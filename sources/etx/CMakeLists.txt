@@ -41,7 +41,6 @@ function(create_library folder)
   etx_build_pack(${lib_name} "${CMAKE_CURRENT_LIST_DIR}/${folder}")
 
   target_compile_options(${lib_name} PRIVATE "/Zl")
-  target_include_directories(${lib_name} PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../")
   target_compile_options(${lib_name} PRIVATE -DNOMINMAX=1 -D_CRT_SECURE_NO_WARNINGS=1 -DWIN32_LEAN_AND_MEAN=1)
 
   # set_target_properties(${project} PROPERTIES
@@ -56,9 +55,13 @@ function(create_library folder)
 endfunction(create_library)
 
 create_library(core)
+target_include_directories(etx-core PUBLIC ..)
 
 create_library(log)
-target_link_libraries(etx-log PUBLIC etx-core)
+target_link_libraries(etx-log PRIVATE etx-core)
+
+create_library(app)
+target_link_libraries(etx-app PRIVATE sokol_app etx-core etx-log)
 
 create_library(rt)
-target_link_libraries(etx-rt PUBLIC etx-core)
+target_link_libraries(etx-rt PRIVATE etx-core)
