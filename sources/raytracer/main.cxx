@@ -1,6 +1,15 @@
 #include <sokol_app.h>
+#include <stdio.h>
+
+#include <Windows.h>
+
+#include <etx/log/log.hxx>
 
 void init_application() {
+  etx::log::info("Info: %d\n", 1);
+  etx::log::warning("Warning: %d\n", 2);
+  etx::log::error("Error: %d\n", 3);
+  etx::log::success("Success: %d\n", 4);
 }
 
 void frame() {
