@@ -2,6 +2,7 @@
 
 #include <etx/core/debug.hxx>
 
+#include <memory.h>
 #include <stdint.h>
 #include <new>
 
