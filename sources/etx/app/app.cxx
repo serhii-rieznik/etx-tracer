@@ -18,6 +18,7 @@ struct ApplicationPrivate {
   }
 
   void frame() {
+    impl.process();
   }
 
   void cleanup() {
