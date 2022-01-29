@@ -61,6 +61,11 @@ All updates will be located here: [BUILDING.md](docs/BUILDING.md)
 #### Docs
 [Code style](docs/CODESTYLE.md) - code style may confuse you. But there is an explanation for that :)
 
+#### Sponsors
+This project is GitHub-sponsored by:
+* [Traverse-Research](https://github.com/Traverse-Research)
+* [voxel-tracer](https://github.com/voxel-tracer)
+
 #### Links
 Links to the books/papers/publications/resources I've used during the development:
  - [PBRT book](https://www.pbr-book.org/)

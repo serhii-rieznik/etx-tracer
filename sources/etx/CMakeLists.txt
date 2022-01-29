@@ -60,8 +60,5 @@ target_include_directories(etx-core PUBLIC ..)
 create_library(log)
 target_link_libraries(etx-log PRIVATE etx-core)
 
-create_library(app)
-target_link_libraries(etx-app PRIVATE sokol_app etx-core etx-log)
-
 create_library(rt)
 target_link_libraries(etx-rt PRIVATE etx-core)
