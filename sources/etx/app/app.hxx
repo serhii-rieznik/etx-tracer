@@ -10,6 +10,9 @@ struct ApplicationImpl {
   virtual void init() {
   }
 
+  virtual void process() {
+  }
+
   virtual void cleanup() {
   }
 };
