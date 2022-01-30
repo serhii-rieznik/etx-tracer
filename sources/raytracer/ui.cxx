@@ -1,4 +1,7 @@
-﻿#include "ui.hxx"
+﻿#include <etx/core/core.hxx>
+#include <etx/render/host/image_pool.hxx>
+
+#include "ui.hxx"
 
 #include <sokol_app.h>
 #include <sokol_gfx.h>
@@ -136,6 +139,10 @@ void UI::build(double dt) {
 
     if (igBeginMenu("Reference image", true)) {
       if (igMenuItemEx("Open...", nullptr, nullptr, false, true)) {
+        auto selected_file = open_file({"Supported images", "*.exr;*.png;*.hdr;*.pfm;*.jpg;*.bmp;*.tga"});
+        if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
+          callbacks.reference_image_selected(selected_file);
+        }
       }
       igEndMenu();
     }

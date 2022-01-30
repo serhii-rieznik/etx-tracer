@@ -1,4 +1,6 @@
-﻿#include "render.hxx"
+﻿#include <etx/render/host/image_pool.hxx>
+
+#include "render.hxx"
 
 #include <sokol_app.h>
 #include <sokol_gfx.h>
@@ -6,7 +8,7 @@
 namespace etx {
 
 extern const char* shader_source;
-constexpr uint32_t image_size[2] = {640u, 480u};
+constexpr uint32_t image_size[2] = {1280u, 720u};
 
 struct ShaderConstants {
   float transform[4] = {};
@@ -20,11 +22,16 @@ struct RenderContextPrivate {
   sg_image light_image = {};
   sg_image reference_image = {};
   ShaderConstants constants;
+  Handle def_image_handle = {};
+  Handle ref_image_handle = {};
 };
 
 ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Private);
 
 void RenderContext::init() {
+  ImagePool::init(1024u);
+  _private->def_image_handle = ImagePool::add_from_file("##default", Image::RepeatU | Image::RepeatV);
+
   sg_desc context = {};
   context.context.d3d11.device = sapp_d3d11_get_device();
   context.context.d3d11.device_context = sapp_d3d11_get_device_context();
@@ -120,37 +127,7 @@ void RenderContext::init() {
   }
   sg_update_image(_private->light_image, light_image_desc.data);
 
-  sg_image_desc ref_image_desc = {};
-  ref_image_desc.type = SG_IMAGETYPE_2D;
-  ref_image_desc.pixel_format = SG_PIXELFORMAT_RGBA32F;
-  ref_image_desc.width = image_size[0];
-  ref_image_desc.height = image_size[1];
-  ref_image_desc.mag_filter = SG_FILTER_NEAREST;
-  ref_image_desc.min_filter = SG_FILTER_NEAREST;
-  ref_image_desc.num_mipmaps = 1;
-  ref_image_desc.usage = SG_USAGE_STREAM;
-  _private->reference_image = sg_make_image(ref_image_desc);
-
-  ref_image_desc.data.subimage[0][0].size = image_size[0] * image_size[1] * sizeof(float) * 4;
-  ref_image_desc.data.subimage[0][0].ptr = malloc(ref_image_desc.data.subimage[0][0].size);
-  ptr = (float*)ref_image_desc.data.subimage[0][0].ptr;
-  for (uint32_t y = 0; y < image_size[1]; ++y) {
-    for (uint32_t x = 0; x < image_size[0]; ++x) {
-      uint32_t i = x + y * image_size[0];
-      if ((x % 2) == (y % 2)) {
-        ptr[4 * i + 0u] = 0.25f;
-        ptr[4 * i + 1u] = 0.5f;
-        ptr[4 * i + 2u] = 1.0f;
-        ptr[4 * i + 3u] = 1.0f;
-      } else {
-        ptr[4 * i + 0u] = 1.0f - 0.25f;
-        ptr[4 * i + 1u] = 1.0f - 0.5f;
-        ptr[4 * i + 2u] = 1.0f - 1.0f;
-        ptr[4 * i + 3u] = 1.0f;
-      }
-    }
-  }
-  sg_update_image(_private->reference_image, ref_image_desc.data);
+  apply_reference_image(_private->def_image_handle);
 }
 
 void RenderContext::cleanup() {
@@ -160,13 +137,17 @@ void RenderContext::cleanup() {
   sg_destroy_image(_private->light_image);
   sg_destroy_image(_private->reference_image);
   sg_shutdown();
+
+  ImagePool::remove(_private->ref_image_handle);
+  ImagePool::remove(_private->def_image_handle);
+  ImagePool::cleanup();
 }
 
 void RenderContext::start_frame() {
   sg_pass_action pass_action = {};
   pass_action.colors[0].action = SG_ACTION_CLEAR;
   pass_action.colors[0].value = {0.05f, 0.07f, 0.1f, 1.0f};
-  sg_apply_viewport(0, 0, sapp_width(), sapp_height(), true);
+  sg_apply_viewport(0, 0, sapp_width(), sapp_height(), false);
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 
   _private->constants = {
@@ -188,13 +169,40 @@ void RenderContext::start_frame() {
   sg_apply_bindings(bindings);
   sg_apply_uniforms(SG_SHADERSTAGE_VS, 0, uniform_data);
   sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, uniform_data);
-  sg_apply_scissor_rect((sapp_width() - image_size[0]) / 2, (sapp_height() - image_size[1]) / 2, image_size[0], image_size[1], true);
+  sg_apply_scissor_rect((sapp_width() - image_size[0]) / 2, (sapp_height() - image_size[1]) / 2, image_size[0], image_size[1], false);
   sg_draw(0, 3, 1);
 }
 
 void RenderContext::end_frame() {
   sg_end_pass();
   sg_commit();
+}
+
+void RenderContext::apply_reference_image(Handle handle) {
+  auto img = ImagePool::get(handle);
+
+  sg_destroy_image(_private->reference_image);
+
+  sg_image_desc ref_image_desc = {};
+  ref_image_desc.type = SG_IMAGETYPE_2D;
+  ref_image_desc.pixel_format = SG_PIXELFORMAT_RGBA32F;
+  ref_image_desc.width = img.isize.x;
+  ref_image_desc.height = img.isize.y;
+  ref_image_desc.mag_filter = SG_FILTER_NEAREST;
+  ref_image_desc.min_filter = SG_FILTER_NEAREST;
+  ref_image_desc.num_mipmaps = 1;
+  ref_image_desc.usage = SG_USAGE_STREAM;
+  _private->reference_image = sg_make_image(ref_image_desc);
+
+  ref_image_desc.data.subimage[0][0].ptr = img.pixels;
+  ref_image_desc.data.subimage[0][0].size = sizeof(float4) * img.isize.x * img.isize.y;
+  sg_update_image(_private->reference_image, ref_image_desc.data);
+}
+
+void RenderContext::set_reference_image(const char* file_name) {
+  ImagePool::remove(_private->ref_image_handle);
+  _private->ref_image_handle = ImagePool::add_from_file(file_name, 0);
+  apply_reference_image(_private->ref_image_handle);
 }
 
 const char* shader_source = R"(
@@ -232,6 +240,7 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
   int py = input.uv.y * dimensions.w;
   int3 coord = int3(px, py, 0);
 
+  /*/
   if (input.uv.x < 1.0f / 3.0f) {
     return sample_image.Load(coord);
   }
@@ -239,6 +248,7 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
   if (input.uv.x < 2.0f / 3.0f) {
     return light_image.Load(coord);
   }
+  // */
 
   return reference_image.Load(coord);
 }

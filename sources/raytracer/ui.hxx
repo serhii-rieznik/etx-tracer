@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <etx/core/options.hxx>
+#include <functional>
 
 struct sapp_event;
 
@@ -15,6 +16,10 @@ struct UI {
   void set_options(const Options&);
 
   bool handle_event(const sapp_event*);
+
+  struct {
+    std::function<void(std::string)> reference_image_selected;
+  } callbacks;
 
  private:
   Options _integrator_options = {};

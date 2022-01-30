@@ -8,4 +8,4 @@ add_executable(raytracer
   render.cxx
 )
 
-target_link_libraries(raytracer sokol_imgui etx-core etx-log etx-rt)
+target_link_libraries(raytracer sokol_imgui glm etx-core etx-log etx-rt)

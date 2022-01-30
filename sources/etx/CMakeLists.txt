@@ -60,5 +60,8 @@ target_include_directories(etx-core PUBLIC ..)
 create_library(log)
 target_link_libraries(etx-log PRIVATE etx-core)
 
+create_library(render)
+target_link_libraries(etx-render PRIVATE glm stb_image tinyexr etx-core)
+
 create_library(rt)
-target_link_libraries(etx-rt PRIVATE etx-core)
+target_link_libraries(etx-rt PRIVATE glm etx-core etx-render)
