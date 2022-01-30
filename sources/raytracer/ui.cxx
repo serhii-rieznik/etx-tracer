@@ -12,48 +12,19 @@
 
 namespace etx {
 
-std::string optional_value_to_string(uint32_t i) {
-  switch (OptionalValue::Class(i)) {
-    case OptionalValue::Class::Undefined:
-      return "OptionalValue::Class::Undefined";
-    case OptionalValue::Class::Integer:
-      return "OptionalValue::Class::Integer";
-    case OptionalValue::Class::Boolean:
-      return "OptionalValue::Class::Boolean";
-    case OptionalValue::Class::InfoString:
-      return "OptionalValue::Class::InfoString";
-    case OptionalValue::Class::Float:
-      return "OptionalValue::Class::Float";
-    case OptionalValue::Class::Enum:
-      return "OptionalValue::Class::Enum";
-    default:
-      return "???";
-  }
-}
-
 void UI::initialize() {
   simgui_desc_t imggui_desc = {};
   imggui_desc.depth_format = SG_PIXELFORMAT_NONE;
   simgui_setup(imggui_desc);
 
-  _integrator_options = Options{{
-    {"info", "VCM (GPU)"},
-    {1u, 4096u, 65536u, "spp", "Samples per Pixel / Iterations"},
-    {1u, 8u, 4096u, "len", "Max Path Length"},
-    {0.0f, 0.0f, 1.0f, "r0", "Initial Radius"},
-    {0.0f, 0.0f, 1.0f, "r1", "Radius"},
-    {true, "mis", "MIS"},
-    {OptionalValue::Class::Boolean, OptionalValue::Class::Count, optional_value_to_string, "val", "Enum Test"},
+  _view_options = Options{{
+    {OutputView::Result, OutputView::Count, output_view_to_string, "out_view", "View Image"},
+    {0.001f, 1.0f, +10.0f, "exp", "Exposure"},
   }};
 }
 
-void UI::build(double dt) {
-  simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
-
-  igSetNextWindowPos({igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {0.0f, 0.0f});
-  igBegin("Properties", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-
-  for (auto& option : _integrator_options.values) {
+void UI::build_options(Options& options) {
+  for (auto& option : options.values) {
     switch (option.cls) {
       case OptionalValue::Class::InfoString: {
         igTextColored({1.0f, 0.5f, 0.25f, 1.0f}, option.name.c_str());
@@ -89,7 +60,7 @@ void UI::build(double dt) {
       case OptionalValue::Class::Enum: {
         int value = option.to_integer();
         igSetNextItemWidth(4.0f * igGetFontSize());
-        if (igTreeNode_Str(option.name.c_str())) {
+        if (igTreeNodeEx_Str(option.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
           for (uint32_t i = 0; i <= option.max_value.integer; ++i) {
             if (igRadioButton_IntPtr(option.name_func(i).c_str(), &value, i)) {
               value = i;
@@ -107,6 +78,15 @@ void UI::build(double dt) {
         ETX_FAIL("Invalid option");
     }
   }
+}
+
+void UI::build(double dt) {
+  simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
+
+  igSetNextWindowPos({igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {0.0f, 0.0f});
+  igBegin("Properties", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
+  igText("Integrator options");
+  build_options(_integrator_options);
 
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("Raytracer", true)) {
@@ -149,6 +129,12 @@ void UI::build(double dt) {
     igEndMainMenuBar();
   }
   igEnd();
+
+  igSetNextWindowPos({sapp_widthf() - igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {1.0f, 0.0f});
+  igBegin("View", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+  igText("View options");
+  build_options(_view_options);
+  igEnd();
 }
 
 void UI::render() {
@@ -164,6 +150,14 @@ bool UI::handle_event(const sapp_event* e) {
 
 void UI::set_options(const Options& options) {
   _integrator_options = options;
+}
+
+ViewOptions UI::view_options() const {
+  return {
+    _view_options.get("out_view", uint32_t(OutputView::Result)).to_enum<OutputView>(),
+    ViewOptions::ToneMapping | ViewOptions::sRGB,
+    _view_options.get("exp", 1.0f).to_float(),
+  };
 }
 
 }  // namespace etx

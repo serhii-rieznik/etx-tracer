@@ -126,6 +126,12 @@ struct OptionalValue {
     return value.boolean;
   }
 
+  template <class T>
+  T to_enum() {
+    ETX_ASSERT((cls == Class::Enum) || (cls == Class::Integer));
+    return T(value.integer);
+  }
+
  private:
   template <class T>
   inline static T clamp_to(T value, T min, T max) {

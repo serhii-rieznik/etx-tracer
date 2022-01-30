@@ -11,8 +11,11 @@ extern const char* shader_source;
 constexpr uint32_t image_size[2] = {1280u, 720u};
 
 struct ShaderConstants {
-  float transform[4] = {};
-  float dimensions[4] = {};
+  float4 dimensions = {};
+  uint32_t image_view = 0;
+  uint32_t options = ViewOptions::ToneMapping;
+  float exposure = 1.0f;
+  float pad = 0.0f;
 };
 
 struct RenderContextPrivate {
@@ -24,6 +27,7 @@ struct RenderContextPrivate {
   ShaderConstants constants;
   Handle def_image_handle = {};
   Handle ref_image_handle = {};
+  ViewOptions view_options = {};
 };
 
 ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Private);
@@ -151,8 +155,10 @@ void RenderContext::start_frame() {
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 
   _private->constants = {
-    {1.0f, 1.0f, 0.0f, 0.0f},
     {sapp_widthf(), sapp_heightf(), float(image_size[0]), float(image_size[1])},
+    uint32_t(_private->view_options.view),
+    _private->view_options.options,
+    _private->view_options.exposure,
   };
 
   sg_range uniform_data = {
@@ -204,11 +210,18 @@ void RenderContext::set_reference_image(const char* file_name) {
   apply_reference_image(_private->ref_image_handle);
 }
 
+void RenderContext::set_view_options(const ViewOptions& o) {
+  _private->view_options = o;
+}
+
 const char* shader_source = R"(
 
 cbuffer Constants : register(b0) {
-  float4 transform;
   float4 dimensions;
+  uint image_view;
+  uint options;
+  float exposure;
+  float pad;
 }
 
 Texture2D<float4> sample_image : register(t0);
@@ -231,6 +244,52 @@ VSOutput vertex_main(uint vertexIndex : SV_VertexID) {
   return output;
 }
 
+static const uint kViewResult = 0;
+static const uint kViewCameraImage = 1;
+static const uint kViewLightImage = 2;
+static const uint kViewReferenceImage = 3;
+static const uint kViewRelativeDifference = 4;
+static const uint kViewAbsoluteDifference = 5;
+
+static const uint ToneMapping = 1u << 0u;
+static const uint sRGB = 1u << 1u;
+
+static const float3 lum = float3(0.2627, 0.6780, 0.0593);
+
+float4 to_rgb(in float4 xyz) {
+  float4 rgb;
+  rgb[0] = max(0.0, 3.240479f * xyz[0] - 1.537150f * xyz[1] - 0.498535f * xyz[2]);
+  rgb[1] = max(0.0, -0.969256f * xyz[0] + 1.875991f * xyz[1] + 0.041556f * xyz[2]);
+  rgb[2] = max(0.0, 0.055648f * xyz[0] - 0.204043f * xyz[1] + 1.057311f * xyz[2]);
+  rgb[3] = 1.0f;
+  return rgb;
+}
+
+float4 validate(in float4 xyz) {
+  if (any(isnan(xyz))) {
+    return float4(123456.0, 0.0, 123456.0, 1.0);
+  }
+  if (any(isinf(xyz))) {
+    return float4(0.0, 123456.0, 123456.0, 1.0);
+  }
+  if (any(xyz < 0.0)) {
+    return float4(0.0, 0.0, 123456.0, 1.0);
+  }
+  return xyz;
+}
+
+float4 tonemap(float4 value) {
+  if (options & ToneMapping) {
+    value = 1.0f - exp(-exposure * value);
+  }
+
+  if (options & sRGB) {
+    value = pow(value, 1.0f / 2.2f);
+  }
+
+  return value;
+}
+
 float4 fragment_main(in VSOutput input) : SV_Target0 {
   float2 offset = 0.5f * (dimensions.xy - dimensions.zw);
 
@@ -244,17 +303,57 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
 
   int3 load_coord = int3(clamped, 0);
 
-  /*/
-  if (input.uv.x < 1.0f / 3.0f) {
-    return sample_image.Load(load_coord);
+  float4 c_image = sample_image.Load(load_coord);
+  float c_lum = dot(c_image.xyz, lum);
+
+  float4 l_image = light_image.Load(load_coord);
+  float l_lum = dot(l_image.xyz, lum);
+
+  float4 r_image = reference_image.Load(load_coord);
+  float r_lum = dot(r_image.xyz, lum);
+
+  float4 t_image = c_image + l_image;
+  float4 v_image = validate(t_image);
+  if (any(v_image != t_image)) {
+    return v_image;
   }
 
-  if (input.uv.x < 2.0f / 3.0f) {
-    return light_image.Load(load_coord);
-  }
-  // */
+  v_image = to_rgb(v_image);
+  float v_lum = dot(v_image.xyz, lum);
 
-  return reference_image.Load(load_coord);
+  float4 result = float4(0.0f, 0.0f, 0.0f, 0.0f);
+  switch (image_view) {
+    case kViewResult: {
+      result = tonemap(v_image);
+      break;
+    }
+    case kViewCameraImage: {
+      result = tonemap(c_image);
+      break;
+    }
+    case kViewLightImage: {
+      result = tonemap(l_image);
+      break;
+    }
+    case kViewReferenceImage: {
+      result = tonemap(r_image);
+      break;
+    }
+    case kViewRelativeDifference: {
+      result.x = max(0.0f, r_lum - v_lum);
+      result.y = max(0.0f, v_lum - r_lum);
+      break;
+    }
+    case kViewAbsoluteDifference: {
+      result.x = float(r_lum > v_lum);
+      result.y = float(v_lum > r_lum);
+      break;
+    }
+    default:
+      break;
+  };
+
+  return result;
 }
 
 )";

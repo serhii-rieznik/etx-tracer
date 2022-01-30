@@ -6,6 +6,7 @@ add_executable(raytracer
   ui.cxx
   render.hxx
   render.cxx
+  options.hxx
 )
 
 target_link_libraries(raytracer sokol_imgui glm etx-core etx-log etx-rt)

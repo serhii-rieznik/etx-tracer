@@ -278,17 +278,6 @@ void ImagePool::remove(Handle handle) {
   ImagePoolImpl::pool().remove(handle);
 }
 
-float sw(float t) {
-  uint32_t x;
-  memcpy(&x, &t, 4);
-  x = ((x & 0x000000ff) >> 0) << 24 |  //
-      ((x & 0x0000ff00) >> 8) << 16 |  //
-      ((x & 0x00ff0000) >> 16) << 8 |  //
-      ((x & 0xff000000) >> 24) << 0;
-  memcpy(&t, &x, 4);
-  return t;
-}
-
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
   FILE* in_file = fopen(path, "rb");
   if (in_file == nullptr) {
@@ -335,6 +324,14 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
     fclose(in_file);
     return false;
   }
+
+  auto sw = [](float t) {
+    uint32_t x;
+    memcpy(&x, &t, 4);
+    x = ((x & 0x000000ff) >> 0) << 24 | ((x & 0x0000ff00) >> 8) << 16 | ((x & 0x00ff0000) >> 16) << 8 | ((x & 0xff000000) >> 24) << 0;
+    memcpy(&t, &x, 4);
+    return t;
+  };
 
   data.resize(sizeof(float4) * size.x * size.y);
   auto data_ptr = reinterpret_cast<float4*>(data.data());

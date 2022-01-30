@@ -14,6 +14,7 @@ void RTApplication::init() {
 void RTApplication::frame() {
   ui.build(time_measure.lap());
 
+  render.set_view_options(ui.view_options());
   render.start_frame();
   ui.render();
   render.end_frame();
