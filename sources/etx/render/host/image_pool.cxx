@@ -174,10 +174,11 @@ struct ImagePoolImpl {
 
       dimensions = {w, h};
       data.resize(sizeof(float4) * w * h);
-      auto row_size = sizeof(float4) * w;
-      for (int y = 0; y < h; ++y) {
-        memcpy(data.data() + row_size * (h - 1 - y), rgba_data + 4llu * y * w, row_size);
-      }
+      memcpy(data.data(), rgba_data, sizeof(float4) * w * h);
+      // auto row_size = sizeof(float4) * w;
+      // for (int y = 0; y < h; ++y) {
+      //   memcpy(data.data() + row_size * (h - 1 - y), rgba_data + 4llu * y * w, row_size);
+      // }
       free(rgba_data);
 
       return Image::Format::RGBA32F;
@@ -187,6 +188,7 @@ struct ImagePoolImpl {
       int w = 0;
       int h = 0;
       int c = 0;
+      stbi_set_flip_vertically_on_load(false);
       auto image = stbi_loadf(source, &w, &h, &c, 0);
       if (image == nullptr) {
         return Image::Format::Undefined;
@@ -213,7 +215,7 @@ struct ImagePoolImpl {
     int w = 0;
     int h = 0;
     int c = 0;
-    stbi_set_flip_vertically_on_load(false);
+    stbi_set_flip_vertically_on_load(true);
     auto image = stbi_load(source, &w, &h, &c, 0);
     if (image == nullptr) {
       return Image::Format::Undefined;
@@ -276,35 +278,68 @@ void ImagePool::remove(Handle handle) {
   ImagePoolImpl::pool().remove(handle);
 }
 
+float sw(float t) {
+  uint32_t x;
+  memcpy(&x, &t, 4);
+  x = ((x & 0x000000ff) >> 0) << 24 |  //
+      ((x & 0x0000ff00) >> 8) << 16 |  //
+      ((x & 0x00ff0000) >> 16) << 8 |  //
+      ((x & 0xff000000) >> 24) << 0;
+  memcpy(&t, &x, 4);
+  return t;
+}
+
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
   FILE* in_file = fopen(path, "rb");
   if (in_file == nullptr) {
     return false;
   }
 
-  char buffer[3] = {};
-  int scale = 0;
-  if (fscanf(in_file, "%c%c\n%d %d\n%d", buffer + 0, buffer + 1, &size.x, &size.y, &scale) != 5) {
-    fclose(in_file);
-    return false;
-  }
+  char buffer[16] = {};
 
-  if (buffer[0] != 'P') {
-    fclose(in_file);
-    return false;
-  }
-
-  if (fgetc(in_file) == '\r') {
-    if (fgetc(in_file) != '\n') {
-      fclose(in_file);
-      return false;
+  auto read_line = [&]() {
+    memset(buffer, 0, sizeof(buffer));
+    char c = {};
+    int p = 0;
+    while ((p < 16) && (fread(&c, 1, 1, in_file) == 1)) {
+      if (c == '\n') {
+        return;
+      } else {
+        buffer[p++] = c;
+      }
     }
+  };
+
+  read_line();
+  if ((buffer[0] != 'P') && (buffer[1] != 'f') && (buffer[1] != 'F')) {
+    fclose(in_file);
+    return false;
+  }
+  char format = buffer[1];
+
+  read_line();
+  if (sscanf(buffer, "%d", &size.x) != 1) {
+    fclose(in_file);
+    return false;
+  }
+
+  read_line();
+  if (sscanf(buffer, "%d", &size.y) != 1) {
+    fclose(in_file);
+    return false;
+  }
+
+  read_line();
+  float scale = 0.0f;
+  if (sscanf(buffer, "%f", &scale) != 1) {
+    fclose(in_file);
+    return false;
   }
 
   data.resize(sizeof(float4) * size.x * size.y);
   auto data_ptr = reinterpret_cast<float4*>(data.data());
 
-  if (buffer[1] == 'f') {
+  if (format == 'f') {
     for (uint32_t i = 0; i < size.y; ++i) {
       for (uint32_t j = 0; j < size.x; ++j) {
         float value = 0.0f;
@@ -312,10 +347,10 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
           fclose(in_file);
           return false;
         }
-        data_ptr[j + (size.y - 1 - i) * size.x] = {value, value, value, 1.0f};
+        data_ptr[j + i * size.x] = {value, value, value, 1.0f};
       }
     }
-  } else if (buffer[1] == 'F') {
+  } else if (format == 'F') {
     for (uint32_t i = 0; i < size.y; ++i) {
       for (uint32_t j = 0; j < size.x; ++j) {
         float3 value = {};
@@ -323,7 +358,7 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
           fclose(in_file);
           return false;
         }
-        data_ptr[j + (size.y - 1 - i) * size.x] = {value, 1.0f};
+        data_ptr[j + i * size.x] = {value, 1.0f};
       }
     }
   } else {

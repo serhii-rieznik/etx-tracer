@@ -147,7 +147,7 @@ void RenderContext::start_frame() {
   sg_pass_action pass_action = {};
   pass_action.colors[0].action = SG_ACTION_CLEAR;
   pass_action.colors[0].value = {0.05f, 0.07f, 0.1f, 1.0f};
-  sg_apply_viewport(0, 0, sapp_width(), sapp_height(), false);
+  sg_apply_viewport(0, 0, sapp_width(), sapp_height(), sg_features().origin_top_left);
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 
   _private->constants = {
@@ -169,7 +169,6 @@ void RenderContext::start_frame() {
   sg_apply_bindings(bindings);
   sg_apply_uniforms(SG_SHADERSTAGE_VS, 0, uniform_data);
   sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, uniform_data);
-  sg_apply_scissor_rect((sapp_width() - image_size[0]) / 2, (sapp_height() - image_size[1]) / 2, image_size[0], image_size[1], false);
   sg_draw(0, 3, 1);
 }
 
@@ -223,34 +222,39 @@ struct VSOutput {
 
 VSOutput vertex_main(uint vertexIndex : SV_VertexID) {
   float2 pos = float2((vertexIndex << 1u) & 2u, vertexIndex & 2u);
+  float2 scale = dimensions.zw / dimensions.xy;
+  float2 snapped_pos = floor(pos * 2.0f * dimensions.zw - dimensions.zw) / dimensions.xy;
 
   VSOutput output = (VSOutput)0;
-  output.pos = float4((pos * 2.0f - 1.0f) * dimensions.zw / dimensions.xy, 0.0f, 1.0f);
-  output.pos.xy = floor(output.pos.xy * dimensions.xy) / dimensions.xy;
+  output.pos = float4(snapped_pos, 0.0f, 1.0f);
   output.uv = pos;
   return output;
 }
 
 float4 fragment_main(in VSOutput input) : SV_Target0 {
-  if (any(saturate(input.uv) != input.uv)) {
+  float2 offset = 0.5f * (dimensions.xy - dimensions.zw);
+
+  int2 coord = int2(floor(input.pos.xy - offset));
+  int2 clamped = clamp(coord.xy, int2(0, 0), int2(dimensions.zw) - 1);
+  clip(any(clamped != coord.xy) ? -1 : 1);
+
+  if (any(clamped != coord.xy)) {
     return float4(1.0f, 0.0f, 1.0f, 1.0f);
   }
 
-  int px = input.uv.x * dimensions.z;
-  int py = input.uv.y * dimensions.w;
-  int3 coord = int3(px, py, 0);
+  int3 load_coord = int3(clamped, 0);
 
   /*/
   if (input.uv.x < 1.0f / 3.0f) {
-    return sample_image.Load(coord);
+    return sample_image.Load(load_coord);
   }
 
   if (input.uv.x < 2.0f / 3.0f) {
-    return light_image.Load(coord);
+    return light_image.Load(load_coord);
   }
   // */
 
-  return reference_image.Load(coord);
+  return reference_image.Load(load_coord);
 }
 
 )";
