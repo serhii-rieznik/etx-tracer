@@ -80,23 +80,29 @@ void UI::build_options(Options& options) {
   }
 }
 
-void UI::build(double dt) {
+void UI::build(double dt, const char* status) {
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
 
-  igSetNextWindowPos({igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {0.0f, 0.0f});
-  igBegin("Properties", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-  igText("Integrator options");
-  build_options(_integrator_options);
+  igSetNextWindowPos({sapp_widthf() - igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {1.0f, 0.0f});
+  igBegin("View", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+  igText("View options");
+  build_options(_view_options);
+
+  char status_buffer[2048] = {};
+  float dy = igGetStyle()->FramePadding.y;
+  snprintf(status_buffer, sizeof(status_buffer), "%.2fms | %.2ffps | %s", 1000.0 * dt, 1.0f / dt, status ? status : "");
+  igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * igGetFontSize(), ImGuiWindowFlags_NoDecoration);
+  igText(status_buffer);
+  igEnd();
 
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("Raytracer", true)) {
-      if (igMenuItemEx("Path Tracing CPU", nullptr, nullptr, false, true)) {
-      }
-      if (igMenuItemEx("Path Tracing GPU", nullptr, nullptr, false, true)) {
-      }
-      if (igMenuItemEx("VCM CPU", nullptr, nullptr, false, true)) {
-      }
-      if (igMenuItemEx("VCM GPU", nullptr, nullptr, false, true)) {
+      for (uint64_t i = 0; i < _integrators.count; ++i) {
+        if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, true)) {
+          if (callbacks.integrator_selected) {
+            callbacks.integrator_selected(_integrators[i]);
+          }
+        }
       }
       igSeparator();
       if (igMenuItemEx("Exit", nullptr, "Ctrl+Q", false, true)) {
@@ -106,6 +112,10 @@ void UI::build(double dt) {
 
     if (igBeginMenu("Scene", true)) {
       if (igMenuItemEx("Open...", nullptr, "Ctrl+O", false, true)) {
+        auto selected_file = open_file({"Supported formats", "*.json;*.obj;*.gltf;*.pbrt"});
+        if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
+          callbacks.scene_file_selected(selected_file);
+        }
       }
       if (igMenuItemEx("Reload ", nullptr, "Ctrl+R", false, true)) {
       }
@@ -130,11 +140,13 @@ void UI::build(double dt) {
   }
   igEnd();
 
-  igSetNextWindowPos({sapp_widthf() - igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {1.0f, 0.0f});
-  igBegin("View", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-  igText("View options");
-  build_options(_view_options);
-  igEnd();
+  if (_integrator_options.values.empty() == false) {
+    igSetNextWindowPos({igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {0.0f, 0.0f});
+    igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
+    igText("Integrator options");
+    build_options(_integrator_options);
+    igEnd();
+  }
 }
 
 void UI::render() {
@@ -148,16 +160,17 @@ bool UI::handle_event(const sapp_event* e) {
   return simgui_handle_event(e);
 }
 
-void UI::set_options(const Options& options) {
-  _integrator_options = options;
-}
-
 ViewOptions UI::view_options() const {
   return {
     _view_options.get("out_view", uint32_t(OutputView::Result)).to_enum<OutputView>(),
     ViewOptions::ToneMapping | ViewOptions::sRGB,
     _view_options.get("exp", 1.0f).to_float(),
   };
+}
+
+void UI::set_current_integrator(Integrator* i) {
+  _integrator_name = i->name();
+  _integrator_options = i->options();
 }
 
 }  // namespace etx

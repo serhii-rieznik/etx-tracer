@@ -62,7 +62,7 @@
   do {                                                     \
   } while (false)
 
-#define ETX_DECLARE_PIMPL(T, SZ) ETX_PIMPL_DECLARE(T, Private, SZ)
-#define ETX_IMPLEMENT_PIMPL(T) ETX_PIMPL_IMPLEMENT(T, Private)
-#define ETX_PIMPL_INIT(T, ...) ETX_PIMPL_CREATE(T, Private, __VA_ARGS__)
-#define ETX_PIMPL_CLEANUP(T) ETX_PIMPL_DESTROY(T, Private)
+#define ETX_DECLARE_PIMPL(T, SZ) ETX_PIMPL_DECLARE(T, Impl, SZ)
+#define ETX_IMPLEMENT_PIMPL(T) ETX_PIMPL_IMPLEMENT(T, Impl)
+#define ETX_PIMPL_INIT(T, ...) ETX_PIMPL_CREATE(T, Impl, __VA_ARGS__)
+#define ETX_PIMPL_CLEANUP(T) ETX_PIMPL_DESTROY(T, Impl)

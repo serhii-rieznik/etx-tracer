@@ -17,7 +17,7 @@ struct ShaderConstants {
   float pad = 0.0f;
 };
 
-struct RenderContextPrivate {
+struct RenderContextImpl {
   sg_shader output_shader = {};
   sg_pipeline output_pipeline = {};
   sg_image sample_image = {};
@@ -30,7 +30,7 @@ struct RenderContextPrivate {
   uint2 output_dimensions = {};
 };
 
-ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Private);
+ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Impl);
 
 void RenderContext::init() {
   ImagePool::init(1024u);
@@ -184,17 +184,21 @@ void RenderContext::set_output_dimensions(const uint2& dim) {
   _private->light_image = sg_make_image(desc);
 }
 
-void RenderContext::update_output_images(const float4* camera, const float4* ligth) {
+void RenderContext::update_output_images(const float4* camera, const float4* light) {
   ETX_ASSERT((_private->sample_image.id != 0) && (_private->light_image.id != 0));
 
   sg_image_data data = {};
   data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
 
-  data.subimage[0][0].ptr = camera;
-  sg_update_image(_private->sample_image, data);
+  if (camera != nullptr) {
+    data.subimage[0][0].ptr = camera;
+    sg_update_image(_private->sample_image, data);
+  }
 
-  data.subimage[0][0].ptr = ligth;
-  sg_update_image(_private->light_image, data);
+  if (light != nullptr) {
+    data.subimage[0][0].ptr = light;
+    sg_update_image(_private->light_image, data);
+  }
 }
 
 const char* shader_source = R"(
@@ -267,7 +271,7 @@ float4 tonemap(float4 value) {
   }
 
   if (options & sRGB) {
-    value = pow(value, 1.0f / 2.2f);
+    value = pow(max(0.0f, value), 1.0f / 2.2f);
   }
 
   return value;
