@@ -43,13 +43,6 @@ function(create_library folder)
   target_compile_options(${lib_name} PRIVATE "/Zl")
   target_compile_options(${lib_name} PRIVATE -DNOMINMAX=1 -D_CRT_SECURE_NO_WARNINGS=1 -DWIN32_LEAN_AND_MEAN=1)
 
-  # set_target_properties(${project} PROPERTIES
-  #  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${et_root}/bin"
-  #  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${et_root}/bin"
-  #  RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${et_root}/bin"
-  #  RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${et_root}/bin"
-  # )
-
   set_property(TARGET ${lib_name} PROPERTY FOLDER "etx")
   set_property(TARGET ${lib_name} PROPERTY LINKER_LANGUAGE CXX)
 endfunction(create_library)
@@ -61,7 +54,8 @@ create_library(log)
 target_link_libraries(etx-log PRIVATE etx-core)
 
 create_library(render)
-target_link_libraries(etx-render PRIVATE glm stb_image tinyexr etx-core)
+target_link_libraries(etx-render PRIVATE glm stb_image tinyexr tiny_obj_loader mikktspace jansson etx-core)
+target_include_directories(etx-render PRIVATE ${JANSSON_INCLUDE_DIRS})
 
 create_library(rt)
 target_link_libraries(etx-rt PRIVATE glm etx-core etx-render)

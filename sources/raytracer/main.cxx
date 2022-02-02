@@ -1,3 +1,4 @@
+#include <etx/core/environment.hxx>
 #include "app.hxx"
 
 #include <sokol_app.h>
@@ -5,6 +6,8 @@
 namespace etx {
 
 extern "C" int main(int argc, char* argv[]) {
+  env().setup(argv[0]);
+
   RTApplication app;
   sapp_desc desc = {};
   {

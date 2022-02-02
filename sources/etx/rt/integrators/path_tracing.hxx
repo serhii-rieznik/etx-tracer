@@ -26,7 +26,6 @@ struct CPUPathTracing : public Integrator {
   float4* get_updated_light_image() override;
   const char* status() const override;
 
- private:
   ETX_DECLARE_PIMPL(CPUPathTracing, 256);
 };
 

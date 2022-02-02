@@ -51,6 +51,7 @@ void RTApplication::on_scene_file_selected(std::string file_name) {
     _current_integrator->stop();
   }
 
+  scene.load_from_file(file_name.c_str());
   render.set_output_dimensions(_scene_output_size);
 
   // TODO : load scene

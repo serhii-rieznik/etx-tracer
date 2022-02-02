@@ -24,17 +24,18 @@ struct RenderContextImpl {
   sg_image light_image = {};
   sg_image reference_image = {};
   ShaderConstants constants;
-  Handle def_image_handle = {};
-  Handle ref_image_handle = {};
+  uint32_t def_image_handle = kInvalidIndex;
+  uint32_t ref_image_handle = kInvalidIndex;
   ViewOptions view_options = {};
   uint2 output_dimensions = {};
+  ImagePool image_pool = {};
 };
 
 ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Impl);
 
 void RenderContext::init() {
-  ImagePool::init(1024u);
-  _private->def_image_handle = ImagePool::add_from_file("##default", Image::RepeatU | Image::RepeatV);
+  _private->image_pool.init(1024u);
+  _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV);
 
   sg_desc context = {};
   context.context.d3d11.device = sapp_d3d11_get_device();
@@ -90,9 +91,9 @@ void RenderContext::cleanup() {
   sg_destroy_image(_private->reference_image);
   sg_shutdown();
 
-  ImagePool::remove(_private->ref_image_handle);
-  ImagePool::remove(_private->def_image_handle);
-  ImagePool::cleanup();
+  _private->image_pool.remove(_private->ref_image_handle);
+  _private->image_pool.remove(_private->def_image_handle);
+  _private->image_pool.cleanup();
 }
 
 void RenderContext::start_frame() {
@@ -131,8 +132,8 @@ void RenderContext::end_frame() {
   sg_commit();
 }
 
-void RenderContext::apply_reference_image(Handle handle) {
-  auto img = ImagePool::get(handle);
+void RenderContext::apply_reference_image(uint32_t handle) {
+  auto img = _private->image_pool.get(handle);
 
   sg_destroy_image(_private->reference_image);
 
@@ -153,8 +154,8 @@ void RenderContext::apply_reference_image(Handle handle) {
 }
 
 void RenderContext::set_reference_image(const char* file_name) {
-  ImagePool::remove(_private->ref_image_handle);
-  _private->ref_image_handle = ImagePool::add_from_file(file_name, 0);
+  _private->image_pool.remove(_private->ref_image_handle);
+  _private->ref_image_handle = _private->image_pool.add_from_file(file_name, 0);
   apply_reference_image(_private->ref_image_handle);
 }
 

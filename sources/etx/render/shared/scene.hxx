@@ -16,6 +16,7 @@ struct alignas(16) EnvironmentEmitters {
 };
 
 struct alignas(16) Scene {
+  Camera camera;
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
@@ -57,4 +58,36 @@ ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const Camera& ca
 
   return {origin, w_o, kRayEpsilon, kMaxFloat};
 }
+
+ETX_GPU_CODE float3 lerp_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
+  return vertices[t.i[0]].pos * bc.x +  //
+         vertices[t.i[1]].pos * bc.y +  //
+         vertices[t.i[2]].pos * bc.z;   //
+}
+
+ETX_GPU_CODE float3 lerp_normal(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
+  return normalize(vertices[t.i[0]].nrm * bc.x +  //
+                   vertices[t.i[1]].nrm * bc.y +  //
+                   vertices[t.i[2]].nrm * bc.z);  //
+}
+
+ETX_GPU_CODE float2 lerp_uv(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& b) {
+  return vertices[t.i[0]].tex * b.x +  //
+         vertices[t.i[1]].tex * b.y +  //
+         vertices[t.i[2]].tex * b.z;   //
+}
+
+ETX_GPU_CODE Vertex lerp(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
+  const auto& v0 = vertices[t.i[0]];
+  const auto& v1 = vertices[t.i[1]];
+  const auto& v2 = vertices[t.i[2]];
+  return {
+    /*     */ v0.pos * bc.x + v1.pos * bc.y + v2.pos * bc.z,
+    normalize(v0.nrm * bc.x + v1.nrm * bc.y + v2.nrm * bc.z),
+    normalize(v0.tan * bc.x + v1.tan * bc.y + v2.tan * bc.z),
+    normalize(v0.btn * bc.x + v1.btn * bc.y + v2.btn * bc.z),
+    /*     */ v0.tex * bc.x + v1.tex * bc.y + v2.tex * bc.z,
+  };
+}
+
 }  // namespace etx

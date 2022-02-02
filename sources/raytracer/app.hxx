@@ -3,6 +3,7 @@
 #include <etx/core/core.hxx>
 #include <etx/core/handle.hxx>
 
+#include <etx/render/host/scene_loader.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
 
 #include "ui.hxx"
@@ -25,6 +26,7 @@ struct RTApplication {
   RenderContext render;
   UI ui;
   TimeMeasure time_measure;
+  SceneRepresentation scene;
 
   struct {
     Integrator _test;

@@ -227,7 +227,7 @@ struct alignas(16) SpectralResponse {
       uint64_t j = min(i + 1, spectrum::WavelengthCount - 1llu);
       float3 xyz0 = spectrum::spectral_xyz(i);
       float3 xyz1 = spectrum::spectral_xyz(j);
-      return lerp(xyz0, xyz1, dw) * (components.x / spectrum::kYIntegral);
+      return lerp<float3>(xyz0, xyz1, dw) * (components.x / spectrum::kYIntegral);
     } else {
       return spectrum::rgb_to_xyz({components.x, components.y, components.z});
     }

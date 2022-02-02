@@ -175,4 +175,28 @@ ETX_GPU_CODE float2 sample_disk(float xi0, float xi1) {
   return {r * std::cos(theta), r * std::sin(theta)};
 }
 
+ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& n) {
+  return normalize(t - n * dot(n, t));
+};
+
+ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& b, const float3& n) {
+  return normalize(t - n * dot(n, t)) * (dot(cross(n, t), b) < 0.0f ? -1.0f : 1.0f);
+}
+
+ETX_GPU_CODE bool valid_value(float t) {
+  return (isnan(t) == false) && (isinf(t) == false) && (t >= 0.0f);
+}
+
+ETX_GPU_CODE bool valid_value(const float2& v) {
+  return valid_value(v.x) && valid_value(v.y);
+}
+
+ETX_GPU_CODE bool valid_value(const float3& v) {
+  return valid_value(v.x) && valid_value(v.y) && valid_value(v.z);
+}
+
+ETX_GPU_CODE bool valid_value(const float4& v) {
+  return valid_value(v.x) && valid_value(v.y) && valid_value(v.z) && valid_value(v.w);
+}
+
 }  // namespace etx

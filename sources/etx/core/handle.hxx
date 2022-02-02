@@ -7,20 +7,19 @@ namespace etx {
 
 union Handle {
   enum : uint64_t {
-    ClsBits = 7,
+    ClsBits = 8,
     ClsMax = (1 << ClsBits) - 1,
     IndexBits = 28,
     IndexMax = (1 << IndexBits) - 1,
     GenBits = 28,
     GenMax = (1 << GenBits) - 1,
-    BitCount = 1 + ClsBits + IndexBits + IndexBits,
+    BitCount = ClsBits + IndexBits + GenBits,
   };
   static_assert(BitCount == 64);
 
   uint64_t value = 0;
   struct {
-    uint64_t alive : 1;
-    uint64_t cls : 7;
+    uint64_t cls : ClsBits;
     uint64_t index : IndexBits;
     uint64_t generation : GenBits;
   };
@@ -34,7 +33,7 @@ union Handle {
     ETX_ASSERT(a_index < IndexMax);
     ETX_ASSERT(a_generation < GenMax);
     Handle result = {};
-    result.alive = 1, result.cls = a_cls;
+    result.cls = a_cls;
     result.index = a_index;
     result.generation = a_generation;
     return result;

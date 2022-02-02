@@ -2,34 +2,35 @@
 #include <etx/render/host/distribution_builder.hxx>
 #include <etx/render/host/pool.hxx>
 
-#include <vector>
-#include <unordered_map>
-
 #include <tinyexr/tinyexr.hxx>
 #include <stb_image/stb_image.hxx>
+
+#include <vector>
+#include <unordered_map>
+#include <functional>
 
 namespace etx {
 
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data);
 
 struct ImagePoolImpl {
-  static ImagePoolImpl& pool() {
-    static ImagePoolImpl impl;
-    return impl;
-  }
-
   void init(uint32_t capacity) {
-    _images.init(capacity, 0);
+    image_pool.init(capacity);
   }
 
   void cleanup() {
-    ETX_ASSERT(_images.count_alive() == 0);
-    _images.cleanup();
+    ETX_ASSERT(image_pool.count_alive() == 0);
+    image_pool.cleanup();
   }
 
-  Handle add_from_file(const char* path, uint32_t image_options) {
-    auto handle = _images.alloc();
-    auto& image = _images.get(handle);
+  uint32_t add_from_file(const char* path, uint32_t image_options) {
+    auto i = _mapping.find(path);
+    if (i != _mapping.end()) {
+      return i->second;
+    }
+
+    auto handle = image_pool.alloc();
+    auto& image = image_pool.get(handle);
     load_image(image, path, image_options);
     if (image_options & Image::BuildSamplingTable) {
       build_sampling_table(image);
@@ -37,14 +38,21 @@ struct ImagePoolImpl {
     return handle;
   }
 
-  const Image& get(Handle handle) const {
-    return _images.get(handle);
+  const Image& get(uint32_t handle) const {
+    return image_pool.get(handle);
   }
 
-  void remove(Handle handle) {
-    if (handle.value != 0) {
-      _images.free(handle);
+  void remove(uint32_t handle) {
+    if (handle == kInvalidIndex) {
+      return;
     }
+
+    free_image(image_pool.get(handle));
+    image_pool.free(handle);
+  }
+
+  void remove_all() {
+    image_pool.free_all(std::bind(&ImagePoolImpl::free_image, this, std::placeholders::_1));
   }
 
   void load_image(Image& img, const char* file_name, uint32_t options) {
@@ -253,29 +261,43 @@ struct ImagePoolImpl {
     return Image::Format::RGBA8;
   }
 
-  ObjectPool<Image> _images;
-  std::unordered_map<std::string, Handle> _mapping;
+  ObjectIndexPool<Image> image_pool;
+  std::unordered_map<std::string, uint32_t> _mapping;
   Image empty;
 };
 
+ETX_PIMPL_IMPLEMENT_ALL(ImagePool, Impl);
+
 void ImagePool::init(uint32_t capacity) {
-  ImagePoolImpl::pool().init(capacity);
+  _private->init(capacity);
 }
 
 void ImagePool::cleanup() {
-  ImagePoolImpl::pool().cleanup();
+  _private->cleanup();
 }
 
-Handle ImagePool::add_from_file(const char* path, uint32_t image_options) {
-  return ImagePoolImpl::pool().add_from_file(path, image_options);
+uint32_t ImagePool::add_from_file(const char* path, uint32_t image_options) {
+  return _private->add_from_file(path, image_options);
 }
 
-const Image& ImagePool::get(Handle handle) {
-  return ImagePoolImpl::pool().get(handle);
+const Image& ImagePool::get(uint32_t handle) {
+  return _private->get(handle);
 }
 
-void ImagePool::remove(Handle handle) {
-  ImagePoolImpl::pool().remove(handle);
+void ImagePool::remove(uint32_t handle) {
+  _private->remove(handle);
+}
+
+void ImagePool::remove_all() {
+  _private->remove_all();
+}
+
+Image* ImagePool::as_array() {
+  return _private->image_pool.data();
+}
+
+uint64_t ImagePool::array_size() {
+  return 1llu + _private->image_pool.latest_alive_index();
 }
 
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {

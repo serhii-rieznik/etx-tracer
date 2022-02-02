@@ -22,11 +22,10 @@ struct RenderContext {
   void set_view_options(const ViewOptions&);
   void set_reference_image(const char*);
 
- private:
-  void apply_reference_image(Handle);
+  ETX_DECLARE_PIMPL(RenderContext, 512);
 
  private:
-  ETX_DECLARE_PIMPL(RenderContext, 256);
+  void apply_reference_image(uint32_t);
 };
 
 }  // namespace etx
