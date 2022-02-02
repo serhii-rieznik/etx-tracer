@@ -13,7 +13,7 @@ struct SceneRepresentation {
 
   const Scene& scene() const;
 
-  ETX_DECLARE_PIMPL(SceneRepresentation, 1024);
+  ETX_DECLARE_PIMPL(SceneRepresentation, 2048);
 };
 
 }  // namespace etx

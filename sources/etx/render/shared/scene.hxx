@@ -51,7 +51,7 @@ ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const Camera& ca
     }
     sensor_sample *= camera.lens_radius;
     origin = origin + camera.side * sensor_sample.x + camera.up * sensor_sample.y;
-    float focal_plane_distance = camera.focus_distance / dot(w_o, camera.direction);
+    float focal_plane_distance = camera.focal_distance / dot(w_o, camera.direction);
     float3 p = camera.position + focal_plane_distance * w_o;
     w_o = normalize(p - origin);
   }

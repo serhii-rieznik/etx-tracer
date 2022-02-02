@@ -140,6 +140,7 @@ struct ObjectIndexPool {
 
   template <class... Args>
   uint32_t alloc(Args... args) {
+    ETX_ASSERT(_capacity > 0);
     ETX_CRITICAL(_head != _capacity);
 
     auto& info = _info[_head];

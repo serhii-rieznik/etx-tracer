@@ -114,6 +114,8 @@ struct SceneRepresentationImpl {
 
   SceneRepresentationImpl() {
     images.init(1024u);
+    mediums.init(1024u);
+    build_camera({5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280.0f, 720.0f}, 26.99f * kPi / 180.0f, 0.0f, 1.0f);
   }
 
   ~SceneRepresentationImpl() {
@@ -133,6 +135,10 @@ struct SceneRepresentationImpl {
     images.remove_all();
     mediums.remove_all();
     materials.reserve(1024);  // TODO : fix, images when reallocated are destroyed releasing memory
+
+    free(scene.emitters_distribution.values);
+    scene.emitters_distribution = {};
+    scene = {};
   }
 
   bool calculate_area(Triangle& t) {
@@ -408,6 +414,29 @@ struct SceneRepresentationImpl {
     // */
   }
 
+  void build_camera(const float3& origin, const float3& target, const float3& up, const float2& viewport, float fov, float lens_radius, float focal_distance) {
+    float4x4 view = glm::lookAtRH(origin, target, up);
+    float4x4 proj = glm::perspectiveFovRH_ZO(fov, viewport.x, viewport.y, 1.0f, 1024.0f);
+
+    auto inv_view = glm::inverse(view);
+    scene.camera.position = {inv_view[3][0], inv_view[3][1], inv_view[3][2]};
+    scene.camera.side = {view[0][0], view[1][0], view[2][0]};
+    scene.camera.up = {view[0][1], view[1][1], view[2][1]};
+    scene.camera.direction = {-view[0][2], -view[1][2], -view[2][2]};
+    scene.camera.tan_half_fov = 1.0f / std::abs(proj[1][1]);
+    scene.camera.aspect = proj[1][1] / proj[0][0];
+    scene.camera.view_proj = proj * view;
+    scene.camera.lens_radius = lens_radius;
+    scene.camera.focal_distance = focal_distance;
+
+    float plane_w = 2.0f * scene.camera.tan_half_fov * scene.camera.aspect;
+    float plane_h = 2.0f * scene.camera.tan_half_fov;
+    scene.camera.area = plane_w * plane_h;
+
+    scene.camera.image_size = viewport;
+    scene.camera.image_plane = float(scene.camera.image_size.x) / (2.0f * scene.camera.tan_half_fov);
+  }
+
   enum : uint32_t {
     LoadFailed = 0u,
     LoadSucceeded = 1u << 0u,
@@ -423,6 +452,23 @@ ETX_PIMPL_IMPLEMENT_ALL(SceneRepresentation, Impl);
 const Scene& SceneRepresentation::scene() const {
   return _private->scene;
 }
+
+template <class V, int n>
+V json_to_float_n(json_t* a) {
+  V result = {};
+  int i = 0;
+  json_t* val = {};
+  json_array_foreach(a, i, val) {
+    if ((i < n) && json_is_number(val)) {
+      result[i] = static_cast<float>(json_number_value(val));
+    } else {
+      break;
+    }
+  }
+  return result;
+}
+const auto json_to_float2 = json_to_float_n<float2, 2>;
+const auto json_to_float3 = json_to_float_n<float3, 3>;
 
 bool SceneRepresentation::load_from_file(const char* filename) {
   _private->cleanup();
@@ -447,6 +493,13 @@ bool SceneRepresentation::load_from_file(const char* filename) {
       return false;
     }
 
+    auto& cam = _private->scene.camera;
+    float3 camera_pos = cam.position;
+    float3 camera_up = {0.0f, 1.0f, 0.0f};
+    float3 camera_view = cam.position + cam.direction;
+    float2 viewport = cam.image_size;
+    float camera_fov = 2.0f * atanf(cam.tan_half_fov) * 180.0f / kPi;
+
     const char* key = {};
     json_t* js_value = {};
     json_object_foreach(js, key, js_value) {
@@ -459,9 +512,33 @@ bool SceneRepresentation::load_from_file(const char* filename) {
         file_to_load = json_string_value(js_value);
         snprintf(buffer + strlen(buffer), sizeof(buffer) + strlen(buffer), "%s", file_to_load);
         file_to_load = buffer;
+      } else if (strcmp(key, "camera") == 0) {
+        if (json_is_object(js_value) == false) {
+          log::error("`camera` in scene description should be an object");
+          continue;
+        }
+        const char* cam_key = {};
+        json_t* cam_value = {};
+        json_object_foreach(js_value, cam_key, cam_value) {
+          if ((strcmp(cam_key, "origin") == 0) && json_is_array(cam_value)) {
+            camera_pos = json_to_float3(cam_value);
+          } else if ((strcmp(cam_key, "target") == 0) && json_is_array(cam_value)) {
+            camera_view = json_to_float3(cam_value);
+          } else if ((strcmp(cam_key, "up") == 0) && json_is_array(cam_value)) {
+            camera_up = json_to_float3(cam_value);
+          } else if ((strcmp(cam_key, "viewport") == 0) && json_is_array(cam_value)) {
+            viewport = json_to_float2(cam_value);
+          } else if ((strcmp(cam_key, "fov") == 0) && json_is_number(cam_value)) {
+            camera_fov = static_cast<float>(json_number_value(cam_value));
+          } else if ((strcmp(cam_key, "lens-radius") == 0) && json_is_number(cam_value)) {
+            cam.lens_radius = static_cast<float>(json_number_value(cam_value));
+          } else if ((strcmp(cam_key, "focal-distance") == 0) && json_is_number(cam_value)) {
+            cam.focal_distance = static_cast<float>(json_number_value(cam_value));
+          }
+        }
       }
     }
-
+    _private->build_camera(camera_pos, camera_view, camera_up, viewport, camera_fov, cam.lens_radius, cam.focal_distance);
     json_decref(js);
   }
 

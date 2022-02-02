@@ -39,7 +39,6 @@ struct RTApplication {
   };
 
   Integrator* _current_integrator = nullptr;
-  uint2 _scene_output_size = {1280u, 720u};
 };
 
 }  // namespace etx

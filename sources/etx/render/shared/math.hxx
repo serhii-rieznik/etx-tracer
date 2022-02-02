@@ -7,6 +7,7 @@
 #else
 
 #define GLM_FORCE_XYZW_ONLY 1
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE 1
 #include <glm/glm.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/ext/matrix_clip_space.hpp>
