@@ -50,4 +50,28 @@ struct alignas(16) Emitter {
   }
 };
 
+struct alignas(16) EmitterSample {
+  SpectralResponse value = {};
+
+  float3 barycentric = {};
+  float pdf_sample = 0.0f;
+
+  float3 origin = {};
+  float pdf_area = 0.0f;
+
+  float3 normal = {};
+  float pdf_dir = 0.0f;
+
+  float3 direction = {};
+  float pdf_dir_out = 0.0f;
+
+  float2 image_uv = {};
+  uint32_t emitter_index = kInvalidIndex;
+  uint32_t triangle_index = kInvalidIndex;
+  uint32_t medium_index = kInvalidIndex;
+
+  bool is_delta = false;
+  bool is_distant = false;
+};
+
 }  // namespace etx

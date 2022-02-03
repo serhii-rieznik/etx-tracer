@@ -11,6 +11,14 @@ struct RNDSampler : public Sampler {
     init(_dis(_gen), _dis(_gen));
   }
 
+  RNDSampler(uint32_t state)
+    : Sampler(state) {
+  }
+
+  RNDSampler(const RNDSampler& other) {
+    seed = other.seed;
+  }
+
  private:
   std::random_device _rd;
   std::mt19937 _gen = std::mt19937(_rd());

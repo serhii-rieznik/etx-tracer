@@ -23,8 +23,8 @@ extern "C" int main(int argc, char* argv[]) {
     desc.event_userdata_cb = [](const sapp_event* e, void* data) {
       reinterpret_cast<RTApplication*>(data)->process_event(e);
     };
-    desc.width = 1900;
-    desc.height = 960;
+    desc.width = 1600;
+    desc.height = 900;
     desc.window_title = "etx-tracer";
     desc.high_dpi = true;
     desc.win32_console_utf8 = true;

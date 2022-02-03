@@ -112,12 +112,12 @@ void UI::build(double dt, const char* status) {
 
     if (igBeginMenu("Scene", true)) {
       if (igMenuItemEx("Open...", nullptr, "Ctrl+O", false, true)) {
-        auto selected_file = open_file({"Supported formats", "*.json;*.obj;*.gltf;*.pbrt"});
-        if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
-          callbacks.scene_file_selected(selected_file);
-        }
+        select_scene_file();
       }
       if (igMenuItemEx("Reload ", nullptr, "Ctrl+R", false, true)) {
+        if (callbacks.reload_scene_selected) {
+          callbacks.reload_scene_selected();
+        }
       }
       if (igMenuItemEx("Reload Materials", nullptr, "Ctrl+M", false, true)) {
       }
@@ -140,23 +140,66 @@ void UI::build(double dt, const char* status) {
   }
   igEnd();
 
-  if (_integrator_options.values.empty() == false) {
+  if ((_current_integrator != nullptr) && (_integrator_options.values.empty() == false)) {
     igSetNextWindowPos({igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {0.0f, 0.0f});
     igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
     igText("Integrator options");
     build_options(_integrator_options);
+
+    if (_current_integrator->can_run()) {
+      igSeparator();
+      igNewLine();
+      auto state = _current_integrator->state();
+      bool has_stop = (state != Integrator::State::Stopped);
+      bool has_preview = (state == Integrator::State::Stopped);
+      bool has_run = (state != Integrator::State::Running);
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
+      if (has_stop) {
+        if (igButton("[ Stop ]", {}) && callbacks.stop_selected) {
+          callbacks.stop_selected();
+        }
+        if (has_preview || has_run) {
+          igSameLine(0.0f, igGetFontSize());
+        }
+      }
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
+      if (has_preview) {
+        if (igButton("[ Preview ]", {}) && callbacks.preview_selected) {
+          callbacks.preview_selected();
+        }
+        if (has_run) {
+          igSameLine(0.0f, igGetFontSize());
+        }
+      }
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
+      if (has_run) {
+        if (igButton("[ Run ]", {}) && callbacks.run_selected) {
+          callbacks.run_selected();
+        }
+      }
+      igPopStyleColor(3);
+      igNewLine();
+    }
     igEnd();
   }
-}
-
-void UI::render() {
   simgui_render();
 }
 
-void UI::cleanup() {
-}
-
 bool UI::handle_event(const sapp_event* e) {
+  if ((e->modifiers & SAPP_MODIFIER_CTRL) && (e->type == SAPP_EVENTTYPE_KEY_DOWN)) {
+    switch (e->key_code) {
+      case SAPP_KEYCODE_O: {
+        select_scene_file();
+        break;
+      }
+      case SAPP_KEYCODE_R: {
+        if (callbacks.reload_scene_selected)
+          callbacks.reload_scene_selected();
+        break;
+      }
+    }
+  }
   return simgui_handle_event(e);
 }
 
@@ -169,8 +212,16 @@ ViewOptions UI::view_options() const {
 }
 
 void UI::set_current_integrator(Integrator* i) {
-  _integrator_name = i->name();
-  _integrator_options = i->options();
+  _current_integrator = i;
+  _integrator_name = _current_integrator->name();
+  _integrator_options = _current_integrator->options();
+}
+
+void UI::select_scene_file() {
+  auto selected_file = open_file({"Supported formats", "*.json;*.obj;*.gltf;*.pbrt"});
+  if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
+    callbacks.scene_file_selected(selected_file);
+  }
 }
 
 }  // namespace etx

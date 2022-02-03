@@ -14,3 +14,5 @@ add_subdirectory(jansson)
 add_subdirectory(tinyobjloader)
 add_subdirectory(mikktspace)
 
+add_subdirectory(enkits)
+

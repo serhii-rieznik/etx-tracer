@@ -9,7 +9,7 @@
 #endif
 
 #if (ETX_NVCC_COMPILER)
-#define ETX_GPU_CODE inline __device__
+#define ETX_GPU_CODE ETX_GPU_CODE
 #define ETX_GPU_DATA __device__
 #define ETX_INIT_WITH(S)
 #else

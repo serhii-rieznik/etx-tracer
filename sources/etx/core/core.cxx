@@ -15,6 +15,11 @@ void TimeMeasure::reset() {
   _data = std::chrono::steady_clock::now().time_since_epoch().count();
 }
 
+double TimeMeasure::measure_ms() const {
+  auto exact = measure_exact();
+  return double(exact) / double(std::micro::den);
+}
+
 double TimeMeasure::measure() const {
   auto exact = measure_exact();
   return double(exact) / double(std::nano::den);

@@ -4,10 +4,18 @@
 #include <etx/render/shared/scene.hxx>
 #include <etx/rt/rt.hxx>
 
+#include <atomic>
+
 namespace etx {
 
 struct Integrator {
-  Integrator(const Raytracing& r)
+  enum class State {
+    Stopped,
+    Preview,
+    Running,
+  };
+
+  Integrator(Raytracing& r)
     : rt(r) {
   }
 
@@ -26,10 +34,20 @@ struct Integrator {
   virtual void set_output_size(const uint2&) {
   }
 
-  virtual void stop() {
+  virtual State state() const {
+    return current_state.load();
   }
 
   virtual void preview() {
+  }
+
+  virtual void run(const Options&) {
+  }
+
+  virtual void update() {
+  }
+
+  virtual void stop() {
   }
 
   virtual float4* get_updated_camera_image() {
@@ -44,8 +62,13 @@ struct Integrator {
     return "Test Integrator";
   }
 
+  virtual bool can_run() const {
+    return rt.has_scene();
+  }
+
  protected:
-  const Raytracing& rt;
+  Raytracing& rt;
+  std::atomic<State> current_state = {State::Stopped};
 };
 
 }  // namespace etx

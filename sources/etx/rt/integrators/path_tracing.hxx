@@ -6,7 +6,7 @@
 namespace etx {
 
 struct CPUPathTracing : public Integrator {
-  CPUPathTracing(const Raytracing&);
+  CPUPathTracing(Raytracing&);
   ~CPUPathTracing() override;
 
   const char* name() override {
@@ -15,8 +15,8 @@ struct CPUPathTracing : public Integrator {
 
   Options options() const override {
     Options result = {};
-    result.set(1u, 256u, 65536u, "spp", "Samples per Pixel");
-    result.set(1u, 4096u, 65536u, "pathlen", "Maximal Path Length");
+    result.set(1u, 0x7fffu, 0xffffu, "spp", "Samples per Pixel");
+    result.set(1u, 0x7fffu, 65536u, "pathlen", "Maximal Path Length");
     result.set(1u, 5u, 65536u, "rrstart", "Start Russian Roulette at");
     return result;
   }
@@ -27,8 +27,11 @@ struct CPUPathTracing : public Integrator {
   const char* status() const override;
 
   void preview() override;
+  void run(const Options&) override;
+  void update() override;
+  void stop() override;
 
-  ETX_DECLARE_PIMPL(CPUPathTracing, 256);
+  ETX_DECLARE_PIMPL(CPUPathTracing, 4096);
 };
 
 }  // namespace etx

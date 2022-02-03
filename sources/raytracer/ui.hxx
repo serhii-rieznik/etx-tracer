@@ -16,17 +16,12 @@ namespace etx {
 struct UI {
   void initialize();
   void build(double dt, const char* status);
-  void render();
-  void cleanup();
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
   }
 
   void set_current_integrator(Integrator*);
-  void set_output_image_size(const uint2&);
-  void update_camera_image(float4*);
-  void update_light_image(float4*);
 
   const Options& integrator_options() const {
     return _integrator_options;
@@ -40,12 +35,18 @@ struct UI {
     std::function<void(std::string)> reference_image_selected;
     std::function<void(std::string)> scene_file_selected;
     std::function<void(Integrator*)> integrator_selected;
+    std::function<void()> stop_selected;
+    std::function<void()> preview_selected;
+    std::function<void()> run_selected;
+    std::function<void()> reload_scene_selected;
   } callbacks;
 
  private:
   void build_options(Options&);
+  void select_scene_file();
 
  private:
+  Integrator* _current_integrator = {};
   ArrayView<Integrator*> _integrators = {};
   Options _view_options = {};
   Options _integrator_options = {};

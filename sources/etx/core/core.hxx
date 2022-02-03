@@ -13,6 +13,7 @@ struct TimeMeasure {
   double lap();
 
   double measure() const;
+  double measure_ms() const;
   uint64_t measure_exact() const;
 
  private:

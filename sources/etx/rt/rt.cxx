@@ -32,7 +32,8 @@
 namespace etx {
 
 struct RaytracingImpl {
-  const Scene& scene;
+  TaskScheduler scheduler;
+  const Scene* scene = nullptr;
 
 #if (ETX_RT_API == ETX_RT_API_NANORT)
 
@@ -64,8 +65,16 @@ struct RaytracingImpl {
 
 #endif
 
-  RaytracingImpl(const Scene& s)
-    : scene(s) {
+  RaytracingImpl() = default;
+
+  ~RaytracingImpl() {
+    release_scene();
+  }
+
+  void set_scene(const Scene& s) {
+    scene = &s;
+    release_scene();
+
 #if (ETX_RT_API == ETX_RT_API_NANORT)
     linear_vertex_data.reserve(scene.vertices.count);
     for (uint32_t i = 0; i < scene.vertices.count; ++i) {
@@ -121,10 +130,10 @@ struct RaytracingImpl {
     auto geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_TRIANGLE);
 
     rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_VERTEX, 0, RTCFormat::RTC_FORMAT_FLOAT3,  //
-      scene.vertices.a, 0, sizeof(Vertex), scene.vertices.count);
+      scene->vertices.a, 0, sizeof(Vertex), scene->vertices.count);
 
     rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_INDEX, 0, RTCFormat::RTC_FORMAT_UINT3,  //
-      scene.triangles.a, 0, sizeof(Triangle), scene.triangles.count);
+      scene->triangles.a, 0, sizeof(Triangle), scene->triangles.count);
 
     rtcCommitGeometry(geometry);
     rtcAttachGeometry(rt_scene, geometry);
@@ -134,28 +143,45 @@ struct RaytracingImpl {
 #endif
   }
 
-  ~RaytracingImpl() {
+  void release_scene() {
 #if (ETX_RT_API == ETX_RT_API_EMBREE)
-    rtcReleaseScene(rt_scene);
-    rtcReleaseDevice(rt_device);
+    if (rt_scene) {
+      rtcReleaseScene(rt_scene);
+      rt_scene = {};
+    }
+    if (rt_device) {
+      rtcReleaseDevice(rt_device);
+      rt_device = {};
+    }
 #endif
   }
 };
 
 ETX_PIMPL_IMPLEMENT(Raytracing, Impl);
 
+Raytracing::Raytracing() {
+  ETX_PIMPL_INIT(Raytracing);
+}
+
 Raytracing::~Raytracing() {
   ETX_PIMPL_CLEANUP(Raytracing);
 }
 
+TaskScheduler& Raytracing::scheduler() {
+  return _private->scheduler;
+}
+
 void Raytracing::set_scene(const Scene& scene) {
-  ETX_PIMPL_CLEANUP(Raytracing);
-  ETX_PIMPL_INIT(Raytracing, scene);
+  _private->set_scene(scene);
+}
+
+bool Raytracing::has_scene() const {
+  return (_private->scene != nullptr) && _private->scene->valid();
 }
 
 const Scene& Raytracing::scene() const {
-  ETX_CRITICAL(_private != nullptr);
-  return _private->scene;
+  ETX_CRITICAL(has_scene());
+  return *(_private->scene);
 }
 
 bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler& smp) const {
@@ -216,8 +242,8 @@ bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler&
       break;
     }
 
-    const auto& tri = _private->scene.triangles[ray_hit.hit.primID];
-    const auto& mat = _private->scene.materials[tri.material_index];
+    const auto& tri = _private->scene->triangles[ray_hit.hit.primID];
+    const auto& mat = _private->scene->materials[tri.material_index];
     /*
     float3 bc = {1.0f - ray_hit.hit.u - ray_hit.hit.v, ray_hit.hit.u, ray_hit.hit.v};
     if (bsdf::continue_tracing(mat, lerp_uv(_private->scene.vertices, tri, bc), _private->scene, smp)) {
@@ -244,16 +270,16 @@ bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler&
 
   if (intersection_found) {
     float3 bc = {1.0f - barycentric.x - barycentric.y, barycentric.x, barycentric.y};
-    const auto& tri = _private->scene.triangles[triangle_index];
-    result_intersection = lerp(_private->scene.vertices, tri, bc);
+    const auto& tri = _private->scene->triangles[triangle_index];
+    result_intersection = lerp_vertex(_private->scene->vertices, tri, bc);
     result_intersection.barycentric = bc;
     result_intersection.triangle_index = static_cast<uint32_t>(triangle_index);
     result_intersection.w_i = r.d;
     result_intersection.t = t;
 
-    const auto& mat = _private->scene.materials[tri.material_index];
+    const auto& mat = _private->scene->materials[tri.material_index];
     if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {
-      auto sampled_normal = _private->scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
+      auto sampled_normal = _private->scene->images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
       float3x3 from_local = {
         {result_intersection.tan.x, result_intersection.tan.y, result_intersection.tan.z},
         {result_intersection.btn.x, result_intersection.btn.y, result_intersection.btn.z},

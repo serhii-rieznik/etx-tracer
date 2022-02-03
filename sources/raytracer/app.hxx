@@ -22,6 +22,10 @@ struct RTApplication {
   void on_referenece_image_selected(std::string);
   void on_scene_file_selected(std::string);
   void on_integrator_selected(Integrator*);
+  void on_preview_selected();
+  void on_run_selected();
+  void on_stop_selected();
+  void on_reload_scene_selected();
 
  private:
   RenderContext render;
@@ -39,6 +43,7 @@ struct RTApplication {
   };
 
   Integrator* _current_integrator = nullptr;
+  std::string _current_scene_file = {};
 };
 
 }  // namespace etx
