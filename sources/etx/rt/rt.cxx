@@ -180,12 +180,12 @@ bool Raytracing::has_scene() const {
 }
 
 const Scene& Raytracing::scene() const {
-  ETX_CRITICAL(has_scene());
+  ETX_ASSERT(has_scene());
   return *(_private->scene);
 }
 
 bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler& smp) const {
-  ETX_CRITICAL(_private != nullptr);
+  ETX_ASSERT(_private != nullptr);
 
   bool intersection_found = false;
   float2 barycentric = {};

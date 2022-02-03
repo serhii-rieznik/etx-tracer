@@ -16,8 +16,7 @@ const char* Environment::data_folder() {
 }
 
 void Environment::setup(const char* executable_path) {
-  uint64_t pos = get_file_folder(executable_path, _env.data_folder, sizeof(_env.data_folder));
-  snprintf(_env.data_folder + pos, sizeof(_env.data_folder) - pos, "data\\");
+  get_file_folder(executable_path, _env.data_folder, sizeof(_env.data_folder));
 }
 
 uint64_t get_file_folder(const char* file_name, char buffer[], uint64_t buffer_size) {
