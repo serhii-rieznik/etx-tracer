@@ -13,6 +13,8 @@ struct SceneRepresentation {
 
   const Scene& scene() const;
 
+  operator bool() const;
+
   ETX_DECLARE_PIMPL(SceneRepresentation, 2048);
 };
 

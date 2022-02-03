@@ -88,27 +88,6 @@ struct alignas(16) BoundingBox {
   }
 };
 
-struct Ray {
-  Ray() = default;
-
-  ETX_GPU_CODE Ray(const float3& origin, const float3& direction)
-    : o(origin)
-    , d(direction) {
-  }
-
-  ETX_GPU_CODE Ray(const float3& origin, const float3& direction, float t_min, float t_max)
-    : o(origin)
-    , min_t(t_min)
-    , d(direction)
-    , max_t(t_max) {
-  }
-
-  float3 o = {};
-  float min_t = kRayEpsilon;
-  float3 d = {};
-  float max_t = kMaxFloat;
-};
-
 struct alignas(16) Vertex {
   float3 pos = {};
   float3 nrm = {};
@@ -130,6 +109,48 @@ struct alignas(16) Frame {
   float3 tan = {};
   float3 btn = {};
   float3 nrm = {};
+};
+
+struct Ray {
+  Ray() = default;
+
+  ETX_GPU_CODE Ray(const float3& origin, const float3& direction)
+    : o(origin)
+    , d(direction) {
+  }
+
+  ETX_GPU_CODE Ray(const float3& origin, const float3& direction, float t_min, float t_max)
+    : o(origin)
+    , min_t(t_min)
+    , d(direction)
+    , max_t(t_max) {
+  }
+
+  float3 o = {};
+  float min_t = kRayEpsilon;
+  float3 d = {};
+  float max_t = kMaxFloat;
+};
+
+struct alignas(16) Intersection : public Vertex {
+  float3 barycentric = {};
+  uint32_t triangle_index = kInvalidIndex;
+  float3 w_i = {};
+  float t = -kMaxFloat;
+
+  Intersection() = default;
+
+  ETX_GPU_CODE Intersection(const Vertex& v)
+    : Vertex(v) {
+  }
+
+  ETX_GPU_CODE float distance() const {
+    return t;
+  }
+
+  ETX_GPU_CODE operator bool() const {
+    return t >= 0.0f;
+  }
 };
 
 ETX_GPU_CODE float3 to_float3(const float4& v) {

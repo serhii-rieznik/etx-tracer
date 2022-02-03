@@ -84,6 +84,7 @@ struct SceneRepresentationImpl {
   uint32_t camera_lens_shape_image_index = kInvalidIndex;
 
   Scene scene;
+  bool loaded = false;
 
   uint32_t add_image(const char* path, uint32_t options) {
     std::string id = path ? path : ("image-" + std::to_string(materials.size()));
@@ -119,7 +120,9 @@ struct SceneRepresentationImpl {
   }
 
   ~SceneRepresentationImpl() {
+    cleanup();
     images.cleanup();
+    mediums.cleanup();
   }
 
   void cleanup() {
@@ -139,6 +142,7 @@ struct SceneRepresentationImpl {
     free(scene.emitters_distribution.values);
     scene.emitters_distribution = {};
     scene = {};
+    loaded = false;
   }
 
   bool calculate_area(Triangle& t) {
@@ -232,7 +236,7 @@ struct SceneRepresentationImpl {
     };
 
     SMikkTSpaceContext context = {};
-    context.m_pUserData = this;
+    context.m_pUserData = &scene;
     context.m_pInterface = &contextInterface;
 
     genTangSpaceDefault(&context);
@@ -311,6 +315,8 @@ struct SceneRepresentationImpl {
     emitters_distribution.finalize();
 
     build_gpu_data();
+
+    loaded = true;
   }
 
   void build_gpu_data() {
@@ -416,7 +422,7 @@ struct SceneRepresentationImpl {
 
   void build_camera(const float3& origin, const float3& target, const float3& up, const float2& viewport, float fov, float lens_radius, float focal_distance) {
     float4x4 view = glm::lookAtRH(origin, target, up);
-    float4x4 proj = glm::perspectiveFovRH_ZO(fov, viewport.x, viewport.y, 1.0f, 1024.0f);
+    float4x4 proj = glm::perspectiveFovRH_ZO(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
 
     auto inv_view = glm::inverse(view);
     scene.camera.position = {inv_view[3][0], inv_view[3][1], inv_view[3][2]};
@@ -451,6 +457,10 @@ ETX_PIMPL_IMPLEMENT_ALL(SceneRepresentation, Impl);
 
 const Scene& SceneRepresentation::scene() const {
   return _private->scene;
+}
+
+SceneRepresentation::operator bool() const {
+  return _private->loaded;
 }
 
 template <class V, int n>

@@ -39,7 +39,7 @@ void log::output(Color clr, const char* fmt, ...) {
 
   va_list list = {};
   va_start(list, fmt);
-  int required_size = _vscprintf(fmt, list);
+  int required_size = _vscprintf(fmt, list) + 1;
   if (required_size + 1 < local_buffer_size) {
     char* buffer = (char*)_malloca(required_size + 1);
     vsnprintf(buffer, required_size, fmt, list);

@@ -51,13 +51,19 @@ void RTApplication::on_scene_file_selected(std::string file_name) {
     _current_integrator->stop();
   }
 
-  scene.load_from_file(file_name.c_str());
-  render.set_output_dimensions(scene.scene().camera.image_size);
+  if (scene.load_from_file(file_name.c_str()) == false) {
+    log::error("Failed to load scene from file: %s", file_name.c_str());
+    return;
+  }
 
-  // TODO : load scene
-  if (_current_integrator != nullptr) {
-    _current_integrator->set_output_size(scene.scene().camera.image_size);
-    _current_integrator->preview();
+  raytracing.set_scene(scene.scene());
+  if (scene) {
+    render.set_output_dimensions(scene.scene().camera.image_size);
+
+    if (_current_integrator != nullptr) {
+      _current_integrator->set_output_size(scene.scene().camera.image_size);
+      _current_integrator->preview();
+    }
   }
 }
 
@@ -73,8 +79,10 @@ void RTApplication::on_integrator_selected(Integrator* i) {
   _current_integrator = i;
   ui.set_current_integrator(_current_integrator);
 
-  _current_integrator->set_output_size(scene.scene().camera.image_size);
-  _current_integrator->preview();
+  if (scene) {
+    _current_integrator->set_output_size(scene.scene().camera.image_size);
+    _current_integrator->preview();
+  }
 }
 
 }  // namespace etx

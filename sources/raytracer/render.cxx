@@ -306,6 +306,8 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
     return v_image;
   }
 
+  c_image = to_rgb(c_image);
+  l_image = to_rgb(l_image);
   v_image = to_rgb(v_image);
   float v_lum = dot(v_image.xyz, lum);
 

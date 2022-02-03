@@ -5,6 +5,7 @@
 
 #include <etx/render/host/scene_loader.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
+#include <etx/rt/rt.hxx>
 
 #include "ui.hxx"
 #include "render.hxx"
@@ -27,15 +28,14 @@ struct RTApplication {
   UI ui;
   TimeMeasure time_measure;
   SceneRepresentation scene;
+  Raytracing raytracing;
 
-  struct {
-    Integrator _test;
-    CPUPathTracing _cpu_pt;
-  } _integrators = {};
+  Integrator _test = {raytracing};
+  CPUPathTracing _cpu_pt = {raytracing};
 
   Integrator* _integrator_array[2] = {
-    &_integrators._test,
-    &_integrators._cpu_pt,
+    &_test,
+    &_cpu_pt,
   };
 
   Integrator* _current_integrator = nullptr;

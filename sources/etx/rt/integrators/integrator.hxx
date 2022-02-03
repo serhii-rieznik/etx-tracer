@@ -1,11 +1,16 @@
 ﻿#pragma once
 
 #include <etx/core/options.hxx>
-#include <etx/render/shared/base.hxx>
+#include <etx/render/shared/scene.hxx>
+#include <etx/rt/rt.hxx>
 
 namespace etx {
 
 struct Integrator {
+  Integrator(const Raytracing& r)
+    : rt(r) {
+  }
+
   virtual ~Integrator() = default;
 
   virtual const char* name() {
@@ -38,6 +43,9 @@ struct Integrator {
   virtual const char* status() const {
     return "Test Integrator";
   }
+
+ protected:
+  const Raytracing& rt;
 };
 
 }  // namespace etx

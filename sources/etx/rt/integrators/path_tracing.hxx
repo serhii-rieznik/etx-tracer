@@ -6,7 +6,7 @@
 namespace etx {
 
 struct CPUPathTracing : public Integrator {
-  CPUPathTracing();
+  CPUPathTracing(const Raytracing&);
   ~CPUPathTracing() override;
 
   const char* name() override {
@@ -25,6 +25,8 @@ struct CPUPathTracing : public Integrator {
   float4* get_updated_camera_image() override;
   float4* get_updated_light_image() override;
   const char* status() const override;
+
+  void preview() override;
 
   ETX_DECLARE_PIMPL(CPUPathTracing, 256);
 };
