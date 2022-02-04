@@ -213,8 +213,8 @@ ViewOptions UI::view_options() const {
 
 void UI::set_current_integrator(Integrator* i) {
   _current_integrator = i;
-  _integrator_name = _current_integrator->name();
-  _integrator_options = _current_integrator->options();
+  _integrator_name = _current_integrator ? _current_integrator->name() : "";
+  _integrator_options = _current_integrator ? _current_integrator->options() : Options{};
 }
 
 void UI::select_scene_file() {

@@ -28,6 +28,9 @@ struct RTApplication {
   void on_reload_scene_selected();
 
  private:
+  void save_options();
+
+ private:
   RenderContext render;
   UI ui;
   TimeMeasure time_measure;
@@ -44,6 +47,7 @@ struct RTApplication {
 
   Integrator* _current_integrator = nullptr;
   std::string _current_scene_file = {};
+  Options _options;
 };
 
 }  // namespace etx

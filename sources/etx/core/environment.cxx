@@ -15,6 +15,12 @@ const char* Environment::data_folder() {
   return _env.data_folder;
 }
 
+const char* Environment::file_in_data(const char* f) {
+  static char buffer[2048] = {};
+  snprintf(buffer, sizeof(buffer), "%s%s", _env.data_folder, f);
+  return buffer;
+}
+
 void Environment::setup(const char* executable_path) {
   get_file_folder(executable_path, _env.data_folder, sizeof(_env.data_folder));
 }

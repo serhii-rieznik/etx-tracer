@@ -48,13 +48,14 @@ function(create_library folder)
 endfunction(create_library)
 
 create_library(core)
-target_include_directories(etx-core PUBLIC ..)
+target_link_libraries(etx-core PUBLIC jansson)
+target_include_directories(etx-core PUBLIC .. ${JANSSON_INCLUDE_DIRS})
 
 create_library(log)
 target_link_libraries(etx-log PRIVATE etx-core)
 
 create_library(render)
-target_link_libraries(etx-render PRIVATE glm stb_image tinyexr tiny_obj_loader mikktspace jansson enkiTS etx-core)
+target_link_libraries(etx-render PRIVATE glm stb_image tinyexr tiny_obj_loader mikktspace enkiTS etx-core)
 target_include_directories(etx-render PRIVATE ${JANSSON_INCLUDE_DIRS})
 
 find_package(embree 3.0 REQUIRED)

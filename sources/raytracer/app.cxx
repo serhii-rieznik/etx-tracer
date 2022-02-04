@@ -1,4 +1,5 @@
-﻿#include <etx/log/log.hxx>
+﻿#include <etx/core/environment.hxx>
+#include <etx/log/log.hxx>
 
 #include <etx/render/host/image_pool.hxx>
 
@@ -19,6 +20,27 @@ void RTApplication::init() {
   ui.callbacks.run_selected = std::bind(&RTApplication::on_run_selected, this);
   ui.callbacks.stop_selected = std::bind(&RTApplication::on_stop_selected, this);
   ui.callbacks.reload_scene_selected = std::bind(&RTApplication::on_reload_scene_selected, this);
+
+  _options.load_from_file(env().file_in_data("options.json"));
+
+  auto integrator = _options.get("integrator", std::string{}).name;
+  for (uint64_t i = 0; (integrator.empty() == false) && (i < std::size(_integrator_array)); ++i) {
+    if (integrator == _integrator_array[i]->name()) {
+      _current_integrator = _integrator_array[i];
+      break;
+    }
+  }
+
+  ui.set_current_integrator(_current_integrator);
+
+  _current_scene_file = _options.get("scene", std::string{}).name;
+  if (_current_scene_file.empty() == false) {
+    on_scene_file_selected(_current_scene_file);
+  }
+}
+
+void RTApplication::save_options() {
+  _options.save_to_file(env().file_in_data("options.json"));
 }
 
 void RTApplication::frame() {
@@ -61,6 +83,9 @@ void RTApplication::on_scene_file_selected(std::string file_name) {
     _current_integrator->stop();
   }
 
+  _options.set("scene", _current_scene_file);
+  save_options();
+
   if (scene.load_from_file(_current_scene_file.c_str()) == false) {
     log::error("Failed to load scene from file: %s", _current_scene_file.c_str());
     return;
@@ -81,6 +106,9 @@ void RTApplication::on_integrator_selected(Integrator* i) {
   if (_current_integrator == i) {
     return;
   }
+
+  _options.set("integrator", i->name());
+  save_options();
 
   if (_current_integrator != nullptr) {
     _current_integrator->stop();

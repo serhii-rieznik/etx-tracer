@@ -6,6 +6,10 @@ namespace etx {
 
 struct Environment {
   const char* data_folder();
+
+  // not thread save, uses static data storage, use at your own risk
+  const char* file_in_data(const char*);
+
   void setup(const char* executable_path);
 };
 

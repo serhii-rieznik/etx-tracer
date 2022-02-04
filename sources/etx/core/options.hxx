@@ -152,6 +152,16 @@ struct Options {
     return {def, id, {}};
   }
 
+  template <>
+  OptionalValue get<std::string>(const std::string& id, std::string def) const {
+    for (const auto& option : values) {
+      if (option.id == id) {
+        return option;
+      }
+    }
+    return {id, def};
+  }
+
   OptionalValue& set(const OptionalValue& def) {
     for (auto& option : values) {
       if (option.id == def.id) {
@@ -166,6 +176,9 @@ struct Options {
   void set(args&&... a) {
     set({std::forward<args>(a)...});
   }
+
+  void save_to_file(const char*);
+  bool load_from_file(const char*);
 };
 
 }  // namespace etx
