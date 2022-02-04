@@ -1655,7 +1655,9 @@ SOKOL_API_IMPL void simgui_setup(const simgui_desc_t* desc) {
         ImGui::StyleColorsDark();
         ImGuiIO* io = &ImGui::GetIO();
         if (!_simgui.desc.no_default_font) {
-            io->Fonts->AddFontDefault();
+            ImFontConfig cfg;
+            cfg.SizePixels = 13.0f * sapp_dpi_scale();
+            io->Fonts->AddFontDefault(&cfg)->Scale = 1.0f / sapp_dpi_scale();
         }
     #else
         igCreateContext(NULL);
