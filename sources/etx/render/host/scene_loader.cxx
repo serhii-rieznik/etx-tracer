@@ -79,7 +79,6 @@ struct SceneRepresentationImpl {
   MediumPool mediums;
 
   std::unordered_map<std::string, uint32_t> material_mapping;
-  std::unordered_map<std::string, uint32_t> medium_mapping;
   uint32_t camera_medium_index = kInvalidIndex;
   uint32_t camera_lens_shape_image_index = kInvalidIndex;
 
@@ -87,7 +86,7 @@ struct SceneRepresentationImpl {
   bool loaded = false;
 
   uint32_t add_image(const char* path, uint32_t options) {
-    std::string id = path ? path : ("image-" + std::to_string(materials.size()));
+    std::string id = path ? path : ("image-" + std::to_string(images.array_size()));
     return images.add_from_file(path, options);
   }
 
@@ -104,13 +103,13 @@ struct SceneRepresentationImpl {
   }
 
   uint32_t add_medium(const char* name, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g) {
-    std::string id = name ? name : ("medium-" + std::to_string(materials.size()));
-    return mediums.add_homogenous(id.c_str(), s_a, s_t, g);
+    std::string id = name ? name : ("medium-" + std::to_string(mediums.array_size()));
+    return mediums.add_homogenous(id, s_a, s_t, g);
   }
 
   uint32_t add_medium(const char* name, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g) {
-    std::string id = name ? name : ("medium-" + std::to_string(materials.size()));
-    return mediums.add_heterogenous(id.c_str(), volume_file, s_a, s_t, g);
+    std::string id = name ? name : ("medium-" + std::to_string(mediums.array_size()));
+    return mediums.add_heterogenous(id, volume_file, s_a, s_t, g);
   }
 
   SceneRepresentationImpl() {
@@ -131,7 +130,6 @@ struct SceneRepresentationImpl {
     materials.clear();
     emitters.clear();
     material_mapping.clear();
-    medium_mapping.clear();
     camera_medium_index = kInvalidIndex;
     camera_lens_shape_image_index = kInvalidIndex;
 
@@ -847,7 +845,8 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         camera_lens_shape_image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
       }
     } else if (material.name == "et::medium") {
-      if (get_param(material, "id", data_buffer) == false) {
+      char name_buffer[2048] = {};
+      if (get_param(material, "id", name_buffer) == false) {
         continue;
       }
 
@@ -882,9 +881,9 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       uint32_t medium_index = kInvalidIndex;
 
       if (strlen(tmp_buffer) == 0) {
-        medium_index = add_medium(data_buffer, s_a, s_t, g);
+        medium_index = add_medium(name_buffer, s_a, s_t, g);
       } else {
-        medium_index = add_medium(data_buffer, tmp_buffer, s_a, s_t, g);
+        medium_index = add_medium(name_buffer, tmp_buffer, s_a, s_t, g);
       }
 
       if (strcmp(data_buffer, "camera") == 0) {
@@ -959,23 +958,19 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       if (get_param(material, "int_medium", data_buffer)) {
-        auto m = medium_mapping.find(data_buffer);
-        if (m != medium_mapping.end()) {
-          mtl.int_medium = m->second;
-        } else {
+        auto m = mediums.find(data_buffer);
+        if (m == kInvalidIndex) {
           log::warning("Medium %s was not declared, but used in material %s as internal medium", data_buffer, material.name.c_str());
         }
+        mtl.int_medium = m;
       }
 
       if (get_param(material, "ext_medium", data_buffer)) {
-        auto m = medium_mapping.find(data_buffer);
-        if (m != medium_mapping.end()) {
-          mtl.ext_medium = m->second;
-        } else {
+        auto m = mediums.find(data_buffer);
+        if (m == kInvalidIndex) {
           log::warning("Medium %s was not declared, but used in material %s as external medium\n", data_buffer, material.name.c_str());
         }
-      } else {
-        mtl.ext_medium = camera_medium_index;
+        mtl.ext_medium = m;
       }
 
       if (get_param(material, "spectrum_kd", data_buffer)) {

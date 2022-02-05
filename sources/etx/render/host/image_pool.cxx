@@ -23,18 +23,20 @@ struct ImagePoolImpl {
     image_pool.cleanup();
   }
 
-  uint32_t add_from_file(const char* path, uint32_t image_options) {
-    auto i = _mapping.find(path);
-    if (i != _mapping.end()) {
+  uint32_t add_from_file(const std::string& path, uint32_t image_options) {
+    auto i = mapping.find(path);
+    if (i != mapping.end()) {
       return i->second;
     }
 
     auto handle = image_pool.alloc();
     auto& image = image_pool.get(handle);
-    load_image(image, path, image_options);
+    load_image(image, path.c_str(), image_options);
     if (image_options & Image::BuildSamplingTable) {
       build_sampling_table(image);
     }
+
+    mapping[path] = handle;
     return handle;
   }
 
@@ -49,10 +51,18 @@ struct ImagePoolImpl {
 
     free_image(image_pool.get(handle));
     image_pool.free(handle);
+
+    for (auto i = mapping.begin(), e = mapping.end(); i != e; ++i) {
+      if (i->second == handle) {
+        mapping.erase(i);
+        break;
+      }
+    }
   }
 
   void remove_all() {
     image_pool.free_all(std::bind(&ImagePoolImpl::free_image, this, std::placeholders::_1));
+    mapping.clear();
   }
 
   void load_image(Image& img, const char* file_name, uint32_t options) {
@@ -72,6 +82,7 @@ struct ImagePoolImpl {
       img.isize.y = 1;
     }
 
+    img.options = img.options | options;
     img.fsize.x = static_cast<float>(img.isize.x);
     img.fsize.y = static_cast<float>(img.isize.y);
     img.pixels = reinterpret_cast<float4*>(calloc(1llu * img.isize.x * img.isize.y, sizeof(float4)));
@@ -262,7 +273,7 @@ struct ImagePoolImpl {
   }
 
   ObjectIndexPool<Image> image_pool;
-  std::unordered_map<std::string, uint32_t> _mapping;
+  std::unordered_map<std::string, uint32_t> mapping;
   Image empty;
 };
 
@@ -276,7 +287,7 @@ void ImagePool::cleanup() {
   _private->cleanup();
 }
 
-uint32_t ImagePool::add_from_file(const char* path, uint32_t image_options) {
+uint32_t ImagePool::add_from_file(const std::string& path, uint32_t image_options) {
   return _private->add_from_file(path, image_options);
 }
 

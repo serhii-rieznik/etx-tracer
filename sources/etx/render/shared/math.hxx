@@ -78,7 +78,7 @@ constexpr float kMaxFloat = 3.402823466e+38f;
 constexpr float kRayEpsilon = 1.0e-4f;
 constexpr float kDeltaAlphaTreshold = 1.0e-4f;
 
-constexpr uint32_t kInvalidIndex = static_cast<uint32_t>(-1);
+constexpr uint32_t kInvalidIndex = ~0u;
 
 struct alignas(16) BoundingBox {
   float3 p_min ETX_EMPTY_INIT;

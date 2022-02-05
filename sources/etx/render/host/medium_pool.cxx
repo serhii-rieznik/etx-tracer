@@ -16,49 +16,47 @@ struct MediumPoolImpl {
     medium_pool.cleanup();
   }
 
-  uint32_t add_homogenous(const char* id, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
-    auto i = _mapping.find(id);
-    if (i != _mapping.end()) {
+  uint32_t add_homogenous(const std::string& id, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
+    auto i = mapping.find(id);
+    if (i != mapping.end()) {
       return i->second;
     }
 
     auto handle = medium_pool.alloc();
+
     auto& medium = medium_pool.get(handle);
+    medium.s_absorption = s_a;
+    medium.s_outscattering = s_o;
+    medium.phase_function_g = g;
+    medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
+    medium.cls = s_a.is_zero() && s_o.is_zero() ? Medium::Class::Vacuum : Medium::Class::Homogeneous;
 
-    if (medium.s_absorption.is_zero() && medium.s_outscattering.is_zero()) {
-      medium.cls = Medium::Class::Vacuum;
-    } else {
-      medium.cls = Medium::Class::Homogeneous;
-      medium.s_absorption = s_a;
-      medium.s_outscattering = s_o;
-      medium.phase_function_g = g;
-    }
-
+    mapping[id] = handle;
     return handle;
   }
 
-  uint32_t add_heterogenous(const char* id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
-    auto i = _mapping.find(id);
-    if (i != _mapping.end()) {
+  uint32_t add_heterogenous(const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
+    auto i = mapping.find(id);
+    if (i != mapping.end()) {
       return i->second;
     }
 
     auto handle = medium_pool.alloc();
+
     auto& medium = medium_pool.get(handle);
+    medium.s_absorption = s_a;
+    medium.s_outscattering = s_o;
+    medium.phase_function_g = g;
+    medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
+    medium.cls = s_a.is_zero() && s_o.is_zero() ? Medium::Class::Vacuum : Medium::Class::Heterogeneous;
 
-    if (s_a.is_zero() && s_o.is_zero()) {
-      medium.cls = Medium::Class::Vacuum;
-    } else {
-      medium.cls = Medium::Class::Heterogeneous;
-      medium.s_absorption = s_a;
-      medium.s_outscattering = s_o;
-      medium.phase_function_g = g;
-      medium.max_sigma = medium.s_outscattering.maximum_power() + medium.s_absorption.maximum_power();
-
+    if (medium.cls == Medium::Class::Heterogeneous) {
       auto density = load_density_grid(volume_file, medium.dimensions.x, medium.dimensions.y, medium.dimensions.z, medium.max_density);
       medium.density.count = density.size();
       medium.density.a = reinterpret_cast<float*>(malloc(medium.density.count * sizeof(float)));
     }
+
+    mapping[id] = handle;
     return handle;
   }
 
@@ -73,10 +71,18 @@ struct MediumPoolImpl {
 
     free_medium(medium_pool.get(handle));
     medium_pool.free(handle);
+
+    for (auto i = mapping.begin(), e = mapping.end(); i != e; ++i) {
+      if (i->second == handle) {
+        mapping.erase(i);
+        break;
+      }
+    }
   }
 
   void remove_all() {
     medium_pool.free_all(std::bind(&MediumPoolImpl::free_medium, this, std::placeholders::_1));
+    mapping.clear();
   }
 
   void free_medium(Medium& m) {
@@ -132,7 +138,7 @@ struct MediumPoolImpl {
   }
 
   ObjectIndexPool<Medium> medium_pool;
-  std::unordered_map<const char*, uint32_t> _mapping;
+  std::unordered_map<std::string, uint32_t> mapping;
 };
 
 ETX_PIMPL_IMPLEMENT_ALL(MediumPool, Impl);
@@ -145,11 +151,11 @@ void MediumPool::cleanup() {
   _private->cleanup();
 }
 
-uint32_t MediumPool::add_homogenous(const char* id, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
+uint32_t MediumPool::add_homogenous(const std::string& id, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
   return _private->add_homogenous(id, s_a, s_o, g);
 }
 
-uint32_t MediumPool::add_heterogenous(const char* id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
+uint32_t MediumPool::add_heterogenous(const std::string& id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
   return _private->add_heterogenous(id, volume, s_a, s_o, g);
 }
 
@@ -175,6 +181,11 @@ Medium* MediumPool::as_array() {
 
 uint64_t MediumPool::array_size() {
   return 1llu + _private->medium_pool.latest_alive_index();
+}
+
+uint32_t MediumPool::find(const char* id) {
+  auto i = _private->mapping.find(id);
+  return (i == _private->mapping.end()) ? kInvalidIndex : i->second;
 }
 
 }  // namespace etx
