@@ -95,7 +95,7 @@ void TaskScheduler::wait(Task::Handle handle) {
   _private->task_pool.free(handle.internal);
 }
 
-void TaskScheduler::restart(Task::Handle handle) {
+void TaskScheduler::restart(Task::Handle handle, uint32_t new_rage) {
   if (handle.internal == Task::InvalidHandle) {
     return;
   }
@@ -104,7 +104,16 @@ void TaskScheduler::restart(Task::Handle handle) {
   if (task_wrapper.GetIsComplete() == false) {
     _private->scheduler.WaitforTaskSet(&task_wrapper);
   }
+  task_wrapper.m_SetSize = new_rage;
   _private->scheduler.AddTaskSetToPipe(&task_wrapper);
+}
+
+void TaskScheduler::restart(Task::Handle handle) {
+  if (handle.internal == Task::InvalidHandle) {
+    return;
+  }
+  auto& task_wrapper = _private->task_pool.get(handle.internal);
+  restart(handle, task_wrapper.m_SetSize);
 }
 
 }  // namespace etx

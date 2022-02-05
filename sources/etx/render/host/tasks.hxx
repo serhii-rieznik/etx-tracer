@@ -35,6 +35,7 @@ struct TaskScheduler {
   void wait(Task::Handle);
 
   void restart(Task::Handle);
+  void restart(Task::Handle, uint32_t new_rage);
 
  private:
   ETX_DECLARE_PIMPL(TaskScheduler, 256);

@@ -11,7 +11,8 @@ struct CPUPathTracingImpl : public Task {
   Raytracing& rt;
   std::vector<float4> camera_image;
   std::vector<RNDSampler> samplers;
-  uint2 dimensions = {};
+  uint2 film_dimensions = {};
+  uint2 current_dimensions = {};
   char status[2048] = {};
 
   TimeMeasure total_time = {};
@@ -21,6 +22,7 @@ struct CPUPathTracingImpl : public Task {
   uint32_t max_iterations = ~0u;
   uint32_t max_depth = ~0u;
   uint32_t rr_start = ~0u;
+  uint32_t preview_scale = 1u;
   std::atomic<Integrator::State>* state = nullptr;
 
   CPUPathTracingImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
@@ -31,12 +33,16 @@ struct CPUPathTracingImpl : public Task {
 
   void start() {
     iteration = 0;
-    dimensions = {rt.scene().camera.image_size.x, rt.scene().camera.image_size.y};
+    film_dimensions = {rt.scene().camera.image_size.x, rt.scene().camera.image_size.y};
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
+
+    preview_scale = max(1u, uint32_t(exp2(3.0f - iteration)));
+    uint32_t scale = (state->load() == Integrator::State::Running) ? 1u : preview_scale;
+    current_dimensions = film_dimensions / scale;
 
     total_time = {};
     iteration_time = {};
-    current_task = rt.scheduler().schedule(this, dimensions.x * dimensions.y);
+    current_task = rt.scheduler().schedule(this, current_dimensions.x * current_dimensions.y);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
@@ -44,20 +50,26 @@ struct CPUPathTracingImpl : public Task {
     auto mode = state->load();
     if (mode == Integrator::State::Preview) {
       for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-        uint32_t x = i % dimensions.x;
-        uint32_t y = i / dimensions.x;
+        uint32_t x = i % current_dimensions.x;
+        uint32_t y = i / current_dimensions.x;
         float4 xyz = {preview_pixel(smp, x, y), 1.0f};
 
-        uint32_t j = x + (dimensions.y - 1 - y) * dimensions.x;
-        camera_image[j] = (iteration == 0) ? xyz : lerp(xyz, camera_image[j], float(iteration) / (float(iteration + 1)));
+        for (uint32_t ay = 0; ay < preview_scale; ++ay) {
+          for (uint32_t ax = 0; ax < preview_scale; ++ax) {
+            uint32_t rx = x * preview_scale + ax;
+            uint32_t ry = y * preview_scale + ay;
+            uint32_t j = rx + (film_dimensions.y - 1 - ry) * film_dimensions.x;
+            camera_image[j] = (preview_scale > 1) ? xyz : lerp(xyz, camera_image[j], float(iteration) / (float(iteration + 1)));
+          }
+        }
       }
     } else {
       for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-        uint32_t x = i % dimensions.x;
-        uint32_t y = i / dimensions.x;
+        uint32_t x = i % film_dimensions.x;
+        uint32_t y = i / film_dimensions.x;
         float4 xyz = {trace_pixel(smp, x, y), 1.0f};
 
-        uint32_t j = x + (dimensions.y - 1 - y) * dimensions.x;
+        uint32_t j = x + (film_dimensions.y - 1 - y) * film_dimensions.x;
         camera_image[j] = (iteration == 0) ? xyz : lerp(xyz, camera_image[j], float(iteration) / (float(iteration + 1)));
       }
     }
@@ -78,7 +90,7 @@ struct CPUPathTracingImpl : public Task {
 
     Intersection intersection = {};
     Medium::Sample medium_sample = {};
-    auto ray = generate_ray(smp, rt.scene(), get_jittered_uv(smp, {x, y}, dimensions));
+    auto ray = generate_ray(smp, rt.scene(), get_jittered_uv(smp, {x, y}, current_dimensions));
     while ((state->load() != Integrator::State::Stopped) && (path_length <= max_depth)) {
       bool found_intersection = rt.trace(ray, intersection, smp);
 
@@ -214,7 +226,7 @@ struct CPUPathTracingImpl : public Task {
   }
 
   float3 preview_pixel(RNDSampler& smp, uint32_t x, uint32_t y) {
-    auto ray = generate_ray(smp, rt.scene(), get_jittered_uv(smp, {x, y}, dimensions));
+    auto ray = generate_ray(smp, rt.scene(), get_jittered_uv(smp, {x, y}, current_dimensions));
 
     float3 xyz = {0.1f, 0.1f, 0.1f};
 
@@ -302,7 +314,7 @@ CPUPathTracing::~CPUPathTracing() {
 }
 
 void CPUPathTracing::set_output_size(const uint2& dim) {
-  _private->dimensions = dim;
+  _private->film_dimensions = dim;
   _private->camera_image.resize(1llu * dim.x * dim.y);
 }
 
@@ -352,7 +364,12 @@ void CPUPathTracing::update() {
         (current_state == Integrator::State::Running ? "Running" : "Preview"), _private->iteration_time.measure_ms());
       _private->iteration_time = {};
       _private->iteration += 1;
-      rt.scheduler().restart(_private->current_task);
+
+      _private->preview_scale = max(1u, uint32_t(exp2(3.0f - _private->iteration)));
+      uint32_t scale = (current_state == Integrator::State::Running) ? 1u : _private->preview_scale;
+      _private->current_dimensions = _private->film_dimensions / scale;
+
+      rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
     }
   }
 }

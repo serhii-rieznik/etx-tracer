@@ -116,7 +116,7 @@ struct SceneRepresentationImpl {
   SceneRepresentationImpl() {
     images.init(1024u);
     mediums.init(1024u);
-    build_camera({5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280.0f, 720.0f}, 26.99f * kPi / 180.0f, 0.0f, 1.0f);
+    scene.camera = build_camera({5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280.0f, 720.0f}, 26.99f, 0.0f, 1.0f);
   }
 
   ~SceneRepresentationImpl() {
@@ -141,7 +141,11 @@ struct SceneRepresentationImpl {
 
     free(scene.emitters_distribution.values);
     scene.emitters_distribution = {};
+
+    auto camera = scene.camera;
     scene = {};
+    scene.camera = camera;
+
     loaded = false;
   }
 
@@ -420,29 +424,6 @@ struct SceneRepresentationImpl {
     // */
   }
 
-  void build_camera(const float3& origin, const float3& target, const float3& up, const float2& viewport, float fov, float lens_radius, float focal_distance) {
-    float4x4 view = glm::lookAtRH(origin, target, up);
-    float4x4 proj = glm::perspectiveFovRH_ZO(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
-
-    auto inv_view = glm::inverse(view);
-    scene.camera.position = {inv_view[3][0], inv_view[3][1], inv_view[3][2]};
-    scene.camera.side = {view[0][0], view[1][0], view[2][0]};
-    scene.camera.up = {view[0][1], view[1][1], view[2][1]};
-    scene.camera.direction = {-view[0][2], -view[1][2], -view[2][2]};
-    scene.camera.tan_half_fov = 1.0f / std::abs(proj[1][1]);
-    scene.camera.aspect = proj[1][1] / proj[0][0];
-    scene.camera.view_proj = proj * view;
-    scene.camera.lens_radius = lens_radius;
-    scene.camera.focal_distance = focal_distance;
-
-    float plane_w = 2.0f * scene.camera.tan_half_fov * scene.camera.aspect;
-    float plane_h = 2.0f * scene.camera.tan_half_fov;
-    scene.camera.area = plane_w * plane_h;
-
-    scene.camera.image_size = viewport;
-    scene.camera.image_plane = float(scene.camera.image_size.x) / (2.0f * scene.camera.tan_half_fov);
-  }
-
   enum : uint32_t {
     LoadFailed = 0u,
     LoadSucceeded = 1u << 0u,
@@ -453,10 +434,46 @@ struct SceneRepresentationImpl {
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
+Camera build_camera(const float3& origin, const float3& target, const float3& up, const float2& viewport, float fov, float lens_radius, float focal_distance) {
+  Camera result = {};
+  result.focal_distance = focal_distance;
+  result.lens_radius = lens_radius;
+  update_camera(result, origin, target, up, viewport, fov);
+  return result;
+}
+
+void update_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const float2& viewport, float fov) {
+  float4x4 view = glm::lookAtRH(origin, target, up);
+  float4x4 proj = glm::perspectiveFovRH_ZO(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
+
+  auto inv_view = glm::inverse(view);
+  camera.position = {inv_view[3][0], inv_view[3][1], inv_view[3][2]};
+  camera.side = {view[0][0], view[1][0], view[2][0]};
+  camera.up = {view[0][1], view[1][1], view[2][1]};
+  camera.direction = {-view[0][2], -view[1][2], -view[2][2]};
+  camera.tan_half_fov = 1.0f / std::abs(proj[1][1]);
+  camera.aspect = proj[1][1] / proj[0][0];
+  camera.view_proj = proj * view;
+
+  float plane_w = 2.0f * camera.tan_half_fov * camera.aspect;
+  float plane_h = 2.0f * camera.tan_half_fov;
+  camera.area = plane_w * plane_h;
+  camera.image_size = viewport;
+  camera.image_plane = float(camera.image_size.x) / (2.0f * camera.tan_half_fov);
+}
+
+float get_camera_fov(const Camera& camera) {
+  return 2.0f * atanf(camera.tan_half_fov) * 180.0f / kPi;
+}
+
 ETX_PIMPL_IMPLEMENT_ALL(SceneRepresentation, Impl);
 
 const Scene& SceneRepresentation::scene() const {
   return _private->scene;
+}
+
+Camera& SceneRepresentation::camera() {
+  return _private->scene.camera;
 }
 
 SceneRepresentation::operator bool() const {
@@ -489,6 +506,13 @@ bool SceneRepresentation::load_from_file(const char* filename) {
   auto file_to_load = filename;
   get_file_folder(filename, buffer, sizeof(buffer));
 
+  auto& cam = _private->scene.camera;
+  float3 camera_pos = cam.position;
+  float3 camera_up = {0.0f, 1.0f, 0.0f};
+  float3 camera_view = cam.position + cam.direction;
+  float2 viewport = cam.image_size;
+  float camera_fov = get_camera_fov(cam);
+
   if (strcmp(get_file_ext(filename), ".json") == 0) {
     json_error_t err = {};
     auto js = json_load_file(filename, 0, &err);
@@ -502,13 +526,6 @@ bool SceneRepresentation::load_from_file(const char* filename) {
       json_decref(js);
       return false;
     }
-
-    auto& cam = _private->scene.camera;
-    float3 camera_pos = cam.position;
-    float3 camera_up = {0.0f, 1.0f, 0.0f};
-    float3 camera_view = cam.position + cam.direction;
-    float2 viewport = cam.image_size;
-    float camera_fov = 2.0f * atanf(cam.tan_half_fov) * 180.0f / kPi;
 
     const char* key = {};
     json_t* js_value = {};
@@ -548,7 +565,6 @@ bool SceneRepresentation::load_from_file(const char* filename) {
         }
       }
     }
-    _private->build_camera(camera_pos, camera_view, camera_up, viewport, camera_fov, cam.lens_radius, cam.focal_distance);
     json_decref(js);
   }
 
@@ -556,6 +572,11 @@ bool SceneRepresentation::load_from_file(const char* filename) {
   if (strcmp(ext, ".obj") == 0) {
     load_result = _private->load_from_obj(file_to_load);
   }
+
+  if (viewport.x * viewport.y == 0) {
+    viewport = {1280, 720};
+  }
+  update_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
 
   if ((load_result & SceneRepresentationImpl::LoadSucceeded) == 0) {
     return false;

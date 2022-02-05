@@ -7,6 +7,7 @@ add_executable(raytracer
   render.hxx
   render.cxx
   options.hxx
+  camera_controller.hxx
 )
 
 target_link_libraries(raytracer sokol_imgui glm etx-core etx-log etx-render etx-rt)

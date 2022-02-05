@@ -9,6 +9,10 @@
 
 namespace etx {
 
+RTApplication::RTApplication()
+  : camera_controller(scene.camera()) {
+}
+
 void RTApplication::init() {
   render.init();
   ui.initialize();
@@ -48,17 +52,26 @@ void RTApplication::frame() {
   float4* l_image = nullptr;
   const char* status = "Not running";
 
+  bool can_change_camera = true;
   if (_current_integrator != nullptr) {
     _current_integrator->update();
     status = _current_integrator->status();
     c_image = _current_integrator->get_updated_camera_image();
     l_image = _current_integrator->get_updated_light_image();
+    can_change_camera = _current_integrator->state() == Integrator::State::Preview;
+  }
+
+  auto dt = time_measure.lap();
+  if (can_change_camera) {
+    if (camera_controller.update(dt)) {
+      _current_integrator->preview();
+    }
   }
 
   render.set_view_options(ui.view_options());
   render.start_frame();
   render.update_output_images(c_image, l_image);
-  ui.build(time_measure.lap(), status);
+  ui.build(dt, status);
   render.end_frame();
 }
 
@@ -67,7 +80,10 @@ void RTApplication::cleanup() {
 }
 
 void RTApplication::process_event(const sapp_event* e) {
-  ui.handle_event(e);
+  if (ui.handle_event(e) || (raytracing.has_scene() == false)) {
+    return;
+  }
+  camera_controller.handle_event(e);
 }
 
 void RTApplication::on_referenece_image_selected(std::string file_name) {

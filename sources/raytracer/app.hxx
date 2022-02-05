@@ -9,10 +9,13 @@
 
 #include "ui.hxx"
 #include "render.hxx"
+#include "camera_controller.hxx"
 
 namespace etx {
 
 struct RTApplication {
+  RTApplication();
+
   void init();
   void frame();
   void cleanup();
@@ -36,6 +39,7 @@ struct RTApplication {
   TimeMeasure time_measure;
   SceneRepresentation scene;
   Raytracing raytracing;
+  CameraController camera_controller;
 
   Integrator _test = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
