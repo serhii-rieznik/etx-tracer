@@ -83,7 +83,8 @@ void UI::build_options(Options& options) {
 void UI::build(double dt, const char* status) {
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
 
-  igSetNextWindowPos({sapp_widthf() - igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {1.0f, 0.0f});
+  float offset_size = igGetFontSize();
+  igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 2.0f * offset_size}, ImGuiCond_Always, {1.0f, 0.0f});
   igBegin("View", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
   igText("View options");
   build_options(_view_options);
@@ -91,7 +92,7 @@ void UI::build(double dt, const char* status) {
   char status_buffer[2048] = {};
   float dy = igGetStyle()->FramePadding.y;
   snprintf(status_buffer, sizeof(status_buffer), "%.2fms | %.2ffps | %s", 1000.0 * dt, 1.0f / dt, status ? status : "");
-  igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * igGetFontSize(), ImGuiWindowFlags_NoDecoration);
+  igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration);
   igText(status_buffer);
   igEnd();
 
@@ -146,7 +147,7 @@ void UI::build(double dt, const char* status) {
   igEnd();
 
   if ((_current_integrator != nullptr) && (_integrator_options.values.empty() == false)) {
-    igSetNextWindowPos({igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {0.0f, 0.0f});
+    igSetNextWindowPos({offset_size, 2.0f * offset_size}, ImGuiCond_Always, {0.0f, 0.0f});
     igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
     igText("Integrator options");
     build_options(_integrator_options);
