@@ -6,6 +6,8 @@
 #include <etx/render/host/scene_loader.hxx>
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
+#include <etx/rt/integrators/bidirectional.hxx>
+#include <etx/rt/integrators/vcm.hxx>
 #include <etx/rt/rt.hxx>
 
 #include "ui.hxx"
@@ -47,10 +49,14 @@ struct RTApplication {
 
   CPUDebugIntegrator _preview = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
+  CPUBidirectional _cpu_bidir = {raytracing};
+  CPUVCM _cpu_vcm = {raytracing};
 
-  Integrator* _integrator_array[2] = {
+  Integrator* _integrator_array[4] = {
     &_preview,
     &_cpu_pt,
+    &_cpu_bidir,
+    &_cpu_vcm,
   };
 
   Integrator* _current_integrator = nullptr;

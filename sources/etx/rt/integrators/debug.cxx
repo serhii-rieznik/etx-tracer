@@ -154,28 +154,6 @@ struct CPUDebugIntegratorImpl : public Task {
   }
 };
 
-CPUDebugIntegrator::CPUDebugIntegrator(CPUDebugIntegrator&& other) noexcept
-  : Integrator(other.rt) {
-  if (_private) {
-    _private->~CPUDebugIntegratorImpl();
-  }
-  memcpy(_private_storage, other._private_storage, sizeof(_private_storage));
-  _private = reinterpret_cast<struct CPUDebugIntegratorImpl*>(_private_storage);
-  memset(other._private_storage, 0, sizeof(_private_storage));
-  other._private = nullptr;
-}
-
-CPUDebugIntegrator& CPUDebugIntegrator::operator=(CPUDebugIntegrator&& other) noexcept {
-  if (_private) {
-    _private->~CPUDebugIntegratorImpl();
-  }
-  memcpy(_private_storage, other._private_storage, sizeof(_private_storage));
-  _private = reinterpret_cast<struct CPUDebugIntegratorImpl*>(_private_storage);
-  memset(other._private_storage, 0, sizeof(_private_storage));
-  other._private = nullptr;
-  return *this;
-}
-
 CPUDebugIntegrator::CPUDebugIntegrator(Raytracing& rt)
   : Integrator(rt) {
   ETX_PIMPL_INIT(CPUDebugIntegrator, rt, &current_state);
@@ -185,7 +163,6 @@ CPUDebugIntegrator::~CPUDebugIntegrator() {
   if (current_state != State::Stopped) {
     stop(false);
   }
-
   ETX_PIMPL_CLEANUP(CPUDebugIntegrator);
 }
 

@@ -26,6 +26,10 @@ struct Integrator {
     return "Basic Integrator";
   }
 
+  virtual const char* status() const {
+    return "Basic Integrator (not able to render anything)";
+  }
+
   virtual Options options() const {
     Options result = {};
     result.set("desc", "No options available");
@@ -33,10 +37,6 @@ struct Integrator {
   }
 
   virtual void set_output_size(const uint2&) {
-  }
-
-  virtual State state() const {
-    return current_state.load();
   }
 
   virtual void preview(const Options&) {
@@ -62,12 +62,12 @@ struct Integrator {
     return nullptr;
   }
 
-  virtual const char* status() const {
-    return "Test Integrator";
-  }
-
-  virtual bool can_run() const {
+ public:
+  bool can_run() const {
     return rt.has_scene();
+  }
+  virtual State state() const {
+    return current_state.load();
   }
 
  protected:

@@ -277,28 +277,6 @@ struct CPUPathTracingImpl : public Task {
   }
 };
 
-CPUPathTracing::CPUPathTracing(CPUPathTracing&& other) noexcept
-  : Integrator(other.rt) {
-  if (_private) {
-    _private->~CPUPathTracingImpl();
-  }
-  memcpy(_private_storage, other._private_storage, sizeof(_private_storage));
-  _private = reinterpret_cast<struct CPUPathTracingImpl*>(_private_storage);
-  memset(other._private_storage, 0, sizeof(_private_storage));
-  other._private = nullptr;
-}
-
-CPUPathTracing& CPUPathTracing::operator=(CPUPathTracing&& other) noexcept {
-  if (_private) {
-    _private->~CPUPathTracingImpl();
-  }
-  memcpy(_private_storage, other._private_storage, sizeof(_private_storage));
-  _private = reinterpret_cast<struct CPUPathTracingImpl*>(_private_storage);
-  memset(other._private_storage, 0, sizeof(_private_storage));
-  other._private = nullptr;
-  return *this;
-}
-
 CPUPathTracing::CPUPathTracing(Raytracing& rt)
   : Integrator(rt) {
   ETX_PIMPL_INIT(CPUPathTracing, rt, &current_state);
@@ -313,6 +291,9 @@ CPUPathTracing::~CPUPathTracing() {
 }
 
 void CPUPathTracing::set_output_size(const uint2& dim) {
+  if (current_state != State::Stopped) {
+    stop(false);
+  }
   _private->film_dimensions = dim;
   _private->camera_image.resize(1llu * dim.x * dim.y);
 }
@@ -331,9 +312,6 @@ const char* CPUPathTracing::status() const {
 
 void CPUPathTracing::preview(const Options& opt) {
   stop(false);
-  _private->opt_max_iterations = opt.get("spp", _private->opt_max_iterations).to_integer();
-  _private->opt_max_depth = opt.get("pathlen", _private->opt_max_depth).to_integer();
-  _private->opt_rr_start = opt.get("rrstart", _private->opt_rr_start).to_integer();
 
   if (rt.has_scene()) {
     current_state = State::Preview;

@@ -40,6 +40,7 @@ struct CPUDebugIntegrator : public Integrator {
   void update() override;
   void stop(bool wait_for_completion) override;
 
+ private:
   ETX_DECLARE_PIMPL(CPUDebugIntegrator, 4096);
 };
 
