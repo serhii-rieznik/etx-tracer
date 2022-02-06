@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <etx/render/shared/material.hxx>
+#include <etx/render/shared/sampler.hxx>
 
 namespace etx {
 

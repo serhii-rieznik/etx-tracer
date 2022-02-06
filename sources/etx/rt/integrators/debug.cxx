@@ -2,6 +2,7 @@
 #include <etx/log/log.hxx>
 
 #include <etx/render/host/rnd_sampler.hxx>
+#include <etx/render/host/film.hxx>
 #include <etx/render/shared/base.hxx>
 
 #include <etx/rt/integrators/debug.hxx>
@@ -12,9 +13,8 @@ struct CPUDebugIntegratorImpl : public Task {
   char status[2048] = {};
   Raytracing& rt;
   std::atomic<Integrator::State>* state = nullptr;
-  std::vector<float4> camera_image;
   std::vector<RNDSampler> samplers;
-  uint2 film_dimensions = {};
+  Film camera_image;
   uint2 current_dimensions = {};
   TimeMeasure total_time = {};
   TimeMeasure iteration_time = {};
@@ -35,11 +35,10 @@ struct CPUDebugIntegratorImpl : public Task {
     mode = opt.get("mode", uint32_t(mode)).to_enum<CPUDebugIntegrator::Mode>();
 
     iteration = 0;
-    film_dimensions = {rt.scene().camera.image_size.x, rt.scene().camera.image_size.y};
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
 
     current_scale = (state->load() == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(preview_frames)));
-    current_dimensions = film_dimensions / current_scale;
+    current_dimensions = camera_image.dimensions() / current_scale;
 
     total_time = {};
     iteration_time = {};
@@ -52,28 +51,27 @@ struct CPUDebugIntegratorImpl : public Task {
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
-      float4 xyz = {preview_pixel(smp, x, y), 1.0f};
+      float2 uv = get_jittered_uv(smp, {x, y}, current_dimensions);
+      float4 xyz = {preview_pixel(smp, uv), 1.0f};
 
       if (state->load() == Integrator::State::Running) {
-        uint32_t j = x + (film_dimensions.y - 1 - y) * film_dimensions.x;
-        camera_image[j] = (iteration == 0) ? xyz : lerp(xyz, camera_image[j], float(iteration) / (float(iteration + 1)));
+        camera_image.accumulate(xyz, uv, float(iteration) / (float(iteration + 1)));
       } else {
-        float t = max(0.0f, float(iteration - preview_frames) / float(iteration - preview_frames + 1));
+        float t = iteration < preview_frames ? 0.0f : float(iteration - preview_frames) / float(iteration - preview_frames + 1);
         for (uint32_t ay = 0; ay < current_scale; ++ay) {
           for (uint32_t ax = 0; ax < current_scale; ++ax) {
             uint32_t rx = x * current_scale + ax;
             uint32_t ry = y * current_scale + ay;
-            uint32_t j = rx + (film_dimensions.y - 1 - ry) * film_dimensions.x;
-            camera_image[j] = (iteration <= preview_frames) ? xyz : lerp(xyz, camera_image[j], t);
+            camera_image.accumulate(xyz, rx, ry, t);
           }
         }
       }
     }
   }
 
-  float3 preview_pixel(RNDSampler& smp, uint32_t x, uint32_t y) {
+  float3 preview_pixel(RNDSampler& smp, const float2& uv) {
     const auto& scene = rt.scene();
-    auto ray = generate_ray(smp, scene, get_jittered_uv(smp, {x, y}, current_dimensions));
+    auto ray = generate_ray(smp, scene, uv);
     auto spect = spectrum::sample(smp.next());
 
     float3 xyz = {0.1f, 0.1f, 0.1f};
@@ -167,8 +165,7 @@ CPUDebugIntegrator::~CPUDebugIntegrator() {
 }
 
 void CPUDebugIntegrator::set_output_size(const uint2& dim) {
-  _private->film_dimensions = dim;
-  _private->camera_image.resize(1llu * dim.x * dim.y);
+  _private->camera_image.resize(dim);
 }
 
 float4* CPUDebugIntegrator::get_updated_camera_image() {
@@ -222,7 +219,7 @@ void CPUDebugIntegrator::update() {
       _private->iteration += 1;
 
       _private->current_scale = (current_state == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(_private->preview_frames - _private->iteration)));
-      _private->current_dimensions = _private->film_dimensions / _private->current_scale;
+      _private->current_dimensions = _private->camera_image.dimensions() / _private->current_scale;
 
       rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
     }

@@ -1,4 +1,9 @@
+#include <etx/log/log.hxx>
+
+#include <etx/render/host/film.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
+
+#include <atomic>
 
 namespace etx {
 
@@ -6,8 +11,10 @@ struct CPUBidirectionalImpl : public Task {
   char status[2048] = {};
   Raytracing& rt;
   uint2 film_dimensions = {};
+
   std::vector<float4> camera_image;
-  std::vector<float4> light_image;
+  Film light_image;
+
   Handle task = {};
 
   CPUBidirectionalImpl(Raytracing& r)
@@ -78,7 +85,7 @@ void CPUBidirectional::set_output_size(const uint2& dim) {
   }
   _private->film_dimensions = dim;
   _private->camera_image.resize(1llu * dim.x * dim.y);
-  _private->light_image.resize(1llu * dim.x * dim.y);
+  _private->light_image.resize(dim);
 }
 
 float4* CPUBidirectional::get_updated_camera_image() {

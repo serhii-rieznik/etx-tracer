@@ -330,8 +330,8 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
       break;
     }
     case kViewRelativeDifference: {
-      result.x = max(0.0f, r_lum - v_lum);
-      result.y = max(0.0f, v_lum - r_lum);
+      result.x = exposure * max(0.0f, r_lum - v_lum);
+      result.y = exposure * max(0.0f, v_lum - r_lum);
       break;
     }
     case kViewAbsoluteDifference: {
