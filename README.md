@@ -58,9 +58,6 @@ Order is a subject to change, but here are main things to do:
 This part of the description would be updated during the development of the project, at the moment there is nothing to build here.
 All updates will be located here: [BUILDING.md](docs/BUILDING.md)
 
-#### Docs
-[Code style](docs/CODESTYLE.md) - code style may confuse you. But there is an explanation for that :)
-
 #### Sponsors
 This project is GitHub-sponsored by:
 * [Traverse-Research](https://github.com/Traverse-Research)
