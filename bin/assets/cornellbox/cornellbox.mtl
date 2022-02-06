@@ -1,0 +1,36 @@
+newmtl et::medium
+sigma_a 0.01 0.01 0.01
+sigma_s 0.075 0.075 0.075
+g 0.75
+
+newmtl white
+    Kd 1.0 1.0 1.0
+
+newmtl leftWall
+    Kd 1.0 0.0 0.0
+
+newmtl rightWall
+    Kd 0.0 1.0 0.0
+
+newmtl floor
+    Kd 1.0 1.0 1.0
+
+newmtl ceiling
+    Kd 1.0 1.0 1.0
+
+newmtl frontWall
+    Kd 1.0 1.0 1.0
+
+newmtl shortBox
+    Kd 1.0 1.0 1.0
+    Ks 1.0 1.0 1.0
+    Kt 1.0 1.0 1.0
+
+newmtl tallBox
+    Kd 1.0 1.0 1.0
+    Ks 1.0 1.0 1.0
+    Kt 1.0 1.0 1.0
+
+newmtl light
+    Kd 1.0 1.0 1.0
+    Ke 4 4 4

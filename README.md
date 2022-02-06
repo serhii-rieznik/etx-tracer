@@ -45,11 +45,11 @@ So now it is time for that hidden project to emerge on a surface. Releasing it a
 
 #### Project milestones:
 Order is a subject to change, but here are main things to do:
-- [ ] boilerplate code for window, input handling, etc;
-- [ ] basic boilerplate code for ray-tracing;
-- [ ] simplest CPU path-tracer;
+- [x] boilerplate code for window, input handling, etc;
+- [x] basic boilerplate code for ray-tracing;
+- [x] simplest CPU path-tracer;
 - [ ] OptiX and GPU-related code basics;
-- [ ] additional code for ray-tracing;
+- [x] additional code for ray-tracing;
 - [ ] VCM integrators (CPU and GPU);
 - [ ] cross-platform, cross-API support;
   ... maintaining code, adding new features.
@@ -58,8 +58,10 @@ Order is a subject to change, but here are main things to do:
 This part of the description would be updated during the development of the project, at the moment there is nothing to build here.
 All updates will be located here: [BUILDING.md](docs/BUILDING.md)
 
-#### Docs
-[Code style](docs/CODESTYLE.md) - code style may confuse you. But there is an explanation for that :)
+#### Sponsors
+This project is GitHub-sponsored by:
+* [Traverse-Research](https://github.com/Traverse-Research)
+* [voxel-tracer](https://github.com/voxel-tracer)
 
 #### Links
 Links to the books/papers/publications/resources I've used during the development:

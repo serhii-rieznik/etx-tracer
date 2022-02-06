@@ -1,2 +1,2 @@
-add_subdirectory(rt-api)
+add_subdirectory(etx)
 add_subdirectory(raytracer)

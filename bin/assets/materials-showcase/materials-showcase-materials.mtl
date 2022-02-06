@@ -1,0 +1,78 @@
+newmtl et::env
+image ../hdri/environment.exr
+
+newmtl et::medium
+id torus.000
+sigma_a 0.6 0.3 0.15
+
+newmtl box
+material class plastic
+int_ior plastic
+Pr 0.5
+Kd 0.8 0.8 0.8
+
+newmtl box-left
+material class plastic
+int_ior plastic
+Pr 0.5
+Kd 0.8 0.1 0.1
+
+newmtl box-right
+material class plastic
+int_ior plastic
+Pr 0.5
+Kd 0.1 0.8 0.1
+
+newmtl bubble
+material class thinfilm
+thinfilm image ../textures/clouds.png range 180.0 840.0
+
+newmtl curtain
+material class translucent
+Kd 0.395292 0.557676 0.8
+
+newmtl curtain-bar
+material class conductor
+int_ior nickel
+Pr 0.2
+
+newmtl emitter-left
+emitter blackbody 12000.0 scale 0.00025 collimated 65536.0
+Ke 1 1 1
+
+newmtl emitter-right
+emitter blackbody 2700.0 scale 0.25 collimated 65536.0
+Ke 1 1 1
+
+newmtl projector-box
+material class coating
+Ks 0.04 0.04 0.04
+Kd 0.131063 0.121089 0.113964
+
+newmtl projector-holder
+material class conductor
+int_ior chrome
+Pr 0.5
+
+newmtl projector-interior
+material class mirror
+
+newmtl torus-stand
+material class conductor uroughness 0.5 vroughness 0.01
+int_ior gold
+
+newmtl torus.000
+material class dielectric
+int_ior sapphire
+int_medium torus.000
+Pr 0.0
+
+newmtl torus.001
+material class dielectric
+int_ior diamond
+Pr 0.1
+
+newmtl torus.002
+material class dielectric
+int_ior glass
+Pr 0.05

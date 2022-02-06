@@ -2669,7 +2669,7 @@ _SOKOL_PRIVATE bool _sapp_strcpy(const char* src, char* dst, int max_len) {
 _SOKOL_PRIVATE sapp_desc _sapp_desc_defaults(const sapp_desc* in_desc) {
     sapp_desc desc = *in_desc;
     desc.sample_count = _sapp_def(desc.sample_count, 1);
-    desc.swap_interval = _sapp_def(desc.swap_interval, 1);
+    desc.swap_interval = _sapp_def(desc.swap_interval, 0);
     desc.html5_canvas_name = _sapp_def(desc.html5_canvas_name, "canvas");
     desc.clipboard_size = _sapp_def(desc.clipboard_size, 8192);
     desc.max_dropped_files = _sapp_def(desc.max_dropped_files, 1);
