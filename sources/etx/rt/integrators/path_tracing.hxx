@@ -29,7 +29,7 @@ struct CPUPathTracing : public Integrator {
   void preview() override;
   void run(const Options&) override;
   void update() override;
-  void stop() override;
+  void stop(bool wait_for_completion) override;
 
   ETX_DECLARE_PIMPL(CPUPathTracing, 4096);
 };

@@ -8,15 +8,21 @@
 #define ETX_DEBUG 1
 #endif
 
-#define ETX_FORCE_ASSERTS 0
-
 #if defined(__NVCC__)
+#define ETX_NVCC_COMPILER 1
+#else
+#define ETX_NVCC_COMPILER 0
+#endif
+
+#if (ETX_NVCC_COMPILER)
 #define ETX_DEBUG_BREAK()
 #define ETX_ABORT() assert(false)
 #else
 #define ETX_DEBUG_BREAK() __debugbreak()
 #define ETX_ABORT() abort()
 #endif
+
+#define ETX_FORCE_ASSERTS 0
 
 #if (ETX_DEBUG || ETX_FORCE_ASSERTS)
 

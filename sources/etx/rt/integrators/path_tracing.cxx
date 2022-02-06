@@ -36,9 +36,8 @@ struct CPUPathTracingImpl : public Task {
     film_dimensions = {rt.scene().camera.image_size.x, rt.scene().camera.image_size.y};
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
 
-    preview_scale = max(1u, uint32_t(exp2(3.0f - iteration)));
-    uint32_t scale = (state->load() == Integrator::State::Running) ? 1u : preview_scale;
-    current_dimensions = film_dimensions / scale;
+    preview_scale = (state->load() == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(3.0f - iteration)));
+    current_dimensions = film_dimensions / preview_scale;
 
     total_time = {};
     iteration_time = {};
@@ -68,7 +67,7 @@ struct CPUPathTracingImpl : public Task {
         uint32_t x = i % film_dimensions.x;
         uint32_t y = i / film_dimensions.x;
         float4 xyz = {trace_pixel(smp, x, y), 1.0f};
-
+        ETX_VALIDATE(xyz);
         uint32_t j = x + (film_dimensions.y - 1 - y) * film_dimensions.x;
         camera_image[j] = (iteration == 0) ? xyz : lerp(xyz, camera_image[j], float(iteration) / (float(iteration + 1)));
       }
@@ -97,6 +96,7 @@ struct CPUPathTracingImpl : public Task {
       if (medium_index != kInvalidIndex) {
         medium_sample = scene.mediums[medium_index].sample(spect, smp, ray.o, ray.d, found_intersection ? intersection.t : std::numeric_limits<float>::max());
         throughput *= medium_sample.weight;
+        ETX_VALIDATE(throughput);
       } else {
         medium_sample.sampled_medium = 0;
       }
@@ -222,7 +222,11 @@ struct CPUPathTracingImpl : public Task {
       ++path_length;
     }
 
-    return (result / spectrum::sample_pdf()).to_xyz();
+    ETX_VALIDATE(result);
+    result /= spectrum::sample_pdf();
+    ETX_VALIDATE(result);
+
+    return result.to_xyz();
   }
 
   float3 preview_pixel(RNDSampler& smp, uint32_t x, uint32_t y) {
@@ -307,7 +311,7 @@ CPUPathTracing::CPUPathTracing(Raytracing& rt)
 
 CPUPathTracing::~CPUPathTracing() {
   if (current_state != State::Stopped) {
-    stop();
+    stop(false);
   }
 
   ETX_PIMPL_CLEANUP(CPUPathTracing);
@@ -331,7 +335,7 @@ const char* CPUPathTracing::status() const {
 }
 
 void CPUPathTracing::preview() {
-  stop();
+  stop(false);
 
   if (rt.has_scene()) {
     current_state = State::Preview;
@@ -340,7 +344,7 @@ void CPUPathTracing::preview() {
 }
 
 void CPUPathTracing::run(const Options& opt) {
-  stop();
+  stop(false);
 
   _private->max_iterations = opt.get("spp", _private->max_iterations).to_integer();
   _private->max_depth = opt.get("pathlen", _private->max_depth).to_integer();
@@ -353,8 +357,10 @@ void CPUPathTracing::run(const Options& opt) {
 }
 
 void CPUPathTracing::update() {
-  if ((current_state != State::Stopped) && rt.scheduler().completed(_private->current_task)) {
-    if (_private->iteration >= _private->max_iterations) {
+  bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
+
+  if (should_stop && rt.scheduler().completed(_private->current_task)) {
+    if ((current_state == State::WaitingForCompletion) || (_private->iteration >= _private->max_iterations)) {
       rt.scheduler().wait(_private->current_task);
       snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
       _private->current_task = {};
@@ -365,25 +371,28 @@ void CPUPathTracing::update() {
       _private->iteration_time = {};
       _private->iteration += 1;
 
-      _private->preview_scale = max(1u, uint32_t(exp2(3.0f - _private->iteration)));
-      uint32_t scale = (current_state == Integrator::State::Running) ? 1u : _private->preview_scale;
-      _private->current_dimensions = _private->film_dimensions / scale;
+      _private->preview_scale = (current_state == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(3.0f - _private->iteration)));
+      _private->current_dimensions = _private->film_dimensions / _private->preview_scale;
 
       rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
     }
   }
 }
 
-void CPUPathTracing::stop() {
+void CPUPathTracing::stop(bool wait_for_completion) {
   if (current_state == State::Stopped) {
     return;
   }
 
-  current_state = State::Stopped;
-  rt.scheduler().wait(_private->current_task);
-  _private->current_task = {};
-
-  snprintf(_private->status, sizeof(_private->status), "[%u] Stopped", _private->iteration);
+  if (wait_for_completion) {
+    current_state = State::WaitingForCompletion;
+    snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->iteration);
+  } else {
+    current_state = State::Stopped;
+    rt.scheduler().wait(_private->current_task);
+    _private->current_task = {};
+    snprintf(_private->status, sizeof(_private->status), "[%u] Stopped", _private->iteration);
+  }
 }
 
 }  // namespace etx

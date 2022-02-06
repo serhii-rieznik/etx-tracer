@@ -276,15 +276,6 @@ struct SceneRepresentationImpl {
     scene.camera_medium_index = camera_medium_index;
     scene.camera_lens_shape_image_index = camera_lens_shape_image_index;
 
-    if (emitters.empty()) {
-      printf("No emitters found, adding sky and Sun\n");
-      char buffer[2048] = {};
-      snprintf(buffer, sizeof(buffer), "%s/hdri/default_sky.exr", env().data_folder());
-      auto& sky = emitters.emplace_back(Emitter::Class::Environment);
-      sky.emission = SpectralDistribution::from_constant(1.0f);
-      sky.image_index = add_image(buffer, Image::BuildSamplingTable);
-    }
-
     for (auto& emitter : emitters) {
       if (emitter.is_distant()) {
         ETX_ASSERT(emitter.weight == 0.0f);
@@ -428,7 +419,7 @@ struct SceneRepresentationImpl {
     HaveTangents = 1u << 1u,
   };
 
-  uint32_t load_from_obj(const char* file_name);
+  uint32_t load_from_obj(const char* file_name, const char* mtl_file);
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
@@ -495,14 +486,16 @@ V json_to_float_n(json_t* a) {
 const auto json_to_float2 = json_to_float_n<float2, 2>;
 const auto json_to_float3 = json_to_float_n<float3, 3>;
 
-bool SceneRepresentation::load_from_file(const char* filename) {
+bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
   _private->cleanup();
 
   uint32_t load_result = SceneRepresentationImpl::LoadFailed;
 
-  char buffer[2048] = {};
-  auto file_to_load = filename;
-  get_file_folder(filename, buffer, sizeof(buffer));
+  std::string file_to_load = filename;
+  std::string material_file = {};
+
+  char base_folder[2048] = {};
+  get_file_folder(filename, base_folder, sizeof(base_folder));
 
   auto& cam = _private->scene.camera;
   float3 camera_pos = cam.position;
@@ -530,13 +523,18 @@ bool SceneRepresentation::load_from_file(const char* filename) {
     json_object_foreach(js, key, js_value) {
       if (strcmp(key, "geometry") == 0) {
         if (json_is_string(js_value) == false) {
-          log::error("`geometry` in scene description should be a string");
+          log::error("`geometry` in scene description should be a string (file name)");
           json_decref(js);
           return false;
         }
-        file_to_load = json_string_value(js_value);
-        snprintf(buffer + strlen(buffer), sizeof(buffer) + strlen(buffer), "%s", file_to_load);
-        file_to_load = buffer;
+        file_to_load = std::string(base_folder) + json_string_value(js_value);
+      } else if (strcmp(key, "materials") == 0) {
+        if (json_is_string(js_value) == false) {
+          log::error("`materials` in scene description should be a string (file name)");
+          json_decref(js);
+          return false;
+        }
+        material_file = json_string_value(js_value);
       } else if (strcmp(key, "camera") == 0) {
         if (json_is_object(js_value) == false) {
           log::error("`camera` in scene description should be an object");
@@ -566,22 +564,31 @@ bool SceneRepresentation::load_from_file(const char* filename) {
     json_decref(js);
   }
 
-  auto ext = get_file_ext(file_to_load);
+  auto ext = get_file_ext(file_to_load.c_str());
   if (strcmp(ext, ".obj") == 0) {
-    load_result = _private->load_from_obj(file_to_load);
+    load_result = _private->load_from_obj(file_to_load.c_str(), material_file.c_str());
   }
-
-  if (viewport.x * viewport.y == 0) {
-    viewport = {1280, 720};
-  }
-  update_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
 
   if ((load_result & SceneRepresentationImpl::LoadSucceeded) == 0) {
     return false;
   }
 
-  if (_private->triangles.empty() || _private->materials.empty() || _private->emitters.empty()) {
+  if (_private->triangles.empty() || _private->materials.empty()) {
     return false;
+  }
+
+  if (options & SetupCamera) {
+    if (viewport.x * viewport.y == 0) {
+      viewport = {1280, 720};
+    }
+    update_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
+  }
+
+  if (_private->emitters.empty()) {
+    printf("No emitters found, adding default environment image...\n");
+    auto& sky = _private->emitters.emplace_back(Emitter::Class::Environment);
+    sky.emission = SpectralDistribution::from_constant(1.0f);
+    sky.image_index = _private->add_image(env().file_in_data("assets/hdri/environment.exr"), Image::RepeatU | Image::BuildSamplingTable);
   }
 
   _private->validate_materials();
@@ -664,7 +671,7 @@ inline Material::Class material_string_to_class(const char* s) {
     return Material::Class::Undefined;
 }
 
-uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name) {
+uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const char* mtl_file) {
   tinyobj::attrib_t obj_attrib;
   std::vector<tinyobj::shape_t> obj_shapes;
   std::vector<tinyobj::material_t> obj_materials;
@@ -674,7 +681,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name) {
   char base_dir[2048] = {};
   get_file_folder(file_name, base_dir, sizeof(base_dir));
 
-  if (tinyobj::LoadObj(&obj_attrib, &obj_shapes, &obj_materials, &warnings, &errors, file_name, base_dir) == false) {
+  if (tinyobj::LoadObj(&obj_attrib, &obj_shapes, &obj_materials, &warnings, &errors, file_name, base_dir, mtl_file) == false) {
     log::error("Failed to load OBJ from file: `%s`\n%s", file_name, errors.c_str());
     return LoadFailed;
   }

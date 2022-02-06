@@ -20,6 +20,7 @@ struct RTApplication {
   void frame();
   void cleanup();
   void process_event(const sapp_event*);
+  void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
 
  private:
   void on_referenece_image_selected(std::string);
@@ -27,8 +28,9 @@ struct RTApplication {
   void on_integrator_selected(Integrator*);
   void on_preview_selected();
   void on_run_selected();
-  void on_stop_selected();
+  void on_stop_selected(bool wait_for_completion);
   void on_reload_scene_selected();
+  void on_reload_geometry_selected();
 
  private:
   void save_options();

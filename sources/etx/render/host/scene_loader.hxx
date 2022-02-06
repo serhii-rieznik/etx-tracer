@@ -6,10 +6,16 @@
 namespace etx {
 
 struct SceneRepresentation {
+  enum : uint32_t {
+    LoadGeometry = 0u,
+    SetupCamera = 1u << 0u,
+    LoadEverything = LoadGeometry | SetupCamera,
+  };
+
   SceneRepresentation();
   ~SceneRepresentation();
 
-  bool load_from_file(const char* filename);
+  bool load_from_file(const char* filename, uint32_t options);
 
   const Scene& scene() const;
   Camera& camera();

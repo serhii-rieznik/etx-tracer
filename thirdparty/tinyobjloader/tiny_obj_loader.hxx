@@ -544,7 +544,7 @@ class ObjReader {
   /// @param[in] filename wavefront .obj filename
   /// @param[in] config Reader configuration
   ///
-  bool ParseFromFile(const std::string& filename, const ObjReaderConfig& config = ObjReaderConfig());
+  bool ParseFromFile(const std::string& filename, const std::string& customMataterials, const ObjReaderConfig& config = ObjReaderConfig());
 
   ///
   /// Parse .obj from a text string.
@@ -616,9 +616,10 @@ class ObjReader {
 /// Option 'default_vcols_fallback' specifies whether vertex colors should
 /// always be defined, even if no colors are given (fallback to white).
 bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<material_t>* materials, std::string* warn, std::string* err, const char* filename,
-  const char* mtl_basedir = NULL, bool triangulate = true, bool default_vcols_fallback = true);
+  const char* mtl_basedir = NULL, const char* mtl_custom_file = NULL, bool triangulate = true, bool default_vcols_fallback = true);
 
-bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std::string* err, const char* filename, const char* mtl_basedir = NULL);
+bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std::string* err, const char* filename, const char* mtl_basedir = NULL,
+  const char* mtl_custom_file = NULL);
 
 /// Loads .obj from a file with custom user callback.
 /// .mtl is loaded as usual and parsed material_t data will be passed to
@@ -634,8 +635,10 @@ bool LoadObjWithCallback(std::istream& inStream, const callback_t& callback, voi
 /// Returns true when loading .obj become success.
 /// Returns warning and error message into `err`
 bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<material_t>* materials, std::string* warn, std::string* err, std::istream* inStream,
-  MaterialReader* readMatFn = NULL, bool triangulate = true, bool default_vcols_fallback = true);
-bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std::string* err, std::istream* inStream, MaterialReader* readMatFn = NULL);
+  MaterialReader* readMatFn, const std::string& customMaterials, bool triangulate = true, bool default_vcols_fallback = true);
+
+bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std::string* err, std::istream* inStream, MaterialReader* readMatFn,
+  const std::string& customMaterials);
 
 /// Loads materials into std::map
 void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* materials, std::istream* inStream, std::string* warning, std::string* err);
@@ -2336,7 +2339,7 @@ bool MaterialStreamReader::operator()(const std::string& matId, std::vector<mate
 }
 
 bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<material_t>* materials, std::string* warn, std::string* err, const char* filename, const char* mtl_basedir,
-  bool triangulate, bool default_vcols_fallback) {
+  const char* mtl_custom_file, bool triangulate, bool default_vcols_fallback) {
   attrib->vertices.clear();
   attrib->normals.clear();
   attrib->texcoords.clear();
@@ -2366,10 +2369,10 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   }
   MaterialFileReader matFileReader(baseDir);
 
-  return LoadObj(attrib, shapes, materials, warn, err, &ifs, &matFileReader, triangulate, default_vcols_fallback);
+  return LoadObj(attrib, shapes, materials, warn, err, &ifs, &matFileReader, mtl_custom_file, triangulate, default_vcols_fallback);
 }
 
-bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std::string* err, const char* filename, const char* mtl_basedir) {
+bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std::string* err, const char* filename, const char* mtl_basedir, const char* mtl_custom_file) {
   std::stringstream errss;
   std::ifstream ifs(filename);
   if (!ifs) {
@@ -2392,11 +2395,11 @@ bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std
   }
   MaterialFileReader matFileReader(baseDir);
 
-  return LoadObjMaterials(materials, warn, err, &ifs, &matFileReader);
+  return LoadObjMaterials(materials, warn, err, &ifs, &matFileReader, mtl_custom_file);
 }
 
 bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<material_t>* materials, std::string* warn, std::string* err, std::istream* inStream,
-  MaterialReader* readMatFn /*= NULL*/, bool triangulate, bool default_vcols_fallback) {
+  MaterialReader* readMatFn, const std::string& customMaterials, bool triangulate, bool default_vcols_fallback) {
   std::stringstream errss;
 
   std::vector<real_t> v;
@@ -2675,7 +2678,11 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
         token += 7;
 
         std::vector<std::string> filenames;
-        SplitString(std::string(token), ' ', '\\', filenames);
+        if (customMaterials.empty()) {
+          SplitString(std::string(token), ' ', '\\', filenames);
+        } else {
+          filenames.emplace_back(customMaterials);
+        }
 
         if (filenames.empty()) {
           if (warn) {
@@ -2932,7 +2939,8 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   return true;
 }
 
-bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std::string* err, std::istream* inStream, MaterialReader* readMatFn) {
+bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std::string* err, std::istream* inStream, MaterialReader* readMatFn,
+  const std::string& customMaterials) {
   std::stringstream errss;
 
   // material
@@ -2978,7 +2986,11 @@ bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std
         token += 7;
 
         std::vector<std::string> filenames;
-        SplitString(std::string(token), ' ', '\\', filenames);
+        if (customMaterials.empty()) {
+          SplitString(std::string(token), ' ', '\\', filenames);
+        } else {
+          filenames.emplace_back(customMaterials);
+        }
 
         if (filenames.empty()) {
           if (warn) {
@@ -3295,7 +3307,7 @@ bool LoadObjWithCallback(std::istream& inStream, const callback_t& callback, voi
   return true;
 }
 
-bool ObjReader::ParseFromFile(const std::string& filename, const ObjReaderConfig& config) {
+bool ObjReader::ParseFromFile(const std::string& filename, const std::string& customMataterials, const ObjReaderConfig& config) {
   std::string mtl_search_path;
 
   if (config.mtl_search_path.empty()) {
@@ -3311,7 +3323,8 @@ bool ObjReader::ParseFromFile(const std::string& filename, const ObjReaderConfig
     mtl_search_path = config.mtl_search_path;
   }
 
-  valid_ = LoadObj(&attrib_, &shapes_, &materials_, &warning_, &error_, filename.c_str(), mtl_search_path.c_str(), config.triangulate, config.vertex_color);
+  valid_ = LoadObj(&attrib_, &shapes_, &materials_, &warning_, &error_, filename.c_str(), mtl_search_path.c_str(),  //
+    customMataterials.empty() ? nullptr : customMataterials.c_str(), config.triangulate, config.vertex_color);
 
   return valid_;
 }
@@ -3325,7 +3338,7 @@ bool ObjReader::ParseFromString(const std::string& obj_text, const std::string& 
 
   MaterialStreamReader mtl_ss(mtl_ifs);
 
-  valid_ = LoadObj(&attrib_, &shapes_, &materials_, &warning_, &error_, &obj_ifs, &mtl_ss, config.triangulate, config.vertex_color);
+  valid_ = LoadObj(&attrib_, &shapes_, &materials_, &warning_, &error_, &obj_ifs, &mtl_ss, {}, config.triangulate, config.vertex_color);
 
   return valid_;
 }

@@ -114,15 +114,20 @@ void UI::build(double dt, const char* status) {
       if (igMenuItemEx("Open...", nullptr, "Ctrl+O", false, true)) {
         select_scene_file();
       }
-      if (igMenuItemEx("Reload ", nullptr, "Ctrl+R", false, true)) {
+      if (igMenuItemEx("Reload Scene", nullptr, "Ctrl+R", false, true)) {
         if (callbacks.reload_scene_selected) {
           callbacks.reload_scene_selected();
         }
       }
-      if (igMenuItemEx("Reload Materials", nullptr, "Ctrl+M", false, true)) {
+      if (igMenuItemEx("Reload Geometry and Materials", nullptr, "Ctrl+G", false, true)) {
+        if (callbacks.reload_geometry_selected) {
+          callbacks.reload_geometry_selected();
+        }
+      }
+      if (igMenuItemEx("Reload Materials", nullptr, "Ctrl+M", false, false)) {
       }
       igSeparator();
-      if (igMenuItemEx("Save...", nullptr, "Ctrl+S", false, true)) {
+      if (igMenuItemEx("Save...", nullptr, "Ctrl+S", false, false)) {
       }
       igEndMenu();
     }
@@ -149,36 +154,34 @@ void UI::build(double dt, const char* status) {
     if (_current_integrator->can_run()) {
       igSeparator();
       igNewLine();
+
       auto state = _current_integrator->state();
+      bool has_complete = (state == Integrator::State::Running);
       bool has_stop = (state != Integrator::State::Stopped);
       bool has_preview = (state == Integrator::State::Stopped);
-      bool has_run = (state != Integrator::State::Running);
+      bool has_run = (state == Integrator::State::Stopped) || (state == Integrator::State::Preview);
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.22f, 0.11f, 1.0f});
+      if (has_complete && igButton("[ Complete iteration and stop ]", {}) && callbacks.stop_selected) {
+        callbacks.stop_selected(true);
+      }
 
       igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
-      if (has_stop) {
-        if (igButton("[ Stop ]", {}) && callbacks.stop_selected) {
-          callbacks.stop_selected();
-        }
-        if (has_preview || has_run) {
-          igSameLine(0.0f, igGetFontSize());
-        }
+      if (has_stop && igButton("[ Break Immediately ]", {}) && callbacks.stop_selected) {
+        callbacks.stop_selected(false);
       }
+
       igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
-      if (has_preview) {
-        if (igButton("[ Preview ]", {}) && callbacks.preview_selected) {
-          callbacks.preview_selected();
-        }
-        if (has_run) {
-          igSameLine(0.0f, igGetFontSize());
-        }
+      if (has_preview && igButton("[ Preview ]", {}) && callbacks.preview_selected) {
+        callbacks.preview_selected();
       }
+
       igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
-      if (has_run) {
-        if (igButton("[ Run ]", {}) && callbacks.run_selected) {
-          callbacks.run_selected();
-        }
+      if (has_run && igButton("[ Launch ]", {}) && callbacks.run_selected) {
+        callbacks.run_selected();
       }
-      igPopStyleColor(3);
+
+      igPopStyleColor(4);
       igNewLine();
     }
     igEnd();
@@ -196,6 +199,11 @@ bool UI::handle_event(const sapp_event* e) {
       case SAPP_KEYCODE_R: {
         if (callbacks.reload_scene_selected)
           callbacks.reload_scene_selected();
+        break;
+      }
+      case SAPP_KEYCODE_G: {
+        if (callbacks.reload_geometry_selected)
+          callbacks.reload_geometry_selected();
         break;
       }
     }
@@ -218,7 +226,7 @@ void UI::set_current_integrator(Integrator* i) {
 }
 
 void UI::select_scene_file() {
-  auto selected_file = open_file({"Supported formats", "*.json;*.obj;*.gltf;*.pbrt"});
+  auto selected_file = open_file({"Supported formats", "*.json;*.obj"});  // TODO : add *.gltf;*.pbrt
   if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
     callbacks.scene_file_selected(selected_file);
   }

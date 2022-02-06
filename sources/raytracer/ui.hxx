@@ -35,10 +35,11 @@ struct UI {
     std::function<void(std::string)> reference_image_selected;
     std::function<void(std::string)> scene_file_selected;
     std::function<void(Integrator*)> integrator_selected;
-    std::function<void()> stop_selected;
+    std::function<void(bool)> stop_selected;
     std::function<void()> preview_selected;
     std::function<void()> run_selected;
     std::function<void()> reload_scene_selected;
+    std::function<void()> reload_geometry_selected;
   } callbacks;
 
  private:

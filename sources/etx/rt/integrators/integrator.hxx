@@ -13,6 +13,7 @@ struct Integrator {
     Stopped,
     Preview,
     Running,
+    WaitingForCompletion,
   };
 
   Integrator(Raytracing& r)
@@ -47,7 +48,7 @@ struct Integrator {
   virtual void update() {
   }
 
-  virtual void stop() {
+  virtual void stop(bool /* wait for completion */) {
   }
 
   virtual float4* get_updated_camera_image() {
