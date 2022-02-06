@@ -39,7 +39,7 @@ struct TaskSchedulerImpl {
 
   TaskSchedulerImpl() {
     task_pool.init(1024u);
-    scheduler.Initialize();
+    scheduler.Initialize(enki::GetNumHardwareThreads() + 1u);
   }
 
   ~TaskSchedulerImpl() {
