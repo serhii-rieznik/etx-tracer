@@ -8,12 +8,16 @@ struct CPUBidirectionalImpl : public Task {
   uint2 film_dimensions = {};
   std::vector<float4> camera_image;
   std::vector<float4> light_image;
+  Handle task = {};
 
   CPUBidirectionalImpl(Raytracing& r)
     : rt(r) {
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) {
+  }
+
+  void start(const Options&) {
   }
 };
 
@@ -29,14 +33,21 @@ CPUBidirectional::~CPUBidirectional() {
   ETX_PIMPL_CLEANUP(CPUBidirectional);
 }
 
-void CPUBidirectional::preview(const Options&) {
+void CPUBidirectional::preview(const Options& opt) {
   stop(false);
+
+  if (rt.has_scene()) {
+    current_state = State::Preview;
+    _private->start(opt);
+  }
 }
 
-void CPUBidirectional::run(const Options&) {
+void CPUBidirectional::run(const Options& opt) {
   stop(false);
-  if (rt.has_scene() == false) {
-    return
+
+  if (rt.has_scene()) {
+    current_state = State::Running;
+    _private->start(opt);
   }
 }
 
@@ -44,6 +55,13 @@ void CPUBidirectional::update() {
 }
 
 void CPUBidirectional::stop(bool /* wait for completion */) {
+  if (current_state == State::Stopped) {
+    return;
+  }
+
+  current_state = State::Stopped;
+  rt.scheduler().wait(_private->task);
+  _private->task = {};
 }
 
 Options CPUBidirectional::options() const {
