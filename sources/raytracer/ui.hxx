@@ -40,10 +40,11 @@ struct UI {
     std::function<void()> run_selected;
     std::function<void()> reload_scene_selected;
     std::function<void()> reload_geometry_selected;
+    std::function<void()> options_changed;
   } callbacks;
 
  private:
-  void build_options(Options&);
+  bool build_options(Options&);
   void select_scene_file();
 
  private:

@@ -39,7 +39,7 @@ struct Integrator {
     return current_state.load();
   }
 
-  virtual void preview() {
+  virtual void preview(const Options&) {
   }
 
   virtual void run(const Options&) {
@@ -49,6 +49,9 @@ struct Integrator {
   }
 
   virtual void stop(bool /* wait for completion */) {
+  }
+
+  virtual void update_options(const Options&) {
   }
 
   virtual float4* get_updated_camera_image() {

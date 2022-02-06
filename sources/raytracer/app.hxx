@@ -4,6 +4,7 @@
 #include <etx/core/handle.hxx>
 
 #include <etx/render/host/scene_loader.hxx>
+#include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/rt.hxx>
 
@@ -31,6 +32,7 @@ struct RTApplication {
   void on_stop_selected(bool wait_for_completion);
   void on_reload_scene_selected();
   void on_reload_geometry_selected();
+  void on_options_changed();
 
  private:
   void save_options();
@@ -43,11 +45,11 @@ struct RTApplication {
   Raytracing raytracing;
   CameraController camera_controller;
 
-  Integrator _test = {raytracing};
+  CPUDebugIntegrator _preview = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
 
   Integrator* _integrator_array[2] = {
-    &_test,
+    &_preview,
     &_cpu_pt,
   };
 

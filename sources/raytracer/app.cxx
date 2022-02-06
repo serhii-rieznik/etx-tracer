@@ -25,6 +25,7 @@ void RTApplication::init() {
   ui.callbacks.stop_selected = std::bind(&RTApplication::on_stop_selected, this, std::placeholders::_1);
   ui.callbacks.reload_scene_selected = std::bind(&RTApplication::on_reload_scene_selected, this);
   ui.callbacks.reload_geometry_selected = std::bind(&RTApplication::on_reload_geometry_selected, this);
+  ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
 
@@ -54,6 +55,7 @@ void RTApplication::frame() {
   const char* status = "Not running";
 
   bool can_change_camera = true;
+
   if (_current_integrator != nullptr) {
     _current_integrator->update();
     status = _current_integrator->status();
@@ -65,7 +67,7 @@ void RTApplication::frame() {
   auto dt = time_measure.lap();
   if (can_change_camera) {
     if (camera_controller.update(dt)) {
-      _current_integrator->preview();
+      _current_integrator->preview(ui.integrator_options());
     }
   }
 
@@ -113,7 +115,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
         _current_integrator->run(ui.integrator_options());
       } else {
         _current_integrator->set_output_size(scene.scene().camera.image_size);
-        _current_integrator->preview();
+        _current_integrator->preview(ui.integrator_options());
       }
     }
   }
@@ -145,13 +147,13 @@ void RTApplication::on_integrator_selected(Integrator* i) {
 
   if (scene) {
     _current_integrator->set_output_size(scene.scene().camera.image_size);
-    _current_integrator->preview();
+    _current_integrator->preview(ui.integrator_options());
   }
 }
 
 void RTApplication::on_preview_selected() {
   ETX_ASSERT(_current_integrator != nullptr);
-  _current_integrator->preview();
+  _current_integrator->preview(ui.integrator_options());
 }
 
 void RTApplication::on_run_selected() {
@@ -176,6 +178,11 @@ void RTApplication::on_reload_geometry_selected() {
     bool start_render = (_current_integrator != nullptr) && (_current_integrator->state() == Integrator::State::Running);
     load_scene_file(_current_scene_file, SceneRepresentation::LoadGeometry, start_render);
   }
+}
+
+void RTApplication::on_options_changed() {
+  ETX_ASSERT(_current_integrator);
+  _current_integrator->update_options(ui.integrator_options());
 }
 
 }  // namespace etx

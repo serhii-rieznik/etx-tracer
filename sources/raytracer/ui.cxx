@@ -23,7 +23,9 @@ void UI::initialize() {
   }};
 }
 
-void UI::build_options(Options& options) {
+bool UI::build_options(Options& options) {
+  bool changed = false;
+
   for (auto& option : options.values) {
     switch (option.cls) {
       case OptionalValue::Class::InfoString: {
@@ -35,6 +37,7 @@ void UI::build_options(Options& options) {
         bool value = option.to_bool();
         if (igCheckbox(option.name.c_str(), &value)) {
           option.set(value);
+          changed = true;
         }
         break;
       }
@@ -44,6 +47,7 @@ void UI::build_options(Options& options) {
         igSetNextItemWidth(4.0f * igGetFontSize());
         if (igDragFloat(option.name.c_str(), &value, 0.001f, option.min_value.flt, option.max_value.flt, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           option.set(value);
+          changed = true;
         }
         break;
       }
@@ -53,6 +57,7 @@ void UI::build_options(Options& options) {
         igSetNextItemWidth(4.0f * igGetFontSize());
         if (igDragInt(option.name.c_str(), &value, 1.0f, option.min_value.integer, option.max_value.integer, "%u", ImGuiSliderFlags_AlwaysClamp)) {
           option.set(uint32_t(value));
+          changed = true;
         }
         break;
       }
@@ -68,6 +73,7 @@ void UI::build_options(Options& options) {
           }
           if (value != option.to_integer()) {
             option.set(uint32_t(value));
+            changed = true;
           }
           igTreePop();
         }
@@ -78,6 +84,7 @@ void UI::build_options(Options& options) {
         ETX_FAIL("Invalid option");
     }
   }
+  return changed;
 }
 
 void UI::build(double dt, const char* status) {
@@ -150,7 +157,10 @@ void UI::build(double dt, const char* status) {
     igSetNextWindowPos({offset_size, 2.0f * offset_size}, ImGuiCond_Always, {0.0f, 0.0f});
     igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
     igText("Integrator options");
-    build_options(_integrator_options);
+
+    if (build_options(_integrator_options) && callbacks.options_changed) {
+      callbacks.options_changed();
+    }
 
     if (_current_integrator->can_run()) {
       igSeparator();

@@ -26,10 +26,11 @@ struct CPUPathTracing : public Integrator {
   float4* get_updated_light_image() override;
   const char* status() const override;
 
-  void preview() override;
+  void preview(const Options&) override;
   void run(const Options&) override;
   void update() override;
   void stop(bool wait_for_completion) override;
+  void update_options(const Options&) override;
 
   ETX_DECLARE_PIMPL(CPUPathTracing, 4096);
 };
