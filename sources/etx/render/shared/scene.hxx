@@ -237,7 +237,10 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const 
 
   const auto& img = scene.images[em.image_index];
   pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+  
   pdf_dir = img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
+  ETX_VALIDATE(pdf_dir);
+
   pdf_dir_out = pdf_area * pdf_dir;
   return em.emission(spect) * rgb::query_spd(spect, to_float3(img.evaluate(uv)), scene.spectrums->rgb_illuminant);
 }
@@ -397,6 +400,7 @@ ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distributi
 ETX_DECLARE_BSDF(Diffuse);
 ETX_DECLARE_BSDF(Plastic);
 ETX_DECLARE_BSDF(Conductor);
+ETX_DECLARE_BSDF(MultiscatteringConductor);
 ETX_DECLARE_BSDF(Dielectric);
 ETX_DECLARE_BSDF(Thinfilm);
 ETX_DECLARE_BSDF(Translucent);
@@ -421,6 +425,7 @@ namespace bsdf {
     MACRO(Diffuse);                         \
     MACRO(Plastic);                         \
     MACRO(Conductor);                       \
+    MACRO(MultiscatteringConductor);        \
     MACRO(Dielectric);                      \
     MACRO(Thinfilm);                        \
     MACRO(Translucent);                     \
@@ -462,9 +467,9 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralRes
 }
 
 }  // namespace bsdf
-
 }  // namespace etx
 
+#include <etx/render/shared/bsdf_external.hxx>
 #include <etx/render/shared/bsdf_conductor.hxx>
 #include <etx/render/shared/bsdf_dielectric.hxx>
 #include <etx/render/shared/bsdf_generic.hxx>

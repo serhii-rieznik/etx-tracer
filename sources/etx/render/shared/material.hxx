@@ -10,6 +10,7 @@ struct alignas(16) Material {
     Diffuse,
     Plastic,
     Conductor,
+    MultiscatteringConductor,
     Dielectric,
     Thinfilm,
     Translucent,
@@ -71,6 +72,7 @@ struct alignas(16) Material {
         return false;
 
       case Class::Conductor:
+      case Class::MultiscatteringConductor:
       case Class::Dielectric:
       case Class::Generic:
         return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;

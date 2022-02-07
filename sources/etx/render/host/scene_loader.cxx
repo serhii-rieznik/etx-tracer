@@ -653,6 +653,8 @@ inline Material::Class material_string_to_class(const char* s) {
     return Material::Class::Plastic;
   else if (strcmp(s, "conductor") == 0)
     return Material::Class::Conductor;
+  else if (strcmp(s, "msconductor") == 0)
+    return Material::Class::MultiscatteringConductor;
   else if (strcmp(s, "dielectric") == 0)
     return Material::Class::Dielectric;
   else if (strcmp(s, "thinfilm") == 0)
@@ -938,12 +940,39 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       mtl.roughness = {material.roughness, material.roughness};
       mtl.metalness = material.metallic;
 
+      if (get_param(material, "material", data_buffer)) {
+        auto params = split_params(data_buffer);
+        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+          if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
+            mtl.cls = material_string_to_class(params[i + 1]);
+            i += 1;
+          }
+          if ((strcmp(params[i], "uroughness") == 0) && (i + 1 < e)) {
+            float param = 0.0f;
+            if (sscanf(params[i + 1], "%f", &param) == 1) {
+              mtl.roughness.x = param;
+            }
+            i += 1;
+          }
+          if ((strcmp(params[i], "vroughness") == 0) && (i + 1 < e)) {
+            float param = 0.0f;
+            if (sscanf(params[i + 1], "%f", &param) == 1) {
+              mtl.roughness.y = param;
+            }
+            i += 1;
+          }
+          if (strcmp(params[i], "twosided") == 0) {
+            mtl.options |= Material::DoubleSided;
+          }
+        }
+      }
+
       if (get_param(material, "int_ior", data_buffer)) {
-        float n_i = 0.0f;
-        float n_k = 0.0f;
-        if (sscanf(data_buffer, "%f %f", &n_i, &n_k) >= 1) {
-          mtl.int_ior.eta = SpectralDistribution::from_constant(n_i);
-          mtl.int_ior.k = SpectralDistribution::from_constant(n_k);
+        float2 values = {};
+        if (sscanf(data_buffer, "%f %f", &values.x, &values.y) == 2) {
+          // interpret as eta/k
+          mtl.int_ior.eta = SpectralDistribution::from_constant(values.x);
+          mtl.int_ior.k = SpectralDistribution::from_constant(values.y);
         } else {
           char buffer[256] = {};
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
@@ -952,11 +981,11 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       if (get_param(material, "ext_ior", data_buffer)) {
-        float n_i = 0.0f;
-        float n_k = 0.0f;
-        if (sscanf(data_buffer, "%f %f", &n_i, &n_k) >= 1) {
-          mtl.ext_ior.eta = SpectralDistribution::from_constant(n_i);
-          mtl.ext_ior.k = SpectralDistribution::from_constant(n_k);
+        float2 values = {};
+        if (sscanf(data_buffer, "%f %f", &values.x, &values.y) == 2) {
+          // interpret as eta/k
+          mtl.ext_ior.eta = SpectralDistribution::from_constant(values.x);
+          mtl.ext_ior.k = SpectralDistribution::from_constant(values.y);
         } else {
           char buffer[256] = {};
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
@@ -1017,33 +1046,6 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
             mtl.thinfilm.min_thickness = static_cast<float>(atof(params[i + 1]));
             mtl.thinfilm.max_thickness = static_cast<float>(atof(params[i + 2]));
             i += 2;
-          }
-        }
-      }
-
-      if (get_param(material, "material", data_buffer)) {
-        auto params = split_params(data_buffer);
-        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-          if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
-            mtl.cls = material_string_to_class(params[i + 1]);
-            i += 1;
-          }
-          if ((strcmp(params[i], "uroughness") == 0) && (i + 1 < e)) {
-            float param = 0.0f;
-            if (sscanf(params[i + 1], "%f", &param) == 1) {
-              mtl.roughness.x = param;
-            }
-            i += 1;
-          }
-          if ((strcmp(params[i], "vroughness") == 0) && (i + 1 < e)) {
-            float param = 0.0f;
-            if (sscanf(params[i + 1], "%f", &param) == 1) {
-              mtl.roughness.y = param;
-            }
-            i += 1;
-          }
-          if (strcmp(params[i], "twosided") == 0) {
-            mtl.options |= Material::DoubleSided;
           }
         }
       }

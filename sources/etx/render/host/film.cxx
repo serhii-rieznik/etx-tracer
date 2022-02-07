@@ -2,8 +2,8 @@
 
 namespace etx {
 
-inline void atomic_add_impl(float* ptr, float value) {
-  volatile long* iptr = reinterpret_cast<long*>(ptr);
+inline void atomic_add_impl(volatile float* ptr, float value) {
+  volatile long* iptr = std::bit_cast<volatile long*>(ptr);
   long old_value = {};
   long new_value = {};
   do {
@@ -40,6 +40,7 @@ void Film::atomic_add(const float4& value, uint32_t x, uint32_t y) {
     return;
   }
 
+  ETX_VALIDATE(value);
   uint32_t index = x + (_dimensions.y - 1 - y) * _dimensions.x;
   auto ptr = (_data_ptr + index)->data.data;
   atomic_add_impl(ptr + 0, value.x);
@@ -51,7 +52,7 @@ void Film::accumulate(const float4& value, uint32_t x, uint32_t y, float t) {
   if ((x >= _dimensions.x) || (y >= _dimensions.y)) {
     return;
   }
-
+  ETX_VALIDATE(value);
   uint32_t i = x + (_dimensions.y - 1 - y) * _dimensions.x;
   _data[i] = (t <= 0.0f) ? value : lerp(value, _data[i], t);
 }

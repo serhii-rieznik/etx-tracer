@@ -53,9 +53,13 @@ struct Image {
     uint32_t col_1 = clamp(col_0 + 1u, 0u, isize.x - 1u);
 
     const auto& p00 = pixel(col_0, row_0) * (1.0f - dx) * (1.0f - dy);
+    ETX_VALIDATE(p00);
     const auto& p01 = pixel(col_1, row_0) * (dx) * (1.0f - dy);
+    ETX_VALIDATE(p01);
     const auto& p10 = pixel(col_0, row_1) * (1.0f - dx) * (dy);
+    ETX_VALIDATE(p10);
     const auto& p11 = pixel(col_1, row_1) * (dx) * (dy);
+    ETX_VALIDATE(p11);
 
     return {p00, p01, p10, p11, row_0, row_1};
   }
@@ -67,8 +71,8 @@ struct Image {
 
   ETX_GPU_CODE float pdf(const float2& in_uv) const {
     auto g = gather(in_uv);
-    auto t = luminance(to_float3(g.p00 + g.p01)) * (options & UniformSamplingTable ? 1.0f : sin(kPi * (float(g.row_0) + 0.5f) / fsize.y));
-    auto b = luminance(to_float3(g.p10 + g.p11)) * (options & UniformSamplingTable ? 1.0f : sin(kPi * (float(g.row_1) + 0.5f) / fsize.y));
+    auto t = luminance(to_float3(g.p00 + g.p01)) * (options & UniformSamplingTable ? 1.0f : sinf(kPi * (float(g.row_0) + 0.5f) / fsize.y));
+    auto b = luminance(to_float3(g.p10 + g.p11)) * (options & UniformSamplingTable ? 1.0f : sinf(kPi * (float(g.row_1) + 0.5f) / fsize.y));
     return (t + b) / normalization;
   }
 

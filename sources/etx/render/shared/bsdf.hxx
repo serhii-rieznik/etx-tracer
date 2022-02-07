@@ -151,6 +151,10 @@ struct LocalFrame : public Frame {
     return _from_local * v;
   }
 
+  ETX_GPU_CODE static float cos_theta(const float3& v) {
+    return v.z;
+  }
+
  private:
   float3x3 _to_local = {};
   float3x3 _from_local = {};
@@ -330,7 +334,7 @@ ETX_GPU_CODE SpectralResponse dielectric_thinfilm(SpectralQuery spect, const flo
     return {spect.wavelength, 1.0f};
   }
 
-  float cos_theta_1 = std::sqrt(1.0f - sin_theta_1_squared);
+  float cos_theta_1 = sqrtf(1.0f - sin_theta_1_squared);
 
   float eta_12 = (film_ior / int_ior);
   float sin_theta_2_squared = sqr(eta_12) * (1.0f - cos_theta_1 * cos_theta_1);
@@ -338,7 +342,7 @@ ETX_GPU_CODE SpectralResponse dielectric_thinfilm(SpectralQuery spect, const flo
     return {spect.wavelength, 1.0f};
   }
 
-  float cos_theta_2 = std::sqrt(1.0f - sin_theta_2_squared);
+  float cos_theta_2 = sqrtf(1.0f - sin_theta_2_squared);
 
   float delta_10 = film_ior > ext_ior ? 0.0f : kPi;
   float delta_21 = int_ior > film_ior ? 0.0f : kPi;
@@ -372,12 +376,10 @@ ETX_GPU_CODE SpectralResponse dielectric_thinfilm(SpectralQuery spect, const flo
   return dielectric_thinfilm(spect, fabsf(dot(i, m)), ext_ior, film_ior, int_ior, thickness);
 }
 
-ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample& sample_out,
-  const RefractiveIndex::Sample& sample_in) {
+ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float cos_theta, const RefractiveIndex::Sample& sample_out, const RefractiveIndex::Sample& sample_in) {
   ETX_ASSERT(spect.wavelength == sample_in.wavelength);
   ETX_ASSERT(spect.wavelength == sample_out.wavelength);
 
-  float cos_theta = fabsf(dot(i, m));
   float cos_theta_2 = cos_theta * cos_theta;
   float sin_theta_2 = clamp(1.0f - cos_theta_2, 0.0f, 1.0f);
 
@@ -400,6 +402,11 @@ ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, co
   ETX_VALIDATE(Rp);
 
   return 0.5f * (Rp + Rs);
+}
+
+ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample& sample_out,
+  const RefractiveIndex::Sample& sample_in) {
+  return conductor(spect, fabsf(dot(i, m)), sample_out, sample_in);
 }
 
 }  // namespace fresnel

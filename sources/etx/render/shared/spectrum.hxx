@@ -258,9 +258,7 @@ struct alignas(16) SpectralResponse {
   }
 
   ETX_GPU_CODE bool valid() const {
-    return true;
-    // TODO : fix
-    // return valid_value(components);
+    return valid_value(components);
   }
 
   ETX_GPU_CODE bool is_zero() const {
