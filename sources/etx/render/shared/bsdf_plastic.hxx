@@ -87,7 +87,7 @@ ETX_GPU_CODE float pdf_delta(const BSDFData& data, const Scene& scene) {
   return kInvPi * n_dot_o * (1.0f - f.monochromatic());
 }
 
-ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (dot(data.material.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
     return sample_delta(smp, data, scene);
   }
@@ -113,10 +113,10 @@ ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& 
     properties = BSDFSample::Diffuse;
   }
 
-  return {eval_data.w_o, evaluate(eval_data, scene), properties};
+  return {eval_data.w_o, evaluate(eval_data, scene, smp), properties};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (dot(data.material.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
     return evaluate_delta(data, scene);
   }
@@ -188,7 +188,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   if (material.diffuse_image_index == kInvalidIndex) {
     return false;
   }
@@ -204,7 +204,7 @@ ETX_GPU_CODE float2 remap_alpha(float2 a) {
   return sqr(max(a, float2{1.0f / 16.0f, 1.0f / 16.0f}));
 }
 
-ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return {{data.spectrum_sample.wavelength, 0.0f}};
@@ -221,10 +221,10 @@ ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& 
     properties = BSDFSample::Diffuse;
   }
 
-  return {eval_data.w_o, evaluate(eval_data, scene), properties};
+  return {eval_data.w_o, evaluate(eval_data, scene, smp), properties};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return {data.spectrum_sample.wavelength, 0.0f};
@@ -290,7 +290,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   if (material.diffuse_image_index == kInvalidIndex) {
     return false;
   }

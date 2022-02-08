@@ -148,7 +148,7 @@ struct CPUPathTracingImpl : public Task {
         if (path_length + 1 <= current_max_depth) {
           auto emitter_sample = sample_emitter(spect, smp, intersection.pos, scene);
           if (emitter_sample.pdf_dir > 0) {
-            BSDFEval bsdf_eval = bsdf::evaluate({spect, medium_index, mat, PathSource::Camera, intersection, ray.d, emitter_sample.direction}, scene);
+            BSDFEval bsdf_eval = bsdf::evaluate({spect, medium_index, mat, PathSource::Camera, intersection, ray.d, emitter_sample.direction}, scene, smp);
             if (bsdf_eval.valid()) {
               auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
               auto tr = transmittance(spect, smp, pos, emitter_sample.origin, medium_index);
@@ -297,11 +297,11 @@ void CPUPathTracing::set_output_size(const uint2& dim) {
   _private->camera_image.resize(dim);
 }
 
-float4* CPUPathTracing::get_updated_camera_image() {
+float4* CPUPathTracing::get_camera_image(bool force_update) {
   return _private->camera_image.data();
 }
 
-float4* CPUPathTracing::get_updated_light_image() {
+float4* CPUPathTracing::get_light_image(bool force_update) {
   return nullptr;
 }
 

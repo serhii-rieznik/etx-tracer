@@ -1,11 +1,11 @@
 ﻿#include <etx/core/environment.hxx>
 #include <etx/log/log.hxx>
-
 #include <etx/render/host/image_pool.hxx>
-
 #include <etx/render/shared/scene.hxx>
 
 #include "app.hxx"
+
+#include <tinyexr/tinyexr.hxx>
 
 namespace etx {
 
@@ -18,6 +18,7 @@ void RTApplication::init() {
   ui.initialize();
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
+  ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
   ui.callbacks.scene_file_selected = std::bind(&RTApplication::on_scene_file_selected, this, std::placeholders::_1);
   ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
   ui.callbacks.preview_selected = std::bind(&RTApplication::on_preview_selected, this);
@@ -59,8 +60,8 @@ void RTApplication::frame() {
   if (_current_integrator != nullptr) {
     _current_integrator->update();
     status = _current_integrator->status();
-    c_image = _current_integrator->get_updated_camera_image();
-    l_image = _current_integrator->get_updated_light_image();
+    c_image = _current_integrator->get_camera_image(false);
+    l_image = _current_integrator->get_light_image(false);
     can_change_camera = _current_integrator->state() == Integrator::State::Preview;
   }
 
@@ -124,6 +125,36 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
 void RTApplication::on_referenece_image_selected(std::string file_name) {
   log::warning("Loading reference image %s...", file_name.c_str());
   render.set_reference_image(file_name.c_str());
+}
+
+void RTApplication::on_save_image_selected(std::string file_name, bool as_xyz) {
+  if (_current_integrator == nullptr) {
+    return;
+  }
+
+  if (strlen(get_file_ext(file_name.c_str())) == 0) {
+    file_name += ".exr";
+  }
+
+  auto c_image = _current_integrator->get_camera_image(true);
+  auto l_image = _current_integrator->get_light_image(true);
+
+  uint2 image_size = raytracing.scene().camera.image_size;
+  std::vector<float4> output(image_size.x * image_size.y, float4{});
+  for (uint32_t i = 0, e = image_size.x * image_size.y; (c_image != nullptr) && (i < e); ++i) {
+    output[i] = c_image[i];
+  }
+  for (uint32_t i = 0, e = image_size.x * image_size.y; (l_image != nullptr) && (i < e); ++i) {
+    output[i] += l_image[i];
+  }
+  for (uint32_t i = 0, e = image_size.x * image_size.y; (as_xyz == false) && (i < e); ++i) {
+    output[i] = {spectrum::xyz_to_rgb(output[i]), 1.0f};
+  }
+
+  const char* error = nullptr;
+  if (SaveEXR(output.data()->data.data, image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
+    log::error("Failed to save EXR image to %s: %s", file_name.c_str(), error);
+  }
 }
 
 void RTApplication::on_scene_file_selected(std::string file_name) {

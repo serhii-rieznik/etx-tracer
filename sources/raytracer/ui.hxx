@@ -33,6 +33,7 @@ struct UI {
 
   struct {
     std::function<void(std::string)> reference_image_selected;
+    std::function<void(std::string, bool)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
     std::function<void(Integrator*)> integrator_selected;
     std::function<void(bool)> stop_selected;

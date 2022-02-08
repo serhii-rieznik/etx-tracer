@@ -54,11 +54,11 @@ struct Integrator {
   virtual void update_options(const Options&) {
   }
 
-  virtual float4* get_updated_camera_image() {
+  virtual float4* get_camera_image(bool /* force update */) {
     return nullptr;
   }
 
-  virtual float4* get_updated_light_image() {
+  virtual float4* get_light_image(bool /* force update */) {
     return nullptr;
   }
 
@@ -66,7 +66,7 @@ struct Integrator {
   bool can_run() const {
     return rt.has_scene();
   }
-  virtual State state() const {
+  State state() const {
     return current_state.load();
   }
 

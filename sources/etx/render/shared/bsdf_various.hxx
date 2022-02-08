@@ -1,7 +1,7 @@
 ﻿namespace etx {
 namespace DiffuseBSDF {
 
-ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return {{data.spectrum_sample.wavelength, 0.0f}};
@@ -9,10 +9,10 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
 
   BSDFData eval_data = data;
   eval_data.w_o = sample_cosine_distribution(smp.next(), smp.next(), frame.nrm, 1.0f);
-  return {eval_data.w_o, evaluate(eval_data, scene), BSDFSample::Diffuse};
+  return {eval_data.w_o, evaluate(eval_data, scene, smp), BSDFSample::Diffuse};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return {data.spectrum_sample.wavelength, 0.0f};
@@ -48,7 +48,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   if (material.diffuse_image_index == kInvalidIndex) {
     return false;
   }
@@ -61,19 +61,19 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
 
 namespace TranslucentBSDF {
 
-ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
   float3 n = entering_material ? -data.nrm : data.nrm;
 
   BSDFData eval_data = data;
   eval_data.w_o = sample_cosine_distribution(smp.next(), smp.next(), n, 1.0f);
 
-  BSDFSample result = {eval_data.w_o, evaluate(eval_data, scene), BSDFSample::Diffuse | BSDFSample::MediumChanged};
+  BSDFSample result = {eval_data.w_o, evaluate(eval_data, scene, smp), BSDFSample::Diffuse | BSDFSample::MediumChanged};
   result.medium_index = entering_material ? data.material.int_medium : data.material.ext_medium;
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   auto diffuse = bsdf::apply_image(data.spectrum_sample, data.material.diffuse(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
   auto n_dot_o = fabsf(dot(data.nrm, data.w_o));
 
@@ -90,7 +90,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return kInvPi * n_dot_o;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   if (material.diffuse_image_index == kInvalidIndex) {
     return false;
   }
@@ -103,7 +103,7 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
 
 namespace MirrorBSDF {
 
-ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return {{data.spectrum_sample.wavelength, 0.0f}};
@@ -117,7 +117,7 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
@@ -125,7 +125,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return 0.0f;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
@@ -133,7 +133,7 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
 
 namespace BoundaryBSDF {
 
-ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
 
   BSDFSample result;
@@ -145,7 +145,7 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
@@ -153,7 +153,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return 0.0f;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 

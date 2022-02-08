@@ -20,8 +20,8 @@ struct CPUBidirectional : public Integrator {
   void stop(bool /* wait for completion */) override;
   void update_options(const Options&) override;
 
-  float4* get_updated_camera_image() override;
-  float4* get_updated_light_image() override;
+  float4* get_camera_image(bool) override;
+  float4* get_light_image(bool) override;
   const char* status() const override;
 
  private:

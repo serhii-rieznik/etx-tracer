@@ -237,7 +237,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const 
 
   const auto& img = scene.images[em.image_index];
   pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
-  
+
   pdf_dir = img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
   ETX_VALIDATE(pdf_dir);
 
@@ -389,12 +389,12 @@ ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distributi
   return emitter.weight / dist.total_weight;
 }
 
-#define ETX_DECLARE_BSDF(Class)                                                                                             \
-  namespace Class##BSDF {                                                                                                   \
-    ETX_GPU_CODE BSDFSample sample(struct Sampler&, const struct BSDFData&, const Scene& scene);                            \
-    ETX_GPU_CODE BSDFEval evaluate(const struct BSDFData& data, const Scene& scene);                                        \
-    ETX_GPU_CODE float pdf(const struct BSDFData& data, const Scene& scene);                                                \
-    ETX_GPU_CODE bool continue_tracing(const struct Material&, const float2& tex, const Scene& scene, struct Sampler& smp); \
+#define ETX_DECLARE_BSDF(Class)                                                                     \
+  namespace Class##BSDF {                                                                           \
+    ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Scene&, Sampler&);                        \
+    ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const Scene&, Sampler&);                        \
+    ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene);                               \
+    ETX_GPU_CODE bool continue_tracing(const Material&, const float2&, const Scene&, Sampler& smp); \
   }
 
 ETX_DECLARE_BSDF(Diffuse);
@@ -402,6 +402,7 @@ ETX_DECLARE_BSDF(Plastic);
 ETX_DECLARE_BSDF(Conductor);
 ETX_DECLARE_BSDF(MultiscatteringConductor);
 ETX_DECLARE_BSDF(Dielectric);
+ETX_DECLARE_BSDF(MultiscatteringDielectric);
 ETX_DECLARE_BSDF(Thinfilm);
 ETX_DECLARE_BSDF(Translucent);
 ETX_DECLARE_BSDF(Mirror);
@@ -415,8 +416,8 @@ namespace bsdf {
   case Material::Class::CLS:      \
     return CLS##BSDF::FUNC(__VA_ARGS__)
 
-#define CASE_IMPL_SAMPLE(A) CASE_IMPL(A, sample, smp, data, scene)
-#define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, scene)
+#define CASE_IMPL_SAMPLE(A) CASE_IMPL(A, sample, data, scene, smp)
+#define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, scene, smp)
 #define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, scene)
 #define CASE_IMPL_CONTINUE(A) CASE_IMPL(A, continue_tracing, material, tex, scene, smp)
 
@@ -427,6 +428,7 @@ namespace bsdf {
     MACRO(Conductor);                       \
     MACRO(MultiscatteringConductor);        \
     MACRO(Dielectric);                      \
+    MACRO(MultiscatteringDielectric);       \
     MACRO(Thinfilm);                        \
     MACRO(Translucent);                     \
     MACRO(Mirror);                          \
@@ -438,10 +440,10 @@ namespace bsdf {
       return {};                            \
   }
 
-[[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const struct Scene& scene, struct Sampler& smp) {
+[[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const struct Scene& scene, Sampler& smp) {
   ALL_CASES(CASE_IMPL_SAMPLE, data.material.cls);
 };
-[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const struct Scene& scene) {
+[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const struct Scene& scene, Sampler& smp) {
   ALL_CASES(CASE_IMPL_EVALUATE, data.material.cls);
 }
 
@@ -449,7 +451,7 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_PDF, data.material.cls);
 }
 
-[[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const struct Scene& scene, struct Sampler& smp) {
+[[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const struct Scene& scene, Sampler& smp) {
   ALL_CASES(CASE_IMPL_CONTINUE, material.cls);
 }
 

@@ -56,4 +56,25 @@ std::string open_file(const std::vector<std::string>& filters) {
   return GetOpenFileNameA(&of) ? of.lpstrFile : "";
 }
 
+std::string save_file(const std::vector<std::string>& filters) {
+  char name_buffer[MAX_PATH] = {};
+
+  size_t fp = 0;
+  char filter_buffer[2048] = {};
+  for (const std::string& w : filters) {
+    memcpy(filter_buffer + fp, w.data(), w.length());
+    fp += 1 + w.length();
+  }
+
+  OPENFILENAME of = {};
+  of.lStructSize = sizeof(of);
+  of.hInstance = GetModuleHandle(nullptr);
+  of.Flags = OFN_ENABLESIZING | OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_OVERWRITEPROMPT;
+  of.lpstrFile = name_buffer;
+  of.nMaxFile = MAX_PATH;
+  of.lpstrFilter = filter_buffer;
+  of.nFilterIndex = filters.empty() ? 0 : 1;
+  return GetSaveFileName(&of) ? of.lpstrFile : "";
+}
+
 }  // namespace etx

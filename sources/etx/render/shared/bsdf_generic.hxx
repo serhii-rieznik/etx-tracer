@@ -9,7 +9,7 @@ ETX_GPU_CODE float remap_metalness(float m) {
   return sqrtf(m);
 }
 
-ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return {};
@@ -43,10 +43,10 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
     properties = BSDFSample::Diffuse;
   }
 
-  return {eval_data.w_o, evaluate(eval_data, scene), properties};
+  return {eval_data.w_o, evaluate(eval_data, scene, smp), properties};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return {data.spectrum_sample.wavelength, 0.0f};
@@ -127,7 +127,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 

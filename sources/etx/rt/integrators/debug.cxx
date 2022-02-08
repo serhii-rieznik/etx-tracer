@@ -168,11 +168,11 @@ void CPUDebugIntegrator::set_output_size(const uint2& dim) {
   _private->camera_image.resize(dim);
 }
 
-float4* CPUDebugIntegrator::get_updated_camera_image() {
+float4* CPUDebugIntegrator::get_camera_image(bool) {
   return _private->camera_image.data();
 }
 
-float4* CPUDebugIntegrator::get_updated_light_image() {
+float4* CPUDebugIntegrator::get_light_image(bool) {
   return nullptr;
 }
 

@@ -88,11 +88,11 @@ void CPUBidirectional::set_output_size(const uint2& dim) {
   _private->light_image.resize(dim);
 }
 
-float4* CPUBidirectional::get_updated_camera_image() {
+float4* CPUBidirectional::get_camera_image(bool) {
   return _private->camera_image.data();
 }
 
-float4* CPUBidirectional::get_updated_light_image() {
+float4* CPUBidirectional::get_light_image(bool) {
   return _private->light_image.data();
 }
 

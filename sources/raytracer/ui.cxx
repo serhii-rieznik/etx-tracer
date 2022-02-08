@@ -135,16 +135,29 @@ void UI::build(double dt, const char* status) {
       if (igMenuItemEx("Reload Materials", nullptr, "Ctrl+M", false, false)) {
       }
       igSeparator();
-      if (igMenuItemEx("Save...", nullptr, "Ctrl+S", false, false)) {
+      if (igMenuItemEx("Save...", nullptr, nullptr, false, false)) {
       }
       igEndMenu();
     }
 
-    if (igBeginMenu("Reference image", true)) {
-      if (igMenuItemEx("Open...", nullptr, nullptr, false, true)) {
+    if (igBeginMenu("Image", true)) {
+      if (igMenuItemEx("Open Reference Image...", nullptr, nullptr, false, true)) {
         auto selected_file = open_file({"Supported images", "*.exr;*.png;*.hdr;*.pfm;*.jpg;*.bmp;*.tga"});
         if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
           callbacks.reference_image_selected(selected_file);
+        }
+      }
+      igSeparator();
+      if (igMenuItemEx("Save Current Image (RGB)...", nullptr, "Ctrl+S", false, true)) {
+        auto selected_file = save_file({"EXR images", "*.exr"});
+        if ((selected_file.empty() == false) && callbacks.save_image_selected) {
+          callbacks.save_image_selected(selected_file, false);
+        }
+      }
+      if (igMenuItemEx("Save Current Image (XYZ)...", nullptr, "Alt+Ctrl+S", false, true)) {
+        auto selected_file = save_file({"EXR images", "*.exr"});
+        if ((selected_file.empty() == false) && callbacks.save_image_selected) {
+          callbacks.save_image_selected(selected_file, true);
         }
       }
       igEndMenu();
@@ -201,7 +214,8 @@ void UI::build(double dt, const char* status) {
 }
 
 bool UI::handle_event(const sapp_event* e) {
-  if ((e->modifiers & SAPP_MODIFIER_CTRL) && (e->type == SAPP_EVENTTYPE_KEY_DOWN)) {
+  auto modifiers = e->modifiers;
+  if ((modifiers & SAPP_MODIFIER_CTRL) && (e->type == SAPP_EVENTTYPE_KEY_DOWN)) {
     switch (e->key_code) {
       case SAPP_KEYCODE_O: {
         select_scene_file();
@@ -215,6 +229,13 @@ bool UI::handle_event(const sapp_event* e) {
       case SAPP_KEYCODE_G: {
         if (callbacks.reload_geometry_selected)
           callbacks.reload_geometry_selected();
+        break;
+      }
+      case SAPP_KEYCODE_S: {
+        auto selected_file = save_file({"EXR images", "*.exr"});
+        if ((selected_file.empty() == false) && callbacks.save_image_selected) {
+          callbacks.save_image_selected(selected_file, modifiers & SAPP_MODIFIER_ALT);
+        }
         break;
       }
     }

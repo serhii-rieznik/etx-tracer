@@ -1,10 +1,10 @@
-﻿namespace etx {
+﻿#include <stdlib.h>
 
-namespace DielectricBSDF {
+namespace etx {
 
 namespace DeltaDielectricBSDF {
 
-ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   bool entering_material = data.get_normal_frame(frame);
 
@@ -55,7 +55,7 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
@@ -64,10 +64,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
 }
 
 }  // namespace DeltaDielectricBSDF
+namespace DielectricBSDF {
 
-ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (data.material.is_delta()) {
-    return DeltaDielectricBSDF::sample(smp, data, scene);
+    return DeltaDielectricBSDF::sample(data, scene, smp);
   }
 
   Frame frame;
@@ -94,7 +95,6 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
   if (reflection) {
     eval_data.w_o = reflect(data.w_i, m);
     if (dot(eval_data.w_o, frame.nrm) <= kEpsilon) {
-      // if (dot(data.w_i, frame.nrm) * dot(eval_data.w_o, frame.nrm) >= 0.0f) {
       return {{data.spectrum_sample.wavelength, 0.0f}};
     }
     eval_data.w_o = normalize(eval_data.w_o);
@@ -104,13 +104,12 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
     float cos_theta_o = sqrtf(clamp(1.0f - sin_theta_o_squared, 0.0f, 1.0f));
     eval_data.w_o = eta * data.w_i + m * (eta * cos_theta_i - cos_theta_o);
     if (dot(eval_data.w_o, frame.nrm) >= -kEpsilon) {
-      //    if (dot(data.w_i, frame.nrm) * dot(eval_data.w_o, frame.nrm) < 0.0f) {
       return {{data.spectrum_sample.wavelength, 0.0f}};
     }
     eval_data.w_o = normalize(eval_data.w_o);
   }
 
-  BSDFSample result = {eval_data.w_o, evaluate(eval_data, scene), reflection ? 0u : BSDFSample::MediumChanged};
+  BSDFSample result = {eval_data.w_o, evaluate(eval_data, scene, smp), reflection ? 0u : BSDFSample::MediumChanged};
   if (entering_material) {
     result.medium_index = reflection ? data.material.ext_medium : data.material.int_medium;
   } else {
@@ -119,9 +118,9 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (data.material.is_delta()) {
-    return DeltaDielectricBSDF::evaluate(data, scene);
+    return DeltaDielectricBSDF::evaluate(data, scene, smp);
   }
 
   Frame frame;
@@ -248,7 +247,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return pdf;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   if (material.diffuse_image_index == kInvalidIndex) {
     return false;
   }
@@ -260,7 +259,7 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
 
 namespace ThinfilmBSDF {
 
-ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   bool entering_material = data.get_normal_frame(frame);
 
@@ -301,7 +300,7 @@ ETX_GPU_CODE BSDFSample sample(struct Sampler& smp, const BSDFData& data, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
@@ -309,7 +308,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   return 0.0f;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, struct Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   if (material.diffuse_image_index == kInvalidIndex) {
     return false;
   }
@@ -319,4 +318,179 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
 }
 
 }  // namespace ThinfilmBSDF
+
+namespace MultiscatteringDielectricBSDF {
+
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
+  if (data.material.is_delta()) {
+    return DeltaDielectricBSDF::sample(data, scene, smp);
+  }
+
+  bsdf::LocalFrame local_frame = {{data.tan, data.btn, data.nrm}};
+  auto w_i = local_frame.to_local(-data.w_i);
+  float ext_ior = data.material.ext_ior(data.spectrum_sample).eta.monochromatic();
+  float int_ior = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
+  float m_eta = int_ior / ext_ior;
+  float m_invEta = 1.0f / m_eta;
+  const float alpha_x = data.material.roughness.x;
+  const float alpha_y = data.material.roughness.y;
+
+  BSDFSample result = {};
+  if (bsdf::LocalFrame::cos_theta(w_i) > 0)  // outside
+  {
+    float weight;
+    result.w_o = external::sample_dielectric(w_i, alpha_x, alpha_y, m_eta, 10, weight);
+
+    auto a_data = data;
+    a_data.w_o = normalize(local_frame.from_local(result.w_o));
+    result.pdf = pdf(a_data, scene);
+
+    if (bsdf::LocalFrame::cos_theta(result.w_o) > 0)  // reflection
+    {
+      result.eta = 1.0f;
+      result.weight = data.material.specular(data.spectrum_sample) * weight;
+    } else  // refraction
+    {
+      result.eta = m_eta;
+      float factor = (data.mode == PathSource::Camera) ? m_invEta : 1.0f;
+      result.weight = data.material.transmittance(data.spectrum_sample) * factor * factor * weight;
+    }
+  } else  // inside
+  {
+    float weight;
+    result.w_o = -external::sample_dielectric(-w_i, alpha_x, alpha_y, m_invEta, 10, weight);
+
+    auto a_data = data;
+    a_data.w_o = normalize(local_frame.from_local(result.w_o));
+    result.pdf = pdf(a_data, scene);
+
+    if (bsdf::LocalFrame::cos_theta(result.w_o) > 0)  // refraction
+    {
+      result.eta = m_invEta;
+      float factor = (data.mode == PathSource::Camera) ? m_eta : 1.0f;
+      result.weight = data.material.transmittance(data.spectrum_sample) * factor * factor * weight;
+    } else  // reflection
+    {
+      result.eta = 1.0f;
+      result.weight = data.material.specular(data.spectrum_sample) * weight;
+    }
+  }
+
+  result.w_o = normalize(local_frame.from_local(result.w_o));
+  return result;
+}
+
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
+  if (data.material.is_delta()) {
+    return DeltaDielectricBSDF::evaluate(data, scene, smp);
+  }
+
+  bsdf::LocalFrame local_frame = {{data.tan, data.btn, data.nrm}};
+  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_o = local_frame.to_local(data.w_o);
+  float ext_ior = data.material.ext_ior(data.spectrum_sample).eta.monochromatic();
+  float int_ior = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
+  float m_eta = int_ior / ext_ior;
+  float m_invEta = 1.0f / m_eta;
+  const float alpha_x = data.material.roughness.x;
+  const float alpha_y = data.material.roughness.y;
+
+  if (bsdf::LocalFrame::cos_theta(w_i) == 0)
+    return {};
+
+  float factor = (data.mode == PathSource::Camera) ? (bsdf::LocalFrame::cos_theta(w_i) > 0 ? m_invEta : m_eta) : 1.0f;
+
+  SpectralResponse result_value = {};
+  if (bsdf::LocalFrame::cos_theta(w_i) > 0)  // outside
+  {
+    if (bsdf::LocalFrame::cos_theta(w_o) >= 0) {
+      float value = (smp.next() > 0.5f)
+                      ? 2.0f * external::eval_dielectric(w_i, w_o, true, alpha_x, alpha_y, m_eta, 10)
+                      : 2.0f * external::eval_dielectric(w_o, w_i, true, alpha_x, alpha_y, m_eta, 10) / bsdf::LocalFrame::cos_theta(w_i) * bsdf::LocalFrame::cos_theta(w_o);
+      result_value = data.material.specular(data.spectrum_sample) * value;
+    } else {
+      float value = (smp.next() > 0.5f) ? 2.0f * external::eval_dielectric(w_i, w_o, false, alpha_x, alpha_y, m_eta, 10)
+                                        : 2.0f * external::eval_dielectric(-w_o, -w_i, false, alpha_x, alpha_y, m_invEta, 10) / bsdf::LocalFrame::cos_theta(w_i) *
+                                            bsdf::LocalFrame::cos_theta(-w_o) / (factor * factor);
+      result_value = data.material.transmittance(data.spectrum_sample) * value * ((bsdf::LocalFrame::cos_theta(w_o) > 0) ? 1.0f : factor * factor);
+    }
+  } else {
+    if (bsdf::LocalFrame::cos_theta(w_o) <= 0) {
+      float value = (smp.next() > 0.5f)
+                      ? 2.0f * external::eval_dielectric(-w_i, -w_o, true, alpha_x, alpha_y, m_invEta, 10)
+                      : 2.0f * external::eval_dielectric(-w_o, -w_i, true, alpha_x, alpha_y, m_invEta, 10) / bsdf::LocalFrame::cos_theta(-w_i) * bsdf::LocalFrame::cos_theta(-w_o);
+      result_value = data.material.specular(data.spectrum_sample) * value;
+    } else {
+      float value = (smp.next() > 0.5f) ? 2.0f * external::eval_dielectric(-w_i, -w_o, false, alpha_x, alpha_y, m_invEta, 10)
+                                        : 2.0f * external::eval_dielectric(w_o, w_i, false, alpha_x, alpha_y, m_eta, 10) / bsdf::LocalFrame::cos_theta(-w_i) *
+                                            bsdf::LocalFrame::cos_theta(w_o) / (factor * factor);
+      result_value = data.material.transmittance(data.spectrum_sample) * value * ((bsdf::LocalFrame::cos_theta(w_o) < 0) ? 1.0f : factor * factor);
+    }
+  }
+
+  BSDFEval eval;
+  eval.bsdf = result_value;
+  eval.func = result_value / fabsf(bsdf::LocalFrame::cos_theta(w_o));
+  eval.pdf = pdf(data, scene);
+  eval.weight = result_value / eval.pdf;
+  return eval;
+}
+
+ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
+  if (data.material.is_delta()) {
+    return DeltaDielectricBSDF::pdf(data, scene);
+  }
+
+  bsdf::LocalFrame local_frame = {{data.tan, data.btn, data.nrm}};
+  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_o = local_frame.to_local(data.w_o);
+  float ext_ior = data.material.ext_ior(data.spectrum_sample).eta.monochromatic();
+  float int_ior = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
+  float m_eta = int_ior / ext_ior;
+  float m_invEta = 1.0f / m_eta;
+  const float alpha_x = data.material.roughness.x;
+  const float alpha_y = data.material.roughness.y;
+
+  bool reflect = bsdf::LocalFrame::cos_theta(w_i) * bsdf::LocalFrame::cos_theta(w_o) > 0;
+
+  float3 wh;
+  float dwh_dwo;
+
+  if (reflect) {
+    wh = normalize(w_o + w_i);
+    dwh_dwo = 1.0f / (4.0f * dot(w_o, wh));
+  } else {
+    float eta = bsdf::LocalFrame::cos_theta(w_i) > 0 ? m_eta : m_invEta;
+    wh = normalize(w_i + w_o * eta);
+    float sqrtDenom = dot(w_i, wh) + eta * dot(w_o, wh);
+    dwh_dwo = (eta * eta * dot(w_o, wh)) / (sqrtDenom * sqrtDenom);
+  }
+
+  wh *= (bsdf::LocalFrame::cos_theta(wh) >= 0.0f) ? 1.0f : -1.0f;
+
+  float s = (bsdf::LocalFrame::cos_theta(w_i) >= 0.0f) ? 1.0f : -1.0f;
+  float3 wi(s * w_i.x, s * w_i.y, s * w_i.z);
+  external::RayInfo ray = {wi, alpha_x, alpha_y};
+
+  float prob = max(0.0f, dot(wh, wi)) * external::D_ggx(wh, alpha_x, alpha_y) / (1.0f + ray.Lambda) / bsdf::LocalFrame::cos_theta(wi);
+
+  float CT = 0.0f;
+  float F = external::fresnelDielectricExt(dot(w_i, wh), CT, m_eta);
+  prob *= reflect ? F : (1 - F);
+
+  // single-scattering PDF + diffuse
+  // otherwise too many fireflies due to lack of multiple-scattering PDF
+  // (MIS works even if the PDF is wrong and not normalized)
+  return fabsf(prob * s) + fabsf(bsdf::LocalFrame::cos_theta(w_o));
+}
+
+ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  if (material.diffuse_image_index == kInvalidIndex) {
+    return false;
+  }
+  const auto& img = scene.images[material.diffuse_image_index];
+  return (img.options & Image::HasAlphaChannel) && (img.evaluate(tex).w < smp.next());
+}
+
+}  // namespace MultiscatteringDielectricBSDF
 }  // namespace etx

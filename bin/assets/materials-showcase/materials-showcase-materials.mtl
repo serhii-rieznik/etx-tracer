@@ -50,7 +50,7 @@ Ks 0.04 0.04 0.04
 Kd 0.131063 0.121089 0.113964
 
 newmtl projector-holder
-material class conductor
+material class msconductor
 int_ior chrome
 Pr 0.5
 
@@ -58,21 +58,21 @@ newmtl projector-interior
 material class mirror
 
 newmtl torus-stand
-material class conductor uroughness 0.5 vroughness 0.01
+material class msconductor uroughness 0.5 vroughness 0.01
 int_ior gold
 
 newmtl torus.000
-material class dielectric
+material class msdielectric
 int_ior sapphire
 int_medium torus.000
 Pr 0.0
 
 newmtl torus.001
-material class dielectric
+material class msdielectric
 int_ior diamond
 Pr 0.1
 
 newmtl torus.002
-material class dielectric
+material class msdielectric
 int_ior glass
 Pr 0.05

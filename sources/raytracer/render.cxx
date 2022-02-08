@@ -5,6 +5,8 @@
 #include <sokol_app.h>
 #include <sokol_gfx.h>
 
+#include <vector>
+
 namespace etx {
 
 extern const char* shader_source;
@@ -29,6 +31,7 @@ struct RenderContextImpl {
   ViewOptions view_options = {};
   uint2 output_dimensions = {};
   ImagePool image_pool = {};
+  std::vector<float4> black_image;
 };
 
 ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Impl);
@@ -183,6 +186,9 @@ void RenderContext::set_output_dimensions(const uint2& dim) {
   desc.usage = SG_USAGE_STREAM;
   _private->sample_image = sg_make_image(desc);
   _private->light_image = sg_make_image(desc);
+
+  _private->black_image.resize(dim.x * dim.y);
+  std::fill(_private->black_image.begin(), _private->black_image.end(), float4{});
 }
 
 void RenderContext::update_output_images(const float4* camera, const float4* light) {
@@ -191,15 +197,11 @@ void RenderContext::update_output_images(const float4* camera, const float4* lig
   sg_image_data data = {};
   data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
 
-  if (camera != nullptr) {
-    data.subimage[0][0].ptr = camera;
-    sg_update_image(_private->sample_image, data);
-  }
+  data.subimage[0][0].ptr = camera ? camera : _private->black_image.data();
+  sg_update_image(_private->sample_image, data);
 
-  if (light != nullptr) {
-    data.subimage[0][0].ptr = light;
-    sg_update_image(_private->light_image, data);
-  }
+  data.subimage[0][0].ptr = light ? light : _private->black_image.data();
+  sg_update_image(_private->light_image, data);
 }
 
 const char* shader_source = R"(

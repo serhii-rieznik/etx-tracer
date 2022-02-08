@@ -657,6 +657,8 @@ inline Material::Class material_string_to_class(const char* s) {
     return Material::Class::MultiscatteringConductor;
   else if (strcmp(s, "dielectric") == 0)
     return Material::Class::Dielectric;
+  else if (strcmp(s, "msdielectric") == 0)
+    return Material::Class::MultiscatteringDielectric;
   else if (strcmp(s, "thinfilm") == 0)
     return Material::Class::Thinfilm;
   else if (strcmp(s, "translucent") == 0)

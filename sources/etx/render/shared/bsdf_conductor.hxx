@@ -3,7 +3,7 @@
 namespace etx {
 namespace DeltaConductorBSDF {
 
-ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return {{data.spectrum_sample.wavelength, 0.0f}};
@@ -21,7 +21,7 @@ ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
@@ -33,9 +33,9 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
 
 namespace ConductorBSDF {
 
-ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (data.material.is_delta()) {
-    return DeltaConductorBSDF::sample(smp, data, scene);
+    return DeltaConductorBSDF::sample(data, scene, smp);
   }
 
   Frame frame;
@@ -48,12 +48,12 @@ ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& 
 
   BSDFData eval_data = data;
   eval_data.w_o = normalize(reflect(data.w_i, m));
-  return {eval_data.w_o, evaluate(eval_data, scene), 0};
+  return {eval_data.w_o, evaluate(eval_data, scene, smp), 0};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (data.material.is_delta()) {
-    return DeltaConductorBSDF::evaluate(data, scene);
+    return DeltaConductorBSDF::evaluate(data, scene, smp);
   }
 
   Frame frame;
@@ -129,9 +129,9 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
 
 namespace MultiscatteringConductorBSDF {
 
-ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (data.material.is_delta()) {
-    return DeltaConductorBSDF::sample(smp, data, scene);
+    return DeltaConductorBSDF::sample(data, scene, smp);
   }
 
   Frame frame;
@@ -160,9 +160,9 @@ ETX_GPU_CODE BSDFSample sample(Sampler& smp, const BSDFData& data, const Scene& 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (data.material.is_delta()) {
-    return DeltaConductorBSDF::evaluate(data, scene);
+    return DeltaConductorBSDF::evaluate(data, scene, smp);
   }
 
   Frame frame;
@@ -185,7 +185,6 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene) {
   auto ext_ior = data.material.ext_ior(data.spectrum_sample);
   auto int_ior = data.material.int_ior(data.spectrum_sample);
 
-  RNDSampler smp;
   BSDFEval result;
   if (smp.next() > 0.5f) {
     result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, alpha_x, alpha_y, ext_ior, int_ior);
