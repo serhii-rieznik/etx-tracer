@@ -649,8 +649,12 @@ inline auto get_param(const tinyobj::material_t& m, const char* param, char buff
 inline Material::Class material_string_to_class(const char* s) {
   if (strcmp(s, "diffuse") == 0)
     return Material::Class::Diffuse;
+  else if (strcmp(s, "msdiffuse") == 0)
+    return Material::Class::MultiscatteringDiffuse;
   else if (strcmp(s, "plastic") == 0)
     return Material::Class::Plastic;
+  else if (strcmp(s, "msplastic") == 0)
+    return Material::Class::MultiscatteringPlastic;
   else if (strcmp(s, "conductor") == 0)
     return Material::Class::Conductor;
   else if (strcmp(s, "msconductor") == 0)
@@ -793,6 +797,12 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
               i += 1;
             } else if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < end)) {
               e.emission = SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), SpectralDistribution::Class::Illuminant, spectrums());
+              i += 1;
+            } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < end)) {
+              float t = static_cast<float>(atof(params[i + 1]));
+              float w = spectrum::black_body_radiation_maximum_wavelength(t);
+              float r = spectrum::black_body_radiation(w, t);
+              e.emission = SpectralDistribution::from_black_body(t, SpectralDistribution::Class::Illuminant, spectrums()) / r;
               i += 1;
             } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < end)) {
               e.emission *= static_cast<float>(atof(params[i + 1]));

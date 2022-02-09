@@ -165,7 +165,9 @@ struct Options {
   OptionalValue& set(const OptionalValue& def) {
     for (auto& option : values) {
       if (option.id == def.id) {
+        auto c = option.cls;
         option = def;
+        option.cls = c;
         return option;
       }
     }

@@ -8,7 +8,9 @@ namespace etx {
 struct alignas(16) Material {
   enum class Class : uint32_t {
     Diffuse,
+    MultiscatteringDiffuse,
     Plastic,
+    MultiscatteringPlastic,
     Conductor,
     MultiscatteringConductor,
     Dielectric,

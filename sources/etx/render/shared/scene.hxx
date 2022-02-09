@@ -398,7 +398,9 @@ ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distributi
   }
 
 ETX_DECLARE_BSDF(Diffuse);
+ETX_DECLARE_BSDF(MultiscatteringDiffuse);
 ETX_DECLARE_BSDF(Plastic);
+ETX_DECLARE_BSDF(MultiscatteringPlastic);
 ETX_DECLARE_BSDF(Conductor);
 ETX_DECLARE_BSDF(MultiscatteringConductor);
 ETX_DECLARE_BSDF(Dielectric);
@@ -424,7 +426,9 @@ namespace bsdf {
 #define ALL_CASES(MACRO, CLS)               \
   switch (CLS) {                            \
     MACRO(Diffuse);                         \
+    MACRO(MultiscatteringDiffuse);          \
     MACRO(Plastic);                         \
+    MACRO(MultiscatteringPlastic);          \
     MACRO(Conductor);                       \
     MACRO(MultiscatteringConductor);        \
     MACRO(Dielectric);                      \

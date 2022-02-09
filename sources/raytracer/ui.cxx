@@ -19,7 +19,7 @@ void UI::initialize() {
 
   _view_options = Options{{
     {OutputView::Result, OutputView::Count, output_view_to_string, "out_view", "View Image"},
-    {0.001f, 1.0f, +10.0f, "exp", "Exposure"},
+    {1.0f / 1000.0f, 1.0f, 1000.0f, "exp", "Exposure"},
   }};
 }
 
@@ -141,24 +141,15 @@ void UI::build(double dt, const char* status) {
     }
 
     if (igBeginMenu("Image", true)) {
-      if (igMenuItemEx("Open Reference Image...", nullptr, nullptr, false, true)) {
-        auto selected_file = open_file({"Supported images", "*.exr;*.png;*.hdr;*.pfm;*.jpg;*.bmp;*.tga"});
-        if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
-          callbacks.reference_image_selected(selected_file);
-        }
+      if (igMenuItemEx("Open Reference Image...", nullptr, "Ctrl+I", false, true)) {
+        load_image();
       }
       igSeparator();
       if (igMenuItemEx("Save Current Image (RGB)...", nullptr, "Ctrl+S", false, true)) {
-        auto selected_file = save_file({"EXR images", "*.exr"});
-        if ((selected_file.empty() == false) && callbacks.save_image_selected) {
-          callbacks.save_image_selected(selected_file, false);
-        }
+        save_image(false);
       }
       if (igMenuItemEx("Save Current Image (XYZ)...", nullptr, "Alt+Ctrl+S", false, true)) {
-        auto selected_file = save_file({"EXR images", "*.exr"});
-        if ((selected_file.empty() == false) && callbacks.save_image_selected) {
-          callbacks.save_image_selected(selected_file, true);
-        }
+        save_image(true);
       }
       igEndMenu();
     }
@@ -214,11 +205,24 @@ void UI::build(double dt, const char* status) {
 }
 
 bool UI::handle_event(const sapp_event* e) {
+  if (simgui_handle_event(e)) {
+    return true;
+  }
+
+  if (e->type != SAPP_EVENTTYPE_KEY_DOWN) {
+    return false;
+  }
+
   auto modifiers = e->modifiers;
-  if ((modifiers & SAPP_MODIFIER_CTRL) && (e->type == SAPP_EVENTTYPE_KEY_DOWN)) {
+
+  if (modifiers & SAPP_MODIFIER_CTRL) {
     switch (e->key_code) {
       case SAPP_KEYCODE_O: {
         select_scene_file();
+        break;
+      }
+      case SAPP_KEYCODE_I: {
+        load_image();
         break;
       }
       case SAPP_KEYCODE_R: {
@@ -232,15 +236,56 @@ bool UI::handle_event(const sapp_event* e) {
         break;
       }
       case SAPP_KEYCODE_S: {
-        auto selected_file = save_file({"EXR images", "*.exr"});
-        if ((selected_file.empty() == false) && callbacks.save_image_selected) {
-          callbacks.save_image_selected(selected_file, modifiers & SAPP_MODIFIER_ALT);
-        }
+        save_image(modifiers & SAPP_MODIFIER_ALT);
         break;
       }
+      default:
+        break;
     }
   }
-  return simgui_handle_event(e);
+
+  switch (e->key_code) {
+    case SAPP_KEYCODE_1: {
+      _view_options.set(uint32_t(OutputView::Result), "out_view", std::string{});
+      break;
+    }
+    case SAPP_KEYCODE_2: {
+      _view_options.set(uint32_t(OutputView::CameraImage), "out_view", std::string{});
+      break;
+    }
+    case SAPP_KEYCODE_3: {
+      _view_options.set(uint32_t(OutputView::LightImage), "out_view", std::string{});
+      break;
+    }
+    case SAPP_KEYCODE_4: {
+      _view_options.set(uint32_t(OutputView::ReferenceImage), "out_view", std::string{});
+      break;
+    }
+    case SAPP_KEYCODE_5: {
+      _view_options.set(uint32_t(OutputView::RelativeDifference), "out_view", std::string{});
+      break;
+    }
+    case SAPP_KEYCODE_6: {
+      _view_options.set(uint32_t(OutputView::AbsoluteDifference), "out_view", std::string{});
+      break;
+    }
+    case SAPP_KEYCODE_KP_DIVIDE: {
+      auto opt = _view_options.get("exp", 1.0f);
+      float e = clamp(opt.to_float() * 0.5f, 1.0f / 1000.0f, 1000.0f);
+      _view_options.set(e, opt.id, opt.name);
+      break;
+    }
+    case SAPP_KEYCODE_KP_MULTIPLY: {
+      auto opt = _view_options.get("exp", 1.0f);
+      float e = clamp(opt.to_float() * 2.0f, 1.0f / 1000.0f, 1000.0f);
+      _view_options.set(e, opt.id, opt.name);
+      break;
+    }
+    default:
+      break;
+  }
+
+  return false;
 }
 
 ViewOptions UI::view_options() const {
@@ -261,6 +306,20 @@ void UI::select_scene_file() {
   auto selected_file = open_file({"Supported formats", "*.json;*.obj"});  // TODO : add *.gltf;*.pbrt
   if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
     callbacks.scene_file_selected(selected_file);
+  }
+}
+
+void UI::save_image(bool xyz) {
+  auto selected_file = save_file({"EXR images", "*.exr"});
+  if ((selected_file.empty() == false) && callbacks.save_image_selected) {
+    callbacks.save_image_selected(selected_file, xyz);
+  }
+}
+
+void UI::load_image() {
+  auto selected_file = open_file({"Supported images", "*.exr;*.png;*.hdr;*.pfm;*.jpg;*.bmp;*.tga"});
+  if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
+    callbacks.reference_image_selected(selected_file);
   }
 }
 

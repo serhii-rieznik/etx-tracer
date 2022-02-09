@@ -44,6 +44,11 @@ void RTApplication::init() {
   if (_current_scene_file.empty() == false) {
     on_scene_file_selected(_current_scene_file);
   }
+
+  auto ref = _options.get("ref", std::string{}).name;
+  if (ref.empty() == false) {
+    on_referenece_image_selected(ref);
+  }
 }
 
 void RTApplication::save_options() {
@@ -124,6 +129,10 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
 
 void RTApplication::on_referenece_image_selected(std::string file_name) {
   log::warning("Loading reference image %s...", file_name.c_str());
+
+  _options.set("ref", file_name);
+  save_options();
+
   render.set_reference_image(file_name.c_str());
 }
 

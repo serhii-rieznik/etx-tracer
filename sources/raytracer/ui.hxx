@@ -47,6 +47,8 @@ struct UI {
  private:
   bool build_options(Options&);
   void select_scene_file();
+  void save_image(bool xyz);
+  void load_image();
 
  private:
   Integrator* _current_integrator = {};
