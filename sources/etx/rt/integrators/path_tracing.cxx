@@ -60,7 +60,6 @@ struct CPUPathTracingImpl : public Task {
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     auto& smp = samplers[thread_id];
-    auto mode = state->load();
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
@@ -117,7 +116,7 @@ struct CPUPathTracingImpl : public Task {
         if (path_length + 1 <= current_max_depth) {
           auto emitter_sample = sample_emitter(spect, smp, medium_sample.pos, scene);
           if (emitter_sample.pdf_dir > 0) {
-            auto tr = transmittance(spect, smp, medium_sample.pos, emitter_sample.origin, medium_index);
+            auto tr = transmittance(spect, smp, medium_sample.pos, emitter_sample.origin, medium_index, rt);
             float phase_function = medium.phase_function(spect, medium_sample.pos, ray.d, emitter_sample.direction);
             auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, phase_function);
             result += throughput * emitter_sample.value * tr * (phase_function * weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
@@ -151,7 +150,7 @@ struct CPUPathTracingImpl : public Task {
             BSDFEval bsdf_eval = bsdf::evaluate({spect, medium_index, mat, PathSource::Camera, intersection, ray.d, emitter_sample.direction}, scene, smp);
             if (bsdf_eval.valid()) {
               auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
-              auto tr = transmittance(spect, smp, pos, emitter_sample.origin, medium_index);
+              auto tr = transmittance(spect, smp, pos, emitter_sample.origin, medium_index, rt);
               auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
               result += throughput * bsdf_eval.bsdf * emitter_sample.value * tr * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
               ETX_VALIDATE(result);
@@ -170,7 +169,7 @@ struct CPUPathTracingImpl : public Task {
           auto e =
             emitter_evaluate_in_local(emitter, spect, intersection.tex, ray.o, intersection.pos, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (path_length == 0));
           if (pdf_emitter_dir > 0.0f) {
-            auto tr = transmittance(spect, smp, ray.o, intersection.pos, medium_index);
+            auto tr = transmittance(spect, smp, ray.o, intersection.pos, medium_index, rt);
             float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
             auto weight = ((path_length == 1) || sampled_delta_bsdf) ? 1.0f : power_heuristic(sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
             result += throughput * e * tr * weight;
@@ -235,45 +234,6 @@ struct CPUPathTracingImpl : public Task {
     ETX_VALIDATE(result);
 
     return result.to_xyz();
-  }
-
-  SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, const float3& p0, const float3& p1, uint32_t medium_index) {
-    const auto& scene = rt.scene();
-    float3 w_o = p1 - p0;
-    float max_t = length(w_o);
-    w_o /= max_t;
-    max_t -= kRayEpsilon;
-
-    float3 origin = p0;
-
-    SpectralResponse result = {spect.wavelength, 1.0f};
-
-    for (;;) {
-      Intersection intersection;
-      if (rt.trace({origin, w_o, kRayEpsilon, max_t}, intersection, smp) == false) {
-        if (medium_index != kInvalidIndex) {
-          result *= scene.mediums[medium_index].transmittance(spect, smp, origin, w_o, max_t);
-        }
-        break;
-      }
-
-      const auto& tri = scene.triangles[intersection.triangle_index];
-      const auto& mat = scene.materials[tri.material_index];
-      if (mat.cls != Material::Class::Boundary) {
-        result = {spect.wavelength, 0.0f};
-        break;
-      }
-
-      if (medium_index != kInvalidIndex) {
-        result *= scene.mediums[medium_index].transmittance(spect, smp, origin, w_o, intersection.t);
-      }
-
-      medium_index = (dot(intersection.nrm, w_o) < 0.0f) ? mat.int_medium : mat.ext_medium;
-      origin = intersection.pos;
-      max_t -= intersection.t;
-    }
-
-    return result;
   }
 };
 
