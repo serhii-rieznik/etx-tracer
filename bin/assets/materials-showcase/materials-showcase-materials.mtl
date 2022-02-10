@@ -32,9 +32,9 @@ material class translucent
 Kd 0.395292 0.557676 0.8
 
 newmtl curtain-bar
-material class conductor
-int_ior nickel
-Pr 0.2
+material class msconductor
+int_ior osmium
+Pr 0.3
 
 newmtl emitter-left
 emitter blackbody 12000.0 scale 0.00025 collimated 65536.0

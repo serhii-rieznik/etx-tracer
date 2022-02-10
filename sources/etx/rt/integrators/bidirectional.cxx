@@ -157,8 +157,6 @@ struct CPUBidirectionalImpl : public Task {
 
   float3 trace_pixel(RNDSampler& smp, const float2& uv, uint32_t thread_id) {
     auto& path_data = per_thread_path_data[thread_id];
-    path_data.camera_path.clear();
-    path_data.emitter_path.clear();
 
     auto spect = spectrum::sample(smp.next());
     auto ray = generate_ray(smp, rt.scene(), uv);
@@ -319,6 +317,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void build_camera_path(Sampler& smp, SpectralQuery spect, Ray ray, std::vector<PathVertex>& path) {
+    path.clear();
     auto& z0 = path.emplace_back(PathVertex::Class::Camera);
     z0.throughput = {spect.wavelength, 1.0f};
 
@@ -336,6 +335,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void build_emitter_path(Sampler& smp, SpectralQuery spect, std::vector<PathVertex>& path) {
+    path.clear();
     const auto& emitter_sample = sample_emission(rt.scene(), spect, smp);
     if ((emitter_sample.pdf_area == 0.0f) || (emitter_sample.pdf_dir == 0.0f) || (emitter_sample.value.is_zero())) {
       return;
@@ -620,8 +620,8 @@ struct CPUBidirectionalImpl : public Task {
 
     uint32_t dim = camera_image.dimensions().x * camera_image.dimensions().y;
     for (auto& path_data : per_thread_path_data) {
-      path_data.camera_path.reserve(dim);
-      path_data.emitter_path.reserve(dim);
+      path_data.camera_path.reserve(2llu + opt_max_depth);
+      path_data.emitter_path.reserve(2llu + opt_max_depth);
     }
 
     iteration = 0;
