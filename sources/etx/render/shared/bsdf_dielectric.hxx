@@ -175,7 +175,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
     float j = 1.0f / fabsf(4.0f * m_dot_o);
     result.pdf = eval.pdf * f * j;
     ETX_VALIDATE(result.pdf);
-  } else {
+  } else if (f < 1.0f) {
     auto transmittance = bsdf::apply_image(data.spectrum_sample, data.material.transmittance(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
 
     result.func = abs(transmittance * (1.0f - fr) * (m_dot_i * m_dot_o * sqr(eta_o) * eval.visibility * eval.ndf) / (n_dot_i * n_dot_o * sqr(m_dot_i * eta_i + m_dot_o * eta_o)));
@@ -197,6 +197,11 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
       result.bsdf *= result.eta * result.eta;
       result.weight *= result.eta * result.eta;
     }
+  } else {
+    result.bsdf = {data.spectrum_sample.wavelength, 0.0f};
+    result.func = {data.spectrum_sample.wavelength, 0.0f};
+    result.weight = {data.spectrum_sample.wavelength, 0.0f};
+    result.pdf = 0.0f;
   }
   return result;
 }
@@ -414,9 +419,11 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
 
   BSDFEval eval;
   eval.func = (reflection ? data.material.specular : data.material.transmittance)(data.spectrum_sample) * (2.0f * value);
+  ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(bsdf::LocalFrame::cos_theta(w_o));
   eval.pdf = pdf(data, scene);
   eval.weight = eval.bsdf / eval.pdf;
+  ETX_VALIDATE(eval.weight);
   return eval;
 }
 

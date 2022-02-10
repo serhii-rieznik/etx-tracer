@@ -56,8 +56,8 @@ void RTApplication::save_options() {
 }
 
 void RTApplication::frame() {
-  float4* c_image = nullptr;
-  float4* l_image = nullptr;
+  const float4* c_image = nullptr;
+  const float4* l_image = nullptr;
   const char* status = "Not running";
 
   bool can_change_camera = true;
@@ -100,7 +100,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
 
   log::warning("Loading scene %s...", _current_scene_file.c_str());
   if (_current_integrator) {
-    _current_integrator->stop(false);
+    _current_integrator->stop(Integrator::Stop::Immediate);
   }
 
   _options.set("scene", _current_scene_file);
@@ -179,7 +179,7 @@ void RTApplication::on_integrator_selected(Integrator* i) {
   save_options();
 
   if (_current_integrator != nullptr) {
-    _current_integrator->stop(false);
+    _current_integrator->stop(Integrator::Stop::Immediate);
   }
 
   _current_integrator = i;
@@ -203,7 +203,7 @@ void RTApplication::on_run_selected() {
 
 void RTApplication::on_stop_selected(bool wait_for_completion) {
   ETX_ASSERT(_current_integrator != nullptr);
-  _current_integrator->stop(wait_for_completion);
+  _current_integrator->stop(wait_for_completion ? Integrator::Stop::WaitForCompletion : Integrator::Stop::Immediate);
 }
 
 void RTApplication::on_reload_scene_selected() {

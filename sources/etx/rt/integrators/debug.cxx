@@ -159,7 +159,7 @@ CPUDebugIntegrator::CPUDebugIntegrator(Raytracing& rt)
 
 CPUDebugIntegrator::~CPUDebugIntegrator() {
   if (current_state != State::Stopped) {
-    stop(false);
+    stop(Stop::Immediate);
   }
   ETX_PIMPL_CLEANUP(CPUDebugIntegrator);
 }
@@ -168,11 +168,11 @@ void CPUDebugIntegrator::set_output_size(const uint2& dim) {
   _private->camera_image.resize(dim);
 }
 
-float4* CPUDebugIntegrator::get_camera_image(bool) {
+const float4* CPUDebugIntegrator::get_camera_image(bool) {
   return _private->camera_image.data();
 }
 
-float4* CPUDebugIntegrator::get_light_image(bool) {
+const float4* CPUDebugIntegrator::get_light_image(bool) {
   return nullptr;
 }
 
@@ -181,7 +181,7 @@ const char* CPUDebugIntegrator::status() const {
 }
 
 void CPUDebugIntegrator::preview(const Options& opt) {
-  stop(false);
+  stop(Stop::Immediate);
 
   if (rt.has_scene()) {
     current_state = State::Preview;
@@ -190,7 +190,7 @@ void CPUDebugIntegrator::preview(const Options& opt) {
 }
 
 void CPUDebugIntegrator::run(const Options& opt) {
-  stop(false);
+  stop(Stop::Immediate);
 
   if (rt.has_scene()) {
     current_state = State::Running;
@@ -226,12 +226,12 @@ void CPUDebugIntegrator::update() {
   }
 }
 
-void CPUDebugIntegrator::stop(bool wait_for_completion) {
+void CPUDebugIntegrator::stop(Stop st) {
   if (current_state == State::Stopped) {
     return;
   }
 
-  if (wait_for_completion) {
+  if (st == Stop::WaitForCompletion) {
     current_state = State::WaitingForCompletion;
     snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->iteration);
   } else {

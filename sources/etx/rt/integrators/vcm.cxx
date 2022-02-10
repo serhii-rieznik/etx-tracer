@@ -17,7 +17,7 @@ CPUVCM::CPUVCM(Raytracing& rt)
 
 CPUVCM::~CPUVCM() {
   if (current_state != State::Stopped) {
-    stop(false);
+    stop(Stop::Immediate);
   }
   ETX_PIMPL_CLEANUP(CPUVCM);
 }

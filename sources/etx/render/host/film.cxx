@@ -14,18 +14,8 @@ inline void atomic_add_impl(volatile float* ptr, float value) {
 
 void Film::resize(const uint2& dim) {
   _dimensions = dim;
-
-  uint32_t size = _dimensions.x * _dimensions.y;
-  if (size == 0) {
-    _data.clear();
-    _data_ptr = nullptr;
-  }
-
-  _data.resize(size);
-  for (uint32_t i = 0; i < size; ++i) {
-    _data[i] = {1.0f, 1.0f, 1.0f, 1.0f};
-  }
-  _data_ptr = _data.data();
+  _data.resize(1llu * _dimensions.x * _dimensions.y);
+  clear();
 }
 
 void Film::atomic_add(const float4& value, const float2& ndc_coord) {
@@ -41,8 +31,8 @@ void Film::atomic_add(const float4& value, uint32_t x, uint32_t y) {
   }
 
   ETX_VALIDATE(value);
-  uint32_t index = x + (_dimensions.y - 1 - y) * _dimensions.x;
-  auto ptr = (_data_ptr + index)->data.data;
+  uint32_t index = x + y * _dimensions.x;
+  auto ptr = _data[index].data.data;
   atomic_add_impl(ptr + 0, value.x);
   atomic_add_impl(ptr + 1, value.y);
   atomic_add_impl(ptr + 2, value.z);
@@ -62,6 +52,17 @@ void Film::accumulate(const float4& value, const float2& ndc_coord, float t) {
   uint32_t ax = static_cast<uint32_t>(uv.x * float(_dimensions.x));
   uint32_t ay = static_cast<uint32_t>(uv.y * float(_dimensions.y));
   accumulate(value, ax, ay, t);
+}
+
+void Film::merge(const Film& other, float t) {
+  ETX_ASSERT(_dimensions == other._dimensions);
+  for (uint64_t i = 0, e = _data.size(); i < e; ++i) {
+    _data[i] = (t == 0.0f) ? other._data[i] : lerp(other._data[i], _data[i], t);
+  }
+}
+
+void Film::clear() {
+  std::fill(_data.begin(), _data.end(), float4{});
 }
 
 }  // namespace etx

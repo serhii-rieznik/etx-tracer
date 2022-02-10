@@ -253,7 +253,7 @@ ETX_GPU_CODE float3 sample_conductor(SpectralQuery spect, Sampler& smp, const fl
     energy = energy * weight;
     ray.updateHeight(ray.h);
 
-    if (current_scatteringOrder > kScatteringOrderMax) {
+    if ((ray.h != ray.h) || (ray.w.x != ray.w.x) || (current_scatteringOrder > kScatteringOrderMax)) {
       energy = {spect.wavelength, 0.0f};
       return float3(0, 0, 1);
     }
@@ -327,6 +327,10 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
 
     if (current_scatteringOrder == 1)
       wi_MISweight = MISweight_conductor(wi, ray.w, alpha_x, alpha_y);
+
+    // if NaN (should not happen, just in case)
+    if ((ray.h != ray.h) || (ray.w.x != ray.w.x))
+      return {spect.wavelength, 0.0f};
   }
 
   // 0.5f = MIS weight of singleScattering
@@ -345,8 +349,8 @@ ETX_GPU_CODE double gamma(double x) {
   return result;
 }
 
-ETX_GPU_CODE double beta(double m, double n) {
-  return (gamma(m) * gamma(n) / gamma(m + n));
+ETX_GPU_CODE float beta(double m, double n) {
+  return static_cast<float>(gamma(m) * gamma(n) / gamma(m + n));
 }
 
 ETX_GPU_CODE float3 refract(const float3& wi, const float3& wm, const float eta) {
@@ -479,9 +483,12 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
       if (wo_outside)
         G2_G1 = (1.0f + (-ray.Lambda - 1.0f)) / (1.0f + (-ray.Lambda - 1.0f) + ray_shadowing.Lambda);
       else
-        G2_G1 = (1.0f + (-ray.Lambda - 1.0f)) * (float)beta(1.0f + (-ray.Lambda - 1.0f), 1.0f + ray_shadowing.Lambda);
+        G2_G1 = (1.0f + (-ray.Lambda - 1.0f)) * beta(1.0f + (-ray.Lambda - 1.0f), 1.0f + ray_shadowing.Lambda);
 
-      singleScattering = phasefunction * G2_G1;
+      if (isfinite(G2_G1)) {
+        singleScattering = phasefunction * G2_G1;
+      }
+      ETX_VALIDATE(singleScattering);
     }
 
     if (current_scatteringOrder > 1)  // multiple scattering
@@ -496,13 +503,10 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
         MIS = wi_MISweight / (wi_MISweight + MISweight_dielectric(-ray.w, -wo, !wo_outside, 1.0f / eta, alpha_x, alpha_y));
       }
 
-      if (outside == wo_outside)
-        ray_shadowing.updateHeight(ray.h);
-      else
-        ray_shadowing.updateHeight(-ray.h);
+      ray_shadowing.updateHeight((outside == wo_outside) ? ray.h : -ray.h);
 
-      const float shadowing = ray_shadowing.G1;
-      multipleScattering += phasefunction * shadowing * MIS;
+      multipleScattering += phasefunction * ray_shadowing.G1 * MIS;
+      ETX_VALIDATE(multipleScattering);
     }
 
     // next direction
@@ -520,7 +524,6 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
     if (current_scatteringOrder == 1)
       wi_MISweight = MISweight_dielectric(wi, ray.w, outside, eta, alpha_x, alpha_y);
 
-    // if NaN (should not happen, just in case)
     if ((ray.h != ray.h) || (ray.w.x != ray.w.x))
       return {spect.wavelength, 0.0f};
   }

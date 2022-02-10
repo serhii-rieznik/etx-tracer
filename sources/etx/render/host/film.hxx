@@ -17,12 +17,15 @@ struct Film {
   void accumulate(const float4& value, const float2& ndc_coord, float t);
   void accumulate(const float4& value, uint32_t x, uint32_t y, float t);
 
+  void merge(const Film& other, float t);
+  void clear();
+
   const uint2& dimensions() const {
     return _dimensions;
   }
 
-  float4* data() const {
-    return _data_ptr;
+  const float4* data() const {
+    return _data.data();
   }
 
  private:
@@ -34,7 +37,6 @@ struct Film {
  private:
   uint2 _dimensions = {};
   std::vector<float4> _data = {};
-  float4* _data_ptr = {};
 };
 
 }  // namespace etx

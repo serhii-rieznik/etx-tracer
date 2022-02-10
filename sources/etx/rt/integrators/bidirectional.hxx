@@ -17,11 +17,11 @@ struct CPUBidirectional : public Integrator {
   void preview(const Options&) override;
   void run(const Options&) override;
   void update() override;
-  void stop(bool /* wait for completion */) override;
+  void stop(Stop) override;
   void update_options(const Options&) override;
 
-  float4* get_camera_image(bool) override;
-  float4* get_light_image(bool) override;
+  const float4* get_camera_image(bool) override;
+  const float4* get_light_image(bool) override;
   const char* status() const override;
 
  private:

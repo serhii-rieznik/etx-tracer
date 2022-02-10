@@ -72,6 +72,74 @@ ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const float2& uv
   return {origin, w_o, kRayEpsilon, kMaxFloat};
 }
 
+ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const float3& from_point) {
+  float2 sensor_sample = {};
+
+  if (scene.camera.lens_radius > 0.0f) {
+    if (scene.camera_lens_shape_image_index == kInvalidIndex) {
+      sensor_sample = sample_disk(smp.next(), smp.next());
+    } else {
+      float pdf = {};
+      uint2 location = {};
+      sensor_sample = scene.images[scene.camera_lens_shape_image_index].sample(smp.next(), smp.next(), pdf, location);
+      sensor_sample = sensor_sample * 2.0f - 1.0f;
+    }
+    sensor_sample *= scene.camera.lens_radius;
+  }
+
+  CameraSample result;
+  result.position = scene.camera.position + sensor_sample.x * scene.camera.side + sensor_sample.y * scene.camera.up;
+  result.direction = result.position - from_point;
+  result.normal = scene.camera.direction;
+
+  float cos_t = -dot(result.direction, result.normal);
+  if (cos_t < 0.0f) {
+    return {};
+  }
+
+  float distance_squared = dot(result.direction, result.direction);
+  float distance = sqrtf(distance_squared);
+  result.direction /= distance;
+  cos_t /= distance;
+
+  float focal_plane_distance = (scene.camera.lens_radius > 0.0f) ? scene.camera.focal_distance : 1.0f;
+  float3 focus_point = result.position - result.direction * (focal_plane_distance / cos_t);
+
+  auto projected = scene.camera.view_proj * float4{focus_point.x, focus_point.y, focus_point.z, 1.0f};
+  result.uv = {projected.x / projected.w, -projected.y / projected.w};
+  if ((projected.w <= 0.0f) || (result.uv.x < -1.0f) || (result.uv.y < -1.0f) || (result.uv.x > 1.0f) || (result.uv.y > 1.0f)) {
+    return {};
+  }
+
+  float lens_area = (scene.camera.lens_radius > 0.0) ? kPi * sqr(scene.camera.lens_radius) : 1.0f;
+
+  result.pdf_area = 1.0f / lens_area;
+  result.pdf_dir = result.pdf_area * distance_squared / cos_t;
+  result.pdf_dir_out = 1.0f / (scene.camera.area * lens_area * cos_t * cos_t * cos_t);
+
+  float importance = result.pdf_dir_out / cos_t;
+  result.weight = importance / result.pdf_dir;
+
+  return result;
+}
+
+ETX_GPU_CODE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& camera_data, const Ray& out_ray) {
+  CameraEval result = {};
+  result.weight = {spect.wavelength, 1.0f};
+  result.normal = camera_data.direction;
+
+  float cos_t = dot(out_ray.d, result.normal);
+  result.pdf_dir = 1.0f / (camera_data.area * cos_t * cos_t * cos_t);
+
+  return result;
+}
+
+ETX_GPU_CODE float film_pdf_out(const Camera& camera, const float3& to_point) {
+  auto w_i = normalize(to_point - camera.position);
+  float cos_t = dot(w_i, camera.direction);
+  return 1.0f / fabsf(camera.area * cos_t * cos_t * cos_t);
+}
+
 ETX_GPU_CODE float3 lerp_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
   return vertices[t.i[0]].pos * bc.x +  //
          vertices[t.i[1]].pos * bc.y +  //
@@ -387,6 +455,126 @@ ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, Sampler& smp, con
 
 ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distribution& dist) {
   return emitter.weight / dist.total_weight;
+}
+
+ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQuery spect, Sampler& smp, const struct Scene& scene) {
+  constexpr float kDisantRadiusScale = 2.0f;
+
+  EmitterSample result = {};
+  switch (em.cls) {
+    case Emitter::Class::Area: {
+      const auto& tri = scene.triangles[em.triangle_index];
+      result.triangle_index = em.triangle_index;
+      result.barycentric = random_barycentric(smp.next(), smp.next());
+      result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
+      result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
+      switch (em.emission_direction) {
+        case Emitter::Direction::Single: {
+          auto basis = orthonormal_basis(result.normal);
+          do {
+            result.direction = sample_cosine_distribution(smp.next(), smp.next(), result.normal, basis.u, basis.v, em.collimation);
+          } while (dot(result.direction, result.normal) <= 0.0f);
+          break;
+        }
+        case Emitter::Direction::TwoSided: {
+          result.normal = (smp.next() > 0.5f) ? float3{-result.normal.x, -result.normal.y, -result.normal.z} : result.normal;
+          result.direction = sample_cosine_distribution(smp.next(), smp.next(), result.normal, em.collimation);
+          break;
+        }
+        case Emitter::Direction::Omni: {
+          float theta = acosf(2.0f * smp.next() - 1.0f) - kHalfPi;
+          float phi = kDoublePi * smp.next();
+          float cos_theta = cosf(theta);
+          float sin_theta = sinf(theta);
+          float cos_phi = cosf(phi);
+          float sin_phi = sinf(phi);
+          result.normal = {cos_theta * cos_phi, sin_theta, cos_theta * sin_phi};
+          result.direction = result.normal;
+          break;
+        }
+        default:
+          ETX_FAIL("Invalid direction");
+      }
+      result.value = emitter_evaluate_out_local(em, spect, lerp_uv(scene.vertices, tri, result.barycentric), result.normal, result.direction,  //
+        result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);                                                                           //
+      break;
+    }
+
+    case Emitter::Class::Environment: {
+      const auto& img = scene.images[em.image_index];
+      float pdf_image = 0.0f;
+      uint2 image_location = {};
+      auto xi0 = smp.next();
+      auto xi1 = smp.next();
+      float2 uv = img.sample(xi0, xi1, pdf_image, image_location);
+      float sin_t = sinf(uv.y * kPi);
+      if ((pdf_image == 0.0f) || (sin_t == 0.0f)) {
+        uv = img.sample(xi0, xi1, pdf_image, image_location);
+        return {};
+      }
+
+      auto d = -uv_to_direction(uv);
+      auto basis = orthonormal_basis(d);
+      auto disk_sample = sample_disk(smp.next(), smp.next());
+
+      result.triangle_index = kInvalidIndex;
+      result.direction = d;
+      result.normal = result.direction;
+      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - kDisantRadiusScale * result.direction);
+      result.value = em.emission(spect) * rgb::query_spd(spect, to_float3(img.evaluate(uv)), scene.spectrums->rgb_illuminant);
+      result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+      result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
+      result.pdf_dir_out = result.pdf_area * result.pdf_dir;
+      ETX_VALIDATE(result.pdf_area);
+      ETX_VALIDATE(result.pdf_dir);
+      ETX_VALIDATE(result.pdf_dir_out);
+      ETX_VALIDATE(result.value);
+      break;
+    }
+
+    case Emitter::Class::Directional: {
+      auto direction_to_scene = em.direction * (-1.0f);
+      auto basic = orthonormal_basis(direction_to_scene);
+
+      if (em.angular_size > 0.0f) {
+        float2 disk = em.equivalent_disk_size * sample_disk(smp.next(), smp.next());
+        result.direction = normalize(direction_to_scene + basic.u * disk.x + basic.v * disk.y);
+      } else {
+        result.direction = direction_to_scene;
+      }
+
+      result.triangle_index = kInvalidIndex;
+
+      result.pdf_dir = 1.0f;
+      result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+      result.pdf_dir_out = result.pdf_dir * result.pdf_area;
+
+      auto disk_sample = sample_disk(smp.next(), smp.next());
+      result.normal = direction_to_scene;
+      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basic.u + disk_sample.y * basic.v - kDisantRadiusScale * direction_to_scene);
+      result.value = em.emission(spect);
+      break;
+    }
+    default: {
+      ETX_FAIL("Invalid emitter");
+    }
+  }
+  return result;
+}
+
+ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQuery spect, Sampler& smp) {
+  float pdf_sample = {};
+  uint32_t i = scene.emitters_distribution.sample(smp.next(), pdf_sample);
+  ETX_ASSERT(i < scene.emitters.count);
+  const auto& em = scene.emitters[i];
+  EmitterSample result = emitter_sample_out(em, spect, smp, scene);
+  result.pdf_sample = pdf_sample;
+  result.emitter_index = i;
+  result.triangle_index = scene.emitters[i].triangle_index;
+  result.medium_index = scene.emitters[i].medium_index;
+  result.is_delta = em.is_delta();
+  result.is_distant = em.is_distant();
+  return result;
 }
 
 #define ETX_DECLARE_BSDF(Class)                                                                     \

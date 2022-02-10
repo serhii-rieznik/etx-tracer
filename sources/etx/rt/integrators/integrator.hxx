@@ -9,11 +9,16 @@
 namespace etx {
 
 struct Integrator {
-  enum class State {
+  enum class State : uint32_t {
     Stopped,
     Preview,
     Running,
     WaitingForCompletion,
+  };
+
+  enum class Stop : uint32_t {
+    Immediate,
+    WaitForCompletion,
   };
 
   Integrator(Raytracing& r)
@@ -48,17 +53,17 @@ struct Integrator {
   virtual void update() {
   }
 
-  virtual void stop(bool /* wait for completion */) {
+  virtual void stop(Stop) {
   }
 
   virtual void update_options(const Options&) {
   }
 
-  virtual float4* get_camera_image(bool /* force update */) {
+  virtual const float4* get_camera_image(bool /* force update */) {
     return nullptr;
   }
 
-  virtual float4* get_light_image(bool /* force update */) {
+  virtual const float4* get_light_image(bool /* force update */) {
     return nullptr;
   }
 

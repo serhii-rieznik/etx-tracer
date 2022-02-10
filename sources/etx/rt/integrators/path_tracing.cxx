@@ -244,7 +244,7 @@ CPUPathTracing::CPUPathTracing(Raytracing& rt)
 
 CPUPathTracing::~CPUPathTracing() {
   if (current_state != State::Stopped) {
-    stop(false);
+    stop(Stop::Immediate);
   }
 
   ETX_PIMPL_CLEANUP(CPUPathTracing);
@@ -252,16 +252,16 @@ CPUPathTracing::~CPUPathTracing() {
 
 void CPUPathTracing::set_output_size(const uint2& dim) {
   if (current_state != State::Stopped) {
-    stop(false);
+    stop(Stop::Immediate);
   }
   _private->camera_image.resize(dim);
 }
 
-float4* CPUPathTracing::get_camera_image(bool force_update) {
+const float4* CPUPathTracing::get_camera_image(bool force_update) {
   return _private->camera_image.data();
 }
 
-float4* CPUPathTracing::get_light_image(bool force_update) {
+const float4* CPUPathTracing::get_light_image(bool force_update) {
   return nullptr;
 }
 
@@ -270,7 +270,7 @@ const char* CPUPathTracing::status() const {
 }
 
 void CPUPathTracing::preview(const Options& opt) {
-  stop(false);
+  stop(Stop::Immediate);
 
   if (rt.has_scene()) {
     current_state = State::Preview;
@@ -279,7 +279,7 @@ void CPUPathTracing::preview(const Options& opt) {
 }
 
 void CPUPathTracing::run(const Options& opt) {
-  stop(false);
+  stop(Stop::Immediate);
 
   if (rt.has_scene()) {
     current_state = State::Running;
@@ -291,7 +291,7 @@ void CPUPathTracing::update() {
   bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
 
   if (should_stop && rt.scheduler().completed(_private->current_task)) {
-    if ((current_state == State::WaitingForCompletion) || (_private->iteration >= _private->opt_max_iterations)) {
+    if ((current_state == State::WaitingForCompletion) || (_private->iteration + 1 >= _private->opt_max_iterations)) {
       rt.scheduler().wait(_private->current_task);
       _private->current_task = {};
       if (current_state == State::Preview) {
@@ -321,12 +321,12 @@ void CPUPathTracing::update() {
   }
 }
 
-void CPUPathTracing::stop(bool wait_for_completion) {
+void CPUPathTracing::stop(Stop st) {
   if (current_state == State::Stopped) {
     return;
   }
 
-  if (wait_for_completion) {
+  if (st == Stop::WaitForCompletion) {
     current_state = State::WaitingForCompletion;
     snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->iteration);
   } else {

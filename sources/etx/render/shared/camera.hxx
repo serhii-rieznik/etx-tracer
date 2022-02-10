@@ -39,4 +39,10 @@ struct CameraSample {
   }
 };
 
+struct CameraEval {
+  SpectralResponse weight ETX_EMPTY_INIT;
+  float3 normal ETX_EMPTY_INIT;
+  float pdf_dir ETX_EMPTY_INIT;
+};
+
 }  // namespace etx
