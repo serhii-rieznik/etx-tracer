@@ -25,7 +25,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
   alpha = remap_alpha(alpha);
   metalness = remap_metalness(metalness);
 
-  auto ggx = bsdf::NormalDistribution(frame, alpha);
+  auto ggx = NormalDistribution(frame, alpha);
   auto m = ggx.sample(smp, data.w_i);
 
   auto diffuse = bsdf::apply_image(data.spectrum_sample, data.material.diffuse(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
@@ -78,7 +78,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f * (1.0f - metalness)} + diffuse * metalness;
   SpectralResponse f = f0 + (1.0f - f0) * std::pow(1.0f - t, 5.0f);
 
-  auto ggx = bsdf::NormalDistribution(frame, alpha);
+  auto ggx = NormalDistribution(frame, alpha);
   auto eval = ggx.evaluate(m, data.w_i, data.w_o);
   float j = 1.0f / (4.0f * m_dot_o);
 
@@ -120,7 +120,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f} * (1.0f - metalness) + diffuse * metalness;
   SpectralResponse f = f0 + (1.0f - f0) * std::pow(1.0f - t, 5.0f);
 
-  auto ggx = bsdf::NormalDistribution(frame, alpha);
+  auto ggx = NormalDistribution(frame, alpha);
   float j = 1.0f / (4.0f * m_dot_o);
   float result = kInvPi * n_dot_o * (1.0f - f.monochromatic()) + ggx.pdf(m, data.w_i, data.w_o) * j * f.monochromatic();
   ETX_VALIDATE(result);

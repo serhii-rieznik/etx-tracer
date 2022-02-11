@@ -278,7 +278,7 @@ struct CPUBidirectionalImpl : public Task {
         ETX_VALIDATE(w.pdf.backward);
 
         if (mode == PathSource::Light) {
-          bsdf_sample.weight *= bsdf::fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
+          bsdf_sample.weight *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
         }
 
         if (mode == PathSource::Camera) {
@@ -879,7 +879,7 @@ SpectralResponse CPUBidirectionalImpl::PathVertex::bsdf_in_direction(SpectralQue
     ETX_VALIDATE(eval.bsdf);
 
     if (mode == PathSource::Light) {
-      eval.bsdf *= bsdf::fix_shading_normal(tri.geo_n, nrm, w_i, w_o);
+      eval.bsdf *= fix_shading_normal(tri.geo_n, nrm, w_i, w_o);
       ETX_VALIDATE(eval.bsdf);
     }
 

@@ -622,13 +622,18 @@ ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const
 
     // next event estimation
     SpectralResponse phasefunction = energy * albedo * max(0.0f, dot(wm, wo) / kPi);
+    ETX_VALIDATE(phasefunction);
 
     if (current_scatteringOrder == 1) {  // closed masking and shadowing (we compute G2 / G1 because G1 is  already in the phase function)
       float G2_G1 = (1.0f + (-ray.Lambda - 1.0f)) / (1.0f + (-ray.Lambda - 1.0f) + ray_shadowing.Lambda);
-      res += phasefunction * G2_G1;
+      if (isfinite(G2_G1)) {
+        res += phasefunction * G2_G1;
+        ETX_VALIDATE(res);
+      }
     } else {
       ray_shadowing.updateHeight(ray.h);
       res += phasefunction * ray_shadowing.G1;
+      ETX_VALIDATE(res);
     }
 
     // next direction

@@ -84,6 +84,7 @@ void RenderContext::init() {
     }
   }
   update_output_images(c_image, l_image);
+  sg_commit();
 }
 
 void RenderContext::cleanup() {

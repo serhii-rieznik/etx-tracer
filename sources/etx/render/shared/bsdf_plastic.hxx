@@ -100,7 +100,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
     return {{data.spectrum_sample.wavelength, 0.0f}};
   }
 
-  auto ggx = bsdf::NormalDistribution(frame, data.material.roughness);
+  auto ggx = NormalDistribution(frame, data.material.roughness);
   auto m = ggx.sample(smp, data.w_i);
 
   auto eta_e = data.material.ext_ior(data.spectrum_sample).eta.monochromatic();
@@ -143,7 +143,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   auto eta_i = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
   auto f = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i);
 
-  auto ggx = bsdf::NormalDistribution(frame, data.material.roughness);
+  auto ggx = NormalDistribution(frame, data.material.roughness);
   auto eval = ggx.evaluate(m, data.w_i, data.w_o);
   float j = 1.0f / (4.0f * m_dot_o);
 
@@ -183,7 +183,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
   auto eta_i = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
   auto f = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i);
 
-  auto ggx = bsdf::NormalDistribution(frame, data.material.roughness);
+  auto ggx = NormalDistribution(frame, data.material.roughness);
 
   float j = 1.0f / (4.0f * m_dot_o);
   float result = kInvPi * n_dot_o * (1.0f - f.monochromatic()) + ggx.pdf(m, data.w_i, data.w_o) * j * f.monochromatic();

@@ -130,8 +130,6 @@ struct BSDFSample {
   }
 };
 
-namespace bsdf {
-
 struct LocalFrame : public Frame {
   ETX_GPU_CODE LocalFrame(const Frame& f)
     : Frame(f) {
@@ -284,8 +282,6 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
   float w_o_s = dot(w_o, n_s);
   return (w_o_s * w_i_g == 0.0f) ? 0.0f : fabsf((w_o_g * w_i_s) / (w_o_s * w_i_g));
 }
-
-}  // namespace bsdf
 
 namespace fresnel {
 

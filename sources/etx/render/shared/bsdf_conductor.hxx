@@ -43,7 +43,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
     return {{data.spectrum_sample.wavelength, 0.0f}};
   }
 
-  auto ggx = bsdf::NormalDistribution(frame, data.material.roughness);
+  auto ggx = NormalDistribution(frame, data.material.roughness);
   auto m = ggx.sample(smp, data.w_i);
 
   BSDFData eval_data = data;
@@ -73,7 +73,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
     return {data.spectrum_sample.wavelength, 0.0f};
   }
 
-  auto ggx = bsdf::NormalDistribution(frame, data.material.roughness);
+  auto ggx = NormalDistribution(frame, data.material.roughness);
   auto eval = ggx.evaluate(m, data.w_i, data.w_o);
 
   SpectralResponse f = fresnel::conductor(data.spectrum_sample, data.w_i, frame.nrm, data.material.ext_ior(data.spectrum_sample), data.material.int_ior(data.spectrum_sample));
@@ -114,7 +114,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
     return 0.0f;
   }
 
-  auto ggx = bsdf::NormalDistribution(frame, data.material.roughness);
+  auto ggx = NormalDistribution(frame, data.material.roughness);
   return ggx.pdf(m, data.w_i, data.w_o) / (4.0f * m_dot_o);
 }
 
@@ -138,7 +138,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
   if (data.check_side(frame) == false) {
     return {{data.spectrum_sample.wavelength, 0.0f}};
   }
-  bsdf::LocalFrame local_frame(frame);
+  LocalFrame local_frame(frame);
   auto w_i = local_frame.to_local(-data.w_i);
   auto alpha_x = data.material.roughness.x;
   auto alpha_y = data.material.roughness.y;
@@ -170,7 +170,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
     return {data.spectrum_sample.wavelength, 0.0f};
   }
 
-  bsdf::LocalFrame local_frame(frame);
+  LocalFrame local_frame(frame);
   auto w_o = local_frame.to_local(data.w_o);
   if (w_o.z <= kEpsilon) {
     return {data.spectrum_sample.wavelength, 0.0f};
@@ -221,7 +221,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
     return 0.0f;
   }
 
-  bsdf::LocalFrame local_frame(frame);
+  LocalFrame local_frame(frame);
   auto w_o = local_frame.to_local(data.w_o);
   if (w_o.z <= kEpsilon) {
     return 0.0f;
