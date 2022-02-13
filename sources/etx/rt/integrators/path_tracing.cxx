@@ -204,6 +204,10 @@ struct CPUPathTracingImpl : public Task {
         ray.d = bsdf_sample.w_o;
         ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, bsdf_sample.w_o);
 
+        if ((path_length >= opt_rr_start) && (apply_rr(eta, smp.next(), throughput) == false)) {
+          break;
+        }
+
       } else {
         for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
           const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
@@ -219,10 +223,6 @@ struct CPUPathTracingImpl : public Task {
             ETX_VALIDATE(result);
           }
         }
-        break;
-      }
-
-      if ((path_length >= opt_rr_start) && (apply_rr(eta, smp.next(), throughput) == false)) {
         break;
       }
 

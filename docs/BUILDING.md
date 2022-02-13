@@ -32,4 +32,14 @@ These libraries are included into the source code in `thirdparty` folder:
 - [tinyexr](https://github.com/syoyo/tinyexr) - Tiny OpenEXR image loader/saver library
 - [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) - Tiny but powerful single file wavefront obj loader
 
-
+### Building with OpenVDB
+Optionally OpenVDB library could be used to load volumetric data stored in .vdb format. 
+Snapshot of [openvdb](https://github.com/AcademySoftwareFoundation/openvdb) included into the `thirdparty` folder.
+For building it, please refer to the documentation. I was able to easily build it following the instructions (using vkpkg).
+After installing all required libraries in vcpkg reconfigure and regenerate a project using CMake:
+```
+cmake -G "Visual Studio 17 2022" 
+  -DCMAKE_TOOLCHAIN_FILE="(PATH_TO_VCPKG)/scripts/buildsystems/vcpkg.cmake" 
+  -DWITH_OPENVDB=1 ..
+```
+The new option `WITH_OPENVDB=1` enables support for loading volumetric data from .vdb format.

@@ -294,6 +294,10 @@ struct CPUBidirectionalImpl : public Task {
         ray.o = shading_pos(rt.scene().vertices, tri, intersection.barycentric, bsdf_data.w_o);
         ray.d = bsdf_data.w_o;
 
+        if ((depth > opt_rr_start) && (apply_rr(eta, smp.next(), throughput) == false)) {
+          break;
+        }
+
       } else if (mode == PathSource::Camera) {
         auto& v = path.emplace_back(PathVertex::Class::Emitter);
         v.medium_index = medium_index;
@@ -307,11 +311,6 @@ struct CPUBidirectionalImpl : public Task {
         break;
       }
 
-      if ((depth > opt_rr_start) && (apply_rr(eta, smp.next(), throughput) == false)) {
-        break;
-      }
-
-      ETX_VALIDATE(throughput);
       depth += 1;
     }
   }
