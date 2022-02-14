@@ -47,8 +47,8 @@ struct Image {
     float dx = x0 - floorf(x0);
     float dy = y0 - floorf(y0);
 
-    uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.x - 1u);
-    uint32_t row_1 = clamp(row_0 + 1u, 0u, isize.x - 1u);
+    uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.y - 1u);
+    uint32_t row_1 = clamp(row_0 + 1u, 0u, isize.y - 1u);
     uint32_t col_0 = clamp(static_cast<uint32_t>(x0), 0u, isize.x - 1u);
     uint32_t col_1 = clamp(col_0 + 1u, 0u, isize.x - 1u);
 
