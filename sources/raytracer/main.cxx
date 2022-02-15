@@ -25,8 +25,9 @@ extern "C" int main(int argc, char* argv[]) {
     };
     desc.width = 1600;
     desc.height = 900;
-    desc.window_title = "etx-tracer";
+    desc.swap_interval = 2;
     desc.high_dpi = true;
+    desc.window_title = "etx-tracer";
     desc.win32_console_utf8 = true;
     desc.win32_console_create = true;
     desc.user_data = &app;

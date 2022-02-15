@@ -141,21 +141,24 @@ struct MediumPoolImpl {
 
     for (const auto& base_grid : *grids) {
       openvdb::FloatGrid::Ptr grid = openvdb::gridPtrCast<openvdb::FloatGrid>(base_grid);
-      auto grid_bbox = grid->evalActiveVoxelBoundingBox();
-      auto grid_dim = grid->evalActiveVoxelDim().asVec3i();
+      if (grid) {
+        auto grid_bbox = grid->evalActiveVoxelBoundingBox();
+        auto grid_dim = grid->evalActiveVoxelDim().asVec3i();
 
-      d.x = grid_dim.x();
-      d.y = grid_dim.y();
-      d.z = grid_dim.z();
-      density.resize(1llu * d.x * d.y * d.z, 0.0f);
+        d.x = grid_dim.x();
+        d.y = grid_dim.y();
+        d.z = grid_dim.z();
+        density.resize(1llu * d.x * d.y * d.z, 0.0f);
+        log::info("Loaded VDB grid dimensions: %u x %u x %u", d.x, d.y, d.z);
 
-      for (auto i = grid->beginValueOn(); i; ++i) {
-        auto pos = (i.getCoord() - grid_bbox.getStart()).asVec3i();
-        density[pos.x() + 1llu * pos.y() * d.x + 1llu * pos.z() * d.x * d.y] = i.getValue();
+        for (auto i = grid->beginValueOn(); i; ++i) {
+          auto pos = (i.getCoord() - grid_bbox.getStart()).asVec3i();
+          density[pos.x() + 1llu * pos.y() * d.x + 1llu * pos.z() * d.x * d.y] = i.getValue();
+        }
+
+        // TODO : support multigrid, just take first for now
+        break;
       }
-
-      // TODO : support multigrid, just take first for now
-      break;
     }
 #else
     log::error("Loading from VDB is disabled. Generate project using CMake with `-DWITH_OPENVDB=1` option to enable support.");

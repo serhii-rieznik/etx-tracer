@@ -1,5 +1,7 @@
 ﻿#include <etx/render/host/film.hxx>
 
+#include <algorithm>
+
 namespace etx {
 
 inline void atomic_add_impl(volatile float* ptr, float value) {
@@ -12,30 +14,52 @@ inline void atomic_add_impl(volatile float* ptr, float value) {
   } while (_InterlockedCompareExchange(iptr, new_value, old_value) != old_value);
 }
 
-void Film::resize(const uint2& dim) {
+void Film::resize(const uint2& dim, uint32_t threads) {
   _dimensions = dim;
-  _data.resize(1llu * _dimensions.x * _dimensions.y);
+  _thread_count = threads;
+
+  uint32_t pixel_count = _dimensions.x * _dimensions.y;
+  _buffer.resize(1llu * _thread_count * pixel_count);
+
+  _sequence.resize(pixel_count);
+  for (uint32_t i = 0; i < pixel_count; ++i) {
+    _sequence[i] = i;
+  }
+
+  std::sort(_sequence.begin(), _sequence.end(), [w = _dimensions.x, h = _dimensions.y, s = float(_dimensions.x) / float(_dimensions.y)](uint32_t a, uint32_t b) {
+    float ax = s * (float(a % w) / w * 2.0f - 1.0f);
+    float ay = float(a / w) / h * 2.0f - 1.0f;
+    float bx = s * (float(b % w) / w * 2.0f - 1.0f);
+    float by = float(b / w) / h * 2.0f - 1.0f;
+    return (ax * ax + ay * ay) < (bx * bx + by * by);
+  });
+
   clear();
 }
 
-void Film::atomic_add(const float4& value, const float2& ndc_coord) {
+void Film::atomic_add(const float4& value, const float2& ndc_coord, uint32_t thread_id) {
   float2 uv = ndc_coord * 0.5f + 0.5f;
   uint32_t ax = static_cast<uint32_t>(uv.x * float(_dimensions.x));
   uint32_t ay = static_cast<uint32_t>(uv.y * float(_dimensions.y));
-  atomic_add(value, ax, ay);
+  atomic_add(value, ax, ay, thread_id);
 }
 
-void Film::atomic_add(const float4& value, uint32_t x, uint32_t y) {
+void Film::atomic_add(const float4& value, uint32_t x, uint32_t y, uint32_t thread_id) {
+  ETX_ASSERT(thread_id < _thread_count);
+
   if ((x >= _dimensions.x) || (y >= _dimensions.y)) {
     return;
   }
 
   ETX_VALIDATE(value);
   uint32_t index = x + y * _dimensions.x;
-  auto ptr = _data[index].data.data;
-  atomic_add_impl(ptr + 0, value.x);
-  atomic_add_impl(ptr + 1, value.y);
-  atomic_add_impl(ptr + 2, value.z);
+  _buffer[index * _thread_count + thread_id] += value;
+  // uint32_t offset = _thread_count
+  // _mt_data[thread_id][index] += value;
+  // auto ptr = _mt_data[0][index].data.data;
+  // atomic_add_impl(ptr + 0, value.x);
+  // atomic_add_impl(ptr + 1, value.y);
+  // atomic_add_impl(ptr + 2, value.z);
 }
 
 void Film::accumulate(const float4& value, uint32_t x, uint32_t y, float t) {
@@ -44,7 +68,7 @@ void Film::accumulate(const float4& value, uint32_t x, uint32_t y, float t) {
   }
   ETX_VALIDATE(value);
   uint32_t i = x + (_dimensions.y - 1 - y) * _dimensions.x;
-  _data[i] = (t <= 0.0f) ? value : lerp(value, _data[i], t);
+  _buffer[i] = (t <= 0.0f) ? value : lerp(value, _buffer[i], t);
 }
 
 void Film::accumulate(const float4& value, const float2& ndc_coord, float t) {
@@ -54,15 +78,26 @@ void Film::accumulate(const float4& value, const float2& ndc_coord, float t) {
   accumulate(value, ax, ay, t);
 }
 
-void Film::merge(const Film& other, float t) {
+void Film::flush_to(Film& other, float t) {
   ETX_ASSERT(_dimensions == other._dimensions);
-  for (uint64_t i = 0, e = _data.size(); i < e; ++i) {
-    _data[i] = (t == 0.0f) ? other._data[i] : lerp(other._data[i], _data[i], t);
+  ETX_ASSERT(other._thread_count == 1);
+
+  auto dst = other._buffer.data();
+  auto src = _buffer.data();
+  uint64_t pixel_count = count();
+  for (uint32_t i = 0; i < pixel_count; ++i) {
+    uint32_t base = i * _thread_count;
+    float4 sum = src[base];
+    for (uint32_t t = 1; t < _thread_count; ++t) {
+      sum += src[base + t];
+    }
+    memset(src + base, 0, sizeof(float4) * _thread_count);
+    dst[i] = (t == 0.0f) ? sum : lerp(sum, dst[i], t);
   }
 }
 
 void Film::clear() {
-  std::fill(_data.begin(), _data.end(), float4{});
+  std::fill(_buffer.begin(), _buffer.end(), float4{});
 }
 
 }  // namespace etx

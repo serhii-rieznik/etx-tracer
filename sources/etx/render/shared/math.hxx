@@ -195,6 +195,10 @@ ETX_GPU_CODE float3 sample_cosine_distribution(float xi0, float xi1, const float
   return sample_cosine_distribution(xi0, xi1, n, basis.u, basis.v, exponent);
 }
 
+ETX_GPU_CODE float3 barycentrics(float2 bc) {
+  return {1.0f - bc.x - bc.y, bc.x, bc.y};
+}
+
 ETX_GPU_CODE float3 random_barycentric(float r1, float r2) {
   r1 = sqrtf(r1);
   return {1.0f - r1, r1 * (1.0f - r2), r1 * r2};
@@ -343,6 +347,17 @@ ETX_GPU_CODE float3 phi_theta_to_direction(float phi, float theta) {
 ETX_GPU_CODE float3 uv_to_direction(const float2& uv) {
   float2 p_t = uv_to_phi_theta(uv.x, uv.y);
   return phi_theta_to_direction(p_t.x, p_t.y);
+}
+
+ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {
+  v--;
+  v |= v >> 1;
+  v |= v >> 2;
+  v |= v >> 4;
+  v |= v >> 8;
+  v |= v >> 16;
+  v++;
+  return v;
 }
 
 }  // namespace etx

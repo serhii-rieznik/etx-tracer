@@ -7,7 +7,7 @@
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
-#include <etx/rt/integrators/vcm.hxx>
+#include <etx/rt/integrators/vcm_cpu.hxx>
 #include <etx/rt/rt.hxx>
 
 #include "ui.hxx"

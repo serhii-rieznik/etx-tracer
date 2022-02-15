@@ -184,7 +184,7 @@ struct CPUBidirectionalImpl : public Task {
           if (_connect_to_camera) {
             CameraSample camera_sample = {};
             auto splat = connect_to_camera(smp, path_data, spect, eye_t, light_s, camera_sample);
-            iteration_light_image.atomic_add({splat.to_xyz(), 1.0f}, camera_sample.uv);
+            iteration_light_image.atomic_add({splat.to_xyz(), 1.0f}, camera_sample.uv, thread_id - 1);
           }
         } else if (light_s == 1) {
           if (_connect_to_light) {
@@ -667,7 +667,7 @@ void CPUBidirectional::update() {
     return;
   }
 
-  _private->light_image.merge(_private->iteration_light_image, float(_private->iteration) / float(_private->iteration + 1));
+  _private->iteration_light_image.flush_to(_private->light_image, float(_private->iteration) / float(_private->iteration + 1));
 
   if (current_state == State::WaitingForCompletion) {
     _private->iteration_light_image.clear();
@@ -675,13 +675,8 @@ void CPUBidirectional::update() {
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
 
-    if (current_state == State::Preview) {
-      snprintf(_private->status, sizeof(_private->status), "[%u] Preview completed", _private->iteration);
-      current_state = Integrator::State::Preview;
-    } else {
-      snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
-      current_state = Integrator::State::Stopped;
-    }
+    snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
+    current_state = Integrator::State::Stopped;
   } else if (_private->iteration + 1 < _private->opt_max_iterations) {
     _private->iteration_light_image.clear();
 
@@ -714,9 +709,9 @@ void CPUBidirectional::stop(Stop st) {
 
 Options CPUBidirectional::options() const {
   Options result = {};
-  result.set(1u, 0x7fffu, 0xffffu, "spp", "Samples per Pixel");
-  result.set(1u, 0x7fffu, 65536u, "pathlen", "Maximal Path Length");
-  result.set(1u, 5u, 65536u, "rrstart", "Start Russian Roulette at");
+  result.set(1u, _private->opt_max_iterations, 0xffffu, "spp", "Max Iterations");
+  result.set(1u, _private->opt_max_depth, 65536u, "pathlen", "Maximal Path Length");
+  result.set(1u, _private->opt_rr_start, 65536u, "rrstart", "Start Russian Roulette at");
   return result;
 }
 
@@ -727,9 +722,9 @@ void CPUBidirectional::set_output_size(const uint2& dim) {
   if (current_state != State::Stopped) {
     stop(Stop::Immediate);
   }
-  _private->camera_image.resize(dim);
-  _private->light_image.resize(dim);
-  _private->iteration_light_image.resize(dim);
+  _private->camera_image.resize(dim, 1);
+  _private->light_image.resize(dim, 1);
+  _private->iteration_light_image.resize(dim, rt.scheduler().max_thread_count());
 }
 
 const float4* CPUBidirectional::get_camera_image(bool) {

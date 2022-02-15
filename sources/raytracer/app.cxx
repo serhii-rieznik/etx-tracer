@@ -61,25 +61,32 @@ void RTApplication::frame() {
   const char* status = "Not running";
 
   bool can_change_camera = true;
+  bool c_image_updated = false;
+  bool l_image_updated = false;
 
   if (_current_integrator != nullptr) {
     _current_integrator->update();
     status = _current_integrator->status();
+    c_image_updated = _current_integrator->have_updated_camera_image();
     c_image = _current_integrator->get_camera_image(false);
+    l_image_updated = _current_integrator->have_updated_light_image();
     l_image = _current_integrator->get_light_image(false);
     can_change_camera = _current_integrator->state() == Integrator::State::Preview;
   }
 
   auto dt = time_measure.lap();
-  if (can_change_camera) {
-    if (camera_controller.update(dt)) {
-      _current_integrator->preview(ui.integrator_options());
-    }
+  if (can_change_camera && camera_controller.update(dt)) {
+    _current_integrator->preview(ui.integrator_options());
   }
 
   render.set_view_options(ui.view_options());
   render.start_frame();
-  render.update_output_images(c_image, l_image);
+  if (c_image_updated) {
+    render.update_camera_image(c_image);
+  }
+  if (l_image_updated) {
+    render.update_light_image(l_image);
+  }
   ui.build(dt, status);
   render.end_frame();
 }

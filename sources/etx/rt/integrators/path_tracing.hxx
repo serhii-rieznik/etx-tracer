@@ -21,6 +21,10 @@ struct CPUPathTracing : public Integrator {
     return result;
   }
 
+  bool have_updated_light_image() const override {
+    return false;
+  }
+
   void set_output_size(const uint2&) override;
   const float4* get_camera_image(bool force_update) override;
   const float4* get_light_image(bool force_update) override;
