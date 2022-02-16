@@ -326,7 +326,7 @@ struct CPUVCMImpl {
                   eval.bsdf *= fix_shading_normal(tri.geo_n, data.nrm, data.w_i, data.w_o);
                   auto result = (tr * eval.bsdf * state.throughput * camera_sample.weight) * weight;
 
-                  iteration_light_image.atomic_add({(result / spectrum::sample_pdf()).to_xyz(), 1.0f}, camera_sample.uv, thread_id - 1);
+                  iteration_light_image.atomic_add({(result / spectrum::sample_pdf()).to_xyz(), 1.0f}, camera_sample.uv, thread_id);
                 }
               }
             }

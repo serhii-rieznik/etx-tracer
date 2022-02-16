@@ -15,7 +15,7 @@ struct TaskWrapper : public enki::ITaskSet {
   }
 
   void ExecuteRange(enki::TaskSetPartition range_, uint32_t threadnum_) override {
-    task->execute_range(range_.start, range_.end, threadnum_);
+    task->execute_range(range_.start, range_.end, threadnum_ - 1);
   }
 };
 

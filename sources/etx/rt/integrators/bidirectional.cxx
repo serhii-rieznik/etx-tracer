@@ -184,7 +184,7 @@ struct CPUBidirectionalImpl : public Task {
           if (_connect_to_camera) {
             CameraSample camera_sample = {};
             auto splat = connect_to_camera(smp, path_data, spect, eye_t, light_s, camera_sample);
-            iteration_light_image.atomic_add({splat.to_xyz(), 1.0f}, camera_sample.uv, thread_id - 1);
+            iteration_light_image.atomic_add({splat.to_xyz(), 1.0f}, camera_sample.uv, thread_id);
           }
         } else if (light_s == 1) {
           if (_connect_to_light) {
