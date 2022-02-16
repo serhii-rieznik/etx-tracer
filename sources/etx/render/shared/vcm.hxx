@@ -473,15 +473,13 @@ ETX_GPU_CODE float3 SpatialGridData::gather(const Scene& scene, SpectralQuery sp
       float weight = 1.0f / (1.0f + w_light + w_camera);
 
       if constexpr (spectrum::kSpectralRendering) {
-        auto c_value = spectrum::xyz_to_rgb((camera_bsdf.func * state.throughput / spectrum::sample_pdf()).to_xyz());
+        auto c_value = ((camera_bsdf.func * state.throughput / spectrum::sample_pdf()).to_xyz());
         c_value = max(c_value, float3{0.0f, 0.0f, 0.0f});
         ETX_VALIDATE(c_value);
-        auto l_value = spectrum::xyz_to_rgb((light_vertex.throughput / spectrum::sample_pdf()).to_xyz());
+        auto l_value = ((light_vertex.throughput / spectrum::sample_pdf()).to_xyz());
         l_value = max(l_value, float3{0.0f, 0.0f, 0.0f});
         ETX_VALIDATE(l_value);
-        auto value = (c_value * l_value) * weight;
-        ETX_VALIDATE(value);
-        merged += spectrum::rgb_to_xyz(value);
+        merged += (c_value * l_value) * weight;
         ETX_VALIDATE(merged);
       } else {
         // mul as RGB
