@@ -18,7 +18,8 @@ struct RenderContext {
   void end_frame();
 
   void set_output_dimensions(const uint2&);
-  void update_output_images(const float4* camera, const float4* ligth);
+  void update_camera_image(const float4* camera);
+  void update_light_image(const float4* ligth);
   void set_view_options(const ViewOptions&);
   void set_reference_image(const char*);
 

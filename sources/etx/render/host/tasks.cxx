@@ -1,6 +1,5 @@
 ﻿#include <etx/core/handle.hxx>
 #include <etx/render/host/pool.hxx>
-
 #include <etx/render/host/tasks.hxx>
 
 #include <enkiTS/TaskScheduler.hxx>
@@ -10,8 +9,8 @@ namespace etx {
 struct TaskWrapper : public enki::ITaskSet {
   Task* task = nullptr;
 
-  TaskWrapper(Task* t, uint32_t range)
-    : enki::ITaskSet(range)
+  TaskWrapper(Task* t, uint32_t range, uint32_t min_size)
+    : enki::ITaskSet(range, min_size)
     , task(t) {
   }
 
@@ -57,11 +56,11 @@ TaskScheduler::~TaskScheduler() {
 }
 
 uint32_t TaskScheduler::max_thread_count() {
-  return _private->scheduler.GetConfig().numTaskThreadsToCreate + 1;
+  return _private->scheduler.GetConfig().numTaskThreadsToCreate;
 }
 
 Task::Handle TaskScheduler::schedule(Task* t, uint32_t range) {
-  auto handle = _private->task_pool.alloc(t, range);
+  auto handle = _private->task_pool.alloc(t, range, 1u);
   auto& task_wrapper = _private->task_pool.get(handle);
   _private->scheduler.AddTaskSetToPipe(&task_wrapper);
   return {handle};

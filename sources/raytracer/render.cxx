@@ -83,7 +83,8 @@ void RenderContext::init() {
       l_image[i] = {0.0f, 0.5f, 0.75f, 1.0f};
     }
   }
-  update_output_images(c_image, l_image);
+  update_camera_image(c_image);
+  update_light_image(l_image);
   sg_commit();
 }
 
@@ -192,15 +193,20 @@ void RenderContext::set_output_dimensions(const uint2& dim) {
   std::fill(_private->black_image.begin(), _private->black_image.end(), float4{});
 }
 
-void RenderContext::update_output_images(const float4* camera, const float4* light) {
-  ETX_ASSERT((_private->sample_image.id != 0) && (_private->light_image.id != 0));
+void RenderContext::update_camera_image(const float4* camera) {
+  ETX_ASSERT(_private->sample_image.id != 0);
 
   sg_image_data data = {};
   data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
-
   data.subimage[0][0].ptr = camera ? camera : _private->black_image.data();
   sg_update_image(_private->sample_image, data);
+}
 
+void RenderContext::update_light_image(const float4* light) {
+  ETX_ASSERT(_private->light_image.id != 0);
+
+  sg_image_data data = {};
+  data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
   data.subimage[0][0].ptr = light ? light : _private->black_image.data();
   sg_update_image(_private->light_image, data);
 }

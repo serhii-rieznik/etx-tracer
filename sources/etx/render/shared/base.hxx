@@ -68,6 +68,11 @@ struct alignas(16) ArrayView {
   }
 };
 
+template <class T>
+ETX_GPU_CODE ArrayView<T> make_array_view(void* p, uint64_t c) {
+  return {reinterpret_cast<T*>(p), c};
+}
+
 ETX_GPU_CODE void print_value(const char* name, const char* tag, float t) {
   printf("%s : %s %f\n", name, tag, t);
 }

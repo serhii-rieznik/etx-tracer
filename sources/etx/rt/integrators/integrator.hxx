@@ -59,8 +59,16 @@ struct Integrator {
   virtual void update_options(const Options&) {
   }
 
+  virtual bool have_updated_camera_image() const {
+    return true;
+  }
+
   virtual const float4* get_camera_image(bool /* force update */) {
     return nullptr;
+  }
+
+  virtual bool have_updated_light_image() const {
+    return true;
   }
 
   virtual const float4* get_light_image(bool /* force update */) {

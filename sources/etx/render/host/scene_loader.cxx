@@ -895,11 +895,11 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         }
       }
 
-      if (get_param(material, "volume", data_buffer)) {
-        snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
-      }
-
       uint32_t medium_index = kInvalidIndex;
+
+      if (get_param(material, "volume", data_buffer)) {
+        snprintf(tmp_buffer, sizeof(tmp_buffer), "%s%s", base_dir, data_buffer);
+      }
 
       if (strlen(tmp_buffer) == 0) {
         medium_index = add_medium(name_buffer, s_a, s_t, g);

@@ -165,7 +165,7 @@ CPUDebugIntegrator::~CPUDebugIntegrator() {
 }
 
 void CPUDebugIntegrator::set_output_size(const uint2& dim) {
-  _private->camera_image.resize(dim);
+  _private->camera_image.resize(dim, 1);
 }
 
 const float4* CPUDebugIntegrator::get_camera_image(bool) {
