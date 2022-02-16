@@ -356,6 +356,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
       result.eta = m_eta;
       float factor = (data.mode == PathSource::Camera) ? m_invEta : 1.0f;
       result.weight = data.material.transmittance(data.spectrum_sample) * factor * factor * weight;
+      result.properties |= BSDFSample::MediumChanged;
+      result.medium_index = data.material.int_medium;
     }
   } else {  // inside
     float weight = {};
@@ -369,6 +371,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
       result.eta = m_invEta;
       float factor = (data.mode == PathSource::Camera) ? m_eta : 1.0f;
       result.weight = data.material.transmittance(data.spectrum_sample) * factor * factor * weight;
+      result.properties |= BSDFSample::MediumChanged;
+      result.medium_index = data.material.ext_medium;
     } else {  // reflection
       result.eta = 1.0f;
       result.weight = data.material.specular(data.spectrum_sample) * weight;
