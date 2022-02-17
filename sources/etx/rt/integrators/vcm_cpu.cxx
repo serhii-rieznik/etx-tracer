@@ -270,7 +270,7 @@ struct CPUVCMImpl {
       }
 
       uint64_t path_begin = local_vertices.size();
-      uint32_t path_length = 0;
+      uint32_t path_length = 1;
       while (running() && (path_length + 1 <= opt_max_depth)) {
         Intersection intersection;
         if (rt.trace(state.ray, intersection, smp) == false) {
@@ -299,7 +299,7 @@ struct CPUVCMImpl {
           state.d_vm /= cos_to_prev;
         }
 
-        if (mat.is_delta() == false) {
+        if (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false) {
           local_vertices.emplace_back(state, intersection.barycentric, intersection.triangle_index, path_length, static_cast<uint32_t>(i));
 
           if (_vcm_options.connect_to_camera() && (path_length + 1 <= opt_max_depth)) {
@@ -313,7 +313,7 @@ struct CPUVCMImpl {
                 float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, w_o);
                 auto tr = transmittance(spect, smp, p0, camera_sample.position, medium_index, rt);
                 if (tr.is_zero() == false) {
-                  float reverse_pdf = bsdf::pdf(data.swap_directions(), rt.scene());
+                  float reverse_pdf = bsdf::pdf(data.swap_directions(), rt.scene(), smp);
                   float camera_pdf = camera_sample.pdf_dir_out * fabsf(dot(intersection.nrm, w_o)) / dot(direction, direction);
                   ETX_VALIDATE(camera_pdf);
 
@@ -380,18 +380,17 @@ struct CPUVCMImpl {
       SpectralResponse gathered = {spect.wavelength, 0.0f};
       float3 merged = {};
 
-      uint32_t path_length = 0;
+      uint32_t path_length = 1;
       while (running() && (path_length <= opt_max_depth)) {
         Intersection intersection;
         if (rt.trace(state.ray, intersection, smp) == false) {
-          for (uint32_t ie = 0; ie < rt.scene().environment_emitters.count; ++ie) {
+          bool gather_light = _vcm_options.direct_hit() || (path_length == 1);
+          for (uint32_t ie = 0; gather_light && (ie < rt.scene().environment_emitters.count); ++ie) {
             const auto& emitter = rt.scene().emitters[rt.scene().environment_emitters.emitters[ie]];
             gathered += get_radiance(rt.scene(), spect, emitter, intersection, state, path_length, _vcm_options.enable_mis());
           }
           break;
         }
-
-        path_length += 1u;
 
         if (medium_index != kInvalidIndex) {
           auto m = rt.scene().mediums[medium_index].transmittance(spect, smp, state.ray.o, state.ray.d, intersection.t);
@@ -414,7 +413,7 @@ struct CPUVCMImpl {
           gathered += get_radiance(rt.scene(), spect, emitter, intersection, state, path_length, _vcm_options.enable_mis());
         }
 
-        bool do_connection = _vcm_options.connect_to_light() && (mat.is_delta() == false);
+        bool do_connection = _vcm_options.connect_to_light() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false);
         if (do_connection && ((path_length + 1) <= opt_max_depth)) {
           auto emitter_sample = sample_emitter(spect, smp, intersection.pos, rt.scene());
 
@@ -427,7 +426,7 @@ struct CPUVCMImpl {
               if (tr.is_zero() == false) {
                 float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
                 float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
-                float reverse_pdf = bsdf::pdf(connection_data.swap_directions(), rt.scene());
+                float reverse_pdf = bsdf::pdf(connection_data.swap_directions(), rt.scene(), smp);
 
                 float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 
@@ -443,7 +442,7 @@ struct CPUVCMImpl {
           }
         }
 
-        do_connection = _vcm_options.connect_vertices() && (mat.is_delta() == false);
+        do_connection = _vcm_options.connect_vertices() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false);
         for (uint64_t i = 0; do_connection && (i < light_path.length) && (path_length + i + 2 <= opt_max_depth); ++i) {
           float3 target_position = {};
           SpectralResponse value = {};
@@ -464,6 +463,8 @@ struct CPUVCMImpl {
         if (vcm::next_ray(rt.scene(), spect, PathSource::Camera, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _vc_weight, _vm_weight) == false) {
           break;
         }
+
+        path_length += 1;
       }
 
       merged *= _vm_normalization;

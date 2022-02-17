@@ -2,8 +2,6 @@
 
 #include <etx/render/shared/bsdf.hxx>
 #include <etx/render/shared/emitter.hxx>
-// #include <etx/rt/generic/generic_bsdf.hpp>
-// #include <etx/rt/generic/generic_emitter.hpp>
 
 namespace etx {
 namespace vcm {
@@ -264,7 +262,8 @@ ETX_GPU_CODE bool next_ray(const Scene& scene, SpectralQuery spect, const PathSo
 
     state.d_vcm = 0.0f;
   } else {
-    auto rev_sample_pdf = bsdf::pdf(bsdf_data.swap_directions(), scene);
+    auto rev_sample_pdf = bsdf::pdf(bsdf_data.swap_directions(), scene, smp);
+    ETX_VALIDATE(rev_sample_pdf);
 
     state.d_vc = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vc * rev_sample_pdf + state.d_vcm + vm_weight);
     ETX_VALIDATE(state.d_vc);
@@ -355,7 +354,7 @@ ETX_GPU_CODE bool connect_to_light_vertex(const Scene& scene, const SpectralQuer
   auto camera_area_pdf = camera_bsdf.pdf * w_dot_l / distance_squared;
   ETX_VALIDATE(camera_area_pdf);
 
-  auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), scene);
+  auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), scene, smp);
   ETX_VALIDATE(camera_rev_pdf);
   if (camera_rev_pdf <= kEpsilon) {
     return false;
@@ -372,7 +371,7 @@ ETX_GPU_CODE bool connect_to_light_vertex(const Scene& scene, const SpectralQuer
   auto light_area_pdf = light_bsdf.pdf * w_dot_c / distance_squared;
   ETX_VALIDATE(light_area_pdf);
 
-  auto light_rev_pdf = bsdf::pdf(light_data.swap_directions(), scene);
+  auto light_rev_pdf = bsdf::pdf(light_data.swap_directions(), scene, smp);
   ETX_VALIDATE(light_rev_pdf);
   if (light_rev_pdf <= kEpsilon) {
     return false;
@@ -466,7 +465,7 @@ ETX_GPU_CODE float3 SpatialGridData::gather(const Scene& scene, SpectralQuery sp
         continue;
       }
 
-      auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), scene);
+      auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), scene, smp);
 
       float w_light = light_vertex.d_vcm * vc_weight + light_vertex.d_vm * camera_bsdf.pdf;
       float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;

@@ -6,14 +6,14 @@ namespace etx {
   namespace Class##BSDF {                                                                           \
     ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Scene&, Sampler&);                        \
     ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const Scene&, Sampler&);                        \
-    ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene);                               \
+    ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp);                 \
     ETX_GPU_CODE bool continue_tracing(const Material&, const float2&, const Scene&, Sampler& smp); \
+    ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler& smp);         \
   }
 
 ETX_DECLARE_BSDF(Diffuse);
 ETX_DECLARE_BSDF(MultiscatteringDiffuse);
 ETX_DECLARE_BSDF(Plastic);
-ETX_DECLARE_BSDF(MultiscatteringPlastic);
 ETX_DECLARE_BSDF(Conductor);
 ETX_DECLARE_BSDF(MultiscatteringConductor);
 ETX_DECLARE_BSDF(Dielectric);
@@ -24,6 +24,7 @@ ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
 ETX_DECLARE_BSDF(Generic);
 ETX_DECLARE_BSDF(Coating);
+ETX_DECLARE_BSDF(Mixture);
 
 #define CASE_IMPL(CLS, FUNC, ...) \
   case Material::Class::CLS:      \
@@ -31,15 +32,15 @@ ETX_DECLARE_BSDF(Coating);
 
 #define CASE_IMPL_SAMPLE(A) CASE_IMPL(A, sample, data, scene, smp)
 #define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, scene, smp)
-#define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, scene)
+#define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, scene, smp)
 #define CASE_IMPL_CONTINUE(A) CASE_IMPL(A, continue_tracing, material, tex, scene, smp)
+#define CASE_IMPL_IS_DELTA(A) CASE_IMPL(A, is_delta, material, tex, scene, smp)
 
 #define ALL_CASES(MACRO, CLS)               \
   switch (CLS) {                            \
     MACRO(Diffuse);                         \
     MACRO(MultiscatteringDiffuse);          \
     MACRO(Plastic);                         \
-    MACRO(MultiscatteringPlastic);          \
     MACRO(Conductor);                       \
     MACRO(MultiscatteringConductor);        \
     MACRO(Dielectric);                      \
@@ -50,25 +51,30 @@ ETX_DECLARE_BSDF(Coating);
     MACRO(Boundary);                        \
     MACRO(Generic);                         \
     MACRO(Coating);                         \
+    MACRO(Mixture);                         \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
       return {};                            \
   }
 
 namespace bsdf {
-[[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const struct Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
   ALL_CASES(CASE_IMPL_SAMPLE, data.material.cls);
 };
-[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const struct Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
   ALL_CASES(CASE_IMPL_EVALUATE, data.material.cls);
 }
 
-[[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const struct Scene& scene) {
+[[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
   ALL_CASES(CASE_IMPL_PDF, data.material.cls);
 }
 
-[[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const struct Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   ALL_CASES(CASE_IMPL_CONTINUE, material.cls);
+}
+
+[[nodiscard]] ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  ALL_CASES(CASE_IMPL_IS_DELTA, material.cls);
 }
 
 #undef CASE_IMPL

@@ -10,7 +10,6 @@ struct alignas(16) Material {
     Diffuse,
     MultiscatteringDiffuse,
     Plastic,
-    MultiscatteringPlastic,
     Conductor,
     MultiscatteringConductor,
     Dielectric,
@@ -21,6 +20,7 @@ struct alignas(16) Material {
     Boundary,
     Generic,
     Coating,
+    Mixture,
 
     Count,
     Undefined = kInvalidIndex,
@@ -47,6 +47,11 @@ struct alignas(16) Material {
   uint32_t int_medium = kInvalidIndex;
   uint32_t ext_medium = kInvalidIndex;
 
+  uint32_t mixture_0 = kInvalidIndex;
+  uint32_t mixture_1 = kInvalidIndex;
+  uint32_t mixture_image_index = kInvalidIndex;
+  float mixture = 0.0f;
+
   SpectralDistribution diffuse = {};
   SpectralDistribution specular = {};
   SpectralDistribution transmittance = {};
@@ -64,30 +69,6 @@ struct alignas(16) Material {
 
   ETX_GPU_CODE bool double_sided() const {
     return (options & DoubleSided) == DoubleSided;
-  }
-
-  ETX_GPU_CODE bool is_delta() const {
-    switch (cls) {
-      case Class::Diffuse:
-      case Class::Translucent:
-      case Class::Boundary:
-      case Class::Plastic:
-        return false;
-
-      case Class::Conductor:
-      case Class::MultiscatteringConductor:
-      case Class::Dielectric:
-      case Class::MultiscatteringDielectric:
-      case Class::Generic:
-        return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
-
-      case Class::Thinfilm:
-      case Class::Mirror:
-        return true;
-
-      default:
-        return false;
-    }
   }
 };
 

@@ -63,6 +63,8 @@ struct RTApplication {
   Integrator* _current_integrator = nullptr;
   std::string _current_scene_file = {};
   Options _options;
+
+  bool _reset_images = true;
 };
 
 }  // namespace etx

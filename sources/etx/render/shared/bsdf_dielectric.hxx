@@ -59,7 +59,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
@@ -67,7 +67,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
 namespace DielectricBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (data.material.is_delta()) {
+  if (is_delta(data.material, data.tex, scene, smp)) {
     return DeltaDielectricBSDF::sample(data, scene, smp);
   }
 
@@ -119,7 +119,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (data.material.is_delta()) {
+  if (is_delta(data.material, data.tex, scene, smp)) {
     return DeltaDielectricBSDF::evaluate(data, scene, smp);
   }
 
@@ -206,9 +206,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
-  if (data.material.is_delta()) {
-    return DeltaDielectricBSDF::pdf(data, scene);
+ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
+  if (is_delta(data.material, data.tex, scene, smp)) {
+    return DeltaDielectricBSDF::pdf(data, scene, smp);
   }
 
   Frame frame;
@@ -260,6 +260,10 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
   return (img.options & Image::HasAlphaChannel) && (img.evaluate(tex).w < smp.next());
 }
 
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
+}
+
 }  // namespace DielectricBSDF
 
 namespace ThinfilmBSDF {
@@ -309,7 +313,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
@@ -322,12 +326,16 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
   return (img.options & Image::HasAlphaChannel) && img.evaluate(tex).w < smp.next();
 }
 
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  return true;
+}
+
 }  // namespace ThinfilmBSDF
 
 namespace MultiscatteringDielectricBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (data.material.is_delta()) {
+  if (is_delta(data.material, data.tex, scene, smp)) {
     return DeltaDielectricBSDF::sample(data, scene, smp);
   }
 
@@ -347,7 +355,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
 
     auto a_data = data;
     a_data.w_o = normalize(local_frame.from_local(result.w_o));
-    result.pdf = pdf(a_data, scene);
+    result.pdf = pdf(a_data, scene, smp);
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {  // reflection
       result.eta = 1.0f;
@@ -365,7 +373,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
 
     auto a_data = data;
     a_data.w_o = normalize(local_frame.from_local(result.w_o));
-    result.pdf = pdf(a_data, scene);
+    result.pdf = pdf(a_data, scene, smp);
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {  // refraction
       result.eta = m_invEta;
@@ -384,7 +392,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (data.material.is_delta()) {
+  if (is_delta(data.material, data.tex, scene, smp)) {
     return DeltaDielectricBSDF::evaluate(data, scene, smp);
   }
 
@@ -425,15 +433,15 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   eval.func = (reflection ? data.material.specular : data.material.transmittance)(data.spectrum_sample) * (2.0f * value);
   ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
-  eval.pdf = pdf(data, scene);
+  eval.pdf = pdf(data, scene, smp);
   eval.weight = eval.bsdf / eval.pdf;
   ETX_VALIDATE(eval.weight);
   return eval;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
-  if (data.material.is_delta()) {
-    return DeltaDielectricBSDF::pdf(data, scene);
+ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
+  if (is_delta(data.material, data.tex, scene, smp)) {
+    return DeltaDielectricBSDF::pdf(data, scene, smp);
   }
 
   LocalFrame local_frame = {{data.tan, data.btn, data.nrm}};
@@ -481,6 +489,10 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
   }
   const auto& img = scene.images[material.diffuse_image_index];
   return (img.options & Image::HasAlphaChannel) && (img.evaluate(tex).w < smp.next());
+}
+
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
 }
 
 }  // namespace MultiscatteringDielectricBSDF

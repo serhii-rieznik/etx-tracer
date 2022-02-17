@@ -15,7 +15,7 @@ struct TaskWrapper : public enki::ITaskSet {
   }
 
   void ExecuteRange(enki::TaskSetPartition range_, uint32_t threadnum_) override {
-    task->execute_range(range_.start, range_.end, threadnum_ - 1);
+    task->execute_range(range_.start, range_.end, threadnum_);
   }
 };
 
@@ -56,7 +56,7 @@ TaskScheduler::~TaskScheduler() {
 }
 
 uint32_t TaskScheduler::max_thread_count() {
-  return _private->scheduler.GetConfig().numTaskThreadsToCreate;
+  return _private->scheduler.GetConfig().numTaskThreadsToCreate + 1;
 }
 
 Task::Handle TaskScheduler::schedule(Task* t, uint32_t range) {

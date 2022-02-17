@@ -68,7 +68,7 @@ struct CPUBidirectionalImpl : public Task {
 
     SpectralResponse bsdf_in_direction(SpectralQuery spect, PathSource mode, const float3& w_o, const Scene& scene, Sampler& smp) const;
 
-    float pdf_area(SpectralQuery spect, PathSource mode, const PathVertex* prev, const PathVertex* next, const Scene& scene) const;
+    float pdf_area(SpectralQuery spect, PathSource mode, const PathVertex* prev, const PathVertex* next, const Scene& scene, Sampler& smp) const;
     float pdf_to_light_out(SpectralQuery spect, const PathVertex* next, const Scene& scene) const;
     float pdf_to_light_in(SpectralQuery spect, const PathVertex* next, const Scene& scene) const;
     float pdf_solid_angle_to_area(float pdf_dir, const PathVertex& to_vertex) const;
@@ -178,7 +178,7 @@ struct CPUBidirectionalImpl : public Task {
 
         if (light_s == 0) {
           if (_direct_hit) {
-            result += direct_hit(path_data, spect, eye_t, light_s);
+            result += direct_hit(path_data, spect, eye_t, light_s, smp);
           }
         } else if (eye_t == 1) {
           if (_connect_to_camera) {
@@ -271,7 +271,7 @@ struct CPUBidirectionalImpl : public Task {
           break;
         }
 
-        auto rev_bsdf_pdf = bsdf::pdf(bsdf_data.swap_directions(), rt.scene());
+        auto rev_bsdf_pdf = bsdf::pdf(bsdf_data.swap_directions(), rt.scene(), smp);
         ETX_VALIDATE(rev_bsdf_pdf);
 
         w.pdf.backward = v.pdf_solid_angle_to_area(rev_bsdf_pdf, w);
@@ -373,7 +373,7 @@ struct CPUBidirectionalImpl : public Task {
     }
   }
 
-  float mis_weight(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s, const PathVertex& sampled) {
+  float mis_weight(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s, const PathVertex& sampled, Sampler& smp) {
     if (_enable_mis == false) {
       return 1.0f;
     }
@@ -406,7 +406,7 @@ struct CPUBidirectionalImpl : public Task {
       z_delta_new = {&z_curr->delta, false};
       float z_curr_pdf = 0.0f;
       if (light_s > 0) {
-        z_curr_pdf = y_curr->pdf_area(spect, PathSource::Light, y_prev, z_curr, rt.scene());
+        z_curr_pdf = y_curr->pdf_area(spect, PathSource::Light, y_prev, z_curr, rt.scene(), smp);
       } else {
         z_curr_pdf = z_curr->pdf_to_light_in(spect, z_prev, rt.scene());
       }
@@ -418,7 +418,7 @@ struct CPUBidirectionalImpl : public Task {
     if (z_prev) {
       float z_prev_pdf = 0.0f;
       if (light_s > 0) {
-        z_prev_pdf = z_curr->pdf_area(spect, PathSource::Camera, y_curr, z_prev, rt.scene());
+        z_prev_pdf = z_curr->pdf_area(spect, PathSource::Camera, y_curr, z_prev, rt.scene(), smp);
       } else {
         z_prev_pdf = z_curr->pdf_to_light_out(spect, z_prev, rt.scene());
       }
@@ -431,7 +431,7 @@ struct CPUBidirectionalImpl : public Task {
       y_delta_new = {&y_curr->delta, false};
       float y_curr_pdf = 0.0f;
       if (eye_t > 1) {
-        y_curr_pdf = z_curr->pdf_area(spect, PathSource::Camera, z_prev, y_curr, rt.scene());
+        y_curr_pdf = z_curr->pdf_area(spect, PathSource::Camera, z_prev, y_curr, rt.scene(), smp);
       } else if (z_curr != nullptr) {
         ETX_ASSERT(z_curr->cls == PathVertex::Class::Camera);
         float pdf_dir = film_pdf_out(rt.scene().camera, y_curr->pos);
@@ -446,7 +446,7 @@ struct CPUBidirectionalImpl : public Task {
 
     if (y_prev) {
       ETX_ASSERT(z_curr != nullptr);
-      float y_prev_pdf = y_curr->pdf_area(spect, PathSource::Light, z_curr, y_prev, rt.scene());
+      float y_prev_pdf = y_curr->pdf_area(spect, PathSource::Light, z_curr, y_prev, rt.scene(), smp);
       ETX_VALIDATE(y_prev_pdf);
       y_prev_new = {&y_prev->pdf.backward, y_prev_pdf};
       ETX_VALIDATE(y_prev->pdf.backward);
@@ -481,7 +481,7 @@ struct CPUBidirectionalImpl : public Task {
     return 1.0f / (1.0f + result);
   }
 
-  SpectralResponse direct_hit(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s) {
+  SpectralResponse direct_hit(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s, Sampler& smp) {
     const auto& z_i = c.camera_path[eye_t];
     if (z_i.is_emitter() == false) {
       return {spect.wavelength, 0.0f};
@@ -516,7 +516,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     ETX_VALIDATE(emitter_value);
-    float weight = mis_weight(c, spect, eye_t, light_s, {});
+    float weight = mis_weight(c, spect, eye_t, light_s, {}, smp);
     return emitter_value * z_i.throughput * weight;
   }
 
@@ -543,7 +543,7 @@ struct CPUBidirectionalImpl : public Task {
 
     SpectralResponse bsdf = z_i.bsdf_in_direction(spect, PathSource::Camera, emitter_sample.direction, rt.scene(), smp);
     SpectralResponse tr = local_transmittance(spect, smp, z_i, sampled_vertex);
-    float weight = mis_weight(c, spect, eye_t, light_s, sampled_vertex);
+    float weight = mis_weight(c, spect, eye_t, light_s, sampled_vertex, smp);
     return z_i.throughput * bsdf * emitter_throughput * tr * weight;
   }
 
@@ -562,7 +562,7 @@ struct CPUBidirectionalImpl : public Task {
     sampled_vertex.w_i = camera_sample.direction;
 
     SpectralResponse bsdf = y_i.bsdf_in_direction(spect, PathSource::Light, camera_sample.direction, rt.scene(), smp);
-    float weight = mis_weight(c, spect, eye_t, light_s, sampled_vertex);
+    float weight = mis_weight(c, spect, eye_t, light_s, sampled_vertex, smp);
 
     SpectralResponse splat = y_i.throughput * bsdf * camera_sample.weight * (weight / spectrum::sample_pdf());
     ETX_VALIDATE(splat);
@@ -594,7 +594,7 @@ struct CPUBidirectionalImpl : public Task {
     SpectralResponse tr = local_transmittance(spect, smp, y_i, z_i);
     ETX_VALIDATE(result);
 
-    float weight = mis_weight(c, spect, eye_t, light_s, {});
+    float weight = mis_weight(c, spect, eye_t, light_s, {}, smp);
     ETX_VALIDATE(weight);
 
     return result * tr * weight;
@@ -739,7 +739,7 @@ const char* CPUBidirectional::status() const {
   return _private->status;
 }
 
-float CPUBidirectionalImpl::PathVertex::pdf_area(SpectralQuery spect, PathSource mode, const PathVertex* prev, const PathVertex* next, const Scene& scene) const {
+float CPUBidirectionalImpl::PathVertex::pdf_area(SpectralQuery spect, PathSource mode, const PathVertex* prev, const PathVertex* next, const Scene& scene, Sampler& smp) const {
   if (cls == Class::Emitter) {
     return pdf_to_light_out(spect, next, scene);
   }
@@ -770,7 +770,7 @@ float CPUBidirectionalImpl::PathVertex::pdf_area(SpectralQuery spect, PathSource
   if (is_surface_interaction()) {
     const auto& tri = scene.triangles[triangle_index];
     const auto& mat = scene.materials[tri.material_index];
-    eval_pdf = bsdf::pdf({spect, medium_index, mat, mode, *this, w_i, w_o}, scene);
+    eval_pdf = bsdf::pdf({spect, medium_index, mat, mode, *this, w_i, w_o}, scene, smp);
   } else if (is_medium_interaction()) {
     eval_pdf = scene.mediums[medium_index].phase_function(spect, pos, w_i, w_o);
   } else {

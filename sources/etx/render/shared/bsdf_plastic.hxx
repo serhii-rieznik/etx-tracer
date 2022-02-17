@@ -68,7 +68,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
   Frame frame;
   if (data.check_side(frame) == false) {
     return 0.0f;
@@ -161,9 +161,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
   if (dot(data.material.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::pdf(data, scene);
+    return DeltaPlasticBSDF::pdf(data, scene, smp);
   }
 
   Frame frame;
@@ -199,29 +199,10 @@ ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, 
   return (img.options & Image::HasAlphaChannel) && img.evaluate(tex).w < smp.next();
 }
 
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  return false;
+}
+
 }  // namespace PlasticBSDF
 
-namespace MultiscatteringPlasticBSDF {
-
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  return DeltaPlasticBSDF::sample(data, scene, smp);
-}
-
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  return DeltaPlasticBSDF::evaluate(data, scene, smp);
-}
-
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene) {
-  return DeltaPlasticBSDF::pdf(data, scene);
-}
-
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse_image_index == kInvalidIndex) {
-    return false;
-  }
-  const auto& img = scene.images[material.diffuse_image_index];
-  return (img.options & Image::HasAlphaChannel) && (img.evaluate(tex).w < smp.next());
-}
-
-}  // namespace MultiscatteringPlasticBSDF
 }  // namespace etx

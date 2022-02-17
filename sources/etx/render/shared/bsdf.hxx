@@ -22,6 +22,16 @@ struct BSDFData : public Vertex {
     , w_o(awo) {
   }
 
+  ETX_GPU_CODE BSDFData(const BSDFData& data, const Material& m)
+    : Vertex(data)
+    , material(m)
+    , mode(data.mode)
+    , spectrum_sample(data.spectrum_sample)
+    , medium_index(data.medium_index)
+    , w_i(data.w_i)
+    , w_o(data.w_o) {
+  }
+
   ETX_GPU_CODE BSDFData swap_directions() const {
     BSDFData result = *this;
     result.w_i = -w_o;
@@ -56,7 +66,6 @@ struct BSDFData : public Vertex {
   PathSource mode = PathSource::Undefined;
   SpectralQuery spectrum_sample;
   uint32_t medium_index = kInvalidIndex;
-  float3 geo_n = {};
   float3 w_i = {};
   float3 w_o = {};
 };

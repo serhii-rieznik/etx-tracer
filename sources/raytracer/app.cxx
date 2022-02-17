@@ -67,10 +67,12 @@ void RTApplication::frame() {
   if (_current_integrator != nullptr) {
     _current_integrator->update();
     status = _current_integrator->status();
-    c_image_updated = _current_integrator->have_updated_camera_image();
-    c_image = _current_integrator->get_camera_image(false);
-    l_image_updated = _current_integrator->have_updated_light_image();
-    l_image = _current_integrator->get_light_image(false);
+    if (_reset_images == false) {
+      c_image_updated = _current_integrator->have_updated_camera_image();
+      c_image = _current_integrator->get_camera_image(false);
+      l_image_updated = _current_integrator->have_updated_light_image();
+      l_image = _current_integrator->get_light_image(false);
+    }
     can_change_camera = _current_integrator->state() == Integrator::State::Preview;
   }
 
@@ -81,12 +83,15 @@ void RTApplication::frame() {
 
   render.set_view_options(ui.view_options());
   render.start_frame();
-  if (c_image_updated) {
+
+  if (_reset_images || c_image_updated) {
     render.update_camera_image(c_image);
   }
-  if (l_image_updated) {
+  if (_reset_images || l_image_updated) {
     render.update_light_image(l_image);
   }
+  _reset_images = false;
+
   ui.build(dt, status);
   render.end_frame();
 }
@@ -196,6 +201,8 @@ void RTApplication::on_integrator_selected(Integrator* i) {
     _current_integrator->set_output_size(scene.scene().camera.image_size);
     _current_integrator->preview(ui.integrator_options());
   }
+
+  _reset_images = true;
 }
 
 void RTApplication::on_preview_selected() {
