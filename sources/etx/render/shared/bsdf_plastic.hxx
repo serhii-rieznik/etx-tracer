@@ -21,10 +21,11 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   }
 
   float n_dot_o = dot(frame.nrm, result.w_o);
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
+  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
 
   if (reflection) {
-    auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - f)) + mtl.specular(data.spectrum_sample) * f;
+    auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - f)) + specular * f;
     result.pdf = kInvPi * n_dot_o * (1.0f - f.monochromatic()) + f.monochromatic();
     result.weight = bsdf / result.pdf;
   } else {
@@ -48,7 +49,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   auto eta_i = mtl.int_ior(data.spectrum_sample).eta.monochromatic();
   auto f = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i);
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
   BSDFEval result;
   result.func = diffuse * (kInvPi * (1.0f - f.monochromatic()));
@@ -132,12 +133,13 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   auto eval = ggx.evaluate(m, data.w_i, data.w_o);
   float j = 1.0f / (4.0f * m_dot_o);
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
+  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
 
   BSDFEval result;
-  result.func = diffuse * (kInvPi * (1.0f - f)) + mtl.specular(data.spectrum_sample) * (f * eval.ndf * eval.visibility / (4.0f * n_dot_i * n_dot_o));
+  result.func = diffuse * (kInvPi * (1.0f - f)) + specular * (f * eval.ndf * eval.visibility / (4.0f * n_dot_i * n_dot_o));
   ETX_VALIDATE(result.func);
-  result.bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - f)) + mtl.specular(data.spectrum_sample) * (f * eval.ndf * eval.visibility / (4.0f * n_dot_i));
+  result.bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - f)) + specular * (f * eval.ndf * eval.visibility / (4.0f * n_dot_i));
   ETX_VALIDATE(result.bsdf);
   result.pdf = kInvPi * n_dot_o * (1.0f - f.monochromatic()) + eval.pdf * j * f.monochromatic();
   ETX_VALIDATE(result.pdf);
@@ -174,11 +176,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse_image_index == kInvalidIndex) {
-    return false;
-  }
-  const auto& img = scene.images[material.diffuse_image_index];
-  return (img.options & Image::HasAlphaChannel) && img.evaluate(tex).w < smp.next();
+  return false;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {

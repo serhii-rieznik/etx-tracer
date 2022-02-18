@@ -28,16 +28,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_in_local(const Emitter& em, const
     pdf_dir_out = pdf_area * fabsf(dot(tri.geo_n, normalize(dp))) * kInvPi;
   }
 
-  SpectralResponse result = em.emission(spect);
-  ETX_VALIDATE(result);
-
-  if (em.image_index != kInvalidIndex) {
-    auto sampled_value = scene.images[em.image_index].evaluate(uv);
-    result *= rgb::query_spd(spect, {sampled_value.x, sampled_value.y, sampled_value.z}, scene.spectrums->rgb_illuminant);
-    ETX_VALIDATE(result);
-  }
-
-  return result;
+  return apply_emitter_image(spect, em.emission, uv, scene);
 }
 
 ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
@@ -66,14 +57,19 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
   pdf_dir_out = pdf_dir * pdf_area;
   ETX_ASSERT(pdf_dir_out > 0.0f);
 
-  SpectralResponse result = em.emission(spect);
-  if (em.image_index != kInvalidIndex) {
-    auto sampled_value = scene.images[em.image_index].evaluate(uv);
-    result *= rgb::query_spd(spect, {sampled_value.x, sampled_value.y, sampled_value.z}, scene.spectrums->rgb_illuminant);
+  return apply_emitter_image(spect, em.emission, uv, scene);
+}
+
+ETX_GPU_CODE float2 disk_uv(const float3& out_dir, const float3& in_dir, float sz) {
+  if (sz == 0.0f) {
+    return {};
   }
 
-  ETX_VALIDATE(result);
-  return result;
+  // TODO : deal with this shit
+  auto basis = orthonormal_basis(out_dir);
+  float du = (kHalfPi - acosf(dot(basis.u, in_dir))) / (0.5f * sz) * 0.5f + 0.5f;
+  float dv = (kHalfPi - acosf(dot(basis.v, in_dir))) / (0.5f * sz) * 0.5f + 0.5f;
+  return {saturate(du), saturate(dv)};
 }
 
 ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
@@ -85,7 +81,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const 
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = 1.0f;
       pdf_dir_out = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
-      return em.emission(spect);
+      return apply_image(spect, em.emission, disk_uv(em.direction, in_direction, em.angular_size), scene);
     } else {
       pdf_area = 0.0f;
       pdf_dir = 0.0f;
@@ -103,14 +99,14 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const 
     return {spect.wavelength, 0.0f};
   }
 
-  const auto& img = scene.images[em.image_index];
+  const auto& img = scene.images[em.emission.image_index];
   pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
 
   pdf_dir = img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
   ETX_VALIDATE(pdf_dir);
 
   pdf_dir_out = pdf_area * pdf_dir;
-  return em.emission(spect) * rgb::query_spd(spect, to_float3(img.evaluate(uv)), scene.spectrums->rgb_illuminant);
+  return apply_emitter_image(spect, em.emission, uv, scene);
 }
 
 ETX_GPU_CODE SpectralResponse emitter_evaluate_env_dist(const Emitter& em, const SpectralQuery spect, const float2& uv, float& pdf_area, float& pdf_dir, float& pdf_dir_out,
@@ -125,13 +121,11 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_env_dist(const Emitter& em, const
     return {spect.wavelength, 0.0f};
   }
 
-  const auto& img = scene.images[em.image_index];
+  const auto& img = scene.images[em.emission.image_index];
   pdf_dir = img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
   pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
   pdf_dir_out = pdf_area * pdf_dir;
-
-  auto eval = to_float3(img.evaluate(uv));
-  return SpectralResponse(spect.wavelength, eval);
+  return apply_emitter_image(spect, em.emission, uv, scene);
 }
 
 ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
@@ -149,17 +143,18 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
 
   switch (em.cls) {
     case Emitter::Class::Environment: {
-      const auto& img = scene.images[em.image_index];
+      const auto& img = scene.images[em.emission.image_index];
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
       pdf_dir_out = pdf_dir * pdf_area;
-      return em.emission(spect) * rgb::query_spd(spect, to_float3(img.evaluate(uv)), scene.spectrums->rgb_illuminant);
+      return apply_emitter_image(spect, em.emission, uv, scene);
     }
+
     case Emitter::Class::Directional: {
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = 1.0f;
       pdf_dir_out = pdf_dir * pdf_area;
-      return em.emission(spect);
+      return apply_image(spect, em.emission, disk_uv(em.direction, in_direction, em.angular_size), scene);
     }
 
     default:
@@ -184,7 +179,7 @@ ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em, const float3& in_direc
     return 0.0f;
   }
 
-  const auto& img = scene.images[em.image_index];
+  const auto& img = scene.images[em.emission.image_index];
   return img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
 }
 
@@ -205,7 +200,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
     }
 
     case Emitter::Class::Environment: {
-      const auto& img = scene.images[em.image_index];
+      const auto& img = scene.images[em.emission.image_index];
       float pdf_image = 0.0f;
       uint2 image_location = {};
       result.image_uv = img.sample(smp.next(), smp.next(), pdf_image, image_location);
@@ -229,7 +224,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
       result.origin = from_point + kDisantRadiusScale * scene.bounding_sphere_radius * result.direction;
       result.normal = em.direction * (-1.0f);
-      result.value = em.emission(spect);
+      result.value = apply_image(spect, em.emission, disk_uv(em.direction, result.direction, em.angular_size), scene);
       break;
     }
     default: {
@@ -301,7 +296,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
     }
 
     case Emitter::Class::Environment: {
-      const auto& img = scene.images[em.image_index];
+      const auto& img = scene.images[em.emission.image_index];
       float pdf_image = 0.0f;
       uint2 image_location = {};
       auto xi0 = smp.next();
@@ -321,7 +316,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
       result.direction = d;
       result.normal = result.direction;
       result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - kDisantRadiusScale * result.direction);
-      result.value = em.emission(spect) * rgb::query_spd(spect, to_float3(img.evaluate(uv)), scene.spectrums->rgb_illuminant);
+      result.value = apply_emitter_image(spect, em.emission, uv, scene);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
       result.pdf_dir_out = result.pdf_area * result.pdf_dir;
@@ -352,7 +347,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
       auto disk_sample = sample_disk(smp.next(), smp.next());
       result.normal = direction_to_scene;
       result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basic.u + disk_sample.y * basic.v - kDisantRadiusScale * direction_to_scene);
-      result.value = em.emission(spect);
+      result.value = apply_image(spect, em.emission, disk_uv(em.direction, result.direction, em.angular_size), scene);
       break;
     }
     default: {

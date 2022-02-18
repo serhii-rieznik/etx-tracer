@@ -25,7 +25,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto ggx = NormalDistribution(frame, alpha);
   auto m = ggx.sample(smp, data.w_i);
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
   float t = fabsf(dot(data.w_i, m));
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f} * (1.0f - metalness) + diffuse * metalness;
@@ -65,8 +65,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   float3 m = normalize(data.w_o - data.w_i);
   float m_dot_o = dot(m, data.w_o);
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
-  auto specular = bsdf::apply_image(data.spectrum_sample, mtl.specular(data.spectrum_sample), mtl.specular_image_index, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
+  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
 
   float t = fabsf(dot(data.w_i, m));
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f * (1.0f - metalness)} + diffuse * metalness;
@@ -95,7 +95,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
   float3 m = normalize(data.w_o - data.w_i);
   float m_dot_o = dot(m, data.w_o);
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
   float2 alpha = mtl.roughness;
   float metalness = mtl.metalness;

@@ -103,6 +103,6 @@ ETX_GPU_CODE bool apply_rr(float eta_scale, float rnd, SpectralResponse& through
 
 }  // namespace etx
 
-#include <etx/render/shared/scene_emitters.hxx>
-#include <etx/render/shared/scene_camera.hxx>
 #include <etx/render/shared/scene_bsdf.hxx>
+#include <etx/render/shared/scene_camera.hxx>
+#include <etx/render/shared/scene_emitters.hxx>

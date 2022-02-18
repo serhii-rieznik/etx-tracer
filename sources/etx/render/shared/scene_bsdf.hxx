@@ -76,19 +76,30 @@ namespace bsdf {
 }
 
 #undef CASE_IMPL
+}  // namespace bsdf
 
-ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralResponse& value, uint32_t image_index, const float2& uv, const Scene& scene) {
-  SpectralResponse result = value;
+ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene) {
+  SpectralResponse result = img.spectrum(spect);
 
-  if (image_index != kInvalidIndex) {
-    float4 eval = scene.images[image_index].evaluate(uv);
+  if (img.image_index != kInvalidIndex) {
+    float4 eval = scene.images[img.image_index].evaluate(uv);
     result *= rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_reflection);
     ETX_VALIDATE(result);
   }
   return result;
 }
 
-}  // namespace bsdf
+ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene) {
+  SpectralResponse result = img.spectrum(spect);
+
+  if (img.image_index != kInvalidIndex) {
+    float4 eval = scene.images[img.image_index].evaluate(uv);
+    result *= rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_illuminant);
+    ETX_VALIDATE(result);
+  }
+  return result;
+}
+
 }  // namespace etx
 
 #include <etx/render/shared/bsdf_external.hxx>

@@ -17,7 +17,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
     return {data.spectrum_sample.wavelength, 0.0f};
   }
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
   BSDFEval result;
   result.func = diffuse * kInvPi;
@@ -41,12 +41,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse_image_index == kInvalidIndex) {
-    return false;
-  }
-
-  const auto& img = scene.images[material.diffuse_image_index];
-  return (img.options & Image::HasAlphaChannel) && img.evaluate(tex).w < smp.next();
+  return false;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -64,7 +59,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto w_i = local_frame.to_local(-data.w_i);
   auto alpha_x = mtl.roughness.x;
   auto alpha_y = mtl.roughness.y;
-  auto albedo = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto albedo = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
   BSDFSample result = {};
   result.eta = 1.0f;
@@ -91,7 +86,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 
   auto alpha_x = mtl.roughness.x;
   auto alpha_y = mtl.roughness.y;
-  auto albedo = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto albedo = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
   BSDFEval result = {};
   result.func = (smp.next() > 0.5f) ? external::eval_diffuse(smp, w_i, w_o, alpha_x, alpha_y, albedo)  //
@@ -113,12 +108,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse_image_index == kInvalidIndex) {
-    return false;
-  }
-
-  const auto& img = scene.images[material.diffuse_image_index];
-  return (img.options & Image::HasAlphaChannel) && img.evaluate(tex).w < smp.next();
+  return false;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -142,7 +132,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
   auto n_dot_o = fabsf(dot(data.nrm, data.w_o));
 
   BSDFEval result;
@@ -159,12 +149,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse_image_index == kInvalidIndex) {
-    return false;
-  }
-
-  const auto& img = scene.images[material.diffuse_image_index];
-  return (img.options & Image::HasAlphaChannel) && img.evaluate(tex).w < smp.next();
+  return false;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -220,8 +205,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   auto ggx = NormalDistribution(frame, remap_alpha(mtl.roughness));
   auto eval = ggx.evaluate(m, data.w_i, data.w_o);
 
-  auto specular_value = bsdf::apply_image(data.spectrum_sample, mtl.specular(data.spectrum_sample), mtl.specular_image_index, data.tex, scene);
-  auto diffuse_value = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto specular_value = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
+  auto diffuse_value = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
   auto fresnel = specular_value + f * (1.0f - specular_value);
 
   auto diffuse_factor = (28.f / (23.f * kPi)) * (1.0 - specular_value) * (1.0f - pow5(1.0f - 0.5f * n_dot_i)) * (1.0f - pow5(1.0f - 0.5f * n_dot_o));
@@ -257,12 +242,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse_image_index == kInvalidIndex) {
-    return false;
-  }
-
-  const auto& img = scene.images[material.diffuse_image_index];
-  return (img.options & Image::HasAlphaChannel) && img.evaluate(tex).w < smp.next();
+  return false;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -278,7 +258,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   BSDFSample result;
   result.w_o = normalize(reflect(data.w_i, frame.nrm));
-  result.weight = bsdf::apply_image(data.spectrum_sample, mtl.specular(data.spectrum_sample), mtl.specular_image_index, data.tex, scene);
+  result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
   result.pdf = 1.0f;
   result.properties = BSDFSample::DeltaReflection;
   return result;

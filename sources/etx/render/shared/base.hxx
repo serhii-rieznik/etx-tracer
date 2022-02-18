@@ -5,9 +5,11 @@
 #if (ETX_NVCC_COMPILER)
 #define ETX_GPU_CODE inline __device__
 #define ETX_GPU_DATA __device__
+#define ETX_CPU_CODE __host__
 #define ETX_INIT_WITH(S)
 #else
 #define ETX_GPU_CODE inline
+#define ETX_CPU_CODE
 #define ETX_GPU_DATA
 #define ETX_INIT_WITH(S) = S
 #endif
