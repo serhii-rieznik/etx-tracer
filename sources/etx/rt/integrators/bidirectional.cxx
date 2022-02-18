@@ -237,7 +237,7 @@ struct CPUBidirectionalImpl : public Task {
         const auto& mat = rt.scene().materials[tri.material_index];
 
         if (mat.cls == Material::Class::Boundary) {
-          auto bsdf_sample = bsdf::sample({spect, medium_index, mat, mode, intersection, intersection.w_i, {}}, rt.scene(), smp);
+          auto bsdf_sample = bsdf::sample({spect, medium_index, mode, intersection, intersection.w_i, {}}, mat, rt.scene(), smp);
           if (bsdf_sample.properties & BSDFSample::MediumChanged) {
             medium_index = bsdf_sample.medium_index;
           }
@@ -254,9 +254,9 @@ struct CPUBidirectionalImpl : public Task {
         v.pdf.forward = w.pdf_solid_angle_to_area(pdf_dir, v);
         ETX_VALIDATE(v.pdf.forward);
 
-        auto bsdf_data = BSDFData(spect, medium_index, mat, mode, v, v.w_i, {});
+        auto bsdf_data = BSDFData(spect, medium_index, mode, v, v.w_i, {});
 
-        auto bsdf_sample = bsdf::sample(bsdf_data, rt.scene(), smp);
+        auto bsdf_sample = bsdf::sample(bsdf_data, mat, rt.scene(), smp);
         ETX_VALIDATE(bsdf_sample.weight);
 
         v.delta = bsdf_sample.is_delta();
@@ -271,7 +271,7 @@ struct CPUBidirectionalImpl : public Task {
           break;
         }
 
-        auto rev_bsdf_pdf = bsdf::pdf(bsdf_data.swap_directions(), rt.scene(), smp);
+        auto rev_bsdf_pdf = bsdf::pdf(bsdf_data.swap_directions(), mat, rt.scene(), smp);
         ETX_VALIDATE(rev_bsdf_pdf);
 
         w.pdf.backward = v.pdf_solid_angle_to_area(rev_bsdf_pdf, w);
@@ -770,7 +770,7 @@ float CPUBidirectionalImpl::PathVertex::pdf_area(SpectralQuery spect, PathSource
   if (is_surface_interaction()) {
     const auto& tri = scene.triangles[triangle_index];
     const auto& mat = scene.materials[tri.material_index];
-    eval_pdf = bsdf::pdf({spect, medium_index, mat, mode, *this, w_i, w_o}, scene, smp);
+    eval_pdf = bsdf::pdf({spect, medium_index, mode, *this, w_i, w_o}, mat, scene, smp);
   } else if (is_medium_interaction()) {
     eval_pdf = scene.mediums[medium_index].phase_function(spect, pos, w_i, w_o);
   } else {
@@ -869,7 +869,7 @@ SpectralResponse CPUBidirectionalImpl::PathVertex::bsdf_in_direction(SpectralQue
     const auto& tri = scene.triangles[triangle_index];
     const auto& mat = scene.materials[tri.material_index];
 
-    BSDFEval eval = bsdf::evaluate({spect, medium_index, mat, mode, *this, w_i, w_o}, scene, smp);
+    BSDFEval eval = bsdf::evaluate({spect, medium_index, mode, *this, w_i, w_o}, mat, scene, smp);
     ETX_VALIDATE(eval.bsdf);
 
     if (mode == PathSource::Light) {

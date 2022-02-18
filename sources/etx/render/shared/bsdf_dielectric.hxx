@@ -4,18 +4,16 @@ namespace etx {
 
 namespace DeltaDielectricBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  Frame frame;
-  bool entering_material = data.get_normal_frame(frame);
-
-  auto eta_i = (entering_material ? data.material.ext_ior : data.material.int_ior)(data.spectrum_sample).eta.monochromatic();
-  auto eta_o = (entering_material ? data.material.int_ior : data.material.ext_ior)(data.spectrum_sample).eta.monochromatic();
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto [frame, entering_material] = data.get_normal_frame();
+  auto eta_i = (entering_material ? mtl.ext_ior : mtl.int_ior)(data.spectrum_sample).eta.monochromatic();
+  auto eta_o = (entering_material ? mtl.int_ior : mtl.ext_ior)(data.spectrum_sample).eta.monochromatic();
   float eta = (eta_i / eta_o);
 
   SpectralResponse fr;
-  if (data.material.thinfilm.image_index != kInvalidIndex) {
-    auto t = scene.images[data.material.thinfilm.image_index].evaluate(data.tex);
-    float thickness = lerp(data.material.thinfilm.min_thickness, data.material.thinfilm.max_thickness, t.x);
+  if (mtl.thinfilm.image_index != kInvalidIndex) {
+    auto t = scene.images[mtl.thinfilm.image_index].evaluate(data.tex);
+    float thickness = lerp(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness, t.x);
     auto ior_eta = scene.spectrums->thinfilm(data.spectrum_sample).eta.monochromatic();
     fr = fresnel::dielectric_thinfilm(data.spectrum_sample, data.w_i, frame.nrm, eta_i, ior_eta, eta_o, thickness);
   } else {
@@ -28,10 +26,10 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
     result.w_o = normalize(reflect(data.w_i, frame.nrm));
     result.pdf = f;
     ETX_VALIDATE(result.pdf);
-    result.weight = (fr / f) * data.material.specular(data.spectrum_sample);
+    result.weight = (fr / f) * mtl.specular(data.spectrum_sample);
     ETX_VALIDATE(result.weight);
     result.properties = BSDFSample::DeltaReflection;
-    result.medium_index = entering_material ? data.material.ext_medium : data.material.int_medium;
+    result.medium_index = entering_material ? mtl.ext_medium : mtl.int_medium;
   } else {
     float cos_theta_i = dot(frame.nrm, -data.w_i);
     float sin_theta_o_squared = (eta * eta) * (1.0f - cos_theta_i * cos_theta_i);
@@ -40,14 +38,14 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
     result.pdf = 1.0f - f;
     ETX_VALIDATE(result.pdf);
 
-    result.weight = bsdf::apply_image(data.spectrum_sample, data.material.transmittance(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
+    result.weight = bsdf::apply_image(data.spectrum_sample, mtl.transmittance(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
     ETX_VALIDATE(result.weight);
 
     result.weight *= (1.0f - fr) / (1.0f - f);
     ETX_VALIDATE(result.weight);
 
     result.properties = BSDFSample::DeltaTransmission | BSDFSample::MediumChanged;
-    result.medium_index = entering_material ? data.material.int_medium : data.material.ext_medium;
+    result.medium_index = entering_material ? mtl.int_medium : mtl.ext_medium;
     if (data.path_source == PathSource::Camera) {
       result.weight *= eta * eta;
     }
@@ -55,35 +53,34 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
 }  // namespace DeltaDielectricBSDF
 namespace DielectricBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (is_delta(data.material, data.tex, scene, smp)) {
-    return DeltaDielectricBSDF::sample(data, scene, smp);
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  if (is_delta(mtl, data.tex, scene, smp)) {
+    return DeltaDielectricBSDF::sample(data, mtl, scene, smp);
   }
 
-  Frame frame;
-  bool entering_material = data.get_normal_frame(frame);
-  auto ggx = NormalDistribution(frame, data.material.roughness);
+  auto [frame, entering_material] = data.get_normal_frame();
+  auto ggx = NormalDistribution(frame, mtl.roughness);
   auto m = ggx.sample(smp, data.w_i);
 
-  auto eta_i = (entering_material ? data.material.ext_ior : data.material.int_ior)(data.spectrum_sample).eta.monochromatic();
-  auto eta_o = (entering_material ? data.material.int_ior : data.material.ext_ior)(data.spectrum_sample).eta.monochromatic();
+  auto eta_i = (entering_material ? mtl.ext_ior : mtl.int_ior)(data.spectrum_sample).eta.monochromatic();
+  auto eta_o = (entering_material ? mtl.int_ior : mtl.ext_ior)(data.spectrum_sample).eta.monochromatic();
   float eta = (eta_i / eta_o);
 
   SpectralResponse fr;
-  if (data.material.thinfilm.image_index != kInvalidIndex) {
-    auto t = scene.images[data.material.thinfilm.image_index].evaluate(data.tex);
-    float thickness = lerp(data.material.thinfilm.min_thickness, data.material.thinfilm.max_thickness, t.x);
+  if (mtl.thinfilm.image_index != kInvalidIndex) {
+    auto t = scene.images[mtl.thinfilm.image_index].evaluate(data.tex);
+    float thickness = lerp(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness, t.x);
     auto ior_eta = scene.spectrums->thinfilm(data.spectrum_sample).eta.monochromatic();
     fr = fresnel::dielectric_thinfilm(data.spectrum_sample, data.w_i, m, eta_i, ior_eta, eta_o, thickness);
   } else {
@@ -109,22 +106,21 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
     eval_data.w_o = normalize(eval_data.w_o);
   }
 
-  BSDFSample result = {eval_data.w_o, evaluate(eval_data, scene, smp), reflection ? 0u : BSDFSample::MediumChanged};
+  BSDFSample result = {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), reflection ? 0u : BSDFSample::MediumChanged};
   if (entering_material) {
-    result.medium_index = reflection ? data.material.ext_medium : data.material.int_medium;
+    result.medium_index = reflection ? mtl.ext_medium : mtl.int_medium;
   } else {
-    result.medium_index = reflection ? data.material.int_medium : data.material.ext_medium;
+    result.medium_index = reflection ? mtl.int_medium : mtl.ext_medium;
   }
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (is_delta(data.material, data.tex, scene, smp)) {
-    return DeltaDielectricBSDF::evaluate(data, scene, smp);
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  if (is_delta(mtl, data.tex, scene, smp)) {
+    return DeltaDielectricBSDF::evaluate(data, mtl, scene, smp);
   }
 
-  Frame frame;
-  bool entering_material = data.get_normal_frame(frame);
+  auto [frame, entering_material] = data.get_normal_frame();
 
   float n_dot_i = -dot(frame.nrm, data.w_i);
   float n_dot_o = dot(frame.nrm, data.w_o);
@@ -133,8 +129,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   }
 
   bool reflection = n_dot_o * n_dot_i >= 0.0f;
-  auto eta_i = (entering_material ? data.material.ext_ior : data.material.int_ior)(data.spectrum_sample).eta.monochromatic();
-  auto eta_o = (entering_material ? data.material.int_ior : data.material.ext_ior)(data.spectrum_sample).eta.monochromatic();
+  auto eta_i = (entering_material ? mtl.ext_ior : mtl.int_ior)(data.spectrum_sample).eta.monochromatic();
+  auto eta_o = (entering_material ? mtl.int_ior : mtl.ext_ior)(data.spectrum_sample).eta.monochromatic();
 
   float3 m = normalize(reflection ? (data.w_o - data.w_i) : (data.w_i * eta_i - data.w_o * eta_o));
   m *= (dot(frame.nrm, m) < 0.0f) ? -1.0f : 1.0f;
@@ -143,9 +139,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   float m_dot_o = dot(m, data.w_o);
 
   SpectralResponse fr;
-  if (data.material.thinfilm.image_index != kInvalidIndex) {
-    auto t = scene.images[data.material.thinfilm.image_index].evaluate(data.tex);
-    float thickness = lerp(data.material.thinfilm.min_thickness, data.material.thinfilm.max_thickness, t.x);
+  if (mtl.thinfilm.image_index != kInvalidIndex) {
+    auto t = scene.images[mtl.thinfilm.image_index].evaluate(data.tex);
+    float thickness = lerp(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness, t.x);
     auto ior_eta = scene.spectrums->thinfilm(data.spectrum_sample).eta.monochromatic();
     fr = fresnel::dielectric_thinfilm(data.spectrum_sample, data.w_i, m, eta_i, ior_eta, eta_o, thickness);
   } else {
@@ -153,7 +149,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   }
   float f = fr.monochromatic();
 
-  auto ggx = NormalDistribution(frame, data.material.roughness);
+  auto ggx = NormalDistribution(frame, mtl.roughness);
   auto eval = ggx.evaluate(m, data.w_i, data.w_o);
   if (eval.pdf == 0.0f) {
     return {data.spectrum_sample.wavelength, 0.0f};
@@ -161,7 +157,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
 
   BSDFEval result = {};
   if (reflection) {
-    auto specular = data.material.specular(data.spectrum_sample);
+    auto specular = mtl.specular(data.spectrum_sample);
 
     result.func = specular * fr * (eval.ndf * eval.visibility / (4.0f * n_dot_i * n_dot_o));
     ETX_VALIDATE(result.func);
@@ -176,7 +172,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
     result.pdf = eval.pdf * f * j;
     ETX_VALIDATE(result.pdf);
   } else if (f < 1.0f) {
-    auto transmittance = bsdf::apply_image(data.spectrum_sample, data.material.transmittance(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
+    auto transmittance = bsdf::apply_image(data.spectrum_sample, mtl.transmittance(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
 
     result.func = abs(transmittance * (1.0f - fr) * (m_dot_i * m_dot_o * sqr(eta_o) * eval.visibility * eval.ndf) / (n_dot_i * n_dot_o * sqr(m_dot_i * eta_i + m_dot_o * eta_o)));
     ETX_VALIDATE(result.func);
@@ -205,20 +201,19 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (is_delta(data.material, data.tex, scene, smp)) {
-    return DeltaDielectricBSDF::pdf(data, scene, smp);
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  if (is_delta(mtl, data.tex, scene, smp)) {
+    return DeltaDielectricBSDF::pdf(data, mtl, scene, smp);
   }
 
-  Frame frame;
-  bool entering_material = data.get_normal_frame(frame);
-  auto ggx = NormalDistribution(frame, data.material.roughness);
+  auto [frame, entering_material] = data.get_normal_frame();
+  auto ggx = NormalDistribution(frame, mtl.roughness);
 
   float n_dot_i = -dot(frame.nrm, data.w_i);
   float n_dot_o = dot(frame.nrm, data.w_o);
   bool reflection = n_dot_o * n_dot_i >= 0.0f;
-  auto eta_i = (entering_material ? data.material.ext_ior : data.material.int_ior)(data.spectrum_sample).eta.monochromatic();
-  auto eta_o = (entering_material ? data.material.int_ior : data.material.ext_ior)(data.spectrum_sample).eta.monochromatic();
+  auto eta_i = (entering_material ? mtl.ext_ior : mtl.int_ior)(data.spectrum_sample).eta.monochromatic();
+  auto eta_o = (entering_material ? mtl.int_ior : mtl.ext_ior)(data.spectrum_sample).eta.monochromatic();
 
   float3 m = normalize(reflection ? (data.w_o - data.w_i) : (data.w_i * eta_i - data.w_o * eta_o));
   m *= (dot(frame.nrm, m) < 0.0f) ? -1.0f : 1.0f;
@@ -227,9 +222,9 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
   float m_dot_o = dot(m, data.w_o);
 
   SpectralResponse fr;
-  if (data.material.thinfilm.image_index != kInvalidIndex) {
-    auto t = scene.images[data.material.thinfilm.image_index].evaluate(data.tex);
-    float thickness = lerp(data.material.thinfilm.min_thickness, data.material.thinfilm.max_thickness, t.x);
+  if (mtl.thinfilm.image_index != kInvalidIndex) {
+    auto t = scene.images[mtl.thinfilm.image_index].evaluate(data.tex);
+    float thickness = lerp(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness, t.x);
     auto ior_eta = scene.spectrums->thinfilm(data.spectrum_sample).eta.monochromatic();
     fr = fresnel::dielectric_thinfilm(data.spectrum_sample, data.w_i, m, eta_i, ior_eta, eta_o, thickness);
   } else {
@@ -267,18 +262,16 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 
 namespace ThinfilmBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  Frame frame;
-  bool entering_material = data.get_normal_frame(frame);
-
-  auto ext_ior = data.material.ext_ior(data.spectrum_sample).eta.monochromatic();
-  auto int_ior = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto [frame, entering_material] = data.get_normal_frame();
+  auto ext_ior = mtl.ext_ior(data.spectrum_sample).eta.monochromatic();
+  auto int_ior = mtl.int_ior(data.spectrum_sample).eta.monochromatic();
 
   float thickness = spectrum::kLongestWavelength;
-  if (data.material.thinfilm.image_index != kInvalidIndex) {
-    const auto& img = scene.images[data.material.thinfilm.image_index];
+  if (mtl.thinfilm.image_index != kInvalidIndex) {
+    const auto& img = scene.images[mtl.thinfilm.image_index];
     auto t = img.evaluate(data.tex);
-    thickness = lerp(data.material.thinfilm.min_thickness, data.material.thinfilm.max_thickness, t.x);
+    thickness = lerp(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness, t.x);
   }
 
   SpectralResponse fr = fresnel::dielectric_thinfilm(data.spectrum_sample, data.w_i, frame.nrm, ext_ior, int_ior, ext_ior, thickness);
@@ -292,27 +285,27 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
     }
     result.w_o = normalize(result.w_o);
     result.pdf = f;
-    result.weight = data.material.specular(data.spectrum_sample);
+    result.weight = mtl.specular(data.spectrum_sample);
     result.weight *= (fr / f);
     result.properties = BSDFSample::DeltaReflection;
-    result.medium_index = entering_material ? data.material.ext_medium : data.material.int_medium;
+    result.medium_index = entering_material ? mtl.ext_medium : mtl.int_medium;
   } else {
     result.w_o = data.w_i;
     result.pdf = 1.0f - f;
-    result.weight = bsdf::apply_image(data.spectrum_sample, data.material.transmittance(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
+    result.weight = bsdf::apply_image(data.spectrum_sample, mtl.transmittance(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
     result.weight *= (1.0f - fr) / (1.0f - f);
     result.properties = BSDFSample::DeltaTransmission | BSDFSample::MediumChanged;
-    result.medium_index = entering_material ? data.material.int_medium : data.material.ext_medium;
+    result.medium_index = entering_material ? mtl.int_medium : mtl.ext_medium;
   }
 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
@@ -333,19 +326,19 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 
 namespace MultiscatteringDielectricBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (is_delta(data.material, data.tex, scene, smp)) {
-    return DeltaDielectricBSDF::sample(data, scene, smp);
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  if (is_delta(mtl, data.tex, scene, smp)) {
+    return DeltaDielectricBSDF::sample(data, mtl, scene, smp);
   }
 
-  LocalFrame local_frame = {{data.tan, data.btn, data.nrm}};
+  LocalFrame local_frame = {data.tan, data.btn, data.nrm};
   auto w_i = local_frame.to_local(-data.w_i);
-  float ext_ior = data.material.ext_ior(data.spectrum_sample).eta.monochromatic();
-  float int_ior = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
+  float ext_ior = mtl.ext_ior(data.spectrum_sample).eta.monochromatic();
+  float int_ior = mtl.int_ior(data.spectrum_sample).eta.monochromatic();
   float m_eta = int_ior / ext_ior;
   float m_invEta = 1.0f / m_eta;
-  const float alpha_x = data.material.roughness.x;
-  const float alpha_y = data.material.roughness.y;
+  const float alpha_x = mtl.roughness.x;
+  const float alpha_y = mtl.roughness.y;
 
   BSDFSample result = {};
   if (LocalFrame::cos_theta(w_i) > 0) {  // outside
@@ -354,17 +347,17 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
 
     auto a_data = data;
     a_data.w_o = normalize(local_frame.from_local(result.w_o));
-    result.pdf = pdf(a_data, scene, smp);
+    result.pdf = pdf(a_data, mtl, scene, smp);
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {  // reflection
       result.eta = 1.0f;
-      result.weight = data.material.specular(data.spectrum_sample) * weight;
+      result.weight = mtl.specular(data.spectrum_sample) * weight;
     } else {  // refraction
       result.eta = m_eta;
       float factor = (data.path_source == PathSource::Camera) ? sqr(m_invEta) : 1.0f;
-      result.weight = data.material.transmittance(data.spectrum_sample) * factor * weight;
+      result.weight = mtl.transmittance(data.spectrum_sample) * factor * weight;
       result.properties |= BSDFSample::MediumChanged;
-      result.medium_index = data.material.int_medium;
+      result.medium_index = mtl.int_medium;
     }
   } else {  // inside
     float weight = {};
@@ -372,17 +365,17 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
 
     auto a_data = data;
     a_data.w_o = normalize(local_frame.from_local(result.w_o));
-    result.pdf = pdf(a_data, scene, smp);
+    result.pdf = pdf(a_data, mtl, scene, smp);
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {  // refraction
       result.eta = m_invEta;
       float factor = (data.path_source == PathSource::Camera) ? sqr(m_eta) : 1.0f;
-      result.weight = data.material.transmittance(data.spectrum_sample) * factor * weight;
+      result.weight = mtl.transmittance(data.spectrum_sample) * factor * weight;
       result.properties |= BSDFSample::MediumChanged;
-      result.medium_index = data.material.ext_medium;
+      result.medium_index = mtl.ext_medium;
     } else {  // reflection
       result.eta = 1.0f;
-      result.weight = data.material.specular(data.spectrum_sample) * weight;
+      result.weight = mtl.specular(data.spectrum_sample) * weight;
     }
   }
 
@@ -390,22 +383,22 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (is_delta(data.material, data.tex, scene, smp)) {
-    return DeltaDielectricBSDF::evaluate(data, scene, smp);
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  if (is_delta(mtl, data.tex, scene, smp)) {
+    return DeltaDielectricBSDF::evaluate(data, mtl, scene, smp);
   }
 
-  LocalFrame local_frame = {{data.tan, data.btn, data.nrm}};
+  LocalFrame local_frame = {data.tan, data.btn, data.nrm};
   auto w_i = local_frame.to_local(-data.w_i);
   if (LocalFrame::cos_theta(w_i) == 0)
     return {};
 
   auto w_o = local_frame.to_local(data.w_o);
 
-  float ext_ior = data.material.ext_ior(data.spectrum_sample).eta.monochromatic();
-  float int_ior = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
-  const float alpha_x = data.material.roughness.x;
-  const float alpha_y = data.material.roughness.y;
+  float ext_ior = mtl.ext_ior(data.spectrum_sample).eta.monochromatic();
+  float int_ior = mtl.int_ior(data.spectrum_sample).eta.monochromatic();
+  const float alpha_x = mtl.roughness.x;
+  const float alpha_y = mtl.roughness.y;
 
   bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
 
@@ -429,29 +422,29 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   }
 
   BSDFEval eval;
-  eval.func = (reflection ? data.material.specular : data.material.transmittance)(data.spectrum_sample) * (2.0f * value);
+  eval.func = (reflection ? mtl.specular : mtl.transmittance)(data.spectrum_sample) * (2.0f * value);
   ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
-  eval.pdf = pdf(data, scene, smp);
+  eval.pdf = pdf(data, mtl, scene, smp);
   eval.weight = eval.bsdf / eval.pdf;
   ETX_VALIDATE(eval.weight);
   return eval;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  if (is_delta(data.material, data.tex, scene, smp)) {
-    return DeltaDielectricBSDF::pdf(data, scene, smp);
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  if (is_delta(mtl, data.tex, scene, smp)) {
+    return DeltaDielectricBSDF::pdf(data, mtl, scene, smp);
   }
 
-  LocalFrame local_frame = {{data.tan, data.btn, data.nrm}};
+  LocalFrame local_frame = {data.tan, data.btn, data.nrm};
   auto w_i = local_frame.to_local(-data.w_i);
   auto w_o = local_frame.to_local(data.w_o);
-  float ext_ior = data.material.ext_ior(data.spectrum_sample).eta.monochromatic();
-  float int_ior = data.material.int_ior(data.spectrum_sample).eta.monochromatic();
+  float ext_ior = mtl.ext_ior(data.spectrum_sample).eta.monochromatic();
+  float int_ior = mtl.int_ior(data.spectrum_sample).eta.monochromatic();
   float m_eta = int_ior / ext_ior;
   float m_invEta = 1.0f / m_eta;
-  const float alpha_x = data.material.roughness.x;
-  const float alpha_y = data.material.roughness.y;
+  const float alpha_x = mtl.roughness.x;
+  const float alpha_y = mtl.roughness.y;
 
   bool outside = LocalFrame::cos_theta(w_i) > 0;
   bool reflect = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0;

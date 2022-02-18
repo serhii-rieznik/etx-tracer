@@ -225,8 +225,8 @@ ETX_GPU_CODE bool next_ray(const Scene& scene, SpectralQuery spect, const PathSo
   Sampler& smp, vcm::PathState& state, uint32_t& state_medium, float& state_eta, float vc_weight, float vm_weight) {
   const auto& tri = scene.triangles[i.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
-  auto bsdf_data = BSDFData{spect, state_medium, mat, path_source, i, state.ray.d, {}};
-  auto bsdf_sample = bsdf::sample(bsdf_data, scene, smp);
+  auto bsdf_data = BSDFData{spect, state_medium, path_source, i, state.ray.d, {}};
+  auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, smp);
   bsdf_data.w_o = bsdf_sample.w_o;
   if (bsdf_sample.valid() == false) {
     return false;
@@ -262,7 +262,7 @@ ETX_GPU_CODE bool next_ray(const Scene& scene, SpectralQuery spect, const PathSo
 
     state.d_vcm = 0.0f;
   } else {
-    auto rev_sample_pdf = bsdf::pdf(bsdf_data.swap_directions(), scene, smp);
+    auto rev_sample_pdf = bsdf::pdf(bsdf_data.swap_directions(), mat, scene, smp);
     ETX_VALIDATE(rev_sample_pdf);
 
     state.d_vc = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vc * rev_sample_pdf + state.d_vcm + vm_weight);
@@ -345,8 +345,8 @@ ETX_GPU_CODE bool connect_to_light_vertex(const Scene& scene, const SpectralQuer
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
-  auto camera_data = BSDFData{spect, state_medium, mat, PathSource::Camera, intersection, intersection.w_i, w_o};
-  auto camera_bsdf = bsdf::evaluate(camera_data, scene, smp);
+  auto camera_data = BSDFData{spect, state_medium, PathSource::Camera, intersection, intersection.w_i, w_o};
+  auto camera_bsdf = bsdf::evaluate(camera_data, mat, scene, smp);
   if (camera_bsdf.valid() == false) {
     return false;
   }
@@ -354,7 +354,7 @@ ETX_GPU_CODE bool connect_to_light_vertex(const Scene& scene, const SpectralQuer
   auto camera_area_pdf = camera_bsdf.pdf * w_dot_l / distance_squared;
   ETX_VALIDATE(camera_area_pdf);
 
-  auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), scene, smp);
+  auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), mat, scene, smp);
   ETX_VALIDATE(camera_rev_pdf);
   if (camera_rev_pdf <= kEpsilon) {
     return false;
@@ -362,8 +362,8 @@ ETX_GPU_CODE bool connect_to_light_vertex(const Scene& scene, const SpectralQuer
 
   const auto& light_tri = scene.triangles[light_vertex.triangle_index];
   const auto& light_mat = scene.materials[light_tri.material_index];
-  auto light_data = BSDFData{spect, state_medium, light_mat, PathSource::Light, light_v, light_vertex.w_i, -w_o};
-  auto light_bsdf = bsdf::evaluate(light_data, scene, smp);
+  auto light_data = BSDFData{spect, state_medium, PathSource::Light, light_v, light_vertex.w_i, -w_o};
+  auto light_bsdf = bsdf::evaluate(light_data, light_mat, scene, smp);
   if (light_bsdf.valid() == false) {
     return false;
   }
@@ -371,7 +371,7 @@ ETX_GPU_CODE bool connect_to_light_vertex(const Scene& scene, const SpectralQuer
   auto light_area_pdf = light_bsdf.pdf * w_dot_c / distance_squared;
   ETX_VALIDATE(light_area_pdf);
 
-  auto light_rev_pdf = bsdf::pdf(light_data.swap_directions(), scene, smp);
+  auto light_rev_pdf = bsdf::pdf(light_data.swap_directions(), light_mat, scene, smp);
   ETX_VALIDATE(light_rev_pdf);
   if (light_rev_pdf <= kEpsilon) {
     return false;
@@ -459,13 +459,13 @@ ETX_GPU_CODE float3 SpatialGridData::gather(const Scene& scene, SpectralQuery sp
 
       const auto& tri = scene.triangles[intersection.triangle_index];
       const auto& mat = scene.materials[tri.material_index];
-      auto camera_data = BSDFData{spect, state_medium, mat, PathSource::Camera, intersection, state.ray.d, -light_vertex.w_i};
-      auto camera_bsdf = bsdf::evaluate(camera_data, scene, smp);
+      auto camera_data = BSDFData{spect, state_medium, PathSource::Camera, intersection, state.ray.d, -light_vertex.w_i};
+      auto camera_bsdf = bsdf::evaluate(camera_data, mat, scene, smp);
       if (camera_bsdf.valid() == false) {
         continue;
       }
 
-      auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), scene, smp);
+      auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), mat, scene, smp);
 
       float w_light = light_vertex.d_vcm * vc_weight + light_vertex.d_vm * camera_bsdf.pdf;
       float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;

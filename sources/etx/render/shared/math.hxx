@@ -115,10 +115,20 @@ struct alignas(16) Triangle {
   uint32_t pad[3] = {};
 };
 
-struct alignas(16) Frame {
+struct alignas(16) LocalFrame {
   float3 tan = {};
   float3 btn = {};
   float3 nrm = {};
+
+  ETX_GPU_CODE float3 to_local(const float3& v) const {
+    return float3x3{{tan.x, btn.x, nrm.x}, {tan.y, btn.y, nrm.y}, {tan.z, btn.z, nrm.z}} * v;
+  }
+  ETX_GPU_CODE float3 from_local(const float3& v) const {
+    return float3x3{{tan.x, tan.y, tan.z}, {btn.x, btn.y, btn.z}, {nrm.x, nrm.y, nrm.z}} * v;
+  }
+  ETX_GPU_CODE static float cos_theta(const float3& v) {
+    return v.z;
+  }
 };
 
 struct Ray {

@@ -147,7 +147,7 @@ struct CPUPathTracingImpl : public Task {
         if (path_length + 1 <= current_max_depth) {
           auto emitter_sample = sample_emitter(spect, smp, intersection.pos, scene);
           if (emitter_sample.pdf_dir > 0) {
-            BSDFEval bsdf_eval = bsdf::evaluate({spect, medium_index, mat, PathSource::Camera, intersection, ray.d, emitter_sample.direction}, scene, smp);
+            BSDFEval bsdf_eval = bsdf::evaluate({spect, medium_index, PathSource::Camera, intersection, ray.d, emitter_sample.direction}, mat, scene, smp);
             if (bsdf_eval.valid()) {
               auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
               auto tr = transmittance(spect, smp, pos, emitter_sample.origin, medium_index, rt);
@@ -180,7 +180,7 @@ struct CPUPathTracingImpl : public Task {
         /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
          * bsdf sampling
          * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-        auto bsdf_sample = bsdf::sample({spect, medium_index, mat, PathSource::Camera, intersection, ray.d, {}}, scene, smp);
+        auto bsdf_sample = bsdf::sample({spect, medium_index, PathSource::Camera, intersection, ray.d, {}}, mat, scene, smp);
         if (bsdf_sample.valid() == false) {
           break;
         }

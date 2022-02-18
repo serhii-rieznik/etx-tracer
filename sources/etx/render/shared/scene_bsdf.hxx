@@ -2,13 +2,13 @@
 
 namespace etx {
 
-#define ETX_DECLARE_BSDF(Class)                                                                     \
-  namespace Class##BSDF {                                                                           \
-    ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Scene&, Sampler&);                        \
-    ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const Scene&, Sampler&);                        \
-    ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp);                 \
-    ETX_GPU_CODE bool continue_tracing(const Material&, const float2&, const Scene&, Sampler& smp); \
-    ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler& smp);         \
+#define ETX_DECLARE_BSDF(Class)                                                                 \
+  namespace Class##BSDF {                                                                       \
+    ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Material&, const Scene&, Sampler&);   \
+    ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const Material&, const Scene&, Sampler&);   \
+    ETX_GPU_CODE float pdf(const BSDFData&, const Material&, const Scene&, Sampler&);           \
+    ETX_GPU_CODE bool continue_tracing(const Material&, const float2&, const Scene&, Sampler&); \
+    ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);         \
   }
 
 ETX_DECLARE_BSDF(Diffuse);
@@ -30,14 +30,14 @@ ETX_DECLARE_BSDF(Mixture);
   case Material::Class::CLS:      \
     return CLS##BSDF::FUNC(__VA_ARGS__)
 
-#define CASE_IMPL_SAMPLE(A) CASE_IMPL(A, sample, data, scene, smp)
-#define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, scene, smp)
-#define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, scene, smp)
-#define CASE_IMPL_CONTINUE(A) CASE_IMPL(A, continue_tracing, material, tex, scene, smp)
-#define CASE_IMPL_IS_DELTA(A) CASE_IMPL(A, is_delta, material, tex, scene, smp)
+#define CASE_IMPL_SAMPLE(A) CASE_IMPL(A, sample, data, mtl, scene, smp)
+#define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, mtl, scene, smp)
+#define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, mtl, scene, smp)
+#define CASE_IMPL_CONTINUE(A) CASE_IMPL(A, continue_tracing, mtl, tex, scene, smp)
+#define CASE_IMPL_IS_DELTA(A) CASE_IMPL(A, is_delta, mtl, tex, scene, smp)
 
-#define ALL_CASES(MACRO, CLS)               \
-  switch (CLS) {                            \
+#define ALL_CASES(MACRO)                    \
+  switch (mtl.cls) {                        \
     MACRO(Diffuse);                         \
     MACRO(MultiscatteringDiffuse);          \
     MACRO(Plastic);                         \
@@ -58,23 +58,21 @@ ETX_DECLARE_BSDF(Mixture);
   }
 
 namespace bsdf {
-[[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  ALL_CASES(CASE_IMPL_SAMPLE, data.material.cls);
+
+[[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  ALL_CASES(CASE_IMPL_SAMPLE);
 };
-[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  ALL_CASES(CASE_IMPL_EVALUATE, data.material.cls);
+[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  ALL_CASES(CASE_IMPL_EVALUATE);
 }
-
-[[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  ALL_CASES(CASE_IMPL_PDF, data.material.cls);
+[[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  ALL_CASES(CASE_IMPL_PDF);
 }
-
-[[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  ALL_CASES(CASE_IMPL_CONTINUE, material.cls);
+[[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+  ALL_CASES(CASE_IMPL_CONTINUE);
 }
-
-[[nodiscard]] ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  ALL_CASES(CASE_IMPL_IS_DELTA, material.cls);
+[[nodiscard]] ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+  ALL_CASES(CASE_IMPL_IS_DELTA);
 }
 
 #undef CASE_IMPL

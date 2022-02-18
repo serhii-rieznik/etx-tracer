@@ -307,13 +307,13 @@ struct CPUVCMImpl {
             if (camera_sample.pdf_dir > 0.0f) {
               auto direction = camera_sample.position - intersection.pos;
               auto w_o = normalize(direction);
-              auto data = BSDFData{spect, medium_index, mat, PathSource::Light, intersection, state.ray.d, w_o};
-              auto eval = bsdf::evaluate(data, rt.scene(), smp);
+              auto data = BSDFData{spect, medium_index, PathSource::Light, intersection, state.ray.d, w_o};
+              auto eval = bsdf::evaluate(data, mat, rt.scene(), smp);
               if (eval.valid()) {
                 float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, w_o);
                 auto tr = transmittance(spect, smp, p0, camera_sample.position, medium_index, rt);
                 if (tr.is_zero() == false) {
-                  float reverse_pdf = bsdf::pdf(data.swap_directions(), rt.scene(), smp);
+                  float reverse_pdf = bsdf::pdf(data.swap_directions(), mat, rt.scene(), smp);
                   float camera_pdf = camera_sample.pdf_dir_out * fabsf(dot(intersection.nrm, w_o)) / dot(direction, direction);
                   ETX_VALIDATE(camera_pdf);
 
@@ -418,15 +418,15 @@ struct CPUVCMImpl {
           auto emitter_sample = sample_emitter(spect, smp, intersection.pos, rt.scene());
 
           if (emitter_sample.pdf_dir > 0) {
-            BSDFData connection_data = {spect, medium_index, mat, PathSource::Camera, intersection, state.ray.d, emitter_sample.direction};
-            BSDFEval connection_eval = bsdf::evaluate(connection_data, rt.scene(), smp);
+            BSDFData connection_data = {spect, medium_index, PathSource::Camera, intersection, state.ray.d, emitter_sample.direction};
+            BSDFEval connection_eval = bsdf::evaluate(connection_data, mat, rt.scene(), smp);
             if (connection_eval.valid()) {
               float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
               auto tr = transmittance(spect, smp, p0, emitter_sample.origin, medium_index, rt);
               if (tr.is_zero() == false) {
                 float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
                 float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
-                float reverse_pdf = bsdf::pdf(connection_data.swap_directions(), rt.scene(), smp);
+                float reverse_pdf = bsdf::pdf(connection_data.swap_directions(), mat, rt.scene(), smp);
 
                 float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 

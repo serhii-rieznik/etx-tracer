@@ -9,16 +9,13 @@ ETX_GPU_CODE float remap_metalness(float m) {
   return sqrtf(m);
 }
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  Frame frame;
-  if (data.check_side(frame) == false) {
-    return {};
-  }
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto [frame, _] = data.get_normal_frame();
 
-  float2 alpha = data.material.roughness;
-  float metalness = data.material.metalness;
-  if (data.material.metal_roughness_image_index != kInvalidIndex) {
-    auto value = scene.images[data.material.metal_roughness_image_index].evaluate(data.tex);
+  float2 alpha = mtl.roughness;
+  float metalness = mtl.metalness;
+  if (mtl.metal_roughness_image_index != kInvalidIndex) {
+    auto value = scene.images[mtl.metal_roughness_image_index].evaluate(data.tex);
     alpha *= value.y;
     metalness *= value.z;
   }
@@ -28,7 +25,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
   auto ggx = NormalDistribution(frame, alpha);
   auto m = ggx.sample(smp, data.w_i);
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, data.material.diffuse(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
+  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
 
   float t = fabsf(dot(data.w_i, m));
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f} * (1.0f - metalness) + diffuse * metalness;
@@ -43,14 +40,11 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
     properties = BSDFSample::Diffuse;
   }
 
-  return {eval_data.w_o, evaluate(eval_data, scene, smp), properties};
+  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), properties};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  Frame frame;
-  if (data.check_side(frame) == false) {
-    return {data.spectrum_sample.wavelength, 0.0f};
-  }
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto [frame, _] = data.get_normal_frame();
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   float n_dot_i = -dot(frame.nrm, data.w_i);
@@ -58,10 +52,10 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
     return {data.spectrum_sample.wavelength, 0.0f};
   }
 
-  float2 alpha = data.material.roughness;
-  float metalness = data.material.metalness;
-  if (data.material.metal_roughness_image_index != kInvalidIndex) {
-    auto value = scene.images[data.material.metal_roughness_image_index].evaluate(data.tex);
+  float2 alpha = mtl.roughness;
+  float metalness = mtl.metalness;
+  if (mtl.metal_roughness_image_index != kInvalidIndex) {
+    auto value = scene.images[mtl.metal_roughness_image_index].evaluate(data.tex);
     alpha *= value.y;
     metalness *= value.z;
   }
@@ -71,8 +65,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   float3 m = normalize(data.w_o - data.w_i);
   float m_dot_o = dot(m, data.w_o);
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, data.material.diffuse(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
-  auto specular = bsdf::apply_image(data.spectrum_sample, data.material.specular(data.spectrum_sample), data.material.specular_image_index, data.tex, scene);
+  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
+  auto specular = bsdf::apply_image(data.spectrum_sample, mtl.specular(data.spectrum_sample), mtl.specular_image_index, data.tex, scene);
 
   float t = fabsf(dot(data.w_i, m));
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f * (1.0f - metalness)} + diffuse * metalness;
@@ -90,11 +84,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
-  Frame frame;
-  if (data.check_side(frame) == false) {
-    return 0.0f;
-  }
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto [frame, _] = data.get_normal_frame();
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   if (n_dot_o <= kEpsilon) {
@@ -104,12 +95,12 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Scene& scene, Sampler& smp) {
   float3 m = normalize(data.w_o - data.w_i);
   float m_dot_o = dot(m, data.w_o);
 
-  auto diffuse = bsdf::apply_image(data.spectrum_sample, data.material.diffuse(data.spectrum_sample), data.material.diffuse_image_index, data.tex, scene);
+  auto diffuse = bsdf::apply_image(data.spectrum_sample, mtl.diffuse(data.spectrum_sample), mtl.diffuse_image_index, data.tex, scene);
 
-  float2 alpha = data.material.roughness;
-  float metalness = data.material.metalness;
-  if (data.material.metal_roughness_image_index != kInvalidIndex) {
-    auto value = scene.images[data.material.metal_roughness_image_index].evaluate(data.tex);
+  float2 alpha = mtl.roughness;
+  float metalness = mtl.metalness;
+  if (mtl.metal_roughness_image_index != kInvalidIndex) {
+    auto value = scene.images[mtl.metal_roughness_image_index].evaluate(data.tex);
     alpha *= value.y;
     metalness *= value.z;
   }

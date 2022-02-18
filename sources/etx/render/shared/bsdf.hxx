@@ -12,24 +12,13 @@ enum class PathSource : uint32_t {
 };
 
 struct BSDFData : public Vertex {
-  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, const Material& m, PathSource ps, const Vertex& av, const float3& awi, const float3& awo)
+  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi, const float3& awo)
     : Vertex(av)
-    , material(m)
     , path_source(ps)
     , spectrum_sample(spect)
     , medium_index(medium)
     , w_i(awi)
     , w_o(awo) {
-  }
-
-  ETX_GPU_CODE BSDFData(const BSDFData& data, const Material& m)
-    : Vertex(data)
-    , material(m)
-    , path_source(data.path_source)
-    , spectrum_sample(data.spectrum_sample)
-    , medium_index(data.medium_index)
-    , w_i(data.w_i)
-    , w_o(data.w_o) {
   }
 
   ETX_GPU_CODE BSDFData swap_directions() const {
@@ -39,30 +28,14 @@ struct BSDFData : public Vertex {
     return result;
   }
 
-  ETX_GPU_CODE bool check_side(Frame& f_out) const {
-    float n_dot_i = dot(nrm, w_i);
-
-    if (material.double_sided()) {
-      float scale = (n_dot_i >= 0.0f ? -1.0f : +1.0f);
-      f_out = {tan * scale, btn * scale, nrm * scale};
-      return true;
-    }
-
-    f_out = {tan, btn, nrm};
-    return (n_dot_i < 0.0f);
-  }
-
-  ETX_GPU_CODE bool get_normal_frame(Frame& f_out) const {
+  ETX_GPU_CODE struct {
+    LocalFrame frame;
+    bool entering_material;
+  } get_normal_frame() const {
     bool entering_material = dot(nrm, w_i) < 0.0f;
-    if (entering_material) {
-      f_out = {tan, btn, nrm};
-    } else {
-      f_out = {-tan, -btn, -nrm};
-    }
-    return entering_material;
+    return {entering_material ? LocalFrame{tan, btn, nrm} : LocalFrame{-tan, -btn, -nrm}, entering_material};
   }
 
-  const Material& material;
   PathSource path_source = PathSource::Undefined;
   SpectralQuery spectrum_sample;
   uint32_t medium_index = kInvalidIndex;
@@ -139,34 +112,6 @@ struct BSDFSample {
   }
 };
 
-struct LocalFrame : public Frame {
-  ETX_GPU_CODE LocalFrame(const Frame& f)
-    : Frame(f) {
-    _to_local = {
-      {tan.x, btn.x, nrm.x},
-      {tan.y, btn.y, nrm.y},
-      {tan.z, btn.z, nrm.z},
-    };
-    _from_local = transpose(_to_local);
-  }
-
-  ETX_GPU_CODE float3 to_local(const float3& v) const {
-    return _to_local * v;
-  }
-
-  ETX_GPU_CODE float3 from_local(const float3& v) const {
-    return _from_local * v;
-  }
-
-  ETX_GPU_CODE static float cos_theta(const float3& v) {
-    return v.z;
-  }
-
- private:
-  float3x3 _to_local = {};
-  float3x3 _from_local = {};
-};
-
 struct NormalDistribution {
   struct Eval {
     float ndf = 0.0f;
@@ -175,7 +120,7 @@ struct NormalDistribution {
     float pdf = 0.0f;
   };
 
-  ETX_GPU_CODE NormalDistribution(const Frame& f, const float2& alpha)
+  ETX_GPU_CODE NormalDistribution(const LocalFrame& f, const float2& alpha)
     : _frame(f)
     , _alpha(alpha) {
   }
