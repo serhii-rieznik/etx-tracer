@@ -239,7 +239,7 @@ ETX_GPU_CODE bool next_ray(const Scene& scene, SpectralQuery spect, const PathSo
     state_medium = bsdf_sample.medium_index;
   }
 
-  if (bsdf_data.mode == PathSource::Light) {
+  if (path_source == PathSource::Light) {
     state.throughput *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
   }
 

@@ -46,23 +46,23 @@ bool Options::load_from_file(const char* filename) {
     json_object_foreach(js, key, value) {
       switch (json_typeof(value)) {
         case JSON_STRING: {
-          set(key, std::string(json_string_value(value)));
+          add(key, std::string(json_string_value(value)));
           break;
         }
         case JSON_INTEGER: {
-          set(uint32_t(json_integer_value(value)), key, std::string{});
+          add(uint32_t(json_integer_value(value)), key, std::string{});
           break;
         }
         case JSON_REAL: {
-          set(float(json_real_value(value)), key, std::string{});
+          add(float(json_real_value(value)), key, std::string{});
           break;
         }
         case JSON_TRUE: {
-          set(true, key, std::string{});
+          add(true, key, std::string{});
           break;
         }
         case JSON_FALSE: {
-          set(false, key, std::string{});
+          add(false, key, std::string{});
           break;
         }
         default:

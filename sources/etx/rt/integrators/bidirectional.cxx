@@ -709,9 +709,9 @@ void CPUBidirectional::stop(Stop st) {
 
 Options CPUBidirectional::options() const {
   Options result = {};
-  result.set(1u, _private->opt_max_iterations, 0xffffu, "spp", "Max Iterations");
-  result.set(1u, _private->opt_max_depth, 65536u, "pathlen", "Maximal Path Length");
-  result.set(1u, _private->opt_rr_start, 65536u, "rrstart", "Start Russian Roulette at");
+  result.add(1u, _private->opt_max_iterations, 0xffffu, "spp", "Max Iterations");
+  result.add(1u, _private->opt_max_depth, 65536u, "pathlen", "Maximal Path Length");
+  result.add(1u, _private->opt_rr_start, 65536u, "rrstart", "Start Russian Roulette at");
   return result;
 }
 

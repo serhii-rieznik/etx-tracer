@@ -92,8 +92,7 @@ void UI::build(double dt, const char* status) {
 
   float offset_size = igGetFontSize();
   igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 2.0f * offset_size}, ImGuiCond_Always, {1.0f, 0.0f});
-  igBegin("View", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-  igText("View options");
+  igBegin("View Options", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
   build_options(_view_options);
 
   char status_buffer[2048] = {};
@@ -246,39 +245,37 @@ bool UI::handle_event(const sapp_event* e) {
 
   switch (e->key_code) {
     case SAPP_KEYCODE_1: {
-      _view_options.set(uint32_t(OutputView::Result), "out_view", std::string{});
+      _view_options.set_enum("out_view", OutputView::Result);
       break;
     }
     case SAPP_KEYCODE_2: {
-      _view_options.set(uint32_t(OutputView::CameraImage), "out_view", std::string{});
+      _view_options.set_enum("out_view", OutputView::CameraImage);
       break;
     }
     case SAPP_KEYCODE_3: {
-      _view_options.set(uint32_t(OutputView::LightImage), "out_view", std::string{});
+      _view_options.set_enum("out_view", OutputView::LightImage);
       break;
     }
     case SAPP_KEYCODE_4: {
-      _view_options.set(uint32_t(OutputView::ReferenceImage), "out_view", std::string{});
+      _view_options.set_enum("out_view", OutputView::ReferenceImage);
       break;
     }
     case SAPP_KEYCODE_5: {
-      _view_options.set(uint32_t(OutputView::RelativeDifference), "out_view", std::string{});
+      _view_options.set_enum("out_view", OutputView::RelativeDifference);
       break;
     }
     case SAPP_KEYCODE_6: {
-      _view_options.set(uint32_t(OutputView::AbsoluteDifference), "out_view", std::string{});
+      _view_options.set_enum("out_view", OutputView::AbsoluteDifference);
       break;
     }
     case SAPP_KEYCODE_KP_DIVIDE: {
-      auto opt = _view_options.get("exp", 1.0f);
-      float e = clamp(opt.to_float() * 0.5f, 1.0f / 1000.0f, 1000.0f);
-      _view_options.set(e, opt.id, opt.name);
+      float e = _view_options.get("exp", 1.0f).to_float();
+      _view_options.set("exp", 0.5f * e);
       break;
     }
     case SAPP_KEYCODE_KP_MULTIPLY: {
-      auto opt = _view_options.get("exp", 1.0f);
-      float e = clamp(opt.to_float() * 2.0f, 1.0f / 1000.0f, 1000.0f);
-      _view_options.set(e, opt.id, opt.name);
+      float e = _view_options.get("exp", 1.0f).to_float();
+      _view_options.set("exp", 2.0f * e);
       break;
     }
     default:

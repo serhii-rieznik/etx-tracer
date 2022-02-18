@@ -13,13 +13,7 @@ struct CPUPathTracing : public Integrator {
     return "Path Tracing (CPU)";
   }
 
-  Options options() const override {
-    Options result = {};
-    result.set(1u, 0x7fffu, 0xffffu, "spp", "Samples per Pixel");
-    result.set(1u, 0x7fffu, 65536u, "pathlen", "Maximal Path Length");
-    result.set(1u, 5u, 65536u, "rrstart", "Start Russian Roulette at");
-    return result;
-  }
+  Options options() const override;
 
   bool have_updated_light_image() const override {
     return false;

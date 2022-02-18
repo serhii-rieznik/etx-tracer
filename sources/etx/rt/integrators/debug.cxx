@@ -244,7 +244,7 @@ void CPUDebugIntegrator::stop(Stop st) {
 
 Options CPUDebugIntegrator::options() const {
   Options result = {};
-  result.set(_private->mode, Mode::Count, &CPUDebugIntegrator::mode_to_string, "mode", "Visualize");
+  result.add(_private->mode, Mode::Count, &CPUDebugIntegrator::mode_to_string, "mode", "Visualize");
   return result;
 }
 

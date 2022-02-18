@@ -337,6 +337,14 @@ void CPUPathTracing::stop(Stop st) {
   }
 }
 
+Options CPUPathTracing::options() const {
+  Options result = {};
+  result.add(1u, _private->opt_max_iterations, 0xffffu, "spp", "Samples per Pixel");
+  result.add(1u, _private->opt_max_depth, 65536u, "pathlen", "Maximal Path Length");
+  result.add(1u, _private->opt_rr_start, 65536u, "rrstart", "Start Russian Roulette at");
+  return result;
+}
+
 void CPUPathTracing::update_options(const Options& opt) {
   if (current_state == State::Preview) {
     preview(opt);

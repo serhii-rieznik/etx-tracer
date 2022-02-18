@@ -48,7 +48,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
 
     result.properties = BSDFSample::DeltaTransmission | BSDFSample::MediumChanged;
     result.medium_index = entering_material ? data.material.int_medium : data.material.ext_medium;
-    if (data.mode == PathSource::Camera) {
+    if (data.path_source == PathSource::Camera) {
       result.weight *= eta * eta;
     }
   }
@@ -192,8 +192,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
     ETX_VALIDATE(result.pdf);
 
     result.eta = eta_i / eta_o;
-
-    if (data.mode == PathSource::Camera) {
+    if (data.path_source == PathSource::Camera) {
       result.bsdf *= result.eta * result.eta;
       result.weight *= result.eta * result.eta;
     }
@@ -362,8 +361,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
       result.weight = data.material.specular(data.spectrum_sample) * weight;
     } else {  // refraction
       result.eta = m_eta;
-      float factor = (data.mode == PathSource::Camera) ? m_invEta : 1.0f;
-      result.weight = data.material.transmittance(data.spectrum_sample) * factor * factor * weight;
+      float factor = (data.path_source == PathSource::Camera) ? sqr(m_invEta) : 1.0f;
+      result.weight = data.material.transmittance(data.spectrum_sample) * factor * weight;
       result.properties |= BSDFSample::MediumChanged;
       result.medium_index = data.material.int_medium;
     }
@@ -377,8 +376,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Scene& scene, Sampler
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {  // refraction
       result.eta = m_invEta;
-      float factor = (data.mode == PathSource::Camera) ? m_eta : 1.0f;
-      result.weight = data.material.transmittance(data.spectrum_sample) * factor * factor * weight;
+      float factor = (data.path_source == PathSource::Camera) ? sqr(m_eta) : 1.0f;
+      result.weight = data.material.transmittance(data.spectrum_sample) * factor * weight;
       result.properties |= BSDFSample::MediumChanged;
       result.medium_index = data.material.ext_medium;
     } else {  // reflection
@@ -410,8 +409,6 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
 
   bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
 
-  // TODO : deal with solid angle compression
-
   SpectralResponse value = {};
   if (LocalFrame::cos_theta(w_i) > 0) {
     if (LocalFrame::cos_theta(w_o) >= 0) {
@@ -420,6 +417,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
     } else {
       value = (smp.next() > 0.5f) ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, false, alpha_x, alpha_y, ext_ior, int_ior)
                                   : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, alpha_x, alpha_y, int_ior, ext_ior) / LocalFrame::cos_theta(w_i);
+      value *= (data.path_source == PathSource::Camera) ? sqr(int_ior / ext_ior) : 1.0f;
     }
   } else if (LocalFrame::cos_theta(w_o) <= 0) {
     value = (smp.next() > 0.5f) ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, true, alpha_x, alpha_y, int_ior, ext_ior)
@@ -427,6 +425,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Scene& scene, Sampler
   } else {
     value = (smp.next() > 0.5f) ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, false, alpha_x, alpha_y, int_ior, ext_ior)
                                 : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, alpha_x, alpha_y, ext_ior, int_ior) / LocalFrame::cos_theta(-w_i);
+    value *= (data.path_source == PathSource::Camera) ? sqr(ext_ior / int_ior) : 1.0f;
   }
 
   BSDFEval eval;

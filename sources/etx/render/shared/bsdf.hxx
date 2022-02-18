@@ -12,10 +12,10 @@ enum class PathSource : uint32_t {
 };
 
 struct BSDFData : public Vertex {
-  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, const Material& m, PathSource tm, const Vertex& av, const float3& awi, const float3& awo)
+  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, const Material& m, PathSource ps, const Vertex& av, const float3& awi, const float3& awo)
     : Vertex(av)
     , material(m)
-    , mode(tm)
+    , path_source(ps)
     , spectrum_sample(spect)
     , medium_index(medium)
     , w_i(awi)
@@ -25,7 +25,7 @@ struct BSDFData : public Vertex {
   ETX_GPU_CODE BSDFData(const BSDFData& data, const Material& m)
     : Vertex(data)
     , material(m)
-    , mode(data.mode)
+    , path_source(data.path_source)
     , spectrum_sample(data.spectrum_sample)
     , medium_index(data.medium_index)
     , w_i(data.w_i)
@@ -63,7 +63,7 @@ struct BSDFData : public Vertex {
   }
 
   const Material& material;
-  PathSource mode = PathSource::Undefined;
+  PathSource path_source = PathSource::Undefined;
   SpectralQuery spectrum_sample;
   uint32_t medium_index = kInvalidIndex;
   float3 w_i = {};
