@@ -56,7 +56,6 @@ struct alignas(16) Material {
   float2 roughness = {};
 
   uint32_t normal_image_index = kInvalidIndex;
-  // uint32_t emissive_image_index = kInvalidIndex;
   uint32_t metal_roughness_image_index = kInvalidIndex;
   uint32_t mixture_0 = kInvalidIndex;
   uint32_t mixture_1 = kInvalidIndex;

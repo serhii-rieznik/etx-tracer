@@ -300,10 +300,10 @@ ETX_GPU_CODE SpectralResponse get_radiance(const Scene& scene, SpectralQuery spe
   SpectralResponse radiance = {};
 
   if (emitter.is_local()) {
-    radiance = emitter_evaluate_in_local(emitter, spect, intersection.tex, state.ray.o, intersection.pos,  //
-      pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (path_length == 1));                  //
+    radiance = emitter_get_radiance(emitter, spect, intersection.tex, state.ray.o, intersection.pos,  //
+      pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (path_length == 1));             //
   } else {
-    radiance = emitter_evaluate_in_dist(emitter, spect, state.ray.d,   //
+    radiance = emitter_get_radiance(emitter, spect, state.ray.d,       //
       pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);  //
   }
 

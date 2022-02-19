@@ -167,7 +167,7 @@ struct CPUPathTracingImpl : public Task {
           float pdf_emitter_dir = 0.0f;
           float pdf_emitter_dir_out = 0.0f;
           auto e =
-            emitter_evaluate_in_local(emitter, spect, intersection.tex, ray.o, intersection.pos, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (path_length == 0));
+            emitter_get_radiance(emitter, spect, intersection.tex, ray.o, intersection.pos, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (path_length == 0));
           if (pdf_emitter_dir > 0.0f) {
             auto tr = transmittance(spect, smp, ray.o, intersection.pos, medium_index, rt);
             float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
@@ -214,7 +214,7 @@ struct CPUPathTracingImpl : public Task {
           float pdf_emitter_area = 0.0f;
           float pdf_emitter_dir = 0.0f;
           float pdf_emitter_dir_out = 0.0f;
-          auto e = emitter_evaluate_in_dist(emitter, spect, ray.d, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
+          auto e = emitter_get_radiance(emitter, spect, ray.d, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
           ETX_VALIDATE(e);
           if ((pdf_emitter_dir > 0) && (e.is_zero() == false)) {
             float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);

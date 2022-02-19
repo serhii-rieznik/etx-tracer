@@ -8,7 +8,7 @@ ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene)
   return 1.0f / tri.area;
 }
 
-ETX_GPU_CODE SpectralResponse emitter_evaluate_in_local(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& pos, const float3& to_point, float& pdf_area,
+ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& pos, const float3& to_point, float& pdf_area,
   float& pdf_dir, float& pdf_dir_out, const Scene& scene, const bool no_collimation) {
   ETX_ASSERT(em.is_local());
 
@@ -60,8 +60,8 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
   return apply_emitter_image(spect, em.emission, uv, scene);
 }
 
-ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
-  float& pdf_dir_out, const Scene& scene) {
+ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir, float& pdf_dir_out,
+  const Scene& scene) {
   ETX_ASSERT(em.is_distant());
 
   if (em.cls == Emitter::Class::Directional) {
@@ -94,25 +94,6 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const 
   pdf_dir = img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
   ETX_VALIDATE(pdf_dir);
 
-  pdf_dir_out = pdf_area * pdf_dir;
-  return apply_emitter_image(spect, em.emission, uv, scene);
-}
-
-ETX_GPU_CODE SpectralResponse emitter_evaluate_env_dist(const Emitter& em, const SpectralQuery spect, const float2& uv, float& pdf_area, float& pdf_dir, float& pdf_dir_out,
-  const Scene& scene) {
-  ETX_ASSERT(em.cls == Emitter::Class::Environment);
-
-  float sin_t = sinf(uv.y * kPi);
-  if (sin_t == 0.0f) {
-    pdf_area = 0.0f;
-    pdf_dir = 0.0f;
-    pdf_dir_out = 0.0f;
-    return {spect.wavelength, 0.0f};
-  }
-
-  const auto& img = scene.images[em.emission.image_index];
-  pdf_dir = img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
-  pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
   pdf_dir_out = pdf_area * pdf_dir;
   return apply_emitter_image(spect, em.emission, uv, scene);
 }
@@ -184,7 +165,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
       result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
       result.direction = normalize(result.origin - from_point);
-      result.value = emitter_evaluate_in_local(em, spect, lerp_uv(scene.vertices, tri, result.barycentric), from_point, result.origin, result.pdf_area, result.pdf_dir,
+      result.value = emitter_get_radiance(em, spect, lerp_uv(scene.vertices, tri, result.barycentric), from_point, result.origin, result.pdf_area, result.pdf_dir,
         result.pdf_dir_out, scene, false);
       break;
     }
@@ -193,11 +174,21 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       const auto& img = scene.images[em.emission.image_index];
       float pdf_image = 0.0f;
       uint2 image_location = {};
-      result.image_uv = img.sample(smp.next(), smp.next(), pdf_image, image_location);
+      float2 uv = img.sample(smp.next(), smp.next(), pdf_image, image_location);
+      float sin_t = sinf(uv.y * kPi);
+      if (sin_t == 0.0f) {
+        result = {{spect.wavelength, 0.0f}};
+        return result;
+      }
+
+      result.image_uv = uv;
       result.direction = uv_to_direction(result.image_uv);
       result.normal = -result.direction;
       result.origin = from_point + kDisantRadiusScale * scene.bounding_sphere_radius * result.direction;
-      result.value = emitter_evaluate_env_dist(em, spect, result.image_uv, result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);
+      result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
+      result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+      result.pdf_dir_out = result.pdf_area * result.pdf_dir;
+      result.value = apply_emitter_image(spect, em.emission, result.image_uv, scene);
       break;
     }
 
@@ -222,6 +213,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       ETX_FAIL("Invalid emitter");
     }
   }
+
   return result;
 }
 
