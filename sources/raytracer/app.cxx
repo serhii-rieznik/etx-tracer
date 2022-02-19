@@ -6,6 +6,8 @@
 #include "app.hxx"
 
 #include <tinyexr/tinyexr.hxx>
+#include <stb_image/stb_image.hxx>
+#include <stb_image/stb_image_write.hxx>
 
 namespace etx {
 
@@ -148,13 +150,9 @@ void RTApplication::on_referenece_image_selected(std::string file_name) {
   render.set_reference_image(file_name.c_str());
 }
 
-void RTApplication::on_save_image_selected(std::string file_name, bool as_xyz) {
+void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
   if (_current_integrator == nullptr) {
     return;
-  }
-
-  if (strlen(get_file_ext(file_name.c_str())) == 0) {
-    file_name += ".exr";
   }
 
   auto c_image = _current_integrator->get_camera_image(true);
@@ -168,13 +166,33 @@ void RTApplication::on_save_image_selected(std::string file_name, bool as_xyz) {
   for (uint32_t i = 0, e = image_size.x * image_size.y; (l_image != nullptr) && (i < e); ++i) {
     output[i] += l_image[i];
   }
-  for (uint32_t i = 0, e = image_size.x * image_size.y; (as_xyz == false) && (i < e); ++i) {
+  for (uint32_t i = 0, e = image_size.x * image_size.y; (mode != SaveImageMode::XYZ) && (i < e); ++i) {
     output[i] = {spectrum::xyz_to_rgb(output[i]), 1.0f};
   }
 
-  const char* error = nullptr;
-  if (SaveEXR(output.data()->data.data, image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
-    log::error("Failed to save EXR image to %s: %s", file_name.c_str(), error);
+  if (mode == SaveImageMode::TonemappedLDR) {
+    if (strlen(get_file_ext(file_name.c_str())) == 0) {
+      file_name += ".png";
+    }
+    float exposure = ui.view_options().exposure;
+    std::vector<ubyte4> tonemapped(image_size.x * image_size.y);
+    for (uint32_t i = 0, e = image_size.x * image_size.y; (mode != SaveImageMode::XYZ) && (i < e); ++i) {
+      tonemapped[i].x = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].x), 1.0f / 2.2f)));
+      tonemapped[i].y = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].y), 1.0f / 2.2f)));
+      tonemapped[i].z = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].z), 1.0f / 2.2f)));
+      tonemapped[i].w = 255u;
+    }
+    if (stbi_write_png(file_name.c_str(), image_size.x, image_size.y, 4, tonemapped.data(), 0) != 1) {
+      log::error("Failed to save PNG image to %s", file_name.c_str());
+    }
+  } else {
+    if (strlen(get_file_ext(file_name.c_str())) == 0) {
+      file_name += ".exr";
+    }
+    const char* error = nullptr;
+    if (SaveEXR(output.data()->data.data, image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
+      log::error("Failed to save EXR image to %s: %s", file_name.c_str(), error);
+    }
   }
 }
 

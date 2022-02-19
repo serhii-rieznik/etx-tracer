@@ -145,10 +145,13 @@ void UI::build(double dt, const char* status) {
       }
       igSeparator();
       if (igMenuItemEx("Save Current Image (RGB)...", nullptr, "Ctrl+S", false, true)) {
-        save_image(false);
+        save_image(SaveImageMode::RGB);
+      }
+      if (igMenuItemEx("Save Current Image (LDR)...", nullptr, "Shift+Ctrl+S", false, true)) {
+        save_image(SaveImageMode::TonemappedLDR);
       }
       if (igMenuItemEx("Save Current Image (XYZ)...", nullptr, "Alt+Ctrl+S", false, true)) {
-        save_image(true);
+        save_image(SaveImageMode::XYZ);
       }
       igEndMenu();
     }
@@ -213,6 +216,8 @@ bool UI::handle_event(const sapp_event* e) {
   }
 
   auto modifiers = e->modifiers;
+  bool has_alt = modifiers & SAPP_MODIFIER_ALT;
+  bool has_shift = modifiers & SAPP_MODIFIER_SHIFT;
 
   if (modifiers & SAPP_MODIFIER_CTRL) {
     switch (e->key_code) {
@@ -235,7 +240,13 @@ bool UI::handle_event(const sapp_event* e) {
         break;
       }
       case SAPP_KEYCODE_S: {
-        save_image(modifiers & SAPP_MODIFIER_ALT);
+        if (has_alt && (has_shift == false))
+          save_image(SaveImageMode::XYZ);
+        else if (has_shift && (has_alt == false)) {
+          save_image(SaveImageMode::TonemappedLDR);
+        } else if ((has_shift == false) && (has_alt == false)) {
+          save_image(SaveImageMode::RGB);
+        }
         break;
       }
       default:
@@ -306,10 +317,13 @@ void UI::select_scene_file() {
   }
 }
 
-void UI::save_image(bool xyz) {
-  auto selected_file = save_file({"EXR images", "*.exr"});
+void UI::save_image(SaveImageMode mode) {
+  auto selected_file = save_file({
+    mode == SaveImageMode::TonemappedLDR ? "PNG images" : "EXR images",
+    mode == SaveImageMode::TonemappedLDR ? "*.png" : "*.exr",
+  });
   if ((selected_file.empty() == false) && callbacks.save_image_selected) {
-    callbacks.save_image_selected(selected_file, xyz);
+    callbacks.save_image_selected(selected_file, mode);
   }
 }
 

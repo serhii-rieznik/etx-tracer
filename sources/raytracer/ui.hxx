@@ -33,7 +33,7 @@ struct UI {
 
   struct {
     std::function<void(std::string)> reference_image_selected;
-    std::function<void(std::string, bool)> save_image_selected;
+    std::function<void(std::string, SaveImageMode)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
     std::function<void(Integrator*)> integrator_selected;
     std::function<void(bool)> stop_selected;
@@ -47,7 +47,7 @@ struct UI {
  private:
   bool build_options(Options&);
   void select_scene_file();
-  void save_image(bool xyz);
+  void save_image(SaveImageMode mode);
   void load_image();
 
  private:

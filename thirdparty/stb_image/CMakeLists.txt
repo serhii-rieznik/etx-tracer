@@ -1,5 +1,6 @@
 add_library(stb_image
   stb_image.hxx
+  stb_image_write.hxx
   stb_image.cxx
 )
 

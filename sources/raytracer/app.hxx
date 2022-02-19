@@ -27,7 +27,7 @@ struct RTApplication {
 
  private:
   void on_referenece_image_selected(std::string);
-  void on_save_image_selected(std::string, bool);
+  void on_save_image_selected(std::string, SaveImageMode);
   void on_scene_file_selected(std::string);
   void on_integrator_selected(Integrator*);
   void on_preview_selected();
