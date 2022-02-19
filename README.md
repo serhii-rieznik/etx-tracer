@@ -9,9 +9,10 @@ Physically-based GPU and CPU ray-tracer emerging on a surface.
  * Volumetric Bidirectional Path Tracing integrator;
  * Variety of BSDFs: 
     - basic materials - diffuse, plastic, conductor, dielectric;
+    - multiscattering materials - diffuse, conductor, dielectric;
     - additionaal materials - thinfilm, translucent, coating, mirror, coating;
     - generic PBR material (WIP);
- * Variety of emitters: 
+ * Variety of emitters:
     - area;
     - environment map;
     - directional emitter with finite angluar size;
@@ -68,3 +69,4 @@ Links to the books/papers/publications/resources I've used during the developmen
  - [PBRT book](https://www.pbr-book.org/)
  - [VCM paper / implementation](https://cgg.mff.cuni.cz/~jaroslav/papers/2012-vcm/)
  - [Rendering resources by Benedikt Bitterli](https://benedikt-bitterli.me/resources/)
+ - [Multiple-Scattering Microfacet BSDFs with the Smith Model](https://eheitzresearch.wordpress.com/240-2/)
