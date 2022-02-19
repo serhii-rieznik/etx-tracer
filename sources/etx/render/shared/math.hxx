@@ -232,6 +232,40 @@ ETX_GPU_CODE float2 sample_disk(float xi0, float xi1) {
   return {r * std::cos(theta), r * std::sin(theta)};
 }
 
+ETX_GPU_CODE float2 sample_disk_uv(float xi0, float xi1) {
+  float2 offset = {2.0f * xi0 - 1.0f, 2.0f * xi1 - 1.0f};
+  if ((offset.x == 0.0f) && (offset.y == 0.0f))
+    return {};
+
+  float r = 0.0f;
+  float theta = 0.0f;
+  if (fabsf(offset.x) > fabsf(offset.y)) {
+    r = offset.x;
+    theta = kQuarterPi * (offset.y / offset.x);
+  } else {
+    r = offset.y;
+    theta = kHalfPi - kQuarterPi * (offset.x / offset.y);
+  }
+
+  return {r * std::cos(theta) * 0.5f + 0.5f, r * std::sin(theta) * 0.5f + 0.5f};
+}
+
+ETX_GPU_CODE float2 projecected_coords(const float3& normal, const float3& in_dir, float sz, float csz) {
+  if (sz == 0.0f) {
+    return {};
+  }
+
+  auto basis = orthonormal_basis(normal);
+  float result_u = dot(basis.u, in_dir) / (0.5f * sz * csz);
+  float result_v = dot(basis.v, in_dir) / (0.5f * sz * csz);
+  return {result_u, result_v};
+}
+
+ETX_GPU_CODE float2 disk_uv(const float3& normal, const float3& in_dir, float sz, float csz) {
+  auto pc = projecected_coords(normal, in_dir, sz, csz);
+  return saturate(pc * 0.5f + 0.5f);
+}
+
 ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& n) {
   return normalize(t - n * dot(n, t));
 };

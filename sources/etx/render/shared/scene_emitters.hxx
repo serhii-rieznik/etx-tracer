@@ -60,18 +60,6 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
   return apply_emitter_image(spect, em.emission, uv, scene);
 }
 
-ETX_GPU_CODE float2 disk_uv(const float3& out_dir, const float3& in_dir, float sz) {
-  if (sz == 0.0f) {
-    return {};
-  }
-
-  // TODO : deal with this shit
-  auto basis = orthonormal_basis(out_dir);
-  float du = (kHalfPi - acosf(dot(basis.u, in_dir))) / (0.5f * sz) * 0.5f + 0.5f;
-  float dv = (kHalfPi - acosf(dot(basis.v, in_dir))) / (0.5f * sz) * 0.5f + 0.5f;
-  return {saturate(du), saturate(dv)};
-}
-
 ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
   float& pdf_dir_out, const Scene& scene) {
   ETX_ASSERT(em.is_distant());
@@ -81,7 +69,8 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_in_dist(const Emitter& em, const 
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = 1.0f;
       pdf_dir_out = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
-      return apply_image(spect, em.emission, disk_uv(em.direction, in_direction, em.angular_size), scene);
+      float2 uv = disk_uv(em.direction, in_direction, em.equivalent_disk_size, em.angular_size_cosine);
+      return apply_image(spect, em.emission, uv, scene);
     } else {
       pdf_area = 0.0f;
       pdf_dir = 0.0f;
@@ -154,7 +143,8 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = 1.0f;
       pdf_dir_out = pdf_dir * pdf_area;
-      return apply_image(spect, em.emission, disk_uv(em.direction, in_direction, em.angular_size), scene);
+      float2 uv = disk_uv(em.direction, in_direction, em.equivalent_disk_size, em.angular_size_cosine);
+      return apply_image(spect, em.emission, uv, scene);
     }
 
     default:
@@ -212,10 +202,11 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
     }
 
     case Emitter::Class::Directional: {
+      float2 disk_sample = {};
       if (em.angular_size > 0.0f) {
-        auto basic = orthonormal_basis(em.direction);
-        float2 disk = em.equivalent_disk_size * sample_disk(smp.next(), smp.next());
-        result.direction = normalize(em.direction + basic.u * disk.x + basic.v * disk.y);
+        auto basis = orthonormal_basis(em.direction);
+        disk_sample = sample_disk(smp.next(), smp.next());
+        result.direction = normalize(em.direction + basis.u * disk_sample.x * em.equivalent_disk_size + basis.v * disk_sample.y * em.equivalent_disk_size);
       } else {
         result.direction = em.direction;
       }
@@ -224,7 +215,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
       result.origin = from_point + kDisantRadiusScale * scene.bounding_sphere_radius * result.direction;
       result.normal = em.direction * (-1.0f);
-      result.value = apply_image(spect, em.emission, disk_uv(em.direction, result.direction, em.angular_size), scene);
+      result.value = apply_image(spect, em.emission, disk_sample * 0.5f + 0.5f, scene);
       break;
     }
     default: {
@@ -329,25 +320,17 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
 
     case Emitter::Class::Directional: {
       auto direction_to_scene = em.direction * (-1.0f);
-      auto basic = orthonormal_basis(direction_to_scene);
-
-      if (em.angular_size > 0.0f) {
-        float2 disk = em.equivalent_disk_size * sample_disk(smp.next(), smp.next());
-        result.direction = normalize(direction_to_scene + basic.u * disk.x + basic.v * disk.y);
-      } else {
-        result.direction = direction_to_scene;
-      }
-
+      auto basis = orthonormal_basis(direction_to_scene);
+      auto pos_sample = sample_disk(smp.next(), smp.next());
+      auto dir_sample = sample_disk(smp.next(), smp.next());
+      result.direction = normalize(direction_to_scene + basis.u * dir_sample.x * em.equivalent_disk_size + basis.v * dir_sample.y * em.equivalent_disk_size);
       result.triangle_index = kInvalidIndex;
-
       result.pdf_dir = 1.0f;
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
-
-      auto disk_sample = sample_disk(smp.next(), smp.next());
       result.normal = direction_to_scene;
-      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basic.u + disk_sample.y * basic.v - kDisantRadiusScale * direction_to_scene);
-      result.value = apply_image(spect, em.emission, disk_uv(em.direction, result.direction, em.angular_size), scene);
+      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (pos_sample.x * basis.u + pos_sample.y * basis.v - kDisantRadiusScale * direction_to_scene);
+      result.value = apply_image(spect, em.emission, dir_sample * 0.5f + 0.5f, scene);
       break;
     }
     default: {
