@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <etx/render/shared/material.hxx>
+#include <etx/render/shared/sampler.hxx>
 
 namespace etx {
 
@@ -11,10 +12,9 @@ enum class PathSource : uint32_t {
 };
 
 struct BSDFData : public Vertex {
-  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, const Material& m, PathSource tm, const Vertex& av, const float3& awi, const float3& awo)
+  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi, const float3& awo)
     : Vertex(av)
-    , material(m)
-    , mode(tm)
+    , path_source(ps)
     , spectrum_sample(spect)
     , medium_index(medium)
     , w_i(awi)
@@ -28,34 +28,17 @@ struct BSDFData : public Vertex {
     return result;
   }
 
-  ETX_GPU_CODE bool check_side(Frame& f_out) const {
-    float n_dot_i = dot(nrm, w_i);
-
-    if (material.double_sided()) {
-      float scale = (n_dot_i >= 0.0f ? -1.0f : +1.0f);
-      f_out = {tan * scale, btn * scale, nrm * scale};
-      return true;
-    }
-
-    f_out = {tan, btn, nrm};
-    return (n_dot_i < 0.0f);
-  }
-
-  ETX_GPU_CODE bool get_normal_frame(Frame& f_out) const {
+  ETX_GPU_CODE struct {
+    LocalFrame frame;
+    bool entering_material;
+  } get_normal_frame() const {
     bool entering_material = dot(nrm, w_i) < 0.0f;
-    if (entering_material) {
-      f_out = {tan, btn, nrm};
-    } else {
-      f_out = {-tan, -btn, -nrm};
-    }
-    return entering_material;
+    return {entering_material ? LocalFrame{tan, btn, nrm} : LocalFrame{-tan, -btn, -nrm}, entering_material};
   }
 
-  const Material& material;
-  PathSource mode = PathSource::Undefined;
+  PathSource path_source = PathSource::Undefined;
   SpectralQuery spectrum_sample;
   uint32_t medium_index = kInvalidIndex;
-  float3 geo_n = {};
   float3 w_i = {};
   float3 w_o = {};
 };
@@ -129,32 +112,6 @@ struct BSDFSample {
   }
 };
 
-namespace bsdf {
-
-struct LocalFrame : public Frame {
-  ETX_GPU_CODE LocalFrame(const Frame& f)
-    : Frame(f) {
-    _to_local = {
-      {tan.x, btn.x, nrm.x},
-      {tan.y, btn.y, nrm.y},
-      {tan.z, btn.z, nrm.z},
-    };
-    _from_local = transpose(_to_local);
-  }
-
-  ETX_GPU_CODE float3 to_local(const float3& v) const {
-    return _to_local * v;
-  }
-
-  ETX_GPU_CODE float3 from_local(const float3& v) const {
-    return _from_local * v;
-  }
-
- private:
-  float3x3 _to_local = {};
-  float3x3 _from_local = {};
-};
-
 struct NormalDistribution {
   struct Eval {
     float ndf = 0.0f;
@@ -163,7 +120,7 @@ struct NormalDistribution {
     float pdf = 0.0f;
   };
 
-  ETX_GPU_CODE NormalDistribution(const Frame& f, const float2& alpha)
+  ETX_GPU_CODE NormalDistribution(const LocalFrame& f, const float2& alpha)
     : _frame(f)
     , _alpha(alpha) {
   }
@@ -280,8 +237,6 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
   return (w_o_s * w_i_g == 0.0f) ? 0.0f : fabsf((w_o_g * w_i_s) / (w_o_s * w_i_g));
 }
 
-}  // namespace bsdf
-
 namespace fresnel {
 
 ETX_GPU_CODE auto reflectance(float ext_ior, float cos_theta_i, float int_ior, float cos_theta_j) {
@@ -329,7 +284,7 @@ ETX_GPU_CODE SpectralResponse dielectric_thinfilm(SpectralQuery spect, const flo
     return {spect.wavelength, 1.0f};
   }
 
-  float cos_theta_1 = std::sqrt(1.0f - sin_theta_1_squared);
+  float cos_theta_1 = sqrtf(1.0f - sin_theta_1_squared);
 
   float eta_12 = (film_ior / int_ior);
   float sin_theta_2_squared = sqr(eta_12) * (1.0f - cos_theta_1 * cos_theta_1);
@@ -337,7 +292,7 @@ ETX_GPU_CODE SpectralResponse dielectric_thinfilm(SpectralQuery spect, const flo
     return {spect.wavelength, 1.0f};
   }
 
-  float cos_theta_2 = std::sqrt(1.0f - sin_theta_2_squared);
+  float cos_theta_2 = sqrtf(1.0f - sin_theta_2_squared);
 
   float delta_10 = film_ior > ext_ior ? 0.0f : kPi;
   float delta_21 = int_ior > film_ior ? 0.0f : kPi;
@@ -371,12 +326,10 @@ ETX_GPU_CODE SpectralResponse dielectric_thinfilm(SpectralQuery spect, const flo
   return dielectric_thinfilm(spect, fabsf(dot(i, m)), ext_ior, film_ior, int_ior, thickness);
 }
 
-ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample& sample_out,
-  const RefractiveIndex::Sample& sample_in) {
+ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float cos_theta, const RefractiveIndex::Sample& sample_out, const RefractiveIndex::Sample& sample_in) {
   ETX_ASSERT(spect.wavelength == sample_in.wavelength);
   ETX_ASSERT(spect.wavelength == sample_out.wavelength);
 
-  float cos_theta = fabsf(dot(i, m));
   float cos_theta_2 = cos_theta * cos_theta;
   float sin_theta_2 = clamp(1.0f - cos_theta_2, 0.0f, 1.0f);
 
@@ -399,6 +352,11 @@ ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, co
   ETX_VALIDATE(Rp);
 
   return 0.5f * (Rp + Rs);
+}
+
+ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample& sample_out,
+  const RefractiveIndex::Sample& sample_in) {
+  return conductor(spect, fabsf(dot(i, m)), sample_out, sample_in);
 }
 
 }  // namespace fresnel

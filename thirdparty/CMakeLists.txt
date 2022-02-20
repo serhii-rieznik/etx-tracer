@@ -16,3 +16,6 @@ add_subdirectory(mikktspace)
 
 add_subdirectory(enkits)
 
+if (WITH_OPENVDB)
+  add_subdirectory(openvdb)
+endif()

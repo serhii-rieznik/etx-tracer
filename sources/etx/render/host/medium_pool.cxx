@@ -1,5 +1,12 @@
-﻿#include <etx/render/host/medium_pool.hxx>
+﻿#include <etx/core/environment.hxx>
+#include <etx/log/log.hxx>
+
+#include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/pool.hxx>
+
+#if (ETX_HAVE_OPENVDB)
+#include <openvdb/openvdb.h>
+#endif
 
 #include <unordered_map>
 #include <functional>
@@ -48,12 +55,16 @@ struct MediumPoolImpl {
     medium.s_outscattering = s_o;
     medium.phase_function_g = g;
     medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
-    medium.cls = s_a.is_zero() && s_o.is_zero() ? Medium::Class::Vacuum : Medium::Class::Heterogeneous;
 
-    if (medium.cls == Medium::Class::Heterogeneous) {
-      auto density = load_density_grid(volume_file, medium.dimensions.x, medium.dimensions.y, medium.dimensions.z, medium.max_density);
+    auto density = load_density_grid(volume_file, medium.dimensions, medium.max_density);
+
+    if (s_a.is_zero() && s_o.is_zero() || (medium.max_density == 0.0f)) {
+      medium.cls = Medium::Class::Vacuum;
+    } else {
+      medium.cls = Medium::Class::Heterogeneous;
       medium.density.count = density.size();
       medium.density.a = reinterpret_cast<float*>(malloc(medium.density.count * sizeof(float)));
+      memcpy(medium.density.a, density.data(), sizeof(float) * medium.density.count);
     }
 
     mapping[id] = handle;
@@ -92,25 +103,14 @@ struct MediumPoolImpl {
     m = {};
   }
 
-  std::vector<float> load_density_grid(const char* file_name, uint32_t& dx, uint32_t& dy, uint32_t& dz, float& max_density) {
-    // TODO : check validity
-    char buffer[2048] = {};
-    int last_char = snprintf(buffer, sizeof(buffer), "%s", file_name);
-    while ((last_char > 0) && (buffer[--last_char] != '.')) {
-    }
-    auto ext = buffer + last_char;
-
+  std::vector<float> load_density_grid(const char* file_name, uint3& d, float& max_density) {
     std::vector<float> density;
 
-#if (ETX_HAVE_OPENVDB)
-    if (strcmp(ext, ".vdb") == 0) {
-      load_vdb(file_name, density, dx, dy, dz);
-      snprintf(ext, sizeof(buffer) - last_char, "%s", ".et-vdb");
-      save_raw(buffer, density, dx, dy, dz);
-    } else
-#endif
-      if (strcmp(ext, ".et-vdb") == 0) {
-      load_raw(file_name, density, dx, dy, dz);
+    const char* ext = get_file_ext(file_name);
+    if (_stricmp(ext, ".vdb") == 0) {
+      load_vdb(file_name, density, d);
+    } else {
+      log::error("Only VDB volumetric data format is supported at the moment");
     }
 
     max_density = 0.0f;
@@ -121,20 +121,48 @@ struct MediumPoolImpl {
     return density;
   }
 
-  void load_raw(const char* file_name, std::vector<float>& density, uint32_t& dx, uint32_t& dy, uint32_t& dz) {
-    auto fin = fopen(file_name, "rb");
-    if (fin == nullptr) {
+  void load_vdb(const char* file_name, std::vector<float>& density, uint3& d) {
+    d = {};
+    density.clear();
+#if (ETX_HAVE_OPENVDB)
+    static bool openvdb_initialized = false;
+
+    if (openvdb_initialized == false) {
+      openvdb::initialize();
+      openvdb_initialized = true;
+    }
+
+    openvdb::io::File in_file(file_name);
+    if (in_file.open() == false) {
       return;
     }
-    uint32_t d[3] = {};
-    fread(d, sizeof(d), 1, fin);
-    dx = d[0];
-    dy = d[1];
-    dz = d[2];
 
-    density.resize(1llu * dx * dy * dz);
-    fread(density.data(), sizeof(float), 1llu * dx * dy * dz, fin);
-    fclose(fin);
+    auto grids = in_file.getGrids();
+
+    for (const auto& base_grid : *grids) {
+      openvdb::FloatGrid::Ptr grid = openvdb::gridPtrCast<openvdb::FloatGrid>(base_grid);
+      if (grid) {
+        auto grid_bbox = grid->evalActiveVoxelBoundingBox();
+        auto grid_dim = grid->evalActiveVoxelDim().asVec3i();
+
+        d.x = grid_dim.x();
+        d.y = grid_dim.y();
+        d.z = grid_dim.z();
+        density.resize(1llu * d.x * d.y * d.z, 0.0f);
+        log::info("Loaded VDB grid dimensions: %u x %u x %u", d.x, d.y, d.z);
+
+        for (auto i = grid->beginValueOn(); i; ++i) {
+          auto pos = (i.getCoord() - grid_bbox.getStart()).asVec3i();
+          density[pos.x() + 1llu * pos.y() * d.x + 1llu * pos.z() * d.x * d.y] = i.getValue();
+        }
+
+        // TODO : support multigrid, just take first for now
+        break;
+      }
+    }
+#else
+    log::error("Loading from VDB is disabled. Generate project using CMake with `-DWITH_OPENVDB=1` option to enable support.");
+#endif
   }
 
   ObjectIndexPool<Medium> medium_pool;

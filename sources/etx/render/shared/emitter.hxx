@@ -18,12 +18,11 @@ struct alignas(16) Emitter {
     Omni,
   };
 
-  SpectralDistribution emission = {};
+  SpectralImage emission = {};
   Class cls = Class::Undefined;
   Direction emission_direction = Direction::Single;
   uint32_t triangle_index = kInvalidIndex;
   uint32_t medium_index = kInvalidIndex;
-  uint32_t image_index = kInvalidIndex;
   float3 direction = {};
   float collimation = 1.0f;
   float angular_size = 0.0f;

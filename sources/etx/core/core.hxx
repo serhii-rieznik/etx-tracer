@@ -21,5 +21,6 @@ struct TimeMeasure {
 };
 
 std::string open_file(const std::vector<std::string>& filters);
+std::string save_file(const std::vector<std::string>& filters);
 
 }  // namespace etx

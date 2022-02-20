@@ -41,7 +41,7 @@ function(create_library folder)
   etx_build_pack(${lib_name} "${CMAKE_CURRENT_LIST_DIR}/${folder}")
 
   target_compile_options(${lib_name} PRIVATE "/Zl")
-  target_compile_options(${lib_name} PRIVATE -DNOMINMAX=1 -D_CRT_SECURE_NO_WARNINGS=1 -DWIN32_LEAN_AND_MEAN=1)
+  target_compile_options(${lib_name} PRIVATE -DNOMINMAX=1 -D_CRT_SECURE_NO_WARNINGS=1 -DWIN32_LEAN_AND_MEAN=1 -D_USE_MATH_DEFINES=1)
 
   set_property(TARGET ${lib_name} PROPERTY FOLDER "etx")
   set_property(TARGET ${lib_name} PROPERTY LINKER_LANGUAGE CXX)
@@ -58,7 +58,14 @@ create_library(render)
 target_link_libraries(etx-render PRIVATE glm stb_image tinyexr tiny_obj_loader mikktspace enkiTS etx-core)
 target_include_directories(etx-render PRIVATE ${JANSSON_INCLUDE_DIRS})
 
+if (WITH_OPENVDB)
+  target_link_libraries(etx-render PUBLIC openvdb)
+  target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
+endif()
+
+
 find_package(embree 3.0 REQUIRED)
 
 create_library(rt)
 target_link_libraries(etx-rt PRIVATE glm embree etx-core etx-render)
+

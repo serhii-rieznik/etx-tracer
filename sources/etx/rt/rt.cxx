@@ -244,10 +244,9 @@ bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler&
 
     const auto& tri = _private->scene->triangles[ray_hit.hit.primID];
     const auto& mat = _private->scene->materials[tri.material_index];
-    /*
     float3 bc = {1.0f - ray_hit.hit.u - ray_hit.hit.v, ray_hit.hit.u, ray_hit.hit.v};
-    if (bsdf::continue_tracing(mat, lerp_uv(_private->scene.vertices, tri, bc), _private->scene, smp)) {
-      auto p = lerp_pos(_private->scene.vertices, tri, bc);
+    if (bsdf::continue_tracing(mat, lerp_uv(_private->scene->vertices, tri, bc), *_private->scene, smp)) {
+      auto p = lerp_pos(_private->scene->vertices, tri, bc);
       ray_hit.ray.org_x = p.x + r.d.x * kRayEpsilon;
       ray_hit.ray.org_y = p.y + r.d.y * kRayEpsilon;
       ray_hit.ray.org_z = p.z + r.d.z * kRayEpsilon;
@@ -255,9 +254,7 @@ bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler&
       ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
       ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
       ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
-    } else
-    // */
-    {
+    } else {
       intersection_found = true;
       barycentric = {ray_hit.hit.u, ray_hit.hit.v};
       triangle_index = ray_hit.hit.primID;

@@ -14,20 +14,26 @@ enum class OutputView : uint32_t {
   Count,
 };
 
+enum class SaveImageMode : uint32_t {
+  RGB,
+  TonemappedLDR,
+  XYZ,
+};
+
 inline std::string output_view_to_string(uint32_t i) {
   switch (OutputView(i)) {
     case OutputView::Result:
-      return "Result Image";
+      return "[1] Result Image ";
     case OutputView::CameraImage:
-      return "Camera Image";
+      return "[2] Camera Image ";
     case OutputView::LightImage:
-      return "Light Image";
+      return "[3] Light Image ";
     case OutputView::ReferenceImage:
-      return "Reference Image";
+      return "[4] Reference Image ";
     case OutputView::RelativeDifference:
-      return "Relative Difference";
+      return "[5] Relative Difference ";
     case OutputView::AbsoluteDifference:
-      return "Absolute Differenec";
+      return "[6] Absolute Difference ";
     default:
       return "???";
   }

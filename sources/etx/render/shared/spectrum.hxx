@@ -245,7 +245,7 @@ struct alignas(16) SpectralResponse {
     if constexpr (spectrum::kSpectralRendering) {
       return components.x;
     } else {
-      return 0.2627f * components.x + 0.678f * components.y + 0.0593f * components.z;
+      return luminance(components);
     }
   }
 
@@ -258,9 +258,7 @@ struct alignas(16) SpectralResponse {
   }
 
   ETX_GPU_CODE bool valid() const {
-    return true;
-    // TODO : fix
-    // return valid_value(components);
+    return valid_value(components);
   }
 
   ETX_GPU_CODE bool is_zero() const {

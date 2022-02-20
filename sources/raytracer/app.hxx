@@ -4,7 +4,10 @@
 #include <etx/core/handle.hxx>
 
 #include <etx/render/host/scene_loader.hxx>
+#include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
+#include <etx/rt/integrators/bidirectional.hxx>
+#include <etx/rt/integrators/vcm_cpu.hxx>
 #include <etx/rt/rt.hxx>
 
 #include "ui.hxx"
@@ -24,6 +27,7 @@ struct RTApplication {
 
  private:
   void on_referenece_image_selected(std::string);
+  void on_save_image_selected(std::string, SaveImageMode);
   void on_scene_file_selected(std::string);
   void on_integrator_selected(Integrator*);
   void on_preview_selected();
@@ -31,6 +35,7 @@ struct RTApplication {
   void on_stop_selected(bool wait_for_completion);
   void on_reload_scene_selected();
   void on_reload_geometry_selected();
+  void on_options_changed();
 
  private:
   void save_options();
@@ -43,17 +48,23 @@ struct RTApplication {
   Raytracing raytracing;
   CameraController camera_controller;
 
-  Integrator _test = {raytracing};
+  CPUDebugIntegrator _preview = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
+  CPUBidirectional _cpu_bidir = {raytracing};
+  CPUVCM _cpu_vcm = {raytracing};
 
-  Integrator* _integrator_array[2] = {
-    &_test,
+  Integrator* _integrator_array[4] = {
+    &_preview,
     &_cpu_pt,
+    &_cpu_bidir,
+    &_cpu_vcm,
   };
 
   Integrator* _current_integrator = nullptr;
   std::string _current_scene_file = {};
   Options _options;
+
+  bool _reset_images = true;
 };
 
 }  // namespace etx

@@ -33,6 +33,7 @@ struct UI {
 
   struct {
     std::function<void(std::string)> reference_image_selected;
+    std::function<void(std::string, SaveImageMode)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
     std::function<void(Integrator*)> integrator_selected;
     std::function<void(bool)> stop_selected;
@@ -40,11 +41,14 @@ struct UI {
     std::function<void()> run_selected;
     std::function<void()> reload_scene_selected;
     std::function<void()> reload_geometry_selected;
+    std::function<void()> options_changed;
   } callbacks;
 
  private:
-  void build_options(Options&);
+  bool build_options(Options&);
   void select_scene_file();
+  void save_image(SaveImageMode mode);
+  void load_image();
 
  private:
   Integrator* _current_integrator = {};

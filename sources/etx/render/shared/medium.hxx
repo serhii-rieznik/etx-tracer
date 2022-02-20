@@ -109,7 +109,8 @@ struct alignas(16) Medium {
   }
 
   ETX_GPU_CODE Sample sample_homogeneous(const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& w_i, float max_t) const {
-    auto s_t = s_outscattering.random_entry_power(smp.next());
+    float rnd = smp.next();
+    auto s_t = s_outscattering.random_entry_power(rnd) + s_absorption.random_entry_power(rnd);
     float t = -logf(1.0f - smp.next()) / s_t;
     t = min(t, max_t);
 
@@ -119,9 +120,9 @@ struct alignas(16) Medium {
     result.w_i = w_i;
     result.t = t;
 
-    SpectralResponse tr = transmittance(spect, smp, pos, w_i, t);
+    SpectralResponse tr = transmittance_homogeneous(spect, smp, pos, w_i, t);
 
-    SpectralResponse density = result.sampled_medium ? ((s_outscattering(spect) + s_absorption(spect)) * tr) : (tr);
+    SpectralResponse density = result.sampled_medium ? (tr * (s_outscattering(spect) + s_absorption(spect))) : (tr);
     float pdf = density.average();
 
     if (pdf == 0.0f) {

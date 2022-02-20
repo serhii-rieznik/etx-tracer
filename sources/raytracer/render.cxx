@@ -5,6 +5,8 @@
 #include <sokol_app.h>
 #include <sokol_gfx.h>
 
+#include <vector>
+
 namespace etx {
 
 extern const char* shader_source;
@@ -29,6 +31,7 @@ struct RenderContextImpl {
   ViewOptions view_options = {};
   uint2 output_dimensions = {};
   ImagePool image_pool = {};
+  std::vector<float4> black_image;
 };
 
 ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Impl);
@@ -80,7 +83,9 @@ void RenderContext::init() {
       l_image[i] = {0.0f, 0.5f, 0.75f, 1.0f};
     }
   }
-  update_output_images(c_image, l_image);
+  update_camera_image(c_image);
+  update_light_image(l_image);
+  sg_commit();
 }
 
 void RenderContext::cleanup() {
@@ -183,23 +188,27 @@ void RenderContext::set_output_dimensions(const uint2& dim) {
   desc.usage = SG_USAGE_STREAM;
   _private->sample_image = sg_make_image(desc);
   _private->light_image = sg_make_image(desc);
+
+  _private->black_image.resize(dim.x * dim.y);
+  std::fill(_private->black_image.begin(), _private->black_image.end(), float4{});
 }
 
-void RenderContext::update_output_images(const float4* camera, const float4* light) {
-  ETX_ASSERT((_private->sample_image.id != 0) && (_private->light_image.id != 0));
+void RenderContext::update_camera_image(const float4* camera) {
+  ETX_ASSERT(_private->sample_image.id != 0);
 
   sg_image_data data = {};
   data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
+  data.subimage[0][0].ptr = camera ? camera : _private->black_image.data();
+  sg_update_image(_private->sample_image, data);
+}
 
-  if (camera != nullptr) {
-    data.subimage[0][0].ptr = camera;
-    sg_update_image(_private->sample_image, data);
-  }
+void RenderContext::update_light_image(const float4* light) {
+  ETX_ASSERT(_private->light_image.id != 0);
 
-  if (light != nullptr) {
-    data.subimage[0][0].ptr = light;
-    sg_update_image(_private->light_image, data);
-  }
+  sg_image_data data = {};
+  data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
+  data.subimage[0][0].ptr = light ? light : _private->black_image.data();
+  sg_update_image(_private->light_image, data);
 }
 
 const char* shader_source = R"(
@@ -330,8 +339,8 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
       break;
     }
     case kViewRelativeDifference: {
-      result.x = max(0.0f, r_lum - v_lum);
-      result.y = max(0.0f, v_lum - r_lum);
+      result.x = exposure * max(0.0f, r_lum - v_lum);
+      result.y = exposure * max(0.0f, v_lum - r_lum);
       break;
     }
     case kViewAbsoluteDifference: {

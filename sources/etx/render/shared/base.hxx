@@ -5,9 +5,11 @@
 #if (ETX_NVCC_COMPILER)
 #define ETX_GPU_CODE inline __device__
 #define ETX_GPU_DATA __device__
+#define ETX_CPU_CODE __host__
 #define ETX_INIT_WITH(S)
 #else
 #define ETX_GPU_CODE inline
+#define ETX_CPU_CODE
 #define ETX_GPU_DATA
 #define ETX_INIT_WITH(S) = S
 #endif
@@ -67,6 +69,11 @@ struct alignas(16) ArrayView {
     return a[i];
   }
 };
+
+template <class T>
+ETX_GPU_CODE ArrayView<T> make_array_view(void* p, uint64_t c) {
+  return {reinterpret_cast<T*>(p), c};
+}
 
 ETX_GPU_CODE void print_value(const char* name, const char* tag, float t) {
   printf("%s : %s %f\n", name, tag, t);

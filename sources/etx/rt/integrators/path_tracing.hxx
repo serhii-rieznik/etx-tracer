@@ -13,24 +13,24 @@ struct CPUPathTracing : public Integrator {
     return "Path Tracing (CPU)";
   }
 
-  Options options() const override {
-    Options result = {};
-    result.set(1u, 0x7fffu, 0xffffu, "spp", "Samples per Pixel");
-    result.set(1u, 0x7fffu, 65536u, "pathlen", "Maximal Path Length");
-    result.set(1u, 5u, 65536u, "rrstart", "Start Russian Roulette at");
-    return result;
+  Options options() const override;
+
+  bool have_updated_light_image() const override {
+    return false;
   }
 
   void set_output_size(const uint2&) override;
-  float4* get_updated_camera_image() override;
-  float4* get_updated_light_image() override;
+  const float4* get_camera_image(bool force_update) override;
+  const float4* get_light_image(bool force_update) override;
   const char* status() const override;
 
-  void preview() override;
+  void preview(const Options&) override;
   void run(const Options&) override;
   void update() override;
-  void stop(bool wait_for_completion) override;
+  void stop(Stop) override;
+  void update_options(const Options&) override;
 
+ private:
   ETX_DECLARE_PIMPL(CPUPathTracing, 4096);
 };
 

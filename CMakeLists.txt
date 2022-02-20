@@ -1,7 +1,9 @@
-project(etx-tracer)
-
 cmake_minimum_required(VERSION 3.1)
+cmake_policy(SET CMP0048 NEW)
+cmake_policy(SET CMP0074 NEW)
 cmake_policy(SET CMP0091 NEW)
+
+project(etx-tracer VERSION 0.0.1)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake")

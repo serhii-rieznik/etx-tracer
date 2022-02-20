@@ -115,10 +115,20 @@ struct alignas(16) Triangle {
   uint32_t pad[3] = {};
 };
 
-struct alignas(16) Frame {
+struct alignas(16) LocalFrame {
   float3 tan = {};
   float3 btn = {};
   float3 nrm = {};
+
+  ETX_GPU_CODE float3 to_local(const float3& v) const {
+    return float3x3{{tan.x, btn.x, nrm.x}, {tan.y, btn.y, nrm.y}, {tan.z, btn.z, nrm.z}} * v;
+  }
+  ETX_GPU_CODE float3 from_local(const float3& v) const {
+    return float3x3{{tan.x, tan.y, tan.z}, {btn.x, btn.y, btn.z}, {nrm.x, nrm.y, nrm.z}} * v;
+  }
+  ETX_GPU_CODE static float cos_theta(const float3& v) {
+    return v.z;
+  }
 };
 
 struct Ray {
@@ -195,6 +205,10 @@ ETX_GPU_CODE float3 sample_cosine_distribution(float xi0, float xi1, const float
   return sample_cosine_distribution(xi0, xi1, n, basis.u, basis.v, exponent);
 }
 
+ETX_GPU_CODE float3 barycentrics(float2 bc) {
+  return {1.0f - bc.x - bc.y, bc.x, bc.y};
+}
+
 ETX_GPU_CODE float3 random_barycentric(float r1, float r2) {
   r1 = sqrtf(r1);
   return {1.0f - r1, r1 * (1.0f - r2), r1 * r2};
@@ -216,6 +230,40 @@ ETX_GPU_CODE float2 sample_disk(float xi0, float xi1) {
   }
 
   return {r * std::cos(theta), r * std::sin(theta)};
+}
+
+ETX_GPU_CODE float2 sample_disk_uv(float xi0, float xi1) {
+  float2 offset = {2.0f * xi0 - 1.0f, 2.0f * xi1 - 1.0f};
+  if ((offset.x == 0.0f) && (offset.y == 0.0f))
+    return {};
+
+  float r = 0.0f;
+  float theta = 0.0f;
+  if (fabsf(offset.x) > fabsf(offset.y)) {
+    r = offset.x;
+    theta = kQuarterPi * (offset.y / offset.x);
+  } else {
+    r = offset.y;
+    theta = kHalfPi - kQuarterPi * (offset.x / offset.y);
+  }
+
+  return {r * std::cos(theta) * 0.5f + 0.5f, r * std::sin(theta) * 0.5f + 0.5f};
+}
+
+ETX_GPU_CODE float2 projecected_coords(const float3& normal, const float3& in_dir, float sz, float csz) {
+  if (sz == 0.0f) {
+    return {};
+  }
+
+  auto basis = orthonormal_basis(normal);
+  float result_u = dot(basis.u, in_dir) / (0.5f * sz * csz);
+  float result_v = dot(basis.v, in_dir) / (0.5f * sz * csz);
+  return {result_u, result_v};
+}
+
+ETX_GPU_CODE float2 disk_uv(const float3& normal, const float3& in_dir, float sz, float csz) {
+  auto pc = projecected_coords(normal, in_dir, sz, csz);
+  return saturate(pc * 0.5f + 0.5f);
 }
 
 ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& n) {
@@ -343,6 +391,17 @@ ETX_GPU_CODE float3 phi_theta_to_direction(float phi, float theta) {
 ETX_GPU_CODE float3 uv_to_direction(const float2& uv) {
   float2 p_t = uv_to_phi_theta(uv.x, uv.y);
   return phi_theta_to_direction(p_t.x, p_t.y);
+}
+
+ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {
+  v--;
+  v |= v >> 1;
+  v |= v >> 2;
+  v |= v >> 4;
+  v |= v >> 8;
+  v |= v >> 16;
+  v++;
+  return v;
 }
 
 }  // namespace etx

@@ -162,10 +162,12 @@ struct Options {
     return {id, def};
   }
 
-  OptionalValue& set(const OptionalValue& def) {
+  OptionalValue& add(const OptionalValue& def) {
     for (auto& option : values) {
       if (option.id == def.id) {
+        auto c = option.cls;
         option = def;
+        option.cls = c;
         return option;
       }
     }
@@ -173,8 +175,50 @@ struct Options {
   }
 
   template <class... args>
-  void set(args&&... a) {
-    set({std::forward<args>(a)...});
+  void add(args&&... a) {
+    add({std::forward<args>(a)...});
+  }
+
+  void set(const std::string& id, const std::string& value) {
+    for (auto& option : values) {
+      if (option.id == id) {
+        ETX_ASSERT(option.cls == OptionalValue::Class::InfoString);
+        option.name = value;
+        break;
+      }
+    }
+  }
+
+  void set(const std::string& id, uint32_t value) {
+    for (auto& option : values) {
+      if (option.id == id) {
+        ETX_ASSERT((option.cls == OptionalValue::Class::Integer) || (option.cls == OptionalValue::Class::Enum));
+        option.value.integer = value < option.min_value.integer ? option.min_value.integer : (value > option.max_value.integer ? option.max_value.integer : value);
+        break;
+      }
+    }
+  }
+
+  template <class T>
+  void set_enum(const std::string& id, T value) {
+    for (auto& option : values) {
+      if (option.id == id) {
+        ETX_ASSERT(option.cls == OptionalValue::Class::Enum);
+        uint32_t i = static_cast<uint32_t>(value);
+        option.value.integer = i < option.min_value.integer ? option.min_value.integer : (i > option.max_value.integer ? option.max_value.integer : i);
+        break;
+      }
+    }
+  }
+
+  void set(const std::string& id, float value) {
+    for (auto& option : values) {
+      if (option.id == id) {
+        ETX_ASSERT(option.cls == OptionalValue::Class::Float);
+        option.value.flt = value < option.min_value.flt ? option.min_value.flt : (value > option.max_value.flt ? option.max_value.flt : value);
+        break;
+      }
+    }
   }
 
   void save_to_file(const char*);

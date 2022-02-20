@@ -19,11 +19,13 @@ void UI::initialize() {
 
   _view_options = Options{{
     {OutputView::Result, OutputView::Count, output_view_to_string, "out_view", "View Image"},
-    {0.001f, 1.0f, +10.0f, "exp", "Exposure"},
+    {1.0f / 1000.0f, 1.0f, 1000.0f, "exp", "Exposure"},
   }};
 }
 
-void UI::build_options(Options& options) {
+bool UI::build_options(Options& options) {
+  bool changed = false;
+
   for (auto& option : options.values) {
     switch (option.cls) {
       case OptionalValue::Class::InfoString: {
@@ -35,6 +37,7 @@ void UI::build_options(Options& options) {
         bool value = option.to_bool();
         if (igCheckbox(option.name.c_str(), &value)) {
           option.set(value);
+          changed = true;
         }
         break;
       }
@@ -44,6 +47,7 @@ void UI::build_options(Options& options) {
         igSetNextItemWidth(4.0f * igGetFontSize());
         if (igDragFloat(option.name.c_str(), &value, 0.001f, option.min_value.flt, option.max_value.flt, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           option.set(value);
+          changed = true;
         }
         break;
       }
@@ -53,6 +57,7 @@ void UI::build_options(Options& options) {
         igSetNextItemWidth(4.0f * igGetFontSize());
         if (igDragInt(option.name.c_str(), &value, 1.0f, option.min_value.integer, option.max_value.integer, "%u", ImGuiSliderFlags_AlwaysClamp)) {
           option.set(uint32_t(value));
+          changed = true;
         }
         break;
       }
@@ -68,6 +73,7 @@ void UI::build_options(Options& options) {
           }
           if (value != option.to_integer()) {
             option.set(uint32_t(value));
+            changed = true;
           }
           igTreePop();
         }
@@ -78,20 +84,21 @@ void UI::build_options(Options& options) {
         ETX_FAIL("Invalid option");
     }
   }
+  return changed;
 }
 
 void UI::build(double dt, const char* status) {
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
 
-  igSetNextWindowPos({sapp_widthf() - igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {1.0f, 0.0f});
-  igBegin("View", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-  igText("View options");
+  float offset_size = igGetFontSize();
+  igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 2.0f * offset_size}, ImGuiCond_Always, {1.0f, 0.0f});
+  igBegin("View Options", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
   build_options(_view_options);
 
   char status_buffer[2048] = {};
   float dy = igGetStyle()->FramePadding.y;
   snprintf(status_buffer, sizeof(status_buffer), "%.2fms | %.2ffps | %s", 1000.0 * dt, 1.0f / dt, status ? status : "");
-  igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * igGetFontSize(), ImGuiWindowFlags_NoDecoration);
+  igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration);
   igText(status_buffer);
   igEnd();
 
@@ -127,17 +134,24 @@ void UI::build(double dt, const char* status) {
       if (igMenuItemEx("Reload Materials", nullptr, "Ctrl+M", false, false)) {
       }
       igSeparator();
-      if (igMenuItemEx("Save...", nullptr, "Ctrl+S", false, false)) {
+      if (igMenuItemEx("Save...", nullptr, nullptr, false, false)) {
       }
       igEndMenu();
     }
 
-    if (igBeginMenu("Reference image", true)) {
-      if (igMenuItemEx("Open...", nullptr, nullptr, false, true)) {
-        auto selected_file = open_file({"Supported images", "*.exr;*.png;*.hdr;*.pfm;*.jpg;*.bmp;*.tga"});
-        if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
-          callbacks.reference_image_selected(selected_file);
-        }
+    if (igBeginMenu("Image", true)) {
+      if (igMenuItemEx("Open Reference Image...", nullptr, "Ctrl+I", false, true)) {
+        load_image();
+      }
+      igSeparator();
+      if (igMenuItemEx("Save Current Image (RGB)...", nullptr, "Ctrl+S", false, true)) {
+        save_image(SaveImageMode::RGB);
+      }
+      if (igMenuItemEx("Save Current Image (LDR)...", nullptr, "Shift+Ctrl+S", false, true)) {
+        save_image(SaveImageMode::TonemappedLDR);
+      }
+      if (igMenuItemEx("Save Current Image (XYZ)...", nullptr, "Alt+Ctrl+S", false, true)) {
+        save_image(SaveImageMode::XYZ);
       }
       igEndMenu();
     }
@@ -146,10 +160,13 @@ void UI::build(double dt, const char* status) {
   igEnd();
 
   if ((_current_integrator != nullptr) && (_integrator_options.values.empty() == false)) {
-    igSetNextWindowPos({igGetFontSize(), 2.0f * igGetFontSize()}, ImGuiCond_Always, {0.0f, 0.0f});
+    igSetNextWindowPos({offset_size, 2.0f * offset_size}, ImGuiCond_Always, {0.0f, 0.0f});
     igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
     igText("Integrator options");
-    build_options(_integrator_options);
+
+    if (build_options(_integrator_options) && callbacks.options_changed) {
+      callbacks.options_changed();
+    }
 
     if (_current_integrator->can_run()) {
       igSeparator();
@@ -190,10 +207,26 @@ void UI::build(double dt, const char* status) {
 }
 
 bool UI::handle_event(const sapp_event* e) {
-  if ((e->modifiers & SAPP_MODIFIER_CTRL) && (e->type == SAPP_EVENTTYPE_KEY_DOWN)) {
+  if (simgui_handle_event(e)) {
+    return true;
+  }
+
+  if (e->type != SAPP_EVENTTYPE_KEY_DOWN) {
+    return false;
+  }
+
+  auto modifiers = e->modifiers;
+  bool has_alt = modifiers & SAPP_MODIFIER_ALT;
+  bool has_shift = modifiers & SAPP_MODIFIER_SHIFT;
+
+  if (modifiers & SAPP_MODIFIER_CTRL) {
     switch (e->key_code) {
       case SAPP_KEYCODE_O: {
         select_scene_file();
+        break;
+      }
+      case SAPP_KEYCODE_I: {
+        load_image();
         break;
       }
       case SAPP_KEYCODE_R: {
@@ -206,9 +239,61 @@ bool UI::handle_event(const sapp_event* e) {
           callbacks.reload_geometry_selected();
         break;
       }
+      case SAPP_KEYCODE_S: {
+        if (has_alt && (has_shift == false))
+          save_image(SaveImageMode::XYZ);
+        else if (has_shift && (has_alt == false)) {
+          save_image(SaveImageMode::TonemappedLDR);
+        } else if ((has_shift == false) && (has_alt == false)) {
+          save_image(SaveImageMode::RGB);
+        }
+        break;
+      }
+      default:
+        break;
     }
   }
-  return simgui_handle_event(e);
+
+  switch (e->key_code) {
+    case SAPP_KEYCODE_1: {
+      _view_options.set_enum("out_view", OutputView::Result);
+      break;
+    }
+    case SAPP_KEYCODE_2: {
+      _view_options.set_enum("out_view", OutputView::CameraImage);
+      break;
+    }
+    case SAPP_KEYCODE_3: {
+      _view_options.set_enum("out_view", OutputView::LightImage);
+      break;
+    }
+    case SAPP_KEYCODE_4: {
+      _view_options.set_enum("out_view", OutputView::ReferenceImage);
+      break;
+    }
+    case SAPP_KEYCODE_5: {
+      _view_options.set_enum("out_view", OutputView::RelativeDifference);
+      break;
+    }
+    case SAPP_KEYCODE_6: {
+      _view_options.set_enum("out_view", OutputView::AbsoluteDifference);
+      break;
+    }
+    case SAPP_KEYCODE_KP_DIVIDE: {
+      float e = _view_options.get("exp", 1.0f).to_float();
+      _view_options.set("exp", 0.5f * e);
+      break;
+    }
+    case SAPP_KEYCODE_KP_MULTIPLY: {
+      float e = _view_options.get("exp", 1.0f).to_float();
+      _view_options.set("exp", 2.0f * e);
+      break;
+    }
+    default:
+      break;
+  }
+
+  return false;
 }
 
 ViewOptions UI::view_options() const {
@@ -229,6 +314,23 @@ void UI::select_scene_file() {
   auto selected_file = open_file({"Supported formats", "*.json;*.obj"});  // TODO : add *.gltf;*.pbrt
   if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
     callbacks.scene_file_selected(selected_file);
+  }
+}
+
+void UI::save_image(SaveImageMode mode) {
+  auto selected_file = save_file({
+    mode == SaveImageMode::TonemappedLDR ? "PNG images" : "EXR images",
+    mode == SaveImageMode::TonemappedLDR ? "*.png" : "*.exr",
+  });
+  if ((selected_file.empty() == false) && callbacks.save_image_selected) {
+    callbacks.save_image_selected(selected_file, mode);
+  }
+}
+
+void UI::load_image() {
+  auto selected_file = open_file({"Supported images", "*.exr;*.png;*.hdr;*.pfm;*.jpg;*.bmp;*.tga"});
+  if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
+    callbacks.reference_image_selected(selected_file);
   }
 }
 
