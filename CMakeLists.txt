@@ -5,6 +5,8 @@ cmake_policy(SET CMP0091 NEW)
 
 project(etx-tracer VERSION 0.0.1)
 
+set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake)
+
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake")
 

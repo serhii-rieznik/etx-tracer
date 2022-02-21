@@ -69,3 +69,15 @@ find_package(embree 3.0 REQUIRED)
 create_library(rt)
 target_link_libraries(etx-rt PRIVATE glm embree etx-core etx-render)
 
+if(DEFINED ENV{OptiX_INSTALL_DIR})
+
+  find_package(CUDA REQUIRED)
+  find_package(OptiX REQUIRED)
+  create_library(gpu)
+  target_link_libraries(etx-gpu PRIVATE etx-core etx-log)
+  target_include_directories(etx-gpu PUBLIC ${OptiX_INCLUDE} ${CUDA_TOOLKIT_ROOT_DIR}/include)
+  target_link_libraries(etx-gpu PUBLIC tlsf ${optix_LIBRARY} ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY})
+
+else()
+  message(WARNING "OptiX_INSTALL_DIR environment variable not found, GPU rendering will not be available.")
+endif()

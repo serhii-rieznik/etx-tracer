@@ -43,3 +43,7 @@ cmake -G "Visual Studio 17 2022"
   -DWITH_OPENVDB=1 ..
 ```
 The new option `WITH_OPENVDB=1` enables support for loading volumetric data from .vdb format.
+
+### Building with CUDA and OptiX
+- download and install [CUDA](https://developer.nvidia.com/cuda-downloads) and [OptiX](https://developer.nvidia.com/designworks/optix/download);
+- set `OptiX_INSTALL_DIR` environment variable so it points to the installation folder of OptiX.
