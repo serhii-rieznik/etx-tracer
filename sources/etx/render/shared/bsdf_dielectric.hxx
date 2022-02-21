@@ -339,6 +339,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     auto a_data = data;
     a_data.w_o = normalize(local_frame.from_local(result.w_o));
     result.pdf = pdf(a_data, mtl, scene, smp);
+    ETX_VALIDATE(result.pdf);
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {  // reflection
       result.eta = 1.0f;
@@ -357,6 +358,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     auto a_data = data;
     a_data.w_o = normalize(local_frame.from_local(result.w_o));
     result.pdf = pdf(a_data, mtl, scene, smp);
+    ETX_VALIDATE(result.pdf);
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {  // refraction
       result.eta = m_invEta;
@@ -382,7 +384,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
   auto w_i = local_frame.to_local(-data.w_i);
   if (LocalFrame::cos_theta(w_i) == 0)
-    return {};
+    return {data.spectrum_sample.wavelength, 0.0f};
 
   auto w_o = local_frame.to_local(data.w_o);
 
@@ -412,6 +414,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
     value *= (data.path_source == PathSource::Camera) ? sqr(ext_ior / int_ior) : 1.0f;
   }
 
+  if (value.is_zero())
+    return {data.spectrum_sample.wavelength, 0.0f};
+
   BSDFEval eval;
   eval.func = apply_image(data.spectrum_sample, reflection ? mtl.specular : mtl.transmittance, data.tex, scene) * (2.0f * value);
   ETX_VALIDATE(eval.func);
@@ -429,6 +434,9 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
   auto w_i = local_frame.to_local(-data.w_i);
+  if (LocalFrame::cos_theta(w_i) == 0.0f)
+    return 0.0f;
+
   auto w_o = local_frame.to_local(data.w_o);
   float ext_ior = mtl.ext_ior(data.spectrum_sample).eta.monochromatic();
   float int_ior = mtl.int_ior(data.spectrum_sample).eta.monochromatic();
@@ -450,18 +458,24 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
     float eta = LocalFrame::cos_theta(w_i) > 0 ? m_eta : m_invEta;
     wh = normalize(w_i + w_o * eta);
     float sqrtDenom = dot(w_i, wh) + eta * dot(w_o, wh);
-    dwh_dwo = (eta * eta * dot(w_o, wh)) / (sqrtDenom * sqrtDenom);
+    dwh_dwo = sqr(eta) * dot(w_o, wh) / sqr(sqrtDenom);
   }
 
   wh *= (LocalFrame::cos_theta(wh) >= 0.0f) ? 1.0f : -1.0f;
 
   external::RayInfo ray = {w_i * (outside ? 1.0f : -1.0f), alpha_x, alpha_y};
   float prob = max(0.0f, dot(wh, ray.w)) * external::D_ggx(wh, alpha_x, alpha_y) / (1.0f + ray.Lambda) / LocalFrame::cos_theta(ray.w);
+  ETX_VALIDATE(prob);
 
   float F = fresnel::dielectric(data.spectrum_sample, dot(w_i, wh), outside ? ext_ior : int_ior, outside ? int_ior : ext_ior).monochromatic();
+  ETX_VALIDATE(F);
+
   prob *= reflect ? F : (1 - F);
 
-  return fabsf(prob * dwh_dwo) + fabsf(LocalFrame::cos_theta(w_o));
+  float result = fabsf(prob * dwh_dwo) + fabsf(LocalFrame::cos_theta(w_o));
+  ETX_VALIDATE(result);
+
+  return result;
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {

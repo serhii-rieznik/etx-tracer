@@ -56,11 +56,20 @@ struct MediumPoolImpl {
     medium.phase_function_g = g;
     medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
 
-    auto density = load_density_grid(volume_file, medium.dimensions, medium.max_density);
+    auto density = load_density_grid(volume_file, medium.dimensions);
 
-    if (s_a.is_zero() && s_o.is_zero() || (medium.max_density == 0.0f)) {
+    float max_density = 0.0f;
+    for (auto f : density) {
+      max_density = max(max_density, f);
+    }
+
+    if ((s_a.is_zero() && s_o.is_zero()) || density.empty() || (max_density == 0.0f)) {
       medium.cls = Medium::Class::Vacuum;
     } else {
+      for (auto& f : density) {
+        f /= max_density;
+      }
+
       medium.cls = Medium::Class::Heterogeneous;
       medium.density.count = density.size();
       medium.density.a = reinterpret_cast<float*>(malloc(medium.density.count * sizeof(float)));
@@ -103,7 +112,7 @@ struct MediumPoolImpl {
     m = {};
   }
 
-  std::vector<float> load_density_grid(const char* file_name, uint3& d, float& max_density) {
+  std::vector<float> load_density_grid(const char* file_name, uint3& d) {
     std::vector<float> density;
 
     const char* ext = get_file_ext(file_name);
@@ -111,11 +120,6 @@ struct MediumPoolImpl {
       load_vdb(file_name, density, d);
     } else {
       log::error("Only VDB volumetric data format is supported at the moment");
-    }
-
-    max_density = 0.0f;
-    for (auto f : density) {
-      max_density = max(max_density, f);
     }
 
     return density;
@@ -155,8 +159,6 @@ struct MediumPoolImpl {
           auto pos = (i.getCoord() - grid_bbox.getStart()).asVec3i();
           density[pos.x() + 1llu * pos.y() * d.x + 1llu * pos.z() * d.x * d.y] = i.getValue();
         }
-
-        // TODO : support multigrid, just take first for now
         break;
       }
     }

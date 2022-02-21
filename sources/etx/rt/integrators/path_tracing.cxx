@@ -95,20 +95,18 @@ struct CPUPathTracingImpl : public Task {
     bool sampled_delta_bsdf = false;
 
     Intersection intersection = {};
-    Medium::Sample medium_sample = {};
     auto ray = generate_ray(smp, rt.scene(), uv);
     while ((state->load() != Integrator::State::Stopped) && (path_length <= current_max_depth)) {
       bool found_intersection = rt.trace(ray, intersection, smp);
 
+      Medium::Sample medium_sample = {};
       if (medium_index != kInvalidIndex) {
         medium_sample = scene.mediums[medium_index].sample(spect, smp, ray.o, ray.d, found_intersection ? intersection.t : std::numeric_limits<float>::max());
         throughput *= medium_sample.weight;
         ETX_VALIDATE(throughput);
-      } else {
-        medium_sample.sampled_medium = 0;
       }
 
-      if (medium_sample.sampled_medium) {
+      if (medium_sample.sampled_medium()) {
         const auto& medium = scene.mediums[medium_index];
         /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
          * direct light sampling from medium
