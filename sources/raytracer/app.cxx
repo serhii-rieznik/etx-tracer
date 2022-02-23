@@ -31,6 +31,15 @@ void RTApplication::init() {
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
+  if (_options.has("integrator") == false) {
+    _options.add("integrator", "none");
+  }
+  if (_options.has("scene") == false) {
+    _options.add("scene", "none");
+  }
+  if (_options.has("ref") == false) {
+    _options.add("ref", "none");
+  }
 
   auto integrator = _options.get("integrator", std::string{}).name;
   for (uint64_t i = 0; (integrator.empty() == false) && (i < std::size(_integrator_array)); ++i) {

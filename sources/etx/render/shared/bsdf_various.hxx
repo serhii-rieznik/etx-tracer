@@ -198,9 +198,10 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
     return {data.spectrum_sample.wavelength, 0.0f};
   }
 
-  auto eta_e = mtl.ext_ior(data.spectrum_sample).eta.monochromatic();
-  auto eta_i = mtl.int_ior(data.spectrum_sample).eta.monochromatic();
-  auto f = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i);
+  auto eta_e = mtl.ext_ior(data.spectrum_sample);
+  auto eta_i = mtl.int_ior(data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
+  auto f = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
 
   auto ggx = NormalDistribution(frame, remap_alpha(mtl.roughness));
   auto eval = ggx.evaluate(m, data.w_i, data.w_o);

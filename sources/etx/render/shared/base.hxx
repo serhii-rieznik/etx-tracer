@@ -83,4 +83,8 @@ ETX_GPU_CODE void print_value(const char* name, const char* tag, const float3& v
   printf("%s : %s (%f, %f, %f)\n", name, tag, v.x, v.y, v.z);
 }
 
+ETX_GPU_CODE void print_value(const char* name, const char* tag, complex z) {
+  printf("%s : %s %f + i * %f\n", name, tag, z.real(), z.imag());
+}
+
 }  // namespace etx

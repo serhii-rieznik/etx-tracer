@@ -1091,7 +1091,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
           if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
             char buffer[1024] = {};
             snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-            mtl.thinfilm.image_index = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::Linear);
+            mtl.thinfilm.thinkness_image = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::Linear);
             i += 1;
           }
 
@@ -1099,6 +1099,17 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
             mtl.thinfilm.min_thickness = static_cast<float>(atof(params[i + 1]));
             mtl.thinfilm.max_thickness = static_cast<float>(atof(params[i + 2]));
             i += 2;
+          }
+
+          if ((strcmp(params[i], "ior") == 0) && (i + 1 < e)) {
+            float value = 0.0f;
+            if (sscanf(params[i + 1], "%f", &value) == 1) {
+              mtl.thinfilm.ior.eta = SpectralDistribution::from_constant(value);
+            } else {
+              char buffer[256] = {};
+              snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
+              SpectralDistribution::load_from_file(buffer, mtl.thinfilm.ior.eta, &mtl.thinfilm.ior.k, SpectralDistribution::Class::Reflectance, spectrums());
+            }
           }
         }
       }

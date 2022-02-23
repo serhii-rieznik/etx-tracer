@@ -13,6 +13,8 @@
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <complex>
+
 using float2 = glm::vec2;
 using float3 = glm::vec3;
 using float4 = glm::vec4;
@@ -26,36 +28,7 @@ using float4x4 = glm::mat4x4;
 using ubyte2 = glm::u8vec2;
 using ubyte3 = glm::u8vec3;
 using ubyte4 = glm::u8vec4;
-
-template <typename T>
-inline constexpr T clamp(T val, T min_val, T max_val) {
-  return glm::clamp(val, min_val, max_val);
-}
-
-template <typename T>
-inline constexpr T saturate(T val) {
-  return glm::clamp(val, 0.0f, 1.0f);
-}
-
-template <typename T>
-inline constexpr T min(T a, T b) {
-  return glm::min(a, b);
-}
-
-template <typename T>
-inline constexpr T max(T a, T b) {
-  return glm::max(a, b);
-}
-
-template <typename T>
-inline constexpr T lerp(T a, T b, float t) {
-  return glm::mix(a, b, t);
-}
-
-template <typename T>
-inline constexpr T sqr(T t) {
-  return t * t;
-}
+using complex = std::complex<float>;
 
 #endif
 
@@ -173,6 +146,36 @@ struct alignas(16) Intersection : public Vertex {
   }
 };
 
+template <typename T>
+inline constexpr T clamp(T val, T min_val, T max_val) {
+  return glm::clamp(val, min_val, max_val);
+}
+
+template <typename T>
+inline constexpr T saturate(T val) {
+  return glm::clamp(val, 0.0f, 1.0f);
+}
+
+template <typename T>
+inline constexpr T min(T a, T b) {
+  return glm::min(a, b);
+}
+
+template <typename T>
+inline constexpr T max(T a, T b) {
+  return glm::max(a, b);
+}
+
+template <typename T>
+inline constexpr T lerp(T a, T b, float t) {
+  return glm::mix(a, b, t);
+}
+
+template <typename T>
+inline constexpr T sqr(T t) {
+  return t * t;
+}
+
 ETX_GPU_CODE float3 to_float3(const float4& v) {
   return {v.x, v.y, v.z};
 }
@@ -288,6 +291,10 @@ ETX_GPU_CODE bool valid_value(const float3& v) {
 
 ETX_GPU_CODE bool valid_value(const float4& v) {
   return valid_value(v.x) && valid_value(v.y) && valid_value(v.z) && valid_value(v.w);
+}
+
+ETX_GPU_CODE bool valid_value(complex t) {
+  return (isnan(t.real()) == false) && (isinf(t.real()) == false) && (isnan(t.imag()) == false) && (isinf(t.imag()) == false);
 }
 
 ETX_GPU_CODE float to_float(uint32_t value) {

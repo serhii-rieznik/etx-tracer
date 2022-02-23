@@ -32,7 +32,6 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, Cl
     float3 xyz = result.integrate_to_xyz();
     result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
   }
-
   return result;
 }
 

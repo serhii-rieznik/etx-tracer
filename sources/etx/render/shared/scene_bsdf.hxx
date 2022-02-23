@@ -89,12 +89,26 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralIma
   return result;
 }
 
+ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene) {
+  if (film.max_thickness * film.min_thickness <= 0.0f) {
+    return {{}, 0.0f};
+  }
+
+  float t = (film.thinkness_image == kInvalidIndex) ? 1.0f : scene.images[film.thinkness_image].evaluate(uv).x;
+  float thickness = lerp(film.min_thickness, film.max_thickness, t);
+  return {film.ior(spect), thickness};
+}
+
 ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene) {
-  SpectralResponse result = img.spectrum(spect);
+  auto result = img.spectrum(spect);
+  ETX_VALIDATE(result);
 
   if (img.image_index != kInvalidIndex) {
     float4 eval = scene.images[img.image_index].evaluate(uv);
-    result *= rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_illuminant);
+    ETX_VALIDATE(eval);
+    auto scale = rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_illuminant);
+    ETX_VALIDATE(result);
+    result *= scale;
     ETX_VALIDATE(result);
   }
   return result;

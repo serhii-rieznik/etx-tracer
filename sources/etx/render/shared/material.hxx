@@ -5,16 +5,25 @@
 
 namespace etx {
 
-struct alignas(16) Thinfilm {
-  uint32_t image_index = kInvalidIndex;
-  float min_thickness = 0.0f;
-  float max_thickness = 0.0f;
-  float pad;
-};
-
 struct alignas(16) SpectralImage {
   SpectralDistribution spectrum = {};
   uint32_t image_index = kInvalidIndex;
+};
+
+struct alignas(16) Thinfilm {
+  struct Eval {
+    RefractiveIndex::Sample ior;
+    float thickness = 0.0f;
+    operator bool() const {
+      return thickness > 0.0f;
+    }
+  };
+
+  RefractiveIndex ior = {};
+  uint32_t thinkness_image = kInvalidIndex;
+  float min_thickness = 0.0f;
+  float max_thickness = 0.0f;
+  float pad;
 };
 
 struct alignas(16) Material {

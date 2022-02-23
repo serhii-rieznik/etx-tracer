@@ -358,6 +358,9 @@ ETX_GPU_CODE SpectralResponse cos(const SpectralResponse& v) {
 ETX_GPU_CODE SpectralResponse abs(const SpectralResponse& v) {
   return {v.wavelength, abs(v.components)};
 }
+ETX_GPU_CODE SpectralResponse saturate(const SpectralResponse& v) {
+  return {v.wavelength, {saturate(v.components.x), saturate(v.components.y), saturate(v.components.z)}};
+}
 ETX_GPU_CODE void print_value(const char* name, const char* tag, const SpectralResponse& v) {
   printf("%s : %s (%f : %f %f %f)\n", name, tag, v.wavelength, v.components.x, v.components.y, v.components.z);
 }
@@ -379,7 +382,7 @@ struct alignas(16) SpectralDistribution {
   ETX_GPU_CODE SpectralResponse query(const SpectralQuery q) const {
     if constexpr (spectrum::kSpectralRendering) {
       if ((q.wavelength < spectrum::kShortestWavelength) || (q.wavelength > spectrum::kLongestWavelength)) {
-        return {q.wavelength, -1.0f};
+        return {q.wavelength, 0.0f};
       }
 
       uint64_t i = lower_bound(q.wavelength);
@@ -398,6 +401,7 @@ struct alignas(16) SpectralDistribution {
       uint64_t j = min(i + 1, count - 1);
       float t = (q.wavelength - entries[i].wavelength) / (entries[j].wavelength - entries[i].wavelength);
       float p = lerp(entries[i].power, entries[j].power, t);
+      ETX_VALIDATE(p);
       return SpectralResponse{q.wavelength, p};
     } else {
       return SpectralResponse{q.wavelength, {entries[0].power, entries[1].power, entries[2].power}};
@@ -510,6 +514,14 @@ struct RefractiveIndex {
     SpectralResponse eta;
     SpectralResponse k;
 
+    ETX_GPU_CODE complex as_complex(uint32_t c) const {
+      return {eta.components[c], k.components[c]};
+    }
+
+    ETX_GPU_CODE complex as_monochromatic_complex() const {
+      return {eta.monochromatic(), k.monochromatic()};
+    }
+
     ETX_GPU_CODE Sample operator/(const Sample& other) const {
       return {wavelength, eta / other.eta, k / other.eta};
     }
@@ -595,7 +607,9 @@ ETX_GPU_CODE void compute_weights(const float3& rgb, float weights[Color::Count]
   }
 }
 
-ETX_GPU_CODE SpectralDistribution make_spd(const float3& rgb, const SpectrumSet& spectrums) {
+ETX_GPU_CODE SpectralDistribution make_spd(float3 rgb, const SpectrumSet& spectrums) {
+  rgb = max(float3{0.0f, 0.0f, 0.0f}, rgb);
+
   SpectralDistribution r;
   if constexpr (spectrum::kSpectralRendering == false) {
     r.count = 3;

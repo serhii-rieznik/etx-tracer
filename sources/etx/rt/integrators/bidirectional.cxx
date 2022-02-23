@@ -279,10 +279,6 @@ struct CPUBidirectionalImpl : public Task {
         w.pdf.backward = v.pdf_solid_angle_to_area(rev_bsdf_pdf, w);
         ETX_VALIDATE(w.pdf.backward);
 
-        if (mode == PathSource::Light) {
-          bsdf_sample.weight *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
-        }
-
         if (mode == PathSource::Camera) {
           eta *= bsdf_sample.eta;
         }
@@ -292,6 +288,11 @@ struct CPUBidirectionalImpl : public Task {
 
         throughput *= bsdf_sample.weight;
         ETX_VALIDATE(throughput);
+
+        if (mode == PathSource::Light) {
+          throughput *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
+          ETX_VALIDATE(throughput);
+        }
 
         ray.o = shading_pos(rt.scene().vertices, tri, intersection.barycentric, bsdf_data.w_o);
         ray.d = bsdf_data.w_o;
