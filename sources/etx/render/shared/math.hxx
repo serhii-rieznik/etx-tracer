@@ -278,7 +278,8 @@ ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& b, const float3
 }
 
 ETX_GPU_CODE bool valid_value(float t) {
-  return (isnan(t) == false) && (isinf(t) == false) && (t >= 0.0f);
+  auto cl = fpclassify(t);
+  return (t >= 0.0f) && (cl != FP_INFINITE) && (cl != FP_NAN);
 }
 
 ETX_GPU_CODE bool valid_value(const float2& v) {
@@ -294,7 +295,9 @@ ETX_GPU_CODE bool valid_value(const float4& v) {
 }
 
 ETX_GPU_CODE bool valid_value(complex t) {
-  return (isnan(t.real()) == false) && (isinf(t.real()) == false) && (isnan(t.imag()) == false) && (isinf(t.imag()) == false);
+  auto re = fpclassify(t.real());
+  auto im = fpclassify(t.imag());
+  return (re != FP_INFINITE) && (re != FP_NAN) && (im != FP_INFINITE) && (im != FP_NAN);
 }
 
 ETX_GPU_CODE float to_float(uint32_t value) {

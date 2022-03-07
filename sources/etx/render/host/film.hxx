@@ -46,7 +46,6 @@ struct Film {
  private:
   uint2 _dimensions = {};
   uint32_t _thread_count = 0;
-  // std::vector<std::vector<float4>> _mt_data = {};
   std::vector<float4> _buffer = {};
   std::vector<uint32_t> _sequence = {};
 };

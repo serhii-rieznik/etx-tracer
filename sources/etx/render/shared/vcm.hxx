@@ -75,12 +75,13 @@ struct PathState {
 struct alignas(16) LightVertex {
   LightVertex() = default;
 
-  ETX_GPU_CODE LightVertex(const PathState& s, const float3& b, uint32_t tri, uint32_t len, uint32_t index)
+  ETX_GPU_CODE LightVertex(const PathState& s, const float3& p, const float3& b, uint32_t tri, uint32_t len, uint32_t index)
     : throughput(s.throughput)
     , w_i(s.ray.d)
     , d_vcm(s.d_vcm)
-    , d_vc(s.d_vc)
     , bc(b)
+    , d_vc(s.d_vc)
+    , pos(p)
     , d_vm(s.d_vm)
     , triangle_index(tri)
     , path_length(len)
@@ -95,6 +96,7 @@ struct alignas(16) LightVertex {
   float3 bc = {};
   float d_vc = 0.0f;
 
+  float3 pos = {};
   float d_vm = 0.0f;
   uint32_t triangle_index = kInvalidIndex;
   uint32_t path_length = 0;
@@ -105,7 +107,7 @@ struct alignas(16) LightVertex {
   }
 
   ETX_GPU_CODE float3 position(const Scene& s) const {
-    return lerp_pos(s.vertices, s.triangles[triangle_index], bc);
+    return pos;  // lerp_pos(s.vertices, s.triangles[triangle_index], bc);
   }
 
   ETX_GPU_CODE float3 normal(const Scene& s) const {

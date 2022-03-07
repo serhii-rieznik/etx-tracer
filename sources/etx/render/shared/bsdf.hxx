@@ -58,7 +58,7 @@ struct BSDFEval {
   float eta = 1.0f;
 
   ETX_GPU_CODE bool valid() const {
-    return (pdf > 0.0f) && bsdf.valid();
+    return (pdf > 0.0f);
   }
 };
 
@@ -100,7 +100,7 @@ struct BSDFSample {
   }
 
   ETX_GPU_CODE bool valid() const {
-    return (pdf > 0.0f) && weight.valid();
+    return (pdf > 0.0f);
   }
 
   ETX_GPU_CODE bool is_diffuse() const {

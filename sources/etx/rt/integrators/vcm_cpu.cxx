@@ -318,7 +318,7 @@ struct CPUVCMImpl {
           }
 
           if (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false) {
-            local_vertices.emplace_back(state, intersection.barycentric, intersection.triangle_index, path_length, static_cast<uint32_t>(i));
+            local_vertices.emplace_back(state, intersection.pos, intersection.barycentric, intersection.triangle_index, path_length, static_cast<uint32_t>(i));
 
             if (_vcm_options.connect_to_camera() && (path_length + 1 <= opt_max_depth)) {
               auto camera_sample = sample_film(smp, rt.scene(), intersection.pos);
@@ -378,11 +378,10 @@ struct CPUVCMImpl {
 
     for (uint32_t pi = range_begin; running() && (pi < range_end); ++pi) {
       stats.c++;
-      uint32_t i = camera_image.pixel_at(pi);
-      uint32_t x = i % camera_image.dimensions().x;
-      uint32_t y = i / camera_image.dimensions().x;
+      uint32_t x = pi % camera_image.dimensions().x;
+      uint32_t y = pi / camera_image.dimensions().x;
 
-      const auto& light_path = _light_paths[i];
+      const auto& light_path = _light_paths[pi];
       auto spect = light_path.spect;
 
       vcm::PathState state;
