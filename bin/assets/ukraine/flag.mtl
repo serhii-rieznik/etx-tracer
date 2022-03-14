@@ -1,0 +1,31 @@
+# Blender 3.1.0 MTL File: 'flag.blend'
+# www.blender.org
+
+newmtl _box
+material class coating
+Ks 0.02 0.02 0.02
+Kd 0.4 0.4 0.4
+thinfilm range 180.0 800.0
+
+newmtl emitter
+emitter nblackbody 4000.0 scale 20.0 collimated 128.0
+Ke 1 1 1
+
+newmtl flag
+material class translucent
+map_Kd  ukraine.png
+
+newmtl left
+material class coating
+Ks 0.02 0.02 0.02
+Kd 1 0 0
+
+newmtl pole
+material class msdielectric
+int_ior chrome
+Pr 0.25
+
+newmtl right
+material class coating
+Ks 0.02 0.02 0.02
+Kd 0 1 0
