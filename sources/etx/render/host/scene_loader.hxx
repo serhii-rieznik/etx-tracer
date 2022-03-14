@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include <etx/core/pimpl.hxx>
+#include <etx/render/host/tasks.hxx>
+
 #include <etx/render/shared/scene.hxx>
 
 namespace etx {
@@ -12,7 +14,7 @@ struct SceneRepresentation {
     LoadEverything = LoadGeometry | SetupCamera,
   };
 
-  SceneRepresentation();
+  SceneRepresentation(TaskScheduler&);
   ~SceneRepresentation();
 
   bool load_from_file(const char* filename, uint32_t options);

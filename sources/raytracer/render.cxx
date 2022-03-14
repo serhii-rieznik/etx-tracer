@@ -20,6 +20,10 @@ struct ShaderConstants {
 };
 
 struct RenderContextImpl {
+  RenderContextImpl(TaskScheduler& s)
+    : image_pool(s) {
+  }
+
   sg_shader output_shader = {};
   sg_pipeline output_pipeline = {};
   sg_image sample_image = {};
@@ -30,11 +34,20 @@ struct RenderContextImpl {
   uint32_t ref_image_handle = kInvalidIndex;
   ViewOptions view_options = {};
   uint2 output_dimensions = {};
-  ImagePool image_pool = {};
+  ImagePool image_pool;
+
   std::vector<float4> black_image;
 };
 
-ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Impl);
+ETX_PIMPL_IMPLEMENT(RenderContext, Impl);
+
+RenderContext::RenderContext(TaskScheduler& s) {
+  ETX_PIMPL_INIT(RenderContext, s);
+}
+
+RenderContext::~RenderContext() {
+  ETX_PIMPL_CLEANUP(RenderContext);
+}
 
 void RenderContext::init() {
   _private->image_pool.init(1024u);

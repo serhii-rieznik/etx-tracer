@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include <etx/core/pimpl.hxx>
+#include <etx/render/host/tasks.hxx>
+
 #include <etx/render/shared/image.hxx>
 
 #include <string>
@@ -8,7 +10,7 @@
 namespace etx {
 
 struct ImagePool {
-  ImagePool();
+  ImagePool(TaskScheduler&);
   ~ImagePool();
 
   void init(uint32_t capacity);

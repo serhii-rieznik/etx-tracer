@@ -12,7 +12,9 @@
 namespace etx {
 
 RTApplication::RTApplication()
-  : camera_controller(scene.camera()) {
+  : render(raytracing.scheduler())
+  , scene(raytracing.scheduler())
+  , camera_controller(scene.camera()) {
 }
 
 void RTApplication::init() {

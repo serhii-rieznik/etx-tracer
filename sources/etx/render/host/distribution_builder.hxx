@@ -20,6 +20,15 @@ struct DistributionBuilder {
     _dist.values[_size++] = {value, 0.0f, 0.0f};
   }
 
+  void set(uint32_t loc, float value) {
+    ETX_ASSERT(loc <= _capacity);
+    _dist.values[loc] = {value, 0.0f, 0.0f};
+  }
+
+  void set_size(uint32_t size) {
+    _size = size;
+  }
+
   void finalize() {
     ETX_ASSERT(_size + 1 == _capacity);
 

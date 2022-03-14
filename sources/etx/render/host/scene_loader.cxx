@@ -70,6 +70,7 @@ inline bool is_valid_vector(const float3& v) {
 }
 
 struct SceneRepresentationImpl {
+  TaskScheduler& scheduler;
   std::vector<Vertex> vertices;
   std::vector<Triangle> triangles;
   std::vector<Material> materials;
@@ -112,7 +113,9 @@ struct SceneRepresentationImpl {
     return mediums.add_heterogenous(id, volume_file, s_a, s_t, g);
   }
 
-  SceneRepresentationImpl() {
+  SceneRepresentationImpl(TaskScheduler& s)
+    : scheduler(s)
+    , images(s) {
     images.init(1024u);
     mediums.init(1024u);
     scene.camera = build_camera({5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280.0f, 720.0f}, 26.99f, 0.0f, 1.0f);
@@ -455,7 +458,15 @@ float get_camera_fov(const Camera& camera) {
   return 2.0f * atanf(camera.tan_half_fov) * 180.0f / kPi;
 }
 
-ETX_PIMPL_IMPLEMENT_ALL(SceneRepresentation, Impl);
+ETX_PIMPL_IMPLEMENT(SceneRepresentation, Impl);
+
+SceneRepresentation::SceneRepresentation(TaskScheduler& s) {
+  ETX_PIMPL_INIT(SceneRepresentation, s);
+}
+
+SceneRepresentation::~SceneRepresentation() {
+  ETX_PIMPL_CLEANUP(SceneRepresentation);
+}
 
 const Scene& SceneRepresentation::scene() const {
   return _private->scene;

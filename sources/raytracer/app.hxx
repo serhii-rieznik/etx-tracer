@@ -41,11 +41,12 @@ struct RTApplication {
   void save_options();
 
  private:
-  RenderContext render;
   UI ui;
   TimeMeasure time_measure;
-  SceneRepresentation scene;
   Raytracing raytracing;
+
+  RenderContext render;
+  SceneRepresentation scene;
   CameraController camera_controller;
 
   CPUDebugIntegrator _preview = {raytracing};

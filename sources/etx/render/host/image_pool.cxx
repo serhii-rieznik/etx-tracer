@@ -1,4 +1,7 @@
-﻿#include <etx/render/host/image_pool.hxx>
+﻿#include <etx/core/core.hxx>
+#include <etx/log/log.hxx>
+
+#include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/distribution_builder.hxx>
 #include <etx/render/host/pool.hxx>
 
@@ -14,6 +17,10 @@ namespace etx {
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data);
 
 struct ImagePoolImpl {
+  ImagePoolImpl(TaskScheduler& s)
+    : scheduler(s) {
+  }
+
   void init(uint32_t capacity) {
     image_pool.init(capacity);
   }
@@ -32,6 +39,7 @@ struct ImagePoolImpl {
     auto handle = image_pool.alloc();
     auto& image = image_pool.get(handle);
     load_image(image, path.c_str(), image_options);
+
     if (image_options & Image::BuildSamplingTable) {
       build_sampling_table(image);
     }
@@ -73,6 +81,7 @@ struct ImagePoolImpl {
 
     std::vector<uint8_t> source_data = {};
     Image::Format format = load_data(file_name, source_data, img.isize);
+
     if ((format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
       source_data.resize(sizeof(float4));
       *(float4*)(source_data.data()) = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -108,6 +117,7 @@ struct ImagePoolImpl {
       memcpy(img.pixels, source_data.data(), source_data.size());
     } else {
       ETX_FAIL_FMT("Unsupported image format %u", format);
+      return;
     }
 
     for (uint32_t i = 0, e = img.isize.x * img.isize.y; i < e; ++i) {
@@ -119,31 +129,34 @@ struct ImagePoolImpl {
   }
 
   void build_sampling_table(Image& img) {
-    float total_weight = 0.0f;
     bool uniform_sampling = (img.options & Image::UniformSamplingTable) == Image::UniformSamplingTable;
     DistributionBuilder y_dist(img.y_distribution, img.isize.y);
     img.x_distributions = reinterpret_cast<Distribution*>(calloc(img.isize.y, sizeof(Distribution)));
 
-    for (uint32_t y = 0; y < img.isize.y; ++y) {
-      float v = (float(y) + 0.5f) / img.fsize.y;
-      float row_value = 0.0f;
+    std::atomic<float> total_weight = {0.0f};
+    scheduler.execute(img.isize.y, [&img, uniform_sampling, &total_weight, &y_dist](uint32_t begin, uint32_t end, uint32_t) {
+      for (uint32_t y = begin; y < end; ++y) {
+        float v = (float(y) + 0.5f) / img.fsize.y;
+        float row_value = 0.0f;
 
-      DistributionBuilder d_x(img.x_distributions[y], img.isize.x);
-      for (uint32_t x = 0; x < img.isize.x; ++x) {
-        float u = (float(x) + 0.5f) / img.fsize.x;
-        float4 px = img.read(img.fsize * float2{u, v});
-        float lum = luminance(px);
-        row_value += lum;
-        d_x.add(lum);
+        DistributionBuilder d_x(img.x_distributions[y], img.isize.x);
+        for (uint32_t x = 0; x < img.isize.x; ++x) {
+          float u = (float(x) + 0.5f) / img.fsize.x;
+          float4 px = img.read(img.fsize * float2{u, v});
+          float lum = luminance(px);
+          row_value += lum;
+          d_x.add(lum);
+        }
+        d_x.finalize();
+
+        float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
+        row_value *= row_weight;
+
+        total_weight += row_value;
+        y_dist.set(y, row_value);
       }
-      d_x.finalize();
-
-      float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
-      row_value *= row_weight;
-
-      total_weight += row_value;
-      y_dist.add(row_value);
-    }
+    });
+    y_dist.set_size(img.isize.y);
     y_dist.finalize();
 
     img.normalization = total_weight / (img.fsize.x * img.fsize.y);
@@ -151,7 +164,7 @@ struct ImagePoolImpl {
 
   void free_image(Image& img) {
     free(img.pixels);
-    for (uint32_t i = 0; i < img.y_distribution.size; ++i) {
+    for (uint32_t i = 0; (img.x_distributions != nullptr) && (i < img.y_distribution.size); ++i) {
       free(img.x_distributions[i].values);
     }
     free(img.x_distributions);
@@ -182,22 +195,20 @@ struct ImagePoolImpl {
         return Image::Format::Undefined;
       }
 
-      for (int i = 0; i < 4 * w * h; ++i) {
-        if (std::isinf(rgba_data[i])) {
-          rgba_data[i] = 65504.0f;  // max value in half-float
+      scheduler.execute(4 * w * h, [&rgba_data](uint32_t begin, uint32_t end, uint32_t) {
+        for (uint32_t i = begin; i < end; ++i) {
+          if (std::isinf(rgba_data[i])) {
+            rgba_data[i] = 65504.0f;  // max value in half-float
+          }
+          if (std::isnan(rgba_data[i]) || (rgba_data[i] < 0.0f)) {
+            rgba_data[i] = 0.0f;
+          }
         }
-        if (std::isnan(rgba_data[i]) || (rgba_data[i] < 0.0f)) {
-          rgba_data[i] = 0.0f;
-        }
-      }
+      });
 
       dimensions = {w, h};
       data.resize(sizeof(float4) * w * h);
       memcpy(data.data(), rgba_data, sizeof(float4) * w * h);
-      // auto row_size = sizeof(float4) * w;
-      // for (int y = 0; y < h; ++y) {
-      //   memcpy(data.data() + row_size * (h - 1 - y), rgba_data + 4llu * y * w, row_size);
-      // }
       free(rgba_data);
 
       return Image::Format::RGBA32F;
@@ -272,12 +283,21 @@ struct ImagePoolImpl {
     return Image::Format::RGBA8;
   }
 
+  TaskScheduler& scheduler;
   ObjectIndexPool<Image> image_pool;
   std::unordered_map<std::string, uint32_t> mapping;
   Image empty;
 };
 
-ETX_PIMPL_IMPLEMENT_ALL(ImagePool, Impl);
+ETX_PIMPL_IMPLEMENT(ImagePool, Impl);
+
+ImagePool::ImagePool(TaskScheduler& s) {
+  ETX_PIMPL_INIT(ImagePool, s);
+}
+
+ImagePool::~ImagePool() {
+  ETX_PIMPL_CLEANUP(ImagePool);
+}
 
 void ImagePool::init(uint32_t capacity) {
   _private->init(capacity);
