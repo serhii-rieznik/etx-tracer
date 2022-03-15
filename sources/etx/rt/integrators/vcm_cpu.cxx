@@ -105,7 +105,7 @@ struct CPUVCMImpl {
   uint32_t opt_max_depth = 0x7fffffff;
   uint32_t opt_rr_start = 0x5;
   uint32_t opt_radius_decay = 256;
-  float initial_radius = 0.0f;
+  float opt_radius = 0.0f;
   float current_radius = 0.0f;
 
   float _vm_weight = {};
@@ -181,6 +181,7 @@ struct CPUVCMImpl {
     opt_max_iterations = opt.get("spp", opt_max_iterations).to_integer();
     opt_max_depth = opt.get("pathlen", opt_max_depth).to_integer();
     opt_rr_start = opt.get("rrstart", opt_rr_start).to_integer();
+    opt_radius = opt.get("vcm_r", opt_radius).to_float();
 
     stats.total_time = {};
     iteration = 0;
@@ -199,7 +200,7 @@ struct CPUVCMImpl {
     stats.l = 0;
     stats.c = 0;
 
-    float used_radius = initial_radius;
+    float used_radius = opt_radius;
     if (used_radius == 0.0f) {
       used_radius = 5.0f * rt.scene().bounding_sphere_radius * min(1.0f / float(camera_image.dimensions().x), 1.0f / float(camera_image.dimensions().y));
     }
@@ -537,6 +538,7 @@ Options CPUVCM::options() const {
   result.add(1u, _private->opt_max_iterations, 0xffffu, "spp", "Max Iterations");
   result.add(1u, _private->opt_max_depth, 65536u, "pathlen", "Maximal Path Length");
   result.add(1u, _private->opt_rr_start, 65536u, "rrstart", "Start Russian Roulette at");
+  result.add(0.0f, _private->opt_radius, 10.0f, "vcm_r", "Initial Radius");
   return result;
 }
 

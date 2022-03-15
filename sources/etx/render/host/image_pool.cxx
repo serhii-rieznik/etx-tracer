@@ -245,7 +245,7 @@ struct ImagePoolImpl {
     int w = 0;
     int h = 0;
     int c = 0;
-    stbi_set_flip_vertically_on_load(true);
+    stbi_set_flip_vertically_on_load(false);
     auto image = stbi_load(source, &w, &h, &c, 0);
     if (image == nullptr) {
       return Image::Format::Undefined;

@@ -47,10 +47,6 @@ struct alignas(16) Material {
     Undefined = kInvalidIndex,
   };
 
-  enum : uint32_t {
-    DoubleSided = 1u << 0u,
-  };
-
   Class cls = Class::Undefined;
   SpectralImage diffuse;
   SpectralImage specular;
