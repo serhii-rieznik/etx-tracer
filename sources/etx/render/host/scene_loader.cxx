@@ -264,18 +264,23 @@ struct SceneRepresentationImpl {
   }
 
   void commit() {
-    float3 bbox_min = {FLT_MAX, FLT_MAX, FLT_MAX};
-    float3 bbox_max = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
-    for (const auto& tri : triangles) {
-      bbox_min = min(bbox_min, vertices[tri.i[0]].pos);
-      bbox_min = min(bbox_min, vertices[tri.i[1]].pos);
-      bbox_min = min(bbox_min, vertices[tri.i[2]].pos);
-      bbox_max = max(bbox_max, vertices[tri.i[0]].pos);
-      bbox_max = max(bbox_max, vertices[tri.i[1]].pos);
-      bbox_max = max(bbox_max, vertices[tri.i[2]].pos);
+    if (triangles.empty()) {
+      scene.bounding_sphere_center = {};
+      scene.bounding_sphere_radius = 6371e+3f + 120e+3f;
+    } else {
+      float3 bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
+      float3 bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
+      for (const auto& tri : triangles) {
+        bbox_min = min(bbox_min, vertices[tri.i[0]].pos);
+        bbox_min = min(bbox_min, vertices[tri.i[1]].pos);
+        bbox_min = min(bbox_min, vertices[tri.i[2]].pos);
+        bbox_max = max(bbox_max, vertices[tri.i[0]].pos);
+        bbox_max = max(bbox_max, vertices[tri.i[1]].pos);
+        bbox_max = max(bbox_max, vertices[tri.i[2]].pos);
+      }
+      scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
+      scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
     }
-    scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
-    scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
     scene.camera_medium_index = camera_medium_index;
     scene.camera_lens_shape_image_index = camera_lens_shape_image_index;
 
@@ -581,10 +586,6 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   }
 
   if ((load_result & SceneRepresentationImpl::LoadSucceeded) == 0) {
-    return false;
-  }
-
-  if (_private->triangles.empty() || _private->materials.empty()) {
     return false;
   }
 
@@ -920,7 +921,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         medium_index = add_medium(name_buffer, tmp_buffer, s_a, s_t, g);
       }
 
-      if (strcmp(data_buffer, "camera") == 0) {
+      if (strcmp(name_buffer, "camera") == 0) {
         camera_medium_index = medium_index;
       }
 

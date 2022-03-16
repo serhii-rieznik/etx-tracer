@@ -176,7 +176,7 @@ void Raytracing::set_scene(const Scene& scene) {
 }
 
 bool Raytracing::has_scene() const {
-  return (_private->scene != nullptr) && _private->scene->valid();
+  return (_private->scene != nullptr);
 }
 
 const Scene& Raytracing::scene() const {

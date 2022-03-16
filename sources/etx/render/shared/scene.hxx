@@ -33,10 +33,6 @@ struct alignas(16) Scene {
   uint64_t acceleration_structure ETX_EMPTY_INIT;
   uint32_t camera_medium_index ETX_INIT_WITH(kInvalidIndex);
   uint32_t camera_lens_shape_image_index ETX_INIT_WITH(kInvalidIndex);
-
-  ETX_GPU_CODE bool valid() const {
-    return (vertices.count > 0) && (triangles.count > 0) && (materials.count > 0) && (emitters.count > 0) && (bounding_sphere_radius > 0.0f);
-  }
 };
 
 ETX_GPU_CODE float3 lerp_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {

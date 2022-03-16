@@ -1,0 +1,12 @@
+# Blender 3.1.0 MTL File: 'None'
+# www.blender.org
+
+newmtl et::dir
+direction 1 1 1
+color 1000.0 1000.0 1000.0
+
+newmtl et::medium
+id camera
+sigma_a 0.0 0.0 0.0
+sigma_s 0.001 0.001 0.001
+g 0.79

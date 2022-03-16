@@ -1,0 +1,6 @@
+{
+  "geometry" : "empty.obj",
+  "camera" : {
+    "viewport" : [1024, 512]
+  }
+}
