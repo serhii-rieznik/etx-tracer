@@ -182,6 +182,7 @@ struct CPUVCMImpl {
     opt_max_depth = opt.get("pathlen", opt_max_depth).to_integer();
     opt_rr_start = opt.get("rrstart", opt_rr_start).to_integer();
     opt_radius = opt.get("vcm_r", opt_radius).to_float();
+    opt_radius_decay = opt.get("vcm_r_decay", opt_radius_decay).to_integer();
 
     stats.total_time = {};
     iteration = 0;
@@ -212,7 +213,7 @@ struct CPUVCMImpl {
 
     vcm_state = VCMState::GatheringLightVertices;
 
-    _vm_weight = _vcm_options.only_connection() ? 0.0f : eta_vcm;
+    _vm_weight = _vcm_options.merge_vertices() ? eta_vcm : 0.0f;
     _vc_weight = 1.0f / eta_vcm;
     _vm_normalization = 1.0f / eta_vcm;
     _light_paths.clear();
@@ -539,6 +540,7 @@ Options CPUVCM::options() const {
   result.add(1u, _private->opt_max_depth, 65536u, "pathlen", "Maximal Path Length");
   result.add(1u, _private->opt_rr_start, 65536u, "rrstart", "Start Russian Roulette at");
   result.add(0.0f, _private->opt_radius, 10.0f, "vcm_r", "Initial Radius");
+  result.add(1u, _private->opt_radius_decay, 65536u, "vcm_r_decay", "Radius Decay");
   return result;
 }
 
