@@ -155,8 +155,6 @@ ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em, const float3& in_direc
 }
 
 ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQuery spect, Sampler& smp, const float3& from_point, const Scene& scene) {
-  constexpr float kDisantRadiusScale = 2.0f;
-
   EmitterSample result;
   switch (em.cls) {
     case Emitter::Class::Area: {
@@ -184,7 +182,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.image_uv = uv;
       result.direction = uv_to_direction(result.image_uv);
       result.normal = -result.direction;
-      result.origin = from_point + kDisantRadiusScale * scene.bounding_sphere_radius * result.direction;
+      result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_radius);
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir_out = result.pdf_area * result.pdf_dir;
@@ -204,7 +202,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir = 1.0f;
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
-      result.origin = from_point + kDisantRadiusScale * scene.bounding_sphere_radius * result.direction;
+      result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_radius);
       result.normal = em.direction * (-1.0f);
       result.value = apply_image(spect, em.emission, disk_sample * 0.5f + 0.5f, scene);
       break;
@@ -236,8 +234,6 @@ ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distributi
 }
 
 ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQuery spect, Sampler& smp, const struct Scene& scene) {
-  constexpr float kDisantRadiusScale = 2.0f;
-
   EmitterSample result = {};
   switch (em.cls) {
     case Emitter::Class::Area: {
@@ -298,7 +294,8 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
       result.triangle_index = kInvalidIndex;
       result.direction = d;
       result.normal = result.direction;
-      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - kDisantRadiusScale * result.direction);
+      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - result.direction);
+      result.origin += result.direction * distance_to_sphere(result.origin, result.direction, scene.bounding_sphere_radius);
       result.value = apply_emitter_image(spect, em.emission, uv, scene);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
@@ -321,7 +318,8 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
       result.normal = direction_to_scene;
-      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (pos_sample.x * basis.u + pos_sample.y * basis.v - kDisantRadiusScale * direction_to_scene);
+      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (pos_sample.x * basis.u + pos_sample.y * basis.v - direction_to_scene);
+      result.origin += result.direction * distance_to_sphere(result.origin, result.direction, scene.bounding_sphere_radius);
       result.value = apply_image(spect, em.emission, dir_sample * 0.5f + 0.5f, scene);
       break;
     }

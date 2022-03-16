@@ -414,4 +414,16 @@ ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {
   return v;
 }
 
+ETX_GPU_CODE float distance_to_sphere(const float3& r_origin, const float3& r_direction, float s) {
+  float b = dot(r_direction, r_origin);
+  float d = (b * b) - dot(r_origin, r_origin) + (s * s);
+  if (d < 0.0f) {
+    return 0.0f;
+  }
+  d = sqrtf(d);
+  float a0 = -b - d;
+  float a1 = -b + d;
+  return (a0 < 0.0f) ? ((a1 < 0.0f) ? 0.0f : a1) : a0;
+}
+
 }  // namespace etx

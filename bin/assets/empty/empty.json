@@ -1,6 +1,8 @@
 {
   "geometry" : "empty.obj",
   "camera" : {
-    "viewport" : [1024, 512]
+    "viewport" : [1024, 512],
+    "origin" : [0.0, 6371000.0, 0.0],
+    "target" : [1.0, 6371000.0, 0.0]
   }
 }
