@@ -103,14 +103,9 @@ struct SceneRepresentationImpl {
     return index;
   }
 
-  uint32_t add_medium(const char* name, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g) {
+  uint32_t add_medium(Medium::Class cls, const char* name, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g) {
     std::string id = name ? name : ("medium-" + std::to_string(mediums.array_size()));
-    return mediums.add_homogenous(id, s_a, s_t, g);
-  }
-
-  uint32_t add_medium(const char* name, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g) {
-    std::string id = name ? name : ("medium-" + std::to_string(mediums.array_size()));
-    return mediums.add_heterogenous(id, volume_file, s_a, s_t, g);
+    return mediums.add(cls, id, volume_file, s_a, s_t, g, spectrums());
   }
 
   SceneRepresentationImpl(TaskScheduler& s)
@@ -514,6 +509,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   get_file_folder(filename, base_folder, sizeof(base_folder));
 
   auto& cam = _private->scene.camera;
+  Camera::Class camera_cls = Camera::Class::Perspective;
   float3 camera_pos = cam.position;
   float3 camera_up = {0.0f, 1.0f, 0.0f};
   float3 camera_view = cam.position + cam.direction;
@@ -559,7 +555,11 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
         const char* cam_key = {};
         json_t* cam_value = {};
         json_object_foreach(js_value, cam_key, cam_value) {
-          if ((strcmp(cam_key, "origin") == 0) && json_is_array(cam_value)) {
+          if ((strcmp(cam_key, "class") == 0) && json_is_string(cam_value)) {
+            if (strcmp(json_string_value(cam_value), "eq") == 0) {
+              camera_cls = Camera::Class::Equirectangular;
+            }
+          } else if ((strcmp(cam_key, "origin") == 0) && json_is_array(cam_value)) {
             camera_pos = json_to_float3(cam_value);
           } else if ((strcmp(cam_key, "target") == 0) && json_is_array(cam_value)) {
             camera_view = json_to_float3(cam_value);
@@ -593,6 +593,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
     if (viewport.x * viewport.y == 0) {
       viewport = {1280, 720};
     }
+    cam.cls = camera_cls;
     update_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
   }
 
@@ -909,17 +910,16 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         }
       }
 
-      uint32_t medium_index = kInvalidIndex;
+      Medium::Class cls = Medium::Class::Homogeneous;
 
       if (get_param(material, "volume", data_buffer)) {
-        snprintf(tmp_buffer, sizeof(tmp_buffer), "%s%s", base_dir, data_buffer);
+        if (strlen(data_buffer) > 0) {
+          snprintf(tmp_buffer, sizeof(tmp_buffer), "%s%s", base_dir, data_buffer);
+          cls = Medium::Class::Heterogeneous;
+        }
       }
 
-      if (strlen(tmp_buffer) == 0) {
-        medium_index = add_medium(name_buffer, s_a, s_t, g);
-      } else {
-        medium_index = add_medium(name_buffer, tmp_buffer, s_a, s_t, g);
-      }
+      uint32_t medium_index = add_medium(cls, name_buffer, tmp_buffer, s_a, s_t, g);
 
       if (strcmp(name_buffer, "camera") == 0) {
         camera_medium_index = medium_index;

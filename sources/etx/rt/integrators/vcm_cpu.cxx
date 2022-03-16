@@ -392,7 +392,7 @@ struct CPUVCMImpl {
 
       auto film_eval = film_evaluate_out(spect, rt.scene().camera, state.ray);
 
-      state.throughput = film_eval.weight;
+      state.throughput = {spect.wavelength, 1.0f};
       state.d_vcm = 1.0f / film_eval.pdf_dir;
       state.d_vc = 0.0f;
       state.d_vm = 0.0f;

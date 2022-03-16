@@ -23,7 +23,7 @@ struct MediumPoolImpl {
     medium_pool.cleanup();
   }
 
-  uint32_t add_homogenous(const std::string& id, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
+  uint32_t add(Medium::Class cls, const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g, const Spectrums* s) {
     auto i = mapping.find(id);
     if (i != mapping.end()) {
       return i->second;
@@ -32,48 +32,33 @@ struct MediumPoolImpl {
     auto handle = medium_pool.alloc();
 
     auto& medium = medium_pool.get(handle);
+    medium.cls = cls;
     medium.s_absorption = s_a;
     medium.s_outscattering = s_o;
-    medium.phase_function_g = g;
     medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
-    medium.cls = s_a.is_zero() && s_o.is_zero() ? Medium::Class::Vacuum : Medium::Class::Homogeneous;
-
-    mapping[id] = handle;
-    return handle;
-  }
-
-  uint32_t add_heterogenous(const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
-    auto i = mapping.find(id);
-    if (i != mapping.end()) {
-      return i->second;
-    }
-
-    auto handle = medium_pool.alloc();
-
-    auto& medium = medium_pool.get(handle);
-    medium.s_absorption = s_a;
-    medium.s_outscattering = s_o;
     medium.phase_function_g = g;
-    medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
 
-    auto density = load_density_grid(volume_file, medium.dimensions);
-
-    float max_density = 0.0f;
-    for (auto f : density) {
-      max_density = max(max_density, f);
-    }
-
-    if ((s_a.is_zero() && s_o.is_zero()) || density.empty() || (max_density == 0.0f)) {
-      medium.cls = Medium::Class::Vacuum;
-    } else {
-      for (auto& f : density) {
-        f /= max_density;
+    if (strlen(volume_file) > 0) {
+      float max_density = 0.0f;
+      auto density = load_density_grid(volume_file, medium.dimensions);
+      for (auto f : density) {
+        max_density = max(max_density, f);
       }
+      if (max_density > 0.0f) {
+        for (auto& f : density) {
+          f /= max_density;
+        }
+        medium.density.count = density.size();
+        medium.density.a = reinterpret_cast<float*>(malloc(medium.density.count * sizeof(float)));
+        memcpy(medium.density.a, density.data(), sizeof(float) * medium.density.count);
+        medium.cls = Medium::Class::Heterogeneous;
+      } else {
+        medium.cls = Medium::Class::Homogeneous;
+      }
+    }
 
-      medium.cls = Medium::Class::Heterogeneous;
-      medium.density.count = density.size();
-      medium.density.a = reinterpret_cast<float*>(malloc(medium.density.count * sizeof(float)));
-      memcpy(medium.density.a, density.data(), sizeof(float) * medium.density.count);
+    if (s_a.is_zero() && s_o.is_zero()) {
+      medium.cls = Medium::Class::Vacuum;
     }
 
     mapping[id] = handle;
@@ -181,12 +166,9 @@ void MediumPool::cleanup() {
   _private->cleanup();
 }
 
-uint32_t MediumPool::add_homogenous(const std::string& id, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
-  return _private->add_homogenous(id, s_a, s_o, g);
-}
-
-uint32_t MediumPool::add_heterogenous(const std::string& id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
-  return _private->add_heterogenous(id, volume, s_a, s_o, g);
+uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
+  const Spectrums* s) {
+  return _private->add(cls, id, volume, s_a, s_o, g, s);
 }
 
 Medium& MediumPool::get(uint32_t handle) {

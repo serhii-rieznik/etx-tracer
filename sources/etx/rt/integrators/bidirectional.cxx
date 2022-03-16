@@ -326,7 +326,7 @@ struct CPUBidirectionalImpl : public Task {
 
     auto& z1 = path.emplace_back(PathVertex::Class::Camera);
     z1.medium_index = rt.scene().camera_medium_index;
-    z1.throughput = eval.weight;
+    z1.throughput = {spect.wavelength, 1.0f};
     z1.pos = ray.o;
     z1.nrm = eval.normal;
     z1.w_i = ray.d;

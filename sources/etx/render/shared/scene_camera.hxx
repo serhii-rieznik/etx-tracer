@@ -16,11 +16,14 @@ ETX_GPU_CODE float film_pdf_out(const Camera& camera, const float3& to_point) {
 }
 
 ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const float2& uv) {
+  if (scene.camera.cls == Camera::Class::Equirectangular) {
+    return {scene.camera.position, phi_theta_to_direction(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat};
+  }
+
+  float3 origin = scene.camera.position;
   float3 s = (uv.x * scene.camera.aspect) * scene.camera.side;
   float3 u = (uv.y) * scene.camera.up;
   float3 w_o = normalize(scene.camera.tan_half_fov * (s + u) + scene.camera.direction);
-
-  float3 origin = scene.camera.position;
   if (scene.camera.lens_radius > 0.0f) {
     float2 sensor_sample = {};
     if (scene.camera_lens_shape_image_index == kInvalidIndex) {
@@ -42,6 +45,11 @@ ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const float2& uv
 }
 
 ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const float3& from_point) {
+  if (scene.camera.cls == Camera::Class::Equirectangular) {
+    // TODO : implelemt for Equirectangular camera
+    return {};
+  }
+
   float2 sensor_sample = {};
 
   if (scene.camera.lens_radius > 0.0f) {
@@ -92,14 +100,11 @@ ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const fl
   return result;
 }
 
-ETX_GPU_CODE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& camera_data, const Ray& out_ray) {
+ETX_GPU_CODE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& camera, const Ray& out_ray) {
+  float cos_t = dot(out_ray.d, camera.direction);
   CameraEval result = {};
-  result.weight = {spect.wavelength, 1.0f};
-  result.normal = camera_data.direction;
-
-  float cos_t = dot(out_ray.d, result.normal);
-  result.pdf_dir = 1.0f / (camera_data.area * cos_t * cos_t * cos_t);
-
+  result.normal = camera.direction;
+  result.pdf_dir = (camera.cls == Camera::Class::Equirectangular) ? 1.0f : 1.0f / (camera.area * cos_t * cos_t * cos_t);
   return result;
 }
 

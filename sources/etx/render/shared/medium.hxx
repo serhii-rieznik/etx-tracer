@@ -7,9 +7,9 @@ namespace etx {
 
 struct alignas(16) Medium {
   enum class Class : uint32_t {
-    Vacuum = 0,
-    Homogeneous = 1,
-    Heterogeneous = 2,
+    Vacuum,
+    Homogeneous,
+    Heterogeneous,
   };
 
   struct alignas(16) Sample {
