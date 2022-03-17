@@ -815,13 +815,13 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
               e.collimation = static_cast<float>(atof(params[i + 1]));
               i += 1;
             } else if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < end)) {
-              e.emission.spectrum = SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), SpectralDistribution::Class::Illuminant, spectrums());
+              e.emission.spectrum = SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), spectrums());
               i += 1;
             } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < end)) {
               float t = static_cast<float>(atof(params[i + 1]));
               float w = spectrum::black_body_radiation_maximum_wavelength(t);
               float r = spectrum::black_body_radiation(w, t);
-              e.emission.spectrum = SpectralDistribution::from_black_body(t, SpectralDistribution::Class::Illuminant, spectrums()) / r;
+              e.emission.spectrum = SpectralDistribution::from_black_body(t, spectrums()) / r;
               i += 1;
             } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < end)) {
               e.emission.spectrum *= static_cast<float>(atof(params[i + 1]));
@@ -926,13 +926,33 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
     } else if (material.name == "et::dir") {
-      auto color = float3{1.0f, 1.0f, 1.0f};
+      SpectralDistribution emitter_spectrum = SpectralDistribution::from_constant(1.0f);
       auto dir = float3{1.0f, 1.0f, 1.0f};
 
       if (get_param(material, "color", data_buffer)) {
         float value[3] = {};
         if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-          color = {value[0], value[1], value[2]};
+          emitter_spectrum = rgb::make_illuminant_spd({value[0], value[1], value[2]}, spectrums());
+        } else {
+          float scale = 1.0f;
+          auto params = split_params(data_buffer);
+          for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+            if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < e)) {
+              float t = static_cast<float>(atof(params[i + 1]));
+              emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums());
+              i += 1;
+            } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < e)) {
+              float t = static_cast<float>(atof(params[i + 1]));
+              float w = spectrum::black_body_radiation_maximum_wavelength(t);
+              float r = spectrum::black_body_radiation(w, t);
+              emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums()) / r;
+              i += 1;
+            } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+              scale = static_cast<float>(atof(params[i + 1]));
+              i += 1;
+            }
+          }
+          emitter_spectrum *= scale;
         }
       }
 
@@ -944,7 +964,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       auto& e = emitters.emplace_back(Emitter::Class::Directional);
-      e.emission.spectrum = rgb::make_illuminant_spd(color, spectrums());
+      e.emission.spectrum = emitter_spectrum;  // rgb::make_illuminant_spd(color, spectrums());
       e.direction = normalize(dir);
 
       if (get_param(material, "image", data_buffer)) {

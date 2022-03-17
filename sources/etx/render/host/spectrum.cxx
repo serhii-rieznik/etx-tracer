@@ -20,7 +20,7 @@ SpectralDistribution SpectralDistribution::from_constant(float value) {
   return result;
 }
 
-SpectralDistribution SpectralDistribution::from_black_body(float temperature, Class cls, Spectrums* spectrums) {
+SpectralDistribution SpectralDistribution::from_black_body(float temperature, Spectrums* spectrums) {
   SpectralDistribution result;
   result.count = spectrum::WavelengthCount;
   for (uint64_t i = 0; i < spectrum::WavelengthCount; ++i) {
@@ -30,7 +30,7 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, Cl
 
   if constexpr (spectrum::kSpectralRendering == false) {
     float3 xyz = result.integrate_to_xyz();
-    result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
+    result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), spectrums->rgb_illuminant);
   }
   return result;
 }

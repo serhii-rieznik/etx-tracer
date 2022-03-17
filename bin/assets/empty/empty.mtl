@@ -2,6 +2,7 @@
 # www.blender.org
 
 newmtl et::dir
-direction 1.0 0.0 1.0
-angular_diameter 0.545
+color nblackbody 5778.0 scale 16.0
+direction 1.0 1.0 1.0
+angular_diameter 0.52
 

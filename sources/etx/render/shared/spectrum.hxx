@@ -501,7 +501,7 @@ struct alignas(16) SpectralDistribution {
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count);
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, struct Spectrums*);
   static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, struct Spectrums*);
-  static SpectralDistribution from_black_body(float temperature, Class cls, struct Spectrums*);
+  static SpectralDistribution from_black_body(float temperature, struct Spectrums*);
   static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, struct Spectrums*);
 };
 
