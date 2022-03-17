@@ -261,7 +261,7 @@ struct SceneRepresentationImpl {
   void commit() {
     if (triangles.empty()) {
       scene.bounding_sphere_center = {};
-      scene.bounding_sphere_radius = 6371e+3f + 120e+3f;
+      scene.bounding_sphere_radius = kPlanetRadius + kAtmosphereRadius;
     } else {
       float3 bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
       float3 bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};

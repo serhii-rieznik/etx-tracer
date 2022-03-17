@@ -2,13 +2,6 @@
 # www.blender.org
 
 newmtl et::dir
-direction 1 1 1
-color 10.0 10.0 10.0
-angular_diameter 0.52
+direction 1.0 0.0 1.0
+angular_diameter 0.545
 
-newmtl et::medium
-id camera
-class atmosphere
-sigma_s 0.00002 0.000015 0.00001
-sigma_a 0.0 0.0 0.0
-g 0.79
