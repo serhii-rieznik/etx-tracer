@@ -90,7 +90,7 @@ void RTApplication::frame() {
   }
 
   auto dt = time_measure.lap();
-  if (can_change_camera && camera_controller.update(dt)) {
+  if (can_change_camera && camera_controller.update(dt) && (_current_integrator != nullptr)) {
     _current_integrator->preview(ui.integrator_options());
   }
 

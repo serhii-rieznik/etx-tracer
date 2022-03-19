@@ -439,7 +439,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
   wh *= (LocalFrame::cos_theta(wh) >= 0.0f) ? 1.0f : -1.0f;
 
   external::RayInfo ray = {w_i * (outside ? 1.0f : -1.0f), alpha_x, alpha_y};
-  float prob = max(0.0f, dot(wh, ray.w)) * external::D_ggx(wh, alpha_x, alpha_y) / (1.0f + ray.Lambda) / LocalFrame::cos_theta(ray.w);
+
+  auto d_ggx = external::D_ggx(wh, alpha_x, alpha_y);
+  ETX_VALIDATE(d_ggx);
+
+  float prob = max(0.0f, dot(wh, ray.w)) * d_ggx / (1.0f + ray.Lambda) / LocalFrame::cos_theta(ray.w);
   ETX_VALIDATE(prob);
 
   float F = fresnel::dielectric(data.spectrum_sample, w_i, wh, outside ? ext_ior : int_ior, outside ? int_ior : ext_ior, thinfilm).monochromatic();

@@ -99,6 +99,8 @@ struct CPUAtmosphereImpl : public Task {
   uint32_t opt_max_iterations = ~0u;
   float opt_phase_function_g = 0.95f;
   float opt_step_scale = 1000.0f;
+  bool opt_render_sun = false;
+
   std::atomic<uint32_t> pixels_processed = {};
   std::atomic<Integrator::State>* state = nullptr;
 
@@ -155,6 +157,7 @@ struct CPUAtmosphereImpl : public Task {
     opt_max_iterations = opt.get("spp", opt_max_iterations).to_integer();
     opt_phase_function_g = opt.get("g", opt_phase_function_g).to_float();
     opt_step_scale = opt.get("step", opt_step_scale).to_float();
+    opt_render_sun = opt.get("sun", opt_render_sun).to_bool();
 
     iteration = 0;
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
@@ -230,7 +233,7 @@ struct CPUAtmosphereImpl : public Task {
 
     result = gathered_r * spect_rayleigh + gathered_m * spect_mie;
 
-    if (to_planet <= 0.0f) {
+    if (opt_render_sun && (to_planet <= 0.0f)) {
       float pdfs[3] = {};
       auto es = sample_emitter(spect, smp, ray.o, scene);
       auto em = emitter_get_radiance(scene.emitters[es.emitter_index], spect, ray.d, pdfs[0], pdfs[1], pdfs[2], scene);
@@ -345,6 +348,7 @@ Options CPUAtmosphere::options() const {
   result.add(1u, _private->opt_max_iterations, 0xffffu, "spp", "Samples per Pixel");
   result.add(-1.0f, _private->opt_phase_function_g, 1.0f, "g", "Asymmetry Factor");
   result.add(100.0f, _private->opt_step_scale, 100000.0f, "step", "Step Scale");
+  result.add(_private->opt_render_sun, "sun", "Render Sun");
   return result;
 }
 

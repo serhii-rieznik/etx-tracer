@@ -154,6 +154,11 @@ struct SceneRepresentationImpl {
 
   void validate_materials() {
     for (auto& mtl : materials) {
+      if ((mtl.roughness.x > 0.0f) || (mtl.roughness.y > 0.0f)) {
+        mtl.roughness.x = max(kEpsilon, mtl.roughness.x);
+        mtl.roughness.y = max(kEpsilon, mtl.roughness.y);
+      }
+
       if (mtl.int_ior.eta.empty() && mtl.int_ior.k.empty()) {
         if (mtl.cls == Material::Class::Conductor) {
           mtl.int_ior = spectrums()->conductor;
