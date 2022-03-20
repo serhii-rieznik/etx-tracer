@@ -56,7 +56,16 @@ inline float3 density(float height_above_ground) {
   return {expf(-height_above_ground / density_h_r), expf(-height_above_ground / density_h_m), ozone_vertical_profile(height_above_ground)};
 }
 
+inline constexpr float3 density_k() {
+  constexpr float density_h_r = 7994.0f;
+  constexpr float density_h_m = 1200.0f;
+  return {-1.0f / density_h_r, -1.0f / density_h_m, 0.0f};
+}
+
 inline float3 optical_length(float3 p, const float3& target, Sampler& smp, float opt_step_scale) {
+  constexpr auto d_k = density_k();
+  const float delta_density = 0.025f;
+
   float3 result = {};
 
   float3 dp = (target - p);
@@ -66,8 +75,10 @@ inline float3 optical_length(float3 p, const float3& target, Sampler& smp, float
   float t = 0.0f;
   while (t < total_distance) {
     float3 current_density = density(length(p) - kPlanetRadius);
-    float max_d = max(current_density.x, max(current_density.y, current_density.z));
-    float dt = clamp((0.5f + 0.5f * smp.next()) * opt_step_scale / max_d, min_step, total_distance - t);
+    float r_step = -logf(delta_density / current_density.x + 1.0f) / d_k.x;
+    float m_step = -logf(delta_density / current_density.y + 1.0f) / d_k.y;
+    float dt = min(total_distance - t, min(r_step, m_step) * (1.0f + opt_step_scale * smp.next()));
+
     p += dp * dt;
     t += dt;
 
@@ -96,9 +107,10 @@ struct CPUAtmosphereImpl : public Task {
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   uint32_t iteration = 0u;
-  uint32_t opt_max_iterations = ~0u;
-  float opt_phase_function_g = 0.95f;
-  float opt_step_scale = 1000.0f;
+  uint32_t opt_max_iterations = 4u;
+  float opt_phase_function_g = 0.75f;
+  float opt_step_scale = 2.0f;
+  float total_time_value = 0.0f;
   bool opt_render_sun = false;
 
   std::atomic<uint32_t> pixels_processed = {};
@@ -162,6 +174,7 @@ struct CPUAtmosphereImpl : public Task {
     iteration = 0;
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
 
+    total_time_value = 0.0f;
     total_time = {};
     iteration_time = {};
     pixels_processed = 0;
@@ -205,40 +218,50 @@ struct CPUAtmosphereImpl : public Task {
     float min_step = to_space / kMaxSteps;
 
     float3 position = ray.o;
-    float3 total_optical_integral = {};
+    float3 total_optical_path = {};
     float t = 0.0f;
+
+    constexpr auto d_k = density_k();
+    const float delta_density = 0.025f;
+
     while (running() && (t < to_space)) {
       float3 current_density = density(length(position) - kPlanetRadius);
-      float max_d = max(current_density.x, max(current_density.y, current_density.z));
-      float dt = clamp((0.5f + 0.5f * smp.next()) * opt_step_scale / max_d, min_step, to_space - t);
+      float r_step = -logf(delta_density / current_density.x + 1.0f) / d_k.x;
+      float m_step = -logf(delta_density / current_density.y + 1.0f) / d_k.y;
+      float dt = min(to_space - t, min(r_step, m_step) * (1.0f + opt_step_scale * smp.next()));
       position += ray.d * dt;
       t += dt;
 
-      auto local_em = sample_emitter(spect, smp, ray.o, scene);
-      auto cos_t = dot(local_em.direction, ray.d);
-      auto distance_to_space = distance_to_sphere(position, local_em.direction, kSphereSize);
-      auto optical_integral = optical_length(position, position + distance_to_space * local_em.direction, smp, opt_step_scale);
-      float3 current_optical_integral = total_optical_integral + optical_integral;
-      auto value = exp(-current_optical_integral.x * spect_rayleigh - current_optical_integral.y * spect_mie - current_optical_integral.z * spect_ozone);
       float3 d = dt * density(length(position) - kPlanetRadius);
 
-      gathered_r += local_em.value * value * d.x * phase_rayleigh(cos_t);
-      ETX_VALIDATE(gathered_r);
+      for (uint32_t i = 0; i < scene.environment_emitters.count; ++i) {
+        auto local_em = sample_emitter(spect, i, smp, ray.o, scene);
+        auto cos_t = dot(local_em.direction, ray.d);
+        auto distance_to_space = distance_to_sphere(position, local_em.direction, kSphereSize);
+        auto optical_path = optical_length(position, position + distance_to_space * local_em.direction, smp, opt_step_scale);
+        float3 current_optical_path = total_optical_path + optical_path;
+        auto value = exp(-current_optical_path.x * spect_rayleigh - current_optical_path.y * spect_mie - current_optical_path.z * spect_ozone);
 
-      gathered_m += local_em.value * value * d.y * phase_mie(cos_t, opt_phase_function_g);
-      ETX_VALIDATE(gathered_r);
+        gathered_r += local_em.value * value * d.x * phase_rayleigh(cos_t);
+        ETX_VALIDATE(gathered_r);
 
-      total_optical_integral += d;
+        gathered_m += local_em.value * value * d.y * phase_mie(cos_t, opt_phase_function_g);
+        ETX_VALIDATE(gathered_r);
+      }
+
+      total_optical_path += d;
     }
 
     result = gathered_r * spect_rayleigh + gathered_m * spect_mie;
 
-    if (opt_render_sun && (to_planet <= 0.0f)) {
-      float pdfs[3] = {};
-      auto es = sample_emitter(spect, smp, ray.o, scene);
-      auto em = emitter_get_radiance(scene.emitters[es.emitter_index], spect, ray.d, pdfs[0], pdfs[1], pdfs[2], scene);
-      float scale = 1.0f / (kDoublePi * (1.0f - cosf(0.5f * scene.emitters[es.emitter_index].angular_size)));
-      result += scale * em * exp(-total_optical_integral.x * spect_rayleigh - total_optical_integral.y * spect_mie);
+    for (uint32_t i = 0; opt_render_sun && (to_planet <= 0.0f) && (i < scene.environment_emitters.count); ++i) {
+      auto e_index = scene.environment_emitters.emitters[i];
+      if (scene.emitters[e_index].angular_size > 0.0f) {
+        float pdfs[3] = {};
+        auto em = emitter_get_radiance(scene.emitters[e_index], spect, ray.d, pdfs[0], pdfs[1], pdfs[2], scene);
+        float scale = 1.0f / (kDoublePi * (1.0f - cosf(0.5f * scene.emitters[e_index].angular_size)));
+        result += scale * em * exp(-total_optical_path.x * spect_rayleigh - total_optical_path.y * spect_mie);
+      }
     }
 
     ETX_VALIDATE(result);
@@ -306,7 +329,10 @@ void CPUAtmosphere::update() {
       rt.scheduler().wait(_private->current_task);
       _private->current_task = {};
       if (current_state == State::Preview) {
-        snprintf(_private->status, sizeof(_private->status), "[%u] Preview completed", _private->iteration);
+        if (_private->total_time_value == 0.0f) {
+          _private->total_time_value = float(_private->total_time.measure());
+          snprintf(_private->status, sizeof(_private->status), "[%u] Preview completed in %.2f seconds", _private->iteration, _private->total_time_value);
+        }
         current_state = Integrator::State::Preview;
       } else {
         snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
@@ -347,7 +373,7 @@ Options CPUAtmosphere::options() const {
   Options result = {};
   result.add(1u, _private->opt_max_iterations, 0xffffu, "spp", "Samples per Pixel");
   result.add(-1.0f, _private->opt_phase_function_g, 1.0f, "g", "Asymmetry Factor");
-  result.add(100.0f, _private->opt_step_scale, 100000.0f, "step", "Step Scale");
+  result.add(0.0f, _private->opt_step_scale, 100.0f, "step", "Step Scale");
   result.add(_private->opt_render_sun, "sun", "Render Sun");
   return result;
 }

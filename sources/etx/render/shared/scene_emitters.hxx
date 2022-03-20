@@ -215,22 +215,25 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
   return result;
 }
 
-ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, Sampler& smp, const float3& from_point, const Scene& scene) {
-  float pdf_sample = 0.0f;
-  uint32_t emitter_index = static_cast<uint32_t>(scene.emitters_distribution.sample(smp.next(), pdf_sample));
-  ETX_ASSERT(emitter_index < scene.emitters_distribution.size);
+ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distribution& dist) {
+  return emitter.weight / dist.total_weight;
+}
 
+ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_index, Sampler& smp, const float3& from_point, const Scene& scene) {
   const auto& emitter = scene.emitters[emitter_index];
   EmitterSample sample = emitter_sample_in(emitter, spect, smp, from_point, scene);
-  sample.pdf_sample = pdf_sample;
+  sample.pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
   sample.emitter_index = emitter_index;
   sample.triangle_index = emitter.triangle_index;
   sample.is_delta = emitter.is_delta();
   return sample;
 }
 
-ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distribution& dist) {
-  return emitter.weight / dist.total_weight;
+ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, Sampler& smp, const float3& from_point, const Scene& scene) {
+  float pdf_sample = 0.0f;
+  uint32_t emitter_index = static_cast<uint32_t>(scene.emitters_distribution.sample(smp.next(), pdf_sample));
+  ETX_ASSERT(emitter_index < scene.emitters_distribution.size);
+  return sample_emitter(spect, emitter_index, smp, from_point, scene);
 }
 
 ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQuery spect, Sampler& smp, const struct Scene& scene) {
