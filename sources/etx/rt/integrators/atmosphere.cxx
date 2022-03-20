@@ -109,7 +109,10 @@ struct CPUAtmosphereImpl : public Task {
   uint32_t iteration = 0u;
   uint32_t opt_max_iterations = 4u;
   float opt_phase_function_g = 0.75f;
-  float opt_step_scale = 2.0f;
+  float opt_step_scale = 10.0f;
+  float opt_rayleigh = 1.0f;
+  float opt_mie = 1.0f;
+  float opt_ozone = 1.0f;
   float total_time_value = 0.0f;
   bool opt_render_sun = false;
 
@@ -170,6 +173,9 @@ struct CPUAtmosphereImpl : public Task {
     opt_phase_function_g = opt.get("g", opt_phase_function_g).to_float();
     opt_step_scale = opt.get("step", opt_step_scale).to_float();
     opt_render_sun = opt.get("sun", opt_render_sun).to_bool();
+    opt_rayleigh = opt.get("r", opt_rayleigh).to_float();
+    opt_mie = opt.get("m", opt_mie).to_float();
+    opt_ozone = opt.get("o", opt_ozone).to_float();
 
     iteration = 0;
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
@@ -245,19 +251,19 @@ struct CPUAtmosphereImpl : public Task {
         if constexpr (spectrum::kSpectralRendering) {
           for (uint32_t s = 0; s < entry_count; ++s) {
             float e = em.emission.spectrum.query({float(spectrum::ShortestWavelength + s)}).components[0];
-            auto value = expf(-current_optical_path.x * rayleigh.entries[s].power -  //
-                              current_optical_path.y * mie.entries[s].power -        //
-                              current_optical_path.z * ozone.entries[s].power);
-            result.entries[s].power += e * value * (d.x * phase_r * rayleigh.entries[s].power + d.y * phase_m * mie.entries[s].power);
+            auto value = expf(-current_optical_path.x * rayleigh.entries[s].power * opt_rayleigh -  //
+                              current_optical_path.y * mie.entries[s].power * opt_mie -             //
+                              current_optical_path.z * ozone.entries[s].power * opt_ozone);
+            result.entries[s].power += e * value * (d.x * phase_r * rayleigh.entries[s].power * opt_rayleigh + d.y * phase_m * mie.entries[s].power * opt_mie);
             ETX_VALIDATE(result);
           }
         } else {
           auto e = em.emission.spectrum.query({-1.0f});
           for (uint32_t s = 0; s < entry_count; ++s) {
-            auto value = expf(-current_optical_path.x * rayleigh.entries[s].power  //
-                              - current_optical_path.y * mie.entries[s].power      //
-                              - current_optical_path.z * ozone.entries[s].power);
-            result.entries[s].power += e.components[s] * value * (d.x * phase_r * rayleigh.entries[s].power + d.y * phase_m * mie.entries[s].power);
+            auto value = expf(-current_optical_path.x * rayleigh.entries[s].power * opt_rayleigh  //
+                              - current_optical_path.y * mie.entries[s].power * opt_mie           //
+                              - current_optical_path.z * ozone.entries[s].power * opt_ozone);
+            result.entries[s].power += e.components[s] * value * (d.x * phase_r * rayleigh.entries[s].power * opt_rayleigh + d.y * phase_m * mie.entries[s].power * opt_mie);
             ETX_VALIDATE(result);
           }
         }
@@ -274,12 +280,14 @@ struct CPUAtmosphereImpl : public Task {
         if constexpr (spectrum::kSpectralRendering) {
           for (uint32_t s = 0; s < entry_count; ++s) {
             auto em = emitter_get_radiance(scene.emitters[e_index], {float(spectrum::ShortestWavelength + s)}, ray.d, pdfs[0], pdfs[1], pdfs[2], scene);
-            result.entries[s].power += scale * em.components[s] * expf(-total_optical_path.x * rayleigh.entries[s].power - total_optical_path.y * mie.entries[s].power);
+            result.entries[s].power +=
+              scale * em.components[s] * expf(-total_optical_path.x * rayleigh.entries[s].power * opt_rayleigh - total_optical_path.y * mie.entries[s].power * opt_mie);
           }
         } else {
           auto em = emitter_get_radiance(scene.emitters[e_index], {-1.0f}, ray.d, pdfs[0], pdfs[1], pdfs[2], scene);
           for (uint32_t s = 0; s < entry_count; ++s) {
-            result.entries[s].power += scale * em.components[s] * expf(-total_optical_path.x * rayleigh.entries[s].power - total_optical_path.y * mie.entries[s].power);
+            result.entries[s].power +=
+              scale * em.components[s] * expf(-total_optical_path.x * rayleigh.entries[s].power * opt_rayleigh - total_optical_path.y * mie.entries[s].power * opt_mie);
           }
         }
       }
@@ -394,6 +402,9 @@ Options CPUAtmosphere::options() const {
   result.add(-1.0f, _private->opt_phase_function_g, 1.0f, "g", "Asymmetry Factor");
   result.add(0.0f, _private->opt_step_scale, 100.0f, "step", "Step Scale");
   result.add(_private->opt_render_sun, "sun", "Render Sun");
+  result.add(0.0f, _private->opt_rayleigh, 100.0f, "r", "Rayleigh Scattering");
+  result.add(0.0f, _private->opt_mie, 100.0f, "m", "Mie Scattering");
+  result.add(0.0f, _private->opt_ozone, 100.0f, "o", "Ozone");
   return result;
 }
 
