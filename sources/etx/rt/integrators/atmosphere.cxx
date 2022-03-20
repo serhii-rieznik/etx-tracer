@@ -25,7 +25,7 @@ inline float scattering_mie(float l) {
 
 inline float ozone_absorbtion(float l) {
   const float na = 6.022140857f /* e+23f cancelled with base */;
-  const float concentration = 41.58f * 0.0000006f;
+  const float concentration = 41.58f * 0.000001f;
   float x = l;
   float x2 = x * x;
   float x3 = x2 * x;
@@ -197,7 +197,6 @@ struct CPUAtmosphereImpl : public Task {
     constexpr float kSphereSize = kPlanetRadius + kAtmosphereRadius;
 
     auto& scene = rt.scene();
-    auto spect = spectrum::sample(smp.next());
 
     auto ray = generate_ray(smp, scene, uv);
     float to_space = distance_to_sphere(ray.o, ray.d, kSphereSize);
@@ -207,13 +206,12 @@ struct CPUAtmosphereImpl : public Task {
       to_space = to_planet;
     }
 
-    SpectralResponse result = {spect.wavelength, 0.0f};
-    SpectralResponse gathered_r = {spect.wavelength, 0.0f};
-    SpectralResponse gathered_m = {spect.wavelength, 0.0f};
+    const uint32_t entry_count = spectrum::kSpectralRendering ? spectrum::WavelengthCount : 3;
 
-    auto spect_rayleigh = rayleigh(spect);
-    auto spect_mie = mie(spect);
-    auto spect_ozone = ozone(spect);
+    SpectralDistribution result = {{}, entry_count};
+    for (uint32_t i = 0; i < entry_count; ++i) {
+      result.entries[i].wavelength = float(spectrum::ShortestWavelength + i);
+    }
 
     float min_step = to_space / kMaxSteps;
 
@@ -235,37 +233,58 @@ struct CPUAtmosphereImpl : public Task {
       float3 d = dt * density(length(position) - kPlanetRadius);
 
       for (uint32_t i = 0; i < scene.environment_emitters.count; ++i) {
-        auto local_em = sample_emitter(spect, i, smp, ray.o, scene);
+        auto local_em = sample_emitter({0.5f * (spectrum::kShortestWavelength + spectrum::kLongestWavelength)}, i, smp, ray.o, scene);
         auto cos_t = dot(local_em.direction, ray.d);
+        auto phase_r = phase_rayleigh(cos_t);
+        auto phase_m = phase_mie(cos_t, opt_phase_function_g);
         auto distance_to_space = distance_to_sphere(position, local_em.direction, kSphereSize);
         auto optical_path = optical_length(position, position + distance_to_space * local_em.direction, smp, opt_step_scale);
+        const auto& em = scene.emitters[local_em.emitter_index];
         float3 current_optical_path = total_optical_path + optical_path;
-        auto value = exp(-current_optical_path.x * spect_rayleigh - current_optical_path.y * spect_mie - current_optical_path.z * spect_ozone);
 
-        gathered_r += local_em.value * value * d.x * phase_rayleigh(cos_t);
-        ETX_VALIDATE(gathered_r);
+        if constexpr (spectrum::kSpectralRendering) {
+          for (uint32_t s = 0; s < entry_count; ++s) {
+            float e = em.emission.spectrum.query({float(spectrum::ShortestWavelength + s)}).components[0];
+            auto value = expf(-current_optical_path.x * rayleigh.entries[s].power -  //
+                              current_optical_path.y * mie.entries[s].power -        //
+                              current_optical_path.z * ozone.entries[s].power);
+            result.entries[s].power += e * value * (d.x * phase_r * rayleigh.entries[s].power + d.y * phase_m * mie.entries[s].power);
+            ETX_VALIDATE(result);
+          }
+        } else {
+          auto e = em.emission.spectrum.query({-1.0f});
+          for (uint32_t s = 0; s < entry_count; ++s) {
+            auto value = expf(-current_optical_path.x * rayleigh.entries[s].power  //
+                              - current_optical_path.y * mie.entries[s].power      //
+                              - current_optical_path.z * ozone.entries[s].power);
+            result.entries[s].power += e.components[s] * value * (d.x * phase_r * rayleigh.entries[s].power + d.y * phase_m * mie.entries[s].power);
+            ETX_VALIDATE(result);
+          }
+        }
 
-        gathered_m += local_em.value * value * d.y * phase_mie(cos_t, opt_phase_function_g);
-        ETX_VALIDATE(gathered_r);
+        total_optical_path += d;
       }
-
-      total_optical_path += d;
     }
-
-    result = gathered_r * spect_rayleigh + gathered_m * spect_mie;
 
     for (uint32_t i = 0; opt_render_sun && (to_planet <= 0.0f) && (i < scene.environment_emitters.count); ++i) {
       auto e_index = scene.environment_emitters.emitters[i];
       if (scene.emitters[e_index].angular_size > 0.0f) {
         float pdfs[3] = {};
-        auto em = emitter_get_radiance(scene.emitters[e_index], spect, ray.d, pdfs[0], pdfs[1], pdfs[2], scene);
         float scale = 1.0f / (kDoublePi * (1.0f - cosf(0.5f * scene.emitters[e_index].angular_size)));
-        result += scale * em * exp(-total_optical_path.x * spect_rayleigh - total_optical_path.y * spect_mie);
+        if constexpr (spectrum::kSpectralRendering) {
+          for (uint32_t s = 0; s < entry_count; ++s) {
+            auto em = emitter_get_radiance(scene.emitters[e_index], {float(spectrum::ShortestWavelength + s)}, ray.d, pdfs[0], pdfs[1], pdfs[2], scene);
+            result.entries[s].power += scale * em.components[s] * expf(-total_optical_path.x * rayleigh.entries[s].power - total_optical_path.y * mie.entries[s].power);
+          }
+        } else {
+          auto em = emitter_get_radiance(scene.emitters[e_index], {-1.0f}, ray.d, pdfs[0], pdfs[1], pdfs[2], scene);
+          for (uint32_t s = 0; s < entry_count; ++s) {
+            result.entries[s].power += scale * em.components[s] * expf(-total_optical_path.x * rayleigh.entries[s].power - total_optical_path.y * mie.entries[s].power);
+          }
+        }
       }
     }
 
-    ETX_VALIDATE(result);
-    result /= spectrum::sample_pdf();
     ETX_VALIDATE(result);
     return result.to_xyz();
   }
