@@ -178,18 +178,18 @@ struct CPUAtmosphereImpl : public Task {
     total_time = {};
     iteration_time = {};
     pixels_processed = 0;
-    current_task = rt.scheduler().schedule(this, camera_image.dimensions().x * camera_image.dimensions().y);
+    current_task = rt.scheduler().schedule(this, camera_image.dimensions().x);
   }
 
-  void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+  void execute_range(uint32_t x_begin, uint32_t x_end, uint32_t thread_id) override {
     auto& smp = samplers[thread_id];
-    for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-      uint32_t x = i % camera_image.dimensions().x;
-      uint32_t y = i / camera_image.dimensions().x;
-      float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
-      float4 xyz = {trace_pixel(smp, uv), 1.0f};
-      camera_image.accumulate(xyz, uv, float(iteration) / float(iteration + 1));
-      ++pixels_processed;
+    for (uint32_t x = x_begin; (state->load() != Integrator::State::Stopped) && (x < x_end); ++x) {
+      for (uint32_t y = 0; y < camera_image.dimensions().y; ++y) {
+        float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
+        float4 xyz = {trace_pixel(smp, uv), 1.0f};
+        camera_image.accumulate(xyz, uv, float(iteration) / float(iteration + 1));
+        ++pixels_processed;
+      }
     }
   }
 
@@ -344,7 +344,7 @@ void CPUAtmosphere::update() {
       _private->iteration_time = {};
       _private->pixels_processed = 0;
       _private->iteration += 1;
-      rt.scheduler().restart(_private->current_task, _private->camera_image.dimensions().x * _private->camera_image.dimensions().y);
+      rt.scheduler().restart(_private->current_task, _private->camera_image.dimensions().x);
     }
   } else {
     float t = 100.0f * float(_private->pixels_processed.load()) / float(_private->camera_image.dimensions().x * _private->camera_image.dimensions().y);
