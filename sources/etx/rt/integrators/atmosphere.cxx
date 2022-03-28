@@ -255,7 +255,7 @@ struct CPUAtmosphereImpl : public Task {
                               current_optical_path.y * mie.entries[s].power * opt_mie -             //
                               current_optical_path.z * ozone.entries[s].power * opt_ozone);
             result.entries[s].power += e * value * (d.x * phase_r * rayleigh.entries[s].power * opt_rayleigh + d.y * phase_m * mie.entries[s].power * opt_mie);
-            ETX_VALIDATE(result);
+            ETX_VALIDATE(result.entries[s].power);
           }
         } else {
           auto e = em.emission.spectrum.query({-1.0f});
@@ -264,7 +264,7 @@ struct CPUAtmosphereImpl : public Task {
                               - current_optical_path.y * mie.entries[s].power * opt_mie           //
                               - current_optical_path.z * ozone.entries[s].power * opt_ozone);
             result.entries[s].power += e.components[s] * value * (d.x * phase_r * rayleigh.entries[s].power * opt_rayleigh + d.y * phase_m * mie.entries[s].power * opt_mie);
-            ETX_VALIDATE(result);
+            ETX_VALIDATE(result.entries[s].power);
           }
         }
 
@@ -292,8 +292,6 @@ struct CPUAtmosphereImpl : public Task {
         }
       }
     }
-
-    ETX_VALIDATE(result);
     return result.to_xyz();
   }
 };

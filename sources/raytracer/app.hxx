@@ -11,6 +11,8 @@
 #include <etx/rt/integrators/atmosphere.hxx>
 #include <etx/rt/rt.hxx>
 
+#include <etx/gpu/gpu.hxx>
+
 #include "ui.hxx"
 #include "render.hxx"
 #include "camera_controller.hxx"
@@ -55,6 +57,8 @@ struct RTApplication {
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};
+
+  GPUDevice* gpu = nullptr;
 
   Integrator* _integrator_array[5] = {
     &_preview,

@@ -62,6 +62,8 @@ void RTApplication::init() {
   if (ref.empty() == false) {
     on_referenece_image_selected(ref);
   }
+
+  gpu = GPUDevice::create_optix_device();
 }
 
 void RTApplication::save_options() {
@@ -111,6 +113,8 @@ void RTApplication::frame() {
 
 void RTApplication::cleanup() {
   render.cleanup();
+  GPUDevice::free_device(gpu);
+  gpu = {};
 }
 
 void RTApplication::process_event(const sapp_event* e) {
