@@ -6,6 +6,7 @@
 #include <etx/render/host/scene_loader.hxx>
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
+#include <etx/rt/integrators/path_tracing_gpu.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
 #include <etx/rt/integrators/atmosphere.hxx>
@@ -54,11 +55,10 @@ struct RTApplication {
 
   CPUDebugIntegrator _preview = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
+  GPUPathTracing _gpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};
-
-  GPUDevice* gpu = nullptr;
 
   Integrator* _integrator_array[5] = {
     &_preview,

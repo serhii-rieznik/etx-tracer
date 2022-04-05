@@ -11,6 +11,7 @@ struct Raytracing {
   ~Raytracing();
 
   TaskScheduler& scheduler();
+  GPUDevice* gpu();
 
   const Scene& scene() const;
   bool has_scene() const;

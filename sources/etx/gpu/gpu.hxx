@@ -19,6 +19,7 @@ struct GPUDevice {
 
   virtual GPUBuffer create_buffer(const GPUBuffer::Descriptor&) = 0;
   virtual void destroy_buffer(GPUBuffer) = 0;
+  virtual uint64_t get_buffer_device_handle(GPUBuffer) const = 0;
 
   static GPUDevice* create_optix_device();
   static void free_device(GPUDevice*);

@@ -1,3 +1,4 @@
+#include <etx/gpu/gpu.hxx>
 #include <etx/rt/rt.hxx>
 
 #define ETX_RT_API_BVH 1
@@ -33,6 +34,7 @@ namespace etx {
 
 struct RaytracingImpl {
   TaskScheduler scheduler;
+  GPUDevice* gpu = nullptr;
   const Scene* scene = nullptr;
 
 #if (ETX_RT_API == ETX_RT_API_NANORT)
@@ -65,10 +67,13 @@ struct RaytracingImpl {
 
 #endif
 
-  RaytracingImpl() = default;
+  RaytracingImpl() {
+    gpu = GPUDevice::create_optix_device();
+  }
 
   ~RaytracingImpl() {
     release_scene();
+    GPUDevice::free_device(gpu);
   }
 
   void set_scene(const Scene& s) {

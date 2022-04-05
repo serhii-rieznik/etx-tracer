@@ -1,3 +1,4 @@
+#include <etx/core/core.hxx>
 #include <etx/log/log.hxx>
 #include <etx/gpu/optix.hxx>
 
@@ -12,13 +13,7 @@
 
 namespace etx {
 
-struct GPUBufferOptixImpl {
-  GPUBufferOptixImpl(const GPUBuffer::Descriptor& desc) {
-  }
-
-  ~GPUBufferOptixImpl() {
-  }
-};
+struct GPUBufferOptixImpl;
 
 struct GPUOptixImplData {
   CUcontext cuda_context = {};
@@ -104,6 +99,47 @@ struct GPUOptixImplData {
   }
 };
 
+#define ETX_OPTIX_INCLUDES 1
+
+/****************************************************
+ *
+ * #include "optix_buffer.hxx"
+ *
+ ***************************************************/
+
+#if !defined(ETX_OPTIX_INCLUDES)
+#error This file should not be included
+#endif
+
+struct GPUBufferOptixImpl {
+  GPUBufferOptixImpl(const GPUBuffer::Descriptor& desc) {
+    uint64_t size = align_up(desc.size, 16u);
+    if ETX_CUDA_CALL_FAILED (cudaMalloc(&device_ptr, desc.size)) {
+      log::error("Failed to create CUDA buffer with size: %llu", desc.size);
+      return;
+    }
+
+    if (desc.data != nullptr) {
+      if ETX_CUDA_CALL_FAILED (cudaMemcpy(device_ptr, desc.data, desc.size, cudaMemcpyKind::cudaMemcpyHostToDevice))
+        log::error("Failed to copy content to CUDA buffer %p from %p with size %llu", device_ptr, desc.data, desc.size);
+    }
+  }
+
+  ~GPUBufferOptixImpl() {
+    if ETX_CUDA_CALL_FAILED (cudaFree(device_ptr)) {
+      log::error("Failed to free CUDA buffer: %p", device_ptr);
+    }
+    device_ptr = nullptr;
+  }
+
+  void* device_ptr = nullptr;
+};
+
+//
+#include "optix_pipeline.hxx"
+
+#undef ETX_OPTIX_INCLUDES
+
 ETX_PIMPL_IMPLEMENT_ALL(GPUOptixImpl, Data)
 
 GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
@@ -112,6 +148,11 @@ GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
 
 void GPUOptixImpl::destroy_buffer(GPUBuffer buffer) {
   _private->buffer_pool.free(buffer.handle);
+}
+
+uint64_t GPUOptixImpl::get_buffer_device_handle(GPUBuffer buffer) const {
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  return reinterpret_cast<uint64_t>(object.device_ptr);
 }
 
 }  // namespace etx
