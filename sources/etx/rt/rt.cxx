@@ -1,4 +1,3 @@
-#include <etx/gpu/gpu.hxx>
 #include <etx/rt/rt.hxx>
 
 #define ETX_RT_API_BVH 1

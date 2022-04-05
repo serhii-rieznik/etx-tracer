@@ -55,7 +55,7 @@ struct RTApplication {
 
   CPUDebugIntegrator _preview = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
-  GPUPathTracing _gpu_pt = {raytracing};
+  // GPUPathTracing _gpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};

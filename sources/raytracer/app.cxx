@@ -111,8 +111,6 @@ void RTApplication::frame() {
 
 void RTApplication::cleanup() {
   render.cleanup();
-  GPUDevice::free_device(gpu);
-  gpu = {};
 }
 
 void RTApplication::process_event(const sapp_event* e) {
