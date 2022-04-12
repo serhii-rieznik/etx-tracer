@@ -147,12 +147,21 @@ GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
 }
 
 void GPUOptixImpl::destroy_buffer(GPUBuffer buffer) {
+  if (buffer.handle == 0)
+    return;
+
   _private->buffer_pool.free(buffer.handle);
 }
 
 uint64_t GPUOptixImpl::get_buffer_device_handle(GPUBuffer buffer) const {
   auto& object = _private->buffer_pool.get(buffer.handle);
   return reinterpret_cast<uint64_t>(object.device_ptr);
+}
+
+void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset, uint64_t size) {
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  if ETX_CUDA_CALL_FAILED (cudaMemcpy(dst, reinterpret_cast<const uint8_t*>(object.device_ptr) + offset, size, cudaMemcpyDeviceToHost))
+    log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
 }
 
 }  // namespace etx

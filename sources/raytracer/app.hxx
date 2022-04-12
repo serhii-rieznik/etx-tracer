@@ -55,16 +55,17 @@ struct RTApplication {
 
   CPUDebugIntegrator _preview = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
-  // GPUPathTracing _gpu_pt = {raytracing};
+  GPUPathTracing _gpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};
 
-  Integrator* _integrator_array[5] = {
+  Integrator* _integrator_array[6] = {
     &_preview,
     &_cpu_pt,
     &_cpu_bidir,
     &_cpu_vcm,
+    &_gpu_pt,
     &_cpu_atmosphere,
   };
 

@@ -175,6 +175,10 @@ TaskScheduler& Raytracing::scheduler() {
   return _private->scheduler;
 }
 
+GPUDevice* Raytracing::gpu() {
+  return _private->gpu;
+}
+
 void Raytracing::set_scene(const Scene& scene) {
   _private->set_scene(scene);
 }

@@ -11,6 +11,7 @@ struct GPUOptixImpl : public GPUDevice {
   GPUBuffer create_buffer(const GPUBuffer::Descriptor& desc) override;
   void destroy_buffer(GPUBuffer) override;
   uint64_t get_buffer_device_handle(GPUBuffer) const override;
+  void copy_from_buffer(GPUBuffer, void* dst, uint64_t offset, uint64_t size) override;
 
   ETX_PIMPL_DECLARE(GPUOptixImpl, Data, 2048);
 };
