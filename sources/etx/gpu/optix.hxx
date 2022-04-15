@@ -13,6 +13,10 @@ struct GPUOptixImpl : public GPUDevice {
   uint64_t get_buffer_device_handle(GPUBuffer) const override;
   void copy_from_buffer(GPUBuffer, void* dst, uint64_t offset, uint64_t size) override;
 
+  GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) override;
+  GPUPipeline create_pipeline_from_file(const char*, bool) override;
+  void destroy_pipeline(GPUPipeline) override;
+
   ETX_PIMPL_DECLARE(GPUOptixImpl, Data, 2048);
 };
 

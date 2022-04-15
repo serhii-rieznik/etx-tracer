@@ -77,4 +77,25 @@ std::string save_file(const std::vector<std::string>& filters) {
   return GetSaveFileName(&of) ? of.lpstrFile : "";
 }
 
+bool load_binary_file(const char* filename, std::vector<uint8_t>& output) {
+  FILE* f_in = fopen(filename, "rb");
+  if (f_in == nullptr) {
+    return false;
+  }
+
+  fseek(f_in, 0, SEEK_END);
+  uint64_t file_size = ftell(f_in);
+  output.resize(file_size);
+  fseek(f_in, 0, SEEK_SET);
+
+  uint64_t bytes_read = fread(output.data(), 1, file_size, f_in);
+  if (bytes_read != file_size) {
+    fclose(f_in);
+    return false;
+  }
+
+  fclose(f_in);
+  return true;
+}
+
 }  // namespace etx

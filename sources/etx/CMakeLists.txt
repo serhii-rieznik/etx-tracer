@@ -87,7 +87,7 @@ endif()
 
 if (ETX_GPU_RENDER)
   create_library(gpu)
-  target_link_libraries(etx-gpu PRIVATE etx-core etx-log)
+  target_link_libraries(etx-gpu PRIVATE etx-core etx-log cuda-compiler-lib)
   target_include_directories(etx-gpu PRIVATE ${OptiX_INCLUDE} ${CUDA_TOOLKIT_ROOT_DIR}/include)
   target_link_libraries(etx-gpu PUBLIC ${optix_LIBRARY} ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY})
 endif()

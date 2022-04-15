@@ -6,6 +6,7 @@ namespace etx {
 
 struct GPUPathTracingImpl {
   GPUBuffer camera_image = {};
+  GPUPipeline main_pipeline = {};
   std::vector<float4> local_camera_image = {};
 };
 
