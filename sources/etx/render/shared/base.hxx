@@ -79,8 +79,16 @@ ETX_GPU_CODE void print_value(const char* name, const char* tag, float t) {
   printf("%s : %s %f\n", name, tag, t);
 }
 
+ETX_GPU_CODE void print_value(const char* name, const char* tag, const float2& v) {
+  printf("%s : %s (%f, %f)\n", name, tag, v.x, v.y);
+}
+
 ETX_GPU_CODE void print_value(const char* name, const char* tag, const float3& v) {
   printf("%s : %s (%f, %f, %f)\n", name, tag, v.x, v.y, v.z);
+}
+
+ETX_GPU_CODE void print_value(const char* name, const char* tag, const float4& v) {
+  printf("%s : %s (%f, %f, %f, %f)\n", name, tag, v.x, v.y, v.z, v.w);
 }
 
 ETX_GPU_CODE void print_value(const char* name, const char* tag, complex z) {

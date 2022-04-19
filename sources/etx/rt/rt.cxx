@@ -286,9 +286,9 @@ bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler&
     if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {
       auto sampled_normal = _private->scene->images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
       float3x3 from_local = {
-        {result_intersection.tan.x, result_intersection.tan.y, result_intersection.tan.z},
-        {result_intersection.btn.x, result_intersection.btn.y, result_intersection.btn.z},
-        {result_intersection.nrm.x, result_intersection.nrm.y, result_intersection.nrm.z},
+        float3{result_intersection.tan.x, result_intersection.tan.y, result_intersection.tan.z},
+        float3{result_intersection.btn.x, result_intersection.btn.y, result_intersection.btn.z},
+        float3{result_intersection.nrm.x, result_intersection.nrm.y, result_intersection.nrm.z},
       };
       result_intersection.nrm = normalize(from_local * sampled_normal);
       result_intersection.tan = normalize(result_intersection.tan - result_intersection.nrm * dot(result_intersection.tan, result_intersection.nrm));

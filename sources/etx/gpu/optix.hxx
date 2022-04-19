@@ -17,6 +17,8 @@ struct GPUOptixImpl : public GPUDevice {
   GPUPipeline create_pipeline_from_file(const char*, bool) override;
   void destroy_pipeline(GPUPipeline) override;
 
+  bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override;
+
   ETX_PIMPL_DECLARE(GPUOptixImpl, Data, 2048);
 };
 

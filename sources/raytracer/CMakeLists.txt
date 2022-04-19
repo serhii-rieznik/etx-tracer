@@ -10,7 +10,7 @@ add_executable(raytracer
   camera_controller.hxx
 )
 
-target_link_libraries(raytracer sokol_imgui glm etx-core etx-log etx-render etx-rt)
+target_link_libraries(raytracer sokol_imgui etx-core etx-log etx-render etx-rt tinyexr stb_image)
 
 set_target_properties(raytracer PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"

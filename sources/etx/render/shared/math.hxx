@@ -1,42 +1,57 @@
 ﻿#pragma once
 
 #if (ETX_RENDER_BASE_INCLUDED)
-
-#if (ETX_NVCC_COMPILER)
-
 #else
+#error This file should not be included separately. Use etx/render/shared/base.hxx instead
+#endif
 
-#define GLM_FORCE_XYZW_ONLY 1
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE 1
-#include <glm/glm.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/gtc/quaternion.hpp>
-
+#include <math.h>
+#include <string.h>
 #include <complex>
 
-using float2 = glm::vec2;
-using float3 = glm::vec3;
-using float4 = glm::vec4;
-using int2 = glm::ivec2;
-using int3 = glm::ivec3;
-using uint2 = glm::uvec2;
-using uint3 = glm::uvec3;
-using uint4 = glm::uvec4;
-using float3x3 = glm::mat3x3;
-using float4x4 = glm::mat4x4;
-using ubyte2 = glm::u8vec2;
-using ubyte3 = glm::u8vec3;
-using ubyte4 = glm::u8vec4;
+#if !(ETX_NVCC_COMPILER)
+
+template <class t>
+struct vector2 {
+  t x, y;
+};
+
+template <class t>
+struct vector3 {
+  t x, y, z;
+};
+
+template <class t>
+struct vector4 {
+  t x, y, z, w;
+};
+
+using float2 = vector2<float>;
+using float3 = vector3<float>;
+using float4 = vector4<float>;
+using int2 = vector2<int32_t>;
+using int3 = vector3<int32_t>;
+using int4 = vector4<int32_t>;
+using uint2 = vector2<uint32_t>;
+using uint3 = vector3<uint32_t>;
+using uint4 = vector4<uint32_t>;
+using ubyte2 = vector2<uint8_t>;
+using ubyte3 = vector3<uint8_t>;
+using ubyte4 = vector4<uint8_t>;
+
+#endif
+
+struct float3x3 {
+  float3 col[3] = {};
+};
+
+struct float4x4 {
+  float4 col[4] = {};
+};
+
 using complex = std::complex<float>;
 
-#endif
-
-#else
-
-#error This file should not be included separately. Use etx/render/shared/base.hxx instead
-
-#endif
+#include <etx/render/shared/vector_math.hxx>
 
 namespace etx {
 
@@ -97,10 +112,10 @@ struct alignas(16) LocalFrame {
   float3 nrm = {};
 
   ETX_GPU_CODE float3 to_local(const float3& v) const {
-    return float3x3{{tan.x, btn.x, nrm.x}, {tan.y, btn.y, nrm.y}, {tan.z, btn.z, nrm.z}} * v;
+    return float3x3{float3{tan.x, btn.x, nrm.x}, float3{tan.y, btn.y, nrm.y}, float3{tan.z, btn.z, nrm.z}} * v;
   }
   ETX_GPU_CODE float3 from_local(const float3& v) const {
-    return float3x3{{tan.x, tan.y, tan.z}, {btn.x, btn.y, btn.z}, {nrm.x, nrm.y, nrm.z}} * v;
+    return float3x3{float3{tan.x, tan.y, tan.z}, float3{btn.x, btn.y, btn.z}, float3{nrm.x, nrm.y, nrm.z}} * v;
   }
   ETX_GPU_CODE static float cos_theta(const float3& v) {
     return v.z;
@@ -149,33 +164,92 @@ struct alignas(16) Intersection : public Vertex {
   }
 };
 
-template <typename T>
-inline constexpr T clamp(T val, T min_val, T max_val) {
-  return glm::clamp(val, min_val, max_val);
+template <class t>
+ETX_GPU_CODE constexpr t min(t a, t b) {
+  return a < b ? a : b;
+}
+
+template <class t>
+ETX_GPU_CODE constexpr t max(t a, t b) {
+  return a > b ? a : b;
+}
+
+template <class t>
+ETX_GPU_CODE constexpr t clamp(t val, t min_val, t max_val) {
+  return (val < min_val) ? min_val : (val > max_val ? max_val : val);
+}
+
+ETX_GPU_CODE float2 max(const float2& a, const float2& b) {
+  return {
+    max(a.x, b.x),
+    max(a.y, b.y),
+  };
+}
+
+ETX_GPU_CODE float3 max(const float3& a, const float3& b) {
+  return {
+    max(a.x, b.x),
+    max(a.y, b.y),
+    max(a.z, b.z),
+  };
+}
+
+ETX_GPU_CODE float4 max(const float4& a, const float4& b) {
+  return {
+    max(a.x, b.x),
+    max(a.y, b.y),
+    max(a.z, b.z),
+    max(a.w, b.w),
+  };
+}
+
+ETX_GPU_CODE float2 min(const float2& a, const float2& b) {
+  return {
+    min(a.x, b.x),
+    min(a.y, b.y),
+  };
+}
+
+ETX_GPU_CODE float3 min(const float3& a, const float3& b) {
+  return {
+    min(a.x, b.x),
+    min(a.y, b.y),
+    min(a.z, b.z),
+  };
+}
+
+ETX_GPU_CODE float4 min(const float4& a, const float4& b) {
+  return {
+    min(a.x, b.x),
+    min(a.y, b.y),
+    min(a.z, b.z),
+    max(a.w, b.w),
+  };
+}
+
+ETX_GPU_CODE constexpr float saturate(float val) {
+  return clamp(val, 0.0f, 1.0f);
+}
+
+ETX_GPU_CODE constexpr float2 saturate(float2 val) {
+  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f)};
+}
+
+ETX_GPU_CODE constexpr float3 saturate(float3 val) {
+  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f), clamp(val.z, 0.0f, 1.0f)};
+}
+
+ETX_GPU_CODE constexpr float4 saturate(float4 val) {
+  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f), clamp(val.z, 0.0f, 1.0f), clamp(val.w, 0.0f, 1.0f)};
 }
 
 template <typename T>
-inline constexpr T saturate(T val) {
-  return glm::clamp(val, 0.0f, 1.0f);
+ETX_GPU_CODE constexpr T lerp(T a, T b, float t) {
+  return a * (1.0f - t) + b * t;
 }
 
 template <typename T>
-inline constexpr T min(T a, T b) {
-  return glm::min(a, b);
-}
-
-template <typename T>
-inline constexpr T max(T a, T b) {
-  return glm::max(a, b);
-}
-
-template <typename T>
-inline constexpr T lerp(T a, T b, float t) {
-  return glm::mix(a, b, t);
-}
-
-template <typename T>
-inline constexpr T sqr(T t) {
+ETX_GPU_CODE constexpr T sqr(T t) {
   return t * t;
 }
 
@@ -235,7 +309,7 @@ ETX_GPU_CODE float2 sample_disk(float xi0, float xi1) {
     theta = kHalfPi - kQuarterPi * (offset.x / offset.y);
   }
 
-  return {r * std::cos(theta), r * std::sin(theta)};
+  return {r * cosf(theta), r * sinf(theta)};
 }
 
 ETX_GPU_CODE float2 sample_disk_uv(float xi0, float xi1) {
@@ -253,7 +327,7 @@ ETX_GPU_CODE float2 sample_disk_uv(float xi0, float xi1) {
     theta = kHalfPi - kQuarterPi * (offset.x / offset.y);
   }
 
-  return {r * std::cos(theta) * 0.5f + 0.5f, r * std::sin(theta) * 0.5f + 0.5f};
+  return {r * cosf(theta) * 0.5f + 0.5f, r * sinf(theta) * 0.5f + 0.5f};
 }
 
 ETX_GPU_CODE float2 projecected_coords(const float3& normal, const float3& in_dir, float sz, float csz) {

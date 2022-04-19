@@ -346,7 +346,8 @@ struct CPUVCMImpl {
                     eval.bsdf *= fix_shading_normal(tri.geo_n, data.nrm, data.w_i, data.w_o);
                     auto result = (tr * eval.bsdf * state.throughput * camera_sample.weight) * weight;
 
-                    iteration_light_image.atomic_add({(result / spectrum::sample_pdf()).to_xyz(), 1.0f}, camera_sample.uv, thread_id);
+                    auto value = (result / spectrum::sample_pdf()).to_xyz();
+                    iteration_light_image.atomic_add({value.x, value.y, value.z, 1.0f}, camera_sample.uv, thread_id);
                   }
                 }
               }
@@ -517,7 +518,7 @@ struct CPUVCMImpl {
       merged *= _vm_normalization;
       merged += (gathered / spectrum::sample_pdf()).to_xyz();
 
-      camera_image.accumulate({merged, 1.0f}, uv, float(iteration) / float(iteration + 1));
+      camera_image.accumulate({merged.x, merged.y, merged.z, 1.0f}, uv, float(iteration) / float(iteration + 1));
     }
   }
 };

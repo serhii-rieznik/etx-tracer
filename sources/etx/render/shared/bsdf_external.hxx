@@ -155,7 +155,7 @@ ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float alpha
   float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
 
   // align with view direction
-  const float phi = atan2(wi_11.y, wi_11.x);
+  const float phi = atan2f(wi_11.y, wi_11.x);
   float2 slope = {
     cosf(phi) * slope_11.x - sinf(phi) * slope_11.y,
     sinf(phi) * slope_11.x + cosf(phi) * slope_11.y,
@@ -208,7 +208,7 @@ ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& 
   float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
 
   // align with view direction
-  const float phi = atan2(wi_11.y, wi_11.x);
+  const float phi = atan2f(wi_11.y, wi_11.x);
   float2 slope = {cosf(phi) * slope_11.x - sinf(phi) * slope_11.y, sinf(phi) * slope_11.x + cosf(phi) * slope_11.y};
 
   // stretch back
@@ -405,7 +405,7 @@ ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sa
   float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
 
   // align with view direction
-  const float phi = atan2(wi_11.y, wi_11.x);
+  const float phi = atan2f(wi_11.y, wi_11.x);
   float2 slope = {
     cosf(phi) * slope_11.x - sinf(phi) * slope_11.y,
     sinf(phi) * slope_11.x + cosf(phi) * slope_11.y,

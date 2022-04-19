@@ -26,7 +26,7 @@ struct alignas(16) Camera {
   float3 direction ETX_EMPTY_INIT;
   float lens_radius ETX_EMPTY_INIT;
 
-  float2 image_size ETX_EMPTY_INIT;
+  uint2 image_size ETX_EMPTY_INIT;
   float image_plane ETX_EMPTY_INIT;
   float focal_distance ETX_EMPTY_INIT;
 };

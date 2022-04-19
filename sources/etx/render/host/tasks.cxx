@@ -2,7 +2,7 @@
 #include <etx/render/host/pool.hxx>
 #include <etx/render/host/tasks.hxx>
 
-#include <enkiTS/TaskScheduler.hxx>
+#include <TaskScheduler.hxx>
 
 #define ETX_ALWAYS_SINGLE_THREAD 0
 

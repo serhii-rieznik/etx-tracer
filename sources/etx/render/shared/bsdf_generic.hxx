@@ -29,7 +29,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   float t = fabsf(dot(data.w_i, m));
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f} * (1.0f - metalness) + diffuse * metalness;
-  SpectralResponse f = f0 + (1.0f - f0) * std::pow(1.0f - t, 5.0f);
+  SpectralResponse f = f0 + (1.0f - f0) * powf(1.0f - t, 5.0f);
 
   uint32_t properties = 0;
   BSDFData eval_data = data;
@@ -70,7 +70,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 
   float t = fabsf(dot(data.w_i, m));
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f * (1.0f - metalness)} + diffuse * metalness;
-  SpectralResponse f = f0 + (1.0f - f0) * std::pow(1.0f - t, 5.0f);
+  SpectralResponse f = f0 + (1.0f - f0) * powf(1.0f - t, 5.0f);
 
   auto ggx = NormalDistribution(frame, alpha);
   auto eval = ggx.evaluate(m, data.w_i, data.w_o);
@@ -109,7 +109,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 
   float t = fabsf(dot(data.w_i, m));
   SpectralResponse f0 = SpectralResponse{data.spectrum_sample.wavelength, 0.04f} * (1.0f - metalness) + diffuse * metalness;
-  SpectralResponse f = f0 + (1.0f - f0) * std::pow(1.0f - t, 5.0f);
+  SpectralResponse f = f0 + (1.0f - f0) * powf(1.0f - t, 5.0f);
 
   auto ggx = NormalDistribution(frame, alpha);
   float j = 1.0f / (4.0f * m_dot_o);

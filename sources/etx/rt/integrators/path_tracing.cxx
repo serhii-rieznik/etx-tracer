@@ -64,17 +64,17 @@ struct CPUPathTracingImpl : public Task {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
       float2 uv = get_jittered_uv(smp, {x, y}, current_dimensions);
-      float4 xyz = {trace_pixel(smp, uv), 1.0f};
+      float3 xyz = trace_pixel(smp, uv);
 
       if (state->load() == Integrator::State::Running) {
-        camera_image.accumulate(xyz, uv, float(iteration) / float(iteration + 1));
+        camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(iteration) / float(iteration + 1));
       } else {
         float t = iteration < preview_frames ? 0.0f : float(iteration - preview_frames) / float(iteration - preview_frames + 1);
         for (uint32_t ay = 0; ay < current_scale; ++ay) {
           for (uint32_t ax = 0; ax < current_scale; ++ax) {
             uint32_t rx = x * current_scale + ax;
             uint32_t ry = y * current_scale + ay;
-            camera_image.accumulate(xyz, rx, ry, t);
+            camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, rx, ry, t);
           }
         }
       }

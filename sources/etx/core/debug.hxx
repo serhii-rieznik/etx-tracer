@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdio.h>
+#include <stdint.h>
 
 #if defined(NDEBUG) || defined(_NDEBUG)
 #define ETX_DEBUG 0

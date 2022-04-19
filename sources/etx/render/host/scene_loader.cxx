@@ -1,6 +1,7 @@
 ﻿#include <etx/core/core.hxx>
 #include <etx/log/log.hxx>
 #include <etx/core/environment.hxx>
+
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/scene.hxx>
 
@@ -113,7 +114,7 @@ struct SceneRepresentationImpl {
     , images(s) {
     images.init(1024u);
     mediums.init(1024u);
-    scene.camera = build_camera({5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280.0f, 720.0f}, 26.99f, 0.0f, 1.0f);
+    scene.camera = build_camera({5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280u, 720u}, 26.99f, 0.0f, 1.0f);
   }
 
   ~SceneRepresentationImpl() {
@@ -211,32 +212,32 @@ struct SceneRepresentationImpl {
       auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
       const auto& tri = data->triangles[iFace];
       const auto& vertex = data->vertices[tri.i[iVert]];
-      fvPosOut[0] = vertex.pos[0];
-      fvPosOut[1] = vertex.pos[1];
-      fvPosOut[2] = vertex.pos[2];
+      fvPosOut[0] = vertex.pos.x;
+      fvPosOut[1] = vertex.pos.y;
+      fvPosOut[2] = vertex.pos.z;
     };
     contextInterface.m_getNormal = [](const SMikkTSpaceContext* pContext, float fvNormOut[], const int iFace, const int iVert) {
       auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
       const auto& tri = data->triangles[iFace];
       const auto& vertex = data->vertices[tri.i[iVert]];
-      fvNormOut[0] = vertex.nrm[0];
-      fvNormOut[1] = vertex.nrm[1];
-      fvNormOut[2] = vertex.nrm[2];
+      fvNormOut[0] = vertex.nrm.x;
+      fvNormOut[1] = vertex.nrm.y;
+      fvNormOut[2] = vertex.nrm.z;
     };
     contextInterface.m_getTexCoord = [](const SMikkTSpaceContext* pContext, float fvTexcOut[], const int iFace, const int iVert) {
       auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
       const auto& tri = data->triangles[iFace];
       const auto& vertex = data->vertices[tri.i[iVert]];
-      fvTexcOut[0] = vertex.tex[0];
-      fvTexcOut[1] = vertex.tex[1];
+      fvTexcOut[0] = vertex.tex.x;
+      fvTexcOut[1] = vertex.tex.y;
     };
     contextInterface.m_setTSpaceBasic = [](const SMikkTSpaceContext* pContext, const float fvTangent[], const float fSign, const int iFace, const int iVert) {
       auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
       const auto& tri = data->triangles[iFace];
       auto& vertex = data->vertices[tri.i[iVert]];
-      vertex.tan[0] = fvTangent[0];
-      vertex.tan[1] = fvTangent[1];
-      vertex.tan[2] = fvTangent[2];
+      vertex.tan.x = fvTangent[0];
+      vertex.tan.y = fvTangent[1];
+      vertex.tan.z = fvTangent[2];
       vertex.btn = normalize(cross(vertex.tan, vertex.nrm) * fSign);
     };
 
@@ -431,7 +432,7 @@ struct SceneRepresentationImpl {
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
-Camera build_camera(const float3& origin, const float3& target, const float3& up, const float2& viewport, float fov, float lens_radius, float focal_distance) {
+Camera build_camera(const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov, float lens_radius, float focal_distance) {
   Camera result = {};
   result.focal_distance = focal_distance;
   result.lens_radius = lens_radius;
@@ -439,17 +440,17 @@ Camera build_camera(const float3& origin, const float3& target, const float3& up
   return result;
 }
 
-void update_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const float2& viewport, float fov) {
-  float4x4 view = glm::lookAtRH(origin, target, up);
-  float4x4 proj = glm::perspectiveFovRH_ZO(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
+void update_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov) {
+  float4x4 view = look_at(origin, target, up);
+  float4x4 proj = perspective(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
+  float4x4 inv_view = inverse(view);
 
-  auto inv_view = glm::inverse(view);
-  camera.position = {inv_view[3][0], inv_view[3][1], inv_view[3][2]};
-  camera.side = {view[0][0], view[1][0], view[2][0]};
-  camera.up = {view[0][1], view[1][1], view[2][1]};
-  camera.direction = {-view[0][2], -view[1][2], -view[2][2]};
-  camera.tan_half_fov = 1.0f / std::abs(proj[1][1]);
-  camera.aspect = proj[1][1] / proj[0][0];
+  camera.position = {inv_view.col[3].x, inv_view.col[3].y, inv_view.col[3].z};
+  camera.side = {view.col[0].x, view.col[1].x, view.col[2].x};
+  camera.up = {view.col[0].y, view.col[1].y, view.col[2].y};
+  camera.direction = {-view.col[0].z, -view.col[1].z, -view.col[2].z};
+  camera.tan_half_fov = 1.0f / std::abs(proj.col[1].y);
+  camera.aspect = proj.col[1].y / proj.col[0].x;
   camera.view_proj = proj * view;
 
   float plane_w = 2.0f * camera.tan_half_fov * camera.aspect;
@@ -485,22 +486,52 @@ SceneRepresentation::operator bool() const {
   return _private->loaded;
 }
 
-template <class V, int n>
-V json_to_float_n(json_t* a) {
-  V result = {};
+uint2 json_to_u2(json_t* a) {
+  uint2 result = {};
   int i = 0;
   json_t* val = {};
   json_array_foreach(a, i, val) {
-    if ((i < n) && json_is_number(val)) {
-      result[i] = static_cast<float>(json_number_value(val));
-    } else {
+    if ((i >= 2) || (json_is_number(val) == false))
       break;
+
+    switch (i) {
+      case 0:
+        result.x = static_cast<uint32_t>(json_number_value(val));
+        break;
+      case 1:
+        result.y = static_cast<uint32_t>(json_number_value(val));
+        break;
+      default:
+        break;
     }
   }
   return result;
 }
-const auto json_to_float2 = json_to_float_n<float2, 2>;
-const auto json_to_float3 = json_to_float_n<float3, 3>;
+
+float3 json_to_f3(json_t* a) {
+  float3 result = {};
+  int i = 0;
+  json_t* val = {};
+  json_array_foreach(a, i, val) {
+    if ((i >= 3) || (json_is_number(val) == false))
+      break;
+
+    switch (i) {
+      case 0:
+        result.x = static_cast<float>(json_number_value(val));
+        break;
+      case 1:
+        result.y = static_cast<float>(json_number_value(val));
+        break;
+      case 2:
+        result.z = static_cast<float>(json_number_value(val));
+        break;
+      default:
+        break;
+    }
+  }
+  return result;
+}
 
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
   _private->cleanup();
@@ -518,7 +549,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   float3 camera_pos = cam.position;
   float3 camera_up = {0.0f, 1.0f, 0.0f};
   float3 camera_view = cam.position + cam.direction;
-  float2 viewport = cam.image_size;
+  uint2 viewport = cam.image_size;
   float camera_fov = get_camera_fov(cam);
 
   if (strcmp(get_file_ext(filename), ".json") == 0) {
@@ -565,13 +596,13 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
               camera_cls = Camera::Class::Equirectangular;
             }
           } else if ((strcmp(cam_key, "origin") == 0) && json_is_array(cam_value)) {
-            camera_pos = json_to_float3(cam_value);
+            camera_pos = json_to_f3(cam_value);
           } else if ((strcmp(cam_key, "target") == 0) && json_is_array(cam_value)) {
-            camera_view = json_to_float3(cam_value);
+            camera_view = json_to_f3(cam_value);
           } else if ((strcmp(cam_key, "up") == 0) && json_is_array(cam_value)) {
-            camera_up = json_to_float3(cam_value);
+            camera_up = json_to_f3(cam_value);
           } else if ((strcmp(cam_key, "viewport") == 0) && json_is_array(cam_value)) {
-            viewport = json_to_float2(cam_value);
+            viewport = json_to_u2(cam_value);
           } else if ((strcmp(cam_key, "fov") == 0) && json_is_number(cam_value)) {
             camera_fov = static_cast<float>(json_number_value(cam_value));
           } else if ((strcmp(cam_key, "lens-radius") == 0) && json_is_number(cam_value)) {
@@ -800,7 +831,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
             for (float u = 0.0f; u < 1.0f; u += dv) {
               float2 uv = lerp_uv({vertices.data(), vertices.size()}, tri, random_barycentric(u, v));
               float4 val = img.evaluate(uv);
-              texture_emission += luminance(val) * du * dv * val.w;
+              texture_emission += luminance(to_float3(val)) * du * dv * val.w;
             }
           }
         }
@@ -859,12 +890,12 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       }
 
       // TODO : deal with bounds!
-      shape_bbox_max = glm::max(shape_bbox_max, vertices[tri.i[0]].pos);
-      shape_bbox_max = glm::max(shape_bbox_max, vertices[tri.i[1]].pos);
-      shape_bbox_max = glm::max(shape_bbox_max, vertices[tri.i[2]].pos);
-      shape_bbox_min = glm::min(shape_bbox_min, vertices[tri.i[0]].pos);
-      shape_bbox_min = glm::min(shape_bbox_min, vertices[tri.i[1]].pos);
-      shape_bbox_min = glm::min(shape_bbox_min, vertices[tri.i[2]].pos);
+      shape_bbox_max = max(shape_bbox_max, vertices[tri.i[0]].pos);
+      shape_bbox_max = max(shape_bbox_max, vertices[tri.i[1]].pos);
+      shape_bbox_max = max(shape_bbox_max, vertices[tri.i[2]].pos);
+      shape_bbox_min = min(shape_bbox_min, vertices[tri.i[0]].pos);
+      shape_bbox_min = min(shape_bbox_min, vertices[tri.i[1]].pos);
+      shape_bbox_min = min(shape_bbox_min, vertices[tri.i[2]].pos);
 
       if (mtl.int_medium != kInvalidIndex) {
         mediums.get(mtl.int_medium).bounds = {shape_bbox_min, shape_bbox_max};

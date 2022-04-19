@@ -55,7 +55,7 @@ create_library(log)
 target_link_libraries(etx-log PRIVATE etx-core)
 
 create_library(render)
-target_link_libraries(etx-render PRIVATE glm stb_image tinyexr tiny_obj_loader mikktspace enkiTS etx-core)
+target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader mikktspace enkiTS etx-core)
 target_include_directories(etx-render PRIVATE ${JANSSON_INCLUDE_DIRS})
 
 if (WITH_OPENVDB)
@@ -88,12 +88,12 @@ endif()
 if (ETX_GPU_RENDER)
   create_library(gpu)
   target_link_libraries(etx-gpu PRIVATE etx-core etx-log cuda-compiler-lib)
-  target_include_directories(etx-gpu PRIVATE ${OptiX_INCLUDE} ${CUDA_TOOLKIT_ROOT_DIR}/include)
   target_link_libraries(etx-gpu PUBLIC ${optix_LIBRARY} ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY})
+  target_include_directories(etx-gpu PRIVATE ${OptiX_INCLUDE} ${CUDA_TOOLKIT_ROOT_DIR}/include)
 endif()
 
 create_library(rt)
-target_link_libraries(etx-rt PRIVATE glm embree etx-core etx-render)
+target_link_libraries(etx-rt PRIVATE embree etx-core etx-render)
 target_compile_definitions(etx-rt PUBLIC -DETX_HAVE_GPU_RENDER=${ETX_GPU_RENDER})
 
 if (ETX_GPU_RENDER)

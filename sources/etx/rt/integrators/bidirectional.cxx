@@ -140,8 +140,8 @@ struct CPUBidirectionalImpl : public Task {
       uint32_t x = i % camera_image.dimensions().x;
       uint32_t y = i / camera_image.dimensions().x;
       float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
-      float4 xyz = {trace_pixel(smp, uv, thread_id), 1.0f};
-      camera_image.accumulate(xyz, uv, float(iteration) / float(iteration + 1));
+      float3 xyz = trace_pixel(smp, uv, thread_id);
+      camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(iteration) / float(iteration + 1));
     }
   }
 
@@ -184,7 +184,8 @@ struct CPUBidirectionalImpl : public Task {
           if (_connect_to_camera) {
             CameraSample camera_sample = {};
             auto splat = connect_to_camera(smp, path_data, spect, eye_t, light_s, camera_sample);
-            iteration_light_image.atomic_add({splat.to_xyz(), 1.0f}, camera_sample.uv, thread_id);
+            auto xyz = splat.to_xyz();
+            iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv, thread_id);
           }
         } else if (light_s == 1) {
           if (_connect_to_light) {
@@ -369,7 +370,7 @@ struct CPUBidirectionalImpl : public Task {
       path[2].pdf.forward = emitter_sample.pdf_area;
       if (path[2].cls == PathVertex::Class::Surface) {
         const auto& tri = rt.scene().triangles[path[2].triangle_index];
-        path[2].pdf.forward *= glm::abs(dot(emitter_sample.direction, tri.geo_n));
+        path[2].pdf.forward *= fabsf(dot(emitter_sample.direction, tri.geo_n));
       }
       ETX_VALIDATE(path[2].pdf.forward);
     }
@@ -805,12 +806,12 @@ float CPUBidirectionalImpl::PathVertex::pdf_to_light_out(SpectralQuery spect, co
       auto w_o = normalize(pos - next->pos);
       emitter_evaluate_out_dist(emitter, spect, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
       if (next->is_surface_interaction()) {
-        pdf_area *= glm::abs(dot(scene.triangles[next->triangle_index].geo_n, w_o));
+        pdf_area *= fabsf(dot(scene.triangles[next->triangle_index].geo_n, w_o));
       }
     }
   } else if (scene.environment_emitters.count > 0) {
     auto w_o = normalize(pos - next->pos);
-    float w_o_dot_n = next->is_surface_interaction() ? glm::abs(dot(scene.triangles[next->triangle_index].geo_n, w_o)) : 1.0f;
+    float w_o_dot_n = next->is_surface_interaction() ? fabsf(dot(scene.triangles[next->triangle_index].geo_n, w_o)) : 1.0f;
     for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
       const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
       float local_pdf_area = 0.0f;
@@ -857,7 +858,7 @@ float CPUBidirectionalImpl::PathVertex::pdf_solid_angle_to_area(float pdf_dir, c
   float inv_d_squared = 1.0f / d_squared;
   w_o *= std::sqrt(inv_d_squared);
 
-  float cos_t = (to_vertex.is_surface_interaction() ? glm::abs(dot(w_o, to_vertex.nrm)) : 1.0f);
+  float cos_t = (to_vertex.is_surface_interaction() ? fabsf(dot(w_o, to_vertex.nrm)) : 1.0f);
 
   float result = cos_t * pdf_dir * inv_d_squared;
   ETX_VALIDATE(result);

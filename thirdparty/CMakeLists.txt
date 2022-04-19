@@ -4,8 +4,6 @@ add_subdirectory(imgui)
 
 add_subdirectory(sokol_imgui)
 
-add_subdirectory(glm)
-
 add_subdirectory(stb_image)
 add_subdirectory(tinyexr)
 

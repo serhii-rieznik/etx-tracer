@@ -5,8 +5,8 @@
 #include <etx/render/host/distribution_builder.hxx>
 #include <etx/render/host/pool.hxx>
 
-#include <tinyexr/tinyexr.hxx>
-#include <stb_image/stb_image.hxx>
+#include <tinyexr.hxx>
+#include <stb_image.hxx>
 
 #include <vector>
 #include <unordered_map>
@@ -143,7 +143,7 @@ struct ImagePoolImpl {
         for (uint32_t x = 0; x < img.isize.x; ++x) {
           float u = (float(x) + 0.5f) / img.fsize.x;
           float4 px = img.read(img.fsize * float2{u, v});
-          float lum = luminance(px);
+          float lum = luminance(to_float3(px));
           row_value += lum;
           d_x.add(lum);
         }
@@ -206,7 +206,7 @@ struct ImagePoolImpl {
         }
       });
 
-      dimensions = {w, h};
+      dimensions = {uint32_t(w), uint32_t(h)};
       data.resize(sizeof(float4) * w * h);
       memcpy(data.data(), rgba_data, sizeof(float4) * w * h);
       free(rgba_data);
@@ -224,7 +224,7 @@ struct ImagePoolImpl {
         return Image::Format::Undefined;
       }
 
-      dimensions = {w, h};
+      dimensions = {uint32_t(w), uint32_t(h)};
       data.resize(sizeof(float4) * w * h);
       auto ptr = reinterpret_cast<float4*>(data.data());
       if (c == 4) {
@@ -256,7 +256,7 @@ struct ImagePoolImpl {
       ETX_FAIL_FMT("Unsupported (yet) image format with %d channels", c);
     }
 
-    dimensions = {w, h};
+    dimensions = {uint32_t(w), uint32_t(h)};
     data.resize(4llu * w * h);
     uint8_t* ptr = reinterpret_cast<uint8_t*>(data.data());
     switch (c) {
@@ -408,7 +408,7 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
           fclose(in_file);
           return false;
         }
-        data_ptr[j + i * size.x] = {value, 1.0f};
+        data_ptr[j + i * size.x] = {value.x, value.y, value.z, 1.0f};
       }
     }
   } else {

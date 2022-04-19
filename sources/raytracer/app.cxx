@@ -5,9 +5,9 @@
 
 #include "app.hxx"
 
-#include <tinyexr/tinyexr.hxx>
-#include <stb_image/stb_image.hxx>
-#include <stb_image/stb_image_write.hxx>
+#include <tinyexr.hxx>
+#include <stb_image.hxx>
+#include <stb_image_write.hxx>
 
 namespace etx {
 
@@ -169,7 +169,7 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
   auto c_image = _current_integrator->get_camera_image(true);
   auto l_image = _current_integrator->get_light_image(true);
 
-  uint2 image_size = raytracing.scene().camera.image_size;
+  uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
   std::vector<float4> output(image_size.x * image_size.y, float4{});
   for (uint32_t i = 0, e = image_size.x * image_size.y; (c_image != nullptr) && (i < e); ++i) {
     output[i] = c_image[i];
@@ -178,7 +178,8 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
     output[i] += l_image[i];
   }
   for (uint32_t i = 0, e = image_size.x * image_size.y; (mode != SaveImageMode::XYZ) && (i < e); ++i) {
-    output[i] = {spectrum::xyz_to_rgb(output[i]), 1.0f};
+    auto rgb = spectrum::xyz_to_rgb(to_float3(output[i]));
+    output[i] = {rgb.x, rgb.y, rgb.z, 1.0f};
   }
 
   if (mode == SaveImageMode::TonemappedLDR) {
@@ -201,7 +202,7 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
       file_name += ".exr";
     }
     const char* error = nullptr;
-    if (SaveEXR(output.data()->data.data, image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
+    if (SaveEXR(reinterpret_cast<const float*>(output.data()), image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
       log::error("Failed to save EXR image to %s: %s", file_name.c_str(), error);
     }
   }

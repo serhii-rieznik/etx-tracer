@@ -72,7 +72,7 @@ struct alignas(16) Medium {
 
     float t = t_min;
     while (true) {
-      t -= std::log(1.0f - smp.next()) / max_sigma;
+      t -= logf(1.0f - smp.next()) / max_sigma;
       if (t >= t_max)
         break;
 
@@ -153,7 +153,7 @@ struct alignas(16) Medium {
 
     float t = t_min;
     while (true) {
-      t -= std::log(1.0f - smp.next()) / max_sigma;
+      t -= logf(1.0f - smp.next()) / max_sigma;
       if (t >= t_max)
         break;
 
@@ -232,9 +232,9 @@ struct alignas(16) Medium {
     float d110 = density[ix + ny * dimensions.x + nz * dimensions.x * dimensions.y];
     float d111 = density[nx + ny * dimensions.x + nz * dimensions.x * dimensions.y];
 
-    float dx = px - std::floor(px);
-    float dy = py - std::floor(py);
-    float dz = pz - std::floor(pz);
+    float dx = px - floorf(px);
+    float dy = py - floorf(py);
+    float dz = pz - floorf(pz);
 
     float d_bottom = lerp(lerp(d000, d001, dx), lerp(d010, d011, dx), dy);
     float d_top = lerp(lerp(d100, d101, dx), lerp(d110, d111, dx), dy);

@@ -5,6 +5,8 @@
 
 namespace etx {
 
+using device_pointer_t = uint64_t;
+
 struct GPUBuffer {
   struct Descriptor {
     uint64_t size = 0;
@@ -49,6 +51,8 @@ struct GPUDevice {
   virtual GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) = 0;
   virtual GPUPipeline create_pipeline_from_file(const char* filename, bool force_recompile) = 0;
   virtual void destroy_pipeline(GPUPipeline) = 0;
+
+  virtual bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) = 0;
 
   static GPUDevice* create_optix_device();
   static void free_device(GPUDevice*);

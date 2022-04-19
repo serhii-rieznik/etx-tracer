@@ -155,7 +155,7 @@ float3 SpectralDistribution::to_xyz() const {
 float SpectralDistribution::maximum_power() const {
   float result = entries[0].power;
   for (uint64_t i = 0; i < count; ++i) {
-    result = glm::max(result, entries[i].power);
+    result = max(result, entries[i].power);
   }
   return result;
 }
@@ -166,7 +166,7 @@ float3 SpectralDistribution::integrate_to_xyz() const {
     uint64_t j = min(i + 1llu, spectrum::WavelengthCount - 1);
     auto v0 = spectrum::spectral_xyz(i);
     auto v1 = spectrum::spectral_xyz(j);
-    float dw = wl - std::floor(wl);
+    float dw = wl - floorf(wl);
     return lerp(v0, v1, dw);
   };
 

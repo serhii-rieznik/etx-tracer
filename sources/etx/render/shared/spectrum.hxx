@@ -172,13 +172,13 @@ ETX_GPU_CODE float black_body_radiation(float wavelength_nm, float t_kelvins) {
   wavelength_nm *= wavelengt_scale;
   float wl5 = wavelength_nm * (wavelength_nm * wavelength_nm) * (wavelength_nm * wavelength_nm);
 
-  float e0 = std::exp(Lc2 / (wavelength_nm * t_kelvins));
-  ETX_ASSERT(std::isnan(e0) == false);
+  float e0 = expf(Lc2 / (wavelength_nm * t_kelvins));
+  ETX_ASSERT(isnan(e0) == false);
 
   float d = wl5 * (e0 - 1.0f);
-  ETX_ASSERT(std::isnan(d) == false);
+  ETX_ASSERT(isnan(d) == false);
 
-  return std::isinf(d) ? 0.0f : (Lc1 / d);
+  return isinf(d) ? 0.0f : (Lc1 / d);
 }
 
 ETX_GPU_CODE SpectralQuery sample(float rnd) {
@@ -221,7 +221,7 @@ struct alignas(16) SpectralResponse {
         return {};
       }
 
-      float w = floor(wavelength);
+      float w = floorf(wavelength);
       float dw = wavelength - w;
       uint64_t i = static_cast<uint64_t>(w - spectrum::kShortestWavelength);
       uint64_t j = min(i + 1, spectrum::WavelengthCount - 1llu);
@@ -514,8 +514,16 @@ struct RefractiveIndex {
     SpectralResponse eta;
     SpectralResponse k;
 
-    ETX_GPU_CODE complex as_complex(uint32_t c) const {
-      return {eta.components[c], k.components[c]};
+    ETX_GPU_CODE complex as_complex_x() const {
+      return {eta.components.x, k.components.x};
+    }
+
+    ETX_GPU_CODE complex as_complex_y() const {
+      return {eta.components.y, k.components.y};
+    }
+
+    ETX_GPU_CODE complex as_complex_z() const {
+      return {eta.components.z, k.components.z};
     }
 
     ETX_GPU_CODE complex as_monochromatic_complex() const {

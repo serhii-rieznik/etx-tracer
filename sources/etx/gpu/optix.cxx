@@ -1,16 +1,16 @@
 #include <etx/core/core.hxx>
+#include <etx/core/environment.hxx>
 #include <etx/log/log.hxx>
 #include <etx/gpu/optix.hxx>
-
-#include <cuda_runtime.h>
-
-#include <optix.h>
-#include <optix_stubs.h>
-#include <optix_function_table_definition.h>
 
 #include <jansson.h>
 
 #include <cuda_compiler/cuda_compiler_lib.hxx>
+
+#include <cuda_runtime.h>
+#include <optix.h>
+#include <optix_stubs.h>
+#include <optix_function_table_definition.h>
 
 #define ETX_CUDA_CALL_FAILED(F) ((F) != cudaSuccess)
 #define ETX_OPTIX_CALL_FAILED(F) ((F) != OPTIX_SUCCESS)
@@ -175,24 +175,7 @@ struct GPUPipelineOptixImpl {
   }
 
   ~GPUPipelineOptixImpl() {
-    if (raygen != nullptr) {
-      ETX_OPTIX_CALL_FAILED(optixProgramGroupDestroy(raygen));
-    }
-
-    for (uint32_t i = 0; i < group_count; ++i) {
-      if (groups[i].hit != nullptr) {
-        ETX_OPTIX_CALL_FAILED(optixProgramGroupDestroy(groups[i].hit));
-      }
-      if (groups[i].miss != nullptr) {
-        ETX_OPTIX_CALL_FAILED(optixProgramGroupDestroy(groups[i].miss));
-      }
-      if (groups[i].exception != nullptr) {
-        ETX_OPTIX_CALL_FAILED(optixProgramGroupDestroy(groups[i].exception));
-      }
-    }
-
-    if ETX_OPTIX_CALL_FAILED (optixModuleDestroy(optix_module))
-      log::error("Failed to destroy OptiX module");
+    destroy_module();
   }
 
   bool create_module(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
@@ -214,6 +197,10 @@ struct GPUPipelineOptixImpl {
     if ETX_OPTIX_CALL_FAILED (optixModuleCreateFromPTX(device->optix, &module_options, &pipeline_options,  //
                                 reinterpret_cast<const char*>(desc.data), desc.data_size, compile_log, &compile_log_size, &optix_module)) {
       log::error("optixModuleCreateFromPTX failed");
+      if (compile_log_size > 1) {
+        log::error(compile_log);
+      }
+      destroy_module();
       return false;
     }
 
@@ -230,6 +217,10 @@ struct GPUPipelineOptixImpl {
       OptixProgramGroupOptions program_options = {};
       if ETX_OPTIX_CALL_FAILED (optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &raygen)) {
         log::error("optixProgramGroupCreate failed");
+        if (compile_log_size > 1) {
+          log::error(compile_log);
+        }
+        destroy_module();
         return false;
       }
 
@@ -259,6 +250,10 @@ struct GPUPipelineOptixImpl {
 
         if ETX_OPTIX_CALL_FAILED (optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.hit)) {
           log::error("optixProgramGroupCreate failed");
+          if (compile_log_size > 1) {
+            log::error(compile_log);
+          }
+          destroy_module();
           return false;
         }
 
@@ -275,6 +270,10 @@ struct GPUPipelineOptixImpl {
         OptixProgramGroupOptions program_options = {};
         if ETX_OPTIX_CALL_FAILED (optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.miss)) {
           log::error("optixProgramGroupCreate failed");
+          if (compile_log_size > 1) {
+            log::error(compile_log);
+          }
+          destroy_module();
           return false;
         }
 
@@ -291,16 +290,51 @@ struct GPUPipelineOptixImpl {
         OptixProgramGroupOptions program_options = {};
         if ETX_OPTIX_CALL_FAILED (optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.exception)) {
           log::error("optixProgramGroupCreate failed");
+          if (compile_log_size > 1) {
+            log::error(compile_log);
+          }
+          destroy_module();
           return false;
         }
 
         if (compile_log_size > 1) {
-          log::error(compile_log);
+          log::warning(compile_log);
         }
       }
     }
 
     return true;
+  }
+
+  void destroy_module() {
+    if (raygen != nullptr) {
+      if ETX_OPTIX_CALL_FAILED (optixProgramGroupDestroy(raygen))
+        log::error("optixProgramGroupDestroy failed");
+      raygen = {};
+    }
+
+    for (uint32_t i = 0; i < group_count; ++i) {
+      if (groups[i].hit != nullptr) {
+        if ETX_OPTIX_CALL_FAILED (optixProgramGroupDestroy(groups[i].hit))
+          log::error("optixProgramGroupDestroy failed");
+      }
+      if (groups[i].miss != nullptr) {
+        if ETX_OPTIX_CALL_FAILED (optixProgramGroupDestroy(groups[i].miss))
+          log::error("optixProgramGroupDestroy failed");
+      }
+      if (groups[i].exception != nullptr) {
+        if ETX_OPTIX_CALL_FAILED (optixProgramGroupDestroy(groups[i].exception))
+          log::error("optixProgramGroupDestroy failed");
+      }
+      groups[i] = {};
+    }
+    group_count = 0;
+
+    if (optix_module != nullptr) {
+      if ETX_OPTIX_CALL_FAILED (optixModuleDestroy(optix_module))
+        log::error("Failed to destroy OptiX module");
+      optix_module = {};
+    }
   }
 
   bool create_pipeline(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
@@ -395,13 +429,7 @@ struct GPUPipelineOptixImpl {
 
 #undef ETX_OPTIX_INCLUDES
 
-// ETX_PIMPL_IMPLEMENT_ALL(GPUOptixImpl, Data)
-
-GPUOptixImpl::GPUOptixImpl() {
-}
-
-GPUOptixImpl::~GPUOptixImpl() {
-}
+ETX_PIMPL_IMPLEMENT_ALL(GPUOptixImpl, Data)
 
 GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
   return {_private->buffer_pool.alloc(desc)};
@@ -588,6 +616,16 @@ GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, b
   desc.payload_count = ps_desc.payload_size;
   desc.max_trace_depth = ps_desc.max_trace_depth;
   return create_pipeline(desc);
+}
+
+bool GPUOptixImpl::launch(GPUPipeline pipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
+  if ((pipeline.handle == 0) || (dim_x * dim_y == 0)) {
+    return false;
+  }
+
+  const auto& pp = _private->pipeline_pool.get(pipeline.handle);
+  auto result = optixLaunch(pp.pipeline, _private->main_stream, params, params_size, &pp.shader_binding_table, dim_x, dim_y, 1);
+  return (result == OPTIX_SUCCESS);
 }
 
 }  // namespace etx
