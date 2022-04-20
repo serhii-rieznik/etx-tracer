@@ -8,11 +8,12 @@
 //
 // (adapted)
 
-namespace etx::external {
+namespace etx {
+namespace external {
 
 constexpr uint32_t kScatteringOrderMax = 16u;
 
-struct alignas(16) RayInfo {
+struct ETX_ALIGNED RayInfo {
   float3 w = {};
   float Lambda = {};
   float h = {};
@@ -112,9 +113,6 @@ ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float U, const float
   const float cos_theta_i = cosf(theta_i);
   const float tan_theta_i = sin_theta_i / cos_theta_i;
 
-  // slope associated to theta_i
-  const float slope_i = cos_theta_i / sin_theta_i;
-
   // projected area
   const float projectedarea = 0.5f * (cos_theta_i + 1.0f);
   if (projectedarea < 0.0001f || projectedarea != projectedarea)
@@ -149,7 +147,7 @@ ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float U, const float
 ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y) {
   // sample D_wi
   // stretch to match configuration with alpha=1.0
-  const float3 wi_11 = normalize(float3(alpha_x * wi.x, alpha_y * wi.y, wi.z));
+  const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
   float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
@@ -168,12 +166,12 @@ ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float alpha
   // if numerical instability
   if ((slope.x != slope.x) || isinf(slope.x)) {
     if (wi.z > 0)
-      return float3(0.0f, 0.0f, 1.0f);
+      return float3{0.0f, 0.0f, 1.0f};
     else
-      return normalize(float3(wi.x, wi.y, 0.0f));
+      return normalize(float3{wi.x, wi.y, 0.0f});
   }
 
-  return normalize(float3(-slope.x, -slope.y, 1.0f));
+  return normalize(float3{-slope.x, -slope.y, 1.0f});
 }
 
 ETX_GPU_CODE SpectralResponse evalPhaseFunction_conductor(SpectralQuery spect, const RayInfo& ray, const float3& wo, const float alpha_x, const float alpha_y,
@@ -202,7 +200,7 @@ ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& 
   const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, SpectralResponse& weight) {
   // sample D_wi
   // stretch to match configuration with alpha=1.0
-  const float3 wi_11 = normalize(float3(alpha_x * wi.x, alpha_y * wi.y, wi.z));
+  const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
   float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
@@ -219,9 +217,9 @@ ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& 
   float3 wm = {};
   // if numerical instability
   if ((slope.x != slope.x) || isinf(slope.x)) {
-    wm = (wi.z > 0) ? float3(0.0f, 0.0f, 1.0f) : normalize(float3(wi.x, wi.y, 0.0f));
+    wm = (wi.z > 0) ? float3{0.0f, 0.0f, 1.0f} : normalize(float3{wi.x, wi.y, 0.0f});
   } else {
-    wm = normalize(float3(-slope.x, -slope.y, 1.0f));
+    wm = normalize(float3{-slope.x, -slope.y, 1.0f});
   }
 
   // reflect
@@ -256,7 +254,7 @@ ETX_GPU_CODE float3 sample_conductor(SpectralQuery spect, Sampler& smp, const fl
 
     if ((ray.h != ray.h) || (ray.w.x != ray.w.x) || (current_scatteringOrder > kScatteringOrderMax)) {
       energy = {spect.wavelength, 0.0f};
-      return float3(0, 0, 1);
+      return float3{0, 0, 1};
     }
   }
 
@@ -399,7 +397,7 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery s
 ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y,
   const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, bool& reflection) {
   // stretch to match configuration with alpha=1.0
-  const float3 wi_11 = normalize(float3(alpha_x * wi.x, alpha_y * wi.y, wi.z));
+  const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
   float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
@@ -420,9 +418,9 @@ ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sa
 
   // if numerical instability
   if (isnan(slope.x) || isinf(slope.x)) {
-    wm = (wi.z > 0) ? float3(0.0f, 0.0f, 1.0f) : normalize(float3(wi.x, wi.y, 0.0f));
+    wm = (wi.z > 0) ? float3{0.0f, 0.0f, 1.0f} : normalize(float3{wi.x, wi.y, 0.0f});
   } else {
-    wm = normalize(float3(-slope.x, -slope.y, 1.0f));
+    wm = normalize(float3{-slope.x, -slope.y, 1.0f});
   }
 
   auto f = fresnel::dielectric(spect, wi, wm, ext_ior, int_ior, thinfilm);
@@ -568,7 +566,7 @@ ETX_GPU_CODE float3 sample_dielectric(const SpectralQuery spect, Sampler& smp, c
 
     if (current_scatteringOrder > kScatteringOrderMax) {
       weight = 0.0f;
-      return float3(0, 0, 1);
+      return float3{0, 0, 1};
     }
   }
 
@@ -680,11 +678,12 @@ ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float a
 
     if (current_scatteringOrder > kScatteringOrderMax) {
       energy = {albedo.wavelength, 0.0f};
-      return float3(0, 0, 1);
+      return float3{0, 0, 1};
     }
   }
 
   return ray.w;
 }
 
-}  // namespace etx::external
+}  // namespace external
+}  // namespace etx

@@ -9,10 +9,12 @@
 #define ETX_INIT_WITH(S)
 #else
 #define ETX_GPU_CODE inline
-#define ETX_CPU_CODE
 #define ETX_GPU_DATA
+#define ETX_CPU_CODE
 #define ETX_INIT_WITH(S) = S
 #endif
+
+#define ETX_ALIGNED alignas(16)
 
 #define ETX_EMPTY_INIT ETX_INIT_WITH({})
 
@@ -44,7 +46,7 @@
 namespace etx {
 
 template <class T>
-struct alignas(16) ArrayView {
+struct ETX_ALIGNED ArrayView {
   T* a ETX_EMPTY_INIT;
   uint64_t count ETX_EMPTY_INIT;
 

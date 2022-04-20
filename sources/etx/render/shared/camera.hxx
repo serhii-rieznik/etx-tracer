@@ -4,7 +4,7 @@
 
 namespace etx {
 
-struct alignas(16) Camera {
+struct ETX_ALIGNED Camera {
   enum class Class : uint32_t {
     Perspective,
     Equirectangular,

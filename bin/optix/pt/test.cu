@@ -1,7 +1,18 @@
 #include <etx/rt/shared/optix.hxx>
 #include <etx/rt/shared/path_tracing_shared.hxx>
 
+using namespace etx;
+
+static __constant__ PathTracingGPUData global;
+
 RAYGEN(main) {
+  uint3 idx = optixGetLaunchIndex();
+  uint3 dim = optixGetLaunchDimensions();
+  uint32_t index = idx.x + idx.y * dim.x;
+  Sampler smp(index, 0);
+  float3 rgb = float3{float(idx.x) / float(dim.x), float(idx.y) / float(dim.y), smp.next()};
+  float3 xyz = spectrum::rgb_to_xyz(rgb);
+  global.output[index] = {xyz.x, xyz.y, xyz.z, 1.0f};
 }
 
 CLOSEST_HIT(main_closest_hit) {

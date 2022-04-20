@@ -3,7 +3,7 @@
 namespace DeltaPlasticBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   auto eta_e = mtl.ext_ior(data.spectrum_sample);
   auto eta_i = mtl.int_ior(data.spectrum_sample);
@@ -40,7 +40,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   if (n_dot_o <= kEpsilon) {
@@ -68,7 +68,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   if (n_dot_o <= kEpsilon) {
@@ -91,7 +91,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     return DeltaPlasticBSDF::sample(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   auto ggx = NormalDistribution(frame, mtl.roughness);
   auto m = ggx.sample(smp, data.w_i);
@@ -118,7 +118,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
     return DeltaPlasticBSDF::evaluate(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   float n_dot_i = -dot(frame.nrm, data.w_i);
@@ -160,7 +160,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
     return DeltaPlasticBSDF::pdf(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float3 m = normalize(data.w_o - data.w_i);
   float m_dot_o = dot(m, data.w_o);

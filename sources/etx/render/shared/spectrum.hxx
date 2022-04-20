@@ -199,7 +199,7 @@ ETX_GPU_CODE constexpr float sample_pdf() {
 
 }  // namespace spectrum
 
-struct alignas(16) SpectralResponse {
+struct ETX_ALIGNED SpectralResponse {
   float3 components = {};
   float wavelength = 0.0f;
 
@@ -365,7 +365,7 @@ ETX_GPU_CODE void print_value(const char* name, const char* tag, const SpectralR
   printf("%s : %s (%f : %f %f %f)\n", name, tag, v.wavelength, v.components.x, v.components.y, v.components.z);
 }
 
-struct alignas(16) SpectralDistribution {
+struct ETX_ALIGNED SpectralDistribution {
   enum Class {
     Reflectance,
     Illuminant,
@@ -574,7 +574,7 @@ struct SpectrumSet {
 };
 }  // namespace rgb
 
-struct alignas(16) Spectrums {
+struct ETX_ALIGNED Spectrums {
   RefractiveIndex thinfilm = {};
   RefractiveIndex conductor = {};
   RefractiveIndex dielectric = {};

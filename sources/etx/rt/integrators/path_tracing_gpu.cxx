@@ -2,16 +2,20 @@
 #include <etx/log/log.hxx>
 
 #include <etx/rt/integrators/path_tracing_gpu.hxx>
+#include <etx/rt/shared/path_tracing_shared.hxx>
 
 #include <etx/gpu/gpu.hxx>
 
 namespace etx {
 
-struct GPUPathTracingImpl {
+struct ETX_ALIGNED GPUPathTracingImpl {
+  PathTracingGPUData gpu_data = {};
+
   GPUBuffer camera_image = {};
   GPUPipeline main_pipeline = {};
   std::vector<float4> local_camera_image = {};
   uint2 output_size = {};
+  device_pointer_t gpu_launch_params = {};
 };
 
 GPUPathTracing::GPUPathTracing(Raytracing& r)
@@ -46,7 +50,12 @@ void GPUPathTracing::preview(const Options&) {
     return;
   }
 
-  rt.gpu()->launch(_private->main_pipeline, _private->output_size.x, _private->output_size.y, 0, 0);
+  _private->gpu_data.output = reinterpret_cast<float4*>(rt.gpu()->get_buffer_device_pointer(_private->camera_image));
+  _private->gpu_data.acceleration_structure = 0;
+
+  _private->gpu_launch_params = rt.gpu()->upload_to_shared_buffer(_private->gpu_launch_params, &_private->gpu_data, sizeof(_private->gpu_data));
+
+  rt.gpu()->launch(_private->main_pipeline, _private->output_size.x, _private->output_size.y, _private->gpu_launch_params, sizeof(_private->gpu_data));
 }
 
 void GPUPathTracing::run(const Options&) {

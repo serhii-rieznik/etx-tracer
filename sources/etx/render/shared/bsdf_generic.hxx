@@ -10,7 +10,7 @@ ETX_GPU_CODE float remap_metalness(float m) {
 }
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float2 alpha = mtl.roughness;
   float metalness = mtl.metalness;
@@ -44,7 +44,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   float n_dot_i = -dot(frame.nrm, data.w_i);
@@ -85,7 +85,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   if (n_dot_o <= kEpsilon) {

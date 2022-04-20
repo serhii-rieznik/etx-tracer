@@ -12,6 +12,8 @@
 #include <optix_stubs.h>
 #include <optix_function_table_definition.h>
 
+#include <atomic>
+
 #define ETX_CUDA_CALL_FAILED(F) ((F) != cudaSuccess)
 #define ETX_OPTIX_CALL_FAILED(F) ((F) != OPTIX_SUCCESS)
 
@@ -19,8 +21,11 @@ namespace etx {
 
 struct GPUBufferOptixImpl;
 struct GPUPipelineOptixImpl;
+struct GPUAccelerationStructureImpl;
 
 struct GPUOptixImplData {
+  constexpr static const uint64_t kSharedBufferSize = 8llu * 1024llu * 1024llu;
+
   CUcontext cuda_context = {};
   CUstream main_stream = {};
 
@@ -29,12 +34,15 @@ struct GPUOptixImplData {
 
   ObjectIndexPool<GPUBufferOptixImpl> buffer_pool;
   ObjectIndexPool<GPUPipelineOptixImpl> pipeline_pool;
+  ObjectIndexPool<GPUAccelerationStructureImpl> accelearaion_structure_pool;
 
-  GPUBuffer system_buffer_handle = {};
+  GPUBuffer shared_buffer = {};
+  std::atomic<uint64_t> shared_buffer_offset = {};
 
   GPUOptixImplData() {
     buffer_pool.init(1024u);
     pipeline_pool.init(1024u);
+    accelearaion_structure_pool.init(16u);
 
     cudaFree(nullptr);
 
@@ -50,6 +58,7 @@ struct GPUOptixImplData {
     cleanup_optix();
     cleanup_cuda();
 
+    accelearaion_structure_pool.cleanup();
     pipeline_pool.cleanup();
     buffer_pool.cleanup();
   }
@@ -108,9 +117,7 @@ struct GPUOptixImplData {
     optixUninitWithHandle(optix_handle);
   }
 
-  GPUBufferOptixImpl& system_buffer() {
-    return buffer_pool.get(system_buffer_handle.handle);
-  }
+  device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size);
 };
 
 #define ETX_OPTIX_INCLUDES 1
@@ -153,16 +160,12 @@ struct GPUBufferOptixImpl {
     device_ptr = nullptr;
   }
 
-  CUdeviceptr upload(void* data, uint64_t size) {
-    ETX_CRITICAL(upload_offset + size <= capacity);
-    auto result = device_ptr + upload_offset;
-    upload_offset += size;
-    return reinterpret_cast<CUdeviceptr>(result);
+  device_pointer_t device_pointer() const {
+    return reinterpret_cast<device_pointer_t>(device_ptr);
   }
 
   uint8_t* device_ptr = nullptr;
   uint64_t capacity = 0;
-  uint64_t upload_offset = 0;
 };
 
 struct GPUPipelineOptixImpl {
@@ -189,7 +192,7 @@ struct GPUPipelineOptixImpl {
       .numPayloadValues = static_cast<int>(desc.payload_count & 0x000000ff),
       .numAttributeValues = 2,
       .exceptionFlags = OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW | OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_USER,
-      .pipelineLaunchParamsVariableName = "input",
+      .pipelineLaunchParamsVariableName = "global",
     };
 
     char compile_log[4096] = {};
@@ -382,17 +385,15 @@ struct GPUPipelineOptixImpl {
         return false;
     }
 
-    auto& system_buffer = device->system_buffer();
-
-    shader_binding_table.raygenRecord = system_buffer.upload(&raygen_record, sizeof(ProgramGroupRecord));
+    shader_binding_table.raygenRecord = device->upload_to_shared_buffer(0, &raygen_record, sizeof(ProgramGroupRecord));
 
     if (hit_record_count > 0) {
-      shader_binding_table.hitgroupRecordBase = system_buffer.upload(hit_records, sizeof(ProgramGroupRecord) * hit_record_count);
+      shader_binding_table.hitgroupRecordBase = device->upload_to_shared_buffer(0, hit_records, sizeof(ProgramGroupRecord) * hit_record_count);
       shader_binding_table.hitgroupRecordStrideInBytes = sizeof(ProgramGroupRecord);
       shader_binding_table.hitgroupRecordCount = hit_record_count;
     }
     if (miss_record_count > 0) {
-      shader_binding_table.missRecordBase = system_buffer.upload(miss_records, sizeof(ProgramGroupRecord) * miss_record_count);
+      shader_binding_table.missRecordBase = device->upload_to_shared_buffer(0, miss_records, sizeof(ProgramGroupRecord) * miss_record_count);
       shader_binding_table.missRecordStrideInBytes = sizeof(ProgramGroupRecord);
       shader_binding_table.missRecordCount = miss_record_count;
     }
@@ -407,7 +408,7 @@ struct GPUPipelineOptixImpl {
   };
 
   struct __align__(OPTIX_SBT_RECORD_ALIGNMENT) ProgramGroupRecord {
-    __align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
+    __align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE] = {};
     void* dummy = nullptr;
   };
 
@@ -424,12 +425,110 @@ struct GPUPipelineOptixImpl {
   OptixShaderBindingTable shader_binding_table = {};
 };
 
-//
-#include "optix_pipeline.hxx"
+/*
+ * #include "optix_pipeline.hxx"
+ */
+
+struct GPUAccelerationStructureImpl {
+  GPUAccelerationStructureImpl(GPUOptixImplData* gpu, const GPUAccelerationStructure::Descriptor& desc) {
+    if ((desc.vertex_count == 0) || (desc.triangle_count == 0)) {
+      return;
+    }
+
+    CUdeviceptr vertex_buffer = gpu->buffer_pool.get(desc.vertex_buffer.handle).device_pointer();
+    uint32_t triangle_array_flags = 0;
+
+    OptixBuildInput build_input = {};
+    build_input.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
+    build_input.triangleArray.indexBuffer = gpu->buffer_pool.get(desc.index_buffer.handle).device_pointer();
+    build_input.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
+    build_input.triangleArray.indexStrideInBytes = desc.index_buffer_stride;
+    build_input.triangleArray.numIndexTriplets = desc.triangle_count;
+    build_input.triangleArray.vertexBuffers = &vertex_buffer;
+    build_input.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
+    build_input.triangleArray.vertexStrideInBytes = desc.vertex_buffer_stride;
+    build_input.triangleArray.numVertices = desc.vertex_count;
+    build_input.triangleArray.flags = &triangle_array_flags;
+    build_input.triangleArray.numSbtRecords = 1;
+
+    OptixAccelBuildOptions build_options = {};
+    build_options.motionOptions.numKeys = 1;
+    build_options.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
+    build_options.operation = OPTIX_BUILD_OPERATION_BUILD;
+
+    OptixAccelBufferSizes memory_usage = {};
+    if ETX_OPTIX_CALL_FAILED (optixAccelComputeMemoryUsage(gpu->optix, &build_options, &build_input, 1, &memory_usage)) {
+      log::error("optixAccelComputeMemoryUsage failed");
+      return;
+    }
+
+    void* temp_buffer = {};
+    cudaMalloc(&temp_buffer, memory_usage.tempSizeInBytes);
+
+    void* output_buffer = {};
+    cudaMalloc(&output_buffer, memory_usage.outputSizeInBytes);
+
+    OptixAccelEmitDesc emit_desc = {};
+    emit_desc.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
+    cudaMalloc(&reinterpret_cast<void*&>(emit_desc.result), sizeof(uint64_t));
+
+    if ETX_OPTIX_CALL_FAILED (optixAccelBuild(gpu->optix, gpu->main_stream, &build_options, &build_input, 1, reinterpret_cast<CUdeviceptr>(temp_buffer),
+                                memory_usage.tempSizeInBytes, reinterpret_cast<CUdeviceptr>(output_buffer), memory_usage.outputSizeInBytes, &traversable, &emit_desc, 1)) {
+      log::error("optixAccelBuild failed");
+      return;
+    }
+
+    if ETX_CUDA_CALL_FAILED (cudaDeviceSynchronize()) {
+      log::error("cudaDeviceSynchronize failed");
+      return;
+    }
+
+    uint64_t compact_size = 0;
+    cudaMemcpy(&compact_size, reinterpret_cast<void*>(emit_desc.result), sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    cudaFree(reinterpret_cast<void*>(emit_desc.result));
+
+    cudaMalloc(&final_buffer, compact_size);
+    if ETX_OPTIX_CALL_FAILED (optixAccelCompact(gpu->optix, gpu->main_stream, traversable, reinterpret_cast<CUdeviceptr>(final_buffer), compact_size, &traversable)) {
+      log::error("optixAccelCompact failed");
+      return;
+    }
+
+    cudaFree(temp_buffer);
+    cudaFree(output_buffer);
+  }
+
+  GPUAccelerationStructureImpl() {
+    cudaFree(final_buffer);
+  }
+
+  OptixTraversableHandle traversable = {};
+  void* final_buffer = {};
+};
 
 #undef ETX_OPTIX_INCLUDES
 
-ETX_PIMPL_IMPLEMENT_ALL(GPUOptixImpl, Data)
+device_pointer_t GPUOptixImplData::upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) {
+  auto& object = buffer_pool.get(shared_buffer.handle);
+
+  if (ptr == 0) {
+    uint64_t offset = shared_buffer_offset.fetch_add(size);
+    ETX_CRITICAL(offset + size <= GPUOptixImplData::kSharedBufferSize);
+    ptr = reinterpret_cast<device_pointer_t>(object.device_ptr) + offset;
+  }
+
+  cudaMemcpy(reinterpret_cast<void*>(ptr), data, size, cudaMemcpyHostToDevice);
+  return ptr;
+}
+
+GPUOptixImpl::GPUOptixImpl() {
+  ETX_PIMPL_CREATE(GPUOptixImpl, Data);
+  _private->shared_buffer = {_private->buffer_pool.alloc(GPUBuffer::Descriptor{GPUOptixImplData::kSharedBufferSize, nullptr})};
+}
+
+GPUOptixImpl::~GPUOptixImpl() {
+  _private->buffer_pool.free(_private->shared_buffer.handle);
+  ETX_PIMPL_DESTROY(GPUOptixImpl, Data);
+}
 
 GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
   return {_private->buffer_pool.alloc(desc)};
@@ -442,9 +541,13 @@ void GPUOptixImpl::destroy_buffer(GPUBuffer buffer) {
   _private->buffer_pool.free(buffer.handle);
 }
 
-uint64_t GPUOptixImpl::get_buffer_device_handle(GPUBuffer buffer) const {
+device_pointer_t GPUOptixImpl::get_buffer_device_pointer(GPUBuffer buffer) const {
   auto& object = _private->buffer_pool.get(buffer.handle);
-  return reinterpret_cast<uint64_t>(object.device_ptr);
+  return reinterpret_cast<device_pointer_t>(object.device_ptr);
+}
+
+device_pointer_t GPUOptixImpl::upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) {
+  return _private->upload_to_shared_buffer(ptr, data, size);
 }
 
 void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset, uint64_t size) {
@@ -626,6 +729,14 @@ bool GPUOptixImpl::launch(GPUPipeline pipeline, uint32_t dim_x, uint32_t dim_y, 
   const auto& pp = _private->pipeline_pool.get(pipeline.handle);
   auto result = optixLaunch(pp.pipeline, _private->main_stream, params, params_size, &pp.shader_binding_table, dim_x, dim_y, 1);
   return (result == OPTIX_SUCCESS);
+}
+
+GPUAccelerationStructure GPUOptixImpl::create_acceleration_structure(const GPUAccelerationStructure::Descriptor& desc) {
+  return {_private->accelearaion_structure_pool.alloc(_private, desc)};
+}
+
+void GPUOptixImpl::destroy_acceleration_structure(GPUAccelerationStructure acc) {
+  _private->accelearaion_structure_pool.free(acc.handle);
 }
 
 }  // namespace etx

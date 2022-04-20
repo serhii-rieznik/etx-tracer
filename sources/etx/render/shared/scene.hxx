@@ -11,13 +11,13 @@
 
 namespace etx {
 
-struct alignas(16) EnvironmentEmitters {
+struct ETX_ALIGNED EnvironmentEmitters {
   constexpr static const uint32_t kMaxCount = 7;
   uint32_t emitters[kMaxCount];
   uint32_t count;
 };
 
-struct alignas(16) Scene {
+struct ETX_ALIGNED Scene {
   Camera camera;
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;

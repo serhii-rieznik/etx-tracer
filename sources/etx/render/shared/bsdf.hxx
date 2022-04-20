@@ -267,17 +267,17 @@ ETX_GPU_CODE auto transmittance(complex ext_ior, complex cos_theta_i, complex in
 
 ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_ior, const complex& int_ior) {
   auto sin_theta_o_squared = sqr(ext_ior / int_ior) * (1.0f - cos_theta_i * cos_theta_i);
-  auto cos_theta_o = std::sqrt(complex{1.0f, 0.0f} - sin_theta_o_squared);
+  auto cos_theta_o = complex_sqrt(complex{1.0f, 0.0f} - sin_theta_o_squared);
   ETX_VALIDATE(cos_theta_o);
   auto rsrp = reflectance(ext_ior, cos_theta_i, int_ior, cos_theta_o);
-  return saturate(0.5f * (std::norm(rsrp.rs) + std::norm(rsrp.rp)));
+  return saturate(0.5f * (complex_norm(rsrp.rs) + complex_norm(rsrp.rp)));
 }
 
 ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, complex ext_ior, complex film_ior, complex int_ior, float thickness) {
   auto sin_theta_1_squared = sqr(ext_ior / film_ior) * (1.0f - cos_theta_0 * cos_theta_0);
-  auto cos_theta_1 = std::sqrt(complex{1.0f, 0.0f} - sin_theta_1_squared);
+  auto cos_theta_1 = complex_sqrt(complex{1.0f, 0.0f} - sin_theta_1_squared);
   auto sin_theta_2_squared = sqr(film_ior / int_ior) * (1.0f - cos_theta_1 * cos_theta_1);
-  auto cos_theta_2 = std::sqrt(1.0f - sin_theta_2_squared);
+  auto cos_theta_2 = complex_sqrt(1.0f - sin_theta_2_squared);
   auto delta_10 = film_ior.real() > ext_ior.real() ? 0.0f : kPi;
   auto delta_21 = int_ior.real() > film_ior.real() ? 0.0f : kPi;
   auto phase_shift = delta_10 + delta_21;
@@ -289,19 +289,19 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
   auto alpha_p = r10.rp * r12.rp;
   auto beta_p = t01.tp * t12.tp;
 
-  auto tp = (beta_p * beta_p) / ((alpha_p * alpha_p) - 2.0f * alpha_p * std::cos(phi) + 1.0f);
+  auto tp = (beta_p * beta_p) / ((alpha_p * alpha_p) - 2.0f * alpha_p * complex_cos(phi) + 1.0f);
   ETX_VALIDATE(tp);
 
   auto alpha_s = r10.rs * r12.rs;
   auto beta_s = t01.ts * t12.ts;
 
-  auto ts = (beta_s * beta_s) / ((alpha_s * alpha_s) - 2.0f * alpha_s * std::cos(phi) + 1.0f);
+  auto ts = (beta_s * beta_s) / ((alpha_s * alpha_s) - 2.0f * alpha_s * complex_cos(phi) + 1.0f);
   ETX_VALIDATE(ts);
 
   auto ratio = (int_ior * cos_theta_2) / (ext_ior * cos_theta_0);
   ETX_VALIDATE(ratio);
 
-  return std::abs(1.0f - ratio * 0.5f * (tp + ts));
+  return complex_abs(1.0f - ratio * 0.5f * (tp + ts));
 }
 
 ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior,

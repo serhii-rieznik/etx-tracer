@@ -72,7 +72,7 @@ struct PathState {
   uint32_t state = Active;
 };
 
-struct alignas(16) LightVertex {
+struct ETX_ALIGNED LightVertex {
   LightVertex() = default;
 
   ETX_GPU_CODE LightVertex(const PathState& s, const float3& p, const float3& b, uint32_t tri, uint32_t len, uint32_t index)
@@ -115,7 +115,7 @@ struct alignas(16) LightVertex {
   }
 };
 
-struct alignas(16) SpatialGridData {
+struct ETX_ALIGNED SpatialGridData {
   ArrayView<uint32_t> indices ETX_EMPTY_INIT;
   ArrayView<uint32_t> cell_ends ETX_EMPTY_INIT;
   BoundingBox bounding_box ETX_EMPTY_INIT;
@@ -134,14 +134,14 @@ struct alignas(16) SpatialGridData {
     uint32_t path_length, uint32_t max_path_length, float vc_weight, Sampler& smp) const;
 };
 
-struct alignas(16) RunInfo {
+struct ETX_ALIGNED RunInfo {
   uint32_t iteration ETX_EMPTY_INIT;
   uint32_t active_rays ETX_EMPTY_INIT;
   uint32_t connecting_rays ETX_EMPTY_INIT;
   uint32_t light_vertices ETX_EMPTY_INIT;
 };
 
-struct alignas(16) LightPayload {
+struct ETX_ALIGNED LightPayload {
   PathState state ETX_EMPTY_INIT;
 
   Sampler smp ETX_EMPTY_INIT;
@@ -155,14 +155,14 @@ struct alignas(16) LightPayload {
   float pad ETX_EMPTY_INIT;
 };
 
-struct alignas(16) LightPath {
+struct ETX_ALIGNED LightPath {
   uint32_t index ETX_EMPTY_INIT;
   uint32_t count ETX_EMPTY_INIT;
   SpectralQuery spect ETX_EMPTY_INIT;
   uint32_t pad ETX_EMPTY_INIT;
 };
 
-struct alignas(16) LightTileParams {
+struct ETX_ALIGNED LightTileParams {
   Scene scene ETX_EMPTY_INIT;
 
   ArrayView<LightPayload> in_payloads ETX_EMPTY_INIT;
@@ -184,14 +184,14 @@ struct alignas(16) LightTileParams {
   uint32_t pad[1] ETX_EMPTY_INIT;
 };
 
-struct alignas(16) MergeParams {
+struct ETX_ALIGNED MergeParams {
   ArrayView<float4> current ETX_EMPTY_INIT;
   ArrayView<float4> output ETX_EMPTY_INIT;
   uint32_t iteration ETX_EMPTY_INIT;
   uint32_t pad[3] ETX_EMPTY_INIT;
 };
 
-struct alignas(16) CameraPayload {
+struct ETX_ALIGNED CameraPayload {
   PathState state ETX_EMPTY_INIT;
   SpectralResponse gathered ETX_EMPTY_INIT;
   Intersection intersection ETX_EMPTY_INIT;
@@ -205,7 +205,7 @@ struct alignas(16) CameraPayload {
   float eta ETX_EMPTY_INIT;
 };
 
-struct alignas(16) CameraParams {
+struct ETX_ALIGNED CameraParams {
   Scene scene ETX_EMPTY_INIT;
   ArrayView<float4> image ETX_EMPTY_INIT;
   ArrayView<LightPath> light_paths ETX_EMPTY_INIT;
@@ -253,7 +253,7 @@ ETX_GPU_CODE bool next_ray(const Scene& scene, SpectralQuery spect, const PathSo
     return false;
   }
 
-  float cos_theta_bsdf = std::abs(dot(i.nrm, bsdf_sample.w_o));
+  float cos_theta_bsdf = fabsf(dot(i.nrm, bsdf_sample.w_o));
 
   if (bsdf_sample.is_delta()) {
     state.d_vc *= cos_theta_bsdf;
@@ -333,7 +333,7 @@ ETX_GPU_CODE bool connect_to_light_vertex(const Scene& scene, const SpectralQuer
     return false;
   }
 
-  w_o /= std::sqrt(distance_squared);
+  w_o /= sqrtf(distance_squared);
 
   float w_dot_c = dot(intersection.nrm, w_o);
   if (w_dot_c < 0.0f) {

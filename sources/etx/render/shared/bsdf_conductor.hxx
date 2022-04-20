@@ -4,7 +4,7 @@ namespace etx {
 namespace DeltaConductorBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
   auto f = fresnel::conductor(data.spectrum_sample, data.w_i, frame.nrm, mtl.ext_ior(data.spectrum_sample), mtl.int_ior(data.spectrum_sample), thinfilm);
   auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
@@ -35,7 +35,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     return DeltaConductorBSDF::sample(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
   auto ggx = NormalDistribution(frame, mtl.roughness);
   auto m = ggx.sample(smp, data.w_i);
 
@@ -49,7 +49,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
     return DeltaConductorBSDF::evaluate(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
   float n_dot_i = -dot(frame.nrm, data.w_i);
   float n_dot_o = dot(frame.nrm, data.w_o);
   if ((n_dot_o <= kEpsilon) || (n_dot_i <= kEpsilon)) {
@@ -93,7 +93,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
     return DeltaConductorBSDF::pdf(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
   float3 m = normalize(data.w_o - data.w_i);
   float m_dot_o = dot(m, data.w_o);
   if (m_dot_o <= kEpsilon) {
@@ -121,7 +121,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     return DeltaConductorBSDF::sample(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   LocalFrame local_frame(frame);
   auto w_i = local_frame.to_local(-data.w_i);
@@ -151,7 +151,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
     return DeltaConductorBSDF::evaluate(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   LocalFrame local_frame(frame);
   auto w_o = local_frame.to_local(data.w_o);
@@ -200,7 +200,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
     return DeltaConductorBSDF::pdf(data, mtl, scene, smp);
   }
 
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   LocalFrame local_frame(frame);
   auto w_o = local_frame.to_local(data.w_o);

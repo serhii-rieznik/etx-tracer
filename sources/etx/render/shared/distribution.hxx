@@ -4,7 +4,7 @@
 
 namespace etx {
 
-struct alignas(16) Distribution {
+struct ETX_ALIGNED Distribution {
   struct Entry {
     float value = 0.0f;
     float pdf = 0.0f;

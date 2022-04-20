@@ -2,7 +2,7 @@
 namespace DiffuseBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   BSDFData eval_data = data;
   eval_data.w_o = sample_cosine_distribution(smp.next(), smp.next(), frame.nrm, 1.0f);
@@ -10,7 +10,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   if (n_dot_o <= kEpsilon) {
@@ -29,7 +29,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
   if (n_dot_o <= kEpsilon) {
@@ -57,7 +57,7 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 namespace MultiscatteringDiffuseBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   LocalFrame local_frame(frame);
   auto w_i = local_frame.to_local(-data.w_i);
@@ -75,7 +75,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   LocalFrame local_frame(frame);
   auto w_i = local_frame.to_local(-data.w_i);
@@ -107,7 +107,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
   return kInvPi * dot(frame.nrm, data.w_o);
 }
 
@@ -173,7 +173,7 @@ ETX_GPU_CODE float2 remap_alpha(float2 a) {
 }
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   uint32_t properties = 0;
   BSDFData eval_data = data;
@@ -190,7 +190,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   auto pow5 = [](float value) {
     return sqr(value) * sqr(value) * fabsf(value);
@@ -234,7 +234,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   float3 m = normalize(data.w_o - data.w_i);
   float m_dot_o = dot(m, data.w_o);
@@ -267,7 +267,7 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 namespace MirrorBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto [frame, _] = data.get_normal_frame();
+  auto frame = data.get_normal_frame().frame;
 
   BSDFSample result;
   result.w_o = normalize(reflect(data.w_i, frame.nrm));

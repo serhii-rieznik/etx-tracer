@@ -9,7 +9,25 @@
 #include <string.h>
 #include <complex>
 
-#if !(ETX_NVCC_COMPILER)
+#if (ETX_NVCC_COMPILER)
+
+#include <thrust/complex.h>
+using complex = thrust::complex<float>;
+
+ETX_GPU_CODE complex complex_sqrt(complex c) {
+  return thrust::sqrt(c);
+}
+ETX_GPU_CODE complex complex_cos(complex c) {
+  return thrust::cos(c);
+}
+ETX_GPU_CODE float complex_abs(complex c) {
+  return thrust::abs(c);
+}
+ETX_GPU_CODE float complex_norm(complex c) {
+  return thrust::norm(c);
+}
+
+#else
 
 template <class t>
 struct vector2 {
@@ -38,6 +56,20 @@ using uint4 = vector4<uint32_t>;
 using ubyte2 = vector2<uint8_t>;
 using ubyte3 = vector3<uint8_t>;
 using ubyte4 = vector4<uint8_t>;
+using complex = std::complex<float>;
+
+ETX_GPU_CODE complex complex_sqrt(complex c) {
+  return std::sqrt(c);
+}
+ETX_GPU_CODE complex complex_cos(complex c) {
+  return std::cos(c);
+}
+ETX_GPU_CODE float complex_abs(complex c) {
+  return std::abs(c);
+}
+ETX_GPU_CODE float complex_norm(complex c) {
+  return std::norm(c);
+}
 
 #endif
 
@@ -48,8 +80,6 @@ struct float3x3 {
 struct float4x4 {
   float4 col[4] = {};
 };
-
-using complex = std::complex<float>;
 
 #include <etx/render/shared/vector_math.hxx>
 
@@ -71,7 +101,7 @@ constexpr float kAtmosphereRadius = 120e+3f;
 
 constexpr uint32_t kInvalidIndex = ~0u;
 
-struct alignas(16) BoundingBox {
+struct ETX_ALIGNED BoundingBox {
   float3 p_min ETX_EMPTY_INIT;
   float3 p_max ETX_EMPTY_INIT;
 
@@ -89,7 +119,7 @@ struct alignas(16) BoundingBox {
   }
 };
 
-struct alignas(16) Vertex {
+struct ETX_ALIGNED Vertex {
   float3 pos = {};
   float3 nrm = {};
   float3 tan = {};
@@ -97,7 +127,7 @@ struct alignas(16) Vertex {
   float2 tex = {};
 };
 
-struct alignas(16) Triangle {
+struct ETX_ALIGNED Triangle {
   uint32_t i[3] = {kInvalidIndex, kInvalidIndex, kInvalidIndex};
   uint32_t material_index = kInvalidIndex;
   float3 geo_n = {};
@@ -106,7 +136,7 @@ struct alignas(16) Triangle {
   uint32_t pad[3] = {};
 };
 
-struct alignas(16) LocalFrame {
+struct ETX_ALIGNED LocalFrame {
   float3 tan = {};
   float3 btn = {};
   float3 nrm = {};
@@ -143,7 +173,7 @@ struct Ray {
   float max_t = kMaxFloat;
 };
 
-struct alignas(16) Intersection : public Vertex {
+struct ETX_ALIGNED Intersection : public Vertex {
   float3 barycentric = {};
   uint32_t triangle_index = kInvalidIndex;
   float3 w_i = {};

@@ -5,14 +5,14 @@
 
 namespace etx {
 
-struct alignas(16) Medium {
+struct ETX_ALIGNED Medium {
   enum class Class : uint32_t {
     Vacuum,
     Homogeneous,
     Heterogeneous,
   };
 
-  struct alignas(16) Sample {
+  struct ETX_ALIGNED Sample {
     SpectralResponse weight = {};
     float3 pos = {};
     float t = {};

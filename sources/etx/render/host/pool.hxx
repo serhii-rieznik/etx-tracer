@@ -151,22 +151,31 @@ struct ObjectIndexPool {
 
     auto result = _head;
     _head = info.next;
-    return result;
+    return (result + 1);
   }
 
   T& get(uint32_t h) {
+    ETX_ASSERT(h > 0);
+    h -= 1;
+
     ETX_ASSERT(h < _capacity);
     ETX_ASSERT(_info[h].alive);
     return _objects[h];
   }
 
   const T& get(uint32_t h) const {
+    ETX_ASSERT(h > 0);
+    h -= 1;
+
     ETX_ASSERT(h < _capacity);
     ETX_ASSERT(_info[h].alive);
     return _objects[h];
   }
 
   void free(uint32_t h) {
+    ETX_ASSERT(h > 0);
+    h -= 1;
+
     ETX_ASSERT(h < _capacity);
     ETX_ASSERT(_info[h].alive);
 
