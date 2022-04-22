@@ -136,7 +136,7 @@ struct SceneRepresentationImpl {
     mediums.remove_all();
     materials.reserve(1024);  // TODO : fix, images when reallocated are destroyed releasing memory
 
-    free(scene.emitters_distribution.values);
+    free(scene.emitters_distribution.values.a);
     scene.emitters_distribution = {};
 
     auto camera = scene.camera;

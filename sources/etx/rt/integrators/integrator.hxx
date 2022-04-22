@@ -75,6 +75,9 @@ struct Integrator {
     return nullptr;
   }
 
+  virtual void reload() {
+  }
+
  public:
   bool can_run() const {
     return rt.has_scene();

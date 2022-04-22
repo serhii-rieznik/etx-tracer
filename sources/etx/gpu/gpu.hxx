@@ -6,13 +6,14 @@
 namespace etx {
 
 using device_pointer_t = uint64_t;
+constexpr static const uint32_t kInvalidHandle = ~0u;
 
 struct GPUBuffer {
   struct Descriptor {
     uint64_t size = 0;
-    uint8_t* data = nullptr;
+    void* data = nullptr;
   };
-  uint32_t handle = 0;
+  uint32_t handle = kInvalidHandle;
 };
 
 struct GPUPipeline {
@@ -36,7 +37,7 @@ struct GPUPipeline {
     uint32_t max_trace_depth = 2;
   };
 
-  uint32_t handle = 0;
+  uint32_t handle = kInvalidHandle;
 };
 
 struct GPUAccelerationStructure {
@@ -50,7 +51,7 @@ struct GPUAccelerationStructure {
     uint32_t triangle_count = 0;
   };
 
-  uint32_t handle = 0;
+  uint32_t handle = kInvalidHandle;
 };
 
 struct GPUDevice {
@@ -58,16 +59,17 @@ struct GPUDevice {
   virtual ~GPUDevice() = default;
 
   virtual GPUBuffer create_buffer(const GPUBuffer::Descriptor&) = 0;
-  virtual void destroy_buffer(GPUBuffer) = 0;
   virtual device_pointer_t get_buffer_device_pointer(GPUBuffer) const = 0;
   virtual device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) = 0;
   virtual void copy_from_buffer(GPUBuffer, void* dst, uint64_t offset, uint64_t size) = 0;
+  virtual void destroy_buffer(GPUBuffer) = 0;
 
   virtual GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) = 0;
   virtual GPUPipeline create_pipeline_from_file(const char* filename, bool force_recompile) = 0;
   virtual void destroy_pipeline(GPUPipeline) = 0;
 
   virtual GPUAccelerationStructure create_acceleration_structure(const GPUAccelerationStructure::Descriptor&) = 0;
+  virtual device_pointer_t get_acceleration_structure_device_pointer(GPUAccelerationStructure) = 0;
   virtual void destroy_acceleration_structure(GPUAccelerationStructure) = 0;
 
   virtual bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) = 0;

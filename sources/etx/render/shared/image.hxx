@@ -99,14 +99,14 @@ struct Image {
     location.x = x_distribution.sample(xi0, x_pdf);
 
     auto x0 = x_distribution.values[location.x];
-    auto x1 = x_distribution.values[min(location.x + 1u, x_distribution.size)];
+    auto x1 = x_distribution.values[min(location.x + 1llu, x_distribution.values.count)];
     float dx = (xi0 - x0.cdf);
     if (x1.cdf - x0.cdf > 0.0f) {
       dx /= (x1.cdf - x0.cdf);
     }
 
     auto y0 = y_distribution.values[location.y];
-    auto y1 = y_distribution.values[min(location.y + 1u, y_distribution.size)];
+    auto y1 = y_distribution.values[min(location.y + 1llu, y_distribution.values.count)];
     float dy = (xi1 - y0.cdf);
     if (y1.cdf - y0.cdf > 0.0f) {
       dy /= (y1.cdf - y0.cdf);

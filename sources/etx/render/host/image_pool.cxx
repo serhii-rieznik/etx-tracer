@@ -76,8 +76,8 @@ struct ImagePoolImpl {
   void load_image(Image& img, const char* file_name, uint32_t options) {
     ETX_ASSERT(img.pixels == nullptr);
     ETX_ASSERT(img.x_distributions == nullptr);
-    ETX_ASSERT(img.y_distribution.size == 0);
-    ETX_ASSERT(img.y_distribution.values == 0);
+    ETX_ASSERT(img.y_distribution.values.count == 0);
+    ETX_ASSERT(img.y_distribution.values.a == nullptr);
 
     std::vector<uint8_t> source_data = {};
     Image::Format format = load_data(file_name, source_data, img.isize);
@@ -164,11 +164,11 @@ struct ImagePoolImpl {
 
   void free_image(Image& img) {
     free(img.pixels);
-    for (uint32_t i = 0; (img.x_distributions != nullptr) && (i < img.y_distribution.size); ++i) {
-      free(img.x_distributions[i].values);
+    for (uint64_t i = 0; (img.x_distributions != nullptr) && (i < img.y_distribution.values.count); ++i) {
+      free(img.x_distributions[i].values.a);
     }
     free(img.x_distributions);
-    free(img.y_distribution.values);
+    free(img.y_distribution.values.a);
     img = {};
   }
 
@@ -324,11 +324,11 @@ void ImagePool::remove_all() {
 }
 
 Image* ImagePool::as_array() {
-  return _private->image_pool.data();
+  return _private->image_pool.alive_objects_count() > 0 ? _private->image_pool.data() : nullptr;
 }
 
 uint64_t ImagePool::array_size() {
-  return 1llu + _private->image_pool.latest_alive_index();
+  return _private->image_pool.alive_objects_count() > 0 ? 1llu + _private->image_pool.latest_alive_index() : 0;
 }
 
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {

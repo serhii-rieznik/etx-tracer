@@ -24,6 +24,7 @@ struct GPUPathTracing : public Integrator {
   void update() override;
   void stop(Stop) override;
   void update_options(const Options&) override;
+  void reload() override;
 
   const float4* get_camera_image(bool force) override;
 

@@ -1,3 +1,4 @@
 *.exe
 *.pdb
 *.dll
+bin/options.json

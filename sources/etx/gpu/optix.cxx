@@ -535,13 +535,20 @@ GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
 }
 
 void GPUOptixImpl::destroy_buffer(GPUBuffer buffer) {
-  if (buffer.handle == 0)
+  if (buffer.handle == kInvalidHandle)
     return;
+
+  if ETX_CUDA_CALL_FAILED (cudaDeviceSynchronize()) {
+    log::error("Failed to synchronize device before the deletion of a buffer.");
+  }
 
   _private->buffer_pool.free(buffer.handle);
 }
 
 device_pointer_t GPUOptixImpl::get_buffer_device_pointer(GPUBuffer buffer) const {
+  if (buffer.handle == kInvalidHandle)
+    return 0;
+
   auto& object = _private->buffer_pool.get(buffer.handle);
   return reinterpret_cast<device_pointer_t>(object.device_ptr);
 }
@@ -560,11 +567,14 @@ GPUPipeline GPUOptixImpl::create_pipeline(const GPUPipeline::Descriptor& desc) {
   return {_private->pipeline_pool.alloc(_private, desc)};
 }
 
-void GPUOptixImpl::destroy_pipeline(GPUPipeline buffer) {
-  if (buffer.handle == 0)
+void GPUOptixImpl::destroy_pipeline(GPUPipeline pipeline) {
+  if (pipeline.handle == kInvalidHandle)
     return;
 
-  _private->pipeline_pool.free(buffer.handle);
+  if ETX_CUDA_CALL_FAILED (cudaDeviceSynchronize()) {
+    log::error("Failed to synchronize device before the deletion of a pipeline.");
+  }
+  _private->pipeline_pool.free(pipeline.handle);
 }
 
 struct PipelineDesc {
@@ -722,7 +732,7 @@ GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, b
 }
 
 bool GPUOptixImpl::launch(GPUPipeline pipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
-  if ((pipeline.handle == 0) || (dim_x * dim_y == 0)) {
+  if ((pipeline.handle == kInvalidHandle) || (dim_x * dim_y == 0)) {
     return false;
   }
 
@@ -735,7 +745,21 @@ GPUAccelerationStructure GPUOptixImpl::create_acceleration_structure(const GPUAc
   return {_private->accelearaion_structure_pool.alloc(_private, desc)};
 }
 
+device_pointer_t GPUOptixImpl::get_acceleration_structure_device_pointer(GPUAccelerationStructure acc) {
+  if (acc.handle == kInvalidHandle)
+    return 0;
+
+  const auto& object = _private->accelearaion_structure_pool.get(acc.handle);
+  return object.traversable;
+}
+
 void GPUOptixImpl::destroy_acceleration_structure(GPUAccelerationStructure acc) {
+  if (acc.handle == kInvalidHandle)
+    return;
+
+  if ETX_CUDA_CALL_FAILED (cudaDeviceSynchronize()) {
+    log::error("Failed to synchronize device before the deletion of an acceleration structure.");
+  }
   _private->accelearaion_structure_pool.free(acc.handle);
 }
 

@@ -40,6 +40,7 @@ struct RTApplication {
   void on_reload_scene_selected();
   void on_reload_geometry_selected();
   void on_options_changed();
+  void on_reload_integrator_selected();
 
  private:
   void save_options();

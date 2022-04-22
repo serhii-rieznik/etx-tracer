@@ -103,7 +103,7 @@ void UI::build(double dt, const char* status) {
   igEnd();
 
   if (igBeginMainMenuBar()) {
-    if (igBeginMenu("Raytracer", true)) {
+    if (igBeginMenu("Integrator", true)) {
       for (uint64_t i = 0; i < _integrators.count; ++i) {
         if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, true)) {
           if (callbacks.integrator_selected) {
@@ -111,6 +111,16 @@ void UI::build(double dt, const char* status) {
           }
         }
       }
+
+      if (_current_integrator != nullptr) {
+        igSeparator();
+        if (igMenuItemEx("Reload Integrator State", nullptr, "Ctrl+A", false, true)) {
+          if (callbacks.reload_integrator) {
+            callbacks.reload_integrator();
+          }
+        }
+      }
+
       igSeparator();
       if (igMenuItemEx("Exit", nullptr, "Ctrl+Q", false, true)) {
       }
@@ -237,6 +247,11 @@ bool UI::handle_event(const sapp_event* e) {
       case SAPP_KEYCODE_G: {
         if (callbacks.reload_geometry_selected)
           callbacks.reload_geometry_selected();
+        break;
+      }
+      case SAPP_KEYCODE_A: {
+        if (callbacks.reload_integrator)
+          callbacks.reload_integrator();
         break;
       }
       case SAPP_KEYCODE_S: {

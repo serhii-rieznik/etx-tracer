@@ -1,127 +1,43 @@
 #include <etx/rt/rt.hxx>
 
-#define ETX_RT_API_BVH 1
-#define ETX_RT_API_NANORT 2
-#define ETX_RT_API_EMBREE 3
-
-#define ETX_RT_API ETX_RT_API_EMBREE
-
-#if (ETX_RT_API == ETX_RT_API_NANORT)
-
-#define NANORT_USE_CPP11_FEATURE 1
-#include <external/nanort/nanort.h>
-
-#elif (ETX_RT_API == ETX_RT_API_BVH)
-
-#include <external/bvh/bvh.hpp>
-#include <external/bvh/triangle.hpp>
-#include <external/bvh/sweep_sah_builder.hpp>
-#include <external/bvh/single_ray_traverser.hpp>
-#include <external/bvh/primitive_intersectors.hpp>
-
-#elif (ETX_RT_API == ETX_RT_API_EMBREE)
-
 #include <embree3/rtcore.h>
-
-#else
-
-#error No raytracing API defined
-
-#endif
 
 namespace etx {
 
 struct RaytracingImpl {
   TaskScheduler scheduler;
-  GPUDevice* gpu = nullptr;
+
   const Scene* scene = nullptr;
-
-#if (ETX_RT_API == ETX_RT_API_NANORT)
-
-  using Ray = nanort::Ray<float>;
-  std::vector<uint32_t> linear_indices;
-  std::vector<float> linear_vertex_data;
-  float* v_ptr = nullptr;
-  uint32_t* i_ptr = nullptr;
-
-  nanort::BVHAccel<float> bvh = {};
-
-#elif (ETX_RT_API == ETX_RT_API_BVH)
-
-  using Bvh = bvh::Bvh<float>;
-  using Builder = bvh::SweepSahBuilder<Bvh>;
-  using Traverser = bvh::SingleRayTraverser<Bvh, 64, bvh::RobustNodeIntersector<Bvh> >;
-  using Triangle = bvh::Triangle<Bvh::ScalarType, false>;
-  using BVHVector = bvh::Vector3<Bvh::ScalarType>;
-  using Intersection = bvh::AlphaTestClosestPrimitiveIntersector<Bvh, Triangle>;
-  using Ray = bvh::Ray<Bvh::ScalarType>;
-
-  std::vector<Triangle> triangles;
-  bvh::Bvh<float> bvh = {};
-
-#elif (ETX_RT_API == ETX_RT_API_EMBREE)
-
   RTCDevice rt_device = {};
   RTCScene rt_scene = {};
 
-#endif
+  GPUDevice* gpu_device = nullptr;
+  struct {
+    Scene scene = {};
+    GPUAccelerationStructure accel = {};
+    std::vector<GPUBuffer> buffers = {};
+  } gpu = {};
 
   RaytracingImpl() {
-    gpu = GPUDevice::create_optix_device();
+    gpu_device = GPUDevice::create_optix_device();
   }
 
   ~RaytracingImpl() {
-    release_scene();
-    GPUDevice::free_device(gpu);
+    release_host_scene();
+    release_device_scene();
+    GPUDevice::free_device(gpu_device);
   }
 
   void set_scene(const Scene& s) {
     scene = &s;
-    release_scene();
+    release_host_scene();
+    build_host_scene();
 
-#if (ETX_RT_API == ETX_RT_API_NANORT)
-    linear_vertex_data.reserve(scene.vertices.count);
-    for (uint32_t i = 0; i < scene.vertices.count; ++i) {
-      linear_vertex_data.emplace_back(scene.vertices[i].pos.x);
-      linear_vertex_data.emplace_back(scene.vertices[i].pos.y);
-      linear_vertex_data.emplace_back(scene.vertices[i].pos.z);
-    }
-    v_ptr = linear_vertex_data.data();
+    release_device_scene();
+    build_device_scene();
+  }
 
-    linear_indices.reserve(3llu * scene.triangles.count);
-    for (uint32_t i = 0; i < scene.triangles.count; ++i) {
-      const auto& tri = scene.triangles[i];
-      linear_indices.emplace_back(tri.i[0]);
-      linear_indices.emplace_back(tri.i[1]);
-      linear_indices.emplace_back(tri.i[2]);
-    }
-    i_ptr = linear_indices.data();
-
-    auto mesh = nanort::TriangleMesh<float>(v_ptr, i_ptr, sizeof(float) * 3llu);
-    auto sah = nanort::TriangleSAHPred<float>(v_ptr, i_ptr, sizeof(float) * 3llu);
-    auto succeed = bvh.Build(uint32_t(scene.triangles.count), mesh, sah, {});
-    ETX_ASSERT(succeed);
-
-#elif (ETX_RT_API == ETX_RT_API_BVH)
-
-    triangles.clear();
-    triangles.reserve(scene.triangles.count);
-    for (uint64_t i = 0, e = scene.triangles.count; i < e; ++i) {
-      const auto& tri = scene.triangles[i];
-      const auto& v0 = scene.vertices[tri.i[0]];
-      const auto& v1 = scene.vertices[tri.i[1]];
-      const auto& v2 = scene.vertices[tri.i[2]];
-      triangles.emplace_back(BVHVector{v0.pos.x, v0.pos.y, v0.pos.z}, BVHVector{v1.pos.x, v1.pos.y, v1.pos.z}, BVHVector{v2.pos.x, v2.pos.y, v2.pos.z});
-    }
-
-    auto [boxes, centers] = bvh::compute_bounding_boxes_and_centers(triangles.data(), triangles.size());
-    auto global_bbox = bvh::compute_bounding_boxes_union(boxes.get(), triangles.size());
-
-    Builder bvh_builder(bvh);
-    bvh_builder.build(global_bbox, boxes.get(), centers.get(), triangles.size());
-
-#elif (ETX_RT_API == ETX_RT_API_EMBREE)
-
+  void build_host_scene() {
     rt_device = rtcNewDevice(nullptr);
     rtcSetDeviceErrorFunction(
       rt_device,
@@ -143,11 +59,9 @@ struct RaytracingImpl {
     rtcAttachGeometry(rt_scene, geometry);
     rtcReleaseGeometry(geometry);
     rtcCommitScene(rt_scene);
-
-#endif
   }
 
-  void release_scene() {
+  void release_host_scene() {
 #if (ETX_RT_API == ETX_RT_API_EMBREE)
     if (rt_scene) {
       rtcReleaseScene(rt_scene);
@@ -158,6 +72,59 @@ struct RaytracingImpl {
       rt_device = {};
     }
 #endif
+  }
+
+  template <class T>
+  void upload_array_view_to_gpu(ArrayView<T>& a, GPUBuffer* out_buffer) {
+    GPUBuffer buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({sizeof(T) * a.count, a.a}));
+
+    auto device_ptr = gpu_device->get_buffer_device_pointer(buffer);
+    a.a = reinterpret_cast<T*>(device_ptr);
+
+    if (out_buffer != nullptr) {
+      *out_buffer = buffer;
+    }
+  }
+
+  template <class T>
+  void upload_array_view_to_gpu(ArrayView<T>& a) {
+    upload_array_view_to_gpu(a, nullptr);
+  }
+
+  void build_device_scene() {
+    GPUBuffer vertex_buffer = {};
+    GPUBuffer index_buffer = {};
+
+    gpu.scene = *scene;
+    upload_array_view_to_gpu(gpu.scene.vertices, &vertex_buffer);
+    upload_array_view_to_gpu(gpu.scene.triangles, &index_buffer);
+    upload_array_view_to_gpu(gpu.scene.materials);
+    upload_array_view_to_gpu(gpu.scene.emitters);
+
+    /*/ TODO : update other data:
+    upload_array_view_to_gpu(gpu.scene.emitters_distribution.values);
+    upload_array_view_to_gpu(gpu.scene.images);
+    upload_array_view_to_gpu(gpu.scene.mediums);
+    // TODO : update gpu.scene.spectrums
+    // */
+
+    GPUAccelerationStructure::Descriptor desc = {};
+    desc.vertex_buffer = vertex_buffer;
+    desc.vertex_buffer_stride = sizeof(Vertex);
+    desc.vertex_count = static_cast<uint32_t>(scene->vertices.count);
+    desc.index_buffer = index_buffer;
+    desc.index_buffer_stride = sizeof(Triangle);
+    desc.triangle_count = static_cast<uint32_t>(scene->triangles.count);
+    gpu.accel = gpu_device->create_acceleration_structure(desc);
+  }
+
+  void release_device_scene() {
+    gpu_device->destroy_acceleration_structure(gpu.accel);
+    for (auto& buffer : gpu.buffers) {
+      gpu_device->destroy_buffer(buffer);
+    }
+    gpu.buffers.clear();
+    gpu = {};
   }
 };
 
@@ -176,7 +143,7 @@ TaskScheduler& Raytracing::scheduler() {
 }
 
 GPUDevice* Raytracing::gpu() {
-  return _private->gpu;
+  return _private->gpu_device;
 }
 
 void Raytracing::set_scene(const Scene& scene) {
@@ -192,6 +159,16 @@ const Scene& Raytracing::scene() const {
   return *(_private->scene);
 }
 
+const Scene& Raytracing::gpu_scene() const {
+  ETX_ASSERT(has_scene());
+  return _private->gpu.scene;
+}
+
+const GPUAccelerationStructure Raytracing::gpu_acceleration_structure() const {
+  ETX_ASSERT(has_scene());
+  return _private->gpu.accel;
+}
+
 bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler& smp) const {
   ETX_ASSERT(_private != nullptr);
 
@@ -199,32 +176,6 @@ bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler&
   float2 barycentric = {};
   uint32_t triangle_index = kInvalidIndex;
   float t = -kMaxFloat;
-
-#if (ETX_RT_API == ETX_RT_API_NANORT)
-
-  RaytracerPrivate::Ray rr = RaytracerPrivate::Ray{{r.o.x, r.o.y, r.o.z}, {r.d.x, r.d.y, r.d.z}, r.min_t, r.max_t};
-  nanort::TriangleIntersector<float> traverser(_private->v_ptr, _private->i_ptr, 3llu * sizeof(float));
-  nanort::TriangleIntersection<float> isect;
-  if (_private->bvh.Traverse(rr, traverser, &isect, {})) {
-    intersection_found = true;
-    barycentric = {isect.u, isect.v};
-    triangle_index = isect.prim_id;
-    t = isect.t;
-  }
-
-#elif (ETX_RT_API == ETX_RT_API_BVH)
-
-  RaytracerPrivate::Ray rr = {{r.o.x, r.o.y, r.o.z}, {r.d.x, r.d.y, r.d.z}, r.min_t, r.max_t};
-  RaytracerPrivate::Traverser traverser(_private->bvh);
-  RaytracerPrivate::Intersection isect(_private->bvh, _private->triangles.data(), _private->scene, smp);
-  if (result_intersection = traverser.traverse(rr, isect)) {
-    intersection_found = true;
-    barycentric = {result_intersection.barycentric.y, result_intersection.barycentric.z};
-    triangle_index = result_intersection.triangle_index;
-    t = result_intersection.t;
-  }
-
-#elif (ETX_RT_API == ETX_RT_API_EMBREE)
 
   RTCIntersectContext context = {};
   rtcInitIntersectContext(&context);
@@ -270,8 +221,6 @@ bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler&
       break;
     }
   }
-
-#endif
 
   if (intersection_found) {
     float3 bc = {1.0f - barycentric.x - barycentric.y, barycentric.x, barycentric.y};

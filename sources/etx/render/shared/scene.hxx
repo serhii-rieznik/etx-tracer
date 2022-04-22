@@ -13,12 +13,12 @@ namespace etx {
 
 struct ETX_ALIGNED EnvironmentEmitters {
   constexpr static const uint32_t kMaxCount = 7;
-  uint32_t emitters[kMaxCount];
-  uint32_t count;
+  uint32_t emitters[kMaxCount] ETX_EMPTY_INIT;
+  uint32_t count ETX_EMPTY_INIT;
 };
 
 struct ETX_ALIGNED Scene {
-  Camera camera;
+  Camera camera ETX_EMPTY_INIT;
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;

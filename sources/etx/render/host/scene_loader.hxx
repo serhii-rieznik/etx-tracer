@@ -20,6 +20,7 @@ struct SceneRepresentation {
   bool load_from_file(const char* filename, uint32_t options);
 
   const Scene& scene() const;
+
   Camera& camera();
 
   operator bool() const;

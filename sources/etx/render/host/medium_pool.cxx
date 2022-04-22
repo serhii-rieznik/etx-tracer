@@ -188,11 +188,11 @@ void MediumPool::remove_all() {
 }
 
 Medium* MediumPool::as_array() {
-  return _private->medium_pool.data();
+  return _private->medium_pool.alive_objects_count() > 0 ? _private->medium_pool.data() : nullptr;
 }
 
 uint64_t MediumPool::array_size() {
-  return 1llu + _private->medium_pool.latest_alive_index();
+  return _private->medium_pool.alive_objects_count() > 0 ? 1llu + _private->medium_pool.latest_alive_index() : 0;
 }
 
 uint32_t MediumPool::find(const char* id) {

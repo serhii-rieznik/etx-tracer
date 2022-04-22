@@ -42,6 +42,7 @@ struct UI {
     std::function<void()> reload_scene_selected;
     std::function<void()> reload_geometry_selected;
     std::function<void()> options_changed;
+    std::function<void()> reload_integrator;
   } callbacks;
 
  private:

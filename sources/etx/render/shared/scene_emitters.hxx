@@ -232,7 +232,7 @@ ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_
 ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, Sampler& smp, const float3& from_point, const Scene& scene) {
   float pdf_sample = 0.0f;
   uint32_t emitter_index = static_cast<uint32_t>(scene.emitters_distribution.sample(smp.next(), pdf_sample));
-  ETX_ASSERT(emitter_index < scene.emitters_distribution.size);
+  ETX_ASSERT(emitter_index < scene.emitters_distribution.values.count);
   return sample_emitter(spect, emitter_index, smp, from_point, scene);
 }
 

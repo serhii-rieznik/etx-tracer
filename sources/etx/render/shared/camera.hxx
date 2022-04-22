@@ -12,8 +12,6 @@ struct ETX_ALIGNED Camera {
 
   float4x4 view_proj ETX_EMPTY_INIT;
 
-  Class cls = Class::Perspective;
-
   float3 position ETX_EMPTY_INIT;
   float tan_half_fov ETX_EMPTY_INIT;
 
@@ -29,6 +27,8 @@ struct ETX_ALIGNED Camera {
   uint2 image_size ETX_EMPTY_INIT;
   float image_plane ETX_EMPTY_INIT;
   float focal_distance ETX_EMPTY_INIT;
+
+  Class cls ETX_INIT_WITH(Class::Perspective);
 };
 
 struct CameraSample {

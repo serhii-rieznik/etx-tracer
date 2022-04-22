@@ -5,14 +5,14 @@
 namespace etx {
 
 struct DistributionBuilder {
-  DistributionBuilder(Distribution& dist, uint32_t capacity)
+  DistributionBuilder(Distribution& dist, uint32_t size)
     : _dist(dist)
-    , _capacity(capacity + 1) {
-    ETX_ASSERT(capacity > 0);
-    ETX_ASSERT(_dist.size == 0);
-    ETX_ASSERT(_dist.values == nullptr);
-    _dist.size = capacity;
-    _dist.values = reinterpret_cast<Distribution::Entry*>(calloc(_capacity, sizeof(Distribution::Entry)));
+    , _capacity(size + 1) {
+    ETX_ASSERT(size > 0);
+    ETX_ASSERT(_dist.values.count == 0);
+    ETX_ASSERT(_dist.values.a == nullptr);
+    _dist.values.count = size;
+    _dist.values.a = reinterpret_cast<Distribution::Entry*>(calloc(_capacity, sizeof(Distribution::Entry)));
   }
 
   void add(float value) {
@@ -39,10 +39,10 @@ struct DistributionBuilder {
     }
 
     if (_dist.total_weight == 0.0f) {
-      for (uint64_t i = 0; i < _dist.size; ++i) {
+      for (uint64_t i = 0; i < _dist.values.count; ++i) {
         _dist.values[i].value = 1.0f;
-        _dist.values[i].pdf = 1.0f / float(_dist.size);
-        _dist.values[i].cdf = float(i) / float(_dist.size);
+        _dist.values[i].pdf = 1.0f / float(_dist.values.count);
+        _dist.values[i].cdf = float(i) / float(_dist.values.count);
       }
     } else {
       for (uint32_t i = 0; i < _size; ++i) {
@@ -51,7 +51,7 @@ struct DistributionBuilder {
       }
     }
 
-    _dist.values[_size++] = {0.0f, 0.0f, 1.0f};
+    _dist.values.a[_size++] = {0.0f, 0.0f, 1.0f};
   }
 
  private:

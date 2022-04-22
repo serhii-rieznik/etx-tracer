@@ -74,11 +74,11 @@ ETX_GPU_CODE float complex_norm(complex c) {
 #endif
 
 struct float3x3 {
-  float3 col[3] = {};
+  float3 col[3] ETX_EMPTY_INIT;
 };
 
 struct float4x4 {
-  float4 col[4] = {};
+  float4 col[4] ETX_EMPTY_INIT;
 };
 
 #include <etx/render/shared/vector_math.hxx>
@@ -385,8 +385,7 @@ ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& b, const float3
 }
 
 ETX_GPU_CODE bool valid_value(float t) {
-  auto cl = fpclassify(t);
-  return (t >= 0.0f) && (cl != FP_INFINITE) && (cl != FP_NAN);
+  return (t >= 0.0f) && isfinite(t);
 }
 
 ETX_GPU_CODE bool valid_value(const float2& v) {
