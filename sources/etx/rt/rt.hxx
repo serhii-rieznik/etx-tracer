@@ -18,12 +18,12 @@ struct Raytracing {
   const Scene& scene() const;
 
   const Scene& gpu_scene() const;
-  const GPUAccelerationStructure gpu_acceleration_structure() const;
 
   bool has_scene() const;
   void set_scene(const Scene&);
 
   bool trace(const Ray&, Intersection&, Sampler& smp) const;
+  bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
 
  private:
   ETX_DECLARE_PIMPL(Raytracing, 1024);

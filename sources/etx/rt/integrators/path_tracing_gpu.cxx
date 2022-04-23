@@ -9,7 +9,7 @@
 namespace etx {
 
 struct ETX_ALIGNED GPUPathTracingImpl {
-  PathTracingGPUData gpu_data = {};
+  PTGPUData gpu_data = {};
 
   GPUBuffer camera_image = {};
   GPUPipeline main_pipeline = {};
@@ -54,7 +54,6 @@ void GPUPathTracing::preview(const Options& opt) {
   }
 
   _private->gpu_data.output = reinterpret_cast<float4*>(rt.gpu()->get_buffer_device_pointer(_private->camera_image));
-  _private->gpu_data.acceleration_structure = rt.gpu()->get_acceleration_structure_device_pointer(rt.gpu_acceleration_structure());
   _private->gpu_data.scene = rt.gpu_scene();
 
   _private->gpu_launch_params = rt.gpu()->upload_to_shared_buffer(_private->gpu_launch_params, &_private->gpu_data, sizeof(_private->gpu_data));

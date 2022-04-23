@@ -331,7 +331,7 @@ struct CPUVCMImpl {
                 auto eval = bsdf::evaluate(data, mat, rt.scene(), smp);
                 if (eval.valid()) {
                   float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, w_o);
-                  auto tr = transmittance(spect, smp, p0, camera_sample.position, medium_index, rt);
+                  auto tr = transmittance(spect, smp, p0, camera_sample.position, medium_index, rt.scene(), rt);
                   if (tr.is_zero() == false) {
                     float reverse_pdf = bsdf::pdf(data.swap_directions(), mat, rt.scene(), smp);
                     float camera_pdf = camera_sample.pdf_dir_out * fabsf(dot(intersection.nrm, w_o)) / dot(direction, direction);
@@ -461,7 +461,7 @@ struct CPUVCMImpl {
               BSDFEval connection_eval = bsdf::evaluate(connection_data, mat, rt.scene(), smp);
               if (connection_eval.valid()) {
                 float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
-                auto tr = transmittance(spect, smp, p0, emitter_sample.origin, medium_index, rt);
+                auto tr = transmittance(spect, smp, p0, emitter_sample.origin, medium_index, rt.scene(), rt);
                 if (tr.is_zero() == false) {
                   float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
                   float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
@@ -488,7 +488,7 @@ struct CPUVCMImpl {
             if (vcm::connect_to_light_vertex(rt.scene(), spect, state, intersection, _light_vertices[light_path.begin + i], _vm_weight, medium_index, target_position, value,
                   smp)) {
               float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
-              auto tr = transmittance(spect, smp, p0, target_position, medium_index, rt);
+              auto tr = transmittance(spect, smp, p0, target_position, medium_index, rt.scene(), rt);
               if (tr.is_zero() == false) {
                 gathered += tr * value;
                 ETX_VALIDATE(gathered);

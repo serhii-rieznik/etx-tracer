@@ -114,7 +114,7 @@ struct CPUPathTracingImpl : public Task {
         if (path_length + 1 <= current_max_depth) {
           auto emitter_sample = sample_emitter(spect, smp, medium_sample.pos, scene);
           if (emitter_sample.pdf_dir > 0) {
-            auto tr = transmittance(spect, smp, medium_sample.pos, emitter_sample.origin, medium_index, rt);
+            auto tr = transmittance(spect, smp, medium_sample.pos, emitter_sample.origin, medium_index, scene, rt);
             float phase_function = medium.phase_function(spect, medium_sample.pos, ray.d, emitter_sample.direction);
             auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, phase_function);
             result += throughput * emitter_sample.value * tr * (phase_function * weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
@@ -148,7 +148,7 @@ struct CPUPathTracingImpl : public Task {
             BSDFEval bsdf_eval = bsdf::evaluate({spect, medium_index, PathSource::Camera, intersection, ray.d, emitter_sample.direction}, mat, scene, smp);
             if (bsdf_eval.valid()) {
               auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
-              auto tr = transmittance(spect, smp, pos, emitter_sample.origin, medium_index, rt);
+              auto tr = transmittance(spect, smp, pos, emitter_sample.origin, medium_index, scene, rt);
               auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
               result += throughput * bsdf_eval.bsdf * emitter_sample.value * tr * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
               ETX_VALIDATE(result);
@@ -167,7 +167,7 @@ struct CPUPathTracingImpl : public Task {
           auto e =
             emitter_get_radiance(emitter, spect, intersection.tex, ray.o, intersection.pos, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (path_length == 0));
           if (pdf_emitter_dir > 0.0f) {
-            auto tr = transmittance(spect, smp, ray.o, intersection.pos, medium_index, rt);
+            auto tr = transmittance(spect, smp, ray.o, intersection.pos, medium_index, scene, rt);
             float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
             auto weight = ((path_length == 1) || sampled_delta_bsdf) ? 1.0f : power_heuristic(sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
             result += throughput * e * tr * weight;

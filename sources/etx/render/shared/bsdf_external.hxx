@@ -21,7 +21,7 @@ struct ETX_ALIGNED RayInfo {
   float G1 = {};
   float pad = {};
 
-  RayInfo(const float3& w, const float alpha_x, const float alpha_y) {
+  ETX_GPU_CODE RayInfo(const float3& w, const float alpha_x, const float alpha_y) {
     updateDirection(w, alpha_x, alpha_y);
   }
 

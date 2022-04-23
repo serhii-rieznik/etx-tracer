@@ -352,27 +352,36 @@ ETX_GPU_CODE uint32_t select_material(const Material& material, const float2& te
 }
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return {};
+  /*
   uint32_t m = select_material(mtl, data.tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::sample(data, mtl, scene, smp);
   }
   return bsdf::sample(data, scene.materials[m], scene, smp);
+  // */
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return {};
+  /*/
   uint32_t m = select_material(mtl, data.tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::evaluate(data, mtl, scene, smp);
   }
   return bsdf::evaluate(data, scene.materials[m], scene, smp);
+  // */
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return {};
+  /*/
   uint32_t m = select_material(mtl, data.tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::pdf(data, mtl, scene, smp);
   }
   return bsdf::pdf(data, scene.materials[m], scene, smp);
+  // */
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {

@@ -152,7 +152,7 @@ struct ETX_ALIGNED LocalFrame {
   }
 };
 
-struct Ray {
+struct ETX_ALIGNED Ray {
   Ray() = default;
 
   ETX_GPU_CODE Ray(const float3& origin, const float3& direction)
@@ -401,9 +401,7 @@ ETX_GPU_CODE bool valid_value(const float4& v) {
 }
 
 ETX_GPU_CODE bool valid_value(complex t) {
-  auto re = fpclassify(t.real());
-  auto im = fpclassify(t.imag());
-  return (re != FP_INFINITE) && (re != FP_NAN) && (im != FP_INFINITE) && (im != FP_NAN);
+  return isfinite(t.real()) && isfinite(t.imag());
 }
 
 ETX_GPU_CODE float to_float(uint32_t value) {

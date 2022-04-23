@@ -610,7 +610,7 @@ struct CPUBidirectionalImpl : public Task {
       const auto& tri = scene.triangles[p0.triangle_index];
       origin = shading_pos(scene.vertices, tri, p0.barycentric, normalize(p1.pos - p0.pos));
     }
-    return transmittance(spect, smp, origin, p1.pos, p0.medium_index, rt);
+    return transmittance(spect, smp, origin, p1.pos, p0.medium_index, scene, rt);
   }
 
   void start(const Options& opt) {

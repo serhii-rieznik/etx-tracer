@@ -116,6 +116,8 @@ struct RaytracingImpl {
     desc.index_buffer_stride = sizeof(Triangle);
     desc.triangle_count = static_cast<uint32_t>(scene->triangles.count);
     gpu.accel = gpu_device->create_acceleration_structure(desc);
+
+    gpu.scene.acceleration_structure = gpu_device->get_acceleration_structure_device_pointer(gpu.accel);
   }
 
   void release_device_scene() {
@@ -162,11 +164,6 @@ const Scene& Raytracing::scene() const {
 const Scene& Raytracing::gpu_scene() const {
   ETX_ASSERT(has_scene());
   return _private->gpu.scene;
-}
-
-const GPUAccelerationStructure Raytracing::gpu_acceleration_structure() const {
-  ETX_ASSERT(has_scene());
-  return _private->gpu.accel;
 }
 
 bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler& smp) const {
@@ -246,6 +243,10 @@ bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler&
   }
 
   return intersection_found;
+}
+
+bool Raytracing::trace(const Scene& scene, const Ray& ray, Intersection& i, Sampler& smp) const {
+  return trace(ray, i, smp);
 }
 
 }  // namespace etx
