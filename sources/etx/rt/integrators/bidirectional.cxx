@@ -533,7 +533,12 @@ struct CPUBidirectionalImpl : public Task {
       return {spect.wavelength, 0.0f};
     }
 
-    sampled_vertex.w_i = normalize(emitter_sample.origin - z_i.pos);
+    auto dp = emitter_sample.origin - z_i.pos;
+    if (dot(dp, dp) <= kEpsilon) {
+      return {spect.wavelength, 0.0f};
+    }
+
+    sampled_vertex.w_i = normalize(dp);
     sampled_vertex.triangle_index = emitter_sample.triangle_index;
     sampled_vertex.emitter_index = emitter_sample.emitter_index;
     sampled_vertex.pos = emitter_sample.origin;

@@ -24,7 +24,9 @@ struct ETX_ALIGNED Raytracing {
     if (i.t < 0.0f)
       return false;
 
+    lerp_vertex(i, scene.vertices, scene.triangles[i.triangle_index], i.barycentric);
     i.w_i = ray.d;
+
     return true;
   }
 };

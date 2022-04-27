@@ -11,6 +11,7 @@ struct GPUOptixImpl : public GPUDevice {
   GPUBuffer create_buffer(const GPUBuffer::Descriptor& desc) override;
   device_pointer_t get_buffer_device_pointer(GPUBuffer) const override;
   device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) override;
+  device_pointer_t copy_to_buffer(GPUBuffer, const void* src, uint64_t offset, uint64_t size) override;
   void copy_from_buffer(GPUBuffer, void* dst, uint64_t offset, uint64_t size) override;
   void destroy_buffer(GPUBuffer) override;
 

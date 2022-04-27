@@ -557,6 +557,15 @@ device_pointer_t GPUOptixImpl::upload_to_shared_buffer(device_pointer_t ptr, voi
   return _private->upload_to_shared_buffer(ptr, data, size);
 }
 
+device_pointer_t GPUOptixImpl::copy_to_buffer(GPUBuffer buffer, const void* src, uint64_t offset, uint64_t size) {
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  ETX_ASSERT(offset + size <= object.capacity);
+  auto ptr = reinterpret_cast<uint8_t*>(object.device_ptr) + offset;
+  if ETX_CUDA_CALL_FAILED (cudaMemcpy(ptr, src, size, cudaMemcpyHostToDevice))
+    log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
+  return reinterpret_cast<device_pointer_t>(ptr);
+}
+
 void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset, uint64_t size) {
   auto& object = _private->buffer_pool.get(buffer.handle);
   if ETX_CUDA_CALL_FAILED (cudaMemcpy(dst, reinterpret_cast<const uint8_t*>(object.device_ptr) + offset, size, cudaMemcpyDeviceToHost))

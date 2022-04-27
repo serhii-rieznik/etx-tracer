@@ -188,10 +188,6 @@ struct ETX_ALIGNED Intersection : public Vertex {
   ETX_GPU_CODE float distance() const {
     return t;
   }
-
-  ETX_GPU_CODE operator bool() const {
-    return t >= 0.0f;
-  }
 };
 
 template <class t>
@@ -285,6 +281,10 @@ ETX_GPU_CODE constexpr T sqr(T t) {
 
 ETX_GPU_CODE float3 to_float3(const float4& v) {
   return {v.x, v.y, v.z};
+}
+
+ETX_GPU_CODE float4 to_float4(const float3& v) {
+  return {v.x, v.y, v.z, 1.0f};
 }
 
 ETX_GPU_CODE float luminance(const float3& value) {

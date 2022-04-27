@@ -6,7 +6,7 @@ REM #                                                                           
 REM ########################################################################################### 
 
 set ROOT=%CD%
-set FOLDERS=(sources)
+set FOLDERS=(sources, bin)
 set EXTENSIONS=(h, hpp, hxx, c, cpp, cxx, mm, glsl, hlsl, cu)
 for %%f in %FOLDERS% do (
  for %%e in %EXTENSIONS% do ( 

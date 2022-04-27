@@ -182,7 +182,7 @@ struct ETX_ALIGNED Medium {
   }
 
   ETX_GPU_CODE float3 sample_phase_function(const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& w_i) const {
-    if ((cls == Class::Vacuum) || s_outscattering.is_zero()) {
+    if (cls == Class::Vacuum) {
       return w_i;
     }
 

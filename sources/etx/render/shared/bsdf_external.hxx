@@ -48,7 +48,10 @@ struct ETX_ALIGNED RayInfo {
 
   ETX_GPU_CODE void updateHeight(const float& in_h) {
     h = in_h;
+    ETX_ASSERT(isfinite(h));
+
     C1 = min(1.0f, max(0.0f, 0.5f * (h + 1.0f)));
+    ETX_VALIDATE(C1);
 
     if (w.z > 0.9999f)
       G1 = 1.0f;
@@ -78,7 +81,19 @@ ETX_GPU_CODE float sampleHeight(const RayInfo& ray, const float U) {
     return kMaxFloat;
 
   // probability of intersection
-  return invC1(ray.C1 / powf((1.0f - U), 1.0f / ray.Lambda));
+  float P1 = powf((1.0f - U), 1.0f / ray.Lambda);
+  ETX_VALIDATE(P1);
+
+  if (P1 <= 0.0f)  // leave the microsurface
+    return kMaxFloat;
+
+  float U1 = ray.C1 / P1;
+  ETX_VALIDATE(U1);
+
+  float result = invC1(U1);
+  ETX_ASSERT(isfinite(result));
+
+  return result;
 }
 
 ETX_GPU_CODE float D_ggx(const float3& wm, const float alpha_x, const float alpha_y) {

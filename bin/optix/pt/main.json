@@ -1,6 +1,6 @@
 {
-  "code" : "test.cu",
-  "source" : "test.ptx",
+  "code" : "main.cu",
+  "source" : "main.ptx",
   "max_trace_depth" : 1,
   "payload_size" : 2,
   "raygen" : "main",

@@ -1,3 +1,4 @@
+#include <etx/core/core.hxx>
 #include <etx/rt/rt.hxx>
 
 #include <embree3/rtcore.h>
@@ -91,9 +92,26 @@ struct RaytracingImpl {
     upload_array_view_to_gpu(a, nullptr);
   }
 
+  template <class T>
+  uint64_t array_size(const ArrayView<T>& a) {
+    return align_up(a.count * sizeof(T), 16llu);
+  }
+
+  template <class T>
+  void push_to_generic_buffer(GPUBuffer buffer, ArrayView<T>& a, uint64_t copy_offset) {
+    if (a.count == 0)
+      return;
+
+    uint64_t size_to_copy = array_size(a);
+    auto ptr = gpu_device->copy_to_buffer(buffer, gpu.scene.emitters_distribution.values.a, copy_offset, size_to_copy);
+    a.a = reinterpret_cast<T*>(ptr);
+    copy_offset = align_up(copy_offset + size_to_copy, 16llu);
+  }
+
   void build_device_scene() {
     GPUBuffer vertex_buffer = {};
     GPUBuffer index_buffer = {};
+    GPUBuffer scene_buffer = {};
 
     gpu.scene = *scene;
     upload_array_view_to_gpu(gpu.scene.vertices, &vertex_buffer);
@@ -101,8 +119,19 @@ struct RaytracingImpl {
     upload_array_view_to_gpu(gpu.scene.materials);
     upload_array_view_to_gpu(gpu.scene.emitters);
 
+    uint64_t scene_buffer_size = 0;
+    scene_buffer_size += array_size(gpu.scene.emitters_distribution.values);
+    scene_buffer_size += array_size(gpu.scene.images);
+    scene_buffer_size += array_size(gpu.scene.mediums);
+
+    scene_buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({scene_buffer_size, nullptr}));
+
+    uint64_t copy_offset = 0;
+    push_to_generic_buffer(scene_buffer, gpu.scene.emitters_distribution.values, copy_offset);
+    push_to_generic_buffer(scene_buffer, gpu.scene.images, copy_offset);
+    push_to_generic_buffer(scene_buffer, gpu.scene.mediums, copy_offset);
+
     /*/ TODO : update other data:
-    upload_array_view_to_gpu(gpu.scene.emitters_distribution.values);
     upload_array_view_to_gpu(gpu.scene.images);
     upload_array_view_to_gpu(gpu.scene.mediums);
     // TODO : update gpu.scene.spectrums
@@ -163,6 +192,7 @@ const Scene& Raytracing::scene() const {
 
 const Scene& Raytracing::gpu_scene() const {
   ETX_ASSERT(has_scene());
+  _private->gpu.scene.camera = _private->scene->camera;
   return _private->gpu.scene;
 }
 

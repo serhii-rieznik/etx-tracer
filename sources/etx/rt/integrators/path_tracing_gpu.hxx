@@ -11,7 +11,7 @@ struct GPUPathTracing : public Integrator {
   }
 
   const char* status() const {
-    return "Basic GPU Integrator (not able to render anything)";
+    return "Path Tracing GPU";
   }
 
   GPUPathTracing(Raytracing& r);

@@ -66,6 +66,17 @@ ETX_GPU_CODE Vertex lerp_vertex(const ArrayView<Vertex>& vertices, const Triangl
   };
 }
 
+ETX_GPU_CODE void lerp_vertex(Vertex& v, const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
+  const auto& v0 = vertices[t.i[0]];
+  const auto& v1 = vertices[t.i[1]];
+  const auto& v2 = vertices[t.i[2]];
+  v.pos = /*     */ v0.pos * bc.x + v1.pos * bc.y + v2.pos * bc.z;
+  v.nrm = normalize(v0.nrm * bc.x + v1.nrm * bc.y + v2.nrm * bc.z);
+  v.tan = normalize(v0.tan * bc.x + v1.tan * bc.y + v2.tan * bc.z);
+  v.btn = normalize(v0.btn * bc.x + v1.btn * bc.y + v2.btn * bc.z);
+  v.tex = /*     */ v0.tex * bc.x + v1.tex * bc.y + v2.tex * bc.z;
+}
+
 ETX_GPU_CODE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
   return position - dot(position - origin, normal) * normal;
 }
