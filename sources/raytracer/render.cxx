@@ -166,8 +166,8 @@ void RenderContext::apply_reference_image(uint32_t handle) {
   ref_image_desc.usage = SG_USAGE_STREAM;
   _private->reference_image = sg_make_image(ref_image_desc);
 
-  ref_image_desc.data.subimage[0][0].ptr = img.pixels;
-  ref_image_desc.data.subimage[0][0].size = sizeof(float4) * img.isize.x * img.isize.y;
+  ref_image_desc.data.subimage[0][0].ptr = img.pixels.a;
+  ref_image_desc.data.subimage[0][0].size = sizeof(float4) * img.pixels.count;
   sg_update_image(_private->reference_image, ref_image_desc.data);
 }
 

@@ -31,8 +31,8 @@ struct Image {
     uint32_t row_1 = 0;
   };
 
-  float4* pixels = nullptr;
-  Distribution* x_distributions = nullptr;
+  ArrayView<float4> pixels = {};
+  ArrayView<Distribution> x_distributions = {};
   Distribution y_distribution = {};
   float2 fsize = {};
   uint2 isize = {};

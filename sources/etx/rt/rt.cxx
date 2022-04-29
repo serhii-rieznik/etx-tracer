@@ -76,8 +76,13 @@ struct RaytracingImpl {
   }
 
   template <class T>
-  void upload_array_view_to_gpu(ArrayView<T>& a, GPUBuffer* out_buffer) {
-    GPUBuffer buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({sizeof(T) * a.count, a.a}));
+  inline static uint64_t array_size(const ArrayView<T>& a) {
+    return align_up(a.count * sizeof(T), 16llu);
+  }
+
+  template <class T>
+  inline void upload_array_view_to_gpu(ArrayView<T>& a, GPUBuffer* out_buffer) {
+    GPUBuffer buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({array_size(a), a.a}));
 
     auto device_ptr = gpu_device->get_buffer_device_pointer(buffer);
     a.a = reinterpret_cast<T*>(device_ptr);
@@ -88,24 +93,31 @@ struct RaytracingImpl {
   }
 
   template <class T>
-  void upload_array_view_to_gpu(ArrayView<T>& a) {
+  inline void upload_array_view_to_gpu(ArrayView<T>& a) {
     upload_array_view_to_gpu(a, nullptr);
   }
 
   template <class T>
-  uint64_t array_size(const ArrayView<T>& a) {
-    return align_up(a.count * sizeof(T), 16llu);
+  inline T* push_to_generic_buffer(GPUBuffer buffer, T* ptr, uint64_t size_to_copy, uint64_t& copy_offset) {
+    if ((ptr == nullptr) || (size_to_copy == 0)) {
+      return nullptr;
+    }
+
+    auto device_ptr = gpu_device->copy_to_buffer(buffer, ptr, copy_offset, size_to_copy);
+    copy_offset = align_up(copy_offset + size_to_copy, 16llu);
+    return reinterpret_cast<T*>(device_ptr);
   }
 
   template <class T>
-  void push_to_generic_buffer(GPUBuffer buffer, ArrayView<T>& a, uint64_t copy_offset) {
-    if (a.count == 0)
+  inline void push_to_generic_buffer(GPUBuffer buffer, ArrayView<T>& a, uint64_t& copy_offset) {
+    if ((a.a == nullptr) || (a.count == 0)) {
       return;
+    }
 
-    uint64_t size_to_copy = array_size(a);
-    auto ptr = gpu_device->copy_to_buffer(buffer, gpu.scene.emitters_distribution.values.a, copy_offset, size_to_copy);
-    a.a = reinterpret_cast<T*>(ptr);
+    auto size_to_copy = array_size(a);
+    auto ptr = gpu_device->copy_to_buffer(buffer, a.a, copy_offset, size_to_copy);
     copy_offset = align_up(copy_offset + size_to_copy, 16llu);
+    a.a = reinterpret_cast<T*>(ptr);
   }
 
   void build_device_scene() {
@@ -120,22 +132,61 @@ struct RaytracingImpl {
     upload_array_view_to_gpu(gpu.scene.emitters);
 
     uint64_t scene_buffer_size = 0;
-    scene_buffer_size += array_size(gpu.scene.emitters_distribution.values);
-    scene_buffer_size += array_size(gpu.scene.images);
-    scene_buffer_size += array_size(gpu.scene.mediums);
+    scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.emitters_distribution.values), 16llu);
+    scene_buffer_size = align_up(scene_buffer_size + align_up(sizeof(Spectrums), 16llu), 16llu);
+
+    // images
+    for (uint32_t i = 0; i < gpu.scene.images.count; ++i) {
+      auto& image = gpu.scene.images[i];
+      scene_buffer_size = align_up(scene_buffer_size + array_size(image.pixels), 16llu);
+      scene_buffer_size = align_up(scene_buffer_size + array_size(image.y_distribution.values), 16llu);
+      scene_buffer_size = align_up(scene_buffer_size + array_size(image.x_distributions), 16llu);
+      for (uint32_t y = 0; y < image.y_distribution.values.count; ++y) {
+        scene_buffer_size = align_up(scene_buffer_size + array_size(image.x_distributions[y].values), 16llu);
+      }
+    }
+    scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.images), 16llu);
+    // mediums
+    scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.mediums), 16llu);
 
     scene_buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({scene_buffer_size, nullptr}));
 
     uint64_t copy_offset = 0;
     push_to_generic_buffer(scene_buffer, gpu.scene.emitters_distribution.values, copy_offset);
-    push_to_generic_buffer(scene_buffer, gpu.scene.images, copy_offset);
-    push_to_generic_buffer(scene_buffer, gpu.scene.mediums, copy_offset);
+    gpu.scene.spectrums = push_to_generic_buffer(scene_buffer, gpu.scene.spectrums.ptr, sizeof(Spectrums), copy_offset);
 
-    /*/ TODO : update other data:
-    upload_array_view_to_gpu(gpu.scene.images);
-    upload_array_view_to_gpu(gpu.scene.mediums);
-    // TODO : update gpu.scene.spectrums
-    // */
+    if (gpu.scene.images.count > 0) {
+      auto images_ptr = reinterpret_cast<Image*>(calloc(gpu.scene.images.count, sizeof(Image)));
+
+      for (uint32_t i = 0; (images_ptr != nullptr) && (i < gpu.scene.images.count); ++i) {
+        Image image = gpu.scene.images[i];
+        push_to_generic_buffer(scene_buffer, image.pixels, copy_offset);
+        push_to_generic_buffer(scene_buffer, image.y_distribution.values, copy_offset);
+
+        auto x_dist_ptr = calloc(image.y_distribution.values.count, sizeof(Distribution));
+
+        ArrayView<Distribution> x_distributions = {
+          reinterpret_cast<Distribution*>(x_dist_ptr),
+          image.y_distribution.values.count,
+        };
+
+        for (uint32_t y = 0; y < image.y_distribution.values.count; ++y) {
+          x_distributions[y] = image.x_distributions[y];
+          push_to_generic_buffer(scene_buffer, x_distributions[y].values, copy_offset);
+        }
+        push_to_generic_buffer(scene_buffer, x_distributions, copy_offset);
+
+        image.x_distributions = x_distributions;
+        images_ptr[i] = image;
+
+        free(x_dist_ptr);
+      }
+      gpu.scene.images = make_array_view<Image>(images_ptr, gpu.scene.images.count);
+      push_to_generic_buffer(scene_buffer, gpu.scene.images, copy_offset);
+      free(images_ptr);
+    }
+
+    // upload_array_view_to_gpu(gpu.scene.mediums);
 
     GPUAccelerationStructure::Descriptor desc = {};
     desc.vertex_buffer = vertex_buffer;

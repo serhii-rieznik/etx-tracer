@@ -365,6 +365,8 @@ ETX_GPU_CODE void print_value(const char* name, const char* tag, const SpectralR
   printf("%s : %s (%f : %f %f %f)\n", name, tag, v.wavelength, v.components.x, v.components.y, v.components.z);
 }
 
+struct Spectrums;
+
 struct ETX_ALIGNED SpectralDistribution {
   enum Class {
     Reflectance,
@@ -499,10 +501,10 @@ struct ETX_ALIGNED SpectralDistribution {
 
   static SpectralDistribution from_constant(float value);
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count);
-  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, struct Spectrums*);
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, struct Spectrums*);
-  static SpectralDistribution from_black_body(float temperature, struct Spectrums*);
-  static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, struct Spectrums*);
+  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, struct Pointer<Spectrums>);
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, struct Pointer<Spectrums>);
+  static SpectralDistribution from_black_body(float temperature, struct Pointer<Spectrums>);
+  static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, struct Pointer<Spectrums>);
 };
 
 struct RefractiveIndex {
@@ -650,11 +652,11 @@ ETX_GPU_CODE SpectralDistribution make_spd(float3 rgb, const SpectrumSet& spectr
   return r;
 }
 
-ETX_GPU_CODE SpectralDistribution make_reflectance_spd(const float3& rgb, const Spectrums* spectrums) {
+ETX_GPU_CODE SpectralDistribution make_reflectance_spd(const float3& rgb, const Pointer<Spectrums> spectrums) {
   return make_spd(rgb, spectrums->rgb_reflection);
 }
 
-ETX_GPU_CODE SpectralDistribution make_illuminant_spd(const float3& rgb, const Spectrums* spectrums) {
+ETX_GPU_CODE SpectralDistribution make_illuminant_spd(const float3& rgb, const Pointer<Spectrums> spectrums) {
   return make_spd(rgb, spectrums->rgb_illuminant);
 }
 

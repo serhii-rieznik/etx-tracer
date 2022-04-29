@@ -74,8 +74,8 @@ struct ImagePoolImpl {
   }
 
   void load_image(Image& img, const char* file_name, uint32_t options) {
-    ETX_ASSERT(img.pixels == nullptr);
-    ETX_ASSERT(img.x_distributions == nullptr);
+    ETX_ASSERT(img.pixels.a == nullptr);
+    ETX_ASSERT(img.x_distributions.a == nullptr);
     ETX_ASSERT(img.y_distribution.values.count == 0);
     ETX_ASSERT(img.y_distribution.values.a == nullptr);
 
@@ -94,7 +94,8 @@ struct ImagePoolImpl {
     img.options = img.options | options;
     img.fsize.x = static_cast<float>(img.isize.x);
     img.fsize.y = static_cast<float>(img.isize.y);
-    img.pixels = reinterpret_cast<float4*>(calloc(1llu * img.isize.x * img.isize.y, sizeof(float4)));
+    img.pixels.count = 1llu * img.isize.x * img.isize.y;
+    img.pixels.a = reinterpret_cast<float4*>(calloc(img.pixels.count, sizeof(float4)));
 
     bool srgb = (options & Image::Linear) == 0;
 
@@ -114,7 +115,7 @@ struct ImagePoolImpl {
         }
       }
     } else if (format == Image::Format::RGBA32F) {
-      memcpy(img.pixels, source_data.data(), source_data.size());
+      memcpy(img.pixels.a, source_data.data(), source_data.size());
     } else {
       ETX_FAIL_FMT("Unsupported image format %u", format);
       return;
@@ -131,7 +132,8 @@ struct ImagePoolImpl {
   void build_sampling_table(Image& img) {
     bool uniform_sampling = (img.options & Image::UniformSamplingTable) == Image::UniformSamplingTable;
     DistributionBuilder y_dist(img.y_distribution, img.isize.y);
-    img.x_distributions = reinterpret_cast<Distribution*>(calloc(img.isize.y, sizeof(Distribution)));
+    img.x_distributions.count = img.isize.y;
+    img.x_distributions.a = reinterpret_cast<Distribution*>(calloc(img.x_distributions.count, sizeof(Distribution)));
 
     std::atomic<float> total_weight = {0.0f};
     scheduler.execute(img.isize.y, [&img, uniform_sampling, &total_weight, &y_dist](uint32_t begin, uint32_t end, uint32_t) {
@@ -163,11 +165,11 @@ struct ImagePoolImpl {
   }
 
   void free_image(Image& img) {
-    free(img.pixels);
-    for (uint64_t i = 0; (img.x_distributions != nullptr) && (i < img.y_distribution.values.count); ++i) {
+    free(img.pixels.a);
+    for (uint64_t i = 0; (img.x_distributions.a != nullptr) && (i < img.y_distribution.values.count); ++i) {
       free(img.x_distributions[i].values.a);
     }
-    free(img.x_distributions);
+    free(img.x_distributions.a);
     free(img.y_distribution.values.a);
     img = {};
   }

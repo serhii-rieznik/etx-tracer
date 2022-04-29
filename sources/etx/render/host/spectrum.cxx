@@ -20,7 +20,7 @@ SpectralDistribution SpectralDistribution::from_constant(float value) {
   return result;
 }
 
-SpectralDistribution SpectralDistribution::from_black_body(float temperature, Spectrums* spectrums) {
+SpectralDistribution SpectralDistribution::from_black_body(float temperature, Pointer<Spectrums> spectrums) {
   SpectralDistribution result;
   result.count = spectrum::WavelengthCount;
   for (uint64_t i = 0; i < spectrum::WavelengthCount; ++i) {
@@ -35,7 +35,7 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, Sp
   return result;
 }
 
-void SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, Spectrums* spectrums) {
+void SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, Pointer<Spectrums> spectrums) {
   auto file = fopen(file_name, "r");
   if (file == nullptr) {
     printf("Failed to load SpectralDistribution from file: %s\n", file_name);
@@ -239,7 +239,7 @@ SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[
   return result;
 }
 
-SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, Spectrums* spectrums) {
+SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, Pointer<Spectrums> spectrums) {
   auto result = from_samples(wavelengths, power, count);
   if constexpr (spectrum::kSpectralRendering == false) {
     float3 xyz = result.integrate_to_xyz();
@@ -248,7 +248,7 @@ SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[
   return result;
 }
 
-SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, Spectrums* spectrums) {
+SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, Pointer<Spectrums> spectrums) {
   float value = (count > 0) ? wavelengths_power[0].x : 100.0f;
   float wavelength_scale = 1.0f;
   while (value < 100.0f) {

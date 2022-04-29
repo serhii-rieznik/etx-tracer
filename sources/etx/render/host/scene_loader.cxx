@@ -21,7 +21,7 @@
 
 namespace etx {
 
-Spectrums* spectrums() {
+Pointer<Spectrums> spectrums() {
   static Spectrums _spectrums;
   static auto invoke_once = []() {
     using SPD = SpectralDistribution;
@@ -412,7 +412,7 @@ struct SceneRepresentationImpl {
     _gpu.data.emitters_distribution.size = emitters_distribution.size;
     _gpu.data.emitters_distribution.total_weight = emitters_distribution.total_weight;
     _gpu.data.emitters_distribution.values = reinterpret_cast<Distribution1DData::Entry*>(emitters_dist_ptr);
-    _gpu.data.spectrums = reinterpret_cast<Spectrums*>(gpu_device.get_buffer_device_pointer(_gpu.spectrums));
+    _gpu.data.spectrums = reinterpret_cast<Pointer<Spectrums>>(gpu_device.get_buffer_device_pointer(_gpu.spectrums));
     _gpu.data.environment_emitters = environment_emitters;
     _gpu.data.bounding_sphere_center = bounding_sphere_center;
     _gpu.data.bounding_sphere_radius = bounding_sphere_radius;

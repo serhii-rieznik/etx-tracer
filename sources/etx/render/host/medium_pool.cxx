@@ -23,7 +23,8 @@ struct MediumPoolImpl {
     medium_pool.cleanup();
   }
 
-  uint32_t add(Medium::Class cls, const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g, const Spectrums* s) {
+  uint32_t add(Medium::Class cls, const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
+    const Pointer<Spectrums> s) {
     auto i = mapping.find(id);
     if (i != mapping.end()) {
       return i->second;
@@ -167,7 +168,7 @@ void MediumPool::cleanup() {
 }
 
 uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
-  const Spectrums* s) {
+  const Pointer<Spectrums> s) {
   return _private->add(cls, id, volume, s_a, s_o, g, s);
 }
 

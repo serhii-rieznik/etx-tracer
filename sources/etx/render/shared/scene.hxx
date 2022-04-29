@@ -27,7 +27,7 @@ struct ETX_ALIGNED Scene {
   ArrayView<Medium> mediums ETX_EMPTY_INIT;
   Distribution emitters_distribution ETX_EMPTY_INIT;
   EnvironmentEmitters environment_emitters ETX_EMPTY_INIT;
-  Spectrums* spectrums ETX_EMPTY_INIT;
+  Pointer<Spectrums> spectrums ETX_EMPTY_INIT;
   float3 bounding_sphere_center ETX_EMPTY_INIT;
   float bounding_sphere_radius ETX_EMPTY_INIT;
   uint64_t acceleration_structure ETX_EMPTY_INIT;
