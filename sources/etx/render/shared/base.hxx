@@ -22,7 +22,7 @@
 #include <etx/render/shared/math.hxx>
 #undef ETX_RENDER_BASE_INCLUDED
 
-#define ETX_FORCE_VALIDATION 1
+#define ETX_FORCE_VALIDATION 0
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
 
