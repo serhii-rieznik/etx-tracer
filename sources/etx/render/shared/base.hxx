@@ -18,11 +18,11 @@
 
 #define ETX_EMPTY_INIT ETX_INIT_WITH({})
 
-#define ETX_FORCE_VALIDATION 0
-
 #define ETX_RENDER_BASE_INCLUDED 1
 #include <etx/render/shared/math.hxx>
 #undef ETX_RENDER_BASE_INCLUDED
+
+#define ETX_FORCE_VALIDATION 1
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
 
@@ -35,10 +35,23 @@
     }                                                               \
   } while (0)
 
+#define ETX_CHECK_FINITE(VALUE)                                     \
+  do {                                                              \
+    if (isfinite((VALUE)) == false) {                               \
+      printf("Validation failed [%s, %u]:\n ", __FILE__, __LINE__); \
+      print_value(#VALUE, "invalid value", VALUE);                  \
+      ETX_DEBUG_BREAK();                                            \
+    }                                                               \
+  } while (0)
+
 #else
 
 #define ETX_VALIDATE(VALUE) \
   do {                      \
+  } while (0)
+
+#define ETX_CHECK_FINITE(VALUE) \
+  do {                          \
   } while (0)
 
 #endif

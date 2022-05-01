@@ -384,6 +384,10 @@ ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& b, const float3
   return normalize(t - n * dot(n, t)) * (dot(cross(n, t), b) < 0.0f ? -1.0f : 1.0f);
 }
 
+ETX_GPU_CODE float isfinite(float t) {
+  return ::isfinite(t);
+}
+
 ETX_GPU_CODE bool valid_value(float t) {
   return (t >= 0.0f) && isfinite(t);
 }
@@ -400,7 +404,23 @@ ETX_GPU_CODE bool valid_value(const float4& v) {
   return valid_value(v.x) && valid_value(v.y) && valid_value(v.z) && valid_value(v.w);
 }
 
+ETX_GPU_CODE bool isfinite(const float2& v) {
+  return isfinite(v.x) && isfinite(v.y);
+}
+
+ETX_GPU_CODE bool isfinite(const float3& v) {
+  return isfinite(v.x) && isfinite(v.y) && isfinite(v.z);
+}
+
+ETX_GPU_CODE bool isfinite(const float4& v) {
+  return isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && valid_value(v.w);
+}
+
 ETX_GPU_CODE bool valid_value(complex t) {
+  return valid_value(t.real()) && isfinite(t.imag());
+}
+
+ETX_GPU_CODE bool isfinite(complex t) {
   return isfinite(t.real()) && isfinite(t.imag());
 }
 

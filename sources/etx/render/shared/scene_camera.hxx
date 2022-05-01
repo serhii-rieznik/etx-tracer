@@ -16,14 +16,26 @@ ETX_GPU_CODE float film_pdf_out(const Camera& camera, const float3& to_point) {
 }
 
 ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const float2& uv) {
+  ETX_CHECK_FINITE(uv);
+
   if (scene.camera.cls == Camera::Class::Equirectangular) {
     return {scene.camera.position, phi_theta_to_direction(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat};
   }
 
   float3 origin = scene.camera.position;
+
+  float3 direction = scene.camera.direction;
+  ETX_CHECK_FINITE(direction);
+
   float3 s = (uv.x * scene.camera.aspect) * scene.camera.side;
+  ETX_CHECK_FINITE(s);
+
   float3 u = (uv.y) * scene.camera.up;
-  float3 w_o = normalize(scene.camera.tan_half_fov * (s + u) + scene.camera.direction);
+  ETX_CHECK_FINITE(u);
+
+  float3 w_o = normalize(scene.camera.tan_half_fov * (s + u) + direction);
+  ETX_CHECK_FINITE(w_o);
+
   if (scene.camera.lens_radius > 0.0f) {
     float2 sensor_sample = {};
     if (scene.camera_lens_shape_image_index == kInvalidIndex) {
@@ -36,9 +48,10 @@ ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const float2& uv
     }
     sensor_sample *= scene.camera.lens_radius;
     origin = origin + scene.camera.side * sensor_sample.x + scene.camera.up * sensor_sample.y;
-    float focal_plane_distance = scene.camera.focal_distance / dot(w_o, scene.camera.direction);
+    float focal_plane_distance = scene.camera.focal_distance / dot(w_o, direction);
     float3 p = scene.camera.position + focal_plane_distance * w_o;
     w_o = normalize(p - origin);
+    ETX_CHECK_FINITE(w_o);
   }
 
   return {origin, w_o, kRayEpsilon, kMaxFloat};

@@ -113,7 +113,10 @@ struct ETX_ALIGNED Medium {
     float rnd = smp.next();
     auto s_t = s_outscattering.random_entry_power(rnd) + s_absorption.random_entry_power(rnd);
     float t = -logf(1.0f - smp.next()) / s_t;
+    ETX_VALIDATE(t);
+
     t = min(t, max_t);
+    ETX_VALIDATE(t);
 
     bool sampled_medium = t < max_t;
 

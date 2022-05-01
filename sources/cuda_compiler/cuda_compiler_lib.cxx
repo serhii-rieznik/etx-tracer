@@ -22,15 +22,15 @@ bool compile_nvcc_file(const char* path_to_file, const char* output_to_file) {
   const char* target_file = output_to_file == nullptr ? out_ptx_file : output_to_file;
 
 #if defined(NDEBUG) || defined(_NDEBUG)
-  const char* ndebug = "--define-macro NDEBUG";
+  const char* debug_flags = "--define-macro NDEBUG --optimize 3";
 #else
-  const char* ndebug = "";
+  const char* debug_flags = "--debug --device-debug --source-in-ptx";
 #endif
 
   static char command_line[4096] = {};
   snprintf(command_line, sizeof(command_line),
     "%s \"%s\" --ptx --output-file \"%s\" -I\"%s\" -I\"%s\" --compiler-bindir \"%s\" -allow-unsupported-compiler %s",  //
-    ETX_CUDA_COMPILER, path_to_file, target_file, ETX_OPTIX_INCLUDES, ETX_INCLUDES, ETX_MSBUILD_PATH, ndebug);         //
+    ETX_CUDA_COMPILER, path_to_file, target_file, ETX_OPTIX_INCLUDES, ETX_INCLUDES, ETX_MSBUILD_PATH, debug_flags);    //
 
   static char command_line_info[4096] = {};
   int j = 0;

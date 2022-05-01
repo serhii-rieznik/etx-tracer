@@ -79,6 +79,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
   payload.ray.o = medium_sample.pos;
   payload.ray.d = w_o;
   payload.path_length += 1;
+  ETX_CHECK_FINITE(payload.ray.d);
 }
 
 ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
@@ -154,6 +155,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   payload.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, bsdf_sample.w_o);
   payload.path_length += 1;
 
+  ETX_CHECK_FINITE(payload.ray.d);
   return (payload.path_length < options.rr_start) || apply_rr(payload.eta, payload.smp.next(), payload.throughput);
 }
 
@@ -177,6 +179,8 @@ ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
 ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
   if (payload.path_length > options.max_depth)
     return false;
+
+  ETX_CHECK_FINITE(payload.ray.d);
 
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, payload.ray, intersection, payload.smp);

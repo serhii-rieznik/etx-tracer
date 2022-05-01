@@ -246,9 +246,9 @@ ETX_GPU_CODE auto reflectance(complex ext_ior, complex cos_theta_i, complex int_
   auto ni = ext_ior;
   auto nj = int_ior;
   auto rs = (ni * cos_theta_i - nj * cos_theta_j) / (ni * cos_theta_i + nj * cos_theta_j);
-  ETX_VALIDATE(rs);
+  ETX_CHECK_FINITE(rs);
   auto rp = (nj * cos_theta_i - ni * cos_theta_j) / (nj * cos_theta_i + ni * cos_theta_j);
-  ETX_VALIDATE(rp);
+  ETX_CHECK_FINITE(rp);
   return result{rs, rp};
 }
 
@@ -259,9 +259,9 @@ ETX_GPU_CODE auto transmittance(complex ext_ior, complex cos_theta_i, complex in
   auto ni = ext_ior;
   auto nj = int_ior;
   auto ts = (2.0f * ni * cos_theta_i) / (ni * cos_theta_i + nj * cos_theta_j);
-  ETX_VALIDATE(ts);
+  ETX_CHECK_FINITE(ts);
   auto tp = (2.0f * ni * cos_theta_i) / (ni * cos_theta_j + nj * cos_theta_i);
-  ETX_VALIDATE(tp);
+  ETX_CHECK_FINITE(tp);
   return result{ts, tp};
 }
 

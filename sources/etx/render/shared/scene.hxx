@@ -110,14 +110,21 @@ ETX_GPU_CODE bool apply_rr(float eta_scale, float rnd, SpectralResponse& through
 
 template <class RT>
 ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, const float3& p0, const float3& p1, uint32_t medium_index, const Scene& scene, const RT& rt) {
+  SpectralResponse result = {spect.wavelength, 1.0f};
+
   float3 w_o = p1 - p0;
-  float max_t = length(w_o);
+  ETX_CHECK_FINITE(w_o);
+
+  float max_t = dot(w_o, w_o);
+  if (max_t < kRayEpsilon) {
+    return result;
+  }
+
+  max_t = sqrtf(max_t);
   w_o /= max_t;
   max_t -= kRayEpsilon;
 
   float3 origin = p0;
-
-  SpectralResponse result = {spect.wavelength, 1.0f};
 
   for (;;) {
     Intersection intersection;

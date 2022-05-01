@@ -13,6 +13,7 @@ namespace etx {
 
 struct ETX_ALIGNED Raytracing {
   ETX_GPU_CODE bool trace(const Scene& scene, const Ray& ray, Intersection& i, Sampler& smp) const {
+    ETX_CHECK_FINITE(ray.d);
     uint64_t ptr = reinterpret_cast<uint64_t>(&i);
     uint32_t ptr_lo = static_cast<uint32_t>((ptr & 0x00000000ffffffff) >> 0llu);
     uint32_t ptr_hi = static_cast<uint32_t>((ptr & 0xffffffff00000000) >> 32llu);

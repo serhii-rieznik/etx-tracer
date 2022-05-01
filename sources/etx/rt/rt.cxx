@@ -146,7 +146,9 @@ struct RaytracingImpl {
       }
     }
     scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.images), 16llu);
-    // mediums
+    for (uint32_t i = 0; i < gpu.scene.mediums.count; ++i) {
+      scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.mediums[i].density), 16llu);
+    }
     scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.mediums), 16llu);
 
     scene_buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({scene_buffer_size, nullptr}));
@@ -186,7 +188,17 @@ struct RaytracingImpl {
       free(images_ptr);
     }
 
-    // upload_array_view_to_gpu(gpu.scene.mediums);
+    if (gpu.scene.mediums.count > 0) {
+      auto medium_ptr = reinterpret_cast<Medium*>(calloc(sizeof(Medium), gpu.scene.mediums.count));
+      for (uint32_t i = 0; (medium_ptr != nullptr) && (i < gpu.scene.mediums.count); ++i) {
+        auto medium = gpu.scene.mediums[i];
+        push_to_generic_buffer(scene_buffer, medium.density, copy_offset);
+        medium_ptr[i] = medium;
+      }
+      gpu.scene.mediums = make_array_view<Medium>(medium_ptr, gpu.scene.mediums.count);
+      upload_array_view_to_gpu(gpu.scene.mediums);
+      free(medium_ptr);
+    }
 
     GPUAccelerationStructure::Descriptor desc = {};
     desc.vertex_buffer = vertex_buffer;
@@ -249,6 +261,7 @@ const Scene& Raytracing::gpu_scene() const {
 
 bool Raytracing::trace(const Ray& r, Intersection& result_intersection, Sampler& smp) const {
   ETX_ASSERT(_private != nullptr);
+  ETX_CHECK_FINITE(r.d);
 
   bool intersection_found = false;
   float2 barycentric = {};

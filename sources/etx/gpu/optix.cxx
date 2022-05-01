@@ -14,9 +14,6 @@
 
 #include <atomic>
 
-#define ETX_CUDA_CALL_FAILED(F) ((F) != cudaSuccess)
-#define ETX_OPTIX_CALL_FAILED(F) ((F) != OPTIX_SUCCESS)
-
 namespace etx {
 
 struct GPUBufferOptixImpl;
@@ -57,7 +54,6 @@ struct GPUOptixImplData {
   ~GPUOptixImplData() {
     cleanup_optix();
     cleanup_cuda();
-
     accelearaion_structure_pool.cleanup();
     pipeline_pool.cleanup();
     buffer_pool.cleanup();
@@ -65,21 +61,21 @@ struct GPUOptixImplData {
 
   bool init_cuda() {
     int device_count = 0;
-    if ETX_CUDA_CALL_FAILED (cudaGetDeviceCount(&device_count))
+    if (cuda_call_failed(cudaGetDeviceCount(&device_count)))
       return false;
 
     if (device_count == 0)
       return false;
 
     int device_id = 0;
-    if ETX_CUDA_CALL_FAILED (cudaSetDevice(device_id))
+    if (cuda_call_failed(cudaSetDevice(device_id)))
       return false;
 
-    if ETX_CUDA_CALL_FAILED (cudaStreamCreate(&main_stream))
+    if (cuda_call_failed(cudaStreamCreate(&main_stream)))
       return false;
 
     cudaDeviceProp device_props = {};
-    if ETX_CUDA_CALL_FAILED (cudaGetDeviceProperties(&device_props, device_id))
+    if (cuda_call_failed(cudaGetDeviceProperties(&device_props, device_id)))
       return false;
 
     if (cuCtxGetCurrent(&cuda_context) != CUDA_SUCCESS)
@@ -100,13 +96,13 @@ struct GPUOptixImplData {
       log::info("OptiX: [%s] %s", tag, message);
     };
 
-    if ETX_OPTIX_CALL_FAILED (optixInitWithHandle(&optix_handle))
+    if (optix_call_failed(optixInitWithHandle(&optix_handle)))
       return false;
 
-    if ETX_OPTIX_CALL_FAILED (optixDeviceContextCreate(cuda_context, &options, &optix))
+    if (optix_call_failed(optixDeviceContextCreate(cuda_context, &options, &optix)))
       return false;
 
-    if ETX_OPTIX_CALL_FAILED (optixDeviceContextSetLogCallback(optix, options.logCallbackFunction, nullptr, 4))
+    if (optix_call_failed(optixDeviceContextSetLogCallback(optix, options.logCallbackFunction, nullptr, 4)))
       return false;
 
     return true;
@@ -115,6 +111,31 @@ struct GPUOptixImplData {
   void cleanup_optix() {
     optixDeviceContextDestroy(optix);
     optixUninitWithHandle(optix_handle);
+  }
+
+  void report_error() {
+    cudaStreamDestroy(main_stream);
+    main_stream = {};
+  }
+
+  bool invalid_state() const {
+    return main_stream == nullptr;
+  }
+
+  bool cuda_call_failed(cudaError result) {
+    if (result == cudaError::cudaSuccess)
+      return false;
+
+    report_error();
+    return true;
+  }
+
+  bool optix_call_failed(OptixResult result) {
+    if (result == OptixResult::OPTIX_SUCCESS)
+      return false;
+
+    report_error();
+    return true;
   }
 
   device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size);
@@ -135,26 +156,26 @@ struct GPUOptixImplData {
 struct GPUBufferOptixImpl {
   GPUBufferOptixImpl() = default;
 
-  GPUBufferOptixImpl(const GPUBuffer::Descriptor& desc) {
+  GPUBufferOptixImpl(GPUOptixImplData* device, const GPUBuffer::Descriptor& desc) {
     capacity = align_up(desc.size, 16u);
 
-    if ETX_CUDA_CALL_FAILED (cudaMalloc(&device_ptr, capacity)) {
+    if (device->cuda_call_failed(cudaMalloc(&device_ptr, capacity))) {
       log::error("Failed to create CUDA buffer with size: %llu", capacity);
       return;
     }
 
     if (desc.data != nullptr) {
-      if ETX_CUDA_CALL_FAILED (cudaMemcpy(device_ptr, desc.data, desc.size, cudaMemcpyKind::cudaMemcpyHostToDevice))
+      if (device->cuda_call_failed(cudaMemcpy(device_ptr, desc.data, desc.size, cudaMemcpyKind::cudaMemcpyHostToDevice)))
         log::error("Failed to copy content to CUDA buffer %p from %p with size %llu", device_ptr, desc.data, desc.size);
     }
   }
 
   ~GPUBufferOptixImpl() {
-    release();
+    ETX_ASSERT(device_ptr == nullptr);
   }
 
-  void release() {
-    if ETX_CUDA_CALL_FAILED (cudaFree(device_ptr)) {
+  void release(GPUOptixImplData* device) {
+    if (device->cuda_call_failed(cudaFree(device_ptr))) {
       log::error("Failed to free CUDA buffer: %p", device_ptr);
     }
     device_ptr = nullptr;
@@ -178,15 +199,27 @@ struct GPUPipelineOptixImpl {
   }
 
   ~GPUPipelineOptixImpl() {
-    destroy_module();
+    ETX_ASSERT(optix_module == nullptr);
+    ETX_ASSERT(pipeline == nullptr);
   }
 
   bool create_module(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
+    if (device->invalid_state())
+      return false;
+
+#if (ETX_DEBUG)
     OptixModuleCompileOptions module_options = {
       .maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT,
-      .optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT,
-      .debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_DEFAULT,
+      .optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0,
+      .debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL,
     };
+#else
+    OptixModuleCompileOptions module_options = {
+      .maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT,
+      .optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3,
+      .debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE,
+    };
+#endif
     pipeline_options = {
       .traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY,
       .numPayloadValues = static_cast<int>(desc.payload_count & 0x000000ff),
@@ -197,13 +230,13 @@ struct GPUPipelineOptixImpl {
 
     char compile_log[4096] = {};
     size_t compile_log_size = sizeof(compile_log);
-    if ETX_OPTIX_CALL_FAILED (optixModuleCreateFromPTX(device->optix, &module_options, &pipeline_options,  //
-                                reinterpret_cast<const char*>(desc.data), desc.data_size, compile_log, &compile_log_size, &optix_module)) {
+    if (device->optix_call_failed(optixModuleCreateFromPTX(device->optix, &module_options, &pipeline_options,  //
+          reinterpret_cast<const char*>(desc.data), desc.data_size, compile_log, &compile_log_size, &optix_module))) {
       log::error("optixModuleCreateFromPTX failed");
       if (compile_log_size > 1) {
         log::error(compile_log);
       }
-      destroy_module();
+      release(device);
       return false;
     }
 
@@ -218,12 +251,12 @@ struct GPUPipelineOptixImpl {
       program_desc.raygen.module = optix_module;
       program_desc.raygen.entryFunctionName = desc.raygen;
       OptixProgramGroupOptions program_options = {};
-      if ETX_OPTIX_CALL_FAILED (optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &raygen)) {
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &raygen))) {
         log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
           log::error(compile_log);
         }
-        destroy_module();
+        release(device);
         return false;
       }
 
@@ -251,12 +284,12 @@ struct GPUPipelineOptixImpl {
         }
         OptixProgramGroupOptions program_options = {};
 
-        if ETX_OPTIX_CALL_FAILED (optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.hit)) {
+        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.hit))) {
           log::error("optixProgramGroupCreate failed");
           if (compile_log_size > 1) {
             log::error(compile_log);
           }
-          destroy_module();
+          release(device);
           return false;
         }
 
@@ -271,12 +304,12 @@ struct GPUPipelineOptixImpl {
         program_desc.miss.module = optix_module;
         program_desc.miss.entryFunctionName = entry.miss;
         OptixProgramGroupOptions program_options = {};
-        if ETX_OPTIX_CALL_FAILED (optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.miss)) {
+        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.miss))) {
           log::error("optixProgramGroupCreate failed");
           if (compile_log_size > 1) {
             log::error(compile_log);
           }
-          destroy_module();
+          release(device);
           return false;
         }
 
@@ -291,12 +324,12 @@ struct GPUPipelineOptixImpl {
         program_desc.miss.module = optix_module;
         program_desc.miss.entryFunctionName = entry.exception;
         OptixProgramGroupOptions program_options = {};
-        if ETX_OPTIX_CALL_FAILED (optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.exception)) {
+        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.exception))) {
           log::error("optixProgramGroupCreate failed");
           if (compile_log_size > 1) {
             log::error(compile_log);
           }
-          destroy_module();
+          release(device);
           return false;
         }
 
@@ -309,38 +342,47 @@ struct GPUPipelineOptixImpl {
     return true;
   }
 
-  void destroy_module() {
+  void release(GPUOptixImplData* device) {
     if (raygen != nullptr) {
-      if ETX_OPTIX_CALL_FAILED (optixProgramGroupDestroy(raygen))
+      if (device->optix_call_failed(optixProgramGroupDestroy(raygen)))
         log::error("optixProgramGroupDestroy failed");
       raygen = {};
     }
 
     for (uint32_t i = 0; i < group_count; ++i) {
       if (groups[i].hit != nullptr) {
-        if ETX_OPTIX_CALL_FAILED (optixProgramGroupDestroy(groups[i].hit))
+        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].hit)))
           log::error("optixProgramGroupDestroy failed");
       }
       if (groups[i].miss != nullptr) {
-        if ETX_OPTIX_CALL_FAILED (optixProgramGroupDestroy(groups[i].miss))
+        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].miss)))
           log::error("optixProgramGroupDestroy failed");
       }
       if (groups[i].exception != nullptr) {
-        if ETX_OPTIX_CALL_FAILED (optixProgramGroupDestroy(groups[i].exception))
+        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].exception)))
           log::error("optixProgramGroupDestroy failed");
       }
       groups[i] = {};
     }
     group_count = 0;
 
+    if (pipeline != nullptr) {
+      if (device->optix_call_failed(optixPipelineDestroy(pipeline)))
+        log::error("Failed to destroy OptiX pipeline");
+      pipeline = {};
+    }
+
     if (optix_module != nullptr) {
-      if ETX_OPTIX_CALL_FAILED (optixModuleDestroy(optix_module))
+      if (device->optix_call_failed(optixModuleDestroy(optix_module)))
         log::error("Failed to destroy OptiX module");
       optix_module = {};
     }
   }
 
   bool create_pipeline(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
+    if (device->invalid_state())
+      return false;
+
     OptixPipelineLinkOptions link_options = {
       .maxTraceDepth = desc.max_trace_depth,
     };
@@ -351,7 +393,7 @@ struct GPUPipelineOptixImpl {
 
     ProgramGroupRecord raygen_record = {};
     program_groups[0] = raygen;
-    if ETX_OPTIX_CALL_FAILED (optixSbtRecordPackHeader(raygen, &raygen_record))
+    if (device->optix_call_failed(optixSbtRecordPackHeader(raygen, &raygen_record)))
       return false;
 
     uint32_t program_group_count = 1;
@@ -361,14 +403,14 @@ struct GPUPipelineOptixImpl {
     for (uint32_t i = 0; i < group_count; ++i) {
       if (groups[i].hit != nullptr) {
         program_groups[program_group_count] = groups[i].hit;
-        if ETX_OPTIX_CALL_FAILED (optixSbtRecordPackHeader(program_groups[program_group_count], hit_records + hit_record_count))
+        if (device->optix_call_failed(optixSbtRecordPackHeader(program_groups[program_group_count], hit_records + hit_record_count)))
           return false;
         ++program_group_count;
         ++hit_record_count;
       }
       if (groups[i].miss != nullptr) {
         program_groups[program_group_count] = groups[i].miss;
-        if ETX_OPTIX_CALL_FAILED (optixSbtRecordPackHeader(program_groups[program_group_count], miss_records + miss_record_count))
+        if (device->optix_call_failed(optixSbtRecordPackHeader(program_groups[program_group_count], miss_records + miss_record_count)))
           return false;
         ++program_group_count;
         ++miss_record_count;
@@ -377,11 +419,12 @@ struct GPUPipelineOptixImpl {
 
     char compile_log[2048] = {};
     size_t compile_log_size = 0;
-    if ETX_OPTIX_CALL_FAILED (optixPipelineCreate(device->optix, &pipeline_options, &link_options, program_groups, program_group_count, compile_log, &compile_log_size, &pipeline))
+    if (device->optix_call_failed(optixPipelineCreate(device->optix, &pipeline_options, &link_options, program_groups, program_group_count,  //
+          compile_log, &compile_log_size, &pipeline)))
       return false;
 
     if (pipeline != nullptr) {
-      if ETX_OPTIX_CALL_FAILED (optixPipelineSetStackSize(pipeline, 0u, 0u, 1u << 14u, link_options.maxTraceDepth))
+      if (device->optix_call_failed(optixPipelineSetStackSize(pipeline, 0u, 0u, 1u << 14u, link_options.maxTraceDepth)))
         return false;
     }
 
@@ -430,17 +473,17 @@ struct GPUPipelineOptixImpl {
  */
 
 struct GPUAccelerationStructureImpl {
-  GPUAccelerationStructureImpl(GPUOptixImplData* gpu, const GPUAccelerationStructure::Descriptor& desc) {
+  GPUAccelerationStructureImpl(GPUOptixImplData* device, const GPUAccelerationStructure::Descriptor& desc) {
     if ((desc.vertex_count == 0) || (desc.triangle_count == 0)) {
       return;
     }
 
-    CUdeviceptr vertex_buffer = gpu->buffer_pool.get(desc.vertex_buffer.handle).device_pointer();
+    CUdeviceptr vertex_buffer = device->buffer_pool.get(desc.vertex_buffer.handle).device_pointer();
     uint32_t triangle_array_flags = 0;
 
     OptixBuildInput build_input = {};
     build_input.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
-    build_input.triangleArray.indexBuffer = gpu->buffer_pool.get(desc.index_buffer.handle).device_pointer();
+    build_input.triangleArray.indexBuffer = device->buffer_pool.get(desc.index_buffer.handle).device_pointer();
     build_input.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
     build_input.triangleArray.indexStrideInBytes = desc.index_buffer_stride;
     build_input.triangleArray.numIndexTriplets = desc.triangle_count;
@@ -457,7 +500,7 @@ struct GPUAccelerationStructureImpl {
     build_options.operation = OPTIX_BUILD_OPERATION_BUILD;
 
     OptixAccelBufferSizes memory_usage = {};
-    if ETX_OPTIX_CALL_FAILED (optixAccelComputeMemoryUsage(gpu->optix, &build_options, &build_input, 1, &memory_usage)) {
+    if (device->optix_call_failed(optixAccelComputeMemoryUsage(device->optix, &build_options, &build_input, 1, &memory_usage))) {
       log::error("optixAccelComputeMemoryUsage failed");
       return;
     }
@@ -472,13 +515,13 @@ struct GPUAccelerationStructureImpl {
     emit_desc.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
     cudaMalloc(&reinterpret_cast<void*&>(emit_desc.result), sizeof(uint64_t));
 
-    if ETX_OPTIX_CALL_FAILED (optixAccelBuild(gpu->optix, gpu->main_stream, &build_options, &build_input, 1, reinterpret_cast<CUdeviceptr>(temp_buffer),
-                                memory_usage.tempSizeInBytes, reinterpret_cast<CUdeviceptr>(output_buffer), memory_usage.outputSizeInBytes, &traversable, &emit_desc, 1)) {
+    if (device->optix_call_failed(optixAccelBuild(device->optix, device->main_stream, &build_options, &build_input, 1, reinterpret_cast<CUdeviceptr>(temp_buffer),
+          memory_usage.tempSizeInBytes, reinterpret_cast<CUdeviceptr>(output_buffer), memory_usage.outputSizeInBytes, &traversable, &emit_desc, 1))) {
       log::error("optixAccelBuild failed");
       return;
     }
 
-    if ETX_CUDA_CALL_FAILED (cudaDeviceSynchronize()) {
+    if (device->cuda_call_failed(cudaDeviceSynchronize())) {
       log::error("cudaDeviceSynchronize failed");
       return;
     }
@@ -488,7 +531,7 @@ struct GPUAccelerationStructureImpl {
     cudaFree(reinterpret_cast<void*>(emit_desc.result));
 
     cudaMalloc(&final_buffer, compact_size);
-    if ETX_OPTIX_CALL_FAILED (optixAccelCompact(gpu->optix, gpu->main_stream, traversable, reinterpret_cast<CUdeviceptr>(final_buffer), compact_size, &traversable)) {
+    if (device->optix_call_failed(optixAccelCompact(device->optix, device->main_stream, traversable, reinterpret_cast<CUdeviceptr>(final_buffer), compact_size, &traversable))) {
       log::error("optixAccelCompact failed");
       return;
     }
@@ -508,6 +551,9 @@ struct GPUAccelerationStructureImpl {
 #undef ETX_OPTIX_INCLUDES
 
 device_pointer_t GPUOptixImplData::upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) {
+  if (invalid_state())
+    return 0;
+
   auto& object = buffer_pool.get(shared_buffer.handle);
 
   if (ptr == 0) {
@@ -522,7 +568,7 @@ device_pointer_t GPUOptixImplData::upload_to_shared_buffer(device_pointer_t ptr,
 
 GPUOptixImpl::GPUOptixImpl() {
   ETX_PIMPL_CREATE(GPUOptixImpl, Data);
-  _private->shared_buffer = {_private->buffer_pool.alloc(GPUBuffer::Descriptor{GPUOptixImplData::kSharedBufferSize, nullptr})};
+  _private->shared_buffer = {_private->buffer_pool.alloc(_private, GPUBuffer::Descriptor{GPUOptixImplData::kSharedBufferSize, nullptr})};
 }
 
 GPUOptixImpl::~GPUOptixImpl() {
@@ -531,17 +577,19 @@ GPUOptixImpl::~GPUOptixImpl() {
 }
 
 GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
-  return {_private->buffer_pool.alloc(desc)};
+  return {_private->buffer_pool.alloc(_private, desc)};
 }
 
 void GPUOptixImpl::destroy_buffer(GPUBuffer buffer) {
   if (buffer.handle == kInvalidHandle)
     return;
 
-  if ETX_CUDA_CALL_FAILED (cudaDeviceSynchronize()) {
+  if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
     log::error("Failed to synchronize device before the deletion of a buffer.");
   }
 
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  object.release(_private);
   _private->buffer_pool.free(buffer.handle);
 }
 
@@ -558,17 +606,23 @@ device_pointer_t GPUOptixImpl::upload_to_shared_buffer(device_pointer_t ptr, voi
 }
 
 device_pointer_t GPUOptixImpl::copy_to_buffer(GPUBuffer buffer, const void* src, uint64_t offset, uint64_t size) {
+  if (_private->invalid_state())
+    return 0;
+
   auto& object = _private->buffer_pool.get(buffer.handle);
   ETX_ASSERT(offset + size <= object.capacity);
   auto ptr = reinterpret_cast<uint8_t*>(object.device_ptr) + offset;
-  if ETX_CUDA_CALL_FAILED (cudaMemcpy(ptr, src, size, cudaMemcpyHostToDevice))
+  if (_private->cuda_call_failed(cudaMemcpy(ptr, src, size, cudaMemcpyHostToDevice)))
     log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
   return reinterpret_cast<device_pointer_t>(ptr);
 }
 
 void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset, uint64_t size) {
+  if (_private->invalid_state())
+    return;
+
   auto& object = _private->buffer_pool.get(buffer.handle);
-  if ETX_CUDA_CALL_FAILED (cudaMemcpy(dst, reinterpret_cast<const uint8_t*>(object.device_ptr) + offset, size, cudaMemcpyDeviceToHost))
+  if (_private->cuda_call_failed(cudaMemcpy(dst, reinterpret_cast<const uint8_t*>(object.device_ptr) + offset, size, cudaMemcpyDeviceToHost)))
     log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
 }
 
@@ -580,9 +634,11 @@ void GPUOptixImpl::destroy_pipeline(GPUPipeline pipeline) {
   if (pipeline.handle == kInvalidHandle)
     return;
 
-  if ETX_CUDA_CALL_FAILED (cudaDeviceSynchronize()) {
+  if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
     log::error("Failed to synchronize device before the deletion of a pipeline.");
   }
+  auto& object = _private->pipeline_pool.get(pipeline.handle);
+  object.release(_private);
   _private->pipeline_pool.free(pipeline.handle);
 }
 
@@ -741,7 +797,7 @@ GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, b
 }
 
 bool GPUOptixImpl::launch(GPUPipeline pipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
-  if ((pipeline.handle == kInvalidHandle) || (dim_x * dim_y == 0)) {
+  if (_private->invalid_state() || (pipeline.handle == kInvalidHandle) || (dim_x * dim_y == 0)) {
     return false;
   }
 
@@ -766,7 +822,7 @@ void GPUOptixImpl::destroy_acceleration_structure(GPUAccelerationStructure acc) 
   if (acc.handle == kInvalidHandle)
     return;
 
-  if ETX_CUDA_CALL_FAILED (cudaDeviceSynchronize()) {
+  if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
     log::error("Failed to synchronize device before the deletion of an acceleration structure.");
   }
   _private->accelearaion_structure_pool.free(acc.handle);
