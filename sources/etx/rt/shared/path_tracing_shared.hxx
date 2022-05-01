@@ -8,7 +8,7 @@ namespace etx {
 struct ETX_ALIGNED PTOptions {
   uint32_t iterations ETX_INIT_WITH(65536u);
   uint32_t max_depth ETX_INIT_WITH(65536u);
-  uint32_t rr_start ETX_INIT_WITH(65536u);
+  uint32_t rr_start ETX_INIT_WITH(6u);
   uint32_t path_per_iteration ETX_INIT_WITH(1u);
 };
 
