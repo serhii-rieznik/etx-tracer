@@ -290,16 +290,16 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
   auto beta_p = t01.tp * t12.tp;
 
   auto tp = (beta_p * beta_p) / ((alpha_p * alpha_p) - 2.0f * alpha_p * complex_cos(phi) + 1.0f);
-  ETX_VALIDATE(tp);
+  ETX_CHECK_FINITE(tp);
 
   auto alpha_s = r10.rs * r12.rs;
   auto beta_s = t01.ts * t12.ts;
 
   auto ts = (beta_s * beta_s) / ((alpha_s * alpha_s) - 2.0f * alpha_s * complex_cos(phi) + 1.0f);
-  ETX_VALIDATE(ts);
+  ETX_CHECK_FINITE(ts);
 
   auto ratio = (int_ior * cos_theta_2) / (ext_ior * cos_theta_0);
-  ETX_VALIDATE(ratio);
+  ETX_CHECK_FINITE(ratio);
 
   return complex_abs(1.0f - ratio * 0.5f * (tp + ts));
 }

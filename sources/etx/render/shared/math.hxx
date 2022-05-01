@@ -417,7 +417,7 @@ ETX_GPU_CODE bool isfinite(const float4& v) {
 }
 
 ETX_GPU_CODE bool valid_value(complex t) {
-  return valid_value(t.real()) && isfinite(t.imag());
+  return isfinite(t.real()) && isfinite(t.imag());
 }
 
 ETX_GPU_CODE bool isfinite(complex t) {
