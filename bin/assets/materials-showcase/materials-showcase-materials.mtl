@@ -25,7 +25,7 @@ Kd 0.1 0.8 0.1
 
 newmtl bubble
 material class thinfilm
-thinfilm image ../textures/clouds.png range 180.0 840.0
+thinfilm image ../textures/clouds.png range 100.0 1000.0 ior 1.76
 
 newmtl curtain
 material class translucent
@@ -37,11 +37,11 @@ int_ior osmium
 Pr 0.3
 
 newmtl emitter-left
-emitter blackbody 12000.0 scale 0.00025 collimated 65536.0
+emitter nblackbody 12000.0 scale 128.0 collimated 1024.0
 Ke 1 1 1
 
 newmtl emitter-right
-emitter blackbody 2700.0 scale 0.25 collimated 65536.0
+emitter nblackbody 2700.0 scale 128.0 collimated 1024.0
 Ke 1 1 1
 
 newmtl projector-box
