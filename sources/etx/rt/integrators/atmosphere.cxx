@@ -205,9 +205,9 @@ struct CPUAtmosphereImpl : public Task {
     auto& scene = rt.scene();
 
     auto ray = generate_ray(smp, scene, uv);
-    float to_space = distance_to_sphere(ray.o, ray.d, kSphereSize);
+    float to_space = distance_to_sphere(ray.o, ray.d, {}, kSphereSize);
 
-    float to_planet = distance_to_sphere(ray.o, ray.d, kPlanetRadius);
+    float to_planet = distance_to_sphere(ray.o, ray.d, {}, kPlanetRadius);
     if (to_planet > 0.0f) {
       to_space = to_planet;
     }
@@ -243,7 +243,7 @@ struct CPUAtmosphereImpl : public Task {
         auto cos_t = dot(local_em.direction, ray.d);
         auto phase_r = phase_rayleigh(cos_t);
         auto phase_m = phase_mie(cos_t, opt_phase_function_g);
-        auto distance_to_space = distance_to_sphere(position, local_em.direction, kSphereSize);
+        auto distance_to_space = distance_to_sphere(position, local_em.direction, {}, kSphereSize);
         auto optical_path = optical_length(position, position + distance_to_space * local_em.direction, smp, opt_step_scale);
         const auto& em = scene.emitters[local_em.emitter_index];
         float3 current_optical_path = total_optical_path + optical_path;
