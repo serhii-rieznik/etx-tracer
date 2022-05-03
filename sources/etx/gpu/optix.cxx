@@ -572,6 +572,8 @@ GPUOptixImpl::GPUOptixImpl() {
 }
 
 GPUOptixImpl::~GPUOptixImpl() {
+  auto& buffer = _private->buffer_pool.get(_private->shared_buffer.handle);
+  buffer.release(_private);
   _private->buffer_pool.free(_private->shared_buffer.handle);
   ETX_PIMPL_DESTROY(GPUOptixImpl, Data);
 }
