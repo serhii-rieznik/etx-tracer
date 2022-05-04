@@ -682,6 +682,35 @@ inline std::vector<const char*> split_params(char* data) {
   return params;
 }
 
+inline SpectralDistribution load_spectrum(char* data_buffer) {
+  SpectralDistribution emitter_spectrum = SpectralDistribution::from_constant(0.0f);
+  float value[3] = {};
+  if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
+    emitter_spectrum = rgb::make_illuminant_spd({value[0], value[1], value[2]}, spectrums());
+  } else {
+    float scale = 1.0f;
+    auto params = split_params(data_buffer);
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < e)) {
+        float t = static_cast<float>(atof(params[i + 1]));
+        emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums());
+        i += 1;
+      } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < e)) {
+        float t = static_cast<float>(atof(params[i + 1]));
+        float w = spectrum::black_body_radiation_maximum_wavelength(t);
+        float r = spectrum::black_body_radiation(w, t);
+        emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums()) / r;
+        i += 1;
+      } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+        scale = static_cast<float>(atof(params[i + 1]));
+        i += 1;
+      }
+    }
+    emitter_spectrum *= scale;
+  }
+  return emitter_spectrum;
+};
+
 inline auto get_param(const tinyobj::material_t& m, const char* param, char buffer[]) -> bool {
   for (const auto& p : m.unknown_parameter) {
     if (_stricmp(p.first.c_str(), param) == 0) {
@@ -962,46 +991,22 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
     } else if (material.name == "et::dir") {
-      SpectralDistribution emitter_spectrum = SpectralDistribution::from_constant(1.0f);
-      auto dir = float3{1.0f, 1.0f, 1.0f};
+      auto& e = emitters.emplace_back(Emitter::Class::Directional);
 
       if (get_param(material, "color", data_buffer)) {
-        float value[3] = {};
-        if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-          emitter_spectrum = rgb::make_illuminant_spd({value[0], value[1], value[2]}, spectrums());
-        } else {
-          float scale = 1.0f;
-          auto params = split_params(data_buffer);
-          for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-            if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < e)) {
-              float t = static_cast<float>(atof(params[i + 1]));
-              emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums());
-              i += 1;
-            } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < e)) {
-              float t = static_cast<float>(atof(params[i + 1]));
-              float w = spectrum::black_body_radiation_maximum_wavelength(t);
-              float r = spectrum::black_body_radiation(w, t);
-              emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums()) / r;
-              i += 1;
-            } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
-              scale = static_cast<float>(atof(params[i + 1]));
-              i += 1;
-            }
-          }
-          emitter_spectrum *= scale;
-        }
+        e.emission.spectrum = load_spectrum(data_buffer);
+      } else {
+        e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
       }
 
+      e.direction = float3{1.0f, 1.0f, 1.0f};
       if (get_param(material, "direction", data_buffer)) {
         float value[3] = {};
         if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-          dir = {value[0], value[1], value[2]};
+          e.direction = {value[0], value[1], value[2]};
         }
       }
-
-      auto& e = emitters.emplace_back(Emitter::Class::Directional);
-      e.emission.spectrum = emitter_spectrum;  // rgb::make_illuminant_spd(color, spectrums());
-      e.direction = normalize(dir);
+      e.direction = normalize(e.direction);
 
       if (get_param(material, "image", data_buffer)) {
         snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
@@ -1021,15 +1026,15 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
       }
 
-      e.emission.spectrum = rgb::make_illuminant_spd({1.0f, 1.0f, 1.0f}, spectrums());
       e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU);
 
       if (get_param(material, "color", data_buffer)) {
-        float color[3] = {};
-        if (sscanf(data_buffer, "%f %f %f", color + 0, color + 1, color + 2) == 3) {
-          e.emission.spectrum = rgb::make_illuminant_spd({color[0], color[1], color[2]}, spectrums());
-        }
+        e.emission.spectrum = load_spectrum(data_buffer);
+      } else {
+        e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
       }
+
+
     } else {
       if (material_mapping.count(material.name) == 0) {
         add_material(material.name.c_str());
