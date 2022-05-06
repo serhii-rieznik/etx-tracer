@@ -78,6 +78,10 @@ GPUPathTracing::~GPUPathTracing() {
   ETX_PIMPL_CLEANUP(GPUPathTracing);
 }
 
+bool GPUPathTracing::enabled() const {
+  return rt.gpu()->rendering_enabled();
+}
+
 Options GPUPathTracing::options() const {
   Options result = {};
   result.add(1u, _private->gpu_data.options.iterations, 0xffffu, "spp", "Samples per Pixel");

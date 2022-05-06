@@ -8,6 +8,8 @@ struct GPUOptixImpl : public GPUDevice {
   GPUOptixImpl();
   ~GPUOptixImpl() override;
 
+  bool rendering_enabled() override;
+
   GPUBuffer create_buffer(const GPUBuffer::Descriptor& desc) override;
   device_pointer_t get_buffer_device_pointer(GPUBuffer) const override;
   device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) override;

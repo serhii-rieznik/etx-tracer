@@ -18,6 +18,7 @@ struct GPUPathTracing : public Integrator {
   ~GPUPathTracing() override;
 
   Options options() const override;
+  bool enabled() const override;
   void set_output_size(const uint2&) override;
   void preview(const Options&) override;
   void run(const Options&) override;

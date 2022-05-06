@@ -46,9 +46,9 @@ void RTApplication::init() {
 
   auto integrator = _options.get("integrator", std::string{}).name;
   for (uint64_t i = 0; (integrator.empty() == false) && (i < std::size(_integrator_array)); ++i) {
+    ETX_ASSERT(_integrator_array[i] != nullptr);
     if (integrator == _integrator_array[i]->name()) {
       _current_integrator = _integrator_array[i];
-      break;
     }
   }
 

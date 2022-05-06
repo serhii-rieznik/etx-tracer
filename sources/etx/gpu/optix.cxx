@@ -578,6 +578,10 @@ GPUOptixImpl::~GPUOptixImpl() {
   ETX_PIMPL_DESTROY(GPUOptixImpl, Data);
 }
 
+bool GPUOptixImpl::rendering_enabled() {
+  return (_private->main_stream != nullptr) && (_private->optix != nullptr);
+}
+
 GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
   return {_private->buffer_pool.alloc(_private, desc)};
 }

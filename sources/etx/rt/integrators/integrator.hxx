@@ -31,6 +31,10 @@ struct Integrator {
     return "Basic Integrator";
   }
 
+  virtual bool enabled() const {
+    return true;
+  }
+
   virtual const char* status() const {
     return "Basic Integrator (not able to render anything)";
   }

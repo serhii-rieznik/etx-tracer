@@ -1034,7 +1034,6 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
       }
 
-
     } else {
       if (material_mapping.count(material.name) == 0) {
         add_material(material.name.c_str());

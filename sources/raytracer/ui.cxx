@@ -105,7 +105,7 @@ void UI::build(double dt, const char* status) {
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("Integrator", true)) {
       for (uint64_t i = 0; i < _integrators.count; ++i) {
-        if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, true)) {
+        if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, _integrators[i]->enabled())) {
           if (callbacks.integrator_selected) {
             callbacks.integrator_selected(_integrators[i]);
           }

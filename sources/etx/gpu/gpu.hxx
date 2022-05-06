@@ -58,6 +58,7 @@ struct GPUDevice {
   GPUDevice() = default;
   virtual ~GPUDevice() = default;
 
+  virtual bool rendering_enabled() = 0;
   virtual GPUBuffer create_buffer(const GPUBuffer::Descriptor&) = 0;
   virtual device_pointer_t get_buffer_device_pointer(GPUBuffer) const = 0;
   virtual device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) = 0;
