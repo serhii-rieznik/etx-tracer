@@ -232,6 +232,11 @@ struct ObjectIndexPool {
     return result;
   }
 
+  bool alive(uint32_t index) const {
+    ETX_ASSERT(index < _capacity);
+    return _info[index].alive;
+  }
+
  private:
   struct TData {
     uint32_t alive = 0;

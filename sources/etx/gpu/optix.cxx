@@ -114,6 +114,9 @@ struct GPUOptixImplData {
   }
 
   void report_error() {
+#if (ETX_DEBUG)
+    ETX_DEBUG_BREAK();
+#endif
     cudaStreamDestroy(main_stream);
     main_stream = {};
   }

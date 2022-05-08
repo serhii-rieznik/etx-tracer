@@ -89,7 +89,7 @@ struct SceneRepresentationImpl {
 
   uint32_t add_image(const char* path, uint32_t options) {
     std::string id = path ? path : ("image-" + std::to_string(images.array_size()));
-    return images.add_from_file(path, options);
+    return images.add_from_file(path, options | Image::DelayLoad);
   }
 
   uint32_t add_material(const char* name) {
@@ -1216,6 +1216,8 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
     }
   }
+
+  images.load_images();
 }
 
 }  // namespace etx

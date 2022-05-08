@@ -20,6 +20,8 @@ struct ImagePool {
   void remove(uint32_t handle);
   void remove_all();
 
+  void load_images();
+
   const Image& get(uint32_t);
 
   Image* as_array();

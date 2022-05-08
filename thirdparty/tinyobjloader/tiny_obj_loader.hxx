@@ -727,6 +727,7 @@ struct face_t {
   face_t()
     : smoothing_group_id(0)
     , pad_(0) {
+    vertex_indices.reserve(4);
   }
 };
 
@@ -2410,6 +2411,12 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   std::vector<tag_t> tags;
   PrimGroup prim_group;
   std::string name;
+
+  v.reserve(65536);
+  vn.reserve(65536);
+  vt.reserve(65536);
+  vc.reserve(65536);
+  vw.reserve(65536);
 
   // material
   std::map<std::string, int> material_map;

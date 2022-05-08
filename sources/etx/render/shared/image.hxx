@@ -20,6 +20,7 @@ struct Image {
     Linear = 1u << 3u,
     HasAlphaChannel = 1u << 4u,
     UniformSamplingTable = 1u << 5u,
+    DelayLoad = 1u << 6u,
   };
 
   struct Gather {
