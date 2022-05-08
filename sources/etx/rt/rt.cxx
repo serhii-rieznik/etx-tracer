@@ -138,7 +138,11 @@ struct RaytracingImpl {
     // images
     for (uint32_t i = 0; i < gpu.scene.images.count; ++i) {
       auto& image = gpu.scene.images[i];
-      scene_buffer_size = align_up(scene_buffer_size + array_size(image.pixels), 16llu);
+      if (image.format == Image::Format::RGBA32F) {
+        scene_buffer_size = align_up(scene_buffer_size + array_size(image.pixels.f32), 16llu);
+      } else {
+        scene_buffer_size = align_up(scene_buffer_size + array_size(image.pixels.u8), 16llu);
+      }
       scene_buffer_size = align_up(scene_buffer_size + array_size(image.y_distribution.values), 16llu);
       scene_buffer_size = align_up(scene_buffer_size + array_size(image.x_distributions), 16llu);
       for (uint32_t y = 0; y < image.y_distribution.values.count; ++y) {
@@ -162,7 +166,11 @@ struct RaytracingImpl {
 
       for (uint32_t i = 0; (images_ptr != nullptr) && (i < gpu.scene.images.count); ++i) {
         Image image = gpu.scene.images[i];
-        push_to_generic_buffer(scene_buffer, image.pixels, copy_offset);
+        if (image.format == Image::Format::RGBA32F) {
+          push_to_generic_buffer(scene_buffer, image.pixels.f32, copy_offset);
+        } else {
+          push_to_generic_buffer(scene_buffer, image.pixels.u8, copy_offset);
+        }
         push_to_generic_buffer(scene_buffer, image.y_distribution.values, copy_offset);
 
         auto x_dist_ptr = calloc(image.y_distribution.values.count, sizeof(Distribution));

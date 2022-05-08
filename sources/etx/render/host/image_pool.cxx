@@ -101,18 +101,19 @@ struct ImagePoolImpl {
   }
 
   void load_image(Image& img, const char* file_name) {
-    ETX_ASSERT(img.pixels.a == nullptr);
+    ETX_ASSERT(img.pixels.f32.a == nullptr);
+    ETX_ASSERT(img.pixels.f32.count == 0);
     ETX_ASSERT(img.x_distributions.a == nullptr);
     ETX_ASSERT(img.y_distribution.values.count == 0);
     ETX_ASSERT(img.y_distribution.values.a == nullptr);
 
     std::vector<uint8_t> source_data = {};
-    Image::Format format = load_data(file_name, source_data, img.isize);
+    img.format = load_data(file_name, source_data, img.isize);
 
-    if ((format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
+    if ((img.format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
       source_data.resize(sizeof(float4));
       *(float4*)(source_data.data()) = {1.0f, 1.0f, 1.0f, 1.0f};
-      format = Image::Format::RGBA32F;
+      img.format = Image::Format::RGBA32F;
       img.options = img.options & (~Image::Linear);
       img.options = img.options & (~Image::RepeatU);
       img.options = img.options & (~Image::Linear);
@@ -123,35 +124,39 @@ struct ImagePoolImpl {
 
     img.fsize.x = static_cast<float>(img.isize.x);
     img.fsize.y = static_cast<float>(img.isize.y);
-    img.pixels.count = 1llu * img.isize.x * img.isize.y;
-    img.pixels.a = reinterpret_cast<float4*>(calloc(img.pixels.count, sizeof(float4)));
 
     bool srgb = (img.options & Image::Linear) == 0;
 
-    if (format == Image::Format::RGBA8) {
+    if (img.format == Image::Format::RGBA8) {
+      img.pixels.u8.count = 1llu * img.isize.x * img.isize.y;
+      img.pixels.u8.a = reinterpret_cast<ubyte4*>(calloc(img.pixels.u8.count, sizeof(ubyte4)));
       auto src_data = reinterpret_cast<const ubyte4*>(source_data.data());
       for (uint32_t y = 0; y < img.isize.y; ++y) {
         for (uint32_t x = 0; x < img.isize.x; ++x) {
           uint32_t i = x + y * img.isize.x;
-          float4 f{float(src_data[i].x) / 255.0f, float(src_data[i].y) / 255.0f, float(src_data[i].z) / 255.0f, float(src_data[i].w) / 255.0f};
+          uint32_t j = x + (img.isize.y - 1 - y) * img.isize.x;
+
+          float4 f = to_float4(src_data[i]);
           if (srgb) {
             f.x = std::pow(f.x, 2.2f);  // TODO : fix gamma conversion
             f.y = std::pow(f.y, 2.2f);  // TODO : fix gamma conversion
             f.z = std::pow(f.z, 2.2f);  // TODO : fix gamma conversion
           }
-          uint32_t j = x + (img.isize.y - 1 - y) * img.isize.x;
-          img.pixels[j] = f;
+          auto val = to_ubyte4(f);
+          img.pixels.u8[j] = val;
         }
       }
-    } else if (format == Image::Format::RGBA32F) {
-      memcpy(img.pixels.a, source_data.data(), source_data.size());
+    } else if (img.format == Image::Format::RGBA32F) {
+      img.pixels.f32.count = 1llu * img.isize.x * img.isize.y;
+      img.pixels.f32.a = reinterpret_cast<float4*>(calloc(img.pixels.f32.count, sizeof(float4)));
+      memcpy(img.pixels.f32.a, source_data.data(), source_data.size());
     } else {
-      ETX_FAIL_FMT("Unsupported image format %u", format);
+      ETX_FAIL_FMT("Unsupported image format %u", img.format);
       return;
     }
 
     for (uint32_t i = 0, e = img.isize.x * img.isize.y; i < e; ++i) {
-      if (img.pixels[i].w < 1.0f) {
+      if (img.pixel(i).w < 1.0f) {
         img.options = img.options | Image::HasAlphaChannel;
         break;
       }
@@ -194,7 +199,7 @@ struct ImagePoolImpl {
   }
 
   void free_image(Image& img) {
-    free(img.pixels.a);
+    free(img.pixels.f32.a);
     for (uint64_t i = 0; (img.x_distributions.a != nullptr) && (i < img.y_distribution.values.count); ++i) {
       free(img.x_distributions[i].values.a);
     }

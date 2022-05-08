@@ -32,14 +32,19 @@ struct Image {
     uint32_t row_1 = 0;
   };
 
-  ArrayView<float4> pixels = {};
+  union {
+    ArrayView<float4> f32;
+    ArrayView<ubyte4> u8;
+  } pixels = {};
+
   ArrayView<Distribution> x_distributions = {};
   Distribution y_distribution = {};
   float2 fsize = {};
   uint2 isize = {};
   float normalization = 0.0f;
   uint32_t options = 0;
-  uint32_t pad[2] = {};
+  Format format = Format::Undefined;
+  uint32_t pad = {};
 
   ETX_GPU_CODE Gather gather(const float2& in_uv) const {
     float2 uv = in_uv * fsize;
@@ -77,9 +82,18 @@ struct Image {
     return (t + b) / normalization;
   }
 
+  ETX_GPU_CODE float4 pixel(uint32_t i) const {
+    ETX_ASSERT(format != Format::Undefined);
+
+    if (format == Format::RGBA8)
+      return to_float4(pixels.u8[i]);
+    else
+      return pixels.f32[i];
+  }
+
   ETX_GPU_CODE float4 pixel(uint32_t x, uint32_t y) const {
     int32_t i = min(x + y * isize.x, isize.x * isize.y - 1u);
-    return pixels[i];
+    return pixel(i);
   }
 
   ETX_GPU_CODE float3 evaluate_normal(const float2& uv, float scale) const {

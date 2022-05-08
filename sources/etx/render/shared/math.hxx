@@ -9,6 +9,21 @@
 #include <string.h>
 #include <complex>
 
+template <class t>
+struct vector2 {
+  t x, y;
+};
+
+template <class t>
+struct vector3 {
+  t x, y, z;
+};
+
+template <class t>
+struct vector4 {
+  t x, y, z, w;
+};
+
 #if (ETX_NVCC_COMPILER)
 
 #include <thrust/complex.h>
@@ -29,21 +44,6 @@ ETX_GPU_CODE float complex_norm(complex c) {
 
 #else
 
-template <class t>
-struct vector2 {
-  t x, y;
-};
-
-template <class t>
-struct vector3 {
-  t x, y, z;
-};
-
-template <class t>
-struct vector4 {
-  t x, y, z, w;
-};
-
 using float2 = vector2<float>;
 using float3 = vector3<float>;
 using float4 = vector4<float>;
@@ -53,9 +53,6 @@ using int4 = vector4<int32_t>;
 using uint2 = vector2<uint32_t>;
 using uint3 = vector3<uint32_t>;
 using uint4 = vector4<uint32_t>;
-using ubyte2 = vector2<uint8_t>;
-using ubyte3 = vector3<uint8_t>;
-using ubyte4 = vector4<uint8_t>;
 using complex = std::complex<float>;
 
 ETX_GPU_CODE complex complex_sqrt(complex c) {
@@ -72,6 +69,10 @@ ETX_GPU_CODE float complex_norm(complex c) {
 }
 
 #endif
+
+using ubyte2 = vector2<uint8_t>;
+using ubyte3 = vector3<uint8_t>;
+using ubyte4 = vector4<uint8_t>;
 
 struct float3x3 {
   float3 col[3] ETX_EMPTY_INIT;
@@ -285,6 +286,19 @@ ETX_GPU_CODE float3 to_float3(const float4& v) {
 
 ETX_GPU_CODE float4 to_float4(const float3& v) {
   return {v.x, v.y, v.z, 1.0f};
+}
+
+ETX_GPU_CODE float4 to_float4(const ubyte4& v) {
+  return {v.x / 255.0f, v.y / 255.0f, v.z / 255.0f, v.w / 255.0f};
+}
+
+ETX_GPU_CODE ubyte4 to_ubyte4(const float4& v) {
+  return {
+    static_cast<uint8_t>(saturate(v.x) * 255.0f),
+    static_cast<uint8_t>(saturate(v.y) * 255.0f),
+    static_cast<uint8_t>(saturate(v.z) * 255.0f),
+    static_cast<uint8_t>(saturate(v.w) * 255.0f),
+  };
 }
 
 ETX_GPU_CODE float luminance(const float3& value) {
