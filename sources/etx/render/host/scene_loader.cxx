@@ -531,10 +531,11 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   }
 
   if (_private->emitters.empty()) {
-    printf("No emitters found, adding default environment image...\n");
+    log::warning("No emitters found, adding default environment image...");
     auto& sky = _private->emitters.emplace_back(Emitter::Class::Environment);
     sky.emission.spectrum = SpectralDistribution::from_constant(1.0f);
     sky.emission.image_index = _private->add_image(env().file_in_data("assets/hdri/environment.exr"), Image::RepeatU | Image::BuildSamplingTable);
+    _private->images.load_images();
   }
 
   _private->validate_materials();

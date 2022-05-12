@@ -29,8 +29,9 @@ Several renderings from the ray-tracer. Samples contains showcase for materials,
 More renderings could be found in my [Twitter](https://twitter.com/serhii_rieznik):
 
 [![Bubbles in Cornell Box](./docs/preview/bubble.png)](./docs/images/bubble.png)[![Volumetric cloud](./docs/preview/volumetric-cloud.png)](./docs/images/volumetric-cloud.png)[![Room](./docs/preview/room.png)](./docs/images/room.png)
-[![Refractions](./docs/preview/volumetric-refractions.png)](./docs/images/volumetric-refractions.png)[![Laser](./docs/preview/laser.png)](./docs/images/laser.png)[![Ring](./docs/preview/ring.png)](./docs/images/ring.png)
+[![Refractions](./docs/preview/volumetric-refractions.png)](./docs/images/volumetric-refractions.png)[![Laser](./docs/preview/laser-2.png)](./docs/images/laser-2.png)[![Ring](./docs/preview/ring.png)](./docs/images/ring.png)
 [![Soap Bubbles](./docs/preview/soapbubbles.png)](./docs/imagessoapbubbles.png)[![Diamonds](./docs/preview/diamonds.png)](./docs/images/diamonds.png)[![SDS](./docs/preview/sds.png)](./docs/images/sds.png)
+[![SDS](./docs/preview/spoons.png)](./docs/images/spoons.png)
 
 #### Story behind this project
 

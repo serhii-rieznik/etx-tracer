@@ -166,15 +166,18 @@ void RenderContext::apply_reference_image(uint32_t handle) {
 
   if (img.format == Image::Format::RGBA32F) {
     ref_image_desc.pixel_format = SG_PIXELFORMAT_RGBA32F;
-    ref_image_desc.data.subimage[0][0].ptr = img.pixels.f32.a;
-    ref_image_desc.data.subimage[0][0].size = sizeof(float4) * img.pixels.f32.count;
   } else {
     ref_image_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
-    ref_image_desc.data.subimage[0][0].ptr = img.pixels.u8.a;
-    ref_image_desc.data.subimage[0][0].size = sizeof(ubyte4) * img.pixels.u8.count;
   }
   _private->reference_image = sg_make_image(ref_image_desc);
 
+  if (img.format == Image::Format::RGBA32F) {
+    ref_image_desc.data.subimage[0][0].ptr = img.pixels.f32.a;
+    ref_image_desc.data.subimage[0][0].size = sizeof(float4) * img.pixels.f32.count;
+  } else {
+    ref_image_desc.data.subimage[0][0].ptr = img.pixels.u8.a;
+    ref_image_desc.data.subimage[0][0].size = sizeof(ubyte4) * img.pixels.u8.count;
+  }
   sg_update_image(_private->reference_image, ref_image_desc.data);
 }
 

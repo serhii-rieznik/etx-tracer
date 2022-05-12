@@ -112,7 +112,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return false;
+  if (material.diffuse.image_index == kInvalidIndex) {
+    return false;
+  }
+  const auto& img = scene.images[material.diffuse.image_index];
+  return (img.options & Image::HasAlphaChannel) ? (img.evaluate(tex).w <= smp.next()) : false;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {

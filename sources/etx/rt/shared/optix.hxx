@@ -25,7 +25,22 @@ struct ETX_ALIGNED Raytracing {
     if (i.t < 0.0f)
       return false;
 
-    lerp_vertex(i, scene.vertices, scene.triangles[i.triangle_index], i.barycentric);
+    const auto& tri = scene.triangles[i.triangle_index];
+    lerp_vertex(i, scene.vertices, tri, i.barycentric);
+
+    const auto& mat = scene.materials[tri.material_index];
+    if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {
+      auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(i.tex, mat.normal_scale);
+      float3x3 from_local = {
+        float3{i.tan.x, i.tan.y, i.tan.z},
+        float3{i.btn.x, i.btn.y, i.btn.z},
+        float3{i.nrm.x, i.nrm.y, i.nrm.z},
+      };
+      i.nrm = normalize(from_local * sampled_normal);
+      i.tan = normalize(i.tan - i.nrm * dot(i.tan, i.nrm));
+      i.btn = normalize(cross(i.nrm, i.tan));
+    }
+
     i.w_i = ray.d;
 
     return true;

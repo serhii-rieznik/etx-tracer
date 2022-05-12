@@ -16,6 +16,8 @@ struct TimeMeasure {
   double measure_ms() const;
   uint64_t measure_exact() const;
 
+  static float get_cpu_load();
+
  private:
   uint64_t _data;
 };

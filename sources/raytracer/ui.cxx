@@ -97,7 +97,8 @@ void UI::build(double dt, const char* status) {
 
   char status_buffer[2048] = {};
   float dy = igGetStyle()->FramePadding.y;
-  snprintf(status_buffer, sizeof(status_buffer), "%.2fms | %.2ffps | %s", 1000.0 * dt, 1.0f / dt, status ? status : "");
+  uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
+  snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
   igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration);
   igText(status_buffer);
   igEnd();
