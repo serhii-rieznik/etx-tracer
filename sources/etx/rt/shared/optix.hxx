@@ -12,15 +12,34 @@
 namespace etx {
 
 struct ETX_ALIGNED Raytracing {
+  struct TraceData {
+    const Scene& scene;
+    Intersection& i;
+    Sampler& smp;
+
+    ETX_GPU_CODE TraceData(const Scene& as, Intersection& ai, Sampler& asmp)
+      : scene(as)
+      , i(ai)
+      , smp(asmp) {
+    }
+  };
+
+  static ETX_GPU_CODE TraceData* unpack_data(uint64_t ptr_lo, uint64_t ptr_hi) {
+    uint64_t ptr = ptr_lo | (ptr_hi << 32llu);
+    return reinterpret_cast<TraceData*>(ptr);
+  }
+
   ETX_GPU_CODE bool trace(const Scene& scene, const Ray& ray, Intersection& i, Sampler& smp) const {
     ETX_CHECK_FINITE(ray.d);
-    uint64_t ptr = reinterpret_cast<uint64_t>(&i);
+    TraceData d = {scene, i, smp};
+
+    uint64_t ptr = reinterpret_cast<uint64_t>(&d);
     uint32_t ptr_lo = static_cast<uint32_t>((ptr & 0x00000000ffffffff) >> 0llu);
     uint32_t ptr_hi = static_cast<uint32_t>((ptr & 0xffffffff00000000) >> 32llu);
 
     i.t = -kMaxFloat;
     optixTrace(OptixTraversableHandle(scene.acceleration_structure), ray.o, ray.d, ray.min_t, ray.max_t, 0.0f,  //
-      OptixVisibilityMask(255), OptixRayFlags(OPTIX_RAY_FLAG_DISABLE_ANYHIT), 0u, 0u, 0u, ptr_lo, ptr_hi);
+      OptixVisibilityMask(255), OptixRayFlags(OPTIX_RAY_FLAG_ENFORCE_ANYHIT), 0u, 0u, 0u, ptr_lo, ptr_hi);
 
     if (i.t < 0.0f)
       return false;
@@ -50,14 +69,23 @@ struct ETX_ALIGNED Raytracing {
 }  // namespace etx
 
 CLOSEST_HIT(main_closest_hit) {
-  uint64_t ptr_lo = optixGetPayload_0();
-  uint64_t ptr_hi = optixGetPayload_1();
-  uint64_t ptr = ptr_lo | (ptr_hi << 32llu);
+  auto data = etx::Raytracing::unpack_data(optixGetPayload_0(), optixGetPayload_1());
 
-  auto i = reinterpret_cast<etx::Intersection*>(ptr);
-  i->barycentric = etx::barycentrics(optixGetTriangleBarycentrics());
-  i->triangle_index = optixGetPrimitiveIndex();
-  i->t = optixGetRayTmax();
+  data->i.barycentric = etx::barycentrics(optixGetTriangleBarycentrics());
+  data->i.triangle_index = optixGetPrimitiveIndex();
+  data->i.t = optixGetRayTmax();
+}
+
+ANY_HIT(main_any_hit) {
+  auto data = etx::Raytracing::unpack_data(optixGetPayload_0(), optixGetPayload_1());
+  const auto& tri = data->scene.triangles[optixGetPrimitiveIndex()];
+  const auto& mat = data->scene.materials[tri.material_index];
+  auto bc = etx::barycentrics(optixGetTriangleBarycentrics());
+  auto uv = lerp_uv(data->scene.vertices, tri, bc);
+
+  if (etx::bsdf::continue_tracing(mat, uv, data->scene, data->smp)) {
+    optixIgnoreIntersection();
+  }
 }
 
 MISS(main_miss) {

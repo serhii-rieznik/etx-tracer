@@ -7,6 +7,7 @@
   "modules" : [
     {
       "closest_hit" : "main_closest_hit",
+      "any_hit" : "main_any_hit",
       "miss" : "main_miss"
     }
   ]

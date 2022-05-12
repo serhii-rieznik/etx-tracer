@@ -389,11 +389,14 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  return false;
+  /*/
   uint32_t m = select_material(material, tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::continue_tracing(material, tex, scene, smp);
   }
   return bsdf::continue_tracing(scene.materials[m], tex, scene, smp);
+  // */
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
