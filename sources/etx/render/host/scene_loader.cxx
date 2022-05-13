@@ -442,6 +442,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   get_file_folder(filename, base_folder, sizeof(base_folder));
 
   auto& cam = _private->scene.camera;
+  cam.lens_radius = 0.0f;
+
   Camera::Class camera_cls = Camera::Class::Perspective;
   float3 camera_pos = cam.position;
   float3 camera_up = {0.0f, 1.0f, 0.0f};
@@ -952,6 +954,10 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
 
       if (get_file(base_dir, material.specular_texname, data_buffer)) {
         mtl.specular.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+      }
+
+      if (get_file(base_dir, material.transmittance_texname, data_buffer)) {
+        mtl.transmittance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
       }
 
       if (get_param(material, "material", data_buffer)) {

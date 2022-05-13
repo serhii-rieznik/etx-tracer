@@ -1,0 +1,10 @@
+{
+  "geometry" : "feature-test.obj",
+  "materials" : "materials.mtl",
+  "camera" : {
+    "origin" : [0.0, 0.0, 11.0],
+    "target" : [0.0, 0.0, 0.0],
+    "viewport" : [1280, 640],
+    "fov" : 26.99
+  }
+}

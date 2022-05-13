@@ -8,12 +8,12 @@ Kd 0.4 0.4 0.4
 thinfilm range 180.0 800.0
 
 newmtl emitter
-emitter nblackbody 4000.0 scale 20.0 collimated 128.0
+emitter nblackbody 5800.0 scale 20.0
 Ke 1 1 1
 
 newmtl flag
 material class translucent
-map_Kd  ukraine.png
+map_Kd ukraine.png
 
 newmtl left
 material class coating

@@ -1,0 +1,47 @@
+# Blender MTL File: 'feature-test.blend'
+# Material Count: 8
+
+newmtl et::dir
+direction 1 1 1
+color nblackbody 6500.0
+
+newmtl et::env
+color nblackbody 12000.0
+
+newmtl Light
+emitter nblackbody 5800.0 scale 5.0
+Ke 1 1 1
+
+newmtl Box
+xmaterial class translucent
+Kd 1.000000 1.000000 1.000000
+
+newmtl Right
+xmaterial class translucent
+Kd 0.000000 1.000000 0.000000
+
+newmtl Left
+xmaterial class translucent
+Kd 1.000000 0.000000 0.000000
+
+newmtl Sphere-1
+material class msdielectric
+int_ior water
+map_Kt ../textures/planet-color.png
+Pr 0.25
+
+newmtl Sphere-2
+material class diffuse
+Kd 0.1 0.25 1.0
+map_Kd ../textures/planet.png
+
+newmtl Sphere-3
+material class msconductor
+int_ior silver
+normalmap image ../textures/square_floor_nor_gl_4k.png scale 1.0
+map_Ks ../textures/square_floor_diff_4k.png
+
+newmtl Font
+material class msconductor
+Pr 0.25
+int_ior gold
