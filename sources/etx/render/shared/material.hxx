@@ -5,19 +5,28 @@
 
 namespace etx {
 
-struct alignas(16) Thinfilm {
+struct ETX_ALIGNED SpectralImage {
+  SpectralDistribution spectrum = {};
   uint32_t image_index = kInvalidIndex;
+};
+
+struct ETX_ALIGNED Thinfilm {
+  struct Eval {
+    RefractiveIndex::Sample ior;
+    float thickness = 0.0f;
+    operator bool() const {
+      return thickness > 0.0f;
+    }
+  };
+
+  RefractiveIndex ior = {};
+  uint32_t thinkness_image = kInvalidIndex;
   float min_thickness = 0.0f;
   float max_thickness = 0.0f;
   float pad;
 };
 
-struct alignas(16) SpectralImage {
-  SpectralDistribution spectrum = {};
-  uint32_t image_index = kInvalidIndex;
-};
-
-struct alignas(16) Material {
+struct ETX_ALIGNED Material {
   enum class Class : uint32_t {
     Diffuse,
     MultiscatteringDiffuse,
@@ -36,10 +45,6 @@ struct alignas(16) Material {
 
     Count,
     Undefined = kInvalidIndex,
-  };
-
-  enum : uint32_t {
-    DoubleSided = 1u << 0u,
   };
 
   Class cls = Class::Undefined;

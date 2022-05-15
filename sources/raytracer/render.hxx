@@ -8,7 +8,7 @@
 namespace etx {
 
 struct RenderContext {
-  RenderContext();
+  RenderContext(TaskScheduler& s);
   ~RenderContext();
 
   void init();

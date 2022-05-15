@@ -58,7 +58,7 @@ struct BSDFEval {
   float eta = 1.0f;
 
   ETX_GPU_CODE bool valid() const {
-    return (pdf > 0.0f) && bsdf.valid();
+    return (pdf > 0.0f);
   }
 };
 
@@ -100,7 +100,7 @@ struct BSDFSample {
   }
 
   ETX_GPU_CODE bool valid() const {
-    return (pdf > 0.0f) && weight.valid();
+    return (pdf > 0.0f);
   }
 
   ETX_GPU_CODE bool is_diffuse() const {
@@ -234,129 +234,123 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
   float w_i_s = dot(w_i, n_s);
   float w_o_g = dot(w_o, n_g);
   float w_o_s = dot(w_o, n_s);
-  return (w_o_s * w_i_g == 0.0f) ? 0.0f : fabsf((w_o_g * w_i_s) / (w_o_s * w_i_g));
+  return (fabsf(w_o_s * w_i_g) < kRayEpsilon) ? 0.0f : fabsf((w_o_g * w_i_s) / (w_o_s * w_i_g));
 }
 
 namespace fresnel {
 
-ETX_GPU_CODE auto reflectance(float ext_ior, float cos_theta_i, float int_ior, float cos_theta_j) {
+ETX_GPU_CODE auto reflectance(complex ext_ior, complex cos_theta_i, complex int_ior, complex cos_theta_j) {
   struct result {
-    float rs, rp;
+    complex rs, rp;
   };
   auto ni = ext_ior;
   auto nj = int_ior;
   auto rs = (ni * cos_theta_i - nj * cos_theta_j) / (ni * cos_theta_i + nj * cos_theta_j);
+  ETX_CHECK_FINITE(rs);
   auto rp = (nj * cos_theta_i - ni * cos_theta_j) / (nj * cos_theta_i + ni * cos_theta_j);
+  ETX_CHECK_FINITE(rp);
   return result{rs, rp};
 }
 
-ETX_GPU_CODE auto transmittance(float ext_ior, float cos_theta_i, float int_ior, float cos_theta_j) {
+ETX_GPU_CODE auto transmittance(complex ext_ior, complex cos_theta_i, complex int_ior, complex cos_theta_j) {
   struct result {
-    float ts, tp;
+    complex ts, tp;
   };
   auto ni = ext_ior;
   auto nj = int_ior;
   auto ts = (2.0f * ni * cos_theta_i) / (ni * cos_theta_i + nj * cos_theta_j);
+  ETX_CHECK_FINITE(ts);
   auto tp = (2.0f * ni * cos_theta_i) / (ni * cos_theta_j + nj * cos_theta_i);
+  ETX_CHECK_FINITE(tp);
   return result{ts, tp};
 }
 
-ETX_GPU_CODE SpectralResponse dielectric(SpectralQuery spect, const float cos_theta_i, float ext_ior, float int_ior) {
-  SpectralResponse result = {spect.wavelength, 1.0f};
-  float eta = (ext_ior / int_ior);
-  float sin_theta_o_squared = (eta * eta) * (1.0f - cos_theta_i * cos_theta_i);
-  if (sin_theta_o_squared <= 1.0) {
-    float cos_theta_o = sqrtf(clamp(1.0f - sin_theta_o_squared, 0.0f, 1.0f));
-    auto rsrp = reflectance(ext_ior, cos_theta_i, int_ior, cos_theta_o);
-    result = SpectralResponse{spect.wavelength, 0.5f * (rsrp.rs * rsrp.rs + rsrp.rp * rsrp.rp)};
-  }
-  return result;
+ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_ior, const complex& int_ior) {
+  auto sin_theta_o_squared = sqr(ext_ior / int_ior) * (1.0f - cos_theta_i * cos_theta_i);
+  auto cos_theta_o = complex_sqrt(complex{1.0f, 0.0f} - sin_theta_o_squared);
+  ETX_VALIDATE(cos_theta_o);
+  auto rsrp = reflectance(ext_ior, cos_theta_i, int_ior, cos_theta_o);
+  return saturate(0.5f * (complex_norm(rsrp.rs) + complex_norm(rsrp.rp)));
 }
 
-ETX_GPU_CODE SpectralResponse dielectric(SpectralQuery spect, const float3& i, const float3& m, float ext_ior, float int_ior) {
-  return dielectric(spect, fabsf(dot(i, m)), ext_ior, int_ior);
-}
-
-ETX_GPU_CODE SpectralResponse dielectric_thinfilm(SpectralQuery spect, const float cos_theta_0, float ext_ior, float film_ior, float int_ior, float thickness) {
-  float eta_01 = (ext_ior / film_ior);
-  float sin_theta_1_squared = sqr(eta_01) * (1.0f - cos_theta_0 * cos_theta_0);
-  if (sin_theta_1_squared >= 1.0f) {
-    return {spect.wavelength, 1.0f};
-  }
-
-  float cos_theta_1 = sqrtf(1.0f - sin_theta_1_squared);
-
-  float eta_12 = (film_ior / int_ior);
-  float sin_theta_2_squared = sqr(eta_12) * (1.0f - cos_theta_1 * cos_theta_1);
-  if (sin_theta_2_squared >= 1.0f) {
-    return {spect.wavelength, 1.0f};
-  }
-
-  float cos_theta_2 = sqrtf(1.0f - sin_theta_2_squared);
-
-  float delta_10 = film_ior > ext_ior ? 0.0f : kPi;
-  float delta_21 = int_ior > film_ior ? 0.0f : kPi;
-  float phase_shift = delta_10 + delta_21;
-
-  SpectralResponse phi = {spect.wavelength, kDoublePi * 2.0f * thickness * cos_theta_1 + phase_shift * film_ior};
-  if constexpr (spectrum::kSpectralRendering) {
-    phi /= spect.wavelength;
-  } else {
-    phi /= {spect.wavelength, {690.0f, 550.0f, 430.0f}};
-  }
-
+ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, complex ext_ior, complex film_ior, complex int_ior, float thickness) {
+  auto sin_theta_1_squared = sqr(ext_ior / film_ior) * (1.0f - cos_theta_0 * cos_theta_0);
+  auto cos_theta_1 = complex_sqrt(complex{1.0f, 0.0f} - sin_theta_1_squared);
+  auto sin_theta_2_squared = sqr(film_ior / int_ior) * (1.0f - cos_theta_1 * cos_theta_1);
+  auto cos_theta_2 = complex_sqrt(1.0f - sin_theta_2_squared);
+  auto delta_10 = film_ior.real() > ext_ior.real() ? 0.0f : kPi;
+  auto delta_21 = int_ior.real() > film_ior.real() ? 0.0f : kPi;
+  auto phase_shift = delta_10 + delta_21;
+  auto phi = (kDoublePi * 2.0f * thickness * cos_theta_1 + phase_shift * film_ior) / wavelength;
   auto r10 = reflectance(film_ior, cos_theta_1, ext_ior, cos_theta_0);
   auto r12 = reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
   auto t01 = transmittance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
   auto t12 = transmittance(film_ior, cos_theta_1, int_ior, cos_theta_2);
-
   auto alpha_p = r10.rp * r12.rp;
   auto beta_p = t01.tp * t12.tp;
-  auto tp = (beta_p * beta_p) / ((alpha_p * alpha_p) - 2.0f * alpha_p * cos(phi) + 1.0f);
+
+  auto tp = (beta_p * beta_p) / ((alpha_p * alpha_p) - 2.0f * alpha_p * complex_cos(phi) + 1.0f);
+  ETX_CHECK_FINITE(tp);
 
   auto alpha_s = r10.rs * r12.rs;
   auto beta_s = t01.ts * t12.ts;
-  auto ts = (beta_s * beta_s) / ((alpha_s * alpha_s) - 2.0f * alpha_s * cos(phi) + 1.0f);
+
+  auto ts = (beta_s * beta_s) / ((alpha_s * alpha_s) - 2.0f * alpha_s * complex_cos(phi) + 1.0f);
+  ETX_CHECK_FINITE(ts);
+
   auto ratio = (int_ior * cos_theta_2) / (ext_ior * cos_theta_0);
+  ETX_CHECK_FINITE(ratio);
 
-  return 1.0f - ratio * 0.5f * (tp + ts);
+  return complex_abs(1.0f - ratio * 0.5f * (tp + ts));
 }
 
-ETX_GPU_CODE SpectralResponse dielectric_thinfilm(SpectralQuery spect, const float3& i, const float3& m, float ext_ior, float film_ior, float int_ior, float thickness) {
-  return dielectric_thinfilm(spect, fabsf(dot(i, m)), ext_ior, film_ior, int_ior, thickness);
+ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior,
+  const Thinfilm::Eval& thinfilm) {
+  ETX_ASSERT(spect.wavelength == ext_ior.wavelength);
+  ETX_ASSERT(spect.wavelength == int_ior.wavelength);
+
+  float cos_theta = fabsf(dot(i, m));
+  if (thinfilm.thickness == 0.0f) {
+    SpectralResponse result = {spect.wavelength, fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x())};
+    if constexpr (spectrum::kSpectralRendering == false) {
+      result.components.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
+      result.components.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
+    }
+    return result;
+  }
+
+  const auto& flm_ior = thinfilm.ior;
+  SpectralResponse result = {spect.wavelength, 0.0f};
+  if constexpr (spectrum::kSpectralRendering) {
+    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex_x(), flm_ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+  } else {
+    result.components.x = fresnel_thinfilm(690.0f, cos_theta, ext_ior.as_complex_x(), flm_ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+    result.components.y = fresnel_thinfilm(550.0f, cos_theta, ext_ior.as_complex_y(), flm_ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
+    result.components.z = fresnel_thinfilm(430.0f, cos_theta, ext_ior.as_complex_z(), flm_ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
+  }
+  return result;
 }
 
-ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float cos_theta, const RefractiveIndex::Sample& sample_out, const RefractiveIndex::Sample& sample_in) {
-  ETX_ASSERT(spect.wavelength == sample_in.wavelength);
-  ETX_ASSERT(spect.wavelength == sample_out.wavelength);
+ETX_GPU_CODE SpectralResponse dielectric(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample ext_ior, const RefractiveIndex::Sample int_ior,
+  const Thinfilm::Eval& thinfilm) {
+  float cos_theta = fabsf(dot(i, m));
+  auto c_e = ext_ior.as_monochromatic_complex();
+  auto c_i = int_ior.as_monochromatic_complex();
+  if (thinfilm.thickness == 0.0f) {
+    return {spect.wavelength, fresnel_generic(cos_theta, c_e, c_i)};
+  }
 
-  float cos_theta_2 = cos_theta * cos_theta;
-  float sin_theta_2 = clamp(1.0f - cos_theta_2, 0.0f, 1.0f);
+  auto c_f = thinfilm.ior.as_monochromatic_complex();
 
-  bool entring_material = (cos_theta > 0.0f);
-  RefractiveIndex::Sample ior_sample = (entring_material) ? (sample_in / sample_out) : (sample_out / sample_in);
-
-  SpectralResponse eta_2 = ior_sample.eta * ior_sample.eta;
-  SpectralResponse k_2 = ior_sample.k * ior_sample.k;
-  SpectralResponse t0 = eta_2 - k_2 - sin_theta_2;
-  SpectralResponse a2plusb2 = sqrt(t0 * t0 + 4.0f * eta_2 * k_2);
-
-  SpectralResponse t1 = a2plusb2 + cos_theta_2;
-  SpectralResponse t2 = 2.0f * sqrt(0.5f * (a2plusb2 + t0)) * fabsf(cos_theta);
-  SpectralResponse Rs = abs((t1 - t2) / (t1 + t2));
-  ETX_VALIDATE(Rs);
-
-  SpectralResponse t3 = cos_theta_2 * a2plusb2 + sin_theta_2 * sin_theta_2;
-  SpectralResponse t4 = t2 * sin_theta_2;
-  SpectralResponse Rp = Rs * ((t3 + t4).is_zero() ? SpectralResponse(spect.wavelength, 1.0f) : (t3 - t4) / (t3 + t4));
-  ETX_VALIDATE(Rp);
-
-  return 0.5f * (Rp + Rs);
-}
-
-ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample& sample_out,
-  const RefractiveIndex::Sample& sample_in) {
-  return conductor(spect, fabsf(dot(i, m)), sample_out, sample_in);
+  SpectralResponse result = {spect.wavelength, 0.0f};
+  if constexpr (spectrum::kSpectralRendering) {
+    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
+  } else {
+    result.components.x = fresnel_thinfilm(690.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
+    result.components.y = fresnel_thinfilm(550.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
+    result.components.z = fresnel_thinfilm(430.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
+  }
+  return result;
 }
 
 }  // namespace fresnel

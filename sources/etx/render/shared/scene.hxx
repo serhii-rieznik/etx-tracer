@@ -11,14 +11,14 @@
 
 namespace etx {
 
-struct alignas(16) EnvironmentEmitters {
+struct ETX_ALIGNED EnvironmentEmitters {
   constexpr static const uint32_t kMaxCount = 7;
-  uint32_t emitters[kMaxCount];
-  uint32_t count;
+  uint32_t emitters[kMaxCount] ETX_EMPTY_INIT;
+  uint32_t count ETX_EMPTY_INIT;
 };
 
-struct alignas(16) Scene {
-  Camera camera;
+struct ETX_ALIGNED Scene {
+  Camera camera ETX_EMPTY_INIT;
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
@@ -27,16 +27,12 @@ struct alignas(16) Scene {
   ArrayView<Medium> mediums ETX_EMPTY_INIT;
   Distribution emitters_distribution ETX_EMPTY_INIT;
   EnvironmentEmitters environment_emitters ETX_EMPTY_INIT;
-  Spectrums* spectrums ETX_EMPTY_INIT;
+  Pointer<Spectrums> spectrums ETX_EMPTY_INIT;
   float3 bounding_sphere_center ETX_EMPTY_INIT;
   float bounding_sphere_radius ETX_EMPTY_INIT;
   uint64_t acceleration_structure ETX_EMPTY_INIT;
   uint32_t camera_medium_index ETX_INIT_WITH(kInvalidIndex);
   uint32_t camera_lens_shape_image_index ETX_INIT_WITH(kInvalidIndex);
-
-  ETX_GPU_CODE bool valid() const {
-    return (vertices.count > 0) && (triangles.count > 0) && (materials.count > 0) && (emitters.count > 0) && (bounding_sphere_radius > 0.0f);
-  }
 };
 
 ETX_GPU_CODE float3 lerp_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
@@ -70,6 +66,17 @@ ETX_GPU_CODE Vertex lerp_vertex(const ArrayView<Vertex>& vertices, const Triangl
   };
 }
 
+ETX_GPU_CODE void lerp_vertex(Vertex& v, const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
+  const auto& v0 = vertices[t.i[0]];
+  const auto& v1 = vertices[t.i[1]];
+  const auto& v2 = vertices[t.i[2]];
+  v.pos = /*     */ v0.pos * bc.x + v1.pos * bc.y + v2.pos * bc.z;
+  v.nrm = normalize(v0.nrm * bc.x + v1.nrm * bc.y + v2.nrm * bc.z);
+  v.tan = normalize(v0.tan * bc.x + v1.tan * bc.y + v2.tan * bc.z);
+  v.btn = normalize(v0.btn * bc.x + v1.btn * bc.y + v2.btn * bc.z);
+  v.tex = /*     */ v0.tex * bc.x + v1.tex * bc.y + v2.tex * bc.z;
+}
+
 ETX_GPU_CODE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
   return position - dot(position - origin, normal) * normal;
 }
@@ -99,6 +106,52 @@ ETX_GPU_CODE bool apply_rr(float eta_scale, float rnd, SpectralResponse& through
   }
 
   return false;
+}
+
+template <class RT>
+ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, const float3& p0, const float3& p1, uint32_t medium_index, const Scene& scene, const RT& rt) {
+  SpectralResponse result = {spect.wavelength, 1.0f};
+
+  float3 w_o = p1 - p0;
+  ETX_CHECK_FINITE(w_o);
+
+  float max_t = dot(w_o, w_o);
+  if (max_t < kRayEpsilon) {
+    return result;
+  }
+
+  max_t = sqrtf(max_t);
+  w_o /= max_t;
+  max_t -= kRayEpsilon;
+
+  float3 origin = p0;
+
+  for (;;) {
+    Intersection intersection;
+    if (rt.trace(scene, {origin, w_o, kRayEpsilon, max_t}, intersection, smp) == false) {
+      if (medium_index != kInvalidIndex) {
+        result *= scene.mediums[medium_index].transmittance(spect, smp, origin, w_o, max_t);
+      }
+      break;
+    }
+
+    const auto& tri = scene.triangles[intersection.triangle_index];
+    const auto& mat = scene.materials[tri.material_index];
+    if (mat.cls != Material::Class::Boundary) {
+      result = {spect.wavelength, 0.0f};
+      break;
+    }
+
+    if (medium_index != kInvalidIndex) {
+      result *= scene.mediums[medium_index].transmittance(spect, smp, origin, w_o, intersection.t);
+    }
+
+    medium_index = (dot(intersection.nrm, w_o) < 0.0f) ? mat.int_medium : mat.ext_medium;
+    origin = intersection.pos;
+    max_t -= intersection.t;
+  }
+
+  return result;
 }
 
 }  // namespace etx

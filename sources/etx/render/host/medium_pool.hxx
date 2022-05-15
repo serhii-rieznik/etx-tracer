@@ -14,8 +14,7 @@ struct MediumPool {
   void init(uint32_t capacity);
   void cleanup();
 
-  uint32_t add_homogenous(const std::string&, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g);
-  uint32_t add_heterogenous(const std::string&, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g);
+  uint32_t add(Medium::Class cls, const std::string&, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g, const Pointer<Spectrums>);
 
   uint32_t find(const char* id);
 

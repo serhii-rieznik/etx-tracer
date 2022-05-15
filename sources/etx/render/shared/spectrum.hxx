@@ -172,13 +172,13 @@ ETX_GPU_CODE float black_body_radiation(float wavelength_nm, float t_kelvins) {
   wavelength_nm *= wavelengt_scale;
   float wl5 = wavelength_nm * (wavelength_nm * wavelength_nm) * (wavelength_nm * wavelength_nm);
 
-  float e0 = std::exp(Lc2 / (wavelength_nm * t_kelvins));
-  ETX_ASSERT(std::isnan(e0) == false);
+  float e0 = expf(Lc2 / (wavelength_nm * t_kelvins));
+  ETX_ASSERT(isnan(e0) == false);
 
   float d = wl5 * (e0 - 1.0f);
-  ETX_ASSERT(std::isnan(d) == false);
+  ETX_ASSERT(isnan(d) == false);
 
-  return std::isinf(d) ? 0.0f : (Lc1 / d);
+  return isinf(d) ? 0.0f : (Lc1 / d);
 }
 
 ETX_GPU_CODE SpectralQuery sample(float rnd) {
@@ -199,7 +199,7 @@ ETX_GPU_CODE constexpr float sample_pdf() {
 
 }  // namespace spectrum
 
-struct alignas(16) SpectralResponse {
+struct ETX_ALIGNED SpectralResponse {
   float3 components = {};
   float wavelength = 0.0f;
 
@@ -221,7 +221,7 @@ struct alignas(16) SpectralResponse {
         return {};
       }
 
-      float w = floor(wavelength);
+      float w = floorf(wavelength);
       float dw = wavelength - w;
       uint64_t i = static_cast<uint64_t>(w - spectrum::kShortestWavelength);
       uint64_t j = min(i + 1, spectrum::WavelengthCount - 1llu);
@@ -358,11 +358,16 @@ ETX_GPU_CODE SpectralResponse cos(const SpectralResponse& v) {
 ETX_GPU_CODE SpectralResponse abs(const SpectralResponse& v) {
   return {v.wavelength, abs(v.components)};
 }
+ETX_GPU_CODE SpectralResponse saturate(const SpectralResponse& v) {
+  return {v.wavelength, {saturate(v.components.x), saturate(v.components.y), saturate(v.components.z)}};
+}
 ETX_GPU_CODE void print_value(const char* name, const char* tag, const SpectralResponse& v) {
   printf("%s : %s (%f : %f %f %f)\n", name, tag, v.wavelength, v.components.x, v.components.y, v.components.z);
 }
 
-struct alignas(16) SpectralDistribution {
+struct Spectrums;
+
+struct ETX_ALIGNED SpectralDistribution {
   enum Class {
     Reflectance,
     Illuminant,
@@ -379,7 +384,7 @@ struct alignas(16) SpectralDistribution {
   ETX_GPU_CODE SpectralResponse query(const SpectralQuery q) const {
     if constexpr (spectrum::kSpectralRendering) {
       if ((q.wavelength < spectrum::kShortestWavelength) || (q.wavelength > spectrum::kLongestWavelength)) {
-        return {q.wavelength, -1.0f};
+        return {q.wavelength, 0.0f};
       }
 
       uint64_t i = lower_bound(q.wavelength);
@@ -398,6 +403,7 @@ struct alignas(16) SpectralDistribution {
       uint64_t j = min(i + 1, count - 1);
       float t = (q.wavelength - entries[i].wavelength) / (entries[j].wavelength - entries[i].wavelength);
       float p = lerp(entries[i].power, entries[j].power, t);
+      ETX_VALIDATE(p);
       return SpectralResponse{q.wavelength, p};
     } else {
       return SpectralResponse{q.wavelength, {entries[0].power, entries[1].power, entries[2].power}};
@@ -495,10 +501,10 @@ struct alignas(16) SpectralDistribution {
 
   static SpectralDistribution from_constant(float value);
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count);
-  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, struct Spectrums*);
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, struct Spectrums*);
-  static SpectralDistribution from_black_body(float temperature, Class cls, struct Spectrums*);
-  static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, struct Spectrums*);
+  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, struct Pointer<Spectrums>);
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, struct Pointer<Spectrums>);
+  static SpectralDistribution from_black_body(float temperature, struct Pointer<Spectrums>);
+  static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, struct Pointer<Spectrums>);
 };
 
 struct RefractiveIndex {
@@ -509,6 +515,22 @@ struct RefractiveIndex {
     float wavelength = 0.0f;
     SpectralResponse eta;
     SpectralResponse k;
+
+    ETX_GPU_CODE complex as_complex_x() const {
+      return {eta.components.x, k.components.x};
+    }
+
+    ETX_GPU_CODE complex as_complex_y() const {
+      return {eta.components.y, k.components.y};
+    }
+
+    ETX_GPU_CODE complex as_complex_z() const {
+      return {eta.components.z, k.components.z};
+    }
+
+    ETX_GPU_CODE complex as_monochromatic_complex() const {
+      return {eta.monochromatic(), k.monochromatic()};
+    }
 
     ETX_GPU_CODE Sample operator/(const Sample& other) const {
       return {wavelength, eta / other.eta, k / other.eta};
@@ -554,7 +576,7 @@ struct SpectrumSet {
 };
 }  // namespace rgb
 
-struct alignas(16) Spectrums {
+struct ETX_ALIGNED Spectrums {
   RefractiveIndex thinfilm = {};
   RefractiveIndex conductor = {};
   RefractiveIndex dielectric = {};
@@ -595,7 +617,9 @@ ETX_GPU_CODE void compute_weights(const float3& rgb, float weights[Color::Count]
   }
 }
 
-ETX_GPU_CODE SpectralDistribution make_spd(const float3& rgb, const SpectrumSet& spectrums) {
+ETX_GPU_CODE SpectralDistribution make_spd(float3 rgb, const SpectrumSet& spectrums) {
+  rgb = max(float3{0.0f, 0.0f, 0.0f}, rgb);
+
   SpectralDistribution r;
   if constexpr (spectrum::kSpectralRendering == false) {
     r.count = 3;
@@ -628,11 +652,11 @@ ETX_GPU_CODE SpectralDistribution make_spd(const float3& rgb, const SpectrumSet&
   return r;
 }
 
-ETX_GPU_CODE SpectralDistribution make_reflectance_spd(const float3& rgb, const Spectrums* spectrums) {
+ETX_GPU_CODE SpectralDistribution make_reflectance_spd(const float3& rgb, const Pointer<Spectrums> spectrums) {
   return make_spd(rgb, spectrums->rgb_reflection);
 }
 
-ETX_GPU_CODE SpectralDistribution make_illuminant_spd(const float3& rgb, const Spectrums* spectrums) {
+ETX_GPU_CODE SpectralDistribution make_illuminant_spd(const float3& rgb, const Pointer<Spectrums> spectrums) {
   return make_spd(rgb, spectrums->rgb_illuminant);
 }
 

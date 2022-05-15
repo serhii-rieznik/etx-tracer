@@ -2,7 +2,15 @@
 #include <etx/render/host/pool.hxx>
 #include <etx/render/host/tasks.hxx>
 
-#include <enkiTS/TaskScheduler.hxx>
+#include <TaskScheduler.hxx>
+
+#define ETX_ALWAYS_SINGLE_THREAD 0
+
+#if (ETX_DEBUG || ETX_ALWAYS_SINGLE_THREAD)
+#define ETX_SINGLE_THREAD 1
+#else
+#define ETX_SINGLE_THREAD 0
+#endif
 
 namespace etx {
 
@@ -38,7 +46,7 @@ struct TaskSchedulerImpl {
 
   TaskSchedulerImpl() {
     task_pool.init(1024u);
-    scheduler.Initialize(enki::GetNumHardwareThreads() + 1u);
+    scheduler.Initialize(ETX_SINGLE_THREAD ? 2 : (enki::GetNumHardwareThreads() + 1u));
   }
 
   ~TaskSchedulerImpl() {

@@ -4,7 +4,7 @@
 
 namespace etx {
 
-struct alignas(16) Emitter {
+struct ETX_ALIGNED Emitter {
   enum class Class : uint32_t {
     Area,
     Environment,
@@ -49,7 +49,7 @@ struct alignas(16) Emitter {
   }
 };
 
-struct alignas(16) EmitterSample {
+struct ETX_ALIGNED EmitterSample {
   SpectralResponse value = {};
 
   float3 barycentric = {};

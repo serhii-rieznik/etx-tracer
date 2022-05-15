@@ -5,21 +5,23 @@
 
 namespace etx {
 
-struct alignas(16) Medium {
+struct ETX_ALIGNED Medium {
   enum class Class : uint32_t {
-    Vacuum = 0,
-    Homogeneous = 1,
-    Heterogeneous = 2,
+    Vacuum,
+    Homogeneous,
+    Heterogeneous,
   };
 
-  struct alignas(16) Sample {
+  struct ETX_ALIGNED Sample {
     SpectralResponse weight = {};
     float3 pos = {};
-    float3 w_i = {};
-    uint32_t sampled_medium = {};
     float t = {};
 
-    bool valid() const {
+    ETX_GPU_CODE bool sampled_medium() const {
+      return t > 0.0f;
+    }
+
+    ETX_GPU_CODE bool valid() const {
       return weight.valid();
     }
   };
@@ -30,7 +32,6 @@ struct alignas(16) Medium {
   BoundingBox bounds = {};
   Class cls = Class::Vacuum;
   float phase_function_g = 0.0f;
-  float max_density = 0.0f;
   float max_sigma = 0.0f;
   uint3 dimensions = {};
   uint32_t pad = {};
@@ -71,12 +72,12 @@ struct alignas(16) Medium {
 
     float t = t_min;
     while (true) {
-      t -= std::log(1.0f - smp.next()) / (max_density * max_sigma);
+      t -= logf(1.0f - smp.next()) / max_sigma;
       if (t >= t_max)
         break;
 
       float density = sample_density(pos + dir * t);
-      tr *= 1 - max(0.0f, density / max_density);
+      tr *= max(0.0f, 1.0f - density);
 
       if (tr < rr_threshold) {
         float q = max(0.05f, 1.0f - tr);
@@ -112,19 +113,22 @@ struct alignas(16) Medium {
     float rnd = smp.next();
     auto s_t = s_outscattering.random_entry_power(rnd) + s_absorption.random_entry_power(rnd);
     float t = -logf(1.0f - smp.next()) / s_t;
+    ETX_VALIDATE(t);
+
     t = min(t, max_t);
+    ETX_VALIDATE(t);
+
+    bool sampled_medium = t < max_t;
 
     Sample result = {};
-    result.sampled_medium = t < max_t;
     result.pos = pos + w_i * t;
-    result.w_i = w_i;
-    result.t = t;
+    result.t = sampled_medium ? t : 0.0f;
 
     SpectralResponse tr = transmittance_homogeneous(spect, smp, pos, w_i, t);
+    SpectralResponse density_spectrum = sampled_medium ? (tr * (s_outscattering(spect) + s_absorption(spect))) : (tr);
 
-    SpectralResponse density = result.sampled_medium ? (tr * (s_outscattering(spect) + s_absorption(spect))) : (tr);
-    float pdf = density.average();
-
+    float density = density_spectrum.average();
+    float pdf = density;
     if (pdf == 0.0f) {
       ETX_ASSERT(tr.is_zero());
       pdf = 1.0f;
@@ -133,7 +137,7 @@ struct alignas(16) Medium {
     result.weight = tr / pdf;
     ETX_VALIDATE(result.weight);
 
-    if (result.sampled_medium) {
+    if (result.sampled_medium()) {
       result.weight *= s_outscattering(spect);
       ETX_VALIDATE(result.weight);
     }
@@ -152,18 +156,16 @@ struct alignas(16) Medium {
 
     float t = t_min;
     while (true) {
-      t -= std::log(1.0f - smp.next()) / (max_density * max_sigma);
+      t -= logf(1.0f - smp.next()) / max_sigma;
       if (t >= t_max)
         break;
 
       float3 local_pos = pos + dir * t;
       float density = sample_density(local_pos);
-      if (smp.next() <= (density / max_density)) {
+      if (smp.next() <= density) {
         Sample result;
-        result.w_i = in_dir;
         result.weight = s_outscattering(spect) / (s_outscattering(spect) + s_absorption(spect));
         result.pos = bounds.from_bounding_box(local_pos);
-        result.sampled_medium = true;
         result.t = t;
         return result;
       }
@@ -233,9 +235,9 @@ struct alignas(16) Medium {
     float d110 = density[ix + ny * dimensions.x + nz * dimensions.x * dimensions.y];
     float d111 = density[nx + ny * dimensions.x + nz * dimensions.x * dimensions.y];
 
-    float dx = px - std::floor(px);
-    float dy = py - std::floor(py);
-    float dz = pz - std::floor(pz);
+    float dx = px - floorf(px);
+    float dy = py - floorf(py);
+    float dz = pz - floorf(pz);
 
     float d_bottom = lerp(lerp(d000, d001, dx), lerp(d010, d011, dx), dy);
     float d_top = lerp(lerp(d100, d101, dx), lerp(d110, d111, dx), dy);

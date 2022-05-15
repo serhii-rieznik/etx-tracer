@@ -1,0 +1,26 @@
+# Blender MTL File: 'None'
+# Material Count: 4
+
+newmtl None
+material class coating
+Pr 0.25
+Ks 0.08 0.08 0.08
+map_Kd ../textures/square_floor_diff_4k.png
+normalmap image ../textures/square_floor_nor_gl_4k.png scale 0.75
+
+newmtl Golden_spoon
+material class conductor
+int_ior osmium
+Pr 0.05
+thinfilm range 1600.0 1860.0 ior 2.41 image ../textures/film.png
+
+newmtl Metal_spoon
+material class dielectric
+int_ior plastic
+Pr 0.025
+thinfilm range 600.0 800.0 ior 1.76 image ../textures/film.png
+
+newmtl Woonde_spoon
+material class conductor
+int_ior copper
+thinfilm range 100.0 360.0 ior 2.41 image ../textures/film.png

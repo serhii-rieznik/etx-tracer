@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdio.h>
+#include <stdint.h>
 
 #if defined(NDEBUG) || defined(_NDEBUG)
 #define ETX_DEBUG 0
@@ -15,7 +16,7 @@
 #endif
 
 #if (ETX_NVCC_COMPILER)
-#define ETX_DEBUG_BREAK()
+#define ETX_DEBUG_BREAK() assert(false)
 #define ETX_ABORT() assert(false)
 #else
 #define ETX_DEBUG_BREAK() __debugbreak()

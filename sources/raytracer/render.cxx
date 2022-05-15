@@ -20,6 +20,10 @@ struct ShaderConstants {
 };
 
 struct RenderContextImpl {
+  RenderContextImpl(TaskScheduler& s)
+    : image_pool(s) {
+  }
+
   sg_shader output_shader = {};
   sg_pipeline output_pipeline = {};
   sg_image sample_image = {};
@@ -30,11 +34,20 @@ struct RenderContextImpl {
   uint32_t ref_image_handle = kInvalidIndex;
   ViewOptions view_options = {};
   uint2 output_dimensions = {};
-  ImagePool image_pool = {};
+  ImagePool image_pool;
+
   std::vector<float4> black_image;
 };
 
-ETX_PIMPL_IMPLEMENT_ALL(RenderContext, Impl);
+ETX_PIMPL_IMPLEMENT(RenderContext, Impl);
+
+RenderContext::RenderContext(TaskScheduler& s) {
+  ETX_PIMPL_INIT(RenderContext, s);
+}
+
+RenderContext::~RenderContext() {
+  ETX_PIMPL_CLEANUP(RenderContext);
+}
 
 void RenderContext::init() {
   _private->image_pool.init(1024u);
@@ -144,17 +157,27 @@ void RenderContext::apply_reference_image(uint32_t handle) {
 
   sg_image_desc ref_image_desc = {};
   ref_image_desc.type = SG_IMAGETYPE_2D;
-  ref_image_desc.pixel_format = SG_PIXELFORMAT_RGBA32F;
   ref_image_desc.width = img.isize.x;
   ref_image_desc.height = img.isize.y;
   ref_image_desc.mag_filter = SG_FILTER_NEAREST;
   ref_image_desc.min_filter = SG_FILTER_NEAREST;
   ref_image_desc.num_mipmaps = 1;
   ref_image_desc.usage = SG_USAGE_STREAM;
+
+  if (img.format == Image::Format::RGBA32F) {
+    ref_image_desc.pixel_format = SG_PIXELFORMAT_RGBA32F;
+  } else {
+    ref_image_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
+  }
   _private->reference_image = sg_make_image(ref_image_desc);
 
-  ref_image_desc.data.subimage[0][0].ptr = img.pixels;
-  ref_image_desc.data.subimage[0][0].size = sizeof(float4) * img.isize.x * img.isize.y;
+  if (img.format == Image::Format::RGBA32F) {
+    ref_image_desc.data.subimage[0][0].ptr = img.pixels.f32.a;
+    ref_image_desc.data.subimage[0][0].size = sizeof(float4) * img.pixels.f32.count;
+  } else {
+    ref_image_desc.data.subimage[0][0].ptr = img.pixels.u8.a;
+    ref_image_desc.data.subimage[0][0].size = sizeof(ubyte4) * img.pixels.u8.count;
+  }
   sg_update_image(_private->reference_image, ref_image_desc.data);
 }
 

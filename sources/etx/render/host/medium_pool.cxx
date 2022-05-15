@@ -23,7 +23,8 @@ struct MediumPoolImpl {
     medium_pool.cleanup();
   }
 
-  uint32_t add_homogenous(const std::string& id, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
+  uint32_t add(Medium::Class cls, const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
+    const Pointer<Spectrums> s) {
     auto i = mapping.find(id);
     if (i != mapping.end()) {
       return i->second;
@@ -32,39 +33,33 @@ struct MediumPoolImpl {
     auto handle = medium_pool.alloc();
 
     auto& medium = medium_pool.get(handle);
+    medium.cls = cls;
     medium.s_absorption = s_a;
     medium.s_outscattering = s_o;
-    medium.phase_function_g = g;
     medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
-    medium.cls = s_a.is_zero() && s_o.is_zero() ? Medium::Class::Vacuum : Medium::Class::Homogeneous;
+    medium.phase_function_g = g;
 
-    mapping[id] = handle;
-    return handle;
-  }
-
-  uint32_t add_heterogenous(const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
-    auto i = mapping.find(id);
-    if (i != mapping.end()) {
-      return i->second;
+    if (strlen(volume_file) > 0) {
+      float max_density = 0.0f;
+      auto density = load_density_grid(volume_file, medium.dimensions);
+      for (auto f : density) {
+        max_density = max(max_density, f);
+      }
+      if (max_density > 0.0f) {
+        for (auto& f : density) {
+          f /= max_density;
+        }
+        medium.density.count = density.size();
+        medium.density.a = reinterpret_cast<float*>(malloc(medium.density.count * sizeof(float)));
+        memcpy(medium.density.a, density.data(), sizeof(float) * medium.density.count);
+        medium.cls = Medium::Class::Heterogeneous;
+      } else {
+        medium.cls = Medium::Class::Homogeneous;
+      }
     }
 
-    auto handle = medium_pool.alloc();
-
-    auto& medium = medium_pool.get(handle);
-    medium.s_absorption = s_a;
-    medium.s_outscattering = s_o;
-    medium.phase_function_g = g;
-    medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
-
-    auto density = load_density_grid(volume_file, medium.dimensions, medium.max_density);
-
-    if (s_a.is_zero() && s_o.is_zero() || (medium.max_density == 0.0f)) {
+    if (s_a.is_zero() && s_o.is_zero()) {
       medium.cls = Medium::Class::Vacuum;
-    } else {
-      medium.cls = Medium::Class::Heterogeneous;
-      medium.density.count = density.size();
-      medium.density.a = reinterpret_cast<float*>(malloc(medium.density.count * sizeof(float)));
-      memcpy(medium.density.a, density.data(), sizeof(float) * medium.density.count);
     }
 
     mapping[id] = handle;
@@ -103,7 +98,7 @@ struct MediumPoolImpl {
     m = {};
   }
 
-  std::vector<float> load_density_grid(const char* file_name, uint3& d, float& max_density) {
+  std::vector<float> load_density_grid(const char* file_name, uint3& d) {
     std::vector<float> density;
 
     const char* ext = get_file_ext(file_name);
@@ -111,11 +106,6 @@ struct MediumPoolImpl {
       load_vdb(file_name, density, d);
     } else {
       log::error("Only VDB volumetric data format is supported at the moment");
-    }
-
-    max_density = 0.0f;
-    for (auto f : density) {
-      max_density = max(max_density, f);
     }
 
     return density;
@@ -155,8 +145,6 @@ struct MediumPoolImpl {
           auto pos = (i.getCoord() - grid_bbox.getStart()).asVec3i();
           density[pos.x() + 1llu * pos.y() * d.x + 1llu * pos.z() * d.x * d.y] = i.getValue();
         }
-
-        // TODO : support multigrid, just take first for now
         break;
       }
     }
@@ -179,12 +167,9 @@ void MediumPool::cleanup() {
   _private->cleanup();
 }
 
-uint32_t MediumPool::add_homogenous(const std::string& id, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
-  return _private->add_homogenous(id, s_a, s_o, g);
-}
-
-uint32_t MediumPool::add_heterogenous(const std::string& id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g) {
-  return _private->add_heterogenous(id, volume, s_a, s_o, g);
+uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
+  const Pointer<Spectrums> s) {
+  return _private->add(cls, id, volume, s_a, s_o, g, s);
 }
 
 Medium& MediumPool::get(uint32_t handle) {
@@ -204,11 +189,11 @@ void MediumPool::remove_all() {
 }
 
 Medium* MediumPool::as_array() {
-  return _private->medium_pool.data();
+  return _private->medium_pool.alive_objects_count() > 0 ? _private->medium_pool.data() : nullptr;
 }
 
 uint64_t MediumPool::array_size() {
-  return 1llu + _private->medium_pool.latest_alive_index();
+  return _private->medium_pool.alive_objects_count() > 0 ? 1llu + _private->medium_pool.latest_alive_index() : 0;
 }
 
 uint32_t MediumPool::find(const char* id) {

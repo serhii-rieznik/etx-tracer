@@ -97,20 +97,31 @@ void UI::build(double dt, const char* status) {
 
   char status_buffer[2048] = {};
   float dy = igGetStyle()->FramePadding.y;
-  snprintf(status_buffer, sizeof(status_buffer), "%.2fms | %.2ffps | %s", 1000.0 * dt, 1.0f / dt, status ? status : "");
+  uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
+  snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
   igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration);
   igText(status_buffer);
   igEnd();
 
   if (igBeginMainMenuBar()) {
-    if (igBeginMenu("Raytracer", true)) {
+    if (igBeginMenu("Integrator", true)) {
       for (uint64_t i = 0; i < _integrators.count; ++i) {
-        if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, true)) {
+        if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, _integrators[i]->enabled())) {
           if (callbacks.integrator_selected) {
             callbacks.integrator_selected(_integrators[i]);
           }
         }
       }
+
+      if (_current_integrator != nullptr) {
+        igSeparator();
+        if (igMenuItemEx("Reload Integrator State", nullptr, "Ctrl+A", false, true)) {
+          if (callbacks.reload_integrator) {
+            callbacks.reload_integrator();
+          }
+        }
+      }
+
       igSeparator();
       if (igMenuItemEx("Exit", nullptr, "Ctrl+Q", false, true)) {
       }
@@ -237,6 +248,11 @@ bool UI::handle_event(const sapp_event* e) {
       case SAPP_KEYCODE_G: {
         if (callbacks.reload_geometry_selected)
           callbacks.reload_geometry_selected();
+        break;
+      }
+      case SAPP_KEYCODE_A: {
+        if (callbacks.reload_integrator)
+          callbacks.reload_integrator();
         break;
       }
       case SAPP_KEYCODE_S: {

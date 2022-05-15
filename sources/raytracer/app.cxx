@@ -5,14 +5,16 @@
 
 #include "app.hxx"
 
-#include <tinyexr/tinyexr.hxx>
-#include <stb_image/stb_image.hxx>
-#include <stb_image/stb_image_write.hxx>
+#include <tinyexr.hxx>
+#include <stb_image.hxx>
+#include <stb_image_write.hxx>
 
 namespace etx {
 
 RTApplication::RTApplication()
-  : camera_controller(scene.camera()) {
+  : render(raytracing.scheduler())
+  , scene(raytracing.scheduler())
+  , camera_controller(scene.camera()) {
 }
 
 void RTApplication::init() {
@@ -29,14 +31,24 @@ void RTApplication::init() {
   ui.callbacks.reload_scene_selected = std::bind(&RTApplication::on_reload_scene_selected, this);
   ui.callbacks.reload_geometry_selected = std::bind(&RTApplication::on_reload_geometry_selected, this);
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
+  ui.callbacks.reload_integrator = std::bind(&RTApplication::on_reload_integrator_selected, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
+  if (_options.has("integrator") == false) {
+    _options.add("integrator", "none");
+  }
+  if (_options.has("scene") == false) {
+    _options.add("scene", "none");
+  }
+  if (_options.has("ref") == false) {
+    _options.add("ref", "none");
+  }
 
   auto integrator = _options.get("integrator", std::string{}).name;
   for (uint64_t i = 0; (integrator.empty() == false) && (i < std::size(_integrator_array)); ++i) {
+    ETX_ASSERT(_integrator_array[i] != nullptr);
     if (integrator == _integrator_array[i]->name()) {
       _current_integrator = _integrator_array[i];
-      break;
     }
   }
 
@@ -79,7 +91,7 @@ void RTApplication::frame() {
   }
 
   auto dt = time_measure.lap();
-  if (can_change_camera && camera_controller.update(dt)) {
+  if (can_change_camera && camera_controller.update(dt) && (_current_integrator != nullptr)) {
     _current_integrator->preview(ui.integrator_options());
   }
 
@@ -158,7 +170,7 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
   auto c_image = _current_integrator->get_camera_image(true);
   auto l_image = _current_integrator->get_light_image(true);
 
-  uint2 image_size = raytracing.scene().camera.image_size;
+  uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
   std::vector<float4> output(image_size.x * image_size.y, float4{});
   for (uint32_t i = 0, e = image_size.x * image_size.y; (c_image != nullptr) && (i < e); ++i) {
     output[i] = c_image[i];
@@ -167,7 +179,8 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
     output[i] += l_image[i];
   }
   for (uint32_t i = 0, e = image_size.x * image_size.y; (mode != SaveImageMode::XYZ) && (i < e); ++i) {
-    output[i] = {spectrum::xyz_to_rgb(output[i]), 1.0f};
+    auto rgb = spectrum::xyz_to_rgb(to_float3(output[i]));
+    output[i] = {rgb.x, rgb.y, rgb.z, 1.0f};
   }
 
   if (mode == SaveImageMode::TonemappedLDR) {
@@ -190,7 +203,7 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
       file_name += ".exr";
     }
     const char* error = nullptr;
-    if (SaveEXR(output.data()->data.data, image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
+    if (SaveEXR(reinterpret_cast<const float*>(output.data()), image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
       log::error("Failed to save EXR image to %s: %s", file_name.c_str(), error);
     }
   }
@@ -255,6 +268,11 @@ void RTApplication::on_reload_geometry_selected() {
 void RTApplication::on_options_changed() {
   ETX_ASSERT(_current_integrator);
   _current_integrator->update_options(ui.integrator_options());
+}
+
+void RTApplication::on_reload_integrator_selected() {
+  ETX_ASSERT(_current_integrator);
+  _current_integrator->reload();
 }
 
 }  // namespace etx

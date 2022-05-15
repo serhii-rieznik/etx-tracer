@@ -221,6 +221,15 @@ struct Options {
     }
   }
 
+  bool has(const std::string& id) const {
+    for (auto& option : values) {
+      if (option.id == id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   void save_to_file(const char*);
   bool load_from_file(const char*);
 };

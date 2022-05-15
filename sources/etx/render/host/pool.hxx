@@ -124,7 +124,7 @@ struct ObjectIndexPool {
     _capacity = capacity;
     _objects = reinterpret_cast<T*>(::calloc(capacity, sizeof(T)));
     _info = reinterpret_cast<TData*>(::calloc(capacity, sizeof(TData)));
-    for (uint32_t i = 0; i < _capacity; ++i) {
+    for (uint32_t i = 0; (_info != nullptr) && (i < _capacity); ++i) {
       _info[i].next = i + 1;
     }
   }
@@ -214,7 +214,15 @@ struct ObjectIndexPool {
     return _objects;
   }
 
-  uint32_t latest_alive_index() {
+  uint32_t alive_objects_count() const {
+    uint32_t result = 0;
+    for (uint32_t i = 0; i < _capacity; ++i) {
+      result += uint32_t(_info[i].alive);
+    }
+    return result;
+  }
+
+  uint32_t latest_alive_index() const {
     uint32_t result = 0;
     for (uint32_t i = 0; i < _capacity; ++i) {
       if (_info[i].alive) {
@@ -222,6 +230,11 @@ struct ObjectIndexPool {
       }
     }
     return result;
+  }
+
+  bool alive(uint32_t index) const {
+    ETX_ASSERT(index < _capacity);
+    return _info[index].alive;
   }
 
  private:

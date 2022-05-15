@@ -9,18 +9,20 @@
 #define ETX_INIT_WITH(S)
 #else
 #define ETX_GPU_CODE inline
-#define ETX_CPU_CODE
 #define ETX_GPU_DATA
+#define ETX_CPU_CODE
 #define ETX_INIT_WITH(S) = S
 #endif
 
-#define ETX_EMPTY_INIT ETX_INIT_WITH({})
+#define ETX_ALIGNED alignas(16)
 
-#define ETX_FORCE_VALIDATION 0
+#define ETX_EMPTY_INIT ETX_INIT_WITH({})
 
 #define ETX_RENDER_BASE_INCLUDED 1
 #include <etx/render/shared/math.hxx>
 #undef ETX_RENDER_BASE_INCLUDED
+
+#define ETX_FORCE_VALIDATION 0
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
 
@@ -33,10 +35,23 @@
     }                                                               \
   } while (0)
 
+#define ETX_CHECK_FINITE(VALUE)                                     \
+  do {                                                              \
+    if (isfinite((VALUE)) == false) {                               \
+      printf("Validation failed [%s, %u]:\n ", __FILE__, __LINE__); \
+      print_value(#VALUE, "invalid value", VALUE);                  \
+      ETX_DEBUG_BREAK();                                            \
+    }                                                               \
+  } while (0)
+
 #else
 
 #define ETX_VALIDATE(VALUE) \
   do {                      \
+  } while (0)
+
+#define ETX_CHECK_FINITE(VALUE) \
+  do {                          \
   } while (0)
 
 #endif
@@ -44,7 +59,7 @@
 namespace etx {
 
 template <class T>
-struct alignas(16) ArrayView {
+struct ETX_ALIGNED ArrayView {
   T* a ETX_EMPTY_INIT;
   uint64_t count ETX_EMPTY_INIT;
 
@@ -71,16 +86,49 @@ struct alignas(16) ArrayView {
 };
 
 template <class T>
-ETX_GPU_CODE ArrayView<T> make_array_view(void* p, uint64_t c) {
-  return {reinterpret_cast<T*>(p), c};
+struct Pointer {
+  T* ptr ETX_EMPTY_INIT;
+
+  Pointer() = default;
+
+  ETX_GPU_CODE Pointer(T* p)
+    : ptr(p) {
+  }
+
+  ETX_GPU_CODE T* operator->() {
+    ETX_ASSERT(ptr != nullptr);
+    return ptr;
+  }
+
+  ETX_GPU_CODE T* operator->() const {
+    ETX_ASSERT(ptr != nullptr);
+    return ptr;
+  }
+};
+
+template <class T>
+ETX_GPU_CODE ArrayView<T> make_array_view(void* p, uint64_t count) {
+  return {reinterpret_cast<T*>(p), count};
 }
 
 ETX_GPU_CODE void print_value(const char* name, const char* tag, float t) {
   printf("%s : %s %f\n", name, tag, t);
 }
 
+ETX_GPU_CODE void print_value(const char* name, const char* tag, const float2& v) {
+  printf("%s : %s (%f, %f)\n", name, tag, v.x, v.y);
+}
+
 ETX_GPU_CODE void print_value(const char* name, const char* tag, const float3& v) {
   printf("%s : %s (%f, %f, %f)\n", name, tag, v.x, v.y, v.z);
+}
+
+ETX_GPU_CODE void print_value(const char* name, const char* tag, const float4& v) {
+  printf("%s : %s (%f, %f, %f, %f)\n", name, tag, v.x, v.y, v.z, v.w);
+}
+
+ETX_GPU_CODE void print_value(const char* name, const char* tag, complex z) {
+  printf("%s : %s %f + i * %f\n", name, tag, z.real(), z.imag());
 }
 
 }  // namespace etx

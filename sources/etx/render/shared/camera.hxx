@@ -4,7 +4,12 @@
 
 namespace etx {
 
-struct alignas(16) Camera {
+struct ETX_ALIGNED Camera {
+  enum class Class : uint32_t {
+    Perspective,
+    Equirectangular,
+  };
+
   float4x4 view_proj ETX_EMPTY_INIT;
 
   float3 position ETX_EMPTY_INIT;
@@ -19,9 +24,11 @@ struct alignas(16) Camera {
   float3 direction ETX_EMPTY_INIT;
   float lens_radius ETX_EMPTY_INIT;
 
-  float focal_distance ETX_EMPTY_INIT;
+  uint2 image_size ETX_EMPTY_INIT;
   float image_plane ETX_EMPTY_INIT;
-  float2 image_size ETX_EMPTY_INIT;
+  float focal_distance ETX_EMPTY_INIT;
+
+  Class cls ETX_INIT_WITH(Class::Perspective);
 };
 
 struct CameraSample {
@@ -40,7 +47,6 @@ struct CameraSample {
 };
 
 struct CameraEval {
-  SpectralResponse weight ETX_EMPTY_INIT;
   float3 normal ETX_EMPTY_INIT;
   float pdf_dir ETX_EMPTY_INIT;
 };

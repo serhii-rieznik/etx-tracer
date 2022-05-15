@@ -1,9 +1,13 @@
-﻿#include <etx/render/host/image_pool.hxx>
+﻿#include <etx/core/core.hxx>
+#include <etx/core/core.hxx>
+#include <etx/log/log.hxx>
+
+#include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/distribution_builder.hxx>
 #include <etx/render/host/pool.hxx>
 
-#include <tinyexr/tinyexr.hxx>
-#include <stb_image/stb_image.hxx>
+#include <tinyexr.hxx>
+#include <stb_image.hxx>
 
 #include <vector>
 #include <unordered_map>
@@ -14,6 +18,10 @@ namespace etx {
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data);
 
 struct ImagePoolImpl {
+  ImagePoolImpl(TaskScheduler& s)
+    : scheduler(s) {
+  }
+
   void init(uint32_t capacity) {
     image_pool.init(capacity);
   }
@@ -30,14 +38,41 @@ struct ImagePoolImpl {
     }
 
     auto handle = image_pool.alloc();
+    mapping[path] = handle;
+
     auto& image = image_pool.get(handle);
-    load_image(image, path.c_str(), image_options);
-    if (image_options & Image::BuildSamplingTable) {
-      build_sampling_table(image);
+    image.options = image_options;
+    if ((image.options & Image::DelayLoad) == 0) {
+      perform_loading(handle, image);
     }
 
-    mapping[path] = handle;
     return handle;
+  }
+
+  void perform_loading(uint32_t handle, Image& image) {
+    for (auto& cache : mapping) {
+      if (cache.second != handle)
+        continue;
+
+      load_image(image, cache.first.c_str());
+      if (image.options & Image::BuildSamplingTable) {
+        build_sampling_table(image);
+      }
+      image.options &= ~Image::DelayLoad;
+      break;
+    }
+  }
+
+  void delay_load() {
+    auto objects = image_pool.data();
+    uint32_t object_count = image_pool.latest_alive_index() + 1u;
+    scheduler.execute(object_count, [this, objects](uint32_t begin, uint32_t end, uint32_t) {
+      for (uint32_t i = begin; i < end; ++i) {
+        if (image_pool.alive(i) && (objects[i].options & Image::DelayLoad)) {
+          perform_loading(i, objects[i]);
+        }
+      }
+    });
   }
 
   const Image& get(uint32_t handle) const {
@@ -65,53 +100,63 @@ struct ImagePoolImpl {
     mapping.clear();
   }
 
-  void load_image(Image& img, const char* file_name, uint32_t options) {
-    ETX_ASSERT(img.pixels == nullptr);
-    ETX_ASSERT(img.x_distributions == nullptr);
-    ETX_ASSERT(img.y_distribution.size == 0);
-    ETX_ASSERT(img.y_distribution.values == 0);
+  void load_image(Image& img, const char* file_name) {
+    ETX_ASSERT(img.pixels.f32.a == nullptr);
+    ETX_ASSERT(img.pixels.f32.count == 0);
+    ETX_ASSERT(img.x_distributions.a == nullptr);
+    ETX_ASSERT(img.y_distribution.values.count == 0);
+    ETX_ASSERT(img.y_distribution.values.a == nullptr);
 
     std::vector<uint8_t> source_data = {};
-    Image::Format format = load_data(file_name, source_data, img.isize);
-    if ((format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
+    img.format = load_data(file_name, source_data, img.isize);
+
+    if ((img.format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
       source_data.resize(sizeof(float4));
       *(float4*)(source_data.data()) = {1.0f, 1.0f, 1.0f, 1.0f};
-      format = Image::Format::RGBA32F;
-      img.options = Image::RepeatU | Image::RepeatV;
+      img.format = Image::Format::RGBA32F;
+      img.options = img.options & (~Image::Linear);
+      img.options = img.options & (~Image::RepeatU);
+      img.options = img.options & (~Image::Linear);
+      img.options = img.options | Image::Linear | Image::RepeatU | Image::RepeatV;
       img.isize.x = 1;
       img.isize.y = 1;
     }
 
-    img.options = img.options | options;
     img.fsize.x = static_cast<float>(img.isize.x);
     img.fsize.y = static_cast<float>(img.isize.y);
-    img.pixels = reinterpret_cast<float4*>(calloc(1llu * img.isize.x * img.isize.y, sizeof(float4)));
 
-    bool srgb = (options & Image::Linear) == 0;
+    bool srgb = (img.options & Image::Linear) == 0;
 
-    if (format == Image::Format::RGBA8) {
+    if (img.format == Image::Format::RGBA8) {
+      img.pixels.u8.count = 1llu * img.isize.x * img.isize.y;
+      img.pixels.u8.a = reinterpret_cast<ubyte4*>(calloc(img.pixels.u8.count, sizeof(ubyte4)));
       auto src_data = reinterpret_cast<const ubyte4*>(source_data.data());
       for (uint32_t y = 0; y < img.isize.y; ++y) {
         for (uint32_t x = 0; x < img.isize.x; ++x) {
           uint32_t i = x + y * img.isize.x;
-          float4 f{float(src_data[i].x) / 255.0f, float(src_data[i].y) / 255.0f, float(src_data[i].z) / 255.0f, float(src_data[i].w) / 255.0f};
+          uint32_t j = x + (img.isize.y - 1 - y) * img.isize.x;
+
+          float4 f = to_float4(src_data[i]);
           if (srgb) {
             f.x = std::pow(f.x, 2.2f);  // TODO : fix gamma conversion
             f.y = std::pow(f.y, 2.2f);  // TODO : fix gamma conversion
             f.z = std::pow(f.z, 2.2f);  // TODO : fix gamma conversion
           }
-          uint32_t j = x + (img.isize.y - 1 - y) * img.isize.x;
-          img.pixels[j] = f;
+          auto val = to_ubyte4(f);
+          img.pixels.u8[j] = val;
         }
       }
-    } else if (format == Image::Format::RGBA32F) {
-      memcpy(img.pixels, source_data.data(), source_data.size());
+    } else if (img.format == Image::Format::RGBA32F) {
+      img.pixels.f32.count = 1llu * img.isize.x * img.isize.y;
+      img.pixels.f32.a = reinterpret_cast<float4*>(calloc(img.pixels.f32.count, sizeof(float4)));
+      memcpy(img.pixels.f32.a, source_data.data(), source_data.size());
     } else {
-      ETX_FAIL_FMT("Unsupported image format %u", format);
+      ETX_FAIL_FMT("Unsupported image format %u", img.format);
+      return;
     }
 
     for (uint32_t i = 0, e = img.isize.x * img.isize.y; i < e; ++i) {
-      if (img.pixels[i].w < 1.0f) {
+      if (img.pixel(i).w < 1.0f) {
         img.options = img.options | Image::HasAlphaChannel;
         break;
       }
@@ -119,43 +164,47 @@ struct ImagePoolImpl {
   }
 
   void build_sampling_table(Image& img) {
-    float total_weight = 0.0f;
     bool uniform_sampling = (img.options & Image::UniformSamplingTable) == Image::UniformSamplingTable;
     DistributionBuilder y_dist(img.y_distribution, img.isize.y);
-    img.x_distributions = reinterpret_cast<Distribution*>(calloc(img.isize.y, sizeof(Distribution)));
+    img.x_distributions.count = img.isize.y;
+    img.x_distributions.a = reinterpret_cast<Distribution*>(calloc(img.x_distributions.count, sizeof(Distribution)));
 
-    for (uint32_t y = 0; y < img.isize.y; ++y) {
-      float v = (float(y) + 0.5f) / img.fsize.y;
-      float row_value = 0.0f;
+    std::atomic<float> total_weight = {0.0f};
+    scheduler.execute(img.isize.y, [&img, uniform_sampling, &total_weight, &y_dist](uint32_t begin, uint32_t end, uint32_t) {
+      for (uint32_t y = begin; y < end; ++y) {
+        float v = (float(y) + 0.5f) / img.fsize.y;
+        float row_value = 0.0f;
 
-      DistributionBuilder d_x(img.x_distributions[y], img.isize.x);
-      for (uint32_t x = 0; x < img.isize.x; ++x) {
-        float u = (float(x) + 0.5f) / img.fsize.x;
-        float4 px = img.read(img.fsize * float2{u, v});
-        float lum = luminance(px);
-        row_value += lum;
-        d_x.add(lum);
+        DistributionBuilder d_x(img.x_distributions[y], img.isize.x);
+        for (uint32_t x = 0; x < img.isize.x; ++x) {
+          float u = (float(x) + 0.5f) / img.fsize.x;
+          float4 px = img.read(img.fsize * float2{u, v});
+          float lum = luminance(to_float3(px));
+          row_value += lum;
+          d_x.add(lum);
+        }
+        d_x.finalize();
+
+        float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
+        row_value *= row_weight;
+
+        total_weight += row_value;
+        y_dist.set(y, row_value);
       }
-      d_x.finalize();
-
-      float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
-      row_value *= row_weight;
-
-      total_weight += row_value;
-      y_dist.add(row_value);
-    }
+    });
+    y_dist.set_size(img.isize.y);
     y_dist.finalize();
 
     img.normalization = total_weight / (img.fsize.x * img.fsize.y);
   }
 
   void free_image(Image& img) {
-    free(img.pixels);
-    for (uint32_t i = 0; i < img.y_distribution.size; ++i) {
-      free(img.x_distributions[i].values);
+    free(img.pixels.f32.a);
+    for (uint64_t i = 0; (img.x_distributions.a != nullptr) && (i < img.y_distribution.values.count); ++i) {
+      free(img.x_distributions[i].values.a);
     }
-    free(img.x_distributions);
-    free(img.y_distribution.values);
+    free(img.x_distributions.a);
+    free(img.y_distribution.values.a);
     img = {};
   }
 
@@ -182,22 +231,20 @@ struct ImagePoolImpl {
         return Image::Format::Undefined;
       }
 
-      for (int i = 0; i < 4 * w * h; ++i) {
-        if (std::isinf(rgba_data[i])) {
-          rgba_data[i] = 65504.0f;  // max value in half-float
+      scheduler.execute(4 * w * h, [&rgba_data](uint32_t begin, uint32_t end, uint32_t) {
+        for (uint32_t i = begin; i < end; ++i) {
+          if (std::isinf(rgba_data[i])) {
+            rgba_data[i] = 65504.0f;  // max value in half-float
+          }
+          if (std::isnan(rgba_data[i]) || (rgba_data[i] < 0.0f)) {
+            rgba_data[i] = 0.0f;
+          }
         }
-        if (std::isnan(rgba_data[i]) || (rgba_data[i] < 0.0f)) {
-          rgba_data[i] = 0.0f;
-        }
-      }
+      });
 
-      dimensions = {w, h};
+      dimensions = {uint32_t(w), uint32_t(h)};
       data.resize(sizeof(float4) * w * h);
       memcpy(data.data(), rgba_data, sizeof(float4) * w * h);
-      // auto row_size = sizeof(float4) * w;
-      // for (int y = 0; y < h; ++y) {
-      //   memcpy(data.data() + row_size * (h - 1 - y), rgba_data + 4llu * y * w, row_size);
-      // }
       free(rgba_data);
 
       return Image::Format::RGBA32F;
@@ -213,7 +260,7 @@ struct ImagePoolImpl {
         return Image::Format::Undefined;
       }
 
-      dimensions = {w, h};
+      dimensions = {uint32_t(w), uint32_t(h)};
       data.resize(sizeof(float4) * w * h);
       auto ptr = reinterpret_cast<float4*>(data.data());
       if (c == 4) {
@@ -234,7 +281,7 @@ struct ImagePoolImpl {
     int w = 0;
     int h = 0;
     int c = 0;
-    stbi_set_flip_vertically_on_load(true);
+    stbi_set_flip_vertically_on_load(false);
     auto image = stbi_load(source, &w, &h, &c, 0);
     if (image == nullptr) {
       return Image::Format::Undefined;
@@ -245,7 +292,7 @@ struct ImagePoolImpl {
       ETX_FAIL_FMT("Unsupported (yet) image format with %d channels", c);
     }
 
-    dimensions = {w, h};
+    dimensions = {uint32_t(w), uint32_t(h)};
     data.resize(4llu * w * h);
     uint8_t* ptr = reinterpret_cast<uint8_t*>(data.data());
     switch (c) {
@@ -272,12 +319,21 @@ struct ImagePoolImpl {
     return Image::Format::RGBA8;
   }
 
+  TaskScheduler& scheduler;
   ObjectIndexPool<Image> image_pool;
   std::unordered_map<std::string, uint32_t> mapping;
   Image empty;
 };
 
-ETX_PIMPL_IMPLEMENT_ALL(ImagePool, Impl);
+ETX_PIMPL_IMPLEMENT(ImagePool, Impl);
+
+ImagePool::ImagePool(TaskScheduler& s) {
+  ETX_PIMPL_INIT(ImagePool, s);
+}
+
+ImagePool::~ImagePool() {
+  ETX_PIMPL_CLEANUP(ImagePool);
+}
 
 void ImagePool::init(uint32_t capacity) {
   _private->init(capacity);
@@ -304,11 +360,11 @@ void ImagePool::remove_all() {
 }
 
 Image* ImagePool::as_array() {
-  return _private->image_pool.data();
+  return _private->image_pool.alive_objects_count() > 0 ? _private->image_pool.data() : nullptr;
 }
 
 uint64_t ImagePool::array_size() {
-  return 1llu + _private->image_pool.latest_alive_index();
+  return _private->image_pool.alive_objects_count() > 0 ? 1llu + _private->image_pool.latest_alive_index() : 0;
 }
 
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
@@ -388,7 +444,7 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
           fclose(in_file);
           return false;
         }
-        data_ptr[j + i * size.x] = {value, 1.0f};
+        data_ptr[j + i * size.x] = {value.x, value.y, value.z, 1.0f};
       }
     }
   } else {
@@ -398,6 +454,10 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
 
   fclose(in_file);
   return true;
+}
+
+void ImagePool::load_images() {
+  _private->delay_load();
 }
 
 }  // namespace etx

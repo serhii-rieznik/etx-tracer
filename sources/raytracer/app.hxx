@@ -6,9 +6,13 @@
 #include <etx/render/host/scene_loader.hxx>
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
+#include <etx/rt/integrators/path_tracing_gpu.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
+#include <etx/rt/integrators/atmosphere.hxx>
 #include <etx/rt/rt.hxx>
+
+#include <etx/gpu/gpu.hxx>
 
 #include "ui.hxx"
 #include "render.hxx"
@@ -36,28 +40,34 @@ struct RTApplication {
   void on_reload_scene_selected();
   void on_reload_geometry_selected();
   void on_options_changed();
+  void on_reload_integrator_selected();
 
  private:
   void save_options();
 
  private:
-  RenderContext render;
   UI ui;
   TimeMeasure time_measure;
-  SceneRepresentation scene;
   Raytracing raytracing;
+
+  RenderContext render;
+  SceneRepresentation scene;
   CameraController camera_controller;
 
   CPUDebugIntegrator _preview = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
+  GPUPathTracing _gpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
+  CPUAtmosphere _cpu_atmosphere = {raytracing};
 
-  Integrator* _integrator_array[4] = {
+  Integrator* _integrator_array[6] = {
     &_preview,
     &_cpu_pt,
     &_cpu_bidir,
     &_cpu_vcm,
+    &_gpu_pt,
+    &_cpu_atmosphere,
   };
 
   Integrator* _current_integrator = nullptr;

@@ -36,10 +36,10 @@ struct CPUBidirectionalImpl : public Task {
       , cls(c) {
     }
 
-    PathVertex(const Medium::Sample& i)
+    PathVertex(const Medium::Sample& i, const float3& a_w_i)
       : cls(Class::Medium) {
       pos = i.pos;
-      w_i = i.w_i;
+      w_i = a_w_i;
     }
 
     PathVertex(Class c)
@@ -140,8 +140,8 @@ struct CPUBidirectionalImpl : public Task {
       uint32_t x = i % camera_image.dimensions().x;
       uint32_t y = i / camera_image.dimensions().x;
       float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
-      float4 xyz = {trace_pixel(smp, uv, thread_id), 1.0f};
-      camera_image.accumulate(xyz, uv, float(iteration) / float(iteration + 1));
+      float3 xyz = trace_pixel(smp, uv, thread_id);
+      camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(iteration) / float(iteration + 1));
     }
   }
 
@@ -184,7 +184,8 @@ struct CPUBidirectionalImpl : public Task {
           if (_connect_to_camera) {
             CameraSample camera_sample = {};
             auto splat = connect_to_camera(smp, path_data, spect, eye_t, light_s, camera_sample);
-            iteration_light_image.atomic_add({splat.to_xyz(), 1.0f}, camera_sample.uv, thread_id);
+            auto xyz = splat.to_xyz();
+            iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv, thread_id);
           }
         } else if (light_s == 1) {
           if (_connect_to_light) {
@@ -203,32 +204,34 @@ struct CPUBidirectionalImpl : public Task {
     ETX_VALIDATE(throughput);
 
     float eta = 1.0f;
-    for (uint32_t depth = 0; depth <= opt_max_depth;) {
+    for (uint32_t path_length = 0; path_length <= opt_max_depth;) {
       Intersection intersection = {};
       bool found_intersection = rt.trace(ray, intersection, smp);
 
       Medium::Sample medium_sample = {};
       if (medium_index != kInvalidIndex) {
-        medium_sample = rt.scene().mediums[medium_index].sample(spect, smp, ray.o, ray.d, found_intersection ? intersection.t : std::numeric_limits<float>::max());
+        medium_sample = rt.scene().mediums[medium_index].sample(spect, smp, ray.o, ray.d, found_intersection ? intersection.t : kMaxFloat);
         throughput *= medium_sample.weight;
         ETX_VALIDATE(throughput);
       }
 
-      if (medium_sample.sampled_medium) {
-        float3 w_i = ray.d;
-        float3 w_o = rt.scene().mediums[medium_index].sample_phase_function(spect, smp, medium_sample.pos, w_i);
+      if (medium_sample.sampled_medium()) {
+        const auto& medium = rt.scene().mediums[medium_index];
 
-        auto& v = path.emplace_back(medium_sample);
+        float3 w_i = ray.d;
+        float3 w_o = medium.sample_phase_function(spect, smp, medium_sample.pos, w_i);
+
+        auto& v = path.emplace_back(medium_sample, w_i);
         auto& w = path[path.size() - 2];
         v.medium_index = medium_index;
         v.throughput = throughput;
         v.delta = false;
         v.pdf.forward = w.pdf_solid_angle_to_area(pdf_dir, v);
 
-        float rev_pdf = rt.scene().mediums[medium_index].phase_function(spect, medium_sample.pos, w_o, w_i);
+        float rev_pdf = medium.phase_function(spect, medium_sample.pos, w_o, w_i);
         w.pdf.backward = v.pdf_solid_angle_to_area(rev_pdf, w);
 
-        pdf_dir = rt.scene().mediums[medium_index].phase_function(spect, medium_sample.pos, w_i, w_o);
+        pdf_dir = medium.phase_function(spect, medium_sample.pos, w_i, w_o);
         ray.o = medium_sample.pos;
         ray.d = w_o;
 
@@ -277,10 +280,6 @@ struct CPUBidirectionalImpl : public Task {
         w.pdf.backward = v.pdf_solid_angle_to_area(rev_bsdf_pdf, w);
         ETX_VALIDATE(w.pdf.backward);
 
-        if (mode == PathSource::Light) {
-          bsdf_sample.weight *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
-        }
-
         if (mode == PathSource::Camera) {
           eta *= bsdf_sample.eta;
         }
@@ -291,12 +290,13 @@ struct CPUBidirectionalImpl : public Task {
         throughput *= bsdf_sample.weight;
         ETX_VALIDATE(throughput);
 
+        if (mode == PathSource::Light) {
+          throughput *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
+          ETX_VALIDATE(throughput);
+        }
+
         ray.o = shading_pos(rt.scene().vertices, tri, intersection.barycentric, bsdf_data.w_o);
         ray.d = bsdf_data.w_o;
-
-        if ((depth > opt_rr_start) && (apply_rr(eta, smp.next(), throughput) == false)) {
-          break;
-        }
 
       } else if (mode == PathSource::Camera) {
         auto& v = path.emplace_back(PathVertex::Class::Emitter);
@@ -311,7 +311,10 @@ struct CPUBidirectionalImpl : public Task {
         break;
       }
 
-      depth += 1;
+      if ((path_length > opt_rr_start) && (apply_rr(eta, smp.next(), throughput) == false)) {
+        break;
+      }
+      path_length += 1;
     }
   }
 
@@ -324,7 +327,7 @@ struct CPUBidirectionalImpl : public Task {
 
     auto& z1 = path.emplace_back(PathVertex::Class::Camera);
     z1.medium_index = rt.scene().camera_medium_index;
-    z1.throughput = eval.weight;
+    z1.throughput = {spect.wavelength, 1.0f};
     z1.pos = ray.o;
     z1.nrm = eval.normal;
     z1.w_i = ray.d;
@@ -367,7 +370,7 @@ struct CPUBidirectionalImpl : public Task {
       path[2].pdf.forward = emitter_sample.pdf_area;
       if (path[2].cls == PathVertex::Class::Surface) {
         const auto& tri = rt.scene().triangles[path[2].triangle_index];
-        path[2].pdf.forward *= glm::abs(dot(emitter_sample.direction, tri.geo_n));
+        path[2].pdf.forward *= fabsf(dot(emitter_sample.direction, tri.geo_n));
       }
       ETX_VALIDATE(path[2].pdf.forward);
     }
@@ -498,7 +501,7 @@ struct CPUBidirectionalImpl : public Task {
     if (z_i.is_specific_emitter()) {
       const auto& emitter = rt.scene().emitters[z_i.emitter_index];
       ETX_ASSERT(emitter.is_local());
-      emitter_value = emitter_get_radiance(emitter, spect, z_i.tex, z_prev.pos, z_i.pos, pdf_area, pdf_dir, pdf_dir_out, rt.scene(), (eye_t == 1));
+      emitter_value = emitter_get_radiance(emitter, spect, z_i.tex, z_prev.pos, z_i.pos, pdf_area, pdf_dir, pdf_dir_out, rt.scene(), (eye_t <= 2));
     } else if (rt.scene().environment_emitters.count > 0) {
       auto w_o = normalize(z_i.pos - z_prev.pos);
       for (uint32_t ie = 0; ie < rt.scene().environment_emitters.count; ++ie) {
@@ -530,7 +533,12 @@ struct CPUBidirectionalImpl : public Task {
       return {spect.wavelength, 0.0f};
     }
 
-    sampled_vertex.w_i = normalize(emitter_sample.origin - z_i.pos);
+    auto dp = emitter_sample.origin - z_i.pos;
+    if (dot(dp, dp) <= kEpsilon) {
+      return {spect.wavelength, 0.0f};
+    }
+
+    sampled_vertex.w_i = normalize(dp);
     sampled_vertex.triangle_index = emitter_sample.triangle_index;
     sampled_vertex.emitter_index = emitter_sample.emitter_index;
     sampled_vertex.pos = emitter_sample.origin;
@@ -607,7 +615,7 @@ struct CPUBidirectionalImpl : public Task {
       const auto& tri = scene.triangles[p0.triangle_index];
       origin = shading_pos(scene.vertices, tri, p0.barycentric, normalize(p1.pos - p0.pos));
     }
-    return transmittance(spect, smp, origin, p1.pos, p0.medium_index, rt);
+    return transmittance(spect, smp, origin, p1.pos, p0.medium_index, scene, rt);
   }
 
   void start(const Options& opt) {
@@ -803,12 +811,12 @@ float CPUBidirectionalImpl::PathVertex::pdf_to_light_out(SpectralQuery spect, co
       auto w_o = normalize(pos - next->pos);
       emitter_evaluate_out_dist(emitter, spect, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
       if (next->is_surface_interaction()) {
-        pdf_area *= glm::abs(dot(scene.triangles[next->triangle_index].geo_n, w_o));
+        pdf_area *= fabsf(dot(scene.triangles[next->triangle_index].geo_n, w_o));
       }
     }
   } else if (scene.environment_emitters.count > 0) {
     auto w_o = normalize(pos - next->pos);
-    float w_o_dot_n = next->is_surface_interaction() ? glm::abs(dot(scene.triangles[next->triangle_index].geo_n, w_o)) : 1.0f;
+    float w_o_dot_n = next->is_surface_interaction() ? fabsf(dot(scene.triangles[next->triangle_index].geo_n, w_o)) : 1.0f;
     for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
       const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
       float local_pdf_area = 0.0f;
@@ -855,7 +863,7 @@ float CPUBidirectionalImpl::PathVertex::pdf_solid_angle_to_area(float pdf_dir, c
   float inv_d_squared = 1.0f / d_squared;
   w_o *= std::sqrt(inv_d_squared);
 
-  float cos_t = (to_vertex.is_surface_interaction() ? glm::abs(dot(w_o, to_vertex.nrm)) : 1.0f);
+  float cos_t = (to_vertex.is_surface_interaction() ? fabsf(dot(w_o, to_vertex.nrm)) : 1.0f);
 
   float result = cos_t * pdf_dir * inv_d_squared;
   ETX_VALIDATE(result);

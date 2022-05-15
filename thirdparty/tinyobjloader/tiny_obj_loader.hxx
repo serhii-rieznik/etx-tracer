@@ -197,6 +197,7 @@ struct material_t {
   std::string ambient_texname;             // map_Ka
   std::string diffuse_texname;             // map_Kd
   std::string specular_texname;            // map_Ks
+  std::string transmittance_texname;       // map_Kt
   std::string specular_highlight_texname;  // map_Ns
   std::string bump_texname;                // map_bump, map_Bump, bump
   std::string displacement_texname;        // disp
@@ -206,6 +207,7 @@ struct material_t {
   texture_option_t ambient_texopt;
   texture_option_t diffuse_texopt;
   texture_option_t specular_texopt;
+  texture_option_t transmittance_texopt;
   texture_option_t specular_highlight_texopt;
   texture_option_t bump_texopt;
   texture_option_t displacement_texopt;
@@ -727,6 +729,7 @@ struct face_t {
   face_t()
     : smoothing_group_id(0)
     , pad_(0) {
+    vertex_indices.reserve(4);
   }
 };
 
@@ -1350,6 +1353,7 @@ static void InitMaterial(material_t* material) {
   InitTexOpt(&material->ambient_texopt, /* is_bump */ false);
   InitTexOpt(&material->diffuse_texopt, /* is_bump */ false);
   InitTexOpt(&material->specular_texopt, /* is_bump */ false);
+  InitTexOpt(&material->transmittance_texopt, /* is_bump */ false);
   InitTexOpt(&material->specular_highlight_texopt, /* is_bump */ false);
   InitTexOpt(&material->bump_texopt, /* is_bump */ true);
   InitTexOpt(&material->displacement_texopt, /* is_bump */ false);
@@ -1365,6 +1369,7 @@ static void InitMaterial(material_t* material) {
   material->ambient_texname = "";
   material->diffuse_texname = "";
   material->specular_texname = "";
+  material->transmittance_texname = "";
   material->specular_highlight_texname = "";
   material->bump_texname = "";
   material->displacement_texname = "";
@@ -2168,6 +2173,13 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
       continue;
     }
 
+    // transmittance texture
+    if ((0 == _strnicmp(token, "map_Kt", 6)) && IS_SPACE(token[6])) {
+      token += 7;
+      ParseTextureNameAndOption(&(material.transmittance_texname), &(material.transmittance_texopt), token);
+      continue;
+    }
+
     // specular highlight texture
     if ((0 == _strnicmp(token, "map_Ns", 6)) && IS_SPACE(token[6])) {
       token += 7;
@@ -2410,6 +2422,12 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   std::vector<tag_t> tags;
   PrimGroup prim_group;
   std::string name;
+
+  v.reserve(65536);
+  vn.reserve(65536);
+  vt.reserve(65536);
+  vc.reserve(65536);
+  vw.reserve(65536);
 
   // material
   std::map<std::string, int> material_map;

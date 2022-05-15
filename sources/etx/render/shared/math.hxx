@@ -1,69 +1,88 @@
 ﻿#pragma once
 
 #if (ETX_RENDER_BASE_INCLUDED)
+#else
+#error This file should not be included separately. Use etx/render/shared/base.hxx instead
+#endif
+
+#include <math.h>
+#include <string.h>
+#include <complex>
+
+template <class t>
+struct vector2 {
+  t x, y;
+};
+
+template <class t>
+struct vector3 {
+  t x, y, z;
+};
+
+template <class t>
+struct vector4 {
+  t x, y, z, w;
+};
 
 #if (ETX_NVCC_COMPILER)
 
+#include <thrust/complex.h>
+using complex = thrust::complex<float>;
+
+ETX_GPU_CODE complex complex_sqrt(complex c) {
+  return thrust::sqrt(c);
+}
+ETX_GPU_CODE complex complex_cos(complex c) {
+  return thrust::cos(c);
+}
+ETX_GPU_CODE float complex_abs(complex c) {
+  return thrust::abs(c);
+}
+ETX_GPU_CODE float complex_norm(complex c) {
+  return thrust::norm(c);
+}
+
 #else
 
-#define GLM_FORCE_XYZW_ONLY 1
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE 1
-#include <glm/glm.hpp>
-#include <glm/ext/matrix_transform.hpp>
-#include <glm/ext/matrix_clip_space.hpp>
-#include <glm/gtc/quaternion.hpp>
+using float2 = vector2<float>;
+using float3 = vector3<float>;
+using float4 = vector4<float>;
+using int2 = vector2<int32_t>;
+using int3 = vector3<int32_t>;
+using int4 = vector4<int32_t>;
+using uint2 = vector2<uint32_t>;
+using uint3 = vector3<uint32_t>;
+using uint4 = vector4<uint32_t>;
+using complex = std::complex<float>;
 
-using float2 = glm::vec2;
-using float3 = glm::vec3;
-using float4 = glm::vec4;
-using int2 = glm::ivec2;
-using int3 = glm::ivec3;
-using uint2 = glm::uvec2;
-using uint3 = glm::uvec3;
-using uint4 = glm::uvec4;
-using float3x3 = glm::mat3x3;
-using float4x4 = glm::mat4x4;
-using ubyte2 = glm::u8vec2;
-using ubyte3 = glm::u8vec3;
-using ubyte4 = glm::u8vec4;
-
-template <typename T>
-inline constexpr T clamp(T val, T min_val, T max_val) {
-  return glm::clamp(val, min_val, max_val);
+ETX_GPU_CODE complex complex_sqrt(complex c) {
+  return std::sqrt(c);
 }
-
-template <typename T>
-inline constexpr T saturate(T val) {
-  return glm::clamp(val, 0.0f, 1.0f);
+ETX_GPU_CODE complex complex_cos(complex c) {
+  return std::cos(c);
 }
-
-template <typename T>
-inline constexpr T min(T a, T b) {
-  return glm::min(a, b);
+ETX_GPU_CODE float complex_abs(complex c) {
+  return std::abs(c);
 }
-
-template <typename T>
-inline constexpr T max(T a, T b) {
-  return glm::max(a, b);
-}
-
-template <typename T>
-inline constexpr T lerp(T a, T b, float t) {
-  return glm::mix(a, b, t);
-}
-
-template <typename T>
-inline constexpr T sqr(T t) {
-  return t * t;
+ETX_GPU_CODE float complex_norm(complex c) {
+  return std::norm(c);
 }
 
 #endif
 
-#else
+using ubyte2 = vector2<uint8_t>;
+using ubyte3 = vector3<uint8_t>;
+using ubyte4 = vector4<uint8_t>;
 
-#error This file should not be included separately. Use etx/render/shared/base.hxx instead
+struct float3x3 {
+  float3 col[3] ETX_EMPTY_INIT;
+};
 
-#endif
+struct float4x4 {
+  float4 col[4] ETX_EMPTY_INIT;
+};
+
+#include <etx/render/shared/vector_math.hxx>
 
 namespace etx {
 
@@ -78,9 +97,12 @@ constexpr float kMaxFloat = 3.402823466e+38f;
 constexpr float kRayEpsilon = 1.0e-4f;
 constexpr float kDeltaAlphaTreshold = 1.0e-4f;
 
+constexpr float kPlanetRadius = 6371e+3f;
+constexpr float kAtmosphereRadius = 120e+3f;
+
 constexpr uint32_t kInvalidIndex = ~0u;
 
-struct alignas(16) BoundingBox {
+struct ETX_ALIGNED BoundingBox {
   float3 p_min ETX_EMPTY_INIT;
   float3 p_max ETX_EMPTY_INIT;
 
@@ -98,7 +120,7 @@ struct alignas(16) BoundingBox {
   }
 };
 
-struct alignas(16) Vertex {
+struct ETX_ALIGNED Vertex {
   float3 pos = {};
   float3 nrm = {};
   float3 tan = {};
@@ -106,7 +128,7 @@ struct alignas(16) Vertex {
   float2 tex = {};
 };
 
-struct alignas(16) Triangle {
+struct ETX_ALIGNED Triangle {
   uint32_t i[3] = {kInvalidIndex, kInvalidIndex, kInvalidIndex};
   uint32_t material_index = kInvalidIndex;
   float3 geo_n = {};
@@ -115,23 +137,23 @@ struct alignas(16) Triangle {
   uint32_t pad[3] = {};
 };
 
-struct alignas(16) LocalFrame {
+struct ETX_ALIGNED LocalFrame {
   float3 tan = {};
   float3 btn = {};
   float3 nrm = {};
 
   ETX_GPU_CODE float3 to_local(const float3& v) const {
-    return float3x3{{tan.x, btn.x, nrm.x}, {tan.y, btn.y, nrm.y}, {tan.z, btn.z, nrm.z}} * v;
+    return float3x3{float3{tan.x, btn.x, nrm.x}, float3{tan.y, btn.y, nrm.y}, float3{tan.z, btn.z, nrm.z}} * v;
   }
   ETX_GPU_CODE float3 from_local(const float3& v) const {
-    return float3x3{{tan.x, tan.y, tan.z}, {btn.x, btn.y, btn.z}, {nrm.x, nrm.y, nrm.z}} * v;
+    return float3x3{float3{tan.x, tan.y, tan.z}, float3{btn.x, btn.y, btn.z}, float3{nrm.x, nrm.y, nrm.z}} * v;
   }
   ETX_GPU_CODE static float cos_theta(const float3& v) {
     return v.z;
   }
 };
 
-struct Ray {
+struct ETX_ALIGNED Ray {
   Ray() = default;
 
   ETX_GPU_CODE Ray(const float3& origin, const float3& direction)
@@ -152,7 +174,7 @@ struct Ray {
   float max_t = kMaxFloat;
 };
 
-struct alignas(16) Intersection : public Vertex {
+struct ETX_ALIGNED Intersection : public Vertex {
   float3 barycentric = {};
   uint32_t triangle_index = kInvalidIndex;
   float3 w_i = {};
@@ -167,14 +189,116 @@ struct alignas(16) Intersection : public Vertex {
   ETX_GPU_CODE float distance() const {
     return t;
   }
-
-  ETX_GPU_CODE operator bool() const {
-    return t >= 0.0f;
-  }
 };
+
+template <class t>
+ETX_GPU_CODE constexpr t min(t a, t b) {
+  return a < b ? a : b;
+}
+
+template <class t>
+ETX_GPU_CODE constexpr t max(t a, t b) {
+  return a > b ? a : b;
+}
+
+template <class t>
+ETX_GPU_CODE constexpr t clamp(t val, t min_val, t max_val) {
+  return (val < min_val) ? min_val : (val > max_val ? max_val : val);
+}
+
+ETX_GPU_CODE float2 max(const float2& a, const float2& b) {
+  return {
+    max(a.x, b.x),
+    max(a.y, b.y),
+  };
+}
+
+ETX_GPU_CODE float3 max(const float3& a, const float3& b) {
+  return {
+    max(a.x, b.x),
+    max(a.y, b.y),
+    max(a.z, b.z),
+  };
+}
+
+ETX_GPU_CODE float4 max(const float4& a, const float4& b) {
+  return {
+    max(a.x, b.x),
+    max(a.y, b.y),
+    max(a.z, b.z),
+    max(a.w, b.w),
+  };
+}
+
+ETX_GPU_CODE float2 min(const float2& a, const float2& b) {
+  return {
+    min(a.x, b.x),
+    min(a.y, b.y),
+  };
+}
+
+ETX_GPU_CODE float3 min(const float3& a, const float3& b) {
+  return {
+    min(a.x, b.x),
+    min(a.y, b.y),
+    min(a.z, b.z),
+  };
+}
+
+ETX_GPU_CODE float4 min(const float4& a, const float4& b) {
+  return {
+    min(a.x, b.x),
+    min(a.y, b.y),
+    min(a.z, b.z),
+    max(a.w, b.w),
+  };
+}
+
+ETX_GPU_CODE constexpr float saturate(float val) {
+  return clamp(val, 0.0f, 1.0f);
+}
+
+ETX_GPU_CODE constexpr float2 saturate(float2 val) {
+  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f)};
+}
+
+ETX_GPU_CODE constexpr float3 saturate(float3 val) {
+  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f), clamp(val.z, 0.0f, 1.0f)};
+}
+
+ETX_GPU_CODE constexpr float4 saturate(float4 val) {
+  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f), clamp(val.z, 0.0f, 1.0f), clamp(val.w, 0.0f, 1.0f)};
+}
+
+template <typename T>
+ETX_GPU_CODE constexpr T lerp(T a, T b, float t) {
+  return a * (1.0f - t) + b * t;
+}
+
+template <typename T>
+ETX_GPU_CODE constexpr T sqr(T t) {
+  return t * t;
+}
 
 ETX_GPU_CODE float3 to_float3(const float4& v) {
   return {v.x, v.y, v.z};
+}
+
+ETX_GPU_CODE float4 to_float4(const float3& v) {
+  return {v.x, v.y, v.z, 1.0f};
+}
+
+ETX_GPU_CODE float4 to_float4(const ubyte4& v) {
+  return {v.x / 255.0f, v.y / 255.0f, v.z / 255.0f, v.w / 255.0f};
+}
+
+ETX_GPU_CODE ubyte4 to_ubyte4(const float4& v) {
+  return {
+    static_cast<uint8_t>(saturate(v.x) * 255.0f),
+    static_cast<uint8_t>(saturate(v.y) * 255.0f),
+    static_cast<uint8_t>(saturate(v.z) * 255.0f),
+    static_cast<uint8_t>(saturate(v.w) * 255.0f),
+  };
 }
 
 ETX_GPU_CODE float luminance(const float3& value) {
@@ -229,7 +353,7 @@ ETX_GPU_CODE float2 sample_disk(float xi0, float xi1) {
     theta = kHalfPi - kQuarterPi * (offset.x / offset.y);
   }
 
-  return {r * std::cos(theta), r * std::sin(theta)};
+  return {r * cosf(theta), r * sinf(theta)};
 }
 
 ETX_GPU_CODE float2 sample_disk_uv(float xi0, float xi1) {
@@ -247,7 +371,7 @@ ETX_GPU_CODE float2 sample_disk_uv(float xi0, float xi1) {
     theta = kHalfPi - kQuarterPi * (offset.x / offset.y);
   }
 
-  return {r * std::cos(theta) * 0.5f + 0.5f, r * std::sin(theta) * 0.5f + 0.5f};
+  return {r * cosf(theta) * 0.5f + 0.5f, r * sinf(theta) * 0.5f + 0.5f};
 }
 
 ETX_GPU_CODE float2 projecected_coords(const float3& normal, const float3& in_dir, float sz, float csz) {
@@ -274,8 +398,12 @@ ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& b, const float3
   return normalize(t - n * dot(n, t)) * (dot(cross(n, t), b) < 0.0f ? -1.0f : 1.0f);
 }
 
+ETX_GPU_CODE float isfinite(float t) {
+  return ::isfinite(t);
+}
+
 ETX_GPU_CODE bool valid_value(float t) {
-  return (isnan(t) == false) && (isinf(t) == false) && (t >= 0.0f);
+  return (t >= 0.0f) && isfinite(t);
 }
 
 ETX_GPU_CODE bool valid_value(const float2& v) {
@@ -288,6 +416,26 @@ ETX_GPU_CODE bool valid_value(const float3& v) {
 
 ETX_GPU_CODE bool valid_value(const float4& v) {
   return valid_value(v.x) && valid_value(v.y) && valid_value(v.z) && valid_value(v.w);
+}
+
+ETX_GPU_CODE bool isfinite(const float2& v) {
+  return isfinite(v.x) && isfinite(v.y);
+}
+
+ETX_GPU_CODE bool isfinite(const float3& v) {
+  return isfinite(v.x) && isfinite(v.y) && isfinite(v.z);
+}
+
+ETX_GPU_CODE bool isfinite(const float4& v) {
+  return isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && valid_value(v.w);
+}
+
+ETX_GPU_CODE bool valid_value(complex t) {
+  return isfinite(t.real()) && isfinite(t.imag());
+}
+
+ETX_GPU_CODE bool isfinite(complex t) {
+  return isfinite(t.real()) && isfinite(t.imag());
 }
 
 ETX_GPU_CODE float to_float(uint32_t value) {
@@ -402,6 +550,20 @@ ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {
   v |= v >> 16;
   v++;
   return v;
+}
+
+ETX_GPU_CODE float distance_to_sphere(const float3& r_origin, const float3& r_direction, const float3& center, float radius) {
+  //
+  float3 e = r_origin - center;
+  float b = dot(r_direction, e);
+  float d = (b * b) - dot(e, e) + (radius * radius);
+  if (d < 0.0f) {
+    return 0.0f;
+  }
+  d = sqrtf(d);
+  float a0 = -b - d;
+  float a1 = -b + d;
+  return (a0 < 0.0f) ? ((a1 < 0.0f) ? 0.0f : a1) : a0;
 }
 
 }  // namespace etx

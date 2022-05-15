@@ -52,17 +52,17 @@ struct CPUDebugIntegratorImpl : public Task {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
       float2 uv = get_jittered_uv(smp, {x, y}, current_dimensions);
-      float4 xyz = {preview_pixel(smp, uv), 1.0f};
+      float3 xyz = preview_pixel(smp, uv);
 
       if (state->load() == Integrator::State::Running) {
-        camera_image.accumulate(xyz, uv, float(iteration) / (float(iteration + 1)));
+        camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(iteration) / (float(iteration + 1)));
       } else {
         float t = iteration < preview_frames ? 0.0f : float(iteration - preview_frames) / float(iteration - preview_frames + 1);
         for (uint32_t ay = 0; ay < current_scale; ++ay) {
           for (uint32_t ax = 0; ax < current_scale; ++ax) {
             uint32_t rx = x * current_scale + ax;
             uint32_t ry = y * current_scale + ay;
-            camera_image.accumulate(xyz, rx, ry, t);
+            camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, rx, ry, t);
           }
         }
       }
@@ -98,7 +98,7 @@ struct CPUDebugIntegratorImpl : public Task {
           break;
         }
         case CPUDebugIntegrator::Mode::TexCoords: {
-          xyz = spectrum::rgb_to_xyz({intersection.tex, 0.0f});
+          xyz = spectrum::rgb_to_xyz({intersection.tex.x, intersection.tex.y, 0.0f});
           break;
         }
         case CPUDebugIntegrator::Mode::FaceOrientation: {
@@ -115,28 +115,23 @@ struct CPUDebugIntegratorImpl : public Task {
         case CPUDebugIntegrator::Mode::Fresnel: {
           const auto& tri = scene.triangles[intersection.triangle_index];
           const auto& mat = scene.materials[tri.material_index];
+          auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, intersection.tex, scene);
           SpectralResponse fr = {};
           switch (mat.cls) {
             case Material::Class::Conductor: {
-              fr = fresnel::conductor(spect, ray.d, intersection.nrm, mat.ext_ior(spect), mat.int_ior(spect));
+              fr = fresnel::conductor(spect, ray.d, intersection.nrm, mat.ext_ior(spect), mat.int_ior(spect), thinfilm);
               break;
             }
             case Material::Class::Thinfilm: {
-              float thickness = spectrum::kLongestWavelength;
-              if (mat.thinfilm.image_index != kInvalidIndex) {
-                const auto& img = scene.images[mat.thinfilm.image_index];
-                auto t = img.evaluate(intersection.tex);
-                thickness = lerp(mat.thinfilm.min_thickness, mat.thinfilm.max_thickness, t.x);
-              }
-              auto eta_ext = mat.ext_ior(spect).eta.monochromatic();
-              auto eta_int = mat.int_ior(spect).eta.monochromatic();
-              fr = fresnel::dielectric_thinfilm(spect, ray.d, intersection.nrm, eta_ext, eta_int, eta_ext, thickness);
+              auto eta_ext = mat.ext_ior(spect);
+              thinfilm.ior = mat.int_ior(spect);
+              fr = fresnel::dielectric(spect, ray.d, intersection.nrm, eta_ext, eta_ext, thinfilm);
               break;
             }
             default: {
-              auto eta_i = (entering_material ? mat.ext_ior : mat.int_ior)(spect).eta.monochromatic();
-              auto eta_o = (entering_material ? mat.int_ior : mat.ext_ior)(spect).eta.monochromatic();
-              fr = fresnel::dielectric(spect, ray.d, intersection.nrm, eta_i, eta_o);
+              auto eta_i = (entering_material ? mat.ext_ior : mat.int_ior)(spect);
+              auto eta_o = (entering_material ? mat.int_ior : mat.ext_ior)(spect);
+              fr = fresnel::dielectric(spect, ray.d, intersection.nrm, eta_i, eta_o, thinfilm);
             }
           }
           xyz = fr.to_xyz();
