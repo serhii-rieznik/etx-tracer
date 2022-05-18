@@ -48,7 +48,7 @@ function(create_library folder)
 endfunction(create_library)
 
 create_library(core)
-target_link_libraries(etx-core PUBLIC jansson)
+target_link_libraries(etx-core PUBLIC jansson Dbghelp.lib)
 target_include_directories(etx-core PUBLIC .. ${JANSSON_INCLUDE_DIRS})
 
 create_library(log)

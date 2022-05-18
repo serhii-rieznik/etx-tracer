@@ -41,24 +41,21 @@ const char* exception_code_to_string(DWORD code) {
 }
 
 LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
-  bool continuable = (info->ExceptionRecord->ExceptionFlags & EXCEPTION_NONCONTINUABLE) == 0;
-
   auto process = GetCurrentProcess();
   SymInitialize(process, nullptr, TRUE);
 
-  void* backtrace[32] = {};
+  void* backtrace[64] = {};
   char symbolInfoData[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
   SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(symbolInfoData);
-  symbol->MaxNameLen = 255;
+  symbol->MaxNameLen = MAX_SYM_NAME;
   symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
 
   DWORD backtraceHash = 0;
-  WORD framesCaptured = RtlCaptureStackBackTrace(0, 32, backtrace, &backtraceHash);
+  WORD framesCaptured = RtlCaptureStackBackTrace(0, 64u, backtrace, &backtraceHash);
 
   std::string excCode = exception_code_to_string(info->ExceptionRecord->ExceptionCode);
-  std::string type = continuable ? "continuable" : "non-continuable";
 
-  printf("Unhandled exception:\n code: %s\n type: %s\n address: 0x%016llX\n", excCode.c_str(), type.c_str(), reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
+  printf("Unhandled exception:\n code: %s\n address: 0x%016llX\n", excCode.c_str(),  reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
   fflush(stdout);
 
   if (framesCaptured > 0) {
@@ -66,7 +63,7 @@ LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
     fflush(stdout);
     for (unsigned int i = 0; i < framesCaptured; ++i) {
       SymFromAddr(process, reinterpret_cast<DWORD64>(backtrace[i]), 0, symbol);
-      printf("%u : %s (0x%016llX)\n", i, symbol->Name, symbol->Address);
+      printf(" - %s (0x%016llX)\n", symbol->Name, symbol->Address);
       fflush(stdout);
     }
   }

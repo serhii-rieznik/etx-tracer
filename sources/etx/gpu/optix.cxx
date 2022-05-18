@@ -646,9 +646,11 @@ void GPUOptixImpl::destroy_pipeline(GPUPipeline pipeline) {
   if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
     log::error("Failed to synchronize device before the deletion of a pipeline.");
   }
+  
   auto& object = _private->pipeline_pool.get(pipeline.handle);
   object.release(_private);
   _private->pipeline_pool.free(pipeline.handle);
+
 }
 
 struct PipelineDesc {
