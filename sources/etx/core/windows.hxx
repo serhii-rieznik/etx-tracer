@@ -13,3 +13,4 @@
 #endif
 
 #include <Windows.h>
+#include <DbgHelp.h>>

@@ -7,6 +7,78 @@
 
 namespace etx {
 
+const char* exception_code_to_string(DWORD code) {
+#define CASE_TO_STRING(A) \
+  case A:                 \
+    return #A
+  switch (code) {
+    CASE_TO_STRING(EXCEPTION_ACCESS_VIOLATION);
+    CASE_TO_STRING(EXCEPTION_DATATYPE_MISALIGNMENT);
+    CASE_TO_STRING(EXCEPTION_BREAKPOINT);
+    CASE_TO_STRING(EXCEPTION_SINGLE_STEP);
+    CASE_TO_STRING(EXCEPTION_ARRAY_BOUNDS_EXCEEDED);
+    CASE_TO_STRING(EXCEPTION_FLT_DENORMAL_OPERAND);
+    CASE_TO_STRING(EXCEPTION_FLT_DIVIDE_BY_ZERO);
+    CASE_TO_STRING(EXCEPTION_FLT_INEXACT_RESULT);
+    CASE_TO_STRING(EXCEPTION_FLT_INVALID_OPERATION);
+    CASE_TO_STRING(EXCEPTION_FLT_OVERFLOW);
+    CASE_TO_STRING(EXCEPTION_FLT_STACK_CHECK);
+    CASE_TO_STRING(EXCEPTION_FLT_UNDERFLOW);
+    CASE_TO_STRING(EXCEPTION_INT_DIVIDE_BY_ZERO);
+    CASE_TO_STRING(EXCEPTION_INT_OVERFLOW);
+    CASE_TO_STRING(EXCEPTION_PRIV_INSTRUCTION);
+    CASE_TO_STRING(EXCEPTION_IN_PAGE_ERROR);
+    CASE_TO_STRING(EXCEPTION_ILLEGAL_INSTRUCTION);
+    CASE_TO_STRING(EXCEPTION_NONCONTINUABLE_EXCEPTION);
+    CASE_TO_STRING(EXCEPTION_STACK_OVERFLOW);
+    CASE_TO_STRING(EXCEPTION_INVALID_DISPOSITION);
+    CASE_TO_STRING(EXCEPTION_GUARD_PAGE);
+    CASE_TO_STRING(EXCEPTION_INVALID_HANDLE);
+    default:
+      return "Unknown exception code";
+  }
+#undef CASE_TO_STRING
+}
+
+LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
+  bool continuable = (info->ExceptionRecord->ExceptionFlags & EXCEPTION_NONCONTINUABLE) == 0;
+
+  auto process = GetCurrentProcess();
+  SymInitialize(process, nullptr, TRUE);
+
+  void* backtrace[32] = {};
+  char symbolInfoData[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+  SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(symbolInfoData);
+  symbol->MaxNameLen = 255;
+  symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+
+  DWORD backtraceHash = 0;
+  WORD framesCaptured = RtlCaptureStackBackTrace(0, 32, backtrace, &backtraceHash);
+
+  std::string excCode = exception_code_to_string(info->ExceptionRecord->ExceptionCode);
+  std::string type = continuable ? "continuable" : "non-continuable";
+
+  printf("Unhandled exception:\n code: %s\n type: %s\n address: 0x%016llX\n", excCode.c_str(), type.c_str(), reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
+  fflush(stdout);
+
+  if (framesCaptured > 0) {
+    printf("Backtrace (hash = 0x%08X):\n", backtraceHash);
+    fflush(stdout);
+    for (unsigned int i = 0; i < framesCaptured; ++i) {
+      SymFromAddr(process, reinterpret_cast<DWORD64>(backtrace[i]), 0, symbol);
+      printf("%u : %s (0x%016llX)\n", i, symbol->Name, symbol->Address);
+      fflush(stdout);
+    }
+  }
+
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
+void init_platform() {
+  SetUnhandledExceptionFilter(unhandled_exception_filter);
+  SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+}
+
 TimeMeasure::TimeMeasure() {
   reset();
 }

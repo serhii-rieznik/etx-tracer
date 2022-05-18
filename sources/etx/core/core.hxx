@@ -22,6 +22,8 @@ struct TimeMeasure {
   uint64_t _data;
 };
 
+void init_platform();
+
 std::string open_file(const std::vector<std::string>& filters);
 std::string save_file(const std::vector<std::string>& filters);
 
