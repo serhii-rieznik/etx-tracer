@@ -738,6 +738,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
         uint32_t emissive_image_index = kInvalidIndex;
         if (get_file(base_dir, source_material.emissive_texname, data_buffer)) {
           emissive_image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable);
+          images.load_images();
         }
 
         float texture_emission = 1.0f;
