@@ -21,13 +21,19 @@ struct GPUPipelineOptixImpl;
 struct GPUAccelerationStructureImpl;
 
 struct GPUOptixImplData {
-  constexpr static const uint64_t kSharedBufferSize = 8llu * 1024llu * 1024llu;
+  constexpr static const uint64_t kSharedBufferSize = 8llu * 1024llu * 1024llu + (2u * 3840u * 2160u * sizeof(float4));
 
   CUcontext cuda_context = {};
   CUstream main_stream = {};
 
   void* optix_handle = nullptr;
   OptixDeviceContext optix = {};
+  OptixDenoiser denoiser = {};
+  device_pointer_t denoiser_state = {};
+  device_pointer_t denoiser_scratch = {};
+  OptixDenoiserSizes denoiser_sizes = {};
+  uint2 denoiser_image_size = {};
+  bool denoiser_setup = false;
 
   ObjectIndexPool<GPUBufferOptixImpl> buffer_pool;
   ObjectIndexPool<GPUPipelineOptixImpl> pipeline_pool;
@@ -48,10 +54,13 @@ struct GPUOptixImplData {
       return;
     }
 
-    init_optix();
+    if (init_optix()) {
+      init_denoiser();
+    }
   }
 
   ~GPUOptixImplData() {
+    cleanup_denoiser();
     cleanup_optix();
     cleanup_cuda();
     accelearaion_structure_pool.cleanup();
@@ -111,6 +120,20 @@ struct GPUOptixImplData {
   void cleanup_optix() {
     optixDeviceContextDestroy(optix);
     optixUninitWithHandle(optix_handle);
+  }
+
+  void init_denoiser() {
+    OptixDenoiserOptions options = {};
+    if (optix_call_failed(optixDenoiserCreate(optix, OPTIX_DENOISER_MODEL_KIND_HDR, &options, &denoiser))) {
+      log::error("Failed to create denoiser");
+      return;
+    }
+  }
+
+  void cleanup_denoiser() {
+    if (optixDenoiserDestroy(denoiser)) {
+      log::error("Failed to destroy denoiser");
+    }
   }
 
   void report_error() {
@@ -646,11 +669,10 @@ void GPUOptixImpl::destroy_pipeline(GPUPipeline pipeline) {
   if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
     log::error("Failed to synchronize device before the deletion of a pipeline.");
   }
-  
+
   auto& object = _private->pipeline_pool.get(pipeline.handle);
   object.release(_private);
   _private->pipeline_pool.free(pipeline.handle);
-
 }
 
 struct PipelineDesc {
@@ -837,6 +859,68 @@ void GPUOptixImpl::destroy_acceleration_structure(GPUAccelerationStructure acc) 
     log::error("Failed to synchronize device before the deletion of an acceleration structure.");
   }
   _private->accelearaion_structure_pool.free(acc.handle);
+}
+
+void GPUOptixImpl::setup_denoiser(uint32_t dim_x, uint32_t dim_y) {
+  _private->denoiser_setup = false;
+  if (_private->denoiser == nullptr)
+    return;
+
+  if (_private->optix_call_failed(optixDenoiserComputeMemoryResources(_private->denoiser, dim_x, dim_y, &_private->denoiser_sizes))) {
+    log::error("Failed to compute memory resources for denoiser");
+    return;
+  }
+
+  _private->denoiser_image_size = {dim_x, dim_y};
+  _private->denoiser_state = upload_to_shared_buffer(_private->denoiser_state, nullptr, _private->denoiser_sizes.stateSizeInBytes);
+  _private->denoiser_scratch = upload_to_shared_buffer(_private->denoiser_scratch, nullptr, _private->denoiser_sizes.withOverlapScratchSizeInBytes);
+
+  auto invoke = optixDenoiserSetup(_private->denoiser, _private->main_stream, dim_x, dim_y, _private->denoiser_state, _private->denoiser_sizes.stateSizeInBytes,
+    _private->denoiser_scratch, _private->denoiser_sizes.withOverlapScratchSizeInBytes);
+
+  if (_private->optix_call_failed(invoke)) {
+    log::error("Failed to setup denoiser");
+    return;
+  }
+  _private->denoiser_setup = true;
+}
+
+bool GPUOptixImpl::denoise(GPUBuffer input, GPUBuffer output) {
+  if (_private->denoiser_setup == false)
+    return false;
+
+  OptixImage2D input_image = {
+    .data = get_buffer_device_pointer(input),
+    .width = _private->denoiser_image_size.x,
+    .height = _private->denoiser_image_size.y,
+    .rowStrideInBytes = _private->denoiser_image_size.x * sizeof(float4),
+    .format = OptixPixelFormat::OPTIX_PIXEL_FORMAT_FLOAT4,
+  };
+
+  OptixImage2D ouput_image = {
+    .data = get_buffer_device_pointer(output),
+    .width = _private->denoiser_image_size.x,
+    .height = _private->denoiser_image_size.y,
+    .rowStrideInBytes = _private->denoiser_image_size.x * sizeof(float4),
+    .format = OptixPixelFormat::OPTIX_PIXEL_FORMAT_FLOAT4,
+  };
+
+  OptixDenoiserParams params = {};
+  OptixDenoiserGuideLayer guide_layer = {};
+  OptixDenoiserLayer guide_layers[1] = {{
+    .input = input_image,
+    .output = ouput_image,
+  }};
+
+  auto invoke = optixDenoiserInvoke(_private->denoiser, _private->main_stream, &params, _private->denoiser_state, _private->denoiser_sizes.stateSizeInBytes, &guide_layer,
+    guide_layers, 1, 0, 0, _private->denoiser_scratch, _private->denoiser_sizes.withOverlapScratchSizeInBytes);
+
+  if (_private->optix_call_failed(invoke)) {
+    log::error("Failed to invoke denoiser");
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace etx

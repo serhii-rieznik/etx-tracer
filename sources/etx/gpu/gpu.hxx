@@ -76,6 +76,9 @@ struct GPUDevice {
 
   virtual bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) = 0;
 
+  virtual void setup_denoiser(uint32_t dim_x, uint32_t dim_y) = 0;
+  virtual bool denoise(GPUBuffer input, GPUBuffer output) = 0;
+
   static GPUDevice* create_optix_device();
   static void free_device(GPUDevice*);
 };

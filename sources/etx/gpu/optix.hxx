@@ -27,6 +27,9 @@ struct GPUOptixImpl : public GPUDevice {
 
   bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override;
 
+  void setup_denoiser(uint32_t dim_x, uint32_t dim_y) override;
+  bool denoise(GPUBuffer input, GPUBuffer output) override;
+
   ETX_PIMPL_DECLARE(GPUOptixImpl, Data, 2048);
 };
 
