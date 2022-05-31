@@ -90,7 +90,6 @@ struct CPUVCMImpl {
   Film light_image;
   Film iteration_light_image;
   Task::Handle current_task = {};
-  uint32_t iteration = {};
   uint32_t opt_max_iterations = 0x7fffffff;
   uint32_t opt_max_depth = 0x7fffffff;
   uint32_t opt_rr_start = 0x5;
@@ -149,10 +148,10 @@ struct CPUVCMImpl {
     double l_c = 100.0 * double(stats.l.load()) / double(camera_image.count());
     double c_c = 100.0 * double(stats.c.load()) / double(camera_image.count());
 
-    if (iteration == 0) {
+    if (_it.iteration == 0) {
       snprintf(status, sizeof(status), "0 | %s / %s : L: %.2f, C: %.2f", str_state[uint32_t(state->load())], str_vcm_state[uint32_t(vcm_state)], l_c, c_c);
     } else {
-      snprintf(status, sizeof(status), "%u | %s / %s : L: %.2f, C: %.2f, last iteration time: %.2fs (L: %.2fs, C: %.2fs, G: %.2fs, M: %.2f)", iteration,  //
+      snprintf(status, sizeof(status), "%u | %s / %s : L: %.2f, C: %.2f, last iteration time: %.2fs (L: %.2fs, C: %.2fs, G: %.2fs, M: %.2f)", _it.iteration,  //
         str_state[uint32_t(state->load())], str_vcm_state[uint32_t(vcm_state)], l_c, c_c, stats.last_iteration_time, stats.l_time, stats.c_time, stats.g_time, stats.m_time);
     }
   }
@@ -171,7 +170,7 @@ struct CPUVCMImpl {
     opt_radius_decay = opt.get("vcm_r_decay", opt_radius_decay).to_integer();
 
     stats.total_time = {};
-    iteration = 0;
+    _it.iteration = 0;
     vcm_state = VCMState::Stopped;
     start_next_iteration();
   }
@@ -194,7 +193,7 @@ struct CPUVCMImpl {
 
     vcm_state = VCMState::GatheringLightVertices;
 
-    float radius_scale = 1.0f / (1.0f + float(iteration) / float(opt_radius_decay));
+    float radius_scale = 1.0f / (1.0f + float(_it.iteration) / float(opt_radius_decay));
     _it.current_radius = used_radius * radius_scale;
 
     float eta_vcm = kPi * sqr(_it.current_radius) * float(camera_image.count());
@@ -504,7 +503,7 @@ struct CPUVCMImpl {
       merged *= _it.vm_normalization;
       merged += (gathered / spectrum::sample_pdf()).to_xyz();
 
-      camera_image.accumulate({merged.x, merged.y, merged.z, 1.0f}, uv, float(iteration) / float(iteration + 1));
+      camera_image.accumulate({merged.x, merged.y, merged.z, 1.0f}, uv, float(_it.iteration) / float(_it.iteration + 1));
     }
   }
 };
@@ -569,15 +568,15 @@ void CPUVCM::update() {
   if (_private->vcm_state == VCMState::GatheringLightVertices) {
     TimeMeasure tm = {};
     _private->light_image_updated = true;
-    _private->iteration_light_image.flush_to(_private->light_image, float(_private->iteration) / float(_private->iteration + 1));
+    _private->iteration_light_image.flush_to(_private->light_image, float(_private->_it.iteration) / float(_private->_it.iteration + 1));
     _private->stats.m_time = tm.measure();
     _private->continue_iteration();
   } else if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);
     current_state = Integrator::State::Stopped;
     _private->current_task = {};
-  } else if (_private->iteration + 1 < _private->opt_max_iterations) {
-    _private->iteration += 1;
+  } else if (_private->_it.iteration + 1 < _private->opt_max_iterations) {
+    _private->_it.iteration += 1;
     _private->start_next_iteration();
   } else {
     current_state = Integrator::State::Stopped;
@@ -596,7 +595,7 @@ void CPUVCM::stop(Stop st) {
     _private->current_task = {};
   } else {
     current_state = State::WaitingForCompletion;
-    snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->iteration);
+    snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->_it.iteration);
   }
 }
 
