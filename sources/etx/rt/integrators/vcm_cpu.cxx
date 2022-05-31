@@ -2,17 +2,15 @@
 #include <etx/rt/integrators/vcm_cpu.hxx>
 
 #include <etx/render/host/film.hxx>
-
-#include <etx/render/shared/vcm.hxx>
 #include <etx/render/shared/scene_camera.hxx>
+
+#include <etx/rt/shared/vcm_shared.hxx>
 
 #include <mutex>
 
 namespace etx {
 
-namespace vcm {
-
-void SpatialGrid::construct(const Scene& scene, const LightVertex* samples, uint64_t sample_count, float radius) {
+void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius) {
   data = {};
   if (sample_count == 0) {
     return;
@@ -58,8 +56,6 @@ void SpatialGrid::construct(const Scene& scene, const LightVertex* samples, uint
   data.cell_ends = make_array_view<uint32_t>(_cell_ends.data(), _cell_ends.size());
 }
 
-}  // namespace vcm
-
 struct CPUVCMImpl {
   struct LightPath {
     uint64_t begin = 0;
@@ -86,12 +82,6 @@ struct CPUVCMImpl {
       impl->gather_camera_vertices(begin, end, thread_id);
     }
   } gather_camera_job = {this};
-
-  enum class VCMState : uint32_t {
-    Stopped,
-    GatheringLightVertices,
-    GatheringCameraVertices,
-  };
 
   Raytracing& rt;
   std::atomic<Integrator::State>* state = {};
@@ -131,12 +121,12 @@ struct CPUVCMImpl {
 
   VCMState vcm_state = VCMState::Stopped;
 
-  vcm::Options _vcm_options = {};
-  vcm::SpatialGrid _current_grid = {};
+  VCMOptions _vcm_options = {};
+  VCMSpatialGrid _current_grid = {};
 
   std::mutex _light_vertices_lock;
   std::vector<LightPath> _light_paths;
-  std::vector<vcm::LightVertex> _light_vertices;
+  std::vector<VCMLightVertex> _light_vertices;
 
   CPUVCMImpl(Raytracing& r, std::atomic<Integrator::State>* st)
     : rt(r)
@@ -241,7 +231,7 @@ struct CPUVCMImpl {
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
     RNDSampler smp;
 
-    std::vector<vcm::LightVertex> local_vertices;
+    std::vector<VCMLightVertex> local_vertices;
     local_vertices.reserve(4llu * (range_end - range_begin));
 
     std::vector<LightPath> local_paths;
@@ -254,7 +244,7 @@ struct CPUVCMImpl {
       auto emitter_sample = sample_emission(rt.scene(), spect, smp);
       float cos_t = dot(emitter_sample.direction, emitter_sample.normal);
 
-      vcm::PathState state;
+      VCMPathState state;
       state.throughput = emitter_sample.value * (cos_t / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample));
       state.ray = {emitter_sample.origin, emitter_sample.direction};
       state.d_vcm = emitter_sample.pdf_area / emitter_sample.pdf_dir_out;
@@ -354,7 +344,7 @@ struct CPUVCMImpl {
             }
           }
 
-          if (vcm::next_ray(rt.scene(), spect, PathSource::Light, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _vc_weight, _vm_weight) == false) {
+          if (vcm_next_ray(rt.scene(), spect, PathSource::Light, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _vc_weight, _vm_weight) == false) {
             break;
           }
 
@@ -387,7 +377,7 @@ struct CPUVCMImpl {
       const auto& light_path = _light_paths[pi];
       auto spect = light_path.spect;
 
-      vcm::PathState state;
+      VCMPathState state;
       float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
       state.ray = generate_ray(smp, rt.scene(), uv);
 
@@ -449,7 +439,7 @@ struct CPUVCMImpl {
 
           if (_vcm_options.direct_hit() && (tri.emitter_index != kInvalidIndex)) {
             const auto& emitter = rt.scene().emitters[tri.emitter_index];
-            gathered += get_radiance(rt.scene(), spect, emitter, intersection, state, path_length, _vcm_options.enable_mis());
+            gathered += vcm_get_radiance(rt.scene(), spect, emitter, intersection, state, path_length, _vcm_options.enable_mis());
           }
 
           bool do_connection = _vcm_options.connect_to_light() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false);
@@ -485,8 +475,7 @@ struct CPUVCMImpl {
           for (uint64_t i = 0; do_connection && (i < light_path.length) && (path_length + i + 2 <= opt_max_depth); ++i) {
             float3 target_position = {};
             SpectralResponse value = {};
-            if (vcm::connect_to_light_vertex(rt.scene(), spect, state, intersection, _light_vertices[light_path.begin + i], _vm_weight, medium_index, target_position, value,
-                  smp)) {
+            if (vcm_connect_to_light_vertex(rt.scene(), spect, state, intersection, _light_vertices[light_path.begin + i], _vm_weight, medium_index, target_position, value, smp)) {
               float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
               auto tr = transmittance(spect, smp, p0, target_position, medium_index, rt.scene(), rt);
               if (tr.is_zero() == false) {
@@ -500,7 +489,7 @@ struct CPUVCMImpl {
             merged += _current_grid.data.gather(rt.scene(), spect, state, _light_vertices.data(), intersection, medium_index, path_length, opt_max_depth, _vc_weight, smp);
           }
 
-          if (vcm::next_ray(rt.scene(), spect, PathSource::Camera, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _vc_weight, _vm_weight) == false) {
+          if (vcm_next_ray(rt.scene(), spect, PathSource::Camera, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _vc_weight, _vm_weight) == false) {
             break;
           }
 
@@ -509,7 +498,7 @@ struct CPUVCMImpl {
           bool gather_light = _vcm_options.direct_hit() || (path_length == 1);
           for (uint32_t ie = 0; gather_light && (ie < rt.scene().environment_emitters.count); ++ie) {
             const auto& emitter = rt.scene().emitters[rt.scene().environment_emitters.emitters[ie]];
-            gathered += get_radiance(rt.scene(), spect, emitter, intersection, state, path_length, _vcm_options.enable_mis());
+            gathered += vcm_get_radiance(rt.scene(), spect, emitter, intersection, state, path_length, _vcm_options.enable_mis());
           }
           break;
         }
@@ -574,13 +563,13 @@ void CPUVCM::run(const Options& opt) {
 
 void CPUVCM::update() {
   _private->build_stats();
-  _private->camera_image_updated = _private->vcm_state == CPUVCMImpl::VCMState::GatheringCameraVertices;
+  _private->camera_image_updated = _private->vcm_state == VCMState::GatheringCameraVertices;
 
   if ((current_state == State::Stopped) || (rt.scheduler().completed(_private->current_task) == false)) {
     return;
   }
 
-  if (_private->vcm_state == CPUVCMImpl::VCMState::GatheringLightVertices) {
+  if (_private->vcm_state == VCMState::GatheringLightVertices) {
     TimeMeasure tm = {};
     _private->light_image_updated = true;
     _private->iteration_light_image.flush_to(_private->light_image, float(_private->iteration) / float(_private->iteration + 1));

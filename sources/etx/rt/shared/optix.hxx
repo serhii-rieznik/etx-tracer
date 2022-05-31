@@ -2,6 +2,7 @@
 
 #include <optix.h>
 #include <etx/render/shared/sampler.hxx>
+#include <etx/render/shared/scene.hxx>
 
 #define RAYGEN(name) extern "C" __global__ void __raygen__##name()
 #define ANY_HIT(name) extern "C" __global__ void __anyhit__##name()
@@ -10,6 +11,8 @@
 #define EXCEPTION(name) extern "C" __global__ void __exception__##name()
 
 namespace etx {
+
+struct Scene;
 
 struct ETX_ALIGNED Raytracing {
   struct TraceData {

@@ -21,7 +21,7 @@ bool compile_nvcc_file(const char* path_to_file, const char* output_to_file) {
 
   const char* target_file = output_to_file == nullptr ? out_ptx_file : output_to_file;
 
-#if defined(NDEBUG) || defined(_NDEBUG)
+#if 1 || defined(NDEBUG) || defined(_NDEBUG)
   const char* debug_flags = "--define-macro NDEBUG --optimize 3";
 #else
   const char* debug_flags = "--debug --device-debug --source-in-ptx";
