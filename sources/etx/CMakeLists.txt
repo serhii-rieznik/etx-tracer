@@ -12,24 +12,26 @@ function(etx_build_pack target folder)
 
   source_group(TREE "${folder}/../" FILES ${sources})
 
-#[[
+# #[[
   set(lib_source "${CMAKE_CURRENT_BINARY_DIR}/../compile_packs/${target}.pack.cpp")
   file(WRITE ${lib_source})
 
-  foreach(source ${sources})
+  foreach(source ${cxx_sources})
     target_sources(${target} PRIVATE ${source})
     set_property(SOURCE ${source} PROPERTY HEADER_FILE_ONLY TRUE)
     file(APPEND ${lib_source} "#include \"${source}\"\n")
   endforeach()
 
   list(APPEND packed_sources ${lib_source})
+  target_sources(${target} PRIVATE ${hxx_sources})
   target_sources(${target} PRIVATE ${packed_sources})
   source_group("" FILES ${lib_source})
   target_sources(${target} PRIVATE ${headers})
-#]]
+# #]]
 
-  target_sources(${target} PRIVATE ${headers})
-  target_sources(${target} PRIVATE ${sources})
+#  target_sources(${target} PRIVATE ${headers})
+#  target_sources(${target} PRIVATE ${sources})
+
 endfunction(etx_build_pack)
 
 function(create_library folder)

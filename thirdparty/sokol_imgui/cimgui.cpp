@@ -74,38 +74,6 @@ CIMGUI_API ImDrawData* igGetDrawData()
 {
     return ImGui::GetDrawData();
 }
-CIMGUI_API void igShowDemoWindow(bool* p_open)
-{
-    return ImGui::ShowDemoWindow(p_open);
-}
-CIMGUI_API void igShowMetricsWindow(bool* p_open)
-{
-    return ImGui::ShowMetricsWindow(p_open);
-}
-CIMGUI_API void igShowStackToolWindow(bool* p_open)
-{
-    return ImGui::ShowStackToolWindow(p_open);
-}
-CIMGUI_API void igShowAboutWindow(bool* p_open)
-{
-    return ImGui::ShowAboutWindow(p_open);
-}
-CIMGUI_API void igShowStyleEditor(ImGuiStyle* ref)
-{
-    return ImGui::ShowStyleEditor(ref);
-}
-CIMGUI_API bool igShowStyleSelector(const char* label)
-{
-    return ImGui::ShowStyleSelector(label);
-}
-CIMGUI_API void igShowFontSelector(const char* label)
-{
-    return ImGui::ShowFontSelector(label);
-}
-CIMGUI_API void igShowUserGuide()
-{
-    return ImGui::ShowUserGuide();
-}
 CIMGUI_API const char* igGetVersion()
 {
     return ImGui::GetVersion();

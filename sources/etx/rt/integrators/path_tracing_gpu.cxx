@@ -145,6 +145,8 @@ void GPUPathTracing::stop(Stop mode) {
 }
 
 void GPUPathTracing::update_options(const Options& opt) {
+  _private->denoise = opt.get("denoise", _private->denoise).to_bool();
+
   if (current_state == State::Preview) {
     preview(opt);
   }

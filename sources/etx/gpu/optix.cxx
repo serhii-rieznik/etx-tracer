@@ -588,7 +588,10 @@ device_pointer_t GPUOptixImplData::upload_to_shared_buffer(device_pointer_t ptr,
     ptr = reinterpret_cast<device_pointer_t>(object.device_ptr) + offset;
   }
 
-  cudaMemcpy(reinterpret_cast<void*>(ptr), data, size, cudaMemcpyHostToDevice);
+  if (data != nullptr) {
+    cudaMemcpy(reinterpret_cast<void*>(ptr), data, size, cudaMemcpyHostToDevice);
+  }
+
   return ptr;
 }
 

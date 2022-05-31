@@ -55,7 +55,7 @@ LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
 
   std::string excCode = exception_code_to_string(info->ExceptionRecord->ExceptionCode);
 
-  printf("Unhandled exception:\n code: %s\n address: 0x%016llX\n", excCode.c_str(),  reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
+  printf("Unhandled exception:\n code: %s\n address: 0x%016llX\n", excCode.c_str(), reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
   fflush(stdout);
 
   if (framesCaptured > 0) {
