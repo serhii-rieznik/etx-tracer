@@ -61,6 +61,13 @@ enum class VCMState : uint32_t {
   GatheringCameraVertices,
 };
 
+struct ETX_ALIGNED VCMIteration {
+  float current_radius = 0.0f;
+  float vm_weight = {};
+  float vc_weight = {};
+  float vm_normalization = {};
+};
+
 struct ETX_ALIGNED GPUCameraLaunchParams {
   ArrayView<float4> camera_image ETX_EMPTY_INIT;
 };
@@ -124,7 +131,7 @@ struct ETX_ALIGNED VCMLightVertex {
 };
 
 ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, SpectralQuery spect, const PathSource path_source, const Intersection& i, const uint64_t path_length, uint32_t rr_start,
-  Sampler& smp, VCMPathState& state, uint32_t& state_medium, float& state_eta, float vc_weight, float vm_weight) {
+  Sampler& smp, VCMPathState& state, uint32_t& state_medium, float& state_eta, const VCMIteration& it) {
   const auto& tri = scene.triangles[i.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
   auto bsdf_data = BSDFData{spect, state_medium, path_source, i, state.ray.d, {}};
@@ -167,10 +174,10 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, SpectralQuery spect, const Pa
     auto rev_sample_pdf = bsdf::pdf(bsdf_data.swap_directions(), mat, scene, smp);
     ETX_VALIDATE(rev_sample_pdf);
 
-    state.d_vc = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vc * rev_sample_pdf + state.d_vcm + vm_weight);
+    state.d_vc = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vc * rev_sample_pdf + state.d_vcm + it.vm_weight);
     ETX_VALIDATE(state.d_vc);
 
-    state.d_vm = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vm * rev_sample_pdf + state.d_vcm * vc_weight + 1.0f);
+    state.d_vm = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vm * rev_sample_pdf + state.d_vcm * it.vc_weight + 1.0f);
     ETX_VALIDATE(state.d_vm);
 
     state.d_vcm = 1.0f / bsdf_sample.pdf;

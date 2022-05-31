@@ -96,11 +96,6 @@ struct CPUVCMImpl {
   uint32_t opt_rr_start = 0x5;
   uint32_t opt_radius_decay = 256;
   float opt_radius = 0.0f;
-  float current_radius = 0.0f;
-
-  float _vm_weight = {};
-  float _vc_weight = {};
-  float _vm_normalization = {};
 
   bool light_image_updated = false;
   bool camera_image_updated = false;
@@ -122,6 +117,7 @@ struct CPUVCMImpl {
   VCMState vcm_state = VCMState::Stopped;
 
   VCMOptions _vcm_options = {};
+  VCMIteration _it = {};
   VCMSpatialGrid _current_grid = {};
 
   std::mutex _light_vertices_lock;
@@ -196,16 +192,16 @@ struct CPUVCMImpl {
       used_radius = 5.0f * rt.scene().bounding_sphere_radius * min(1.0f / float(camera_image.dimensions().x), 1.0f / float(camera_image.dimensions().y));
     }
 
-    float radius_scale = 1.0f / (1.0f + float(iteration) / float(opt_radius_decay));
-    current_radius = used_radius * radius_scale;
-
-    float eta_vcm = kPi * sqr(current_radius) * float(camera_image.count());
-
     vcm_state = VCMState::GatheringLightVertices;
 
-    _vm_weight = _vcm_options.merge_vertices() ? eta_vcm : 0.0f;
-    _vc_weight = 1.0f / eta_vcm;
-    _vm_normalization = 1.0f / eta_vcm;
+    float radius_scale = 1.0f / (1.0f + float(iteration) / float(opt_radius_decay));
+    _it.current_radius = used_radius * radius_scale;
+
+    float eta_vcm = kPi * sqr(_it.current_radius) * float(camera_image.count());
+    _it.vm_weight = _vcm_options.merge_vertices() ? eta_vcm : 0.0f;
+    _it.vc_weight = 1.0f / eta_vcm;
+    _it.vm_normalization = 1.0f / eta_vcm;
+
     _light_paths.clear();
     _light_vertices.clear();
     current_task = rt.scheduler().schedule(&gather_light_job, camera_image.count());
@@ -219,7 +215,7 @@ struct CPUVCMImpl {
 
     TimeMeasure grid_time = {};
     if (_vcm_options.merge_vertices()) {
-      _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), current_radius);
+      _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), _it.current_radius);
     }
     stats.g_time = grid_time.measure();
     stats.camera_gather_time = {};
@@ -249,7 +245,7 @@ struct CPUVCMImpl {
       state.ray = {emitter_sample.origin, emitter_sample.direction};
       state.d_vcm = emitter_sample.pdf_area / emitter_sample.pdf_dir_out;
       state.d_vc = emitter_sample.is_delta ? 0.0f : (cos_t / (emitter_sample.pdf_dir_out * emitter_sample.pdf_sample));
-      state.d_vm = state.d_vc * _vc_weight;
+      state.d_vm = state.d_vc * _it.vc_weight;
       ETX_VALIDATE(state.d_vcm);
       ETX_VALIDATE(state.d_vc);
       ETX_VALIDATE(state.d_vm);
@@ -327,7 +323,7 @@ struct CPUVCMImpl {
                     float camera_pdf = camera_sample.pdf_dir_out * fabsf(dot(intersection.nrm, w_o)) / dot(direction, direction);
                     ETX_VALIDATE(camera_pdf);
 
-                    float w_light = camera_pdf * (_vm_weight + state.d_vcm + state.d_vc * reverse_pdf);
+                    float w_light = camera_pdf * (_it.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);
                     ETX_VALIDATE(w_light);
 
                     float weight = _vcm_options.enable_mis() ? (1.0f / (1.0f + w_light)) : 1.0f;
@@ -344,7 +340,7 @@ struct CPUVCMImpl {
             }
           }
 
-          if (vcm_next_ray(rt.scene(), spect, PathSource::Light, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _vc_weight, _vm_weight) == false) {
+          if (vcm_next_ray(rt.scene(), spect, PathSource::Light, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _it) == false) {
             break;
           }
 
@@ -460,7 +456,7 @@ struct CPUVCMImpl {
                   float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 
                   float w_camera = (emitter_sample.pdf_dir_out * l_dot_n) / (emitter_sample.pdf_dir * l_dot_e) *  //
-                                   (_vm_weight + state.d_vcm + state.d_vc * reverse_pdf);                         //
+                                   (_it.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);                      //
 
                   float weight = _vcm_options.enable_mis() ? (1.0f / (1.0f + w_light + w_camera)) : 1.0f;
 
@@ -475,7 +471,8 @@ struct CPUVCMImpl {
           for (uint64_t i = 0; do_connection && (i < light_path.length) && (path_length + i + 2 <= opt_max_depth); ++i) {
             float3 target_position = {};
             SpectralResponse value = {};
-            if (vcm_connect_to_light_vertex(rt.scene(), spect, state, intersection, _light_vertices[light_path.begin + i], _vm_weight, medium_index, target_position, value, smp)) {
+            if (vcm_connect_to_light_vertex(rt.scene(), spect, state, intersection, _light_vertices[light_path.begin + i], _it.vm_weight, medium_index, target_position, value,
+                  smp)) {
               float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
               auto tr = transmittance(spect, smp, p0, target_position, medium_index, rt.scene(), rt);
               if (tr.is_zero() == false) {
@@ -486,10 +483,10 @@ struct CPUVCMImpl {
           }
 
           if (_vcm_options.merge_vertices() && (path_length + 1 <= opt_max_depth)) {
-            merged += _current_grid.data.gather(rt.scene(), spect, state, _light_vertices.data(), intersection, medium_index, path_length, opt_max_depth, _vc_weight, smp);
+            merged += _current_grid.data.gather(rt.scene(), spect, state, _light_vertices.data(), intersection, medium_index, path_length, opt_max_depth, _it.vc_weight, smp);
           }
 
-          if (vcm_next_ray(rt.scene(), spect, PathSource::Camera, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _vc_weight, _vm_weight) == false) {
+          if (vcm_next_ray(rt.scene(), spect, PathSource::Camera, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _it) == false) {
             break;
           }
 
@@ -504,7 +501,7 @@ struct CPUVCMImpl {
         }
       }
 
-      merged *= _vm_normalization;
+      merged *= _it.vm_normalization;
       merged += (gathered / spectrum::sample_pdf()).to_xyz();
 
       camera_image.accumulate({merged.x, merged.y, merged.z, 1.0f}, uv, float(iteration) / float(iteration + 1));
