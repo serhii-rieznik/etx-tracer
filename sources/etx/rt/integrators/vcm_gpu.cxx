@@ -29,6 +29,7 @@ struct GPUVCMImpl {
   std::vector<float4> local_light_image = {};
   uint2 dimemsions = {};
 
+  VCMState vcm_state = VCMState::Stopped;
   GPUCameraLaunchParams camera_launch_params = {};
   device_pointer_t camera_launch_params_ptr = {};
 
@@ -83,11 +84,19 @@ struct GPUVCMImpl {
 
     camera_launch_params.camera_image = make_array_view<float4>(reinterpret_cast<void*>(rt.gpu()->get_buffer_device_pointer(camera_image)), 1llu * dimemsions.x * dimemsions.y);
     camera_launch_params_ptr = rt.gpu()->upload_to_shared_buffer(camera_launch_params_ptr, &camera_launch_params, sizeof(camera_launch_params));
+
     if (rt.gpu()->launch(pipelines[CameraGen].first, dimemsions.x, dimemsions.y, camera_launch_params_ptr, sizeof(camera_launch_params)) == false) {
+      vcm_state = VCMState::Stopped;
       return false;
     }
 
+    vcm_state = VCMState::GatheringLightVertices;
     return true;
+  }
+
+  void update() {
+    if (vcm_state == VCMState::Stopped)
+      return;
   }
 };
 
@@ -133,6 +142,7 @@ void GPUVCM::run(const Options& opt) {
 }
 
 void GPUVCM::update() {
+  _private->update();
 }
 
 void GPUVCM::stop(Stop) {

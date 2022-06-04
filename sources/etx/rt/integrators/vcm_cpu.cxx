@@ -116,7 +116,7 @@ struct CPUVCMImpl {
   VCMState vcm_state = VCMState::Stopped;
 
   VCMOptions _vcm_options = {};
-  VCMIteration _it = {};
+  VCMIteration vcm_iteration = {};
   VCMSpatialGrid _current_grid = {};
 
   std::mutex _light_vertices_lock;
@@ -148,10 +148,10 @@ struct CPUVCMImpl {
     double l_c = 100.0 * double(stats.l.load()) / double(camera_image.count());
     double c_c = 100.0 * double(stats.c.load()) / double(camera_image.count());
 
-    if (_it.iteration == 0) {
+    if (vcm_iteration.iteration == 0) {
       snprintf(status, sizeof(status), "0 | %s / %s : L: %.2f, C: %.2f", str_state[uint32_t(state->load())], str_vcm_state[uint32_t(vcm_state)], l_c, c_c);
     } else {
-      snprintf(status, sizeof(status), "%u | %s / %s : L: %.2f, C: %.2f, last iteration time: %.2fs (L: %.2fs, C: %.2fs, G: %.2fs, M: %.2f)", _it.iteration,  //
+      snprintf(status, sizeof(status), "%u | %s / %s : L: %.2f, C: %.2f, last iteration time: %.2fs (L: %.2fs, C: %.2fs, G: %.2fs, M: %.2f)", vcm_iteration.iteration,  //
         str_state[uint32_t(state->load())], str_vcm_state[uint32_t(vcm_state)], l_c, c_c, stats.last_iteration_time, stats.l_time, stats.c_time, stats.g_time, stats.m_time);
     }
   }
@@ -170,7 +170,7 @@ struct CPUVCMImpl {
     opt_radius_decay = opt.get("vcm_r_decay", opt_radius_decay).to_integer();
 
     stats.total_time = {};
-    _it.iteration = 0;
+    vcm_iteration.iteration = 0;
     vcm_state = VCMState::Stopped;
     start_next_iteration();
   }
@@ -193,13 +193,13 @@ struct CPUVCMImpl {
 
     vcm_state = VCMState::GatheringLightVertices;
 
-    float radius_scale = 1.0f / (1.0f + float(_it.iteration) / float(opt_radius_decay));
-    _it.current_radius = used_radius * radius_scale;
+    float radius_scale = 1.0f / (1.0f + float(vcm_iteration.iteration) / float(opt_radius_decay));
+    vcm_iteration.current_radius = used_radius * radius_scale;
 
-    float eta_vcm = kPi * sqr(_it.current_radius) * float(camera_image.count());
-    _it.vm_weight = _vcm_options.merge_vertices() ? eta_vcm : 0.0f;
-    _it.vc_weight = 1.0f / eta_vcm;
-    _it.vm_normalization = 1.0f / eta_vcm;
+    float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(camera_image.count());
+    vcm_iteration.vm_weight = _vcm_options.merge_vertices() ? eta_vcm : 0.0f;
+    vcm_iteration.vc_weight = 1.0f / eta_vcm;
+    vcm_iteration.vm_normalization = 1.0f / eta_vcm;
 
     _light_paths.clear();
     _light_vertices.clear();
@@ -214,7 +214,7 @@ struct CPUVCMImpl {
 
     TimeMeasure grid_time = {};
     if (_vcm_options.merge_vertices()) {
-      _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), _it.current_radius);
+      _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius);
     }
     stats.g_time = grid_time.measure();
     stats.camera_gather_time = {};
@@ -225,6 +225,7 @@ struct CPUVCMImpl {
 
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
     RNDSampler smp;
+    const Scene& scene = rt.scene();
 
     std::vector<VCMLightVertex> local_vertices;
     local_vertices.reserve(4llu * (range_end - range_begin));
@@ -234,121 +235,52 @@ struct CPUVCMImpl {
 
     for (uint64_t i = range_begin; running() && (i < range_end); ++i) {
       stats.l++;
-      auto spect = spectrum::sample(smp.next());
 
-      auto emitter_sample = sample_emission(rt.scene(), spect, smp);
-      float cos_t = dot(emitter_sample.direction, emitter_sample.normal);
-
-      VCMPathState state;
-      state.throughput = emitter_sample.value * (cos_t / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample));
-      state.ray = {emitter_sample.origin, emitter_sample.direction};
-      state.d_vcm = emitter_sample.pdf_area / emitter_sample.pdf_dir_out;
-      state.d_vc = emitter_sample.is_delta ? 0.0f : (cos_t / (emitter_sample.pdf_dir_out * emitter_sample.pdf_sample));
-      state.d_vm = state.d_vc * _it.vc_weight;
-      ETX_VALIDATE(state.d_vcm);
-      ETX_VALIDATE(state.d_vc);
-      ETX_VALIDATE(state.d_vm);
-
-      uint32_t medium_index = emitter_sample.medium_index;
-      float state_eta = 1.0f;
-
-      if (emitter_sample.triangle_index != kInvalidIndex) {
-        state.ray.o = shading_pos(rt.scene().vertices, rt.scene().triangles[emitter_sample.triangle_index], emitter_sample.barycentric, state.ray.d);
-      }
+      VCMPathState state = vcm_generate_emitter_state(smp, scene, vcm_iteration);
 
       uint64_t path_begin = local_vertices.size();
-      float path_distance = 0.0f;
-      uint32_t path_length = 0;
-      while (running() && (path_length + 1 <= opt_max_depth)) {
+      while (running() && (state.path_length + 1 <= opt_max_depth)) {
         Intersection intersection;
         bool found_intersection = rt.trace(state.ray, intersection, smp);
 
-        Medium::Sample medium_sample = {};
-        if (medium_index != kInvalidIndex) {
-          medium_sample = rt.scene().mediums[medium_index].sample(spect, smp, state.ray.o, state.ray.d, found_intersection ? intersection.t : kMaxFloat);
-          state.throughput *= medium_sample.weight;
-          ETX_VALIDATE(state.throughput);
-        }
+        Medium::Sample medium_sample = vcm_try_sampling_medium(smp, scene, state, found_intersection ? intersection.t : kMaxFloat);
 
         if (medium_sample.sampled_medium()) {
-          path_distance += medium_sample.t;
-          path_length += 1;
-          const auto& medium = rt.scene().mediums[medium_index];
-          state.ray.o = medium_sample.pos;
-          state.ray.d = medium.sample_phase_function(spect, smp, medium_sample.pos, state.ray.d);
-        } else if (found_intersection) {
-          path_distance += intersection.t;
-          path_length += 1;
-          const auto& tri = rt.scene().triangles[intersection.triangle_index];
-          const auto& mat = rt.scene().materials[tri.material_index];
+          vcm_handle_sampled_medium(smp, scene, medium_sample, state);
+          continue;
+        } else if (found_intersection == false) {
+          break;
+        }
 
-          if (mat.cls == Material::Class::Boundary) {
-            auto bsdf_sample = bsdf::sample({spect, medium_index, PathSource::Light, intersection, intersection.w_i, {}}, mat, rt.scene(), smp);
-            if (bsdf_sample.properties & BSDFSample::MediumChanged) {
-              medium_index = bsdf_sample.medium_index;
-            }
-            state.ray.o = intersection.pos;
-            state.ray.d = bsdf_sample.w_o;
-            continue;
-          }
+        state.path_distance += intersection.t;
+        state.path_length += 1;
+        const auto& tri = rt.scene().triangles[intersection.triangle_index];
+        const auto& mat = rt.scene().materials[tri.material_index];
 
-          {
-            if ((path_length > 1) || (emitter_sample.is_delta == false)) {
-              state.d_vcm *= sqr(path_distance);
-            }
+        if (vcm_handle_boundary_bsdf(smp, scene, mat, intersection, state)) {
+          continue;
+        }
 
-            float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
-            state.d_vcm /= cos_to_prev;
-            state.d_vc /= cos_to_prev;
-            state.d_vm /= cos_to_prev;
-            path_distance = 0.0f;
-          }
+        vcm_update_light_vcm(intersection, state);
 
-          if (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false) {
-            local_vertices.emplace_back(state, intersection.pos, intersection.barycentric, intersection.triangle_index, path_length, static_cast<uint32_t>(i));
+        if (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false) {
+          local_vertices.emplace_back(state, intersection.pos, intersection.barycentric, intersection.triangle_index, static_cast<uint32_t>(i));
 
-            if (_vcm_options.connect_to_camera() && (path_length + 1 <= opt_max_depth)) {
-              auto camera_sample = sample_film(smp, rt.scene(), intersection.pos);
-              if (camera_sample.pdf_dir > 0.0f) {
-                auto direction = camera_sample.position - intersection.pos;
-                auto w_o = normalize(direction);
-                auto data = BSDFData{spect, medium_index, PathSource::Light, intersection, state.ray.d, w_o};
-                auto eval = bsdf::evaluate(data, mat, rt.scene(), smp);
-                if (eval.valid()) {
-                  float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, w_o);
-                  auto tr = transmittance(spect, smp, p0, camera_sample.position, medium_index, rt.scene(), rt);
-                  if (tr.is_zero() == false) {
-                    float reverse_pdf = bsdf::pdf(data.swap_directions(), mat, rt.scene(), smp);
-                    float camera_pdf = camera_sample.pdf_dir_out * fabsf(dot(intersection.nrm, w_o)) / dot(direction, direction);
-                    ETX_VALIDATE(camera_pdf);
-
-                    float w_light = camera_pdf * (_it.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);
-                    ETX_VALIDATE(w_light);
-
-                    float weight = _vcm_options.enable_mis() ? (1.0f / (1.0f + w_light)) : 1.0f;
-                    ETX_VALIDATE(weight);
-
-                    eval.bsdf *= fix_shading_normal(tri.geo_n, data.nrm, data.w_i, data.w_o);
-                    auto result = (tr * eval.bsdf * state.throughput * camera_sample.weight) * weight;
-
-                    auto value = (result / spectrum::sample_pdf()).to_xyz();
-                    iteration_light_image.atomic_add({value.x, value.y, value.z, 1.0f}, camera_sample.uv, thread_id);
-                  }
-                }
-              }
+          if (_vcm_options.connect_to_camera() && (state.path_length + 1 <= opt_max_depth)) {
+            float2 uv = {};
+            auto value = vcm_connect_to_camera(rt, smp, scene, intersection, mat, tri, vcm_iteration, state, uv);
+            if (dot(value, value) > 0.0f) {
+              iteration_light_image.atomic_add({value.x, value.y, value.z, 1.0f}, uv, thread_id);
             }
           }
+        }
 
-          if (vcm_next_ray(rt.scene(), spect, PathSource::Light, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _it) == false) {
-            break;
-          }
-
-        } else {
+        if (vcm_next_ray(rt.scene(), PathSource::Light, intersection, opt_rr_start, smp, state, vcm_iteration) == false) {
           break;
         }
       }
 
-      local_paths.emplace_back(path_begin, local_vertices.size() - path_begin, spect);
+      local_paths.emplace_back(path_begin, local_vertices.size() - path_begin, state.spect);
     }
 
     {
@@ -370,54 +302,54 @@ struct CPUVCMImpl {
       uint32_t y = pi / camera_image.dimensions().x;
 
       const auto& light_path = _light_paths[pi];
-      auto spect = light_path.spect;
 
       VCMPathState state;
+      state.spect = light_path.spect;
       float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
       state.ray = generate_ray(smp, rt.scene(), uv);
 
-      auto film_eval = film_evaluate_out(spect, rt.scene().camera, state.ray);
+      auto film_eval = film_evaluate_out(state.spect, rt.scene().camera, state.ray);
 
-      state.throughput = {spect.wavelength, 1.0f};
+      state.throughput = {state.spect.wavelength, 1.0f};
       state.d_vcm = 1.0f / film_eval.pdf_dir;
       state.d_vc = 0.0f;
       state.d_vm = 0.0f;
-
-      uint32_t medium_index = rt.scene().camera_medium_index;
-      float state_eta = 1.0f;
+      state.medium_index = rt.scene().camera_medium_index;
+      state.eta = 1.0f;
       float d = 0.0f;
-      SpectralResponse gathered = {spect.wavelength, 0.0f};
+
+      SpectralResponse gathered = {state.spect.wavelength, 0.0f};
       float3 merged = {};
 
-      float path_distance = 0.0f;
-      uint32_t path_length = 1;
-      while (running() && (path_length <= opt_max_depth)) {
+      state.path_distance = 0.0f;
+      state.path_length = 1;
+      while (running() && (state.path_length <= opt_max_depth)) {
         Intersection intersection;
         bool found_intersection = rt.trace(state.ray, intersection, smp);
 
         Medium::Sample medium_sample = {};
-        if (medium_index != kInvalidIndex) {
-          medium_sample = rt.scene().mediums[medium_index].sample(spect, smp, state.ray.o, state.ray.d, found_intersection ? intersection.t : kMaxFloat);
+        if (state.medium_index != kInvalidIndex) {
+          medium_sample = rt.scene().mediums[state.medium_index].sample(state.spect, smp, state.ray.o, state.ray.d, found_intersection ? intersection.t : kMaxFloat);
           state.throughput *= medium_sample.weight;
           ETX_VALIDATE(state.throughput);
         }
 
         if (medium_sample.sampled_medium()) {
-          path_distance += medium_sample.t;
-          const auto& medium = rt.scene().mediums[medium_index];
+          state.path_distance += medium_sample.t;
+          const auto& medium = rt.scene().mediums[state.medium_index];
           state.ray.o = medium_sample.pos;
-          state.ray.d = medium.sample_phase_function(spect, smp, medium_sample.pos, state.ray.d);
-          path_length += 1;
+          state.ray.d = medium.sample_phase_function(state.spect, smp, medium_sample.pos, state.ray.d);
+          state.path_length += 1;
         } else if (found_intersection) {
-          path_distance += intersection.t;
+          state.path_distance += intersection.t;
 
           const auto& tri = rt.scene().triangles[intersection.triangle_index];
           const auto& mat = rt.scene().materials[tri.material_index];
 
           if (mat.cls == Material::Class::Boundary) {
-            auto bsdf_sample = bsdf::sample({spect, medium_index, PathSource::Camera, intersection, intersection.w_i, {}}, mat, rt.scene(), smp);
+            auto bsdf_sample = bsdf::sample({state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i, {}}, mat, rt.scene(), smp);
             if (bsdf_sample.properties & BSDFSample::MediumChanged) {
-              medium_index = bsdf_sample.medium_index;
+              state.medium_index = bsdf_sample.medium_index;
             }
             state.ray.o = intersection.pos;
             state.ray.d = bsdf_sample.w_o;
@@ -426,27 +358,27 @@ struct CPUVCMImpl {
 
           {
             float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
-            state.d_vcm *= sqr(path_distance) / cos_to_prev;
+            state.d_vcm *= sqr(state.path_distance) / cos_to_prev;
             state.d_vc /= cos_to_prev;
             state.d_vm /= cos_to_prev;
-            path_distance = 0.0f;
+            state.path_distance = 0.0f;
           }
 
           if (_vcm_options.direct_hit() && (tri.emitter_index != kInvalidIndex)) {
             const auto& emitter = rt.scene().emitters[tri.emitter_index];
-            gathered += vcm_get_radiance(rt.scene(), spect, emitter, intersection, state, path_length, _vcm_options.enable_mis());
+            gathered += vcm_get_radiance(rt.scene(), emitter, intersection, state, _vcm_options.enable_mis());
           }
 
           bool do_connection = _vcm_options.connect_to_light() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false);
-          if (do_connection && ((path_length + 1) <= opt_max_depth)) {
-            auto emitter_sample = sample_emitter(spect, smp, intersection.pos, rt.scene());
+          if (do_connection && ((state.path_length + 1) <= opt_max_depth)) {
+            auto emitter_sample = sample_emitter(state.spect, smp, intersection.pos, rt.scene());
 
             if (emitter_sample.pdf_dir > 0) {
-              BSDFData connection_data = {spect, medium_index, PathSource::Camera, intersection, state.ray.d, emitter_sample.direction};
+              BSDFData connection_data = {state.spect, state.medium_index, PathSource::Camera, intersection, state.ray.d, emitter_sample.direction};
               BSDFEval connection_eval = bsdf::evaluate(connection_data, mat, rt.scene(), smp);
               if (connection_eval.valid()) {
                 float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
-                auto tr = transmittance(spect, smp, p0, emitter_sample.origin, medium_index, rt.scene(), rt);
+                auto tr = transmittance(state.spect, smp, p0, emitter_sample.origin, state.medium_index, rt.scene(), rt);
                 if (tr.is_zero() == false) {
                   float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
                   float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
@@ -455,7 +387,7 @@ struct CPUVCMImpl {
                   float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 
                   float w_camera = (emitter_sample.pdf_dir_out * l_dot_n) / (emitter_sample.pdf_dir * l_dot_e) *  //
-                                   (_it.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);                      //
+                                   (vcm_iteration.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);            //
 
                   float weight = _vcm_options.enable_mis() ? (1.0f / (1.0f + w_light + w_camera)) : 1.0f;
 
@@ -467,13 +399,13 @@ struct CPUVCMImpl {
           }
 
           do_connection = _vcm_options.connect_vertices() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false);
-          for (uint64_t i = 0; do_connection && (i < light_path.length) && (path_length + i + 2 <= opt_max_depth); ++i) {
+          for (uint64_t i = 0; do_connection && (i < light_path.length) && (state.path_length + i + 2 <= opt_max_depth); ++i) {
             float3 target_position = {};
             SpectralResponse value = {};
-            if (vcm_connect_to_light_vertex(rt.scene(), spect, state, intersection, _light_vertices[light_path.begin + i], _it.vm_weight, medium_index, target_position, value,
-                  smp)) {
+            if (vcm_connect_to_light_vertex(rt.scene(), state.spect, state, intersection, _light_vertices[light_path.begin + i], vcm_iteration.vm_weight, state.medium_index,
+                  target_position, value, smp)) {
               float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
-              auto tr = transmittance(spect, smp, p0, target_position, medium_index, rt.scene(), rt);
+              auto tr = transmittance(state.spect, smp, p0, target_position, state.medium_index, rt.scene(), rt);
               if (tr.is_zero() == false) {
                 gathered += tr * value;
                 ETX_VALIDATE(gathered);
@@ -481,29 +413,29 @@ struct CPUVCMImpl {
             }
           }
 
-          if (_vcm_options.merge_vertices() && (path_length + 1 <= opt_max_depth)) {
-            merged += _current_grid.data.gather(rt.scene(), spect, state, _light_vertices.data(), intersection, medium_index, path_length, opt_max_depth, _it.vc_weight, smp);
+          if (_vcm_options.merge_vertices() && (state.path_length + 1 <= opt_max_depth)) {
+            merged += _current_grid.data.gather(rt.scene(), state, _light_vertices.data(), intersection, opt_max_depth, vcm_iteration.vc_weight, smp);
           }
 
-          if (vcm_next_ray(rt.scene(), spect, PathSource::Camera, intersection, path_length, opt_rr_start, smp, state, medium_index, state_eta, _it) == false) {
+          if (vcm_next_ray(rt.scene(), PathSource::Camera, intersection, opt_rr_start, smp, state, vcm_iteration) == false) {
             break;
           }
 
-          path_length += 1;
+          state.path_length += 1;
         } else {
-          bool gather_light = _vcm_options.direct_hit() || (path_length == 1);
+          bool gather_light = _vcm_options.direct_hit() || (state.path_length == 1);
           for (uint32_t ie = 0; gather_light && (ie < rt.scene().environment_emitters.count); ++ie) {
             const auto& emitter = rt.scene().emitters[rt.scene().environment_emitters.emitters[ie]];
-            gathered += vcm_get_radiance(rt.scene(), spect, emitter, intersection, state, path_length, _vcm_options.enable_mis());
+            gathered += vcm_get_radiance(rt.scene(), emitter, intersection, state, _vcm_options.enable_mis());
           }
           break;
         }
       }
 
-      merged *= _it.vm_normalization;
+      merged *= vcm_iteration.vm_normalization;
       merged += (gathered / spectrum::sample_pdf()).to_xyz();
 
-      camera_image.accumulate({merged.x, merged.y, merged.z, 1.0f}, uv, float(_it.iteration) / float(_it.iteration + 1));
+      camera_image.accumulate({merged.x, merged.y, merged.z, 1.0f}, uv, float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1));
     }
   }
 };
@@ -568,15 +500,15 @@ void CPUVCM::update() {
   if (_private->vcm_state == VCMState::GatheringLightVertices) {
     TimeMeasure tm = {};
     _private->light_image_updated = true;
-    _private->iteration_light_image.flush_to(_private->light_image, float(_private->_it.iteration) / float(_private->_it.iteration + 1));
+    _private->iteration_light_image.flush_to(_private->light_image, float(_private->vcm_iteration.iteration) / float(_private->vcm_iteration.iteration + 1));
     _private->stats.m_time = tm.measure();
     _private->continue_iteration();
   } else if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);
     current_state = Integrator::State::Stopped;
     _private->current_task = {};
-  } else if (_private->_it.iteration + 1 < _private->opt_max_iterations) {
-    _private->_it.iteration += 1;
+  } else if (_private->vcm_iteration.iteration + 1 < _private->opt_max_iterations) {
+    _private->vcm_iteration.iteration += 1;
     _private->start_next_iteration();
   } else {
     current_state = Integrator::State::Stopped;
@@ -595,7 +527,7 @@ void CPUVCM::stop(Stop st) {
     _private->current_task = {};
   } else {
     current_state = State::WaitingForCompletion;
-    snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->_it.iteration);
+    snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->vcm_iteration.iteration);
   }
 }
 
