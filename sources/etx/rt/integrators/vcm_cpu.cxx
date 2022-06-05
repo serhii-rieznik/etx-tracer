@@ -224,7 +224,6 @@ struct CPUVCMImpl {
   }
 
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
-    RNDSampler smp;
     const Scene& scene = rt.scene();
 
     std::vector<VCMLightVertex> local_vertices;
@@ -236,17 +235,17 @@ struct CPUVCMImpl {
     for (uint64_t i = range_begin; running() && (i < range_end); ++i) {
       stats.l++;
 
-      VCMPathState state = vcm_generate_emitter_state(smp, scene, vcm_iteration);
+      VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration);
 
       uint64_t path_begin = local_vertices.size();
       while (running() && (state.path_length + 1 <= opt_max_depth)) {
         Intersection intersection;
-        bool found_intersection = rt.trace(state.ray, intersection, smp);
+        bool found_intersection = rt.trace(state.ray, intersection, state.sampler);
 
-        Medium::Sample medium_sample = vcm_try_sampling_medium(smp, scene, state, found_intersection ? intersection.t : kMaxFloat);
+        Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
 
         if (medium_sample.sampled_medium()) {
-          vcm_handle_sampled_medium(smp, scene, medium_sample, state);
+          vcm_handle_sampled_medium(scene, medium_sample, state);
           continue;
         } else if (found_intersection == false) {
           break;
@@ -257,25 +256,25 @@ struct CPUVCMImpl {
         const auto& tri = rt.scene().triangles[intersection.triangle_index];
         const auto& mat = rt.scene().materials[tri.material_index];
 
-        if (vcm_handle_boundary_bsdf(smp, scene, mat, intersection, state)) {
+        if (vcm_handle_boundary_bsdf(scene, mat, intersection, state)) {
           continue;
         }
 
         vcm_update_light_vcm(intersection, state);
 
-        if (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false) {
+        if (bsdf::is_delta(mat, intersection.tex, rt.scene(), state.sampler) == false) {
           local_vertices.emplace_back(state, intersection.pos, intersection.barycentric, intersection.triangle_index, static_cast<uint32_t>(i));
 
           if (_vcm_options.connect_to_camera() && (state.path_length + 1 <= opt_max_depth)) {
             float2 uv = {};
-            auto value = vcm_connect_to_camera(rt, smp, scene, intersection, mat, tri, vcm_iteration, state, uv);
+            auto value = vcm_connect_to_camera(rt, scene, intersection, mat, tri, vcm_iteration, state, uv);
             if (dot(value, value) > 0.0f) {
               iteration_light_image.atomic_add({value.x, value.y, value.z, 1.0f}, uv, thread_id);
             }
           }
         }
 
-        if (vcm_next_ray(rt.scene(), PathSource::Light, intersection, opt_rr_start, smp, state, vcm_iteration) == false) {
+        if (vcm_next_ray(rt.scene(), PathSource::Light, intersection, opt_rr_start, state, vcm_iteration) == false) {
           break;
         }
       }
@@ -294,8 +293,6 @@ struct CPUVCMImpl {
   }
 
   void gather_camera_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
-    RNDSampler smp;
-
     for (uint32_t pi = range_begin; running() && (pi < range_end); ++pi) {
       stats.c++;
       uint32_t x = pi % camera_image.dimensions().x;
@@ -304,9 +301,11 @@ struct CPUVCMImpl {
       const auto& light_path = _light_paths[pi];
 
       VCMPathState state;
+      state.sampler = Sampler(pi, vcm_iteration.iteration);
       state.spect = light_path.spect;
-      float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
-      state.ray = generate_ray(smp, rt.scene(), uv);
+
+      float2 uv = get_jittered_uv(state.sampler, {x, y}, camera_image.dimensions());
+      state.ray = generate_ray(state.sampler, rt.scene(), uv);
 
       auto film_eval = film_evaluate_out(state.spect, rt.scene().camera, state.ray);
 
@@ -325,11 +324,11 @@ struct CPUVCMImpl {
       state.path_length = 1;
       while (running() && (state.path_length <= opt_max_depth)) {
         Intersection intersection;
-        bool found_intersection = rt.trace(state.ray, intersection, smp);
+        bool found_intersection = rt.trace(state.ray, intersection, state.sampler);
 
         Medium::Sample medium_sample = {};
         if (state.medium_index != kInvalidIndex) {
-          medium_sample = rt.scene().mediums[state.medium_index].sample(state.spect, smp, state.ray.o, state.ray.d, found_intersection ? intersection.t : kMaxFloat);
+          medium_sample = rt.scene().mediums[state.medium_index].sample(state.spect, state.sampler, state.ray.o, state.ray.d, found_intersection ? intersection.t : kMaxFloat);
           state.throughput *= medium_sample.weight;
           ETX_VALIDATE(state.throughput);
         }
@@ -338,7 +337,7 @@ struct CPUVCMImpl {
           state.path_distance += medium_sample.t;
           const auto& medium = rt.scene().mediums[state.medium_index];
           state.ray.o = medium_sample.pos;
-          state.ray.d = medium.sample_phase_function(state.spect, smp, medium_sample.pos, state.ray.d);
+          state.ray.d = medium.sample_phase_function(state.spect, state.sampler, medium_sample.pos, state.ray.d);
           state.path_length += 1;
         } else if (found_intersection) {
           state.path_distance += intersection.t;
@@ -347,7 +346,7 @@ struct CPUVCMImpl {
           const auto& mat = rt.scene().materials[tri.material_index];
 
           if (mat.cls == Material::Class::Boundary) {
-            auto bsdf_sample = bsdf::sample({state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i, {}}, mat, rt.scene(), smp);
+            auto bsdf_sample = bsdf::sample({state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i, {}}, mat, rt.scene(), state.sampler);
             if (bsdf_sample.properties & BSDFSample::MediumChanged) {
               state.medium_index = bsdf_sample.medium_index;
             }
@@ -369,20 +368,20 @@ struct CPUVCMImpl {
             gathered += vcm_get_radiance(rt.scene(), emitter, intersection, state, _vcm_options.enable_mis());
           }
 
-          bool do_connection = _vcm_options.connect_to_light() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false);
+          bool do_connection = _vcm_options.connect_to_light() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), state.sampler) == false);
           if (do_connection && ((state.path_length + 1) <= opt_max_depth)) {
-            auto emitter_sample = sample_emitter(state.spect, smp, intersection.pos, rt.scene());
+            auto emitter_sample = sample_emitter(state.spect, state.sampler, intersection.pos, rt.scene());
 
             if (emitter_sample.pdf_dir > 0) {
               BSDFData connection_data = {state.spect, state.medium_index, PathSource::Camera, intersection, state.ray.d, emitter_sample.direction};
-              BSDFEval connection_eval = bsdf::evaluate(connection_data, mat, rt.scene(), smp);
+              BSDFEval connection_eval = bsdf::evaluate(connection_data, mat, rt.scene(), state.sampler);
               if (connection_eval.valid()) {
                 float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
-                auto tr = transmittance(state.spect, smp, p0, emitter_sample.origin, state.medium_index, rt.scene(), rt);
+                auto tr = transmittance(state.spect, state.sampler, p0, emitter_sample.origin, state.medium_index, rt.scene(), rt);
                 if (tr.is_zero() == false) {
                   float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
                   float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
-                  float reverse_pdf = bsdf::pdf(connection_data.swap_directions(), mat, rt.scene(), smp);
+                  float reverse_pdf = bsdf::pdf(connection_data.swap_directions(), mat, rt.scene(), state.sampler);
 
                   float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 
@@ -398,14 +397,14 @@ struct CPUVCMImpl {
             }
           }
 
-          do_connection = _vcm_options.connect_vertices() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), smp) == false);
+          do_connection = _vcm_options.connect_vertices() && (bsdf::is_delta(mat, intersection.tex, rt.scene(), state.sampler) == false);
           for (uint64_t i = 0; do_connection && (i < light_path.length) && (state.path_length + i + 2 <= opt_max_depth); ++i) {
             float3 target_position = {};
             SpectralResponse value = {};
             if (vcm_connect_to_light_vertex(rt.scene(), state.spect, state, intersection, _light_vertices[light_path.begin + i], vcm_iteration.vm_weight, state.medium_index,
-                  target_position, value, smp)) {
+                  target_position, value)) {
               float3 p0 = shading_pos(rt.scene().vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
-              auto tr = transmittance(state.spect, smp, p0, target_position, state.medium_index, rt.scene(), rt);
+              auto tr = transmittance(state.spect, state.sampler, p0, target_position, state.medium_index, rt.scene(), rt);
               if (tr.is_zero() == false) {
                 gathered += tr * value;
                 ETX_VALIDATE(gathered);
@@ -414,10 +413,10 @@ struct CPUVCMImpl {
           }
 
           if (_vcm_options.merge_vertices() && (state.path_length + 1 <= opt_max_depth)) {
-            merged += _current_grid.data.gather(rt.scene(), state, _light_vertices.data(), intersection, opt_max_depth, vcm_iteration.vc_weight, smp);
+            merged += _current_grid.data.gather(rt.scene(), state, _light_vertices.data(), intersection, opt_max_depth, vcm_iteration.vc_weight);
           }
 
-          if (vcm_next_ray(rt.scene(), PathSource::Camera, intersection, opt_rr_start, smp, state, vcm_iteration) == false) {
+          if (vcm_next_ray(rt.scene(), PathSource::Camera, intersection, opt_rr_start, state, vcm_iteration) == false) {
             break;
           }
 

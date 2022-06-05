@@ -111,6 +111,11 @@ ETX_GPU_CODE ArrayView<T> make_array_view(void* p, uint64_t count) {
   return {reinterpret_cast<T*>(p), count};
 }
 
+template <class T>
+ETX_GPU_CODE ArrayView<T> make_array_view(uint64_t p, uint64_t count) {
+  return {reinterpret_cast<T*>(p), count};
+}
+
 ETX_GPU_CODE void print_value(const char* name, const char* tag, float t) {
   printf("%s : %s %f\n", name, tag, t);
 }

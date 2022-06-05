@@ -71,9 +71,9 @@ struct ETX_ALIGNED FilmData {
     accumulate(value, ax, ay, t);
   }
 
-  ETX_GPU_CODE void atomic_add_impl(volatile float* ptr, float value) {
+  ETX_GPU_CODE void atomic_add_impl(float* ptr, float value) {
 #if (ETX_NVCC_COMPILER)
-    // TODO :
+    atomicAdd(ptr, value);
 #else
     volatile long* iptr = std::bit_cast<volatile long*>(ptr);
     long old_value = {};
