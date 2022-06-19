@@ -16,6 +16,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
 
   BSDFSample result;
   result.properties = BSDFSample::Diffuse;
+
   if (reflection) {
     result.w_o = normalize(reflect(data.w_i, frame.nrm));
     result.properties = result.properties | BSDFSample::DeltaReflection;
@@ -27,14 +28,15 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
   auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
 
+  auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr));
+  result.pdf = kInvPi * n_dot_o * (1.0f - f);
+
   if (reflection) {
-    auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr)) + specular * fr;
-    result.pdf = kInvPi * n_dot_o * (1.0f - f) + f;
-    result.weight = bsdf / result.pdf;
-  } else {
-    result.pdf = kInvPi * n_dot_o;
-    result.weight = diffuse;
+    bsdf += specular;
+    result.pdf += 1.0f;
   }
+
+  result.weight = bsdf / result.pdf;
 
   return result;
 }
