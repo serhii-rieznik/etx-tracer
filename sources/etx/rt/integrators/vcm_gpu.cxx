@@ -48,7 +48,7 @@ struct GPUVCMImpl {
   bool build_pipelines() {
     for (auto& p : pipelines) {
       if (p.first.handle == kInvalidHandle) {
-        auto handle = rt.gpu()->create_pipeline_from_file(env().file_in_data(p.second), true);
+        auto handle = rt.gpu()->create_pipeline_from_file(env().file_in_data(p.second), false);
         if (handle.handle == kInvalidHandle) {
           return false;
         }
@@ -79,11 +79,22 @@ struct GPUVCMImpl {
 
   void destroy_output() {
     rt.gpu()->destroy_buffer(state_buffers[0]);
+    state_buffers[0].handle = kInvalidIndex;
+    
     rt.gpu()->destroy_buffer(state_buffers[1]);
+    state_buffers[1].handle = kInvalidIndex;
+    
     rt.gpu()->destroy_buffer(global_data);
+    global_data.handle = kInvalidIndex;
+    
     rt.gpu()->destroy_buffer(camera_image);
+    camera_image.handle = kInvalidIndex;
+    
     rt.gpu()->destroy_buffer(light_image);
+    light_image.handle = kInvalidIndex;
+    
     rt.gpu()->destroy_buffer(light_iteration_image);
+    light_iteration_image.handle = kInvalidIndex;
   }
 
   bool run(const Options& opt) {
@@ -152,6 +163,7 @@ struct GPUVCMImpl {
       VCMIteration it = {};
       rt.gpu()->copy_from_buffer(global_data, &it, 0, sizeof(VCMIteration));
       if (it.active_light_paths > 0) {
+        log::info("active_light_paths = %u", it.active_light_paths);
         // update iteration
         iteration.active_light_paths = 0;
         rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
@@ -166,6 +178,7 @@ struct GPUVCMImpl {
 
         current_buffer = 1u - current_buffer;
       } else {
+        log::info("active_light_paths = %u, FINISHED!", it.active_light_paths);
         // light gathering finished
         // build grid
         // etc...

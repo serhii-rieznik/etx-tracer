@@ -336,7 +336,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   return state;
 }
 
-static Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t) {
+ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t) {
   if (state.medium_index == kInvalidIndex)
     return {};
 
