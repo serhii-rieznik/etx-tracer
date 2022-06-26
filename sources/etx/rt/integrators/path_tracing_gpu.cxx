@@ -34,6 +34,7 @@ struct ETX_ALIGNED GPUPathTracingImpl {
   }
 
   bool start(Raytracing& rt, bool recompile) {
+    TimeMeasure tm = {};
     if (main_pipeline.handle == kInvalidHandle) {
       main_pipeline = rt.gpu()->create_pipeline_from_file(env().file_in_data("optix/pt/main.json"), recompile);
       if (main_pipeline.handle == kInvalidHandle) {
@@ -49,6 +50,7 @@ struct ETX_ALIGNED GPUPathTracingImpl {
         return false;
       }
     }
+    log::info("Pipelines compiled: %.2f sec", tm.measure());
 
     gpu_data.payloads = reinterpret_cast<PTRayPayload*>(rt.gpu()->get_buffer_device_pointer(payload_buffer));
     gpu_data.output = reinterpret_cast<float4*>(rt.gpu()->get_buffer_device_pointer(accumulated_image));

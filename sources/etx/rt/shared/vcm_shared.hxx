@@ -65,7 +65,7 @@ struct ETX_ALIGNED VCMIteration {
   uint32_t iteration ETX_EMPTY_INIT;
   uint32_t active_light_paths ETX_EMPTY_INIT;
   uint32_t active_camera_paths ETX_EMPTY_INIT;
-  uint32_t pad ETX_EMPTY_INIT;
+  uint32_t light_vertices ETX_EMPTY_INIT;
   float current_radius ETX_EMPTY_INIT;
   float vm_weight ETX_EMPTY_INIT;
   float vc_weight ETX_EMPTY_INIT;
@@ -137,13 +137,11 @@ struct ETX_ALIGNED VCMLightVertex {
   }
 };
 
-struct ETX_ALIGNED VCMGlobal {
-  Scene scene ETX_EMPTY_INIT;
-  VCMIteration* iteration ETX_EMPTY_INIT;
-  ArrayView<VCMPathState> input_state ETX_EMPTY_INIT;
-  ArrayView<VCMPathState> output_state ETX_EMPTY_INIT;
-  ArrayView<float4> camera_image ETX_EMPTY_INIT;
-  ArrayView<float4> light_image ETX_EMPTY_INIT;
+struct ETX_ALIGNED VCMLightPath {
+  uint32_t index ETX_EMPTY_INIT;
+  uint32_t count ETX_EMPTY_INIT;
+  SpectralQuery spect ETX_EMPTY_INIT;
+  uint32_t pad ETX_EMPTY_INIT;
 };
 
 ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source, const Intersection& i, uint32_t rr_start, VCMPathState& state, const VCMIteration& it) {
@@ -528,6 +526,18 @@ struct VCMSpatialGrid {
  private:
   std::vector<uint32_t> _indices;
   std::vector<uint32_t> _cell_ends;
+};
+
+struct ETX_ALIGNED VCMGlobal {
+  Scene scene ETX_EMPTY_INIT;
+  VCMIteration* iteration ETX_EMPTY_INIT;
+  ArrayView<VCMPathState> input_state ETX_EMPTY_INIT;
+  ArrayView<VCMPathState> output_state ETX_EMPTY_INIT;
+  ArrayView<VCMLightVertex> light_vertices ETX_EMPTY_INIT;
+  ArrayView<float4> camera_image ETX_EMPTY_INIT;
+  ArrayView<float4> light_iteration_image ETX_EMPTY_INIT;
+  ArrayView<float4> light_final_image ETX_EMPTY_INIT;
+  VCMSpatialGridData spatial_grid ETX_EMPTY_INIT;
 };
 
 }  // namespace etx

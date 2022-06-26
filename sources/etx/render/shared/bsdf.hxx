@@ -5,6 +5,8 @@
 
 namespace etx {
 
+constexpr bool kForceDiffuseBSDF = true;
+
 enum class PathSource : uint32_t {
   Undefined,
   Camera,

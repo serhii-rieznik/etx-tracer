@@ -100,9 +100,18 @@ struct GPUOptixImplData {
   bool init_optix() {
     OptixDeviceContextOptions options = {};
     options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
-    options.logCallbackLevel = 3;
+    options.logCallbackLevel = 4;
+    options.logCallbackData = this;
     options.logCallbackFunction = [](unsigned int level, const char* tag, const char* message, void* cbdata) {
-      log::info("OptiX: [%s] %s", tag, message);
+      auto self = reinterpret_cast<GPUOptixImplData*>(cbdata);
+      if (level <= 2) {
+        log::error("OptiX: [%s] %s", tag, message);
+        self->report_error();
+      } else if (level <= 3) {
+        log::warning("OptiX: [%s] %s", tag, message);
+      } else {
+        log::info("OptiX: [%s] %s", tag, message);
+      }
     };
 
     if (optix_call_failed(optixInitWithHandle(&optix_handle)))
@@ -646,10 +655,20 @@ device_pointer_t GPUOptixImpl::copy_to_buffer(GPUBuffer buffer, const void* src,
 
   auto& object = _private->buffer_pool.get(buffer.handle);
   ETX_ASSERT(offset + size <= object.capacity);
-  auto ptr = reinterpret_cast<uint8_t*>(object.device_ptr) + offset;
-  if (_private->cuda_call_failed(cudaMemcpy(ptr, src, size, cudaMemcpyHostToDevice)))
+
+  CUdeviceptr ptr_base = {};
+  size_t ptr_size = {};
+  uint8_t* device_ptr_v = object.device_ptr + offset;
+  CUdeviceptr device_ptr = reinterpret_cast<CUdeviceptr>(device_ptr_v);
+  CUresult query_result = cuMemGetAddressRange_v2(&ptr_base, &ptr_size, device_ptr);
+  if (query_result != CUresult::CUDA_SUCCESS) {
+    log::error("Failed to get mem info: %p", device_ptr);
+  }
+
+  if (_private->cuda_call_failed(cudaMemcpy(device_ptr_v, src, size, cudaMemcpyHostToDevice)))
     log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
-  return reinterpret_cast<device_pointer_t>(ptr);
+
+  return reinterpret_cast<device_pointer_t>(device_ptr_v);
 }
 
 void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset, uint64_t size) {
@@ -657,7 +676,17 @@ void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset
     return;
 
   auto& object = _private->buffer_pool.get(buffer.handle);
-  if (_private->cuda_call_failed(cudaMemcpy(dst, reinterpret_cast<const uint8_t*>(object.device_ptr) + offset, size, cudaMemcpyDeviceToHost)))
+
+  CUdeviceptr ptr_base = {};
+  size_t ptr_size = {};
+  uint8_t* device_ptr_v = object.device_ptr + offset;
+  CUdeviceptr device_ptr = reinterpret_cast<CUdeviceptr>(device_ptr_v);
+  CUresult query_result = cuMemGetAddressRange_v2(&ptr_base, &ptr_size, device_ptr);
+  if (query_result != CUresult::CUDA_SUCCESS) {
+    log::error("Failed to get mem info: %p", device_ptr);
+  }
+
+  if (_private->cuda_call_failed(cudaMemcpy(dst, device_ptr_v, size, cudaMemcpyDeviceToHost)))
     log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
 }
 

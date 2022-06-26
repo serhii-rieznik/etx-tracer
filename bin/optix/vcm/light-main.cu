@@ -10,15 +10,23 @@ ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, const VCMPathState& 
   global.output_state[i] = state;
 }
 
+ETX_GPU_CODE void push_light_vertex(VCMIteration& iteration, const VCMLightVertex& v) {
+  int i = atomicAdd(&iteration.light_vertices, 1);
+  global.light_vertices[i] = v;
+}
+
 ETX_GPU_CODE void project(const float2& ndc_coord, const float3& value) {
   float2 uv = ndc_coord * 0.5f + 0.5f;
-  uint32_t ax = static_cast<uint32_t>(uv.x * float(global.scene.camera.image_size.x));
-  uint32_t ay = static_cast<uint32_t>(uv.y * float(global.scene.camera.image_size.y));
-  uint32_t i = ax + ay * global.scene.camera.image_size.x;
-  float4& current = global.light_image[i];
-  atomicAdd(&current.x, value.x);
-  atomicAdd(&current.y, value.y);
-  atomicAdd(&current.z, value.z);
+  uint2 dim = global.scene.camera.image_size;
+  uint32_t ax = static_cast<uint32_t>(uv.x * float(dim.x));
+  uint32_t ay = static_cast<uint32_t>(uv.y * float(dim.y));
+  if ((ax < dim.x) && (ay < dim.y)) {
+    uint32_t i = ax + ay * dim.x;
+    float4& current = global.light_iteration_image[i];
+    atomicAdd(&current.x, value.x);
+    atomicAdd(&current.y, value.y);
+    atomicAdd(&current.z, value.z);
+  }
 }
 
 RAYGEN(main) {
@@ -30,7 +38,7 @@ RAYGEN(main) {
   uint32_t index = idx.x + idx.y * dim.x;
   auto& state = global.input_state[index];
   auto& iteration = *global.iteration;
-        
+
   Raytracing rt;
 
   Intersection intersection;
@@ -42,7 +50,9 @@ RAYGEN(main) {
     vcm_handle_sampled_medium(global.scene, medium_sample, state);
     continue_tracing(iteration, state);
     return;
-  } else if (found_intersection == false) {
+  }
+
+  if (found_intersection == false) {
     // TODO : finish iteration
     return;
   }
@@ -60,9 +70,9 @@ RAYGEN(main) {
   vcm_update_light_vcm(intersection, state);
 
   if (bsdf::is_delta(mat, intersection.tex, global.scene, state.sampler) == false) {
-    // local_vertices.emplace_back(state, intersection.pos, intersection.barycentric, intersection.triangle_index, static_cast<uint32_t>(i));
+    push_light_vertex(iteration, {state, intersection.pos, intersection.barycentric, intersection.triangle_index, index});
 
-    if (/*_vcm_options.connect_to_camera() && */(state.path_length + 1 <= opt_max_depth)) {
+    if (state.path_length + 1 <= opt_max_depth) {
       float2 uv = {};
       auto value = vcm_connect_to_camera(rt, global.scene, intersection, mat, tri, iteration, state, uv);
       if (dot(value, value) > 0.0f) {
