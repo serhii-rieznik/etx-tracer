@@ -30,9 +30,6 @@ ETX_GPU_CODE void project(const float2& ndc_coord, const float3& value) {
 }
 
 RAYGEN(main) {
-  const uint32_t opt_max_depth = 16u;
-  const uint32_t opt_rr_start = 5u;
-
   uint3 idx = optixGetLaunchIndex();
   uint3 dim = optixGetLaunchDimensions();
   uint32_t index = idx.x + idx.y * dim.x;
@@ -40,7 +37,6 @@ RAYGEN(main) {
   auto& iteration = *global.iteration;
 
   Raytracing rt;
-
   Intersection intersection;
   bool found_intersection = rt.trace(global.scene, state.ray, intersection, state.sampler);
 
@@ -53,7 +49,6 @@ RAYGEN(main) {
   }
 
   if (found_intersection == false) {
-    // TODO : finish iteration
     return;
   }
 
@@ -62,7 +57,7 @@ RAYGEN(main) {
   const auto& tri = global.scene.triangles[intersection.triangle_index];
   const auto& mat = global.scene.materials[tri.material_index];
 
-  if (vcm_handle_boundary_bsdf(global.scene, mat, intersection, state)) {
+  if (vcm_handle_boundary_bsdf(global.scene, mat, intersection, PathSource::Light, state)) {
     continue_tracing(iteration, state);
     return;
   }
@@ -72,7 +67,7 @@ RAYGEN(main) {
   if (bsdf::is_delta(mat, intersection.tex, global.scene, state.sampler) == false) {
     push_light_vertex(iteration, {state, intersection.pos, intersection.barycentric, intersection.triangle_index, index});
 
-    if (state.path_length + 1 <= opt_max_depth) {
+    if (state.path_length + 1 <= kVCMMaxDepth) {
       float2 uv = {};
       auto value = vcm_connect_to_camera(rt, global.scene, intersection, mat, tri, iteration, state, uv);
       if (dot(value, value) > 0.0f) {
@@ -81,7 +76,7 @@ RAYGEN(main) {
     }
   }
 
-  if (vcm_next_ray(global.scene, PathSource::Light, intersection, opt_rr_start, state, iteration)) {
+  if (vcm_next_ray(global.scene, PathSource::Light, intersection, kVCMRRStart, state, iteration)) {
     continue_tracing(iteration, state);
   }
 }

@@ -242,19 +242,12 @@ struct GPUPipelineOptixImpl {
     if (device->invalid_state())
       return false;
 
-#if (ETX_DEBUG)
     OptixModuleCompileOptions module_options = {
       .maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT,
-      .optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0,
-      .debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL,
+      .optLevel = OptixCompileOptimizationLevel(ETX_DEBUG * OPTIX_COMPILE_OPTIMIZATION_LEVEL_0 + (1 - ETX_DEBUG) * OPTIX_COMPILE_OPTIMIZATION_LEVEL_3),
+      .debugLevel = OptixCompileDebugLevel((ETX_DEBUG)*OPTIX_COMPILE_DEBUG_LEVEL_FULL + (1 - ETX_DEBUG) * OPTIX_COMPILE_DEBUG_LEVEL_DEFAULT),
     };
-#else
-    OptixModuleCompileOptions module_options = {
-      .maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT,
-      .optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3,
-      .debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE,
-    };
-#endif
+
     pipeline_options = {
       .traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY,
       .numPayloadValues = static_cast<int>(desc.payload_count & 0x000000ff),
