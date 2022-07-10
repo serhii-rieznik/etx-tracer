@@ -266,39 +266,39 @@ struct ETX_ALIGNED SpectralResponse {
   }
 
   ETX_GPU_CODE SpectralResponse& operator*=(const SpectralResponse& other) {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     components *= other.components;
     return *this;
   }
   ETX_GPU_CODE SpectralResponse& operator/=(const SpectralResponse& other) {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     components /= other.components;
     return *this;
   }
   ETX_GPU_CODE SpectralResponse& operator+=(const SpectralResponse& other) {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     components += other.components;
     return *this;
   }
   ETX_GPU_CODE SpectralResponse& operator-=(const SpectralResponse& other) {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     components -= other.components;
     return *this;
   }
   ETX_GPU_CODE SpectralResponse operator*(const SpectralResponse& other) const {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     return {wavelength, components * other.components};
   }
   ETX_GPU_CODE SpectralResponse operator/(const SpectralResponse& other) const {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     return {wavelength, components / other.components};
   }
   ETX_GPU_CODE SpectralResponse operator+(const SpectralResponse& other) const {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     return {wavelength, components + other.components};
   }
   ETX_GPU_CODE SpectralResponse operator-(const SpectralResponse& other) const {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     return {wavelength, components - other.components};
   }
   ETX_GPU_CODE SpectralResponse& operator*=(float other) {

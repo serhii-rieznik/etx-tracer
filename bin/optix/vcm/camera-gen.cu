@@ -12,5 +12,5 @@ RAYGEN(main) {
 
   const auto& light_path = global.light_paths[index];
   global.input_state[index] = vcm_generate_camera_state({idx.x, idx.y}, global.scene, *global.iteration, light_path.spect);
-  global.iteration->active_camera_paths = dim.x * dim.y;
+  global.iteration->active_paths = dim.x * dim.y;
 }

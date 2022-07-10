@@ -6,12 +6,12 @@ using namespace etx;
 static __constant__ VCMGlobal global;
 
 ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, const VCMPathState& state) {
-  int i = atomicAdd(&iteration.active_light_paths, 1);
+  int i = atomicAdd(&iteration.active_paths, 1u);
   global.output_state[i] = state;
 }
 
 ETX_GPU_CODE void push_light_vertex(VCMIteration& iteration, const VCMLightVertex& v) {
-  int i = atomicAdd(&iteration.light_vertices, 1);
+  uint32_t i = atomicAdd(&iteration.light_vertices, 1u);
   global.light_vertices[i] = v;
 }
 
@@ -32,11 +32,14 @@ ETX_GPU_CODE void project(const float2& ndc_coord, const float3& value) {
 RAYGEN(main) {
   uint3 idx = optixGetLaunchIndex();
   uint3 dim = optixGetLaunchDimensions();
-  uint32_t index = idx.x + idx.y * dim.x;
-  auto& state = global.input_state[index];
+  auto& state = global.input_state[idx.x + idx.y * dim.x];
+  if (state.path_length + 1 > kVCMMaxDepth) {
+    return;
+  }
+
   auto& iteration = *global.iteration;
 
-  Raytracing rt;
+  Raytracing rt = {};
   Intersection intersection;
   bool found_intersection = rt.trace(global.scene, state.ray, intersection, state.sampler);
 
@@ -65,7 +68,7 @@ RAYGEN(main) {
   vcm_update_light_vcm(intersection, state);
 
   if (bsdf::is_delta(mat, intersection.tex, global.scene, state.sampler) == false) {
-    push_light_vertex(iteration, {state, intersection.pos, intersection.barycentric, intersection.triangle_index, index});
+    push_light_vertex(iteration, {state, intersection.pos, intersection.barycentric, intersection.triangle_index, state.index});
 
     if (state.path_length + 1 <= kVCMMaxDepth) {
       float2 uv = {};
@@ -78,5 +81,8 @@ RAYGEN(main) {
 
   if (vcm_next_ray(global.scene, PathSource::Light, intersection, kVCMRRStart, state, iteration)) {
     continue_tracing(iteration, state);
+    return;
   }
+
+  atomicAdd(&iteration.terminated_paths, 1u);
 }

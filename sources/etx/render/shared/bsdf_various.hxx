@@ -368,43 +368,58 @@ ETX_GPU_CODE uint32_t select_material(const Material& material, const float2& te
 }
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return DiffuseBSDF::sample_impl(data, mtl, scene, smp);
+  /*
   uint32_t m = select_material(mtl, data.tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::sample_impl(data, mtl, scene, smp);
   }
   return bsdf::sample_impl(data, scene.materials[m], scene, smp);
+  // */
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return DiffuseBSDF::evaluate_impl(data, mtl, scene, smp);
+  /*
   uint32_t m = select_material(mtl, data.tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::evaluate_impl(data, mtl, scene, smp);
   }
   return bsdf::evaluate_impl(data, scene.materials[m], scene, smp);
+  // */
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return DiffuseBSDF::pdf_impl(data, mtl, scene, smp);
+  /*/
   uint32_t m = select_material(mtl, data.tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::pdf_impl(data, mtl, scene, smp);
   }
   return bsdf::pdf_impl(data, scene.materials[m], scene, smp);
+  // */
 }
 
 ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  return DiffuseBSDF::continue_tracing_impl(material, tex, scene, smp);
+  /*/
   uint32_t m = select_material(material, tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::continue_tracing_impl(material, tex, scene, smp);
   }
   return bsdf::continue_tracing_impl(scene.materials[m], tex, scene, smp);
+  // */
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  return DiffuseBSDF::is_delta_impl(material, tex, scene, smp);
+  /*/
   uint32_t m = select_material(material, tex, scene, smp);
   if (m == kInvalidIndex) {
     return DiffuseBSDF::is_delta_impl(material, tex, scene, smp);
   }
   return bsdf::is_delta_impl(scene.materials[m], tex, scene, smp);
+  // */
 }
 
 ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {

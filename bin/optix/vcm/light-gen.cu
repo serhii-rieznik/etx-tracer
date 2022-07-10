@@ -11,5 +11,5 @@ RAYGEN(main) {
   uint32_t index = idx.x + idx.y * dim.x;
 
   global.input_state[index] = vcm_generate_emitter_state(index, global.scene, *global.iteration);
-  global.iteration->active_light_paths = dim.x * dim.y;
+  global.iteration->active_paths = dim.x * dim.y;
 }

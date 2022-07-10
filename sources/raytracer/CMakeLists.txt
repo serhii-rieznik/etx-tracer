@@ -19,3 +19,9 @@ set_target_properties(raytracer PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${root_folder}/bin"
 )
 
+if (ETX_GPU_RENDER)
+  file(GLOB_RECURSE cu_sources "${root_folder}/bin/optix/*.cu")
+  source_group(TREE "${root_folder}/bin/" FILES ${cu_sources})
+  target_sources(raytracer PRIVATE ${cu_sources})
+  set_source_files_properties(${cu_sources} PROPERTIES HEADER_FILE_ONLY TRUE)
+endif()                               

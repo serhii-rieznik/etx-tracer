@@ -68,8 +68,8 @@ enum class VCMState : uint32_t {
 
 struct ETX_ALIGNED VCMIteration {
   uint32_t iteration ETX_EMPTY_INIT;
-  uint32_t active_light_paths ETX_EMPTY_INIT;
-  uint32_t active_camera_paths ETX_EMPTY_INIT;
+  uint32_t active_paths ETX_EMPTY_INIT;
+  uint32_t terminated_paths ETX_EMPTY_INIT;
   uint32_t light_vertices ETX_EMPTY_INIT;
   float current_radius ETX_EMPTY_INIT;
   float vm_weight ETX_EMPTY_INIT;
@@ -247,9 +247,9 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
 ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
   auto sampler = Sampler(index, it.iteration);
   auto spect = spectrum::sample(sampler.next());
-  VCMPathState state = {};
-
   auto emitter_sample = sample_emission(scene, spect, sampler);
+
+  VCMPathState state = {};
 
   float cos_t = dot(emitter_sample.direction, emitter_sample.normal);
   state.throughput = emitter_sample.value * (cos_t / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample));
@@ -273,7 +273,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   state.medium_index = emitter_sample.medium_index;
   state.delta_emitter = emitter_sample.is_delta ? 1 : 0;
   state.sampler = sampler;
-
+  state.index = index;
   return state;
 }
 
@@ -281,7 +281,7 @@ ETX_GPU_CODE static VCMPathState vcm_generate_camera_state(const uint2& coord, c
   VCMPathState state = {};
   state.index = coord.x + coord.y * scene.camera.image_size.x;
   state.sampler = Sampler(state.index, it.iteration);
-  state.spect = spect;
+  state.spect = (spect.wavelength == 0.0f) ? spectrum::sample(state.sampler.next()) : spect;
   state.uv = get_jittered_uv(state.sampler, coord, scene.camera.image_size);
   state.ray = generate_ray(state.sampler, scene, state.uv);
   state.throughput = {state.spect.wavelength, 1.0f};
@@ -616,7 +616,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
           ETX_VALIDATE(merged);
         } else {
           // mul as RGB
-          auto value = (light_vertex.throughput * camera_bsdf.func * state.throughput) * (weight / sqr(spectrum::sample_pdf()));
+          auto value = light_vertex.throughput * camera_bsdf.func * state.throughput * (weight / sqr(spectrum::sample_pdf()));
           ETX_VALIDATE(value);
           merged += value.to_xyz();
           ETX_VALIDATE(merged);

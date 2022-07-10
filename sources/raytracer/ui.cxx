@@ -179,7 +179,7 @@ void UI::build(double dt, const char* status) {
     }
   }
 
-  if (_current_integrator->can_run()) {
+  if ((_current_integrator != nullptr) && _current_integrator->can_run()) {
     igSeparator();
     igNewLine();
 

@@ -53,6 +53,7 @@ struct GPUVCMImpl {
   device_pointer_t iteration_ptr = {};
   device_pointer_t gpu_data_ptr = {};
   uint32_t current_buffer = 0;
+  uint32_t iteration_frame = 0;
 
   std::pair<GPUPipeline, const char*> pipelines[PipelineCount] = {
     {{}, "optix/vcm/camera-gen.json"},
@@ -62,6 +63,13 @@ struct GPUVCMImpl {
     {{}, "optix/vcm/light-merge.json"},
   };
   bool reload_pipelines[PipelineCount] = {};
+
+  char status[2048] = {};
+
+  void update_status(const char* tag, uint32_t active_paths) {
+    double completed = 100.0 * double(dimemsions.x * dimemsions.y - active_paths) / double(dimemsions.x * dimemsions.y);
+    snprintf(status, sizeof(status), "%s: %u / %u, launching %u threads (%.2f percent done)...", tag, iteration.iteration, iteration_frame, active_paths, completed);
+  }
 
   bool build_pipelines(const Options& opt) {
     for (auto& p : pipelines) {
@@ -143,8 +151,8 @@ struct GPUVCMImpl {
     state_buffers[1] = rt.gpu()->create_buffer({sizeof(VCMPathState) * dimemsions.x * dimemsions.y});
 
     light_vertices.reserve(LightBufferCapacity);
+
     light_paths.resize(1llu * dimemsions.x * dimemsions.y);
-    memset(light_paths.data(), 0, sizeof(VCMLightPath) * dimemsions.x * dimemsions.y);
     light_paths_buffer = rt.gpu()->create_buffer({sizeof(VCMLightPath) * dimemsions.x * dimemsions.y});
 
     gpu_data.scene = rt.gpu_scene();
@@ -172,11 +180,11 @@ struct GPUVCMImpl {
     iteration.current_radius = used_radius * radius_scale;
 
     float eta_vcm = kPi * sqr(iteration.current_radius) * float(dimemsions.x) * float(dimemsions.y);
-    iteration.vm_weight = eta_vcm;  // _vcm_options.merge_vertices() ? eta_vcm : 0.0f;
+    iteration.vm_weight = eta_vcm;
     iteration.vc_weight = 1.0f / eta_vcm;
     iteration.vm_normalization = 1.0f / eta_vcm;
-    iteration.active_camera_paths = 0;
-    iteration.active_light_paths = 0;
+    iteration.active_paths = 0;
+    iteration.terminated_paths = 0;
     iteration.light_vertices = 0;
     iteration_ptr = rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
 
@@ -190,6 +198,8 @@ struct GPUVCMImpl {
     gpu_data.light_vertices = make_array_view<VCMLightVertex>(rt.gpu()->get_buffer_device_pointer(light_vertex_buffer), LightBufferCapacity);
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
+    iteration_frame = 0;
+
     if (rt.gpu()->launch(pipelines[LightGen].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       vcm_state = VCMState::Stopped;
       return false;
@@ -201,29 +211,65 @@ struct GPUVCMImpl {
 
   void download_light_vertices(uint32_t count) {
     TimeMeasure tm = {};
-    log::info("Downloading light vertices...");
+    log::info("Downloading %u light vertices...", count);
     uint64_t light_buffer_pos = light_vertices.size();
     light_vertices.resize(light_buffer_pos + count);
     rt.gpu()->copy_from_buffer(light_vertex_buffer, light_vertices.data() + light_buffer_pos, 0, sizeof(VCMLightVertex) * count);
     log::info("Completed in %.2f sec", tm.measure());
   }
 
-  void build_spatial_grid() {
-    TimeMeasure tm = {};
+  uint32_t build_spatial_grid_data(const Scene& scene, VCMLightVertex* light_vertices_ptr, uint64_t light_vertex_count, VCMLightPath* paths_ptr, uint64_t paths_count,
+    const VCMIteration& iteration, VCMSpatialGrid& grid_builder) {
     TimeMeasure tm_total = {};
-    log::info("Building spatial grid:");
-    auto light_vertices_ptr = light_vertices.data();
-    auto light_vertex_count = light_vertices.size();
+    TimeMeasure tm = {};
+
+    log::info(" - processing CPU data...");
     std::sort(light_vertices_ptr, light_vertices_ptr + light_vertex_count, [](const VCMLightVertex& a, const VCMLightVertex& b) {
       return (a.path_index == b.path_index) ? (a.path_length < b.path_length) : (a.path_index < b.path_index);
     });
+    log::info(" --- sorting light vertices: %.2f sec", tm.lap());
 
-    log::info(" - sorting light vertices: %.2f sec", tm.lap());
-    grid_builder.construct(rt.scene(), light_vertices.data(), light_vertices.size(), iteration.current_radius);
+    grid_builder.construct(scene, light_vertices_ptr, light_vertex_count, iteration.current_radius);
+    log::info(" --- constructing grid: %.2f sec", tm.lap());
+
+    memset(paths_ptr, 0, paths_count * sizeof(VCMLightPath));
+    uint32_t max_path_length = 1;
+    uint32_t index = 0u;
+    uint32_t path_index = light_vertices_ptr ? light_vertices_ptr[0].path_index : 0u;
+    for (uint32_t i = 0; i < light_vertex_count; ++i) {
+      const auto& v = light_vertices_ptr[i];
+
+      if (v.path_index != path_index) {
+        index = static_cast<uint32_t>(i);
+        path_index = v.path_index;
+      }
+
+      auto& path = paths_ptr[path_index];
+      path.count += 1;
+      path.index = index;
+      path.spect = {v.throughput.wavelength};
+      max_path_length = max(max_path_length, path.count);
+    }
+
+    log::info(
+      " --- building paths: %.2f sec\n"
+      " - completed in %.2f sec",
+      tm.measure(), tm_total.measure());
+
+    return max_path_length;
+  }
+
+  void build_spatial_grid() {
+    TimeMeasure tm_total = {};
+    log::info("Building spatial grid...");
+
+    uint32_t max_path_length = build_spatial_grid_data(rt.scene(), light_vertices.data(), light_vertices.size(), light_paths.data(), light_paths.size(), iteration, grid_builder);
     gpu_data.spatial_grid = grid_builder.data;
 
+    TimeMeasure tm = {};
     rt.gpu()->destroy_buffer(light_vertex_buffer);
-    light_vertex_buffer = rt.gpu()->create_buffer({light_vertex_count * sizeof(VCMLightVertex), light_vertices_ptr});
+    light_vertex_buffer = rt.gpu()->create_buffer({light_vertices.size() * sizeof(VCMLightVertex), light_vertices.data()});
+    gpu_data.light_vertices = make_array_view<VCMLightVertex>(rt.gpu()->get_buffer_device_pointer(light_vertex_buffer), light_vertices.size());
 
     rt.gpu()->destroy_buffer(spatial_grid_indices);
     spatial_grid_indices = rt.gpu()->create_buffer({sizeof(uint32_t) * grid_builder.data.indices.count, gpu_data.spatial_grid.indices.a});
@@ -232,42 +278,26 @@ struct GPUVCMImpl {
     rt.gpu()->destroy_buffer(spatial_grid_cells);
     spatial_grid_cells = rt.gpu()->create_buffer({sizeof(uint32_t) * grid_builder.data.cell_ends.count, gpu_data.spatial_grid.cell_ends.a});
     gpu_data.spatial_grid.cell_ends = make_array_view<uint32_t>(rt.gpu()->get_buffer_device_pointer(spatial_grid_cells), grid_builder.data.cell_ends.count);
-    log::info(" - building grid: %.2f sec", tm.lap());
-
-    auto paths_ptr = light_paths.data();
-    uint32_t max_path_length = 1;
-    uint32_t index = 0u;
-    uint32_t path_index = light_vertices_ptr ? light_vertices_ptr[0].path_index : 0u;
-    for (uint32_t i = 0; i < light_vertex_count; ++i) {
-      const auto& v = light_vertices_ptr[i];
-      if (v.path_index != path_index) {
-        index = static_cast<uint32_t>(i);
-        path_index = v.path_index;
-      }
-      auto& path = paths_ptr[path_index];
-      path.count += 1;
-      path.index = index;
-      path.spect = {v.throughput.wavelength};
-      max_path_length = max(max_path_length, path.count);
-    }
 
     auto light_paths_ptr = rt.gpu()->copy_to_buffer(light_paths_buffer, light_paths.data(), 0, sizeof(VCMLightPath) * dimemsions.x * dimemsions.y);
     gpu_data.light_paths = make_array_view<VCMLightPath>(light_paths_ptr, 1llu * dimemsions.x * dimemsions.y);
 
-    log::info(" - building paths: %.2f sec (max path: %u)", tm.lap(), max_path_length);
-    log::info("Completed: %.2f sec", tm_total.measure());
+    log::info(
+      " - updating GPU buffers: %.2f sec (max path: %u)\n"
+      "Completed: %.2f sec\n",
+      tm.measure(), max_path_length, tm_total.measure());
   }
 
   void update_light_vertices() {
     VCMIteration it = {};
     rt.gpu()->copy_from_buffer(global_data, &it, 0, sizeof(VCMIteration));
 
-    if ((it.active_light_paths == 0) || (it.light_vertices + it.active_light_paths > LightBufferCapacity)) {
+    if ((it.active_paths == 0) || (it.light_vertices + it.active_paths > LightBufferCapacity)) {
       download_light_vertices(it.light_vertices);
       it.light_vertices = 0;
     }
 
-    if (it.active_light_paths == 0) {
+    if (it.active_paths == 0) {
       rt.gpu()->launch(pipelines[LightMerge].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
       build_spatial_grid();
       vcm_state = generate_camera_vertices() ? VCMState::GatheringCameraVertices : VCMState::Stopped;
@@ -275,7 +305,7 @@ struct GPUVCMImpl {
     }
 
     // update iteration
-    iteration.active_light_paths = 0;
+    iteration.active_paths = 0;
     iteration.light_vertices = it.light_vertices;
     rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
 
@@ -285,17 +315,22 @@ struct GPUVCMImpl {
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
     // launch main
-    if (rt.gpu()->launch(pipelines[LightMain].first, it.active_light_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+    update_status("camera", it.active_paths);
+    if (rt.gpu()->launch(pipelines[LightMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       state = Integrator::State::Stopped;
     }
     current_buffer = 1u - current_buffer;
+    ++iteration_frame;
   }
 
   bool generate_camera_vertices() {
-    iteration.active_camera_paths = 0;
+    iteration.active_paths = 0;
+    iteration.terminated_paths = 0;
     rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
 
     current_buffer = 0;
+    iteration_frame = 0;
+
     gpu_data.input_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.output_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[1 - current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
@@ -304,32 +339,32 @@ struct GPUVCMImpl {
 
   void update_camera_vertices() {
     VCMIteration it = {};
-
     rt.gpu()->copy_from_buffer(global_data, &it, 0, sizeof(VCMIteration));
-    log::info("Active camera vertices: %u", it.active_camera_paths);
 
-    if (it.active_camera_paths == 0) {
+    if (it.active_paths == 0) {
       iteration.iteration += 1;
-      state = Integrator::State::Stopped;
-      // if (start_next_iteration() == false) {
-      //   state = Integrator::State::Stopped;
-      // }
+      start_next_iteration();
       return;
     }
 
-    iteration.active_camera_paths = 0;
+    iteration.active_paths = 0;
     rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
 
     gpu_data.input_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.output_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[1 - current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
-    rt.gpu()->launch(pipelines[CameraMain].first, it.active_camera_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal));
+    update_status("light", it.active_paths);
+    if (rt.gpu()->launch(pipelines[CameraMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+      state = Integrator::State::Stopped;
+    }
     current_buffer = 1u - current_buffer;
+    ++iteration_frame;
   }
 
   void update() {
     if (vcm_state == VCMState::Stopped) {
+      snprintf(status, sizeof(status), "Stopped");
       state = Integrator::State::Stopped;
       return;
     }
@@ -356,7 +391,7 @@ bool GPUVCM::enabled() const {
 }
 
 const char* GPUVCM::status() const {
-  return "Hello world!";
+  return _private->status;
 }
 
 Options GPUVCM::options() const {
@@ -399,8 +434,6 @@ void GPUVCM::update() {
 }
 
 void GPUVCM::stop(Stop stop) {
-  // stop == Stop::Immediate
-
   current_state = State::Stopped;
 }
 
