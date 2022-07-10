@@ -13,7 +13,5 @@ RAYGEN(main) {
   auto dst = global.light_final_image;
   auto src = global.light_iteration_image;
   float t = global.iteration->iteration / float(global.iteration->iteration + 1);
-
   dst[index] = lerp(src[index], dst[index], t);
-  src[index] = {};
 }

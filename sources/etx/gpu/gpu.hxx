@@ -63,6 +63,7 @@ struct GPUDevice {
   virtual device_pointer_t get_buffer_device_pointer(GPUBuffer) const = 0;
   virtual device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) = 0;
   virtual device_pointer_t copy_to_buffer(GPUBuffer, const void* src, uint64_t offset, uint64_t size) = 0;
+  virtual void clear_buffer(GPUBuffer) = 0;
   virtual void copy_from_buffer(GPUBuffer, void* dst, uint64_t offset, uint64_t size) = 0;
   virtual void destroy_buffer(GPUBuffer) = 0;
 

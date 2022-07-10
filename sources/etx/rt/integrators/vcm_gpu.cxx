@@ -7,6 +7,7 @@ struct GPUVCMImpl {
   GPUVCMImpl(Raytracing& art, std::atomic<Integrator::State>& st)
     : rt(art)
     , state(st) {
+    options = VCMOptions::default_values();
   }
 
   ~GPUVCMImpl() {
@@ -50,6 +51,7 @@ struct GPUVCMImpl {
   VCMState vcm_state = VCMState::Stopped;
   VCMGlobal gpu_data = {};
   VCMIteration iteration = {};
+  VCMOptions options = {};
   device_pointer_t iteration_ptr = {};
   device_pointer_t gpu_data_ptr = {};
   uint32_t current_buffer = 0;
@@ -67,8 +69,20 @@ struct GPUVCMImpl {
   char status[2048] = {};
 
   void update_status(const char* tag, uint32_t active_paths) {
-    double completed = 100.0 * double(dimemsions.x * dimemsions.y - active_paths) / double(dimemsions.x * dimemsions.y);
-    snprintf(status, sizeof(status), "%s: %u / %u, launching %u threads (%.2f percent done)...", tag, iteration.iteration, iteration_frame, active_paths, completed);
+    if (state == Integrator::State::Stopped) {
+      snprintf(status, sizeof(status), "Not running");
+    } else {
+      double completed = 100.0 * double(dimemsions.x * dimemsions.y - active_paths) / double(dimemsions.x * dimemsions.y);
+      snprintf(status, sizeof(status), "[%u / %u] %s: %u frame, launching %u threads (%.2f percent done)...",  //
+        iteration.iteration, options.max_samples, tag, iteration_frame, active_paths, completed);
+    }
+  }
+
+  void stop() {
+    vcm_state = VCMState::Stopped;
+    state = Integrator::State::Stopped;
+
+    update_status("Stopped", 0);
   }
 
   bool build_pipelines(const Options& opt) {
@@ -155,10 +169,16 @@ struct GPUVCMImpl {
     light_paths.resize(1llu * dimemsions.x * dimemsions.y);
     light_paths_buffer = rt.gpu()->create_buffer({sizeof(VCMLightPath) * dimemsions.x * dimemsions.y});
 
+    options.load(opt);
+
+    gpu_data.options = options;
     gpu_data.scene = rt.gpu_scene();
     gpu_data.camera_image = make_array_view<float4>(rt.gpu()->get_buffer_device_pointer(camera_image), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.light_final_image = make_array_view<float4>(rt.gpu()->get_buffer_device_pointer(light_final_image), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.light_iteration_image = make_array_view<float4>(rt.gpu()->get_buffer_device_pointer(light_iteration_image), 1llu * dimemsions.x * dimemsions.y);
+
+    rt.gpu()->clear_buffer(camera_image);
+    rt.gpu()->clear_buffer(light_final_image);
 
     current_buffer = 0;
     iteration.iteration = 0;
@@ -166,17 +186,19 @@ struct GPUVCMImpl {
   }
 
   bool start_next_iteration() {
-    constexpr float opt_radius_decay = 256.0f;
-    constexpr float opt_radius = 0.0f;
+    if (iteration.iteration >= options.max_samples) {
+      stop();
+      return false;
+    }
 
-    float used_radius = opt_radius;
+    float used_radius = options.initial_radius;
     if (used_radius == 0.0f) {
       used_radius = 5.0f * rt.scene().bounding_sphere_radius * min(1.0f / float(dimemsions.x), 1.0f / float(dimemsions.y));
     }
 
     current_buffer = 0;
 
-    float radius_scale = 1.0f / (1.0f + float(iteration.iteration) / float(opt_radius_decay));
+    float radius_scale = 1.0f / (1.0f + float(iteration.iteration) / float(options.radius_decay));
     iteration.current_radius = used_radius * radius_scale;
 
     float eta_vcm = kPi * sqr(iteration.current_radius) * float(dimemsions.x) * float(dimemsions.y);
@@ -201,7 +223,7 @@ struct GPUVCMImpl {
     iteration_frame = 0;
 
     if (rt.gpu()->launch(pipelines[LightGen].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
-      vcm_state = VCMState::Stopped;
+      stop();
       return false;
     }
 
@@ -300,7 +322,11 @@ struct GPUVCMImpl {
     if (it.active_paths == 0) {
       rt.gpu()->launch(pipelines[LightMerge].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
       build_spatial_grid();
-      vcm_state = generate_camera_vertices() ? VCMState::GatheringCameraVertices : VCMState::Stopped;
+      if (generate_camera_vertices() == false) {
+        stop();
+        return;
+      }
+      vcm_state = VCMState::GatheringCameraVertices;
       return;
     }
 
@@ -317,7 +343,7 @@ struct GPUVCMImpl {
     // launch main
     update_status("camera", it.active_paths);
     if (rt.gpu()->launch(pipelines[LightMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
-      state = Integrator::State::Stopped;
+      stop();
     }
     current_buffer = 1u - current_buffer;
     ++iteration_frame;
@@ -334,6 +360,7 @@ struct GPUVCMImpl {
     gpu_data.input_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.output_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[1 - current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
+
     return rt.gpu()->launch(pipelines[CameraGen].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
   }
 
@@ -356,14 +383,14 @@ struct GPUVCMImpl {
 
     update_status("light", it.active_paths);
     if (rt.gpu()->launch(pipelines[CameraMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
-      state = Integrator::State::Stopped;
+      stop();
     }
     current_buffer = 1u - current_buffer;
     ++iteration_frame;
   }
 
   void update() {
-    if (vcm_state == VCMState::Stopped) {
+    if ((state == Integrator::State::Stopped) || (vcm_state == VCMState::Stopped)) {
       snprintf(status, sizeof(status), "Stopped");
       state = Integrator::State::Stopped;
       return;
@@ -396,6 +423,7 @@ const char* GPUVCM::status() const {
 
 Options GPUVCM::options() const {
   Options opt;
+  _private->options.store(opt);
   opt.add("reload", "Reload pipelines on next launch:");
   for (uint32_t i = 0; i < GPUVCMImpl::PipelineCount; ++i) {
     opt.add(_private->reload_pipelines[i], _private->pipelines[i].second, _private->pipelines[i].second + 10);
@@ -411,6 +439,10 @@ void GPUVCM::preview(const Options& opt) {
   if (_private->build_pipelines(opt) == false)
     return;
 
+  if (current_state == State::Preview) {
+    stop(Stop::Immediate);
+  }
+
   if (_private->run(opt)) {
     current_state = State::Preview;
   }
@@ -420,7 +452,7 @@ void GPUVCM::run(const Options& opt) {
   if (_private->build_pipelines(opt) == false)
     return;
 
-  if (_private->run(opt)) {
+  if ((current_state != State::Running) && _private->run(opt)) {
     current_state = State::Running;
   }
 }

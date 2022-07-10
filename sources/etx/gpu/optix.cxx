@@ -712,6 +712,14 @@ void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset
     log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
 }
 
+void GPUOptixImpl::clear_buffer(GPUBuffer buffer) {
+  if (_private->invalid_state())
+    return;
+
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  cuMemsetD32(object.device_pointer(), 0u, object.capacity / sizeof(uint32_t));
+}
+
 GPUPipeline GPUOptixImpl::create_pipeline(const GPUPipeline::Descriptor& desc) {
   return {_private->pipeline_pool.alloc(_private, desc)};
 }

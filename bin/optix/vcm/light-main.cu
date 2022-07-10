@@ -33,7 +33,7 @@ RAYGEN(main) {
   uint3 idx = optixGetLaunchIndex();
   uint3 dim = optixGetLaunchDimensions();
   auto& state = global.input_state[idx.x + idx.y * dim.x];
-  if (state.path_length + 1 > kVCMMaxDepth) {
+  if (state.path_length + 1 > global.options.max_depth) {
     return;
   }
 
@@ -56,7 +56,6 @@ RAYGEN(main) {
   }
 
   state.path_distance += intersection.t;
-  state.path_length += 1;
   const auto& tri = global.scene.triangles[intersection.triangle_index];
   const auto& mat = global.scene.materials[tri.material_index];
 
@@ -65,21 +64,20 @@ RAYGEN(main) {
     return;
   }
 
+  state.path_length += 1;
   vcm_update_light_vcm(intersection, state);
 
   if (bsdf::is_delta(mat, intersection.tex, global.scene, state.sampler) == false) {
     push_light_vertex(iteration, {state, intersection.pos, intersection.barycentric, intersection.triangle_index, state.index});
 
-    if (state.path_length + 1 <= kVCMMaxDepth) {
-      float2 uv = {};
-      auto value = vcm_connect_to_camera(rt, global.scene, intersection, mat, tri, iteration, state, uv);
-      if (dot(value, value) > 0.0f) {
-        project(uv, value);
-      }
+    float2 uv = {};
+    auto value = vcm_connect_to_camera(rt, global.scene, intersection, mat, tri, iteration, global.options, state, uv);
+    if (dot(value, value) > 0.0f) {
+      project(uv, value);
     }
   }
 
-  if (vcm_next_ray(global.scene, PathSource::Light, intersection, kVCMRRStart, state, iteration)) {
+  if (vcm_next_ray(global.scene, PathSource::Light, intersection, global.options.rr_start, state, iteration)) {
     continue_tracing(iteration, state);
     return;
   }
