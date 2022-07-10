@@ -396,6 +396,7 @@ const char* GPUVCM::status() const {
 
 Options GPUVCM::options() const {
   Options opt;
+  opt.add("reload", "Reload pipelines on next launch:");
   for (uint32_t i = 0; i < GPUVCMImpl::PipelineCount; ++i) {
     opt.add(_private->reload_pipelines[i], _private->pipelines[i].second, _private->pipelines[i].second + 10);
   }

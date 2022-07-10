@@ -23,6 +23,7 @@ struct GPUAccelerationStructureImpl;
 struct GPUOptixImplData {
   constexpr static const uint64_t kSharedBufferSize = 8llu * 1024llu * 1024llu + (2u * 3840u * 2160u * sizeof(float4));
 
+  CUdevice cuda_device = {};
   CUcontext cuda_context = {};
   CUstream main_stream = {};
 
@@ -41,6 +42,7 @@ struct GPUOptixImplData {
 
   GPUBuffer shared_buffer = {};
   std::atomic<uint64_t> shared_buffer_offset = {};
+  char cuda_arch[128] = {};
 
   GPUOptixImplData() {
     buffer_pool.init(1024u);
@@ -79,6 +81,25 @@ struct GPUOptixImplData {
     int device_id = 0;
     if (cuda_call_failed(cudaSetDevice(device_id)))
       return false;
+
+    if (cuda_call_failed(cuDeviceGet(&cuda_device, device_id)))
+      return false;
+
+    int compute_major = 0;
+    cuDeviceGetAttribute(&compute_major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuda_device);
+
+    int compute_minor = 0;
+    cuDeviceGetAttribute(&compute_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuda_device);
+
+    snprintf(cuda_arch, sizeof(cuda_arch), "--generate-code arch=compute_%d%d,\"code=compute_%d%d\"",  //
+      compute_major, compute_minor, compute_major, compute_minor);
+
+    uint64_t device_memory = 0llu;
+    cuDeviceTotalMem(&device_memory, cuda_device);
+
+    char device_name[128] = {};
+    cuDeviceGetName(device_name, sizeof(device_name), cuda_device);
+    log::info("Using CUDA device: %s (compute: %d.%d, %llu Mb)", device_name, compute_major, compute_minor, device_memory / 1024 / 1024);
 
     if (cuda_call_failed(cudaStreamCreate(&main_stream)))
       return false;
@@ -159,6 +180,14 @@ struct GPUOptixImplData {
 
   bool cuda_call_failed(cudaError result) {
     if (result == cudaError::cudaSuccess)
+      return false;
+
+    report_error();
+    return true;
+  }
+
+  bool cuda_call_failed(CUresult result) {
+    if (result == CUresult::CUDA_SUCCESS)
       return false;
 
     report_error();
@@ -833,7 +862,7 @@ GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, b
   }
 
   if ((ps_desc.code != nullptr) && ((has_ptx_file == false) || force_recompile)) {
-    if (compile_nvcc_file(ps_desc.code, ps_desc.source) == false) {
+    if (compile_nvcc_file(ps_desc.code, ps_desc.source, _private->cuda_arch) == false) {
       return {};
     }
   }

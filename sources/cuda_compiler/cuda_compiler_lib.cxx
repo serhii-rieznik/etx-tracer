@@ -7,7 +7,7 @@
 
 namespace etx {
 
-bool compile_nvcc_file(const char* path_to_file, const char* output_to_file) {
+bool compile_nvcc_file(const char* path_to_file, const char* output_to_file, const char* options) {
   auto con = GetStdHandle(STD_OUTPUT_HANDLE);
 
   static char out_ptx_file[4096] = {};
@@ -29,8 +29,8 @@ bool compile_nvcc_file(const char* path_to_file, const char* output_to_file) {
 
   static char command_line[4096] = {};
   snprintf(command_line, sizeof(command_line),
-    "%s \"%s\" --ptx --output-file \"%s\" -I\"%s\" -I\"%s\" --compiler-bindir \"%s\" -allow-unsupported-compiler %s",  //
-    ETX_CUDA_COMPILER, path_to_file, target_file, ETX_OPTIX_INCLUDES, ETX_INCLUDES, ETX_MSBUILD_PATH, debug_flags);    //
+    "%s \"%s\" --ptx --output-file \"%s\" -I\"%s\" -I\"%s\" --compiler-bindir \"%s\" %s %s",                                  //
+    ETX_CUDA_COMPILER, path_to_file, target_file, ETX_OPTIX_INCLUDES, ETX_INCLUDES, ETX_MSBUILD_PATH, debug_flags, options);  //
 
   static char command_line_info[4096] = {};
   int j = 0;
