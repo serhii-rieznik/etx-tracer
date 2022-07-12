@@ -6,8 +6,8 @@ namespace etx {
 struct GPUVCMImpl {
   GPUVCMImpl(Raytracing& art, std::atomic<Integrator::State>& st)
     : rt(art)
-    , state(st) {
-    options = VCMOptions::default_values();
+    , state(st)
+    , options(VCMOptions::default_values()) {
   }
 
   ~GPUVCMImpl() {
@@ -324,17 +324,18 @@ struct GPUVCMImpl {
 
     if (it.active_paths == 0) {
       rt.gpu()->launch(pipelines[LightMerge].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
-      build_spatial_grid();
+      auto task = rt.scheduler().schedule(1u, [this](uint32_t, uint32_t, uint32_t) {
+        build_spatial_grid();
+      });
+      rt.scheduler().wait(task);
+
       if (generate_camera_vertices() == false) {
         stop();
         return;
       }
+
       vcm_state = VCMState::GatheringCameraVertices;
       return;
-    }
-
-    if ((iteration_frame > 100) && (it.active_paths <= 10)) {
-      log::info("Light: %u / %u frame -> %u paths :/", update_frame, iteration_frame, it.active_paths);
     }
 
     // update iteration
@@ -381,26 +382,12 @@ struct GPUVCMImpl {
       return;
     }
 
-    if ((iteration_frame > 100) && (it.active_paths <= 10)) {
-      log::info("Camera: %u / %u frame -> %u paths :/", update_frame, iteration_frame, it.active_paths);
-    }
-
     iteration.active_paths = 0;
     rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
 
     gpu_data.input_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.output_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[1 - current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
-
-    if ((iteration_frame > 200) && (it.active_paths <= 15)) {
-      VCMPathState states[32] = {};
-      rt.gpu()->copy_from_buffer(state_buffers[current_buffer], states, 0, sizeof(VCMPathState) * it.active_paths);
-      printf("[");
-      for (auto& state : states) {
-        printf("%d ", state.state);
-      }
-      printf("]\n");
-    }
 
     update_status("camera", it.active_paths);
     if (rt.gpu()->launch(pipelines[CameraMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {

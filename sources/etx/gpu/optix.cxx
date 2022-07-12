@@ -21,7 +21,7 @@ struct GPUPipelineOptixImpl;
 struct GPUAccelerationStructureImpl;
 
 struct GPUOptixImplData {
-  constexpr static const uint64_t kSharedBufferSize = 8llu * 1024llu * 1024llu + (2u * 3840u * 2160u * sizeof(float4));
+  constexpr static const uint64_t kSharedBufferSize = 16llu * 1024llu * 1024llu;
 
   CUdevice cuda_device = {};
   CUcontext cuda_context = {};
@@ -91,8 +91,8 @@ struct GPUOptixImplData {
     int compute_minor = 0;
     cuDeviceGetAttribute(&compute_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuda_device);
 
-    snprintf(cuda_arch, sizeof(cuda_arch), "--generate-code arch=compute_%d%d,\"code=compute_%d%d\"",  //
-      compute_major, compute_minor, compute_major, compute_minor);
+    // snprintf(cuda_arch, sizeof(cuda_arch), "--generate-code arch=compute_%d%d,\"code=compute_%d%d\"",  //
+    //   compute_major, compute_minor, compute_major, compute_minor);
 
     uint64_t device_memory = 0llu;
     cuDeviceTotalMem(&device_memory, cuda_device);

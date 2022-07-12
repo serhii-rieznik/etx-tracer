@@ -37,8 +37,6 @@ RAYGEN(main) {
   auto& state = global.input_state[idx.x];
   auto& iteration = *global.iteration;
 
-  state.state = 1u;
-
   Raytracing rt;
   Intersection intersection;
   bool found_intersection = rt.trace(global.scene, state.ray, intersection, state.sampler);

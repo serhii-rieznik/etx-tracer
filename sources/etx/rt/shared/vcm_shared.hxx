@@ -93,13 +93,10 @@ struct ETX_ALIGNED VCMPathState {
   float d_vm = 0.0f;
   float eta = 1.0f;
 
-  uint32_t state = 0u;
   uint32_t path_length = 0;
   uint32_t medium_index = kInvalidIndex;
   uint32_t delta_emitter = 0;
-
   uint32_t index = 0u;
-  uint32_t pad[3] = {};
 };
 
 struct ETX_ALIGNED VCMLightVertex {
@@ -128,9 +125,11 @@ struct ETX_ALIGNED VCMLightVertex {
 
   float3 pos = {};
   float d_vm = 0.0f;
+
   uint32_t triangle_index = kInvalidIndex;
   uint32_t path_length = 0;
   uint32_t path_index = 0;
+  uint32_t pad = 0;
 
   ETX_GPU_CODE Vertex vertex(const Scene& s) const {
     return lerp_vertex(s.vertices, s.triangles[triangle_index], bc);
@@ -380,6 +379,9 @@ ETX_GPU_CODE static float3 vcm_connect_to_camera(const RT& rt, const Scene& scen
 }
 
 ETX_GPU_CODE static void vcm_cam_handle_miss(const Scene& scene, const Intersection& intersection, const VCMOptions& options, VCMPathState& state) {
+  if (options.direct_hit() == false)
+    return;
+
   for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
     const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
     state.gathered += vcm_get_radiance(scene, emitter, intersection, state, options);
@@ -657,6 +659,24 @@ struct ETX_ALIGNED VCMGlobal {
   VCMSpatialGridData spatial_grid ETX_EMPTY_INIT;
   VCMOptions options ETX_EMPTY_INIT;
   VCMIteration* iteration ETX_EMPTY_INIT;
+};
+
+enum VCMMemoryRequirements : uint64_t {
+  VCMMaxOutputWidth = 3840llu,
+  VCMMaxOutputHeight = 2160llu,
+  VCMPixelCount = VCMMaxOutputWidth * VCMMaxOutputHeight,
+  VCMPathStateSize = sizeof(VCMPathState),
+  VCMGlobalSize = sizeof(VCMGlobal),
+  VCMLightVertexSize = sizeof(VCMLightVertex),
+  VCMLightVerticesMinSize = VCMLightVertexSize * VCMPixelCount,
+  VCMPathStateBuffersSize = 2llu * VCMPathStateSize * VCMPixelCount,
+  VCMImagesSize = 3llu * sizeof(float4) * VCMPixelCount,
+
+  VCMTotalSize = VCMPathStateBuffersSize + VCMLightVerticesMinSize + VCMImagesSize,
+
+  MB_PathStateBuffersSize = VCMPathStateBuffersSize / 1024llu / 1024llu,
+  MB_ImagesSize = VCMImagesSize / 1024llu / 1024llu,
+  MB_VCMTotalSize = VCMTotalSize / 1024llu / 1024llu,
 };
 
 }  // namespace etx

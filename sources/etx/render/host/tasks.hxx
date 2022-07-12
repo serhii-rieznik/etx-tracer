@@ -12,7 +12,7 @@ struct Task {
   };
 
   struct Handle {
-    uint32_t internal = InvalidHandle;
+    uint32_t data = InvalidHandle;
   };
 
   virtual ~Task() = default;
@@ -27,6 +27,7 @@ struct TaskScheduler {
   uint32_t max_thread_count();
 
   Task::Handle schedule(Task*, uint32_t range);
+  Task::Handle schedule(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
   void execute(Task*, uint32_t range);
   void execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
@@ -38,7 +39,7 @@ struct TaskScheduler {
   void restart(Task::Handle, uint32_t new_rage);
 
  private:
-  ETX_DECLARE_PIMPL(TaskScheduler, 256);
+  ETX_DECLARE_PIMPL(TaskScheduler, 512);
 };
 
 }  // namespace etx

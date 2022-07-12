@@ -38,9 +38,6 @@ struct CPUVCMImpl {
   Film light_image;
   Film iteration_light_image;
   Task::Handle current_task = {};
-  // uint32_t opt_max_iterations = 0x7fffffff;
-  // uint32_t opt_radius_decay = 256;
-  // float opt_radius = 0.0f;
 
   bool light_image_updated = false;
   bool camera_image_updated = false;
@@ -71,7 +68,8 @@ struct CPUVCMImpl {
 
   CPUVCMImpl(Raytracing& r, std::atomic<Integrator::State>* st)
     : rt(r)
-    , state(st) {
+    , state(st)
+    , vcm_options(VCMOptions::default_values()) {
   }
 
   bool running() const {
