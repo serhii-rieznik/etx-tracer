@@ -1,7 +1,47 @@
 #include <etx/rt/integrators/vcm_gpu.hxx>
 #include <etx/rt/shared/vcm_shared.hxx>
 
+#include <cuda.h>
+
 namespace etx {
+
+CUstream cuda_stream();
+
+struct CUDATimer {
+  void begin() {
+    _started = true;
+    cuEventRecord(_begin, cuda_stream());
+  }
+
+  float retreive() {
+    ETX_ASSERT(_started);
+    cuEventRecord(_end, cuda_stream());
+    cuEventSynchronize(_end);
+    cuEventElapsedTime(&_duration, _begin, _end);
+    return _duration;
+  }
+
+  CUDATimer() {
+    cuEventCreate(&_begin, CU_EVENT_DEFAULT);
+    cuEventCreate(&_end, CU_EVENT_DEFAULT);
+  }
+
+  ~CUDATimer() {
+    cuEventDestroy(_end);
+    cuEventDestroy(_begin);
+  }
+
+  CUDATimer(const CUDATimer&) = delete;
+  CUDATimer& operator=(const CUDATimer&) = delete;
+  CUDATimer(CUDATimer&&) = delete;
+  CUDATimer& operator=(CUDATimer&&) = delete;
+
+ private:
+  CUevent _begin = {};
+  CUevent _end = {};
+  float _duration = 0.0f;
+  bool _started = false;
+};
 
 struct GPUVCMImpl {
   GPUVCMImpl(Raytracing& art, std::atomic<Integrator::State>& st)
@@ -44,6 +84,13 @@ struct GPUVCMImpl {
   std::vector<VCMLightVertex> light_vertices = {};
   std::vector<VCMLightPath> light_paths;
   uint2 dimemsions = {};
+
+  Integrator::DebugInfo debug_info[2] = {
+    {"GPU light time (ms)  "},
+    {"GPU camera time (ms) "},
+  };
+  CUDATimer gpu_light_timer = {};
+  CUDATimer gpu_camera_timer = {};
 
   std::atomic<Integrator::State>& state;
 
@@ -350,9 +397,13 @@ struct GPUVCMImpl {
 
     // launch main
     update_status("camera", it.active_paths);
+
+    gpu_light_timer.begin();
     if (rt.gpu()->launch(pipelines[LightMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       stop();
     }
+    debug_info[0].value += gpu_light_timer.retreive();
+
     current_buffer = 1u - current_buffer;
     ++iteration_frame;
   }
@@ -390,9 +441,13 @@ struct GPUVCMImpl {
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
     update_status("camera", it.active_paths);
+
+    gpu_camera_timer.begin();
     if (rt.gpu()->launch(pipelines[CameraMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       stop();
     }
+    debug_info[1].value += gpu_camera_timer.retreive();
+
     current_buffer = 1u - current_buffer;
     ++iteration_frame;
   }
@@ -469,7 +524,11 @@ void GPUVCM::update() {
   constexpr float kDeltaTime = 1.0f / 30.0f;
 
   TimeMeasure tm = {};
-  while ((current_state != State::Stopped) && (tm.measure() < kDeltaTime)) {
+
+  _private->debug_info[0].value = 0.0f;
+  _private->debug_info[1].value = 0.0f;
+  // while ((current_state != State::Stopped) && (tm.measure() < kDeltaTime)) 
+  {
     _private->update();
   }
 
@@ -511,6 +570,14 @@ void GPUVCM::reload() {
   stop(Stop::Immediate);
   _private->destroy_pipelines();
   preview({});
+}
+
+uint64_t GPUVCM::debug_info_count() const {
+  return std::size(_private->debug_info);
+}
+
+Integrator::DebugInfo* GPUVCM::debug_info() const {
+  return _private->debug_info;
 }
 
 }  // namespace etx

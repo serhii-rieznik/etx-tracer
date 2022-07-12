@@ -16,6 +16,12 @@
 
 namespace etx {
 
+static CUstream shared_cuda_stream = {};
+
+CUstream cuda_stream() {
+  return shared_cuda_stream;
+}
+
 struct GPUBufferOptixImpl;
 struct GPUPipelineOptixImpl;
 struct GPUAccelerationStructureImpl;
@@ -103,6 +109,8 @@ struct GPUOptixImplData {
 
     if (cuda_call_failed(cudaStreamCreate(&main_stream)))
       return false;
+
+    shared_cuda_stream = main_stream;
 
     cudaDeviceProp device_props = {};
     if (cuda_call_failed(cudaGetDeviceProperties(&device_props, device_id)))

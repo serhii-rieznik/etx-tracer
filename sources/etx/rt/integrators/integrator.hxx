@@ -21,6 +21,11 @@ struct Integrator {
     WaitForCompletion,
   };
 
+  struct DebugInfo {
+    const char* title = nullptr;
+    float value = 0.0f;
+  };
+
   Integrator(Raytracing& r)
     : rt(r) {
   }
@@ -80,6 +85,14 @@ struct Integrator {
   }
 
   virtual void reload() {
+  }
+
+  virtual uint64_t debug_info_count() const {
+    return 0llu;
+  }
+
+  virtual DebugInfo* debug_info() const {
+    return nullptr;
   }
 
  public:

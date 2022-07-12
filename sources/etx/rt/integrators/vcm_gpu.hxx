@@ -27,6 +27,9 @@ struct GPUVCM : public Integrator {
   const float4* get_light_image(bool /* force update */) override;
   void reload() override;
 
+  uint64_t debug_info_count() const override;
+  DebugInfo* debug_info() const override;
+
   ETX_DECLARE_PIMPL(GPUVCM, 4096);
 };
 
