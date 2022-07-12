@@ -108,7 +108,7 @@ void UI::build(double dt, const char* status) {
     igBegin("Debug Info", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
     auto debug_info = _current_integrator->debug_info();
     for (uint64_t i = 0; i < _current_integrator->debug_info_count(); ++i) {
-      igLabelText("", "%s : %.3f", debug_info[i].title,  debug_info[i].value);
+      igLabelText("", "%s : %.3f", debug_info[i].title, debug_info[i].value);
     }
     igEnd();
   }

@@ -527,8 +527,7 @@ void GPUVCM::update() {
 
   _private->debug_info[0].value = 0.0f;
   _private->debug_info[1].value = 0.0f;
-  // while ((current_state != State::Stopped) && (tm.measure() < kDeltaTime)) 
-  {
+  while ((current_state != State::Stopped) && (tm.measure() < kDeltaTime)) {
     _private->update();
   }
 
