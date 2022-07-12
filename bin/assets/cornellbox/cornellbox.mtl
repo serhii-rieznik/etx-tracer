@@ -1,36 +1,29 @@
-newmtl et::medium
-sigma_a 0.01 0.01 0.01
-sigma_s 0.075 0.075 0.075
-g 0.75
-
 newmtl white
-    Kd 1.0 1.0 1.0
+material class diffuse
 
 newmtl leftWall
-    Kd 1.0 0.0 0.0
+material class diffuse
+Kd 1.0 0.0 0.0
 
 newmtl rightWall
-    Kd 0.0 1.0 0.0
+material class diffuse
+Kd 0.0 1.0 0.0
 
 newmtl floor
-    Kd 1.0 1.0 1.0
+material class diffuse
 
 newmtl ceiling
-    Kd 1.0 1.0 1.0
+material class diffuse
 
 newmtl frontWall
-    Kd 1.0 1.0 1.0
+material class diffuse
 
 newmtl shortBox
-    Kd 1.0 1.0 1.0
-    Ks 1.0 1.0 1.0
-    Kt 1.0 1.0 1.0
+material class diffuse
 
 newmtl tallBox
-    Kd 1.0 1.0 1.0
-    Ks 1.0 1.0 1.0
-    Kt 1.0 1.0 1.0
+material class diffuse
 
 newmtl light
-    Kd 1.0 1.0 1.0
-    Ke 4 4 4
+material class diffuse
+Ke 5 4 3

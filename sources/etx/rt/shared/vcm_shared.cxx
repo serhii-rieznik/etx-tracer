@@ -19,12 +19,13 @@ void VCMOptions::load(const Options& opt) {
   initial_radius = opt.get("initial_radius", initial_radius).to_float();
   radius_decay = opt.get("radius_decay", radius_decay).to_integer();
   rr_start = opt.get("rr_start", max_depth).to_integer();
-  options = opt.get("direct_hit", direct_hit()).to_bool() ? options | DirectHit : options | ~DirectHit;
-  options = opt.get("connect_to_light", connect_to_light()).to_bool() ? options | ConnectToLight : options | ~ConnectToLight;
-  options = opt.get("connect_to_camera", connect_to_camera()).to_bool() ? options | ConnectToCamera : options | ~ConnectToCamera;
-  options = opt.get("connect_vertices", connect_vertices()).to_bool() ? options | ConnectVertices : options | ~ConnectVertices;
-  options = opt.get("merge_vertices", merge_vertices()).to_bool() ? options | MergeVertices : options | ~MergeVertices;
-  options = opt.get("mis", enable_mis()).to_bool() ? options | EnableMis : options | ~EnableMis;
+
+  options = opt.get("direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
+  options = opt.get("connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
+  options = opt.get("connect_to_camera", connect_to_camera()).to_bool() ? (options | ConnectToCamera) : (options & ~ConnectToCamera);
+  options = opt.get("connect_vertices", connect_vertices()).to_bool() ? (options | ConnectVertices) : (options & ~ConnectVertices);
+  options = opt.get("merge_vertices", merge_vertices()).to_bool() ? (options | MergeVertices) : (options & ~MergeVertices);
+  options = opt.get("mis", enable_mis()).to_bool() ? (options | EnableMis) : (options & ~EnableMis);
 }
 
 void VCMOptions::store(Options& opt) {

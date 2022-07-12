@@ -22,21 +22,22 @@ ETX_GPU_CODE void finish_ray(VCMIteration& iteration, VCMPathState& state) {
   global.camera_image[c] = lerp(new_value, old_value, t);
 }
 
-ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, VCMPathState& state) {
-  uint32_t i = atomicAdd(&iteration.active_paths, 1u);
-  global.output_state[i] = state;
-  state.path_length += 1;
+ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, VCMPathState& state, uint32_t path_len_offset) {
+  state.path_length += path_len_offset;
+  if (state.path_length < global.options.max_depth) {
+    int i = atomicAdd(&iteration.active_paths, 1u);
+    global.output_state[i] = state;
+  } else {
+    finish_ray(iteration, state);
+  }
 }
 
 RAYGEN(main) {
   uint3 idx = optixGetLaunchIndex();
-  uint3 dim = optixGetLaunchDimensions();
-  auto& state = global.input_state[idx.x + idx.y * dim.x];
-  if (state.path_length > global.options.max_depth) {
-    return;
-  }
-
+  auto& state = global.input_state[idx.x];
   auto& iteration = *global.iteration;
+
+  state.state = 1u;
 
   Raytracing rt;
   Intersection intersection;
@@ -46,7 +47,7 @@ RAYGEN(main) {
 
   if (medium_sample.sampled_medium()) {
     vcm_handle_sampled_medium(global.scene, medium_sample, state);
-    continue_tracing(iteration, state);
+    continue_tracing(iteration, state, 1u);
     return;
   }
 
@@ -61,8 +62,7 @@ RAYGEN(main) {
   const auto& mat = global.scene.materials[tri.material_index];
 
   if (vcm_handle_boundary_bsdf(global.scene, mat, intersection, PathSource::Camera, state)) {
-    state.path_length = (state.path_length > 0) ? (state.path_length - 1u) : 0;
-    continue_tracing(iteration, state);
+    continue_tracing(iteration, state, 0u);
     return;
   }
 
@@ -81,5 +81,5 @@ RAYGEN(main) {
     return;
   }
 
-  continue_tracing(iteration, state);
+  continue_tracing(iteration, state, 1u);
 }

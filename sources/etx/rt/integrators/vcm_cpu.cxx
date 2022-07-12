@@ -199,7 +199,6 @@ struct CPUVCMImpl {
           continue;
         }
 
-        state.path_length += 1;
         vcm_update_light_vcm(intersection, state);
 
         if (bsdf::is_delta(mat, intersection.tex, rt.scene(), state.sampler) == false) {

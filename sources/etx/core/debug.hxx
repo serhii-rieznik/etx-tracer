@@ -25,6 +25,9 @@
 #define ETX_CPU_CODE
 #define ETX_INIT_WITH(S) = S
 
+template <class T>
+T atomicAdd(T*, T);
+
 #endif
 
 #if (ETX_NVCC_COMPILER)
@@ -95,6 +98,7 @@ ETX_GPU_CODE void print_value_no_tag(const char* name, int64_t t) {
 #define ETX_ASSERT_GREATER(A, B)                           \
   do {                                                     \
     if (((A) > (B)) == false) {                            \
+      ETX_DEBUG_BREAK();                                   \
       printf("Greater condition: (");                      \
       print_value_no_tag(#A, A);                           \
       printf(") > (");                                     \

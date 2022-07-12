@@ -5,9 +5,12 @@ using namespace etx;
 
 static __constant__ VCMGlobal global;
 
-ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, const VCMPathState& state) {
-  int i = atomicAdd(&iteration.active_paths, 1u);
-  global.output_state[i] = state;
+ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, VCMPathState& state, uint32_t path_len_offset) {
+  state.path_length += path_len_offset;
+  if (state.path_length < global.options.max_depth) {
+    int i = atomicAdd(&iteration.active_paths, 1u);
+    global.output_state[i] = state;
+  }
 }
 
 ETX_GPU_CODE void push_light_vertex(VCMIteration& iteration, const VCMLightVertex& v) {
@@ -31,12 +34,7 @@ ETX_GPU_CODE void project(const float2& ndc_coord, const float3& value) {
 
 RAYGEN(main) {
   uint3 idx = optixGetLaunchIndex();
-  uint3 dim = optixGetLaunchDimensions();
-  auto& state = global.input_state[idx.x + idx.y * dim.x];
-  if (state.path_length + 1 > global.options.max_depth) {
-    return;
-  }
-
+  auto& state = global.input_state[idx.x];
   auto& iteration = *global.iteration;
 
   Raytracing rt = {};
@@ -47,7 +45,7 @@ RAYGEN(main) {
 
   if (medium_sample.sampled_medium()) {
     vcm_handle_sampled_medium(global.scene, medium_sample, state);
-    continue_tracing(iteration, state);
+    continue_tracing(iteration, state, 1u);
     return;
   }
 
@@ -60,11 +58,10 @@ RAYGEN(main) {
   const auto& mat = global.scene.materials[tri.material_index];
 
   if (vcm_handle_boundary_bsdf(global.scene, mat, intersection, PathSource::Light, state)) {
-    continue_tracing(iteration, state);
+    continue_tracing(iteration, state, 0u);
     return;
   }
 
-  state.path_length += 1;
   vcm_update_light_vcm(intersection, state);
 
   if (bsdf::is_delta(mat, intersection.tex, global.scene, state.sampler) == false) {
@@ -78,7 +75,7 @@ RAYGEN(main) {
   }
 
   if (vcm_next_ray(global.scene, PathSource::Light, intersection, global.options.rr_start, state, iteration)) {
-    continue_tracing(iteration, state);
+    continue_tracing(iteration, state, 1u);
     return;
   }
 

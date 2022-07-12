@@ -56,6 +56,7 @@ struct GPUVCMImpl {
   device_pointer_t gpu_data_ptr = {};
   uint32_t current_buffer = 0;
   uint32_t iteration_frame = 0;
+  uint32_t update_frame = 0;
 
   std::pair<GPUPipeline, const char*> pipelines[PipelineCount] = {
     {{}, "optix/vcm/camera-gen.json"},
@@ -180,6 +181,8 @@ struct GPUVCMImpl {
     rt.gpu()->clear_buffer(camera_image);
     rt.gpu()->clear_buffer(light_final_image);
 
+    update_frame = 0;
+    iteration_frame = 0;
     current_buffer = 0;
     iteration.iteration = 0;
     return start_next_iteration();
@@ -330,6 +333,10 @@ struct GPUVCMImpl {
       return;
     }
 
+    if ((iteration_frame > 100) && (it.active_paths <= 10)) {
+      log::info("Light: %u / %u frame -> %u paths :/", update_frame, iteration_frame, it.active_paths);
+    }
+
     // update iteration
     iteration.active_paths = 0;
     iteration.light_vertices = it.light_vertices;
@@ -374,6 +381,10 @@ struct GPUVCMImpl {
       return;
     }
 
+    if ((iteration_frame > 100) && (it.active_paths <= 10)) {
+      log::info("Camera: %u / %u frame -> %u paths :/", update_frame, iteration_frame, it.active_paths);
+    }
+
     iteration.active_paths = 0;
     rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
 
@@ -381,7 +392,17 @@ struct GPUVCMImpl {
     gpu_data.output_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[1 - current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
-    update_status("light", it.active_paths);
+    if ((iteration_frame > 200) && (it.active_paths <= 15)) {
+      VCMPathState states[32] = {};
+      rt.gpu()->copy_from_buffer(state_buffers[current_buffer], states, 0, sizeof(VCMPathState) * it.active_paths);
+      printf("[");
+      for (auto& state : states) {
+        printf("%d ", state.state);
+      }
+      printf("]\n");
+    }
+
+    update_status("camera", it.active_paths);
     if (rt.gpu()->launch(pipelines[CameraMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       stop();
     }
@@ -464,6 +485,8 @@ void GPUVCM::update() {
   while ((current_state != State::Stopped) && (tm.measure() < kDeltaTime)) {
     _private->update();
   }
+
+  ++_private->update_frame;
 }
 
 void GPUVCM::stop(Stop stop) {

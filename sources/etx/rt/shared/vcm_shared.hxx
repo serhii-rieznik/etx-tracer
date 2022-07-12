@@ -77,12 +77,6 @@ struct ETX_ALIGNED VCMIteration {
 };
 
 struct ETX_ALIGNED VCMPathState {
-  enum : uint32_t {
-    Active = 0u,
-    ConnectingVertices = 1u,
-    Completed = 2u,
-  };
-
   SpectralResponse throughput = {};
   SpectralResponse gathered = {};
   Ray ray = {};
@@ -99,7 +93,7 @@ struct ETX_ALIGNED VCMPathState {
   float d_vm = 0.0f;
   float eta = 1.0f;
 
-  uint32_t state = Active;
+  uint32_t state = 0u;
   uint32_t path_length = 0;
   uint32_t medium_index = kInvalidIndex;
   uint32_t delta_emitter = 0;
@@ -171,10 +165,6 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
   state.throughput *= bsdf_sample.weight;
   ETX_VALIDATE(state.throughput);
 
-  if (bsdf_sample.properties & BSDFSample::MediumChanged) {
-    state.medium_index = bsdf_sample.medium_index;
-  }
-
   if (path_source == PathSource::Light) {
     state.throughput *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
   }
@@ -185,6 +175,10 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
 
   if ((state.path_length >= rr_start) && (apply_rr(state.eta, state.sampler.next(), state.throughput) == false)) {
     return false;
+  }
+
+  if (bsdf_sample.properties & BSDFSample::MediumChanged) {
+    state.medium_index = bsdf_sample.medium_index;
   }
 
   float cos_theta_bsdf = fabsf(dot(i.nrm, bsdf_sample.w_o));
@@ -210,6 +204,7 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
     state.d_vcm = 1.0f / bsdf_sample.pdf;
     ETX_VALIDATE(state.d_vcm);
   }
+
   state.ray.d = bsdf_sample.w_o;
   state.ray.o = shading_pos(scene.vertices, tri, i.barycentric, bsdf_sample.w_o);
   state.eta *= bsdf_sample.eta;
@@ -330,7 +325,7 @@ ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const Material& m
 }
 
 ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPathState& state) {
-  if ((state.path_length > 1) || (state.delta_emitter == 0)) {
+  if ((state.path_length > 0) || (state.delta_emitter == 0)) {
     state.d_vcm *= sqr(state.path_distance);
   }
 
@@ -344,7 +339,7 @@ ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPath
 template <class RT>
 ETX_GPU_CODE static float3 vcm_connect_to_camera(const RT& rt, const Scene& scene, const Intersection& intersection, const Material& mat, const Triangle& tri,
   const VCMIteration& vcm_iteration, const VCMOptions& options, VCMPathState& state, float2& uv) {
-  if ((options.connect_to_camera() == false) || (state.path_length + 1 <= options.max_depth)) {
+  if ((options.connect_to_camera() == false) || (state.path_length + 1 >= options.max_depth)) {
     return {};
   }
 
