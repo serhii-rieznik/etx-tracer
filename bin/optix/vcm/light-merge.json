@@ -1,5 +1,0 @@
-{
-  "class" : "CUDA",
-  "code" : "light-merge.cu",
-  "source" : "./output/light-merge.fatbin"
-}

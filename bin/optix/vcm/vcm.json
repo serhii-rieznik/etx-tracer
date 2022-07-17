@@ -1,0 +1,5 @@
+{
+  "class" : "CUDA",
+  "code" : "vcm.cu",
+  "source" : "./output/vcm.fatbin"
+}

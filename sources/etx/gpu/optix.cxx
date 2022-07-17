@@ -1,5 +1,6 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
+
 #include <etx/log/log.hxx>
 #include <etx/gpu/optix.hxx>
 
@@ -13,6 +14,7 @@
 #include <optix_function_table_definition.h>
 
 #include <atomic>
+#include <unordered_map>
 
 namespace etx {
 
@@ -36,11 +38,13 @@ CUstream cuda_stream() {
   return shared_cuda_stream;
 }
 
+const char* cuda_result(CUresult result);
+
 bool check_cuda_call_failed(CUresult result, const char* expr, const char* file, uint32_t line) {
   if (result == CUDA_SUCCESS)
     return false;
 
-  log::error("CUDA call %s failed with %u at %s [%u]", expr, result, file, line);
+  log::error("CUDA call %s failed with %s at %s [%u]", expr, cuda_result(result), file, line);
   return true;
 }
 
@@ -259,7 +263,7 @@ struct GPUBufferOptixImpl {
   GPUBufferOptixImpl() = default;
 
   GPUBufferOptixImpl(GPUOptixImplData* device, const GPUBuffer::Descriptor& desc) {
-    capacity = align_up(desc.size, 16u);
+    capacity = align_up(desc.size, 16llu);
 
     if (device->cuda_call_failed(cudaMalloc(&device_ptr, capacity))) {
       log::error("Failed to create CUDA buffer with size: %llu", capacity);
@@ -437,16 +441,7 @@ struct GPUPipelineOptixImpl {
 
   bool create_cuda_module(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
     ETX_ASSERT(cuda.cuda_module == nullptr);
-
-    if (ETX_CUDA_FAILED(cuModuleLoadData(&cuda.cuda_module, desc.data))) {
-      return false;
-    }
-
-    if (ETX_CUDA_FAILED(cuModuleGetFunction(&cuda.function, cuda.cuda_module, "merge_light_image"))) {
-      return false;
-    }
-
-    return true;
+    return ETX_CUDA_SUCCEED(cuModuleLoadData(&cuda.cuda_module, desc.data));
   }
 
   bool create_module(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
@@ -614,9 +609,15 @@ struct GPUPipelineOptixImpl {
   OptixPipeline pipeline = {};
   OptixShaderBindingTable shader_binding_table = {};
 
+  struct CUDAFunction {
+    CUfunction func = {};
+    uint32_t min_grid_size = 0u;
+    uint32_t max_block_size = 0u;
+  };
+
   struct {
     CUmodule cuda_module = {};
-    CUfunction function = {};
+    std::unordered_map<uint32_t, CUDAFunction> functions = {};
   } cuda = {};
 
   CUDACompileTarget target = CUDACompileTarget::PTX;
@@ -1005,38 +1006,50 @@ bool GPUOptixImpl::launch(GPUPipeline pipeline, uint32_t dim_x, uint32_t dim_y, 
   }
 
   const auto& pp = _private->pipeline_pool.get(pipeline.handle);
-  switch (pp.target) {
-    case CUDACompileTarget::PTX: {
-      auto result = optixLaunch(pp.pipeline, _private->main_stream, params, params_size, &pp.shader_binding_table, dim_x, dim_y, 1);
-      return (result == OPTIX_SUCCESS);
-    }
+  ETX_ASSERT(pp.target == CUDACompileTarget::PTX);
+  auto result = optixLaunch(pp.pipeline, _private->main_stream, params, params_size, &pp.shader_binding_table, dim_x, dim_y, 1);
+  return (result == OPTIX_SUCCESS);
+}
 
-    case CUDACompileTarget::Library: {
-      uint32_t block_size = 8;
-      uint32_t launch_x = dim_x / block_size;
-      uint32_t launch_y = dim_y / block_size;
-
-      void* call_extra[] = {
-        CU_LAUNCH_PARAM_BUFFER_POINTER,
-        reinterpret_cast<void*>(&params),
-        CU_LAUNCH_PARAM_BUFFER_SIZE,
-        reinterpret_cast<void*>(sizeof(device_pointer_t)),
-        CU_LAUNCH_PARAM_END,
-      };
-
-      void* call_params[] = {
-        &params,
-      };
-
-      return ETX_CUDA_SUCCEED(cuLaunchKernel(pp.cuda.function, launch_x, launch_y, 1u, block_size, block_size, 1u, 0, _private->main_stream,  //
-        reinterpret_cast<void**>(&call_params), nullptr));
-    }
-
-    default:
-      break;
+bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
+  if (_private->invalid_state() || (pipeline.handle == kInvalidHandle) || (dim_x * dim_y == 0)) {
+    return false;
   }
 
-  return false;
+  auto& pp = _private->pipeline_pool.get(pipeline.handle);
+  ETX_ASSERT(pp.target == CUDACompileTarget::Library);
+
+  GPUPipelineOptixImpl::CUDAFunction func = {};
+  uint32_t func_hash = fnv1a32(function);
+  auto f = pp.cuda.functions.find(func_hash);
+  if (f == pp.cuda.functions.end()) {
+    if (ETX_CUDA_FAILED(cuModuleGetFunction(&func.func, pp.cuda.cuda_module, function)))
+      return false;
+
+    int min_grid_size = 0;
+    int max_block_size = 0;
+    if (ETX_CUDA_FAILED(cuOccupancyMaxPotentialBlockSize(&min_grid_size, &max_block_size, func.func, nullptr, 0, 768)))
+      return false;
+
+    func.min_grid_size = uint32_t(min_grid_size);
+    func.max_block_size = uint32_t(max_block_size);
+    pp.cuda.functions[func_hash] = func;
+  } else {
+    func = f->second;
+  }
+
+  if ((func.func == nullptr) || (func.max_block_size == 0) || (func.min_grid_size == 0)) {
+    return false;
+  }
+
+  uint32_t bs = align_up(dim_x / func.min_grid_size, 8u);
+  uint32_t launch_x = dim_x / bs + (dim_x % bs > 0 ? 1u : 0u);
+  uint32_t launch_y = dim_y / bs + (dim_y % bs > 0 ? 1u : 0u);
+
+  void* call_params[] = {
+    &params
+  };
+  return ETX_CUDA_SUCCEED(cuLaunchKernel(func.func, launch_x, launch_y, 1u, bs, bs, 1u, 0, _private->main_stream, reinterpret_cast<void**>(&call_params), nullptr));
 }
 
 GPUAccelerationStructure GPUOptixImpl::create_acceleration_structure(const GPUAccelerationStructure::Descriptor& desc) {
@@ -1121,6 +1134,107 @@ bool GPUOptixImpl::denoise(GPUBuffer input, GPUBuffer output) {
   }
 
   return true;
+}
+
+const char* cuda_result(CUresult result) {
+#define CASE(X) \
+  case X:       \
+    return #X
+
+  switch (result) {
+    CASE(CUDA_SUCCESS);
+    CASE(CUDA_ERROR_INVALID_VALUE);
+    CASE(CUDA_ERROR_OUT_OF_MEMORY);
+    CASE(CUDA_ERROR_NOT_INITIALIZED);
+    CASE(CUDA_ERROR_DEINITIALIZED);
+    CASE(CUDA_ERROR_PROFILER_DISABLED);
+    CASE(CUDA_ERROR_PROFILER_NOT_INITIALIZED);
+    CASE(CUDA_ERROR_PROFILER_ALREADY_STARTED);
+    CASE(CUDA_ERROR_PROFILER_ALREADY_STOPPED);
+    CASE(CUDA_ERROR_STUB_LIBRARY);
+    CASE(CUDA_ERROR_DEVICE_UNAVAILABLE);
+    CASE(CUDA_ERROR_NO_DEVICE);
+    CASE(CUDA_ERROR_INVALID_DEVICE);
+    CASE(CUDA_ERROR_DEVICE_NOT_LICENSED);
+    CASE(CUDA_ERROR_INVALID_IMAGE);
+    CASE(CUDA_ERROR_INVALID_CONTEXT);
+    CASE(CUDA_ERROR_CONTEXT_ALREADY_CURRENT);
+    CASE(CUDA_ERROR_MAP_FAILED);
+    CASE(CUDA_ERROR_UNMAP_FAILED);
+    CASE(CUDA_ERROR_ARRAY_IS_MAPPED);
+    CASE(CUDA_ERROR_ALREADY_MAPPED);
+    CASE(CUDA_ERROR_NO_BINARY_FOR_GPU);
+    CASE(CUDA_ERROR_ALREADY_ACQUIRED);
+    CASE(CUDA_ERROR_NOT_MAPPED);
+    CASE(CUDA_ERROR_NOT_MAPPED_AS_ARRAY);
+    CASE(CUDA_ERROR_NOT_MAPPED_AS_POINTER);
+    CASE(CUDA_ERROR_ECC_UNCORRECTABLE);
+    CASE(CUDA_ERROR_UNSUPPORTED_LIMIT);
+    CASE(CUDA_ERROR_CONTEXT_ALREADY_IN_USE);
+    CASE(CUDA_ERROR_PEER_ACCESS_UNSUPPORTED);
+    CASE(CUDA_ERROR_INVALID_PTX);
+    CASE(CUDA_ERROR_INVALID_GRAPHICS_CONTEXT);
+    CASE(CUDA_ERROR_NVLINK_UNCORRECTABLE);
+    CASE(CUDA_ERROR_JIT_COMPILER_NOT_FOUND);
+    CASE(CUDA_ERROR_UNSUPPORTED_PTX_VERSION);
+    CASE(CUDA_ERROR_JIT_COMPILATION_DISABLED);
+    CASE(CUDA_ERROR_UNSUPPORTED_EXEC_AFFINITY);
+    CASE(CUDA_ERROR_INVALID_SOURCE);
+    CASE(CUDA_ERROR_FILE_NOT_FOUND);
+    CASE(CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND);
+    CASE(CUDA_ERROR_SHARED_OBJECT_INIT_FAILED);
+    CASE(CUDA_ERROR_OPERATING_SYSTEM);
+    CASE(CUDA_ERROR_INVALID_HANDLE);
+    CASE(CUDA_ERROR_ILLEGAL_STATE);
+    CASE(CUDA_ERROR_NOT_FOUND);
+    CASE(CUDA_ERROR_NOT_READY);
+    CASE(CUDA_ERROR_ILLEGAL_ADDRESS);
+    CASE(CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES);
+    CASE(CUDA_ERROR_LAUNCH_TIMEOUT);
+    CASE(CUDA_ERROR_LAUNCH_INCOMPATIBLE_TEXTURING);
+    CASE(CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED);
+    CASE(CUDA_ERROR_PEER_ACCESS_NOT_ENABLED);
+    CASE(CUDA_ERROR_PRIMARY_CONTEXT_ACTIVE);
+    CASE(CUDA_ERROR_CONTEXT_IS_DESTROYED);
+    CASE(CUDA_ERROR_ASSERT);
+    CASE(CUDA_ERROR_TOO_MANY_PEERS);
+    CASE(CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED);
+    CASE(CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED);
+    CASE(CUDA_ERROR_HARDWARE_STACK_ERROR);
+    CASE(CUDA_ERROR_ILLEGAL_INSTRUCTION);
+    CASE(CUDA_ERROR_MISALIGNED_ADDRESS);
+    CASE(CUDA_ERROR_INVALID_ADDRESS_SPACE);
+    CASE(CUDA_ERROR_INVALID_PC);
+    CASE(CUDA_ERROR_LAUNCH_FAILED);
+    CASE(CUDA_ERROR_COOPERATIVE_LAUNCH_TOO_LARGE);
+    CASE(CUDA_ERROR_NOT_PERMITTED);
+    CASE(CUDA_ERROR_NOT_SUPPORTED);
+    CASE(CUDA_ERROR_SYSTEM_NOT_READY);
+    CASE(CUDA_ERROR_SYSTEM_DRIVER_MISMATCH);
+    CASE(CUDA_ERROR_COMPAT_NOT_SUPPORTED_ON_DEVICE);
+    CASE(CUDA_ERROR_MPS_CONNECTION_FAILED);
+    CASE(CUDA_ERROR_MPS_RPC_FAILURE);
+    CASE(CUDA_ERROR_MPS_SERVER_NOT_READY);
+    CASE(CUDA_ERROR_MPS_MAX_CLIENTS_REACHED);
+    CASE(CUDA_ERROR_MPS_MAX_CONNECTIONS_REACHED);
+    CASE(CUDA_ERROR_STREAM_CAPTURE_UNSUPPORTED);
+    CASE(CUDA_ERROR_STREAM_CAPTURE_INVALIDATED);
+    CASE(CUDA_ERROR_STREAM_CAPTURE_MERGE);
+    CASE(CUDA_ERROR_STREAM_CAPTURE_UNMATCHED);
+    CASE(CUDA_ERROR_STREAM_CAPTURE_UNJOINED);
+    CASE(CUDA_ERROR_STREAM_CAPTURE_ISOLATION);
+    CASE(CUDA_ERROR_STREAM_CAPTURE_IMPLICIT);
+    CASE(CUDA_ERROR_CAPTURED_EVENT);
+    CASE(CUDA_ERROR_STREAM_CAPTURE_WRONG_THREAD);
+    CASE(CUDA_ERROR_TIMEOUT);
+    CASE(CUDA_ERROR_GRAPH_EXEC_UPDATE_FAILURE);
+    CASE(CUDA_ERROR_EXTERNAL_DEVICE);
+    CASE(CUDA_ERROR_UNKNOWN);
+    default:
+      break;
+  }
+  return "Unknown CUDA error";
+#undef CASE
 }
 
 }  // namespace etx

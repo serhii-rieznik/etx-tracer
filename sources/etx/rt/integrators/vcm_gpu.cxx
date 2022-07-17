@@ -56,10 +56,10 @@ struct GPUVCMImpl {
   }
 
   enum : uint32_t {
-    LightMerge,
-    CameraGen,
+    VCMLibrary,
+    // CameraGen,
     CameraMain,
-    LightGen,
+    // LightGen,
     LightMain,
     PipelineCount,
   };
@@ -106,10 +106,8 @@ struct GPUVCMImpl {
   uint32_t update_frame = 0;
 
   std::pair<GPUPipeline, const char*> pipelines[PipelineCount] = {
-    {{}, "optix/vcm/light-merge.json"},
-    {{}, "optix/vcm/camera-gen.json"},
+    {{}, "optix/vcm/vcm.json"},
     {{}, "optix/vcm/camera-main.json"},
-    {{}, "optix/vcm/light-gen.json"},
     {{}, "optix/vcm/light-main.json"},
   };
   bool reload_pipelines[PipelineCount] = {};
@@ -271,7 +269,7 @@ struct GPUVCMImpl {
 
     iteration_frame = 0;
 
-    if (rt.gpu()->launch(pipelines[LightGen].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+    if (rt.gpu()->launch(pipelines[VCMLibrary].first, "gen_light_rays", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       stop();
       return false;
     }
@@ -369,7 +367,7 @@ struct GPUVCMImpl {
     }
 
     if (it.active_paths == 0) {
-      rt.gpu()->launch(pipelines[LightMerge].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
+      rt.gpu()->launch(pipelines[VCMLibrary].first, "merge_light_image", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
       auto task = rt.scheduler().schedule(1u, [this](uint32_t, uint32_t, uint32_t) {
         build_spatial_grid();
       });
@@ -418,7 +416,7 @@ struct GPUVCMImpl {
     gpu_data.output_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[1 - current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
-    return rt.gpu()->launch(pipelines[CameraGen].first, dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
+    return rt.gpu()->launch(pipelines[VCMLibrary].first, "gen_camera_rays", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
   }
 
   void update_camera_vertices() {
