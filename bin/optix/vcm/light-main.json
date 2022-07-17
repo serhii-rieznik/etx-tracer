@@ -1,6 +1,6 @@
 {
   "code" : "light-main.cu",
-  "source" : "light-main.ptx",
+  "source" : "./output/light-main.ptx",
   "max_trace_depth" : 1,
   "payload_size" : 2,
   "raygen" : "main",

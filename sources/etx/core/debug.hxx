@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <assert.h>
 
 #if defined(NDEBUG) || defined(_NDEBUG)
 #define ETX_DEBUG 0
@@ -12,17 +13,21 @@
 #if defined(__NVCC__)
 
 #define ETX_NVCC_COMPILER 1
-#define ETX_GPU_CODE inline __device__
-#define ETX_GPU_DATA __device__
 #define ETX_CPU_CODE __host__
+#define ETX_GPU_CODE inline __device__
+#define ETX_SHARED_CODE ETX_GPU_CODE ETX_CPU_CODE
+#define ETX_GPU_DATA __device__
+#define ETX_GPU_CALLABLE extern "C" __global__
 #define ETX_INIT_WITH(S)
 
 #else
 
 #define ETX_NVCC_COMPILER 0
-#define ETX_GPU_CODE inline
-#define ETX_GPU_DATA
 #define ETX_CPU_CODE
+#define ETX_GPU_CODE inline
+#define ETX_SHARED_CODE ETX_GPU_CODE ETX_CPU_CODE
+#define ETX_GPU_CALLABLE
+#define ETX_GPU_DATA
 #define ETX_INIT_WITH(S) = S
 
 template <class T>

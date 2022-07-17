@@ -1,6 +1,6 @@
 {
   "code" : "camera-main.cu",
-  "source" : "camera-main.ptx",
+  "source" : "./output/camera-main.ptx",
   "max_trace_depth" : 1,
   "payload_size" : 2,
   "raygen" : "main",

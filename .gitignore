@@ -3,3 +3,4 @@
 *.dll
 bin/options.json
 *.ptx
+*.fatbin

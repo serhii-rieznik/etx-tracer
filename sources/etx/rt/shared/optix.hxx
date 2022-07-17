@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cuda.h>
 #include <optix.h>
 
 #include <etx/render/shared/sampler.hxx>

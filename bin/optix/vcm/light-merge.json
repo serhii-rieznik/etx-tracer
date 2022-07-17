@@ -1,14 +1,5 @@
 {
+  "class" : "CUDA",
   "code" : "light-merge.cu",
-  "source" : "light-merge.ptx",
-  "max_trace_depth" : 1,
-  "payload_size" : 2,
-  "raygen" : "main",
-  "modules" : [
-    {
-      "closest_hit" : "main_closest_hit",
-      "any_hit" : "main_any_hit",
-      "miss" : "main_miss"
-    }
-  ]
+  "source" : "./output/light-merge.fatbin"
 }

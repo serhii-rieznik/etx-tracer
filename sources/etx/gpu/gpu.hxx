@@ -30,11 +30,13 @@ struct GPUPipeline {
 
     const char* raygen = nullptr;
 
-    Entry* entries = nullptr;
+    const Entry* entries = nullptr;
     uint32_t entry_count = 0;
 
     uint32_t payload_count = 0;
     uint32_t max_trace_depth = 2;
+
+    uint32_t compile_options = 0;
   };
 
   uint32_t handle = kInvalidHandle;

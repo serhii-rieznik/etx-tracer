@@ -68,8 +68,8 @@ enum class VCMState : uint32_t {
 struct ETX_ALIGNED VCMIteration {
   uint32_t iteration ETX_EMPTY_INIT;
   uint32_t active_paths ETX_EMPTY_INIT;
-  uint32_t terminated_paths ETX_EMPTY_INIT;
   uint32_t light_vertices ETX_EMPTY_INIT;
+  uint32_t pad ETX_EMPTY_INIT;
   float current_radius ETX_EMPTY_INIT;
   float vm_weight ETX_EMPTY_INIT;
   float vc_weight ETX_EMPTY_INIT;

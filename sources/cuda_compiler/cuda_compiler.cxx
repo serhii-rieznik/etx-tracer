@@ -12,7 +12,7 @@ int main(int argc, const char* argv[]) {
 
   int result = 0;
   do {
-    result = etx::compile_nvcc_file(argv[1], output_file, "") ? 0 : 1;
+    result = etx::compile_cuda(etx::CUDACompileTarget::PTX, argv[1], output_file, "") ? 0 : 1;
     printf("Press [R] to retry or any other key to exit.\n");
 
     int option = _getch();

@@ -5,7 +5,7 @@
 
 namespace etx {
 
-constexpr bool kForceDiffuseBSDF = false;
+constexpr bool kForceDiffuseBSDF = true;
 
 enum class PathSource : uint32_t {
   Undefined,

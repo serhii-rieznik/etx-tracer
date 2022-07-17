@@ -78,6 +78,4 @@ RAYGEN(main) {
     continue_tracing(iteration, state, 1u);
     return;
   }
-
-  atomicAdd(&iteration.terminated_paths, 1u);
 }

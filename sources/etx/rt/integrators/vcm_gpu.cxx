@@ -56,11 +56,11 @@ struct GPUVCMImpl {
   }
 
   enum : uint32_t {
+    LightMerge,
     CameraGen,
     CameraMain,
     LightGen,
     LightMain,
-    LightMerge,
     PipelineCount,
   };
 
@@ -106,11 +106,11 @@ struct GPUVCMImpl {
   uint32_t update_frame = 0;
 
   std::pair<GPUPipeline, const char*> pipelines[PipelineCount] = {
+    {{}, "optix/vcm/light-merge.json"},
     {{}, "optix/vcm/camera-gen.json"},
     {{}, "optix/vcm/camera-main.json"},
     {{}, "optix/vcm/light-gen.json"},
     {{}, "optix/vcm/light-main.json"},
-    {{}, "optix/vcm/light-merge.json"},
   };
   bool reload_pipelines[PipelineCount] = {};
 
@@ -256,7 +256,6 @@ struct GPUVCMImpl {
     iteration.vc_weight = 1.0f / eta_vcm;
     iteration.vm_normalization = 1.0f / eta_vcm;
     iteration.active_paths = 0;
-    iteration.terminated_paths = 0;
     iteration.light_vertices = 0;
     iteration_ptr = rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
 
@@ -410,7 +409,6 @@ struct GPUVCMImpl {
 
   bool generate_camera_vertices() {
     iteration.active_paths = 0;
-    iteration.terminated_paths = 0;
     rt.gpu()->copy_to_buffer(global_data, &iteration, 0, sizeof(VCMIteration));
 
     current_buffer = 0;

@@ -433,7 +433,7 @@ struct ETX_ALIGNED SpectralDistribution {
     return b;
   }
 
-  ETX_GPU_CODE void make_constant(float power) {
+  ETX_SHARED_CODE void make_constant(float power) {
     for (uint64_t i = 0; i < count; ++i) {
       entries[i].power = power;
     }
@@ -548,7 +548,7 @@ struct RefractiveIndex {
     return at(q);
   }
 
-  void make_constant(float a_eta, float a_k) {
+  ETX_SHARED_CODE void make_constant(float a_eta, float a_k) {
     eta.make_constant(a_eta);
     k.make_constant(a_k);
   }

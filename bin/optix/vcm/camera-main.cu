@@ -6,8 +6,6 @@ using namespace etx;
 static __constant__ VCMGlobal global;
 
 ETX_GPU_CODE void finish_ray(VCMIteration& iteration, VCMPathState& state) {
-  atomicAdd(&iteration.terminated_paths, 1u);
-
   state.merged *= iteration.vm_normalization;
   state.merged += (state.gathered / spectrum::sample_pdf()).to_xyz();
 
