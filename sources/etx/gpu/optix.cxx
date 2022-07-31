@@ -61,7 +61,7 @@ struct GPUPipelineOptixImpl;
 struct GPUAccelerationStructureImpl;
 
 struct GPUOptixImplData {
-  constexpr static const uint64_t kSharedBufferSize = 16llu * 1024llu * 1024llu;
+  constexpr static const uint64_t kSharedBufferSize = 16llu * 1024llu * 1024llu + 2llu * 2160llu * 3840llu * 16llu;
 
   CUdevice cuda_device = {};
   CUcontext cuda_context = {};
@@ -1001,8 +1001,12 @@ GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, b
 }
 
 bool GPUOptixImpl::launch(GPUPipeline pipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
-  if (_private->invalid_state() || (pipeline.handle == kInvalidHandle) || (dim_x * dim_y == 0)) {
+  if (_private->invalid_state() || (pipeline.handle == kInvalidHandle)) {
     return false;
+  }
+
+  if (dim_x * dim_y == 0) {
+    return true;
   }
 
   const auto& pp = _private->pipeline_pool.get(pipeline.handle);
@@ -1046,9 +1050,7 @@ bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t d
   uint32_t launch_x = dim_x / bs + (dim_x % bs > 0 ? 1u : 0u);
   uint32_t launch_y = dim_y / bs + (dim_y % bs > 0 ? 1u : 0u);
 
-  void* call_params[] = {
-    &params
-  };
+  void* call_params[] = {&params};
   return ETX_CUDA_SUCCEED(cuLaunchKernel(func.func, launch_x, launch_y, 1u, bs, bs, 1u, 0, _private->main_stream, reinterpret_cast<void**>(&call_params), nullptr));
 }
 
