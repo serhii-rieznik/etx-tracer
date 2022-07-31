@@ -45,4 +45,12 @@ constexpr inline uint32_t fnv1a32(const char* str, const uint32_t hash = kFnv1a3
   return (str && (*str)) ? fnv1a32(str + 1, (hash ^ uint32_t(*str)) * kFnv1a32Prime) : hash;
 }
 
+constexpr inline uint32_t fnv1a32(const uint8_t* ptr, uint64_t size, const uint32_t hash = kFnv1a32Begin) {
+  uint32_t hsh = hash;
+  for (uint64_t i = 0; i < size; ++i) {
+    hsh = (hsh ^ uint32_t(ptr[i])) * kFnv1a32Prime;
+  }
+  return hsh;
+}
+
 }  // namespace etx

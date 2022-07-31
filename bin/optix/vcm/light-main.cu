@@ -7,7 +7,7 @@ static __constant__ VCMGlobal global;
 
 ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, VCMPathState& state, uint32_t path_len_offset) {
   state.path_length += path_len_offset;
-  if (state.path_length < global.options.max_depth) {
+  if (state.path_length <= global.options.max_depth) {
     int i = atomicAdd(&iteration.active_paths, 1u);
     global.output_state[i] = state;
   }
@@ -74,8 +74,9 @@ RAYGEN(main) {
     }
   }
 
-  if (vcm_next_ray(global.scene, PathSource::Light, intersection, global.options.rr_start, state, iteration)) {
-    continue_tracing(iteration, state, 1u);
+  if (vcm_next_ray(global.scene, PathSource::Light, intersection, global.options.rr_start, state, iteration) == false) {
     return;
   }
+
+  continue_tracing(iteration, state, 1u);
 }

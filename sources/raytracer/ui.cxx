@@ -174,6 +174,11 @@ void UI::build(double dt, const char* status) {
       if (igMenuItemEx("Save Current Image (XYZ)...", nullptr, "Alt+Ctrl+S", false, true)) {
         save_image(SaveImageMode::XYZ);
       }
+      if (igMenuItemEx("Use as Reference", nullptr, "Ctrl+Shift+R", false, true)) {
+        if (callbacks.use_image_as_reference) {
+          callbacks.use_image_as_reference();
+        }
+      }
       igEndMenu();
     }
     igEndMainMenuBar();
@@ -251,8 +256,13 @@ bool UI::handle_event(const sapp_event* e) {
         break;
       }
       case SAPP_KEYCODE_R: {
-        if (callbacks.reload_scene_selected)
+        if (has_shift) {
+          if (callbacks.use_image_as_reference) {
+            callbacks.use_image_as_reference();
+          }
+        } else if (callbacks.reload_scene_selected) {
           callbacks.reload_scene_selected();
+        }
         break;
       }
       case SAPP_KEYCODE_G: {

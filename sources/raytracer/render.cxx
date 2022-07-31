@@ -187,6 +187,12 @@ void RenderContext::set_reference_image(const char* file_name) {
   apply_reference_image(_private->ref_image_handle);
 }
 
+void RenderContext::set_reference_image(const float4 data[], const uint2 dimensions) {
+  _private->image_pool.remove(_private->ref_image_handle);
+  _private->ref_image_handle = _private->image_pool.add_from_data(data, dimensions);
+  apply_reference_image(_private->ref_image_handle);
+}
+
 void RenderContext::set_view_options(const ViewOptions& o) {
   _private->view_options = o;
 }

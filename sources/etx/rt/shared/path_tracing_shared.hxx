@@ -10,6 +10,8 @@ struct ETX_ALIGNED PTOptions {
   uint32_t max_depth ETX_INIT_WITH(65536u);
   uint32_t rr_start ETX_INIT_WITH(6u);
   uint32_t path_per_iteration ETX_INIT_WITH(1u);
+  bool nee ETX_INIT_WITH(true);
+  bool mis ETX_INIT_WITH(true);
 };
 
 struct ETX_ALIGNED PTRayPayload {
@@ -95,14 +97,15 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  if (payload.path_length + 1 <= options.max_depth) {
+  if (options.nee && (payload.path_length + 1 <= options.max_depth)) {
     auto emitter_sample = sample_emitter(payload.spect, payload.smp, intersection.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
       BSDFEval bsdf_eval = bsdf::evaluate({payload.spect, payload.medium, PathSource::Camera, intersection, payload.ray.d, emitter_sample.direction}, mat, scene, payload.smp);
       if (bsdf_eval.valid()) {
         auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
         auto tr = transmittance(payload.spect, payload.smp, pos, emitter_sample.origin, payload.medium, scene, rt);
-        auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
+        bool no_weight = (options.mis == false) || emitter_sample.is_delta;
+        auto weight = no_weight ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
         payload.accumulated += payload.throughput * bsdf_eval.bsdf * emitter_sample.value * tr * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
         ETX_VALIDATE(payload.accumulated);
       }
@@ -122,7 +125,8 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     if (pdf_emitter_dir > 0.0f) {
       auto tr = transmittance(payload.spect, payload.smp, payload.ray.o, intersection.pos, payload.medium, scene, rt);
       float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      auto weight = ((payload.path_length == 1) || payload.sampled_delta_bsdf) ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
+      bool no_weight = (options.mis == false) || (payload.path_length == 1) || payload.sampled_delta_bsdf;
+      auto weight = no_weight ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
       payload.accumulated += payload.throughput * e * tr * weight;
       ETX_VALIDATE(payload.accumulated);
     }

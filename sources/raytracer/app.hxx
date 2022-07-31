@@ -42,8 +42,10 @@ struct RTApplication {
   void on_reload_geometry_selected();
   void on_options_changed();
   void on_reload_integrator_selected();
+  void on_use_image_as_reference();
 
  private:
+  std::vector<float4> get_current_image(bool convert_to_rgb);
   void save_options();
 
  private:

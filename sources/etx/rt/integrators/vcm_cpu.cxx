@@ -176,7 +176,7 @@ struct CPUVCMImpl {
       VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration);
 
       uint32_t path_begin = static_cast<uint32_t>(local_vertices.size());
-      while (running() && (state.path_length + 1 <= vcm_options.max_depth)) {
+      while (running() && (state.path_length <= vcm_options.max_depth)) {
         Intersection intersection;
         bool found_intersection = rt.trace(state.ray, intersection, state.sampler);
 
@@ -214,6 +214,8 @@ struct CPUVCMImpl {
         if (vcm_next_ray(rt.scene(), PathSource::Light, intersection, vcm_options.rr_start, state, vcm_iteration) == false) {
           break;
         }
+
+        state.path_length += 1u;
       }
 
       local_paths.emplace_back(path_begin, static_cast<uint32_t>(local_vertices.size() - path_begin), state.spect);
@@ -242,43 +244,7 @@ struct CPUVCMImpl {
       stats.c++;
       VCMPathState state = vcm_generate_camera_state({x, y}, scene, vcm_iteration, light_path.spect);
       while (running() && (state.path_length <= vcm_options.max_depth)) {
-        Intersection intersection;
-        bool found_intersection = rt.trace(state.ray, intersection, state.sampler);
-
-        Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
-
-        if (medium_sample.sampled_medium()) {
-          vcm_handle_sampled_medium(scene, medium_sample, state);
-        } else if (found_intersection) {
-          state.path_distance += intersection.t;
-
-          const auto& tri = scene.triangles[intersection.triangle_index];
-          const auto& mat = scene.materials[tri.material_index];
-
-          if (vcm_handle_boundary_bsdf(scene, mat, intersection, PathSource::Camera, state)) {
-            continue;
-          }
-
-          vcm_update_camera_vcm(intersection, state);
-          vcm_handle_direct_hit(scene, tri, intersection, vcm_options, state);
-
-          if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
-            vcm_connect_to_light(scene, tri, mat, intersection, vcm_iteration, vcm_options, rt, state);
-            vcm_connect_to_light_path(scene, tri, mat, intersection, vcm_iteration, light_path, light_vertices, vcm_options, rt, state);
-          }
-
-          if (vcm_options.merge_vertices() && (state.path_length + 1 <= vcm_options.max_depth)) {
-            state.merged += _current_grid.data.gather(scene, state, _light_vertices.data(), intersection, vcm_options, vcm_iteration.vc_weight);
-          }
-
-          if (vcm_next_ray(scene, PathSource::Camera, intersection, vcm_options.rr_start, state, vcm_iteration) == false) {
-            break;
-          }
-
-          state.path_length += 1;
-
-        } else {
-          vcm_cam_handle_miss(scene, intersection, vcm_options, state);
+        if (vcm_camera_step(scene, vcm_iteration, vcm_options, light_path, light_vertices, state, rt, _current_grid.data) == false) {
           break;
         }
       }
@@ -286,7 +252,8 @@ struct CPUVCMImpl {
       state.merged *= vcm_iteration.vm_normalization;
       state.merged += (state.gathered / spectrum::sample_pdf()).to_xyz();
 
-      camera_image.accumulate({state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1));
+      float t = float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1);
+      camera_image.accumulate({state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);
     }
   }
 };
