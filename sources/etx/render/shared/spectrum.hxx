@@ -266,39 +266,39 @@ struct ETX_ALIGNED SpectralResponse {
   }
 
   ETX_GPU_CODE SpectralResponse& operator*=(const SpectralResponse& other) {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     components *= other.components;
     return *this;
   }
   ETX_GPU_CODE SpectralResponse& operator/=(const SpectralResponse& other) {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     components /= other.components;
     return *this;
   }
   ETX_GPU_CODE SpectralResponse& operator+=(const SpectralResponse& other) {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     components += other.components;
     return *this;
   }
   ETX_GPU_CODE SpectralResponse& operator-=(const SpectralResponse& other) {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     components -= other.components;
     return *this;
   }
   ETX_GPU_CODE SpectralResponse operator*(const SpectralResponse& other) const {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     return {wavelength, components * other.components};
   }
   ETX_GPU_CODE SpectralResponse operator/(const SpectralResponse& other) const {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     return {wavelength, components / other.components};
   }
   ETX_GPU_CODE SpectralResponse operator+(const SpectralResponse& other) const {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     return {wavelength, components + other.components};
   }
   ETX_GPU_CODE SpectralResponse operator-(const SpectralResponse& other) const {
-    ETX_ASSERT(wavelength == other.wavelength);
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);
     return {wavelength, components - other.components};
   }
   ETX_GPU_CODE SpectralResponse& operator*=(float other) {
@@ -433,7 +433,7 @@ struct ETX_ALIGNED SpectralDistribution {
     return b;
   }
 
-  ETX_GPU_CODE void make_constant(float power) {
+  ETX_SHARED_CODE void make_constant(float power) {
     for (uint64_t i = 0; i < count; ++i) {
       entries[i].power = power;
     }
@@ -548,7 +548,7 @@ struct RefractiveIndex {
     return at(q);
   }
 
-  void make_constant(float a_eta, float a_k) {
+  ETX_SHARED_CODE void make_constant(float a_eta, float a_k) {
     eta.make_constant(a_eta);
     k.make_constant(a_k);
   }

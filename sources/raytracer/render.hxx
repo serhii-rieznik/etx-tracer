@@ -22,6 +22,7 @@ struct RenderContext {
   void update_light_image(const float4* ligth);
   void set_view_options(const ViewOptions&);
   void set_reference_image(const char*);
+  void set_reference_image(const float4 data[], const uint2 dimensions);
 
   ETX_DECLARE_PIMPL(RenderContext, 512);
 

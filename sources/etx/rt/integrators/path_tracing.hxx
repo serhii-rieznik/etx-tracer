@@ -30,7 +30,6 @@ struct CPUPathTracing : public Integrator {
   void stop(Stop) override;
   void update_options(const Options&) override;
 
- private:
   ETX_DECLARE_PIMPL(CPUPathTracing, 4096);
 };
 

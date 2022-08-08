@@ -8,7 +8,7 @@ Kd 0.4 0.4 0.4
 thinfilm range 180.0 800.0
 
 newmtl emitter
-emitter nblackbody 5800.0 scale 20.0
+emitter nblackbody 5800.0 scale 20.0 collimated 16.0
 Ke 1 1 1
 
 newmtl flag
@@ -21,9 +21,9 @@ Ks 0.02 0.02 0.02
 Kd 1 0 0
 
 newmtl pole
-material class msdielectric
+material class msconductor
 int_ior chrome
-Pr 0.25
+Pr 0.05
 
 newmtl right
 material class coating

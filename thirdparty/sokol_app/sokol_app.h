@@ -5930,7 +5930,7 @@ _SOKOL_PRIVATE void _sapp_d3d11_present(bool do_not_wait) {
         _sapp_d3d11_ResolveSubresource(_sapp.d3d11.device_context, (ID3D11Resource*)_sapp.d3d11.rt, 0, (ID3D11Resource*)_sapp.d3d11.msaa_rt, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
     }
     UINT flags = 0;
-    if (_sapp.win32.is_win10_or_greater && do_not_wait) {
+    if (_sapp.win32.is_win10_or_greater) {
         /* this hack/workaround somewhat improves window-movement and -sizing
             responsiveness when rendering is controlled via WM_TIMER during window
             move and resize on NVIDIA cards on Win10 with recent drivers.

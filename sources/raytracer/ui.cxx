@@ -103,6 +103,16 @@ void UI::build(double dt, const char* status) {
   igText(status_buffer);
   igEnd();
 
+  if ((_current_integrator != nullptr) && (_current_integrator->debug_info_count() > 0)) {
+    igSetNextWindowPos({offset_size, 0.5f * sapp_heightf() - 3.0f * offset_size - dy}, ImGuiCond_Always, {0.0f, 1.0f});
+    igBegin("Debug Info", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
+    auto debug_info = _current_integrator->debug_info();
+    for (uint64_t i = 0; i < _current_integrator->debug_info_count(); ++i) {
+      igLabelText("", "%s : %.3f", debug_info[i].title, debug_info[i].value);
+    }
+    igEnd();
+  }
+
   if (igBeginMainMenuBar()) {
     if (igBeginMenu("Integrator", true)) {
       for (uint64_t i = 0; i < _integrators.count; ++i) {
@@ -164,56 +174,61 @@ void UI::build(double dt, const char* status) {
       if (igMenuItemEx("Save Current Image (XYZ)...", nullptr, "Alt+Ctrl+S", false, true)) {
         save_image(SaveImageMode::XYZ);
       }
+      if (igMenuItemEx("Use as Reference", nullptr, "Ctrl+Shift+R", false, true)) {
+        if (callbacks.use_image_as_reference) {
+          callbacks.use_image_as_reference();
+        }
+      }
       igEndMenu();
     }
     igEndMainMenuBar();
   }
   igEnd();
 
+  igSetNextWindowPos({offset_size, 2.0f * offset_size}, ImGuiCond_Always, {0.0f, 0.0f});
+  igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
+  igText("Integrator options");
   if ((_current_integrator != nullptr) && (_integrator_options.values.empty() == false)) {
-    igSetNextWindowPos({offset_size, 2.0f * offset_size}, ImGuiCond_Always, {0.0f, 0.0f});
-    igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-    igText("Integrator options");
-
     if (build_options(_integrator_options) && callbacks.options_changed) {
       callbacks.options_changed();
     }
-
-    if (_current_integrator->can_run()) {
-      igSeparator();
-      igNewLine();
-
-      auto state = _current_integrator->state();
-      bool has_complete = (state == Integrator::State::Running);
-      bool has_stop = (state != Integrator::State::Stopped);
-      bool has_preview = (state == Integrator::State::Stopped);
-      bool has_run = (state == Integrator::State::Stopped) || (state == Integrator::State::Preview);
-
-      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.22f, 0.11f, 1.0f});
-      if (has_complete && igButton("[ Complete iteration and stop ]", {}) && callbacks.stop_selected) {
-        callbacks.stop_selected(true);
-      }
-
-      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
-      if (has_stop && igButton("[ Break Immediately ]", {}) && callbacks.stop_selected) {
-        callbacks.stop_selected(false);
-      }
-
-      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
-      if (has_preview && igButton("[ Preview ]", {}) && callbacks.preview_selected) {
-        callbacks.preview_selected();
-      }
-
-      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
-      if (has_run && igButton("[ Launch ]", {}) && callbacks.run_selected) {
-        callbacks.run_selected();
-      }
-
-      igPopStyleColor(4);
-      igNewLine();
-    }
-    igEnd();
   }
+
+  if ((_current_integrator != nullptr) && _current_integrator->can_run()) {
+    igSeparator();
+    igNewLine();
+
+    auto state = _current_integrator->state();
+    bool has_complete = (state == Integrator::State::Running);
+    bool has_stop = (state != Integrator::State::Stopped);
+    bool has_preview = (state == Integrator::State::Stopped);
+    bool has_run = (state == Integrator::State::Stopped) || (state == Integrator::State::Preview);
+
+    igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.22f, 0.11f, 1.0f});
+    if (has_complete && igButton("[ Complete iteration and stop ]", {}) && callbacks.stop_selected) {
+      callbacks.stop_selected(true);
+    }
+
+    igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
+    if (has_stop && igButton("[ Break Immediately ]", {}) && callbacks.stop_selected) {
+      callbacks.stop_selected(false);
+    }
+
+    igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
+    if (has_preview && igButton("[ Preview ]", {}) && callbacks.preview_selected) {
+      callbacks.preview_selected();
+    }
+
+    igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
+    if (has_run && igButton("[ Launch ]", {}) && callbacks.run_selected) {
+      callbacks.run_selected();
+    }
+
+    igPopStyleColor(4);
+    igNewLine();
+  }
+  igEnd();
+
   simgui_render();
 }
 
@@ -241,8 +256,13 @@ bool UI::handle_event(const sapp_event* e) {
         break;
       }
       case SAPP_KEYCODE_R: {
-        if (callbacks.reload_scene_selected)
+        if (has_shift) {
+          if (callbacks.use_image_as_reference) {
+            callbacks.use_image_as_reference();
+          }
+        } else if (callbacks.reload_scene_selected) {
           callbacks.reload_scene_selected();
+        }
         break;
       }
       case SAPP_KEYCODE_G: {

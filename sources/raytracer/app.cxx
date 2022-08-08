@@ -32,6 +32,7 @@ void RTApplication::init() {
   ui.callbacks.reload_geometry_selected = std::bind(&RTApplication::on_reload_geometry_selected, this);
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
   ui.callbacks.reload_integrator = std::bind(&RTApplication::on_reload_integrator_selected, this);
+  ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -81,12 +82,19 @@ void RTApplication::frame() {
   if (_current_integrator != nullptr) {
     _current_integrator->update();
     status = _current_integrator->status();
+
     if (_reset_images == false) {
       c_image_updated = _current_integrator->have_updated_camera_image();
-      c_image = _current_integrator->get_camera_image(false);
+      if (c_image_updated) {
+        c_image = _current_integrator->get_camera_image(false);
+      }
+
       l_image_updated = _current_integrator->have_updated_light_image();
-      l_image = _current_integrator->get_light_image(false);
+      if (l_image_updated) {
+        l_image = _current_integrator->get_light_image(false);
+      }
     }
+
     can_change_camera = _current_integrator->state() == Integrator::State::Preview;
   }
 
@@ -162,26 +170,45 @@ void RTApplication::on_referenece_image_selected(std::string file_name) {
   render.set_reference_image(file_name.c_str());
 }
 
+void RTApplication::on_use_image_as_reference() {
+  ETX_ASSERT(_current_integrator);
+  _options.set("ref", std::string());
+  save_options();
+
+  auto image = get_current_image(true);
+  uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
+  render.set_reference_image(image.data(), image_size);
+}
+
+std::vector<float4> RTApplication::get_current_image(bool convert_to_rgb) {
+  auto c_image = _current_integrator->get_camera_image(true);
+  auto l_image = _current_integrator->get_light_image(true);
+  uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
+
+  std::vector<float4> output(image_size.x * image_size.y, float4{});
+  for (uint32_t i = 0, e = image_size.x * image_size.y; (c_image != nullptr) && (i < e); ++i) {
+    output[i] = c_image[i];
+  }
+
+  for (uint32_t i = 0, e = image_size.x * image_size.y; (l_image != nullptr) && (i < e); ++i) {
+    output[i] += l_image[i];
+  }
+
+  for (uint32_t i = 0, e = image_size.x * image_size.y; convert_to_rgb && (i < e); ++i) {
+    auto rgb = spectrum::xyz_to_rgb(to_float3(output[i]));
+    output[i] = {rgb.x, rgb.y, rgb.z, 1.0f};
+  }
+
+  return output;
+}
+
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
   if (_current_integrator == nullptr) {
     return;
   }
 
-  auto c_image = _current_integrator->get_camera_image(true);
-  auto l_image = _current_integrator->get_light_image(true);
-
   uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
-  std::vector<float4> output(image_size.x * image_size.y, float4{});
-  for (uint32_t i = 0, e = image_size.x * image_size.y; (c_image != nullptr) && (i < e); ++i) {
-    output[i] = c_image[i];
-  }
-  for (uint32_t i = 0, e = image_size.x * image_size.y; (l_image != nullptr) && (i < e); ++i) {
-    output[i] += l_image[i];
-  }
-  for (uint32_t i = 0, e = image_size.x * image_size.y; (mode != SaveImageMode::XYZ) && (i < e); ++i) {
-    auto rgb = spectrum::xyz_to_rgb(to_float3(output[i]));
-    output[i] = {rgb.x, rgb.y, rgb.z, 1.0f};
-  }
+  std::vector<float4> output = get_current_image(mode != SaveImageMode::XYZ);
 
   if (mode == SaveImageMode::TonemappedLDR) {
     if (strlen(get_file_ext(file_name.c_str())) == 0) {

@@ -15,6 +15,7 @@ struct GPUOptixImpl : public GPUDevice {
   device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) override;
   device_pointer_t copy_to_buffer(GPUBuffer, const void* src, uint64_t offset, uint64_t size) override;
   void copy_from_buffer(GPUBuffer, void* dst, uint64_t offset, uint64_t size) override;
+  void clear_buffer(GPUBuffer) override;
   void destroy_buffer(GPUBuffer) override;
 
   GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) override;
@@ -26,6 +27,10 @@ struct GPUOptixImpl : public GPUDevice {
   void destroy_acceleration_structure(GPUAccelerationStructure) override;
 
   bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override;
+  bool launch(GPUPipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override;
+
+  void setup_denoiser(uint32_t dim_x, uint32_t dim_y) override;
+  bool denoise(GPUBuffer input, GPUBuffer output) override;
 
   ETX_PIMPL_DECLARE(GPUOptixImpl, Data, 2048);
 };

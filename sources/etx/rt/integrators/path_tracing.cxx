@@ -37,6 +37,8 @@ struct CPUPathTracingImpl : public Task {
     options.iterations = opt.get("spp", options.iterations).to_integer();
     options.max_depth = opt.get("pathlen", options.max_depth).to_integer();
     options.rr_start = opt.get("rrstart", options.rr_start).to_integer();
+    options.nee = opt.get("nee", options.nee).to_bool();
+    options.mis = opt.get("mis", options.mis).to_bool();
 
     iteration = 0;
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
@@ -184,6 +186,8 @@ Options CPUPathTracing::options() const {
   result.add(1u, _private->options.iterations, 0xffffu, "spp", "Samples per Pixel");
   result.add(1u, _private->options.max_depth, 65536u, "pathlen", "Maximal Path Length");
   result.add(1u, _private->options.rr_start, 65536u, "rrstart", "Start Russian Roulette at");
+  result.add(_private->options.nee, "nee", "Next Event Estimation");
+  result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
   return result;
 }
 

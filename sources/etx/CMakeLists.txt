@@ -12,24 +12,26 @@ function(etx_build_pack target folder)
 
   source_group(TREE "${folder}/../" FILES ${sources})
 
-#[[
+# #[[
   set(lib_source "${CMAKE_CURRENT_BINARY_DIR}/../compile_packs/${target}.pack.cpp")
   file(WRITE ${lib_source})
 
-  foreach(source ${sources})
+  foreach(source ${cxx_sources})
     target_sources(${target} PRIVATE ${source})
     set_property(SOURCE ${source} PROPERTY HEADER_FILE_ONLY TRUE)
     file(APPEND ${lib_source} "#include \"${source}\"\n")
   endforeach()
 
   list(APPEND packed_sources ${lib_source})
+  target_sources(${target} PRIVATE ${hxx_sources})
   target_sources(${target} PRIVATE ${packed_sources})
   source_group("" FILES ${lib_source})
   target_sources(${target} PRIVATE ${headers})
-#]]
+# #]]
 
-  target_sources(${target} PRIVATE ${headers})
-  target_sources(${target} PRIVATE ${sources})
+#  target_sources(${target} PRIVATE ${headers})
+#  target_sources(${target} PRIVATE ${sources})
+
 endfunction(etx_build_pack)
 
 function(create_library folder)
@@ -48,7 +50,7 @@ function(create_library folder)
 endfunction(create_library)
 
 create_library(core)
-target_link_libraries(etx-core PUBLIC jansson)
+target_link_libraries(etx-core PUBLIC jansson Dbghelp.lib)
 target_include_directories(etx-core PUBLIC .. ${JANSSON_INCLUDE_DIRS})
 
 create_library(log)
@@ -70,6 +72,9 @@ set(HAS_OPTIX 0)
 if(DEFINED ENV{OptiX_INSTALL_DIR})
   find_package(CUDA QUIET)
   if (CUDA_FOUND)
+    # enable_language(CUDA)
+    # set(CMAKE_CUDA_STANDARD 20)
+    # set(CMAKE_CUDA_STANDARD_REQUIRED ON)
     set(OptiX_FIND_QUIETLY YES)
     find_package(OptiX QUIET)
     if (OptiX_INCLUDE) 
@@ -86,9 +91,9 @@ endif()
 
 if (HAS_OPTIX)
   create_library(gpu)
-  target_link_libraries(etx-gpu PRIVATE etx-core etx-log cuda-compiler-lib)
+  target_link_libraries(etx-gpu PUBLIC etx-core etx-log cuda-compiler-lib)
   target_link_libraries(etx-gpu PUBLIC ${optix_LIBRARY} ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY})
-  target_include_directories(etx-gpu PRIVATE ${OptiX_INCLUDE} ${CUDA_TOOLKIT_ROOT_DIR}/include)
+  target_include_directories(etx-gpu PUBLIC ${OptiX_INCLUDE} ${CUDA_TOOLKIT_ROOT_DIR}/include)
 else()
   create_library(gpu-off)
   target_link_libraries(etx-gpu-off PRIVATE etx-core etx-log)

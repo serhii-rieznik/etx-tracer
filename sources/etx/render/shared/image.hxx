@@ -105,24 +105,24 @@ struct Image {
     };
   }
 
-  ETX_GPU_CODE float2 sample(float xi0, float xi1, float& image_pdf, uint2& location) const {
+  ETX_GPU_CODE float2 sample(const float2& rnd, float& image_pdf, uint2& location) const {
     float y_pdf = 0.0f;
-    location.y = y_distribution.sample(xi1, y_pdf);
+    location.y = y_distribution.sample(rnd.y, y_pdf);
 
     float x_pdf = 0.0f;
     const auto& x_distribution = x_distributions[location.y];
-    location.x = x_distribution.sample(xi0, x_pdf);
+    location.x = x_distribution.sample(rnd.x, x_pdf);
 
     auto x0 = x_distribution.values[location.x];
     auto x1 = x_distribution.values[min(location.x + 1llu, x_distribution.values.count - 1)];
-    float dx = (xi0 - x0.cdf);
+    float dx = (rnd.x - x0.cdf);
     if (x1.cdf - x0.cdf > 0.0f) {
       dx /= (x1.cdf - x0.cdf);
     }
 
     auto y0 = y_distribution.values[location.y];
     auto y1 = y_distribution.values[min(location.y + 1llu, y_distribution.values.count - 1)];
-    float dy = (xi1 - y0.cdf);
+    float dy = (rnd.y - y0.cdf);
     if (y1.cdf - y0.cdf > 0.0f) {
       dy /= (y1.cdf - y0.cdf);
     }

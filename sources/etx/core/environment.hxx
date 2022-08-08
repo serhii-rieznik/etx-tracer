@@ -7,6 +7,9 @@ namespace etx {
 struct Environment {
   const char* data_folder();
 
+  // thread save, uses extenal data storage
+  const char* file_in_data(const char* f, char buffer[], uint64_t buffer_size);
+
   // not thread save, uses static data storage, use at your own risk
   const char* file_in_data(const char*);
 

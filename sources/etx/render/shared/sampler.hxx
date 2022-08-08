@@ -7,31 +7,32 @@ namespace etx {
 struct Sampler {
   uint32_t seed = 0;
 
-  Sampler() = default;
+  ETX_SHARED_CODE Sampler() {
+  }
 
-  ETX_GPU_CODE Sampler(uint32_t state)
+  ETX_SHARED_CODE Sampler(uint32_t state)
     : seed(state) {
   }
 
-  ETX_GPU_CODE Sampler(uint32_t a, uint32_t b)
+  ETX_SHARED_CODE Sampler(uint32_t a, uint32_t b)
     : seed(random_seed(a, b)) {
   }
 
-  ETX_GPU_CODE void init(uint32_t a, uint32_t b) {
+  ETX_SHARED_CODE void init(uint32_t a, uint32_t b) {
     seed = random_seed(a, b);
   }
 
-  ETX_GPU_CODE float next() {
+  ETX_SHARED_CODE float next() {
     return next_random(seed);
   }
 
-  ETX_GPU_CODE void start_pixel(const int2&) {
+  ETX_SHARED_CODE float2 next_2d() {
+    float a = next();
+    float b = next();
+    return {a, b};
   }
 
-  ETX_GPU_CODE void next_sample() {
-  }
-
-  static ETX_GPU_CODE uint32_t random_seed(const uint32_t val0, const uint32_t val1) {
+  static ETX_SHARED_CODE uint32_t random_seed(const uint32_t val0, const uint32_t val1) {
     uint32_t v0 = val0;
     uint32_t v1 = val1;
     uint32_t s0 = 0;
@@ -43,7 +44,7 @@ struct Sampler {
     return v0;
   }
 
-  static ETX_GPU_CODE float next_random(uint32_t& previous) {
+  static ETX_SHARED_CODE float next_random(uint32_t& previous) {
     previous = previous * 1664525u + 1013904223u;
     union {
       uint32_t i;

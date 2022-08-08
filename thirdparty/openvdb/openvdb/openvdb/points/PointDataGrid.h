@@ -1167,7 +1167,7 @@ PointDataLeafNode<T, Log2Dim>::readBuffers(std::istream& is, const CoordBBox& /*
                                                                         const Index index)
         {
             std::string key("paged:" + std::to_string(index));
-            auto it = auxData.find(key);
+            io::StreamMetadata::AuxDataMap::const_iterator it = auxData.find(key);
             if (it != auxData.end()) {
                 return *(boost::any_cast<compression::PagedInputStream::Ptr>(it->second));
             }
@@ -1211,7 +1211,7 @@ PointDataLeafNode<T, Log2Dim>::readBuffers(std::istream& is, const CoordBBox& /*
         static AttributeSet::Descriptor::Ptr retrieveMatchingDescriptor(const io::StreamMetadata::AuxDataMap& auxData)
         {
             std::string descriptorKey("descriptorPtr");
-            auto itDescriptor = auxData.find(descriptorKey);
+            io::StreamMetadata::AuxDataMap::const_iterator itDescriptor = auxData.find(descriptorKey);
             assert(itDescriptor != auxData.end());
             const Descriptor::Ptr descriptor = boost::any_cast<AttributeSet::Descriptor::Ptr>(itDescriptor->second);
             return descriptor;
@@ -1333,7 +1333,7 @@ PointDataLeafNode<T, Log2Dim>::writeBuffers(std::ostream& os, bool toHalf) const
         {
             // if paged stream exists, flush and delete it
             std::string key("paged:" + std::to_string(index));
-            auto it = auxData.find(key);
+            io::StreamMetadata::AuxDataMap::const_iterator it = auxData.find(key);
             if (it != auxData.end()) {
                 compression::PagedOutputStream& stream = *(boost::any_cast<compression::PagedOutputStream::Ptr>(it->second));
                 stream.flush();
@@ -1345,7 +1345,7 @@ PointDataLeafNode<T, Log2Dim>::writeBuffers(std::ostream& os, bool toHalf) const
                                                                         const Index index)
         {
             std::string key("paged:" + std::to_string(index));
-            auto it = auxData.find(key);
+            io::StreamMetadata::AuxDataMap::const_iterator it = auxData.find(key);
             if (it != auxData.end()) {
                 return *(boost::any_cast<compression::PagedOutputStream::Ptr>(it->second));
             }
@@ -1361,8 +1361,8 @@ PointDataLeafNode<T, Log2Dim>::writeBuffers(std::ostream& os, bool toHalf) const
         {
             std::string descriptorKey("descriptorPtr");
             std::string matchingKey("hasMatchingDescriptor");
-            auto itMatching = auxData.find(matchingKey);
-            auto itDescriptor = auxData.find(descriptorKey);
+            io::StreamMetadata::AuxDataMap::const_iterator itMatching = auxData.find(matchingKey);
+            io::StreamMetadata::AuxDataMap::const_iterator itDescriptor = auxData.find(descriptorKey);
             if (itMatching == auxData.end()) {
                 // if matching bool is not found, insert "true" and the descriptor
                 (const_cast<io::StreamMetadata::AuxDataMap&>(auxData))[matchingKey] = true;
@@ -1386,7 +1386,7 @@ PointDataLeafNode<T, Log2Dim>::writeBuffers(std::ostream& os, bool toHalf) const
         static bool hasMatchingDescriptor(const io::StreamMetadata::AuxDataMap& auxData)
         {
             std::string matchingKey("hasMatchingDescriptor");
-            auto itMatching = auxData.find(matchingKey);
+            io::StreamMetadata::AuxDataMap::const_iterator itMatching = auxData.find(matchingKey);
             // if matching key is not found, no matching descriptor
             if (itMatching == auxData.end())                return false;
             // if matching key is found and is false, no matching descriptor
@@ -1397,7 +1397,7 @@ PointDataLeafNode<T, Log2Dim>::writeBuffers(std::ostream& os, bool toHalf) const
         static AttributeSet::Descriptor::Ptr retrieveMatchingDescriptor(const io::StreamMetadata::AuxDataMap& auxData)
         {
             std::string descriptorKey("descriptorPtr");
-            auto itDescriptor = auxData.find(descriptorKey);
+            io::StreamMetadata::AuxDataMap::const_iterator itDescriptor = auxData.find(descriptorKey);
             // if matching key is true, however descriptor is not found, it has already been retrieved
             if (itDescriptor == auxData.end())              return nullptr;
             // otherwise remove it and return it
@@ -1410,8 +1410,8 @@ PointDataLeafNode<T, Log2Dim>::writeBuffers(std::ostream& os, bool toHalf) const
         {
             std::string matchingKey("hasMatchingDescriptor");
             std::string descriptorKey("descriptorPtr");
-            auto itMatching = auxData.find(matchingKey);
-            auto itDescriptor = auxData.find(descriptorKey);
+            io::StreamMetadata::AuxDataMap::const_iterator itMatching = auxData.find(matchingKey);
+            io::StreamMetadata::AuxDataMap::const_iterator itDescriptor = auxData.find(descriptorKey);
             if (itMatching != auxData.end())    (const_cast<io::StreamMetadata::AuxDataMap&>(auxData)).erase(itMatching);
             if (itDescriptor != auxData.end())  (const_cast<io::StreamMetadata::AuxDataMap&>(auxData)).erase(itDescriptor);
         }

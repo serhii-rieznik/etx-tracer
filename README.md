@@ -39,12 +39,7 @@ More renderings could be found in my [Twitter](https://twitter.com/serhii_riezni
 This project is a fusion of several my previous projects 
   * [et-engine](https://github.com/sergeyreznik/et-engine) - the old game engine, which actually was used in several shipped games;
   * [etx](https://github.com/sergeyreznik/et-x-classic) - an extension to the engine, which is used for UI;
-  * [metal-ray-tracer](https://github.com/sergeyreznik/metal-ray-tracer) - ray-tracer based on Metal Performance Shaders;
-  * and one more project is currently located in the private repository. 
-
-And the most interesting part is that private repo contains a GPU ray-tracer, which implements Vertex Connection and Merging algorithm on GPU using OptiX (alongside with other integrators, like standard path-tracing and ambient occlusion integrator, both CPU and GPU versions).
-
-So now it is time for that hidden project to emerge on a surface. Releasing it as-is would be too embarrassing for me, because it contains a lot of hacks and code that was required "right now" to make things work. So I would try to rewrite it in a nice way, and probably write some post about it.
+  * [metal-ray-tracer](https://github.com/sergeyreznik/metal-ray-tracer) - ray-tracer based on Metal Performance Shaders.
 
 #### Project milestones:
 Order is a subject to change, but here are main things to do:
@@ -54,7 +49,7 @@ Order is a subject to change, but here are main things to do:
 - [x] OptiX and GPU-related code basics;
 - [x] additional code for ray-tracing;
 - [x] GPU path tracing;
-- [ ] VCM integrators (CPU and GPU);
+- [x] VCM integrators (CPU and GPU);
 - [ ] cross-platform, cross-API support;
   ... maintaining code, adding new features.
 

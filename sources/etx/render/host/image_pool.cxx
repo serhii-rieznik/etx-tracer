@@ -49,6 +49,27 @@ struct ImagePoolImpl {
     return handle;
   }
 
+  uint32_t add_from_data(const float4 data[], const uint2& dimensions) {
+    uint64_t data_size = sizeof(float4) * dimensions.x * dimensions.y;
+    uint32_t hash = fnv1a32(reinterpret_cast<const uint8_t*>(data), data_size);
+    char buffer[32] = {};
+    snprintf(buffer, sizeof(buffer), "#%u", hash);
+    auto i = mapping.find(buffer);
+    if (i != mapping.end()) {
+      return i->second;
+    }
+
+    auto handle = image_pool.alloc();
+    mapping[buffer] = handle;
+    auto& image = image_pool.get(handle);
+    image.format = Image::Format::RGBA32F;
+    image.pixels.f32 = make_array_view<float4>(calloc(1llu * dimensions.x * dimensions.y, sizeof(float4)), dimensions.x * dimensions.y);
+    memcpy(image.pixels.f32.a, data, data_size);
+    image.isize = dimensions;
+    image.fsize = {float(dimensions.x), float(dimensions.y)};
+    return handle;
+  }
+
   void perform_loading(uint32_t handle, Image& image) {
     for (auto& cache : mapping) {
       if (cache.second != handle)
@@ -125,9 +146,8 @@ struct ImagePoolImpl {
     img.fsize.x = static_cast<float>(img.isize.x);
     img.fsize.y = static_cast<float>(img.isize.y);
 
-    bool srgb = (img.options & Image::Linear) == 0;
-
     if (img.format == Image::Format::RGBA8) {
+      bool srgb = (img.options & Image::Linear) == 0;
       img.pixels.u8.count = 1llu * img.isize.x * img.isize.y;
       img.pixels.u8.a = reinterpret_cast<ubyte4*>(calloc(img.pixels.u8.count, sizeof(ubyte4)));
       auto src_data = reinterpret_cast<const ubyte4*>(source_data.data());
@@ -135,7 +155,6 @@ struct ImagePoolImpl {
         for (uint32_t x = 0; x < img.isize.x; ++x) {
           uint32_t i = x + y * img.isize.x;
           uint32_t j = x + (img.isize.y - 1 - y) * img.isize.x;
-
           float4 f = to_float4(src_data[i]);
           if (srgb) {
             f.x = std::pow(f.x, 2.2f);  // TODO : fix gamma conversion
@@ -345,6 +364,10 @@ void ImagePool::cleanup() {
 
 uint32_t ImagePool::add_from_file(const std::string& path, uint32_t image_options) {
   return _private->add_from_file(path, image_options);
+}
+
+uint32_t ImagePool::add_from_data(const float4* data, const uint2& dimensions) {
+  return _private->add_from_data(data, dimensions);
 }
 
 const Image& ImagePool::get(uint32_t handle) {

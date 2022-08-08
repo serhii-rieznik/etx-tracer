@@ -3,7 +3,7 @@
 namespace etx {
 namespace DeltaConductorBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
   auto f = fresnel::conductor(data.spectrum_sample, data.w_i, frame.nrm, mtl.ext_ior(data.spectrum_sample), mtl.int_ior(data.spectrum_sample), thinfilm);
@@ -18,11 +18,11 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
@@ -30,9 +30,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 
 namespace ConductorBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_FORWARD_TO_IMPL;
+
+ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::sample(data, mtl, scene, smp);
+    return DeltaConductorBSDF::sample_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -44,9 +46,9 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), 0};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::evaluate(data, mtl, scene, smp);
+    return DeltaConductorBSDF::evaluate_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -88,9 +90,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::pdf(data, mtl, scene, smp);
+    return DeltaConductorBSDF::pdf_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -104,11 +106,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
   return ggx.pdf(m, data.w_i, data.w_o) / (4.0f * m_dot_o);
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
 }
 
@@ -116,9 +118,11 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 
 namespace MultiscatteringConductorBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_FORWARD_TO_IMPL;
+
+ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::sample(data, mtl, scene, smp);
+    return DeltaConductorBSDF::sample_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -146,9 +150,9 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::evaluate(data, mtl, scene, smp);
+    return DeltaConductorBSDF::evaluate_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -195,9 +199,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::pdf(data, mtl, scene, smp);
+    return DeltaConductorBSDF::pdf_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -220,11 +224,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
 }
 

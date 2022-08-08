@@ -9,6 +9,7 @@
 #include <etx/rt/integrators/path_tracing_gpu.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
+#include <etx/rt/integrators/vcm_gpu.hxx>
 #include <etx/rt/integrators/atmosphere.hxx>
 #include <etx/rt/rt.hxx>
 
@@ -41,8 +42,10 @@ struct RTApplication {
   void on_reload_geometry_selected();
   void on_options_changed();
   void on_reload_integrator_selected();
+  void on_use_image_as_reference();
 
  private:
+  std::vector<float4> get_current_image(bool convert_to_rgb);
   void save_options();
 
  private:
@@ -59,14 +62,16 @@ struct RTApplication {
   GPUPathTracing _gpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
+  GPUVCM _gpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};
 
-  Integrator* _integrator_array[6] = {
+  Integrator* _integrator_array[7] = {
     &_preview,
     &_cpu_pt,
     &_cpu_bidir,
     &_cpu_vcm,
     &_gpu_pt,
+    &_gpu_vcm,
     &_cpu_atmosphere,
   };
 

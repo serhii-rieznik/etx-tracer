@@ -1,12 +1,12 @@
 {
     "geometry" : "cornellbox.obj",
     "camera" : {
-        "viewport" : [640.0, 640.0],
+        "viewport" : [1080.0, 1080.0],
         "origin" : [0.0, 1.0, 5.15],
         "target" : [0.0, 1.0, 0.0],
         "up" : [0.0, 1.0, 0.0],
         "fov" : 26.99,
-        "lens-radius" : 0.25,
+        "lens-radius" : 0.125,
         "focal-distance" : 4.6
     }
 }

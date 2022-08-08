@@ -30,11 +30,13 @@ struct GPUPipeline {
 
     const char* raygen = nullptr;
 
-    Entry* entries = nullptr;
+    const Entry* entries = nullptr;
     uint32_t entry_count = 0;
 
     uint32_t payload_count = 0;
     uint32_t max_trace_depth = 2;
+
+    uint32_t compile_options = 0;
   };
 
   uint32_t handle = kInvalidHandle;
@@ -63,6 +65,7 @@ struct GPUDevice {
   virtual device_pointer_t get_buffer_device_pointer(GPUBuffer) const = 0;
   virtual device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) = 0;
   virtual device_pointer_t copy_to_buffer(GPUBuffer, const void* src, uint64_t offset, uint64_t size) = 0;
+  virtual void clear_buffer(GPUBuffer) = 0;
   virtual void copy_from_buffer(GPUBuffer, void* dst, uint64_t offset, uint64_t size) = 0;
   virtual void destroy_buffer(GPUBuffer) = 0;
 
@@ -75,6 +78,10 @@ struct GPUDevice {
   virtual void destroy_acceleration_structure(GPUAccelerationStructure) = 0;
 
   virtual bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) = 0;
+  virtual bool launch(GPUPipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) = 0;
+
+  virtual void setup_denoiser(uint32_t dim_x, uint32_t dim_y) = 0;
+  virtual bool denoise(GPUBuffer input, GPUBuffer output) = 0;
 
   static GPUDevice* create_optix_device();
   static void free_device(GPUDevice*);

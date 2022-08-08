@@ -17,6 +17,7 @@ struct ImagePool {
   void cleanup();
 
   uint32_t add_from_file(const std::string& path, uint32_t image_options);
+  uint32_t add_from_data(const float4* data, const uint2& dimensions);
   void remove(uint32_t handle);
   void remove_all();
 

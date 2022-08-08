@@ -2,18 +2,6 @@
 
 #include <etx/core/debug.hxx>
 
-#if (ETX_NVCC_COMPILER)
-#define ETX_GPU_CODE inline __device__
-#define ETX_GPU_DATA __device__
-#define ETX_CPU_CODE __host__
-#define ETX_INIT_WITH(S)
-#else
-#define ETX_GPU_CODE inline
-#define ETX_GPU_DATA
-#define ETX_CPU_CODE
-#define ETX_INIT_WITH(S) = S
-#endif
-
 #define ETX_ALIGNED alignas(16)
 
 #define ETX_EMPTY_INIT ETX_INIT_WITH({})
@@ -71,16 +59,16 @@ struct ETX_ALIGNED ArrayView {
   }
 
   ETX_GPU_CODE const T& operator[](uint64_t i) const {
-    ETX_ASSERT(count > 0);
+    ETX_ASSERT_GREATER(count, 0);
     ETX_ASSERT(a != nullptr);
-    ETX_ASSERT(i < count);
+    ETX_ASSERT_LESS(i, count);
     return a[i];
   }
 
   ETX_GPU_CODE T& operator[](uint64_t i) {
-    ETX_ASSERT(count > 0);
+    ETX_ASSERT_GREATER(count, 0);
     ETX_ASSERT(a != nullptr);
-    ETX_ASSERT(i < count);
+    ETX_ASSERT_LESS(i, count);
     return a[i];
   }
 };
@@ -111,8 +99,9 @@ ETX_GPU_CODE ArrayView<T> make_array_view(void* p, uint64_t count) {
   return {reinterpret_cast<T*>(p), count};
 }
 
-ETX_GPU_CODE void print_value(const char* name, const char* tag, float t) {
-  printf("%s : %s %f\n", name, tag, t);
+template <class T>
+ETX_GPU_CODE ArrayView<T> make_array_view(uint64_t p, uint64_t count) {
+  return {reinterpret_cast<T*>(p), count};
 }
 
 ETX_GPU_CODE void print_value(const char* name, const char* tag, const float2& v) {

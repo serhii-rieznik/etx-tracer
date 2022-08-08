@@ -1,0 +1,30 @@
+# Blender MTL File: 'sds-test.blend'
+# Material Count: 4
+
+newmtl et::env
+image ../hdri/environment.exr
+
+newmtl et::medium
+id xglass
+sigma_a 0.3333 0.16666 0.083333
+
+newmtl plane
+map_Kd ../textures/checkers_grayscale.png
+
+newmtl cube
+material class dielectric
+int_ior water
+int_medium glass
+
+newmtl metal
+material class msconductor
+int_ior chrome
+Pr 0.2
+
+newmtl thorus
+material class msconductor
+int_ior gold
+ext_medium glass
+Pr 0.25
+xthinfilm range 100.0 1000.0 ior diamond image ../textures/film.png
+

@@ -7,7 +7,7 @@
 
 namespace etx {
 
-bool compile_nvcc_file(const char* path_to_file, const char* output_to_file) {
+bool compile_cuda(CUDACompileTarget target, const char* path_to_file, const char* output_to_file, const char* options) {
   auto con = GetStdHandle(STD_OUTPUT_HANDLE);
 
   static char out_ptx_file[4096] = {};
@@ -16,7 +16,7 @@ bool compile_nvcc_file(const char* path_to_file, const char* output_to_file) {
     --len;
   }
   if (len > 0) {
-    snprintf(out_ptx_file + len, sizeof(out_ptx_file) - len, "%s\0", ".ptx");
+    snprintf(out_ptx_file + len, sizeof(out_ptx_file) - len, "%s\0", target == CUDACompileTarget::PTX ? ".ptx" : ".fatbin");
   }
 
   const char* target_file = output_to_file == nullptr ? out_ptx_file : output_to_file;
@@ -24,13 +24,14 @@ bool compile_nvcc_file(const char* path_to_file, const char* output_to_file) {
 #if defined(NDEBUG) || defined(_NDEBUG)
   const char* debug_flags = "--define-macro NDEBUG --optimize 3";
 #else
-  const char* debug_flags = "--debug --device-debug --source-in-ptx";
+  const char* debug_flags = (target == CUDACompileTarget::PTX) ? "--debug --device-debug --source-in-ptx" : "--debug --device-debug";
 #endif
 
   static char command_line[4096] = {};
   snprintf(command_line, sizeof(command_line),
-    "%s \"%s\" --ptx --output-file \"%s\" -I\"%s\" -I\"%s\" --compiler-bindir \"%s\" -allow-unsupported-compiler %s",  //
-    ETX_CUDA_COMPILER, path_to_file, target_file, ETX_OPTIX_INCLUDES, ETX_INCLUDES, ETX_MSBUILD_PATH, debug_flags);    //
+    "%s \"%s\" --output-file \"%s\" -I\"%s\" -I\"%s\" --std c++17 --compiler-bindir \"%s\" %s %s %s",               //
+    ETX_CUDA_COMPILER, path_to_file, target_file, ETX_OPTIX_INCLUDES, ETX_INCLUDES, ETX_MSBUILD_PATH, debug_flags,  //
+    (target == CUDACompileTarget::PTX) ? "--ptx" : "--fatbin", options);                                            //
 
   static char command_line_info[4096] = {};
   int j = 0;

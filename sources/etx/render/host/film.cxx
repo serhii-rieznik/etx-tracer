@@ -54,12 +54,6 @@ void Film::atomic_add(const float4& value, uint32_t x, uint32_t y, uint32_t thre
   ETX_VALIDATE(value);
   uint32_t index = x + y * _dimensions.x;
   _buffer[index * _thread_count + thread_id] += value;
-  // uint32_t offset = _thread_count
-  // _mt_data[thread_id][index] += value;
-  // auto ptr = _mt_data[0][index].data.data;
-  // atomic_add_impl(ptr + 0, value.x);
-  // atomic_add_impl(ptr + 1, value.y);
-  // atomic_add_impl(ptr + 2, value.z);
 }
 
 void Film::accumulate(const float4& value, uint32_t x, uint32_t y, float t) {

@@ -2,7 +2,7 @@
 
 namespace DeltaPlasticBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   auto eta_e = mtl.ext_ior(data.spectrum_sample);
@@ -16,30 +16,32 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   BSDFSample result;
   result.properties = BSDFSample::Diffuse;
+
   if (reflection) {
     result.w_o = normalize(reflect(data.w_i, frame.nrm));
     result.properties = result.properties | BSDFSample::DeltaReflection;
   } else {
-    result.w_o = sample_cosine_distribution(smp.next(), smp.next(), frame.nrm, 1.0f);
+    result.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
   }
 
   float n_dot_o = dot(frame.nrm, result.w_o);
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
   auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
 
+  auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr));
+  result.pdf = kInvPi * n_dot_o * (1.0f - f);
+
   if (reflection) {
-    auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr)) + specular * fr;
-    result.pdf = kInvPi * n_dot_o * (1.0f - f) + f;
-    result.weight = bsdf / result.pdf;
-  } else {
-    result.pdf = kInvPi * n_dot_o;
-    result.weight = diffuse;
+    bsdf += specular;
+    result.pdf += 1.0f;
   }
+
+  result.weight = bsdf / result.pdf;
 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
@@ -67,7 +69,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
@@ -86,9 +88,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 
 namespace PlasticBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_FORWARD_TO_IMPL;
+
+ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::sample(data, mtl, scene, smp);
+    return DeltaPlasticBSDF::sample_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -106,16 +110,16 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   if (smp.next() <= f.monochromatic()) {
     eval_data.w_o = normalize(reflect(data.w_i, m));
   } else {
-    eval_data.w_o = sample_cosine_distribution(smp.next(), smp.next(), frame.nrm, 1.0f);
+    eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
     properties = BSDFSample::Diffuse;
   }
 
   return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), properties};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::evaluate(data, mtl, scene, smp);
+    return DeltaPlasticBSDF::evaluate_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -155,9 +159,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::pdf(data, mtl, scene, smp);
+    return DeltaPlasticBSDF::pdf_impl(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -184,11 +188,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 

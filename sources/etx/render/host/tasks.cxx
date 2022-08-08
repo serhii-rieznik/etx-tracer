@@ -43,9 +43,12 @@ struct FunctionTask : public Task {
 struct TaskSchedulerImpl {
   enki::TaskScheduler scheduler;
   ObjectIndexPool<TaskWrapper> task_pool;
+  ObjectIndexPool<FunctionTask> function_task_pool;
+  std::map<uint32_t, uint32_t> task_to_function;
 
   TaskSchedulerImpl() {
     task_pool.init(1024u);
+    function_task_pool.init(1024u);
     scheduler.Initialize(ETX_SINGLE_THREAD ? 2 : (enki::GetNumHardwareThreads() + 1u));
   }
 
@@ -74,40 +77,58 @@ Task::Handle TaskScheduler::schedule(Task* t, uint32_t range) {
   return {handle};
 }
 
+Task::Handle TaskScheduler::schedule(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
+  auto func_task_handle = _private->function_task_pool.alloc(func);
+  auto& func_task = _private->function_task_pool.get(func_task_handle);
+
+  auto task_handle = _private->task_pool.alloc(&func_task, range, 1u);
+  auto& task = _private->task_pool.get(task_handle);
+
+  _private->task_to_function[task_handle] = func_task_handle;
+  _private->scheduler.AddTaskSetToPipe(&task);
+
+  return {task_handle};
+}
+
 void TaskScheduler::execute(Task* t, uint32_t range) {
   wait(schedule(t, range));
 }
 
 void TaskScheduler::execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
-  FunctionTask t(func);
-  wait(schedule(&t, range));
+  wait(schedule(range, func));
 }
 
 bool TaskScheduler::completed(Task::Handle handle) {
-  if (handle.internal == Task::InvalidHandle) {
+  if (handle.data == Task::InvalidHandle) {
     return true;
   }
 
-  auto& task_wrapper = _private->task_pool.get(handle.internal);
+  auto& task_wrapper = _private->task_pool.get(handle.data);
   return task_wrapper.GetIsComplete();
 }
 
 void TaskScheduler::wait(Task::Handle handle) {
-  if (handle.internal == Task::InvalidHandle) {
+  if (handle.data == Task::InvalidHandle) {
     return;
   }
 
-  auto& task_wrapper = _private->task_pool.get(handle.internal);
+  auto& task_wrapper = _private->task_pool.get(handle.data);
   _private->scheduler.WaitforTaskSet(&task_wrapper);
-  _private->task_pool.free(handle.internal);
+  _private->task_pool.free(handle.data);
+
+  auto func_task = _private->task_to_function.find(handle.data);
+  if (func_task != _private->task_to_function.end()) {
+    _private->function_task_pool.free(func_task->second);
+    _private->task_to_function.erase(func_task);
+  }
 }
 
 void TaskScheduler::restart(Task::Handle handle, uint32_t new_rage) {
-  if (handle.internal == Task::InvalidHandle) {
+  if (handle.data == Task::InvalidHandle) {
     return;
   }
 
-  auto& task_wrapper = _private->task_pool.get(handle.internal);
+  auto& task_wrapper = _private->task_pool.get(handle.data);
   if (task_wrapper.GetIsComplete() == false) {
     _private->scheduler.WaitforTaskSet(&task_wrapper);
   }
@@ -116,10 +137,10 @@ void TaskScheduler::restart(Task::Handle handle, uint32_t new_rage) {
 }
 
 void TaskScheduler::restart(Task::Handle handle) {
-  if (handle.internal == Task::InvalidHandle) {
+  if (handle.data == Task::InvalidHandle) {
     return;
   }
-  auto& task_wrapper = _private->task_pool.get(handle.internal);
+  auto& task_wrapper = _private->task_pool.get(handle.data);
   restart(handle, task_wrapper.m_SetSize);
 }
 
