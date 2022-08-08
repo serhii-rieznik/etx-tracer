@@ -104,7 +104,7 @@ ETX_V2(uint2, uint32_t)
     return a;                                            \
   }                                                      \
   ETX_GPU_CODE V& operator+=(V& a, const C b) {          \
-    a += b;                                              \
+    a.x += b;                                            \
     a.y += b;                                            \
     a.z += b;                                            \
     return a;                                            \

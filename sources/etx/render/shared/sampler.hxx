@@ -26,10 +26,10 @@ struct Sampler {
     return next_random(seed);
   }
 
-  ETX_SHARED_CODE void start_pixel(const int2&) {
-  }
-
-  ETX_SHARED_CODE void next_sample() {
+  ETX_SHARED_CODE float2 next_2d() {
+    float a = next();
+    float b = next();
+    return {a, b};
   }
 
   static ETX_SHARED_CODE uint32_t random_seed(const uint32_t val0, const uint32_t val1) {

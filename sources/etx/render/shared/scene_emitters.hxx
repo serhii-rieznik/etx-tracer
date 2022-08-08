@@ -159,7 +159,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
   switch (em.cls) {
     case Emitter::Class::Area: {
       const auto& tri = scene.triangles[em.triangle_index];
-      result.barycentric = random_barycentric(smp.next(), smp.next());
+      result.barycentric = random_barycentric(smp.next_2d());
       result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
       result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
       result.direction = normalize(result.origin - from_point);
@@ -172,7 +172,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       const auto& img = scene.images[em.emission.image_index];
       float pdf_image = 0.0f;
       uint2 image_location = {};
-      float2 uv = img.sample(smp.next(), smp.next(), pdf_image, image_location);
+      float2 uv = img.sample(smp.next_2d(), pdf_image, image_location);
       float sin_t = sinf(uv.y * kPi);
       if (sin_t == 0.0f) {
         result = {{spect.wavelength, 0.0f}};
@@ -194,7 +194,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       float2 disk_sample = {};
       if (em.angular_size > 0.0f) {
         auto basis = orthonormal_basis(em.direction);
-        disk_sample = sample_disk(smp.next(), smp.next());
+        disk_sample = sample_disk(smp.next_2d());
         result.direction = normalize(em.direction + basis.u * disk_sample.x * em.equivalent_disk_size + basis.v * disk_sample.y * em.equivalent_disk_size);
       } else {
         result.direction = em.direction;
@@ -242,20 +242,20 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
     case Emitter::Class::Area: {
       const auto& tri = scene.triangles[em.triangle_index];
       result.triangle_index = em.triangle_index;
-      result.barycentric = random_barycentric(smp.next(), smp.next());
+      result.barycentric = random_barycentric(smp.next_2d());
       result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
       result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
       switch (em.emission_direction) {
         case Emitter::Direction::Single: {
           auto basis = orthonormal_basis(result.normal);
           do {
-            result.direction = sample_cosine_distribution(smp.next(), smp.next(), result.normal, basis.u, basis.v, em.collimation);
+            result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, basis.u, basis.v, em.collimation);
           } while (dot(result.direction, result.normal) <= 0.0f);
           break;
         }
         case Emitter::Direction::TwoSided: {
           result.normal = (smp.next() > 0.5f) ? float3{-result.normal.x, -result.normal.y, -result.normal.z} : result.normal;
-          result.direction = sample_cosine_distribution(smp.next(), smp.next(), result.normal, em.collimation);
+          result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, em.collimation);
           break;
         }
         case Emitter::Direction::Omni: {
@@ -281,18 +281,15 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
       const auto& img = scene.images[em.emission.image_index];
       float pdf_image = 0.0f;
       uint2 image_location = {};
-      auto xi0 = smp.next();
-      auto xi1 = smp.next();
-      float2 uv = img.sample(xi0, xi1, pdf_image, image_location);
+      float2 uv = img.sample(smp.next_2d(), pdf_image, image_location);
       float sin_t = sinf(uv.y * kPi);
       if ((pdf_image == 0.0f) || (sin_t == 0.0f)) {
-        uv = img.sample(xi0, xi1, pdf_image, image_location);
         return {};
       }
 
       auto d = -uv_to_direction(uv);
       auto basis = orthonormal_basis(d);
-      auto disk_sample = sample_disk(smp.next(), smp.next());
+      auto disk_sample = sample_disk(smp.next_2d());
 
       result.triangle_index = kInvalidIndex;
       result.direction = d;
@@ -313,8 +310,8 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
     case Emitter::Class::Directional: {
       auto direction_to_scene = em.direction * (-1.0f);
       auto basis = orthonormal_basis(direction_to_scene);
-      auto pos_sample = sample_disk(smp.next(), smp.next());
-      auto dir_sample = sample_disk(smp.next(), smp.next());
+      auto pos_sample = sample_disk(smp.next_2d());
+      auto dir_sample = sample_disk(smp.next_2d());
       result.direction = normalize(direction_to_scene + basis.u * dir_sample.x * em.equivalent_disk_size + basis.v * dir_sample.y * em.equivalent_disk_size);
       result.triangle_index = kInvalidIndex;
       result.pdf_dir = 1.0f;

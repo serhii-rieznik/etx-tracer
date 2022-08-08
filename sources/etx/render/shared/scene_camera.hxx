@@ -39,11 +39,11 @@ ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const float2& uv
   if (scene.camera.lens_radius > 0.0f) {
     float2 sensor_sample = {};
     if (scene.camera_lens_shape_image_index == kInvalidIndex) {
-      sensor_sample = sample_disk(smp.next(), smp.next());
+      sensor_sample = sample_disk(smp.next_2d());
     } else {
       float pdf = {};
       uint2 location = {};
-      sensor_sample = scene.images[scene.camera_lens_shape_image_index].sample(smp.next(), smp.next(), pdf, location);
+      sensor_sample = scene.images[scene.camera_lens_shape_image_index].sample(smp.next_2d(), pdf, location);
       sensor_sample = sensor_sample * 2.0f - 1.0f;
     }
     sensor_sample *= scene.camera.lens_radius;
@@ -67,11 +67,11 @@ ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const fl
 
   if (scene.camera.lens_radius > 0.0f) {
     if (scene.camera_lens_shape_image_index == kInvalidIndex) {
-      sensor_sample = sample_disk(smp.next(), smp.next());
+      sensor_sample = sample_disk(smp.next_2d());
     } else {
       float pdf = {};
       uint2 location = {};
-      sensor_sample = scene.images[scene.camera_lens_shape_image_index].sample(smp.next(), smp.next(), pdf, location);
+      sensor_sample = scene.images[scene.camera_lens_shape_image_index].sample(smp.next_2d(), pdf, location);
       sensor_sample = sensor_sample * 2.0f - 1.0f;
     }
     sensor_sample *= scene.camera.lens_radius;

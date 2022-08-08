@@ -112,12 +112,12 @@ ETX_GPU_CODE float D_ggx(const float3& wm, const float alpha_x, const float alph
   return P22 / (wm.z * wm.z * wm.z * wm.z);
 }
 
-ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float U, const float U_2, const float alpha_x, const float alpha_y) {
+ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const float alpha_x, const float alpha_y) {
   float2 slope;
 
   if (theta_i < 0.0001f) {
-    const float r = sqrtf(U / (1.0f - U));
-    const float phi = 6.28318530718f * U_2;
+    const float r = sqrtf(rnd.x / (1.0f - rnd.x));
+    const float phi = 6.28318530718f * rnd.y;
     slope.x = r * cosf(phi);
     slope.y = r * sinf(phi);
     return slope;
@@ -135,7 +135,7 @@ ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float U, const float
   // normalization coefficient
   const float c = 1.0f / projectedarea;
 
-  const float A = 2.0f * U / cos_theta_i / c - 1.0f;
+  const float A = 2.0f * rnd.x / cos_theta_i / c - 1.0f;
   const float B = tan_theta_i;
   const float tmp = 1.0f / (A * A - 1.0f);
 
@@ -146,12 +146,12 @@ ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float U, const float
 
   float U2;
   float S;
-  if (U_2 > 0.5f) {
+  if (rnd.y > 0.5f) {
     S = 1.0f;
-    U2 = 2.0f * (U_2 - 0.5f);
+    U2 = 2.0f * (rnd.y - 0.5f);
   } else {
     S = -1.0f;
-    U2 = 2.0f * (0.5f - U_2);
+    U2 = 2.0f * (0.5f - rnd.y);
   }
   const float z = (U2 * (U2 * (U2 * 0.27385f - 0.73369f) + 0.46341f)) / (U2 * (U2 * (U2 * 0.093073f + 0.309420f) - 1.000000f) + 0.597999f);
   slope.y = S * z * sqrtf(1.0f + slope.x * slope.x);
@@ -165,7 +165,7 @@ ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float alpha
   const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
-  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
+  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha_x, alpha_y);
 
   // align with view direction
   const float phi = atan2f(wi_11.y, wi_11.x);
@@ -218,7 +218,7 @@ ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& 
   const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
-  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
+  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha_x, alpha_y);
 
   // align with view direction
   const float phi = atan2f(wi_11.y, wi_11.x);
@@ -415,7 +415,7 @@ ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sa
   const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
-  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next(), smp.next(), alpha_x, alpha_y);
+  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha_x, alpha_y);
 
   // align with view direction
   const float phi = atan2f(wi_11.y, wi_11.x);

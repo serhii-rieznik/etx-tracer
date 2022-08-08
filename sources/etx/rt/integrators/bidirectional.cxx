@@ -311,7 +311,7 @@ struct CPUBidirectionalImpl : public Task {
         break;
       }
 
-      if ((path_length > opt_rr_start) && (apply_rr(eta, smp.next(), throughput) == false)) {
+      if ((path_length > opt_rr_start) && (apply_rr(eta, smp, throughput) == false)) {
         break;
       }
       path_length += 1;

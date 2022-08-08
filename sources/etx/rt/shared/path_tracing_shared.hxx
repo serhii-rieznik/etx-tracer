@@ -160,7 +160,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   payload.path_length += 1;
 
   ETX_CHECK_FINITE(payload.ray.d);
-  return (payload.path_length < options.rr_start) || apply_rr(payload.eta, payload.smp.next(), payload.throughput);
+  return (payload.path_length < options.rr_start) || apply_rr(payload.eta, payload.smp, payload.throughput);
 }
 
 ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {

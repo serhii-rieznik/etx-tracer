@@ -38,7 +38,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   if (smp.next() <= f.monochromatic()) {
     eval_data.w_o = normalize(reflect(data.w_i, m));
   } else {
-    eval_data.w_o = sample_cosine_distribution(smp.next(), smp.next(), frame.nrm, 1.0f);
+    eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
     properties = BSDFSample::Diffuse;
   }
 

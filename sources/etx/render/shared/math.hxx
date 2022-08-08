@@ -318,28 +318,28 @@ ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
   };
 }
 
-ETX_GPU_CODE float3 sample_cosine_distribution(float xi0, float xi1, const float3& n, const float3& u, const float3& v, float exponent) {
-  float cos_theta = powf(xi0, 1.0f / (exponent + 1.0f));
+ETX_GPU_CODE float3 sample_cosine_distribution(const float2 rnd, const float3& n, const float3& u, const float3& v, float exponent) {
+  float cos_theta = powf(rnd.x, 1.0f / (exponent + 1.0f));
   float sin_theta = sqrtf(1.0f - cos_theta * cos_theta);
-  return (u * cosf(xi1 * kDoublePi) + v * sinf(xi1 * kDoublePi)) * sin_theta + n * cos_theta;
+  return (u * cosf(rnd.y * kDoublePi) + v * sinf(rnd.y * kDoublePi)) * sin_theta + n * cos_theta;
 }
 
-ETX_GPU_CODE float3 sample_cosine_distribution(float xi0, float xi1, const float3& n, float exponent) {
+ETX_GPU_CODE float3 sample_cosine_distribution(const float2& rnd, const float3& n, float exponent) {
   auto basis = orthonormal_basis(n);
-  return sample_cosine_distribution(xi0, xi1, n, basis.u, basis.v, exponent);
+  return sample_cosine_distribution(rnd, n, basis.u, basis.v, exponent);
 }
 
 ETX_GPU_CODE float3 barycentrics(float2 bc) {
   return {1.0f - bc.x - bc.y, bc.x, bc.y};
 }
 
-ETX_GPU_CODE float3 random_barycentric(float r1, float r2) {
-  r1 = sqrtf(r1);
-  return {1.0f - r1, r1 * (1.0f - r2), r1 * r2};
+ETX_GPU_CODE float3 random_barycentric(const float2 rnd) {
+  float r1 = sqrtf(rnd.x);
+  return {1.0f - r1, r1 * (1.0f - rnd.y), r1 * rnd.y};
 }
 
-ETX_GPU_CODE float2 sample_disk(float xi0, float xi1) {
-  float2 offset = {2.0f * xi0 - 1.0f, 2.0f * xi1 - 1.0f};
+ETX_GPU_CODE float2 sample_disk(const float2& rnd) {
+  float2 offset = {2.0f * rnd.x - 1.0f, 2.0f * rnd.y - 1.0f};
   if ((offset.x == 0.0f) && (offset.y == 0.0f))
     return {};
 

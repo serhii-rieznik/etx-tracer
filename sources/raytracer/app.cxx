@@ -82,12 +82,19 @@ void RTApplication::frame() {
   if (_current_integrator != nullptr) {
     _current_integrator->update();
     status = _current_integrator->status();
+
     if (_reset_images == false) {
       c_image_updated = _current_integrator->have_updated_camera_image();
-      c_image = _current_integrator->get_camera_image(false);
+      if (c_image_updated) {
+        c_image = _current_integrator->get_camera_image(false);
+      }
+
       l_image_updated = _current_integrator->have_updated_light_image();
-      l_image = _current_integrator->get_light_image(false);
+      if (l_image_updated) {
+        l_image = _current_integrator->get_light_image(false);
+      }
     }
+
     can_change_camera = _current_integrator->state() == Integrator::State::Preview;
   }
 

@@ -7,7 +7,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   auto frame = data.get_normal_frame().frame;
 
   BSDFData eval_data = data;
-  eval_data.w_o = sample_cosine_distribution(smp.next(), smp.next(), frame.nrm, 1.0f);
+  eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
   return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse};
 }
 
@@ -138,7 +138,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   float3 n = entering_material ? -data.nrm : data.nrm;
 
   BSDFData eval_data = data;
-  eval_data.w_o = sample_cosine_distribution(smp.next(), smp.next(), n, 1.0f);
+  eval_data.w_o = sample_cosine_distribution(smp.next_2d(), n, 1.0f);
 
   BSDFSample result = {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::MediumChanged};
   result.medium_index = entering_material ? mtl.int_medium : mtl.ext_medium;
@@ -194,7 +194,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
     auto m = ggx.sample(smp, data.w_i);
     eval_data.w_o = normalize(reflect(data.w_i, m));
   } else {
-    eval_data.w_o = sample_cosine_distribution(smp.next(), smp.next(), frame.nrm, 1.0f);
+    eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
     properties = BSDFSample::Diffuse;
   }
 

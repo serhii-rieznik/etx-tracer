@@ -759,7 +759,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
 
           for (float v = 0.0f; v < 1.0f; v += dv) {
             for (float u = 0.0f; u < 1.0f; u += dv) {
-              float2 uv = lerp_uv({vertices.data(), vertices.size()}, tri, random_barycentric(u, v));
+              float2 uv = lerp_uv({vertices.data(), vertices.size()}, tri, random_barycentric({u, v}));
               float4 val = img.evaluate(uv);
               texture_emission += luminance(to_float3(val)) * du * dv * val.w;
             }

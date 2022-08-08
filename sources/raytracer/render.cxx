@@ -348,6 +348,7 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
   l_image = to_rgb(l_image);
   v_image = to_rgb(v_image);
   float v_lum = dot(v_image.xyz, lum);
+  float c_treshold = 1.0f / 65536.0f;
 
   float4 result = float4(0.0f, 0.0f, 0.0f, 0.0f);
   switch (image_view) {
@@ -373,8 +374,8 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
       break;
     }
     case kViewAbsoluteDifference: {
-      result.x = float(r_lum > v_lum);
-      result.y = float(v_lum > r_lum);
+      result.x = float(max(0.0f, r_lum - v_lum) > c_treshold);
+      result.y = float(max(0.0f, v_lum - r_lum) > c_treshold);
       break;
     }
     default:

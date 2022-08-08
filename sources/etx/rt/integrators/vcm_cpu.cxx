@@ -176,46 +176,18 @@ struct CPUVCMImpl {
       VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration);
 
       uint32_t path_begin = static_cast<uint32_t>(local_vertices.size());
-      while (running() && (state.path_length <= vcm_options.max_depth)) {
-        Intersection intersection;
-        bool found_intersection = rt.trace(state.ray, intersection, state.sampler);
+      while (running()) {
+        auto step_result = vcm_light_step(scene, vcm_iteration, vcm_options, static_cast<uint32_t>(i), state, rt);
 
-        Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
+        if (step_result.add_vertex) {
+          local_vertices.emplace_back(step_result.vertex_to_add);
+        }
 
-        if (medium_sample.sampled_medium()) {
-          vcm_handle_sampled_medium(scene, medium_sample, state);
-          continue;
-        } else if (found_intersection == false) {
+        iteration_light_image.atomic_add({step_result.value_to_splat.x, step_result.value_to_splat.y, step_result.value_to_splat.z, 1.0f}, step_result.splat_uv, thread_id);
+
+        if (step_result.continue_tracing == false) {
           break;
         }
-
-        state.path_distance += intersection.t;
-        const auto& tri = scene.triangles[intersection.triangle_index];
-        const auto& mat = scene.materials[tri.material_index];
-
-        if (vcm_handle_boundary_bsdf(scene, mat, intersection, PathSource::Light, state)) {
-          continue;
-        }
-
-        vcm_update_light_vcm(intersection, state);
-
-        if (bsdf::is_delta(mat, intersection.tex, rt.scene(), state.sampler) == false) {
-          local_vertices.emplace_back(state, intersection.pos, intersection.barycentric, intersection.triangle_index, static_cast<uint32_t>(i));
-
-          if (vcm_options.connect_to_camera() && (state.path_length + 1 <= vcm_options.max_depth)) {
-            float2 uv = {};
-            auto value = vcm_connect_to_camera(rt, scene, intersection, mat, tri, vcm_iteration, vcm_options, state, uv);
-            if (dot(value, value) > 0.0f) {
-              iteration_light_image.atomic_add({value.x, value.y, value.z, 1.0f}, uv, thread_id);
-            }
-          }
-        }
-
-        if (vcm_next_ray(rt.scene(), PathSource::Light, intersection, vcm_options.rr_start, state, vcm_iteration) == false) {
-          break;
-        }
-
-        state.path_length += 1u;
       }
 
       local_paths.emplace_back(path_begin, static_cast<uint32_t>(local_vertices.size() - path_begin), state.spect);
@@ -243,10 +215,7 @@ struct CPUVCMImpl {
 
       stats.c++;
       VCMPathState state = vcm_generate_camera_state({x, y}, scene, vcm_iteration, light_path.spect);
-      while (running() && (state.path_length <= vcm_options.max_depth)) {
-        if (vcm_camera_step(scene, vcm_iteration, vcm_options, light_path, light_vertices, state, rt, _current_grid.data) == false) {
-          break;
-        }
+      while (running() && vcm_camera_step(scene, vcm_iteration, vcm_options, light_path, light_vertices, state, rt, _current_grid.data)) {
       }
 
       state.merged *= vcm_iteration.vm_normalization;
@@ -264,9 +233,7 @@ CPUVCM::CPUVCM(Raytracing& rt)
 }
 
 CPUVCM::~CPUVCM() {
-  if (current_state != State::Stopped) {
-    stop(Stop::Immediate);
-  }
+  stop(Stop::Immediate);
   ETX_PIMPL_CLEANUP(CPUVCM);
 }
 
@@ -318,14 +285,15 @@ void CPUVCM::update() {
     _private->stats.m_time = tm.measure();
     _private->continue_iteration();
   } else if (current_state == State::WaitingForCompletion) {
-    rt.scheduler().wait(_private->current_task);
     current_state = Integrator::State::Stopped;
+    rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
   } else if (_private->vcm_iteration.iteration + 1 < _private->vcm_options.max_samples) {
     _private->vcm_iteration.iteration += 1;
     _private->start_next_iteration();
   } else {
     current_state = Integrator::State::Stopped;
+    rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
   }
 }

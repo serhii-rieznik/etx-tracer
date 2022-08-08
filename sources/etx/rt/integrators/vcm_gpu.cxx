@@ -57,9 +57,7 @@ struct GPUVCMImpl {
 
   enum : uint32_t {
     VCMLibrary,
-    // CameraGen,
     CameraMain,
-    // LightGen,
     LightMain,
     PipelineCount,
   };
@@ -70,9 +68,11 @@ struct GPUVCMImpl {
   };
 
   Raytracing& rt;
-  GPUBuffer camera_image = {};
-  GPUBuffer light_final_image = {};
+  GPUBuffer camera_iteration_image = {};
+  GPUBuffer camera_final_image = {};
   GPUBuffer light_iteration_image = {};
+  GPUBuffer light_final_image = {};
+
   GPUBuffer light_vertex_buffer = {};
   GPUBuffer global_data = {};
   GPUBuffer state_buffers[2] = {};
@@ -105,13 +105,15 @@ struct GPUVCMImpl {
   uint32_t iteration_frame = 0;
   uint32_t update_frame = 0;
 
+  bool light_image_ready = false;
+  bool camera_image_ready = false;
+
   std::pair<GPUPipeline, const char*> pipelines[PipelineCount] = {
     {{}, "optix/vcm/vcm.json"},
     {{}, "optix/vcm/camera-main.json"},
     {{}, "optix/vcm/light-main.json"},
   };
   bool reload_pipelines[PipelineCount] = {};
-
   char status[2048] = {};
 
   void update_status(const char* tag, uint32_t active_paths) {
@@ -125,6 +127,8 @@ struct GPUVCMImpl {
   }
 
   void stop() {
+    light_image_ready = true;
+    camera_image_ready = true;
     vcm_state = VCMState::Stopped;
     state = Integrator::State::Stopped;
 
@@ -160,7 +164,8 @@ struct GPUVCMImpl {
     local_camera_image.resize(1llu * size.x * size.y);
     local_light_image.resize(1llu * size.x * size.y);
 
-    camera_image = rt.gpu()->create_buffer({sizeof(float4) * size.x * size.y});
+    camera_final_image = rt.gpu()->create_buffer({sizeof(float4) * size.x * size.y});
+    camera_iteration_image = rt.gpu()->create_buffer({sizeof(float4) * size.x * size.y});
     light_final_image = rt.gpu()->create_buffer({sizeof(float4) * size.x * size.y});
     light_iteration_image = rt.gpu()->create_buffer({sizeof(float4) * size.x * size.y});
   }
@@ -175,8 +180,11 @@ struct GPUVCMImpl {
     rt.gpu()->destroy_buffer(global_data);
     global_data.handle = kInvalidIndex;
 
-    rt.gpu()->destroy_buffer(camera_image);
-    camera_image.handle = kInvalidIndex;
+    rt.gpu()->destroy_buffer(camera_final_image);
+    camera_final_image.handle = kInvalidIndex;
+
+    rt.gpu()->destroy_buffer(camera_iteration_image);
+    camera_iteration_image.handle = kInvalidIndex;
 
     rt.gpu()->destroy_buffer(light_final_image);
     light_final_image.handle = kInvalidIndex;
@@ -219,11 +227,12 @@ struct GPUVCMImpl {
 
     gpu_data.options = options;
     gpu_data.scene = rt.gpu_scene();
-    gpu_data.camera_image = make_array_view<float4>(rt.gpu()->get_buffer_device_pointer(camera_image), 1llu * dimemsions.x * dimemsions.y);
+    gpu_data.camera_final_image = make_array_view<float4>(rt.gpu()->get_buffer_device_pointer(camera_final_image), 1llu * dimemsions.x * dimemsions.y);
+    gpu_data.camera_iteration_image = make_array_view<float4>(rt.gpu()->get_buffer_device_pointer(camera_iteration_image), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.light_final_image = make_array_view<float4>(rt.gpu()->get_buffer_device_pointer(light_final_image), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.light_iteration_image = make_array_view<float4>(rt.gpu()->get_buffer_device_pointer(light_iteration_image), 1llu * dimemsions.x * dimemsions.y);
 
-    rt.gpu()->clear_buffer(camera_image);
+    rt.gpu()->clear_buffer(camera_final_image);
     rt.gpu()->clear_buffer(light_final_image);
 
     update_frame = 0;
@@ -378,6 +387,7 @@ struct GPUVCMImpl {
         return;
       }
 
+      light_image_ready = true;
       vcm_state = VCMState::GatheringCameraVertices;
       return;
     }
@@ -393,7 +403,7 @@ struct GPUVCMImpl {
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
     // launch main
-    update_status("camera", it.active_paths);
+    update_status("light", it.active_paths);
 
     gpu_light_timer.begin();
     if (rt.gpu()->launch(pipelines[LightMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
@@ -424,6 +434,8 @@ struct GPUVCMImpl {
     rt.gpu()->copy_from_buffer(global_data, &it, 0, sizeof(VCMIteration));
 
     if (it.active_paths == 0) {
+      rt.gpu()->launch(pipelines[VCMLibrary].first, "merge_camera_image", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
+      camera_image_ready = true;
       iteration.iteration += 1;
       start_next_iteration();
       return;
@@ -538,25 +550,27 @@ void GPUVCM::update_options(const Options&) {
 }
 
 bool GPUVCM::have_updated_camera_image() const {
-  return true;
+  return _private->camera_image_ready;
 }
 
 const float4* GPUVCM::get_camera_image(bool /* force update */) {
-  if (_private->camera_image.handle == kInvalidHandle)
+  if (_private->camera_final_image.handle == kInvalidHandle)
     return nullptr;
 
-  rt.gpu()->copy_from_buffer(_private->camera_image, _private->local_camera_image.data(), 0llu, _private->local_camera_image.size() * sizeof(float4));
+  _private->camera_image_ready = false;
+  rt.gpu()->copy_from_buffer(_private->camera_final_image, _private->local_camera_image.data(), 0llu, _private->local_camera_image.size() * sizeof(float4));
   return _private->local_camera_image.data();
 }
 
 bool GPUVCM::have_updated_light_image() const {
-  return true;
+  return _private->light_image_ready;
 }
 
 const float4* GPUVCM::get_light_image(bool /* force update */) {
   if (_private->light_final_image.handle == kInvalidHandle)
     return nullptr;
 
+  _private->light_image_ready = false;
   rt.gpu()->copy_from_buffer(_private->light_final_image, _private->local_light_image.data(), 0llu, _private->local_light_image.size() * sizeof(float4));
   return _private->local_light_image.data();
 }

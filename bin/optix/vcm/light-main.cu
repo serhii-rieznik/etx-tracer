@@ -5,12 +5,9 @@ using namespace etx;
 
 static __constant__ VCMGlobal global;
 
-ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, VCMPathState& state, uint32_t path_len_offset) {
-  state.path_length += path_len_offset;
-  if (state.path_length <= global.options.max_depth) {
-    int i = atomicAdd(&iteration.active_paths, 1u);
-    global.output_state[i] = state;
-  }
+ETX_GPU_CODE void continue_tracing(VCMIteration& iteration, VCMPathState& state) {
+  int i = atomicAdd(&iteration.active_paths, 1u);
+  global.output_state[i] = state;
 }
 
 ETX_GPU_CODE void push_light_vertex(VCMIteration& iteration, const VCMLightVertex& v) {
@@ -38,45 +35,15 @@ RAYGEN(main) {
   auto& iteration = *global.iteration;
 
   Raytracing rt = {};
-  Intersection intersection;
-  bool found_intersection = rt.trace(global.scene, state.ray, intersection, state.sampler);
+  auto step_result = vcm_light_step(global.scene, iteration, global.options, state.global_index, state, rt);
 
-  Medium::Sample medium_sample = vcm_try_sampling_medium(global.scene, state, found_intersection ? intersection.t : kMaxFloat);
-
-  if (medium_sample.sampled_medium()) {
-    vcm_handle_sampled_medium(global.scene, medium_sample, state);
-    continue_tracing(iteration, state, 1u);
-    return;
+  if (step_result.add_vertex) {
+    push_light_vertex(iteration, step_result.vertex_to_add);
   }
 
-  if (found_intersection == false) {
-    return;
+  project(step_result.splat_uv, step_result.value_to_splat);
+
+  if (step_result.continue_tracing) {
+    continue_tracing(iteration, state);
   }
-
-  state.path_distance += intersection.t;
-  const auto& tri = global.scene.triangles[intersection.triangle_index];
-  const auto& mat = global.scene.materials[tri.material_index];
-
-  if (vcm_handle_boundary_bsdf(global.scene, mat, intersection, PathSource::Light, state)) {
-    continue_tracing(iteration, state, 0u);
-    return;
-  }
-
-  vcm_update_light_vcm(intersection, state);
-
-  if (bsdf::is_delta(mat, intersection.tex, global.scene, state.sampler) == false) {
-    push_light_vertex(iteration, {state, intersection.pos, intersection.barycentric, intersection.triangle_index, state.index});
-
-    float2 uv = {};
-    auto value = vcm_connect_to_camera(rt, global.scene, intersection, mat, tri, iteration, global.options, state, uv);
-    if (dot(value, value) > 0.0f) {
-      project(uv, value);
-    }
-  }
-
-  if (vcm_next_ray(global.scene, PathSource::Light, intersection, global.options.rr_start, state, iteration) == false) {
-    return;
-  }
-
-  continue_tracing(iteration, state, 1u);
 }
