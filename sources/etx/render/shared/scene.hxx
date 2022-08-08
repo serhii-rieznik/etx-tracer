@@ -93,7 +93,10 @@ ETX_GPU_CODE float3 shading_pos(const ArrayView<Vertex>& vertices, const Triangl
   return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
 }
 
-ETX_GPU_CODE bool apply_rr(float eta_scale, Sampler& smp, SpectralResponse& throughput) {
+ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
+  if (path_length < start_path_length)
+    return true;
+
   float max_t = throughput.maximum() * (eta_scale * eta_scale);
   if (valid_value(max_t) == false) {
     return false;

@@ -145,6 +145,13 @@ struct ETX_ALIGNED VCMLightPath {
   uint32_t pad ETX_EMPTY_INIT;
 };
 
+ETX_GPU_CODE bool vcm_next_medium_ray(const VCMOptions& options, VCMPathState& state) {
+  if (state.total_path_depth + 1 > options.max_depth)
+    return false;
+
+  return random_continue(state.total_path_depth, options.rr_start, state.eta, state.sampler, state.throughput);
+}
+
 ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source, const Intersection& i, const VCMOptions& options, VCMPathState& state, const VCMIteration& it) {
   if (state.total_path_depth + 1 > options.max_depth)
     return false;
@@ -169,8 +176,7 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
     return false;
   }
 
-  bool passes_rr = apply_rr(state.eta, state.sampler, state.throughput);
-  if ((passes_rr == false) && (state.total_path_depth >= options.rr_start)) {
+  if (random_continue(state.total_path_depth, options.rr_start, state.eta, state.sampler, state.throughput) == false) {
     return false;
   }
 
@@ -299,17 +305,20 @@ ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathS
 
   auto medium_sample = scene.mediums[state.medium_index].sample(state.spect, state.sampler, state.ray.o, state.ray.d, max_t);
   state.throughput *= medium_sample.weight;
+
   ETX_VALIDATE(state.throughput);
   return medium_sample;
 }
 
-ETX_GPU_CODE void vcm_handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, VCMPathState& state) {
+ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const VCMOptions& options, VCMPathState& state) {
   state.path_distance += medium_sample.t;
   state.total_path_depth += 1;
 
   const auto& medium = scene.mediums[state.medium_index];
   state.ray.o = medium_sample.pos;
   state.ray.d = medium.sample_phase_function(state.spect, state.sampler, medium_sample.pos, state.ray.d);
+
+  return vcm_next_medium_ray(options, state);
 }
 
 ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const Material& mat, const Intersection& intersection, const PathSource path_source, VCMPathState& state) {
@@ -399,8 +408,6 @@ ETX_GPU_CODE static void vcm_update_camera_vcm(const Intersection& intersection,
 }
 
 ETX_GPU_CODE static void vcm_handle_direct_hit(const Scene& scene, const Triangle& tri, const Intersection& intersection, const VCMOptions& options, VCMPathState& state) {
-  ETX_ASSERT(state.total_path_depth <= options.max_depth);
-
   if ((options.direct_hit() == false) || (tri.emitter_index == kInvalidIndex))
     return;
 
@@ -553,7 +560,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
     return cell_index(static_cast<int32_t>(m.x), static_cast<int32_t>(m.y), static_cast<int32_t>(m.z));
   }
 
-  ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex> samples, const Intersection& intersection, const VCMOptions& options,
+  ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const Intersection& intersection, const VCMOptions& options,
     float vc_weight) const {
     if ((options.merge_vertices() == false) || (indices.count == 0) || (state.total_path_depth + 1 > options.max_depth)) {
       return {};
@@ -592,7 +599,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
       uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
 
       for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
-        auto& light_vertex = samples[indices[j]];
+        const auto& light_vertex = samples[indices[j]];
 
         auto d = light_vertex.position(scene) - intersection.pos;
         float distance_squared = dot(d, d);
@@ -649,8 +656,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
 
   Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
   if (medium_sample.sampled_medium()) {
-    vcm_handle_sampled_medium(scene, medium_sample, state);
-    return true;  // TODO : deal with max depth
+    return vcm_handle_sampled_medium(scene, medium_sample, options, state);
   }
 
   if (found_intersection == false) {
@@ -700,8 +706,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
 
   Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
   if (medium_sample.sampled_medium()) {
-    vcm_handle_sampled_medium(scene, medium_sample, state);
-    result.continue_tracing = true;  // TODO : deal with max depth
+    result.continue_tracing = vcm_handle_sampled_medium(scene, medium_sample, options, state);
     return result;
   }
 

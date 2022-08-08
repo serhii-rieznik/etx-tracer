@@ -8,6 +8,9 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
 
   BSDFData eval_data = data;
   eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
+  if (dot(eval_data.w_o, data.nrm) < kEpsilon)
+    return {};
+
   return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse};
 }
 
@@ -147,7 +150,10 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
 
 ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
-  auto n_dot_o = fabsf(dot(data.nrm, data.w_o));
+
+  bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
+  float3 n = entering_material ? -data.nrm : data.nrm;
+  auto n_dot_o = fmaxf(0.0f, dot(n, data.w_o));
 
   BSDFEval result;
   result.func = diffuse * kInvPi;
@@ -158,7 +164,9 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
 }
 
 ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto n_dot_o = fabsf(dot(data.nrm, data.w_o));
+  bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
+  float3 n = entering_material ? -data.nrm : data.nrm;
+  auto n_dot_o = fmaxf(0.0f, dot(n, data.w_o));
   return kInvPi * n_dot_o;
 }
 

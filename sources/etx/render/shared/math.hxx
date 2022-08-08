@@ -94,7 +94,7 @@ constexpr float kSqrt2 = 1.4142135623730950488016887242097f;
 constexpr float kInvPi = 0.31830988618379067153776752674503f;
 constexpr float kEpsilon = 1.192092896e-07f;
 constexpr float kMaxFloat = 3.402823466e+38f;
-constexpr float kRayEpsilon = 1.0e-4f;
+constexpr float kRayEpsilon = 1.0f / 65535.0f;
 constexpr float kDeltaAlphaTreshold = 1.0e-4f;
 
 constexpr float kPlanetRadius = 6371e+3f;
