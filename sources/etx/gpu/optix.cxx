@@ -1050,6 +1050,12 @@ bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t d
     (dim_y > 1u) ? func.max_block_size : 1u,
   };
 
+  // HACKS!
+  if (dim_y < block_size.y) {
+    block_size.y = dim_y;
+    block_size.x = (dim_x > 1u) ? (func.max_block_size + block_size.y - 1) / block_size.y : 1u;
+  }
+
   uint32_t scale_dim = 0;
   uint32_t* bptr = &block_size.x;
   while (block_size.x * block_size.y > uint32_t(_private->device_properties.maxThreadsPerBlock)) {
