@@ -4,7 +4,7 @@ namespace etx {
 
 VCMOptions VCMOptions::default_values() {
   VCMOptions options = {};
-  options.options = VCMOptions::Default;
+  options.options = Default;
   options.max_samples = 65536u;
   options.max_depth = 65536u;
   options.rr_start = 8u;

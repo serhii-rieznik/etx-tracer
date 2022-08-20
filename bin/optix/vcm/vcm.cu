@@ -61,7 +61,26 @@ ETX_GPU_CALLABLE void merge_camera_image(VCMGlobal* global) {
 
 ETX_GPU_CALLABLE void vcm_camera_compute_lighting(VCMGlobal* global_ptr) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= global_ptr->launch_dim)
+  if (idx >= global_ptr->active_rays)
+    return;
+
+  auto& global = *global_ptr;
+  auto& state = global.input_state[idx];
+  if (state.ray_action_set()) {
+    return;
+  }
+
+  const auto& scene = global.scene;
+  const auto& options = global.options;
+
+  vcm_update_camera_vcm(state);
+  vcm_handle_direct_hit(scene, options, state);
+}
+
+ETX_GPU_CALLABLE void vcm_camera_merge(VCMGlobal* global_ptr) {
+  uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  uint32_t dim = blockIdx.y * blockDim.y + threadIdx.y;
+  if ((idx >= global_ptr->active_rays) || (dim >= 8))
     return;
 
   auto& global = *global_ptr;
@@ -73,16 +92,49 @@ ETX_GPU_CALLABLE void vcm_camera_compute_lighting(VCMGlobal* global_ptr) {
   const auto& scene = global.scene;
   const auto& options = global.options;
   const auto& light_vertices = global.light_vertices;
+  const auto& grid = global.spatial_grid;
   auto& iteration = *global.iteration;
 
-  vcm_update_camera_vcm(state);
-  vcm_handle_direct_hit(scene, options, state);
-  vcm_gather_vertices(scene, iteration, light_vertices, global.spatial_grid, options, state);
+  if ((options.merge_vertices() == false) || (grid.indices.count == 0) || (state.total_path_depth + 1 > options.max_depth)) {
+    return;
+  }
+
+  if (grid.bounding_box.contains(state.intersection.pos) == false) {
+    return;
+  }
+
+  float3 m = (state.intersection.pos - grid.bounding_box.p_min) / grid.cell_size;
+  float3 mf = floor(m);
+  float3 md = m - mf;
+
+  int32_t acx = static_cast<int32_t>(mf.x);
+  int32_t acy = static_cast<int32_t>(mf.y);
+  int32_t acz = static_cast<int32_t>(mf.z);
+
+  int32_t bcx = acx + ((md.x < 0.5f) ? -1 : +1);
+  int32_t bcy = acy + ((md.y < 0.5f) ? -1 : +1);
+  int32_t bcz = acz + ((md.z < 0.5f) ? -1 : +1);
+
+  uint32_t cell_indices[8] = {
+    grid.cell_index(acx, acy, acz),
+    grid.cell_index(bcx, acy, acz),
+    grid.cell_index(acx, bcy, acz),
+    grid.cell_index(bcx, bcy, acz),
+    grid.cell_index(acx, acy, bcz),
+    grid.cell_index(bcx, acy, bcz),
+    grid.cell_index(acx, bcy, bcz),
+    grid.cell_index(bcx, bcy, bcz),
+  };
+
+  float3 merged = grid.gather_index(scene, state, light_vertices, options, iteration.vc_weight, cell_indices[dim]);
+  atomicAdd(&state.merged.x, merged.x);
+  atomicAdd(&state.merged.y, merged.y);
+  atomicAdd(&state.merged.z, merged.z);
 }
 
 ETX_GPU_CALLABLE void vcm_continue_camera_path(VCMGlobal* global_ptr) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= global_ptr->launch_dim)
+  if (idx >= global_ptr->active_rays)
     return;
 
   auto& global = *global_ptr;

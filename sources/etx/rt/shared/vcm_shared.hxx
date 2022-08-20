@@ -603,6 +603,58 @@ struct ETX_ALIGNED VCMSpatialGridData {
     return cell_index(static_cast<int32_t>(m.x), static_cast<int32_t>(m.y), static_cast<int32_t>(m.z));
   }
 
+  ETX_GPU_CODE float3 gather_index(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, float vc_weight,
+    uint32_t index) const {
+    uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
+
+    float3 merged = {};
+    for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
+      const auto& light_vertex = samples[indices[j]];
+
+      auto d = light_vertex.position(scene) - state.intersection.pos;
+      float distance_squared = dot(d, d);
+      if ((distance_squared > radius_squared) || (light_vertex.path_length + state.total_path_depth > options.max_depth)) {
+        continue;
+      }
+
+      if (dot(state.intersection.nrm, light_vertex.normal(scene)) <= kEpsilon) {
+        continue;
+      }
+
+      const auto& tri = scene.triangles[state.intersection.triangle_index];
+      const auto& mat = scene.materials[tri.material_index];
+      auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, state.intersection, state.ray.d, -light_vertex.w_i};
+      auto camera_bsdf = bsdf::evaluate(camera_data, mat, scene, state.sampler);
+      if (camera_bsdf.valid() == false) {
+        continue;
+      }
+
+      auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), mat, scene, state.sampler);
+
+      float w_light = light_vertex.d_vcm * vc_weight + light_vertex.d_vm * camera_bsdf.pdf;
+      float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;
+      float weight = 1.0f / (1.0f + w_light + w_camera);
+
+      if constexpr (spectrum::kSpectralRendering) {
+        auto c_value = ((camera_bsdf.func * state.throughput / spectrum::sample_pdf()).to_xyz());
+        c_value = max(c_value, float3{0.0f, 0.0f, 0.0f});
+        ETX_VALIDATE(c_value);
+        auto l_value = ((light_vertex.throughput / spectrum::sample_pdf()).to_xyz());
+        l_value = max(l_value, float3{0.0f, 0.0f, 0.0f});
+        ETX_VALIDATE(l_value);
+        merged += (c_value * l_value) * weight;
+        ETX_VALIDATE(merged);
+      } else {
+        // mul as RGB
+        auto value = light_vertex.throughput * camera_bsdf.func * state.throughput * (weight / sqr(spectrum::sample_pdf()));
+        ETX_VALIDATE(value);
+        merged += value.to_xyz();
+        ETX_VALIDATE(merged);
+      }
+    }
+    return merged;
+  }
+
   ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, float vc_weight) const {
     if ((options.merge_vertices() == false) || (indices.count == 0) || (state.total_path_depth + 1 > options.max_depth)) {
       return {};
@@ -637,53 +689,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
     float3 merged = {};
     for (uint32_t i = 0; i < 8; ++i) {
-      uint32_t index = cell_indices[i];
-      uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
-
-      for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
-        const auto& light_vertex = samples[indices[j]];
-
-        auto d = light_vertex.position(scene) - state.intersection.pos;
-        float distance_squared = dot(d, d);
-        if ((distance_squared > radius_squared) || (light_vertex.path_length + state.total_path_depth > options.max_depth)) {
-          continue;
-        }
-
-        if (dot(state.intersection.nrm, light_vertex.normal(scene)) <= kEpsilon) {
-          continue;
-        }
-
-        const auto& tri = scene.triangles[state.intersection.triangle_index];
-        const auto& mat = scene.materials[tri.material_index];
-        auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, state.intersection, state.ray.d, -light_vertex.w_i};
-        auto camera_bsdf = bsdf::evaluate(camera_data, mat, scene, state.sampler);
-        if (camera_bsdf.valid() == false) {
-          continue;
-        }
-
-        auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), mat, scene, state.sampler);
-
-        float w_light = light_vertex.d_vcm * vc_weight + light_vertex.d_vm * camera_bsdf.pdf;
-        float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;
-        float weight = 1.0f / (1.0f + w_light + w_camera);
-
-        if constexpr (spectrum::kSpectralRendering) {
-          auto c_value = ((camera_bsdf.func * state.throughput / spectrum::sample_pdf()).to_xyz());
-          c_value = max(c_value, float3{0.0f, 0.0f, 0.0f});
-          ETX_VALIDATE(c_value);
-          auto l_value = ((light_vertex.throughput / spectrum::sample_pdf()).to_xyz());
-          l_value = max(l_value, float3{0.0f, 0.0f, 0.0f});
-          ETX_VALIDATE(l_value);
-          merged += (c_value * l_value) * weight;
-          ETX_VALIDATE(merged);
-        } else {
-          // mul as RGB
-          auto value = light_vertex.throughput * camera_bsdf.func * state.throughput * (weight / sqr(spectrum::sample_pdf()));
-          ETX_VALIDATE(value);
-          merged += value.to_xyz();
-          ETX_VALIDATE(merged);
-        }
-      }
+      merged += gather_index(scene, state, samples, options, vc_weight, cell_indices[i]);
     }
 
     return merged;
@@ -806,7 +812,8 @@ struct ETX_ALIGNED VCMGlobal {
   VCMSpatialGridData spatial_grid ETX_EMPTY_INIT;
   VCMOptions options ETX_EMPTY_INIT;
   VCMIteration* iteration ETX_EMPTY_INIT;
-  uint32_t launch_dim ETX_EMPTY_INIT;
+  uint32_t active_rays ETX_EMPTY_INIT;
+  uint32_t max_light_path_length ETX_EMPTY_INIT;
 };
 
 enum VCMMemoryRequirements : uint64_t {

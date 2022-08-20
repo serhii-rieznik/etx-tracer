@@ -107,8 +107,10 @@ void UI::build(double dt, const char* status) {
     igSetNextWindowPos({offset_size, 0.5f * sapp_heightf() - 3.0f * offset_size - dy}, ImGuiCond_Always, {0.0f, 1.0f});
     igBegin("Debug Info", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
     auto debug_info = _current_integrator->debug_info();
-    for (uint64_t i = 0; i < _current_integrator->debug_info_count(); ++i) {
-      igLabelText("", "%s : %.3f", debug_info[i].title, debug_info[i].value);
+    for (uint64_t i = 0, e = _current_integrator->debug_info_count(); i < e; ++i) {
+      char buffer[8] = {};
+      snprintf(buffer, sizeof(buffer), "%.3f     .", debug_info[i].value);
+      igLabelText(buffer, debug_info[i].title);
     }
     igEnd();
   }
