@@ -59,6 +59,27 @@ ETX_GPU_CALLABLE void merge_camera_image(VCMGlobal* global) {
   dst[index] = lerp(src[index], dst[index], t);
 }
 
+ETX_GPU_CALLABLE void vcm_camera_compute_lighting(VCMGlobal* global_ptr) {
+  uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= global_ptr->launch_dim)
+    return;
+
+  auto& global = *global_ptr;
+  auto& state = global.input_state[idx];
+  if (state.ray_action_set()) {
+    return;
+  }
+
+  const auto& scene = global.scene;
+  const auto& options = global.options;
+  const auto& light_vertices = global.light_vertices;
+  auto& iteration = *global.iteration;
+
+  vcm_update_camera_vcm(state);
+  vcm_handle_direct_hit(scene, options, state);
+  vcm_gather_vertices(scene, iteration, light_vertices, global.spatial_grid, options, state);
+}
+
 ETX_GPU_CALLABLE void vcm_continue_camera_path(VCMGlobal* global_ptr) {
   uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= global_ptr->launch_dim)

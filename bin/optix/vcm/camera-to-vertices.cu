@@ -19,10 +19,5 @@ RAYGEN(main) {
   auto& iteration = *global.iteration;
 
   Raytracing rt;
-  vcm_update_camera_vcm(state);
-  vcm_handle_direct_hit(scene, options, state);
-  vcm_gather_vertices(scene, iteration, light_vertices, global.spatial_grid, options, state);
-
-  vcm_connect_to_light(scene, iteration, options, rt, state);
   vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, rt, state);
 }

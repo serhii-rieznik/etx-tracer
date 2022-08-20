@@ -1,6 +1,6 @@
 {
-  "code" : "camera-lighting.cu",
-  "source" : "./output/camera-lighting.ptx",
+  "code" : "camera-to-vertices.cu",
+  "source" : "./output/camera-to-vertices.ptx",
   "max_trace_depth" : 1,
   "payload_size" : 2,
   "raygen" : "main",

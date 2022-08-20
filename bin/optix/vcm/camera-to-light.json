@@ -1,6 +1,6 @@
 {
-  "code" : "camera-walk.cu",
-  "source" : "./output/camera-walk.ptx",
+  "code" : "camera-to-light.cu",
+  "source" : "./output/camera-to-light.ptx",
   "max_trace_depth" : 1,
   "payload_size" : 2,
   "raygen" : "main",
