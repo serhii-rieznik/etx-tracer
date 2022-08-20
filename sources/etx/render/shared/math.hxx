@@ -191,6 +191,8 @@ struct ETX_ALIGNED Intersection : public Vertex {
   }
 };
 
+constexpr const uint64_t kIntersectionSize = sizeof(Intersection);
+
 template <class t>
 ETX_GPU_CODE constexpr t min(t a, t b) {
   return a < b ? a : b;

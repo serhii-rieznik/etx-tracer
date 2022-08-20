@@ -58,6 +58,8 @@ struct GPUVCMImpl {
   enum : uint32_t {
     VCMLibrary,
     CameraMain,
+    CameraLighting,
+    CameraWalk,
     LightMain,
     PipelineCount,
   };
@@ -108,12 +110,30 @@ struct GPUVCMImpl {
   bool light_image_ready = false;
   bool camera_image_ready = false;
 
-  std::pair<GPUPipeline, const char*> pipelines[PipelineCount] = {
-    {{}, "optix/vcm/vcm.json"},
-    {{}, "optix/vcm/camera-main.json"},
-    {{}, "optix/vcm/light-main.json"},
+  struct PipelineHolder {
+    GPUPipeline pipeline = {};
+    const char* path = nullptr;
+    bool reload = true;
+
+    PipelineHolder() = default;
+
+    PipelineHolder(const char* p)
+      : path(p) {
+    }
+
+    operator GPUPipeline() const {
+      return pipeline;
+    }
   };
-  bool reload_pipelines[PipelineCount] = {};
+
+  PipelineHolder pipelines[PipelineCount] = {
+    {"optix/vcm/vcm.json"},
+    {"optix/vcm/camera-main.json"},
+    {"optix/vcm/camera-lighting.json"},
+    {"optix/vcm/camera-walk.json"},
+    {"optix/vcm/light-main.json"},
+  };
+
   char status[2048] = {};
 
   void update_status(const char* tag, uint32_t active_paths) {
@@ -135,15 +155,17 @@ struct GPUVCMImpl {
     update_status("Stopped", 0);
   }
 
-  bool build_pipelines(const Options& opt) {
+  bool build_pipelines(Options& opt) {
     for (auto& p : pipelines) {
-      bool force_reload = opt.get(p.second, false).to_bool();
-      if (force_reload || (p.first.handle == kInvalidHandle)) {
-        auto handle = rt.gpu()->create_pipeline_from_file(env().file_in_data(p.second), force_reload);
+      bool force_reload = p.reload || opt.get(p.path, false).to_bool();
+      if (force_reload || (p.pipeline.handle == kInvalidHandle)) {
+        auto handle = rt.gpu()->create_pipeline_from_file(env().file_in_data(p.path), force_reload);
         if (handle.handle == kInvalidHandle) {
           return false;
         }
-        p.first = handle;
+        p.pipeline = handle;
+        p.reload = false;
+        opt.set(p.path, false);
       }
     }
 
@@ -152,8 +174,8 @@ struct GPUVCMImpl {
 
   void destroy_pipelines() {
     for (auto& p : pipelines) {
-      rt.gpu()->destroy_pipeline(p.first);
-      p.first = {};
+      rt.gpu()->destroy_pipeline(p.pipeline);
+      p.pipeline = {};
     }
   }
 
@@ -205,7 +227,7 @@ struct GPUVCMImpl {
     light_paths_buffer.handle = kInvalidHandle;
   }
 
-  bool run(const Options& opt) {
+  bool run(Options& opt) {
     if (build_pipelines(opt) == false)
       return false;
 
@@ -278,7 +300,7 @@ struct GPUVCMImpl {
 
     iteration_frame = 0;
 
-    if (rt.gpu()->launch(pipelines[VCMLibrary].first, "gen_light_rays", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+    if (rt.gpu()->launch(pipelines[VCMLibrary], "gen_light_rays", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       stop();
       return false;
     }
@@ -376,7 +398,7 @@ struct GPUVCMImpl {
     }
 
     if (it.active_paths == 0) {
-      rt.gpu()->launch(pipelines[VCMLibrary].first, "merge_light_image", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
+      rt.gpu()->launch(pipelines[VCMLibrary], "merge_light_image", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
       auto task = rt.scheduler().schedule(1u, [this](uint32_t, uint32_t, uint32_t) {
         build_spatial_grid();
       });
@@ -406,7 +428,7 @@ struct GPUVCMImpl {
     update_status("light", it.active_paths);
 
     gpu_light_timer.begin();
-    if (rt.gpu()->launch(pipelines[LightMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+    if (rt.gpu()->launch(pipelines[LightMain], it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       stop();
     }
     debug_info[0].value += gpu_light_timer.retreive();
@@ -426,7 +448,7 @@ struct GPUVCMImpl {
     gpu_data.output_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[1 - current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
-    return rt.gpu()->launch(pipelines[VCMLibrary].first, "gen_camera_rays", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
+    return rt.gpu()->launch(pipelines[VCMLibrary], "gen_camera_rays", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
   }
 
   void update_camera_vertices() {
@@ -434,7 +456,7 @@ struct GPUVCMImpl {
     rt.gpu()->copy_from_buffer(global_data, &it, 0, sizeof(VCMIteration));
 
     if (it.active_paths == 0) {
-      rt.gpu()->launch(pipelines[VCMLibrary].first, "merge_camera_image", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
+      rt.gpu()->launch(pipelines[VCMLibrary], "merge_camera_image", dimemsions.x, dimemsions.y, gpu_data_ptr, sizeof(VCMGlobal));
       camera_image_ready = true;
       iteration.iteration += 1;
       start_next_iteration();
@@ -446,12 +468,20 @@ struct GPUVCMImpl {
 
     gpu_data.input_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[current_buffer]), 1llu * dimemsions.x * dimemsions.y);
     gpu_data.output_state = make_array_view<VCMPathState>(rt.gpu()->get_buffer_device_pointer(state_buffers[1 - current_buffer]), 1llu * dimemsions.x * dimemsions.y);
+    gpu_data.launch_dim = it.active_paths;
+
     gpu_data_ptr = rt.gpu()->copy_to_buffer(global_data, &gpu_data, sizeof(VCMIteration), sizeof(VCMGlobal));
 
     update_status("camera", it.active_paths);
 
     gpu_camera_timer.begin();
-    if (rt.gpu()->launch(pipelines[CameraMain].first, it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+    if (rt.gpu()->launch(pipelines[CameraMain], it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+      stop();
+    }
+    if (rt.gpu()->launch(pipelines[CameraLighting], it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+      stop();
+    }
+    if (rt.gpu()->launch(pipelines[VCMLibrary], "vcm_continue_camera_path", it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
       stop();
     }
     debug_info[1].value += gpu_camera_timer.retreive();
@@ -497,7 +527,7 @@ Options GPUVCM::options() const {
   _private->options.store(opt);
   opt.add("reload", "Reload pipelines on next launch:");
   for (uint32_t i = 0; i < GPUVCMImpl::PipelineCount; ++i) {
-    opt.add(_private->reload_pipelines[i], _private->pipelines[i].second, _private->pipelines[i].second + 10);
+    opt.add(_private->pipelines[i].reload, _private->pipelines[i].path, _private->pipelines[i].path + 10);
   }
   return opt;
 }
@@ -506,7 +536,8 @@ void GPUVCM::set_output_size(const uint2& size) {
   _private->build_output(size);
 }
 
-void GPUVCM::preview(const Options& opt) {
+void GPUVCM::preview(const Options& in_opt) {
+  Options opt = in_opt;
   if (_private->build_pipelines(opt) == false)
     return;
 
@@ -519,7 +550,8 @@ void GPUVCM::preview(const Options& opt) {
   }
 }
 
-void GPUVCM::run(const Options& opt) {
+void GPUVCM::run(const Options& in_opt) {
+  Options opt = in_opt;
   if (_private->build_pipelines(opt) == false)
     return;
 

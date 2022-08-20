@@ -66,6 +66,7 @@ struct GPUOptixImplData {
   CUdevice cuda_device = {};
   CUcontext cuda_context = {};
   CUstream main_stream = {};
+  CUdevprop device_properties = {};
 
   void* optix_handle = nullptr;
   OptixDeviceContext optix = {};
@@ -131,8 +132,7 @@ struct GPUOptixImplData {
     int compute_minor = 0;
     cuDeviceGetAttribute(&compute_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuda_device);
 
-    // snprintf(cuda_arch, sizeof(cuda_arch), "--generate-code arch=compute_%d%d,\"code=compute_%d%d\"",  //
-    //   compute_major, compute_minor, compute_major, compute_minor);
+    cuDeviceGetProperties(&device_properties, cuda_device);
 
     uint64_t device_memory = 0llu;
     cuDeviceTotalMem(&device_memory, cuda_device);
@@ -1032,7 +1032,7 @@ bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t d
 
     int min_grid_size = 0;
     int max_block_size = 0;
-    if (ETX_CUDA_FAILED(cuOccupancyMaxPotentialBlockSize(&min_grid_size, &max_block_size, func.func, nullptr, 0, 768)))
+    if (ETX_CUDA_FAILED(cuOccupancyMaxPotentialBlockSize(&min_grid_size, &max_block_size, func.func, nullptr, 0, _private->device_properties.maxThreadsPerBlock)))
       return false;
 
     func.min_grid_size = uint32_t(min_grid_size);
@@ -1046,12 +1046,30 @@ bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t d
     return false;
   }
 
-  uint32_t bs = align_up(dim_x / func.min_grid_size, 8u);
-  uint32_t launch_x = dim_x / bs + (dim_x % bs > 0 ? 1u : 0u);
-  uint32_t launch_y = dim_y / bs + (dim_y % bs > 0 ? 1u : 0u);
-
   void* call_params[] = {&params};
-  return ETX_CUDA_SUCCEED(cuLaunchKernel(func.func, launch_x, launch_y, 1u, bs, bs, 1u, 0, _private->main_stream, reinterpret_cast<void**>(&call_params), nullptr));
+
+  uint32_t bs_x = dim_x / func.max_block_size;
+  bs_x = (dim_x > 1) ? align_up(bs_x > 0 ? bs_x : 1u, 8u) : 1u;
+  uint32_t launch_x = (dim_x > 1) ? dim_x / bs_x + (dim_x % bs_x > 0 ? 1u : 0u) : 1u;
+
+  uint32_t bs_y = dim_y / func.max_block_size;
+  bs_y = (dim_y > 1) ? align_up(bs_y > 0 ? bs_y : 1u, 8u) : 1u;
+  uint32_t launch_y = (dim_y > 1) ? dim_y / bs_y + (dim_y % bs_y > 0 ? 1u : 0u) : 1u;
+
+  ETX_ASSERT(launch_x < _private->device_properties.maxGridSize[0]);
+  ETX_ASSERT(launch_y < _private->device_properties.maxGridSize[1]);
+  ETX_ASSERT(bs_x < _private->device_properties.maxThreadsPerBlock);
+  ETX_ASSERT(bs_y < _private->device_properties.maxThreadsPerBlock);
+  if (ETX_CUDA_SUCCEED(cuLaunchKernel(func.func, launch_x, launch_y, 1u, bs_x, bs_y, 1u, 0, _private->main_stream, reinterpret_cast<void**>(&call_params), nullptr))) {
+    return true;
+  }
+
+  uint32_t b = 1u;
+  uint3 launch_size = {(dim_x + b - 1) / b, (dim_y + b - 1) / b, 1u};
+  uint3 block_size = {b, b, 1u};
+
+  return ETX_CUDA_SUCCEED(cuLaunchKernel(func.func, launch_size.x, launch_size.y, 1u, block_size.x, block_size.y, 1u, 0, _private->main_stream,  //
+    reinterpret_cast<void**>(&call_params), nullptr));
 }
 
 GPUAccelerationStructure GPUOptixImpl::create_acceleration_structure(const GPUAccelerationStructure::Descriptor& desc) {

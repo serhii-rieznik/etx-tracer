@@ -27,20 +27,17 @@ RAYGEN(main) {
   auto& state = global.input_state[idx.x];
   const auto& scene = global.scene;
   const auto& options = global.options;
+  auto& iteration = *global.iteration;
 
-  Raytracing rt;
-  bool found_intersection = rt.trace(scene, state.ray, state.intersection, state.sampler);
-
-  state.clear_ray_action();
-
-  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state);
-  if (medium_sample.sampled_medium()) {
-    bool continue_ray = vcm_handle_sampled_medium(scene, medium_sample, options, state);
+  // Last kernel
+  if (state.ray_action_set() == false) {
+    bool continue_ray = vcm_next_ray(scene, PathSource::Camera, options, state, iteration);
     state.continue_ray(continue_ray);
-  } else if (found_intersection == false) {
-    vcm_cam_handle_miss(scene, options, state);
-    state.continue_ray(false);
-  } else if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, state)) {
-    state.continue_ray(true);
+  }
+
+  if (state.should_continue_ray()) {
+    continue_tracing(iteration, state);
+  } else {
+    finish_ray(iteration, state);
   }
 }
