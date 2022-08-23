@@ -221,7 +221,7 @@ struct Options {
     }
   }
 
-  void set(const std::string& id, bool value) {
+  void set_bool(const std::string& id, bool value) {
     for (auto& option : values) {
       if (option.id == id) {
         ETX_ASSERT(option.cls == OptionalValue::Class::Boolean);

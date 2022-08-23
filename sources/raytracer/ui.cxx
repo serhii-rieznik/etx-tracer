@@ -187,10 +187,11 @@ void UI::build(double dt, const char* status) {
   }
   igEnd();
 
+  bool has_integrator = (_current_integrator != nullptr);
   igSetNextWindowPos({offset_size, 2.0f * offset_size}, ImGuiCond_Always, {0.0f, 0.0f});
-  igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
+  igBegin(has_integrator ? _current_integrator->name() : "Integrator", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
   igText("Integrator options");
-  if ((_current_integrator != nullptr) && (_integrator_options.values.empty() == false)) {
+  if (has_integrator && (_integrator_options.values.empty() == false)) {
     if (build_options(_integrator_options) && callbacks.options_changed) {
       callbacks.options_changed();
     }
@@ -344,7 +345,6 @@ ViewOptions UI::view_options() const {
 
 void UI::set_current_integrator(Integrator* i) {
   _current_integrator = i;
-  _integrator_name = _current_integrator ? _current_integrator->name() : "";
   _integrator_options = _current_integrator ? _current_integrator->options() : Options{};
 }
 

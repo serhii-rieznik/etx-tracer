@@ -57,7 +57,6 @@ struct UI {
   ArrayView<Integrator*> _integrators = {};
   Options _view_options = {};
   Options _integrator_options = {};
-  const char* _integrator_name = {};
 };
 
 }  // namespace etx

@@ -240,7 +240,7 @@ struct GPUVCMImpl {
         }
         p.pipeline = handle;
         p.reload = false;
-        opt.set(p.path, false);
+        opt.set_bool(p.path, false);
       }
     }
 
