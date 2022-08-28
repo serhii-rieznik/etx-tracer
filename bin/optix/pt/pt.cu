@@ -6,6 +6,15 @@ using namespace etx;
 
 static __constant__ PTGPUData global;
 
+RAYGEN(raygen) {
+  uint3 idx = optixGetLaunchIndex();
+  uint3 dim = optixGetLaunchDimensions();
+
+  uint32_t index = idx.x + idx.y * dim.x;
+  global.payloads[index] = make_ray_payload(global.scene, {idx.x, dim.y - idx.y - 1u}, {dim.x, dim.y}, 0u);
+  global.output[index] = {};
+}
+
 RAYGEN(main) {
   uint3 idx = optixGetLaunchIndex();
   uint3 dim = optixGetLaunchDimensions();
