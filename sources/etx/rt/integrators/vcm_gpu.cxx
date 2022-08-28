@@ -94,10 +94,11 @@ struct GPUVCMImpl {
 
   enum : uint32_t {
     VCMLibrary,
-    CameraMain,
-    CameraToLight,
-    CameraToVertices,
-    LightMain,
+    VCMOptixLibrary,
+    // CameraMain,
+    // CameraToLight,
+    // CameraToVertices,
+    // LightMain,
     PipelineCount,
   };
 
@@ -162,10 +163,7 @@ struct GPUVCMImpl {
 
   PipelineHolder pipelines[PipelineCount] = {
     {"optix/vcm/vcm.json"},
-    {"optix/vcm/camera-main.json"},
-    {"optix/vcm/camera-to-light.json"},
-    {"optix/vcm/camera-to-vertices.json"},
-    {"optix/vcm/light-main.json"},
+    {"optix/vcm/vcm-optix.json"},
   };
 
   char status[2048] = {};
@@ -511,7 +509,7 @@ struct GPUVCMImpl {
     update_status("light", it.active_paths);
 
     timer_scope("Light : everything", [&]() {
-      if (rt.gpu()->launch(pipelines[LightMain], it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+      if (rt.gpu()->launch(pipelines[VCMOptixLibrary], "light_main", it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
         stop();
       }
     });
@@ -564,7 +562,7 @@ struct GPUVCMImpl {
     update_status("camera", it.active_paths);
 
     timer_scope("Camera:main", [&]() {
-      if (rt.gpu()->launch(pipelines[CameraMain], it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+      if (rt.gpu()->launch(pipelines[VCMOptixLibrary], "camera_main", it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
         stop();
       }
     });
@@ -582,14 +580,14 @@ struct GPUVCMImpl {
     });
 
     timer_scope("Camera:light", [&]() {
-      if (rt.gpu()->launch(pipelines[CameraToLight], it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+      if (rt.gpu()->launch(pipelines[VCMOptixLibrary], "camera_to_light", it.active_paths, 1u, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
         stop();
       }
     });
 
     if (options.connect_vertices()) {
       timer_scope("Camera:vertices", [&]() {
-        if (rt.gpu()->launch(pipelines[CameraToVertices], it.active_paths, gpu_data.max_light_path_length, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
+        if (rt.gpu()->launch(pipelines[VCMOptixLibrary], "camera_to_vertices", it.active_paths, gpu_data.max_light_path_length, gpu_data_ptr, sizeof(VCMGlobal)) == false) {
           stop();
         }
       });

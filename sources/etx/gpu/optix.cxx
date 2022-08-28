@@ -18,18 +18,15 @@
 
 namespace etx {
 
-constexpr static uint64_t kMaxModuleGroups = 1;
+constexpr static uint64_t kMaxEntryPoints = 8;
 static CUstream shared_cuda_stream = {};
 
 struct PipelineDesc {
   const char* name = nullptr;
   const char* code = nullptr;
   const char* source = nullptr;
-  const char* raygen = nullptr;
-  GPUPipeline::Entry modules[kMaxModuleGroups] = {};
-  uint32_t module_count = 0;
-  uint32_t max_trace_depth = 1;
-  uint32_t payload_size = 0;
+  GPUPipeline::EntryPoint entry_points[kMaxEntryPoints] = {};
+  uint32_t entry_point_count = 0;
   CUDACompileTarget target = CUDACompileTarget::PTX;
   bool completed = false;
 };
@@ -241,6 +238,9 @@ struct GPUOptixImplData {
     return true;
   }
 
+  bool launch_optix(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size);
+  bool launch_cuda(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size);
+
   device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size);
 };
 
@@ -316,7 +316,7 @@ struct GPUPipelineOptixImpl {
 
     pipeline_options = {
       .traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY,
-      .numPayloadValues = static_cast<int>(desc.payload_count & 0x000000ff),
+      .numPayloadValues = kOptiXPayloadSize,
       .numAttributeValues = 2,
       .exceptionFlags = OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW | OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_USER,
       .pipelineLaunchParamsVariableName = "global",
@@ -338,14 +338,14 @@ struct GPUPipelineOptixImpl {
       log::warning(compile_log);
     }
 
-    ETX_ASSERT(desc.raygen != nullptr);
-    {
-      OptixProgramGroupDesc program_desc = {};
-      program_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+    for (uint64_t i = 0; i < desc.entry_point_count; ++i) {
+      OptixProgramGroupDesc program_desc = {
+        .kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN,
+      };
       program_desc.raygen.module = optix_module;
-      program_desc.raygen.entryFunctionName = desc.raygen;
+      program_desc.raygen.entryFunctionName = desc.entry_points[i];
       OptixProgramGroupOptions program_options = {};
-      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &raygen))) {
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, entry_points + i))) {
         log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
           log::error(compile_log);
@@ -359,77 +359,49 @@ struct GPUPipelineOptixImpl {
       }
     }
 
-    group_count = desc.entry_count;
+    {
+      OptixProgramGroupDesc program_desc = {
+        .kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP,
+      };
+      program_desc.hitgroup.moduleCH = optix_module;
+      program_desc.hitgroup.entryFunctionNameCH = "__closesthit__main";
+      program_desc.hitgroup.moduleAH = optix_module;
+      program_desc.hitgroup.entryFunctionNameAH = "__anyhit__main";
 
-    for (uint64_t i = 0; i < desc.entry_count; ++i) {
-      auto& entry = desc.entries[i];
-      auto& group = groups[i];
-
-      if ((entry.closest_hit != nullptr) || (entry.any_hit != nullptr)) {
-        OptixProgramGroupDesc program_desc = {};
-        program_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-        if (entry.closest_hit != nullptr) {
-          program_desc.hitgroup.moduleCH = optix_module;
-          program_desc.hitgroup.entryFunctionNameCH = entry.closest_hit;
-        }
-        if (entry.any_hit != nullptr) {
-          program_desc.hitgroup.moduleAH = optix_module;
-          program_desc.hitgroup.entryFunctionNameAH = entry.any_hit;
-        }
-        OptixProgramGroupOptions program_options = {};
-
-        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.hit))) {
-          log::error("optixProgramGroupCreate failed");
-          if (compile_log_size > 1) {
-            log::error(compile_log);
-          }
-          release(device);
-          return false;
-        }
-
+      OptixProgramGroupOptions program_options = {};
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &main_hit_program_group))) {
+        log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
-          log::warning(compile_log);
+          log::error(compile_log);
         }
+        release(device);
+        return false;
       }
 
-      if (entry.miss != nullptr) {
-        OptixProgramGroupDesc program_desc = {};
-        program_desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
-        program_desc.miss.module = optix_module;
-        program_desc.miss.entryFunctionName = entry.miss;
-        OptixProgramGroupOptions program_options = {};
-        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.miss))) {
-          log::error("optixProgramGroupCreate failed");
-          if (compile_log_size > 1) {
-            log::error(compile_log);
-          }
-          release(device);
-          return false;
-        }
+      if (compile_log_size > 1) {
+        log::warning(compile_log);
+      }
+    }
 
+    {
+      OptixProgramGroupDesc program_desc = {
+        .kind = OPTIX_PROGRAM_GROUP_KIND_MISS,
+      };
+      program_desc.miss.module = optix_module;
+      program_desc.miss.entryFunctionName = "__miss__main";
+
+      OptixProgramGroupOptions program_options = {};
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &main_miss_program_group))) {
+        log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
-          log::warning(compile_log);
+          log::error(compile_log);
         }
+        release(device);
+        return false;
       }
 
-      if (entry.exception != nullptr) {
-        OptixProgramGroupDesc program_desc = {};
-        program_desc.kind = OPTIX_PROGRAM_GROUP_KIND_EXCEPTION;
-        program_desc.miss.module = optix_module;
-        program_desc.miss.entryFunctionName = entry.exception;
-        OptixProgramGroupOptions program_options = {};
-        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.exception))) {
-          log::error("optixProgramGroupCreate failed");
-          if (compile_log_size > 1) {
-            log::error(compile_log);
-          }
-          release(device);
-          return false;
-        }
-
-        if (compile_log_size > 1) {
-          log::warning(compile_log);
-        }
+      if (compile_log_size > 1) {
+        log::warning(compile_log);
       }
     }
 
@@ -462,28 +434,24 @@ struct GPUPipelineOptixImpl {
   }
 
   void release(GPUOptixImplData* device) {
-    if (raygen != nullptr) {
-      if (device->optix_call_failed(optixProgramGroupDestroy(raygen)))
+    if (main_hit_program_group != nullptr) {
+      if (device->optix_call_failed(optixProgramGroupDestroy(main_hit_program_group)))
         log::error("optixProgramGroupDestroy failed");
-      raygen = {};
+      main_hit_program_group = {};
+    }
+    if (main_miss_program_group != nullptr) {
+      if (device->optix_call_failed(optixProgramGroupDestroy(main_miss_program_group)))
+        log::error("optixProgramGroupDestroy failed");
+      main_miss_program_group = {};
     }
 
-    for (uint32_t i = 0; i < group_count; ++i) {
-      if (groups[i].hit != nullptr) {
-        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].hit)))
+    for (uint32_t i = 0; i < descriptor.entry_point_count; ++i) {
+      if (entry_points[i] != nullptr) {
+        if (device->optix_call_failed(optixProgramGroupDestroy(entry_points[i])))
           log::error("optixProgramGroupDestroy failed");
       }
-      if (groups[i].miss != nullptr) {
-        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].miss)))
-          log::error("optixProgramGroupDestroy failed");
-      }
-      if (groups[i].exception != nullptr) {
-        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].exception)))
-          log::error("optixProgramGroupDestroy failed");
-      }
-      groups[i] = {};
+      entry_points[i] = {};
     }
-    group_count = 0;
 
     if (pipeline != nullptr) {
       if (device->optix_call_failed(optixPipelineDestroy(pipeline)))
@@ -501,74 +469,63 @@ struct GPUPipelineOptixImpl {
       ETX_CUDA_CALL(cuModuleUnload(cuda.cuda_module));
       cuda.cuda_module = nullptr;
     }
+
+    descriptor = {};
   }
 
-  bool create_cuda_pipeline(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
+  bool create_cuda_pipeline(GPUOptixImplData* device) {
     return true;
   }
 
-  bool create_optix_pipeline(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
+  bool create_optix_pipeline(GPUOptixImplData* device) {
     struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) ProgramGroupRecord {
       alignas(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE] = {};
       void* dummy = nullptr;
     };
 
     OptixPipelineLinkOptions link_options = {
-      .maxTraceDepth = desc.max_trace_depth,
+      .maxTraceDepth = kOptiXMaxTraceDepth,
     };
 
-    OptixProgramGroup program_groups[kMaxModuleGroups * 3] = {};
-    ProgramGroupRecord hit_records[kMaxModuleGroups * 3] = {};
-    ProgramGroupRecord miss_records[kMaxModuleGroups * 3] = {};
-
-    ProgramGroupRecord raygen_record = {};
-    program_groups[0] = raygen;
-    if (device->optix_call_failed(optixSbtRecordPackHeader(raygen, &raygen_record)))
-      return false;
-
-    uint32_t program_group_count = 1;
-
-    uint32_t hit_record_count = 0;
-    uint32_t miss_record_count = 0;
-    for (uint32_t i = 0; i < group_count; ++i) {
-      if (groups[i].hit != nullptr) {
-        program_groups[program_group_count] = groups[i].hit;
-        if (device->optix_call_failed(optixSbtRecordPackHeader(program_groups[program_group_count], hit_records + hit_record_count)))
-          return false;
-        ++program_group_count;
-        ++hit_record_count;
-      }
-      if (groups[i].miss != nullptr) {
-        program_groups[program_group_count] = groups[i].miss;
-        if (device->optix_call_failed(optixSbtRecordPackHeader(program_groups[program_group_count], miss_records + miss_record_count)))
-          return false;
-        ++program_group_count;
-        ++miss_record_count;
-      }
+    OptixProgramGroup all_program_groups[kOptiXMaxEntryPoints + 2] = {};
+    for (uint32_t i = 0; i < descriptor.entry_point_count; ++i) {
+      all_program_groups[i] = entry_points[i];
     }
+    all_program_groups[descriptor.entry_point_count + 0] = main_hit_program_group;
+    all_program_groups[descriptor.entry_point_count + 1] = main_miss_program_group;
 
     char compile_log[2048] = {};
     size_t compile_log_size = 0;
-    if (device->optix_call_failed(optixPipelineCreate(device->optix, &pipeline_options, &link_options, program_groups, program_group_count,  //
-          compile_log, &compile_log_size, &pipeline)))
+    if (device->optix_call_failed(optixPipelineCreate(device->optix, &pipeline_options, &link_options,  //
+          all_program_groups, descriptor.entry_point_count + 2, compile_log, &compile_log_size, &pipeline))) {
       return false;
+    }
 
     if (pipeline != nullptr) {
       if (device->optix_call_failed(optixPipelineSetStackSize(pipeline, 0u, 0u, 1u << 14u, link_options.maxTraceDepth)))
         return false;
     }
 
-    shader_binding_table.raygenRecord = device->upload_to_shared_buffer(0, &raygen_record, sizeof(ProgramGroupRecord));
+    for (uint32_t i = 0; i < descriptor.entry_point_count; ++i) {
+      ProgramGroupRecord raygen_record = {};
+      if (device->optix_call_failed(optixSbtRecordPackHeader(entry_points[i], &raygen_record)))
+        return false;
 
-    if (hit_record_count > 0) {
-      shader_binding_table.hitgroupRecordBase = device->upload_to_shared_buffer(0, hit_records, sizeof(ProgramGroupRecord) * hit_record_count);
-      shader_binding_table.hitgroupRecordStrideInBytes = sizeof(ProgramGroupRecord);
-      shader_binding_table.hitgroupRecordCount = hit_record_count;
-    }
-    if (miss_record_count > 0) {
-      shader_binding_table.missRecordBase = device->upload_to_shared_buffer(0, miss_records, sizeof(ProgramGroupRecord) * miss_record_count);
-      shader_binding_table.missRecordStrideInBytes = sizeof(ProgramGroupRecord);
-      shader_binding_table.missRecordCount = miss_record_count;
+      ProgramGroupRecord hit_record = {};
+      if (device->optix_call_failed(optixSbtRecordPackHeader(main_hit_program_group, &hit_record)))
+        return false;
+
+      ProgramGroupRecord miss_record = {};
+      if (device->optix_call_failed(optixSbtRecordPackHeader(main_miss_program_group, &miss_record)))
+        return false;
+
+      shader_binding_tables[i].raygenRecord = device->upload_to_shared_buffer(0, &raygen_record, sizeof(ProgramGroupRecord));
+      shader_binding_tables[i].hitgroupRecordBase = device->upload_to_shared_buffer(0, &hit_record, sizeof(ProgramGroupRecord));
+      shader_binding_tables[i].hitgroupRecordStrideInBytes = sizeof(ProgramGroupRecord);
+      shader_binding_tables[i].hitgroupRecordCount = 1;
+      shader_binding_tables[i].missRecordBase = device->upload_to_shared_buffer(0, &miss_record, sizeof(ProgramGroupRecord));
+      shader_binding_tables[i].missRecordStrideInBytes = sizeof(ProgramGroupRecord);
+      shader_binding_tables[i].missRecordCount = 1;
     }
 
     return true;
@@ -578,11 +535,12 @@ struct GPUPipelineOptixImpl {
     if (device->invalid_state())
       return false;
 
-    switch (CUDACompileTarget(desc.compile_options)) {
+    descriptor = desc;
+    switch (CUDACompileTarget(descriptor.compile_options)) {
       case CUDACompileTarget::PTX:
-        return create_optix_pipeline(device, desc);
+        return create_optix_pipeline(device);
       case CUDACompileTarget::Library: {
-        return create_cuda_pipeline(device, desc);
+        return create_cuda_pipeline(device);
         default:
           break;
       }
@@ -590,21 +548,16 @@ struct GPUPipelineOptixImpl {
     return false;
   }
 
-  struct ModuleGroups {
-    OptixProgramGroup hit = {};
-    OptixProgramGroup miss = {};
-    OptixProgramGroup exception = {};
-  };
-
+  GPUPipeline::Descriptor descriptor = {};
   OptixPipelineCompileOptions pipeline_options = {};
   OptixModule optix_module;
 
-  OptixProgramGroup raygen = {};
-  ModuleGroups groups[kMaxModuleGroups] = {};
-  uint32_t group_count = 0;
+  OptixProgramGroup main_hit_program_group = {};
+  OptixProgramGroup main_miss_program_group = {};
+  OptixProgramGroup entry_points[kMaxEntryPoints] = {};
+  OptixShaderBindingTable shader_binding_tables[kMaxEntryPoints] = {};
 
   OptixPipeline pipeline = {};
-  OptixShaderBindingTable shader_binding_table = {};
 
   struct CUDAFunction {
     CUfunction func = {};
@@ -616,6 +569,10 @@ struct GPUPipelineOptixImpl {
     CUmodule cuda_module = {};
     std::unordered_map<uint32_t, CUDAFunction> functions = {};
   } cuda = {};
+
+  struct {
+    std::unordered_map<uint32_t, uint32_t> functions = {};
+  } optix = {};
 
   CUDACompileTarget target = CUDACompileTarget::PTX;
 };
@@ -719,6 +676,111 @@ device_pointer_t GPUOptixImplData::upload_to_shared_buffer(device_pointer_t ptr,
   }
 
   return ptr;
+}
+
+bool GPUOptixImplData::launch_optix(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
+  if (invalid_state()) {
+    return false;
+  }
+
+  if (dim_x * dim_y == 0) {
+    return true;
+  }
+
+  uint32_t entry_point_index = kInvalidHandle;
+
+  uint32_t func_hash = fnv1a32(function);
+  auto f = pipeline.optix.functions.find(func_hash);
+  if (f == pipeline.optix.functions.end()) {
+    for (uint32_t index = 0; index < pipeline.descriptor.entry_point_count; ++index) {
+      constexpr uint64_t kPrefixOffset = sizeof("_raygen__");
+      if (strcmp(pipeline.descriptor.entry_points[index] + kPrefixOffset, function) == 0) {
+        entry_point_index = index;
+        break;
+      }
+    }
+    pipeline.optix.functions[func_hash] = entry_point_index;
+  } else {
+    entry_point_index = f->second;
+  }
+
+  if (entry_point_index == kInvalidHandle) {
+    return false;
+  }
+
+  auto result = optixLaunch(pipeline.pipeline, main_stream, params, params_size, pipeline.shader_binding_tables + entry_point_index, dim_x, dim_y, 1);
+  return (result == OPTIX_SUCCESS);
+}
+
+bool GPUOptixImplData::launch_cuda(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
+  if (invalid_state()) {
+    return false;
+  }
+
+  if (dim_x * dim_y == 0) {
+    return true;
+  }
+
+  GPUPipelineOptixImpl::CUDAFunction func = {};
+  uint32_t func_hash = fnv1a32(function);
+  auto f = pipeline.cuda.functions.find(func_hash);
+  if (f == pipeline.cuda.functions.end()) {
+    if (ETX_CUDA_FAILED(cuModuleGetFunction(&func.func, pipeline.cuda.cuda_module, function)))
+      return false;
+
+    int min_grid_size = 0;
+    int max_block_size = 0;
+    if (ETX_CUDA_FAILED(cuOccupancyMaxPotentialBlockSize(&min_grid_size, &max_block_size, func.func, nullptr, 0, 0)))
+      return false;
+
+    func.min_grid_size = uint32_t(min_grid_size);
+    func.max_block_size = uint32_t(max_block_size);
+    pipeline.cuda.functions[func_hash] = func;
+  } else {
+    func = f->second;
+  }
+
+  if ((func.func == nullptr) || (func.max_block_size == 0) || (func.min_grid_size == 0)) {
+    return false;
+  }
+
+  void* call_params[] = {&params};
+
+  uint2 block_size = {
+    (dim_x > 1u) ? func.max_block_size : 1u,
+    (dim_y > 1u) ? func.max_block_size : 1u,
+  };
+
+  // HACKS!
+  if (dim_y < block_size.y) {
+    block_size.y = dim_y;
+    block_size.x = (dim_x > 1u) ? (func.max_block_size + block_size.y - 1) / block_size.y : 1u;
+  }
+
+  uint32_t scale_dim = 0;
+  uint32_t* bptr = &block_size.x;
+  while (block_size.x * block_size.y > uint32_t(device_properties.maxThreadsPerBlock)) {
+    if (bptr[scale_dim] > 1) {
+      bptr[scale_dim] = bptr[scale_dim] / 2;
+    } else if (bptr[1u - scale_dim] > 1) {
+      bptr[1u - scale_dim] = bptr[1u - scale_dim] / 2;
+    } else {
+      break;
+    }
+    scale_dim = 1u - scale_dim;
+  }
+
+  uint2 grid_size = {
+    (dim_x + block_size.x - 1) / block_size.x,
+    (dim_y + block_size.y - 1) / block_size.y,
+  };
+
+  CUresult call_result = cuLaunchKernel(func.func,  //
+    grid_size.x, grid_size.y, 1u,                   //
+    block_size.x, block_size.y, 1u,                 //
+    0u, main_stream, reinterpret_cast<void**>(&call_params), nullptr);
+
+  return ETX_CUDA_SUCCEED(call_result);
 }
 
 /***********************************************
@@ -882,57 +944,22 @@ inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[]
       }
       buffer[pos_1] = 0;
       buffer_pos += 1 + snprintf(buffer + pos_1, buffer_size - pos_1, "/%s", json_string_value(value));
-    } else if (strcmp(key, "max_trace_depth") == 0) {
-      result.max_trace_depth = static_cast<uint32_t>(json_is_number(value) ? json_number_value(value) : result.max_trace_depth);
-    } else if (strcmp(key, "payload_size") == 0) {
-      result.payload_size = static_cast<uint32_t>(json_is_number(value) ? json_number_value(value) : result.payload_size);
-    } else if (strcmp(key, "raygen") == 0) {
-      if (json_is_string(value) == false) {
-        return {};
-      }
-      result.raygen = buffer + buffer_pos;
-      buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__raygen__%s", json_string_value(value));
-    } else if (strcmp(key, "modules") == 0) {
+    } else if (strcmp(key, "entry-points") == 0) {
       if (json_is_array(value) == false) {
         return {};
       }
 
       int index = 0;
-      json_t* module_value = nullptr;
-      json_array_foreach(value, index, module_value) {
-        if (index >= kMaxModuleGroups) {
+      json_t* entry_point_name = nullptr;
+      json_array_foreach(value, index, entry_point_name) {
+        if (index >= kMaxEntryPoints) {
           break;
         }
 
-        if (json_is_object(module_value) == false) {
-          continue;
+        if (json_is_string(entry_point_name)) {
+          snprintf(result.entry_points[result.entry_point_count], sizeof(GPUPipeline::EntryPoint), "__raygen__%s", json_string_value(entry_point_name));
+          result.entry_point_count += 1;
         }
-
-        const char* program_name = nullptr;
-        json_t* program_value = nullptr;
-        json_object_foreach(module_value, program_name, program_value) {
-          if (json_is_string(program_value) == false) {
-            continue;
-          }
-
-          if (strcmp(program_name, "name") == 0) {
-            // TODO : add name?
-          } else if (strcmp(program_name, "closest_hit") == 0) {
-            result.modules[index].closest_hit = buffer + buffer_pos;
-            buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__closesthit__%s", json_string_value(program_value));
-          } else if (strcmp(program_name, "any_hit") == 0) {
-            result.modules[index].any_hit = buffer + buffer_pos;
-            buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__anyhit__%s", json_string_value(program_value));
-          } else if (strcmp(program_name, "miss") == 0) {
-            result.modules[index].miss = buffer + buffer_pos;
-            buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__miss__%s", json_string_value(program_value));
-          } else if (strcmp(program_name, "exception") == 0) {
-            result.modules[index].exception = buffer + buffer_pos;
-            buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__exception__%s", json_string_value(program_value));
-          }
-        }
-
-        result.module_count += 1;
       }
     }
   }
@@ -987,29 +1014,11 @@ GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, b
   GPUPipeline::Descriptor desc;
   desc.data = binary_data.data();
   desc.data_size = static_cast<uint32_t>(binary_data.size());
-  desc.raygen = ps_desc.raygen;
-  desc.entries = ps_desc.modules;
-  desc.entry_count = ps_desc.module_count;
-  desc.payload_count = ps_desc.payload_size;
-  desc.max_trace_depth = ps_desc.max_trace_depth;
+  memcpy(desc.entry_points, ps_desc.entry_points, ps_desc.entry_point_count * sizeof(GPUPipeline::EntryPoint));
+  desc.entry_point_count = ps_desc.entry_point_count;
   desc.compile_options = uint32_t(ps_desc.target);
 
   return {_private->pipeline_pool.alloc(_private, desc)};
-}
-
-bool GPUOptixImpl::launch(GPUPipeline pipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
-  if (_private->invalid_state() || (pipeline.handle == kInvalidHandle)) {
-    return false;
-  }
-
-  if (dim_x * dim_y == 0) {
-    return true;
-  }
-
-  const auto& pp = _private->pipeline_pool.get(pipeline.handle);
-  ETX_ASSERT(pp.target == CUDACompileTarget::PTX);
-  auto result = optixLaunch(pp.pipeline, _private->main_stream, params, params_size, &pp.shader_binding_table, dim_x, dim_y, 1);
-  return (result == OPTIX_SUCCESS);
 }
 
 bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
@@ -1018,68 +1027,13 @@ bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t d
   }
 
   auto& pp = _private->pipeline_pool.get(pipeline.handle);
-  ETX_ASSERT(pp.target == CUDACompileTarget::Library);
-
-  GPUPipelineOptixImpl::CUDAFunction func = {};
-  uint32_t func_hash = fnv1a32(function);
-  auto f = pp.cuda.functions.find(func_hash);
-  if (f == pp.cuda.functions.end()) {
-    if (ETX_CUDA_FAILED(cuModuleGetFunction(&func.func, pp.cuda.cuda_module, function)))
-      return false;
-
-    int min_grid_size = 0;
-    int max_block_size = 0;
-    if (ETX_CUDA_FAILED(cuOccupancyMaxPotentialBlockSize(&min_grid_size, &max_block_size, func.func, nullptr, 0, 0)))
-      return false;
-
-    func.min_grid_size = uint32_t(min_grid_size);
-    func.max_block_size = uint32_t(max_block_size);
-    pp.cuda.functions[func_hash] = func;
-  } else {
-    func = f->second;
+  if (pp.target == CUDACompileTarget::Library) {
+    return _private->launch_cuda(pp, function, dim_x, dim_y, params, params_size);
+  } else if (pp.target == CUDACompileTarget::PTX) {
+    return _private->launch_optix(pp, function, dim_x, dim_y, params, params_size);
   }
 
-  if ((func.func == nullptr) || (func.max_block_size == 0) || (func.min_grid_size == 0)) {
-    return false;
-  }
-
-  void* call_params[] = {&params};
-
-  uint2 block_size = {
-    (dim_x > 1u) ? func.max_block_size : 1u,
-    (dim_y > 1u) ? func.max_block_size : 1u,
-  };
-
-  // HACKS!
-  if (dim_y < block_size.y) {
-    block_size.y = dim_y;
-    block_size.x = (dim_x > 1u) ? (func.max_block_size + block_size.y - 1) / block_size.y : 1u;
-  }
-
-  uint32_t scale_dim = 0;
-  uint32_t* bptr = &block_size.x;
-  while (block_size.x * block_size.y > uint32_t(_private->device_properties.maxThreadsPerBlock)) {
-    if (bptr[scale_dim] > 1) {
-      bptr[scale_dim] = bptr[scale_dim] / 2;
-    } else if (bptr[1u - scale_dim] > 1) {
-      bptr[1u - scale_dim] = bptr[1u - scale_dim] / 2;
-    } else {
-      break;
-    }
-    scale_dim = 1u - scale_dim;
-  }
-
-  uint2 grid_size = {
-    (dim_x + block_size.x - 1) / block_size.x,
-    (dim_y + block_size.y - 1) / block_size.y,
-  };
-
-  CUresult call_result = cuLaunchKernel(func.func,  //
-    grid_size.x, grid_size.y, 1u,                   //
-    block_size.x, block_size.y, 1u,                 //
-    0u, _private->main_stream, reinterpret_cast<void**>(&call_params), nullptr);
-
-  return ETX_CUDA_SUCCEED(call_result);
+  return false;
 }
 
 GPUAccelerationStructure GPUOptixImpl::create_acceleration_structure(const GPUAccelerationStructure::Descriptor& desc) {

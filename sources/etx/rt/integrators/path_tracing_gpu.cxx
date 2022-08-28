@@ -58,13 +58,13 @@ struct ETX_ALIGNED GPUPathTracingImpl {
 
     gpu_data.output = reinterpret_cast<float4*>(rt.gpu()->get_buffer_device_pointer(accumulated_image));
     gpu_launch_params = rt.gpu()->upload_to_shared_buffer(gpu_launch_params, &gpu_data, sizeof(gpu_data));
-    return rt.gpu()->launch(raygen_pipeline, output_size.x, output_size.y, gpu_launch_params, sizeof(gpu_data));
+    return rt.gpu()->launch(raygen_pipeline, "raygen", output_size.x, output_size.y, gpu_launch_params, sizeof(gpu_data));
   }
 
   void frame(Raytracing& rt) {
     TimeMeasure tm;
     while (tm.measure() <= frame_time_ms / 1000.0f) {
-      if (rt.gpu()->launch(main_pipeline, output_size.x, output_size.y, gpu_launch_params, sizeof(gpu_data)) == false) {
+      if (rt.gpu()->launch(main_pipeline, "main", output_size.x, output_size.y, gpu_launch_params, sizeof(gpu_data)) == false) {
         break;
       }
     }

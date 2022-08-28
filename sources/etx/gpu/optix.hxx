@@ -26,7 +26,6 @@ struct GPUOptixImpl : public GPUDevice {
   device_pointer_t get_acceleration_structure_device_pointer(GPUAccelerationStructure) override;
   void destroy_acceleration_structure(GPUAccelerationStructure) override;
 
-  bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override;
   bool launch(GPUPipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override;
 
   void setup_denoiser(uint32_t dim_x, uint32_t dim_y) override;

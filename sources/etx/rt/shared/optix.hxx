@@ -93,15 +93,14 @@ struct ETX_ALIGNED Raytracing {
 
 }  // namespace etx
 
-CLOSEST_HIT(main_closest_hit) {
+CLOSEST_HIT(main) {
   auto data = etx::Raytracing::unpack_data(optixGetPayload_0(), optixGetPayload_1());
-
   data->i.barycentric = etx::barycentrics(optixGetTriangleBarycentrics());
   data->i.triangle_index = optixGetPrimitiveIndex();
   data->i.t = optixGetRayTmax();
 }
 
-ANY_HIT(main_any_hit) {
+ANY_HIT(main) {
   auto data = etx::Raytracing::unpack_data(optixGetPayload_0(), optixGetPayload_1());
   const auto& tri = data->scene.triangles[optixGetPrimitiveIndex()];
   const auto& mat = data->scene.materials[tri.material_index];
@@ -113,5 +112,5 @@ ANY_HIT(main_any_hit) {
   }
 }
 
-MISS(main_miss) {
+MISS(main) {
 }
