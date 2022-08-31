@@ -11,34 +11,80 @@
 
 namespace etx {
 
+namespace restir {
+
+struct Reservoir {
+  EmitterSample sample = {};
+  uint32_t sample_count = 0;
+  float total_weight = 0.0f;
+  float target_weight = 0.0f;
+  float weight = 0.0f;
+
+  void add_sample(float sample_weight, float sample_pdf, const EmitterSample& emitter_sample, Sampler& smp) {
+    float weight = sample_weight / sample_pdf;
+    total_weight += weight;
+
+    if (smp.next() < weight / total_weight) {
+      target_weight = sample_weight;
+      sample = emitter_sample;
+    }
+  }
+
+  void compute_weight() {
+    weight = (total_weight == 0.0f) ? 0.0f : total_weight / (target_weight * float(sample_count));
+    ETX_VALIDATE(weight);
+  }
+};
+
+Reservoir generate_samples(const SpectralQuery& spect, Sampler& smp, const Intersection& intersection, const Scene& scene, bool use_bsdf) {
+  const auto& tri = scene.triangles[intersection.triangle_index];
+  const auto& mat = scene.materials[tri.material_index];
+  const float emitter_sample_pdf = 1.0f / float(scene.emitters.count);
+
+  Reservoir result = {};
+  result.sample_count = 32u;
+  for (uint32_t i = 0; i < result.sample_count; ++i) {
+    uint32_t emitter_index = uint32_t(smp.next() / emitter_sample_pdf);
+    auto emitter_sample = sample_emitter(spect, emitter_index, smp, intersection.pos, scene);
+    if (emitter_sample.pdf_dir > 0.0f) {
+      float bsdf_pdf = bsdf::pdf({spect, kInvalidIndex, PathSource::Camera, intersection, intersection.w_i, emitter_sample.direction}, mat, scene, smp);
+      if ((use_bsdf == false) || (bsdf_pdf > 0.0f)) {
+        float weight = (use_bsdf ? bsdf_pdf : 1.0f) * emitter_sample.value.to_xyz().y / emitter_sample.pdf_dir;
+        result.add_sample(weight, emitter_sample_pdf, emitter_sample, smp);
+      }
+    }
+  }
+  result.compute_weight();
+  return result;
+}
+
+}  // namespace restir
+
 struct ETX_ALIGNED DirectOptions {
   uint32_t iterations = 1u;
+  bool ris_sampling = false;
+  bool ris_bsdf = false;
 };
 
 struct ETX_ALIGNED DirectPayload {
   Ray ray = {};
-  SpectralResponse throughput = {spectrum::kUndefinedWavelength, 1.0f};
   SpectralResponse accumulated = {spectrum::kUndefinedWavelength, 0.0f};
-  uint32_t index = kInvalidIndex;
   uint32_t medium = kInvalidIndex;
   uint32_t iteration = 0u;
   SpectralQuery spect = {};
   float2 uv = {};
   Sampler smp = {};
-  bool sampled_delta_bsdf = false;
 
   static DirectPayload make(const Scene& scene, uint2 px, uint2 dim, uint32_t iteration) {
+    uint32_t index = px.x + px.y * dim.x;
     DirectPayload payload = {};
-    payload.index = px.x + px.y * dim.x;
     payload.iteration = iteration;
-    payload.smp.init(payload.index, payload.iteration);
+    payload.smp.init(index, payload.iteration);
     payload.spect = spectrum::sample(payload.smp.next());
     payload.uv = get_jittered_uv(payload.smp, px, dim);
     payload.ray = generate_ray(payload.smp, scene, payload.uv);
-    payload.throughput = {payload.spect.wavelength, 1.0f};
     payload.accumulated = {payload.spect.wavelength, 0.0f};
     payload.medium = scene.camera_medium_index;
-    payload.sampled_delta_bsdf = false;
     return payload;
   }
 };
@@ -67,6 +113,8 @@ struct CPUDirectLightingImpl : public Task {
 
   void start(const Options& opt) {
     options.iterations = opt.get("spp", options.iterations).to_integer();
+    options.ris_sampling = opt.get("ris", options.ris_sampling).to_bool();
+    options.ris_bsdf = opt.get("ris-bsdf", options.ris_bsdf).to_bool();
 
     iteration = 0;
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
@@ -96,29 +144,38 @@ struct CPUDirectLightingImpl : public Task {
         const auto& tri = scene.triangles[intersection.triangle_index];
         const auto& mat = scene.materials[tri.material_index];
 
-        auto emitter_sample = sample_emitter(payload.spect, payload.smp, intersection.pos, scene);
+        EmitterSample emitter_sample = {};
+
+        if (options.ris_sampling) {
+          auto reservoir = restir::generate_samples(payload.spect, payload.smp, intersection, scene, options.ris_bsdf);
+          emitter_sample = reservoir.sample;
+          emitter_sample.pdf_sample = 1.0f / reservoir.weight;
+          if (emitter_sample.pdf_sample <= 0.0f) {
+            printf("!");
+          }
+        } else {
+          emitter_sample = sample_emitter(payload.spect, payload.smp, intersection.pos, scene);
+        }
+
         if (emitter_sample.pdf_dir > 0) {
           BSDFEval bsdf_eval = bsdf::evaluate({payload.spect, payload.medium, PathSource::Camera, intersection, payload.ray.d, emitter_sample.direction}, mat, scene, payload.smp);
           if (bsdf_eval.valid()) {
             auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
             auto tr = transmittance(payload.spect, payload.smp, pos, emitter_sample.origin, payload.medium, scene, rt);
-            auto weight = 1.0f;
-            payload.accumulated += payload.throughput * bsdf_eval.bsdf * emitter_sample.value * tr * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
+            payload.accumulated += bsdf_eval.bsdf * emitter_sample.value * tr / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
             ETX_VALIDATE(payload.accumulated);
           }
         }
 
         if (tri.emitter_index != kInvalidIndex) {
           const auto& emitter = scene.emitters[tri.emitter_index];
-          float pdf_emitter_area = 0.0f;
+          float pdf_a = 0.0f;
+          float pdf_do = 0.0f;
           float pdf_emitter_dir = 0.0f;
-          float pdf_emitter_dir_out = 0.0f;
-          auto e =
-            emitter_get_radiance(emitter, payload.spect, intersection.tex, payload.ray.o, intersection.pos, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, true);
+          auto e = emitter_get_radiance(emitter, payload.spect, intersection.tex, payload.ray.o, intersection.pos, pdf_a, pdf_emitter_dir, pdf_do, scene, true);
           if (pdf_emitter_dir > 0.0f) {
             auto tr = transmittance(payload.spect, payload.smp, payload.ray.o, intersection.pos, payload.medium, scene, rt);
-            float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-            payload.accumulated += payload.throughput * e * tr;
+            payload.accumulated += e * tr;
             ETX_VALIDATE(payload.accumulated);
           }
         }
@@ -244,6 +301,8 @@ void CPUDirectLighting::stop(Stop st) {
 Options CPUDirectLighting::options() const {
   Options result = {};
   result.add(1u, _private->options.iterations, 0xffffu, "spp", "Samples per Pixel");
+  result.add(_private->options.ris_sampling, "ris", "RIS sampling");
+  result.add(_private->options.ris_bsdf, "ris-bsdf", "BSDF in RIS sampling");
   return result;
 }
 
