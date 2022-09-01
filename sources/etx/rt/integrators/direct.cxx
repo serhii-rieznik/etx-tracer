@@ -17,44 +17,68 @@ struct Reservoir {
   EmitterSample sample = {};
   uint32_t sample_count = 0;
   float total_weight = 0.0f;
-  float target_weight = 0.0f;
-  float weight = 0.0f;
+  float target_pdf = 0.0f;
 
-  void add_sample(float sample_weight, float sample_pdf, const EmitterSample& emitter_sample, Sampler& smp) {
-    float weight = sample_weight / sample_pdf;
+  void add_samples(uint32_t count, float pdf, float weight, const EmitterSample& emitter_sample, Sampler& smp) {
     total_weight += weight;
+    sample_count += count;
 
     if (smp.next() < weight / total_weight) {
-      target_weight = sample_weight;
       sample = emitter_sample;
+      target_pdf = pdf;
     }
   }
 
-  void compute_weight() {
-    weight = (total_weight == 0.0f) ? 0.0f : total_weight / (target_weight * float(sample_count));
+  float weight() const {
+    if (target_pdf == 0.0f)
+      return 0.0f;
+
+    float weight = (1.0f / target_pdf) * (1.0f / float(sample_count)) * total_weight;
     ETX_VALIDATE(weight);
+    return weight;
   }
 };
 
-Reservoir generate_samples(const SpectralQuery& spect, Sampler& smp, const Intersection& intersection, const Scene& scene, bool use_bsdf) {
+float sample_weight(const SpectralQuery& spect, Sampler& smp, const Intersection& intersection, const Scene& scene, const EmitterSample& emitter_sample, bool use_bsdf) {
+  if (emitter_sample.pdf_dir <= 0.0f) {
+    return 0.0f;
+  }
+
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
-  const float emitter_sample_pdf = 1.0f / float(scene.emitters.count);
+  float bsdf_pdf = bsdf::pdf({spect, kInvalidIndex, PathSource::Camera, intersection, intersection.w_i, emitter_sample.direction}, mat, scene, smp);
+  float l_dot_n = fmaxf(0.0f, dot(emitter_sample.direction, intersection.nrm));
+  if (((use_bsdf == false) && (l_dot_n > 0.0f)) || (bsdf_pdf > 0.0f)) {
+    return (use_bsdf ? bsdf_pdf : l_dot_n) * emitter_sample.value.to_xyz().y / emitter_sample.pdf_dir;
+  }
+
+  return 0.0f;
+}
+
+Reservoir generate_samples(const SpectralQuery& spect, Sampler& smp, const Intersection& intersection, const Scene& scene, bool use_bsdf) {
+  constexpr uint32_t kSampleCount = 32u;
 
   Reservoir result = {};
-  result.sample_count = 32u;
-  for (uint32_t i = 0; i < result.sample_count; ++i) {
-    uint32_t emitter_index = uint32_t(smp.next() / emitter_sample_pdf);
+  for (uint32_t i = 0; i < kSampleCount; ++i) {
+    uint32_t emitter_index = uint32_t(smp.next() * float(scene.emitters.count));
     auto emitter_sample = sample_emitter(spect, emitter_index, smp, intersection.pos, scene);
-    if (emitter_sample.pdf_dir > 0.0f) {
-      float bsdf_pdf = bsdf::pdf({spect, kInvalidIndex, PathSource::Camera, intersection, intersection.w_i, emitter_sample.direction}, mat, scene, smp);
-      if ((use_bsdf == false) || (bsdf_pdf > 0.0f)) {
-        float weight = (use_bsdf ? bsdf_pdf : 1.0f) * emitter_sample.value.to_xyz().y / emitter_sample.pdf_dir;
-        result.add_sample(weight, emitter_sample_pdf, emitter_sample, smp);
-      }
-    }
+    float weight = sample_weight(spect, smp, intersection, scene, emitter_sample, use_bsdf);
+    result.add_samples(1u, weight, weight * float(scene.emitters.count), emitter_sample, smp);
   }
-  result.compute_weight();
+  return result;
+}
+
+restir::Reservoir resample_reservoir(const restir::Reservoir& r0, const restir::Reservoir& r1,  //
+  const SpectralQuery& spect, Sampler& smp, const Intersection& intersection, const Scene& scene, bool use_bsdf) {
+  float r0_target_pdf = r0.target_pdf;
+  float r0_weight = r0.weight() * float(r0.sample_count);
+
+  float r1_target_pdf = sample_weight(spect, smp, intersection, scene, r1.sample, use_bsdf);
+  float r1_weight = r1.weight() * float(r1.sample_count);
+
+  restir::Reservoir result = {};
+  result.add_samples(r0.sample_count, r0_target_pdf, r0_target_pdf * r0_weight, r0.sample, smp);
+  result.add_samples(r1.sample_count, r1_target_pdf, r1_target_pdf * r1_weight, r1.sample, smp);
   return result;
 }
 
@@ -64,6 +88,7 @@ struct ETX_ALIGNED DirectOptions {
   uint32_t iterations = 1u;
   bool ris_sampling = false;
   bool ris_bsdf = false;
+  bool ris_spatial = false;
 };
 
 struct ETX_ALIGNED DirectPayload {
@@ -89,7 +114,7 @@ struct ETX_ALIGNED DirectPayload {
   }
 };
 
-struct CPUDirectLightingImpl : public Task {
+struct CPUDirectLightingImpl {
   Raytracing& rt;
   Film camera_image;
   uint2 current_dimensions = {};
@@ -100,11 +125,18 @@ struct CPUDirectLightingImpl : public Task {
   Task::Handle current_task = {};
   uint32_t iteration = 0u;
   uint32_t preview_frames = 3;
-  uint32_t current_scale = 1u;
 
   DirectOptions options = {};
 
   std::atomic<Integrator::State>* state = nullptr;
+  std::vector<Intersection> intersections = {};
+  std::vector<restir::Reservoir> reservoirs = {};
+
+  enum class Operation : uint32_t {
+    None,
+    GenReservoirs,
+    FinalGather,
+  } operation = Operation::None;
 
   CPUDirectLightingImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
@@ -115,23 +147,53 @@ struct CPUDirectLightingImpl : public Task {
     options.iterations = opt.get("spp", options.iterations).to_integer();
     options.ris_sampling = opt.get("ris", options.ris_sampling).to_bool();
     options.ris_bsdf = opt.get("ris-bsdf", options.ris_bsdf).to_bool();
+    options.ris_spatial = opt.get("ris-spat", options.ris_spatial).to_bool();
 
     iteration = 0;
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
 
-    if (true || state->load() == Integrator::State::Running) {
-      current_scale = 1;
-    } else {
-      current_scale = max(1u, uint32_t(exp2(preview_frames)));
-    }
-    current_dimensions = camera_image.dimensions() / current_scale;
+    current_dimensions = camera_image.dimensions();
+    reservoirs.resize(current_dimensions.x * current_dimensions.y);
+    intersections.resize(current_dimensions.x * current_dimensions.y);
 
     total_time = {};
-    iteration_time = {};
-    current_task = rt.scheduler().schedule(this, current_dimensions.x * current_dimensions.y);
+    start_generating_reservoirs();
   }
 
-  void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+  void start_generating_reservoirs() {
+    iteration_time = {};
+    operation = Operation::GenReservoirs;
+    current_task = rt.scheduler().schedule(&gen_reservoirs_task, current_dimensions.x * current_dimensions.y);
+  }
+
+  void start_final_gather() {
+    operation = Operation::FinalGather;
+    current_task = rt.scheduler().schedule(&final_gather_task, current_dimensions.x * current_dimensions.y);
+  }
+
+  struct FinalGatherTask : Task {
+    CPUDirectLightingImpl* self = nullptr;
+
+    FinalGatherTask(CPUDirectLightingImpl* a)
+      : self(a) {
+    }
+
+    void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+      self->final_gather(begin, end, thread_id);
+    }
+  } final_gather_task = {this};
+
+  struct GenReservoirsTask : Task {
+    CPUDirectLightingImpl* self = nullptr;
+    GenReservoirsTask(CPUDirectLightingImpl* a)
+      : self(a) {
+    }
+    void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+      self->gen_reservoirs(begin, end, thread_id);
+    }
+  } gen_reservoirs_task = {this};
+
+  void gen_reservoirs(uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
@@ -139,20 +201,62 @@ struct CPUDirectLightingImpl : public Task {
       const auto& scene = rt.scene();
       auto payload = DirectPayload::make(scene, {x, y}, current_dimensions, iteration);
 
+      restir::Reservoir reservoir = {};
       Intersection intersection = {};
       if (rt.trace(scene, payload.ray, intersection, payload.smp)) {
+        if (options.ris_sampling) {
+          reservoir = restir::generate_samples(payload.spect, payload.smp, intersection, scene, options.ris_bsdf);
+        }
+      }
+      reservoirs[i] = reservoir;
+      intersections[i] = intersection;
+    }
+  }
+
+  void spatial_resample(restir::Reservoir& r0, uint32_t x, uint32_t y,  //
+    const SpectralQuery& spect, Sampler& smp, const Intersection& intersection, const Scene& scene, bool use_bsdf) {
+    constexpr uint32_t kSamples = 32u;
+    constexpr float kRadius = 8.0f;
+    for (uint32_t i = 0; i < kSamples; ++i) {
+      float r = sqrtf(smp.next()) * kRadius;
+      float a = kDoublePi * smp.next();
+
+      uint2 offset = {
+        uint32_t(float(x) + r * cosf(a)),
+        uint32_t(float(y) + r * sinf(a)),
+      };
+
+      if ((offset.x == x) || (offset.x >= current_dimensions.x) || (offset.y == y) || (offset.y >= current_dimensions.y))
+        continue;
+
+      uint32_t px = offset.x + offset.y * current_dimensions.x;
+      const auto& r1 = reservoirs[px];
+      r0 = restir::resample_reservoir(r0, r1, spect, smp, intersection, scene, use_bsdf);
+    }
+  }
+
+  void final_gather(uint32_t begin, uint32_t end, uint32_t thread_id) {
+    for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
+      uint32_t x = i % current_dimensions.x;
+      uint32_t y = i / current_dimensions.x;
+
+      const auto& scene = rt.scene();
+      auto payload = DirectPayload::make(scene, {x, y}, current_dimensions, iteration);
+
+      const auto& intersection = intersections[i];
+      if (intersection.t != -kMaxFloat) {
         const auto& tri = scene.triangles[intersection.triangle_index];
         const auto& mat = scene.materials[tri.material_index];
 
         EmitterSample emitter_sample = {};
 
         if (options.ris_sampling) {
-          auto reservoir = restir::generate_samples(payload.spect, payload.smp, intersection, scene, options.ris_bsdf);
-          emitter_sample = reservoir.sample;
-          emitter_sample.pdf_sample = 1.0f / reservoir.weight;
-          if (emitter_sample.pdf_sample <= 0.0f) {
-            printf("!");
+          restir::Reservoir reservoir = reservoirs[i];
+          if (options.ris_spatial) {
+            spatial_resample(reservoir, x, y, payload.spect, payload.smp, intersection, scene, options.ris_bsdf);
           }
+          emitter_sample = reservoir.sample;
+          emitter_sample.pdf_sample = 1.0f / reservoir.weight();
         } else {
           emitter_sample = sample_emitter(payload.spect, payload.smp, intersection.pos, scene);
         }
@@ -183,19 +287,7 @@ struct CPUDirectLightingImpl : public Task {
 
       auto xyz = (payload.accumulated / spectrum::sample_pdf()).to_xyz();
       ETX_VALIDATE(xyz);
-
-      if (state->load() == Integrator::State::Running) {
-        camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, payload.uv, float(iteration) / float(iteration + 1));
-      } else {
-        float t = iteration < preview_frames ? 0.0f : float(iteration - preview_frames) / float(iteration - preview_frames + 1);
-        for (uint32_t ay = 0; ay < current_scale; ++ay) {
-          for (uint32_t ax = 0; ax < current_scale; ++ax) {
-            uint32_t rx = x * current_scale + ax;
-            uint32_t ry = y * current_scale + ay;
-            camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, rx, ry, t);
-          }
-        }
-      }
+      camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, payload.uv, float(iteration) / float(iteration + 1));
     }
   }
 };
@@ -251,34 +343,43 @@ void CPUDirectLighting::run(const Options& opt) {
 }
 
 void CPUDirectLighting::update() {
-  bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
+  if (current_state == State::Stopped)
+    return;
 
-  if (should_stop && rt.scheduler().completed(_private->current_task)) {
-    if ((current_state == State::WaitingForCompletion) || (_private->iteration + 1 >= _private->options.iterations)) {
-      rt.scheduler().wait(_private->current_task);
-      _private->current_task = {};
-      if (current_state == State::Preview) {
-        snprintf(_private->status, sizeof(_private->status), "[%u] Preview completed", _private->iteration);
-        current_state = Integrator::State::Preview;
-      } else {
-        snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
-        current_state = Integrator::State::Stopped;
-      }
-    } else {
-      snprintf(_private->status, sizeof(_private->status), "[%u] %s... (%.3fms per iteration)", _private->iteration,
-        (current_state == Integrator::State::Running ? "Running" : "Preview"), _private->iteration_time.measure_ms());
-      _private->iteration_time = {};
-      _private->iteration += 1;
+  if (rt.scheduler().completed(_private->current_task) == false)
+    return;
 
-      if (current_state == Integrator::State::Running) {
-        _private->current_scale = 1;
-      } else {
-        _private->current_scale = max(1u, uint32_t(exp2(_private->preview_frames - _private->iteration)));
-      }
-      _private->current_dimensions = _private->camera_image.dimensions() / _private->current_scale;
+  rt.scheduler().wait(_private->current_task);
+  _private->current_task = {};
 
-      rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
+  switch (_private->operation) {
+    case CPUDirectLightingImpl::Operation::GenReservoirs: {
+      _private->start_final_gather();
+      break;
     }
+
+    case CPUDirectLightingImpl::Operation::FinalGather: {
+      if ((current_state == State::WaitingForCompletion) || (_private->iteration + 1 >= _private->options.iterations)) {
+        if (current_state == State::Preview) {
+          _private->operation = CPUDirectLightingImpl::Operation::None;
+          snprintf(_private->status, sizeof(_private->status), "[%u] Preview completed", _private->iteration);
+          current_state = Integrator::State::Preview;
+        } else {
+          _private->operation = CPUDirectLightingImpl::Operation::None;
+          snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
+          current_state = Integrator::State::Stopped;
+        }
+      } else {
+        snprintf(_private->status, sizeof(_private->status), "[%u] Running... (%.3fms per iteration)", _private->iteration, _private->iteration_time.measure_ms());
+        _private->iteration_time = {};
+        _private->iteration += 1;
+        _private->start_generating_reservoirs();
+      }
+      break;
+    }
+
+    default:
+      break;
   }
 }
 
@@ -303,6 +404,7 @@ Options CPUDirectLighting::options() const {
   result.add(1u, _private->options.iterations, 0xffffu, "spp", "Samples per Pixel");
   result.add(_private->options.ris_sampling, "ris", "RIS sampling");
   result.add(_private->options.ris_bsdf, "ris-bsdf", "BSDF in RIS sampling");
+  result.add(_private->options.ris_spatial, "ris-spat", "Spatial Resampling");
   return result;
 }
 
