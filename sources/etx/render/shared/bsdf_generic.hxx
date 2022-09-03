@@ -120,10 +120,6 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return false;
-}
-
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
 }

@@ -45,14 +45,6 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse.image_index == kInvalidIndex) {
-    return false;
-  }
-  const auto& img = scene.images[material.diffuse.image_index];
-  return (img.options & Image::HasAlphaChannel) ? (img.evaluate(tex).w <= smp.next()) : false;
-}
-
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
@@ -118,14 +110,6 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return kInvPi * dot(frame.nrm, data.w_o);
 }
 
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse.image_index == kInvalidIndex) {
-    return false;
-  }
-  const auto& img = scene.images[material.diffuse.image_index];
-  return (img.options & Image::HasAlphaChannel) ? (img.evaluate(tex).w <= smp.next()) : false;
-}
-
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
@@ -168,14 +152,6 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   float3 n = entering_material ? -data.nrm : data.nrm;
   auto n_dot_o = fmaxf(0.0f, dot(n, data.w_o));
   return kInvPi * n_dot_o;
-}
-
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse.image_index == kInvalidIndex) {
-    return false;
-  }
-  const auto& img = scene.images[material.diffuse.image_index];
-  return (img.options & Image::HasAlphaChannel) ? (img.evaluate(tex).w <= smp.next()) : false;
 }
 
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -270,14 +246,6 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return result;
 }
 
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (material.diffuse.image_index == kInvalidIndex) {
-    return false;
-  }
-  const auto& img = scene.images[material.diffuse.image_index];
-  return (img.options & Image::HasAlphaChannel) ? (img.evaluate(tex).w <= smp.next()) : false;
-}
-
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;  // TODO : check this
 }
@@ -305,10 +273,6 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
 
 ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
-}
-
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return false;
 }
 
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -339,10 +303,6 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
 
 ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
-}
-
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return false;
 }
 
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -399,14 +359,6 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
   return bsdf::pdf_impl(data, scene.materials[m], scene, smp);
 }
 
-ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  uint32_t m = select_material(material, tex, scene, smp);
-  if (m == kInvalidIndex) {
-    return DiffuseBSDF::continue_tracing_impl(material, tex, scene, smp);
-  }
-  return bsdf::continue_tracing_impl(scene.materials[m], tex, scene, smp);
-}
-
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   uint32_t m = select_material(material, tex, scene, smp);
   if (m == kInvalidIndex) {
@@ -424,10 +376,6 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
 }
 
 ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {};
-}
-
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return {};
 }
 

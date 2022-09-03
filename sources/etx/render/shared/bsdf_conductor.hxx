@@ -106,10 +106,6 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return ggx.pdf(m, data.w_i, data.w_o) / (4.0f * m_dot_o);
 }
 
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return false;
-}
-
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
 }
@@ -222,10 +218,6 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   float result = external::D_ggx(normalize(w_o + w_i), alpha_x, alpha_y) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
   ETX_VALIDATE(result);
   return result;
-}
-
-ETX_GPU_CODE bool continue_tracing_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return false;
 }
 
 ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
