@@ -627,18 +627,12 @@ inline auto get_param(const tinyobj::material_t& m, const char* param, char buff
 inline Material::Class material_string_to_class(const char* s) {
   if (strcmp(s, "diffuse") == 0)
     return Material::Class::Diffuse;
-  else if (strcmp(s, "msdiffuse") == 0)
-    return Material::Class::MultiscatteringDiffuse;
   else if (strcmp(s, "plastic") == 0)
     return Material::Class::Plastic;
-  else if (strcmp(s, "conductor") == 0)
+  else if ((strcmp(s, "conductor") == 0) || (strcmp(s, "msconductor") == 0))
     return Material::Class::Conductor;
-  else if (strcmp(s, "msconductor") == 0)
-    return Material::Class::MultiscatteringConductor;
-  else if (strcmp(s, "dielectric") == 0)
+  else if ((strcmp(s, "dielectric") == 0) || (strcmp(s, "msdielectric") == 0))
     return Material::Class::Dielectric;
-  else if (strcmp(s, "msdielectric") == 0)
-    return Material::Class::MultiscatteringDielectric;
   else if (strcmp(s, "thinfilm") == 0)
     return Material::Class::Thinfilm;
   else if (strcmp(s, "translucent") == 0)

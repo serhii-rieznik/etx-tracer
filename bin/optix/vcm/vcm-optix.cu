@@ -52,15 +52,42 @@ RAYGEN(light_main) {
   auto& iteration = *global.iteration;
 
   Raytracing rt = {};
-  auto step_result = vcm_light_step(global.scene, iteration, global.options, state.global_index, state, rt);
+  bool found_intersection = rt.trace(global.scene, state.ray, state.intersection, state.sampler);
 
-  if (step_result.add_vertex) {
-    push_light_vertex(iteration, step_result.vertex_to_add);
+  Medium::Sample medium_sample = vcm_try_sampling_medium(global.scene, state);
+  if (medium_sample.sampled_medium()) {
+    if (vcm_handle_sampled_medium(global.scene, medium_sample, global.options, state)) {
+      continue_tracing(iteration, state);
+    }
+    return;
   }
 
-  project(step_result.splat_uv, step_result.value_to_splat);
+  if (found_intersection == false) {
+    return;
+  }
 
-  if (step_result.continue_tracing) {
+  if (vcm_handle_boundary_bsdf(global.scene, PathSource::Light, state)) {
+    continue_tracing(iteration, state);
+    return;
+  }
+
+  vcm_update_light_vcm(state);
+
+  const auto& tri = global.scene.triangles[state.intersection.triangle_index];
+  const auto& mat = global.scene.materials[tri.material_index];
+
+  if (bsdf::is_delta(mat, state.intersection.tex, global.scene, state.sampler) == false) {
+    VCMLightVertex light_vertex = {state, state.intersection.pos, state.intersection.barycentric, state.intersection.triangle_index, state.global_index};
+    push_light_vertex(iteration, light_vertex);
+
+    if (global.options.connect_to_camera() && (state.total_path_depth + 1 <= global.options.max_depth)) {
+      float2 uv = {};
+      float3 splat = vcm_connect_to_camera(rt, global.scene, mat, tri, iteration, global.options, state, uv);
+      project(uv, splat);
+    }
+  }
+
+  if (vcm_next_ray(global.scene, PathSource::Light, global.options, state, iteration)) {
     continue_tracing(iteration, state);
   }
 }

@@ -29,12 +29,9 @@ struct ETX_ALIGNED Thinfilm {
 struct ETX_ALIGNED Material {
   enum class Class : uint32_t {
     Diffuse,
-    MultiscatteringDiffuse,
     Plastic,
     Conductor,
-    MultiscatteringConductor,
     Dielectric,
-    MultiscatteringDielectric,
     Thinfilm,
     Translucent,
     Mirror,

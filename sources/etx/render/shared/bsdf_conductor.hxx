@@ -38,90 +38,6 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   }
 
   auto frame = data.get_normal_frame().frame;
-  auto ggx = NormalDistribution(frame, mtl.roughness);
-  auto m = ggx.sample(smp, data.w_i);
-
-  BSDFData eval_data = data;
-  eval_data.w_o = normalize(reflect(data.w_i, m));
-  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), 0};
-}
-
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::evaluate_impl(data, mtl, scene, smp);
-  }
-
-  auto frame = data.get_normal_frame().frame;
-  float n_dot_i = -dot(frame.nrm, data.w_i);
-  float n_dot_o = dot(frame.nrm, data.w_o);
-  if ((n_dot_o <= kEpsilon) || (n_dot_i <= kEpsilon)) {
-    return {data.spectrum_sample.wavelength, 0.0f};
-  }
-
-  float3 m = normalize(data.w_o - data.w_i);
-  float m_dot_o = dot(m, data.w_o);
-  if (m_dot_o <= kEpsilon) {
-    return {data.spectrum_sample.wavelength, 0.0f};
-  }
-
-  auto ggx = NormalDistribution(frame, mtl.roughness);
-  auto eval = ggx.evaluate(m, data.w_i, data.w_o);
-
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  SpectralResponse f = fresnel::conductor(data.spectrum_sample, data.w_i, m, mtl.ext_ior(data.spectrum_sample), mtl.int_ior(data.spectrum_sample), thinfilm);
-
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
-
-  BSDFEval result;
-  result.func = specular * (f * eval.ndf * eval.visibility / (4.0f * n_dot_i * n_dot_o));
-  ETX_VALIDATE(result.func);
-
-  result.bsdf = specular * (f * eval.ndf * eval.visibility / (4.0f * n_dot_i));
-  ETX_VALIDATE(result.bsdf);
-
-  result.pdf = eval.pdf / (4.0f * m_dot_o);
-  ETX_VALIDATE(result.pdf);
-
-  if (result.pdf > 0.0f) {
-    result.weight = result.bsdf / result.pdf;
-    ETX_VALIDATE(result.weight);
-  }
-
-  return result;
-}
-
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::pdf_impl(data, mtl, scene, smp);
-  }
-
-  auto frame = data.get_normal_frame().frame;
-  float3 m = normalize(data.w_o - data.w_i);
-  float m_dot_o = dot(m, data.w_o);
-  if (m_dot_o <= kEpsilon) {
-    return 0.0f;
-  }
-
-  auto ggx = NormalDistribution(frame, mtl.roughness);
-  return ggx.pdf(m, data.w_i, data.w_o) / (4.0f * m_dot_o);
-}
-
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
-}
-
-}  // namespace ConductorBSDF
-
-namespace MultiscatteringConductorBSDF {
-
-ETX_FORWARD_TO_IMPL;
-
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::sample_impl(data, mtl, scene, smp);
-  }
-
-  auto frame = data.get_normal_frame().frame;
 
   LocalFrame local_frame(frame);
   auto w_i = local_frame.to_local(-data.w_i);
@@ -224,5 +140,5 @@ ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, con
   return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
 }
 
-}  // namespace MultiscatteringConductorBSDF
+}  // namespace ConductorBSDF
 }  // namespace etx
