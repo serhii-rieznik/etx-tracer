@@ -7,6 +7,7 @@ namespace etx {
 
 struct CPUDebugIntegrator : public Integrator {
   enum class Mode {
+    Experiments,
     Geometry,
     Barycentrics,
     Normals,

@@ -95,10 +95,6 @@ struct GPUVCMImpl {
   enum : uint32_t {
     VCMLibrary,
     VCMOptixLibrary,
-    // CameraMain,
-    // CameraToLight,
-    // CameraToVertices,
-    // LightMain,
     PipelineCount,
   };
 

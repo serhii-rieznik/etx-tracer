@@ -149,8 +149,6 @@ RAYGEN(camera_to_vertices) {
   const auto& light_vertices = global.light_vertices;
   auto& iteration = *global.iteration;
 
-  Raytracing rt;
-
   float3 target_position = {};
   SpectralResponse value = {};
   bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertices[light_path.index + i],  //
@@ -160,6 +158,7 @@ RAYGEN(camera_to_vertices) {
     return;
   }
 
+  Raytracing rt;
   const auto& tri = scene.triangles[state.intersection.triangle_index];
   float3 p0 = shading_pos(scene.vertices, tri, state.intersection.barycentric, normalize(target_position - state.intersection.pos));
   auto tr = value * transmittance(state.spect, state.sampler, p0, target_position, state.medium_index, scene, rt);

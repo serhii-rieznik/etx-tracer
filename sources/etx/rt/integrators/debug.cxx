@@ -23,7 +23,8 @@ struct CPUDebugIntegratorImpl : public Task {
   uint32_t max_iterations = 32u;
   uint32_t current_scale = 1u;
   uint32_t preview_frames = 3u;
-  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Geometry;
+  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Experiments;
+  float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
 
   CPUDebugIntegratorImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
@@ -33,6 +34,14 @@ struct CPUDebugIntegratorImpl : public Task {
 
   void start(const Options& opt) {
     mode = opt.get("mode", uint32_t(mode)).to_enum<CPUDebugIntegrator::Mode>();
+    voxel_data[0] = opt.get("v000", voxel_data[0]).to_float();
+    voxel_data[1] = opt.get("v001", voxel_data[1]).to_float();
+    voxel_data[2] = opt.get("v100", voxel_data[2]).to_float();
+    voxel_data[3] = opt.get("v101", voxel_data[3]).to_float();
+    voxel_data[4] = opt.get("v010", voxel_data[4]).to_float();
+    voxel_data[5] = opt.get("v011", voxel_data[5]).to_float();
+    voxel_data[6] = opt.get("v110", voxel_data[6]).to_float();
+    voxel_data[7] = opt.get("v111", voxel_data[7]).to_float();
 
     iteration = 0;
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
@@ -69,10 +78,261 @@ struct CPUDebugIntegratorImpl : public Task {
     }
   }
 
+  bool intersect_plane(const float3& in_o, const float3& in_d, const float3& plane_n, const float3& plane_p, float& t) {
+    float denom = dot(in_d, plane_n);
+    if (denom >= -kEpsilon) {
+      return false;
+    }
+
+    t = dot(plane_p - in_o, plane_n) / denom;
+    return t > 0.0f;
+  }
+
+  bool intersect_bbox(const Ray& r, const float3& box_min, float& out_min, float& out_max) {
+    float3 tbot = (box_min - r.o) / r.d;
+    float3 ttop = (box_min - r.o + 2.0f) / r.d;
+    float3 tmin = min(ttop, tbot);
+    float3 tmax = max(ttop, tbot);
+    out_min = fmaxf(fmaxf(0.0f, tmin.x), fmaxf(tmin.y, tmin.z));
+    out_max = fminf(fminf(tmax.x, tmax.x), fminf(tmax.y, tmax.z));
+    return (out_max > out_min) && (out_max >= 0.0f);
+  }
+
+  bool intersect_sphere(const float3& in_o, const float3& in_d, const float3& c, float r, float& result_t) {
+    float3 e = in_o - c;
+    float b = dot(in_d, e);
+    float d = (b * b) - dot(e, e) + (r * r);
+    if (d < 0.0f) {
+      return false;
+    }
+    d = sqrtf(d);
+    float a0 = -b - d;
+    float a1 = -b + d;
+    result_t = (a0 < 0.0f) ? ((a1 < 0.0f) ? 0.0f : a1) : a0;
+    return true;
+  }
+
+  float cube_root(float t) {
+    float s = powf(fabsf(t), 1.0f / 3.0f);
+    return t >= 0.0f ? +s : -s;
+  }
+
+  uint32_t solve_linear(float a, float b, float roots[]) {
+    if (a * a < kEpsilon)
+      return 0;
+
+    // at + b = 0
+    roots[0] = -b / a;
+    return 1;
+  }
+
+  uint32_t solve_quadratic(float a, float b, float c, float roots[]) {
+    if (a * a <= kEpsilon) {
+      return solve_linear(b, c, roots);
+    }
+
+    // at^2 + bt + c = 0
+    float discriminant = b * b - 4.0f * a * c;
+    if (discriminant < 0.0f) {
+      return 0;
+    }
+
+    float sqrt_d = sqrtf(discriminant);
+    roots[0] = (-b - sqrt_d) / (2.0f * a);
+    roots[1] = (-b + sqrt_d) / (2.0f * a);
+    return 2u;
+  }
+
+  uint32_t solve_cubic(float a, float b, float c, float d, float roots[]) {
+    if (a * a < kEpsilon) {
+      return solve_quadratic(b, c, d, roots);
+    }
+
+    // t^3 + pt + q = 0
+    float p = (3.0f * a * c - b * b) / (3.0f * a * a);
+    float q = (2.0f * b * b * b - 9.0f * a * b * c + 27.0f * a * a * d) / (27.0f * a * a * a);
+
+    if (fabsf(p) <= kEpsilon) {
+      roots[0] = cube_root(-q);
+      return 1u;
+    }
+
+    if (fabsf(q) <= kEpsilon) {
+      roots[0u] = 0.0f;
+      if (p < 0.0f) {
+        roots[1u] = sqrtf(-p);
+        roots[2u] = -sqrtf(-p);
+        return 3u;
+      }
+      return 1u;
+    }
+
+    float e = b / (3.0f * a);
+    float Q = q * q / 4.0f + p * p * p / 27.0f;
+    if (fabsf(Q) <= kEpsilon) {
+      // discriminant = 0 -> two roots
+      roots[0] = -1.5f * q / p - e;
+      roots[1] = 3.0f * q / p - e;
+      return 2u;
+    }
+
+    if (Q > 0.0f) {
+      // discriminant > 0 -> only one real root
+      float sqrt_Q = sqrtf(Q);
+      roots[0] = cube_root(-q / 2.0f + sqrt_Q) + cube_root(-q / 2.0f - sqrt_Q) - e;
+      return 1u;
+    }
+
+    // discriminant < 0 -> three roots
+    float u = 2.0f * sqrtf(-p / 3.0f);
+    float cos_phi = clamp(3.0f * q / p / u, -1.0f, 1.0f);
+    float t = acosf(cos_phi) / 3.0f;
+    float k = 2.0f * kPi / 3.0f;
+    roots[0] = u * cosf(t) - e;
+    roots[1] = u * cosf(t - k) - e;
+    roots[2] = u * cosf(t - 2.0f * k) - e;
+    return 3u;
+  }
+
+  bool intersect_voxel(const float3& in_o, const float3& in_d, const float voxel[8], float& result_t) {
+    float s000 = voxel[0];
+    float s001 = voxel[1];
+    float s010 = voxel[2];
+    float s011 = voxel[3];
+    float s100 = voxel[4];
+    float s101 = voxel[5];
+    float s110 = voxel[6];
+    float s111 = voxel[7];
+    float ka = s101 - s001;
+    float k0 = s000;
+    float k1 = s100 - s000;
+    float k2 = s010 - s000;
+    float k3 = s110 - s010 - k1;
+    float k4 = k0 - s001;
+    float k5 = k1 - ka;
+    float k6 = k2 - (s011 - s001);
+    float k7 = k3 - (s111 - s011 - ka);
+    float ox = in_o.x;
+    float oy = in_o.y;
+    float oz = in_o.z;
+    float dx = in_d.x;
+    float dy = in_d.y;
+    float dz = in_d.z;
+    float m0 = ox * oy;
+    float m1 = dx * dy;
+    float m2 = ox * dy + oy * dx;
+    float m3 = k5 * oz - k1;
+    float m4 = k6 * oz - k2;
+    float m5 = k7 * oz - k3;
+    float a = k7 * m1 * dz;
+    float b = m1 * m5 + dz * (k5 * dx + k6 * dy + k7 * m2);
+    float c = dx * m3 + dy * m4 + m2 * m5 + dz * (k4 + k5 * ox + k6 * oy + k7 * m0);
+    float d = (k4 * oz - k0) + ox * m3 + oy * m4 + m0 * m5;
+    float roots[3] = {kMaxFloat, kMaxFloat, kMaxFloat};
+    uint32_t root_count = solve_cubic(a, b, c, d, roots);
+    float r0 = roots[0] < 0.0f ? kMaxFloat : roots[0];
+    float r1 = roots[1] < 0.0f ? kMaxFloat : roots[1];
+    float r2 = roots[2] < 0.0f ? kMaxFloat : roots[2];
+    result_t = fminf(fminf(r0, r1), r2);
+    return (root_count > 0) && (result_t > 0.0f) && (result_t != kMaxFloat);
+  }
+
+  float3 surface_normal(const float3& p, float voxel[8]) {
+    float s000 = voxel[0];
+    float s001 = voxel[1];
+    float s010 = voxel[2];
+    float s011 = voxel[3];
+    float s100 = voxel[4];
+    float s101 = voxel[5];
+    float s110 = voxel[6];
+    float s111 = voxel[7];
+
+    float3 result = {};
+    {
+      float y0 = lerp(s100 - s000, s110 - s010, p.y);
+      float y1 = lerp(s101 - s001, s111 - s011, p.y);
+      result.x = lerp(y0, y1, p.z);
+    }
+    {
+      float x0 = lerp(s010 - s000, s110 - s100, p.x);
+      float x1 = lerp(s011 - s001, s111 - s101, p.x);
+      result.y = lerp(x0, x1, p.z);
+    }
+    {
+      float x0 = lerp(s001 - s000, s101 - s100, p.x);
+      float x1 = lerp(s011 - s010, s111 - s110, p.x);
+      result.z = lerp(x0, x1, p.y);
+    }
+    return normalize(result);
+  }
+
+  float3 experiments(SpectralQuery spect, const Ray& ray, const float2& uv) {
+    float3 bg = spectrum::rgb_to_xyz(ray.d * 0.5f + 0.5f);
+    float3 border = spectrum::rgb_to_xyz(float3{1.0f, 0.0f, 0.0f});
+    if (dot(uv, uv) <= kEpsilon) {
+      spect.wavelength += 0.0f;
+    }
+
+    float min_t = 0.0f;
+    float max_t = 0.0f;
+    float3 bbox_min = {-1.0f, -1.0f, -1.0f};
+    float3 bbox_max = bbox_min + 2.0f;
+    if (intersect_bbox(ray, bbox_min, min_t, max_t) == false)
+      return bg;
+
+    float3 o_ws = ray.o + ray.d * min_t;
+    float3 o_vs = (o_ws - bbox_min) / (bbox_max - bbox_min);
+    float3 e_ws = ray.o + ray.d * max_t;
+    float3 e_vs = (e_ws - bbox_min) / (bbox_max - bbox_min);
+    float3 d_vs = normalize(e_vs - o_vs);
+
+    float fe[3] = {
+      fabsf(fabsf(o_vs.x * 2.0f - 1.0f) - 1.0f),
+      fabsf(fabsf(o_vs.y * 2.0f - 1.0f) - 1.0f),
+      fabsf(fabsf(o_vs.z * 2.0f - 1.0f) - 1.0f),
+    };
+    float be[3] = {
+      fabsf(fabsf(e_vs.x * 2.0f - 1.0f) - 1.0f),
+      fabsf(fabsf(e_vs.y * 2.0f - 1.0f) - 1.0f),
+      fabsf(fabsf(e_vs.z * 2.0f - 1.0f) - 1.0f),
+    };
+
+    const float kEdgeDelta = 0.025f;
+
+    bool front_edge = ((fe[0] < kEdgeDelta) && (fe[1] < kEdgeDelta)) ||  //
+                      ((fe[0] < kEdgeDelta) && (fe[2] < kEdgeDelta)) ||  //
+                      ((fe[1] < kEdgeDelta) && (fe[2] < kEdgeDelta));
+
+    bool back_edge = ((be[0] < kEdgeDelta) && (be[1] < kEdgeDelta)) ||  //
+                     ((be[0] < kEdgeDelta) && (be[2] < kEdgeDelta)) ||  //
+                     ((be[1] < kEdgeDelta) && (be[2] < kEdgeDelta));    //
+
+    if (front_edge) {
+      return border;
+    }
+
+    float voxel_t = 0.0f;
+    if (intersect_voxel(o_vs, d_vs, voxel_data, voxel_t) == false) {
+      return back_edge ? border : bg;
+    }
+
+    float3 p_vs = o_vs + voxel_t * d_vs;
+    if ((p_vs.x < 0.0f) || (p_vs.x > 1.0f) || (p_vs.y < 0.0f) || (p_vs.y > 1.0f) || (p_vs.z < 0.0f) || (p_vs.z > 1.0f)) {
+      return back_edge ? border : bg;
+    }
+
+    float3 n = surface_normal(p_vs, voxel_data);
+    return spectrum::rgb_to_xyz(n * 0.5f + 0.5f);
+  }
+
   float3 preview_pixel(RNDSampler& smp, const float2& uv) {
     const auto& scene = rt.scene();
     auto ray = generate_ray(smp, scene, uv);
     auto spect = spectrum::sample(smp.next());
+
+    if (mode == CPUDebugIntegrator::Mode::Experiments) {
+      return experiments(spect, ray, uv);
+    }
 
     float3 xyz = {0.1f, 0.1f, 0.1f};
 
@@ -240,11 +500,23 @@ void CPUDebugIntegrator::stop(Stop st) {
 Options CPUDebugIntegrator::options() const {
   Options result = {};
   result.add(_private->mode, Mode::Count, &CPUDebugIntegrator::mode_to_string, "mode", "Visualize");
+  if (_private->mode == Mode::Experiments) {
+    result.add(-4.0f, _private->voxel_data[0], +4.0f, "v000", "v000");
+    result.add(-4.0f, _private->voxel_data[1], +4.0f, "v001", "v001");
+    result.add(-4.0f, _private->voxel_data[2], +4.0f, "v010", "v010");
+    result.add(-4.0f, _private->voxel_data[3], +4.0f, "v011", "v011");
+    result.add(-4.0f, _private->voxel_data[4], +4.0f, "v100", "v100");
+    result.add(-4.0f, _private->voxel_data[5], +4.0f, "v101", "v101");
+    result.add(-4.0f, _private->voxel_data[6], +4.0f, "v110", "v110");
+    result.add(-4.0f, _private->voxel_data[7], +4.0f, "v111", "v111");
+  }
   return result;
 }
 
 std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
   switch (Mode(i)) {
+    case Mode::Experiments:
+      return "Experiments";
     case Mode::Geometry:
       return "Geometry";
     case Mode::Barycentrics:

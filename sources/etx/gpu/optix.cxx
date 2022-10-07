@@ -262,33 +262,38 @@ struct GPUBufferOptixImpl {
   GPUBufferOptixImpl(GPUOptixImplData* device, const GPUBuffer::Descriptor& desc) {
     capacity = align_up(desc.size, 16llu);
 
-    if (device->cuda_call_failed(cudaMalloc(&device_ptr, capacity))) {
+    if (capacity == 0) {
+      log::warning("Allocating CUDA empty buffer (size: %llu)", capacity);
+      return;
+    }
+
+    if (device->cuda_call_failed(cuMemAlloc(&device_ptr, capacity))) {
       log::error("Failed to create CUDA buffer with size: %llu", capacity);
       return;
     }
 
     if (desc.data != nullptr) {
-      if (device->cuda_call_failed(cudaMemcpy(device_ptr, desc.data, desc.size, cudaMemcpyKind::cudaMemcpyHostToDevice)))
+      if (device->cuda_call_failed(cuMemcpyHtoD(device_ptr, desc.data, desc.size)))
         log::error("Failed to copy content to CUDA buffer %p from %p with size %llu", device_ptr, desc.data, desc.size);
     }
   }
 
   ~GPUBufferOptixImpl() {
-    ETX_ASSERT(device_ptr == nullptr);
+    ETX_ASSERT(device_ptr == 0u);
   }
 
   void release(GPUOptixImplData* device) {
-    if (device->cuda_call_failed(cudaFree(device_ptr))) {
+    if (device->cuda_call_failed(cuMemFree(device_ptr))) {
       log::error("Failed to free CUDA buffer: %p", device_ptr);
     }
-    device_ptr = nullptr;
+    device_ptr = 0llu;
   }
 
   device_pointer_t device_pointer() const {
-    return reinterpret_cast<device_pointer_t>(device_ptr);
+    return device_ptr;
   }
 
-  uint8_t* device_ptr = nullptr;
+  device_pointer_t device_ptr = 0llu;
   uint64_t capacity = 0;
 };
 
@@ -668,7 +673,7 @@ device_pointer_t GPUOptixImplData::upload_to_shared_buffer(device_pointer_t ptr,
   if (ptr == 0) {
     uint64_t offset = shared_buffer_offset.fetch_add(size);
     ETX_CRITICAL(offset + size <= GPUOptixImplData::kSharedBufferSize);
-    ptr = reinterpret_cast<device_pointer_t>(object.device_ptr) + offset;
+    ptr = object.device_ptr + offset;
   }
 
   if (data != nullptr) {
@@ -827,7 +832,7 @@ device_pointer_t GPUOptixImpl::get_buffer_device_pointer(GPUBuffer buffer) const
     return 0;
 
   auto& object = _private->buffer_pool.get(buffer.handle);
-  return reinterpret_cast<device_pointer_t>(object.device_ptr);
+  return object.device_ptr;
 }
 
 device_pointer_t GPUOptixImpl::upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) {
@@ -843,17 +848,16 @@ device_pointer_t GPUOptixImpl::copy_to_buffer(GPUBuffer buffer, const void* src,
 
   CUdeviceptr ptr_base = {};
   size_t ptr_size = {};
-  uint8_t* device_ptr_v = object.device_ptr + offset;
-  CUdeviceptr device_ptr = reinterpret_cast<CUdeviceptr>(device_ptr_v);
+  device_pointer_t device_ptr = object.device_ptr + offset;
   CUresult query_result = cuMemGetAddressRange_v2(&ptr_base, &ptr_size, device_ptr);
   if (query_result != CUresult::CUDA_SUCCESS) {
     log::error("Failed to get mem info: %p", device_ptr);
   }
 
-  if (_private->cuda_call_failed(cudaMemcpy(device_ptr_v, src, size, cudaMemcpyHostToDevice)))
+  if (_private->cuda_call_failed(cuMemcpyHtoD(device_ptr, src, size)))
     log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
 
-  return reinterpret_cast<device_pointer_t>(device_ptr_v);
+  return device_ptr;
 }
 
 void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset, uint64_t size) {
@@ -864,14 +868,13 @@ void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset
 
   CUdeviceptr ptr_base = {};
   size_t ptr_size = {};
-  uint8_t* device_ptr_v = object.device_ptr + offset;
-  CUdeviceptr device_ptr = reinterpret_cast<CUdeviceptr>(device_ptr_v);
+  CUdeviceptr device_ptr = object.device_ptr + offset;
   CUresult query_result = cuMemGetAddressRange_v2(&ptr_base, &ptr_size, device_ptr);
   if (query_result != CUresult::CUDA_SUCCESS) {
     log::error("Failed to get mem info: %p", device_ptr);
   }
 
-  if (_private->cuda_call_failed(cudaMemcpy(dst, device_ptr_v, size, cudaMemcpyDeviceToHost)))
+  if (_private->cuda_call_failed(cuMemcpyDtoH(dst, device_ptr, size)))
     log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
 }
 
