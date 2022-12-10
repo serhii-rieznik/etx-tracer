@@ -20,6 +20,7 @@ struct GPUOptixImpl : public GPUDevice {
 
   GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) override;
   GPUPipeline create_pipeline_from_file(const char*, bool) override;
+  void create_pipeline_from_files(TaskScheduler&, uint64_t file_count, const char* files[], GPUPipeline pipelines[], bool) override;
   void destroy_pipeline(GPUPipeline) override;
 
   GPUAccelerationStructure create_acceleration_structure(const GPUAccelerationStructure::Descriptor&) override;

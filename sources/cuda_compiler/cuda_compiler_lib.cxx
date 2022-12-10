@@ -57,7 +57,6 @@ bool rtc_compile(CUDACompileTarget target, const char* filename, const char* opt
     "--device-as-default-execution-space",
     "--use_fast_math",
     "--std=c++17",
-    "--device-debug",
     (target == CUDACompileTarget::PTX) ? "--gpu-architecture=compute_86" : "--gpu-architecture=sm_86",
     "-I" ETX_INCLUDES,
     "-I" ETX_OPTIX_INCLUDES,
@@ -112,7 +111,7 @@ bool rtc_compile(CUDACompileTarget target, const char* filename, const char* opt
 }
 
 bool compile_cuda(CUDACompileTarget target, const char* path_to_file, const char* output_to_file, const char* options) {
-  // return rtc_compile(target, path_to_file, options, output_to_file);
+  return rtc_compile(target, path_to_file, options, output_to_file);
   auto con = GetStdHandle(STD_OUTPUT_HANDLE);
 
   static char out_ptx_file[4096] = {};

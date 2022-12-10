@@ -244,6 +244,7 @@ struct GPUOptixImplData {
   bool launch_cuda(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size);
 
   device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size);
+  bool compile(const char* file, bool force, GPUPipeline::Descriptor& desc, std::vector<uint8_t>& binary);
 };
 
 #define ETX_OPTIX_INCLUDES 1
@@ -799,6 +800,125 @@ bool GPUOptixImplData::launch_cuda(GPUPipelineOptixImpl& pipeline, const char* f
   return ETX_CUDA_SUCCEED(call_result);
 }
 
+inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[], uint64_t buffer_size) {
+  if (json_is_object(json) == false) {
+    return {};
+  }
+
+  int buffer_pos = 0;
+  PipelineDesc result = {};
+
+  const char* key = nullptr;
+  json_t* value = nullptr;
+  json_object_foreach(json, key, value) {
+    if (strcmp(key, "class") == 0) {
+      auto cls = json_is_string(value) ? json_string_value(value) : "optix";
+      if (strcmp(cls, "CUDA") == 0) {
+        result.target = CUDACompileTarget::Library;
+      }
+    } else if (strcmp(key, "name") == 0) {
+      result.name = json_is_string(value) ? json_string_value(value) : "undefined";
+    } else if (strcmp(key, "source") == 0) {
+      if (json_is_string(value) == false) {
+        return {};
+      }
+      int pos_0 = buffer_pos;
+      result.source = buffer + buffer_pos;
+      buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "%s", filename);
+      int pos_1 = buffer_pos;
+      while ((pos_1 > pos_0) && (buffer[pos_1] != '/') && (buffer[pos_1] != '\\')) {
+        --pos_1;
+      }
+      buffer[pos_1] = 0;
+      buffer_pos += 1 + snprintf(buffer + pos_1, buffer_size - pos_1, "/%s", json_string_value(value));
+    } else if (strcmp(key, "code") == 0) {
+      if (json_is_string(value) == false) {
+        return {};
+      }
+      int pos_0 = buffer_pos;
+      result.code = buffer + buffer_pos;
+      buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "%s", filename);
+      int pos_1 = buffer_pos;
+      while ((pos_1 > pos_0) && (buffer[pos_1] != '/') && (buffer[pos_1] != '\\')) {
+        --pos_1;
+      }
+      buffer[pos_1] = 0;
+      buffer_pos += 1 + snprintf(buffer + pos_1, buffer_size - pos_1, "/%s", json_string_value(value));
+    } else if (strcmp(key, "entry-points") == 0) {
+      if (json_is_array(value) == false) {
+        return {};
+      }
+
+      int index = 0;
+      json_t* entry_point_name = nullptr;
+      json_array_foreach(value, index, entry_point_name) {
+        if (index >= kMaxEntryPoints) {
+          break;
+        }
+
+        if (json_is_string(entry_point_name)) {
+          snprintf(result.entry_points[result.entry_point_count], sizeof(GPUPipeline::EntryPoint), "__raygen__%s", json_string_value(entry_point_name));
+          result.entry_point_count += 1;
+        }
+      }
+    }
+  }
+
+  result.completed = true;
+  return result;
+}
+
+bool GPUOptixImplData::compile(const char* json_filename, bool force, GPUPipeline::Descriptor& desc, std::vector<uint8_t>& binary_data) {
+  json_error_t error = {};
+  json_t* json_data = json_load_file(json_filename, 0, &error);
+  if (json_data == nullptr) {
+    log::error("Erorr parsing json `%s`:[%d, %d] %s", json_filename, error.line, error.column, error.text);
+    return {};
+  }
+
+  char info_buffer[2048] = {};
+  auto ps_desc = parse_file(json_data, json_filename, info_buffer, sizeof(info_buffer));
+  if (ps_desc.completed == false) {
+    json_delete(json_data);
+    log::error("Failed to load pipeline from json: `%s`", json_filename);
+    return {};
+  }
+
+  bool has_output_file = false;
+  if ((ps_desc.source != nullptr) && (ps_desc.source[0] != 0)) {
+    if (auto file = fopen(ps_desc.source, "rb")) {
+      has_output_file = true;
+      fclose(file);
+    }
+  }
+
+  if ((ps_desc.code != nullptr) && ((has_output_file == false) || force)) {
+    if (compile_cuda(ps_desc.target, ps_desc.code, ps_desc.source, cuda_arch) == false) {
+      return false;
+    }
+  }
+
+  if ((ps_desc.source != nullptr) && (ps_desc.source[0] != 0)) {
+    if (auto file = fopen(ps_desc.source, "rb")) {
+      fclose(file);
+    } else {
+      return false;
+    }
+  }
+
+  // std::vector<uint8_t> binary_data;
+  if (load_binary_file(ps_desc.source, binary_data) == false) {
+    return false;
+  }
+
+  desc.data = binary_data.data();
+  desc.data_size = static_cast<uint32_t>(binary_data.size());
+  memcpy(desc.entry_points, ps_desc.entry_points, ps_desc.entry_point_count * sizeof(GPUPipeline::EntryPoint));
+  desc.entry_point_count = ps_desc.entry_point_count;
+  desc.compile_options = uint32_t(ps_desc.target);
+  return true;
+}
+
 /***********************************************
  *
  * GPUOptixImpl
@@ -914,125 +1034,36 @@ void GPUOptixImpl::destroy_pipeline(GPUPipeline pipeline) {
   _private->pipeline_pool.free(pipeline.handle);
 }
 
-inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[], uint64_t buffer_size) {
-  if (json_is_object(json) == false) {
+GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, bool force_recompile) {
+  GPUPipeline::Descriptor desc = {};
+  std::vector<uint8_t> binary_data;
+  if (_private->compile(json_filename, force_recompile, desc, binary_data) == false) {
+    log::error("Failed to create pipeline from file: %s", json_filename);
     return {};
   }
-
-  int buffer_pos = 0;
-  PipelineDesc result = {};
-
-  const char* key = nullptr;
-  json_t* value = nullptr;
-  json_object_foreach(json, key, value) {
-    if (strcmp(key, "class") == 0) {
-      auto cls = json_is_string(value) ? json_string_value(value) : "optix";
-      if (strcmp(cls, "CUDA") == 0) {
-        result.target = CUDACompileTarget::Library;
-      }
-    } else if (strcmp(key, "name") == 0) {
-      result.name = json_is_string(value) ? json_string_value(value) : "undefined";
-    } else if (strcmp(key, "source") == 0) {
-      if (json_is_string(value) == false) {
-        return {};
-      }
-      int pos_0 = buffer_pos;
-      result.source = buffer + buffer_pos;
-      buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "%s", filename);
-      int pos_1 = buffer_pos;
-      while ((pos_1 > pos_0) && (buffer[pos_1] != '/') && (buffer[pos_1] != '\\')) {
-        --pos_1;
-      }
-      buffer[pos_1] = 0;
-      buffer_pos += 1 + snprintf(buffer + pos_1, buffer_size - pos_1, "/%s", json_string_value(value));
-    } else if (strcmp(key, "code") == 0) {
-      if (json_is_string(value) == false) {
-        return {};
-      }
-      int pos_0 = buffer_pos;
-      result.code = buffer + buffer_pos;
-      buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "%s", filename);
-      int pos_1 = buffer_pos;
-      while ((pos_1 > pos_0) && (buffer[pos_1] != '/') && (buffer[pos_1] != '\\')) {
-        --pos_1;
-      }
-      buffer[pos_1] = 0;
-      buffer_pos += 1 + snprintf(buffer + pos_1, buffer_size - pos_1, "/%s", json_string_value(value));
-    } else if (strcmp(key, "entry-points") == 0) {
-      if (json_is_array(value) == false) {
-        return {};
-      }
-
-      int index = 0;
-      json_t* entry_point_name = nullptr;
-      json_array_foreach(value, index, entry_point_name) {
-        if (index >= kMaxEntryPoints) {
-          break;
-        }
-
-        if (json_is_string(entry_point_name)) {
-          snprintf(result.entry_points[result.entry_point_count], sizeof(GPUPipeline::EntryPoint), "__raygen__%s", json_string_value(entry_point_name));
-          result.entry_point_count += 1;
-        }
-      }
-    }
-  }
-
-  result.completed = true;
-  return result;
+  return {_private->pipeline_pool.alloc(_private, desc)};
 }
 
-GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, bool force_recompile) {
-  json_error_t error = {};
-  json_t* json_data = json_load_file(json_filename, 0, &error);
-  if (json_data == nullptr) {
-    log::error("Erorr parsing json `%s`:[%d, %d] %s", json_filename, error.line, error.column, error.text);
-    return {};
-  }
+void GPUOptixImpl::create_pipeline_from_files(TaskScheduler& scheduler, uint64_t file_count, const char* files[], GPUPipeline pipelines[], bool force) {
+  if (file_count == 0)
+    return;
 
-  char info_buffer[2048] = {};
-  auto ps_desc = parse_file(json_data, json_filename, info_buffer, sizeof(info_buffer));
-  if (ps_desc.completed == false) {
-    json_delete(json_data);
-    log::error("Failed to load pipeline from json: `%s`", json_filename);
-    return {};
-  }
+  std::vector<GPUPipeline::Descriptor> desc(file_count);
+  std::vector<std::vector<uint8_t>> binary_data(file_count);
 
-  bool has_output_file = false;
-  if ((ps_desc.source != nullptr) && (ps_desc.source[0] != 0)) {
-    if (auto file = fopen(ps_desc.source, "rb")) {
-      has_output_file = true;
-      fclose(file);
+  std::atomic<bool> success = {true};
+  scheduler.execute(uint32_t(file_count), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    for (uint32_t i = begin; i < end; ++i) {
+      if (_private->compile(files[i], force, desc[i], binary_data[i]) == false) {
+        log::error("Failed to create pipeline from file: %s", files[i]);
+        success = false;
+      }
     }
+  });
+
+  for (uint64_t i = 0; success && (i < file_count); ++i) {
+    pipelines[i] = {_private->pipeline_pool.alloc(_private, desc[i])};
   }
-
-  if ((ps_desc.code != nullptr) && ((has_output_file == false) || force_recompile)) {
-    if (compile_cuda(ps_desc.target, ps_desc.code, ps_desc.source, _private->cuda_arch) == false) {
-      return {};
-    }
-  }
-
-  if ((ps_desc.source != nullptr) && (ps_desc.source[0] != 0)) {
-    if (auto file = fopen(ps_desc.source, "rb")) {
-      fclose(file);
-    } else {
-      return {};
-    }
-  }
-
-  std::vector<uint8_t> binary_data;
-  if (load_binary_file(ps_desc.source, binary_data) == false) {
-    return {};
-  }
-
-  GPUPipeline::Descriptor desc;
-  desc.data = binary_data.data();
-  desc.data_size = static_cast<uint32_t>(binary_data.size());
-  memcpy(desc.entry_points, ps_desc.entry_points, ps_desc.entry_point_count * sizeof(GPUPipeline::EntryPoint));
-  desc.entry_point_count = ps_desc.entry_point_count;
-  desc.compile_options = uint32_t(ps_desc.target);
-
-  return {_private->pipeline_pool.alloc(_private, desc)};
 }
 
 bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {

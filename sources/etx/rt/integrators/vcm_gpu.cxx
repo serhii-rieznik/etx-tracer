@@ -227,19 +227,34 @@ struct GPUVCMImpl {
   }
 
   bool build_pipelines(Options& opt) {
-    for (auto& p : pipelines) {
-      bool force_reload = p.reload || opt.get(p.path, false).to_bool();
-      if (force_reload || (p.pipeline.handle == kInvalidHandle)) {
-        auto handle = rt.gpu()->create_pipeline_from_file(env().file_in_data(p.path), force_reload);
-        if (handle.handle == kInvalidHandle) {
-          return false;
+    constexpr uint64_t kBufferSize = 2048llu;
+    char buffers[kBufferSize * PipelineCount] = {};
+    const char* files[PipelineCount] = {};
+    uint32_t mapping[PipelineCount] = {};
+
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < PipelineCount; ++i) {
+      bool force_reload = pipelines[i].reload || opt.get(pipelines[i].path, false).to_bool();
+      if (force_reload || (pipelines[i].pipeline.handle == kInvalidHandle)) {
+        if (pipelines[i].pipeline.handle != kInvalidHandle) {
+          rt.gpu()->destroy_pipeline(pipelines[i].pipeline);
         }
-        p.pipeline = handle;
-        p.reload = false;
-        opt.set_bool(p.path, false);
+        env().file_in_data(pipelines[i].path, buffers + i * kBufferSize, kBufferSize);
+        files[count] = buffers + i * kBufferSize;
+        mapping[count] = i;
+        count++;
       }
     }
 
+    GPUPipeline built_pipelines[PipelineCount] = {};
+    rt.gpu()->create_pipeline_from_files(rt.scheduler(), count, files, built_pipelines, true);
+
+    for (uint32_t i = 0; i < count; ++i) {
+      uint32_t mapped = mapping[i];
+      pipelines[mapped].pipeline = built_pipelines[mapped];
+      pipelines[mapped].reload = false;
+      opt.set_bool(pipelines[mapped].path, false);
+    }
     return true;
   }
 

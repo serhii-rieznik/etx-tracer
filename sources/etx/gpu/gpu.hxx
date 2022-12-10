@@ -2,6 +2,7 @@
 
 #include <etx/core/pimpl.hxx>
 #include <etx/render/host/pool.hxx>
+#include <etx/render/host/tasks.hxx>
 
 namespace etx {
 
@@ -63,6 +64,7 @@ struct GPUDevice {
 
   virtual GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) = 0;
   virtual GPUPipeline create_pipeline_from_file(const char* filename, bool force_recompile) = 0;
+  virtual void create_pipeline_from_files(TaskScheduler&, uint64_t file_count, const char* files[], GPUPipeline pipelines[], bool force_recompile) = 0;
   virtual void destroy_pipeline(GPUPipeline) = 0;
 
   virtual GPUAccelerationStructure create_acceleration_structure(const GPUAccelerationStructure::Descriptor&) = 0;
