@@ -5,7 +5,7 @@
 
 namespace etx {
 
-constexpr bool kForceDiffuseBSDF = false;
+// #define ETX_FORCED_BSDF PlasticBSDF
 
 enum class PathSource : uint32_t {
   Undefined,
@@ -241,7 +241,7 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
 
 namespace fresnel {
 
-ETX_GPU_CODE auto reflectance(complex ext_ior, complex cos_theta_i, complex int_ior, complex cos_theta_j) {
+ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
   struct result {
     complex rs, rp;
   };
@@ -254,7 +254,7 @@ ETX_GPU_CODE auto reflectance(complex ext_ior, complex cos_theta_i, complex int_
   return result{rs, rp};
 }
 
-ETX_GPU_CODE auto transmittance(complex ext_ior, complex cos_theta_i, complex int_ior, complex cos_theta_j) {
+ETX_GPU_CODE auto transmittance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
   struct result {
     complex ts, tp;
   };
@@ -275,7 +275,7 @@ ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_i
   return saturate(0.5f * (complex_norm(rsrp.rs) + complex_norm(rsrp.rp)));
 }
 
-ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, complex ext_ior, complex film_ior, complex int_ior, float thickness) {
+ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
   auto sin_theta_1_squared = sqr(ext_ior / film_ior) * (1.0f - cos_theta_0 * cos_theta_0);
   auto cos_theta_1 = complex_sqrt(complex{1.0f, 0.0f} - sin_theta_1_squared);
   auto sin_theta_2_squared = sqr(film_ior / int_ior) * (1.0f - cos_theta_1 * cos_theta_1);

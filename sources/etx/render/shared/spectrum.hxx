@@ -361,8 +361,8 @@ ETX_GPU_CODE SpectralResponse abs(const SpectralResponse& v) {
 ETX_GPU_CODE SpectralResponse saturate(const SpectralResponse& v) {
   return {v.wavelength, {saturate(v.components.x), saturate(v.components.y), saturate(v.components.z)}};
 }
-ETX_GPU_CODE void print_value(const char* name, const char* tag, const SpectralResponse& v) {
-  printf("%s : %s (%f : %f %f %f)\n", name, tag, v.wavelength, v.components.x, v.components.y, v.components.z);
+ETX_GPU_CODE void print_invalid_value(const char* name, const SpectralResponse& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f : %f %f %f) at %s [%u]\n", name, v.wavelength, v.components.x, v.components.y, v.components.z, filename, line);
 }
 
 struct Spectrums;

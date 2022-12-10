@@ -9,6 +9,14 @@
 #include <stb_image.hxx>
 #include <stb_image_write.hxx>
 
+#if defined(_WIN32)
+
+// TODO : fix hacks
+#define WIN32_LEAN_AND_MEAN 1
+#include <Windows.h>
+
+#endif
+
 namespace etx {
 
 RTApplication::RTApplication()
@@ -54,6 +62,12 @@ void RTApplication::init() {
       _current_integrator = _integrator_array[i];
     }
   }
+
+#if defined(_WIN32)
+  if (GetAsyncKeyState(VK_ESCAPE)) {
+    _current_integrator = nullptr;
+  }
+#endif
 
   ui.set_current_integrator(_current_integrator);
 

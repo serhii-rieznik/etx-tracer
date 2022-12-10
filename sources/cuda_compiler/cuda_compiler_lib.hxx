@@ -9,6 +9,8 @@ enum class CUDACompileTarget : uint32_t {
   Library,
 };
 
+constexpr bool kCUDADebugBuild = false;
+
 bool compile_cuda(CUDACompileTarget target, const char* path_to_file, const char* output_to_file, const char* options);
 
 }  // namespace etx

@@ -90,7 +90,7 @@ struct UI {
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
   int32_t _selected_material = -1;
-  int32_t _selected_medium= -1;
+  int32_t _selected_medium = -1;
 };
 
 }  // namespace etx

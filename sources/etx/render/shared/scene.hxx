@@ -134,6 +134,7 @@ ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, c
     if (rt.trace(scene, {origin, w_o, kRayEpsilon, max_t}, intersection, smp) == false) {
       if (medium_index != kInvalidIndex) {
         result *= scene.mediums[medium_index].transmittance(spect, smp, origin, w_o, max_t);
+        ETX_VALIDATE(result);
       }
       break;
     }
@@ -147,6 +148,7 @@ ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, c
 
     if (medium_index != kInvalidIndex) {
       result *= scene.mediums[medium_index].transmittance(spect, smp, origin, w_o, intersection.t);
+      ETX_VALIDATE(result);
     }
 
     medium_index = (dot(intersection.nrm, w_o) < 0.0f) ? mat.int_medium : mat.ext_medium;

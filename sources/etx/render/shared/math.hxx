@@ -311,7 +311,7 @@ ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
   struct basis {
     float3 u, v;
   };
-  float s = (n.z < 0.0 ? -1.0f : 1.0f);
+  float s = (n.z < 0.0f ? -1.0f : 1.0f);
   float a = -1.0f / (s + n.z);
   float b = n.x * n.y * a;
   return basis{

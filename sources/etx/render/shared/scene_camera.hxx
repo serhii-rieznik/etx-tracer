@@ -101,7 +101,7 @@ ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const fl
     return {};
   }
 
-  float lens_area = (scene.camera.lens_radius > 0.0) ? kPi * sqr(scene.camera.lens_radius) : 1.0f;
+  float lens_area = (scene.camera.lens_radius > 0.0f) ? kPi * sqr(scene.camera.lens_radius) : 1.0f;
 
   result.pdf_area = 1.0f / lens_area;
   result.pdf_dir = result.pdf_area * distance_squared / cos_t;

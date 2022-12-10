@@ -193,7 +193,7 @@ struct ETX_ALIGNED Medium {
     float xi1 = smp.next();
 
     float cos_theta = 0.0f;
-    if (fabsf(phase_function_g) < 1e-3) {
+    if (fabsf(phase_function_g) < 1e-3f) {
       cos_theta = 1.0f - 2.0f * xi0;
     } else {
       float sqr_term = (1.0f - phase_function_g * phase_function_g) / (1.0f + phase_function_g - 2.0f * phase_function_g * xi0);

@@ -72,27 +72,27 @@ ETX_DECLARE_BSDF(Mixture);
 namespace bsdf {
 
 [[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::sample(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_SAMPLE);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::sample(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_SAMPLE);
 }
 
 [[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::evaluate(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_EVALUATE);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::evaluate(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_EVALUATE);
 }
 
 [[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::pdf(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_PDF);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::pdf(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_PDF);
 }
 
 [[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -108,58 +108,48 @@ namespace bsdf {
 }
 
 [[nodiscard]] ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::is_delta(mtl, tex, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_IS_DELTA);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::is_delta(mtl, tex, scene, smp);
+#endif
+  ALL_CASES(CASE_IMPL_IS_DELTA);
 }
 
 [[nodiscard]] ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::sample_impl(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_SAMPLE_IMPL);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::sample_impl(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_SAMPLE_IMPL);
 };
 
 [[nodiscard]] ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::evaluate_impl(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_EVALUATE_IMPL);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::evaluate_impl(data, mtl, scene, smp);
+#endif
+  ALL_CASES(CASE_IMPL_EVALUATE_IMPL);
 }
 
 [[nodiscard]] ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::pdf_impl(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_PDF_IMPL);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::pdf_impl(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_PDF_IMPL);
 }
 
 [[nodiscard]] ETX_GPU_CODE bool is_delta_impl(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::is_delta_impl(mtl, tex, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_IS_DELTA_IMPL);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::is_delta_impl(mtl, tex, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_IS_DELTA_IMPL);
 }
 
-#define ETX_FORWARD_TO_IMPL                                                                                     \
-  ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) { \
-    return sample_impl(data, mtl, scene, smp);                                                                  \
-  }                                                                                                             \
-  ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) { \
-    return evaluate_impl(data, mtl, scene, smp);                                                                \
-  }                                                                                                             \
-  ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {         \
-    return pdf_impl(data, mtl, scene, smp);                                                                     \
-  }                                                                                                             \
-  ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {   \
-    return is_delta_impl(material, tex, scene, smp);                                                            \
-  }
+#define ETX_FORWARD_TO_IMPL                                                                                                                                    \
+  ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) { return sample_impl(data, mtl, scene, smp); }   \
+  ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) { return evaluate_impl(data, mtl, scene, smp); } \
+  ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) { return pdf_impl(data, mtl, scene, smp); }              \
+  ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) { return is_delta_impl(material, tex, scene, smp); }
 
 #undef CASE_IMPL
 }  // namespace bsdf

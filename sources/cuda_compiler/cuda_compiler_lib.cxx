@@ -18,14 +18,18 @@ bool compile_cuda(CUDACompileTarget target, const char* path_to_file, const char
   if (len > 0) {
     snprintf(out_ptx_file + len, sizeof(out_ptx_file) - len, "%s\0", target == CUDACompileTarget::PTX ? ".ptx" : ".fatbin");
   }
-
   const char* target_file = output_to_file == nullptr ? out_ptx_file : output_to_file;
 
-#if defined(NDEBUG) || defined(_NDEBUG)
-  const char* debug_flags = "--define-macro NDEBUG --optimize 3";
-#else
-  const char* debug_flags = (target == CUDACompileTarget::PTX) ? "--debug --device-debug --source-in-ptx" : "--debug --device-debug";
-#endif
+  const char* debug_flags = nullptr;
+  if (kCUDADebugBuild) {
+    debug_flags = (target == CUDACompileTarget::PTX)    //
+                    ? "--device-debug --source-in-ptx"  //
+                    : "--device-debug";                 //
+  } else {
+    debug_flags = (target == CUDACompileTarget::PTX)                                                 //
+                    ? "--device-debug --source-in-ptx --dopt on --define-macro NDEBUG --optimize 3"  //
+                    : "--device-debug --dopt on --define-macro NDEBUG --optimize 3";                 //
+  }
 
   static char command_line[4096] = {};
   snprintf(command_line, sizeof(command_line),

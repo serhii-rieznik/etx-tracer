@@ -147,6 +147,8 @@ struct GPUOptixImplData {
     if (cuCtxGetCurrent(&cuda_context) != CUDA_SUCCESS)
       return false;
 
+    snprintf(cuda_arch, sizeof(cuda_arch), "--gpu-architecture sm_%d%d", device_properties.major, device_properties.minor);
+
     return true;
   }
 
@@ -313,10 +315,17 @@ struct GPUPipelineOptixImpl {
   }
 
   bool create_optix_module(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
+    constexpr uint32_t debug_build = kCUDADebugBuild ? 1u : 0u;
+    constexpr uint32_t optimization_level = debug_build * OPTIX_COMPILE_OPTIMIZATION_LEVEL_0 + (1 - debug_build) * OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
+    constexpr uint32_t debug_level = debug_build * OPTIX_COMPILE_DEBUG_LEVEL_FULL + (1 - debug_build) * OPTIX_COMPILE_DEBUG_LEVEL_DEFAULT;
+    constexpr uint64_t kMaxLogSize = 64llu * 1024llu;
+
+    std::vector<char> compile_log(kMaxLogSize);
+
     OptixModuleCompileOptions module_options = {
       .maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT,
-      .optLevel = OptixCompileOptimizationLevel(ETX_DEBUG * OPTIX_COMPILE_OPTIMIZATION_LEVEL_0 + (1 - ETX_DEBUG) * OPTIX_COMPILE_OPTIMIZATION_LEVEL_3),
-      .debugLevel = OptixCompileDebugLevel((ETX_DEBUG)*OPTIX_COMPILE_DEBUG_LEVEL_FULL + (1 - ETX_DEBUG) * OPTIX_COMPILE_DEBUG_LEVEL_DEFAULT),
+      .optLevel = OptixCompileOptimizationLevel(optimization_level),
+      .debugLevel = OptixCompileDebugLevel(debug_level),
     };
 
     pipeline_options = {
@@ -327,20 +336,19 @@ struct GPUPipelineOptixImpl {
       .pipelineLaunchParamsVariableName = "global",
     };
 
-    char compile_log[4096] = {};
-    size_t compile_log_size = sizeof(compile_log);
+    uint64_t compile_log_size = kMaxLogSize;
     if (device->optix_call_failed(optixModuleCreateFromPTX(device->optix, &module_options, &pipeline_options,  //
-          reinterpret_cast<const char*>(desc.data), desc.data_size, compile_log, &compile_log_size, &optix_module))) {
+          reinterpret_cast<const char*>(desc.data), desc.data_size, compile_log.data(), &compile_log_size, &optix_module))) {
       log::error("optixModuleCreateFromPTX failed");
       if (compile_log_size > 1) {
-        log::error(compile_log);
+        log::error(compile_log.data());
       }
       release(device);
       return false;
     }
 
     if (compile_log_size > 1) {
-      log::warning(compile_log);
+      log::warning(compile_log.data());
     }
 
     for (uint64_t i = 0; i < desc.entry_point_count; ++i) {
@@ -350,17 +358,18 @@ struct GPUPipelineOptixImpl {
       program_desc.raygen.module = optix_module;
       program_desc.raygen.entryFunctionName = desc.entry_points[i];
       OptixProgramGroupOptions program_options = {};
-      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, entry_points + i))) {
+      compile_log_size = kMaxLogSize;
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log.data(), &compile_log_size, entry_points + i))) {
         log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
-          log::error(compile_log);
+          log::error(compile_log.data());
         }
         release(device);
         return false;
       }
 
       if (compile_log_size > 1) {
-        log::warning(compile_log);
+        log::warning(compile_log.data());
       }
     }
 
@@ -373,18 +382,19 @@ struct GPUPipelineOptixImpl {
       program_desc.hitgroup.moduleAH = optix_module;
       program_desc.hitgroup.entryFunctionNameAH = "__anyhit__main";
 
+      compile_log_size = kMaxLogSize;
       OptixProgramGroupOptions program_options = {};
-      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &main_hit_program_group))) {
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log.data(), &compile_log_size, &main_hit_program_group))) {
         log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
-          log::error(compile_log);
+          log::error(compile_log.data());
         }
         release(device);
         return false;
       }
 
       if (compile_log_size > 1) {
-        log::warning(compile_log);
+        log::warning(compile_log.data());
       }
     }
 
@@ -395,18 +405,19 @@ struct GPUPipelineOptixImpl {
       program_desc.miss.module = optix_module;
       program_desc.miss.entryFunctionName = "__miss__main";
 
+      compile_log_size = kMaxLogSize;
       OptixProgramGroupOptions program_options = {};
-      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &main_miss_program_group))) {
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log.data(), &compile_log_size, &main_miss_program_group))) {
         log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
-          log::error(compile_log);
+          log::error(compile_log.data());
         }
         release(device);
         return false;
       }
 
       if (compile_log_size > 1) {
-        log::warning(compile_log);
+        log::warning(compile_log.data());
       }
     }
 

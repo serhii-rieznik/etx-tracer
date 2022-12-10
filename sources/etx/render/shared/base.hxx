@@ -14,22 +14,26 @@
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
 
-#define ETX_VALIDATE(VALUE)                                         \
-  do {                                                              \
-    if (valid_value((VALUE)) == false) {                            \
-      printf("Validation failed [%s, %u]:\n ", __FILE__, __LINE__); \
-      print_value(#VALUE, "invalid value", VALUE);                  \
-      ETX_DEBUG_BREAK();                                            \
-    }                                                               \
+#define ETX_VALIDATE(VALUE)                                     \
+  do {                                                          \
+    if (valid_value((VALUE)) == false) {                        \
+      static uint32_t reported = 0;                             \
+      if (atomicAdd(&reported, 1u) == 0) {                      \
+        print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
+        ETX_DEBUG_BREAK();                                      \
+      }                                                         \
+    }                                                           \
   } while (0)
 
-#define ETX_CHECK_FINITE(VALUE)                                     \
-  do {                                                              \
-    if (isfinite((VALUE)) == false) {                               \
-      printf("Validation failed [%s, %u]:\n ", __FILE__, __LINE__); \
-      print_value(#VALUE, "invalid value", VALUE);                  \
-      ETX_DEBUG_BREAK();                                            \
-    }                                                               \
+#define ETX_CHECK_FINITE(VALUE)                                 \
+  do {                                                          \
+    if (isfinite((VALUE)) == false) {                           \
+      static uint32_t reported = 0;                             \
+      if (atomicAdd(&reported, 1u) == 0) {                      \
+        print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
+        ETX_DEBUG_BREAK();                                      \
+      }                                                         \
+    }                                                           \
   } while (0)
 
 #else
@@ -59,14 +63,14 @@ struct ETX_ALIGNED ArrayView {
   }
 
   ETX_GPU_CODE const T& operator[](uint64_t i) const {
-    ETX_ASSERT_GREATER(count, 0);
+    ETX_ASSERT_GREATER(count, 0llu);
     ETX_ASSERT(a != nullptr);
     ETX_ASSERT_LESS(i, count);
     return a[i];
   }
 
   ETX_GPU_CODE T& operator[](uint64_t i) {
-    ETX_ASSERT_GREATER(count, 0);
+    ETX_ASSERT_GREATER(count, 0llu);
     ETX_ASSERT(a != nullptr);
     ETX_ASSERT_LESS(i, count);
     return a[i];
@@ -104,20 +108,20 @@ ETX_GPU_CODE ArrayView<T> make_array_view(uint64_t p, uint64_t count) {
   return {reinterpret_cast<T*>(p), count};
 }
 
-ETX_GPU_CODE void print_value(const char* name, const char* tag, const float2& v) {
-  printf("%s : %s (%f, %f)\n", name, tag, v.x, v.y);
+ETX_GPU_CODE void print_invalid_value(const char* name, const float2& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f %f) at %s [%u]\n", name, v.x, v.y, filename, line);
 }
 
-ETX_GPU_CODE void print_value(const char* name, const char* tag, const float3& v) {
-  printf("%s : %s (%f, %f, %f)\n", name, tag, v.x, v.y, v.z);
+ETX_GPU_CODE void print_invalid_value(const char* name, const float3& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, filename, line);
 }
 
-ETX_GPU_CODE void print_value(const char* name, const char* tag, const float4& v) {
-  printf("%s : %s (%f, %f, %f, %f)\n", name, tag, v.x, v.y, v.z, v.w);
+ETX_GPU_CODE void print_invalid_value(const char* name, const float4& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f %f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, v.w, filename, line);
 }
 
-ETX_GPU_CODE void print_value(const char* name, const char* tag, complex z) {
-  printf("%s : %s %f + i * %f\n", name, tag, z.real(), z.imag());
+ETX_GPU_CODE void print_invalid_value(const char* name, complex z, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f + i * %f) at %s [%u]\n", name, z.real(), z.imag(), filename, line);
 }
 
 }  // namespace etx

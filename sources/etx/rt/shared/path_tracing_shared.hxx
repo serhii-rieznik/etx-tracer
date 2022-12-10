@@ -100,12 +100,19 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   if (options.nee && (payload.path_length + 1 <= options.max_depth)) {
     auto emitter_sample = sample_emitter(payload.spect, payload.smp, intersection.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
+      ETX_VALIDATE(emitter_sample.value);
       BSDFEval bsdf_eval = bsdf::evaluate({payload.spect, payload.medium, PathSource::Camera, intersection, payload.ray.d, emitter_sample.direction}, mat, scene, payload.smp);
       if (bsdf_eval.valid()) {
+        ETX_VALIDATE(bsdf_eval.bsdf);
+
         auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
         auto tr = transmittance(payload.spect, payload.smp, pos, emitter_sample.origin, payload.medium, scene, rt);
+        ETX_VALIDATE(tr);
+
         bool no_weight = (options.mis == false) || emitter_sample.is_delta;
         auto weight = no_weight ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
+        ETX_VALIDATE(weight);
+
         payload.accumulated += payload.throughput * bsdf_eval.bsdf * emitter_sample.value * tr * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
         ETX_VALIDATE(payload.accumulated);
       }
