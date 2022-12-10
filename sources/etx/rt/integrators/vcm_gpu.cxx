@@ -1,4 +1,6 @@
 #include <etx/rt/integrators/vcm_gpu.hxx>
+#include <etx/rt/integrators/vcm_spatial_grid.hxx>
+
 #include <etx/rt/shared/vcm_shared.hxx>
 
 #include <cuda.h>

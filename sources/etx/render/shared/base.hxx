@@ -108,20 +108,4 @@ ETX_GPU_CODE ArrayView<T> make_array_view(uint64_t p, uint64_t count) {
   return {reinterpret_cast<T*>(p), count};
 }
 
-ETX_GPU_CODE void print_invalid_value(const char* name, const float2& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f) at %s [%u]\n", name, v.x, v.y, filename, line);
-}
-
-ETX_GPU_CODE void print_invalid_value(const char* name, const float3& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, filename, line);
-}
-
-ETX_GPU_CODE void print_invalid_value(const char* name, const float4& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, v.w, filename, line);
-}
-
-ETX_GPU_CODE void print_invalid_value(const char* name, complex z, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f + i * %f) at %s [%u]\n", name, z.real(), z.imag(), filename, line);
-}
-
 }  // namespace etx

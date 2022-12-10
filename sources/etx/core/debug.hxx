@@ -1,8 +1,7 @@
 #pragma once
 
-#include <stdio.h>
-#include <stdint.h>
-#include <assert.h>
+#include <cstdint>
+#include <cassert>
 
 #if defined(NDEBUG) || defined(_NDEBUG)
 #define ETX_DEBUG 0
@@ -10,7 +9,7 @@
 #define ETX_DEBUG 1
 #endif
 
-#if defined(__NVCC__)
+#if defined(__CUDACC__)
 
 #define ETX_NVCC_COMPILER 1
 #define ETX_CPU_CODE __host__
@@ -21,6 +20,8 @@
 #define ETX_INIT_WITH(S)
 
 #else
+
+#include <stdio.h>
 
 #define ETX_NVCC_COMPILER 0
 #define ETX_CPU_CODE
@@ -51,10 +52,6 @@ T atomicAdd(T*, T);
 #define ETX_ABORT() abort()
 
 #endif
-
-ETX_GPU_CODE void print_invalid_value(const char* name, float v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f) at %s [%u]\n", name, v, filename, line);
-}
 
 #define ETX_FORCE_ASSERTS 0
 

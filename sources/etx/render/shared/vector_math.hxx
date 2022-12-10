@@ -1,7 +1,9 @@
 #pragma once
 
+#if !defined(__CUDACC__)
 #pragma warning(push)
 #pragma warning(disable : 4146)
+#endif
 
 /*
  * Float2
@@ -190,7 +192,9 @@ ETX_V4(float4, float)
 ETX_V4(int4, int32_t)
 ETX_V4(uint4, uint32_t)
 
+#if !defined(__CUDACC__)
 #pragma warning(pop)
+#endif
 
 ETX_GPU_CODE float2 abs(const float2& a) {
   return {fabsf(a.x), fabsf(a.y)};

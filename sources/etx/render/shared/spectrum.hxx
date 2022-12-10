@@ -361,9 +361,41 @@ ETX_GPU_CODE SpectralResponse abs(const SpectralResponse& v) {
 ETX_GPU_CODE SpectralResponse saturate(const SpectralResponse& v) {
   return {v.wavelength, {saturate(v.components.x), saturate(v.components.y), saturate(v.components.z)}};
 }
-ETX_GPU_CODE void print_invalid_value(const char* name, const SpectralResponse& v, const char* filename, uint32_t line) {
+
+#if (ETX_DEBUG || ETX_FORCE_VALIDATION)
+template <class T>
+ETX_GPU_CODE void print_invalid_value(const char* name, const T& v, const char* filename, uint32_t line);
+
+template <>
+ETX_GPU_CODE void print_invalid_value<float>(const char* name, const float& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f) at %s [%u]\n", name, v, filename, line);
+}
+
+template <>
+ETX_GPU_CODE void print_invalid_value<float2>(const char* name, const float2& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f %f) at %s [%u]\n", name, v.x, v.y, filename, line);
+}
+
+template <>
+ETX_GPU_CODE void print_invalid_value<float3>(const char* name, const float3& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, filename, line);
+}
+
+template <>
+ETX_GPU_CODE void print_invalid_value<float4>(const char* name, const float4& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f %f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, v.w, filename, line);
+}
+
+template <>
+ETX_GPU_CODE void print_invalid_value<complex>(const char* name, const complex& z, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%f + i * %f) at %s [%u]\n", name, z.real(), z.imag(), filename, line);
+}
+
+template <>
+ETX_GPU_CODE void print_invalid_value<SpectralResponse>(const char* name, const SpectralResponse& v, const char* filename, uint32_t line) {
   printf("Validation failed: %s (%f : %f %f %f) at %s [%u]\n", name, v.wavelength, v.components.x, v.components.y, v.components.z, filename, line);
 }
+#endif
 
 struct Spectrums;
 
@@ -501,10 +533,10 @@ struct ETX_ALIGNED SpectralDistribution {
 
   static SpectralDistribution from_constant(float value);
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count);
-  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, struct Pointer<Spectrums>);
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, struct Pointer<Spectrums>);
-  static SpectralDistribution from_black_body(float temperature, struct Pointer<Spectrums>);
-  static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, struct Pointer<Spectrums>);
+  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, Pointer<Spectrums>);
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, Pointer<Spectrums>);
+  static SpectralDistribution from_black_body(float temperature, Pointer<Spectrums>);
+  static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, Pointer<Spectrums>);
 };
 
 struct RefractiveIndex {

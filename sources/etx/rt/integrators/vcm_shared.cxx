@@ -1,4 +1,4 @@
-#include <etx/rt/shared/vcm_shared.hxx>
+#include <etx/rt/integrators/vcm_spatial_grid.hxx>
 
 namespace etx {
 

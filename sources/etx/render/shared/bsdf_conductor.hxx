@@ -1,6 +1,4 @@
-﻿#include <etx/render/host/rnd_sampler.hxx>
-
-namespace etx {
+﻿namespace etx {
 namespace DeltaConductorBSDF {
 
 ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {

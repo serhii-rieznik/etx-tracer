@@ -5,8 +5,7 @@
 #error This file should not be included separately. Use etx/render/shared/base.hxx instead
 #endif
 
-#include <math.h>
-#include <string.h>
+#include <cmath>
 #include <complex>
 
 template <class t>
@@ -25,25 +24,14 @@ struct vector4 {
 };
 
 #if (ETX_NVCC_COMPILER)
-
+#if defined(__NVCC__)
 #include <thrust/complex.h>
-using complex = thrust::complex<float>;
-
-ETX_GPU_CODE complex complex_sqrt(complex c) {
-  return thrust::sqrt(c);
-}
-ETX_GPU_CODE complex complex_cos(complex c) {
-  return thrust::cos(c);
-}
-ETX_GPU_CODE float complex_abs(complex c) {
-  return thrust::abs(c);
-}
-ETX_GPU_CODE float complex_norm(complex c) {
-  return thrust::norm(c);
-}
-
+#define STD_NS thrust
 #else
-
+#define STD_NS cuda::std
+#endif
+#else
+#define STD_NS std
 using float2 = vector2<float>;
 using float3 = vector3<float>;
 using float4 = vector4<float>;
@@ -53,22 +41,22 @@ using int4 = vector4<int32_t>;
 using uint2 = vector2<uint32_t>;
 using uint3 = vector3<uint32_t>;
 using uint4 = vector4<uint32_t>;
-using complex = std::complex<float>;
+#endif
+
+using complex = STD_NS::complex<float>;
 
 ETX_GPU_CODE complex complex_sqrt(complex c) {
-  return std::sqrt(c);
+  return STD_NS::sqrt(c);
 }
 ETX_GPU_CODE complex complex_cos(complex c) {
-  return std::cos(c);
+  return STD_NS::cos(c);
 }
 ETX_GPU_CODE float complex_abs(complex c) {
-  return std::abs(c);
+  return STD_NS::abs(c);
 }
 ETX_GPU_CODE float complex_norm(complex c) {
-  return std::norm(c);
+  return STD_NS::norm(c);
 }
-
-#endif
 
 using ubyte2 = vector2<uint8_t>;
 using ubyte3 = vector3<uint8_t>;

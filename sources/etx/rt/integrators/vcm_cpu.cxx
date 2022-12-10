@@ -1,5 +1,7 @@
 #include <etx/core/core.hxx>
+
 #include <etx/rt/integrators/vcm_cpu.hxx>
+#include <etx/rt/integrators/vcm_spatial_grid.hxx>
 
 #include <etx/render/host/film.hxx>
 #include <etx/render/shared/scene_camera.hxx>

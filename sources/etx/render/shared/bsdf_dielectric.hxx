@@ -1,6 +1,4 @@
-﻿#include <stdlib.h>
-
-namespace etx {
+﻿namespace etx {
 
 namespace DeltaDielectricBSDF {
 

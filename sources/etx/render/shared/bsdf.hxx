@@ -5,7 +5,11 @@
 
 namespace etx {
 
-// #define ETX_FORCED_BSDF PlasticBSDF
+#define ETX_FORCE_BSDF 0
+
+#if (ETX_FORCED_BSDF)
+#define ETX_FORCED_BSDF DiffuseBSDF
+#endif
 
 enum class PathSource : uint32_t {
   Undefined,
@@ -14,6 +18,11 @@ enum class PathSource : uint32_t {
 };
 
 struct BSDFData : public Vertex {
+  struct ETX_ALIGNED NormalFrame {
+    LocalFrame frame;
+    bool entering_material;
+  };
+
   ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi, const float3& awo)
     : Vertex(av)
     , path_source(ps)
@@ -30,10 +39,7 @@ struct BSDFData : public Vertex {
     return result;
   }
 
-  ETX_GPU_CODE struct {
-    LocalFrame frame;
-    bool entering_material;
-  } get_normal_frame() const {
+  ETX_GPU_CODE NormalFrame get_normal_frame() const {
     bool entering_material = dot(nrm, w_i) < 0.0f;
     return {entering_material ? LocalFrame{tan, btn, nrm} : LocalFrame{-tan, -btn, -nrm}, entering_material};
   }
