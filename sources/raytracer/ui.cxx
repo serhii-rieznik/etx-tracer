@@ -1,5 +1,6 @@
 ﻿#include <etx/core/core.hxx>
 #include <etx/render/host/image_pool.hxx>
+#include <etx/log/log.hxx>
 
 #include "ui.hxx"
 
@@ -11,6 +12,24 @@
 #include <sokol_imgui.h>
 
 namespace etx {
+
+void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint32_t>& mapping) {
+  constexpr uint64_t kMaterialNameMaxSize = 1024llu;
+
+  indices.clear();
+  indices.reserve(mapping.size());
+  names.clear();
+  names.reserve(mapping.size());
+  data.resize(mapping.size() * kMaterialNameMaxSize);
+  std::fill(data.begin(), data.end(), 0);
+  char* ptr = data.data();
+  int32_t pp = 0;
+  for (auto& m : mapping) {
+    indices.emplace_back(m.second);
+    names.emplace_back(ptr + pp);
+    pp += snprintf(ptr + pp, kMaterialNameMaxSize, "%s", m.first.c_str()) + 1;
+  }
+}
 
 void UI::initialize() {
   simgui_desc_t imggui_desc = {};
@@ -87,21 +106,66 @@ bool UI::build_options(Options& options) {
   return changed;
 }
 
+bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums) {
+  float3 rgb = linear_to_gamma(spectrum::xyz_to_rgb(spd.to_xyz()));
+  if (igColorEdit3(name, &rgb.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar)) {
+    spd = rgb::make_reflectance_spd(gamma_to_linear(rgb), spectrums);
+    return true;
+  }
+  return false;
+}
+
 void UI::build(double dt, const char* status) {
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
 
   float offset_size = igGetFontSize();
-  igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 2.0f * offset_size}, ImGuiCond_Always, {1.0f, 0.0f});
-  igBegin("View Options", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-  build_options(_view_options);
-
-  char status_buffer[2048] = {};
   float dy = igGetStyle()->FramePadding.y;
-  uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
-  snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
-  igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration);
-  igText(status_buffer);
-  igEnd();
+
+  {
+    igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 0.5f * sapp_heightf() - 3.0f * offset_size - dy}, ImGuiCond_Always, {1.0f, 1.0f});
+    igBegin("View Options", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+    build_options(_view_options);
+  }
+  {
+    char status_buffer[2048] = {};
+    uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
+    snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
+    igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration);
+    igText(status_buffer);
+    igEnd();
+  }
+
+  if ((_current_integrator != nullptr) && (_current_scene != nullptr) && (_material_mapping.empty() == false)) {
+    igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 2.0f * offset_size}, ImGuiCond_Always, {1.0f, 0.0f});
+    igBegin("Materials", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+    igListBox_Str_arr("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
+    if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
+      if ((_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
+        uint32_t material_index = _material_mapping.at(_selected_material);
+        Material& material = _current_scene->materials[material_index];
+        bool changed = build_material(material);
+        if (changed && callbacks.material_changed) {
+          callbacks.material_changed(material_index);
+        }
+      }
+      igEnd();
+    }
+
+    igSetNextWindowPos({0.5f * sapp_widthf() / sapp_dpi_scale(), 2.0f * offset_size}, ImGuiCond_Always, {0.5f, 0.0f});
+    igBegin("Mediums", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+    igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
+    if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
+      if ((_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
+        uint32_t medium_index = _medium_mapping.at(_selected_medium);
+        Medium& m = _current_scene->mediums[medium_index];
+        bool changed = build_medium(m);
+        if (changed && callbacks.material_changed) {
+          callbacks.medium_changed(medium_index);
+        }
+      }
+      igEnd();
+    }
+  }
 
   if ((_current_integrator != nullptr) && (_current_integrator->debug_info_count() > 0)) {
     igSetNextWindowPos({offset_size, 0.5f * sapp_heightf() - 3.0f * offset_size - dy}, ImGuiCond_Always, {0.0f, 1.0f});
@@ -370,6 +434,60 @@ void UI::load_image() {
   if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
     callbacks.reference_image_selected(selected_file);
   }
+}
+
+void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums) {
+  _current_scene = scene;
+
+  _selected_material = -1;
+  _material_mapping.build(materials);
+
+  _selected_medium = -1;
+  _medium_mapping.build(mediums);
+}
+
+bool UI::build_material(Material& material) {
+  int32_t material_cls = static_cast<int32_t>(material.cls);
+  bool changed = igCombo_FnBoolPtr(
+    "Type", &material_cls,
+    [](void* data, int32_t idx, const char** out_text) -> bool {
+      material_class_to_string(Material::Class(idx), out_text);
+      return true;
+    },
+    nullptr, int32_t(Material::Class::Count), 5);
+  material.cls = static_cast<Material::Class>(material_cls);
+  changed |= igSliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  changed |= igSliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  changed |= igSpectrumPicker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums);
+  changed |= igSpectrumPicker("Specular", material.specular.spectrum, _current_scene->spectrums);
+  changed |= igSpectrumPicker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums);
+
+  auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
+    bool has_medium = medium != kInvalidIndex;
+    bool changed = igCheckbox(name, &has_medium);
+    if (has_medium) {
+      int32_t medium_index = static_cast<int32_t>(medium);
+      if (medium_index == -1)
+        medium_index = 0;
+      changed |= igSliderInt("##medium_index", &medium_index, 0, int32_t(medium_count), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
+      medium = uint32_t(medium_index);
+    } else {
+      medium = kInvalidIndex;
+    }
+    return changed;
+  };
+
+  changed |= medium_editor("Internal medium", material.int_medium, _current_scene->mediums.count);
+  changed |= medium_editor("Extenral medium", material.ext_medium, _current_scene->mediums.count);
+
+  return changed;
+}
+
+bool UI::build_medium(Medium& m) {
+  bool changed = igSpectrumPicker("Absorption", m.s_absorption, _current_scene->spectrums);
+  changed |= igSpectrumPicker("Outscattering", m.s_outscattering, _current_scene->spectrums);
+  changed |= igSliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
+  return changed;
 }
 
 }  // namespace etx

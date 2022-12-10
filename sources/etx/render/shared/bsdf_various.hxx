@@ -246,6 +246,7 @@ ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, con
 
 }  // namespace BoundaryBSDF
 
+#if (ETX_HAS_MIXTURE_BSDF)
 namespace MixtureBSDF {
 
 ETX_GPU_CODE float get_factor(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -319,4 +320,6 @@ ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, con
 }
 
 }  // namespace MixtureBSDF
+#endif
+
 }  // namespace etx

@@ -3,6 +3,8 @@
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/spectrum.hxx>
 
+#define ETX_HAS_MIXTURE_BSDF 0
+
 namespace etx {
 
 struct ETX_ALIGNED SpectralImage {
@@ -38,7 +40,11 @@ struct ETX_ALIGNED Material {
     Boundary,
     Generic,
     Coating,
+    Velvet,
+
+#if (ETX_HAS_MIXTURE_BSDF)
     Mixture,
+#endif
 
     Count,
     Undefined = kInvalidIndex,
@@ -59,13 +65,16 @@ struct ETX_ALIGNED Material {
 
   uint32_t normal_image_index = kInvalidIndex;
   uint32_t metal_roughness_image_index = kInvalidIndex;
+
+  float metalness = {};
+  float normal_scale = 1.0f;
+
+#if (ETX_HAS_MIXTURE_BSDF)
   uint32_t mixture_0 = kInvalidIndex;
   uint32_t mixture_1 = kInvalidIndex;
   uint32_t mixture_image_index = kInvalidIndex;
-
   float mixture = {};
-  float metalness = {};
-  float normal_scale = 1.0f;
+#endif
 };
 
 }  // namespace etx

@@ -304,13 +304,19 @@ float4 validate(in float4 xyz) {
   return xyz;
 }
 
+float linear_to_gamma(float value) {
+  return value <= 0.0031308f ? 12.92f * value : 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
+}
+
 float4 tonemap(float4 value) {
   if (options & ToneMapping) {
     value = 1.0f - exp(-exposure * value);
   }
 
   if (options & sRGB) {
-    value = pow(max(0.0f, value), 1.0f / 2.2f);
+    value.x = linear_to_gamma(value.x);
+    value.y = linear_to_gamma(value.y);
+    value.z = linear_to_gamma(value.z);
   }
 
   return value;

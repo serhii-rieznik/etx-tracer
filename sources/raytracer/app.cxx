@@ -33,6 +33,8 @@ void RTApplication::init() {
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
   ui.callbacks.reload_integrator = std::bind(&RTApplication::on_reload_integrator_selected, this);
   ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
+  ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
+  ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -141,11 +143,13 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   save_options();
 
   if (scene.load_from_file(_current_scene_file.c_str(), options) == false) {
+    ui.set_scene(nullptr, {}, {});
     log::error("Failed to load scene from file: %s", _current_scene_file.c_str());
     return;
   }
 
   raytracing.set_scene(scene.scene());
+  ui.set_scene(scene.mutable_scene(), scene.material_mapping(), scene.medium_mapping());
 
   if (scene) {
     render.set_output_dimensions(scene.scene().camera.image_size);
@@ -217,9 +221,15 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
     float exposure = ui.view_options().exposure;
     std::vector<ubyte4> tonemapped(image_size.x * image_size.y);
     for (uint32_t i = 0, e = image_size.x * image_size.y; (mode != SaveImageMode::XYZ) && (i < e); ++i) {
-      tonemapped[i].x = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].x), 1.0f / 2.2f)));
-      tonemapped[i].y = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].y), 1.0f / 2.2f)));
-      tonemapped[i].z = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].z), 1.0f / 2.2f)));
+      float3 tm = {
+        1.0f - expf(-exposure * output[i].x),
+        1.0f - expf(-exposure * output[i].y),
+        1.0f - expf(-exposure * output[i].z),
+      };
+      float3 gamma = linear_to_gamma(tm);
+      tonemapped[i].x = static_cast<uint8_t>(255.0f * saturate(gamma.x));
+      tonemapped[i].y = static_cast<uint8_t>(255.0f * saturate(gamma.y));
+      tonemapped[i].z = static_cast<uint8_t>(255.0f * saturate(gamma.z));
       tonemapped[i].w = 255u;
     }
     if (stbi_write_png(file_name.c_str(), image_size.x, image_size.y, 4, tonemapped.data(), 0) != 1) {
@@ -300,6 +310,16 @@ void RTApplication::on_options_changed() {
 void RTApplication::on_reload_integrator_selected() {
   ETX_ASSERT(_current_integrator);
   _current_integrator->reload();
+}
+
+void RTApplication::on_material_changed(uint32_t index) {
+  // TODO : re-upload to GPU
+  _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_medium_changed(uint32_t index) {
+  // TODO : re-upload to GPU
+  _current_integrator->preview(ui.integrator_options());
 }
 
 }  // namespace etx

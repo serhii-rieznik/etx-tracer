@@ -24,7 +24,11 @@ ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
 ETX_DECLARE_BSDF(Generic);
 ETX_DECLARE_BSDF(Coating);
+ETX_DECLARE_BSDF(Velvet);
+
+#if (ETX_HAS_MIXTURE_BSDF)
 ETX_DECLARE_BSDF(Mixture);
+#endif
 
 #define CASE_IMPL(CLS, FUNC, ...) \
   case Material::Class::CLS:      \
@@ -40,6 +44,12 @@ ETX_DECLARE_BSDF(Mixture);
 #define CASE_IMPL_PDF_IMPL(A) CASE_IMPL(A, pdf_impl, data, mtl, scene, smp)
 #define CASE_IMPL_IS_DELTA_IMPL(A) CASE_IMPL(A, is_delta_impl, mtl, tex, scene, smp)
 
+#if (ETX_HAS_MIXTURE_BSDF)
+#define ETX_MIXTURE_BSDF_MACRO(M) M
+#else
+#define ETX_MIXTURE_BSDF_MACRO(M)
+#endif
+
 #define ALL_CASES(MACRO)                    \
   switch (mtl.cls) {                        \
     MACRO(Diffuse);                         \
@@ -52,7 +62,8 @@ ETX_DECLARE_BSDF(Mixture);
     MACRO(Boundary);                        \
     MACRO(Generic);                         \
     MACRO(Coating);                         \
-    MACRO(Mixture);                         \
+    ETX_MIXTURE_BSDF_MACRO(MACRO(Mixture)); \
+    MACRO(Velvet);                          \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
       return {};                            \
@@ -197,3 +208,4 @@ ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const Spe
 #include <etx/render/shared/bsdf_generic.hxx>
 #include <etx/render/shared/bsdf_plastic.hxx>
 #include <etx/render/shared/bsdf_various.hxx>
+#include <etx/render/shared/bsdf_velvet.hxx>

@@ -20,6 +20,7 @@ But this libraries and tools you have to install by yourself:
 
 Windows is the only one platform, which is supported at the moment.
 - download and install the latest release of Intel Embree from [GitHub](https://github.com/embree/embree/releases);
+  - add environment variable `EMBREE_LOCATION` pointing to the Embree installation folder;
   - copy embree binaries (embree3.dll and tbb12.dll) to "bin" folder in the root directory of etx-tracer;
 - download and install CUDA and OptiX;
   - add environment variable `OptiX_INSTALL_DIR` pointing to the OptiX installation folder;

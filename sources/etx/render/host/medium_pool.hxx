@@ -8,6 +8,8 @@
 namespace etx {
 
 struct MediumPool {
+  using Mapping = std::unordered_map<std::string, uint32_t>;
+
   MediumPool();
   ~MediumPool();
 
@@ -24,6 +26,7 @@ struct MediumPool {
   Medium& get(uint32_t);
   const Medium& get(uint32_t) const;
 
+  const Mapping& mapping() const;
   Medium* as_array();
   uint64_t array_size();
 

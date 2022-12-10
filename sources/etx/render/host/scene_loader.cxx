@@ -80,7 +80,7 @@ struct SceneRepresentationImpl {
   ImagePool images;
   MediumPool mediums;
 
-  std::unordered_map<std::string, uint32_t> material_mapping;
+  SceneRepresentation::MaterialMapping material_mapping;
   uint32_t camera_medium_index = kInvalidIndex;
   uint32_t camera_lens_shape_image_index = kInvalidIndex;
 
@@ -371,8 +371,20 @@ SceneRepresentation::~SceneRepresentation() {
   ETX_PIMPL_CLEANUP(SceneRepresentation);
 }
 
+Scene* SceneRepresentation::mutable_scene() {
+  return &_private->scene;
+}
+
 const Scene& SceneRepresentation::scene() const {
   return _private->scene;
+}
+
+const SceneRepresentation::MaterialMapping& SceneRepresentation::material_mapping() const {
+  return _private->material_mapping;
+}
+
+const SceneRepresentation::MediumMapping& SceneRepresentation::medium_mapping() const {
+  return _private->mediums.mapping();
 }
 
 Camera& SceneRepresentation::camera() {
@@ -624,7 +636,7 @@ inline auto get_param(const tinyobj::material_t& m, const char* param, char buff
   return false;
 }
 
-inline Material::Class material_string_to_class(const char* s) {
+Material::Class material_string_to_class(const char* s) {
   if (strcmp(s, "diffuse") == 0)
     return Material::Class::Diffuse;
   else if (strcmp(s, "plastic") == 0)
@@ -646,9 +658,45 @@ inline Material::Class material_string_to_class(const char* s) {
   else if (strcmp(s, "coating") == 0)
     return Material::Class::Coating;
   else if (strcmp(s, "mixture") == 0)
-    return Material::Class::Mixture;
+    return
+#if (ETX_HAS_MIXTURE_BSDF)
+      Material::Class::Mixture;
+#else
+      Material::Class::Diffuse;
+#endif
+  else if (strcmp(s, "velvet") == 0)
+    return Material::Class::Velvet;
   else
     return Material::Class::Undefined;
+}
+
+void material_class_to_string(Material::Class cls, const char** str) {
+  static const char* names[uint32_t(Material::Class::Count) + 1u] = {
+    "Diffuse",
+    "Plastic",
+    "Conductor",
+    "Dielectric",
+    "Thinfilm",
+    "Translucent",
+    "Mirror",
+    "Boundary",
+    "Generic",
+    "Coating",
+    "Velvet",
+#if (ETX_HAS_MIXTURE_BSDF)
+    "Mixture",
+#endif
+    "Undefined"
+  };
+
+  uint32_t material_index = cls < Material::Class::Count ? uint32_t(cls) : uint32_t(Material::Class::Count);
+  *str = names[material_index];
+}
+
+const char* material_class_to_string(Material::Class cls) {
+  const char* result = nullptr;
+  material_class_to_string(cls, &result);
+  return result;
 }
 
 inline bool get_file(const char* base_dir, const std::string& base, char buffer[]) {
@@ -1085,6 +1133,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         }
       }
 
+#if (ETX_HAS_MIXTURE_BSDF)
       if (get_param(material, "mixture", data_buffer)) {
         auto params = split_params(data_buffer);
         for (uint64_t i = 0, e = params.size(); i < e; ++i) {
@@ -1113,6 +1162,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
           }
         }
       }
+#endif
     }
   }
 

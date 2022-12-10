@@ -568,4 +568,28 @@ ETX_GPU_CODE float distance_to_sphere(const float3& r_origin, const float3& r_di
   return (a0 < 0.0f) ? ((a1 < 0.0f) ? 0.0f : a1) : a0;
 }
 
+ETX_GPU_CODE float gamma_to_linear(float value) {
+  return value <= 0.04045f ? value / 12.92f : powf((value + 0.055f) / 1.055f, 2.4f);
+}
+
+ETX_GPU_CODE float3 gamma_to_linear(const float3& value) {
+  return {
+    gamma_to_linear(value.x),
+    gamma_to_linear(value.y),
+    gamma_to_linear(value.z),
+  };
+}
+
+ETX_GPU_CODE float linear_to_gamma(float value) {
+  return value <= 0.0031308f ? 12.92f * value : 1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
+}
+
+ETX_GPU_CODE float3 linear_to_gamma(const float3& value) {
+  return {
+    linear_to_gamma(value.x),
+    linear_to_gamma(value.y),
+    linear_to_gamma(value.z),
+  };
+}
+
 }  // namespace etx
