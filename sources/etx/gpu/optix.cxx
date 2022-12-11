@@ -80,7 +80,7 @@ struct GPUOptixImplData {
 
   GPUBuffer shared_buffer = {};
   std::atomic<uint64_t> shared_buffer_offset = {};
-  char cuda_arch[128] = {};
+  uint32_t cuda_arch = 0u;
 
   GPUOptixImplData() {
     buffer_pool.init(1024u);
@@ -147,7 +147,7 @@ struct GPUOptixImplData {
     if (cuCtxGetCurrent(&cuda_context) != CUDA_SUCCESS)
       return false;
 
-    snprintf(cuda_arch, sizeof(cuda_arch), "--gpu-architecture sm_%d%d", device_properties.major, device_properties.minor);
+    cuda_arch = 10 * device_properties.major + device_properties.minor;
 
     return true;
   }

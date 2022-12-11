@@ -12,7 +12,7 @@
 
 namespace etx {
 
-bool rtc_compile(CUDACompileTarget target, const char* filename, const char* options, const char* output_file) {
+bool rtc_compile(CUDACompileTarget target, const char* filename, const uint32_t arch, const char* output_file) {
   nvrtcProgram program = {};
 
   auto rtc_call_impl = [&program](const char* expr, nvrtcResult result) -> bool {
@@ -53,11 +53,18 @@ bool rtc_compile(CUDACompileTarget target, const char* filename, const char* opt
     return false;
   }
 
+  char arch_ptx[] = "--gpu-architecture=compute_XX";
+  arch_ptx[sizeof(arch_ptx) - 3] = char(48 + arch / 10);
+  arch_ptx[sizeof(arch_ptx) - 2] = char(48 + arch % 10);
+  char arch_bin[] = "--gpu-architecture=sm_XX";
+  arch_bin[sizeof(arch_bin) - 3] = char(48 + arch / 10);
+  arch_bin[sizeof(arch_bin) - 2] = char(48 + arch % 10);
+
   std::vector<const char*> option_set = {
     "--device-as-default-execution-space",
     "--use_fast_math",
     "--std=c++17",
-    (target == CUDACompileTarget::PTX) ? "--gpu-architecture=compute_86" : "--gpu-architecture=sm_86",
+    (target == CUDACompileTarget::PTX) ? arch_ptx : arch_bin,
     "-I" ETX_INCLUDES,
     "-I" ETX_OPTIX_INCLUDES,
     "-I" ETX_CUDA_INCLUDES,
@@ -110,8 +117,8 @@ bool rtc_compile(CUDACompileTarget target, const char* filename, const char* opt
   return success;
 }
 
-bool compile_cuda(CUDACompileTarget target, const char* path_to_file, const char* output_to_file, const char* options) {
-  return rtc_compile(target, path_to_file, options, output_to_file);
+bool compile_cuda(CUDACompileTarget target, const char* path_to_file, const char* output_to_file, const uint32_t arch) {
+  return rtc_compile(target, path_to_file, arch, output_to_file);
   auto con = GetStdHandle(STD_OUTPUT_HANDLE);
 
   static char out_ptx_file[4096] = {};
@@ -137,9 +144,9 @@ bool compile_cuda(CUDACompileTarget target, const char* path_to_file, const char
 
   static char command_line[4096] = {};
   snprintf(command_line, sizeof(command_line),
-    "%s \"%s\" --output-file \"%s\" -I\"%s\" -I\"%s\" --std c++17 --expt-relaxed-constexpr --compiler-bindir \"%s\" %s %s %s",  //
-    ETX_CUDA_COMPILER, path_to_file, target_file, ETX_OPTIX_INCLUDES, ETX_INCLUDES, ETX_MSBUILD_PATH, debug_flags,              //
-    (target == CUDACompileTarget::PTX) ? "--ptx" : "--fatbin", options);                                                        //
+    "%s \"%s\" --output-file \"%s\" -I\"%s\" -I\"%s\" --std c++17 --expt-relaxed-constexpr --compiler-bindir \"%s\" %s %s --gpu-architecture sm_",  //
+    ETX_CUDA_COMPILER, path_to_file, target_file, ETX_OPTIX_INCLUDES, ETX_INCLUDES, ETX_MSBUILD_PATH, debug_flags,                                  //
+    (target == CUDACompileTarget::PTX) ? "--ptx" : "--fatbin", arch);                                                                               //
 
   static char command_line_info[4096] = {};
   int j = 0;
