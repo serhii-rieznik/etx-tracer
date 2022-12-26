@@ -162,6 +162,12 @@ struct ETX_ALIGNED Ray {
   float max_t = kMaxFloat;
 };
 
+struct ETX_ALIGNED IntersectionBase {
+  float2 barycentric = {};
+  uint32_t triangle_index = kInvalidIndex;
+  float t = -kMaxFloat;
+};
+
 struct ETX_ALIGNED Intersection : public Vertex {
   float3 barycentric = {};
   uint32_t triangle_index = kInvalidIndex;

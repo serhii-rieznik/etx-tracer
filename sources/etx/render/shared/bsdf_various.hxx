@@ -1,9 +1,9 @@
 ﻿namespace etx {
 namespace DiffuseBSDF {
 
-ETX_FORWARD_TO_IMPL;
+;
 
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   BSDFData eval_data = data;
@@ -14,7 +14,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse};
 }
 
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
@@ -33,7 +33,7 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
@@ -45,7 +45,7 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return result;
 }
 
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
@@ -53,9 +53,9 @@ ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, con
 
 namespace TranslucentBSDF {
 
-ETX_FORWARD_TO_IMPL;
+;
 
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
   float3 n = entering_material ? -data.nrm : data.nrm;
 
@@ -67,7 +67,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
@@ -82,14 +82,14 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
   float3 n = entering_material ? -data.nrm : data.nrm;
   auto n_dot_o = fmaxf(0.0f, dot(n, data.w_o));
   return kInvPi * n_dot_o;
 }
 
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
@@ -97,13 +97,13 @@ ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, con
 
 namespace CoatingBSDF {
 
-ETX_FORWARD_TO_IMPL;
+;
 
 ETX_GPU_CODE float2 remap_alpha(float2 a) {
   return sqr(max(a, float2{1.0f / 16.0f, 1.0f / 16.0f}));
 }
 
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   uint32_t properties = 0;
@@ -120,7 +120,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), properties};
 }
 
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   auto pow5 = [](float value) {
@@ -164,7 +164,7 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   float3 m = normalize(data.w_o - data.w_i);
@@ -181,7 +181,7 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return result;
 }
 
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;  // TODO : check this
 }
 
@@ -189,9 +189,9 @@ ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, con
 
 namespace MirrorBSDF {
 
-ETX_FORWARD_TO_IMPL;
+;
 
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   BSDFSample result;
@@ -202,15 +202,15 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return true;
 }
 
@@ -218,9 +218,9 @@ ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, con
 
 namespace BoundaryBSDF {
 
-ETX_FORWARD_TO_IMPL;
+;
 
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
 
   BSDFSample result;
@@ -232,94 +232,18 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
 }  // namespace BoundaryBSDF
-
-#if (ETX_HAS_MIXTURE_BSDF)
-namespace MixtureBSDF {
-
-ETX_GPU_CODE float get_factor(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  float result = material.mixture;
-  if (material.mixture_image_index != kInvalidIndex) {
-    result *= scene.images[material.mixture_image_index].evaluate(tex).x;
-  }
-  return result;
-}
-
-ETX_GPU_CODE uint32_t select_material(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  if ((material.mixture_0 == kInvalidIndex) && (material.mixture_1 == kInvalidIndex)) {
-    return kInvalidIndex;
-  }
-  float f = get_factor(material, tex, scene, smp);
-  if ((f >= 1.0f) || (material.mixture_0 == kInvalidIndex)) {
-    return material.mixture_1;
-  }
-  if ((f <= 0.0f) || (material.mixture_1 == kInvalidIndex)) {
-    return material.mixture_0;
-  }
-  return f <= smp.next() ? material.mixture_0 : material.mixture_1;
-}
-
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  uint32_t m = select_material(mtl, data.tex, scene, smp);
-  if (m == kInvalidIndex) {
-    return DiffuseBSDF::sample_impl(data, mtl, scene, smp);
-  }
-  return bsdf::sample_impl(data, scene.materials[m], scene, smp);
-}
-
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  uint32_t m = select_material(mtl, data.tex, scene, smp);
-  if (m == kInvalidIndex) {
-    return DiffuseBSDF::evaluate_impl(data, mtl, scene, smp);
-  }
-  return bsdf::evaluate_impl(data, scene.materials[m], scene, smp);
-}
-
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  uint32_t m = select_material(mtl, data.tex, scene, smp);
-  if (m == kInvalidIndex) {
-    return DiffuseBSDF::pdf_impl(data, mtl, scene, smp);
-  }
-  return bsdf::pdf_impl(data, scene.materials[m], scene, smp);
-}
-
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  uint32_t m = select_material(material, tex, scene, smp);
-  if (m == kInvalidIndex) {
-    return DiffuseBSDF::is_delta_impl(material, tex, scene, smp);
-  }
-  return bsdf::is_delta_impl(scene.materials[m], tex, scene, smp);
-}
-
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {};
-}
-
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {};
-}
-
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {};
-}
-
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return {};
-}
-
-}  // namespace MixtureBSDF
-#endif
 
 }  // namespace etx

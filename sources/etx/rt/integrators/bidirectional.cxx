@@ -206,7 +206,7 @@ struct CPUBidirectionalImpl : public Task {
     float eta = 1.0f;
     for (uint32_t path_length = 0; path_length <= opt_max_depth;) {
       Intersection intersection = {};
-      bool found_intersection = rt.trace(ray, intersection, smp);
+      bool found_intersection = rt.trace(rt.scene(), ray, intersection, smp);
 
       Medium::Sample medium_sample = {};
       if (medium_index != kInvalidIndex) {

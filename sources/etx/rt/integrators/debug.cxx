@@ -337,7 +337,7 @@ struct CPUDebugIntegratorImpl : public Task {
     float3 xyz = {0.1f, 0.1f, 0.1f};
 
     Intersection intersection;
-    if (rt.trace(ray, intersection, smp)) {
+    if (rt.trace(scene, ray, intersection, smp)) {
       bool entering_material = dot(ray.d, intersection.nrm) < 0.0f;
 
       switch (mode) {

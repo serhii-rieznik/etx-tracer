@@ -2,9 +2,9 @@
 
 namespace VelvetBSDF {
 
-ETX_FORWARD_TO_IMPL;
+;
 
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto eval_data = data;
   auto frame = data.get_normal_frame().frame;
   eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);
@@ -41,7 +41,7 @@ ETX_GPU_CODE float diffuse_burley(float alpha, float n_dot_i, float n_dot_o, flo
   return lightScatter * viewScatter * kInvPi;
 }
 
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   if (frame.entering_material == false)
     return {data.spectrum_sample.wavelength, 0.0f};
@@ -89,7 +89,7 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
   return eval;
 }
 
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   if (frame.entering_material == false)
     return 0.0f;
@@ -97,7 +97,7 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return 1.0f / kDoublePi;
 }
 
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 

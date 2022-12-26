@@ -2,7 +2,7 @@
 
 namespace DeltaPlasticBSDF {
 
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   auto eta_e = mtl.ext_ior(data.spectrum_sample);
@@ -41,7 +41,7 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
@@ -69,7 +69,7 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame().frame;
 
   float n_dot_o = dot(frame.nrm, data.w_o);
@@ -88,11 +88,11 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
 
 namespace PlasticBSDF {
 
-ETX_FORWARD_TO_IMPL;
+;
 
-ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::sample_impl(data, mtl, scene, smp);
+    return DeltaPlasticBSDF::sample(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -117,9 +117,9 @@ ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, c
   return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), properties};
 }
 
-ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::evaluate_impl(data, mtl, scene, smp);
+    return DeltaPlasticBSDF::evaluate(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -159,9 +159,9 @@ ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::pdf_impl(data, mtl, scene, smp);
+    return DeltaPlasticBSDF::pdf(data, mtl, scene, smp);
   }
 
   auto frame = data.get_normal_frame().frame;
@@ -188,7 +188,7 @@ ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Sce
   return result;
 }
 
-ETX_GPU_CODE bool is_delta_impl(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
