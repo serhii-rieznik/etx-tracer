@@ -594,7 +594,16 @@ inline std::vector<const char*> split_params(char* data) {
   return params;
 }
 
-inline SpectralDistribution load_spectrum(char* data_buffer) {
+inline SpectralDistribution load_reflectance_spectrum(char* data_buffer) {
+  SpectralDistribution reflection_spectrum = SpectralDistribution::from_constant(0.0f);
+  float value[3] = {};
+  if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
+    reflection_spectrum = rgb::make_reflectance_spd({value[0], value[1], value[2]}, spectrums());
+  }
+  return reflection_spectrum;
+}
+
+inline SpectralDistribution load_illuminant_spectrum(char* data_buffer) {
   SpectralDistribution emitter_spectrum = SpectralDistribution::from_constant(0.0f);
   float value[3] = {};
   if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
@@ -926,7 +935,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       auto& e = emitters.emplace_back(Emitter::Class::Directional);
 
       if (get_param(material, "color", data_buffer)) {
-        e.emission.spectrum = load_spectrum(data_buffer);
+        e.emission.spectrum = load_illuminant_spectrum(data_buffer);
       } else {
         e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
       }
@@ -961,7 +970,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU);
 
       if (get_param(material, "color", data_buffer)) {
-        e.emission.spectrum = load_spectrum(data_buffer);
+        e.emission.spectrum = load_illuminant_spectrum(data_buffer);
       } else {
         e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
       }
@@ -1123,8 +1132,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       if (get_param(material, "subsurface", data_buffer)) {
-        auto params = split_params(data_buffer);
-        mtl.subsurface.flags = 1u;
+        mtl.subsurface.scattering = load_reflectance_spectrum(data_buffer) * 0.2f;
       }
     }
   }

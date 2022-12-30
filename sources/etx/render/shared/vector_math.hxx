@@ -215,7 +215,6 @@ ETX_GPU_CODE float3 exp(const float3& a) {
 ETX_GPU_CODE float4 exp(const float4& a) {
   return {expf(a.x), expf(a.y), expf(a.z), expf(a.w)};
 }
-
 ETX_GPU_CODE float2 sqrt(const float2& a) {
   return {sqrtf(a.x), sqrtf(a.y)};
 }

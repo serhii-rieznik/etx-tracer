@@ -1,8 +1,6 @@
 ﻿namespace etx {
 namespace GenericBSDF {
 
-;
-
 ETX_GPU_CODE float2 remap_alpha(float2 a) {
   return sqr(max(a, float2{1.0f / 16.0f, 1.0f / 16.0f}));
 }

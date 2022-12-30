@@ -27,7 +27,7 @@ struct ETX_ALIGNED Thinfilm {
 };
 
 struct Subsurface {
-  uint32_t flags = 0;
+  SpectralDistribution scattering;
 };
 
 struct ETX_ALIGNED Material {
@@ -43,6 +43,7 @@ struct ETX_ALIGNED Material {
     Generic,
     Coating,
     Velvet,
+    Subsurface,
 
     Count,
     Undefined = kInvalidIndex,

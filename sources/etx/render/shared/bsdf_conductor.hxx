@@ -28,8 +28,6 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 
 namespace ConductorBSDF {
 
-;
-
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
     return DeltaConductorBSDF::sample(data, mtl, scene, smp);

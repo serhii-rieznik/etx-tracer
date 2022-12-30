@@ -57,8 +57,6 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
 
 namespace ThinfilmBSDF {
 
-;
-
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame_entering_material = data.get_normal_frame();
   auto frame = frame_entering_material.frame;
@@ -108,8 +106,6 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }  // namespace ThinfilmBSDF
 
 namespace DielectricBSDF {
-
-;
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
