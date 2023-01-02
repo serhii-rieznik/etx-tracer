@@ -29,7 +29,7 @@ struct Raytracing {
   void set_scene(const Scene&);
 
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
-  uint32_t continuous_trace(const Scene& scene, const Ray&, ContinousTraceOptions& options, Sampler& smp) const;
+  uint32_t continuous_trace(const Scene& scene, const Ray&, const ContinousTraceOptions& options, Sampler& smp) const;
 
   Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase&) const;
 

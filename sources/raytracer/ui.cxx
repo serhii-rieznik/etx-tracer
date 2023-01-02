@@ -121,46 +121,48 @@ void UI::build(double dt, const char* status) {
   float offset_size = igGetFontSize();
   float dy = igGetStyle()->FramePadding.y;
 
-  {
-    igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 0.5f * sapp_heightf() - 3.0f * offset_size - dy}, ImGuiCond_Always, {1.0f, 1.0f});
-    igBegin("View Options", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+  igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 0.5f * sapp_heightf() - 3.0f * offset_size - dy}, ImGuiCond_Always, {1.0f, 1.0f});
+  if (igBegin("View Options", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
     build_options(_view_options);
+    igEnd();
   }
-  {
-    char status_buffer[2048] = {};
-    uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
-    snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
-    igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration);
+
+  char status_buffer[2048] = {};
+  uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
+  snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
+  if (igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration)) {
     igText(status_buffer);
     igEnd();
   }
 
   if ((_current_integrator != nullptr) && (_current_scene != nullptr) && (_material_mapping.empty() == false)) {
     igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 2.0f * offset_size}, ImGuiCond_Always, {1.0f, 0.0f});
-    igBegin("Materials", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-    igListBox_Str_arr("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
-    if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
-      if ((_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
-        uint32_t material_index = _material_mapping.at(_selected_material);
-        Material& material = _current_scene->materials[material_index];
-        bool changed = build_material(material);
-        if (changed && callbacks.material_changed) {
-          callbacks.material_changed(material_index);
+    if (igBegin("Materials", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+      igListBox_Str_arr("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
+      if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
+        if ((_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
+          uint32_t material_index = _material_mapping.at(_selected_material);
+          Material& material = _current_scene->materials[material_index];
+          bool changed = build_material(material);
+          if (changed && callbacks.material_changed) {
+            callbacks.material_changed(material_index);
+          }
         }
       }
       igEnd();
     }
 
     igSetNextWindowPos({0.5f * sapp_widthf() / sapp_dpi_scale(), 2.0f * offset_size}, ImGuiCond_Always, {0.5f, 0.0f});
-    igBegin("Mediums", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-    igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
-    if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
-      if ((_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
-        uint32_t medium_index = _medium_mapping.at(_selected_medium);
-        Medium& m = _current_scene->mediums[medium_index];
-        bool changed = build_medium(m);
-        if (changed && callbacks.material_changed) {
-          callbacks.medium_changed(medium_index);
+    if (igBegin("Mediums", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+      igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
+      if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
+        if ((_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
+          uint32_t medium_index = _medium_mapping.at(_selected_medium);
+          Medium& m = _current_scene->mediums[medium_index];
+          bool changed = build_medium(m);
+          if (changed && callbacks.material_changed) {
+            callbacks.medium_changed(medium_index);
+          }
         }
       }
       igEnd();
@@ -169,14 +171,15 @@ void UI::build(double dt, const char* status) {
 
   if ((_current_integrator != nullptr) && (_current_integrator->debug_info_count() > 0)) {
     igSetNextWindowPos({offset_size, 0.5f * sapp_heightf() - 3.0f * offset_size - dy}, ImGuiCond_Always, {0.0f, 1.0f});
-    igBegin("Debug Info", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-    auto debug_info = _current_integrator->debug_info();
-    for (uint64_t i = 0, e = _current_integrator->debug_info_count(); i < e; ++i) {
-      char buffer[8] = {};
-      snprintf(buffer, sizeof(buffer), "%.3f     .", debug_info[i].value);
-      igLabelText(buffer, debug_info[i].title);
+    if (igBegin("Debug Info", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize)) {
+      auto debug_info = _current_integrator->debug_info();
+      for (uint64_t i = 0, e = _current_integrator->debug_info_count(); i < e; ++i) {
+        char buffer[8] = {};
+        snprintf(buffer, sizeof(buffer), "%.3f     .", debug_info[i].value);
+        igLabelText(buffer, debug_info[i].title);
+      }
+      igEnd();
     }
-    igEnd();
   }
 
   if (igBeginMainMenuBar()) {
@@ -249,52 +252,51 @@ void UI::build(double dt, const char* status) {
     }
     igEndMainMenuBar();
   }
-  igEnd();
 
   bool has_integrator = (_current_integrator != nullptr);
   igSetNextWindowPos({offset_size, 2.0f * offset_size}, ImGuiCond_Always, {0.0f, 0.0f});
-  igBegin(has_integrator ? _current_integrator->name() : "Integrator", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-  igText("Integrator options");
-  if (has_integrator && (_integrator_options.values.empty() == false)) {
-    if (build_options(_integrator_options) && callbacks.options_changed) {
-      callbacks.options_changed();
+  if (igBegin(has_integrator ? _current_integrator->name() : "Integrator", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize)) {
+    igText("Integrator options");
+    if (has_integrator && (_integrator_options.values.empty() == false)) {
+      if (build_options(_integrator_options) && callbacks.options_changed) {
+        callbacks.options_changed();
+      }
     }
+
+    if ((_current_integrator != nullptr) && _current_integrator->can_run()) {
+      igSeparator();
+      igNewLine();
+
+      auto state = _current_integrator->state();
+      bool has_complete = (state == Integrator::State::Running);
+      bool has_stop = (state != Integrator::State::Stopped);
+      bool has_preview = (state == Integrator::State::Stopped);
+      bool has_run = (state == Integrator::State::Stopped) || (state == Integrator::State::Preview);
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.22f, 0.11f, 1.0f});
+      if (has_complete && igButton("[ Complete iteration and stop ]", {}) && callbacks.stop_selected) {
+        callbacks.stop_selected(true);
+      }
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
+      if (has_stop && igButton("[ Break Immediately ]", {}) && callbacks.stop_selected) {
+        callbacks.stop_selected(false);
+      }
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
+      if (has_preview && igButton("[ Preview ]", {}) && callbacks.preview_selected) {
+        callbacks.preview_selected();
+      }
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
+      if (has_run && igButton("[ Launch ]", {}) && callbacks.run_selected) {
+        callbacks.run_selected();
+      }
+
+      igPopStyleColor(4);
+    }
+    igEnd();
   }
-
-  if ((_current_integrator != nullptr) && _current_integrator->can_run()) {
-    igSeparator();
-    igNewLine();
-
-    auto state = _current_integrator->state();
-    bool has_complete = (state == Integrator::State::Running);
-    bool has_stop = (state != Integrator::State::Stopped);
-    bool has_preview = (state == Integrator::State::Stopped);
-    bool has_run = (state == Integrator::State::Stopped) || (state == Integrator::State::Preview);
-
-    igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.22f, 0.11f, 1.0f});
-    if (has_complete && igButton("[ Complete iteration and stop ]", {}) && callbacks.stop_selected) {
-      callbacks.stop_selected(true);
-    }
-
-    igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
-    if (has_stop && igButton("[ Break Immediately ]", {}) && callbacks.stop_selected) {
-      callbacks.stop_selected(false);
-    }
-
-    igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
-    if (has_preview && igButton("[ Preview ]", {}) && callbacks.preview_selected) {
-      callbacks.preview_selected();
-    }
-
-    igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
-    if (has_run && igButton("[ Launch ]", {}) && callbacks.run_selected) {
-      callbacks.run_selected();
-    }
-
-    igPopStyleColor(4);
-    igNewLine();
-  }
-  igEnd();
 
   simgui_render();
 }

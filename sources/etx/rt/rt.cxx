@@ -267,7 +267,7 @@ const Scene& Raytracing::gpu_scene() const {
   return _private->gpu.scene;
 }
 
-uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, ContinousTraceOptions& options, Sampler& smp) const {
+uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const ContinousTraceOptions& options, Sampler& smp) const {
   ETX_ASSERT(_private != nullptr);
   ETX_CHECK_FINITE(r.d);
 

@@ -1,23 +1,27 @@
 ﻿namespace etx {
 namespace DiffuseBSDF {
 
-;
-
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame().frame;
+  auto frame_info = data.get_normal_frame();
+  if (frame_info.entering_material == false) {
+    return {{data.spectrum_sample.wavelength, 0.0f}};
+  }
 
   BSDFData eval_data = data;
-  eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
-  if (dot(eval_data.w_o, data.nrm) < kEpsilon)
-    return {};
+  eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame_info.frame.nrm, 1.0f);
+  if (dot(eval_data.w_o, data.nrm) < kEpsilon) {
+    return {{data.spectrum_sample.wavelength, 0.0f}};
+  }
 
   return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse};
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame().frame;
+  auto frame_info = data.get_normal_frame();
+  if (frame_info.entering_material == false)
+    return {data.spectrum_sample.wavelength, 0.0f};
 
-  float n_dot_o = dot(frame.nrm, data.w_o);
+  float n_dot_o = dot(frame_info.frame.nrm, data.w_o);
   if (n_dot_o <= kEpsilon) {
     return {data.spectrum_sample.wavelength, 0.0f};
   }
@@ -34,12 +38,15 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame().frame;
+  auto frame_info = data.get_normal_frame();
+  if (frame_info.entering_material == false)
+    return 0.0f;
 
-  float n_dot_o = dot(frame.nrm, data.w_o);
+  float n_dot_o = dot(frame_info.frame.nrm, data.w_o);
   if (n_dot_o <= kEpsilon) {
     return 0.0f;
   }
+
   float result = kInvPi * n_dot_o;
   ETX_VALIDATE(result);
   return result;
@@ -52,8 +59,6 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }  // namespace DiffuseBSDF
 
 namespace TranslucentBSDF {
-
-;
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
@@ -96,8 +101,6 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }  // namespace TranslucentBSDF
 
 namespace CoatingBSDF {
-
-;
 
 ETX_GPU_CODE float2 remap_alpha(float2 a) {
   return sqr(max(a, float2{1.0f / 16.0f, 1.0f / 16.0f}));
@@ -217,8 +220,6 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }  // namespace MirrorBSDF
 
 namespace BoundaryBSDF {
-
-;
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
