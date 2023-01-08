@@ -107,20 +107,25 @@ ETX_GPU_CODE float pdf_s_r(float scattering_distance, float radius) {
          0.75f * expf(-radius / (3.0f * scattering_distance)) / (6.0f * kPi * scattering_distance * radius);
 }
 
-ETX_GPU_CODE float pdf_s_p(const Vertex& i0, const BSSRDFSample& b0, const Vertex& i1, const SpectralDistribution& scattering) {
+ETX_GPU_CODE float pdf_s_p(const Vertex& i0, const Vertex& i1, const SpectralDistribution& scattering) {
+  const float s_pdf = 1.0f / float(scattering.count);
+
   float3 d = i1.pos - i0.pos;
-  float3 d_local = {dot(b0.u, d), dot(b0.v, d), dot(b0.w, d)};
+  float3 d_local = {
+    dot(i0.tan, d),
+    dot(i0.btn, d),
+    dot(i0.nrm, d),
+  };
+  const float n_local[] = {
+    0.25f * fabsf(dot(i0.tan, i1.nrm)) * s_pdf,
+    0.25f * fabsf(dot(i0.btn, i1.nrm)) * s_pdf,
+    0.5f * fabsf(dot(i0.nrm, i1.nrm)) * s_pdf,
+  };
 
   const float r_proj[3] = {
-    sqrtf(d_local.y * d_local.y + d_local.z * d_local.z),
-    sqrtf(d_local.z * d_local.z + d_local.x * d_local.x),
-    sqrtf(d_local.x * d_local.x + d_local.y * d_local.y),
-  };
-  const float s_pdf = 1.0f / float(scattering.count);
-  const float n_local[] = {
-    0.25f * fabsf(dot(b0.u, i1.nrm)) * s_pdf,
-    0.25f * fabsf(dot(b0.v, i1.nrm)) * s_pdf,
-    0.5f * fabsf(dot(b0.w, i1.nrm)) * s_pdf,
+    sqrtf(sqr(d_local.y) + sqr(d_local.z)),
+    sqrtf(sqr(d_local.z) + sqr(d_local.x)),
+    sqrtf(sqr(d_local.x) + sqr(d_local.y)),
   };
 
   float pdf = 0;
@@ -135,21 +140,19 @@ ETX_GPU_CODE float pdf_s_p(const Vertex& i0, const BSSRDFSample& b0, const Verte
 
 ETX_GPU_CODE BSSRDFSample sample_spatial(const Vertex& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   BSSRDFSample sample;
-  auto ortho = orthonormal_basis(data.nrm);
-
   float rnd_0 = smp.next();
   if (rnd_0 < 0.5f) {
-    sample.u = ortho.u;
-    sample.v = ortho.v;
+    sample.u = data.tan;
+    sample.v = data.btn;
     sample.w = data.nrm;
   } else if (rnd_0 < 0.75f) {
-    sample.u = ortho.v;
+    sample.u = data.btn;
     sample.v = data.nrm;
-    sample.w = ortho.u;
+    sample.w = data.tan;
   } else {
     sample.u = data.nrm;
-    sample.v = ortho.u;
-    sample.w = ortho.v;
+    sample.v = data.tan;
+    sample.w = data.btn;
   }
 
   float scattering_distance = mtl.subsurface.scattering.random_entry_power(smp.next());
@@ -163,8 +166,8 @@ ETX_GPU_CODE BSSRDFSample sample_spatial(const Vertex& data, const Material& mtl
 
 ETX_GPU_CODE Ray make_ray(const BSSRDFSample& sample, const float3& p0) {
   Ray ray;
-  ray.o = p0 + 0.5f * sample.height * sample.w + sample.radius * (cosf(sample.phi) * sample.u + sinf(sample.phi) * sample.v);
-  ray.d = -sample.w;
+  ray.o = p0 - 0.5f * sample.height * sample.w + sample.radius * (cosf(sample.phi) * sample.u + sinf(sample.phi) * sample.v);
+  ray.d = sample.w;
   ray.max_t = sample.height;
   return ray;
 }

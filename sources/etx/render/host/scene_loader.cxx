@@ -668,6 +668,8 @@ Material::Class material_string_to_class(const char* s) {
     return Material::Class::Coating;
   else if (strcmp(s, "velvet") == 0)
     return Material::Class::Velvet;
+  else if (strcmp(s, "subsurface") == 0)
+    return Material::Class::Subsurface;
   else {
     log::error("Undefined BSDF: `%s`", s);
     return Material::Class::Diffuse;
@@ -675,7 +677,7 @@ Material::Class material_string_to_class(const char* s) {
 }
 
 void material_class_to_string(Material::Class cls, const char** str) {
-  static const char* names[uint32_t(Material::Class::Count) + 1] = {
+  static const char* names[] = {
     "Diffuse",
     "Plastic",
     "Conductor",
@@ -687,7 +689,10 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "Generic",
     "Coating",
     "Velvet",
+    "Subsurface",
+    "Undefined",
   };
+  static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);
   *str = cls < Material::Class::Count ? names[uint32_t(cls)] : "Undefined";
 }
 
@@ -1132,6 +1137,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       if (get_param(material, "subsurface", data_buffer)) {
+        mtl.cls = Material::Class::Subsurface;
         mtl.subsurface.scattering = load_reflectance_spectrum(data_buffer) * 0.2f;
       }
     }

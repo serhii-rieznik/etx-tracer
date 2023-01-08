@@ -29,7 +29,7 @@ struct ETX_ALIGNED Thinfilm {
 struct SubsurfaceMaterial {
   enum class Class : uint32_t {
     Disney,
-    
+
     Count,
   };
   SpectralDistribution scattering;
@@ -48,6 +48,7 @@ struct ETX_ALIGNED Material {
     Generic,
     Coating,
     Velvet,
+    Subsurface,
 
     Count,
     Undefined = kInvalidIndex,

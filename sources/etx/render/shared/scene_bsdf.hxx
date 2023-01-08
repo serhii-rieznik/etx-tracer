@@ -21,6 +21,7 @@ ETX_DECLARE_BSDF(Boundary);
 ETX_DECLARE_BSDF(Generic);
 ETX_DECLARE_BSDF(Coating);
 ETX_DECLARE_BSDF(Velvet);
+ETX_DECLARE_BSDF(Subsurface);
 
 #define CASE_IMPL(CLS, FUNC, ...) \
   case Material::Class::CLS:      \
@@ -44,6 +45,7 @@ ETX_DECLARE_BSDF(Velvet);
     MACRO(Generic);                         \
     MACRO(Coating);                         \
     MACRO(Velvet);                          \
+    MACRO(Subsurface);                      \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
       return {};                            \

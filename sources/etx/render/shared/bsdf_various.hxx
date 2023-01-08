@@ -58,6 +58,53 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 
 }  // namespace DiffuseBSDF
 
+namespace SubsurfaceBSDF {
+
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto frame_info = data.get_normal_frame();
+  auto n = frame_info.entering_material ? frame_info.frame.nrm : -frame_info.frame.nrm;
+
+  BSDFData eval_data = data;
+  eval_data.w_o = sample_cosine_distribution(smp.next_2d(), n, 1.0f);
+  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse};
+}
+
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto frame_info = data.get_normal_frame();
+  float n_dot_o = fabsf(dot(frame_info.frame.nrm, data.w_o));
+  if (n_dot_o <= kEpsilon) {
+    return {data.spectrum_sample.wavelength, 0.0f};
+  }
+
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
+
+  BSDFEval result;
+  result.func = diffuse * kInvPi;
+  result.bsdf = diffuse * (kInvPi * n_dot_o);
+  result.weight = diffuse;
+  result.pdf = kInvPi * n_dot_o;
+  ETX_VALIDATE(result.pdf);
+  return result;
+}
+
+ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto frame_info = data.get_normal_frame();
+  float n_dot_o = fabsf(dot(frame_info.frame.nrm, data.w_o));
+  if (n_dot_o <= kEpsilon) {
+    return 0.0f;
+  }
+
+  float result = kInvPi * n_dot_o;
+  ETX_VALIDATE(result);
+  return result;
+}
+
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+  return false;
+}
+
+}  // namespace SubsurfaceBSDF
+
 namespace TranslucentBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
