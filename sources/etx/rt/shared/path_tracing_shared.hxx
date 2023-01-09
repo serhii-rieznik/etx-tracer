@@ -155,7 +155,7 @@ ETX_GPU_CODE bool handle_subsurface(const Scene& scene, const Intersection& in_i
   auto eval = subsurface::eval_s_r(payload.spect, mtl.subsurface.scattering, actual_distance);
   ETX_VALIDATE(eval);
 
-  auto pdf = subsurface::pdf_s_p(in_intersection, ss_sample, out_intersection, mtl.subsurface.scattering) / float(intersection_count);
+  auto pdf = subsurface::pdf_s_p(in_intersection, out_intersection, mtl.subsurface.scattering) / float(intersection_count);
   ETX_VALIDATE(pdf);
 
   payload.throughput *= eval / pdf;
