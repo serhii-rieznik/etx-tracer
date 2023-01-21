@@ -166,8 +166,8 @@ ETX_GPU_CODE BSSRDFSample sample_spatial(const Vertex& data, const Material& mtl
 
 ETX_GPU_CODE Ray make_ray(const BSSRDFSample& sample, const float3& p0) {
   Ray ray;
-  ray.o = p0 - 0.5f * sample.height * sample.w + sample.radius * (cosf(sample.phi) * sample.u + sinf(sample.phi) * sample.v);
-  ray.d = sample.w;
+  ray.o = p0 + 0.5f * sample.height * sample.w + sample.radius * (cosf(sample.phi) * sample.u + sinf(sample.phi) * sample.v);
+  ray.d = -sample.w;
   ray.max_t = sample.height;
   return ray;
 }

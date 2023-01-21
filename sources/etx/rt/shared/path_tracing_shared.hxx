@@ -152,11 +152,13 @@ ETX_GPU_CODE bool handle_subsurface(const Scene& scene, const Intersection& in_i
 
   float actual_distance = length(out_intersection.pos - in_intersection.pos);
 
-  auto eval = subsurface::eval_s_r(payload.spect, mtl.subsurface.scattering, actual_distance);
-  ETX_VALIDATE(eval);
-
   auto pdf = subsurface::pdf_s_p(in_intersection, out_intersection, mtl.subsurface.scattering) / float(intersection_count);
   ETX_VALIDATE(pdf);
+  if (pdf <= 0.0f)
+    return false;
+
+  auto eval = subsurface::eval_s_r(payload.spect, mtl.subsurface.scattering, actual_distance);
+  ETX_VALIDATE(eval);
 
   payload.throughput *= eval / pdf;
   ETX_VALIDATE(payload.throughput);
@@ -217,6 +219,12 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   if (mat.subsurface.scattering.is_zero()) {
     auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i, {}}, mat, scene, payload.smp);
+
+    if (bsdf_sample.valid() && ((bsdf_sample.properties & (BSDFSample::Reflection | BSDFSample::Transmission)) == 0)) {
+      log::error("Invalid sampling for material %u", uint32_t(mat.cls));
+      ETX_DEBUG_BREAK();
+    }
+
     if (update_payload_with_bsdf_sample(scene, intersection, payload, bsdf_sample) == false) {
       return false;
     }

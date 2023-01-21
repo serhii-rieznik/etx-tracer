@@ -15,10 +15,8 @@ ETX_DECLARE_BSDF(Plastic);
 ETX_DECLARE_BSDF(Conductor);
 ETX_DECLARE_BSDF(Dielectric);
 ETX_DECLARE_BSDF(Thinfilm);
-ETX_DECLARE_BSDF(Translucent);
 ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
-ETX_DECLARE_BSDF(Generic);
 ETX_DECLARE_BSDF(Coating);
 ETX_DECLARE_BSDF(Velvet);
 ETX_DECLARE_BSDF(Subsurface);
@@ -39,10 +37,8 @@ ETX_DECLARE_BSDF(Subsurface);
     MACRO(Conductor);                       \
     MACRO(Dielectric);                      \
     MACRO(Thinfilm);                        \
-    MACRO(Translucent);                     \
     MACRO(Mirror);                          \
     MACRO(Boundary);                        \
-    MACRO(Generic);                         \
     MACRO(Coating);                         \
     MACRO(Velvet);                          \
     MACRO(Subsurface);                      \
@@ -140,7 +136,7 @@ ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const Spe
 #include <etx/render/shared/bsdf_external.hxx>
 #include <etx/render/shared/bsdf_conductor.hxx>
 #include <etx/render/shared/bsdf_dielectric.hxx>
-#include <etx/render/shared/bsdf_generic.hxx>
+#include <etx/render/shared/bsdf_coating.hxx>
 #include <etx/render/shared/bsdf_plastic.hxx>
 #include <etx/render/shared/bsdf_various.hxx>
 #include <etx/render/shared/bsdf_velvet.hxx>

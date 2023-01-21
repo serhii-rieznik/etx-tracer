@@ -12,7 +12,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   result.weight = specular * f;
   ETX_VALIDATE(result.weight);
   result.pdf = 1.0f;
-  result.properties = BSDFSample::DeltaReflection;
+  result.properties = BSDFSample::Delta | BSDFSample::Reflection;
   return result;
 }
 
@@ -42,6 +42,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
 
   BSDFSample result;
+  result.properties = BSDFSample::Reflection;
   result.medium_index = data.medium_index;
   result.eta = 1.0f;
   result.w_o = external::sample_conductor(data.spectrum_sample, smp, w_i, alpha_x, alpha_y,  //

@@ -23,7 +23,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     ETX_VALIDATE(result.pdf);
     result.weight = (fr / f) * apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
     ETX_VALIDATE(result.weight);
-    result.properties = BSDFSample::DeltaReflection;
+    result.properties = BSDFSample::Delta | BSDFSample::Reflection;
     result.medium_index = entering_material ? mtl.ext_medium : mtl.int_medium;
   } else {
     float eta = ior_i.eta.monochromatic() / ior_o.eta.monochromatic();
@@ -37,7 +37,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.weight = (1.0f - fr) / (1.0f - f) * apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene);
     ETX_VALIDATE(result.weight);
 
-    result.properties = BSDFSample::DeltaTransmission | BSDFSample::MediumChanged;
+    result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
     result.medium_index = entering_material ? mtl.int_medium : mtl.ext_medium;
     if (data.path_source == PathSource::Camera) {
       result.weight *= eta * eta;
@@ -77,14 +77,14 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.pdf = f;
     result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
     result.weight *= (fr / f);
-    result.properties = BSDFSample::DeltaReflection;
+    result.properties = BSDFSample::Delta | BSDFSample::Reflection;
     result.medium_index = entering_material ? mtl.ext_medium : mtl.int_medium;
   } else {
     result.w_o = data.w_i;
     result.pdf = 1.0f - f;
     result.weight = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene);
     result.weight *= (1.0f - fr) / (1.0f - f);
-    result.properties = BSDFSample::DeltaTransmission | BSDFSample::MediumChanged;
+    result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
     result.medium_index = entering_material ? mtl.int_medium : mtl.ext_medium;
   }
 
@@ -124,42 +124,52 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   BSDFSample result = {};
   if (LocalFrame::cos_theta(w_i) > 0) {  // outside
-    float weight = {};
-    result.w_o = external::sample_dielectric(data.spectrum_sample, smp, w_i, alpha_x, alpha_y, ext_ior, int_ior, thinfilm, weight);
+    if (external::sample_dielectric(data.spectrum_sample, smp, w_i, alpha_x, alpha_y, ext_ior, int_ior, thinfilm, result.w_o) == false) {
+      return {{data.spectrum_sample.wavelength, 0.0f}};
+    }
 
     auto a_data = data;
     a_data.w_o = normalize(local_frame.from_local(result.w_o));
     result.pdf = pdf(a_data, mtl, scene, smp);
     ETX_VALIDATE(result.pdf);
 
-    if (LocalFrame::cos_theta(result.w_o) > 0) {  // reflection
+    if (LocalFrame::cos_theta(result.w_o) > 0) {
+      // reflection
       result.eta = 1.0f;
-      result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene) * weight;
-    } else {  // refraction
+      result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
+      result.properties = BSDFSample::Reflection;
+    } else {
+      // refraction
       result.eta = m_eta;
       float factor = (data.path_source == PathSource::Camera) ? sqr(m_invEta) : 1.0f;
-      result.weight = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene) * factor * weight;
-      result.properties |= BSDFSample::MediumChanged;
+      result.weight = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene) * factor;
+      result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged;
       result.medium_index = mtl.int_medium;
     }
   } else {  // inside
-    float weight = {};
-    result.w_o = -external::sample_dielectric(data.spectrum_sample, smp, -w_i, alpha_x, alpha_y, int_ior, ext_ior, thinfilm, weight);
+    if (external::sample_dielectric(data.spectrum_sample, smp, -w_i, alpha_x, alpha_y, int_ior, ext_ior, thinfilm, result.w_o) == false) {
+      return {{data.spectrum_sample.wavelength, 0.0f}};
+    }
+
+    result.w_o = -result.w_o;
 
     auto a_data = data;
     a_data.w_o = normalize(local_frame.from_local(result.w_o));
     result.pdf = pdf(a_data, mtl, scene, smp);
     ETX_VALIDATE(result.pdf);
 
-    if (LocalFrame::cos_theta(result.w_o) > 0) {  // refraction
+    if (LocalFrame::cos_theta(result.w_o) > 0) {
+      // refraction
       result.eta = m_invEta;
       float factor = (data.path_source == PathSource::Camera) ? sqr(m_eta) : 1.0f;
-      result.weight = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene) * factor * weight;
-      result.properties |= BSDFSample::MediumChanged;
+      result.weight = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene) * factor;
+      result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged;
       result.medium_index = mtl.ext_medium;
-    } else {  // reflection
+    } else {
+      // reflection
       result.eta = 1.0f;
-      result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene) * weight;
+      result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
+      result.properties = BSDFSample::Reflection | BSDFSample::MediumChanged;
     }
   }
 

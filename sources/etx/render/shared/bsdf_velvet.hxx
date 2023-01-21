@@ -2,13 +2,11 @@
 
 namespace VelvetBSDF {
 
-;
-
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto eval_data = data;
   auto frame = data.get_normal_frame().frame;
   eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);
-  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse};
+  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::Reflection};
 }
 
 ETX_GPU_CODE float lambda_velvet_l(float r, float x) {

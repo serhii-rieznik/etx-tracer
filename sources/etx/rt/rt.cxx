@@ -289,7 +289,7 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
   ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
 
   uint32_t intersection_count = 0;
-
+  uint32_t last_triangle_index = kInvalidIndex;
   for (;;) {
     rtcIntersect1(_private->rt_scene, &context, &ray_hit);
     if ((ray_hit.hit.geomID == RTC_INVALID_GEOMETRY_ID)) {
@@ -300,10 +300,12 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     const auto& mat = scene.materials[tri.material_index];
     float3 bc = {1.0f - ray_hit.hit.u - ray_hit.hit.v, ray_hit.hit.u, ray_hit.hit.v};
 
-    bool add_intersection = (intersection_count < options.max_intersections)                                             //
+    bool add_intersection = (ray_hit.hit.primID != last_triangle_index) &&                                               //
+                            (intersection_count < options.max_intersections)                                             //
                             && ((options.material_id == kInvalidIndex) || (tri.material_index == options.material_id));  //
 
     if (add_intersection && (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, smp) == false)) {
+      last_triangle_index = ray_hit.hit.primID;
       options.intersection_buffer[intersection_count] = {
         .barycentric = {ray_hit.hit.u, ray_hit.hit.v},
         .triangle_index = ray_hit.hit.primID,

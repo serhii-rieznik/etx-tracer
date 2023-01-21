@@ -15,13 +15,12 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   bool reflection = smp.next() <= f;
 
   BSDFSample result;
-  result.properties = BSDFSample::Diffuse;
-
   if (reflection) {
     result.w_o = normalize(reflect(data.w_i, frame.nrm));
-    result.properties = result.properties | BSDFSample::DeltaReflection;
+    result.properties = BSDFSample::Diffuse | BSDFSample::Reflection;
   } else {
     result.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
+    result.properties = BSDFSample::Diffuse | BSDFSample::Transmission;
   }
 
   float n_dot_o = dot(frame.nrm, result.w_o);
@@ -103,16 +102,14 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
   auto f = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
 
-  uint32_t properties = 0;
   BSDFData eval_data = data;
   if (smp.next() <= f.monochromatic()) {
     eval_data.w_o = normalize(reflect(data.w_i, m));
   } else {
     eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
-    properties = BSDFSample::Diffuse;
   }
 
-  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), properties};
+  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::Reflection};
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {

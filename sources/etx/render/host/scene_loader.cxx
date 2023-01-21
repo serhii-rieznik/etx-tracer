@@ -657,13 +657,11 @@ Material::Class material_string_to_class(const char* s) {
   else if (strcmp(s, "thinfilm") == 0)
     return Material::Class::Thinfilm;
   else if (strcmp(s, "translucent") == 0)
-    return Material::Class::Translucent;
+    return Material::Class::Subsurface;
   else if (strcmp(s, "mirror") == 0)
     return Material::Class::Mirror;
   else if (strcmp(s, "boundary") == 0)
     return Material::Class::Boundary;
-  else if (strcmp(s, "generic") == 0)
-    return Material::Class::Generic;
   else if (strcmp(s, "coating") == 0)
     return Material::Class::Coating;
   else if (strcmp(s, "velvet") == 0)
@@ -683,10 +681,8 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "Conductor",
     "Dielectric",
     "Thinfilm",
-    "Translucent",
     "Mirror",
     "Boundary",
-    "Generic",
     "Coating",
     "Velvet",
     "Subsurface",

@@ -73,9 +73,10 @@ struct BSDFEval {
 struct BSDFSample {
   enum Properties : uint32_t {
     Diffuse = 1u << 0u,
-    DeltaReflection = 1u << 1u,
-    DeltaTransmission = 1u << 2u,
+    Reflection = 1u << 1u,
+    Transmission = 1u << 2u,
     MediumChanged = 1u << 3u,
+    Delta = 1u << 4u,
   };
 
   SpectralResponse weight = {};
@@ -116,7 +117,7 @@ struct BSDFSample {
   }
 
   ETX_GPU_CODE bool is_delta() const {
-    return ((properties & DeltaReflection) != 0) || ((properties & DeltaTransmission) != 0);
+    return (properties & Delta) == Delta;
   }
 };
 
