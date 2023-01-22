@@ -93,9 +93,13 @@ ETX_GPU_CODE SpectralResponse eval_s_r(const SpectralQuery spect, const Spectral
   ETX_VALIDATE(term_1);
 
   auto div = 8.0f * kPi * radius * sd;
+  div.components = max(div.components, float3{kEpsilon, kEpsilon, kEpsilon});
   ETX_VALIDATE(div);
 
-  auto result = (term_0 + term_1) / div;
+  auto t = term_0 + term_1;
+  ETX_VALIDATE(t);
+
+  auto result = t / div;
   ETX_VALIDATE(result);
 
   return result;
@@ -103,8 +107,14 @@ ETX_GPU_CODE SpectralResponse eval_s_r(const SpectralQuery spect, const Spectral
 
 ETX_GPU_CODE float pdf_s_r(float scattering_distance, float radius) {
   radius = fmaxf(radius, kEpsilon);
-  return 0.25f * expf(-radius / scattering_distance) / (2.0f * kPi * scattering_distance * radius) +
-         0.75f * expf(-radius / (3.0f * scattering_distance)) / (6.0f * kPi * scattering_distance * radius);
+  scattering_distance = fmaxf(scattering_distance, kEpsilon);
+
+  radius = fmaxf(radius, kEpsilon);
+  float t0 = 0.25f * expf(-radius / scattering_distance) / (2.0f * kPi * scattering_distance * radius);
+  ETX_VALIDATE(t0);
+  float t1 = 0.75f * expf(-radius / (3.0f * scattering_distance)) / (6.0f * kPi * scattering_distance * radius);
+  ETX_VALIDATE(t1);
+  return t0 + t1;
 }
 
 ETX_GPU_CODE float pdf_s_p(const Vertex& i0, const Vertex& i1, const SpectralDistribution& scattering) {

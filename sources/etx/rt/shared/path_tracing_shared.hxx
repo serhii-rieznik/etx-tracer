@@ -134,16 +134,24 @@ ETX_GPU_CODE bool update_payload_with_bsdf_sample(const Scene& scene, const Inte
   return true;
 }
 
-ETX_GPU_CODE bool handle_subsurface(const Scene& scene, const Intersection& in_intersection, const PTOptions& options, const Raytracing& rt, const uint32_t material_index,
-  PTRayPayload& payload) {
+ETX_GPU_CODE void handle_subsurface(const Scene& scene, const Intersection& in_intersection, const PTOptions& options, const Raytracing& rt, const uint32_t material_index,
+  PTRayPayload& payload, BSDFSample& bsdf_sample) {
+  constexpr float kMinSubsurfaceScatteringDistance = 1.0f / 255.0f;
+
+  if ((bsdf_sample.properties & BSDFSample::Diffuse) == 0)
+    return;
+
   const auto& mtl = scene.materials[material_index];
+  if (mtl.subsurface.scattering.maximum_power() <= kMinSubsurfaceScatteringDistance)
+    return;
+
   auto ss_sample = subsurface::sample_spatial(in_intersection, mtl, scene, payload.smp);
   auto ss_ray = subsurface::make_ray(ss_sample, in_intersection.pos);
 
   IntersectionBase intersections[subsurface::kMaxIntersections] = {};
-  uint32_t intersection_count = rt.continuous_trace(scene, ss_ray, {intersections, subsurface::kMaxIntersections, material_index}, payload.smp);
+  uint32_t intersection_count = rt.continuous_trace(scene, ss_ray, {intersections, subsurface::kMaxIntersections, material_index, in_intersection.triangle_index}, payload.smp);
   if (intersection_count == 0) {
-    return false;
+    return;
   }
 
   uint32_t selected_intersection = uint32_t(payload.smp.next() * float(intersection_count));
@@ -155,7 +163,7 @@ ETX_GPU_CODE bool handle_subsurface(const Scene& scene, const Intersection& in_i
   auto pdf = subsurface::pdf_s_p(in_intersection, out_intersection, mtl.subsurface.scattering) / float(intersection_count);
   ETX_VALIDATE(pdf);
   if (pdf <= 0.0f)
-    return false;
+    return;
 
   auto eval = subsurface::eval_s_r(payload.spect, mtl.subsurface.scattering, actual_distance);
   ETX_VALIDATE(eval);
@@ -167,12 +175,10 @@ ETX_GPU_CODE bool handle_subsurface(const Scene& scene, const Intersection& in_i
   payload.accumulated += payload.throughput * light_value;
   ETX_VALIDATE(payload.accumulated);
 
-  auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, out_intersection, out_intersection.w_i, {}}, mtl, scene, payload.smp);
-  if (bsdf_sample.valid() == false) {
-    return false;
+  auto subsurface_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, out_intersection, out_intersection.w_i, {}}, mtl, scene, payload.smp);
+  if (subsurface_sample.valid()) {
+    bsdf_sample = subsurface_sample;
   }
-
-  return update_payload_with_bsdf_sample(scene, out_intersection, payload, bsdf_sample);
 }
 
 ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
@@ -216,22 +222,15 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // bsdf sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+  auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i, {}}, mat, scene, payload.smp);
+  if (bsdf_sample.valid() == false) {
+    return false;
+  }
 
-  if (mat.subsurface.scattering.is_zero()) {
-    auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i, {}}, mat, scene, payload.smp);
+  handle_subsurface(scene, intersection, options, rt, tri.material_index, payload, bsdf_sample);
 
-    if (bsdf_sample.valid() && ((bsdf_sample.properties & (BSDFSample::Reflection | BSDFSample::Transmission)) == 0)) {
-      log::error("Invalid sampling for material %u", uint32_t(mat.cls));
-      ETX_DEBUG_BREAK();
-    }
-
-    if (update_payload_with_bsdf_sample(scene, intersection, payload, bsdf_sample) == false) {
-      return false;
-    }
-  } else {
-    if (handle_subsurface(scene, intersection, options, rt, tri.material_index, payload) == false) {
-      return false;
-    }
+  if (update_payload_with_bsdf_sample(scene, intersection, payload, bsdf_sample) == false) {
+    return false;
   }
 
   payload.path_length += 1;

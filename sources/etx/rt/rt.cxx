@@ -289,7 +289,7 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
   ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
 
   uint32_t intersection_count = 0;
-  uint32_t last_triangle_index = kInvalidIndex;
+  uint32_t last_triangle_index = options.start_triangle_id;
   for (;;) {
     rtcIntersect1(_private->rt_scene, &context, &ray_hit);
     if ((ray_hit.hit.geomID == RTC_INVALID_GEOMETRY_ID)) {

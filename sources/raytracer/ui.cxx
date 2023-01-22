@@ -106,12 +106,29 @@ bool UI::build_options(Options& options) {
   return changed;
 }
 
-bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums) {
-  float3 rgb = linear_to_gamma(spectrum::xyz_to_rgb(spd.to_xyz()));
-  if (igColorEdit3(name, &rgb.x, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar)) {
-    spd = rgb::make_reflectance_spd(gamma_to_linear(rgb), spectrums);
+bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool scattering) {
+  float3 rgb = spectrum::xyz_to_rgb(spd.to_xyz());
+  if (scattering == false) {
+    rgb = linear_to_gamma(rgb);
+  } else {
+    rgb = rgb;
+  }
+  uint32_t flags = scattering ? ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_NoPicker  //
+                              : ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar;                    //
+
+  if (scattering) {
+    igText(name);
+  }
+
+  if (igColorEdit3(scattering ? "##scattering" : name, &rgb.x, flags)) {
+    if (scattering == false) {
+      rgb = gamma_to_linear(rgb);
+    }
+    rgb = max(rgb, float3{});
+    spd = rgb::make_reflectance_spd(rgb, spectrums);
     return true;
   }
+
   return false;
 }
 
@@ -137,7 +154,9 @@ void UI::build(double dt, const char* status) {
 
   if ((_current_integrator != nullptr) && (_current_scene != nullptr) && (_material_mapping.empty() == false)) {
     igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 2.0f * offset_size}, ImGuiCond_Always, {1.0f, 0.0f});
-    if (igBegin("Materials", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+
+    if (igBegin("Scene Setup", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+      igText("Materials");
       igListBox_Str_arr("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
       if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
         if ((_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
@@ -149,20 +168,20 @@ void UI::build(double dt, const char* status) {
           }
         }
       }
-      igEnd();
-    }
-
-    igSetNextWindowPos({0.5f * sapp_widthf() / sapp_dpi_scale(), 2.0f * offset_size}, ImGuiCond_Always, {0.5f, 0.0f});
-    if (igBegin("Mediums", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-      igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
-      if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
-        if ((_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
-          uint32_t medium_index = _medium_mapping.at(_selected_medium);
-          Medium& m = _current_scene->mediums[medium_index];
-          bool changed = build_medium(m);
-          if (changed && callbacks.material_changed) {
-            callbacks.medium_changed(medium_index);
+      if (_medium_mapping.empty() == false) {
+        igSeparator();
+        igText("Mediums");
+        igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
+        if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
+          if ((_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
+            uint32_t medium_index = _medium_mapping.at(_selected_medium);
+            Medium& m = _current_scene->mediums[medium_index];
+            bool changed = build_medium(m);
+            if (changed && callbacks.material_changed) {
+              callbacks.medium_changed(medium_index);
+            }
           }
+          igEndChild();
         }
       }
       igEnd();
@@ -451,7 +470,7 @@ void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& mat
 bool UI::build_material(Material& material) {
   int32_t material_cls = static_cast<int32_t>(material.cls);
   bool changed = igCombo_FnBoolPtr(
-    "Type", &material_cls,
+    "##type", &material_cls,
     [](void* data, int32_t idx, const char** out_text) -> bool {
       material_class_to_string(Material::Class(idx), out_text);
       return true;
@@ -460,9 +479,10 @@ bool UI::build_material(Material& material) {
   material.cls = static_cast<Material::Class>(material_cls);
   changed |= igSliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= igSliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-  changed |= igSpectrumPicker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums);
-  changed |= igSpectrumPicker("Specular", material.specular.spectrum, _current_scene->spectrums);
-  changed |= igSpectrumPicker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums);
+  changed |= igSpectrumPicker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
+  changed |= igSpectrumPicker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
+  changed |= igSpectrumPicker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);
+  changed |= igSpectrumPicker("Subsurface", material.subsurface.scattering, _current_scene->spectrums, true);
 
   auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
     bool has_medium = medium != kInvalidIndex;
@@ -479,15 +499,17 @@ bool UI::build_material(Material& material) {
     return changed;
   };
 
-  changed |= medium_editor("Internal medium", material.int_medium, _current_scene->mediums.count);
-  changed |= medium_editor("Extenral medium", material.ext_medium, _current_scene->mediums.count);
+  if (_medium_mapping.empty() == false) {
+    changed |= medium_editor("Internal medium", material.int_medium, _current_scene->mediums.count);
+    changed |= medium_editor("Extenral medium", material.ext_medium, _current_scene->mediums.count);
+  }
 
   return changed;
 }
 
 bool UI::build_medium(Medium& m) {
-  bool changed = igSpectrumPicker("Absorption", m.s_absorption, _current_scene->spectrums);
-  changed |= igSpectrumPicker("Outscattering", m.s_outscattering, _current_scene->spectrums);
+  bool changed = igSpectrumPicker("Absorption", m.s_absorption, _current_scene->spectrums, true);
+  changed |= igSpectrumPicker("Outscattering", m.s_outscattering, _current_scene->spectrums, true);
   changed |= igSliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
   return changed;
 }
