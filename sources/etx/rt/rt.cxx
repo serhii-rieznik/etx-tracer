@@ -43,11 +43,13 @@ struct RaytracingImpl {
     rtcSetDeviceErrorFunction(
       rt_device,
       [](void* userPtr, enum RTCError code, const char* str) {
-        printf("Embree error: %u (%s)\n", code, str);
+        log::error("Embree error: %u (%s)", code, str);
       },
       nullptr);
 
     rt_scene = rtcNewScene(rt_device);
+    rtcSetSceneFlags(rt_scene, RTC_SCENE_FLAG_CONTEXT_FILTER_FUNCTION);
+
     auto geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_TRIANGLE);
 
     rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_VERTEX, 0, RTCFormat::RTC_FORMAT_FLOAT3,  //
@@ -271,8 +273,44 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
   ETX_ASSERT(_private != nullptr);
   ETX_CHECK_FINITE(r.d);
 
-  RTCIntersectContext context = {};
-  rtcInitIntersectContext(&context);
+  struct IntersectionContextExt {
+    RTCIntersectContext context;
+    const Scene* scene;
+    Sampler* smp;
+    IntersectionBase* buffer;
+    uint32_t mat_id;
+    uint32_t count;
+    uint32_t max_count;
+  } context = {{}, &scene, &smp, options.intersection_buffer, options.material_id, 0u, options.max_intersections};
+
+  rtcInitIntersectContext(&context.context);
+
+  context.context.filter = [](const struct RTCFilterFunctionNArguments* args) {
+    auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
+    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+
+    const auto& tri = ctx->scene->triangles[triangle_index];
+    if ((tri.material_index != kInvalidIndex) && (ctx->mat_id != tri.material_index)) {
+      *args->valid = 0;
+      return;
+    }
+
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    float3 bc = barycentrics({u, v});
+    const auto& scene = *ctx->scene;
+    const auto& mat = ctx->scene->materials[tri.material_index];
+    if ((ctx->count < ctx->max_count) && (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp) == false)) {
+      ctx->buffer[ctx->count] = {
+        .barycentric = {u, v},
+        .triangle_index = triangle_index,
+        .t = RTCRayN_tfar(args->ray, args->N, 0),
+      };
+      ctx->count += 1u;
+    }
+
+    *args->valid = (ctx->count < ctx->max_count) ? 0 : -1;
+  };
 
   RTCRayHit ray_hit = {};
   ray_hit.ray.dir_x = r.d.x;
@@ -287,47 +325,8 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
   ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
   ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
   ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
-
-  uint32_t intersection_count = 0;
-  uint32_t last_triangle_index = options.start_triangle_id;
-  for (;;) {
-    rtcIntersect1(_private->rt_scene, &context, &ray_hit);
-    if ((ray_hit.hit.geomID == RTC_INVALID_GEOMETRY_ID)) {
-      break;
-    }
-
-    const auto& tri = scene.triangles[ray_hit.hit.primID];
-    const auto& mat = scene.materials[tri.material_index];
-    float3 bc = {1.0f - ray_hit.hit.u - ray_hit.hit.v, ray_hit.hit.u, ray_hit.hit.v};
-
-    bool add_intersection = (ray_hit.hit.primID != last_triangle_index) &&                                               //
-                            (intersection_count < options.max_intersections)                                             //
-                            && ((options.material_id == kInvalidIndex) || (tri.material_index == options.material_id));  //
-
-    if (add_intersection && (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, smp) == false)) {
-      last_triangle_index = ray_hit.hit.primID;
-      options.intersection_buffer[intersection_count] = {
-        .barycentric = {ray_hit.hit.u, ray_hit.hit.v},
-        .triangle_index = ray_hit.hit.primID,
-        .t = ray_hit.ray.tfar,
-      };
-      intersection_count += 1u;
-      if (intersection_count >= options.max_intersections)
-        break;
-    }
-
-    auto p = lerp_pos(scene.vertices, tri, bc);
-    auto p_start = offset_ray(p, r.d);
-    ray_hit.ray.org_x = p_start.x;
-    ray_hit.ray.org_y = p_start.y;
-    ray_hit.ray.org_z = p_start.z;
-    ray_hit.ray.tfar = r.max_t - ray_hit.ray.tfar;
-    ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-    ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
-    ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
-  }
-
-  return intersection_count;
+  rtcIntersect1(_private->rt_scene, &context.context, &ray_hit);
+  return context.count;
 }
 
 bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_intersection, Sampler& smp) const {

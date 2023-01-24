@@ -1133,8 +1133,8 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       if (get_param(material, "subsurface", data_buffer)) {
-        mtl.cls = Material::Class::Subsurface;
-        mtl.subsurface.scattering = load_reflectance_spectrum(data_buffer) * 0.2f;
+        mtl.subsurface.scattering_distance = load_reflectance_spectrum(data_buffer);
+        mtl.subsurface.scattering_distance_scale = 0.2f;
       }
     }
   }

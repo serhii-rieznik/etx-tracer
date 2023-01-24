@@ -10,6 +10,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE float lambda_velvet_l(float r, float x) {
+  x = fmaxf(x, 0.0f);
   auto lerp_x = [](float a, float b, float t) {
     return sqr(1.0f - t) * a + (1.0f - sqr(1.0f - t)) * b;
   };
@@ -18,7 +19,9 @@ ETX_GPU_CODE float lambda_velvet_l(float r, float x) {
   float c = lerp_x(0.16801f, 0.19823f, r);
   float d = lerp_x(-1.27393f, -1.97760f, r);
   float e = lerp_x(-4.85967f, -4.32054f, r);
-  return a / (1.0f + b * powf(x, c)) + d * x + e;
+  float q = a / (1.0f + b * powf(x, c)) + d * x + e;
+  ETX_VALIDATE(q);
+  return q;
 }
 
 ETX_GPU_CODE float lambda_velvet(float r, float cos_t) {
@@ -41,8 +44,6 @@ ETX_GPU_CODE float diffuse_burley(float alpha, float n_dot_i, float n_dot_o, flo
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
-  if (frame.entering_material == false)
-    return {data.spectrum_sample.wavelength, 0.0f};
 
   float n_dot_o = fmaxf(0.0f, dot(data.w_o, frame.frame.nrm));
   float n_dot_i = fmaxf(0.0f, -dot(data.w_i, frame.frame.nrm));
@@ -62,10 +63,15 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
     float m_dot_n = dot(m, frame.frame.nrm);
     float sin_t = (1.0f - m_dot_n * m_dot_n);
     float d = (2.0f + inv_alpha) * powf(sin_t, 0.5f * inv_alpha) / kDoublePi;
+    ETX_VALIDATE(d);
     float l_i = lambda_velvet(alpha, n_dot_i);
+    ETX_VALIDATE(l_i);
     float l_o = lambda_velvet(alpha, n_dot_o);
+    ETX_VALIDATE(l_o);
     float g = 1.0f / (1.0f + l_i + l_o);
+    ETX_VALIDATE(g);
     specular_scale_base = 0.25f * d * g / n_dot_i;
+    ETX_VALIDATE(specular_scale_base);
   }
 
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);

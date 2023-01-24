@@ -11,15 +11,6 @@ struct ETX_ALIGNED BSSRDFData {
   float3 w_o;
 };
 
-struct ETX_ALIGNED BSSRDFSample {
-  float3 u = {};
-  float radius = 0.0f;
-  float3 v = {};
-  float phi = 0.0f;
-  float3 w = {};
-  float height = 0.0f;
-};
-
 ETX_GPU_CODE float fresnel_moment_1(float eta) {
   float eta2 = eta * eta;
   float eta3 = eta2 * eta;
@@ -80,8 +71,8 @@ ETX_GPU_CODE float sample_s_r(float rnd) {
   return 3.0f * logf(1.0f / (1.0f - rnd));
 }
 
-ETX_GPU_CODE SpectralResponse eval_s_r(const SpectralQuery spect, const SpectralDistribution& scattering_distance, float radius) {
-  auto sd = scattering_distance(spect);
+ETX_GPU_CODE SpectralResponse eval_s_r(const SpectralQuery spect, const SubsurfaceMaterial& m, float radius) {
+  auto sd = m.scattering_distance(spect) * m.scattering_distance_scale;
   ETX_VALIDATE(sd);
 
   radius = fmaxf(radius, kEpsilon);
@@ -117,8 +108,8 @@ ETX_GPU_CODE float pdf_s_r(float scattering_distance, float radius) {
   return t0 + t1;
 }
 
-ETX_GPU_CODE float pdf_s_p(const Vertex& i0, const Vertex& i1, const SpectralDistribution& scattering) {
-  const float s_pdf = 1.0f / float(scattering.count);
+ETX_GPU_CODE float pdf_s_p(const Vertex& i0, const Vertex& i1, const SubsurfaceMaterial& m) {
+  const float s_pdf = 1.0f / float(m.scattering_distance.count);
 
   float3 d = i1.pos - i0.pos;
   float3 d_local = {
@@ -140,46 +131,46 @@ ETX_GPU_CODE float pdf_s_p(const Vertex& i0, const Vertex& i1, const SpectralDis
 
   float pdf = 0;
   for (uint64_t axis = 0; axis < 3llu; ++axis) {
-    for (uint64_t channel = 0; channel < scattering.count; ++channel) {
-      float scattering_distance = scattering.entries[channel].power;
+    for (uint64_t channel = 0; channel < m.scattering_distance.count; ++channel) {
+      float scattering_distance = m.scattering_distance_scale * m.scattering_distance.entries[channel].power;
       pdf += pdf_s_r(scattering_distance, r_proj[axis]) * n_local[axis];
     }
   }
   return pdf;
 }
 
-ETX_GPU_CODE BSSRDFSample sample_spatial(const Vertex& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  BSSRDFSample sample;
+ETX_GPU_CODE bool sample(const Vertex& data, const Material& mtl, const Scene& scene, Sampler& smp, Ray& ray) {
+  float scattering_distance = mtl.subsurface.scattering_distance_scale * mtl.subsurface.scattering_distance.random_entry_power(smp.next());
+  if (scattering_distance == 0.0f)
+    return false;
+
+  float3 u, v, w;
   float rnd_0 = smp.next();
   if (rnd_0 < 0.5f) {
-    sample.u = data.tan;
-    sample.v = data.btn;
-    sample.w = data.nrm;
+    u = data.tan;
+    v = data.btn;
+    w = data.nrm;
   } else if (rnd_0 < 0.75f) {
-    sample.u = data.btn;
-    sample.v = data.nrm;
-    sample.w = data.tan;
+    u = data.btn;
+    v = data.nrm;
+    w = data.tan;
   } else {
-    sample.u = data.nrm;
-    sample.v = data.tan;
-    sample.w = data.btn;
+    u = data.nrm;
+    v = data.tan;
+    w = data.btn;
   }
 
-  float scattering_distance = mtl.subsurface.scattering.random_entry_power(smp.next());
   float r_max = scattering_distance * sample_s_r(0.9999f);
+  float radius = scattering_distance * sample_s_r(smp.next());
+  float phi = kDoublePi * smp.next();
+  float height = 2.0f * sqrtf(sqr(r_max) - sqr(radius));
+  if (height <= kRayEpsilon)
+    return false;
 
-  sample.radius = scattering_distance * sample_s_r(smp.next());
-  sample.phi = kDoublePi * smp.next();
-  sample.height = 2.0f * sqrtf(sqr(r_max) - sqr(sample.radius));
-  return sample;
-}
-
-ETX_GPU_CODE Ray make_ray(const BSSRDFSample& sample, const float3& p0) {
-  Ray ray;
-  ray.o = p0 + 0.5f * sample.height * sample.w + sample.radius * (cosf(sample.phi) * sample.u + sinf(sample.phi) * sample.v);
-  ray.d = -sample.w;
-  ray.max_t = sample.height;
-  return ray;
+  ray.o = data.pos + 0.5f * height * w + radius * (cosf(phi) * u + sinf(phi) * v);
+  ray.d = -w;
+  ray.max_t = height;
+  return true;
 }
 
 }  // namespace subsurface

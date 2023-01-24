@@ -120,16 +120,24 @@ bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer
     igText(name);
   }
 
+  bool changed = false;
   if (igColorEdit3(scattering ? "##scattering" : name, &rgb.x, flags)) {
     if (scattering == false) {
       rgb = gamma_to_linear(rgb);
     }
     rgb = max(rgb, float3{});
     spd = rgb::make_reflectance_spd(rgb, spectrums);
-    return true;
+    changed = true;
   }
 
-  return false;
+  if (scattering) {
+    if (igButton("Clear", {})) {
+      spd = SpectralDistribution::from_constant(0.0f);
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 void UI::build(double dt, const char* status) {
@@ -482,7 +490,7 @@ bool UI::build_material(Material& material) {
   changed |= igSpectrumPicker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
   changed |= igSpectrumPicker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
   changed |= igSpectrumPicker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);
-  changed |= igSpectrumPicker("Subsurface", material.subsurface.scattering, _current_scene->spectrums, true);
+  changed |= igSpectrumPicker("Subsurface", material.subsurface.scattering_distance, _current_scene->spectrums, true);
 
   auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
     bool has_medium = medium != kInvalidIndex;

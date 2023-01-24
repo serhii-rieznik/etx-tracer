@@ -6,7 +6,7 @@
 namespace etx {
 
 struct ETX_ALIGNED PTOptions {
-  uint32_t iterations ETX_INIT_WITH(65536u);
+  uint32_t iterations ETX_INIT_WITH(128u);
   uint32_t max_depth ETX_INIT_WITH(65536u);
   uint32_t rr_start ETX_INIT_WITH(6u);
   uint32_t path_per_iteration ETX_INIT_WITH(1u);
@@ -84,15 +84,12 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
   ETX_CHECK_FINITE(payload.ray.d);
 }
 
-ETX_GPU_CODE SpectralResponse sample_light(const Scene& scene, const Intersection& intersection, const Raytracing& rt, const uint32_t medium, const SpectralQuery spect,
-  Sampler& smp, bool mis) {
+ETX_GPU_CODE SpectralResponse sample_light(const Scene& scene, const Intersection& intersection, const Raytracing& rt, const Material& mat, const uint32_t medium,
+  const SpectralQuery spect, Sampler& smp, bool mis) {
   auto emitter_sample = sample_emitter(spect, smp, intersection.pos, scene);
   if (emitter_sample.pdf_dir <= 0) {
     return {spect.wavelength, 0.0f};
   }
-
-  const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
 
   BSDFEval bsdf_eval = bsdf::evaluate({spect, medium, PathSource::Camera, intersection, intersection.w_i, emitter_sample.direction}, mat, scene, smp);
   if (bsdf_eval.valid() == false) {
@@ -101,6 +98,7 @@ ETX_GPU_CODE SpectralResponse sample_light(const Scene& scene, const Intersectio
 
   ETX_VALIDATE(bsdf_eval.bsdf);
 
+  const auto& tri = scene.triangles[intersection.triangle_index];
   auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
   auto tr = transmittance(spect, smp, pos, emitter_sample.origin, medium, scene, rt);
   ETX_VALIDATE(tr);
@@ -113,72 +111,90 @@ ETX_GPU_CODE SpectralResponse sample_light(const Scene& scene, const Intersectio
   return bsdf_eval.bsdf * emitter_sample.value * tr * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 }
 
-ETX_GPU_CODE bool update_payload_with_bsdf_sample(const Scene& scene, const Intersection& intersection, PTRayPayload& payload, const BSDFSample& bsdf_sample) {
-  if (bsdf_sample.valid() == false) {
-    return false;
-  }
-
-  ETX_VALIDATE(payload.throughput);
-  payload.throughput *= bsdf_sample.weight;
-  ETX_VALIDATE(payload.throughput);
-  if (payload.throughput.is_zero())
-    return false;
-
-  payload.medium = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium;
-  payload.sampled_bsdf_pdf = bsdf_sample.pdf;
-  payload.sampled_delta_bsdf = bsdf_sample.is_delta();
-  payload.eta *= bsdf_sample.eta;
-  payload.ray.d = bsdf_sample.w_o;
-  payload.ray.o = shading_pos(scene.vertices, scene.triangles[intersection.triangle_index], intersection.barycentric, bsdf_sample.w_o);
-
-  return true;
-}
-
-ETX_GPU_CODE void handle_subsurface(const Scene& scene, const Intersection& in_intersection, const PTOptions& options, const Raytracing& rt, const uint32_t material_index,
-  PTRayPayload& payload, BSDFSample& bsdf_sample) {
-  constexpr float kMinSubsurfaceScatteringDistance = 1.0f / 255.0f;
-
-  if ((bsdf_sample.properties & BSDFSample::Diffuse) == 0)
-    return;
-
+ETX_GPU_CODE bool handle_subsurface(const Scene& scene, const Intersection& in_intersection, const PTOptions& options, const Raytracing& rt, const uint32_t material_index,
+  PTRayPayload& payload) {
   const auto& mtl = scene.materials[material_index];
-  if (mtl.subsurface.scattering.maximum_power() <= kMinSubsurfaceScatteringDistance)
-    return;
 
-  auto ss_sample = subsurface::sample_spatial(in_intersection, mtl, scene, payload.smp);
-  auto ss_ray = subsurface::make_ray(ss_sample, in_intersection.pos);
+  Ray ss_ray = {};
+  if (subsurface::sample(in_intersection, mtl, scene, payload.smp, ss_ray) == false)
+    return false;
 
   IntersectionBase intersections[subsurface::kMaxIntersections] = {};
   uint32_t intersection_count = rt.continuous_trace(scene, ss_ray, {intersections, subsurface::kMaxIntersections, material_index, in_intersection.triangle_index}, payload.smp);
+  ETX_CRITICAL(intersection_count <= subsurface::kMaxIntersections);
   if (intersection_count == 0) {
-    return;
+    return false;
   }
 
-  uint32_t selected_intersection = uint32_t(payload.smp.next() * float(intersection_count));
-  auto out_intersection = rt.make_intersection(scene, ss_ray.d, intersections[selected_intersection]);
-  const auto& out_tri = scene.triangles[out_intersection.triangle_index];
+  Material delta_material = mtl;
+  delta_material.roughness = {};
 
-  float actual_distance = length(out_intersection.pos - in_intersection.pos);
+  float total_weigth = 0.0f;
+  SpectralResponse weights[subsurface::kMaxIntersections] = {};
+  SpectralResponse total_subsurface = {payload.spect.wavelength, 0.0f};
+  for (uint32_t i = 0; i < intersection_count; ++i) {
+    auto out_intersection = rt.make_intersection(scene, ss_ray.d, intersections[i]);
+    auto pdf = subsurface::pdf_s_p(in_intersection, out_intersection, mtl.subsurface);
+    ETX_VALIDATE(pdf);
+    if (pdf > 0.0f) {
+      float actual_distance = length(out_intersection.pos - in_intersection.pos);
+      auto eval = subsurface::eval_s_r(payload.spect, mtl.subsurface, actual_distance);
+      ETX_VALIDATE(eval);
 
-  auto pdf = subsurface::pdf_s_p(in_intersection, out_intersection, mtl.subsurface.scattering) / float(intersection_count);
-  ETX_VALIDATE(pdf);
-  if (pdf <= 0.0f)
-    return;
+      weights[i] = eval / pdf;
+      ETX_VALIDATE(weights[i]);
 
-  auto eval = subsurface::eval_s_r(payload.spect, mtl.subsurface.scattering, actual_distance);
-  ETX_VALIDATE(eval);
+      total_weigth += weights[i].average();
+      ETX_VALIDATE(total_weigth);
+      auto light_value = sample_light(scene, out_intersection, rt, delta_material, payload.medium, payload.spect, payload.smp, options.mis);
+      total_subsurface += weights[i] * payload.throughput * light_value;
+      ETX_VALIDATE(total_subsurface);
+    }
+  }
 
-  payload.throughput *= eval / pdf;
+  if (total_weigth == 0.0f)
+    return false;
+
+  float rnd = payload.smp.next() * total_weigth;
+  float partial_sum = 0.0f;
+  float sample_weight = 0.0f;
+  uint32_t selected_intersection = ~0u;
+  for (uint32_t i = 0; i < intersection_count; ++i) {
+    const auto& weight = weights[i];
+    sample_weight = weight.average();
+    float next_sum = partial_sum + sample_weight;
+    if (rnd < next_sum) {
+      selected_intersection = i;
+      break;
+    }
+    partial_sum = next_sum;
+  }
+
+  if (selected_intersection == ~0u)
+    return false;
+
+  payload.throughput *= weights[selected_intersection] * total_weigth / sample_weight;
   ETX_VALIDATE(payload.throughput);
 
-  auto light_value = sample_light(scene, out_intersection, rt, payload.medium, payload.spect, payload.smp, options.mis);
-  payload.accumulated += payload.throughput * light_value;
-  ETX_VALIDATE(payload.accumulated);
+  auto out_intersection = rt.make_intersection(scene, ss_ray.d, intersections[selected_intersection]);
+  float3 w_i = -out_intersection.nrm;
+  float3 w_o = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
+  out_intersection.w_i = w_i;
 
-  auto subsurface_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, out_intersection, out_intersection.w_i, {}}, mtl, scene, payload.smp);
-  if (subsurface_sample.valid()) {
-    bsdf_sample = subsurface_sample;
+  BSDFData bsdf_data = {payload.spect, payload.medium, PathSource::Camera, out_intersection, w_i, w_o};
+  auto subsurface_eval = bsdf::evaluate(bsdf_data, delta_material, scene, payload.smp);
+  if (subsurface_eval.valid()) {
+    ETX_VALIDATE(payload.throughput);
+    payload.accumulated += total_subsurface;
+    payload.throughput *= subsurface_eval.bsdf / subsurface_eval.pdf;
+    payload.sampled_bsdf_pdf = subsurface_eval.pdf;
+    payload.sampled_delta_bsdf = false;
+    payload.ray.d = w_o;
+    payload.ray.o = shading_pos(scene.vertices, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, w_o);
+    return true;
   }
+
+  return false;
 }
 
 ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
@@ -194,8 +210,9 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+  SpectralResponse direct_light = {payload.spect.wavelength, 0.0f};
   if (options.nee && (payload.path_length + 1 <= options.max_depth)) {
-    payload.accumulated += payload.throughput * sample_light(scene, intersection, rt, payload.medium, payload.spect, payload.smp, options.mis);
+    direct_light = payload.throughput * sample_light(scene, intersection, rt, mat, payload.medium, payload.spect, payload.smp, options.mis);
     ETX_VALIDATE(payload.accumulated);
   }
   //*
@@ -227,11 +244,25 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     return false;
   }
 
-  handle_subsurface(scene, intersection, options, rt, tri.material_index, payload, bsdf_sample);
-
-  if (update_payload_with_bsdf_sample(scene, intersection, payload, bsdf_sample) == false) {
-    return false;
+  bool subsurface_handled = false;
+  if (bsdf_sample.properties & BSDFSample::Diffuse) {
+    subsurface_handled = handle_subsurface(scene, intersection, options, rt, tri.material_index, payload);
   }
+
+  if (subsurface_handled == false) {
+    payload.accumulated += direct_light;
+    payload.throughput *= bsdf_sample.weight;
+    ETX_VALIDATE(payload.throughput);
+    payload.medium = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium;
+    payload.sampled_bsdf_pdf = bsdf_sample.pdf;
+    payload.sampled_delta_bsdf = bsdf_sample.is_delta();
+    payload.eta *= bsdf_sample.eta;
+    payload.ray.d = bsdf_sample.w_o;
+    payload.ray.o = shading_pos(scene.vertices, scene.triangles[intersection.triangle_index], intersection.barycentric, bsdf_sample.w_o);
+  }
+
+  if (payload.throughput.is_zero())
+    return false;
 
   payload.path_length += 1;
   ETX_CHECK_FINITE(payload.ray.d);

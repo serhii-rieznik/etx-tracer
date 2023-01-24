@@ -17,7 +17,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   BSDFSample result;
   if (reflection) {
     result.w_o = normalize(reflect(data.w_i, frame.nrm));
-    result.properties = BSDFSample::Diffuse | BSDFSample::Reflection;
+    result.properties = BSDFSample::Reflection;
   } else {
     result.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
     result.properties = BSDFSample::Diffuse | BSDFSample::Transmission;

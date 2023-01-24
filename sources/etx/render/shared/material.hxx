@@ -27,12 +27,8 @@ struct ETX_ALIGNED Thinfilm {
 };
 
 struct SubsurfaceMaterial {
-  enum class Class : uint32_t {
-    Disney,
-
-    Count,
-  };
-  SpectralDistribution scattering;
+  SpectralDistribution scattering_distance;
+  float scattering_distance_scale = 0.2f;
 };
 
 struct ETX_ALIGNED Material {
