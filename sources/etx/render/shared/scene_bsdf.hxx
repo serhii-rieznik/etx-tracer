@@ -140,5 +140,3 @@ ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const Spe
 #include <etx/render/shared/bsdf_plastic.hxx>
 #include <etx/render/shared/bsdf_various.hxx>
 #include <etx/render/shared/bsdf_velvet.hxx>
-
-#include <etx/render/shared/bssrdf_subsurface.hxx>

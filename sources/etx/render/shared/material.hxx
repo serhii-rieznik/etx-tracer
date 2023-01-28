@@ -67,6 +67,11 @@ struct ETX_ALIGNED Material {
 
   float metalness = {};
   float normal_scale = 1.0f;
+
+  bool has_subsurface_scattering() const {
+    return ((cls == Class::Diffuse) || (cls == Class::Plastic) || (cls == Class::Subsurface) || (cls == Class::Velvet) || (cls == Class::Coating)) &&
+           (subsurface.scattering_distance.is_zero() == false);
+  }
 };
 
 }  // namespace etx

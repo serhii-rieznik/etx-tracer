@@ -388,10 +388,9 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
 }
 
 Intersection Raytracing::make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) const {
-  Intersection result_intersection;
-  float3 bc = {1.0f - base.barycentric.x - base.barycentric.y, base.barycentric.x, base.barycentric.y};
+  float3 bc = barycentrics(base.barycentric);
   const auto& tri = scene.triangles[base.triangle_index];
-  result_intersection = lerp_vertex(scene.vertices, tri, bc);
+  Intersection result_intersection = lerp_vertex(scene.vertices, tri, bc);
   result_intersection.barycentric = bc;
   result_intersection.triangle_index = static_cast<uint32_t>(base.triangle_index);
   result_intersection.w_i = w_i;

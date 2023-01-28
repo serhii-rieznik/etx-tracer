@@ -8,6 +8,7 @@
 #include <etx/render/shared/emitter.hxx>
 #include <etx/render/shared/sampler.hxx>
 #include <etx/render/shared/bsdf.hxx>
+#include <etx/render/shared/bssrdf_subsurface.hxx>
 
 namespace etx {
 
@@ -159,6 +160,68 @@ ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, c
   return result;
 }
 
+namespace subsurface {
+
+template <class RT>
+ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp) {
+  const auto& mtl = scene.materials[material_index];
+  Ray ss_ray = {};
+  if (subsurface::sample(in_intersection, mtl, smp, ss_ray) == false)
+    return {};
+
+  IntersectionBase intersections[subsurface::kMaxIntersections] = {};
+  uint32_t intersection_count = rt.continuous_trace(scene, ss_ray, {intersections, subsurface::kMaxIntersections, material_index, in_intersection.triangle_index}, smp);
+  ETX_CRITICAL(intersection_count <= subsurface::kMaxIntersections);
+  if (intersection_count == 0) {
+    return {};
+  }
+
+  Gather result = {};
+  ArrayView<Intersection> iv = {result.intersections, subsurface::kMaxIntersections};
+  ArrayView<SpectralResponse> wv = {result.weights, subsurface::kMaxIntersections};
+
+  float total_weight = 0.0f;
+  for (uint32_t i = 0; i < intersection_count; ++i) {
+    auto out_intersection = rt.make_intersection(scene, ss_ray.d, intersections[i]);
+    out_intersection.w_i = -out_intersection.nrm;
+    auto pdf = subsurface::pdf_s_p(in_intersection, out_intersection, mtl.subsurface);
+    ETX_VALIDATE(pdf);
+    if (pdf > 0.0f) {
+      float actual_distance = length(out_intersection.pos - in_intersection.pos);
+      auto eval = subsurface::eval_s_r(spect, mtl.subsurface, actual_distance);
+      ETX_VALIDATE(eval);
+      auto weight = eval / pdf;
+      ETX_VALIDATE(weight);
+      if (weight.is_zero() == false) {
+        total_weight += weight.average();
+        iv[result.intersection_count] = out_intersection;
+        wv[result.intersection_count] = weight;
+        result.intersection_count += 1u;
+      }
+    }
+  }
+
+  if (total_weight > 0.0f) {
+    float rnd = smp.next() * total_weight;
+    float partial_sum = 0.0f;
+    float sample_weight = 0.0f;
+    for (uint32_t i = 0; i < result.intersection_count; ++i) {
+      sample_weight = wv[i].average();
+      float next_sum = partial_sum + sample_weight;
+      if (rnd < next_sum) {
+        result.selected_intersection = i;
+        result.selected_sample_weight = total_weight / sample_weight;
+        break;
+      }
+      partial_sum = next_sum;
+    }
+    ETX_ASSERT(result.selected_intersection != kInvalidIndex);
+  }
+
+  return result;
+}
+
+}  // namespace subsurface
 }  // namespace etx
 
 #include <etx/render/shared/scene_bsdf.hxx>
