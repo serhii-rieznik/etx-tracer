@@ -5,21 +5,6 @@
 
 namespace etx {
 
-SpectralDistribution SpectralDistribution::from_constant(float value) {
-  SpectralDistribution result;
-  if constexpr (spectrum::kSpectralRendering) {
-    result.count = 2;
-    result.entries[0] = {spectrum::kShortestWavelength, value};
-    result.entries[1] = {spectrum::kLongestWavelength, value};
-  } else {
-    result.count = 3;
-    result.entries[0] = {spectrum::kUndefinedWavelength, value};
-    result.entries[1] = {spectrum::kUndefinedWavelength, value};
-    result.entries[2] = {spectrum::kUndefinedWavelength, value};
-  }
-  return result;
-}
-
 SpectralDistribution SpectralDistribution::from_black_body(float temperature, Pointer<Spectrums> spectrums) {
   SpectralDistribution result;
   result.count = spectrum::WavelengthCount;
@@ -130,14 +115,6 @@ void SpectralDistribution::load_from_file(const char* file_name, SpectralDistrib
 bool SpectralDistribution::valid() const {
   for (uint64_t i = 0; i < count; ++i) {
     if (valid_value(entries[i].power) == false) {
-      return false;
-    }
-  }
-  return true;
-}
-bool SpectralDistribution::is_zero() const {
-  for (uint64_t i = 0; i < count; ++i) {
-    if (entries[i].power != 0.0f) {
       return false;
     }
   }

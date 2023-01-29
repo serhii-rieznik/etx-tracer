@@ -460,7 +460,8 @@ ETX_GPU_CODE void vcm_connect_to_light(const Scene& scene, const VCMIteration& v
 
   const auto& tri = scene.triangles[state.intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
-  auto emitter_sample = sample_emitter(state.spect, state.sampler, state.intersection.pos, scene);
+  uint32_t emitter_index = sample_emitter_index(scene, state.sampler);
+  auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler, state.intersection.pos, scene);
 
   if (emitter_sample.pdf_dir > 0) {
     BSDFData connection_data = {state.spect, state.medium_index, PathSource::Camera, state.intersection, state.ray.d, emitter_sample.direction};

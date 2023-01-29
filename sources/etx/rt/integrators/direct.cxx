@@ -258,7 +258,8 @@ struct CPUDirectLightingImpl {
           emitter_sample = reservoir.sample;
           emitter_sample.pdf_sample = 1.0f / reservoir.weight();
         } else {
-          emitter_sample = sample_emitter(payload.spect, payload.smp, intersection.pos, scene);
+          uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
+          emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, intersection.pos, scene);
         }
 
         if (emitter_sample.pdf_dir > 0) {

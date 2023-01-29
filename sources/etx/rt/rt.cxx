@@ -271,6 +271,7 @@ const Scene& Raytracing::gpu_scene() const {
 
 uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const ContinousTraceOptions& options, Sampler& smp) const {
   ETX_ASSERT(_private != nullptr);
+  ETX_CHECK_FINITE(r.o);
   ETX_CHECK_FINITE(r.d);
 
   struct IntersectionContextExt {
@@ -331,6 +332,7 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
 
 bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_intersection, Sampler& smp) const {
   ETX_ASSERT(_private != nullptr);
+  ETX_CHECK_FINITE(r.o);
   ETX_CHECK_FINITE(r.d);
 
   RTCIntersectContext context = {};
@@ -385,30 +387,6 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
   }
 
   return intersection_found;
-}
-
-Intersection Raytracing::make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) const {
-  float3 bc = barycentrics(base.barycentric);
-  const auto& tri = scene.triangles[base.triangle_index];
-  Intersection result_intersection = lerp_vertex(scene.vertices, tri, bc);
-  result_intersection.barycentric = bc;
-  result_intersection.triangle_index = static_cast<uint32_t>(base.triangle_index);
-  result_intersection.w_i = w_i;
-  result_intersection.t = base.t;
-
-  const auto& mat = scene.materials[tri.material_index];
-  if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {
-    auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
-    float3x3 from_local = {
-      float3{result_intersection.tan.x, result_intersection.tan.y, result_intersection.tan.z},
-      float3{result_intersection.btn.x, result_intersection.btn.y, result_intersection.btn.z},
-      float3{result_intersection.nrm.x, result_intersection.nrm.y, result_intersection.nrm.z},
-    };
-    result_intersection.nrm = normalize(from_local * sampled_normal);
-    result_intersection.tan = normalize(result_intersection.tan - result_intersection.nrm * dot(result_intersection.tan, result_intersection.nrm));
-    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan));
-  }
-  return result_intersection;
 }
 
 }  // namespace etx

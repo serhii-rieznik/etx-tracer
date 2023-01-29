@@ -72,6 +72,14 @@ struct ETX_ALIGNED Material {
     return ((cls == Class::Diffuse) || (cls == Class::Plastic) || (cls == Class::Subsurface) || (cls == Class::Velvet) || (cls == Class::Coating)) &&
            (subsurface.scattering_distance.is_zero() == false);
   }
+
+  static const Material& subsurface_material() {
+    static constexpr Material m = {
+      Material::Class::Subsurface,
+      {SpectralDistribution::from_constant(1.0f)},
+    };
+    return m;
+  }
 };
 
 }  // namespace etx

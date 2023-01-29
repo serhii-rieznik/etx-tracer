@@ -9,13 +9,6 @@
 namespace etx {
 
 struct Raytracing {
-  struct ContinousTraceOptions {
-    IntersectionBase* intersection_buffer = nullptr;
-    uint32_t max_intersections = 0;
-    uint32_t material_id = kInvalidIndex;
-    uint32_t start_triangle_id = kInvalidIndex;
-  };
-
   Raytracing();
   ~Raytracing();
 
@@ -31,8 +24,6 @@ struct Raytracing {
 
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
   uint32_t continuous_trace(const Scene& scene, const Ray&, const ContinousTraceOptions& options, Sampler& smp) const;
-
-  Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase&) const;
 
  private:
   ETX_DECLARE_PIMPL(Raytracing, 1024);

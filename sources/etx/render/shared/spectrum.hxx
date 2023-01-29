@@ -475,6 +475,15 @@ struct ETX_ALIGNED SpectralDistribution {
     return count == 0;
   }
 
+  ETX_GPU_CODE bool is_zero() const {
+    for (uint64_t i = 0; i < count; ++i) {
+      if (entries[i].power != 0.0f) {
+        return false;
+      }
+    }
+    return true;
+  }
+
  public:
   SpectralDistribution& operator*=(float other) {
     for (uint64_t i = 0; i < count; ++i) {
@@ -529,9 +538,22 @@ struct ETX_ALIGNED SpectralDistribution {
   float maximum_power() const;
 
   bool valid() const;
-  bool is_zero() const;
 
-  static SpectralDistribution from_constant(float value);
+  static constexpr SpectralDistribution from_constant(float value) {
+    SpectralDistribution result;
+    if constexpr (spectrum::kSpectralRendering) {
+      result.count = 2;
+      result.entries[0] = {spectrum::kShortestWavelength, value};
+      result.entries[1] = {spectrum::kLongestWavelength, value};
+    } else {
+      result.count = 3;
+      result.entries[0] = {spectrum::kUndefinedWavelength, value};
+      result.entries[1] = {spectrum::kUndefinedWavelength, value};
+      result.entries[2] = {spectrum::kUndefinedWavelength, value};
+    }
+    return result;
+  }
+
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count);
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, Pointer<Spectrums>);

@@ -110,8 +110,11 @@ ETX_GPU_CODE bool sample(const Vertex& data, const Material& mtl, Sampler& smp, 
     w = data.btn;
   }
 
-  float r_max = scattering_distance * sample_s_r(0.9999f);
+  float r_max = scattering_distance * sample_s_r(1.0f);
   float radius = scattering_distance * sample_s_r(smp.next());
+  if (radius >= r_max)
+    return false;
+
   float phi = kDoublePi * smp.next();
   float height = 2.0f * sqrtf(sqr(r_max) - sqr(radius));
   if (height <= kRayEpsilon)

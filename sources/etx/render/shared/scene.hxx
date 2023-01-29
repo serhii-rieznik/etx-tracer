@@ -36,6 +36,12 @@ struct ETX_ALIGNED Scene {
   uint32_t camera_lens_shape_image_index ETX_INIT_WITH(kInvalidIndex);
 };
 
+struct ContinousTraceOptions {
+  IntersectionBase* intersection_buffer = nullptr;
+  uint32_t max_intersections = 0;
+  uint32_t material_id = kInvalidIndex;
+};
+
 ETX_GPU_CODE float3 lerp_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
   return vertices[t.i[0]].pos * bc.x +  //
          vertices[t.i[1]].pos * bc.y +  //
@@ -94,6 +100,30 @@ ETX_GPU_CODE float3 shading_pos(const ArrayView<Vertex>& vertices, const Triangl
   return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
 }
 
+ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
+  float3 bc = barycentrics(base.barycentric);
+  const auto& tri = scene.triangles[base.triangle_index];
+  Intersection result_intersection = lerp_vertex(scene.vertices, tri, bc);
+  result_intersection.barycentric = bc;
+  result_intersection.triangle_index = static_cast<uint32_t>(base.triangle_index);
+  result_intersection.w_i = w_i;
+  result_intersection.t = base.t;
+
+  const auto& mat = scene.materials[tri.material_index];
+  if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {
+    auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
+    float3x3 from_local = {
+      float3{result_intersection.tan.x, result_intersection.tan.y, result_intersection.tan.z},
+      float3{result_intersection.btn.x, result_intersection.btn.y, result_intersection.btn.z},
+      float3{result_intersection.nrm.x, result_intersection.nrm.y, result_intersection.nrm.z},
+    };
+    result_intersection.nrm = normalize(from_local * sampled_normal);
+    result_intersection.tan = normalize(result_intersection.tan - result_intersection.nrm * dot(result_intersection.tan, result_intersection.nrm));
+    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan));
+  }
+  return result_intersection;
+}
+
 ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
   if (path_length < start_path_length)
     return true;
@@ -114,14 +144,16 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
 
 template <class RT>
 ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, const float3& p0, const float3& p1, uint32_t medium_index, const Scene& scene, const RT& rt) {
-  SpectralResponse result = {spect.wavelength, 1.0f};
+  // return {spect.wavelength, 1.0f};
+  //*
+  constexpr uint32_t kMaxIterations = 256u;
 
   float3 w_o = p1 - p0;
   ETX_CHECK_FINITE(w_o);
 
   float max_t = dot(w_o, w_o);
-  if (max_t < kRayEpsilon) {
-    return result;
+  if (max_t <= kRayEpsilon) {
+    return {spect.wavelength, 1.0f};
   }
 
   max_t = sqrtf(max_t);
@@ -130,7 +162,8 @@ ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, c
 
   float3 origin = p0;
 
-  for (;;) {
+  SpectralResponse result = {spect.wavelength, 1.0f};
+  for (uint32_t i = 0; i < kMaxIterations; ++i) {
     Intersection intersection;
     if (rt.trace(scene, {origin, w_o, kRayEpsilon, max_t}, intersection, smp) == false) {
       if (medium_index != kInvalidIndex) {
@@ -158,6 +191,7 @@ ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, c
   }
 
   return result;
+  // */
 }
 
 namespace subsurface {
@@ -170,7 +204,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
     return {};
 
   IntersectionBase intersections[subsurface::kMaxIntersections] = {};
-  uint32_t intersection_count = rt.continuous_trace(scene, ss_ray, {intersections, subsurface::kMaxIntersections, material_index, in_intersection.triangle_index}, smp);
+  uint32_t intersection_count = rt.continuous_trace(scene, ss_ray, {intersections, subsurface::kMaxIntersections, material_index}, smp);
   ETX_CRITICAL(intersection_count <= subsurface::kMaxIntersections);
   if (intersection_count == 0) {
     return {};
@@ -182,7 +216,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
 
   float total_weight = 0.0f;
   for (uint32_t i = 0; i < intersection_count; ++i) {
-    auto out_intersection = rt.make_intersection(scene, ss_ray.d, intersections[i]);
+    auto out_intersection = make_intersection(scene, ss_ray.d, intersections[i]);
     out_intersection.w_i = -out_intersection.nrm;
     auto pdf = subsurface::pdf_s_p(in_intersection, out_intersection, mtl.subsurface);
     ETX_VALIDATE(pdf);
