@@ -266,7 +266,7 @@ struct CPUDirectLightingImpl {
           BSDFEval bsdf_eval = bsdf::evaluate({payload.spect, payload.medium, PathSource::Camera, intersection, payload.ray.d, emitter_sample.direction}, mat, scene, payload.smp);
           if (bsdf_eval.valid()) {
             auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
-            auto tr = transmittance(payload.spect, payload.smp, pos, emitter_sample.origin, payload.medium, scene, rt);
+            auto tr = rt.trace_transmittance(payload.spect, scene, pos, emitter_sample.origin, payload.medium, payload.smp);
             payload.accumulated += bsdf_eval.bsdf * emitter_sample.value * tr / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
             ETX_VALIDATE(payload.accumulated);
           }
@@ -279,7 +279,7 @@ struct CPUDirectLightingImpl {
           float pdf_emitter_dir = 0.0f;
           auto e = emitter_get_radiance(emitter, payload.spect, intersection.tex, payload.ray.o, intersection.pos, pdf_a, pdf_emitter_dir, pdf_do, scene, true);
           if (pdf_emitter_dir > 0.0f) {
-            auto tr = transmittance(payload.spect, payload.smp, payload.ray.o, intersection.pos, payload.medium, scene, rt);
+            auto tr = rt.trace_transmittance(payload.spect, scene, payload.ray.o, intersection.pos, payload.medium, payload.smp);
             payload.accumulated += e * tr;
             ETX_VALIDATE(payload.accumulated);
           }

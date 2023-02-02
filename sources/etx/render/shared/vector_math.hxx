@@ -430,10 +430,10 @@ ETX_GPU_CODE float4x4 perspective(float fov, uint32_t width, uint32_t height, fl
   ETX_ASSERT(fov > 0);
 
   float h = cosf(0.5f * fov) / sinf(0.5f * fov);
-  float w = h * float(height) / float(width);
+  float aspect = float(width) / float(height);
 
   float4x4 result = {};
-  result.col[0].x = w;
+  result.col[0].x = h / aspect;
   result.col[1].y = h;
   result.col[2].z = z_far / (z_near - z_far);
   result.col[2].w = -1.0f;

@@ -357,8 +357,18 @@ void update_camera(Camera& camera, const float3& origin, const float3& target, c
   camera.image_plane = float(camera.image_size.x) / (2.0f * camera.tan_half_fov);
 }
 
+static const float kFilmSize = 36.0f;
+
 float get_camera_fov(const Camera& camera) {
   return 2.0f * atanf(camera.tan_half_fov) * 180.0f / kPi;
+}
+
+float fov_to_focal_length(float fov) {
+  return 0.5f * kFilmSize / tanf(0.5f * fov);
+}
+
+float focal_length_to_fov(float focal_len) {
+  return 2.0f * atanf(kFilmSize / (2.0f * focal_len));
 }
 
 ETX_PIMPL_IMPLEMENT(SceneRepresentation, Impl);
@@ -462,6 +472,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   float3 camera_view = cam.position + cam.direction;
   uint2 viewport = cam.image_size;
   float camera_fov = get_camera_fov(cam);
+  float camera_focal_len = fov_to_focal_length(camera_fov);
+  bool use_focal_len = false;
 
   if (strcmp(get_file_ext(filename), ".json") == 0) {
     json_error_t err = {};
@@ -516,6 +528,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
             viewport = json_to_u2(cam_value);
           } else if ((strcmp(cam_key, "fov") == 0) && json_is_number(cam_value)) {
             camera_fov = static_cast<float>(json_number_value(cam_value));
+          } else if ((strcmp(cam_key, "focal-length") == 0) && json_is_number(cam_value)) {
+            camera_focal_len = static_cast<float>(json_number_value(cam_value));
+            use_focal_len = true;
           } else if ((strcmp(cam_key, "lens-radius") == 0) && json_is_number(cam_value)) {
             cam.lens_radius = static_cast<float>(json_number_value(cam_value));
           } else if ((strcmp(cam_key, "focal-distance") == 0) && json_is_number(cam_value)) {
@@ -541,6 +556,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       viewport = {1280, 720};
     }
     cam.cls = camera_cls;
+    if (use_focal_len) {
+      camera_fov = 0.5f * focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
+    }
     update_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
   }
 

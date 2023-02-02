@@ -69,14 +69,14 @@ struct RTApplication {
   GPUVCM _gpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};
 
-  Integrator* _integrator_array[8] = {
+  Integrator* _integrator_array[6] = {
     &_preview,
     &_cpu_direct,
     &_cpu_pt,
     &_cpu_bidir,
     &_cpu_vcm,
-    &_gpu_pt,
-    &_gpu_vcm,
+    //&_gpu_pt,
+    //&_gpu_vcm,
     &_cpu_atmosphere,
   };
 

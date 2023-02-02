@@ -404,7 +404,7 @@ ETX_GPU_CODE float3 vcm_connect_to_camera(const RT& rt, const Scene& scene, cons
   }
 
   float3 p0 = shading_pos(scene.vertices, tri, state.intersection.barycentric, w_o);
-  auto tr = transmittance(state.spect, state.sampler, p0, camera_sample.position, state.medium_index, scene, rt);
+  auto tr = rt.trace_transmittance(state.spect, scene, p0, camera_sample.position, state.medium_index, state.sampler);
   if (tr.is_zero()) {
     return {};
   }
@@ -468,7 +468,7 @@ ETX_GPU_CODE void vcm_connect_to_light(const Scene& scene, const VCMIteration& v
     BSDFEval connection_eval = bsdf::evaluate(connection_data, mat, scene, state.sampler);
     if (connection_eval.valid()) {
       float3 p0 = shading_pos(scene.vertices, tri, state.intersection.barycentric, normalize(emitter_sample.origin - state.intersection.pos));
-      auto tr = transmittance(state.spect, state.sampler, p0, emitter_sample.origin, state.medium_index, scene, rt);
+      auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, state.medium_index, state.sampler);
       if (tr.is_zero() == false) {
         float l_dot_n = fabsf(dot(emitter_sample.direction, state.intersection.nrm));
         float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
@@ -577,7 +577,7 @@ ETX_GPU_CODE void vcm_connect_to_light_path(const Scene& scene, const VCMIterati
 
     if (connected) {
       float3 p0 = shading_pos(scene.vertices, tri, state.intersection.barycentric, normalize(target_position - state.intersection.pos));
-      auto tr = transmittance(state.spect, state.sampler, p0, target_position, state.medium_index, scene, rt);
+      auto tr = rt.trace_transmittance(state.spect, scene, p0, target_position, state.medium_index, state.sampler);
       if (tr.is_zero() == false) {
         state.gathered += tr * value;
         ETX_VALIDATE(state.gathered);

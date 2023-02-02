@@ -335,8 +335,31 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
   ETX_CHECK_FINITE(r.o);
   ETX_CHECK_FINITE(r.d);
 
-  RTCIntersectContext context = {};
-  rtcInitIntersectContext(&context);
+  struct IntersectionContextExt {
+    RTCIntersectContext context;
+    IntersectionBase i;
+    const Scene* scene;
+    Sampler* smp;
+  } context = {{}, {{}, kInvalidIndex, 0.0f}, &scene, &smp};
+
+  rtcInitIntersectContext(&context.context);
+
+  context.context.filter = [](const struct RTCFilterFunctionNArguments* args) {
+    auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
+    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    float3 bc = barycentrics({u, v});
+    const auto& scene = *ctx->scene;
+    const auto& tri = ctx->scene->triangles[triangle_index];
+    const auto& mat = ctx->scene->materials[tri.material_index];
+    if (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp)) {
+      *args->valid = 0;
+      return;
+    }
+
+    ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0)};
+  };
 
   RTCRayHit ray_hit = {};
   ray_hit.ray.dir_x = r.d.x;
@@ -351,42 +374,103 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
   ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
   ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
   ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
+  rtcIntersect1(_private->rt_scene, &context.context, &ray_hit);
 
-  IntersectionBase base = {};
-  bool intersection_found = false;
-  for (;;) {
-    rtcIntersect1(_private->rt_scene, &context, &ray_hit);
-    if ((ray_hit.hit.geomID == RTC_INVALID_GEOMETRY_ID)) {
-      intersection_found = false;
-      break;
+  if (context.i.triangle_index == kInvalidIndex)
+    return false;
+
+  result_intersection = make_intersection(scene, r.d, context.i);
+  return true;
+}
+
+SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const uint32_t medium, Sampler& smp) const {
+  ETX_ASSERT(_private != nullptr);
+  ETX_CHECK_FINITE(p0);
+  ETX_CHECK_FINITE(p1);
+
+  struct IntersectionContextExt {
+    RTCIntersectContext context;
+    const Scene* scene;
+    Sampler* smp;
+    SpectralQuery spect;
+    SpectralResponse value;
+    uint32_t medium;
+    float3 origin;
+    float3 direction;
+    float t;
+  } context = {{}, &scene, &smp, spect, {spect.wavelength, 1.0f}, medium, p0};
+
+  rtcInitIntersectContext(&context.context);
+
+  context.context.filter = [](const struct RTCFilterFunctionNArguments* args) {
+    auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
+    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    float t = RTCRayN_tfar(args->ray, args->N, 0);
+    float3 bc = barycentrics({u, v});
+    const auto& scene = *ctx->scene;
+    const auto& tri = ctx->scene->triangles[triangle_index];
+    const auto& mat = ctx->scene->materials[tri.material_index];
+    if (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp)) {
+      *args->valid = 0;
+      return;
     }
 
-    const auto& tri = scene.triangles[ray_hit.hit.primID];
-    const auto& mat = scene.materials[tri.material_index];
-    float3 bc = {1.0f - ray_hit.hit.u - ray_hit.hit.v, ray_hit.hit.u, ray_hit.hit.v};
-    if (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, smp)) {
-      auto p = lerp_pos(scene.vertices, tri, bc);
-      ray_hit.ray.org_x = p.x + r.d.x * kRayEpsilon;
-      ray_hit.ray.org_y = p.y + r.d.y * kRayEpsilon;
-      ray_hit.ray.org_z = p.z + r.d.z * kRayEpsilon;
-      ray_hit.ray.tfar = r.max_t - ray_hit.ray.tfar;
-      ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-      ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
-      ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
+    if (mat.cls == Material::Class::Boundary) {
+      if (ctx->medium != kInvalidIndex) {
+        float dt = t - ctx->t;
+        ctx->value *= scene.mediums[ctx->medium].transmittance(ctx->spect, *ctx->smp, ctx->origin, ctx->direction, dt);
+        ETX_VALIDATE(ctx->value);
+      }
+
+      float3 nrm = lerp_normal(scene.vertices, tri, bc);
+      ctx->medium = (dot(nrm, ctx->direction) < 0.0f) ? mat.int_medium : mat.ext_medium;
+      ctx->origin = lerp_pos(scene.vertices, tri, bc);
+      ctx->t = t;
+
+      *args->valid = 0;
     } else {
-      intersection_found = true;
-      base.barycentric = {ray_hit.hit.u, ray_hit.hit.v};
-      base.triangle_index = ray_hit.hit.primID;
-      base.t = ray_hit.ray.tfar;
-      break;
+      ctx->value = {ctx->value.wavelength, 0.0f};
+      *args->valid = -1;
     }
+  };
+
+  context.direction = p1 - p0;
+  ETX_CHECK_FINITE(context.direction);
+
+  float t_max = dot(context.direction, context.direction);
+  if (t_max <= kRayEpsilon) {
+    return {spect.wavelength, 1.0f};
   }
 
-  if (intersection_found) {
-    result_intersection = make_intersection(scene, r.d, base);
+  t_max = sqrtf(t_max);
+  context.direction /= t_max;
+  t_max -= kRayEpsilon;
+  ETX_VALIDATE(t_max);
+
+  RTCRayHit ray_hit = {};
+  ray_hit.ray.dir_x = context.direction.x;
+  ray_hit.ray.dir_y = context.direction.y;
+  ray_hit.ray.dir_z = context.direction.z;
+  ray_hit.ray.org_x = p0.x;
+  ray_hit.ray.org_y = p0.y;
+  ray_hit.ray.org_z = p0.z;
+  ray_hit.ray.tnear = kRayEpsilon;
+  ray_hit.ray.tfar = t_max;
+  ray_hit.ray.mask = kInvalidIndex;
+  ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
+  ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
+  ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
+
+  rtcIntersect1(_private->rt_scene, &context.context, &ray_hit);
+
+  if (context.medium != kInvalidIndex) {
+    context.value *= scene.mediums[context.medium].transmittance(spect, smp, context.origin, context.direction, t_max - context.t);
+    ETX_VALIDATE(context.value);
   }
 
-  return intersection_found;
+  return context.value;
 }
 
 }  // namespace etx

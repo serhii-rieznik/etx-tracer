@@ -121,7 +121,9 @@ bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer
   }
 
   bool changed = false;
-  if (igColorEdit3(scattering ? "##scattering" : name, &rgb.x, flags)) {
+  char name_buffer[64] = {};
+  snprintf(name_buffer, sizeof(name_buffer), "%s%s", scattering ? "##" : "", name);
+  if (igColorEdit3(name_buffer, &rgb.x, flags)) {
     if (scattering == false) {
       rgb = gamma_to_linear(rgb);
     }
@@ -189,7 +191,6 @@ void UI::build(double dt, const char* status) {
               callbacks.medium_changed(medium_index);
             }
           }
-          igEndChild();
         }
       }
       igEnd();
@@ -516,7 +517,8 @@ bool UI::build_material(Material& material) {
 }
 
 bool UI::build_medium(Medium& m) {
-  bool changed = igSpectrumPicker("Absorption", m.s_absorption, _current_scene->spectrums, true);
+  bool changed = false;
+  changed |= igSpectrumPicker("Absorption", m.s_absorption, _current_scene->spectrums, true);
   changed |= igSpectrumPicker("Outscattering", m.s_outscattering, _current_scene->spectrums, true);
   changed |= igSliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
   return changed;
