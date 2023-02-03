@@ -148,13 +148,23 @@ template <class RT>
 ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp) {
   const auto& mtl = scene.materials[material_index].subsurface;
 
-  Sample ss_sample = {};
-  if (sample(in_intersection, mtl, smp, ss_sample) == false)
-    return {};
+  Sample ss_samples[3] = {
+    sample(in_intersection, mtl, 0u, smp),
+    sample(in_intersection, mtl, 1u, smp),
+    sample(in_intersection, mtl, 2u, smp),
+  };
 
-  IntersectionBase intersections[kMaxIntersections] = {};
-  uint32_t intersection_count = rt.continuous_trace(scene, ss_sample.ray, {intersections, kMaxIntersections, material_index}, smp);
-  ETX_CRITICAL(intersection_count <= kMaxIntersections);
+  IntersectionBase intersections[kTotalIntersection] = {};
+
+  ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, material_index};
+  uint32_t intersections_0 = rt.continuous_trace(scene, ss_samples[0].ray, ct, smp);
+  ct.intersection_buffer += intersections_0;
+  uint32_t intersections_1 = rt.continuous_trace(scene, ss_samples[1].ray, ct, smp);
+  ct.intersection_buffer += intersections_1;
+  uint32_t intersections_2 = rt.continuous_trace(scene, ss_samples[2].ray, ct, smp);
+
+  uint32_t intersection_count = intersections_0 + intersections_1 + intersections_2;
+  ETX_CRITICAL(intersection_count <= kTotalIntersection);
   if (intersection_count == 0) {
     return {};
   }
@@ -163,28 +173,30 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
 
   float total_weight = 0.0f;
   for (uint32_t i = 0; i < intersection_count; ++i) {
+    Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
+
     auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
     out_intersection.w_i = -out_intersection.nrm;
-    float gw = geometric_weigth(out_intersection.nrm, ss_sample);
-    float pdf = gw * evaluate(spect, mtl, ss_sample.sampled_radius).average();
+
+    float gw = geometric_weigth(out_intersection.nrm, ss_sample) / 3.0f;
+    float pdf = evaluate(spect, mtl, ss_sample.sampled_radius).average();
     ETX_VALIDATE(pdf);
-    if (pdf > 0.0f) {
-      float actual_distance = length(out_intersection.pos - in_intersection.pos);
-      auto eval = evaluate(spect, mtl, actual_distance);
-      ETX_VALIDATE(eval);
-      auto weight = eval / pdf * gw;
-      ETX_VALIDATE(weight);
-      if (weight.is_zero() == false) {
-        total_weight += weight.average();
-        result.intersections[result.intersection_count] = out_intersection;
-        result.weights[result.intersection_count] = weight;
-        result.intersection_count += 1u;
-      } else {
-        eval = evaluate(spect, mtl, actual_distance);
-        ETX_VALIDATE(eval);
-        weight = eval / pdf * gw;
-      }
-    }
+    if (pdf <= 0.0f)
+      continue;
+
+    auto eval = evaluate(spect, mtl, length(out_intersection.pos - in_intersection.pos));
+    ETX_VALIDATE(eval);
+
+    auto weight = eval / pdf * gw;
+    ETX_VALIDATE(weight);
+
+    if (weight.is_zero())
+      continue;
+
+    total_weight += weight.average();
+    result.intersections[result.intersection_count] = out_intersection;
+    result.weights[result.intersection_count] = weight;
+    result.intersection_count += 1u;
   }
 
   if (total_weight > 0.0f) {

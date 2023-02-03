@@ -1,11 +1,13 @@
 ﻿namespace etx {
 namespace subsurface {
 
-constexpr uint32_t kMaxIntersections = 8u;
+constexpr uint32_t kIntersectionDirections = 3u;
+constexpr uint32_t kIntersectionsPerDirection = 8u;
+constexpr uint32_t kTotalIntersection = kIntersectionDirections * kIntersectionsPerDirection;
 
 struct Gather {
-  Intersection intersections[subsurface::kMaxIntersections] = {};
-  SpectralResponse weights[subsurface::kMaxIntersections] = {};
+  Intersection intersections[kTotalIntersection] = {};
+  SpectralResponse weights[kTotalIntersection] = {};
   uint32_t intersection_count = 0;
   uint32_t selected_intersection = kInvalidIndex;
   float selected_sample_weight = 0.0f;
@@ -53,44 +55,53 @@ struct Sample {
   }
 };
 
-ETX_GPU_CODE bool sample(const Vertex& data, const SubsurfaceMaterial& mtl, Sampler& smp, Sample& result) {
+ETX_GPU_CODE Sample sample(const Vertex& data, const SubsurfaceMaterial& mtl, const uint32_t direction, Sampler& smp) {
   float scattering_distance = mtl.scattering_distance_scale * mtl.scattering_distance.random_entry_power(smp.next());
   if (scattering_distance == 0.0f)
-    return false;
+    return {};
 
-  float rnd_0 = smp.next();
-  if (rnd_0 <= 0.5f) {
-    result.u = data.tan;
-    result.v = data.btn;
-    result.w = data.nrm;
-    result.basis_prob = {0.25f, 0.25f, 0.5f};
-  } else if (rnd_0 < 0.75f) {
-    result.u = data.btn;
-    result.v = data.nrm;
-    result.w = data.tan;
-    result.basis_prob = {0.25f, 0.50f, 0.25f};
-  } else {
-    result.u = data.nrm;
-    result.v = data.tan;
-    result.w = data.btn;
-    result.basis_prob = {0.5f, 0.25f, 0.25f};
+  Sample result = {};
+  switch (direction) {
+    case 0: {
+      result.u = data.tan;
+      result.v = data.btn;
+      result.w = data.nrm;
+      result.basis_prob = {0.25f, 0.25f, 0.5f};
+      break;
+    }
+    case 1: {
+      result.u = data.btn;
+      result.v = data.nrm;
+      result.w = data.tan;
+      result.basis_prob = {0.25f, 0.50f, 0.25f};
+      break;
+    }
+    case 2: {
+      result.u = data.nrm;
+      result.v = data.tan;
+      result.w = data.btn;
+      result.basis_prob = {0.5f, 0.25f, 0.25f};
+      break;
+    }
+    default:
+      ETX_FAIL("Invalid direction");
   }
 
   constexpr float kMaxRadius = 47.827155457397595950044717258511f;
   float r_max = scattering_distance * kMaxRadius;
   result.sampled_radius = scattering_distance * sample_s_r(smp.next());
   if (result.sampled_radius >= r_max)
-    return false;
+    return {};
 
   float phi = kDoublePi * smp.next();
   float height = sqrtf(sqr(r_max) - sqr(result.sampled_radius));
   if (height <= kRayEpsilon)
-    return false;
+    return {};
 
   result.ray.o = data.pos + height * result.w + result.sampled_radius * (cosf(phi) * result.u + sinf(phi) * result.v);
   result.ray.d = -result.w;
   result.ray.max_t = 2.0f * height;
-  return true;
+  return result;
 }
 
 ETX_GPU_CODE float geometric_weigth(const float3& nrm, const Sample& smp) {
