@@ -45,11 +45,9 @@ Pointer<Spectrums> spectrums() {
 
       _spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2, SPD::Class::Reflectance, &_spectrums);
       _spectrums.thinfilm.k = SPD::from_samples(w, k, 2, SPD::Class::Reflectance, &_spectrums);
-
-      _spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, std::size(chrome_samples_eta), SPD::Class::Reflectance, &_spectrums);
-      _spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, std::size(chrome_samples_k), SPD::Class::Reflectance, &_spectrums);
-
-      _spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, std::size(plastic_samples_eta), SPD::Class::Reflectance, &_spectrums);
+      _spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)), SPD::Class::Reflectance, &_spectrums);
+      _spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_k)), SPD::Class::Reflectance, &_spectrums);
+      _spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)), SPD::Class::Reflectance, &_spectrums);
       _spectrums.dielectric.k = SPD::from_constant(0.0f);
     }
     return true;

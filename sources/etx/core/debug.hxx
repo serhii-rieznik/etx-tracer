@@ -19,6 +19,8 @@
 #define ETX_GPU_CALLABLE extern "C" __global__
 #define ETX_INIT_WITH(S)
 
+#define ETX_ASSERT_ATOMIC_CHECK() atomicAdd(reported, 1u) == 0
+
 #else
 
 #include <stdio.h>
@@ -31,8 +33,7 @@
 #define ETX_GPU_DATA
 #define ETX_INIT_WITH(S) = S
 
-template <class T>
-T atomicAdd(T*, T);
+#define ETX_ASSERT_ATOMIC_CHECK() true
 
 #endif
 
@@ -73,18 +74,11 @@ ETX_GPU_CODE void printf_assert_info(const char* name_a, const uint64_t a, const
   printf("Condition failed: (%s:%llu) %s (%s:%llu) at %s [%u]\n", name_a, a, op, name_b, b, filename, line);
 }
 
-#if (ETX_NVCC_COMPILER == 0)
-inline uint32_t atomicAdd(uint32_t* value, uint32_t add) {
-  // TODO : fix that
-  return *value++;
-}
-#endif
-
 #define ETX_ASSERT_SPECIFIC(A, B, OP)                              \
   do {                                                             \
     if (!((A)OP(B))) {                                             \
       static uint32_t reported = 0;                                \
-      if (atomicAdd(&reported, 1u) == 0) {                         \
+      if (ETX_ASSERT_ATOMIC_CHECK()) {                         \
         printf_assert_info(#A, A, #OP, #B, B, __FILE__, __LINE__); \
         ETX_DEBUG_BREAK();                                         \
       }                                                            \
@@ -100,7 +94,7 @@ inline uint32_t atomicAdd(uint32_t* value, uint32_t add) {
   do {                                                                              \
     if (!(condition)) {                                                             \
       static uint32_t reported = 0;                                                 \
-      if (atomicAdd(&reported, 1u) == 0) {                                          \
+      if (ETX_ASSERT_ATOMIC_CHECK()) {                                          \
         printf("Condition %s failed at %s [%u]\n", #condition, __FILE__, __LINE__); \
         ETX_DEBUG_BREAK();                                                          \
       }                                                                             \

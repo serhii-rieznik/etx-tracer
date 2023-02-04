@@ -13,16 +13,16 @@ namespace spectrum {
 constexpr bool kSpectralRendering = false;
 constexpr float kUndefinedWavelength = -1.0f;
 
-constexpr uint64_t WavelengthCount = 471u;
-constexpr uint64_t ShortestWavelength = 360u;
-constexpr uint64_t LongestWavelength = ShortestWavelength + WavelengthCount - 1u;
+constexpr uint32_t WavelengthCount = 471u;
+constexpr uint32_t ShortestWavelength = 360u;
+constexpr uint32_t LongestWavelength = ShortestWavelength + WavelengthCount - 1u;
 
 constexpr float kShortestWavelength = static_cast<float>(ShortestWavelength);
 constexpr float kLongestWavelength = static_cast<float>(LongestWavelength);
 constexpr float kWavelengthCount = static_cast<float>(WavelengthCount);
 constexpr float kYIntegral = 106.85689544677734375f;
 
-ETX_GPU_CODE float3 spectral_xyz(uint64_t i) {
+ETX_GPU_CODE float3 spectral_xyz(uint32_t i) {
   ETX_ASSERT(i < WavelengthCount);
 
   ETX_GPU_DATA constexpr static const float kX[WavelengthCount] = {0.0001299000f, 0.0001458470f, 0.0001638021f, 0.0001840037f, 0.0002066902f, 0.0002321000f, 0.0002607280f,
@@ -223,8 +223,8 @@ struct ETX_ALIGNED SpectralResponse {
 
       float w = floorf(wavelength);
       float dw = wavelength - w;
-      uint64_t i = static_cast<uint64_t>(w - spectrum::kShortestWavelength);
-      uint64_t j = min(i + 1, spectrum::WavelengthCount - 1llu);
+      uint32_t i = static_cast<uint32_t>(w - spectrum::kShortestWavelength);
+      uint32_t j = min(i + 1u, spectrum::WavelengthCount - 1u);
       float3 xyz0 = spectrum::spectral_xyz(i);
       float3 xyz1 = spectrum::spectral_xyz(j);
       return lerp<float3>(xyz0, xyz1, dw) * (components.x / spectrum::kYIntegral);
@@ -409,8 +409,7 @@ struct ETX_ALIGNED SpectralDistribution {
     float wavelength = 0.0f;
     float power = 0.0f;
   } entries[spectrum::WavelengthCount] = {};
-
-  uint64_t count = 0;
+  uint32_t count = 0u;
 
  public:  // device
   ETX_GPU_CODE SpectralResponse query(const SpectralQuery q) const {
@@ -419,7 +418,7 @@ struct ETX_ALIGNED SpectralDistribution {
         return {q.wavelength, 0.0f};
       }
 
-      uint64_t i = lower_bound(q.wavelength);
+      uint32_t i = lower_bound(q.wavelength);
       if (i >= count) {
         return {q.wavelength, 0.0f};
       }
@@ -432,7 +431,7 @@ struct ETX_ALIGNED SpectralDistribution {
         return {q.wavelength, entries[i].power};
       }
 
-      uint64_t j = min(i + 1, count - 1);
+      uint32_t j = min(i + 1u, count - 1);
       float t = (q.wavelength - entries[i].wavelength) / (entries[j].wavelength - entries[i].wavelength);
       float p = lerp(entries[i].power, entries[j].power, t);
       ETX_VALIDATE(p);
@@ -447,15 +446,15 @@ struct ETX_ALIGNED SpectralDistribution {
   }
 
   ETX_GPU_CODE float random_entry_power(float rnd) const {
-    uint64_t i = static_cast<uint64_t>(rnd * float(count));
+    uint32_t i = static_cast<uint32_t>(rnd * float(count));
     return entries[i].power;
   }
 
-  ETX_GPU_CODE uint64_t lower_bound(float wavelength) const {
-    uint64_t b = 0;
-    uint64_t e = count;
+  ETX_GPU_CODE uint32_t lower_bound(float wavelength) const {
+    uint32_t b = 0;
+    uint32_t e = count;
     do {
-      uint64_t m = b + (e - b) / 2;
+      uint32_t m = b + (e - b) / 2;
       if (entries[m].wavelength > wavelength) {
         e = m;
       } else {
@@ -466,7 +465,7 @@ struct ETX_ALIGNED SpectralDistribution {
   }
 
   ETX_SHARED_CODE void make_constant(float power) {
-    for (uint64_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
       entries[i].power = power;
     }
   }
@@ -476,7 +475,7 @@ struct ETX_ALIGNED SpectralDistribution {
   }
 
   ETX_GPU_CODE bool is_zero() const {
-    for (uint64_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
       if (entries[i].power != 0.0f) {
         return false;
       }
@@ -486,25 +485,25 @@ struct ETX_ALIGNED SpectralDistribution {
 
  public:
   SpectralDistribution& operator*=(float other) {
-    for (uint64_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
       entries[i].power *= other;
     }
     return *this;
   }
   SpectralDistribution& operator/=(float other) {
-    for (uint64_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
       entries[i].power /= other;
     }
     return *this;
   }
   SpectralDistribution& operator+=(float other) {
-    for (uint64_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
       entries[i].power += other;
     }
     return *this;
   }
   SpectralDistribution& operator-=(float other) {
-    for (uint64_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
       entries[i].power -= other;
     }
     return *this;
@@ -554,12 +553,14 @@ struct ETX_ALIGNED SpectralDistribution {
     return result;
   }
 
-  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count);
-  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint64_t count, Class cls, Pointer<Spectrums>);
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Class cls, Pointer<Spectrums>);
+  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count);
+  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count, Class cls, Pointer<Spectrums>);
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint32_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_black_body(float temperature, Pointer<Spectrums>);
   static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, Pointer<Spectrums>);
 };
+
+constexpr uint64_t kSpectralDistributionSize = sizeof(SpectralDistribution);
 
 struct RefractiveIndex {
   SpectralDistribution eta;
@@ -699,7 +700,7 @@ ETX_GPU_CODE SpectralDistribution make_spd(float3 rgb, const SpectrumSet& spectr
                            weights[5] * spectrums.values[5][i] +  //
                            weights[6] * spectrums.values[6][i];
     }
-    for (uint64_t i = 0; i < r.count; ++i) {
+    for (uint32_t i = 0; i < r.count; ++i) {
       r.entries[i].power = max(0.0f, r.entries[i].power);
     }
   }
@@ -737,7 +738,7 @@ ETX_GPU_CODE SpectralResponse query_spd(const SpectralQuery spect, const float3&
       return {spect.wavelength, 0.0f};
     }
 
-    uint64_t j = min(i + 1llu, SampleCount - 1llu);
+    uint32_t j = min(i + 1u, SampleCount - 1u);
 
     float t;
     if ((i == 0) && (spect.wavelength < wavelengths[0])) {

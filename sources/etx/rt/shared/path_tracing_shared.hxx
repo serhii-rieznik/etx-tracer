@@ -120,19 +120,34 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     return true;
   }
 
+  auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i, {}}, mat, scene, payload.smp);
+  bool sample_subsurface = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
+
   subsurface::Gather ss_gather = {};
-  if (mat.has_subsurface_scattering()) {
+  if (sample_subsurface) {
     ss_gather = subsurface::gather(payload.spect, scene, intersection, tri.material_index, rt, payload.smp);
+    sample_subsurface = ss_gather.intersection_count > 0;
   }
 
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
-  if ((mat.has_subsurface_scattering() == false) && options.nee && (payload.path_length + 1 <= options.max_depth)) {
-    auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, intersection.pos, scene);
-    payload.accumulated += payload.throughput * evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, options.mis);
-    ETX_VALIDATE(payload.accumulated);
+  if (options.nee && (payload.path_length + 1 <= options.max_depth)) {
+    uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
+    SpectralResponse direct_light = {payload.spect.wavelength, 0.0f};
+    if (sample_subsurface) {
+      for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
+        auto local_sample = sample_emitter(payload.spect, emitter_index, payload.smp, ss_gather.intersections[i].pos, scene);
+        SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, mat, payload.medium, payload.spect, local_sample, payload.smp, options.mis);
+        direct_light += ss_gather.weights[i] * light_value;
+        ETX_VALIDATE(direct_light);
+      }
+    } else {
+      auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, intersection.pos, scene);
+      direct_light += evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, options.mis);
+      ETX_VALIDATE(payload.accumulated);
+    }
+    payload.accumulated += payload.throughput * direct_light;
   }
 
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -155,31 +170,17 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     }
   }
 
-  if (mat.has_subsurface_scattering() && (ss_gather.intersection_count == 0)) {
-    return false;
-  }
-
-  // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  // bsdf sampling
-  // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i, {}}, mat, scene, payload.smp);
   if (bsdf_sample.valid() == false) {
     return false;
   }
 
-
-  SpectralResponse direct_light = {payload.spect.wavelength, 0.0f};
-  for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-    auto local_sample = sample_emitter(payload.spect, emitter_index, payload.smp, ss_gather.intersections[i].pos, scene);
-    SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, mat, payload.medium, payload.spect, local_sample, payload.smp, options.mis);
-    direct_light += ss_gather.weights[i] * light_value;
-    ETX_VALIDATE(direct_light);
+  if (sample_subsurface && (ss_gather.intersection_count == 0)) {
+    return false;
   }
-  payload.accumulated += payload.throughput * direct_light;
 
   payload.throughput *= bsdf_sample.weight;
 
-  if ((bsdf_sample.properties & BSDFSample::Diffuse) && (ss_gather.intersection_count > 0)) {
+  if (sample_subsurface) {
     const auto& out_intersection = ss_gather.intersections[ss_gather.selected_intersection];
     float3 w_o = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
     payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
