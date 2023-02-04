@@ -167,22 +167,23 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     return false;
   }
 
-  payload.throughput *= bsdf_sample.weight;
 
   SpectralResponse direct_light = {payload.spect.wavelength, 0.0f};
   for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
     auto local_sample = sample_emitter(payload.spect, emitter_index, payload.smp, ss_gather.intersections[i].pos, scene);
-    SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, mat, payload.medium, payload.spect, local_sample, payload.smp, false);
+    SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, mat, payload.medium, payload.spect, local_sample, payload.smp, options.mis);
     direct_light += ss_gather.weights[i] * light_value;
     ETX_VALIDATE(direct_light);
   }
   payload.accumulated += payload.throughput * direct_light;
 
+  payload.throughput *= bsdf_sample.weight;
+
   if ((bsdf_sample.properties & BSDFSample::Diffuse) && (ss_gather.intersection_count > 0)) {
     const auto& out_intersection = ss_gather.intersections[ss_gather.selected_intersection];
     float3 w_o = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
     payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
-    payload.sampled_bsdf_pdf = 1.0f;
+    payload.sampled_bsdf_pdf = fabsf(dot(w_o, out_intersection.nrm)) / kPi;
     payload.mis_weight = true;
     payload.ray.d = w_o;
     payload.ray.o = shading_pos(scene.vertices, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, w_o);

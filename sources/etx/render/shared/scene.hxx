@@ -176,9 +176,8 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
     Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
 
     auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
-    out_intersection.w_i = -out_intersection.nrm;
 
-    float gw = geometric_weigth(out_intersection.nrm, ss_sample) / 3.0f;
+    float gw = geometric_weigth(out_intersection.nrm, ss_sample);
     float pdf = evaluate(spect, mtl, ss_sample.sampled_radius).average();
     ETX_VALIDATE(pdf);
     if (pdf <= 0.0f)

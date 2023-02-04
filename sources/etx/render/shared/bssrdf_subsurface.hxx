@@ -108,7 +108,7 @@ ETX_GPU_CODE float geometric_weigth(const float3& nrm, const Sample& smp) {
   float pdf_t = smp.basis_prob.x * fabsf(dot(nrm, smp.u));
   float pdf_b = smp.basis_prob.y * fabsf(dot(nrm, smp.v));
   float pdf_n = smp.basis_prob.z * fabsf(dot(nrm, smp.w));
-  return pdf_n / (sqr(pdf_t) + sqr(pdf_b) + sqr(pdf_n));
+  return sqr(pdf_n) / (sqr(pdf_t) + sqr(pdf_b) + sqr(pdf_n));
 }
 
 }  // namespace subsurface
