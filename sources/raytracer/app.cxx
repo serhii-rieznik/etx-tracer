@@ -9,6 +9,14 @@
 #include <stb_image.hxx>
 #include <stb_image_write.hxx>
 
+#if defined(_WIN32)
+
+// TODO : fix hacks
+#define WIN32_LEAN_AND_MEAN 1
+#include <Windows.h>
+
+#endif
+
 namespace etx {
 
 RTApplication::RTApplication()
@@ -24,6 +32,7 @@ void RTApplication::init() {
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
   ui.callbacks.scene_file_selected = std::bind(&RTApplication::on_scene_file_selected, this, std::placeholders::_1);
+  ui.callbacks.save_scene_file_selected = std::bind(&RTApplication::on_save_scene_file_selected, this, std::placeholders::_1);
   ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
   ui.callbacks.preview_selected = std::bind(&RTApplication::on_preview_selected, this);
   ui.callbacks.run_selected = std::bind(&RTApplication::on_run_selected, this);
@@ -33,6 +42,10 @@ void RTApplication::init() {
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
   ui.callbacks.reload_integrator = std::bind(&RTApplication::on_reload_integrator_selected, this);
   ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
+  ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
+  ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
+  ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
+  ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -44,6 +57,15 @@ void RTApplication::init() {
   if (_options.has("ref") == false) {
     _options.add("ref", "none");
   }
+
+#if defined(_WIN32)
+  if (GetAsyncKeyState(VK_ESCAPE)) {
+    _options.set("integrator", std::string());
+  }
+  if (GetAsyncKeyState(VK_ESCAPE) && GetAsyncKeyState(VK_SHIFT)) {
+    _options.set("scene", std::string());
+  }
+#endif
 
   auto integrator = _options.get("integrator", std::string{}).name;
   for (uint64_t i = 0; (integrator.empty() == false) && (i < std::size(_integrator_array)); ++i) {
@@ -64,6 +86,8 @@ void RTApplication::init() {
   if (ref.empty() == false) {
     on_referenece_image_selected(ref);
   }
+
+  save_options();
 }
 
 void RTApplication::save_options() {
@@ -141,11 +165,13 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   save_options();
 
   if (scene.load_from_file(_current_scene_file.c_str(), options) == false) {
+    ui.set_scene(nullptr, {}, {});
     log::error("Failed to load scene from file: %s", _current_scene_file.c_str());
     return;
   }
 
   raytracing.set_scene(scene.scene());
+  ui.set_scene(scene.mutable_scene_pointer(), scene.material_mapping(), scene.medium_mapping());
 
   if (scene) {
     render.set_output_dimensions(scene.scene().camera.image_size);
@@ -159,6 +185,11 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
       }
     }
   }
+}
+
+void RTApplication::save_scene_file(const std::string& file_name) {
+  log::info("Saving %s..", file_name.c_str());
+  scene.save_to_file(file_name.c_str());
 }
 
 void RTApplication::on_referenece_image_selected(std::string file_name) {
@@ -217,9 +248,15 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
     float exposure = ui.view_options().exposure;
     std::vector<ubyte4> tonemapped(image_size.x * image_size.y);
     for (uint32_t i = 0, e = image_size.x * image_size.y; (mode != SaveImageMode::XYZ) && (i < e); ++i) {
-      tonemapped[i].x = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].x), 1.0f / 2.2f)));
-      tonemapped[i].y = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].y), 1.0f / 2.2f)));
-      tonemapped[i].z = static_cast<uint8_t>(255.0f * saturate(powf(1.0f - expf(-exposure * output[i].z), 1.0f / 2.2f)));
+      float3 tm = {
+        1.0f - expf(-exposure * output[i].x),
+        1.0f - expf(-exposure * output[i].y),
+        1.0f - expf(-exposure * output[i].z),
+      };
+      float3 gamma = linear_to_gamma(tm);
+      tonemapped[i].x = static_cast<uint8_t>(255.0f * saturate(gamma.x));
+      tonemapped[i].y = static_cast<uint8_t>(255.0f * saturate(gamma.y));
+      tonemapped[i].z = static_cast<uint8_t>(255.0f * saturate(gamma.z));
       tonemapped[i].w = 255u;
     }
     if (stbi_write_png(file_name.c_str(), image_size.x, image_size.y, 4, tonemapped.data(), 0) != 1) {
@@ -238,6 +275,13 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
 
 void RTApplication::on_scene_file_selected(std::string file_name) {
   load_scene_file(file_name, SceneRepresentation::LoadEverything, false);
+}
+
+void RTApplication::on_save_scene_file_selected(std::string file_name) {
+  if (strlen(get_file_ext(file_name.c_str())) == 0) {
+    file_name += ".json";
+  }
+  save_scene_file(file_name);
 }
 
 void RTApplication::on_integrator_selected(Integrator* i) {
@@ -300,6 +344,27 @@ void RTApplication::on_options_changed() {
 void RTApplication::on_reload_integrator_selected() {
   ETX_ASSERT(_current_integrator);
   _current_integrator->reload();
+}
+
+void RTApplication::on_material_changed(uint32_t index) {
+  // TODO : re-upload to GPU
+  _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_medium_changed(uint32_t index) {
+  // TODO : re-upload to GPU
+  _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_emitter_changed(uint32_t index) {
+  // TODO : re-upload to GPU
+  _current_integrator->stop(Integrator::Stop::Immediate);
+  build_emitters_distribution(scene.mutable_scene());
+  _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_camera_changed() {
+  _current_integrator->preview(ui.integrator_options());
 }
 
 }  // namespace etx

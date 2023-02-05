@@ -22,8 +22,9 @@ struct Raytracing {
   bool has_scene() const;
   void set_scene(const Scene&);
 
-  bool trace(const Ray&, Intersection&, Sampler& smp) const;
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
+  uint32_t continuous_trace(const Scene& scene, const Ray&, const ContinousTraceOptions& options, Sampler& smp) const;
+  SpectralResponse trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const uint32_t medium, Sampler& smp) const;
 
  private:
   ETX_DECLARE_PIMPL(Raytracing, 1024);

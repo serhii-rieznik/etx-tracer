@@ -15,8 +15,7 @@ struct ETX_ALIGNED GPUPathTracingImpl {
   GPUBuffer accumulated_image = {};
   GPUBuffer denoised_image = {};
   GPUBuffer payload_buffer = {};
-  GPUPipeline raygen_pipeline = {};
-  GPUPipeline main_pipeline = {};
+  GPUPipeline pipeline = {};
   std::vector<float4> local_camera_image = {};
   uint2 output_size = {};
   device_pointer_t gpu_launch_params = {};
@@ -35,22 +34,14 @@ struct ETX_ALIGNED GPUPathTracingImpl {
 
   bool start(Raytracing& rt, bool recompile) {
     TimeMeasure tm = {};
-    if (main_pipeline.handle == kInvalidHandle) {
-      main_pipeline = rt.gpu()->create_pipeline_from_file(env().file_in_data("optix/pt/main.json"), recompile);
-      if (main_pipeline.handle == kInvalidHandle) {
+    if (pipeline.handle == kInvalidHandle) {
+      pipeline = rt.gpu()->create_pipeline_from_file(env().file_in_data("optix/pt/pt.json"), recompile);
+      if (pipeline.handle == kInvalidHandle) {
         log::error("GPU Path Tracing failed to compile main pipeline");
         return false;
       }
+      log::info("Pipelines compiled: %.2f sec", tm.measure());
     }
-
-    if (raygen_pipeline.handle == kInvalidHandle) {
-      raygen_pipeline = rt.gpu()->create_pipeline_from_file(env().file_in_data("optix/pt/raygen.json"), recompile);
-      if (raygen_pipeline.handle == kInvalidHandle) {
-        log::error("GPU Path Tracing failed to compile raygen pipeline");
-        return false;
-      }
-    }
-    log::info("Pipelines compiled: %.2f sec", tm.measure());
 
     gpu_data.payloads = reinterpret_cast<PTRayPayload*>(rt.gpu()->get_buffer_device_pointer(payload_buffer));
     gpu_data.output = reinterpret_cast<float4*>(rt.gpu()->get_buffer_device_pointer(accumulated_image));
@@ -58,13 +49,13 @@ struct ETX_ALIGNED GPUPathTracingImpl {
 
     gpu_data.output = reinterpret_cast<float4*>(rt.gpu()->get_buffer_device_pointer(accumulated_image));
     gpu_launch_params = rt.gpu()->upload_to_shared_buffer(gpu_launch_params, &gpu_data, sizeof(gpu_data));
-    return rt.gpu()->launch(raygen_pipeline, output_size.x, output_size.y, gpu_launch_params, sizeof(gpu_data));
+    return rt.gpu()->launch(pipeline, "raygen", output_size.x, output_size.y, gpu_launch_params, sizeof(gpu_data));
   }
 
   void frame(Raytracing& rt) {
     TimeMeasure tm;
     while (tm.measure() <= frame_time_ms / 1000.0f) {
-      if (rt.gpu()->launch(main_pipeline, output_size.x, output_size.y, gpu_launch_params, sizeof(gpu_data)) == false) {
+      if (rt.gpu()->launch(pipeline, "main", output_size.x, output_size.y, gpu_launch_params, sizeof(gpu_data)) == false) {
         break;
       }
     }
@@ -80,8 +71,7 @@ GPUPathTracing::~GPUPathTracing() {
   rt.gpu()->destroy_buffer(_private->accumulated_image);
   rt.gpu()->destroy_buffer(_private->denoised_image);
   rt.gpu()->destroy_buffer(_private->payload_buffer);
-  rt.gpu()->destroy_pipeline(_private->raygen_pipeline);
-  rt.gpu()->destroy_pipeline(_private->main_pipeline);
+  rt.gpu()->destroy_pipeline(_private->pipeline);
   ETX_PIMPL_CLEANUP(GPUPathTracing);
 }
 
@@ -170,11 +160,8 @@ const float4* GPUPathTracing::get_camera_image(bool /* force */) {
 void GPUPathTracing::reload() {
   stop(Stop::Immediate);
 
-  rt.gpu()->destroy_pipeline(_private->raygen_pipeline);
-  _private->raygen_pipeline = {};
-
-  rt.gpu()->destroy_pipeline(_private->main_pipeline);
-  _private->main_pipeline = {};
+  rt.gpu()->destroy_pipeline(_private->pipeline);
+  _private->pipeline = {};
 
   _private->start(rt, true);
 }

@@ -1,8 +1,0 @@
-{
-  "geometry" : "empty.obj",
-  "camera" : {
-    "class" : "eq",
-    "viewport" : [1024, 512],
-    "origin" : [0.0, 6372010.0, 0.0]
-  }
-}

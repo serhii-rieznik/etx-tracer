@@ -5,6 +5,7 @@
 
 #include <etx/render/host/scene_loader.hxx>
 #include <etx/rt/integrators/debug.hxx>
+#include <etx/rt/integrators/direct.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/integrators/path_tracing_gpu.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
@@ -28,12 +29,15 @@ struct RTApplication {
   void frame();
   void cleanup();
   void process_event(const sapp_event*);
-  void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
 
  private:
+  void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
+  void save_scene_file(const std::string&);
+
   void on_referenece_image_selected(std::string);
   void on_save_image_selected(std::string, SaveImageMode);
   void on_scene_file_selected(std::string);
+  void on_save_scene_file_selected(std::string);
   void on_integrator_selected(Integrator*);
   void on_preview_selected();
   void on_run_selected();
@@ -43,6 +47,10 @@ struct RTApplication {
   void on_options_changed();
   void on_reload_integrator_selected();
   void on_use_image_as_reference();
+  void on_material_changed(uint32_t index);
+  void on_medium_changed(uint32_t index);
+  void on_emitter_changed(uint32_t index);
+  void on_camera_changed();
 
  private:
   std::vector<float4> get_current_image(bool convert_to_rgb);
@@ -58,6 +66,7 @@ struct RTApplication {
   CameraController camera_controller;
 
   CPUDebugIntegrator _preview = {raytracing};
+  CPUDirectLighting _cpu_direct = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
   GPUPathTracing _gpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
@@ -65,13 +74,14 @@ struct RTApplication {
   GPUVCM _gpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};
 
-  Integrator* _integrator_array[7] = {
+  Integrator* _integrator_array[6] = {
     &_preview,
+    &_cpu_direct,
     &_cpu_pt,
     &_cpu_bidir,
     &_cpu_vcm,
-    &_gpu_pt,
-    &_gpu_vcm,
+    //&_gpu_pt,
+    //&_gpu_vcm,
     &_cpu_atmosphere,
   };
 

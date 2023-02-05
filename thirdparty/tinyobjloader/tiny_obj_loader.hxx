@@ -63,6 +63,7 @@ THE SOFTWARE.
 #include <map>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 namespace tinyobj {
 
@@ -139,10 +140,10 @@ namespace tinyobj {
 //
 
 #ifdef TINYOBJLOADER_USE_DOUBLE
-//#pragma message "using double"
+// #pragma message "using double"
 typedef double real_t;
 #else
-//#pragma message "using float"
+// #pragma message "using float"
 typedef float real_t;
 #endif
 
@@ -1971,6 +1972,7 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
     if ((0 == _strnicmp(token, "newmtl", 6)) && IS_SPACE((token[6]))) {
       // flush previous material.
       if (!material.name.empty()) {
+        std::transform(material.name.begin(), material.name.end(), material.name.begin(), tolower);
         material_map->insert(std::pair<std::string, int>(material.name, static_cast<int>(materials->size())));
         materials->push_back(material);
       }
@@ -2666,7 +2668,7 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
     if ((0 == _strnicmp(token, "usemtl", 6))) {
       token += 6;
       std::string namebuf = parseString(&token);
-
+      std::transform(namebuf.begin(), namebuf.end(), namebuf.begin(), tolower);
       int newMaterialId = -1;
       std::map<std::string, int>::const_iterator it = material_map.find(namebuf);
       if (it != material_map.end()) {
@@ -3157,6 +3159,7 @@ bool LoadObjWithCallback(std::istream& inStream, const callback_t& callback, voi
       std::stringstream ss;
       ss << token;
       std::string namebuf = ss.str();
+      std::transform(namebuf.begin(), namebuf.end(), namebuf.begin(), tolower);
 
       int newMaterialId = -1;
       std::map<std::string, int>::const_iterator it = material_map.find(namebuf);

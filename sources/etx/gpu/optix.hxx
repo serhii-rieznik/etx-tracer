@@ -20,13 +20,13 @@ struct GPUOptixImpl : public GPUDevice {
 
   GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) override;
   GPUPipeline create_pipeline_from_file(const char*, bool) override;
+  void create_pipeline_from_files(TaskScheduler&, uint64_t file_count, const char* files[], GPUPipeline pipelines[], bool) override;
   void destroy_pipeline(GPUPipeline) override;
 
   GPUAccelerationStructure create_acceleration_structure(const GPUAccelerationStructure::Descriptor&) override;
   device_pointer_t get_acceleration_structure_device_pointer(GPUAccelerationStructure) override;
   void destroy_acceleration_structure(GPUAccelerationStructure) override;
 
-  bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override;
   bool launch(GPUPipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override;
 
   void setup_denoiser(uint32_t dim_x, uint32_t dim_y) override;

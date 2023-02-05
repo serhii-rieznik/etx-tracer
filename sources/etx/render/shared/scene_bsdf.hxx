@@ -2,34 +2,24 @@
 
 namespace etx {
 
-#define ETX_DECLARE_BSDF(Class)                                                                      \
-  namespace Class##BSDF {                                                                            \
-    ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Material&, const Scene&, Sampler&);        \
-    ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const Material&, const Scene&, Sampler&);        \
-    ETX_GPU_CODE float pdf(const BSDFData&, const Material&, const Scene&, Sampler&);                \
-    ETX_GPU_CODE bool continue_tracing(const Material&, const float2&, const Scene&, Sampler&);      \
-    ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);              \
-    ETX_GPU_CODE BSDFSample sample_impl(const BSDFData&, const Material&, const Scene&, Sampler&);   \
-    ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData&, const Material&, const Scene&, Sampler&);   \
-    ETX_GPU_CODE float pdf_impl(const BSDFData&, const Material&, const Scene&, Sampler&);           \
-    ETX_GPU_CODE bool continue_tracing_impl(const Material&, const float2&, const Scene&, Sampler&); \
-    ETX_GPU_CODE bool is_delta_impl(const Material&, const float2&, const Scene&, Sampler&);         \
+#define ETX_DECLARE_BSDF(Class)                                                               \
+  namespace Class##BSDF {                                                                     \
+    ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Material&, const Scene&, Sampler&); \
+    ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const Material&, const Scene&, Sampler&); \
+    ETX_GPU_CODE float pdf(const BSDFData&, const Material&, const Scene&, Sampler&);         \
+    ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);       \
   }
 
 ETX_DECLARE_BSDF(Diffuse);
-ETX_DECLARE_BSDF(MultiscatteringDiffuse);
 ETX_DECLARE_BSDF(Plastic);
 ETX_DECLARE_BSDF(Conductor);
-ETX_DECLARE_BSDF(MultiscatteringConductor);
 ETX_DECLARE_BSDF(Dielectric);
-ETX_DECLARE_BSDF(MultiscatteringDielectric);
 ETX_DECLARE_BSDF(Thinfilm);
-ETX_DECLARE_BSDF(Translucent);
 ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
-ETX_DECLARE_BSDF(Generic);
 ETX_DECLARE_BSDF(Coating);
-ETX_DECLARE_BSDF(Mixture);
+ETX_DECLARE_BSDF(Velvet);
+ETX_DECLARE_BSDF(Subsurface);
 
 #define CASE_IMPL(CLS, FUNC, ...) \
   case Material::Class::CLS:      \
@@ -38,31 +28,20 @@ ETX_DECLARE_BSDF(Mixture);
 #define CASE_IMPL_SAMPLE(A) CASE_IMPL(A, sample, data, mtl, scene, smp)
 #define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, mtl, scene, smp)
 #define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, mtl, scene, smp)
-#define CASE_IMPL_CONTINUE(A) CASE_IMPL(A, continue_tracing, mtl, tex, scene, smp)
 #define CASE_IMPL_IS_DELTA(A) CASE_IMPL(A, is_delta, mtl, tex, scene, smp)
-
-#define CASE_IMPL_SAMPLE_IMPL(A) CASE_IMPL(A, sample_impl, data, mtl, scene, smp)
-#define CASE_IMPL_EVALUATE_IMPL(A) CASE_IMPL(A, evaluate_impl, data, mtl, scene, smp)
-#define CASE_IMPL_PDF_IMPL(A) CASE_IMPL(A, pdf_impl, data, mtl, scene, smp)
-#define CASE_IMPL_CONTINUE_IMPL(A) CASE_IMPL(A, continue_tracing_impl, mtl, tex, scene, smp)
-#define CASE_IMPL_IS_DELTA_IMPL(A) CASE_IMPL(A, is_delta_impl, mtl, tex, scene, smp)
 
 #define ALL_CASES(MACRO)                    \
   switch (mtl.cls) {                        \
     MACRO(Diffuse);                         \
-    MACRO(MultiscatteringDiffuse);          \
     MACRO(Plastic);                         \
     MACRO(Conductor);                       \
-    MACRO(MultiscatteringConductor);        \
     MACRO(Dielectric);                      \
-    MACRO(MultiscatteringDielectric);       \
     MACRO(Thinfilm);                        \
-    MACRO(Translucent);                     \
     MACRO(Mirror);                          \
     MACRO(Boundary);                        \
-    MACRO(Generic);                         \
     MACRO(Coating);                         \
-    MACRO(Mixture);                         \
+    MACRO(Velvet);                          \
+    MACRO(Subsurface);                      \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
       return {};                            \
@@ -71,101 +50,47 @@ ETX_DECLARE_BSDF(Mixture);
 namespace bsdf {
 
 [[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::sample(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_SAMPLE);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::sample(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_SAMPLE);
 }
 
 [[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::evaluate(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_EVALUATE);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::evaluate(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_EVALUATE);
 }
 
 [[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::pdf(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_PDF);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::pdf(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_PDF);
 }
 
 [[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::continue_tracing(mtl, tex, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_CONTINUE);
+  if (mtl.diffuse.image_index == kInvalidIndex) {
+    return false;
   }
+
+  const auto& img = scene.images[mtl.diffuse.image_index];
+  if ((img.options & Image::HasAlphaChannel) == 0)
+    return false;
+
+  return img.evaluate(tex).w <= smp.next();
 }
 
 [[nodiscard]] ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::is_delta(mtl, tex, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_IS_DELTA);
-  }
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::is_delta(mtl, tex, scene, smp);
+#endif
+  ALL_CASES(CASE_IMPL_IS_DELTA);
 }
-
-[[nodiscard]] ETX_GPU_CODE BSDFSample sample_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::sample_impl(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_SAMPLE_IMPL);
-  }
-};
-
-[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::evaluate_impl(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_EVALUATE_IMPL);
-  }
-}
-
-[[nodiscard]] ETX_GPU_CODE float pdf_impl(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::pdf_impl(data, mtl, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_PDF_IMPL);
-  }
-}
-
-[[nodiscard]] ETX_GPU_CODE bool continue_tracing_impl(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::continue_tracing_impl(mtl, tex, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_CONTINUE_IMPL);
-  }
-}
-
-[[nodiscard]] ETX_GPU_CODE bool is_delta_impl(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  if constexpr (kForceDiffuseBSDF) {
-    return DiffuseBSDF::is_delta_impl(mtl, tex, scene, smp);
-  } else {
-    ALL_CASES(CASE_IMPL_IS_DELTA_IMPL);
-  }
-}
-
-#define ETX_FORWARD_TO_IMPL                                                                                           \
-  ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {       \
-    return sample_impl(data, mtl, scene, smp);                                                                        \
-  }                                                                                                                   \
-  ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {       \
-    return evaluate_impl(data, mtl, scene, smp);                                                                      \
-  }                                                                                                                   \
-  ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {               \
-    return pdf_impl(data, mtl, scene, smp);                                                                           \
-  }                                                                                                                   \
-  ETX_GPU_CODE bool continue_tracing(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) { \
-    return continue_tracing_impl(material, tex, scene, smp);                                                          \
-  }                                                                                                                   \
-  ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {         \
-    return is_delta_impl(material, tex, scene, smp);                                                                  \
-  }
 
 #undef CASE_IMPL
 }  // namespace bsdf
@@ -211,6 +136,7 @@ ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const Spe
 #include <etx/render/shared/bsdf_external.hxx>
 #include <etx/render/shared/bsdf_conductor.hxx>
 #include <etx/render/shared/bsdf_dielectric.hxx>
-#include <etx/render/shared/bsdf_generic.hxx>
+#include <etx/render/shared/bsdf_coating.hxx>
 #include <etx/render/shared/bsdf_plastic.hxx>
 #include <etx/render/shared/bsdf_various.hxx>
+#include <etx/render/shared/bsdf_velvet.hxx>

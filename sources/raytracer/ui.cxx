@@ -1,5 +1,6 @@
 ﻿#include <etx/core/core.hxx>
 #include <etx/render/host/image_pool.hxx>
+#include <etx/log/log.hxx>
 
 #include "ui.hxx"
 
@@ -11,6 +12,24 @@
 #include <sokol_imgui.h>
 
 namespace etx {
+
+void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint32_t>& mapping) {
+  constexpr uint64_t kMaterialNameMaxSize = 1024llu;
+
+  indices.clear();
+  indices.reserve(mapping.size());
+  names.clear();
+  names.reserve(mapping.size());
+  data.resize(mapping.size() * kMaterialNameMaxSize);
+  std::fill(data.begin(), data.end(), 0);
+  char* ptr = data.data();
+  int32_t pp = 0;
+  for (auto& m : mapping) {
+    indices.emplace_back(m.second);
+    names.emplace_back(ptr + pp);
+    pp += snprintf(ptr + pp, kMaterialNameMaxSize, "%s", m.first.c_str()) + 1;
+  }
+}
 
 void UI::initialize() {
   simgui_desc_t imggui_desc = {};
@@ -87,57 +106,50 @@ bool UI::build_options(Options& options) {
   return changed;
 }
 
-void UI::build(double dt, const char* status) {
-  simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
+bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear) {
+  float3 rgb = spectrum::xyz_to_rgb(spd.to_xyz());
+  if (linear == false) {
+    rgb = linear_to_gamma(rgb);
+  } else {
+    rgb = rgb;
+  }
+  uint32_t flags = linear ? ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_NoPicker  //
+                          : ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar;                    //
 
-  float offset_size = igGetFontSize();
-  igSetNextWindowPos({sapp_widthf() / sapp_dpi_scale() - offset_size, 2.0f * offset_size}, ImGuiCond_Always, {1.0f, 0.0f});
-  igBegin("View Options", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-  build_options(_view_options);
-
-  char status_buffer[2048] = {};
-  float dy = igGetStyle()->FramePadding.y;
-  uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
-  snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
-  igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration);
-  igText(status_buffer);
-  igEnd();
-
-  if ((_current_integrator != nullptr) && (_current_integrator->debug_info_count() > 0)) {
-    igSetNextWindowPos({offset_size, 0.5f * sapp_heightf() - 3.0f * offset_size - dy}, ImGuiCond_Always, {0.0f, 1.0f});
-    igBegin("Debug Info", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-    auto debug_info = _current_integrator->debug_info();
-    for (uint64_t i = 0; i < _current_integrator->debug_info_count(); ++i) {
-      igLabelText("", "%s : %.3f", debug_info[i].title, debug_info[i].value);
-    }
-    igEnd();
+  if (linear) {
+    igText(name);
   }
 
-  if (igBeginMainMenuBar()) {
-    if (igBeginMenu("Integrator", true)) {
-      for (uint64_t i = 0; i < _integrators.count; ++i) {
-        if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, _integrators[i]->enabled())) {
-          if (callbacks.integrator_selected) {
-            callbacks.integrator_selected(_integrators[i]);
-          }
-        }
-      }
-
-      if (_current_integrator != nullptr) {
-        igSeparator();
-        if (igMenuItemEx("Reload Integrator State", nullptr, "Ctrl+A", false, true)) {
-          if (callbacks.reload_integrator) {
-            callbacks.reload_integrator();
-          }
-        }
-      }
-
-      igSeparator();
-      if (igMenuItemEx("Exit", nullptr, "Ctrl+Q", false, true)) {
-      }
-      igEndMenu();
+  bool changed = false;
+  char name_buffer[64] = {};
+  snprintf(name_buffer, sizeof(name_buffer), "%s%s", linear ? "##" : "", name);
+  if (igColorEdit3(name_buffer, &rgb.x, flags)) {
+    if (linear == false) {
+      rgb = gamma_to_linear(rgb);
     }
+    rgb = max(rgb, float3{});
+    spd = rgb::make_reflectance_spd(rgb, spectrums);
+    changed = true;
+  }
 
+  if (linear) {
+    if (igButton("Clear", {})) {
+      spd = SpectralDistribution::from_constant(0.0f);
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+void UI::build(double dt, const char* status) {
+  constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
+  bool has_integrator = (_current_integrator != nullptr);
+  bool has_scene = (_current_scene != nullptr);
+
+  simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
+
+  if (igBeginMainMenuBar()) {
     if (igBeginMenu("Scene", true)) {
       if (igMenuItemEx("Open...", nullptr, "Ctrl+O", false, true)) {
         select_scene_file();
@@ -155,7 +167,32 @@ void UI::build(double dt, const char* status) {
       if (igMenuItemEx("Reload Materials", nullptr, "Ctrl+M", false, false)) {
       }
       igSeparator();
-      if (igMenuItemEx("Save...", nullptr, nullptr, false, false)) {
+      if (igMenuItemEx("Save...", nullptr, nullptr, false, true)) {
+        save_scene_file();
+      }
+      igEndMenu();
+    }
+
+    if (igBeginMenu("Integrator", true)) {
+      for (uint64_t i = 0; i < _integrators.count; ++i) {
+        if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, _integrators[i]->enabled())) {
+          if (callbacks.integrator_selected) {
+            callbacks.integrator_selected(_integrators[i]);
+          }
+        }
+      }
+
+      if (has_integrator) {
+        igSeparator();
+        if (igMenuItemEx("Reload Integrator State", nullptr, "Ctrl+A", false, true)) {
+          if (callbacks.reload_integrator) {
+            callbacks.reload_integrator();
+          }
+        }
+      }
+
+      igSeparator();
+      if (igMenuItemEx("Exit", nullptr, "Ctrl+Q", false, true)) {
       }
       igEndMenu();
     }
@@ -181,53 +218,223 @@ void UI::build(double dt, const char* status) {
       }
       igEndMenu();
     }
+
+    if (igBeginMenu("View", true)) {
+      auto ui_toggle = [this](const char* label, uint32_t flag) {
+        uint32_t k = 0;
+        for (; (k < 8) && (flag != (1u << k)); ++k) {
+        }
+        char buffer[8] = {};
+        snprintf(buffer, sizeof(buffer), "F%u", k + 1u);
+        bool ui_integrator = (_ui_setup & flag) == flag;
+        if (igMenuItemEx(label, nullptr, buffer, ui_integrator, true)) {
+          _ui_setup = ui_integrator ? (_ui_setup & (~flag)) : (_ui_setup | flag);
+        }
+      };
+      ui_toggle("Interator options", UIIntegrator);
+      ui_toggle("View options", UIView);
+      ui_toggle("Materials and mediums", UIMaterial);
+      ui_toggle("Emitters", UIEmitters);
+      ui_toggle("Camera", UICamera);
+      igEndMenu();
+    }
+
     igEndMainMenuBar();
   }
-  igEnd();
 
-  igSetNextWindowPos({offset_size, 2.0f * offset_size}, ImGuiCond_Always, {0.0f, 0.0f});
-  igBegin(_integrator_name, nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize);
-  igText("Integrator options");
-  if ((_current_integrator != nullptr) && (_integrator_options.values.empty() == false)) {
-    if (build_options(_integrator_options) && callbacks.options_changed) {
-      callbacks.options_changed();
+  if ((_ui_setup & UIIntegrator) && igBegin("Integrator options", nullptr, kWindowFlags)) {
+    igText(has_integrator ? _current_integrator->name() : "No integrator selected");
+
+    if (has_integrator && (_integrator_options.values.empty() == false)) {
+      if (build_options(_integrator_options) && callbacks.options_changed) {
+        callbacks.options_changed();
+      }
+    }
+
+    if (has_integrator && _current_integrator->can_run()) {
+      igSeparator();
+      igNewLine();
+
+      auto state = _current_integrator->state();
+      bool has_complete = (state == Integrator::State::Running);
+      bool has_stop = (state != Integrator::State::Stopped);
+      bool has_preview = (state == Integrator::State::Stopped);
+      bool has_run = (state == Integrator::State::Stopped) || (state == Integrator::State::Preview);
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.22f, 0.11f, 1.0f});
+      if (has_complete && igButton("[ Complete iteration and stop ]", {}) && callbacks.stop_selected) {
+        callbacks.stop_selected(true);
+      }
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
+      if (has_stop && igButton("[ Break Immediately ]", {}) && callbacks.stop_selected) {
+        callbacks.stop_selected(false);
+      }
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
+      if (has_preview && igButton("[ Preview ]", {}) && callbacks.preview_selected) {
+        callbacks.preview_selected();
+      }
+
+      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
+      if (has_run && igButton("[ Launch ]", {}) && callbacks.run_selected) {
+        callbacks.run_selected();
+      }
+
+      igPopStyleColor(4);
+    }
+    igEnd();
+  }
+
+  if ((_ui_setup & UIView) && igBegin("View Options", nullptr, kWindowFlags)) {
+    build_options(_view_options);
+    igEnd();
+  }
+
+  if ((_ui_setup & UIMaterial) && igBegin("Materials and mediums", nullptr, kWindowFlags)) {
+    if (has_integrator && has_scene && (_material_mapping.empty() == false)) {
+      igText("Materials");
+      igListBox_Str_arr("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
+      if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
+        if ((_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
+          uint32_t material_index = _material_mapping.at(_selected_material);
+          Material& material = _current_scene->materials[material_index];
+          bool changed = build_material(material);
+          if (changed && callbacks.material_changed) {
+            callbacks.material_changed(material_index);
+          }
+        }
+      }
+      if (_medium_mapping.empty() == false) {
+        igSeparator();
+        igText("Mediums");
+        igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
+        if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
+          if ((_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
+            uint32_t medium_index = _medium_mapping.at(_selected_medium);
+            Medium& m = _current_scene->mediums[medium_index];
+            bool changed = build_medium(m);
+            if (changed && callbacks.material_changed) {
+              callbacks.medium_changed(medium_index);
+            }
+          }
+        }
+      }
+    } else {
+      igText("No scene or integrator selected");
+    }
+    igEnd();
+  }
+
+  if ((_ui_setup & UIEmitters) && igBegin("Emitters", nullptr, kWindowFlags)) {
+    bool has_emitters = false;
+
+    igText("Emitters");
+    if (igBeginListBox("##emitters", {})) {
+      for (uint32_t index = 0; has_scene && (index < _current_scene->emitters.count); ++index) {
+        auto& emitter = _current_scene->emitters[index];
+        if (emitter.cls == Emitter::Class::Area)
+          continue;
+
+        char buffer[32] = {};
+        switch (emitter.cls) {
+          case Emitter::Class::Directional: {
+            snprintf(buffer, sizeof(buffer), "%05u : directional", index);
+            break;
+          }
+          case Emitter::Class::Environment: {
+            snprintf(buffer, sizeof(buffer), "%05u : environment", index);
+            break;
+          }
+          default:
+            break;
+        }
+        if (igSelectable_Bool(buffer, _selected_emitter == index, ImGuiSelectableFlags_None, {})) {
+          _selected_emitter = index;
+        }
+      }
+      igEndListBox();
+    }
+
+    if ((_selected_emitter >= 0) && (_selected_emitter < _current_scene->emitters.count)) {
+      auto& emitter = _current_scene->emitters[_selected_emitter];
+
+      bool changed = igSpectrumPicker("Emission", emitter.emission.spectrum, _current_scene->spectrums, true);
+
+      if (emitter.cls == Emitter::Class::Directional) {
+        igText("Angular Size");
+        if (igDragFloat("##angularsize", &emitter.angular_size, 0.01f, 0.0f, kHalfPi, "%.3f", ImGuiSliderFlags_NoRoundToFormat)) {
+          emitter.angular_size_cosine = cosf(emitter.angular_size / 2.0f);
+          emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
+          changed = true;
+        }
+
+        igText("Direction");
+        if (igDragFloat3("##direction", &emitter.direction.x, 0.1f, -256.0f, 256.0f, "%.02f", ImGuiSliderFlags_NoRoundToFormat)) {
+          emitter.direction = normalize(emitter.direction);
+          changed = true;
+        }
+      }
+
+      if (changed && callbacks.emitter_changed) {
+        callbacks.emitter_changed(_selected_emitter);
+      }
+    }
+    igEnd();
+  }
+
+  if (_ui_setup & UICamera) {
+    if (igBegin("Camera", nullptr, kWindowFlags)) {
+      if (has_scene) {
+        auto& camera = _current_scene->camera;
+
+        bool changed = false;
+
+        float3 pos = camera.position;
+        float3 target = camera.position + camera.direction;
+        float focal_len = get_camera_focal_length(camera);
+
+        igText("Lens size");
+        changed = changed || igDragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
+        igText("Focal distance");
+        changed = changed || igDragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
+        igText("Focal length");
+        changed = changed || igDragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
+
+        if (changed && callbacks.camera_changed) {
+          camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
+          camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
+          update_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, focal_length_to_fov(focal_len) * 180.0f / kPi);
+          callbacks.camera_changed();
+        }
+      } else {
+        igText("No scene selected");
+      }
+      igEnd();
     }
   }
 
-  if ((_current_integrator != nullptr) && _current_integrator->can_run()) {
-    igSeparator();
-    igNewLine();
-
-    auto state = _current_integrator->state();
-    bool has_complete = (state == Integrator::State::Running);
-    bool has_stop = (state != Integrator::State::Stopped);
-    bool has_preview = (state == Integrator::State::Stopped);
-    bool has_run = (state == Integrator::State::Stopped) || (state == Integrator::State::Preview);
-
-    igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.22f, 0.11f, 1.0f});
-    if (has_complete && igButton("[ Complete iteration and stop ]", {}) && callbacks.stop_selected) {
-      callbacks.stop_selected(true);
+  if (has_integrator && (_current_integrator->debug_info_count() > 0)) {
+    if (igBegin("Debug Info", nullptr, kWindowFlags)) {
+      auto debug_info = _current_integrator->debug_info();
+      for (uint64_t i = 0, e = _current_integrator->debug_info_count(); i < e; ++i) {
+        char buffer[8] = {};
+        snprintf(buffer, sizeof(buffer), "%.3f     .", debug_info[i].value);
+        igLabelText(buffer, debug_info[i].title);
+      }
+      igEnd();
     }
-
-    igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
-    if (has_stop && igButton("[ Break Immediately ]", {}) && callbacks.stop_selected) {
-      callbacks.stop_selected(false);
-    }
-
-    igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
-    if (has_preview && igButton("[ Preview ]", {}) && callbacks.preview_selected) {
-      callbacks.preview_selected();
-    }
-
-    igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
-    if (has_run && igButton("[ Launch ]", {}) && callbacks.run_selected) {
-      callbacks.run_selected();
-    }
-
-    igPopStyleColor(4);
-    igNewLine();
   }
-  igEnd();
+
+  char status_buffer[2048] = {};
+  uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
+  snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
+  float offset_size = igGetFontSize();
+  float dy = igGetStyle()->FramePadding.y;
+  if (igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration)) {
+    igText(status_buffer);
+    igEnd();
+  }
 
   simgui_render();
 }
@@ -291,6 +498,15 @@ bool UI::handle_event(const sapp_event* e) {
   }
 
   switch (e->key_code) {
+    case SAPP_KEYCODE_F1:
+    case SAPP_KEYCODE_F2:
+    case SAPP_KEYCODE_F3:
+    case SAPP_KEYCODE_F4:
+    case SAPP_KEYCODE_F5: {
+      uint32_t flag = 1u << (e->key_code - SAPP_KEYCODE_F1);
+      _ui_setup = (_ui_setup & flag) ? (_ui_setup & (~flag)) : (_ui_setup | flag);
+      break;
+    };
     case SAPP_KEYCODE_1: {
       _view_options.set_enum("out_view", OutputView::Result);
       break;
@@ -342,7 +558,6 @@ ViewOptions UI::view_options() const {
 
 void UI::set_current_integrator(Integrator* i) {
   _current_integrator = i;
-  _integrator_name = _current_integrator ? _current_integrator->name() : "";
   _integrator_options = _current_integrator ? _current_integrator->options() : Options{};
 }
 
@@ -350,6 +565,13 @@ void UI::select_scene_file() {
   auto selected_file = open_file({"Supported formats", "*.json;*.obj"});  // TODO : add *.gltf;*.pbrt
   if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
     callbacks.scene_file_selected(selected_file);
+  }
+}
+
+void UI::save_scene_file() {
+  auto selected_file = save_file({"Scene description", "*.json"});
+  if ((selected_file.empty() == false) && callbacks.save_scene_file_selected) {
+    callbacks.save_scene_file_selected(selected_file);
   }
 }
 
@@ -368,6 +590,64 @@ void UI::load_image() {
   if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
     callbacks.reference_image_selected(selected_file);
   }
+}
+
+void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums) {
+  _current_scene = scene;
+
+  _selected_material = -1;
+  _material_mapping.build(materials);
+
+  _selected_medium = -1;
+  _medium_mapping.build(mediums);
+}
+
+bool UI::build_material(Material& material) {
+  int32_t material_cls = static_cast<int32_t>(material.cls);
+  bool changed = igCombo_FnBoolPtr(
+    "##type", &material_cls,
+    [](void* data, int32_t idx, const char** out_text) -> bool {
+      material_class_to_string(Material::Class(idx), out_text);
+      return true;
+    },
+    nullptr, int32_t(Material::Class::Count), 5);
+  material.cls = static_cast<Material::Class>(material_cls);
+  changed |= igSliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  changed |= igSliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  changed |= igSpectrumPicker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
+  changed |= igSpectrumPicker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
+  changed |= igSpectrumPicker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);
+  changed |= igSpectrumPicker("Subsurface", material.subsurface.scattering_distance, _current_scene->spectrums, true);
+
+  auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
+    bool has_medium = medium != kInvalidIndex;
+    bool changed = igCheckbox(name, &has_medium);
+    if (has_medium) {
+      int32_t medium_index = static_cast<int32_t>(medium);
+      if (medium_index == -1)
+        medium_index = 0;
+      changed |= igSliderInt("##medium_index", &medium_index, 0, int32_t(medium_count), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
+      medium = uint32_t(medium_index);
+    } else {
+      medium = kInvalidIndex;
+    }
+    return changed;
+  };
+
+  if (_medium_mapping.empty() == false) {
+    changed |= medium_editor("Internal medium", material.int_medium, _current_scene->mediums.count);
+    changed |= medium_editor("Extenral medium", material.ext_medium, _current_scene->mediums.count);
+  }
+
+  return changed;
+}
+
+bool UI::build_medium(Medium& m) {
+  bool changed = false;
+  changed |= igSpectrumPicker("Absorption", m.s_absorption, _current_scene->spectrums, true);
+  changed |= igSpectrumPicker("Outscattering", m.s_outscattering, _current_scene->spectrums, true);
+  changed |= igSliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
+  return changed;
 }
 
 }  // namespace etx

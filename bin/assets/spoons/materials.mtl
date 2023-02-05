@@ -2,11 +2,12 @@
 # Material Count: 4
 
 newmtl None
-material class coating
+material class plastic
+int_ior diamond
 Pr 0.25
-Ks 0.08 0.08 0.08
+Ks 1.0 0.9 0.5
 map_Kd ../textures/square_floor_diff_4k.png
-normalmap image ../textures/square_floor_nor_gl_4k.png scale 0.75
+normalmap image ../textures/square_floor_nor_gl_4k.png scale 0.5
 
 newmtl Golden_spoon
 material class conductor
@@ -20,7 +21,7 @@ int_ior plastic
 Pr 0.025
 thinfilm range 600.0 800.0 ior 1.76 image ../textures/film.png
 
-newmtl Woonde_spoon
+newmtl woonde_spoon
 material class conductor
 int_ior copper
 thinfilm range 100.0 360.0 ior 2.41 image ../textures/film.png

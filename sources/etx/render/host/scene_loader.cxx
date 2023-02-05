@@ -19,6 +19,8 @@
 #include <tiny_obj_loader.hxx>
 #include <jansson.h>
 
+#include <filesystem>
+
 namespace etx {
 
 Pointer<Spectrums> spectrums() {
@@ -45,11 +47,9 @@ Pointer<Spectrums> spectrums() {
 
       _spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2, SPD::Class::Reflectance, &_spectrums);
       _spectrums.thinfilm.k = SPD::from_samples(w, k, 2, SPD::Class::Reflectance, &_spectrums);
-
-      _spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, std::size(chrome_samples_eta), SPD::Class::Reflectance, &_spectrums);
-      _spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, std::size(chrome_samples_k), SPD::Class::Reflectance, &_spectrums);
-
-      _spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, std::size(plastic_samples_eta), SPD::Class::Reflectance, &_spectrums);
+      _spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)), SPD::Class::Reflectance, &_spectrums);
+      _spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_k)), SPD::Class::Reflectance, &_spectrums);
+      _spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)), SPD::Class::Reflectance, &_spectrums);
       _spectrums.dielectric.k = SPD::from_constant(0.0f);
     }
     return true;
@@ -77,10 +77,14 @@ struct SceneRepresentationImpl {
   std::vector<Material> materials;
   std::vector<Emitter> emitters;
 
+  std::string json_file_name;
+  std::string obj_file_name;
+  std::string mtl_file_name;
+
   ImagePool images;
   MediumPool mediums;
 
-  std::unordered_map<std::string, uint32_t> material_mapping;
+  SceneRepresentation::MaterialMapping material_mapping;
   uint32_t camera_medium_index = kInvalidIndex;
   uint32_t camera_lens_shape_image_index = kInvalidIndex;
 
@@ -89,7 +93,7 @@ struct SceneRepresentationImpl {
 
   uint32_t add_image(const char* path, uint32_t options) {
     std::string id = path ? path : ("image-" + std::to_string(images.array_size()));
-    return images.add_from_file(path, options | Image::DelayLoad);
+    return images.add_from_file(id, options | Image::DelayLoad);
   }
 
   uint32_t add_material(const char* name) {
@@ -284,14 +288,6 @@ struct SceneRepresentationImpl {
     }
     scene.camera_medium_index = camera_medium_index;
     scene.camera_lens_shape_image_index = camera_lens_shape_image_index;
-
-    for (auto& emitter : emitters) {
-      if (emitter.is_distant()) {
-        ETX_ASSERT(emitter.weight == 0.0f);
-        emitter.weight = kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
-      }
-    }
-
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
     scene.materials = {materials.data(), materials.size()};
@@ -302,19 +298,7 @@ struct SceneRepresentationImpl {
     scene.environment_emitters.count = 0;
 
     log::info("Building emitters distribution for %llu emitters...\n", scene.emitters.count);
-    DistributionBuilder emitters_distribution(scene.emitters_distribution, static_cast<uint32_t>(scene.emitters.count));
-    for (uint32_t i = 0; i < scene.emitters.count; ++i) {
-      auto& emitter = emitters[i];
-      emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
-      emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);
-      emitters_distribution.add(emitter.weight);
-      if (emitter.is_local()) {
-        triangles[emitter.triangle_index].emitter_index = i;
-      } else if ((emitter.cls == Emitter::Class::Environment) || (emitter.cls == Emitter::Class::Directional)) {
-        scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
-      }
-    }
-    emitters_distribution.finalize();
+    build_emitters_distribution(scene);
 
     loaded = true;
   }
@@ -357,8 +341,22 @@ void update_camera(Camera& camera, const float3& origin, const float3& target, c
   camera.image_plane = float(camera.image_size.x) / (2.0f * camera.tan_half_fov);
 }
 
+static const float kFilmSize = 36.0f;
+
 float get_camera_fov(const Camera& camera) {
   return 2.0f * atanf(camera.tan_half_fov) * 180.0f / kPi;
+}
+
+float get_camera_focal_length(const Camera& camera) {
+  return 0.5f * kFilmSize / camera.tan_half_fov;
+}
+
+float fov_to_focal_length(float fov) {
+  return 0.5f * kFilmSize / tanf(0.5f * fov);
+}
+
+float focal_length_to_fov(float focal_len) {
+  return 2.0f * atanf(kFilmSize / (2.0f * focal_len));
 }
 
 ETX_PIMPL_IMPLEMENT(SceneRepresentation, Impl);
@@ -371,8 +369,24 @@ SceneRepresentation::~SceneRepresentation() {
   ETX_PIMPL_CLEANUP(SceneRepresentation);
 }
 
+Scene& SceneRepresentation::mutable_scene() {
+  return _private->scene;
+}
+
+Scene* SceneRepresentation::mutable_scene_pointer() {
+  return &_private->scene;
+}
+
 const Scene& SceneRepresentation::scene() const {
   return _private->scene;
+}
+
+const SceneRepresentation::MaterialMapping& SceneRepresentation::material_mapping() const {
+  return _private->material_mapping;
+}
+
+const SceneRepresentation::MediumMapping& SceneRepresentation::medium_mapping() const {
+  return _private->mediums.mapping();
 }
 
 Camera& SceneRepresentation::camera() {
@@ -430,13 +444,130 @@ float3 json_to_f3(json_t* a) {
   return result;
 }
 
+json_t* json_float3_to_array(const float3& v) {
+  json_t* j = json_array();
+  json_array_append(j, json_real(v.x));
+  json_array_append(j, json_real(v.y));
+  json_array_append(j, json_real(v.z));
+  return j;
+}
+
+json_t* json_uint2_to_array(const uint2& v) {
+  json_t* j = json_array();
+  json_array_append(j, json_integer(v.x));
+  json_array_append(j, json_integer(v.y));
+  return j;
+}
+
+void SceneRepresentation::write_materials(const char* filename) {
+  FILE* fout = fopen(filename, "w");
+  if (fout == nullptr) {
+    log::error("Failed to write materials file: %s", filename);
+    return;
+  }
+
+  for (const auto& em : _private->scene.emitters) {
+    switch (em.cls) {
+      case Emitter::Class::Directional: {
+        float3 e = em.emission.spectrum.to_xyz();
+        fprintf(fout, "newmtl et::dir\n");
+        fprintf(fout, "color %.3f %.3f %.3f\n", e.x, e.y, e.z);
+        fprintf(fout, "direction %.3f %.3f %.3f\n", em.direction.x, em.direction.y, em.direction.z);
+        fprintf(fout, "angular_diameter %.3f\n", em.angular_size * 180.0f / kPi);
+        fprintf(fout, "\n");
+        break;
+      }
+      case Emitter::Class::Environment: {
+        float3 e = em.emission.spectrum.to_xyz();
+        fprintf(fout, "newmtl et::env\n");
+        fprintf(fout, "color %.3f %.3f %.3f\n", e.x, e.y, e.z);
+        fprintf(fout, "\n");
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  for (const auto& mmap : _private->material_mapping) {
+    const auto& material = _private->scene.materials[mmap.second];
+
+    fprintf(fout, "newmtl %s\n", mmap.first.c_str());
+    fprintf(fout, "material class %s\n", material_class_to_string(material.cls));
+    // TODO : support anisotripic roughness
+    fprintf(fout, "Pr %.3f\n", sqrtf(0.5f * (sqr(material.roughness.x) + sqr(material.roughness.y))));
+    {
+      float3 kd = spectrum::xyz_to_rgb(material.diffuse.spectrum.to_xyz());
+      fprintf(fout, "Kd %.3f %.3f %.3f\n", kd.x, kd.y, kd.z);
+    }
+    {
+      float3 ks = spectrum::xyz_to_rgb(material.specular.spectrum.to_xyz());
+      fprintf(fout, "Ks %.3f %.3f %.3f\n", ks.x, ks.y, ks.z);
+    }
+    {
+      float3 kt = spectrum::xyz_to_rgb(material.transmittance.spectrum.to_xyz());
+      fprintf(fout, "Kt %.3f %.3f %.3f\n", kt.x, kt.y, kt.z);
+    }
+
+    if (material.emission.spectrum.is_zero() == false) {
+      float3 ke = spectrum::xyz_to_rgb(material.emission.spectrum.to_xyz());
+      fprintf(fout, "Ke %.3f %.3f %.3f\n", ke.x, ke.y, ke.z);
+    }
+
+    if (material.subsurface.scattering_distance.is_zero() == false) {
+      float3 ss = spectrum::xyz_to_rgb(material.subsurface.scattering_distance.to_xyz());
+      fprintf(fout, "subsurface %.3f %.3f %.3f\n", ss.x, ss.y, ss.z);
+    }
+
+    fprintf(fout, "\n");
+  }
+
+  fclose(fout);
+}
+
+void SceneRepresentation::save_to_file(const char* filename) {
+  if (_private->obj_file_name.empty())
+    return;
+
+  FILE* fout = fopen(filename, "w");
+  if (fout == nullptr)
+    return;
+
+  auto materials_file = _private->obj_file_name + ".materials";
+  auto relative_obj_file = std::filesystem::relative(_private->obj_file_name, std::filesystem::path(filename).parent_path()).string();
+  auto relative_mtl_file = std::filesystem::relative(materials_file, std::filesystem::path(filename).parent_path()).string();
+  write_materials(materials_file.c_str());
+
+  auto j = json_object();
+  json_object_set(j, "geometry", json_string(relative_obj_file.c_str()));
+  json_object_set(j, "materials", json_string(relative_mtl_file.c_str()));
+
+  {
+    auto camera = json_object();
+    json_object_set(camera, "viewport", json_uint2_to_array(_private->scene.camera.image_size));
+    json_object_set(camera, "origin", json_float3_to_array(_private->scene.camera.position));
+    json_object_set(camera, "target", json_float3_to_array(_private->scene.camera.position + _private->scene.camera.direction));
+    json_object_set(camera, "up", json_float3_to_array(_private->scene.camera.up));
+    json_object_set(camera, "lens-radius", json_real(_private->scene.camera.lens_radius));
+    json_object_set(camera, "focal-distance", json_real(_private->scene.camera.focal_distance));
+    json_object_set(camera, "focal-length", json_real(get_camera_focal_length(_private->scene.camera)));
+    json_object_set(j, "camera", camera);
+  }
+
+  json_dumpf(j, fout, JSON_INDENT(2));
+  fclose(fout);
+
+  json_decref(j);
+}
+
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
   _private->cleanup();
 
   uint32_t load_result = SceneRepresentationImpl::LoadFailed;
 
-  std::string file_to_load = filename;
-  std::string material_file = {};
+  _private->json_file_name = {};
+  _private->mtl_file_name = {};
+  _private->obj_file_name = filename;
 
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
@@ -450,6 +581,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   float3 camera_view = cam.position + cam.direction;
   uint2 viewport = cam.image_size;
   float camera_fov = get_camera_fov(cam);
+  float camera_focal_len = fov_to_focal_length(camera_fov);
+  bool use_focal_len = false;
 
   if (strcmp(get_file_ext(filename), ".json") == 0) {
     json_error_t err = {};
@@ -474,14 +607,14 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
           json_decref(js);
           return false;
         }
-        file_to_load = std::string(base_folder) + json_string_value(js_value);
+        _private->obj_file_name = std::string(base_folder) + json_string_value(js_value);
       } else if (strcmp(key, "materials") == 0) {
         if (json_is_string(js_value) == false) {
           log::error("`materials` in scene description should be a string (file name)");
           json_decref(js);
           return false;
         }
-        material_file = json_string_value(js_value);
+        _private->mtl_file_name = json_string_value(js_value);
       } else if (strcmp(key, "camera") == 0) {
         if (json_is_object(js_value) == false) {
           log::error("`camera` in scene description should be an object");
@@ -504,6 +637,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
             viewport = json_to_u2(cam_value);
           } else if ((strcmp(cam_key, "fov") == 0) && json_is_number(cam_value)) {
             camera_fov = static_cast<float>(json_number_value(cam_value));
+          } else if ((strcmp(cam_key, "focal-length") == 0) && json_is_number(cam_value)) {
+            camera_focal_len = static_cast<float>(json_number_value(cam_value));
+            use_focal_len = true;
           } else if ((strcmp(cam_key, "lens-radius") == 0) && json_is_number(cam_value)) {
             cam.lens_radius = static_cast<float>(json_number_value(cam_value));
           } else if ((strcmp(cam_key, "focal-distance") == 0) && json_is_number(cam_value)) {
@@ -513,11 +649,12 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       }
     }
     json_decref(js);
+    _private->json_file_name = filename;
   }
 
-  auto ext = get_file_ext(file_to_load.c_str());
+  auto ext = get_file_ext(_private->obj_file_name.c_str());
   if (strcmp(ext, ".obj") == 0) {
-    load_result = _private->load_from_obj(file_to_load.c_str(), material_file.c_str());
+    load_result = _private->load_from_obj(_private->obj_file_name.c_str(), _private->mtl_file_name.c_str());
   }
 
   if ((load_result & SceneRepresentationImpl::LoadSucceeded) == 0) {
@@ -529,6 +666,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       viewport = {1280, 720};
     }
     cam.cls = camera_cls;
+    if (use_focal_len) {
+      camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
+    }
     update_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
   }
 
@@ -582,7 +722,16 @@ inline std::vector<const char*> split_params(char* data) {
   return params;
 }
 
-inline SpectralDistribution load_spectrum(char* data_buffer) {
+inline SpectralDistribution load_reflectance_spectrum(char* data_buffer) {
+  SpectralDistribution reflection_spectrum = SpectralDistribution::from_constant(0.0f);
+  float value[3] = {};
+  if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
+    reflection_spectrum = rgb::make_reflectance_spd({value[0], value[1], value[2]}, spectrums());
+  }
+  return reflection_spectrum;
+}
+
+inline SpectralDistribution load_illuminant_spectrum(char* data_buffer) {
   SpectralDistribution emitter_spectrum = SpectralDistribution::from_constant(0.0f);
   float value[3] = {};
   if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
@@ -624,37 +773,57 @@ inline auto get_param(const tinyobj::material_t& m, const char* param, char buff
   return false;
 }
 
-inline Material::Class material_string_to_class(const char* s) {
+Material::Class material_string_to_class(const char* s) {
   if (strcmp(s, "diffuse") == 0)
     return Material::Class::Diffuse;
-  else if (strcmp(s, "msdiffuse") == 0)
-    return Material::Class::MultiscatteringDiffuse;
   else if (strcmp(s, "plastic") == 0)
     return Material::Class::Plastic;
-  else if (strcmp(s, "conductor") == 0)
+  else if ((strcmp(s, "conductor") == 0) || (strcmp(s, "msconductor") == 0))
     return Material::Class::Conductor;
-  else if (strcmp(s, "msconductor") == 0)
-    return Material::Class::MultiscatteringConductor;
-  else if (strcmp(s, "dielectric") == 0)
+  else if ((strcmp(s, "dielectric") == 0) || (strcmp(s, "msdielectric") == 0))
     return Material::Class::Dielectric;
-  else if (strcmp(s, "msdielectric") == 0)
-    return Material::Class::MultiscatteringDielectric;
   else if (strcmp(s, "thinfilm") == 0)
     return Material::Class::Thinfilm;
   else if (strcmp(s, "translucent") == 0)
-    return Material::Class::Translucent;
+    return Material::Class::Subsurface;
   else if (strcmp(s, "mirror") == 0)
     return Material::Class::Mirror;
   else if (strcmp(s, "boundary") == 0)
     return Material::Class::Boundary;
-  else if (strcmp(s, "generic") == 0)
-    return Material::Class::Generic;
   else if (strcmp(s, "coating") == 0)
     return Material::Class::Coating;
-  else if (strcmp(s, "mixture") == 0)
-    return Material::Class::Mixture;
-  else
-    return Material::Class::Undefined;
+  else if (strcmp(s, "velvet") == 0)
+    return Material::Class::Velvet;
+  else if (strcmp(s, "subsurface") == 0)
+    return Material::Class::Subsurface;
+  else {
+    log::error("Undefined BSDF: `%s`", s);
+    return Material::Class::Diffuse;
+  }
+}
+
+void material_class_to_string(Material::Class cls, const char** str) {
+  static const char* names[] = {
+    "diffuse",
+    "plastic",
+    "conductor",
+    "dielectric",
+    "thinfilm",
+    "mirror",
+    "boundary",
+    "coating",
+    "velvet",
+    "subsurface",
+    "undefined",
+  };
+  static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);
+  *str = cls < Material::Class::Count ? names[uint32_t(cls)] : "undefined";
+}
+
+const char* material_class_to_string(Material::Class cls) {
+  const char* result = nullptr;
+  material_class_to_string(cls, &result);
+  return result;
 }
 
 inline bool get_file(const char* base_dir, const std::string& base, char buffer[]) {
@@ -895,7 +1064,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       auto& e = emitters.emplace_back(Emitter::Class::Directional);
 
       if (get_param(material, "color", data_buffer)) {
-        e.emission.spectrum = load_spectrum(data_buffer);
+        e.emission.spectrum = load_illuminant_spectrum(data_buffer);
       } else {
         e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
       }
@@ -930,7 +1099,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU);
 
       if (get_param(material, "color", data_buffer)) {
-        e.emission.spectrum = load_spectrum(data_buffer);
+        e.emission.spectrum = load_illuminant_spectrum(data_buffer);
       } else {
         e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
       }
@@ -942,10 +1111,11 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       uint32_t material_index = material_mapping[material.name];
       auto& mtl = materials[material_index];
 
+      mtl.cls = Material::Class::Diffuse;
       mtl.diffuse.spectrum = rgb::make_reflectance_spd(to_float3(material.diffuse), spectrums());
       mtl.specular.spectrum = rgb::make_reflectance_spd(to_float3(material.specular), spectrums());
       mtl.transmittance.spectrum = rgb::make_reflectance_spd(to_float3(material.transmittance), spectrums());
-
+      mtl.emission.spectrum = rgb::make_reflectance_spd(to_float3(material.emission), spectrums());
       mtl.roughness = {material.roughness, material.roughness};
       mtl.metalness = material.metallic;
 
@@ -983,8 +1153,6 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
             i += 1;
           }
         }
-      } else {
-        mtl.cls = Material::Class::Diffuse;
       }
 
       if (get_param(material, "int_ior", data_buffer)) {
@@ -1091,38 +1259,35 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         }
       }
 
-      if (get_param(material, "mixture", data_buffer)) {
-        auto params = split_params(data_buffer);
-        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-          if ((strcmp(params[i], "material1") == 0) && (i + 1 < e)) {
-            auto ref = params[i + 1];
-            mtl.mixture_0 = material_mapping.count(ref) > 0 ? material_mapping[ref] : kInvalidIndex;
-            i += 1;
-          }
-          if ((strcmp(params[i], "material2") == 0) && (i + 1 < e)) {
-            auto ref = params[i + 1];
-            mtl.mixture_1 = material_mapping.count(ref) > 0 ? material_mapping[ref] : kInvalidIndex;
-            i += 1;
-          }
-          if ((strcmp(params[i], "factor") == 0) && (i + 1 < e)) {
-            float value = 0.0f;
-            if (sscanf(params[i + 1], "%f", &value) == 1) {
-              mtl.mixture = value;
-            }
-            i += 1;
-          }
-          if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
-            char buffer[1024] = {};
-            snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-            mtl.mixture_image_index = add_image(buffer, Image::RepeatU | Image::RepeatV);
-            i += 1;
-          }
-        }
+      if (get_param(material, "subsurface", data_buffer)) {
+        mtl.subsurface.scattering_distance = load_reflectance_spectrum(data_buffer);
+        mtl.subsurface.scattering_distance_scale = 0.2f;
       }
     }
   }
 
   images.load_images();
+}
+
+void build_emitters_distribution(Scene& scene) {
+  DistributionBuilder emitters_distribution(scene.emitters_distribution, static_cast<uint32_t>(scene.emitters.count));
+  scene.environment_emitters.count = 0;
+  for (uint32_t i = 0; i < scene.emitters.count; ++i) {
+    auto& emitter = scene.emitters[i];
+    if (emitter.is_distant()) {
+      emitter.weight = emitter.emission.spectrum.total_power() * kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
+    }
+    emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
+    emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);
+    emitters_distribution.add(emitter.weight);
+
+    if (emitter.is_local()) {
+      scene.triangles[emitter.triangle_index].emitter_index = i;
+    } else if (emitter.is_distant() && (emitter.weight > 0.0f)) {
+      scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
+    }
+  }
+  emitters_distribution.finalize();
 }
 
 }  // namespace etx

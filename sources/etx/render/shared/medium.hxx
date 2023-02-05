@@ -112,7 +112,7 @@ struct ETX_ALIGNED Medium {
   ETX_GPU_CODE Sample sample_homogeneous(const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& w_i, float max_t) const {
     float rnd = smp.next();
     auto s_t = s_outscattering.random_entry_power(rnd) + s_absorption.random_entry_power(rnd);
-    float t = -logf(1.0f - smp.next()) / s_t;
+    float t = (s_t > 0.0f) ? -logf(1.0f - smp.next()) / s_t : max_t;
     ETX_VALIDATE(t);
 
     t = min(t, max_t);
@@ -193,7 +193,7 @@ struct ETX_ALIGNED Medium {
     float xi1 = smp.next();
 
     float cos_theta = 0.0f;
-    if (fabsf(phase_function_g) < 1e-3) {
+    if (fabsf(phase_function_g) < 1e-3f) {
       cos_theta = 1.0f - 2.0f * xi0;
     } else {
       float sqr_term = (1.0f - phase_function_g * phase_function_g) / (1.0f + phase_function_g - 2.0f * phase_function_g * xi0);

@@ -5,7 +5,11 @@
 
 namespace etx {
 
-constexpr bool kForceDiffuseBSDF = false;
+#define ETX_FORCE_BSDF 0
+
+#if (ETX_FORCE_BSDF)
+#define ETX_FORCED_BSDF DiffuseBSDF
+#endif
 
 enum class PathSource : uint32_t {
   Undefined,
@@ -14,6 +18,11 @@ enum class PathSource : uint32_t {
 };
 
 struct BSDFData : public Vertex {
+  struct ETX_ALIGNED NormalFrame {
+    LocalFrame frame;
+    bool entering_material;
+  };
+
   ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi, const float3& awo)
     : Vertex(av)
     , path_source(ps)
@@ -30,10 +39,7 @@ struct BSDFData : public Vertex {
     return result;
   }
 
-  ETX_GPU_CODE struct {
-    LocalFrame frame;
-    bool entering_material;
-  } get_normal_frame() const {
+  ETX_GPU_CODE NormalFrame get_normal_frame() const {
     bool entering_material = dot(nrm, w_i) < 0.0f;
     return {entering_material ? LocalFrame{tan, btn, nrm} : LocalFrame{-tan, -btn, -nrm}, entering_material};
   }
@@ -67,9 +73,10 @@ struct BSDFEval {
 struct BSDFSample {
   enum Properties : uint32_t {
     Diffuse = 1u << 0u,
-    DeltaReflection = 1u << 1u,
-    DeltaTransmission = 1u << 2u,
+    Reflection = 1u << 1u,
+    Transmission = 1u << 2u,
     MediumChanged = 1u << 3u,
+    Delta = 1u << 4u,
   };
 
   SpectralResponse weight = {};
@@ -110,7 +117,7 @@ struct BSDFSample {
   }
 
   ETX_GPU_CODE bool is_delta() const {
-    return ((properties & DeltaReflection) != 0) || ((properties & DeltaTransmission) != 0);
+    return (properties & Delta) == Delta;
   }
 };
 
@@ -241,7 +248,7 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
 
 namespace fresnel {
 
-ETX_GPU_CODE auto reflectance(complex ext_ior, complex cos_theta_i, complex int_ior, complex cos_theta_j) {
+ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
   struct result {
     complex rs, rp;
   };
@@ -254,7 +261,7 @@ ETX_GPU_CODE auto reflectance(complex ext_ior, complex cos_theta_i, complex int_
   return result{rs, rp};
 }
 
-ETX_GPU_CODE auto transmittance(complex ext_ior, complex cos_theta_i, complex int_ior, complex cos_theta_j) {
+ETX_GPU_CODE auto transmittance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
   struct result {
     complex ts, tp;
   };
@@ -275,7 +282,7 @@ ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_i
   return saturate(0.5f * (complex_norm(rsrp.rs) + complex_norm(rsrp.rp)));
 }
 
-ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, complex ext_ior, complex film_ior, complex int_ior, float thickness) {
+ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
   auto sin_theta_1_squared = sqr(ext_ior / film_ior) * (1.0f - cos_theta_0 * cos_theta_0);
   auto cos_theta_1 = complex_sqrt(complex{1.0f, 0.0f} - sin_theta_1_squared);
   auto sin_theta_2_squared = sqr(film_ior / int_ior) * (1.0f - cos_theta_1 * cos_theta_1);

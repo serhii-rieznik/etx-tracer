@@ -2,11 +2,16 @@
 
 #include <etx/core/pimpl.hxx>
 #include <etx/render/host/pool.hxx>
+#include <etx/render/host/tasks.hxx>
 
 namespace etx {
 
 using device_pointer_t = uint64_t;
+
 constexpr static const uint32_t kInvalidHandle = ~0u;
+constexpr static const uint32_t kOptiXMaxEntryPoints = 8u;
+constexpr static const uint32_t kOptiXMaxTraceDepth = 1u;
+constexpr static const uint32_t kOptiXPayloadSize = 2u;
 
 struct GPUBuffer {
   struct Descriptor {
@@ -17,25 +22,13 @@ struct GPUBuffer {
 };
 
 struct GPUPipeline {
-  struct Entry {
-    const char* closest_hit = nullptr;
-    const char* any_hit = nullptr;
-    const char* miss = nullptr;
-    const char* exception = nullptr;
-  };
+  using EntryPoint = char[128];
 
   struct Descriptor {
     uint8_t* data = nullptr;
     uint64_t data_size = 0;
-
-    const char* raygen = nullptr;
-
-    const Entry* entries = nullptr;
-    uint32_t entry_count = 0;
-
-    uint32_t payload_count = 0;
-    uint32_t max_trace_depth = 2;
-
+    EntryPoint entry_points[kOptiXMaxEntryPoints] = {};
+    uint32_t entry_point_count = 0;
     uint32_t compile_options = 0;
   };
 
@@ -71,13 +64,13 @@ struct GPUDevice {
 
   virtual GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) = 0;
   virtual GPUPipeline create_pipeline_from_file(const char* filename, bool force_recompile) = 0;
+  virtual void create_pipeline_from_files(TaskScheduler&, uint64_t file_count, const char* files[], GPUPipeline pipelines[], bool force_recompile) = 0;
   virtual void destroy_pipeline(GPUPipeline) = 0;
 
   virtual GPUAccelerationStructure create_acceleration_structure(const GPUAccelerationStructure::Descriptor&) = 0;
   virtual device_pointer_t get_acceleration_structure_device_pointer(GPUAccelerationStructure) = 0;
   virtual void destroy_acceleration_structure(GPUAccelerationStructure) = 0;
 
-  virtual bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) = 0;
   virtual bool launch(GPUPipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) = 0;
 
   virtual void setup_denoiser(uint32_t dim_x, uint32_t dim_y) = 0;

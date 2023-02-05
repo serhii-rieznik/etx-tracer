@@ -1,7 +1,7 @@
 ﻿#pragma once
 
-#include <etx/render/shared/base.hxx>
 #include <etx/render/shared/distribution.hxx>
+#include <etx/render/shared/spectrum.hxx>
 
 namespace etx {
 

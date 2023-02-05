@@ -352,19 +352,18 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
   return 0.5f * singleScattering + multipleScattering;
 }
 
-ETX_GPU_CODE double abgam(double x) {
-  double gam[10] = {1. / 12., 1. / 30., 53. / 210., 195. / 371., 22999. / 22737., 29944523. / 19733142., 109535241009. / 48264275462.};
-  return 0.5 * ::log(kDoublePi) - x + (x - 0.5) * ::log(x) + gam[0] / (x + gam[1] / (x + gam[2] / (x + gam[3] / (x + gam[4] / (x + gam[5] / (x + gam[6] / x))))));
+ETX_GPU_CODE float abgam(float x) {
+  constexpr float gam[] = {1.0f / 12.0f, 1.0f / 30.0f, 53.0f / 210.0f, 195.0f / 371.0f, 22999.0f / 22737.0f, 29944523.0f / 19733142.0f, 109535241009.0f / 48264275462.0f};
+  constexpr float kHalfLogDoublePi = 0.918938518f;  // 0.5f * logf(kDoublePi)
+  return kHalfLogDoublePi - x + (x - 0.5f) * logf(x) + gam[0] / (x + gam[1] / (x + gam[2] / (x + gam[3] / (x + gam[4] / (x + gam[5] / (x + gam[6] / x))))));
 }
 
-ETX_GPU_CODE double gamma(double x) {
-  double result;
-  result = ::exp(abgam(x + 5)) / (x * (x + 1) * (x + 2) * (x + 3) * (x + 4));
-  return result;
+ETX_GPU_CODE float gamma(float x) {
+  return expf(abgam(x + 5.0f)) / (x * (x + 1.0f) * (x + 2.0f) * (x + 3.0f) * (x + 4.0f));
 }
 
-ETX_GPU_CODE float beta(double m, double n) {
-  return static_cast<float>(gamma(m) * gamma(n) / gamma(m + n));
+ETX_GPU_CODE float beta(float m, float n) {
+  return gamma(m) * gamma(n) / gamma(m + n);
 }
 
 ETX_GPU_CODE float3 refract(const float3& wi, const float3& wm, const float eta) {
@@ -548,8 +547,8 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
   return 0.5f * singleScattering + multipleScattering;
 }
 
-ETX_GPU_CODE float3 sample_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y, const RefractiveIndex::Sample& ext_ior,
-  const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, float& weight) {
+ETX_GPU_CODE bool sample_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y, const RefractiveIndex::Sample& ext_ior,
+  const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, float3& w_o) {
   // init
   RayInfo ray = {-wi, alpha_x, alpha_y};
   ray.updateHeight(1.0f);
@@ -580,13 +579,12 @@ ETX_GPU_CODE float3 sample_dielectric(const SpectralQuery spect, Sampler& smp, c
     }
 
     if (current_scatteringOrder > kScatteringOrderMax) {
-      weight = 0.0f;
-      return float3{0, 0, 1};
+      return false;
     }
   }
 
-  weight = 1.0f;
-  return (outside) ? ray.w : -ray.w;
+  w_o = (outside) ? ray.w : -ray.w;
+  return true;
 }
 
 ETX_GPU_CODE float3 samplePhaseFunction_diffuse(Sampler& smp, const float3& wm) {

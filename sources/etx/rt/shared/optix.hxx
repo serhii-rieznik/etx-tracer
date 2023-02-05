@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cuda.h>
 #include <optix.h>
 
 #include <etx/render/shared/sampler.hxx>
@@ -60,11 +59,14 @@ struct ETX_ALIGNED Raytracing {
     uint32_t ptr_hi = static_cast<uint32_t>((ptr & 0xffffffff00000000) >> 32llu);
 
     i.t = -kMaxFloat;
+
     optixTrace(OptixTraversableHandle(scene.acceleration_structure), ray.o, ray.d, ray.min_t, ray.max_t, 0.0f,  //
       OptixVisibilityMask(255), OptixRayFlags(OPTIX_RAY_FLAG_ENFORCE_ANYHIT), 0u, 0u, 0u, ptr_lo, ptr_hi);
 
-    if (i.t < 0.0f)
+    if (i.t < 0.0f) {
+      i.t = kMaxFloat;
       return false;
+    }
 
     const auto& tri = scene.triangles[i.triangle_index];
     lerp_vertex(i, scene.vertices, tri, i.barycentric);
@@ -90,15 +92,14 @@ struct ETX_ALIGNED Raytracing {
 
 }  // namespace etx
 
-CLOSEST_HIT(main_closest_hit) {
+CLOSEST_HIT(main) {
   auto data = etx::Raytracing::unpack_data(optixGetPayload_0(), optixGetPayload_1());
-
   data->i.barycentric = etx::barycentrics(optixGetTriangleBarycentrics());
   data->i.triangle_index = optixGetPrimitiveIndex();
   data->i.t = optixGetRayTmax();
 }
 
-ANY_HIT(main_any_hit) {
+ANY_HIT(main) {
   auto data = etx::Raytracing::unpack_data(optixGetPayload_0(), optixGetPayload_1());
   const auto& tri = data->scene.triangles[optixGetPrimitiveIndex()];
   const auto& mat = data->scene.materials[tri.material_index];
@@ -110,5 +111,5 @@ ANY_HIT(main_any_hit) {
   }
 }
 
-MISS(main_miss) {
+MISS(main) {
 }

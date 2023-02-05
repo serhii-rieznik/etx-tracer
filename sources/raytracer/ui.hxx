@@ -5,6 +5,8 @@
 #include <etx/render/shared/base.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 
+#include <etx/render/host/scene_loader.hxx>
+
 #include <functional>
 
 #include "options.hxx"
@@ -22,6 +24,7 @@ struct UI {
   }
 
   void set_current_integrator(Integrator*);
+  void set_scene(Scene* scene, const SceneRepresentation::MaterialMapping&, const SceneRepresentation::MediumMapping&);
 
   const Options& integrator_options() const {
     return _integrator_options;
@@ -35,6 +38,7 @@ struct UI {
     std::function<void(std::string)> reference_image_selected;
     std::function<void(std::string, SaveImageMode)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
+    std::function<void(std::string)> save_scene_file_selected;
     std::function<void(Integrator*)> integrator_selected;
     std::function<void(bool)> stop_selected;
     std::function<void()> preview_selected;
@@ -44,20 +48,63 @@ struct UI {
     std::function<void()> options_changed;
     std::function<void()> reload_integrator;
     std::function<void()> use_image_as_reference;
+    std::function<void(uint32_t)> material_changed;
+    std::function<void(uint32_t)> medium_changed;
+    std::function<void(uint32_t)> emitter_changed;
+    std::function<void()> camera_changed;
   } callbacks;
 
  private:
   bool build_options(Options&);
   void select_scene_file();
+  void save_scene_file();
   void save_image(SaveImageMode mode);
   void load_image();
+  bool build_material(Material&);
+  bool build_medium(Medium&);
 
  private:
-  Integrator* _current_integrator = {};
+  Integrator* _current_integrator = nullptr;
+  Scene* _current_scene = nullptr;
+
   ArrayView<Integrator*> _integrators = {};
   Options _view_options = {};
   Options _integrator_options = {};
-  const char* _integrator_name = {};
+
+  struct MappingRepresentation {
+    std::vector<uint32_t> indices;
+    std::vector<char> data;
+    std::vector<const char*> names;
+
+    uint64_t size() const {
+      return indices.size();
+    }
+
+    bool empty() const {
+      return indices.empty();
+    }
+
+    uint32_t at(const int32_t i) const {
+      return indices.at(i);
+    }
+
+    void build(const std::unordered_map<std::string, uint32_t>&);
+  };
+
+  enum UISetup : uint32_t {
+    UIIntegrator = 1u << 0u,
+    UIView = 1u << 1u,
+    UIMaterial = 1u << 2u,
+    UIEmitters = 1u << 3u,
+    UICamera = 1u << 4u,
+  };
+
+  MappingRepresentation _material_mapping;
+  MappingRepresentation _medium_mapping;
+  int32_t _selected_material = -1;
+  int32_t _selected_medium = -1;
+  int32_t _selected_emitter = -1;
+  uint32_t _ui_setup = 0;
 };
 
 }  // namespace etx

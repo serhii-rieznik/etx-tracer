@@ -1,5 +1,7 @@
 #include <etx/core/core.hxx>
+
 #include <etx/rt/integrators/vcm_cpu.hxx>
+#include <etx/rt/integrators/vcm_spatial_grid.hxx>
 
 #include <etx/render/host/film.hxx>
 #include <etx/render/shared/scene_camera.hxx>
@@ -204,7 +206,8 @@ struct CPUVCMImpl {
   }
 
   void gather_camera_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
-    ArrayView<VCMLightVertex> light_vertices = make_array_view<VCMLightVertex>(_light_vertices.data(), _light_vertices.size());
+    auto light_vertices = make_array_view<VCMLightVertex>(_light_vertices.data(), _light_vertices.size());
+    auto light_paths = make_array_view<VCMLightPath>(_light_paths.data(), _light_paths.size());
     const auto& scene = rt.scene();
 
     for (uint32_t pi = range_begin; running() && (pi < range_end); ++pi) {
@@ -215,7 +218,7 @@ struct CPUVCMImpl {
 
       stats.c++;
       VCMPathState state = vcm_generate_camera_state({x, y}, scene, vcm_iteration, light_path.spect);
-      while (running() && vcm_camera_step(scene, vcm_iteration, vcm_options, light_path, light_vertices, state, rt, _current_grid.data)) {
+      while (running() && vcm_camera_step(scene, vcm_iteration, vcm_options, light_paths, light_vertices, state, rt, _current_grid.data)) {
       }
 
       state.merged *= vcm_iteration.vm_normalization;

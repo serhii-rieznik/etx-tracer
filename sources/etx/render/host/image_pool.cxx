@@ -157,9 +157,8 @@ struct ImagePoolImpl {
           uint32_t j = x + (img.isize.y - 1 - y) * img.isize.x;
           float4 f = to_float4(src_data[i]);
           if (srgb) {
-            f.x = std::pow(f.x, 2.2f);  // TODO : fix gamma conversion
-            f.y = std::pow(f.y, 2.2f);  // TODO : fix gamma conversion
-            f.z = std::pow(f.z, 2.2f);  // TODO : fix gamma conversion
+            float3 linear = gamma_to_linear({f.x, f.y, f.z});
+            f = {linear.x, linear.y, linear.z, f.w};
           }
           auto val = to_ubyte4(f);
           img.pixels.u8[j] = val;

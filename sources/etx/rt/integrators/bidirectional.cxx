@@ -206,7 +206,7 @@ struct CPUBidirectionalImpl : public Task {
     float eta = 1.0f;
     for (uint32_t path_length = 0; path_length <= opt_max_depth;) {
       Intersection intersection = {};
-      bool found_intersection = rt.trace(ray, intersection, smp);
+      bool found_intersection = rt.trace(rt.scene(), ray, intersection, smp);
 
       Medium::Sample medium_sample = {};
       if (medium_index != kInvalidIndex) {
@@ -529,7 +529,8 @@ struct CPUBidirectionalImpl : public Task {
 
     const auto& z_i = c.camera_path[eye_t];
 
-    auto emitter_sample = sample_emitter(spect, smp, z_i.pos, rt.scene());
+    uint32_t emitter_index = sample_emitter_index(rt.scene(), smp);
+    auto emitter_sample = sample_emitter(spect, emitter_index, smp, z_i.pos, rt.scene());
     if (emitter_sample.value.is_zero() || (emitter_sample.pdf_dir == 0.0f)) {
       return {spect.wavelength, 0.0f};
     }
@@ -616,7 +617,7 @@ struct CPUBidirectionalImpl : public Task {
       const auto& tri = scene.triangles[p0.triangle_index];
       origin = shading_pos(scene.vertices, tri, p0.barycentric, normalize(p1.pos - p0.pos));
     }
-    return transmittance(spect, smp, origin, p1.pos, p0.medium_index, scene, rt);
+    return rt.trace_transmittance(spect, scene, origin, p1.pos, p0.medium_index, smp);
   }
 
   void start(const Options& opt) {

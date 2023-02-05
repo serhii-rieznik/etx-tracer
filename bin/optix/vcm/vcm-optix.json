@@ -1,0 +1,10 @@
+{
+  "code" : "vcm-optix.cu",
+  "source" : "../output/vcm-optix.ptx",
+  "entry-points" : [
+    "light_main",
+    "camera_main",
+    "camera_to_light",
+    "camera_to_vertices"
+  ]
+}

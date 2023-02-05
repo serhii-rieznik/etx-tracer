@@ -5,8 +5,7 @@
 #error This file should not be included separately. Use etx/render/shared/base.hxx instead
 #endif
 
-#include <math.h>
-#include <string.h>
+#include <cmath>
 #include <complex>
 
 template <class t>
@@ -25,25 +24,14 @@ struct vector4 {
 };
 
 #if (ETX_NVCC_COMPILER)
-
+#if defined(__NVCC__)
 #include <thrust/complex.h>
-using complex = thrust::complex<float>;
-
-ETX_GPU_CODE complex complex_sqrt(complex c) {
-  return thrust::sqrt(c);
-}
-ETX_GPU_CODE complex complex_cos(complex c) {
-  return thrust::cos(c);
-}
-ETX_GPU_CODE float complex_abs(complex c) {
-  return thrust::abs(c);
-}
-ETX_GPU_CODE float complex_norm(complex c) {
-  return thrust::norm(c);
-}
-
+#define STD_NS thrust
 #else
-
+#define STD_NS cuda::std
+#endif
+#else
+#define STD_NS std
 using float2 = vector2<float>;
 using float3 = vector3<float>;
 using float4 = vector4<float>;
@@ -53,22 +41,22 @@ using int4 = vector4<int32_t>;
 using uint2 = vector2<uint32_t>;
 using uint3 = vector3<uint32_t>;
 using uint4 = vector4<uint32_t>;
-using complex = std::complex<float>;
+#endif
+
+using complex = STD_NS::complex<float>;
 
 ETX_GPU_CODE complex complex_sqrt(complex c) {
-  return std::sqrt(c);
+  return STD_NS::sqrt(c);
 }
 ETX_GPU_CODE complex complex_cos(complex c) {
-  return std::cos(c);
+  return STD_NS::cos(c);
 }
 ETX_GPU_CODE float complex_abs(complex c) {
-  return std::abs(c);
+  return STD_NS::abs(c);
 }
 ETX_GPU_CODE float complex_norm(complex c) {
-  return std::norm(c);
+  return STD_NS::norm(c);
 }
-
-#endif
 
 using ubyte2 = vector2<uint8_t>;
 using ubyte3 = vector3<uint8_t>;
@@ -174,6 +162,12 @@ struct ETX_ALIGNED Ray {
   float max_t = kMaxFloat;
 };
 
+struct ETX_ALIGNED IntersectionBase {
+  float2 barycentric = {};
+  uint32_t triangle_index = kInvalidIndex;
+  float t = -kMaxFloat;
+};
+
 struct ETX_ALIGNED Intersection : public Vertex {
   float3 barycentric = {};
   uint32_t triangle_index = kInvalidIndex;
@@ -190,6 +184,8 @@ struct ETX_ALIGNED Intersection : public Vertex {
     return t;
   }
 };
+
+constexpr const uint64_t kIntersectionSize = sizeof(Intersection);
 
 template <class t>
 ETX_GPU_CODE constexpr t min(t a, t b) {
@@ -309,7 +305,7 @@ ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
   struct basis {
     float3 u, v;
   };
-  float s = (n.z < 0.0 ? -1.0f : 1.0f);
+  float s = (n.z < 0.0f ? -1.0f : 1.0f);
   float a = -1.0f / (s + n.z);
   float b = n.x * n.y * a;
   return basis{
@@ -564,6 +560,30 @@ ETX_GPU_CODE float distance_to_sphere(const float3& r_origin, const float3& r_di
   float a0 = -b - d;
   float a1 = -b + d;
   return (a0 < 0.0f) ? ((a1 < 0.0f) ? 0.0f : a1) : a0;
+}
+
+ETX_GPU_CODE float gamma_to_linear(float value) {
+  return value <= 0.04045f ? value / 12.92f : powf((value + 0.055f) / 1.055f, 2.4f);
+}
+
+ETX_GPU_CODE float3 gamma_to_linear(const float3& value) {
+  return {
+    gamma_to_linear(value.x),
+    gamma_to_linear(value.y),
+    gamma_to_linear(value.z),
+  };
+}
+
+ETX_GPU_CODE float linear_to_gamma(float value) {
+  return value <= 0.0031308f ? 12.92f * value : 1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
+}
+
+ETX_GPU_CODE float3 linear_to_gamma(const float3& value) {
+  return {
+    linear_to_gamma(value.x),
+    linear_to_gamma(value.y),
+    linear_to_gamma(value.z),
+  };
 }
 
 }  // namespace etx

@@ -1,4 +1,5 @@
 ﻿#include <etx/render/host/film.hxx>
+#include <etx/render/shared/spectrum.hxx>
 
 #include <algorithm>
 

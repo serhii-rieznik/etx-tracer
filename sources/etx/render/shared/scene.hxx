@@ -8,6 +8,7 @@
 #include <etx/render/shared/emitter.hxx>
 #include <etx/render/shared/sampler.hxx>
 #include <etx/render/shared/bsdf.hxx>
+#include <etx/render/shared/bssrdf_subsurface.hxx>
 
 namespace etx {
 
@@ -33,6 +34,12 @@ struct ETX_ALIGNED Scene {
   uint64_t acceleration_structure ETX_EMPTY_INIT;
   uint32_t camera_medium_index ETX_INIT_WITH(kInvalidIndex);
   uint32_t camera_lens_shape_image_index ETX_INIT_WITH(kInvalidIndex);
+};
+
+struct ContinousTraceOptions {
+  IntersectionBase* intersection_buffer = nullptr;
+  uint32_t max_intersections = 0;
+  uint32_t material_id = kInvalidIndex;
 };
 
 ETX_GPU_CODE float3 lerp_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
@@ -93,6 +100,30 @@ ETX_GPU_CODE float3 shading_pos(const ArrayView<Vertex>& vertices, const Triangl
   return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
 }
 
+ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
+  float3 bc = barycentrics(base.barycentric);
+  const auto& tri = scene.triangles[base.triangle_index];
+  Intersection result_intersection = lerp_vertex(scene.vertices, tri, bc);
+  result_intersection.barycentric = bc;
+  result_intersection.triangle_index = static_cast<uint32_t>(base.triangle_index);
+  result_intersection.w_i = w_i;
+  result_intersection.t = base.t;
+
+  const auto& mat = scene.materials[tri.material_index];
+  if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {
+    auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
+    float3x3 from_local = {
+      float3{result_intersection.tan.x, result_intersection.tan.y, result_intersection.tan.z},
+      float3{result_intersection.btn.x, result_intersection.btn.y, result_intersection.btn.z},
+      float3{result_intersection.nrm.x, result_intersection.nrm.y, result_intersection.nrm.z},
+    };
+    result_intersection.nrm = normalize(from_local * sampled_normal);
+    result_intersection.tan = normalize(result_intersection.tan - result_intersection.nrm * dot(result_intersection.tan, result_intersection.nrm));
+    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan));
+  }
+  return result_intersection;
+}
+
 ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
   if (path_length < start_path_length)
     return true;
@@ -111,52 +142,83 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
   return false;
 }
 
+namespace subsurface {
+
 template <class RT>
-ETX_GPU_CODE SpectralResponse transmittance(SpectralQuery spect, Sampler& smp, const float3& p0, const float3& p1, uint32_t medium_index, const Scene& scene, const RT& rt) {
-  SpectralResponse result = {spect.wavelength, 1.0f};
+ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp) {
+  const auto& mtl = scene.materials[material_index].subsurface;
 
-  float3 w_o = p1 - p0;
-  ETX_CHECK_FINITE(w_o);
+  Sample ss_samples[3] = {
+    sample(in_intersection, mtl, 0u, smp),
+    sample(in_intersection, mtl, 1u, smp),
+    sample(in_intersection, mtl, 2u, smp),
+  };
 
-  float max_t = dot(w_o, w_o);
-  if (max_t < kRayEpsilon) {
-    return result;
+  IntersectionBase intersections[kTotalIntersection] = {};
+
+  ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, material_index};
+  uint32_t intersections_0 = rt.continuous_trace(scene, ss_samples[0].ray, ct, smp);
+  ct.intersection_buffer += intersections_0;
+  uint32_t intersections_1 = rt.continuous_trace(scene, ss_samples[1].ray, ct, smp);
+  ct.intersection_buffer += intersections_1;
+  uint32_t intersections_2 = rt.continuous_trace(scene, ss_samples[2].ray, ct, smp);
+
+  uint32_t intersection_count = intersections_0 + intersections_1 + intersections_2;
+  ETX_CRITICAL(intersection_count <= kTotalIntersection);
+  if (intersection_count == 0) {
+    return {};
   }
 
-  max_t = sqrtf(max_t);
-  w_o /= max_t;
-  max_t -= kRayEpsilon;
+  Gather result = {};
 
-  float3 origin = p0;
+  float total_weight = 0.0f;
+  for (uint32_t i = 0; i < intersection_count; ++i) {
+    Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
 
-  for (;;) {
-    Intersection intersection;
-    if (rt.trace(scene, {origin, w_o, kRayEpsilon, max_t}, intersection, smp) == false) {
-      if (medium_index != kInvalidIndex) {
-        result *= scene.mediums[medium_index].transmittance(spect, smp, origin, w_o, max_t);
+    auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
+
+    float gw = geometric_weigth(out_intersection.nrm, ss_sample);
+    float pdf = evaluate(spect, mtl, ss_sample.sampled_radius).average();
+    ETX_VALIDATE(pdf);
+    if (pdf <= 0.0f)
+      continue;
+
+    auto eval = evaluate(spect, mtl, length(out_intersection.pos - in_intersection.pos));
+    ETX_VALIDATE(eval);
+
+    auto weight = eval / pdf * gw;
+    ETX_VALIDATE(weight);
+
+    if (weight.is_zero())
+      continue;
+
+    total_weight += weight.average();
+    result.intersections[result.intersection_count] = out_intersection;
+    result.weights[result.intersection_count] = weight;
+    result.intersection_count += 1u;
+  }
+
+  if (total_weight > 0.0f) {
+    float rnd = smp.next() * total_weight;
+    float partial_sum = 0.0f;
+    float sample_weight = 0.0f;
+    for (uint32_t i = 0; i < result.intersection_count; ++i) {
+      sample_weight = result.weights[i].average();
+      float next_sum = partial_sum + sample_weight;
+      if (rnd < next_sum) {
+        result.selected_intersection = i;
+        result.selected_sample_weight = total_weight / sample_weight;
+        break;
       }
-      break;
+      partial_sum = next_sum;
     }
-
-    const auto& tri = scene.triangles[intersection.triangle_index];
-    const auto& mat = scene.materials[tri.material_index];
-    if (mat.cls != Material::Class::Boundary) {
-      result = {spect.wavelength, 0.0f};
-      break;
-    }
-
-    if (medium_index != kInvalidIndex) {
-      result *= scene.mediums[medium_index].transmittance(spect, smp, origin, w_o, intersection.t);
-    }
-
-    medium_index = (dot(intersection.nrm, w_o) < 0.0f) ? mat.int_medium : mat.ext_medium;
-    origin = intersection.pos;
-    max_t -= intersection.t;
+    ETX_ASSERT(result.selected_intersection != kInvalidIndex);
   }
 
   return result;
 }
 
+}  // namespace subsurface
 }  // namespace etx
 
 #include <etx/render/shared/scene_bsdf.hxx>

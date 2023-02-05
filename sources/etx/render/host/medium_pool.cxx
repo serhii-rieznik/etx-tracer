@@ -154,7 +154,7 @@ struct MediumPoolImpl {
   }
 
   ObjectIndexPool<Medium> medium_pool;
-  std::unordered_map<std::string, uint32_t> mapping;
+  MediumPool::Mapping mapping;
 };
 
 ETX_PIMPL_IMPLEMENT_ALL(MediumPool, Impl);
@@ -199,6 +199,10 @@ uint64_t MediumPool::array_size() {
 uint32_t MediumPool::find(const char* id) {
   auto i = _private->mapping.find(id);
   return (i == _private->mapping.end()) ? kInvalidIndex : i->second;
+}
+
+const MediumPool::Mapping& MediumPool::mapping() const {
+  return _private->mapping;
 }
 
 }  // namespace etx

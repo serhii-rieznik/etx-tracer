@@ -3,45 +3,45 @@
 
 newmtl et::dir
 direction 1 1 1
-color nblackbody 6500.0
+color nblackbody 6500.0 scale 0.5
 
 newmtl et::env
-color nblackbody 12000.0
+color nblackbody 12000.0 scale 0.1
 
 newmtl Light
-emitter nblackbody 5800.0 scale 5.0
+emitter nblackbody 4000.0 scale 4.0
 Ke 1 1 1
 
 newmtl Box
-xmaterial class translucent
-Kd 1.000000 1.000000 1.000000
+material class diffuse
+Kd 1.0 1.0 1.0
 
 newmtl Right
-xmaterial class translucent
-Kd 0.000000 1.000000 0.000000
+material class diffuse
+Kd 0.0 1.0 0.0
 
 newmtl Left
-xmaterial class translucent
-Kd 1.000000 0.000000 0.000000
+material class diffuse
+Kd 1.0 0.0 0.0
 
 newmtl Sphere-1
-material class msdielectric
+material class dielectric
 int_ior water
 map_Kt ../textures/planet-color.png
-Pr 0.25
+Pr 0.1
 
 newmtl Sphere-2
-material class diffuse
+material class subsurface
 Kd 0.1 0.25 1.0
 map_Kd ../textures/planet.png
+subsurface 0.1 0.1 0.1
 
 newmtl Sphere-3
 material class msconductor
-int_ior silver
-normalmap image ../textures/square_floor_nor_gl_4k.png scale 1.0
-map_Ks ../textures/square_floor_diff_4k.png
+int_ior bronze
+normalmap image ../textures/square_floor_nor_gl_4k.png scale 0.5
 
-newmtl Font
-material class msconductor
-Pr 0.25
-int_ior gold
+newmtl font
+material class subsurface
+Kd 0.5 0.5 0.5
+subsurface 0.2 0.1 0.05

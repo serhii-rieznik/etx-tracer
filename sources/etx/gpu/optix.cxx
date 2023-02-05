@@ -18,18 +18,15 @@
 
 namespace etx {
 
-constexpr static uint64_t kMaxModuleGroups = 1;
+constexpr static uint64_t kMaxEntryPoints = 8;
 static CUstream shared_cuda_stream = {};
 
 struct PipelineDesc {
   const char* name = nullptr;
   const char* code = nullptr;
   const char* source = nullptr;
-  const char* raygen = nullptr;
-  GPUPipeline::Entry modules[kMaxModuleGroups] = {};
-  uint32_t module_count = 0;
-  uint32_t max_trace_depth = 1;
-  uint32_t payload_size = 0;
+  GPUPipeline::EntryPoint entry_points[kMaxEntryPoints] = {};
+  uint32_t entry_point_count = 0;
   CUDACompileTarget target = CUDACompileTarget::PTX;
   bool completed = false;
 };
@@ -66,6 +63,7 @@ struct GPUOptixImplData {
   CUdevice cuda_device = {};
   CUcontext cuda_context = {};
   CUstream main_stream = {};
+  cudaDeviceProp device_properties = {};
 
   void* optix_handle = nullptr;
   OptixDeviceContext optix = {};
@@ -82,7 +80,7 @@ struct GPUOptixImplData {
 
   GPUBuffer shared_buffer = {};
   std::atomic<uint64_t> shared_buffer_offset = {};
-  char cuda_arch[128] = {};
+  uint32_t cuda_arch = 0u;
 
   GPUOptixImplData() {
     buffer_pool.init(1024u);
@@ -131,9 +129,6 @@ struct GPUOptixImplData {
     int compute_minor = 0;
     cuDeviceGetAttribute(&compute_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuda_device);
 
-    // snprintf(cuda_arch, sizeof(cuda_arch), "--generate-code arch=compute_%d%d,\"code=compute_%d%d\"",  //
-    //   compute_major, compute_minor, compute_major, compute_minor);
-
     uint64_t device_memory = 0llu;
     cuDeviceTotalMem(&device_memory, cuda_device);
 
@@ -146,12 +141,13 @@ struct GPUOptixImplData {
 
     shared_cuda_stream = main_stream;
 
-    cudaDeviceProp device_props = {};
-    if (cuda_call_failed(cudaGetDeviceProperties(&device_props, device_id)))
+    if (cuda_call_failed(cudaGetDeviceProperties(&device_properties, device_id)))
       return false;
 
     if (cuCtxGetCurrent(&cuda_context) != CUDA_SUCCESS)
       return false;
+
+    cuda_arch = 10 * device_properties.major + device_properties.minor;
 
     return true;
   }
@@ -244,7 +240,11 @@ struct GPUOptixImplData {
     return true;
   }
 
+  bool launch_optix(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size);
+  bool launch_cuda(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size);
+
   device_pointer_t upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size);
+  bool compile(const char* file, bool force, GPUPipeline::Descriptor& desc, std::vector<uint8_t>& binary);
 };
 
 #define ETX_OPTIX_INCLUDES 1
@@ -265,33 +265,38 @@ struct GPUBufferOptixImpl {
   GPUBufferOptixImpl(GPUOptixImplData* device, const GPUBuffer::Descriptor& desc) {
     capacity = align_up(desc.size, 16llu);
 
-    if (device->cuda_call_failed(cudaMalloc(&device_ptr, capacity))) {
+    if (capacity == 0) {
+      log::warning("Allocating CUDA empty buffer (size: %llu)", capacity);
+      return;
+    }
+
+    if (device->cuda_call_failed(cuMemAlloc(&device_ptr, capacity))) {
       log::error("Failed to create CUDA buffer with size: %llu", capacity);
       return;
     }
 
     if (desc.data != nullptr) {
-      if (device->cuda_call_failed(cudaMemcpy(device_ptr, desc.data, desc.size, cudaMemcpyKind::cudaMemcpyHostToDevice)))
+      if (device->cuda_call_failed(cuMemcpyHtoD(device_ptr, desc.data, desc.size)))
         log::error("Failed to copy content to CUDA buffer %p from %p with size %llu", device_ptr, desc.data, desc.size);
     }
   }
 
   ~GPUBufferOptixImpl() {
-    ETX_ASSERT(device_ptr == nullptr);
+    ETX_ASSERT(device_ptr == 0u);
   }
 
   void release(GPUOptixImplData* device) {
-    if (device->cuda_call_failed(cudaFree(device_ptr))) {
+    if (device->cuda_call_failed(cuMemFree(device_ptr))) {
       log::error("Failed to free CUDA buffer: %p", device_ptr);
     }
-    device_ptr = nullptr;
+    device_ptr = 0llu;
   }
 
   device_pointer_t device_pointer() const {
-    return reinterpret_cast<device_pointer_t>(device_ptr);
+    return device_ptr;
   }
 
-  uint8_t* device_ptr = nullptr;
+  device_pointer_t device_ptr = 0llu;
   uint64_t capacity = 0;
 };
 
@@ -311,128 +316,109 @@ struct GPUPipelineOptixImpl {
   }
 
   bool create_optix_module(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
+    constexpr uint32_t debug_build = kCUDADebugBuild ? 1u : 0u;
+    constexpr uint32_t optimization_level = debug_build * OPTIX_COMPILE_OPTIMIZATION_LEVEL_0 + (1 - debug_build) * OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
+    constexpr uint32_t debug_level = debug_build * OPTIX_COMPILE_DEBUG_LEVEL_FULL + (1 - debug_build) * OPTIX_COMPILE_DEBUG_LEVEL_DEFAULT;
+    constexpr uint64_t kMaxLogSize = 64llu * 1024llu;
+
+    std::vector<char> compile_log(kMaxLogSize);
+
     OptixModuleCompileOptions module_options = {
       .maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT,
-      .optLevel = OptixCompileOptimizationLevel(ETX_DEBUG * OPTIX_COMPILE_OPTIMIZATION_LEVEL_0 + (1 - ETX_DEBUG) * OPTIX_COMPILE_OPTIMIZATION_LEVEL_3),
-      .debugLevel = OptixCompileDebugLevel((ETX_DEBUG)*OPTIX_COMPILE_DEBUG_LEVEL_FULL + (1 - ETX_DEBUG) * OPTIX_COMPILE_DEBUG_LEVEL_DEFAULT),
+      .optLevel = OptixCompileOptimizationLevel(optimization_level),
+      .debugLevel = OptixCompileDebugLevel(debug_level),
     };
 
     pipeline_options = {
       .traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY,
-      .numPayloadValues = static_cast<int>(desc.payload_count & 0x000000ff),
+      .numPayloadValues = kOptiXPayloadSize,
       .numAttributeValues = 2,
       .exceptionFlags = OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW | OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_USER,
       .pipelineLaunchParamsVariableName = "global",
     };
 
-    char compile_log[4096] = {};
-    size_t compile_log_size = sizeof(compile_log);
+    uint64_t compile_log_size = kMaxLogSize;
     if (device->optix_call_failed(optixModuleCreateFromPTX(device->optix, &module_options, &pipeline_options,  //
-          reinterpret_cast<const char*>(desc.data), desc.data_size, compile_log, &compile_log_size, &optix_module))) {
+          reinterpret_cast<const char*>(desc.data), desc.data_size, compile_log.data(), &compile_log_size, &optix_module))) {
       log::error("optixModuleCreateFromPTX failed");
       if (compile_log_size > 1) {
-        log::error(compile_log);
+        log::error(compile_log.data());
       }
       release(device);
       return false;
     }
 
     if (compile_log_size > 1) {
-      log::warning(compile_log);
+      log::warning(compile_log.data());
     }
 
-    ETX_ASSERT(desc.raygen != nullptr);
-    {
-      OptixProgramGroupDesc program_desc = {};
-      program_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+    for (uint64_t i = 0; i < desc.entry_point_count; ++i) {
+      OptixProgramGroupDesc program_desc = {
+        .kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN,
+      };
       program_desc.raygen.module = optix_module;
-      program_desc.raygen.entryFunctionName = desc.raygen;
+      program_desc.raygen.entryFunctionName = desc.entry_points[i];
       OptixProgramGroupOptions program_options = {};
-      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &raygen))) {
+      compile_log_size = kMaxLogSize;
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log.data(), &compile_log_size, entry_points + i))) {
         log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
-          log::error(compile_log);
+          log::error(compile_log.data());
         }
         release(device);
         return false;
       }
 
       if (compile_log_size > 1) {
-        log::warning(compile_log);
+        log::warning(compile_log.data());
       }
     }
 
-    group_count = desc.entry_count;
+    {
+      OptixProgramGroupDesc program_desc = {
+        .kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP,
+      };
+      program_desc.hitgroup.moduleCH = optix_module;
+      program_desc.hitgroup.entryFunctionNameCH = "__closesthit__main";
+      program_desc.hitgroup.moduleAH = optix_module;
+      program_desc.hitgroup.entryFunctionNameAH = "__anyhit__main";
 
-    for (uint64_t i = 0; i < desc.entry_count; ++i) {
-      auto& entry = desc.entries[i];
-      auto& group = groups[i];
-
-      if ((entry.closest_hit != nullptr) || (entry.any_hit != nullptr)) {
-        OptixProgramGroupDesc program_desc = {};
-        program_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-        if (entry.closest_hit != nullptr) {
-          program_desc.hitgroup.moduleCH = optix_module;
-          program_desc.hitgroup.entryFunctionNameCH = entry.closest_hit;
-        }
-        if (entry.any_hit != nullptr) {
-          program_desc.hitgroup.moduleAH = optix_module;
-          program_desc.hitgroup.entryFunctionNameAH = entry.any_hit;
-        }
-        OptixProgramGroupOptions program_options = {};
-
-        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.hit))) {
-          log::error("optixProgramGroupCreate failed");
-          if (compile_log_size > 1) {
-            log::error(compile_log);
-          }
-          release(device);
-          return false;
-        }
-
+      compile_log_size = kMaxLogSize;
+      OptixProgramGroupOptions program_options = {};
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log.data(), &compile_log_size, &main_hit_program_group))) {
+        log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
-          log::warning(compile_log);
+          log::error(compile_log.data());
         }
+        release(device);
+        return false;
       }
 
-      if (entry.miss != nullptr) {
-        OptixProgramGroupDesc program_desc = {};
-        program_desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
-        program_desc.miss.module = optix_module;
-        program_desc.miss.entryFunctionName = entry.miss;
-        OptixProgramGroupOptions program_options = {};
-        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.miss))) {
-          log::error("optixProgramGroupCreate failed");
-          if (compile_log_size > 1) {
-            log::error(compile_log);
-          }
-          release(device);
-          return false;
-        }
+      if (compile_log_size > 1) {
+        log::warning(compile_log.data());
+      }
+    }
 
+    {
+      OptixProgramGroupDesc program_desc = {
+        .kind = OPTIX_PROGRAM_GROUP_KIND_MISS,
+      };
+      program_desc.miss.module = optix_module;
+      program_desc.miss.entryFunctionName = "__miss__main";
+
+      compile_log_size = kMaxLogSize;
+      OptixProgramGroupOptions program_options = {};
+      if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log.data(), &compile_log_size, &main_miss_program_group))) {
+        log::error("optixProgramGroupCreate failed");
         if (compile_log_size > 1) {
-          log::warning(compile_log);
+          log::error(compile_log.data());
         }
+        release(device);
+        return false;
       }
 
-      if (entry.exception != nullptr) {
-        OptixProgramGroupDesc program_desc = {};
-        program_desc.kind = OPTIX_PROGRAM_GROUP_KIND_EXCEPTION;
-        program_desc.miss.module = optix_module;
-        program_desc.miss.entryFunctionName = entry.exception;
-        OptixProgramGroupOptions program_options = {};
-        if (device->optix_call_failed(optixProgramGroupCreate(device->optix, &program_desc, 1, &program_options, compile_log, &compile_log_size, &group.exception))) {
-          log::error("optixProgramGroupCreate failed");
-          if (compile_log_size > 1) {
-            log::error(compile_log);
-          }
-          release(device);
-          return false;
-        }
-
-        if (compile_log_size > 1) {
-          log::warning(compile_log);
-        }
+      if (compile_log_size > 1) {
+        log::warning(compile_log.data());
       }
     }
 
@@ -465,28 +451,24 @@ struct GPUPipelineOptixImpl {
   }
 
   void release(GPUOptixImplData* device) {
-    if (raygen != nullptr) {
-      if (device->optix_call_failed(optixProgramGroupDestroy(raygen)))
+    if (main_hit_program_group != nullptr) {
+      if (device->optix_call_failed(optixProgramGroupDestroy(main_hit_program_group)))
         log::error("optixProgramGroupDestroy failed");
-      raygen = {};
+      main_hit_program_group = {};
+    }
+    if (main_miss_program_group != nullptr) {
+      if (device->optix_call_failed(optixProgramGroupDestroy(main_miss_program_group)))
+        log::error("optixProgramGroupDestroy failed");
+      main_miss_program_group = {};
     }
 
-    for (uint32_t i = 0; i < group_count; ++i) {
-      if (groups[i].hit != nullptr) {
-        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].hit)))
+    for (uint32_t i = 0; i < descriptor.entry_point_count; ++i) {
+      if (entry_points[i] != nullptr) {
+        if (device->optix_call_failed(optixProgramGroupDestroy(entry_points[i])))
           log::error("optixProgramGroupDestroy failed");
       }
-      if (groups[i].miss != nullptr) {
-        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].miss)))
-          log::error("optixProgramGroupDestroy failed");
-      }
-      if (groups[i].exception != nullptr) {
-        if (device->optix_call_failed(optixProgramGroupDestroy(groups[i].exception)))
-          log::error("optixProgramGroupDestroy failed");
-      }
-      groups[i] = {};
+      entry_points[i] = {};
     }
-    group_count = 0;
 
     if (pipeline != nullptr) {
       if (device->optix_call_failed(optixPipelineDestroy(pipeline)))
@@ -504,74 +486,63 @@ struct GPUPipelineOptixImpl {
       ETX_CUDA_CALL(cuModuleUnload(cuda.cuda_module));
       cuda.cuda_module = nullptr;
     }
+
+    descriptor = {};
   }
 
-  bool create_cuda_pipeline(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
+  bool create_cuda_pipeline(GPUOptixImplData* device) {
     return true;
   }
 
-  bool create_optix_pipeline(GPUOptixImplData* device, const GPUPipeline::Descriptor& desc) {
+  bool create_optix_pipeline(GPUOptixImplData* device) {
     struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) ProgramGroupRecord {
       alignas(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE] = {};
       void* dummy = nullptr;
     };
 
     OptixPipelineLinkOptions link_options = {
-      .maxTraceDepth = desc.max_trace_depth,
+      .maxTraceDepth = kOptiXMaxTraceDepth,
     };
 
-    OptixProgramGroup program_groups[kMaxModuleGroups * 3] = {};
-    ProgramGroupRecord hit_records[kMaxModuleGroups * 3] = {};
-    ProgramGroupRecord miss_records[kMaxModuleGroups * 3] = {};
-
-    ProgramGroupRecord raygen_record = {};
-    program_groups[0] = raygen;
-    if (device->optix_call_failed(optixSbtRecordPackHeader(raygen, &raygen_record)))
-      return false;
-
-    uint32_t program_group_count = 1;
-
-    uint32_t hit_record_count = 0;
-    uint32_t miss_record_count = 0;
-    for (uint32_t i = 0; i < group_count; ++i) {
-      if (groups[i].hit != nullptr) {
-        program_groups[program_group_count] = groups[i].hit;
-        if (device->optix_call_failed(optixSbtRecordPackHeader(program_groups[program_group_count], hit_records + hit_record_count)))
-          return false;
-        ++program_group_count;
-        ++hit_record_count;
-      }
-      if (groups[i].miss != nullptr) {
-        program_groups[program_group_count] = groups[i].miss;
-        if (device->optix_call_failed(optixSbtRecordPackHeader(program_groups[program_group_count], miss_records + miss_record_count)))
-          return false;
-        ++program_group_count;
-        ++miss_record_count;
-      }
+    OptixProgramGroup all_program_groups[kOptiXMaxEntryPoints + 2] = {};
+    for (uint32_t i = 0; i < descriptor.entry_point_count; ++i) {
+      all_program_groups[i] = entry_points[i];
     }
+    all_program_groups[descriptor.entry_point_count + 0] = main_hit_program_group;
+    all_program_groups[descriptor.entry_point_count + 1] = main_miss_program_group;
 
     char compile_log[2048] = {};
     size_t compile_log_size = 0;
-    if (device->optix_call_failed(optixPipelineCreate(device->optix, &pipeline_options, &link_options, program_groups, program_group_count,  //
-          compile_log, &compile_log_size, &pipeline)))
+    if (device->optix_call_failed(optixPipelineCreate(device->optix, &pipeline_options, &link_options,  //
+          all_program_groups, descriptor.entry_point_count + 2, compile_log, &compile_log_size, &pipeline))) {
       return false;
+    }
 
     if (pipeline != nullptr) {
       if (device->optix_call_failed(optixPipelineSetStackSize(pipeline, 0u, 0u, 1u << 14u, link_options.maxTraceDepth)))
         return false;
     }
 
-    shader_binding_table.raygenRecord = device->upload_to_shared_buffer(0, &raygen_record, sizeof(ProgramGroupRecord));
+    for (uint32_t i = 0; i < descriptor.entry_point_count; ++i) {
+      ProgramGroupRecord raygen_record = {};
+      if (device->optix_call_failed(optixSbtRecordPackHeader(entry_points[i], &raygen_record)))
+        return false;
 
-    if (hit_record_count > 0) {
-      shader_binding_table.hitgroupRecordBase = device->upload_to_shared_buffer(0, hit_records, sizeof(ProgramGroupRecord) * hit_record_count);
-      shader_binding_table.hitgroupRecordStrideInBytes = sizeof(ProgramGroupRecord);
-      shader_binding_table.hitgroupRecordCount = hit_record_count;
-    }
-    if (miss_record_count > 0) {
-      shader_binding_table.missRecordBase = device->upload_to_shared_buffer(0, miss_records, sizeof(ProgramGroupRecord) * miss_record_count);
-      shader_binding_table.missRecordStrideInBytes = sizeof(ProgramGroupRecord);
-      shader_binding_table.missRecordCount = miss_record_count;
+      ProgramGroupRecord hit_record = {};
+      if (device->optix_call_failed(optixSbtRecordPackHeader(main_hit_program_group, &hit_record)))
+        return false;
+
+      ProgramGroupRecord miss_record = {};
+      if (device->optix_call_failed(optixSbtRecordPackHeader(main_miss_program_group, &miss_record)))
+        return false;
+
+      shader_binding_tables[i].raygenRecord = device->upload_to_shared_buffer(0, &raygen_record, sizeof(ProgramGroupRecord));
+      shader_binding_tables[i].hitgroupRecordBase = device->upload_to_shared_buffer(0, &hit_record, sizeof(ProgramGroupRecord));
+      shader_binding_tables[i].hitgroupRecordStrideInBytes = sizeof(ProgramGroupRecord);
+      shader_binding_tables[i].hitgroupRecordCount = 1;
+      shader_binding_tables[i].missRecordBase = device->upload_to_shared_buffer(0, &miss_record, sizeof(ProgramGroupRecord));
+      shader_binding_tables[i].missRecordStrideInBytes = sizeof(ProgramGroupRecord);
+      shader_binding_tables[i].missRecordCount = 1;
     }
 
     return true;
@@ -581,11 +552,12 @@ struct GPUPipelineOptixImpl {
     if (device->invalid_state())
       return false;
 
-    switch (CUDACompileTarget(desc.compile_options)) {
+    descriptor = desc;
+    switch (CUDACompileTarget(descriptor.compile_options)) {
       case CUDACompileTarget::PTX:
-        return create_optix_pipeline(device, desc);
+        return create_optix_pipeline(device);
       case CUDACompileTarget::Library: {
-        return create_cuda_pipeline(device, desc);
+        return create_cuda_pipeline(device);
         default:
           break;
       }
@@ -593,21 +565,16 @@ struct GPUPipelineOptixImpl {
     return false;
   }
 
-  struct ModuleGroups {
-    OptixProgramGroup hit = {};
-    OptixProgramGroup miss = {};
-    OptixProgramGroup exception = {};
-  };
-
+  GPUPipeline::Descriptor descriptor = {};
   OptixPipelineCompileOptions pipeline_options = {};
   OptixModule optix_module;
 
-  OptixProgramGroup raygen = {};
-  ModuleGroups groups[kMaxModuleGroups] = {};
-  uint32_t group_count = 0;
+  OptixProgramGroup main_hit_program_group = {};
+  OptixProgramGroup main_miss_program_group = {};
+  OptixProgramGroup entry_points[kMaxEntryPoints] = {};
+  OptixShaderBindingTable shader_binding_tables[kMaxEntryPoints] = {};
 
   OptixPipeline pipeline = {};
-  OptixShaderBindingTable shader_binding_table = {};
 
   struct CUDAFunction {
     CUfunction func = {};
@@ -619,6 +586,10 @@ struct GPUPipelineOptixImpl {
     CUmodule cuda_module = {};
     std::unordered_map<uint32_t, CUDAFunction> functions = {};
   } cuda = {};
+
+  struct {
+    std::unordered_map<uint32_t, uint32_t> functions = {};
+  } optix = {};
 
   CUDACompileTarget target = CUDACompileTarget::PTX;
 };
@@ -714,7 +685,7 @@ device_pointer_t GPUOptixImplData::upload_to_shared_buffer(device_pointer_t ptr,
   if (ptr == 0) {
     uint64_t offset = shared_buffer_offset.fetch_add(size);
     ETX_CRITICAL(offset + size <= GPUOptixImplData::kSharedBufferSize);
-    ptr = reinterpret_cast<device_pointer_t>(object.device_ptr) + offset;
+    ptr = object.device_ptr + offset;
   }
 
   if (data != nullptr) {
@@ -724,121 +695,109 @@ device_pointer_t GPUOptixImplData::upload_to_shared_buffer(device_pointer_t ptr,
   return ptr;
 }
 
-/***********************************************
- *
- * GPUOptixImpl
- *
- **********************************************/
-
-GPUOptixImpl::GPUOptixImpl() {
-  ETX_PIMPL_CREATE(GPUOptixImpl, Data);
-  _private->shared_buffer = {_private->buffer_pool.alloc(_private, GPUBuffer::Descriptor{GPUOptixImplData::kSharedBufferSize, nullptr})};
-}
-
-GPUOptixImpl::~GPUOptixImpl() {
-  auto& buffer = _private->buffer_pool.get(_private->shared_buffer.handle);
-  buffer.release(_private);
-  _private->buffer_pool.free(_private->shared_buffer.handle);
-  ETX_PIMPL_DESTROY(GPUOptixImpl, Data);
-}
-
-bool GPUOptixImpl::rendering_enabled() {
-  return (_private->main_stream != nullptr) && (_private->optix != nullptr);
-}
-
-GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
-  return {_private->buffer_pool.alloc(_private, desc)};
-}
-
-void GPUOptixImpl::destroy_buffer(GPUBuffer buffer) {
-  if (buffer.handle == kInvalidHandle)
-    return;
-
-  if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
-    log::error("Failed to synchronize device before the deletion of a buffer.");
+bool GPUOptixImplData::launch_optix(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
+  if (invalid_state()) {
+    return false;
   }
 
-  auto& object = _private->buffer_pool.get(buffer.handle);
-  object.release(_private);
-  _private->buffer_pool.free(buffer.handle);
-}
-
-device_pointer_t GPUOptixImpl::get_buffer_device_pointer(GPUBuffer buffer) const {
-  if (buffer.handle == kInvalidHandle)
-    return 0;
-
-  auto& object = _private->buffer_pool.get(buffer.handle);
-  return reinterpret_cast<device_pointer_t>(object.device_ptr);
-}
-
-device_pointer_t GPUOptixImpl::upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) {
-  return _private->upload_to_shared_buffer(ptr, data, size);
-}
-
-device_pointer_t GPUOptixImpl::copy_to_buffer(GPUBuffer buffer, const void* src, uint64_t offset, uint64_t size) {
-  if (_private->invalid_state())
-    return 0;
-
-  auto& object = _private->buffer_pool.get(buffer.handle);
-  ETX_ASSERT(offset + size <= object.capacity);
-
-  CUdeviceptr ptr_base = {};
-  size_t ptr_size = {};
-  uint8_t* device_ptr_v = object.device_ptr + offset;
-  CUdeviceptr device_ptr = reinterpret_cast<CUdeviceptr>(device_ptr_v);
-  CUresult query_result = cuMemGetAddressRange_v2(&ptr_base, &ptr_size, device_ptr);
-  if (query_result != CUresult::CUDA_SUCCESS) {
-    log::error("Failed to get mem info: %p", device_ptr);
+  if (dim_x * dim_y == 0) {
+    return true;
   }
 
-  if (_private->cuda_call_failed(cudaMemcpy(device_ptr_v, src, size, cudaMemcpyHostToDevice)))
-    log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
+  uint32_t entry_point_index = kInvalidHandle;
 
-  return reinterpret_cast<device_pointer_t>(device_ptr_v);
-}
-
-void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset, uint64_t size) {
-  if (_private->invalid_state())
-    return;
-
-  auto& object = _private->buffer_pool.get(buffer.handle);
-
-  CUdeviceptr ptr_base = {};
-  size_t ptr_size = {};
-  uint8_t* device_ptr_v = object.device_ptr + offset;
-  CUdeviceptr device_ptr = reinterpret_cast<CUdeviceptr>(device_ptr_v);
-  CUresult query_result = cuMemGetAddressRange_v2(&ptr_base, &ptr_size, device_ptr);
-  if (query_result != CUresult::CUDA_SUCCESS) {
-    log::error("Failed to get mem info: %p", device_ptr);
+  uint32_t func_hash = fnv1a32(function);
+  auto f = pipeline.optix.functions.find(func_hash);
+  if (f == pipeline.optix.functions.end()) {
+    for (uint32_t index = 0; index < pipeline.descriptor.entry_point_count; ++index) {
+      constexpr uint64_t kPrefixOffset = sizeof("_raygen__");
+      if (strcmp(pipeline.descriptor.entry_points[index] + kPrefixOffset, function) == 0) {
+        entry_point_index = index;
+        break;
+      }
+    }
+    pipeline.optix.functions[func_hash] = entry_point_index;
+  } else {
+    entry_point_index = f->second;
   }
 
-  if (_private->cuda_call_failed(cudaMemcpy(dst, device_ptr_v, size, cudaMemcpyDeviceToHost)))
-    log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
-}
-
-void GPUOptixImpl::clear_buffer(GPUBuffer buffer) {
-  if (_private->invalid_state())
-    return;
-
-  auto& object = _private->buffer_pool.get(buffer.handle);
-  cuMemsetD32(object.device_pointer(), 0u, object.capacity / sizeof(uint32_t));
-}
-
-GPUPipeline GPUOptixImpl::create_pipeline(const GPUPipeline::Descriptor& desc) {
-  return {_private->pipeline_pool.alloc(_private, desc)};
-}
-
-void GPUOptixImpl::destroy_pipeline(GPUPipeline pipeline) {
-  if (pipeline.handle == kInvalidHandle)
-    return;
-
-  if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
-    log::error("Failed to synchronize device before the deletion of a pipeline.");
+  if (entry_point_index == kInvalidHandle) {
+    return false;
   }
 
-  auto& object = _private->pipeline_pool.get(pipeline.handle);
-  object.release(_private);
-  _private->pipeline_pool.free(pipeline.handle);
+  auto result = optixLaunch(pipeline.pipeline, main_stream, params, params_size, pipeline.shader_binding_tables + entry_point_index, dim_x, dim_y, 1);
+  return (result == OPTIX_SUCCESS);
+}
+
+bool GPUOptixImplData::launch_cuda(GPUPipelineOptixImpl& pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
+  if (invalid_state()) {
+    return false;
+  }
+
+  if (dim_x * dim_y == 0) {
+    return true;
+  }
+
+  GPUPipelineOptixImpl::CUDAFunction func = {};
+  uint32_t func_hash = fnv1a32(function);
+  auto f = pipeline.cuda.functions.find(func_hash);
+  if (f == pipeline.cuda.functions.end()) {
+    if (ETX_CUDA_FAILED(cuModuleGetFunction(&func.func, pipeline.cuda.cuda_module, function)))
+      return false;
+
+    int min_grid_size = 0;
+    int max_block_size = 0;
+    if (ETX_CUDA_FAILED(cuOccupancyMaxPotentialBlockSize(&min_grid_size, &max_block_size, func.func, nullptr, 0, 0)))
+      return false;
+
+    func.min_grid_size = uint32_t(min_grid_size);
+    func.max_block_size = uint32_t(max_block_size);
+    pipeline.cuda.functions[func_hash] = func;
+  } else {
+    func = f->second;
+  }
+
+  if ((func.func == nullptr) || (func.max_block_size == 0) || (func.min_grid_size == 0)) {
+    return false;
+  }
+
+  void* call_params[] = {&params};
+
+  uint2 block_size = {
+    (dim_x > 1u) ? func.max_block_size : 1u,
+    (dim_y > 1u) ? func.max_block_size : 1u,
+  };
+
+  // HACKS!
+  if (dim_y < block_size.y) {
+    block_size.y = dim_y;
+    block_size.x = (dim_x > 1u) ? (func.max_block_size + block_size.y - 1) / block_size.y : 1u;
+  }
+
+  uint32_t scale_dim = 0;
+  uint32_t* bptr = &block_size.x;
+  while (block_size.x * block_size.y > uint32_t(device_properties.maxThreadsPerBlock)) {
+    if (bptr[scale_dim] > 1) {
+      bptr[scale_dim] = bptr[scale_dim] / 2;
+    } else if (bptr[1u - scale_dim] > 1) {
+      bptr[1u - scale_dim] = bptr[1u - scale_dim] / 2;
+    } else {
+      break;
+    }
+    scale_dim = 1u - scale_dim;
+  }
+
+  uint2 grid_size = {
+    (dim_x + block_size.x - 1) / block_size.x,
+    (dim_y + block_size.y - 1) / block_size.y,
+  };
+
+  CUresult call_result = cuLaunchKernel(func.func,  //
+    grid_size.x, grid_size.y, 1u,                   //
+    block_size.x, block_size.y, 1u,                 //
+    0u, main_stream, reinterpret_cast<void**>(&call_params), nullptr);
+
+  return ETX_CUDA_SUCCEED(call_result);
 }
 
 inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[], uint64_t buffer_size) {
@@ -885,57 +844,22 @@ inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[]
       }
       buffer[pos_1] = 0;
       buffer_pos += 1 + snprintf(buffer + pos_1, buffer_size - pos_1, "/%s", json_string_value(value));
-    } else if (strcmp(key, "max_trace_depth") == 0) {
-      result.max_trace_depth = static_cast<uint32_t>(json_is_number(value) ? json_number_value(value) : result.max_trace_depth);
-    } else if (strcmp(key, "payload_size") == 0) {
-      result.payload_size = static_cast<uint32_t>(json_is_number(value) ? json_number_value(value) : result.payload_size);
-    } else if (strcmp(key, "raygen") == 0) {
-      if (json_is_string(value) == false) {
-        return {};
-      }
-      result.raygen = buffer + buffer_pos;
-      buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__raygen__%s", json_string_value(value));
-    } else if (strcmp(key, "modules") == 0) {
+    } else if (strcmp(key, "entry-points") == 0) {
       if (json_is_array(value) == false) {
         return {};
       }
 
       int index = 0;
-      json_t* module_value = nullptr;
-      json_array_foreach(value, index, module_value) {
-        if (index >= kMaxModuleGroups) {
+      json_t* entry_point_name = nullptr;
+      json_array_foreach(value, index, entry_point_name) {
+        if (index >= kMaxEntryPoints) {
           break;
         }
 
-        if (json_is_object(module_value) == false) {
-          continue;
+        if (json_is_string(entry_point_name)) {
+          snprintf(result.entry_points[result.entry_point_count], sizeof(GPUPipeline::EntryPoint), "__raygen__%s", json_string_value(entry_point_name));
+          result.entry_point_count += 1;
         }
-
-        const char* program_name = nullptr;
-        json_t* program_value = nullptr;
-        json_object_foreach(module_value, program_name, program_value) {
-          if (json_is_string(program_value) == false) {
-            continue;
-          }
-
-          if (strcmp(program_name, "name") == 0) {
-            // TODO : add name?
-          } else if (strcmp(program_name, "closest_hit") == 0) {
-            result.modules[index].closest_hit = buffer + buffer_pos;
-            buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__closesthit__%s", json_string_value(program_value));
-          } else if (strcmp(program_name, "any_hit") == 0) {
-            result.modules[index].any_hit = buffer + buffer_pos;
-            buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__anyhit__%s", json_string_value(program_value));
-          } else if (strcmp(program_name, "miss") == 0) {
-            result.modules[index].miss = buffer + buffer_pos;
-            buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__miss__%s", json_string_value(program_value));
-          } else if (strcmp(program_name, "exception") == 0) {
-            result.modules[index].exception = buffer + buffer_pos;
-            buffer_pos += 1 + snprintf(buffer + buffer_pos, buffer_size - buffer_pos, "__exception__%s", json_string_value(program_value));
-          }
-        }
-
-        result.module_count += 1;
       }
     }
   }
@@ -944,7 +868,7 @@ inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[]
   return result;
 }
 
-GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, bool force_recompile) {
+bool GPUOptixImplData::compile(const char* json_filename, bool force, GPUPipeline::Descriptor& desc, std::vector<uint8_t>& binary_data) {
   json_error_t error = {};
   json_t* json_data = json_load_file(json_filename, 0, &error);
   if (json_data == nullptr) {
@@ -968,9 +892,9 @@ GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, b
     }
   }
 
-  if ((ps_desc.code != nullptr) && ((has_output_file == false) || force_recompile)) {
-    if (compile_cuda(ps_desc.target, ps_desc.code, ps_desc.source, _private->cuda_arch) == false) {
-      return {};
+  if ((ps_desc.code != nullptr) && ((has_output_file == false) || force)) {
+    if (compile_cuda(ps_desc.target, ps_desc.code, ps_desc.source, cuda_arch) == false) {
+      return false;
     }
   }
 
@@ -978,41 +902,168 @@ GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, b
     if (auto file = fopen(ps_desc.source, "rb")) {
       fclose(file);
     } else {
-      return {};
+      return false;
     }
   }
 
-  std::vector<uint8_t> binary_data;
+  // std::vector<uint8_t> binary_data;
   if (load_binary_file(ps_desc.source, binary_data) == false) {
-    return {};
-  }
-
-  GPUPipeline::Descriptor desc;
-  desc.data = binary_data.data();
-  desc.data_size = static_cast<uint32_t>(binary_data.size());
-  desc.raygen = ps_desc.raygen;
-  desc.entries = ps_desc.modules;
-  desc.entry_count = ps_desc.module_count;
-  desc.payload_count = ps_desc.payload_size;
-  desc.max_trace_depth = ps_desc.max_trace_depth;
-  desc.compile_options = uint32_t(ps_desc.target);
-
-  return {_private->pipeline_pool.alloc(_private, desc)};
-}
-
-bool GPUOptixImpl::launch(GPUPipeline pipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
-  if (_private->invalid_state() || (pipeline.handle == kInvalidHandle)) {
     return false;
   }
 
-  if (dim_x * dim_y == 0) {
-    return true;
+  desc.data = binary_data.data();
+  desc.data_size = static_cast<uint32_t>(binary_data.size());
+  memcpy(desc.entry_points, ps_desc.entry_points, ps_desc.entry_point_count * sizeof(GPUPipeline::EntryPoint));
+  desc.entry_point_count = ps_desc.entry_point_count;
+  desc.compile_options = uint32_t(ps_desc.target);
+  return true;
+}
+
+/***********************************************
+ *
+ * GPUOptixImpl
+ *
+ **********************************************/
+
+GPUOptixImpl::GPUOptixImpl() {
+  ETX_PIMPL_CREATE(GPUOptixImpl, Data);
+  _private->shared_buffer = {_private->buffer_pool.alloc(_private, GPUBuffer::Descriptor{GPUOptixImplData::kSharedBufferSize, nullptr})};
+}
+
+GPUOptixImpl::~GPUOptixImpl() {
+  auto& buffer = _private->buffer_pool.get(_private->shared_buffer.handle);
+  buffer.release(_private);
+  _private->buffer_pool.free(_private->shared_buffer.handle);
+  ETX_PIMPL_DESTROY(GPUOptixImpl, Data);
+}
+
+bool GPUOptixImpl::rendering_enabled() {
+  return (_private->main_stream != nullptr) && (_private->optix != nullptr);
+}
+
+GPUBuffer GPUOptixImpl::create_buffer(const GPUBuffer::Descriptor& desc) {
+  return {_private->buffer_pool.alloc(_private, desc)};
+}
+
+void GPUOptixImpl::destroy_buffer(GPUBuffer buffer) {
+  if (buffer.handle == kInvalidHandle)
+    return;
+
+  if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
+    log::error("Failed to synchronize device before the deletion of a buffer.");
   }
 
-  const auto& pp = _private->pipeline_pool.get(pipeline.handle);
-  ETX_ASSERT(pp.target == CUDACompileTarget::PTX);
-  auto result = optixLaunch(pp.pipeline, _private->main_stream, params, params_size, &pp.shader_binding_table, dim_x, dim_y, 1);
-  return (result == OPTIX_SUCCESS);
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  object.release(_private);
+  _private->buffer_pool.free(buffer.handle);
+}
+
+device_pointer_t GPUOptixImpl::get_buffer_device_pointer(GPUBuffer buffer) const {
+  if (buffer.handle == kInvalidHandle)
+    return 0;
+
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  return object.device_ptr;
+}
+
+device_pointer_t GPUOptixImpl::upload_to_shared_buffer(device_pointer_t ptr, void* data, uint64_t size) {
+  return _private->upload_to_shared_buffer(ptr, data, size);
+}
+
+device_pointer_t GPUOptixImpl::copy_to_buffer(GPUBuffer buffer, const void* src, uint64_t offset, uint64_t size) {
+  if (_private->invalid_state())
+    return 0;
+
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  ETX_ASSERT(offset + size <= object.capacity);
+
+  CUdeviceptr ptr_base = {};
+  size_t ptr_size = {};
+  device_pointer_t device_ptr = object.device_ptr + offset;
+  CUresult query_result = cuMemGetAddressRange_v2(&ptr_base, &ptr_size, device_ptr);
+  if (query_result != CUresult::CUDA_SUCCESS) {
+    log::error("Failed to get mem info: %p", device_ptr);
+  }
+
+  if (_private->cuda_call_failed(cuMemcpyHtoD(device_ptr, src, size)))
+    log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
+
+  return device_ptr;
+}
+
+void GPUOptixImpl::copy_from_buffer(GPUBuffer buffer, void* dst, uint64_t offset, uint64_t size) {
+  if (_private->invalid_state())
+    return;
+
+  auto& object = _private->buffer_pool.get(buffer.handle);
+
+  CUdeviceptr ptr_base = {};
+  size_t ptr_size = {};
+  CUdeviceptr device_ptr = object.device_ptr + offset;
+  CUresult query_result = cuMemGetAddressRange_v2(&ptr_base, &ptr_size, device_ptr);
+  if (query_result != CUresult::CUDA_SUCCESS) {
+    log::error("Failed to get mem info: %p", device_ptr);
+  }
+
+  if (_private->cuda_call_failed(cuMemcpyDtoH(dst, device_ptr, size)))
+    log::error("Failed to copy from buffer %p (%llu, %llu)", object.device_ptr, offset, size);
+}
+
+void GPUOptixImpl::clear_buffer(GPUBuffer buffer) {
+  if (_private->invalid_state())
+    return;
+
+  auto& object = _private->buffer_pool.get(buffer.handle);
+  cuMemsetD32(object.device_pointer(), 0u, object.capacity / sizeof(uint32_t));
+}
+
+GPUPipeline GPUOptixImpl::create_pipeline(const GPUPipeline::Descriptor& desc) {
+  return {_private->pipeline_pool.alloc(_private, desc)};
+}
+
+void GPUOptixImpl::destroy_pipeline(GPUPipeline pipeline) {
+  if (pipeline.handle == kInvalidHandle)
+    return;
+
+  if (_private->cuda_call_failed(cudaDeviceSynchronize())) {
+    log::error("Failed to synchronize device before the deletion of a pipeline.");
+  }
+
+  auto& object = _private->pipeline_pool.get(pipeline.handle);
+  object.release(_private);
+  _private->pipeline_pool.free(pipeline.handle);
+}
+
+GPUPipeline GPUOptixImpl::create_pipeline_from_file(const char* json_filename, bool force_recompile) {
+  GPUPipeline::Descriptor desc = {};
+  std::vector<uint8_t> binary_data;
+  if (_private->compile(json_filename, force_recompile, desc, binary_data) == false) {
+    log::error("Failed to create pipeline from file: %s", json_filename);
+    return {};
+  }
+  return {_private->pipeline_pool.alloc(_private, desc)};
+}
+
+void GPUOptixImpl::create_pipeline_from_files(TaskScheduler& scheduler, uint64_t file_count, const char* files[], GPUPipeline pipelines[], bool force) {
+  if (file_count == 0)
+    return;
+
+  std::vector<GPUPipeline::Descriptor> desc(file_count);
+  std::vector<std::vector<uint8_t>> binary_data(file_count);
+
+  std::atomic<bool> success = {true};
+  scheduler.execute(uint32_t(file_count), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    for (uint32_t i = begin; i < end; ++i) {
+      if (_private->compile(files[i], force, desc[i], binary_data[i]) == false) {
+        log::error("Failed to create pipeline from file: %s", files[i]);
+        success = false;
+      }
+    }
+  });
+
+  for (uint64_t i = 0; success && (i < file_count); ++i) {
+    pipelines[i] = {_private->pipeline_pool.alloc(_private, desc[i])};
+  }
 }
 
 bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) {
@@ -1021,37 +1072,13 @@ bool GPUOptixImpl::launch(GPUPipeline pipeline, const char* function, uint32_t d
   }
 
   auto& pp = _private->pipeline_pool.get(pipeline.handle);
-  ETX_ASSERT(pp.target == CUDACompileTarget::Library);
-
-  GPUPipelineOptixImpl::CUDAFunction func = {};
-  uint32_t func_hash = fnv1a32(function);
-  auto f = pp.cuda.functions.find(func_hash);
-  if (f == pp.cuda.functions.end()) {
-    if (ETX_CUDA_FAILED(cuModuleGetFunction(&func.func, pp.cuda.cuda_module, function)))
-      return false;
-
-    int min_grid_size = 0;
-    int max_block_size = 0;
-    if (ETX_CUDA_FAILED(cuOccupancyMaxPotentialBlockSize(&min_grid_size, &max_block_size, func.func, nullptr, 0, 768)))
-      return false;
-
-    func.min_grid_size = uint32_t(min_grid_size);
-    func.max_block_size = uint32_t(max_block_size);
-    pp.cuda.functions[func_hash] = func;
-  } else {
-    func = f->second;
+  if (pp.target == CUDACompileTarget::Library) {
+    return _private->launch_cuda(pp, function, dim_x, dim_y, params, params_size);
+  } else if (pp.target == CUDACompileTarget::PTX) {
+    return _private->launch_optix(pp, function, dim_x, dim_y, params, params_size);
   }
 
-  if ((func.func == nullptr) || (func.max_block_size == 0) || (func.min_grid_size == 0)) {
-    return false;
-  }
-
-  uint32_t bs = align_up(dim_x / func.min_grid_size, 8u);
-  uint32_t launch_x = dim_x / bs + (dim_x % bs > 0 ? 1u : 0u);
-  uint32_t launch_y = dim_y / bs + (dim_y % bs > 0 ? 1u : 0u);
-
-  void* call_params[] = {&params};
-  return ETX_CUDA_SUCCEED(cuLaunchKernel(func.func, launch_x, launch_y, 1u, bs, bs, 1u, 0, _private->main_stream, reinterpret_cast<void**>(&call_params), nullptr));
+  return false;
 }
 
 GPUAccelerationStructure GPUOptixImpl::create_acceleration_structure(const GPUAccelerationStructure::Descriptor& desc) {
@@ -1154,7 +1181,7 @@ const char* cuda_result(CUresult result) {
     CASE(CUDA_ERROR_PROFILER_ALREADY_STARTED);
     CASE(CUDA_ERROR_PROFILER_ALREADY_STOPPED);
     CASE(CUDA_ERROR_STUB_LIBRARY);
-    CASE(CUDA_ERROR_DEVICE_UNAVAILABLE);
+    // CASE(CUDA_ERROR_DEVICE_UNAVAILABLE);
     CASE(CUDA_ERROR_NO_DEVICE);
     CASE(CUDA_ERROR_INVALID_DEVICE);
     CASE(CUDA_ERROR_DEVICE_NOT_LICENSED);

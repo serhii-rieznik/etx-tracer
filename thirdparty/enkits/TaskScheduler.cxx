@@ -19,7 +19,7 @@
 #include "TaskScheduler.hxx"
 #include "LockLessMultiReadPipe.hxx"
 
-#include <algorithm>
+#include <string>
 
 #if defined __i386__ || defined __x86_64__
 #include "x86intrin.h"

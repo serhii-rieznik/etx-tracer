@@ -2,12 +2,14 @@
 
 #include <etx/core/pimpl.hxx>
 #include <etx/render/host/tasks.hxx>
-
 #include <etx/render/shared/scene.hxx>
 
 namespace etx {
 
 struct SceneRepresentation {
+  using MaterialMapping = std::unordered_map<std::string, uint32_t>;
+  using MediumMapping = std::unordered_map<std::string, uint32_t>;
+
   enum : uint32_t {
     LoadGeometry = 0u,
     SetupCamera = 1u << 0u,
@@ -18,8 +20,15 @@ struct SceneRepresentation {
   ~SceneRepresentation();
 
   bool load_from_file(const char* filename, uint32_t options);
+  void save_to_file(const char* filename);
+  void write_materials(const char* filename);
+
+  Scene& mutable_scene();
+  Scene* mutable_scene_pointer();
 
   const Scene& scene() const;
+  const MaterialMapping& material_mapping() const;
+  const MediumMapping& medium_mapping() const;
 
   Camera& camera();
 
@@ -31,5 +40,15 @@ struct SceneRepresentation {
 Camera build_camera(const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov, float lens_radius, float focal_distance);
 void update_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov);
 float get_camera_fov(const Camera& camera);
+float get_camera_focal_length(const Camera& camera);
+float fov_to_focal_length(float fov);
+float focal_length_to_fov(float focal_len);
+
+Material::Class material_string_to_class(const char* s);
+const char* material_class_to_string(Material::Class cls);
+void material_class_to_string(Material::Class cls, const char** str);
+
+void build_emitters_distribution(Scene& scene);
+float emitter_weight(const Emitter&);
 
 }  // namespace etx
