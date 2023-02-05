@@ -69,10 +69,16 @@ void RTApplication::init() {
     _current_integrator = nullptr;
   }
 #endif
-
   ui.set_current_integrator(_current_integrator);
 
   _current_scene_file = _options.get("scene", std::string{}).name;
+
+#if defined(_WIN32)
+  if (GetAsyncKeyState(VK_ESCAPE) && GetAsyncKeyState(VK_SHIFT)) {
+    _current_scene_file.clear();
+  }
+#endif
+
   if (_current_scene_file.empty() == false) {
     on_scene_file_selected(_current_scene_file);
   }
