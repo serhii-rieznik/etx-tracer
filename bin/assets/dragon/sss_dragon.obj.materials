@@ -1,0 +1,28 @@
+newmtl et::dir
+color 1.901 2.000 2.178
+direction 0.696 0.525 0.489
+angular_diameter 0.573
+
+newmtl dragon
+material class plastic
+Pr 0.103
+Kd 0.449 0.449 0.449
+Ks 1.000 1.000 1.000
+Kt 1.000 1.000 1.000
+subsurface 2.000 0.500 0.125
+
+newmtl plane
+material class diffuse
+Pr 0.000
+Kd 0.500 0.500 0.500
+Ks 1.000 1.000 1.000
+Kt 1.000 1.000 1.000
+
+newmtl no-light0
+material class diffuse
+Pr 0.000
+Kd 1.000 1.000 1.000
+Ks 1.000 1.000 1.000
+Kt 1.000 1.000 1.000
+Ke 7.000 7.000 7.000
+

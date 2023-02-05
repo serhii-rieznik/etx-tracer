@@ -52,6 +52,7 @@ struct ETX_ALIGNED Material {
   SpectralImage diffuse;
   SpectralImage specular;
   SpectralImage transmittance;
+  SpectralImage emission;
 
   uint32_t int_medium = kInvalidIndex;
   uint32_t ext_medium = kInvalidIndex;

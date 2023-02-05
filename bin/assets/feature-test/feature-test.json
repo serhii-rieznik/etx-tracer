@@ -2,9 +2,9 @@
   "geometry" : "feature-test.obj",
   "materials" : "materials.mtl",
   "camera" : {
-    "origin" : [0.0, 0.0, 11.0],
+    "origin" : [0.0, 0.0, 9.75],
     "target" : [0.0, 0.0, 0.0],
-    "viewport" : [1280, 640],
-    "fov" : 26.99
+    "viewport" : [1920, 720],
+    "focal-length" : 85.0
   }
 }

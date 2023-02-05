@@ -1,8 +1,0 @@
-{
-  "geometry" : "empty.obj",
-  "camera" : {
-    "viewport" : [1024, 1024],
-    "origin" : [5.0, 5.0, 5.0],
-    "fov" : 54.0
-  }
-}

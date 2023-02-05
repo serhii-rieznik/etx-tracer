@@ -466,13 +466,59 @@ void SceneRepresentation::write_materials(const char* filename) {
     return;
   }
 
+  for (const auto& em : _private->scene.emitters) {
+    switch (em.cls) {
+      case Emitter::Class::Directional: {
+        float3 e = em.emission.spectrum.to_xyz();
+        fprintf(fout, "newmtl et::dir\n");
+        fprintf(fout, "color %.3f %.3f %.3f\n", e.x, e.y, e.z);
+        fprintf(fout, "direction %.3f %.3f %.3f\n", em.direction.x, em.direction.y, em.direction.z);
+        fprintf(fout, "angular_diameter %.3f\n", em.angular_size * 180.0f / kPi);
+        fprintf(fout, "\n");
+        break;
+      }
+      case Emitter::Class::Environment: {
+        float3 e = em.emission.spectrum.to_xyz();
+        fprintf(fout, "newmtl et::env\n");
+        fprintf(fout, "color %.3f %.3f %.3f\n", e.x, e.y, e.z);
+        fprintf(fout, "\n");
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
   for (const auto& mmap : _private->material_mapping) {
     const auto& material = _private->scene.materials[mmap.second];
 
-    // TODO : support anisotripic roughness
     fprintf(fout, "newmtl %s\n", mmap.first.c_str());
     fprintf(fout, "material class %s\n", material_class_to_string(material.cls));
+    // TODO : support anisotripic roughness
     fprintf(fout, "Pr %.3f\n", sqrtf(0.5f * (sqr(material.roughness.x) + sqr(material.roughness.y))));
+    {
+      float3 kd = spectrum::xyz_to_rgb(material.diffuse.spectrum.to_xyz());
+      fprintf(fout, "Kd %.3f %.3f %.3f\n", kd.x, kd.y, kd.z);
+    }
+    {
+      float3 ks = spectrum::xyz_to_rgb(material.specular.spectrum.to_xyz());
+      fprintf(fout, "Ks %.3f %.3f %.3f\n", ks.x, ks.y, ks.z);
+    }
+    {
+      float3 kt = spectrum::xyz_to_rgb(material.transmittance.spectrum.to_xyz());
+      fprintf(fout, "Kt %.3f %.3f %.3f\n", kt.x, kt.y, kt.z);
+    }
+
+    if (material.emission.spectrum.is_zero() == false) {
+      float3 ke = spectrum::xyz_to_rgb(material.emission.spectrum.to_xyz());
+      fprintf(fout, "Ke %.3f %.3f %.3f\n", ke.x, ke.y, ke.z);
+    }
+
+    if (material.subsurface.scattering_distance.is_zero() == false) {
+      float3 ss = spectrum::xyz_to_rgb(material.subsurface.scattering_distance.to_xyz());
+      fprintf(fout, "subsurface %.3f %.3f %.3f\n", ss.x, ss.y, ss.z);
+    }
+
     fprintf(fout, "\n");
   }
 
@@ -1065,10 +1111,11 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       uint32_t material_index = material_mapping[material.name];
       auto& mtl = materials[material_index];
 
+      mtl.cls = Material::Class::Diffuse;
       mtl.diffuse.spectrum = rgb::make_reflectance_spd(to_float3(material.diffuse), spectrums());
       mtl.specular.spectrum = rgb::make_reflectance_spd(to_float3(material.specular), spectrums());
       mtl.transmittance.spectrum = rgb::make_reflectance_spd(to_float3(material.transmittance), spectrums());
-
+      mtl.emission.spectrum = rgb::make_reflectance_spd(to_float3(material.emission), spectrums());
       mtl.roughness = {material.roughness, material.roughness};
       mtl.metalness = material.metallic;
 
@@ -1106,8 +1153,6 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
             i += 1;
           }
         }
-      } else {
-        mtl.cls = Material::Class::Diffuse;
       }
 
       if (get_param(material, "int_ior", data_buffer)) {
