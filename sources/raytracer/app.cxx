@@ -56,6 +56,15 @@ void RTApplication::init() {
     _options.add("ref", "none");
   }
 
+#if defined(_WIN32)
+  if (GetAsyncKeyState(VK_ESCAPE)) {
+    _options.set("integrator", std::string());
+  }
+  if (GetAsyncKeyState(VK_ESCAPE) && GetAsyncKeyState(VK_SHIFT)) {
+    _options.set("scene", std::string());
+  }
+#endif
+
   auto integrator = _options.get("integrator", std::string{}).name;
   for (uint64_t i = 0; (integrator.empty() == false) && (i < std::size(_integrator_array)); ++i) {
     ETX_ASSERT(_integrator_array[i] != nullptr);
@@ -64,21 +73,9 @@ void RTApplication::init() {
     }
   }
 
-#if defined(_WIN32)
-  if (GetAsyncKeyState(VK_ESCAPE)) {
-    _current_integrator = nullptr;
-  }
-#endif
   ui.set_current_integrator(_current_integrator);
 
   _current_scene_file = _options.get("scene", std::string{}).name;
-
-#if defined(_WIN32)
-  if (GetAsyncKeyState(VK_ESCAPE) && GetAsyncKeyState(VK_SHIFT)) {
-    _current_scene_file.clear();
-  }
-#endif
-
   if (_current_scene_file.empty() == false) {
     on_scene_file_selected(_current_scene_file);
   }
@@ -87,6 +84,8 @@ void RTApplication::init() {
   if (ref.empty() == false) {
     on_referenece_image_selected(ref);
   }
+
+  save_options();
 }
 
 void RTApplication::save_options() {
