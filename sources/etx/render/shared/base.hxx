@@ -18,7 +18,7 @@
   do {                                                          \
     if (valid_value((VALUE)) == false) {                        \
       static uint32_t reported = 0;                             \
-      if (ETX_ASSERT_ATOMIC_CHECK()) {                      \
+      if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
         print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
         ETX_DEBUG_BREAK();                                      \
       }                                                         \
@@ -29,7 +29,7 @@
   do {                                                          \
     if (isfinite((VALUE)) == false) {                           \
       static uint32_t reported = 0;                             \
-      if (ETX_ASSERT_ATOMIC_CHECK()) {                      \
+      if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
         print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
         ETX_DEBUG_BREAK();                                      \
       }                                                         \
@@ -74,6 +74,18 @@ struct ETX_ALIGNED ArrayView {
     ETX_ASSERT(a != nullptr);
     ETX_ASSERT_LESS(i, count);
     return a[i];
+  }
+
+  ETX_GPU_CODE T* begin() const {
+    ETX_ASSERT_GREATER(count, 0llu);
+    ETX_ASSERT(a != nullptr);
+    return a;
+  }
+
+  ETX_GPU_CODE T* end() const {
+    ETX_ASSERT_GREATER(count, 0llu);
+    ETX_ASSERT(a != nullptr);
+    return a + count;
   }
 };
 

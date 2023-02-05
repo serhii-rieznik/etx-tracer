@@ -21,7 +21,9 @@ struct SceneRepresentation {
 
   bool load_from_file(const char* filename, uint32_t options);
 
-  Scene* mutable_scene();
+  Scene& mutable_scene();
+  Scene* mutable_scene_pointer();
+
   const Scene& scene() const;
   const MaterialMapping& material_mapping() const;
   const MediumMapping& medium_mapping() const;
@@ -40,4 +42,8 @@ float get_camera_fov(const Camera& camera);
 Material::Class material_string_to_class(const char* s);
 const char* material_class_to_string(Material::Class cls);
 void material_class_to_string(Material::Class cls, const char** str);
+
+void build_emitters_distribution(Scene& scene);
+float emitter_weight(const Emitter&);
+
 }  // namespace etx

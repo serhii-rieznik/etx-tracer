@@ -46,6 +46,7 @@ struct RTApplication {
   void on_use_image_as_reference();
   void on_material_changed(uint32_t index);
   void on_medium_changed(uint32_t index);
+  void on_emitter_changed(uint32_t index);
 
  private:
   std::vector<float4> get_current_image(bool convert_to_rgb);

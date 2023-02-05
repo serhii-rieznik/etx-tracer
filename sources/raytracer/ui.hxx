@@ -49,6 +49,7 @@ struct UI {
     std::function<void()> use_image_as_reference;
     std::function<void(uint32_t)> material_changed;
     std::function<void(uint32_t)> medium_changed;
+    std::function<void(uint32_t)> emitter_changed;
   } callbacks;
 
  private:
@@ -87,10 +88,19 @@ struct UI {
     void build(const std::unordered_map<std::string, uint32_t>&);
   };
 
+  enum UISetup : uint32_t {
+    UIIntegrator = 1u << 0u,
+    UIView = 1u << 1u,
+    UIMaterial = 1u << 2u,
+    UIEmitters = 1u << 3u,
+  };
+
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
   int32_t _selected_material = -1;
   int32_t _selected_medium = -1;
+  int32_t _selected_emitter = -1;
+  uint32_t _ui_setup = 0;
 };
 
 }  // namespace etx

@@ -23,7 +23,7 @@ struct CPUDebugIntegratorImpl : public Task {
   uint32_t max_iterations = 32u;
   uint32_t current_scale = 1u;
   uint32_t preview_frames = 3u;
-  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Experiments;
+  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Geometry;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
 
   CPUDebugIntegratorImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
@@ -266,73 +266,10 @@ struct CPUDebugIntegratorImpl : public Task {
     return normalize(result);
   }
 
-  float3 experiments(SpectralQuery spect, const Ray& ray, const float2& uv) {
-    float3 bg = spectrum::rgb_to_xyz(ray.d * 0.5f + 0.5f);
-    float3 border = spectrum::rgb_to_xyz(float3{1.0f, 0.0f, 0.0f});
-    if (dot(uv, uv) <= kEpsilon) {
-      spect.wavelength += 0.0f;
-    }
-
-    float min_t = 0.0f;
-    float max_t = 0.0f;
-    float3 bbox_min = {-1.0f, -1.0f, -1.0f};
-    float3 bbox_max = bbox_min + 2.0f;
-    if (intersect_bbox(ray, bbox_min, min_t, max_t) == false)
-      return bg;
-
-    float3 o_ws = ray.o + ray.d * min_t;
-    float3 o_vs = (o_ws - bbox_min) / (bbox_max - bbox_min);
-    float3 e_ws = ray.o + ray.d * max_t;
-    float3 e_vs = (e_ws - bbox_min) / (bbox_max - bbox_min);
-    float3 d_vs = normalize(e_vs - o_vs);
-
-    float fe[3] = {
-      fabsf(fabsf(o_vs.x * 2.0f - 1.0f) - 1.0f),
-      fabsf(fabsf(o_vs.y * 2.0f - 1.0f) - 1.0f),
-      fabsf(fabsf(o_vs.z * 2.0f - 1.0f) - 1.0f),
-    };
-    float be[3] = {
-      fabsf(fabsf(e_vs.x * 2.0f - 1.0f) - 1.0f),
-      fabsf(fabsf(e_vs.y * 2.0f - 1.0f) - 1.0f),
-      fabsf(fabsf(e_vs.z * 2.0f - 1.0f) - 1.0f),
-    };
-
-    const float kEdgeDelta = 0.025f;
-
-    bool front_edge = ((fe[0] < kEdgeDelta) && (fe[1] < kEdgeDelta)) ||  //
-                      ((fe[0] < kEdgeDelta) && (fe[2] < kEdgeDelta)) ||  //
-                      ((fe[1] < kEdgeDelta) && (fe[2] < kEdgeDelta));
-
-    bool back_edge = ((be[0] < kEdgeDelta) && (be[1] < kEdgeDelta)) ||  //
-                     ((be[0] < kEdgeDelta) && (be[2] < kEdgeDelta)) ||  //
-                     ((be[1] < kEdgeDelta) && (be[2] < kEdgeDelta));    //
-
-    if (front_edge) {
-      return border;
-    }
-
-    float voxel_t = 0.0f;
-    if (intersect_voxel(o_vs, d_vs, voxel_data, voxel_t) == false) {
-      return back_edge ? border : bg;
-    }
-
-    float3 p_vs = o_vs + voxel_t * d_vs;
-    if ((p_vs.x < 0.0f) || (p_vs.x > 1.0f) || (p_vs.y < 0.0f) || (p_vs.y > 1.0f) || (p_vs.z < 0.0f) || (p_vs.z > 1.0f)) {
-      return back_edge ? border : bg;
-    }
-
-    float3 n = surface_normal(p_vs, voxel_data);
-    return spectrum::rgb_to_xyz(n * 0.5f + 0.5f);
-  }
-
   float3 preview_pixel(RNDSampler& smp, const float2& uv) {
     const auto& scene = rt.scene();
     auto ray = generate_ray(smp, scene, uv);
     auto spect = spectrum::sample(smp.next());
-
-    if (mode == CPUDebugIntegrator::Mode::Experiments) {
-      return experiments(spect, ray, uv);
-    }
 
     float3 xyz = {0.1f, 0.1f, 0.1f};
 
@@ -500,23 +437,11 @@ void CPUDebugIntegrator::stop(Stop st) {
 Options CPUDebugIntegrator::options() const {
   Options result = {};
   result.add(_private->mode, Mode::Count, &CPUDebugIntegrator::mode_to_string, "mode", "Visualize");
-  if (_private->mode == Mode::Experiments) {
-    result.add(-4.0f, _private->voxel_data[0], +4.0f, "v000", "v000");
-    result.add(-4.0f, _private->voxel_data[1], +4.0f, "v001", "v001");
-    result.add(-4.0f, _private->voxel_data[2], +4.0f, "v010", "v010");
-    result.add(-4.0f, _private->voxel_data[3], +4.0f, "v011", "v011");
-    result.add(-4.0f, _private->voxel_data[4], +4.0f, "v100", "v100");
-    result.add(-4.0f, _private->voxel_data[5], +4.0f, "v101", "v101");
-    result.add(-4.0f, _private->voxel_data[6], +4.0f, "v110", "v110");
-    result.add(-4.0f, _private->voxel_data[7], +4.0f, "v111", "v111");
-  }
   return result;
 }
 
 std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
   switch (Mode(i)) {
-    case Mode::Experiments:
-      return "Experiments";
     case Mode::Geometry:
       return "Geometry";
     case Mode::Barycentrics:

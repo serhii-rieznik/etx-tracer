@@ -282,14 +282,6 @@ struct SceneRepresentationImpl {
     }
     scene.camera_medium_index = camera_medium_index;
     scene.camera_lens_shape_image_index = camera_lens_shape_image_index;
-
-    for (auto& emitter : emitters) {
-      if (emitter.is_distant()) {
-        ETX_ASSERT(emitter.weight == 0.0f);
-        emitter.weight = kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
-      }
-    }
-
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
     scene.materials = {materials.data(), materials.size()};
@@ -300,19 +292,7 @@ struct SceneRepresentationImpl {
     scene.environment_emitters.count = 0;
 
     log::info("Building emitters distribution for %llu emitters...\n", scene.emitters.count);
-    DistributionBuilder emitters_distribution(scene.emitters_distribution, static_cast<uint32_t>(scene.emitters.count));
-    for (uint32_t i = 0; i < scene.emitters.count; ++i) {
-      auto& emitter = emitters[i];
-      emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
-      emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);
-      emitters_distribution.add(emitter.weight);
-      if (emitter.is_local()) {
-        triangles[emitter.triangle_index].emitter_index = i;
-      } else if ((emitter.cls == Emitter::Class::Environment) || (emitter.cls == Emitter::Class::Directional)) {
-        scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
-      }
-    }
-    emitters_distribution.finalize();
+    build_emitters_distribution(scene);
 
     loaded = true;
   }
@@ -379,7 +359,11 @@ SceneRepresentation::~SceneRepresentation() {
   ETX_PIMPL_CLEANUP(SceneRepresentation);
 }
 
-Scene* SceneRepresentation::mutable_scene() {
+Scene& SceneRepresentation::mutable_scene() {
+  return _private->scene;
+}
+
+Scene* SceneRepresentation::mutable_scene_pointer() {
   return &_private->scene;
 }
 
@@ -1156,6 +1140,27 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
   }
 
   images.load_images();
+}
+
+void build_emitters_distribution(Scene& scene) {
+  DistributionBuilder emitters_distribution(scene.emitters_distribution, static_cast<uint32_t>(scene.emitters.count));
+  scene.environment_emitters.count = 0;
+  for (uint32_t i = 0; i < scene.emitters.count; ++i) {
+    auto& emitter = scene.emitters[i];
+    if (emitter.is_distant()) {
+      emitter.weight = emitter.emission.spectrum.total_power() * kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
+    }
+    emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
+    emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);
+    emitters_distribution.add(emitter.weight);
+
+    if (emitter.is_local()) {
+      scene.triangles[emitter.triangle_index].emitter_index = i;
+    } else if (emitter.is_distant() && (emitter.weight > 0.0f)) {
+      scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
+    }
+  }
+  emitters_distribution.finalize();
 }
 
 }  // namespace etx

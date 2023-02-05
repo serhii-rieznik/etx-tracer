@@ -43,6 +43,7 @@ void RTApplication::init() {
   ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
   ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
   ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
+  ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -163,7 +164,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   }
 
   raytracing.set_scene(scene.scene());
-  ui.set_scene(scene.mutable_scene(), scene.material_mapping(), scene.medium_mapping());
+  ui.set_scene(scene.mutable_scene_pointer(), scene.material_mapping(), scene.medium_mapping());
 
   if (scene) {
     render.set_output_dimensions(scene.scene().camera.image_size);
@@ -333,6 +334,13 @@ void RTApplication::on_material_changed(uint32_t index) {
 
 void RTApplication::on_medium_changed(uint32_t index) {
   // TODO : re-upload to GPU
+  _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_emitter_changed(uint32_t index) {
+  // TODO : re-upload to GPU
+  _current_integrator->stop(Integrator::Stop::Immediate);
+  build_emitters_distribution(scene.mutable_scene());
   _current_integrator->preview(ui.integrator_options());
 }
 
