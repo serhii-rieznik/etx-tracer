@@ -234,6 +234,7 @@ void UI::build(double dt, const char* status) {
       ui_toggle("View options", UIView);
       ui_toggle("Materials and mediums", UIMaterial);
       ui_toggle("Emitters", UIEmitters);
+      ui_toggle("Camera", UICamera);
       igEndMenu();
     }
 
@@ -381,8 +382,39 @@ void UI::build(double dt, const char* status) {
     igEnd();
   }
 
+  if (_ui_setup & UICamera) {
+    if (igBegin("Camera", nullptr, kWindowFlags)) {
+      if (has_scene) {
+        auto& camera = _current_scene->camera;
+
+        bool changed = false;
+
+        float3 pos = camera.position;
+        float3 target = camera.position + camera.direction;
+        float focal_len = fov_to_focal_length(2.0f * get_camera_fov(camera) * kPi / 180.0f);
+
+        igText("Lens size");
+        changed = changed || igDragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
+        igText("Focal distance");
+        changed = changed || igDragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
+        igText("Focal length");
+        changed = changed || igDragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
+
+        if (changed && callbacks.camera_changed) {
+          camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
+          camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
+          update_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, 0.5f * focal_length_to_fov(focal_len) * 180.0f / kPi);
+          callbacks.camera_changed();
+        }
+      } else {
+        igText("No scene selected");
+      }
+      igEnd();
+    }
+  }
+
   if (has_integrator && (_current_integrator->debug_info_count() > 0)) {
-    if (igBegin("Debug Info", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (igBegin("Debug Info", nullptr, kWindowFlags)) {
       auto debug_info = _current_integrator->debug_info();
       for (uint64_t i = 0, e = _current_integrator->debug_info_count(); i < e; ++i) {
         char buffer[8] = {};

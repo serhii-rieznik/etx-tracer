@@ -36,7 +36,7 @@ ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const float2& uv
   float3 w_o = normalize(scene.camera.tan_half_fov * (s + u) + direction);
   ETX_CHECK_FINITE(w_o);
 
-  if (scene.camera.lens_radius > 0.0f) {
+  if ((scene.camera.lens_radius > kEpsilon) && (scene.camera.focal_distance > kEpsilon)) {
     float2 sensor_sample = {};
     if (scene.camera_lens_shape_image_index == kInvalidIndex) {
       sensor_sample = sample_disk(smp.next_2d());
@@ -65,7 +65,7 @@ ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const fl
 
   float2 sensor_sample = {};
 
-  if (scene.camera.lens_radius > 0.0f) {
+  if ((scene.camera.lens_radius > kEpsilon) && (scene.camera.focal_distance > kEpsilon)) {
     if (scene.camera_lens_shape_image_index == kInvalidIndex) {
       sensor_sample = sample_disk(smp.next_2d());
     } else {
@@ -92,7 +92,7 @@ ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const fl
   result.direction /= distance;
   cos_t /= distance;
 
-  float focal_plane_distance = (scene.camera.lens_radius > 0.0f) ? scene.camera.focal_distance : 1.0f;
+  float focal_plane_distance = ((scene.camera.lens_radius > kEpsilon) && (scene.camera.focal_distance > kEpsilon)) ? scene.camera.focal_distance : 1.0f;
   float3 focus_point = result.position - result.direction * (focal_plane_distance / cos_t);
 
   auto projected = scene.camera.view_proj * float4{focus_point.x, focus_point.y, focus_point.z, 1.0f};
@@ -101,7 +101,7 @@ ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const fl
     return {};
   }
 
-  float lens_area = (scene.camera.lens_radius > 0.0f) ? kPi * sqr(scene.camera.lens_radius) : 1.0f;
+  float lens_area = (scene.camera.lens_radius > kEpsilon) ? kPi * sqr(scene.camera.lens_radius) : 1.0f;
 
   result.pdf_area = 1.0f / lens_area;
   result.pdf_dir = result.pdf_area * distance_squared / cos_t;

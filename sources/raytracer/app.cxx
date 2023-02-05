@@ -44,6 +44,7 @@ void RTApplication::init() {
   ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
   ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
+  ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -346,6 +347,10 @@ void RTApplication::on_emitter_changed(uint32_t index) {
   // TODO : re-upload to GPU
   _current_integrator->stop(Integrator::Stop::Immediate);
   build_emitters_distribution(scene.mutable_scene());
+  _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_camera_changed() {
   _current_integrator->preview(ui.integrator_options());
 }
 

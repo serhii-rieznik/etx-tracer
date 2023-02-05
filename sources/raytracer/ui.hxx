@@ -50,6 +50,7 @@ struct UI {
     std::function<void(uint32_t)> material_changed;
     std::function<void(uint32_t)> medium_changed;
     std::function<void(uint32_t)> emitter_changed;
+    std::function<void()> camera_changed;
   } callbacks;
 
  private:
@@ -93,6 +94,7 @@ struct UI {
     UIView = 1u << 1u,
     UIMaterial = 1u << 2u,
     UIEmitters = 1u << 3u,
+    UICamera = 1u << 4u,
   };
 
   MappingRepresentation _material_mapping;
