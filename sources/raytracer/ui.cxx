@@ -167,7 +167,8 @@ void UI::build(double dt, const char* status) {
       if (igMenuItemEx("Reload Materials", nullptr, "Ctrl+M", false, false)) {
       }
       igSeparator();
-      if (igMenuItemEx("Save...", nullptr, nullptr, false, false)) {
+      if (igMenuItemEx("Save...", nullptr, nullptr, false, true)) {
+        save_scene_file();
       }
       igEndMenu();
     }
@@ -391,7 +392,7 @@ void UI::build(double dt, const char* status) {
 
         float3 pos = camera.position;
         float3 target = camera.position + camera.direction;
-        float focal_len = fov_to_focal_length(2.0f * get_camera_fov(camera) * kPi / 180.0f);
+        float focal_len = get_camera_focal_length(camera);
 
         igText("Lens size");
         changed = changed || igDragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
@@ -403,7 +404,7 @@ void UI::build(double dt, const char* status) {
         if (changed && callbacks.camera_changed) {
           camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
           camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
-          update_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, 0.5f * focal_length_to_fov(focal_len) * 180.0f / kPi);
+          update_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, focal_length_to_fov(focal_len) * 180.0f / kPi);
           callbacks.camera_changed();
         }
       } else {
@@ -564,6 +565,13 @@ void UI::select_scene_file() {
   auto selected_file = open_file({"Supported formats", "*.json;*.obj"});  // TODO : add *.gltf;*.pbrt
   if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
     callbacks.scene_file_selected(selected_file);
+  }
+}
+
+void UI::save_scene_file() {
+  auto selected_file = save_file({"Scene description", "*.json"});
+  if ((selected_file.empty() == false) && callbacks.save_scene_file_selected) {
+    callbacks.save_scene_file_selected(selected_file);
   }
 }
 

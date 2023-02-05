@@ -20,6 +20,8 @@ struct SceneRepresentation {
   ~SceneRepresentation();
 
   bool load_from_file(const char* filename, uint32_t options);
+  void save_to_file(const char* filename);
+  void write_materials(const char* filename);
 
   Scene& mutable_scene();
   Scene* mutable_scene_pointer();
@@ -38,6 +40,7 @@ struct SceneRepresentation {
 Camera build_camera(const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov, float lens_radius, float focal_distance);
 void update_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov);
 float get_camera_fov(const Camera& camera);
+float get_camera_focal_length(const Camera& camera);
 float fov_to_focal_length(float fov);
 float focal_length_to_fov(float focal_len);
 

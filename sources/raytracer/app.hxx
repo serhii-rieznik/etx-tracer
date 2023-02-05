@@ -29,12 +29,15 @@ struct RTApplication {
   void frame();
   void cleanup();
   void process_event(const sapp_event*);
-  void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
 
  private:
+  void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
+  void save_scene_file(const std::string&);
+
   void on_referenece_image_selected(std::string);
   void on_save_image_selected(std::string, SaveImageMode);
   void on_scene_file_selected(std::string);
+  void on_save_scene_file_selected(std::string);
   void on_integrator_selected(Integrator*);
   void on_preview_selected();
   void on_run_selected();

@@ -19,6 +19,8 @@
 #include <tiny_obj_loader.hxx>
 #include <jansson.h>
 
+#include <filesystem>
+
 namespace etx {
 
 Pointer<Spectrums> spectrums() {
@@ -74,6 +76,10 @@ struct SceneRepresentationImpl {
   std::vector<Triangle> triangles;
   std::vector<Material> materials;
   std::vector<Emitter> emitters;
+
+  std::string json_file_name;
+  std::string obj_file_name;
+  std::string mtl_file_name;
 
   ImagePool images;
   MediumPool mediums;
@@ -341,6 +347,10 @@ float get_camera_fov(const Camera& camera) {
   return 2.0f * atanf(camera.tan_half_fov) * 180.0f / kPi;
 }
 
+float get_camera_focal_length(const Camera& camera) {
+  return 0.5f * kFilmSize / camera.tan_half_fov;
+}
+
 float fov_to_focal_length(float fov) {
   return 0.5f * kFilmSize / tanf(0.5f * fov);
 }
@@ -434,13 +444,84 @@ float3 json_to_f3(json_t* a) {
   return result;
 }
 
+json_t* json_float3_to_array(const float3& v) {
+  json_t* j = json_array();
+  json_array_append(j, json_real(v.x));
+  json_array_append(j, json_real(v.y));
+  json_array_append(j, json_real(v.z));
+  return j;
+}
+
+json_t* json_uint2_to_array(const uint2& v) {
+  json_t* j = json_array();
+  json_array_append(j, json_integer(v.x));
+  json_array_append(j, json_integer(v.y));
+  return j;
+}
+
+void SceneRepresentation::write_materials(const char* filename) {
+  FILE* fout = fopen(filename, "w");
+  if (fout == nullptr) {
+    log::error("Failed to write materials file: %s", filename);
+    return;
+  }
+
+  for (const auto& mmap : _private->material_mapping) {
+    const auto& material = _private->scene.materials[mmap.second];
+
+    // TODO : support anisotripic roughness
+    fprintf(fout, "newmtl %s\n", mmap.first.c_str());
+    fprintf(fout, "material class %s\n", material_class_to_string(material.cls));
+    fprintf(fout, "Pr %.3f\n", sqrtf(0.5f * (sqr(material.roughness.x) + sqr(material.roughness.y))));
+    fprintf(fout, "\n");
+  }
+
+  fclose(fout);
+}
+
+void SceneRepresentation::save_to_file(const char* filename) {
+  if (_private->obj_file_name.empty())
+    return;
+
+  FILE* fout = fopen(filename, "w");
+  if (fout == nullptr)
+    return;
+
+  auto materials_file = _private->obj_file_name + ".materials";
+  auto relative_obj_file = std::filesystem::relative(_private->obj_file_name, std::filesystem::path(filename).parent_path()).string();
+  auto relative_mtl_file = std::filesystem::relative(materials_file, std::filesystem::path(filename).parent_path()).string();
+  write_materials(materials_file.c_str());
+
+  auto j = json_object();
+  json_object_set(j, "geometry", json_string(relative_obj_file.c_str()));
+  json_object_set(j, "materials", json_string(relative_mtl_file.c_str()));
+
+  {
+    auto camera = json_object();
+    json_object_set(camera, "viewport", json_uint2_to_array(_private->scene.camera.image_size));
+    json_object_set(camera, "origin", json_float3_to_array(_private->scene.camera.position));
+    json_object_set(camera, "target", json_float3_to_array(_private->scene.camera.position + _private->scene.camera.direction));
+    json_object_set(camera, "up", json_float3_to_array(_private->scene.camera.up));
+    json_object_set(camera, "lens-radius", json_real(_private->scene.camera.lens_radius));
+    json_object_set(camera, "focal-distance", json_real(_private->scene.camera.focal_distance));
+    json_object_set(camera, "focal-length", json_real(get_camera_focal_length(_private->scene.camera)));
+    json_object_set(j, "camera", camera);
+  }
+
+  json_dumpf(j, fout, JSON_INDENT(2));
+  fclose(fout);
+
+  json_decref(j);
+}
+
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
   _private->cleanup();
 
   uint32_t load_result = SceneRepresentationImpl::LoadFailed;
 
-  std::string file_to_load = filename;
-  std::string material_file = {};
+  _private->json_file_name = {};
+  _private->mtl_file_name = {};
+  _private->obj_file_name = filename;
 
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
@@ -480,14 +561,14 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
           json_decref(js);
           return false;
         }
-        file_to_load = std::string(base_folder) + json_string_value(js_value);
+        _private->obj_file_name = std::string(base_folder) + json_string_value(js_value);
       } else if (strcmp(key, "materials") == 0) {
         if (json_is_string(js_value) == false) {
           log::error("`materials` in scene description should be a string (file name)");
           json_decref(js);
           return false;
         }
-        material_file = json_string_value(js_value);
+        _private->mtl_file_name = json_string_value(js_value);
       } else if (strcmp(key, "camera") == 0) {
         if (json_is_object(js_value) == false) {
           log::error("`camera` in scene description should be an object");
@@ -522,11 +603,12 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       }
     }
     json_decref(js);
+    _private->json_file_name = filename;
   }
 
-  auto ext = get_file_ext(file_to_load.c_str());
+  auto ext = get_file_ext(_private->obj_file_name.c_str());
   if (strcmp(ext, ".obj") == 0) {
-    load_result = _private->load_from_obj(file_to_load.c_str(), material_file.c_str());
+    load_result = _private->load_from_obj(_private->obj_file_name.c_str(), _private->mtl_file_name.c_str());
   }
 
   if ((load_result & SceneRepresentationImpl::LoadSucceeded) == 0) {
@@ -539,7 +621,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
     }
     cam.cls = camera_cls;
     if (use_focal_len) {
-      camera_fov = 0.5f * focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
+      camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
     }
     update_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
   }
@@ -676,20 +758,20 @@ Material::Class material_string_to_class(const char* s) {
 
 void material_class_to_string(Material::Class cls, const char** str) {
   static const char* names[] = {
-    "Diffuse",
-    "Plastic",
-    "Conductor",
-    "Dielectric",
-    "Thinfilm",
-    "Mirror",
-    "Boundary",
-    "Coating",
-    "Velvet",
-    "Subsurface",
-    "Undefined",
+    "diffuse",
+    "plastic",
+    "conductor",
+    "dielectric",
+    "thinfilm",
+    "mirror",
+    "boundary",
+    "coating",
+    "velvet",
+    "subsurface",
+    "undefined",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);
-  *str = cls < Material::Class::Count ? names[uint32_t(cls)] : "Undefined";
+  *str = cls < Material::Class::Count ? names[uint32_t(cls)] : "undefined";
 }
 
 const char* material_class_to_string(Material::Class cls) {

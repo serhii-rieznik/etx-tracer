@@ -32,6 +32,7 @@ void RTApplication::init() {
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
   ui.callbacks.scene_file_selected = std::bind(&RTApplication::on_scene_file_selected, this, std::placeholders::_1);
+  ui.callbacks.save_scene_file_selected = std::bind(&RTApplication::on_save_scene_file_selected, this, std::placeholders::_1);
   ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
   ui.callbacks.preview_selected = std::bind(&RTApplication::on_preview_selected, this);
   ui.callbacks.run_selected = std::bind(&RTApplication::on_run_selected, this);
@@ -186,6 +187,11 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   }
 }
 
+void RTApplication::save_scene_file(const std::string& file_name) {
+  log::info("Saving %s..", file_name.c_str());
+  scene.save_to_file(file_name.c_str());
+}
+
 void RTApplication::on_referenece_image_selected(std::string file_name) {
   log::warning("Loading reference image %s...", file_name.c_str());
 
@@ -269,6 +275,13 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
 
 void RTApplication::on_scene_file_selected(std::string file_name) {
   load_scene_file(file_name, SceneRepresentation::LoadEverything, false);
+}
+
+void RTApplication::on_save_scene_file_selected(std::string file_name) {
+  if (strlen(get_file_ext(file_name.c_str())) == 0) {
+    file_name += ".json";
+  }
+  save_scene_file(file_name);
 }
 
 void RTApplication::on_integrator_selected(Integrator* i) {
