@@ -6,7 +6,7 @@ ETX_GPU_CODE float2 remap_alpha(float2 a) {
 }
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame().frame;
+  auto frame = data.get_normal_frame();
 
   uint32_t properties = 0;
   BSDFData eval_data = data;
@@ -24,7 +24,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame().frame;
+  auto frame = data.get_normal_frame();
 
   auto pow5 = [](float value) {
     return sqr(value) * sqr(value) * fabsf(value);
@@ -68,7 +68,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame().frame;
+  auto frame = data.get_normal_frame();
 
   float3 m = normalize(data.w_o - data.w_i);
   float m_dot_o = dot(m, data.w_o);

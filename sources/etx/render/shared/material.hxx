@@ -42,7 +42,6 @@ struct ETX_ALIGNED Material {
     Boundary,
     Coating,
     Velvet,
-    Subsurface,
 
     Count,
     Undefined = kInvalidIndex,
@@ -70,16 +69,7 @@ struct ETX_ALIGNED Material {
   float normal_scale = 1.0f;
 
   bool has_subsurface_scattering() const {
-    return ((cls == Class::Diffuse) || (cls == Class::Plastic) || (cls == Class::Subsurface) || (cls == Class::Velvet) || (cls == Class::Coating)) &&
-           (subsurface.scattering_distance.is_zero() == false);
-  }
-
-  static const Material& subsurface_material() {
-    static constexpr Material m = {
-      Material::Class::Subsurface,
-      {SpectralDistribution::from_constant(1.0f)},
-    };
-    return m;
+    return ((cls == Class::Diffuse) || (cls == Class::Plastic) || (cls == Class::Velvet) || (cls == Class::Coating)) && (subsurface.scattering_distance.is_zero() == false);
   }
 };
 

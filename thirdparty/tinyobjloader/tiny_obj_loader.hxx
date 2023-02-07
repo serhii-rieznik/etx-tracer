@@ -2273,6 +2273,7 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
     }
   }
   // flush last material.
+  std::transform(material.name.begin(), material.name.end(), material.name.begin(), tolower);
   material_map->insert(std::pair<std::string, int>(material.name, static_cast<int>(materials->size())));
   materials->push_back(material);
 

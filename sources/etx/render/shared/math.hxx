@@ -126,18 +126,33 @@ struct ETX_ALIGNED Triangle {
 };
 
 struct ETX_ALIGNED LocalFrame {
+  enum : uint32_t {
+    EnteringMaterial = 1u << 0u,
+  };
+
   float3 tan = {};
   float3 btn = {};
   float3 nrm = {};
+  uint32_t flags = 0u;
 
   ETX_GPU_CODE float3 to_local(const float3& v) const {
     return float3x3{float3{tan.x, btn.x, nrm.x}, float3{tan.y, btn.y, nrm.y}, float3{tan.z, btn.z, nrm.z}} * v;
   }
+
   ETX_GPU_CODE float3 from_local(const float3& v) const {
     return float3x3{float3{tan.x, tan.y, tan.z}, float3{btn.x, btn.y, btn.z}, float3{nrm.x, nrm.y, nrm.z}} * v;
   }
+
   ETX_GPU_CODE static float cos_theta(const float3& v) {
     return v.z;
+  }
+
+  ETX_GPU_CODE static float sin_theta(const float3& v) {
+    return sqrtf(fmaxf(0.0f, 1.0f - cos_theta(v)));
+  }
+
+  bool entering_material() const {
+    return (flags & EnteringMaterial) == EnteringMaterial;
   }
 };
 
