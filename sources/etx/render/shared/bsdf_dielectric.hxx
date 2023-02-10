@@ -44,11 +44,11 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 }  // namespace DeltaDielectricBSDF
@@ -87,11 +87,11 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
@@ -124,9 +124,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
       return {{data.spectrum_sample.wavelength, 0.0f}};
     }
 
-    auto a_data = data;
-    a_data.w_o = normalize(local_frame.from_local(result.w_o));
-    result.pdf = pdf(a_data, mtl, scene, smp);
+    float3 w_o = normalize(local_frame.from_local(result.w_o));
+    result.pdf = pdf(data, w_o, mtl, scene, smp);
     ETX_VALIDATE(result.pdf);
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {
@@ -149,9 +148,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
     result.w_o = -result.w_o;
 
-    auto a_data = data;
-    a_data.w_o = normalize(local_frame.from_local(result.w_o));
-    result.pdf = pdf(a_data, mtl, scene, smp);
+    float3 w_o = normalize(local_frame.from_local(result.w_o));
+    result.pdf = pdf(data, w_o, mtl, scene, smp);
     ETX_VALIDATE(result.pdf);
 
     if (LocalFrame::cos_theta(result.w_o) > 0) {
@@ -173,9 +171,9 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaDielectricBSDF::evaluate(data, mtl, scene, smp);
+    return DeltaDielectricBSDF::evaluate(data, in_w_o, mtl, scene, smp);
   }
 
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
@@ -183,7 +181,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   if (LocalFrame::cos_theta(w_i) == 0)
     return {data.spectrum_sample.wavelength, 0.0f};
 
-  auto w_o = local_frame.to_local(data.w_o);
+  auto w_o = local_frame.to_local(in_w_o);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
@@ -222,15 +220,15 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   eval.func = apply_image(data.spectrum_sample, reflection ? mtl.specular : mtl.transmittance, data.tex, scene) * (2.0f * value);
   ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
-  eval.pdf = pdf(data, mtl, scene, smp);
+  eval.pdf = pdf(data, w_o, mtl, scene, smp);
   eval.weight = eval.bsdf / eval.pdf;
   ETX_VALIDATE(eval.weight);
   return eval;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaDielectricBSDF::pdf(data, mtl, scene, smp);
+    return DeltaDielectricBSDF::pdf(data, in_w_o, mtl, scene, smp);
   }
 
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
@@ -238,7 +236,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& s
   if (LocalFrame::cos_theta(w_i) == 0.0f)
     return 0.0f;
 
-  auto w_o = local_frame.to_local(data.w_o);
+  auto w_o = local_frame.to_local(in_w_o);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);

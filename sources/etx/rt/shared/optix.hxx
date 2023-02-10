@@ -58,15 +58,13 @@ struct ETX_ALIGNED Raytracing {
     uint32_t ptr_lo = static_cast<uint32_t>((ptr & 0x00000000ffffffff) >> 0llu);
     uint32_t ptr_hi = static_cast<uint32_t>((ptr & 0xffffffff00000000) >> 32llu);
 
-    i.t = -kMaxFloat;
+    i.t = kMaxFloat;
 
     optixTrace(OptixTraversableHandle(scene.acceleration_structure), ray.o, ray.d, ray.min_t, ray.max_t, 0.0f,  //
       OptixVisibilityMask(255), OptixRayFlags(OPTIX_RAY_FLAG_ENFORCE_ANYHIT), 0u, 0u, 0u, ptr_lo, ptr_hi);
 
-    if (i.t < 0.0f) {
-      i.t = kMaxFloat;
+    if (i.t == kMaxFloat)
       return false;
-    }
 
     const auto& tri = scene.triangles[i.triangle_index];
     lerp_vertex(i, scene.vertices, tri, i.barycentric);

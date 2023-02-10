@@ -240,7 +240,7 @@ struct CPUBidirectionalImpl : public Task {
         const auto& mat = rt.scene().materials[tri.material_index];
 
         if (mat.cls == Material::Class::Boundary) {
-          auto bsdf_sample = bsdf::sample({spect, medium_index, mode, intersection, intersection.w_i, {}}, mat, rt.scene(), smp);
+          auto bsdf_sample = bsdf::sample({spect, medium_index, mode, intersection, intersection.w_i}, mat, rt.scene(), smp);
           if (bsdf_sample.properties & BSDFSample::MediumChanged) {
             medium_index = bsdf_sample.medium_index;
           }
@@ -257,7 +257,7 @@ struct CPUBidirectionalImpl : public Task {
         v.pdf.forward = w.pdf_solid_angle_to_area(pdf_dir, v);
         ETX_VALIDATE(v.pdf.forward);
 
-        auto bsdf_data = BSDFData(spect, medium_index, mode, v, v.w_i, {});
+        auto bsdf_data = BSDFData(spect, medium_index, mode, v, v.w_i);
 
         auto bsdf_sample = bsdf::sample(bsdf_data, mat, rt.scene(), smp);
         ETX_VALIDATE(bsdf_sample.weight);
@@ -268,13 +268,11 @@ struct CPUBidirectionalImpl : public Task {
           medium_index = bsdf_sample.medium_index;
         }
 
-        bsdf_data.w_o = bsdf_sample.w_o;
-
         if (bsdf_sample.valid() == false) {
           break;
         }
 
-        auto rev_bsdf_pdf = bsdf::pdf(bsdf_data.swap_directions(), mat, rt.scene(), smp);
+        auto rev_bsdf_pdf = bsdf::reverse_pdf(bsdf_data, -v.w_i, mat, rt.scene(), smp);
         ETX_VALIDATE(rev_bsdf_pdf);
 
         w.pdf.backward = v.pdf_solid_angle_to_area(rev_bsdf_pdf, w);
@@ -291,12 +289,12 @@ struct CPUBidirectionalImpl : public Task {
         ETX_VALIDATE(throughput);
 
         if (mode == PathSource::Light) {
-          throughput *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
+          throughput *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_sample.w_o);
           ETX_VALIDATE(throughput);
         }
 
-        ray.o = shading_pos(rt.scene().vertices, tri, intersection.barycentric, bsdf_data.w_o);
-        ray.d = bsdf_data.w_o;
+        ray.o = shading_pos(rt.scene().vertices, tri, intersection.barycentric, bsdf_sample.w_o);
+        ray.d = bsdf_sample.w_o;
 
       } else if (mode == PathSource::Camera) {
         auto& v = path.emplace_back(PathVertex::Class::Emitter);
@@ -780,7 +778,7 @@ float CPUBidirectionalImpl::PathVertex::pdf_area(SpectralQuery spect, PathSource
   if (is_surface_interaction()) {
     const auto& tri = scene.triangles[triangle_index];
     const auto& mat = scene.materials[tri.material_index];
-    eval_pdf = bsdf::pdf({spect, medium_index, mode, *this, w_i, w_o}, mat, scene, smp);
+    eval_pdf = bsdf::pdf({spect, medium_index, mode, *this, w_i}, w_o, mat, scene, smp);
   } else if (is_medium_interaction()) {
     eval_pdf = scene.mediums[medium_index].phase_function(spect, pos, w_i, w_o);
   } else {
@@ -879,7 +877,7 @@ SpectralResponse CPUBidirectionalImpl::PathVertex::bsdf_in_direction(SpectralQue
     const auto& tri = scene.triangles[triangle_index];
     const auto& mat = scene.materials[tri.material_index];
 
-    BSDFEval eval = bsdf::evaluate({spect, medium_index, mode, *this, w_i, w_o}, mat, scene, smp);
+    BSDFEval eval = bsdf::evaluate({spect, medium_index, mode, *this, w_i}, w_o, mat, scene, smp);
     ETX_VALIDATE(eval.bsdf);
 
     if (mode == PathSource::Light) {

@@ -2,12 +2,12 @@
 
 namespace etx {
 
-#define ETX_DECLARE_BSDF(Class)                                                               \
-  namespace Class##BSDF {                                                                     \
-    ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Material&, const Scene&, Sampler&); \
-    ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const Material&, const Scene&, Sampler&); \
-    ETX_GPU_CODE float pdf(const BSDFData&, const Material&, const Scene&, Sampler&);         \
-    ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);       \
+#define ETX_DECLARE_BSDF(Class)                                                                                  \
+  namespace Class##BSDF {                                                                                        \
+    ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Material&, const Scene&, Sampler&);                    \
+    ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&); \
+    ETX_GPU_CODE float pdf(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&);         \
+    ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);                          \
   }
 
 ETX_DECLARE_BSDF(Diffuse);
@@ -25,8 +25,8 @@ ETX_DECLARE_BSDF(Velvet);
     return CLS##BSDF::FUNC(__VA_ARGS__)
 
 #define CASE_IMPL_SAMPLE(A) CASE_IMPL(A, sample, data, mtl, scene, smp)
-#define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, mtl, scene, smp)
-#define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, mtl, scene, smp)
+#define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, w_o, mtl, scene, smp)
+#define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, w_o, mtl, scene, smp)
 #define CASE_IMPL_IS_DELTA(A) CASE_IMPL(A, is_delta, mtl, tex, scene, smp)
 
 #define ALL_CASES(MACRO)                    \
@@ -55,7 +55,7 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_SAMPLE);
 }
 
-[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::evaluate(data, mtl, scene, smp);
 #endif
@@ -63,9 +63,21 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_EVALUATE);
 }
 
-[[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::pdf(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_PDF);
+}
+
+[[nodiscard]] ETX_GPU_CODE float reverse_pdf(const BSDFData& in_data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+  float3 w_o = -in_data.w_i;
+  BSDFData data = in_data;
+  data.w_i = -in_w_o;
+
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::pdf(data, w_o, mtl, scene, smp);
 #endif
 
   ALL_CASES(CASE_IMPL_PDF);

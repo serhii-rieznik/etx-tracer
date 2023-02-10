@@ -18,20 +18,12 @@ enum class PathSource : uint32_t {
 };
 
 struct BSDFData : public Vertex {
-  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi, const float3& awo)
+  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi)
     : Vertex(av)
     , w_i(awi)
-    , w_o(awo)
     , spectrum_sample(spect)
     , path_source(ps)
     , medium_index(medium) {
-  }
-
-  ETX_GPU_CODE BSDFData swap_directions() const {
-    BSDFData result = *this;
-    result.w_i = -w_o;
-    result.w_o = -w_i;
-    return result;
   }
 
   ETX_GPU_CODE float3 front_fracing_normal() const {
@@ -44,7 +36,6 @@ struct BSDFData : public Vertex {
   }
 
   float3 w_i = {};
-  float3 w_o = {};
   SpectralQuery spectrum_sample = {};
   PathSource path_source = PathSource::Undefined;
   uint32_t medium_index = kInvalidIndex;

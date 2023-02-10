@@ -46,7 +46,7 @@ float sample_weight(const SpectralQuery& spect, Sampler& smp, const Intersection
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
-  float bsdf_pdf = bsdf::pdf({spect, kInvalidIndex, PathSource::Camera, intersection, intersection.w_i, emitter_sample.direction}, mat, scene, smp);
+  float bsdf_pdf = bsdf::pdf({spect, kInvalidIndex, PathSource::Camera, intersection, intersection.w_i}, emitter_sample.direction, mat, scene, smp);
   float l_dot_n = fmaxf(0.0f, dot(emitter_sample.direction, intersection.nrm));
   if (((use_bsdf == false) && (l_dot_n > 0.0f)) || (bsdf_pdf > 0.0f)) {
     return (use_bsdf ? bsdf_pdf : l_dot_n) * emitter_sample.value.to_xyz().y / emitter_sample.pdf_dir;
@@ -244,7 +244,7 @@ struct CPUDirectLightingImpl {
       auto payload = DirectPayload::make(scene, {x, y}, current_dimensions, iteration);
 
       const auto& intersection = intersections[i];
-      if (intersection.t != -kMaxFloat) {
+      if (intersection.t != kMaxFloat) {
         const auto& tri = scene.triangles[intersection.triangle_index];
         const auto& mat = scene.materials[tri.material_index];
 
@@ -263,7 +263,7 @@ struct CPUDirectLightingImpl {
         }
 
         if (emitter_sample.pdf_dir > 0) {
-          BSDFEval bsdf_eval = bsdf::evaluate({payload.spect, payload.medium, PathSource::Camera, intersection, payload.ray.d, emitter_sample.direction}, mat, scene, payload.smp);
+          BSDFEval bsdf_eval = bsdf::evaluate({payload.spect, payload.medium, PathSource::Camera, intersection, payload.ray.d}, emitter_sample.direction, mat, scene, payload.smp);
           if (bsdf_eval.valid()) {
             auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
             auto tr = rt.trace_transmittance(payload.spect, scene, pos, emitter_sample.origin, payload.medium, payload.smp);

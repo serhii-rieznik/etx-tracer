@@ -91,7 +91,7 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
     return {spect.wavelength, 0.0f};
   }
 
-  BSDFEval bsdf_eval = bsdf::evaluate({spect, medium, PathSource::Camera, intersection, intersection.w_i, emitter_sample.direction}, mat, scene, smp);
+  BSDFEval bsdf_eval = bsdf::evaluate({spect, medium, PathSource::Camera, intersection, intersection.w_i}, emitter_sample.direction, mat, scene, smp);
   if (bsdf_eval.valid() == false) {
     return {spect.wavelength, 0.0f};
   }
@@ -120,7 +120,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     return true;
   }
 
-  auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i, {}}, mat, scene, payload.smp);
+  auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i}, mat, scene, payload.smp);
   bool sample_subsurface = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
 
   subsurface::Gather ss_gather = {};
@@ -231,7 +231,7 @@ ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& option
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, payload.ray, intersection, payload.smp);
 
-  Medium::Sample medium_sample = try_sampling_medium(scene, payload, found_intersection ? intersection.t : kMaxFloat);
+  Medium::Sample medium_sample = try_sampling_medium(scene, payload, intersection.t);
 
   if (medium_sample.sampled_medium()) {
     handle_sampled_medium(scene, medium_sample, options, rt, payload);

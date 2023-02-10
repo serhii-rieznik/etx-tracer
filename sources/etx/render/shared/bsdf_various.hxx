@@ -2,13 +2,12 @@
 namespace DiffuseBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  BSDFData eval_data = data;
-  eval_data.w_o = sample_cosine_distribution(smp.next_2d(), data.front_fracing_normal(), 1.0f);
-  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::Reflection};
+  float3 w_o = sample_cosine_distribution(smp.next_2d(), data.front_fracing_normal(), 1.0f);
+  return {w_o, evaluate(data, w_o, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::Reflection};
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  float n_dot_o = dot(data.nrm, data.w_o);
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+  float n_dot_o = dot(data.nrm, w_o);
   if (n_dot_o <= kEpsilon)
     return {data.spectrum_sample.wavelength, 0.0f};
 
@@ -22,8 +21,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  float n_dot_o = dot(data.nrm, data.w_o);
+ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+  float n_dot_o = dot(data.nrm, w_o);
   if (n_dot_o <= kEpsilon)
     return 0.0f;
 
@@ -51,11 +50,11 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
@@ -79,11 +78,11 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample.wavelength, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
