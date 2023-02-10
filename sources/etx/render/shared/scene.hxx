@@ -154,7 +154,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
     sample(in_intersection, mtl, 2u, smp),
   };
 
-  IntersectionBase intersections[kTotalIntersection] = {};
+  IntersectionBase intersections[kTotalIntersections] = {};
 
   ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, material_index};
   uint32_t intersections_0 = rt.continuous_trace(scene, ss_samples[0].ray, ct, smp);
@@ -164,7 +164,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
   uint32_t intersections_2 = rt.continuous_trace(scene, ss_samples[2].ray, ct, smp);
 
   uint32_t intersection_count = intersections_0 + intersections_1 + intersections_2;
-  ETX_CRITICAL(intersection_count <= kTotalIntersection);
+  ETX_CRITICAL(intersection_count <= kTotalIntersections);
   if (intersection_count == 0) {
     return {};
   }

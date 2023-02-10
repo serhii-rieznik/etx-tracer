@@ -178,25 +178,23 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     return false;
   }
 
-  payload.throughput *= bsdf_sample.weight;
-
   if (sample_subsurface) {
     const auto& out_intersection = ss_gather.intersections[ss_gather.selected_intersection];
-    float3 w_o = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
+    payload.ray.d = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
     payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
-    payload.sampled_bsdf_pdf = fabsf(dot(w_o, out_intersection.nrm)) / kPi;
+    payload.sampled_bsdf_pdf = fabsf(dot(payload.ray.d, out_intersection.nrm)) / kPi;
     payload.mis_weight = true;
-    payload.ray.d = w_o;
-    payload.ray.o = shading_pos(scene.vertices, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, w_o);
+    payload.ray.o = shading_pos(scene.vertices, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, payload.ray.d);
   } else {
     payload.medium = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium;
     payload.sampled_bsdf_pdf = bsdf_sample.pdf;
     payload.mis_weight = bsdf_sample.is_delta() == false;
     payload.eta *= bsdf_sample.eta;
     payload.ray.d = bsdf_sample.w_o;
-    payload.ray.o = shading_pos(scene.vertices, scene.triangles[intersection.triangle_index], intersection.barycentric, bsdf_sample.w_o);
+    payload.ray.o = shading_pos(scene.vertices, scene.triangles[intersection.triangle_index], intersection.barycentric, payload.ray.d);
   }
 
+  payload.throughput *= bsdf_sample.weight;
   if (payload.throughput.is_zero())
     return false;
 

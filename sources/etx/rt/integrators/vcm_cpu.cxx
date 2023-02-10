@@ -185,7 +185,10 @@ struct CPUVCMImpl {
           local_vertices.emplace_back(step_result.vertex_to_add);
         }
 
-        iteration_light_image.atomic_add({step_result.value_to_splat.x, step_result.value_to_splat.y, step_result.value_to_splat.z, 1.0f}, step_result.splat_uv, thread_id);
+        for (uint32_t i = 0; i < step_result.splat_count; ++i) {
+          const float3& val = step_result.values_to_splat[i];
+          iteration_light_image.atomic_add({val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i], thread_id);
+        }
 
         if (step_result.continue_tracing == false) {
           break;
