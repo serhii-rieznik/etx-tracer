@@ -45,34 +45,50 @@ void VCMOptions::store(Options& opt) {
   opt.add(enable_merging(), "merging", "Enable Merging");
 }
 
-void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius) {
+void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {
+  static_assert(sizeof(long) == sizeof(uint32_t));
+
   data = {};
   if (sample_count == 0) {
     return;
   }
-
-  _indices.resize(sample_count);
 
   TimeMeasure time_measure = {};
 
   data.radius_squared = radius * radius;
   data.cell_size = 2.0f * radius;
   data.bounding_box = {{kMaxFloat, kMaxFloat, kMaxFloat}, {-kMaxFloat, -kMaxFloat, -kMaxFloat}};
-  for (uint64_t i = 0; i < sample_count; ++i) {
-    const auto& p = samples[i];
-    data.bounding_box.p_min = min(data.bounding_box.p_min, p.position(scene));
-    data.bounding_box.p_max = max(data.bounding_box.p_max, p.position(scene));
+
+  std::vector<BoundingBox> thread_boxes(scheduler.max_thread_count(), {{kMaxFloat, kMaxFloat, kMaxFloat}, {-kMaxFloat, -kMaxFloat, -kMaxFloat}});
+  scheduler.execute(uint32_t(sample_count), [&scene, &thread_boxes, samples](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    for (uint32_t i = begin; i < end; ++i) {
+      const auto& p = samples[i];
+      thread_boxes[thread_id].p_min = min(thread_boxes[thread_id].p_min, p.position(scene));
+      thread_boxes[thread_id].p_max = max(thread_boxes[thread_id].p_max, p.position(scene));
+    }
+  });
+  for (const auto& bbox : thread_boxes) {
+    data.bounding_box.p_min = min(data.bounding_box.p_min, bbox.p_min);
+    data.bounding_box.p_max = max(data.bounding_box.p_max, bbox.p_max);
   }
 
   uint32_t hash_table_size = static_cast<uint32_t>(next_power_of_two(sample_count));
   data.hash_table_mask = hash_table_size - 1u;
 
+  _position_to_index.resize(sample_count);
+  _indices.resize(sample_count);
+
   _cell_ends.resize(hash_table_size);
   memset(_cell_ends.data(), 0, sizeof(uint32_t) * hash_table_size);
 
-  for (uint64_t i = 0; i < sample_count; ++i) {
-    _cell_ends[data.position_to_index(samples[i].position(scene))] += 1;
-  }
+  volatile long* ptr = reinterpret_cast<volatile long*>(_cell_ends.data());
+  scheduler.execute(uint32_t(sample_count), [&scene, &samples, this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    for (uint32_t i = begin; i < end; ++i) {
+      uint32_t index = data.position_to_index(samples[i].position(scene));
+      _position_to_index[i] = index;
+      _InterlockedIncrement(ptr + index);
+    }
+  });
 
   uint32_t sum = 0;
   for (auto& cell_end : _cell_ends) {
@@ -81,11 +97,14 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     sum += t;
   }
 
-  for (uint32_t i = 0, e = static_cast<uint32_t>(sample_count); i < e; ++i) {
-    uint32_t index = data.position_to_index(samples[i].position(scene));
-    auto target_cell = _cell_ends[index]++;
-    _indices[target_cell] = i;
-  }
+  ptr = reinterpret_cast<volatile long*>(_cell_ends.data());
+  scheduler.execute(uint32_t(sample_count), [this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    for (uint32_t i = begin; i < end; ++i) {
+      uint32_t index = _position_to_index[i];
+      uint32_t target_cell = _InterlockedIncrement(ptr + index);
+      _indices[target_cell - 1u] = i;
+    }
+  });
 
   data.indices = make_array_view<uint32_t>(_indices.data(), _indices.size());
   data.cell_ends = make_array_view<uint32_t>(_cell_ends.data(), _cell_ends.size());

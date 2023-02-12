@@ -154,7 +154,7 @@ struct CPUVCMImpl {
 
     if (vcm_options.enable_merging() && vcm_options.merge_vertices()) {
       TimeMeasure grid_time = {};
-      _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius);
+      _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius, rt.scheduler());
       stats.g_time = grid_time.measure();
     } else {
       stats.g_time = 0.0f;

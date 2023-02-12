@@ -418,7 +418,7 @@ struct GPUVCMImpl {
     });
     log::info(" --- sorting light vertices: %.2f sec", tm.lap());
 
-    grid_builder.construct(scene, light_vertices_ptr, light_vertex_count, iteration.current_radius);
+    grid_builder.construct(scene, light_vertices_ptr, light_vertex_count, iteration.current_radius, rt.scheduler());
     log::info(" --- constructing grid: %.2f sec", tm.lap());
 
     memset(paths_ptr, 0, paths_count * sizeof(VCMLightPath));
