@@ -152,11 +152,13 @@ struct CPUVCMImpl {
 
     stats.l_time = stats.light_gather_time.measure();
 
-    TimeMeasure grid_time = {};
     if (vcm_options.enable_merging() && vcm_options.merge_vertices()) {
+      TimeMeasure grid_time = {};
       _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius);
+      stats.g_time = grid_time.measure();
+    } else {
+      stats.g_time = 0.0f;
     }
-    stats.g_time = grid_time.measure();
     stats.camera_gather_time = {};
 
     vcm_state = VCMState::GatheringCameraVertices;

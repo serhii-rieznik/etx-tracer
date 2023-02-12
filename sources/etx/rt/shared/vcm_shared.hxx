@@ -134,14 +134,15 @@ constexpr uint64_t kVCMPathStateSize = sizeof(VCMPathState);
 struct ETX_ALIGNED VCMLightVertex {
   VCMLightVertex() = default;
 
-  ETX_GPU_CODE VCMLightVertex(const VCMPathState& s, const float3& p, const float3& b, uint32_t tri, uint32_t index)
+  ETX_GPU_CODE VCMLightVertex(const VCMPathState& s, const float3& a_pos, const float3& a_nrm, const float3& b, uint32_t tri, uint32_t index)
     : throughput(s.throughput)
     , w_i(s.ray.d)
     , d_vcm(s.d_vcm)
     , bc(b)
     , d_vc(s.d_vc)
-    , pos(p)
+    , pos(a_pos)
     , d_vm(s.d_vm)
+    , nrm(a_nrm)
     , triangle_index(tri)
     , path_length(s.total_path_depth)
     , path_index(index) {
@@ -158,21 +159,22 @@ struct ETX_ALIGNED VCMLightVertex {
   float3 pos = {};
   float d_vm = 0.0f;
 
+  float3 nrm = {};
   uint32_t triangle_index = kInvalidIndex;
+
   uint32_t path_length = 0;
   uint32_t path_index = 0;
-  uint32_t pad = 0;
 
   ETX_GPU_CODE Vertex vertex(const Scene& s) const {
     return lerp_vertex(s.vertices, s.triangles[triangle_index], bc);
   }
 
-  ETX_GPU_CODE float3 position(const Scene& s) const {
-    return pos;  // lerp_pos(s.vertices, s.triangles[triangle_index], bc);
+  ETX_GPU_CODE const float3& position(const Scene& s) const {
+    return pos;
   }
 
-  ETX_GPU_CODE float3 normal(const Scene& s) const {
-    return lerp_normal(s.vertices, s.triangles[triangle_index], bc);
+  ETX_GPU_CODE const float3& normal(const Scene& s) const {
+    return nrm;
   }
 };
 
@@ -668,7 +670,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
   ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, const Intersection& intersection,
     float vc_weight) const {
-    if ((options.merge_vertices() == false) || (indices.count == 0) || (state.total_path_depth + 1 > options.max_depth)) {
+    if ((indices.count == 0) || (state.total_path_depth + 1 > options.max_depth)) {
       return {};
     }
 
@@ -818,7 +820,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     result.add_vertex = true;
-    result.vertex_to_add = {state, intersection.pos, intersection.barycentric, intersection.triangle_index, path_index};
+    result.vertex_to_add = {state, intersection.pos, intersection.nrm, intersection.barycentric, intersection.triangle_index, path_index};
     result.splat_count = 0;
 
     if (options.connect_to_camera() && (state.total_path_depth + 1 <= options.max_depth)) {
