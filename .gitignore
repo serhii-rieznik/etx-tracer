@@ -4,3 +4,4 @@
 bin/options.json
 *.ptx
 *.fatbin
+bin/ui.ini
