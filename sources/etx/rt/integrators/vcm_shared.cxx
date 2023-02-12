@@ -4,7 +4,7 @@ namespace etx {
 
 VCMOptions VCMOptions::default_values() {
   VCMOptions options = {};
-  options.options = Default;
+  options.options = DefaultOptions;
   options.max_samples = 65536u;
   options.max_depth = 65536u;
   options.rr_start = 8u;
@@ -26,6 +26,7 @@ void VCMOptions::load(const Options& opt) {
   options = opt.get("connect_vertices", connect_vertices()).to_bool() ? (options | ConnectVertices) : (options & ~ConnectVertices);
   options = opt.get("merge_vertices", merge_vertices()).to_bool() ? (options | MergeVertices) : (options & ~MergeVertices);
   options = opt.get("mis", enable_mis()).to_bool() ? (options | EnableMis) : (options & ~EnableMis);
+  options = opt.get("merging", enable_merging()).to_bool() ? (options | EnableMerging) : (options & ~EnableMerging);
 }
 
 void VCMOptions::store(Options& opt) {
@@ -41,6 +42,7 @@ void VCMOptions::store(Options& opt) {
   opt.add(connect_vertices(), "connect_vertices", "Connect Vertices");
   opt.add(merge_vertices(), "merge_vertices", "Merge Vertices");
   opt.add(enable_mis(), "mis", "Multiple Importance Sampling");
+  opt.add(enable_merging(), "merging", "Enable Merging");
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius) {

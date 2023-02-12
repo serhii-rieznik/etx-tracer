@@ -170,12 +170,10 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
   }
 
   Gather result = {};
-
-  float total_weight = 0.0f;
   for (uint32_t i = 0; i < intersection_count; ++i) {
     Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
 
-    auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
+    auto out_intersection = make_intersection(scene, in_intersection.w_i, intersections[i]);
 
     float gw = geometric_weigth(out_intersection.nrm, ss_sample);
     float pdf = evaluate(spect, mtl, ss_sample.sampled_radius).average();
@@ -192,14 +190,14 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
     if (weight.is_zero())
       continue;
 
-    total_weight += weight.average();
+    result.total_weight += weight.average();
     result.intersections[result.intersection_count] = out_intersection;
     result.weights[result.intersection_count] = weight;
     result.intersection_count += 1u;
   }
 
-  if (total_weight > 0.0f) {
-    float rnd = smp.next() * total_weight;
+  if (result.total_weight > 0.0f) {
+    float rnd = smp.next() * result.total_weight;
     float partial_sum = 0.0f;
     float sample_weight = 0.0f;
     for (uint32_t i = 0; i < result.intersection_count; ++i) {
@@ -207,7 +205,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
       float next_sum = partial_sum + sample_weight;
       if (rnd < next_sum) {
         result.selected_intersection = i;
-        result.selected_sample_weight = total_weight / sample_weight;
+        result.selected_sample_weight = result.total_weight / sample_weight;
         break;
       }
       partial_sum = next_sum;

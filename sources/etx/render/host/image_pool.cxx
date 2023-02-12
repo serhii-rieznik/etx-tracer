@@ -305,11 +305,6 @@ struct ImagePoolImpl {
       return Image::Format::Undefined;
     }
 
-    if ((c != 3) && (c != 4)) {
-      free(image);
-      ETX_FAIL_FMT("Unsupported (yet) image format with %d channels", c);
-    }
-
     dimensions = {uint32_t(w), uint32_t(h)};
     data.resize(4llu * w * h);
     uint8_t* ptr = reinterpret_cast<uint8_t*>(data.data());
@@ -324,6 +319,16 @@ struct ImagePoolImpl {
           ptr[4 * i + 0] = image[3 * i + 0];
           ptr[4 * i + 1] = image[3 * i + 1];
           ptr[4 * i + 2] = image[3 * i + 2];
+          ptr[4 * i + 3] = 255;
+        }
+        break;
+      }
+
+      case 1: {
+        for (int i = 0; i < w * h; ++i) {
+          ptr[4 * i + 0] = image[i];
+          ptr[4 * i + 1] = image[i];
+          ptr[4 * i + 2] = image[i];
           ptr[4 * i + 3] = 255;
         }
         break;

@@ -127,6 +127,12 @@ struct CPUBidirectionalImpl : public Task {
   uint32_t opt_max_depth = 0x7fffffff;
   uint32_t opt_rr_start = 0x5;
 
+  bool conn_direct_hit = true;
+  bool conn_connect_to_light = true;
+  bool conn_connect_to_camera = true;
+  bool conn_connect_vertices = true;
+  bool conn_mis = true;
+
   CPUBidirectionalImpl(Raytracing& r, std::atomic<Integrator::State>* st)
     : rt(r)
     , state(st)
@@ -148,12 +154,6 @@ struct CPUBidirectionalImpl : public Task {
   bool running() const {
     return state->load() != Integrator::State::Stopped;
   }
-
-  constexpr static bool _direct_hit = true;
-  constexpr static bool _connect_to_camera = true;
-  constexpr static bool _connect_to_light = true;
-  constexpr static bool _connect_vertices = true;
-  constexpr static bool _enable_mis = true;
 
   float3 trace_pixel(RNDSampler& smp, const float2& uv, uint32_t thread_id) {
     auto& path_data = per_thread_path_data[thread_id];
@@ -177,21 +177,19 @@ struct CPUBidirectionalImpl : public Task {
         }
 
         if (light_s == 0) {
-          if (_direct_hit) {
-            result += direct_hit(path_data, spect, eye_t, light_s, smp);
-          }
+          result += direct_hit(path_data, spect, eye_t, light_s, smp);
         } else if (eye_t == 1) {
-          if (_connect_to_camera) {
+          if (conn_connect_to_camera) {
             CameraSample camera_sample = {};
             auto splat = connect_to_camera(smp, path_data, spect, eye_t, light_s, camera_sample);
             auto xyz = splat.to_xyz();
             iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv, thread_id);
           }
         } else if (light_s == 1) {
-          if (_connect_to_light) {
+          if (conn_connect_to_light) {
             result += connect_to_light(smp, path_data, spect, eye_t, light_s);
           }
-        } else if (_connect_vertices) {
+        } else if (conn_connect_vertices) {
           result += connect_vertices(smp, path_data, spect, eye_t, light_s);
         }
         ETX_VALIDATE(result);
@@ -376,7 +374,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   float mis_weight(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s, const PathVertex& sampled, Sampler& smp) {
-    if (_enable_mis == false) {
+    if (conn_mis == false) {
       return 1.0f;
     }
 
@@ -485,7 +483,7 @@ struct CPUBidirectionalImpl : public Task {
 
   SpectralResponse direct_hit(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s, Sampler& smp) {
     const auto& z_i = c.camera_path[eye_t];
-    if (z_i.is_emitter() == false) {
+    if ((conn_direct_hit == false) || (z_i.is_emitter() == false)) {
       return {spect.wavelength, 0.0f};
     }
 
@@ -623,6 +621,12 @@ struct CPUBidirectionalImpl : public Task {
     opt_max_depth = opt.get("pathlen", opt_max_depth).to_integer();
     opt_rr_start = opt.get("rrstart", opt_rr_start).to_integer();
 
+    conn_direct_hit = opt.get("conn_direct_hit", conn_direct_hit).to_bool();
+    conn_connect_to_camera = opt.get("conn_connect_to_camera", conn_connect_to_camera).to_bool();
+    conn_connect_to_light = opt.get("conn_connect_to_light", conn_connect_to_light).to_bool();
+    conn_connect_vertices = opt.get("conn_connect_vertices", conn_connect_vertices).to_bool();
+    conn_mis = opt.get("conn_mis", conn_mis).to_bool();
+
     iteration_light_image.clear();
 
     uint32_t dim = camera_image.dimensions().x * camera_image.dimensions().y;
@@ -719,11 +723,19 @@ Options CPUBidirectional::options() const {
   Options result = {};
   result.add(1u, _private->opt_max_iterations, 0xffffu, "spp", "Max Iterations");
   result.add(1u, _private->opt_max_depth, 65536u, "pathlen", "Maximal Path Length");
-  result.add(1u, _private->opt_rr_start, 65536u, "rrstart", "Start Russian Roulette at");
+  result.add(1u, _private->opt_rr_start, 65536u, "rrstart", "Start russian Roulette at");
+  result.add(_private->conn_direct_hit, "conn_direct_hit", "Direct Hits");
+  result.add(_private->conn_connect_to_camera, "conn_connect_to_camera", "Connect to Camera");
+  result.add(_private->conn_connect_to_light, "conn_connect_to_light", "Connect to Light");
+  result.add(_private->conn_connect_vertices, "conn_connect_vertices", "Connect Vertices");
+  result.add(_private->conn_mis, "conn_mis", "Multiple Importance Sampling");
   return result;
 }
 
-void CPUBidirectional::update_options(const Options&) {
+void CPUBidirectional::update_options(const Options& opt) {
+  if (current_state == State::Preview) {
+    preview(opt);
+  }
 }
 
 void CPUBidirectional::set_output_size(const uint2& dim) {

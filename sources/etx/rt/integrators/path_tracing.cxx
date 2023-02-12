@@ -186,7 +186,7 @@ Options CPUPathTracing::options() const {
   Options result = {};
   result.add(1u, _private->options.iterations, 0xffffu, "spp", "Samples per Pixel");
   result.add(1u, _private->options.max_depth, 65536u, "pathlen", "Maximal Path Length");
-  result.add(1u, _private->options.rr_start, 65536u, "rrstart", "Start Russian Roulette at");
+  result.add(1u, _private->options.rr_start, 65536u, "rrstart", "Start russian Roulette at");
   result.add(_private->options.nee, "nee", "Next Event Estimation");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
   return result;

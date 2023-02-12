@@ -144,6 +144,7 @@ void RTApplication::frame() {
 
 void RTApplication::cleanup() {
   render.cleanup();
+  ui.cleanup();
 }
 
 void RTApplication::process_event(const sapp_event* e) {

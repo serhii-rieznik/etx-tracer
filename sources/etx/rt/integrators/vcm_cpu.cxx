@@ -137,7 +137,7 @@ struct CPUVCMImpl {
     vcm_iteration.current_radius = used_radius * radius_scale;
 
     float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(camera_image.count());
-    vcm_iteration.vm_weight = vcm_options.merge_vertices() ? eta_vcm : 0.0f;
+    vcm_iteration.vm_weight = vcm_options.enable_merging() ? eta_vcm : 0.0f;
     vcm_iteration.vc_weight = 1.0f / eta_vcm;
     vcm_iteration.vm_normalization = 1.0f / eta_vcm;
 
@@ -153,7 +153,7 @@ struct CPUVCMImpl {
     stats.l_time = stats.light_gather_time.measure();
 
     TimeMeasure grid_time = {};
-    if (vcm_options.merge_vertices()) {
+    if (vcm_options.enable_merging() && vcm_options.merge_vertices()) {
       _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius);
     }
     stats.g_time = grid_time.measure();
@@ -319,7 +319,10 @@ void CPUVCM::stop(Stop st) {
   }
 }
 
-void CPUVCM::update_options(const Options&) {
+void CPUVCM::update_options(const Options& opt) {
+  if (current_state == State::Preview) {
+    preview(opt);
+  }
 }
 
 bool CPUVCM::have_updated_camera_image() const {

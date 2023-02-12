@@ -11,6 +11,7 @@ struct Gather {
   uint32_t intersection_count = 0;
   uint32_t selected_intersection = kInvalidIndex;
   float selected_sample_weight = 0.0f;
+  float total_weight = 0.0f;
 };
 
 ETX_GPU_CODE float sample_s_r(float rnd) {

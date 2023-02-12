@@ -97,7 +97,7 @@ ETX_GPU_CODE float sampleHeight(const RayInfo& ray, const float U) {
 }
 
 ETX_GPU_CODE float D_ggx(const float3& wm, const float alpha_x, const float alpha_y) {
-  if (wm.z <= 0.0f)
+  if (wm.z <= kEpsilon)
     return 0.0f;
 
   // slope of wm
@@ -106,7 +106,10 @@ ETX_GPU_CODE float D_ggx(const float3& wm, const float alpha_x, const float alph
 
   // P22
   const float tmp = 1.0f + slope_x * slope_x / (alpha_x * alpha_x) + slope_y * slope_y / (alpha_y * alpha_y);
+  ETX_VALIDATE(tmp);
+
   const float P22 = 1.0f / (kPi * alpha_x * alpha_y) / (tmp * tmp);
+  ETX_VALIDATE(P22);
 
   // value
   return P22 / (wm.z * wm.z * wm.z * wm.z);
@@ -199,16 +202,26 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_conductor(SpectralQuery spect, c
   if (wh.z < 0.0f)
     return {spect.wavelength, 0.0f};
 
+  float w_dot_h = dot(-ray.w, wh);
+  if (w_dot_h < kEpsilon)
+    return {spect.wavelength, 0.0f};
+
   // projected area
-  float projectedArea;
-  if (ray.w.z < -0.9999f)
-    projectedArea = 1.0f;
-  else
-    projectedArea = ray.Lambda * ray.w.z;
+  float projectedArea = (ray.w.z < -0.9999f) ? 1.0f : ray.Lambda * ray.w.z;
+  if (projectedArea < kEpsilon)
+    return {spect.wavelength, 0.0f};
 
   // value
-  return fresnel::conductor(spect, -ray.w, wh, ext_ior, int_ior, thinfilm) *  //
-         max(0.0f, dot(-ray.w, wh)) * D_ggx(wh, alpha_x, alpha_y) / 4.0f / projectedArea / dot(-ray.w, wh);
+  auto f = fresnel::conductor(spect, -ray.w, wh, ext_ior, int_ior, thinfilm);
+  ETX_VALIDATE(f);
+
+  float d_ggx = D_ggx(wh, alpha_x, alpha_y);
+  ETX_VALIDATE(d_ggx);
+  
+  float d = d_ggx / (4.0f * projectedArea);
+  ETX_VALIDATE(d);
+  
+  return f * d;
 }
 
 ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y,
@@ -301,9 +314,10 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
   const float D = D_ggx(wh, alpha_x, alpha_y);
   const float G2 = 1.0f / (1.0f + (-ray.Lambda - 1.0f) + ray_shadowing.Lambda);
   SpectralResponse singleScattering = fresnel::conductor(spect, ray.w, wh, ext_ior, int_ior, thinfilm) * D * G2 / (4.0f * wi.z);
+  ETX_VALIDATE(singleScattering);
 
   // MIS weight
-  float wi_MISweight;
+  float wi_MISweight = 0.0f;
 
   // multiple scattering
   SpectralResponse multipleScattering = {spect.wavelength, 0.0f};
@@ -324,13 +338,18 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
     if (current_scatteringOrder > 1)  // single scattering is already computed
     {
       SpectralResponse phasefunction = evalPhaseFunction_conductor(spect, ray, wo, alpha_x, alpha_y, ext_ior, int_ior, thinfilm);
+      ETX_VALIDATE(phasefunction);
+
       ray_shadowing.updateHeight(ray.h);
       float shadowing = ray_shadowing.G1;
       SpectralResponse I = energy * phasefunction * shadowing;
+      ETX_VALIDATE(I);
 
       // MIS
       const float MIS = wi_MISweight / (wi_MISweight + MISweight_conductor(-ray.w, wo, alpha_x, alpha_y));
+      ETX_VALIDATE(MIS);
       multipleScattering += I * MIS;
+      ETX_VALIDATE(multipleScattering);
     }
 
     // next direction

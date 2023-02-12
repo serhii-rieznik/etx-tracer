@@ -83,7 +83,7 @@ Options GPUPathTracing::options() const {
   Options result = {};
   result.add(1u, _private->gpu_data.options.iterations, 0xffffu, "spp", "Samples per Pixel");
   result.add(1u, _private->gpu_data.options.max_depth, 65536u, "pathlen", "Maximal Path Length");
-  result.add(1u, _private->gpu_data.options.rr_start, 65536u, "rrstart", "Start Russian Roulette at");
+  result.add(1u, _private->gpu_data.options.rr_start, 65536u, "rrstart", "Start russian Roulette at");
   result.add(1u, _private->gpu_data.options.path_per_iteration, 256u, "plen", "Path Length per iteration");
   result.add(1.0f, _private->frame_time_ms, 100.0f, "framems", "CPU frame time (ms)");
   result.add(_private->denoise, "denoise", "Denoise");

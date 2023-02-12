@@ -320,13 +320,11 @@ ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
   struct basis {
     float3 u, v;
   };
-  float s = (n.z < 0.0f ? -1.0f : 1.0f);
-  float a = -1.0f / (s + n.z);
-  float b = n.x * n.y * a;
-  return basis{
-    {1.0f + s * n.x * n.x * a, s * b, -s * n.x},
-    {b, s + n.y * n.y * a, -n.y},
-  };
+  float3 a = normalize((n.x != n.y) || (n.x != n.z)                  //
+                         ? float3{n.z - n.y, n.x - n.z, +n.y - n.x}  //
+                         : float3{n.z - n.y, n.x + n.z, -n.y - n.x});
+  float3 b = normalize(cross(n, a));
+  return basis{a, b};
 }
 
 ETX_GPU_CODE float3 sample_cosine_distribution(const float2 rnd, const float3& n, const float3& u, const float3& v, float exponent) {
