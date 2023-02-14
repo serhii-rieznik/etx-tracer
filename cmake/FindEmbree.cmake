@@ -26,7 +26,7 @@
 # The module defines the following variables:
 #   EMBREE_INCLUDE_DIR - path to embree header directory
 #   EMBREE_LIBRARY     - path to embree library file
-#       EMBREE_FOUND   - true if embree was found
+#   EMBREE_FOUND       - true if embree was found
 #
 # Example usage:
 #   find_package(EMBREE)
@@ -37,50 +37,52 @@
 #=============================================================================
 
 if (APPLE)
-    set (EMBREE_LIB_NAME libembree3.dylib)
+    set(EMBREE_INC_NAME libembree4.dylib)
 elseif (UNIX)
-    set (EMBREE_LIB_NAME libembree3.so)
+    set(EMBREE_LIB_NAME libembree4.so)
 elseif (WIN32)
-    set (EMBREE_LIB_NAME embree3.lib)
+    set(EMBREE_LIB_NAME embree4.lib)
 endif()
 
-find_library(EMBREE_LIBRARY
-        "${EMBREE_LIB_NAME}"
-    HINTS
-        "${EMBREE_LOCATION}/lib64"
-        "${EMBREE_LOCATION}/lib"
-        "$ENV{EMBREE_LOCATION}/lib64"
-        "$ENV{EMBREE_LOCATION}/lib"
-    DOC
-        "Embree library path"
+if (NOT DEFINED EMBREE_LOCATION)
+  message("EMBREE_LOCATION is not defined")
+  if ("$ENV{EMBREE_LOCATION}" STREQUAL "")
+      message("Environment variable EMBREE_LOCATION is not defined")
+  endif()
+endif()
+
+set(EMBREE_INC_NAME embree4)
+
+find_library(EMBREE_LIBRARY 
+    "${EMBREE_LIB_NAME}"
+  HINTS
+    "${EMBREE_LOCATION}/lib64"
+    "${EMBREE_LOCATION}/lib"
+    "$ENV{EMBREE_LOCATION}/lib64"
+    "$ENV{EMBREE_LOCATION}/lib"
+  DOC   
+    "Embree library path"
 )
 
-find_path(EMBREE_INCLUDE_DIR
-    embree3/rtcore.h
-HINTS
+find_path(EMBREE_INCLUDE_DIR 
+    "${EMBREE_INC_NAME}/rtcore.h"
+  HINTS 
     "${EMBREE_LOCATION}/include"
     "$ENV{EMBREE_LOCATION}/include"
-DOC
+  DOC
     "Embree headers path"
 )
 
-if (EMBREE_INCLUDE_DIR AND EXISTS "${EMBREE_INCLUDE_DIR}/embree3/rtcore_version.h" )
-    file(STRINGS "${EMBREE_INCLUDE_DIR}/embree3/rtcore_version.h" TMP REGEX "^#define RTC_VERSION_MAJOR.*$")
+if (EMBREE_INCLUDE_DIR AND EXISTS "${EMBREE_INCLUDE_DIR}/${EMBREE_INC_NAME}/rtcore_version.h" )
+    file(STRINGS "${EMBREE_INCLUDE_DIR}/${EMBREE_INC_NAME}/rtcore_version.h" TMP REGEX "^#define RTC_VERSION_MAJOR.*$")
     string(REGEX MATCHALL "[0-9]+" MAJOR ${TMP})
-    file(STRINGS "${EMBREE_INCLUDE_DIR}/embree3/rtcore_version.h" TMP REGEX "^#define RTC_VERSION_MINOR.*$")
+    file(STRINGS "${EMBREE_INCLUDE_DIR}/${EMBREE_INC_NAME}/rtcore_version.h" TMP REGEX "^#define RTC_VERSION_MINOR.*$")
     string(REGEX MATCHALL "[0-9]+" MINOR ${TMP})
-    file(STRINGS "${EMBREE_INCLUDE_DIR}/embree3/rtcore_version.h" TMP REGEX "^#define RTC_VERSION_PATCH.*$")
+    file(STRINGS "${EMBREE_INCLUDE_DIR}/${EMBREE_INC_NAME}/rtcore_version.h" TMP REGEX "^#define RTC_VERSION_PATCH.*$")
     string(REGEX MATCHALL "[0-9]+" PATCH ${TMP})
-
     set (EMBREE_VERSION ${MAJOR}.${MINOR}.${PATCH})
 endif()
 
 include(FindPackageHandleStandardArgs)
 
-find_package_handle_standard_args(embree
-    REQUIRED_VARS
-        EMBREE_INCLUDE_DIR
-        EMBREE_LIBRARY
-    VERSION_VAR
-        EMBREE_VERSION
-)
+find_package_handle_standard_args(embree REQUIRED_VARS EMBREE_INCLUDE_DIR EMBREE_LIBRARY VERSION_VAR EMBREE_VERSION)

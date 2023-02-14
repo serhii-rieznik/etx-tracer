@@ -65,7 +65,7 @@ if (WITH_OPENVDB)
   target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 endif()
 
-find_package(embree 3.0 REQUIRED)
+find_package(embree 4.0 REQUIRED)
 
 set(HAS_OPTIX 0)
 
