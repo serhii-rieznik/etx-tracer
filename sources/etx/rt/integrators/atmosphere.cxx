@@ -184,7 +184,7 @@ struct CPUAtmosphereImpl : public Task {
     total_time = {};
     iteration_time = {};
     pixels_processed = 0;
-    current_task = rt.scheduler().schedule(this, camera_image.dimensions().x);
+    current_task = rt.scheduler().schedule(camera_image.dimensions().x, this);
   }
 
   void execute_range(uint32_t x_begin, uint32_t x_end, uint32_t thread_id) override {

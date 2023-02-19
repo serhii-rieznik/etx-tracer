@@ -143,7 +143,7 @@ struct CPUVCMImpl {
 
     _light_paths.clear();
     _light_vertices.clear();
-    current_task = rt.scheduler().schedule(&gather_light_job, camera_image.count());
+    current_task = rt.scheduler().schedule(camera_image.count(), &gather_light_job);
   }
 
   void continue_iteration() {
@@ -162,7 +162,7 @@ struct CPUVCMImpl {
     stats.camera_gather_time = {};
 
     vcm_state = VCMState::GatheringCameraVertices;
-    current_task = rt.scheduler().schedule(&gather_camera_job, camera_image.count());
+    current_task = rt.scheduler().schedule(camera_image.count(), &gather_camera_job);
   }
 
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {

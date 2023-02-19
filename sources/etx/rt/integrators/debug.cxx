@@ -51,7 +51,7 @@ struct CPUDebugIntegratorImpl : public Task {
 
     total_time = {};
     iteration_time = {};
-    current_task = rt.scheduler().schedule(this, current_dimensions.x * current_dimensions.y);
+    current_task = rt.scheduler().schedule(current_dimensions.x * current_dimensions.y, this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {

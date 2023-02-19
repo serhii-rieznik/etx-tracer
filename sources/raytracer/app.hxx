@@ -7,6 +7,7 @@
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/direct.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
+#include <etx/rt/integrators/path_tracing_2.hxx>
 #include <etx/rt/integrators/path_tracing_gpu.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
@@ -68,16 +69,18 @@ struct RTApplication {
   CPUDebugIntegrator _preview = {raytracing};
   CPUDirectLighting _cpu_direct = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
+  CPUPathTracing2 _cpu_pt_2 = {raytracing};
   GPUPathTracing _gpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
   GPUVCM _gpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};
 
-  Integrator* _integrator_array[6] = {
+  Integrator* _integrator_array[7] = {
     &_preview,
     &_cpu_direct,
     &_cpu_pt,
+    &_cpu_pt_2,
     &_cpu_bidir,
     &_cpu_vcm,
     //&_gpu_pt,

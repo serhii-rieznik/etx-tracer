@@ -640,7 +640,7 @@ struct CPUBidirectionalImpl : public Task {
 
     total_time = {};
     iteration_time = {};
-    current_task = rt.scheduler().schedule(this, dim);
+    current_task = rt.scheduler().schedule(dim, this);
   }
 };
 

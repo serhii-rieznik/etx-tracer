@@ -163,12 +163,12 @@ struct CPUDirectLightingImpl {
   void start_generating_reservoirs() {
     iteration_time = {};
     operation = Operation::GenReservoirs;
-    current_task = rt.scheduler().schedule(&gen_reservoirs_task, current_dimensions.x * current_dimensions.y);
+    current_task = rt.scheduler().schedule(current_dimensions.x * current_dimensions.y, &gen_reservoirs_task);
   }
 
   void start_final_gather() {
     operation = Operation::FinalGather;
-    current_task = rt.scheduler().schedule(&final_gather_task, current_dimensions.x * current_dimensions.y);
+    current_task = rt.scheduler().schedule(current_dimensions.x * current_dimensions.y, &final_gather_task);
   }
 
   struct FinalGatherTask : Task {

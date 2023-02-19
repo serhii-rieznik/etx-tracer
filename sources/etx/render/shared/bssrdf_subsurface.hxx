@@ -8,8 +8,8 @@ constexpr uint32_t kTotalIntersections = kIntersectionDirections * kIntersection
 struct Gather {
   Intersection intersections[kTotalIntersections] = {};
   SpectralResponse weights[kTotalIntersections] = {};
-  uint32_t intersection_count = 0;
-  uint32_t selected_intersection = kInvalidIndex;
+  uint32_t intersection_count = 0u;
+  uint32_t selected_intersection = 0u;
   float selected_sample_weight = 0.0f;
   float total_weight = 0.0f;
 };

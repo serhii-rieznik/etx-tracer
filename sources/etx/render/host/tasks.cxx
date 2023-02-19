@@ -71,7 +71,7 @@ uint32_t TaskScheduler::max_thread_count() {
   return _private->scheduler.GetConfig().numTaskThreadsToCreate + 1;
 }
 
-Task::Handle TaskScheduler::schedule(Task* t, uint32_t range) {
+Task::Handle TaskScheduler::schedule(uint32_t range, Task* t) {
   auto handle = _private->task_pool.alloc(t, range, 1u);
   auto& task_wrapper = _private->task_pool.get(handle);
   _private->scheduler.AddTaskSetToPipe(&task_wrapper);
@@ -91,8 +91,8 @@ Task::Handle TaskScheduler::schedule(uint32_t range, std::function<void(uint32_t
   return {task_handle};
 }
 
-void TaskScheduler::execute(Task* t, uint32_t range) {
-  wait(schedule(t, range));
+void TaskScheduler::execute(uint32_t range, Task* t) {
+  wait(schedule(range, t));
 }
 
 void TaskScheduler::execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {

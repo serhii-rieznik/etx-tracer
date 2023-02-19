@@ -145,7 +145,7 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
 namespace subsurface {
 
 template <class RT>
-ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp) {
+ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp, Gather& result) {
   const auto& mtl = scene.materials[material_index].subsurface;
 
   Sample ss_samples[3] = {
@@ -155,7 +155,6 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
   };
 
   IntersectionBase intersections[kTotalIntersections] = {};
-
   ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, material_index};
   uint32_t intersections_0 = rt.continuous_trace(scene, ss_samples[0].ray, ct, smp);
   ct.intersection_buffer += intersections_0;
@@ -166,10 +165,10 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
   uint32_t intersection_count = intersections_0 + intersections_1 + intersections_2;
   ETX_CRITICAL(intersection_count <= kTotalIntersections);
   if (intersection_count == 0) {
-    return {};
+    return false;
   }
 
-  Gather result = {};
+  result = {};
   for (uint32_t i = 0; i < intersection_count; ++i) {
     Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
 
@@ -213,7 +212,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
     ETX_ASSERT(result.selected_intersection != kInvalidIndex);
   }
 
-  return result;
+  return result.intersection_count > 0;
 }
 
 }  // namespace subsurface

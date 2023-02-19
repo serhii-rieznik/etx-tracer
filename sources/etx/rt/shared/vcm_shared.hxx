@@ -739,14 +739,11 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   vcm_handle_direct_hit(scene, options, intersection, state);
 
   subsurface::Gather ss_gather = {};
-  bool sample_subsurface = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
-  if (sample_subsurface) {
-    ss_gather = subsurface::gather(state.spect, scene, intersection, tri.material_index, rt, state.sampler);
-    sample_subsurface = ss_gather.intersection_count > 0;
-  }
+  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
+  bool subsurface_sampled = subsurface_path && subsurface::gather(state.spect, scene, intersection, tri.material_index, rt, state.sampler, ss_gather);
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
-    if (sample_subsurface) {
+    if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
         state.gathered += ss_gather.weights[i] * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, ss_gather.intersections[i], rt, state);
         state.gathered += ss_gather.weights[i] * vcm_connect_to_light(scene, iteration, options, ss_gather.intersections[i], rt, state);
@@ -757,7 +754,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     }
   }
 
-  if (sample_subsurface) {
+  if (subsurface_sampled) {
     state.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
     intersection = ss_gather.intersections[ss_gather.selected_intersection];
     bsdf_sample.w_o = sample_cosine_distribution(state.sampler.next_2d(), intersection.nrm, 1.0f);
@@ -769,7 +766,11 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     state.merged += spatial_grid.gather(scene, state, light_vertices, options, intersection, iteration.vc_weight);
   }
 
-  return vcm_next_ray(scene, PathSource::Camera, options, state, iteration, intersection, bsdf_data, bsdf_sample, sample_subsurface);
+  if (subsurface_path && (subsurface_sampled == false)) {
+    return false;
+  }
+
+  return vcm_next_ray(scene, PathSource::Camera, options, state, iteration, intersection, bsdf_data, bsdf_sample, subsurface_sampled);
 }
 
 struct ETX_ALIGNED LightStepResult {
@@ -812,11 +813,8 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
   vcm_update_light_vcm(intersection, state);
 
   subsurface::Gather ss_gather = {};
-  bool sample_subsurface = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
-  if (sample_subsurface) {
-    ss_gather = subsurface::gather(state.spect, scene, intersection, tri.material_index, rt, state.sampler);
-    sample_subsurface = ss_gather.intersection_count > 0;
-  }
+  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
+  bool subsurface_sampled = subsurface::gather(state.spect, scene, intersection, tri.material_index, rt, state.sampler, ss_gather);
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     result.add_vertex = true;
@@ -824,7 +822,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
     result.splat_count = 0;
 
     if (options.connect_to_camera() && (state.total_path_depth + 1 <= options.max_depth)) {
-      if (sample_subsurface) {
+      if (subsurface_sampled) {
         for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
           auto value = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options,  //
             ss_gather.intersections[i], ss_gather.weights[i], state, result.splat_uvs[result.splat_count]);
@@ -843,7 +841,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
     }
   }
 
-  if (sample_subsurface) {
+  if (subsurface_sampled) {
     state.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
     ETX_VALIDATE(state.throughput);
     intersection = ss_gather.intersections[ss_gather.selected_intersection];
@@ -852,7 +850,11 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
     bsdf_sample.eta = 1.0f;
   }
 
-  if (vcm_next_ray(scene, PathSource::Light, options, state, iteration, intersection, bsdf_data, bsdf_sample, sample_subsurface) == false) {
+  if (subsurface_path && (subsurface_sampled == false)) {
+    return result;
+  }
+
+  if (vcm_next_ray(scene, PathSource::Light, options, state, iteration, intersection, bsdf_data, bsdf_sample, subsurface_sampled) == false) {
     return result;
   }
 
