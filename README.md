@@ -62,7 +62,6 @@ All updates will be located here: [BUILDING.md](docs/BUILDING.md)
 #### Sponsors
 This project is GitHub-sponsored by:
 * [Traverse-Research](https://github.com/Traverse-Research)
-* [voxel-tracer](https://github.com/voxel-tracer)
 
 #### Links
 Links to the books/papers/publications/resources I've used during the development:
