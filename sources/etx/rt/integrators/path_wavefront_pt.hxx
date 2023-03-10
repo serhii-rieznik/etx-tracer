@@ -1,6 +1,5 @@
 ﻿#pragma once
 
-#include <etx/core/pimpl.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 
 namespace etx {

@@ -80,7 +80,6 @@ ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, uint2 px, uint2 d
 }
 
 ETX_GPU_CODE void make_ray_payload(const Scene& scene, uint2 dim, uint32_t iteration, PTRayPayloadSoA& payload, uint32_t index) {
-  payload.iteration[index] = iteration;
   Sampler smp(index, iteration);
   SpectralQuery spect = spectrum::sample(smp.next());
   float2 uv = get_jittered_uv(smp, {index % dim.x, index / dim.x}, dim);
@@ -95,6 +94,7 @@ ETX_GPU_CODE void make_ray_payload(const Scene& scene, uint2 dim, uint32_t itera
   payload.sampled_bsdf_pdf[index] = 0.0f;
   payload.mis_weight[index] = 1u;
   payload.ray_state[index] = PTRayState::ContinueIteration;
+  payload.iteration[index] = iteration;
 }
 
 ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload& payload, float max_t) {

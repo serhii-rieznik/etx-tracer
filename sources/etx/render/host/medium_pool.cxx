@@ -4,9 +4,7 @@
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/pool.hxx>
 
-#if (ETX_HAVE_OPENVDB)
-#include <openvdb/openvdb.h>
-#endif
+#include <nanovdb/util/IO.h>
 
 #include <unordered_map>
 #include <functional>
@@ -102,55 +100,72 @@ struct MediumPoolImpl {
     std::vector<float> density;
 
     const char* ext = get_file_ext(file_name);
-    if (_stricmp(ext, ".vdb") == 0) {
-      load_vdb(file_name, density, d);
+    if (_stricmp(ext, ".nvdb") == 0) {
+      load_nvdb(file_name, density, d);
     } else {
-      log::error("Only VDB volumetric data format is supported at the moment");
+      log::error("Only NVDB volumetric data format is supported at the moment");
     }
 
     return density;
   }
 
-  void load_vdb(const char* file_name, std::vector<float>& density, uint3& d) {
+  void load_nvdb(const char* file_name, std::vector<float>& density, uint3& d) {
     d = {};
     density.clear();
-#if (ETX_HAVE_OPENVDB)
-    static bool openvdb_initialized = false;
 
-    if (openvdb_initialized == false) {
-      openvdb::initialize();
-      openvdb_initialized = true;
-    }
-
-    openvdb::io::File in_file(file_name);
-    if (in_file.open() == false) {
+    auto handle = nanovdb::io::readGrid(file_name);
+    auto grid = handle.grid<float>(0);
+    if (grid == nullptr) {
       return;
     }
 
-    auto grids = in_file.getGrids();
+    auto accessor = grid->getAccessor();
+    const auto& grid_bbox = grid->indexBBox();
+    const auto& min = grid_bbox.min();
+    const auto& max = grid_bbox.max();
+    auto dim = max - min;
+    d.x = static_cast<uint32_t>(dim.x());
+    d.y = static_cast<uint32_t>(dim.y());
+    d.z = static_cast<uint32_t>(dim.z());
+    uint32_t dmax = std::max(d.x, std::max(d.y, d.z));
+    float3 fd = {float(d.x) / float(dmax), float(d.y) / float(dmax), float(d.z) / float(dmax)};
 
-    for (const auto& base_grid : *grids) {
-      openvdb::FloatGrid::Ptr grid = openvdb::gridPtrCast<openvdb::FloatGrid>(base_grid);
-      if (grid) {
-        auto grid_bbox = grid->evalActiveVoxelBoundingBox();
-        auto grid_dim = grid->evalActiveVoxelDim().asVec3i();
+    log::info("Medium bounding box: [%d %d %d]...[%d %d %d] : [%d %d %d] (%.4f %.4f %.4f)",  //
+      grid_bbox.min().x(), grid_bbox.min().y(), grid_bbox.min().z(),                         //
+      grid_bbox.max().x(), grid_bbox.max().y(), grid_bbox.max().z(),                         //
+      d.x, d.y, d.z, fd.x, fd.y, fd.z);
 
-        d.x = grid_dim.x();
-        d.y = grid_dim.y();
-        d.z = grid_dim.z();
-        density.resize(1llu * d.x * d.y * d.z, 0.0f);
-        log::info("Loaded VDB grid dimensions: %u x %u x %u", d.x, d.y, d.z);
+    density.resize(1llu * d.x * d.y * d.z, 0.0f);
 
-        for (auto i = grid->beginValueOn(); i; ++i) {
-          auto pos = (i.getCoord() - grid_bbox.getStart()).asVec3i();
-          density[pos.x() + 1llu * pos.y() * d.x + 1llu * pos.z() * d.x * d.y] = i.getValue();
+    float min_val = FLT_MAX;
+    float max_val = -FLT_MAX;
+    double avg_val = 0.0f;
+    uint64_t value_count = 0;
+    nanovdb::Coord c = {};
+    for (c.z() = min.z(); c.z() < max.z(); ++c.z()) {
+      for (c.y() = min.y(); c.y() < max.y(); ++c.y()) {
+        for (c.x() = min.x(); c.x() < max.x(); ++c.x()) {
+          float val = accessor.getValue(c);
+          if (val > 0.0f) {
+            min_val = std::min(min_val, val);
+            max_val = std::max(max_val, val);
+            nanovdb::Coord cr = c - min;
+            density[cr.x() + 1llu * cr.y() * d.x + 1llu * cr.z() * d.x * d.y] = val;
+            value_count += 1u;
+            avg_val += val;
+          }
         }
-        break;
       }
     }
-#else
-    log::error("Loading from VDB is disabled. Generate project using CMake with `-DWITH_OPENVDB=1` option to enable support.");
-#endif
+    avg_val /= float(value_count);
+
+    log::info("Density values range: %.5f ... %.5f ... %.5f", min_val, avg_val, max_val);
+    if ((value_count == 0) || (min_val == FLT_MAX) || ((max_val - min_val) <= kEpsilon) || (avg_val <= kEpsilon)) {
+      log::warning("Density is zero or too small, clearing...");
+      d = {};
+      density.clear();
+      density.shrink_to_fit();
+    }
   }
 
   ObjectIndexPool<Medium> medium_pool;

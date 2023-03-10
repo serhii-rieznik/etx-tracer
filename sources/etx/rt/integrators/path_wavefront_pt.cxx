@@ -1,13 +1,4 @@
-﻿#include <etx/core/core.hxx>
-#include <etx/log/log.hxx>
-
-#include <etx/render/shared/base.hxx>
-#include <etx/render/shared/bsdf.hxx>
-#include <etx/render/host/rnd_sampler.hxx>
-#include <etx/render/host/film.hxx>
-
-#include <etx/rt/integrators/path_wavefront_pt.hxx>
-#include <etx/rt/shared/path_tracing_shared.hxx>
+﻿#include <etx/rt/integrators/path_wavefront_pt.hxx>
 
 namespace etx {
 
@@ -163,29 +154,34 @@ struct CPUWavefrontPTImpl {
   void trace_execute_range(Raytracing& rt, uint32_t begin, uint32_t end, uint32_t thread_id) {
     const auto& scene = rt.scene();
     for (uint32_t i = begin; i < end; ++i) {
-      if (payload.ray_state[i] == PTRayState::Finished) {
-        if (count_wasted) {
-          ++wasted_invocations;
+      switch (payload.ray_state[i]) {
+        case PTRayState::EndIteration: {
+          float it = float(payload.iteration[i]) / float(payload.iteration[i] + 1u);
+          auto xyz = (payload.accumulated[i] / spectrum::sample_pdf()).to_xyz();
+          camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, i % dimensions.x, i / dimensions.x, it);
+          make_ray_payload(scene, dimensions, payload.iteration[i] + 1u, payload, i);
+          if (payload.iteration[i] == options.iterations) {
+            payload.ray_state[i] = PTRayState::Finished;
+            completed_rays += 1u;
+          }
+          break;
         }
-        continue;
-      }
-
-      if (payload.ray_state[i] == PTRayState::EndIteration) {
-        float it = float(payload.iteration[i]) / float(payload.iteration[i] + 1u);
-        auto xyz = (payload.accumulated[i] / spectrum::sample_pdf()).to_xyz();
-        camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, i % dimensions.x, i / dimensions.x, it);
-        make_ray_payload(scene, dimensions, payload.iteration[i] + 1u, payload, i);
-        if (payload.iteration[i] == options.iterations) {
-          payload.ray_state[i] = PTRayState::Finished;
-          completed_rays += 1u;
+        case PTRayState::ContinueIteration: {
+          active_rays[active_ray_count++] = i;
+          payload.intersection[i].t = kMaxFloat;
+          bool intersection_found = rt.trace(scene, payload.ray[i], payload.intersection[i], payload.smp[i]);
+          payload.ray_state[i] = intersection_found ? PTRayState::IntersectionFound : PTRayState::NoIntersection;
+          break;
         }
-      }
-
-      if (payload.ray_state[i] == PTRayState::ContinueIteration) {
-        active_rays[active_ray_count++] = i;
-        payload.intersection[i].t = kMaxFloat;
-        bool intersection_found = rt.trace(scene, payload.ray[i], payload.intersection[i], payload.smp[i]);
-        payload.ray_state[i] = intersection_found ? PTRayState::IntersectionFound : PTRayState::NoIntersection;
+        case PTRayState::Finished: {
+          if (count_wasted) {
+            ++wasted_invocations;
+          }
+          break;
+        }
+        default:
+          ETX_FAIL("Invalid ray state");
+          break;
       }
     }
   }
