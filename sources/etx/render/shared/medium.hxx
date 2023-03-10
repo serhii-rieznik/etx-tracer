@@ -180,7 +180,7 @@ struct ETX_ALIGNED Medium {
     }
 
     float cos_t = dot(w_i, w_o);
-    float d = 1.0f + phase_function_g * phase_function_g + 2.0f * phase_function_g * cos_t;
+    float d = 1.0f + phase_function_g * phase_function_g - 2.0f * phase_function_g * cos_t;
     return (1.0f / (4.0f * kPi)) * (1.0f - phase_function_g * phase_function_g) / (d * sqrtf(d));
   }
 
@@ -196,8 +196,8 @@ struct ETX_ALIGNED Medium {
     if (fabsf(phase_function_g) < 1e-3f) {
       cos_theta = 1.0f - 2.0f * xi0;
     } else {
-      float sqr_term = (1.0f - phase_function_g * phase_function_g) / (1.0f + phase_function_g - 2.0f * phase_function_g * xi0);
-      cos_theta = -(1.0f + phase_function_g * phase_function_g - sqr_term * sqr_term) / (2.0f * phase_function_g);
+      float sqr_term = (1.0f - phase_function_g * phase_function_g) / (1.0f + phase_function_g * (2.0f * xi0 - 1.0f));
+      cos_theta = (1.0f + phase_function_g * phase_function_g - sqr_term * sqr_term) / (2.0f * phase_function_g);
     }
 
     float sin_theta = sqrtf(max(0.0f, 1.0f - cos_theta * cos_theta));
