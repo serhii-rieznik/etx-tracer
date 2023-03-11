@@ -3,10 +3,9 @@
 namespace VelvetBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto eval_data = data;
-  auto frame = data.get_normal_frame().frame;
-  eval_data.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);
-  return {eval_data.w_o, evaluate(eval_data, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::Reflection};
+  auto frame = data.get_normal_frame();
+  float3 w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);
+  return {w_o, evaluate(data, w_o, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::Reflection};
 }
 
 ETX_GPU_CODE float lambda_velvet_l(float r, float x) {
@@ -42,16 +41,16 @@ ETX_GPU_CODE float diffuse_burley(float alpha, float n_dot_i, float n_dot_o, flo
   return lightScatter * viewScatter * kInvPi;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
-  float n_dot_o = fmaxf(0.0f, dot(data.w_o, frame.frame.nrm));
-  float n_dot_i = fmaxf(0.0f, -dot(data.w_i, frame.frame.nrm));
+  float n_dot_o = fmaxf(0.0f, dot(w_o, frame.nrm));
+  float n_dot_i = fmaxf(0.0f, -dot(data.w_i, frame.nrm));
   if ((n_dot_o <= kEpsilon) || (n_dot_i <= kEpsilon))
     return {data.spectrum_sample.wavelength, 0.0f};
 
-  float3 m = normalize(data.w_o - data.w_i);
-  float m_dot_o = fmaxf(0.0f, dot(data.w_o, m));
+  float3 m = normalize(w_o - data.w_i);
+  float m_dot_o = fmaxf(0.0f, dot(w_o, m));
   float m_dot_i = fmaxf(0.0f, -dot(data.w_i, m));
   if ((m_dot_o <= kEpsilon) || (m_dot_i <= kEpsilon))
     return {data.spectrum_sample.wavelength, 0.0f};
@@ -60,7 +59,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   float alpha = 0.5f * (mtl.roughness.x + mtl.roughness.y);
   if (alpha > kEpsilon) {
     float inv_alpha = 1.0f / (kEpsilon + alpha);
-    float m_dot_n = dot(m, frame.frame.nrm);
+    float m_dot_n = dot(m, frame.nrm);
     float sin_t = (1.0f - m_dot_n * m_dot_n);
     float d = (2.0f + inv_alpha) * powf(sin_t, 0.5f * inv_alpha) / kDoublePi;
     ETX_VALIDATE(d);
@@ -93,9 +92,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const Material& mtl, const 
   return eval;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
-  if (frame.entering_material == false)
+  if (frame.entering_material() == false)
     return 0.0f;
 
   return 1.0f / kDoublePi;

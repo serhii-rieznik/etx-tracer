@@ -1,7 +1,7 @@
 #include <etx/core/core.hxx>
 #include <etx/rt/rt.hxx>
 
-#include <embree3/rtcore.h>
+#include <embree4/rtcore.h>
 
 namespace etx {
 
@@ -48,7 +48,6 @@ struct RaytracingImpl {
       nullptr);
 
     rt_scene = rtcNewScene(rt_device);
-    rtcSetSceneFlags(rt_scene, RTC_SCENE_FLAG_CONTEXT_FILTER_FUNCTION);
 
     auto geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_TRIANGLE);
 
@@ -230,6 +229,36 @@ struct RaytracingImpl {
     gpu.buffers.clear();
     gpu = {};
   }
+
+  void trace_with_function(const Ray& r, RTCRayQueryContext* context, RTCFilterFunctionN filter_funtion) {
+    ETX_CHECK_FINITE(r.o);
+    ETX_CHECK_FINITE(r.d);
+
+    rtcInitRayQueryContext(context);
+
+    RTCIntersectArguments args = {};
+    rtcInitIntersectArguments(&args);
+
+    args.context = context;
+    args.feature_mask = static_cast<RTCFeatureFlags>(RTC_FEATURE_FLAG_TRIANGLE | RTC_FEATURE_FLAG_FILTER_FUNCTION_IN_ARGUMENTS);
+    args.flags = RTC_RAY_QUERY_FLAG_INVOKE_ARGUMENT_FILTER;
+    args.filter = filter_funtion;
+
+    RTCRayHit ray_hit = {};
+    ray_hit.ray.dir_x = r.d.x;
+    ray_hit.ray.dir_y = r.d.y;
+    ray_hit.ray.dir_z = r.d.z;
+    ray_hit.ray.org_x = r.o.x;
+    ray_hit.ray.org_y = r.o.y;
+    ray_hit.ray.org_z = r.o.z;
+    ray_hit.ray.tnear = r.min_t;
+    ray_hit.ray.tfar = r.max_t;
+    ray_hit.ray.mask = kInvalidIndex;
+    ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
+    ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
+    ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
+    rtcIntersect1(rt_scene, &ray_hit, &args);
+  }
 };
 
 ETX_PIMPL_IMPLEMENT(Raytracing, Impl);
@@ -270,12 +299,8 @@ const Scene& Raytracing::gpu_scene() const {
 }
 
 uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const ContinousTraceOptions& options, Sampler& smp) const {
-  ETX_ASSERT(_private != nullptr);
-  ETX_CHECK_FINITE(r.o);
-  ETX_CHECK_FINITE(r.d);
-
   struct IntersectionContextExt {
-    RTCIntersectContext context;
+    RTCRayQueryContext context;
     const Scene* scene;
     Sampler* smp;
     IntersectionBase* buffer;
@@ -284,9 +309,7 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     uint32_t max_count;
   } context = {{}, &scene, &smp, options.intersection_buffer, options.material_id, 0u, options.max_intersections};
 
-  rtcInitIntersectContext(&context.context);
-
-  context.context.filter = [](const struct RTCFilterFunctionNArguments* args) {
+  auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
     uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
 
@@ -313,38 +336,21 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     *args->valid = (ctx->count < ctx->max_count) ? 0 : -1;
   };
 
-  RTCRayHit ray_hit = {};
-  ray_hit.ray.dir_x = r.d.x;
-  ray_hit.ray.dir_y = r.d.y;
-  ray_hit.ray.dir_z = r.d.z;
-  ray_hit.ray.org_x = r.o.x;
-  ray_hit.ray.org_y = r.o.y;
-  ray_hit.ray.org_z = r.o.z;
-  ray_hit.ray.tnear = r.min_t;
-  ray_hit.ray.tfar = r.max_t;
-  ray_hit.ray.mask = kInvalidIndex;
-  ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-  ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
-  ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
-  rtcIntersect1(_private->rt_scene, &context.context, &ray_hit);
+  ETX_ASSERT(_private != nullptr);
+  _private->trace_with_function(r, &context.context, filter_funtion);
+
   return context.count;
 }
 
 bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_intersection, Sampler& smp) const {
-  ETX_ASSERT(_private != nullptr);
-  ETX_CHECK_FINITE(r.o);
-  ETX_CHECK_FINITE(r.d);
-
   struct IntersectionContextExt {
-    RTCIntersectContext context;
+    RTCRayQueryContext context;
     IntersectionBase i;
     const Scene* scene;
     Sampler* smp;
   } context = {{}, {{}, kInvalidIndex, 0.0f}, &scene, &smp};
 
-  rtcInitIntersectContext(&context.context);
-
-  context.context.filter = [](const struct RTCFilterFunctionNArguments* args) {
+  auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
     uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
     float u = RTCHitN_u(args->hit, args->N, 0);
@@ -361,20 +367,8 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
     ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0)};
   };
 
-  RTCRayHit ray_hit = {};
-  ray_hit.ray.dir_x = r.d.x;
-  ray_hit.ray.dir_y = r.d.y;
-  ray_hit.ray.dir_z = r.d.z;
-  ray_hit.ray.org_x = r.o.x;
-  ray_hit.ray.org_y = r.o.y;
-  ray_hit.ray.org_z = r.o.z;
-  ray_hit.ray.tnear = r.min_t;
-  ray_hit.ray.tfar = r.max_t;
-  ray_hit.ray.mask = kInvalidIndex;
-  ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-  ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
-  ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
-  rtcIntersect1(_private->rt_scene, &context.context, &ray_hit);
+  ETX_ASSERT(_private != nullptr);
+  _private->trace_with_function(r, &context.context, filter_funtion);
 
   if (context.i.triangle_index == kInvalidIndex)
     return false;
@@ -385,11 +379,9 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
 
 SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const uint32_t medium, Sampler& smp) const {
   ETX_ASSERT(_private != nullptr);
-  ETX_CHECK_FINITE(p0);
-  ETX_CHECK_FINITE(p1);
 
   struct IntersectionContextExt {
-    RTCIntersectContext context;
+    RTCRayQueryContext context;
     const Scene* scene;
     Sampler* smp;
     SpectralQuery spect;
@@ -400,9 +392,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     float t;
   } context = {{}, &scene, &smp, spect, {spect.wavelength, 1.0f}, medium, p0};
 
-  rtcInitIntersectContext(&context.context);
-
-  context.context.filter = [](const struct RTCFilterFunctionNArguments* args) {
+  auto filter_function = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
     uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
     float u = RTCHitN_u(args->hit, args->N, 0);
@@ -449,21 +439,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
   t_max -= kRayEpsilon;
   ETX_VALIDATE(t_max);
 
-  RTCRayHit ray_hit = {};
-  ray_hit.ray.dir_x = context.direction.x;
-  ray_hit.ray.dir_y = context.direction.y;
-  ray_hit.ray.dir_z = context.direction.z;
-  ray_hit.ray.org_x = p0.x;
-  ray_hit.ray.org_y = p0.y;
-  ray_hit.ray.org_z = p0.z;
-  ray_hit.ray.tnear = kRayEpsilon;
-  ray_hit.ray.tfar = t_max;
-  ray_hit.ray.mask = kInvalidIndex;
-  ray_hit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-  ray_hit.hit.primID = RTC_INVALID_GEOMETRY_ID;
-  ray_hit.hit.instID[0] = RTC_INVALID_GEOMETRY_ID;
-
-  rtcIntersect1(_private->rt_scene, &context.context, &ray_hit);
+  _private->trace_with_function({p0, context.direction, kRayEpsilon, t_max}, &context.context, filter_function);
 
   if (context.medium != kInvalidIndex) {
     context.value *= scene.mediums[context.medium].transmittance(spect, smp, context.origin, context.direction, t_max - context.t);

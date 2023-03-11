@@ -21,7 +21,9 @@ struct ETX_ALIGNED VCMOptions {
     ConnectVertices = 1u << 3u,
     MergeVertices = 1u << 4u,
     EnableMis = 1u << 5u,
-    Default = ConnectToCamera | DirectHit | ConnectToLight | ConnectVertices | MergeVertices | EnableMis,
+    EnableMerging = 1u << 6u,
+
+    DefaultOptions = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices | EnableMis | EnableMerging,
   };
 
   void set_option(uint32_t option, bool enabled) {
@@ -45,6 +47,9 @@ struct ETX_ALIGNED VCMOptions {
   }
   ETX_GPU_CODE bool enable_mis() const {
     return options & EnableMis;
+  }
+  ETX_GPU_CODE bool enable_merging() const {
+    return options & EnableMerging;
   }
 
   static VCMOptions default_values();
@@ -77,7 +82,6 @@ struct ETX_ALIGNED VCMPathState {
     RayActionSet = 1u << 2u,
   };
 
-  Intersection intersection = {};
   SpectralResponse throughput = {};
   SpectralResponse gathered = {};
   Ray ray = {};
@@ -125,17 +129,20 @@ struct ETX_ALIGNED VCMPathState {
   }
 };
 
+constexpr uint64_t kVCMPathStateSize = sizeof(VCMPathState);
+
 struct ETX_ALIGNED VCMLightVertex {
   VCMLightVertex() = default;
 
-  ETX_GPU_CODE VCMLightVertex(const VCMPathState& s, const float3& p, const float3& b, uint32_t tri, uint32_t index)
+  ETX_GPU_CODE VCMLightVertex(const VCMPathState& s, const float3& a_pos, const float3& a_nrm, const float3& b, uint32_t tri, uint32_t index)
     : throughput(s.throughput)
     , w_i(s.ray.d)
     , d_vcm(s.d_vcm)
     , bc(b)
     , d_vc(s.d_vc)
-    , pos(p)
+    , pos(a_pos)
     , d_vm(s.d_vm)
+    , nrm(a_nrm)
     , triangle_index(tri)
     , path_length(s.total_path_depth)
     , path_index(index) {
@@ -152,21 +159,22 @@ struct ETX_ALIGNED VCMLightVertex {
   float3 pos = {};
   float d_vm = 0.0f;
 
+  float3 nrm = {};
   uint32_t triangle_index = kInvalidIndex;
+
   uint32_t path_length = 0;
   uint32_t path_index = 0;
-  uint32_t pad = 0;
 
   ETX_GPU_CODE Vertex vertex(const Scene& s) const {
     return lerp_vertex(s.vertices, s.triangles[triangle_index], bc);
   }
 
-  ETX_GPU_CODE float3 position(const Scene& s) const {
-    return pos;  // lerp_pos(s.vertices, s.triangles[triangle_index], bc);
+  ETX_GPU_CODE const float3& position(const Scene& s) const {
+    return pos;
   }
 
-  ETX_GPU_CODE float3 normal(const Scene& s) const {
-    return lerp_normal(s.vertices, s.triangles[triangle_index], bc);
+  ETX_GPU_CODE const float3& normal(const Scene& s) const {
+    return nrm;
   }
 };
 
@@ -184,24 +192,22 @@ ETX_GPU_CODE bool vcm_next_medium_ray(const VCMOptions& options, VCMPathState& s
   return random_continue(state.total_path_depth, options.rr_start, state.eta, state.sampler, state.throughput);
 }
 
-ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source, const VCMOptions& options, VCMPathState& state, const VCMIteration& it) {
+ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source, const VCMOptions& options, VCMPathState& state, const VCMIteration& it,
+  const Intersection& intersection, const BSDFData& bsdf_data, const BSDFSample& bsdf_sample, bool subsurface_sample) {
   if (state.total_path_depth + 1 > options.max_depth)
     return false;
-
-  const auto& tri = scene.triangles[state.intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
-  auto bsdf_data = BSDFData{state.spect, state.medium_index, path_source, state.intersection, state.ray.d, {}};
-  auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, state.sampler);
-  bsdf_data.w_o = bsdf_sample.w_o;
   if (bsdf_sample.valid() == false) {
     return false;
   }
+
+  const auto& tri = scene.triangles[intersection.triangle_index];
+  const auto& mat = scene.materials[tri.material_index];
 
   state.throughput *= bsdf_sample.weight;
   ETX_VALIDATE(state.throughput);
 
   if (path_source == PathSource::Light) {
-    state.throughput *= fix_shading_normal(tri.geo_n, bsdf_data.nrm, bsdf_data.w_i, bsdf_data.w_o);
+    state.throughput *= fix_shading_normal(tri.geo_n, intersection.nrm, intersection.w_i, bsdf_sample.w_o);
   }
 
   if (state.throughput.is_zero()) {
@@ -216,7 +222,7 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
     state.medium_index = bsdf_sample.medium_index;
   }
 
-  float cos_theta_bsdf = fabsf(dot(state.intersection.nrm, bsdf_sample.w_o));
+  float cos_theta_bsdf = fabsf(dot(intersection.nrm, bsdf_sample.w_o));
 
   if (bsdf_sample.is_delta()) {
     state.d_vc *= cos_theta_bsdf;
@@ -227,7 +233,9 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
 
     state.d_vcm = 0.0f;
   } else {
-    auto rev_sample_pdf = bsdf::pdf(bsdf_data.swap_directions(), mat, scene, state.sampler);
+    auto rev_sample_pdf = subsurface_sample                                      //
+                            ? fabsf(dot(bsdf_data.w_i, intersection.nrm)) / kPi  //
+                            : bsdf::reverse_pdf(bsdf_data, bsdf_sample.w_o, mat, scene, state.sampler);
     ETX_VALIDATE(rev_sample_pdf);
 
     state.d_vc = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vc * rev_sample_pdf + state.d_vcm + it.vm_weight);
@@ -241,14 +249,14 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
   }
 
   state.ray.d = bsdf_sample.w_o;
-  state.ray.o = shading_pos(scene.vertices, tri, state.intersection.barycentric, bsdf_sample.w_o);
+  state.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, bsdf_sample.w_o);
   state.eta *= bsdf_sample.eta;
   state.total_path_depth += 1;
 
   return true;
 }
 
-ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter& emitter, const VCMPathState& state, const VCMOptions& options) {
+ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const Intersection& intersection) {
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;
@@ -256,8 +264,8 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
   SpectralResponse radiance = {};
 
   if (emitter.is_local()) {
-    radiance = emitter_get_radiance(emitter, state.spect, state.intersection.tex, state.ray.o, state.intersection.pos,  //
-      pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (state.total_path_depth == 1));                    //
+    radiance = emitter_get_radiance(emitter, state.spect, intersection.tex, state.ray.o, intersection.pos,  //
+      pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (state.total_path_depth == 1));        //
   } else {
     radiance = emitter_get_radiance(emitter, state.spect, state.ray.d,  //
       pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);   //
@@ -331,11 +339,10 @@ ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const Sc
   return state;
 }
 
-ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state) {
+ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t) {
   if (state.medium_index == kInvalidIndex)
     return {};
 
-  float max_t = state.intersection.t;
   auto medium_sample = scene.mediums[state.medium_index].sample(state.spect, state.sampler, state.ray.o, state.ray.d, max_t);
   state.throughput *= medium_sample.weight;
 
@@ -354,29 +361,29 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
   return vcm_next_medium_ray(options, state);
 }
 
-ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, VCMPathState& state) {
-  const auto& tri = scene.triangles[state.intersection.triangle_index];
+ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state) {
+  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
   if (mat.cls != Material::Class::Boundary)
     return false;
 
-  auto bsdf_sample = bsdf::sample({state.spect, state.medium_index, path_source, state.intersection, state.intersection.w_i, {}}, mat, scene, state.sampler);
+  auto bsdf_sample = bsdf::sample({state.spect, state.medium_index, path_source, intersection, intersection.w_i}, mat, scene, state.sampler);
   if (bsdf_sample.properties & BSDFSample::MediumChanged) {
     state.medium_index = bsdf_sample.medium_index;
   }
 
-  state.path_distance += state.intersection.t;
-  state.ray.o = state.intersection.pos;
+  state.path_distance += intersection.t;
+  state.ray.o = intersection.pos;
   state.ray.d = bsdf_sample.w_o;
   return true;
 }
 
-ETX_GPU_CODE void vcm_update_light_vcm(VCMPathState& state) {
+ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPathState& state) {
   if ((state.total_path_depth > 0) || (state.delta_emitter() == false)) {
-    state.d_vcm *= sqr(state.path_distance + state.intersection.t);
+    state.d_vcm *= sqr(state.path_distance + intersection.t);
   }
 
-  float cos_to_prev = fabsf(dot(state.intersection.nrm, -state.ray.d));
+  float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
   state.d_vcm /= cos_to_prev;
   state.d_vc /= cos_to_prev;
   state.d_vm /= cos_to_prev;
@@ -385,32 +392,32 @@ ETX_GPU_CODE void vcm_update_light_vcm(VCMPathState& state) {
 
 template <class RT>
 ETX_GPU_CODE float3 vcm_connect_to_camera(const RT& rt, const Scene& scene, const Material& mat, const Triangle& tri, const VCMIteration& vcm_iteration, const VCMOptions& options,
-  VCMPathState& state, float2& uv) {
+  const Intersection& intersection, const SpectralResponse& scale, VCMPathState& state, float2& uv) {
   if ((options.connect_to_camera() == false) || (state.total_path_depth + 1 >= options.max_depth)) {
     return {};
   }
 
-  auto camera_sample = sample_film(state.sampler, scene, state.intersection.pos);
+  auto camera_sample = sample_film(state.sampler, scene, intersection.pos);
   if (camera_sample.pdf_dir <= 0.0f) {
     return {};
   }
 
-  auto direction = camera_sample.position - state.intersection.pos;
+  auto direction = camera_sample.position - intersection.pos;
   auto w_o = normalize(direction);
-  auto data = BSDFData{state.spect, state.medium_index, PathSource::Light, state.intersection, state.ray.d, w_o};
-  auto eval = bsdf::evaluate(data, mat, scene, state.sampler);
+  auto data = BSDFData{state.spect, state.medium_index, PathSource::Light, intersection, intersection.w_i};
+  auto eval = bsdf::evaluate(data, w_o, mat, scene, state.sampler);
   if (eval.valid() == false) {
     return {};
   }
 
-  float3 p0 = shading_pos(scene.vertices, tri, state.intersection.barycentric, w_o);
+  float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, w_o);
   auto tr = rt.trace_transmittance(state.spect, scene, p0, camera_sample.position, state.medium_index, state.sampler);
   if (tr.is_zero()) {
     return {};
   }
 
-  float reverse_pdf = bsdf::pdf(data.swap_directions(), mat, scene, state.sampler);
-  float camera_pdf = camera_sample.pdf_dir_out * fabsf(dot(state.intersection.nrm, w_o)) / dot(direction, direction);
+  float reverse_pdf = bsdf::reverse_pdf(data, w_o, mat, scene, state.sampler);
+  float camera_pdf = camera_sample.pdf_dir_out * fabsf(dot(intersection.nrm, w_o)) / dot(direction, direction);
   ETX_VALIDATE(camera_pdf);
 
   float w_light = camera_pdf * (vcm_iteration.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);
@@ -419,80 +426,83 @@ ETX_GPU_CODE float3 vcm_connect_to_camera(const RT& rt, const Scene& scene, cons
   float weight = options.enable_mis() ? (1.0f / (1.0f + w_light)) : 1.0f;
   ETX_VALIDATE(weight);
 
-  eval.bsdf *= fix_shading_normal(tri.geo_n, data.nrm, data.w_i, data.w_o);
+  eval.bsdf *= fix_shading_normal(tri.geo_n, data.nrm, data.w_i, w_o);
   auto result = (tr * eval.bsdf * state.throughput * camera_sample.weight) * weight;
 
   uv = camera_sample.uv;
-  return (result / spectrum::sample_pdf()).to_xyz();
+  return (scale * result / spectrum::sample_pdf()).to_xyz();
 }
 
-ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& options, VCMPathState& state) {
+ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
   if (options.direct_hit() == false)
     return;
 
   for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
     const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
-    state.gathered += vcm_get_radiance(scene, emitter, state, options);
+    state.gathered += vcm_get_radiance(scene, emitter, state, options, intersection);
   }
 }
 
-ETX_GPU_CODE void vcm_update_camera_vcm(VCMPathState& state) {
-  float cos_to_prev = fabsf(dot(state.intersection.nrm, -state.ray.d));
-  state.d_vcm *= sqr(state.path_distance + state.intersection.t) / cos_to_prev;
+ETX_GPU_CODE void vcm_update_camera_vcm(const Intersection& intersection, VCMPathState& state) {
+  float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
+  state.d_vcm *= sqr(state.path_distance + intersection.t) / cos_to_prev;
   state.d_vc /= cos_to_prev;
   state.d_vm /= cos_to_prev;
   state.path_distance = 0.0f;
 }
 
-ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, VCMPathState& state) {
-  const auto& tri = scene.triangles[state.intersection.triangle_index];
+ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
+  const auto& tri = scene.triangles[intersection.triangle_index];
   if ((options.direct_hit() == false) || (tri.emitter_index == kInvalidIndex))
     return;
 
   const auto& emitter = scene.emitters[tri.emitter_index];
-  state.gathered += vcm_get_radiance(scene, emitter, state, options);
+  state.gathered += vcm_get_radiance(scene, emitter, state, options, intersection);
 }
 
 template <class RT>
-ETX_GPU_CODE void vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, const RT& rt, VCMPathState& state) {
+ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, const Intersection& intersection, const RT& rt,
+  VCMPathState& state) {
   if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > options.max_depth))
-    return;
+    return {state.spect.wavelength, 0.0f};
 
-  const auto& tri = scene.triangles[state.intersection.triangle_index];
+  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
   uint32_t emitter_index = sample_emitter_index(scene, state.sampler);
-  auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler, state.intersection.pos, scene);
+  auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler, intersection.pos, scene);
 
-  if (emitter_sample.pdf_dir > 0) {
-    BSDFData connection_data = {state.spect, state.medium_index, PathSource::Camera, state.intersection, state.ray.d, emitter_sample.direction};
-    BSDFEval connection_eval = bsdf::evaluate(connection_data, mat, scene, state.sampler);
-    if (connection_eval.valid()) {
-      float3 p0 = shading_pos(scene.vertices, tri, state.intersection.barycentric, normalize(emitter_sample.origin - state.intersection.pos));
-      auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, state.medium_index, state.sampler);
-      if (tr.is_zero() == false) {
-        float l_dot_n = fabsf(dot(emitter_sample.direction, state.intersection.nrm));
-        float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
-        float reverse_pdf = bsdf::pdf(connection_data.swap_directions(), mat, scene, state.sampler);
+  if (emitter_sample.pdf_dir <= 0)
+    return {state.spect.wavelength, 0.0f};
 
-        float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
+  BSDFData connection_data = {state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
+  BSDFEval connection_eval = bsdf::evaluate(connection_data, emitter_sample.direction, mat, scene, state.sampler);
+  if (connection_eval.valid() == false)
+    return {state.spect.wavelength, 0.0f};
 
-        float w_camera = (emitter_sample.pdf_dir_out * l_dot_n) / (emitter_sample.pdf_dir * l_dot_e) *  //
-                         (vcm_iteration.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);            //
+  float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
+  auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, state.medium_index, state.sampler);
+  if (tr.is_zero())
+    return {state.spect.wavelength, 0.0f};
 
-        float weight = options.enable_mis() ? 1.0f / (1.0f + w_light + w_camera) : 1.0f;
-        state.gathered += tr * state.throughput * connection_eval.bsdf * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
-        ETX_VALIDATE(state.gathered);
-      }
-    }
-  }
+  float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
+  float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
+  float reverse_pdf = bsdf::reverse_pdf(connection_data, emitter_sample.direction, mat, scene, state.sampler);
+
+  float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
+
+  float w_camera = (emitter_sample.pdf_dir_out * l_dot_n) / (emitter_sample.pdf_dir * l_dot_e) *  //
+                   (vcm_iteration.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);            //
+
+  float weight = options.enable_mis() ? 1.0f / (1.0f + w_light + w_camera) : 1.0f;
+  return tr * state.throughput * connection_eval.bsdf * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 }
 
 ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
-  float vm_weight, uint32_t state_medium, float3& target_position, SpectralResponse& value) {
+  const Intersection& intersection, float vm_weight, uint32_t state_medium, float3& target_position, SpectralResponse& value) {
   auto light_v = light_vertex.vertex(scene);
   target_position = light_v.pos;
 
-  auto w_o = light_v.pos - state.intersection.pos;
+  auto w_o = light_v.pos - intersection.pos;
   float distance_squared = dot(w_o, w_o);
 
   if (distance_squared == 0.0f) {
@@ -501,7 +511,7 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
 
   w_o /= sqrtf(distance_squared);
 
-  float w_dot_c = dot(state.intersection.nrm, w_o);
+  float w_dot_c = dot(intersection.nrm, w_o);
   if (w_dot_c < 0.0f) {
     return false;
   }
@@ -511,10 +521,10 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
     return false;
   }
 
-  const auto& tri = scene.triangles[state.intersection.triangle_index];
+  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
-  auto camera_data = BSDFData{spect, state_medium, PathSource::Camera, state.intersection, state.intersection.w_i, w_o};
-  auto camera_bsdf = bsdf::evaluate(camera_data, mat, scene, state.sampler);
+  auto camera_data = BSDFData{spect, state_medium, PathSource::Camera, intersection, intersection.w_i};
+  auto camera_bsdf = bsdf::evaluate(camera_data, w_o, mat, scene, state.sampler);
   if (camera_bsdf.valid() == false) {
     return false;
   }
@@ -522,7 +532,7 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
   auto camera_area_pdf = camera_bsdf.pdf * w_dot_l / distance_squared;
   ETX_VALIDATE(camera_area_pdf);
 
-  auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), mat, scene, state.sampler);
+  auto camera_rev_pdf = bsdf::reverse_pdf(camera_data, w_o, mat, scene, state.sampler);
   ETX_VALIDATE(camera_rev_pdf);
   if (camera_rev_pdf <= kEpsilon) {
     return false;
@@ -530,8 +540,8 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
 
   const auto& light_tri = scene.triangles[light_vertex.triangle_index];
   const auto& light_mat = scene.materials[light_tri.material_index];
-  auto light_data = BSDFData{spect, state_medium, PathSource::Light, light_v, light_vertex.w_i, -w_o};
-  auto light_bsdf = bsdf::evaluate(light_data, light_mat, scene, state.sampler);
+  auto light_data = BSDFData{spect, state_medium, PathSource::Light, light_v, light_vertex.w_i};
+  auto light_bsdf = bsdf::evaluate(light_data, -w_o, light_mat, scene, state.sampler);
   if (light_bsdf.valid() == false) {
     return false;
   }
@@ -539,7 +549,7 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
   auto light_area_pdf = light_bsdf.pdf * w_dot_c / distance_squared;
   ETX_VALIDATE(light_area_pdf);
 
-  auto light_rev_pdf = bsdf::pdf(light_data.swap_directions(), light_mat, scene, state.sampler);
+  auto light_rev_pdf = bsdf::reverse_pdf(light_data, -w_o, light_mat, scene, state.sampler);
   ETX_VALIDATE(light_rev_pdf);
   if (light_rev_pdf <= kEpsilon) {
     return false;
@@ -554,36 +564,38 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
   float weight = options.enable_mis() ? 1.0f / (1.0f + w_light + w_camera) : 1.0f;
   ETX_VALIDATE(weight);
 
-  light_bsdf.bsdf *= fix_shading_normal(light_tri.geo_n, light_data.nrm, light_data.w_i, light_data.w_o);
+  light_bsdf.bsdf *= fix_shading_normal(light_tri.geo_n, light_data.nrm, light_data.w_i, -w_o);
   value = (camera_bsdf.bsdf * state.throughput) * (light_bsdf.bsdf * light_vertex.throughput) * (weight / distance_squared);
   return true;
 }
 
 template <class RT>
-ETX_GPU_CODE void vcm_connect_to_light_path(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightPath>& light_paths,
-  const ArrayView<VCMLightVertex>& light_vertices, const VCMOptions& options, const RT& rt, VCMPathState& state) {
+ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightPath>& light_paths,
+  const ArrayView<VCMLightVertex>& light_vertices, const VCMOptions& options, const Intersection& intersection, const RT& rt, VCMPathState& state) {
   if (options.connect_vertices() == false)
-    return;
+    return {state.spect.wavelength, 0.0f};
 
-  const auto& tri = scene.triangles[state.intersection.triangle_index];
+  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
   const auto& light_path = light_paths[state.global_index];
 
+  SpectralResponse result = {state.spect.wavelength, 0.0f};
   for (uint64_t i = 0; (i < light_path.count) && (state.total_path_depth + i + 2 <= options.max_depth); ++i) {
     float3 target_position = {};
     SpectralResponse value = {};
     bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertices[light_path.index + i],  //
-      options, iteration.vm_weight, state.medium_index, target_position, value);
+      options, intersection, iteration.vm_weight, state.medium_index, target_position, value);
 
     if (connected) {
-      float3 p0 = shading_pos(scene.vertices, tri, state.intersection.barycentric, normalize(target_position - state.intersection.pos));
+      float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
       auto tr = rt.trace_transmittance(state.spect, scene, p0, target_position, state.medium_index, state.sampler);
       if (tr.is_zero() == false) {
-        state.gathered += tr * value;
-        ETX_VALIDATE(state.gathered);
+        result += tr * value;
+        ETX_VALIDATE(result);
       }
     }
   }
+  return result;
 }
 
 struct ETX_ALIGNED VCMSpatialGridData {
@@ -604,33 +616,33 @@ struct ETX_ALIGNED VCMSpatialGridData {
     return cell_index(static_cast<int32_t>(m.x), static_cast<int32_t>(m.y), static_cast<int32_t>(m.z));
   }
 
-  ETX_GPU_CODE float3 gather_index(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, float vc_weight,
-    uint32_t index) const {
+  ETX_GPU_CODE float3 gather_index(const Scene& scene, const Intersection& intersection, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, float vc_weight,
+    uint32_t index, VCMPathState& state) const {
     uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
 
     float3 merged = {};
     for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
       const auto& light_vertex = samples[indices[j]];
 
-      auto d = light_vertex.position(scene) - state.intersection.pos;
+      auto d = light_vertex.position(scene) - intersection.pos;
       float distance_squared = dot(d, d);
       if ((distance_squared > radius_squared) || (light_vertex.path_length + state.total_path_depth > options.max_depth)) {
         continue;
       }
 
-      if (dot(state.intersection.nrm, light_vertex.normal(scene)) <= kEpsilon) {
+      if (dot(intersection.nrm, light_vertex.normal(scene)) <= kEpsilon) {
         continue;
       }
 
-      const auto& tri = scene.triangles[state.intersection.triangle_index];
+      const auto& tri = scene.triangles[intersection.triangle_index];
       const auto& mat = scene.materials[tri.material_index];
-      auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, state.intersection, state.ray.d, -light_vertex.w_i};
-      auto camera_bsdf = bsdf::evaluate(camera_data, mat, scene, state.sampler);
+      auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
+      auto camera_bsdf = bsdf::evaluate(camera_data, -light_vertex.w_i, mat, scene, state.sampler);
       if (camera_bsdf.valid() == false) {
         continue;
       }
 
-      auto camera_rev_pdf = bsdf::pdf(camera_data.swap_directions(), mat, scene, state.sampler);
+      auto camera_rev_pdf = bsdf::reverse_pdf(camera_data, -light_vertex.w_i, mat, scene, state.sampler);
 
       float w_light = light_vertex.d_vcm * vc_weight + light_vertex.d_vm * camera_bsdf.pdf;
       float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;
@@ -656,16 +668,17 @@ struct ETX_ALIGNED VCMSpatialGridData {
     return merged;
   }
 
-  ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, float vc_weight) const {
-    if ((options.merge_vertices() == false) || (indices.count == 0) || (state.total_path_depth + 1 > options.max_depth)) {
+  ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, const Intersection& intersection,
+    float vc_weight) const {
+    if ((indices.count == 0) || (state.total_path_depth + 1 > options.max_depth)) {
       return {};
     }
 
-    if (bounding_box.contains(state.intersection.pos) == false) {
+    if (bounding_box.contains(intersection.pos) == false) {
       return {};
     }
 
-    float3 m = (state.intersection.pos - bounding_box.p_min) / cell_size;
+    float3 m = (intersection.pos - bounding_box.p_min) / cell_size;
     float3 mf = floor(m);
     float3 md = m - mf;
 
@@ -690,59 +703,81 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
     float3 merged = {};
     for (uint32_t i = 0; i < 8; ++i) {
-      merged += gather_index(scene, state, samples, options, vc_weight, cell_indices[i]);
+      merged += gather_index(scene, intersection, samples, options, vc_weight, cell_indices[i], state);
     }
 
     return merged;
   }
 };
 
-ETX_GPU_CODE void vcm_gather_vertices(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightVertex> light_vertices, const VCMSpatialGridData& spatial_grid,
-  const VCMOptions& options, VCMPathState& state) {
-  if ((options.merge_vertices() == false) || (state.total_path_depth + 1 > options.max_depth)) {
-    return;
-  }
-
-  state.merged += spatial_grid.gather(scene, state, light_vertices, options, iteration.vc_weight);
-}
-
 template <class RT>
 ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iteration, const VCMOptions& options, const ArrayView<VCMLightPath>& light_paths,
   const ArrayView<VCMLightVertex>& light_vertices, VCMPathState& state, const RT& rt, const VCMSpatialGridData& spatial_grid) {
-  bool found_intersection = rt.trace(scene, state.ray, state.intersection, state.sampler);
+  Intersection intersection = {};
+  bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
-  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state);
+  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, intersection.t);
   if (medium_sample.sampled_medium()) {
     return vcm_handle_sampled_medium(scene, medium_sample, options, state);
   }
 
   if (found_intersection == false) {
-    vcm_cam_handle_miss(scene, options, state);
+    vcm_cam_handle_miss(scene, options, intersection, state);
     return false;
   }
 
-  if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, state)) {
+  if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, intersection, state)) {
     return true;
   }
 
-  vcm_update_camera_vcm(state);
-  vcm_handle_direct_hit(scene, options, state);
-  vcm_gather_vertices(scene, iteration, light_vertices, spatial_grid, options, state);
-
-  const auto& tri = scene.triangles[state.intersection.triangle_index];
+  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[tri.material_index];
-  if (bsdf::is_delta(mat, state.intersection.tex, scene, state.sampler) == false) {
-    vcm_connect_to_light(scene, iteration, options, rt, state);
-    vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, rt, state);
+  auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
+  auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, state.sampler);
+
+  vcm_update_camera_vcm(intersection, state);
+  vcm_handle_direct_hit(scene, options, intersection, state);
+
+  subsurface::Gather ss_gather = {};
+  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
+  bool subsurface_sampled = subsurface_path && subsurface::gather(state.spect, scene, intersection, tri.material_index, rt, state.sampler, ss_gather);
+
+  if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
+    if (subsurface_sampled) {
+      for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
+        state.gathered += ss_gather.weights[i] * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, ss_gather.intersections[i], rt, state);
+        state.gathered += ss_gather.weights[i] * vcm_connect_to_light(scene, iteration, options, ss_gather.intersections[i], rt, state);
+      }
+    } else {
+      state.gathered += vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, intersection, rt, state);
+      state.gathered += vcm_connect_to_light(scene, iteration, options, intersection, rt, state);
+    }
   }
 
-  return vcm_next_ray(scene, PathSource::Camera, options, state, iteration);
+  if (subsurface_sampled) {
+    state.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
+    intersection = ss_gather.intersections[ss_gather.selected_intersection];
+    bsdf_sample.w_o = sample_cosine_distribution(state.sampler.next_2d(), intersection.nrm, 1.0f);
+    bsdf_sample.pdf = fabsf(dot(bsdf_sample.w_o, intersection.nrm)) / kPi;
+    bsdf_sample.eta = 1.0f;
+  }
+
+  if (options.enable_merging() && options.merge_vertices() && (state.total_path_depth + 1 <= options.max_depth)) {
+    state.merged += spatial_grid.gather(scene, state, light_vertices, options, intersection, iteration.vc_weight);
+  }
+
+  if (subsurface_path && (subsurface_sampled == false)) {
+    return false;
+  }
+
+  return vcm_next_ray(scene, PathSource::Camera, options, state, iteration, intersection, bsdf_data, bsdf_sample, subsurface_sampled);
 }
 
 struct ETX_ALIGNED LightStepResult {
   VCMLightVertex vertex_to_add = {};
-  float3 value_to_splat = {};
-  float2 splat_uv = {};
+  float3 values_to_splat[subsurface::kTotalIntersections] = {};
+  float2 splat_uvs[subsurface::kTotalIntersections] = {};
+  uint32_t splat_count = 0;
   bool add_vertex = false;
   bool continue_tracing = false;
 };
@@ -750,10 +785,11 @@ struct ETX_ALIGNED LightStepResult {
 template <class RT>
 ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIteration& iteration, const VCMOptions& options, const uint32_t path_index, VCMPathState& state,
   const RT& rt) {
-  LightStepResult result = {};
-  bool found_intersection = rt.trace(scene, state.ray, state.intersection, state.sampler);
+  Intersection intersection = {};
+  bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
-  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state);
+  LightStepResult result = {};
+  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, intersection.t);
   if (medium_sample.sampled_medium()) {
     result.continue_tracing = vcm_handle_sampled_medium(scene, medium_sample, options, state);
     return result;
@@ -763,26 +799,62 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
     return result;
   }
 
-  const auto& tri = scene.triangles[state.intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
-
-  if (vcm_handle_boundary_bsdf(scene, PathSource::Light, state)) {
+  if (vcm_handle_boundary_bsdf(scene, PathSource::Light, intersection, state)) {
     result.continue_tracing = true;
     return result;
   }
 
-  vcm_update_light_vcm(state);
+  const auto& tri = scene.triangles[intersection.triangle_index];
+  const auto& mat = scene.materials[tri.material_index];
+  auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Light, intersection, intersection.w_i};
+  auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, state.sampler);
+  ETX_VALIDATE(bsdf_sample.weight);
 
-  if (bsdf::is_delta(mat, state.intersection.tex, scene, state.sampler) == false) {
+  vcm_update_light_vcm(intersection, state);
+
+  subsurface::Gather ss_gather = {};
+  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
+  bool subsurface_sampled = subsurface::gather(state.spect, scene, intersection, tri.material_index, rt, state.sampler, ss_gather);
+
+  if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     result.add_vertex = true;
-    result.vertex_to_add = {state, state.intersection.pos, state.intersection.barycentric, state.intersection.triangle_index, path_index};
+    result.vertex_to_add = {state, intersection.pos, intersection.nrm, intersection.barycentric, intersection.triangle_index, path_index};
+    result.splat_count = 0;
 
     if (options.connect_to_camera() && (state.total_path_depth + 1 <= options.max_depth)) {
-      result.value_to_splat = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options, state, result.splat_uv);
+      if (subsurface_sampled) {
+        for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
+          auto value = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options,  //
+            ss_gather.intersections[i], ss_gather.weights[i], state, result.splat_uvs[result.splat_count]);
+          ETX_VALIDATE(value);
+          float ss_scale = ss_gather.weights[i].average() / ss_gather.total_weight;
+          if (dot(value, value) > kEpsilon) {
+            result.values_to_splat[result.splat_count] = value * ss_scale;
+            result.splat_count++;
+          }
+        }
+      } else {
+        SpectralResponse no_scale = {state.spect.wavelength, 1.0f};
+        result.values_to_splat[0] = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options, intersection, no_scale, state, result.splat_uvs[0]);
+        result.splat_count = 1;
+      }
     }
   }
 
-  if (vcm_next_ray(scene, PathSource::Light, options, state, iteration) == false) {
+  if (subsurface_sampled) {
+    state.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
+    ETX_VALIDATE(state.throughput);
+    intersection = ss_gather.intersections[ss_gather.selected_intersection];
+    bsdf_sample.w_o = sample_cosine_distribution(state.sampler.next_2d(), intersection.nrm, 1.0f);
+    bsdf_sample.pdf = fabsf(dot(bsdf_sample.w_o, intersection.nrm)) / kPi;
+    bsdf_sample.eta = 1.0f;
+  }
+
+  if (subsurface_path && (subsurface_sampled == false)) {
+    return result;
+  }
+
+  if (vcm_next_ray(scene, PathSource::Light, options, state, iteration, intersection, bsdf_data, bsdf_sample, subsurface_sampled) == false) {
     return result;
   }
 

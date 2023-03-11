@@ -12,7 +12,7 @@
 
 namespace etx {
 
-bool rtc_compile(CUDACompileTarget target, const char* filename, const uint32_t arch, const char* output_file) {
+bool compile_cuda(CUDACompileTarget target, const char* filename, const char* output_file, const uint32_t arch) {
   nvrtcProgram program = {};
 
   auto rtc_call_impl = [&program](const char* expr, nvrtcResult result) -> bool {
@@ -117,10 +117,6 @@ bool rtc_compile(CUDACompileTarget target, const char* filename, const uint32_t 
   log::info("Compilation finished: %s", success ? "success" : "fail");
   rtc_call(nvrtcDestroyProgram(&program));
   return success;
-}
-
-bool compile_cuda(CUDACompileTarget target, const char* path_to_file, const char* output_to_file, const uint32_t arch) {
-  return rtc_compile(target, path_to_file, arch, output_to_file);
 }
 
 }  // namespace etx

@@ -91,7 +91,7 @@ struct ETX_ALIGNED FilmData {
     }
 
     ETX_VALIDATE(value);
-    auto& ptr = data[x + y * dimensions.x];
+    auto& ptr = data[x + 1llu * y * dimensions.x];
     atomic_add_impl(&ptr.x, value.x);
     atomic_add_impl(&ptr.y, value.y);
     atomic_add_impl(&ptr.z, value.z);

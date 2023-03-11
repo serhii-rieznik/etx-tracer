@@ -22,7 +22,7 @@ struct Integrator {
   };
 
   struct DebugInfo {
-    const char* title = nullptr;
+    const char* title = "";
     float value = 0.0f;
   };
 

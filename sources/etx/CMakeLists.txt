@@ -60,12 +60,10 @@ create_library(render)
 target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader mikktspace enkiTS etx-core)
 target_include_directories(etx-render PRIVATE ${JANSSON_INCLUDE_DIRS})
 
-if (WITH_OPENVDB)
-  target_link_libraries(etx-render PUBLIC openvdb)
-  target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
-endif()
+target_link_libraries(etx-render PUBLIC nanovdb)
+target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 
-find_package(embree 3.0 REQUIRED)
+find_package(embree 4.0 REQUIRED)
 
 set(HAS_OPTIX 0)
 

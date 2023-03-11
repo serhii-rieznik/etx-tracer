@@ -17,6 +17,8 @@ namespace etx {
 
 struct UI {
   void initialize();
+  void cleanup();
+
   void build(double dt, const char* status);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
@@ -68,7 +70,7 @@ struct UI {
   Scene* _current_scene = nullptr;
 
   ArrayView<Integrator*> _integrators = {};
-  Options _view_options = {};
+  ViewOptions _view_options = {};
   Options _integrator_options = {};
 
   struct MappingRepresentation {
@@ -93,10 +95,10 @@ struct UI {
 
   enum UISetup : uint32_t {
     UIIntegrator = 1u << 0u,
-    UIView = 1u << 1u,
-    UIMaterial = 1u << 2u,
-    UIEmitters = 1u << 3u,
-    UICamera = 1u << 4u,
+    UIMaterial = 1u << 1u,
+    UIEmitters = 1u << 2u,
+    UICamera = 1u << 3u,
+    UIEverything = UIIntegrator,
   };
 
   MappingRepresentation _material_mapping;
@@ -104,7 +106,7 @@ struct UI {
   int32_t _selected_material = -1;
   int32_t _selected_medium = -1;
   int32_t _selected_emitter = -1;
-  uint32_t _ui_setup = 0;
+  uint32_t _ui_setup = UIEverything;
 };
 
 }  // namespace etx

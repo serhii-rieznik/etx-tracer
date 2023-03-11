@@ -52,7 +52,7 @@ struct CPUPathTracingImpl : public Task {
 
     total_time = {};
     iteration_time = {};
-    current_task = rt.scheduler().schedule(this, current_dimensions.x * current_dimensions.y);
+    current_task = rt.scheduler().schedule(current_dimensions.x * current_dimensions.y, this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
@@ -186,7 +186,7 @@ Options CPUPathTracing::options() const {
   Options result = {};
   result.add(1u, _private->options.iterations, 0xffffu, "spp", "Samples per Pixel");
   result.add(1u, _private->options.max_depth, 65536u, "pathlen", "Maximal Path Length");
-  result.add(1u, _private->options.rr_start, 65536u, "rrstart", "Start Russian Roulette at");
+  result.add(1u, _private->options.rr_start, 65536u, "rrstart", "Start Random Path Termination at");
   result.add(_private->options.nee, "nee", "Next Event Estimation");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
   return result;

@@ -137,13 +137,13 @@ struct CPUVCMImpl {
     vcm_iteration.current_radius = used_radius * radius_scale;
 
     float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(camera_image.count());
-    vcm_iteration.vm_weight = vcm_options.merge_vertices() ? eta_vcm : 0.0f;
+    vcm_iteration.vm_weight = vcm_options.enable_merging() ? eta_vcm : 0.0f;
     vcm_iteration.vc_weight = 1.0f / eta_vcm;
     vcm_iteration.vm_normalization = 1.0f / eta_vcm;
 
     _light_paths.clear();
     _light_vertices.clear();
-    current_task = rt.scheduler().schedule(&gather_light_job, camera_image.count());
+    current_task = rt.scheduler().schedule(camera_image.count(), &gather_light_job);
   }
 
   void continue_iteration() {
@@ -152,15 +152,17 @@ struct CPUVCMImpl {
 
     stats.l_time = stats.light_gather_time.measure();
 
-    TimeMeasure grid_time = {};
-    if (vcm_options.merge_vertices()) {
-      _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius);
+    if (vcm_options.enable_merging() && vcm_options.merge_vertices()) {
+      TimeMeasure grid_time = {};
+      _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius, rt.scheduler());
+      stats.g_time = grid_time.measure();
+    } else {
+      stats.g_time = 0.0f;
     }
-    stats.g_time = grid_time.measure();
     stats.camera_gather_time = {};
 
     vcm_state = VCMState::GatheringCameraVertices;
-    current_task = rt.scheduler().schedule(&gather_camera_job, camera_image.count());
+    current_task = rt.scheduler().schedule(camera_image.count(), &gather_camera_job);
   }
 
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
@@ -185,7 +187,10 @@ struct CPUVCMImpl {
           local_vertices.emplace_back(step_result.vertex_to_add);
         }
 
-        iteration_light_image.atomic_add({step_result.value_to_splat.x, step_result.value_to_splat.y, step_result.value_to_splat.z, 1.0f}, step_result.splat_uv, thread_id);
+        for (uint32_t i = 0; i < step_result.splat_count; ++i) {
+          const float3& val = step_result.values_to_splat[i];
+          iteration_light_image.atomic_add({val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i], thread_id);
+        }
 
         if (step_result.continue_tracing == false) {
           break;
@@ -316,7 +321,10 @@ void CPUVCM::stop(Stop st) {
   }
 }
 
-void CPUVCM::update_options(const Options&) {
+void CPUVCM::update_options(const Options& opt) {
+  if (current_state == State::Preview) {
+    preview(opt);
+  }
 }
 
 bool CPUVCM::have_updated_camera_image() const {

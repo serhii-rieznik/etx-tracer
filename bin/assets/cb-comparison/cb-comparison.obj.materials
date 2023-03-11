@@ -1,0 +1,33 @@
+newmtl et::medium
+id medium
+sigma_a 0.1 0.1 0.1
+sigma_s 5.0 10.0 20.0
+
+newmtl diffuse
+material class diffuse
+
+newmtl leftwall
+material class diffuse
+Kd 1 0 0 
+
+newmtl light
+material class diffuse
+Ke 1 1 1
+emitter nblackbody 5800 scale 48.0
+
+newmtl medium
+material class boundary
+int_medium medium
+
+newmtl rightwall
+material class diffuse
+Kd 0 1 0
+
+newmtl subsurface
+material class diffuse
+subsurface 0.4 0.2 0.1
+
+newmtl white
+material class plastic
+Pr 0.1
+Kd 0.18 0.18 0.18

@@ -26,10 +26,10 @@ struct TaskScheduler {
 
   uint32_t max_thread_count();
 
-  Task::Handle schedule(Task*, uint32_t range);
+  Task::Handle schedule(uint32_t range, Task*);
   Task::Handle schedule(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
-  void execute(Task*, uint32_t range);
+  void execute(uint32_t range, Task*);
   void execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
   bool completed(Task::Handle);

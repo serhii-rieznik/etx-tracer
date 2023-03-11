@@ -3,14 +3,15 @@ namespace subsurface {
 
 constexpr uint32_t kIntersectionDirections = 3u;
 constexpr uint32_t kIntersectionsPerDirection = 8u;
-constexpr uint32_t kTotalIntersection = kIntersectionDirections * kIntersectionsPerDirection;
+constexpr uint32_t kTotalIntersections = kIntersectionDirections * kIntersectionsPerDirection;
 
 struct Gather {
-  Intersection intersections[kTotalIntersection] = {};
-  SpectralResponse weights[kTotalIntersection] = {};
-  uint32_t intersection_count = 0;
-  uint32_t selected_intersection = kInvalidIndex;
+  Intersection intersections[kTotalIntersections] = {};
+  SpectralResponse weights[kTotalIntersections] = {};
+  uint32_t intersection_count = 0u;
+  uint32_t selected_intersection = 0u;
   float selected_sample_weight = 0.0f;
+  float total_weight = 0.0f;
 };
 
 ETX_GPU_CODE float sample_s_r(float rnd) {

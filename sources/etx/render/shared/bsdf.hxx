@@ -18,37 +18,27 @@ enum class PathSource : uint32_t {
 };
 
 struct BSDFData : public Vertex {
-  struct ETX_ALIGNED NormalFrame {
-    LocalFrame frame;
-    bool entering_material;
-  };
-
-  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi, const float3& awo)
+  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi)
     : Vertex(av)
-    , path_source(ps)
-    , spectrum_sample(spect)
-    , medium_index(medium)
     , w_i(awi)
-    , w_o(awo) {
+    , spectrum_sample(spect)
+    , path_source(ps)
+    , medium_index(medium) {
   }
 
-  ETX_GPU_CODE BSDFData swap_directions() const {
-    BSDFData result = *this;
-    result.w_i = -w_o;
-    result.w_o = -w_i;
-    return result;
+  ETX_GPU_CODE float3 front_fracing_normal() const {
+    return dot(nrm, w_i) < 0.0f ? nrm : -nrm;
   }
 
-  ETX_GPU_CODE NormalFrame get_normal_frame() const {
+  ETX_GPU_CODE LocalFrame get_normal_frame() const {
     bool entering_material = dot(nrm, w_i) < 0.0f;
-    return {entering_material ? LocalFrame{tan, btn, nrm} : LocalFrame{-tan, -btn, -nrm}, entering_material};
+    return entering_material ? LocalFrame{tan, btn, nrm, LocalFrame::EnteringMaterial} : LocalFrame{-tan, -btn, -nrm, 0u};
   }
 
-  PathSource path_source = PathSource::Undefined;
-  SpectralQuery spectrum_sample;
-  uint32_t medium_index = kInvalidIndex;
   float3 w_i = {};
-  float3 w_o = {};
+  SpectralQuery spectrum_sample = {};
+  PathSource path_source = PathSource::Undefined;
+  uint32_t medium_index = kInvalidIndex;
 };
 
 struct BSDFEval {

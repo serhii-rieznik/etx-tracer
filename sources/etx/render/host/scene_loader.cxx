@@ -774,7 +774,7 @@ inline auto get_param(const tinyobj::material_t& m, const char* param, char buff
 }
 
 Material::Class material_string_to_class(const char* s) {
-  if (strcmp(s, "diffuse") == 0)
+  if ((strcmp(s, "diffuse") == 0) || (strcmp(s, "translucent") == 0) || (strcmp(s, "subsurface") == 0))
     return Material::Class::Diffuse;
   else if (strcmp(s, "plastic") == 0)
     return Material::Class::Plastic;
@@ -784,8 +784,6 @@ Material::Class material_string_to_class(const char* s) {
     return Material::Class::Dielectric;
   else if (strcmp(s, "thinfilm") == 0)
     return Material::Class::Thinfilm;
-  else if (strcmp(s, "translucent") == 0)
-    return Material::Class::Subsurface;
   else if (strcmp(s, "mirror") == 0)
     return Material::Class::Mirror;
   else if (strcmp(s, "boundary") == 0)
@@ -794,8 +792,6 @@ Material::Class material_string_to_class(const char* s) {
     return Material::Class::Coating;
   else if (strcmp(s, "velvet") == 0)
     return Material::Class::Velvet;
-  else if (strcmp(s, "subsurface") == 0)
-    return Material::Class::Subsurface;
   else {
     log::error("Undefined BSDF: `%s`", s);
     return Material::Class::Diffuse;
@@ -813,7 +809,6 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "boundary",
     "coating",
     "velvet",
-    "subsurface",
     "undefined",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);

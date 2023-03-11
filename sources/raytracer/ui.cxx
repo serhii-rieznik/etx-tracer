@@ -1,4 +1,5 @@
 ﻿#include <etx/core/core.hxx>
+#include <etx/core/environment.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/log/log.hxx>
 
@@ -12,6 +13,14 @@
 #include <sokol_imgui.h>
 
 namespace etx {
+
+inline void decrease_exposure(ViewOptions& o) {
+  o.exposure = fmaxf(1.0f / 1024.0f, 0.5f * o.exposure);
+}
+
+inline void increase_exposure(ViewOptions& o) {
+  o.exposure = fmaxf(1.0f / 1024.0f, 2.0f * o.exposure);
+}
 
 void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint32_t>& mapping) {
   constexpr uint64_t kMaterialNameMaxSize = 1024llu;
@@ -35,11 +44,11 @@ void UI::initialize() {
   simgui_desc_t imggui_desc = {};
   imggui_desc.depth_format = SG_PIXELFORMAT_NONE;
   simgui_setup(imggui_desc);
+  igLoadIniSettingsFromDisk(env().file_in_data("ui.ini"));
+}
 
-  _view_options = Options{{
-    {OutputView::Result, OutputView::Count, output_view_to_string, "out_view", "View Image"},
-    {1.0f / 1000.0f, 1.0f, 1000.0f, "exp", "Exposure"},
-  }};
+void UI::cleanup() {
+  igSaveIniSettingsToDisk(env().file_in_data("ui.ini"));
 }
 
 bool UI::build_options(Options& options) {
@@ -220,6 +229,23 @@ void UI::build(double dt, const char* status) {
     }
 
     if (igBeginMenu("View", true)) {
+      char shortcut[2] = "X";
+      for (uint32_t i = 0; i < uint32_t(OutputView::Count); ++i) {
+        shortcut[0] = char('1' + i);
+        if (igMenuItemEx(output_view_to_string(i).c_str(), nullptr, shortcut, uint32_t(_view_options.view) == i, true)) {
+          _view_options.view = static_cast<OutputView>(i);
+        }
+      }
+
+      igSeparator();
+      if (igMenuItemEx("Increase Exposure", nullptr, "*", false, true)) {
+        increase_exposure(_view_options);
+      }
+      if (igMenuItemEx("Decrease Exposure", nullptr, "/", false, true)) {
+        increase_exposure(_view_options);
+      }
+      igSeparator();
+
       auto ui_toggle = [this](const char* label, uint32_t flag) {
         uint32_t k = 0;
         for (; (k < 8) && (flag != (1u << k)); ++k) {
@@ -232,7 +258,6 @@ void UI::build(double dt, const char* status) {
         }
       };
       ui_toggle("Interator options", UIIntegrator);
-      ui_toggle("View options", UIView);
       ui_toggle("Materials and mediums", UIMaterial);
       ui_toggle("Emitters", UIEmitters);
       ui_toggle("Camera", UICamera);
@@ -242,93 +267,129 @@ void UI::build(double dt, const char* status) {
     igEndMainMenuBar();
   }
 
-  if ((_ui_setup & UIIntegrator) && igBegin("Integrator options", nullptr, kWindowFlags)) {
-    igText(has_integrator ? _current_integrator->name() : "No integrator selected");
+  bool scene_editable = has_integrator && has_scene &&  //
+                        ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped));
 
-    if (has_integrator && (_integrator_options.values.empty() == false)) {
-      if (build_options(_integrator_options) && callbacks.options_changed) {
-        callbacks.options_changed();
-      }
+  ImVec2 wpadding = igGetStyle()->WindowPadding;
+  ImVec2 fpadding = igGetStyle()->FramePadding;
+  float text_size = igGetFontSize();
+  float button_size = 32.0f;
+  float input_size = 64.0f;
+  if (igBeginViewportSideBar("##toolbar", igGetMainViewport(), ImGuiDir_Up, button_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
+    bool can_run = has_integrator && _current_integrator->can_run();
+    Integrator::State state = can_run ? _current_integrator->state() : Integrator::State::Stopped;
+
+    bool state_available[4] = {
+      can_run && (state == Integrator::State::Stopped),
+      can_run && ((state == Integrator::State::Stopped) || (state == Integrator::State::Preview)),
+      can_run && (state == Integrator::State::Running),
+      can_run && ((state != Integrator::State::Stopped)),
+    };
+
+    ImVec4 colors[4] = {
+      state_available[0] ? ImVec4{0.1f, 0.1f, 0.33f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
+      state_available[1] ? ImVec4{0.1f, 0.33f, 0.1f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
+      state_available[2] ? ImVec4{0.33f, 0.22f, 0.11f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
+      state_available[3] ? ImVec4{0.33f, 0.1f, 0.1f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
+    };
+
+    std::string labels[4] = {
+      (state == Integrator::State::Preview) ? "> Preview <" : "  Preview  ",
+      (state == Integrator::State::Running) ? "> Launch <" : "  Launch  ",
+      (state == Integrator::State::WaitingForCompletion) ? "> Finish <" : "  Finish  ",
+      " Terminate ",
+    };
+
+    igPushStyleColor_Vec4(ImGuiCol_Button, colors[0]);
+    if (igButton(labels[0].c_str(), {0.0f, button_size})) {
+      callbacks.preview_selected();
     }
 
-    if (has_integrator && _current_integrator->can_run()) {
-      igSeparator();
-      igNewLine();
-
-      auto state = _current_integrator->state();
-      bool has_complete = (state == Integrator::State::Running);
-      bool has_stop = (state != Integrator::State::Stopped);
-      bool has_preview = (state == Integrator::State::Stopped);
-      bool has_run = (state == Integrator::State::Stopped) || (state == Integrator::State::Preview);
-
-      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.22f, 0.11f, 1.0f});
-      if (has_complete && igButton("[ Complete iteration and stop ]", {}) && callbacks.stop_selected) {
-        callbacks.stop_selected(true);
-      }
-
-      igPushStyleColor_Vec4(ImGuiCol_Button, {0.33f, 0.1f, 0.1f, 1.0f});
-      if (has_stop && igButton("[ Break Immediately ]", {}) && callbacks.stop_selected) {
-        callbacks.stop_selected(false);
-      }
-
-      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.1f, 0.33f, 1.0f});
-      if (has_preview && igButton("[ Preview ]", {}) && callbacks.preview_selected) {
-        callbacks.preview_selected();
-      }
-
-      igPushStyleColor_Vec4(ImGuiCol_Button, {0.1f, 0.33f, 0.1f, 1.0f});
-      if (has_run && igButton("[ Launch ]", {}) && callbacks.run_selected) {
-        callbacks.run_selected();
-      }
-
-      igPopStyleColor(4);
+    igSameLine(0.0f, wpadding.x);
+    igPushStyleColor_Vec4(ImGuiCol_Button, colors[1]);
+    if (igButton(labels[1].c_str(), {0.0f, button_size})) {
+      callbacks.run_selected();
     }
+
+    igSameLine(0.0f, wpadding.x);
+    igPushStyleColor_Vec4(ImGuiCol_Button, colors[2]);
+    if (igButton(labels[2].c_str(), {0.0f, button_size})) {
+      callbacks.stop_selected(true);
+    }
+
+    igSameLine(0.0f, wpadding.x);
+    igPushStyleColor_Vec4(ImGuiCol_Button, colors[3]);
+    if (igButton(labels[3].c_str(), {0.0f, button_size})) {
+      callbacks.stop_selected(false);
+    }
+
+    igPopStyleColor(4);
+
+    igSameLine(0.0f, wpadding.x);
+    igSeparatorEx(ImGuiSeparatorFlags_Vertical);
+    igSameLine(0.0f, wpadding.x);
+
+    igPushItemWidth(input_size);
+    igGetStyle()->FramePadding.y = (button_size - text_size) / 2.0f;
+    igText("Exposure:");
+    igSameLine(0.0f, 0.0f);
+    igDragFloat("##exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
+    igGetStyle()->FramePadding.y = fpadding.y;
+    igPopItemWidth();
+
     igEnd();
   }
 
-  if ((_ui_setup & UIView) && igBegin("View Options", nullptr, kWindowFlags)) {
-    build_options(_view_options);
+  if (igBeginViewportSideBar("##status", igGetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
+    char status_buffer[2048] = {};
+    uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
+    snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
+    igText(status_buffer);
+    igEnd();
+  }
+
+  if ((_ui_setup & UIIntegrator) && igBegin("Integrator options", nullptr, kWindowFlags)) {
+    if (has_integrator) {
+      igText(_current_integrator->name());
+      if (build_options(_integrator_options) && callbacks.options_changed) {
+        callbacks.options_changed();
+      }
+    } else {
+      igText("No integrator selected");
+    }
     igEnd();
   }
 
   if ((_ui_setup & UIMaterial) && igBegin("Materials and mediums", nullptr, kWindowFlags)) {
-    if (has_integrator && has_scene && (_material_mapping.empty() == false)) {
-      igText("Materials");
-      igListBox_Str_arr("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
-      if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
-        if ((_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
-          uint32_t material_index = _material_mapping.at(_selected_material);
-          Material& material = _current_scene->materials[material_index];
-          bool changed = build_material(material);
-          if (changed && callbacks.material_changed) {
-            callbacks.material_changed(material_index);
-          }
-        }
+    igText("Materials");
+    igListBox_Str_arr("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
+    if (scene_editable && (_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
+      uint32_t material_index = _material_mapping.at(_selected_material);
+      Material& material = _current_scene->materials[material_index];
+      bool changed = build_material(material);
+      if (changed && callbacks.material_changed) {
+        callbacks.material_changed(material_index);
       }
-      if (_medium_mapping.empty() == false) {
-        igSeparator();
-        igText("Mediums");
-        igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
-        if ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped)) {
-          if ((_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
-            uint32_t medium_index = _medium_mapping.at(_selected_medium);
-            Medium& m = _current_scene->mediums[medium_index];
-            bool changed = build_medium(m);
-            if (changed && callbacks.material_changed) {
-              callbacks.medium_changed(medium_index);
-            }
-          }
-        }
-      }
-    } else {
-      igText("No scene or integrator selected");
     }
+
+    igSeparator();
+
+    igText("Mediums");
+    igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
+    if (scene_editable && (_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
+      uint32_t medium_index = _medium_mapping.at(_selected_medium);
+      Medium& m = _current_scene->mediums[medium_index];
+      bool changed = build_medium(m);
+      if (changed && callbacks.material_changed) {
+        callbacks.medium_changed(medium_index);
+      }
+    }
+
     igEnd();
   }
 
   if ((_ui_setup & UIEmitters) && igBegin("Emitters", nullptr, kWindowFlags)) {
     bool has_emitters = false;
-
     igText("Emitters");
     if (igBeginListBox("##emitters", {})) {
       for (uint32_t index = 0; has_scene && (index < _current_scene->emitters.count); ++index) {
@@ -356,7 +417,7 @@ void UI::build(double dt, const char* status) {
       igEndListBox();
     }
 
-    if ((_selected_emitter >= 0) && (_selected_emitter < _current_scene->emitters.count)) {
+    if (scene_editable && (_selected_emitter >= 0) && (_selected_emitter < _current_scene->emitters.count)) {
       auto& emitter = _current_scene->emitters[_selected_emitter];
 
       bool changed = igSpectrumPicker("Emission", emitter.emission.spectrum, _current_scene->spectrums, true);
@@ -383,35 +444,30 @@ void UI::build(double dt, const char* status) {
     igEnd();
   }
 
-  if (_ui_setup & UICamera) {
-    if (igBegin("Camera", nullptr, kWindowFlags)) {
-      if (has_scene) {
-        auto& camera = _current_scene->camera;
+  if ((_ui_setup & UICamera) && igBegin("Camera", nullptr, kWindowFlags)) {
+    if (scene_editable) {
+      auto& camera = _current_scene->camera;
+      bool changed = false;
+      float3 pos = camera.position;
+      float3 target = camera.position + camera.direction;
+      float focal_len = get_camera_focal_length(camera);
+      igText("Lens size");
+      changed = changed || igDragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
+      igText("Focal distance");
+      changed = changed || igDragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
+      igText("Focal length");
+      changed = changed || igDragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
 
-        bool changed = false;
-
-        float3 pos = camera.position;
-        float3 target = camera.position + camera.direction;
-        float focal_len = get_camera_focal_length(camera);
-
-        igText("Lens size");
-        changed = changed || igDragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
-        igText("Focal distance");
-        changed = changed || igDragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
-        igText("Focal length");
-        changed = changed || igDragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
-
-        if (changed && callbacks.camera_changed) {
-          camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
-          camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
-          update_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, focal_length_to_fov(focal_len) * 180.0f / kPi);
-          callbacks.camera_changed();
-        }
-      } else {
-        igText("No scene selected");
+      if (changed && callbacks.camera_changed) {
+        camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
+        camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
+        update_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, focal_length_to_fov(focal_len) * 180.0f / kPi);
+        callbacks.camera_changed();
       }
-      igEnd();
+    } else {
+      igText("No options available");
     }
+    igEnd();
   }
 
   if (has_integrator && (_current_integrator->debug_info_count() > 0)) {
@@ -424,16 +480,6 @@ void UI::build(double dt, const char* status) {
       }
       igEnd();
     }
-  }
-
-  char status_buffer[2048] = {};
-  uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
-  snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
-  float offset_size = igGetFontSize();
-  float dy = igGetStyle()->FramePadding.y;
-  if (igBeginViewportSideBar("Sidebar", igGetMainViewport(), ImGuiDir_Down, dy + 2.0f * offset_size, ImGuiWindowFlags_NoDecoration)) {
-    igText(status_buffer);
-    igEnd();
   }
 
   simgui_render();
@@ -507,38 +553,22 @@ bool UI::handle_event(const sapp_event* e) {
       _ui_setup = (_ui_setup & flag) ? (_ui_setup & (~flag)) : (_ui_setup | flag);
       break;
     };
-    case SAPP_KEYCODE_1: {
-      _view_options.set_enum("out_view", OutputView::Result);
-      break;
-    }
-    case SAPP_KEYCODE_2: {
-      _view_options.set_enum("out_view", OutputView::CameraImage);
-      break;
-    }
-    case SAPP_KEYCODE_3: {
-      _view_options.set_enum("out_view", OutputView::LightImage);
-      break;
-    }
-    case SAPP_KEYCODE_4: {
-      _view_options.set_enum("out_view", OutputView::ReferenceImage);
-      break;
-    }
-    case SAPP_KEYCODE_5: {
-      _view_options.set_enum("out_view", OutputView::RelativeDifference);
-      break;
-    }
+
+    case SAPP_KEYCODE_1:
+    case SAPP_KEYCODE_2:
+    case SAPP_KEYCODE_3:
+    case SAPP_KEYCODE_4:
+    case SAPP_KEYCODE_5:
     case SAPP_KEYCODE_6: {
-      _view_options.set_enum("out_view", OutputView::AbsoluteDifference);
+      _view_options.view = static_cast<OutputView>(e->key_code - SAPP_KEYCODE_1);
       break;
     }
     case SAPP_KEYCODE_KP_DIVIDE: {
-      float e = _view_options.get("exp", 1.0f).to_float();
-      _view_options.set("exp", 0.5f * e);
+      decrease_exposure(_view_options);
       break;
     }
     case SAPP_KEYCODE_KP_MULTIPLY: {
-      float e = _view_options.get("exp", 1.0f).to_float();
-      _view_options.set("exp", 2.0f * e);
+      increase_exposure(_view_options);
       break;
     }
     default:
@@ -549,11 +579,7 @@ bool UI::handle_event(const sapp_event* e) {
 }
 
 ViewOptions UI::view_options() const {
-  return {
-    _view_options.get("out_view", uint32_t(OutputView::Result)).to_enum<OutputView>(),
-    ViewOptions::ToneMapping | ViewOptions::sRGB,
-    _view_options.get("exp", 1.0f).to_float(),
-  };
+  return _view_options;
 }
 
 void UI::set_current_integrator(Integrator* i) {

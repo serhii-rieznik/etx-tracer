@@ -145,7 +145,7 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
 namespace subsurface {
 
 template <class RT>
-ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp) {
+ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp, Gather& result) {
   const auto& mtl = scene.materials[material_index].subsurface;
 
   Sample ss_samples[3] = {
@@ -154,8 +154,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
     sample(in_intersection, mtl, 2u, smp),
   };
 
-  IntersectionBase intersections[kTotalIntersection] = {};
-
+  IntersectionBase intersections[kTotalIntersections] = {};
   ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, material_index};
   uint32_t intersections_0 = rt.continuous_trace(scene, ss_samples[0].ray, ct, smp);
   ct.intersection_buffer += intersections_0;
@@ -164,18 +163,16 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
   uint32_t intersections_2 = rt.continuous_trace(scene, ss_samples[2].ray, ct, smp);
 
   uint32_t intersection_count = intersections_0 + intersections_1 + intersections_2;
-  ETX_CRITICAL(intersection_count <= kTotalIntersection);
+  ETX_CRITICAL(intersection_count <= kTotalIntersections);
   if (intersection_count == 0) {
-    return {};
+    return false;
   }
 
-  Gather result = {};
-
-  float total_weight = 0.0f;
+  result = {};
   for (uint32_t i = 0; i < intersection_count; ++i) {
     Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
 
-    auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
+    auto out_intersection = make_intersection(scene, in_intersection.w_i, intersections[i]);
 
     float gw = geometric_weigth(out_intersection.nrm, ss_sample);
     float pdf = evaluate(spect, mtl, ss_sample.sampled_radius).average();
@@ -192,14 +189,14 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
     if (weight.is_zero())
       continue;
 
-    total_weight += weight.average();
+    result.total_weight += weight.average();
     result.intersections[result.intersection_count] = out_intersection;
     result.weights[result.intersection_count] = weight;
     result.intersection_count += 1u;
   }
 
-  if (total_weight > 0.0f) {
-    float rnd = smp.next() * total_weight;
+  if (result.total_weight > 0.0f) {
+    float rnd = smp.next() * result.total_weight;
     float partial_sum = 0.0f;
     float sample_weight = 0.0f;
     for (uint32_t i = 0; i < result.intersection_count; ++i) {
@@ -207,7 +204,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
       float next_sum = partial_sum + sample_weight;
       if (rnd < next_sum) {
         result.selected_intersection = i;
-        result.selected_sample_weight = total_weight / sample_weight;
+        result.selected_sample_weight = result.total_weight / sample_weight;
         break;
       }
       partial_sum = next_sum;
@@ -215,7 +212,7 @@ ETX_GPU_CODE Gather gather(SpectralQuery spect, const Scene& scene, const Inters
     ETX_ASSERT(result.selected_intersection != kInvalidIndex);
   }
 
-  return result;
+  return result.intersection_count > 0;
 }
 
 }  // namespace subsurface

@@ -47,7 +47,7 @@ struct ViewOptions {
 
   OutputView view = OutputView::Result;
   uint32_t options = ToneMapping | sRGB;
-  float exposure = 0.0f;
+  float exposure = 1.0f;
 };
 
 }  // namespace etx

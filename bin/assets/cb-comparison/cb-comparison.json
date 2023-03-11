@@ -1,0 +1,28 @@
+{
+  "geometry": "cb-comparison.obj",
+  "materials": "cb-comparison.obj.materials",
+  "camera": {
+    "viewport": [
+      1000,
+      1000
+    ],
+    "origin": [
+      0.0,
+      1.0,
+      3.8310980796813965
+    ],
+    "target": [
+      0.0,
+      1.0,
+      2.8310980796813965
+    ],
+    "up": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "lens-radius": 0.0,
+    "focal-distance": 0.0,
+    "focal-length": 49.999992370605469
+  }
+}

@@ -126,18 +126,33 @@ struct ETX_ALIGNED Triangle {
 };
 
 struct ETX_ALIGNED LocalFrame {
+  enum : uint32_t {
+    EnteringMaterial = 1u << 0u,
+  };
+
   float3 tan = {};
   float3 btn = {};
   float3 nrm = {};
+  uint32_t flags = 0u;
 
   ETX_GPU_CODE float3 to_local(const float3& v) const {
     return float3x3{float3{tan.x, btn.x, nrm.x}, float3{tan.y, btn.y, nrm.y}, float3{tan.z, btn.z, nrm.z}} * v;
   }
+
   ETX_GPU_CODE float3 from_local(const float3& v) const {
     return float3x3{float3{tan.x, tan.y, tan.z}, float3{btn.x, btn.y, btn.z}, float3{nrm.x, nrm.y, nrm.z}} * v;
   }
+
   ETX_GPU_CODE static float cos_theta(const float3& v) {
     return v.z;
+  }
+
+  ETX_GPU_CODE static float sin_theta(const float3& v) {
+    return sqrtf(fmaxf(0.0f, 1.0f - cos_theta(v)));
+  }
+
+  bool entering_material() const {
+    return (flags & EnteringMaterial) == EnteringMaterial;
   }
 };
 
@@ -165,14 +180,14 @@ struct ETX_ALIGNED Ray {
 struct ETX_ALIGNED IntersectionBase {
   float2 barycentric = {};
   uint32_t triangle_index = kInvalidIndex;
-  float t = -kMaxFloat;
+  float t = kMaxFloat;
 };
 
 struct ETX_ALIGNED Intersection : public Vertex {
   float3 barycentric = {};
   uint32_t triangle_index = kInvalidIndex;
   float3 w_i = {};
-  float t = -kMaxFloat;
+  float t = kMaxFloat;
 
   Intersection() = default;
 
@@ -305,13 +320,11 @@ ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
   struct basis {
     float3 u, v;
   };
-  float s = (n.z < 0.0f ? -1.0f : 1.0f);
-  float a = -1.0f / (s + n.z);
-  float b = n.x * n.y * a;
-  return basis{
-    {1.0f + s * n.x * n.x * a, s * b, -s * n.x},
-    {b, s + n.y * n.y * a, -n.y},
-  };
+  float3 a = normalize((n.x != n.y) || (n.x != n.z)                  //
+                         ? float3{n.z - n.y, n.x - n.z, +n.y - n.x}  //
+                         : float3{n.z - n.y, n.x + n.z, -n.y - n.x});
+  float3 b = normalize(cross(n, a));
+  return basis{a, b};
 }
 
 ETX_GPU_CODE float3 sample_cosine_distribution(const float2 rnd, const float3& n, const float3& u, const float3& v, float exponent) {
