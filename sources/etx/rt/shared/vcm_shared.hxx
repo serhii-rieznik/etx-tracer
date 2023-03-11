@@ -392,7 +392,7 @@ ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPath
 
 template <class RT>
 ETX_GPU_CODE float3 vcm_connect_to_camera(const RT& rt, const Scene& scene, const Material& mat, const Triangle& tri, const VCMIteration& vcm_iteration, const VCMOptions& options,
-  const Intersection& intersection, const SpectralResponse& scale, VCMPathState& state, float2& uv) {
+  const Intersection& in_intersection, const Intersection& intersection, const SpectralResponse& scale, VCMPathState& state, float2& uv) {
   if ((options.connect_to_camera() == false) || (state.total_path_depth + 1 >= options.max_depth)) {
     return {};
   }
@@ -426,7 +426,7 @@ ETX_GPU_CODE float3 vcm_connect_to_camera(const RT& rt, const Scene& scene, cons
   float weight = options.enable_mis() ? (1.0f / (1.0f + w_light)) : 1.0f;
   ETX_VALIDATE(weight);
 
-  eval.bsdf *= fix_shading_normal(tri.geo_n, data.nrm, data.w_i, w_o);
+  weight *= fix_shading_normal(tri.geo_n, in_intersection.nrm, in_intersection.w_i, w_o);
   auto result = (tr * eval.bsdf * state.throughput * camera_sample.weight) * weight;
 
   uv = camera_sample.uv;
@@ -825,18 +825,22 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
       if (subsurface_sampled) {
         for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
           auto value = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options,  //
-            ss_gather.intersections[i], ss_gather.weights[i], state, result.splat_uvs[result.splat_count]);
+            intersection, ss_gather.intersections[i], ss_gather.weights[i], state, result.splat_uvs[result.splat_count]);
           ETX_VALIDATE(value);
-          float ss_scale = ss_gather.weights[i].average() / ss_gather.total_weight;
           if (dot(value, value) > kEpsilon) {
+            float ss_scale = ss_gather.weights[i].average() / ss_gather.total_weight;
             result.values_to_splat[result.splat_count] = value * ss_scale;
             result.splat_count++;
           }
         }
       } else {
         SpectralResponse no_scale = {state.spect.wavelength, 1.0f};
-        result.values_to_splat[0] = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options, intersection, no_scale, state, result.splat_uvs[0]);
-        result.splat_count = 1;
+        auto value = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options, intersection, intersection, no_scale, state, result.splat_uvs[0]);
+        ETX_VALIDATE(value);
+        if (dot(value, value) > kEpsilon) {
+          result.values_to_splat[0] = value;
+          result.splat_count = 1;
+        }
       }
     }
   }

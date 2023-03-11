@@ -407,23 +407,23 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       return;
     }
 
-    if (mat.cls == Material::Class::Boundary) {
-      if (ctx->medium != kInvalidIndex) {
-        float dt = t - ctx->t;
-        ctx->value *= scene.mediums[ctx->medium].transmittance(ctx->spect, *ctx->smp, ctx->origin, ctx->direction, dt);
-        ETX_VALIDATE(ctx->value);
-      }
-
-      float3 nrm = lerp_normal(scene.vertices, tri, bc);
-      ctx->medium = (dot(nrm, ctx->direction) < 0.0f) ? mat.int_medium : mat.ext_medium;
-      ctx->origin = lerp_pos(scene.vertices, tri, bc);
-      ctx->t = t;
-
-      *args->valid = 0;
-    } else {
+    if (mat.cls != Material::Class::Boundary) {
       ctx->value = {ctx->value.wavelength, 0.0f};
       *args->valid = -1;
     }
+
+    if (ctx->medium != kInvalidIndex) {
+      float dt = t - ctx->t;
+      ctx->value *= scene.mediums[ctx->medium].transmittance(ctx->spect, *ctx->smp, ctx->origin, ctx->direction, dt);
+      ETX_VALIDATE(ctx->value);
+    }
+
+    float3 nrm = lerp_normal(scene.vertices, tri, bc);
+    ctx->medium = (dot(nrm, ctx->direction) < 0.0f) ? mat.int_medium : mat.ext_medium;
+    ctx->origin = lerp_pos(scene.vertices, tri, bc);
+    ctx->t = t;
+
+    *args->valid = 0;
   };
 
   context.direction = p1 - p0;
