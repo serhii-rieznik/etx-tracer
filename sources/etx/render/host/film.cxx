@@ -1,4 +1,4 @@
-﻿#include <etx/render/host/film.hxx>
+#include <etx/render/host/film.hxx>
 #include <etx/render/shared/spectrum.hxx>
 
 #include <algorithm>
@@ -6,6 +6,7 @@
 namespace etx {
 
 inline void atomic_add_impl(volatile float* ptr, float value) {
+#if defined(__MSC_VER)
   volatile long* iptr = std::bit_cast<volatile long*>(ptr);
   long old_value = {};
   long new_value = {};
@@ -13,6 +14,10 @@ inline void atomic_add_impl(volatile float* ptr, float value) {
     old_value = std::bit_cast<long>(*ptr);
     new_value = std::bit_cast<long>(*ptr + value);
   } while (_InterlockedCompareExchange(iptr, new_value, old_value) != old_value);
+#else
+#warning FIX
+  *ptr += value;
+#endif
 }
 
 void Film::resize(const uint2& dim, uint32_t threads) {

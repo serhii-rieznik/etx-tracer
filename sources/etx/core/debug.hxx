@@ -49,7 +49,12 @@
 
 #else
 
-#define ETX_DEBUG_BREAK() __debugbreak()
+#if defined(__MSC_VER)
+  #define ETX_DEBUG_BREAK() __debugbreak()
+#else
+  #define ETX_DEBUG_BREAK()
+#endif
+
 #define ETX_ABORT() abort()
 
 #endif

@@ -8,7 +8,7 @@ struct CPUBidirectional : public Integrator {
   CPUBidirectional(Raytracing&);
   ~CPUBidirectional();
 
-  const char* name() {
+  const char* name() override {
     return "Bidirectional (CPU)";
   }
 

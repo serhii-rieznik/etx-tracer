@@ -42,16 +42,24 @@ function(create_library folder)
   add_library(${lib_name} STATIC)
   etx_build_pack(${lib_name} "${CMAKE_CURRENT_LIST_DIR}/${folder}")
 
-  target_compile_options(${lib_name} PRIVATE "/Zl")
-  target_compile_options(${lib_name} PRIVATE -DNOMINMAX=1 -D_CRT_SECURE_NO_WARNINGS=1 -DWIN32_LEAN_AND_MEAN=1 -D_USE_MATH_DEFINES=1)
+  if(MSVC)
+    target_compile_options(${lib_name} PRIVATE "/Zl")
+    target_compile_options(${lib_name} PRIVATE -DNOMINMAX=1 -D_CRT_SECURE_NO_WARNINGS=1 -DWIN32_LEAN_AND_MEAN=1 -D_USE_MATH_DEFINES=1)
+  else()
+    target_compile_options(${lib_name} PRIVATE -D_USE_MATH_DEFINES=1)
+  endif()
 
   set_property(TARGET ${lib_name} PROPERTY FOLDER "etx")
   set_property(TARGET ${lib_name} PROPERTY LINKER_LANGUAGE CXX)
 endfunction(create_library)
 
 create_library(core)
-target_link_libraries(etx-core PUBLIC jansson Dbghelp.lib)
+target_link_libraries(etx-core PUBLIC jansson)
 target_include_directories(etx-core PUBLIC .. ${JANSSON_INCLUDE_DIRS})
+
+if(APPLE)
+#  target_link_options(etx-core PUBLIC "-framework CoreFoundation")
+endif()
 
 create_library(log)
 target_link_libraries(etx-log PRIVATE etx-core)

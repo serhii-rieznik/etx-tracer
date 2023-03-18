@@ -38,7 +38,13 @@ uint64_t get_file_folder(const char* file_name, char buffer[], uint64_t buffer_s
   while ((len > 0) && (buffer[len] != '/') && (buffer[len] != '\\')) {
     --len;
   }
+
+#if defined(__MSC_VER)
   buffer[len] = '\\';
+#else
+  buffer[len] = '/';
+#endif
+  
   ETX_ASSERT(len + 1 < buffer_size);
   buffer[1llu + len] = 0;
   return 1ll + len;

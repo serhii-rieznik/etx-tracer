@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/render/shared/base.hxx>
 
@@ -74,7 +74,7 @@ struct ETX_ALIGNED FilmData {
   ETX_GPU_CODE void atomic_add_impl(float* ptr, float value) {
 #if (ETX_NVCC_COMPILER)
     atomicAdd(ptr, value);
-#else
+#elif defined(__MSC_VER)
     volatile long* iptr = std::bit_cast<volatile long*>(ptr);
     long old_value = {};
     long new_value = {};
@@ -82,6 +82,9 @@ struct ETX_ALIGNED FilmData {
       old_value = std::bit_cast<long>(*ptr);
       new_value = std::bit_cast<long>(*ptr + value);
     } while (_InterlockedCompareExchange(iptr, new_value, old_value) != old_value);
+#else
+#warning FIX
+    *ptr += value;
 #endif
   }
 

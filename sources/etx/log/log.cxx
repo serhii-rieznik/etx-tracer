@@ -5,11 +5,15 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#if defined(__MSC_VER)
 #include <malloc.h>
+#endif
 
 namespace etx {
 
 inline void set_console_color(log::Color clr) {
+#if defined(__MSC_VER)
   auto con = GetStdHandle(STD_OUTPUT_HANDLE);
   switch (clr) {
     case log::Color::White: {
@@ -31,9 +35,11 @@ inline void set_console_color(log::Color clr) {
     default:
       SetConsoleTextAttribute(con, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
   }
+#endif
 }
 
 void log::output(Color clr, const char* fmt, ...) {
+#if defined(__MSC_VER)
   constexpr int local_buffer_size = 1024;
   set_console_color(clr);
 
@@ -56,6 +62,7 @@ void log::output(Color clr, const char* fmt, ...) {
   va_end(list);
 
   set_console_color(Color::White);
+#endif
 }
 
 }  // namespace etx

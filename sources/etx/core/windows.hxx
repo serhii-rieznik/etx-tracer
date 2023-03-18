@@ -1,5 +1,7 @@
 #pragma once
 
+#if defined(__MSC_VER)
+
 #if !defined(NOMINMAX)
 #error NOMINMAX should be defined
 #endif
@@ -14,3 +16,7 @@
 
 #include <Windows.h>
 #include <DbgHelp.h>
+#include <commdlg.h>
+
+#endif
+

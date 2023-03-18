@@ -3,9 +3,10 @@
 #include <chrono>
 
 #include <etx/core/windows.hxx>
-#include <commdlg.h>
 
 namespace etx {
+
+#if defined(__MSC_VER)
 
 const char* exception_code_to_string(DWORD code) {
 #define CASE_TO_STRING(A) \
@@ -71,9 +72,13 @@ LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
+#endif
+
 void init_platform() {
+#if defined(__MSC_VER)
   SetUnhandledExceptionFilter(unhandled_exception_filter);
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+#endif
 }
 
 TimeMeasure::TimeMeasure() {
@@ -105,6 +110,7 @@ uint64_t TimeMeasure::measure_exact() const {
 }
 
 float TimeMeasure::get_cpu_load() {
+#if defined(__MSC_VER)
   auto CalculateCPULoad = [](unsigned long long idleTicks, unsigned long long totalTicks) {
     static unsigned long long _previousTotalTicks = 0;
     static unsigned long long _previousIdleTicks = 0;
@@ -125,9 +131,13 @@ float TimeMeasure::get_cpu_load() {
 
   FILETIME idleTime = {}, kernelTime = {}, userTime = {};
   return GetSystemTimes(&idleTime, &kernelTime, &userTime) ? CalculateCPULoad(FileTimeToInt64(idleTime), FileTimeToInt64(kernelTime) + FileTimeToInt64(userTime)) : -1.0f;
+#else
+  return 0.0f;
+#endif
 }
 
 std::string open_file(const std::vector<std::string>& filters) {
+#if defined(__MSC_VER)
   char name_buffer[MAX_PATH] = {};
 
   size_t fp = 0;
@@ -146,9 +156,13 @@ std::string open_file(const std::vector<std::string>& filters) {
   of.lpstrFilter = filter_buffer;
   of.nFilterIndex = filters.empty() ? 0 : 1;
   return GetOpenFileNameA(&of) ? of.lpstrFile : "";
+#else
+  return {};
+#endif
 }
 
 std::string save_file(const std::vector<std::string>& filters) {
+#if defined(__MSC_VER)
   char name_buffer[MAX_PATH] = {};
 
   size_t fp = 0;
@@ -167,6 +181,9 @@ std::string save_file(const std::vector<std::string>& filters) {
   of.lpstrFilter = filter_buffer;
   of.nFilterIndex = filters.empty() ? 0 : 1;
   return GetSaveFileName(&of) ? of.lpstrFile : "";
+#else
+  return {};
+#endif
 }
 
 bool load_binary_file(const char* filename, std::vector<uint8_t>& output) {

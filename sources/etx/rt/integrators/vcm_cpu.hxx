@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/rt/integrators/integrator.hxx>
 
@@ -8,7 +8,7 @@ struct CPUVCM : public Integrator {
   CPUVCM(Raytracing&);
   ~CPUVCM();
 
-  const char* name() {
+  const char* name() override {
     return "VCM (CPU)";
   }
 

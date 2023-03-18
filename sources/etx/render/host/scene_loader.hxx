@@ -1,8 +1,10 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/core/pimpl.hxx>
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/shared/scene.hxx>
+
+#include <unordered_map>
 
 namespace etx {
 

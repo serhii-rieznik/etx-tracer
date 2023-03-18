@@ -134,7 +134,7 @@ struct RaytracingImpl {
 
     uint64_t scene_buffer_size = 0;
     scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.emitters_distribution.values), 16llu);
-    scene_buffer_size = align_up(scene_buffer_size + align_up(sizeof(Spectrums), 16llu), 16llu);
+    scene_buffer_size = align_up(size_t(scene_buffer_size) + align_up(sizeof(Spectrums), size_t(16)), size_t(16));
 
     // images
     for (uint32_t i = 0; i < gpu.scene.images.count; ++i) {

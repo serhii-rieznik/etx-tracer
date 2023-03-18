@@ -1,4 +1,4 @@
-﻿#include <etx/core/environment.hxx>
+#include <etx/core/environment.hxx>
 #include <etx/log/log.hxx>
 
 #include <etx/render/host/medium_pool.hxx>
@@ -8,6 +8,10 @@
 
 #include <unordered_map>
 #include <functional>
+
+#if !defined(__MSC_VER)
+#define _stricmp strcasecmp
+#endif
 
 namespace etx {
 
@@ -137,8 +141,8 @@ struct MediumPoolImpl {
 
     density.resize(1llu * d.x * d.y * d.z, 0.0f);
 
-    float min_val = FLT_MAX;
-    float max_val = -FLT_MAX;
+    float min_val = kMaxFloat;
+    float max_val = -kMaxFloat;
     double avg_val = 0.0f;
     uint64_t value_count = 0;
     nanovdb::Coord c = {};
@@ -160,7 +164,7 @@ struct MediumPoolImpl {
     avg_val /= float(value_count);
 
     log::info("Density values range: %.5f ... %.5f ... %.5f", min_val, avg_val, max_val);
-    if ((value_count == 0) || (min_val == FLT_MAX) || ((max_val - min_val) <= kEpsilon) || (avg_val <= kEpsilon)) {
+    if ((value_count == 0) || (min_val == kMaxFloat) || ((max_val - min_val) <= kEpsilon) || (avg_val <= kEpsilon)) {
       log::warning("Density is zero or too small, clearing...");
       d = {};
       density.clear();
