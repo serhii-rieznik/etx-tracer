@@ -25,3 +25,5 @@ if (ETX_GPU_RENDER)
   target_sources(raytracer PRIVATE ${cu_sources})
   set_source_files_properties(${cu_sources} PROPERTIES HEADER_FILE_ONLY TRUE)
 endif()                               
+
+set_property(TARGET raytracer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_folder}/bin")

@@ -3,10 +3,9 @@
 
 #include <etx/rt/shared/vcm_shared.hxx>
 
-#include <cuda.h>
-
 namespace etx {
 
+#if (0)
 CUstream cuda_stream();
 
 struct CUDATimer {
@@ -81,6 +80,23 @@ struct CUDATimer {
   CUevent _end = {};
   bool _started = false;
 };
+
+#else
+
+struct CUDATimer {
+  Integrator::DebugInfo info = {};
+  void reset() {
+  }
+  void begin() {
+  }
+  void end() {
+  }
+  float duration() const {
+    return 0.0f;
+  }
+};
+
+#endif
 
 struct GPUVCMImpl {
   GPUVCMImpl(Raytracing& art, std::atomic<Integrator::State>& st)
