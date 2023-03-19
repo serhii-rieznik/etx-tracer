@@ -46,7 +46,6 @@ void VCMOptions::store(Options& opt) {
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {
-#if defined(__MSC_VER)
   static_assert(sizeof(long) == sizeof(uint32_t));
 
   data = {};
@@ -109,7 +108,6 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
 
   data.indices = make_array_view<uint32_t>(_indices.data(), _indices.size());
   data.cell_ends = make_array_view<uint32_t>(_cell_ends.data(), _cell_ends.size());
-#endif
 }
 
 }  // namespace etx

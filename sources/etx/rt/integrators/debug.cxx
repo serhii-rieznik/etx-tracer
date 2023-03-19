@@ -1,5 +1,4 @@
 ﻿#include <etx/core/core.hxx>
-#include <etx/log/log.hxx>
 
 #include <etx/render/host/rnd_sampler.hxx>
 #include <etx/render/host/film.hxx>

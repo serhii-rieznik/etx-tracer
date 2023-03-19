@@ -1,6 +1,5 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
-#include <etx/log/log.hxx>
 
 #include <etx/rt/integrators/path_tracing_gpu.hxx>
 #include <etx/rt/shared/path_tracing_shared.hxx>

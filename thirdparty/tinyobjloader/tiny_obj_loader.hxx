@@ -65,7 +65,7 @@ THE SOFTWARE.
 #include <vector>
 #include <algorithm>
 
-#if !defined(__MSC_VER)
+#if !defined(_MSC_VER)
 #define _strnicmp strncasecmp
 #endif
 

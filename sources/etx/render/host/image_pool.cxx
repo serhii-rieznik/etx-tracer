@@ -1,6 +1,4 @@
 #include <etx/core/core.hxx>
-#include <etx/core/core.hxx>
-#include <etx/log/log.hxx>
 
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/distribution_builder.hxx>

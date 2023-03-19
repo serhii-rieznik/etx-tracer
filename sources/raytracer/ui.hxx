@@ -107,6 +107,7 @@ struct UI {
   int32_t _selected_medium = -1;
   int32_t _selected_emitter = -1;
   uint32_t _ui_setup = UIEverything;
+  uint32_t _font_image = 0u;
 };
 
 }  // namespace etx

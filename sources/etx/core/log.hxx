@@ -10,6 +10,7 @@ struct log {
     Red,
   };
 
+  static void set_console_color(log::Color clr);
   static void output(Color color, const char* fmt, ...);
 
   template <class... args>

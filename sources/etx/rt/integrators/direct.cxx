@@ -1,5 +1,4 @@
 ﻿#include <etx/core/core.hxx>
-#include <etx/log/log.hxx>
 
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/bsdf.hxx>

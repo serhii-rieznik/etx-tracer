@@ -1,6 +1,8 @@
 #pragma once
 
-#if defined(__MSC_VER)
+#include <etx/core/platform.hxx>
+
+#if defined(ETX_PLATFORM_WINDOWS)
 
 #if !defined(NOMINMAX)
 #error NOMINMAX should be defined

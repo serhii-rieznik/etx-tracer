@@ -6,7 +6,7 @@
 namespace etx {
 
 inline void atomic_add_impl(volatile float* ptr, float value) {
-#if defined(__MSC_VER)
+#if defined(ETX_PLATFORM_WINDOWS)
   volatile long* iptr = std::bit_cast<volatile long*>(ptr);
   long old_value = {};
   long new_value = {};
@@ -15,8 +15,7 @@ inline void atomic_add_impl(volatile float* ptr, float value) {
     new_value = std::bit_cast<long>(*ptr + value);
   } while (_InterlockedCompareExchange(iptr, new_value, old_value) != old_value);
 #else
-#warning FIX
-  *ptr += value;
+#error implement proper atomic operator
 #endif
 }
 

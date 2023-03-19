@@ -1,5 +1,4 @@
 #include <etx/core/environment.hxx>
-#include <etx/log/log.hxx>
 
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/pool.hxx>
@@ -8,10 +7,6 @@
 
 #include <unordered_map>
 #include <functional>
-
-#if !defined(__MSC_VER)
-#define _stricmp strcasecmp
-#endif
 
 namespace etx {
 

@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <cassert>
 
+#include <etx/core/platform.hxx>
+
 #if defined(NDEBUG) || defined(_NDEBUG)
 #define ETX_DEBUG 0
 #else
@@ -49,7 +51,7 @@
 
 #else
 
-#if defined(__MSC_VER)
+#if defined(ETX_PLATFORM_WINDOWS)
   #define ETX_DEBUG_BREAK() __debugbreak()
 #else
   #define ETX_DEBUG_BREAK()

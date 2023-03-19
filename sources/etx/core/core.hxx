@@ -1,8 +1,11 @@
 #pragma once
 
-#include <stdint.h>
-#include <string>
+#include <etx/core/platform.hxx>
+#include <etx/core/debug.hxx>
+#include <etx/core/log.hxx>
+
 #include <vector>
+#include <string>
 
 namespace etx {
 
@@ -16,8 +19,6 @@ struct TimeMeasure {
   double measure_ms() const;
   uint64_t measure_exact() const;
 
-  static float get_cpu_load();
-
  private:
   uint64_t _data;
 };
@@ -28,6 +29,7 @@ std::string open_file(const std::vector<std::string>& filters);
 std::string save_file(const std::vector<std::string>& filters);
 
 bool load_binary_file(const char* filename, std::vector<uint8_t>& data);
+float get_cpu_load();
 
 template <class T>
 constexpr inline T align_up(T sz, T al) {
