@@ -7,7 +7,7 @@ add_library(cuda-compiler-lib STATIC
 
 get_filename_component(ms_build_path ${CMAKE_C_COMPILER} DIRECTORY)
 
-target_link_libraries(cuda-compiler-lib PUBLIC etx-log CUDA::nvrtc)
+target_link_libraries(cuda-compiler-lib PUBLIC CUDA::nvrtc)
 
 target_include_directories(cuda-compiler-lib PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
 target_include_directories(cuda-compiler-lib PRIVATE ${OptiX_INCLUDE} ${CUDA_TOOLKIT_ROOT_DIR}/include ${root_folder}/sources)

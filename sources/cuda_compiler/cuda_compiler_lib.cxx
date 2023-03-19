@@ -1,6 +1,6 @@
+#include <etx/core/core.hxx>
 #include "cuda_compiler_lib.hxx"
 
-#include <etx/log/log.hxx>
 #include <stdio.h>
 
 #define WIN32_LEAN_AND_MEAN 1

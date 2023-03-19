@@ -1,7 +1,5 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
-
-#include <etx/log/log.hxx>
 #include <etx/gpu/optix.hxx>
 
 #include <jansson.h>
