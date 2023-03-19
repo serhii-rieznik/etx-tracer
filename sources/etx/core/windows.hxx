@@ -1,5 +1,9 @@
 #pragma once
 
+#include <etx/core/platform.hxx>
+
+#if defined(ETX_PLATFORM_WINDOWS)
+
 #if !defined(NOMINMAX)
 #error NOMINMAX should be defined
 #endif
@@ -14,3 +18,7 @@
 
 #include <Windows.h>
 #include <DbgHelp.h>
+#include <commdlg.h>
+
+#endif
+

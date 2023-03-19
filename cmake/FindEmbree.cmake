@@ -37,7 +37,7 @@
 #=============================================================================
 
 if (APPLE)
-    set(EMBREE_INC_NAME libembree4.dylib)
+    set(EMBREE_LIB_NAME libembree4.dylib)
 elseif (UNIX)
     set(EMBREE_LIB_NAME libembree4.so)
 elseif (WIN32)

@@ -1,7 +1,6 @@
-﻿#include <etx/core/core.hxx>
+#include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/render/host/image_pool.hxx>
-#include <etx/log/log.hxx>
 
 #include "ui.hxx"
 
@@ -43,7 +42,37 @@ void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint
 void UI::initialize() {
   simgui_desc_t imggui_desc = {};
   imggui_desc.depth_format = SG_PIXELFORMAT_NONE;
+  imggui_desc.no_default_font = true;
   simgui_setup(imggui_desc);
+  {
+    auto font_config = ImFontConfig_ImFontConfig();
+    font_config->OversampleH = 4;
+    font_config->OversampleV = 4;
+
+    auto io = igGetIO();
+    unsigned char* font_pixels = nullptr;
+    int font_width = 0;
+    int font_height = 0;
+    int bytes_per_pixel = 0;
+    auto font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "fonts/roboto.ttf", 15.0f * sapp_dpi_scale(), font_config, nullptr);
+    font->Scale = 1.0f / sapp_dpi_scale();
+    ImFontAtlas_GetTexDataAsRGBA32(io->Fonts, &font_pixels, &font_width, &font_height, &bytes_per_pixel);
+
+    sg_image_desc img_desc = {};
+    img_desc.width = font_width;
+    img_desc.height = font_height;
+    img_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
+    img_desc.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
+    img_desc.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
+    img_desc.min_filter = SG_FILTER_LINEAR;
+    img_desc.mag_filter = SG_FILTER_LINEAR;
+    img_desc.data.subimage[0][0].ptr = font_pixels;
+    img_desc.data.subimage[0][0].size = (size_t)(font_width * font_height) * sizeof(uint32_t);
+    img_desc.label = "sokol-imgui-font";
+    _font_image = sg_make_image(&img_desc).id;
+    io->Fonts->TexID = (ImTextureID)(uintptr_t)_font_image;
+    ImFontConfig_destroy(font_config);
+  }
   igLoadIniSettingsFromDisk(env().file_in_data("ui.ini"));
 }
 
@@ -342,7 +371,7 @@ void UI::build(double dt, const char* status) {
 
   if (igBeginViewportSideBar("##status", igGetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     char status_buffer[2048] = {};
-    uint32_t cpu_load = static_cast<uint32_t>(TimeMeasure::get_cpu_load() * 100.0f);
+    uint32_t cpu_load = static_cast<uint32_t>(get_cpu_load() * 100.0f);
     snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
     igText(status_buffer);
     igEnd();

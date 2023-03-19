@@ -1,6 +1,4 @@
-﻿#include <etx/core/core.hxx>
 #include <etx/core/core.hxx>
-#include <etx/log/log.hxx>
 
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/distribution_builder.hxx>
@@ -206,7 +204,7 @@ struct ImagePoolImpl {
         float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
         row_value *= row_weight;
 
-        total_weight += row_value;
+        total_weight = total_weight + row_value;
         y_dist.set(y, row_value);
       }
     });

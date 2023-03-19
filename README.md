@@ -1,31 +1,27 @@
 # etx-tracer
 
-Physically-based GPU and CPU ray-tracer emerging on a surface.
+Physically-based ray-tracer.
 
-#### Features
- * Vertex Connection and Merging algorithm (CPU and GPU);
- * Full-spectral rendering (by sampling single wavelength per ray);
- * Heterogeneous and scattering medium rendering in path tracing integrators (CPU and GPU);
- * Volumetric Bidirectional Path Tracing integrator;
- * Variety of BSDFs: 
-    - basic materials - diffuse, plastic, conductor, dielectric;
-    - multiscattering materials - diffuse, conductor, dielectric;
-    - additionaal materials - thinfilm, translucent, coating, mirror, coating;
-    - generic PBR material (WIP);
- * Variety of emitters:
+## Features
+ * Vertex Connection and Merging algorithm
+ * Full-spectral rendering (by sampling single wavelength per ray)
+ * Mdium rendering
+ * Volumetric Bidirectional Path Tracing integrator
+ * Variety of BSDFs:
+    - basic materials - diffuse, plastic, conductor, dielectric
+    - additionaal materials - thinfilm, coating, mirror, velvet
+ * Variety of emitters
     - area;
     - environment map;
-    - directional emitter with finite angluar size;
-    - collimated area lights (lasers);
- * Spectral representation of material's properties (colors, index of refractions, etc);
- * Normal mapping;
- * Subsurface scattering (Christensen and Burley)
- * Thin-film rendering over most of materials (including conductor materials);
- * Using OptiX for GPU ray-tracing;
- * Most of the code is reused for CPU and GPU integrators;
+    - directional emitter with finite angluar size
+    - collimated area lights (lasers)
+ * Spectral representation of material's properties (colors, index of refractions, etc)
+ * Subsurface scattering which could be applied to any material containing diffuse layer (diffuse, plastic, velvet)
+ * Thin-film rendering over most of materials (including conductor materials)
+ * Normal mapping
  * Atmosphere integrator;
 
-#### Samples
+## Samples
 Several renderings from the ray-tracer. Samples contains showcase for materials, volumetric data rendering, spectral rendering, participating media rendering, subsurface scattering and SDS (specular-diffuse-specular paths), which are usually tricky thing to render. As well as thin film rendering, collimated emitters, depth of field, and other effects.
 
 More renderings could be found in my [Twitter](https://twitter.com/serhii_rieznik):
@@ -49,21 +45,21 @@ Order is a subject to change, but here are main things to do:
 - [x] simplest CPU path-tracer;
 - [x] OptiX and GPU-related code basics;
 - [x] additional code for ray-tracing;
-- [x] GPU path tracing;
+- [ ] GPU path tracing;
 - [x] VCM integrators (CPU and GPU);
 - [x] Subsurface scattering;
 - [ ] cross-platform, cross-API support;
   ... maintaining code, adding new features.
 
-#### Building
+## Building
 This part of the description would be updated during the development of the project, at the moment there is nothing to build here.
 All updates will be located here: [BUILDING.md](docs/BUILDING.md)
 
-#### Sponsors
+## Sponsors
 This project is GitHub-sponsored by:
 * [Traverse-Research](https://github.com/Traverse-Research)
 
-#### Links
+## Links
 Links to the books/papers/publications/resources I've used during the development:
  - [PBRT book](https://www.pbr-book.org/)
  - [VCM paper / implementation](https://cgg.mff.cuni.cz/~jaroslav/papers/2012-vcm/)

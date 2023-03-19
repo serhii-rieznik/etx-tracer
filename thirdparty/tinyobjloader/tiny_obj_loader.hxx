@@ -65,6 +65,10 @@ THE SOFTWARE.
 #include <vector>
 #include <algorithm>
 
+#if !defined(_MSC_VER)
+#define _strnicmp strncasecmp
+#endif
+
 namespace tinyobj {
 
 // TODO(syoyo): Better C++11 detection for older compiler

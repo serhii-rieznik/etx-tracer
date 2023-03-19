@@ -197,7 +197,10 @@ struct CPUVCMImpl {
         }
       }
 
-      local_paths.emplace_back(path_begin, static_cast<uint32_t>(local_vertices.size() - path_begin), state.spect);
+      auto& lp = local_paths.emplace_back();
+      lp.index = path_begin;
+      lp.count = static_cast<uint32_t>(local_vertices.size() - path_begin);
+      lp.spect = state.spect;
     }
 
     {

@@ -10,7 +10,7 @@ struct GPUPathTracing : public Integrator {
     return "Path Tracing (GPU)";
   }
 
-  const char* status() const {
+  const char* status() const override {
     return "Path Tracing GPU";
   }
 
@@ -29,11 +29,11 @@ struct GPUPathTracing : public Integrator {
 
   const float4* get_camera_image(bool force) override;
 
-  bool have_updated_camera_image() const {
+  bool have_updated_camera_image() const override {
     return true;
   }
 
-  bool have_updated_light_image() const {
+  bool have_updated_light_image() const override {
     return false;
   }
 

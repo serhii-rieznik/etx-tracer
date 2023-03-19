@@ -20,6 +20,8 @@ struct GPUDummyDevice : public GPUDevice {
   }
   void copy_from_buffer(GPUBuffer, void* dst, uint64_t offset, uint64_t size) override {
   }
+  void clear_buffer(GPUBuffer) override {
+  }
   void destroy_buffer(GPUBuffer) override {
   }
   GPUPipeline create_pipeline(const GPUPipeline::Descriptor&) override {
@@ -38,7 +40,14 @@ struct GPUDummyDevice : public GPUDevice {
   }
   void destroy_acceleration_structure(GPUAccelerationStructure) override {
   }
-  bool launch(GPUPipeline, uint32_t dim_x, uint32_t dim_y, device_pointer_t params, uint64_t params_size) override {
+  bool launch(GPUPipeline, const char*, uint32_t, uint32_t, device_pointer_t, uint64_t) override {
+    return false;
+  }
+  void create_pipeline_from_files(TaskScheduler&, uint64_t, const char* [], GPUPipeline[], bool) override {
+  }
+  void setup_denoiser(uint32_t, uint32_t) override {
+  }
+  bool denoise(GPUBuffer, GPUBuffer) override {
     return false;
   }
 };

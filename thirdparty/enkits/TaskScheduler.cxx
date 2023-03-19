@@ -1003,6 +1003,7 @@ void SetThreadName(uint32_t dwThreadID, const std::string& threadName) {
   } __except (EXCEPTION_EXECUTE_HANDLER) {
   }
 }
+
 void SetThreadName(const std::string& threadName) {
   SetThreadName(GetCurrentThreadId(), threadName);
 }
@@ -1053,6 +1054,9 @@ inline void SemaphoreSignal(semaphoreid_t& semaphoreid, int32_t countWaiting) {
 // OSX below 10.6 does not support dispatch, but I do not have an earlier OSX version
 // to test alternatives
 #include <dispatch/dispatch.h>
+
+void SetThreadName(std::thread& thread, const std::string& threadName) {
+}
 
 namespace enki {
 

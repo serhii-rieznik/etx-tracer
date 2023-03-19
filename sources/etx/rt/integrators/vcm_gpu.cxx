@@ -3,10 +3,11 @@
 
 #include <etx/rt/shared/vcm_shared.hxx>
 
-#include <cuda.h>
+#include <unordered_map>
 
 namespace etx {
 
+#if (0)
 CUstream cuda_stream();
 
 struct CUDATimer {
@@ -81,6 +82,23 @@ struct CUDATimer {
   CUevent _end = {};
   bool _started = false;
 };
+
+#else
+
+struct CUDATimer {
+  Integrator::DebugInfo info = {};
+  void reset() {
+  }
+  void begin() {
+  }
+  void end() {
+  }
+  float duration() const {
+    return 0.0f;
+  }
+};
+
+#endif
 
 struct GPUVCMImpl {
   GPUVCMImpl(Raytracing& art, std::atomic<Integrator::State>& st)
@@ -320,7 +338,7 @@ struct GPUVCMImpl {
     total_time = {};
 
     rt.gpu()->destroy_buffer(global_data);
-    global_data = rt.gpu()->create_buffer({align_up(sizeof(VCMIteration), 16llu) + align_up(sizeof(VCMGlobal), 16llu)});
+    global_data = rt.gpu()->create_buffer({align_up(sizeof(VCMIteration), size_t(16)) + align_up(sizeof(VCMGlobal), size_t(16))});
 
     rt.gpu()->destroy_buffer(state_buffers[0]);
     state_buffers[0] = rt.gpu()->create_buffer({sizeof(VCMPathState) * dimemsions.x * dimemsions.y});

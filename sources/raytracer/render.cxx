@@ -1,4 +1,4 @@
-﻿#include <etx/render/host/image_pool.hxx>
+#include <etx/render/host/image_pool.hxx>
 
 #include "render.hxx"
 

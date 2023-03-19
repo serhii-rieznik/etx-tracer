@@ -1,6 +1,5 @@
 ﻿#include <sokol_app.h>
 
-#include <etx/log/log.hxx>
 #include <etx/render/shared/camera.hxx>
 
 #include <unordered_set>

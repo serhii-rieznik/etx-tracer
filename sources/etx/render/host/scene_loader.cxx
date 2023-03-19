@@ -1,5 +1,4 @@
-﻿#include <etx/core/core.hxx>
-#include <etx/log/log.hxx>
+#include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 
 #include <etx/render/shared/base.hxx>
@@ -821,11 +820,11 @@ const char* material_class_to_string(Material::Class cls) {
   return result;
 }
 
-inline bool get_file(const char* base_dir, const std::string& base, char buffer[]) {
+inline bool get_file(const char* base_dir, const std::string& base, char buffer[], uint64_t buffer_size) {
   if (base.empty()) {
     return false;
   }
-  sprintf(buffer, "%s/%s", base_dir, base.c_str());
+  snprintf(buffer, buffer_size, "%s/%s", base_dir, base.c_str());
   return true;
 };
 
@@ -860,8 +859,8 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
 
   for (const auto& shape : obj_shapes) {
     uint64_t index_offset = 0;
-    float3 shape_bbox_min = {FLT_MAX, FLT_MAX, FLT_MAX};
-    float3 shape_bbox_max = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    float3 shape_bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
+    float3 shape_bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
 
     for (uint64_t face = 0, face_e = shape.mesh.num_face_vertices.size(); face < face_e; ++face) {
       int material_id = shape.mesh.material_ids[face];
@@ -900,7 +899,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       if (emissive_material) {
         char data_buffer[2048] = {};
         uint32_t emissive_image_index = kInvalidIndex;
-        if (get_file(base_dir, source_material.emissive_texname, data_buffer)) {
+        if (get_file(base_dir, source_material.emissive_texname, data_buffer, sizeof(data_buffer))) {
           emissive_image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable);
           images.load_images();
         }
@@ -1114,15 +1113,15 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       mtl.roughness = {material.roughness, material.roughness};
       mtl.metalness = material.metallic;
 
-      if (get_file(base_dir, material.diffuse_texname, data_buffer)) {
+      if (get_file(base_dir, material.diffuse_texname, data_buffer, sizeof(data_buffer))) {
         mtl.diffuse.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
       }
 
-      if (get_file(base_dir, material.specular_texname, data_buffer)) {
+      if (get_file(base_dir, material.specular_texname, data_buffer, sizeof(data_buffer))) {
         mtl.specular.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
       }
 
-      if (get_file(base_dir, material.transmittance_texname, data_buffer)) {
+      if (get_file(base_dir, material.transmittance_texname, data_buffer, sizeof(data_buffer))) {
         mtl.transmittance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
       }
 
