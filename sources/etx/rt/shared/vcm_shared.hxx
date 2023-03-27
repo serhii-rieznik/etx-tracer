@@ -455,10 +455,10 @@ ETX_GPU_CODE void vcm_update_camera_vcm(const Intersection& intersection, VCMPat
 
 ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
   const auto& tri = scene.triangles[intersection.triangle_index];
-  if ((options.direct_hit() == false) || (tri.emitter_index == kInvalidIndex))
+  if ((options.direct_hit() == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
-  const auto& emitter = scene.emitters[tri.emitter_index];
+  const auto& emitter = scene.emitters[intersection.emitter_index];
   state.gathered += vcm_get_radiance(scene, emitter, state, options, intersection);
 }
 

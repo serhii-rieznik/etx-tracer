@@ -23,6 +23,7 @@ struct ETX_ALIGNED Scene {
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<uint32_t> triangle_to_material ETX_EMPTY_INIT;
+  ArrayView<uint32_t> triangle_to_emitter ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
   ArrayView<Emitter> emitters ETX_EMPTY_INIT;
   ArrayView<Image> images ETX_EMPTY_INIT;
@@ -110,6 +111,7 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
   result_intersection.w_i = w_i;
   result_intersection.t = base.t;
   result_intersection.material_index = scene.triangle_to_material[result_intersection.triangle_index];
+  result_intersection.emitter_index = scene.triangle_to_emitter[result_intersection.triangle_index];
 
   const auto& mat = scene.materials[result_intersection.material_index];
   if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {

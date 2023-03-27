@@ -249,7 +249,7 @@ struct CPUBidirectionalImpl : public Task {
         auto& v = path.emplace_back(PathVertex::Class::Surface, intersection);
         auto& w = path[path.size() - 2];
         v.medium_index = medium_index;
-        v.emitter_index = tri.emitter_index;
+        v.emitter_index = intersection.emitter_index;
         v.throughput = throughput;
         v.pdf.forward = w.pdf_solid_angle_to_area(pdf_dir, v);
         ETX_VALIDATE(v.pdf.forward);

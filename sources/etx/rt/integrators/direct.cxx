@@ -271,8 +271,8 @@ struct CPUDirectLightingImpl {
           }
         }
 
-        if (tri.emitter_index != kInvalidIndex) {
-          const auto& emitter = scene.emitters[tri.emitter_index];
+        if (intersection.emitter_index != kInvalidIndex) {
+          const auto& emitter = scene.emitters[intersection.emitter_index];
           float pdf_a = 0.0f;
           float pdf_do = 0.0f;
           float pdf_emitter_dir = 0.0f;

@@ -197,10 +197,10 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
 }
 
 ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, const bool mis, PTRayPayload& payload) {
-  if (tri.emitter_index == kInvalidIndex)
+  if (intersection.emitter_index == kInvalidIndex)
     return;
 
-  const auto& emitter = scene.emitters[tri.emitter_index];
+  const auto& emitter = scene.emitters[intersection.emitter_index];
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;
@@ -218,11 +218,11 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
 }
 
 ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Raytracing& rt, const bool mis, PTRayPayloadSoA& payload, uint32_t i) {
-  if (tri.emitter_index == kInvalidIndex)
+  const auto& intersection = payload.intersection[i];
+  if (intersection.emitter_index == kInvalidIndex)
     return;
 
-  const auto& intersection = payload.intersection[i];
-  const auto& emitter = scene.emitters[tri.emitter_index];
+  const auto& emitter = scene.emitters[intersection.emitter_index];
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;

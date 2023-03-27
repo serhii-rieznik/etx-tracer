@@ -4,8 +4,7 @@ namespace etx {
 
 ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene) {
   ETX_ASSERT(em.is_local());
-  const auto& tri = scene.triangles[em.triangle_index];
-  return 1.0f / tri.area;
+  return 1.0f / em.triangle_area;
 }
 
 ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& pos, const float3& to_point, float& pdf_area,

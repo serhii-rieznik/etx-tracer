@@ -165,7 +165,7 @@ struct ETX_ALIGNED Medium {
       if (smp.next() <= density) {
         Sample result;
         result.weight = s_outscattering(spect) / (s_outscattering(spect) + s_absorption(spect));
-        result.pos = bounds.from_bounding_box(local_pos);
+        result.pos = bounds.from_local(local_pos);
         result.t = t;
         return result;
       }
@@ -287,9 +287,9 @@ struct ETX_ALIGNED Medium {
     }
 
     float3 end_pos = in_pos + in_direction * in_max_t;
-    float3 medium_end_pos = bounds.to_bounding_box(end_pos);
+    float3 medium_end_pos = bounds.to_local(end_pos);
 
-    medium_pos = bounds.to_bounding_box(in_pos);
+    medium_pos = bounds.to_local(in_pos);
     medium_dir = normalize(medium_end_pos - medium_pos);
     in_max_t = length(medium_end_pos - medium_pos);
 

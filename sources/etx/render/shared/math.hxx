@@ -94,11 +94,11 @@ struct ETX_ALIGNED BoundingBox {
   float3 p_min ETX_EMPTY_INIT;
   float3 p_max ETX_EMPTY_INIT;
 
-  ETX_GPU_CODE float3 to_bounding_box(const float3& p) const {
+  ETX_GPU_CODE float3 to_local(const float3& p) const {
     return (p - p_min) / (p_max - p_min);
   }
 
-  ETX_GPU_CODE float3 from_bounding_box(const float3& p) const {
+  ETX_GPU_CODE float3 from_local(const float3& p) const {
     return p * (p_max - p_min) + p_min;
   }
 
@@ -118,9 +118,7 @@ struct ETX_ALIGNED Vertex {
 
 struct ETX_ALIGNED Triangle {
   uint32_t i[3] = {kInvalidIndex, kInvalidIndex, kInvalidIndex};
-  uint32_t emitter_index = kInvalidIndex;
   float3 geo_n = {};
-  float area = {};
 };
 
 struct ETX_ALIGNED LocalFrame {
@@ -187,6 +185,7 @@ struct ETX_ALIGNED Intersection : public Vertex {
   float3 w_i = {};
   float t = kMaxFloat;
   uint32_t material_index = kInvalidIndex;
+  uint32_t emitter_index = kInvalidIndex;
 
   Intersection() = default;
 

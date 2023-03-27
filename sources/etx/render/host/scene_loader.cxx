@@ -74,6 +74,7 @@ struct SceneRepresentationImpl {
   std::vector<Vertex> vertices;
   std::vector<Triangle> triangles;
   std::vector<uint32_t> triangle_to_material;
+  std::vector<uint32_t> triangle_to_emitter;
   std::vector<Material> materials;
   std::vector<Emitter> emitters;
 
@@ -150,11 +151,18 @@ struct SceneRepresentationImpl {
     loaded = false;
   }
 
-  bool calculate_area(Triangle& t) {
+  float triangle_area(const Triangle& t) {
+    return 0.5f * length(cross(vertices[t.i[1]].pos - vertices[t.i[0]].pos, vertices[t.i[2]].pos - vertices[t.i[0]].pos));
+  }
+
+  bool validate_triangle(Triangle& t) {
     t.geo_n = cross(vertices[t.i[1]].pos - vertices[t.i[0]].pos, vertices[t.i[2]].pos - vertices[t.i[0]].pos);
-    t.area = 0.5f * length(t.geo_n);
-    t.geo_n *= 0.5f / t.area;
-    return t.area > 0.0f;
+    float l = length(t.geo_n);
+    if (l == 0.0f)
+      return false;
+
+    t.geo_n /= l;
+    return true;
   }
 
   void validate_materials() {
@@ -179,16 +187,17 @@ struct SceneRepresentationImpl {
 
     referenced_vertices.resize(vertices.size());
     for (const auto& tri : triangles) {
+      const float tri_area = triangle_area(tri);
       for (uint32_t i = 0; i < 3; ++i) {
         uint32_t index = tri.i[i];
         ETX_CRITICAL(is_valid_vector(tri.geo_n));
         referenced_vertices[index] = true;
         if (is_valid_vector(vertices[index].nrm) == false) {
           if (reset_normals.count(index) == 0) {
-            vertices[index].nrm = tri.geo_n * tri.area;
+            vertices[index].nrm = tri.geo_n * tri_area;
             reset_normals.insert(index);
           } else {
-            vertices[index].nrm += tri.geo_n * tri.area;
+            vertices[index].nrm += tri.geo_n * tri_area;
           }
         }
       }
@@ -291,6 +300,7 @@ struct SceneRepresentationImpl {
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
     scene.triangle_to_material = {triangle_to_material.data(), triangle_to_material.size()};
+    scene.triangle_to_emitter = {triangle_to_emitter.data(), triangle_to_emitter.size()};
     scene.materials = {materials.data(), materials.size()};
     scene.emitters = {emitters.data(), emitters.size()};
     scene.images = {images.as_array(), images.array_size()};
@@ -858,6 +868,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
 
   triangles.reserve(total_triangles);
   triangle_to_material.reserve(total_triangles);
+  triangle_to_emitter.reserve(total_triangles);
   vertices.reserve(total_triangles * 3);
 
   for (const auto& shape : obj_shapes) {
@@ -877,6 +888,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
 
       uint32_t material_index = material_mapping[source_material.name];
 
+      triangle_to_emitter.emplace_back(kInvalidIndex);
       triangle_to_material.emplace_back(material_index);
       auto& tri = triangles.emplace_back();
       auto& mtl = materials[material_index];
@@ -895,7 +907,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       }
       index_offset += face_size;
 
-      if (calculate_area(tri) == false) {
+      if (validate_triangle(tri) == false) {
         triangles.pop_back();
       }
 
@@ -983,7 +995,8 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
         }
         e.medium_index = mtl.ext_medium;
         e.triangle_index = static_cast<uint32_t>(triangles.size() - 1llu);
-        e.weight = power_scale * (tri.area * kPi) * (e.emission.spectrum.total_power() * texture_emission);
+        e.triangle_area = triangle_area(tri);
+        e.weight = power_scale * (e.triangle_area * kPi) * (e.emission.spectrum.total_power() * texture_emission);
         e.emission.image_index = emissive_image_index;
       }
 
@@ -1281,7 +1294,7 @@ void build_emitters_distribution(Scene& scene) {
     emitters_distribution.add(emitter.weight);
 
     if (emitter.is_local()) {
-      scene.triangles[emitter.triangle_index].emitter_index = i;
+      scene.triangle_to_emitter[emitter.triangle_index] = i;
     } else if (emitter.is_distant() && (emitter.weight > 0.0f)) {
       scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
     }
