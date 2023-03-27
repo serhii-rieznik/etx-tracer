@@ -118,11 +118,9 @@ struct ETX_ALIGNED Vertex {
 
 struct ETX_ALIGNED Triangle {
   uint32_t i[3] = {kInvalidIndex, kInvalidIndex, kInvalidIndex};
-  uint32_t material_index = kInvalidIndex;
+  uint32_t emitter_index = kInvalidIndex;
   float3 geo_n = {};
   float area = {};
-  uint32_t emitter_index = kInvalidIndex;
-  uint32_t pad[3] = {};
 };
 
 struct ETX_ALIGNED LocalFrame {
@@ -188,6 +186,7 @@ struct ETX_ALIGNED Intersection : public Vertex {
   uint32_t triangle_index = kInvalidIndex;
   float3 w_i = {};
   float t = kMaxFloat;
+  uint32_t material_index = kInvalidIndex;
 
   Intersection() = default;
 

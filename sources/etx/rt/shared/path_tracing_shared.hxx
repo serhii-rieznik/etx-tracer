@@ -241,7 +241,7 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
 
 ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
   const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[intersection.material_index];
 
   if (mat.cls == Material::Class::Boundary) {
     payload.medium = (dot(intersection.nrm, payload.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
@@ -255,7 +255,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
 
   subsurface::Gather ss_gather = {};
-  bool subsurface_sampled = subsurface_path && subsurface::gather(payload.spect, scene, intersection, tri.material_index, rt, payload.smp, ss_gather);
+  bool subsurface_sampled = subsurface_path && subsurface::gather(payload.spect, scene, intersection, intersection.material_index, rt, payload.smp, ss_gather);
 
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling

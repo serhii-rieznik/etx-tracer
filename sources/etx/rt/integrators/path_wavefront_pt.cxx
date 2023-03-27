@@ -229,7 +229,7 @@ struct CPUWavefrontPTImpl {
 
       const auto& intersection = payload.intersection[i];
       const auto& tri = scene.triangles[intersection.triangle_index];
-      const auto& mat = scene.materials[tri.material_index];
+      const auto& mat = scene.materials[intersection.material_index];
 
       if (mat.cls == Material::Class::Boundary) {
         payload.medium[i] = (dot(intersection.nrm, payload.ray[i].d) < 0.0f) ? mat.int_medium : mat.ext_medium;
@@ -257,11 +257,11 @@ struct CPUWavefrontPTImpl {
       auto& smp = payload.smp[i];
       const auto& intersection = payload.intersection[i];
       const auto& tri = scene.triangles[intersection.triangle_index];
-      const auto& mat = scene.materials[tri.material_index];
+      const auto& mat = scene.materials[intersection.material_index];
       payload.bsdf_sample[i] = bsdf::sample({payload.spect[i], payload.medium[i], PathSource::Camera, intersection, intersection.w_i}, mat, scene, smp);
 
       bool subsurface_path = mat.has_subsurface_scattering() && (payload.bsdf_sample[i].properties & BSDFSample::Diffuse);
-      payload.subsurface_sampled[i] = subsurface_path && subsurface::gather(payload.spect[i], scene, intersection, tri.material_index, rt, smp, payload.ss_gather[i]);
+      payload.subsurface_sampled[i] = subsurface_path && subsurface::gather(payload.spect[i], scene, intersection, intersection.material_index, rt, smp, payload.ss_gather[i]);
     }
   }
 
@@ -282,7 +282,7 @@ struct CPUWavefrontPTImpl {
       const auto& bsdf_sample = payload.bsdf_sample[i];
       const auto& intersection = payload.intersection[i];
       const auto& tri = scene.triangles[intersection.triangle_index];
-      const auto& mat = scene.materials[tri.material_index];
+      const auto& mat = scene.materials[intersection.material_index];
 
       if (options.nee && (payload.path_length[i] + 1 <= options.max_depth)) {
         uint32_t emitter_index = sample_emitter_index(scene, smp);
@@ -336,7 +336,7 @@ struct CPUWavefrontPTImpl {
       const auto& bsdf_sample = payload.bsdf_sample[i];
       const auto& intersection = payload.intersection[i];
       const auto& tri = scene.triangles[intersection.triangle_index];
-      const auto& mat = scene.materials[tri.material_index];
+      const auto& mat = scene.materials[intersection.material_index];
 
       if (payload.subsurface_sampled[i]) {
         payload.ray[i].d = sample_cosine_distribution(smp.next_2d(), intersection.nrm, 1.0f);

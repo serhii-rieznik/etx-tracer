@@ -313,8 +313,8 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
     uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
 
-    const auto& tri = ctx->scene->triangles[triangle_index];
-    if ((tri.material_index != kInvalidIndex) && (ctx->mat_id != tri.material_index)) {
+    auto material_index = ctx->scene->triangle_to_material[triangle_index];
+    if ((material_index != kInvalidIndex) && (ctx->mat_id != material_index)) {
       *args->valid = 0;
       return;
     }
@@ -323,7 +323,8 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     float v = RTCHitN_v(args->hit, args->N, 0);
     float3 bc = barycentrics({u, v});
     const auto& scene = *ctx->scene;
-    const auto& mat = ctx->scene->materials[tri.material_index];
+    const auto& tri = ctx->scene->triangles[triangle_index];
+    const auto& mat = ctx->scene->materials[material_index];
     if ((ctx->count < ctx->max_count) && (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp) == false)) {
       ctx->buffer[ctx->count] = {
         .barycentric = {u, v},
@@ -357,8 +358,9 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
     float v = RTCHitN_v(args->hit, args->N, 0);
     float3 bc = barycentrics({u, v});
     const auto& scene = *ctx->scene;
+    const auto material_index = ctx->scene->triangle_to_material[triangle_index];
     const auto& tri = ctx->scene->triangles[triangle_index];
-    const auto& mat = ctx->scene->materials[tri.material_index];
+    const auto& mat = ctx->scene->materials[material_index];
     if (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp)) {
       *args->valid = 0;
       return;
@@ -401,7 +403,8 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     float3 bc = barycentrics({u, v});
     const auto& scene = *ctx->scene;
     const auto& tri = ctx->scene->triangles[triangle_index];
-    const auto& mat = ctx->scene->materials[tri.material_index];
+    auto material_index = ctx->scene->triangle_to_material[triangle_index];
+    const auto& mat = ctx->scene->materials[material_index];
     if (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp)) {
       *args->valid = 0;
       return;

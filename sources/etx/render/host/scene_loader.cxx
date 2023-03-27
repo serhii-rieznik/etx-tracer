@@ -73,6 +73,7 @@ struct SceneRepresentationImpl {
   TaskScheduler& scheduler;
   std::vector<Vertex> vertices;
   std::vector<Triangle> triangles;
+  std::vector<uint32_t> triangle_to_material;
   std::vector<Material> materials;
   std::vector<Emitter> emitters;
 
@@ -289,6 +290,7 @@ struct SceneRepresentationImpl {
     scene.camera_lens_shape_image_index = camera_lens_shape_image_index;
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
+    scene.triangle_to_material = {triangle_to_material.data(), triangle_to_material.size()};
     scene.materials = {materials.data(), materials.size()};
     scene.emitters = {emitters.data(), emitters.size()};
     scene.images = {images.as_array(), images.array_size()};
@@ -855,6 +857,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
   }
 
   triangles.reserve(total_triangles);
+  triangle_to_material.reserve(total_triangles);
   vertices.reserve(total_triangles * 3);
 
   for (const auto& shape : obj_shapes) {
@@ -872,9 +875,11 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       uint64_t face_size = shape.mesh.num_face_vertices[face];
       ETX_ASSERT(face_size == 3);
 
+      uint32_t material_index = material_mapping[source_material.name];
+
+      triangle_to_material.emplace_back(material_index);
       auto& tri = triangles.emplace_back();
-      tri.material_index = material_mapping[source_material.name];
-      auto& mtl = materials[tri.material_index];
+      auto& mtl = materials[material_index];
 
       for (uint64_t vertex_index = 0; vertex_index < face_size; ++vertex_index) {
         const auto& index = shape.mesh.indices[index_offset + vertex_index];

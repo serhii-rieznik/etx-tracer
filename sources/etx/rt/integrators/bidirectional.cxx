@@ -234,7 +234,7 @@ struct CPUBidirectionalImpl : public Task {
 
       } else if (found_intersection) {
         const auto& tri = rt.scene().triangles[intersection.triangle_index];
-        const auto& mat = rt.scene().materials[tri.material_index];
+        const auto& mat = rt.scene().materials[intersection.material_index];
 
         if (mat.cls == Material::Class::Boundary) {
           auto bsdf_sample = bsdf::sample({spect, medium_index, mode, intersection, intersection.w_i}, mat, rt.scene(), smp);
@@ -788,7 +788,7 @@ float CPUBidirectionalImpl::PathVertex::pdf_area(SpectralQuery spect, PathSource
   float eval_pdf = 0.0f;
   if (is_surface_interaction()) {
     const auto& tri = scene.triangles[triangle_index];
-    const auto& mat = scene.materials[tri.material_index];
+    const auto& mat = scene.materials[material_index];
     eval_pdf = bsdf::pdf({spect, medium_index, mode, *this, w_i}, w_o, mat, scene, smp);
   } else if (is_medium_interaction()) {
     eval_pdf = scene.mediums[medium_index].phase_function(spect, pos, w_i, w_o);
@@ -886,7 +886,7 @@ SpectralResponse CPUBidirectionalImpl::PathVertex::bsdf_in_direction(SpectralQue
 
   if (is_surface_interaction()) {
     const auto& tri = scene.triangles[triangle_index];
-    const auto& mat = scene.materials[tri.material_index];
+    const auto& mat = scene.materials[material_index];
 
     BSDFEval eval = bsdf::evaluate({spect, medium_index, mode, *this, w_i}, w_o, mat, scene, smp);
     ETX_VALIDATE(eval.bsdf);

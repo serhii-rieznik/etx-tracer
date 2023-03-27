@@ -44,7 +44,7 @@ float sample_weight(const SpectralQuery& spect, Sampler& smp, const Intersection
   }
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[intersection.material_index];
   float bsdf_pdf = bsdf::pdf({spect, kInvalidIndex, PathSource::Camera, intersection, intersection.w_i}, emitter_sample.direction, mat, scene, smp);
   float l_dot_n = fmaxf(0.0f, dot(emitter_sample.direction, intersection.nrm));
   if (((use_bsdf == false) && (l_dot_n > 0.0f)) || (bsdf_pdf > 0.0f)) {
@@ -245,7 +245,7 @@ struct CPUDirectLightingImpl {
       const auto& intersection = intersections[i];
       if (intersection.t != kMaxFloat) {
         const auto& tri = scene.triangles[intersection.triangle_index];
-        const auto& mat = scene.materials[tri.material_index];
+        const auto& mat = scene.materials[intersection.material_index];
 
         EmitterSample emitter_sample = {};
 
