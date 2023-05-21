@@ -6,6 +6,12 @@
 
 namespace etx {
 
+#if !defined(ETX_PLATFORM_WINDOWS)
+#define _vscprintf(fmt, list) vsnprintf(nullptr, 0, fmt, list)
+#define _malloca alloca
+#define set_console_color(...)
+#endif
+
 void log::output(Color clr, const char* fmt, ...) {
   constexpr int local_buffer_size = 1024;
   set_console_color(clr);
@@ -17,7 +23,6 @@ void log::output(Color clr, const char* fmt, ...) {
     char* buffer = (char*)_malloca(required_size + 1);
     vsnprintf(buffer, required_size, fmt, list);
     puts(buffer);
-    _freea(buffer);
   } else {
     char* buffer = (char*)calloc(required_size + 1, 1);
     if (buffer != nullptr) {

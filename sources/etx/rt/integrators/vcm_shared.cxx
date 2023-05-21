@@ -1,5 +1,7 @@
 #include <etx/rt/integrators/vcm_spatial_grid.hxx>
 
+#include <stdatomic.h>
+
 namespace etx {
 
 VCMOptions VCMOptions::default_values() {
@@ -46,7 +48,6 @@ void VCMOptions::store(Options& opt) {
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {
-  static_assert(sizeof(long) == sizeof(uint32_t));
 
   data = {};
   if (sample_count == 0) {
@@ -81,12 +82,12 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   _cell_ends.resize(hash_table_size);
   memset(_cell_ends.data(), 0, sizeof(uint32_t) * hash_table_size);
 
-  volatile long* ptr = reinterpret_cast<volatile long*>(_cell_ends.data());
+  atomic_int* ptr = reinterpret_cast<atomic_int*>(_cell_ends.data());
   scheduler.execute(uint32_t(sample_count), [&scene, &samples, this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       uint32_t index = data.position_to_index(samples[i].position(scene));
       _position_to_index[i] = index;
-      _InterlockedIncrement(ptr + index);
+      atomic_fetch_add_explicit(ptr + index, 1u, memory_order_relaxed);
     }
   });
 
@@ -97,11 +98,11 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     sum += t;
   }
 
-  ptr = reinterpret_cast<volatile long*>(_cell_ends.data());
+  ptr = reinterpret_cast<atomic_int*>(_cell_ends.data());
   scheduler.execute(uint32_t(sample_count), [this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       uint32_t index = _position_to_index[i];
-      uint32_t target_cell = _InterlockedIncrement(ptr + index);
+      uint32_t target_cell = atomic_fetch_add_explicit(ptr + index, 1u, memory_order_relaxed);
       _indices[target_cell - 1u] = i;
     }
   });
