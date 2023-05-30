@@ -62,7 +62,7 @@ if(APPLE)
 endif()
 
 create_library(render)
-target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader mikktspace enkiTS etx-core)
+target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS etx-core)
 target_include_directories(etx-render PRIVATE ${JANSSON_INCLUDE_DIRS})
 
 target_link_libraries(etx-render PUBLIC nanovdb)

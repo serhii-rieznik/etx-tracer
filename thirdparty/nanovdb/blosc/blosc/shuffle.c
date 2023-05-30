@@ -416,7 +416,7 @@ int
 blosc_internal_bitshuffle(const size_t bytesoftype, const size_t blocksize,
                           const uint8_t* const _src, const uint8_t* _dest,
                           const uint8_t* _tmp) {
-  int size = blocksize / bytesoftype;
+  int size = (int)(blocksize / bytesoftype);
   /* Initialize the shuffle implementation if necessary. */
   init_shuffle_implementation();
 
@@ -443,7 +443,7 @@ int
 blosc_internal_bitunshuffle(const size_t bytesoftype, const size_t blocksize,
                             const uint8_t* const _src, const uint8_t* _dest,
                             const uint8_t* _tmp) {
-  int size = blocksize / bytesoftype;
+  int size = (int)(blocksize / bytesoftype);
   /* Initialize the shuffle implementation if necessary. */
   init_shuffle_implementation();
 

@@ -8,8 +8,9 @@
 #include <sokol_gfx.h>
 
 #define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
-#include <cimgui.h>
-#include <sokol_imgui.h>
+#include <imgui.h>
+#include <imgui_internal.h>
+#include <util/sokol_imgui.h>
 
 namespace etx {
 
@@ -45,18 +46,18 @@ void UI::initialize() {
   imggui_desc.no_default_font = true;
   simgui_setup(imggui_desc);
   {
-    auto font_config = ImFontConfig_ImFontConfig();
-    font_config->OversampleH = 4;
-    font_config->OversampleV = 4;
+    auto font_config = ImFontConfig::ImFontConfig();
+    font_config.OversampleH = 4;
+    font_config.OversampleV = 4;
 
-    auto io = igGetIO();
+    auto& io = ImGui::GetIO();
     unsigned char* font_pixels = nullptr;
     int font_width = 0;
     int font_height = 0;
     int bytes_per_pixel = 0;
-    auto font = ImFontAtlas_AddFontFromFileTTF(io->Fonts, "fonts/roboto.ttf", 15.0f * sapp_dpi_scale(), font_config, nullptr);
+    auto font = io.Fonts->AddFontFromFileTTF("fonts/roboto.ttf", 15.0f * sapp_dpi_scale(), &font_config, nullptr);
     font->Scale = 1.0f / sapp_dpi_scale();
-    ImFontAtlas_GetTexDataAsRGBA32(io->Fonts, &font_pixels, &font_width, &font_height, &bytes_per_pixel);
+    io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width, &font_height, &bytes_per_pixel);
 
     sg_image_desc img_desc = {};
     img_desc.width = font_width;
@@ -70,14 +71,13 @@ void UI::initialize() {
     img_desc.data.subimage[0][0].size = (size_t)(font_width * font_height) * sizeof(uint32_t);
     img_desc.label = "sokol-imgui-font";
     _font_image = sg_make_image(&img_desc).id;
-    io->Fonts->TexID = (ImTextureID)(uintptr_t)_font_image;
-    ImFontConfig_destroy(font_config);
+    io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_image;
   }
-  igLoadIniSettingsFromDisk(env().file_in_data("ui.ini"));
+  ImGui::LoadIniSettingsFromDisk(env().file_in_data("ui.ini"));
 }
 
 void UI::cleanup() {
-  igSaveIniSettingsToDisk(env().file_in_data("ui.ini"));
+  ImGui::SaveIniSettingsToDisk(env().file_in_data("ui.ini"));
 }
 
 bool UI::build_options(Options& options) {
@@ -86,13 +86,13 @@ bool UI::build_options(Options& options) {
   for (auto& option : options.values) {
     switch (option.cls) {
       case OptionalValue::Class::InfoString: {
-        igTextColored({1.0f, 0.5f, 0.25f, 1.0f}, option.name.c_str());
+        ImGui::TextColored({1.0f, 0.5f, 0.25f, 1.0f}, option.name.c_str());
         break;
       };
 
       case OptionalValue::Class::Boolean: {
         bool value = option.to_bool();
-        if (igCheckbox(option.name.c_str(), &value)) {
+        if (ImGui::Checkbox(option.name.c_str(), &value)) {
           option.set(value);
           changed = true;
         }
@@ -101,8 +101,8 @@ bool UI::build_options(Options& options) {
 
       case OptionalValue::Class::Float: {
         float value = option.to_float();
-        igSetNextItemWidth(4.0f * igGetFontSize());
-        if (igDragFloat(option.name.c_str(), &value, 0.001f, option.min_value.flt, option.max_value.flt, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
+        if (ImGui::DragFloat(option.name.c_str(), &value, 0.001f, option.min_value.flt, option.max_value.flt, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           option.set(value);
           changed = true;
         }
@@ -111,8 +111,8 @@ bool UI::build_options(Options& options) {
 
       case OptionalValue::Class::Integer: {
         int value = option.to_integer();
-        igSetNextItemWidth(4.0f * igGetFontSize());
-        if (igDragInt(option.name.c_str(), &value, 1.0f, option.min_value.integer, option.max_value.integer, "%u", ImGuiSliderFlags_AlwaysClamp)) {
+        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
+        if (ImGui::DragInt(option.name.c_str(), &value, 1.0f, option.min_value.integer, option.max_value.integer, "%u", ImGuiSliderFlags_AlwaysClamp)) {
           option.set(uint32_t(value));
           changed = true;
         }
@@ -121,10 +121,10 @@ bool UI::build_options(Options& options) {
 
       case OptionalValue::Class::Enum: {
         int value = option.to_integer();
-        igSetNextItemWidth(4.0f * igGetFontSize());
-        if (igTreeNodeEx_Str(option.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
+        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
+        if (ImGui::TreeNodeEx(option.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
           for (uint32_t i = 0; i <= option.max_value.integer; ++i) {
-            if (igRadioButton_IntPtr(option.name_func(i).c_str(), &value, i)) {
+            if (ImGui::RadioButton(option.name_func(i).c_str(), &value, i)) {
               value = i;
             }
           }
@@ -132,7 +132,7 @@ bool UI::build_options(Options& options) {
             option.set(uint32_t(value));
             changed = true;
           }
-          igTreePop();
+          ImGui::TreePop();
         }
         break;
       }
@@ -155,13 +155,13 @@ bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer
                           : ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar;                    //
 
   if (linear) {
-    igText(name);
+    ImGui::Text(name);
   }
 
   bool changed = false;
   char name_buffer[64] = {};
   snprintf(name_buffer, sizeof(name_buffer), "%s%s", linear ? "##" : "", name);
-  if (igColorEdit3(name_buffer, &rgb.x, flags)) {
+  if (ImGui::ColorEdit3(name_buffer, &rgb.x, flags)) {
     if (linear == false) {
       rgb = gamma_to_linear(rgb);
     }
@@ -171,7 +171,7 @@ bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer
   }
 
   if (linear) {
-    if (igButton("Clear", {})) {
+    if (ImGui::Button("Clear", {})) {
       spd = SpectralDistribution::from_constant(0.0f);
       changed = true;
     }
@@ -187,33 +187,33 @@ void UI::build(double dt, const char* status) {
 
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
 
-  if (igBeginMainMenuBar()) {
-    if (igBeginMenu("Scene", true)) {
-      if (igMenuItemEx("Open...", nullptr, "Ctrl+O", false, true)) {
+  if (ImGui::BeginMainMenuBar()) {
+    if (ImGui::BeginMenu("Scene", true)) {
+      if (ImGui::MenuItem("Open...", "Ctrl+O", false, true)) {
         select_scene_file();
       }
-      if (igMenuItemEx("Reload Scene", nullptr, "Ctrl+R", false, true)) {
+      if (ImGui::MenuItem("Reload Scene", "Ctrl+R", false, true)) {
         if (callbacks.reload_scene_selected) {
           callbacks.reload_scene_selected();
         }
       }
-      if (igMenuItemEx("Reload Geometry and Materials", nullptr, "Ctrl+G", false, true)) {
+      if (ImGui::MenuItem("Reload Geometry and Materials", "Ctrl+G", false, true)) {
         if (callbacks.reload_geometry_selected) {
           callbacks.reload_geometry_selected();
         }
       }
-      if (igMenuItemEx("Reload Materials", nullptr, "Ctrl+M", false, false)) {
+      if (ImGui::MenuItem("Reload Materials", "Ctrl+M", false, false)) {
       }
-      igSeparator();
-      if (igMenuItemEx("Save...", nullptr, nullptr, false, true)) {
+      ImGui::Separator();
+      if (ImGui::MenuItem("Save...", nullptr, false, true)) {
         save_scene_file();
       }
-      igEndMenu();
+      ImGui::EndMenu();
     }
 
-    if (igBeginMenu("Integrator", true)) {
+    if (ImGui::BeginMenu("Integrator", true)) {
       for (uint64_t i = 0; i < _integrators.count; ++i) {
-        if (igMenuItemEx(_integrators[i]->name(), nullptr, nullptr, false, _integrators[i]->enabled())) {
+        if (ImGui::MenuItem(_integrators[i]->name(), nullptr, false, _integrators[i]->enabled())) {
           if (callbacks.integrator_selected) {
             callbacks.integrator_selected(_integrators[i]);
           }
@@ -221,59 +221,59 @@ void UI::build(double dt, const char* status) {
       }
 
       if (has_integrator) {
-        igSeparator();
-        if (igMenuItemEx("Reload Integrator State", nullptr, "Ctrl+A", false, true)) {
+        ImGui::Separator();
+        if (ImGui::MenuItem("Reload Integrator State", "Ctrl+A", false, true)) {
           if (callbacks.reload_integrator) {
             callbacks.reload_integrator();
           }
         }
       }
 
-      igSeparator();
-      if (igMenuItemEx("Exit", nullptr, "Ctrl+Q", false, true)) {
+      ImGui::Separator();
+      if (ImGui::MenuItem("Exit", "Ctrl+Q", false, true)) {
       }
-      igEndMenu();
+      ImGui::EndMenu();
     }
 
-    if (igBeginMenu("Image", true)) {
-      if (igMenuItemEx("Open Reference Image...", nullptr, "Ctrl+I", false, true)) {
+    if (ImGui::BeginMenu("Image", true)) {
+      if (ImGui::MenuItem("Open Reference Image...", "Ctrl+I", false, true)) {
         load_image();
       }
-      igSeparator();
-      if (igMenuItemEx("Save Current Image (RGB)...", nullptr, "Ctrl+S", false, true)) {
+      ImGui::Separator();
+      if (ImGui::MenuItem("Save Current Image (RGB)...", "Ctrl+S", false, true)) {
         save_image(SaveImageMode::RGB);
       }
-      if (igMenuItemEx("Save Current Image (LDR)...", nullptr, "Shift+Ctrl+S", false, true)) {
+      if (ImGui::MenuItem("Save Current Image (LDR)...", "Shift+Ctrl+S", false, true)) {
         save_image(SaveImageMode::TonemappedLDR);
       }
-      if (igMenuItemEx("Save Current Image (XYZ)...", nullptr, "Alt+Ctrl+S", false, true)) {
+      if (ImGui::MenuItem("Save Current Image (XYZ)...", "Alt+Ctrl+S", false, true)) {
         save_image(SaveImageMode::XYZ);
       }
-      if (igMenuItemEx("Use as Reference", nullptr, "Ctrl+Shift+R", false, true)) {
+      if (ImGui::MenuItem("Use as Reference", "Ctrl+Shift+R", false, true)) {
         if (callbacks.use_image_as_reference) {
           callbacks.use_image_as_reference();
         }
       }
-      igEndMenu();
+      ImGui::EndMenu();
     }
 
-    if (igBeginMenu("View", true)) {
+    if (ImGui::BeginMenu("View", true)) {
       char shortcut[2] = "X";
       for (uint32_t i = 0; i < uint32_t(OutputView::Count); ++i) {
         shortcut[0] = char('1' + i);
-        if (igMenuItemEx(output_view_to_string(i).c_str(), nullptr, shortcut, uint32_t(_view_options.view) == i, true)) {
+        if (ImGui::MenuItem(output_view_to_string(i).c_str(), shortcut, uint32_t(_view_options.view) == i, true)) {
           _view_options.view = static_cast<OutputView>(i);
         }
       }
 
-      igSeparator();
-      if (igMenuItemEx("Increase Exposure", nullptr, "*", false, true)) {
+      ImGui::Separator();
+      if (ImGui::MenuItem("Increase Exposure", "*", false, true)) {
         increase_exposure(_view_options);
       }
-      if (igMenuItemEx("Decrease Exposure", nullptr, "/", false, true)) {
+      if (ImGui::MenuItem("Decrease Exposure", "/", false, true)) {
         increase_exposure(_view_options);
       }
-      igSeparator();
+      ImGui::Separator();
 
       auto ui_toggle = [this](const char* label, uint32_t flag) {
         uint32_t k = 0;
@@ -282,7 +282,7 @@ void UI::build(double dt, const char* status) {
         char buffer[8] = {};
         snprintf(buffer, sizeof(buffer), "F%u", k + 1u);
         bool ui_integrator = (_ui_setup & flag) == flag;
-        if (igMenuItemEx(label, nullptr, buffer, ui_integrator, true)) {
+        if (ImGui::MenuItem(label, buffer, ui_integrator, true)) {
           _ui_setup = ui_integrator ? (_ui_setup & (~flag)) : (_ui_setup | flag);
         }
       };
@@ -290,21 +290,21 @@ void UI::build(double dt, const char* status) {
       ui_toggle("Materials and mediums", UIMaterial);
       ui_toggle("Emitters", UIEmitters);
       ui_toggle("Camera", UICamera);
-      igEndMenu();
+      ImGui::EndMenu();
     }
 
-    igEndMainMenuBar();
+    ImGui::EndMainMenuBar();
   }
 
   bool scene_editable = has_integrator && has_scene &&  //
                         ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped));
 
-  ImVec2 wpadding = igGetStyle()->WindowPadding;
-  ImVec2 fpadding = igGetStyle()->FramePadding;
-  float text_size = igGetFontSize();
+  ImVec2 wpadding = ImGui::GetStyle().WindowPadding;
+  ImVec2 fpadding = ImGui::GetStyle().FramePadding;
+  float text_size = ImGui::GetFontSize();
   float button_size = 32.0f;
   float input_size = 64.0f;
-  if (igBeginViewportSideBar("##toolbar", igGetMainViewport(), ImGuiDir_Up, button_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
+  if (ImGui::BeginViewportSideBar("##toolbar", ImGui::GetMainViewport(), ImGuiDir_Up, button_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     bool can_run = has_integrator && _current_integrator->can_run();
     Integrator::State state = can_run ? _current_integrator->state() : Integrator::State::Stopped;
 
@@ -329,69 +329,69 @@ void UI::build(double dt, const char* status) {
       " Terminate ",
     };
 
-    igPushStyleColor_Vec4(ImGuiCol_Button, colors[0]);
-    if (igButton(labels[0].c_str(), {0.0f, button_size})) {
+    ImGui::PushStyleColor(ImGuiCol_Button, colors[0]);
+    if (ImGui::Button(labels[0].c_str(), {0.0f, button_size})) {
       callbacks.preview_selected();
     }
 
-    igSameLine(0.0f, wpadding.x);
-    igPushStyleColor_Vec4(ImGuiCol_Button, colors[1]);
-    if (igButton(labels[1].c_str(), {0.0f, button_size})) {
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::PushStyleColor(ImGuiCol_Button, colors[1]);
+    if (ImGui::Button(labels[1].c_str(), {0.0f, button_size})) {
       callbacks.run_selected();
     }
 
-    igSameLine(0.0f, wpadding.x);
-    igPushStyleColor_Vec4(ImGuiCol_Button, colors[2]);
-    if (igButton(labels[2].c_str(), {0.0f, button_size})) {
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::PushStyleColor(ImGuiCol_Button, colors[2]);
+    if (ImGui::Button(labels[2].c_str(), {0.0f, button_size})) {
       callbacks.stop_selected(true);
     }
 
-    igSameLine(0.0f, wpadding.x);
-    igPushStyleColor_Vec4(ImGuiCol_Button, colors[3]);
-    if (igButton(labels[3].c_str(), {0.0f, button_size})) {
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::PushStyleColor(ImGuiCol_Button, colors[3]);
+    if (ImGui::Button(labels[3].c_str(), {0.0f, button_size})) {
       callbacks.stop_selected(false);
     }
 
-    igPopStyleColor(4);
+    ImGui::PopStyleColor(4);
 
-    igSameLine(0.0f, wpadding.x);
-    igSeparatorEx(ImGuiSeparatorFlags_Vertical);
-    igSameLine(0.0f, wpadding.x);
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine(0.0f, wpadding.x);
 
-    igPushItemWidth(input_size);
-    igGetStyle()->FramePadding.y = (button_size - text_size) / 2.0f;
-    igText("Exposure:");
-    igSameLine(0.0f, 0.0f);
-    igDragFloat("##exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
-    igGetStyle()->FramePadding.y = fpadding.y;
-    igPopItemWidth();
+    ImGui::PushItemWidth(input_size);
+    ImGui::GetStyle().FramePadding.y = (button_size - text_size) / 2.0f;
+    ImGui::Text("Exposure:");
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::DragFloat("##exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
+    ImGui::GetStyle().FramePadding.y = fpadding.y;
+    ImGui::PopItemWidth();
 
-    igEnd();
+    ImGui::End();
   }
 
-  if (igBeginViewportSideBar("##status", igGetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
+  if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     char status_buffer[2048] = {};
     uint32_t cpu_load = static_cast<uint32_t>(get_cpu_load() * 100.0f);
     snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
-    igText(status_buffer);
-    igEnd();
+    ImGui::Text(status_buffer);
+    ImGui::End();
   }
 
-  if ((_ui_setup & UIIntegrator) && igBegin("Integrator options", nullptr, kWindowFlags)) {
+  if ((_ui_setup & UIIntegrator) && ImGui::Begin("Integrator options", nullptr, kWindowFlags)) {
     if (has_integrator) {
-      igText(_current_integrator->name());
+      ImGui::Text(_current_integrator->name());
       if (build_options(_integrator_options) && callbacks.options_changed) {
         callbacks.options_changed();
       }
     } else {
-      igText("No integrator selected");
+      ImGui::Text("No integrator selected");
     }
-    igEnd();
+    ImGui::End();
   }
 
-  if ((_ui_setup & UIMaterial) && igBegin("Materials and mediums", nullptr, kWindowFlags)) {
-    igText("Materials");
-    igListBox_Str_arr("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
+  if ((_ui_setup & UIMaterial) && ImGui::Begin("Materials and mediums", nullptr, kWindowFlags)) {
+    ImGui::Text("Materials");
+    ImGui::ListBox("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
     if (scene_editable && (_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
       uint32_t material_index = _material_mapping.at(_selected_material);
       Material& material = _current_scene->materials[material_index];
@@ -401,10 +401,10 @@ void UI::build(double dt, const char* status) {
       }
     }
 
-    igSeparator();
+    ImGui::Separator();
 
-    igText("Mediums");
-    igListBox_Str_arr("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
+    ImGui::Text("Mediums");
+    ImGui::ListBox("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
     if (scene_editable && (_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
       uint32_t medium_index = _medium_mapping.at(_selected_medium);
       Medium& m = _current_scene->mediums[medium_index];
@@ -414,13 +414,13 @@ void UI::build(double dt, const char* status) {
       }
     }
 
-    igEnd();
+    ImGui::End();
   }
 
-  if ((_ui_setup & UIEmitters) && igBegin("Emitters", nullptr, kWindowFlags)) {
+  if ((_ui_setup & UIEmitters) && ImGui::Begin("Emitters", nullptr, kWindowFlags)) {
     bool has_emitters = false;
-    igText("Emitters");
-    if (igBeginListBox("##emitters", {})) {
+    ImGui::Text("Emitters");
+    if (ImGui::BeginListBox("##emitters", {})) {
       for (uint32_t index = 0; has_scene && (index < _current_scene->emitters.count); ++index) {
         auto& emitter = _current_scene->emitters[index];
         if (emitter.cls == Emitter::Class::Area)
@@ -439,11 +439,11 @@ void UI::build(double dt, const char* status) {
           default:
             break;
         }
-        if (igSelectable_Bool(buffer, _selected_emitter == index, ImGuiSelectableFlags_None, {})) {
+        if (ImGui::Selectable(buffer, _selected_emitter == index, ImGuiSelectableFlags_None, {})) {
           _selected_emitter = index;
         }
       }
-      igEndListBox();
+      ImGui::EndListBox();
     }
 
     if (scene_editable && (_selected_emitter >= 0) && (_selected_emitter < _current_scene->emitters.count)) {
@@ -452,15 +452,15 @@ void UI::build(double dt, const char* status) {
       bool changed = igSpectrumPicker("Emission", emitter.emission.spectrum, _current_scene->spectrums, true);
 
       if (emitter.cls == Emitter::Class::Directional) {
-        igText("Angular Size");
-        if (igDragFloat("##angularsize", &emitter.angular_size, 0.01f, 0.0f, kHalfPi, "%.3f", ImGuiSliderFlags_NoRoundToFormat)) {
+        ImGui::Text("Angular Size");
+        if (ImGui::DragFloat("##angularsize", &emitter.angular_size, 0.01f, 0.0f, kHalfPi, "%.3f", ImGuiSliderFlags_NoRoundToFormat)) {
           emitter.angular_size_cosine = cosf(emitter.angular_size / 2.0f);
           emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
           changed = true;
         }
 
-        igText("Direction");
-        if (igDragFloat3("##direction", &emitter.direction.x, 0.1f, -256.0f, 256.0f, "%.02f", ImGuiSliderFlags_NoRoundToFormat)) {
+        ImGui::Text("Direction");
+        if (ImGui::DragFloat3("##direction", &emitter.direction.x, 0.1f, -256.0f, 256.0f, "%.02f", ImGuiSliderFlags_NoRoundToFormat)) {
           emitter.direction = normalize(emitter.direction);
           changed = true;
         }
@@ -470,22 +470,22 @@ void UI::build(double dt, const char* status) {
         callbacks.emitter_changed(_selected_emitter);
       }
     }
-    igEnd();
+    ImGui::End();
   }
 
-  if ((_ui_setup & UICamera) && igBegin("Camera", nullptr, kWindowFlags)) {
+  if ((_ui_setup & UICamera) && ImGui::Begin("Camera", nullptr, kWindowFlags)) {
     if (scene_editable) {
       auto& camera = _current_scene->camera;
       bool changed = false;
       float3 pos = camera.position;
       float3 target = camera.position + camera.direction;
       float focal_len = get_camera_focal_length(camera);
-      igText("Lens size");
-      changed = changed || igDragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
-      igText("Focal distance");
-      changed = changed || igDragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
-      igText("Focal length");
-      changed = changed || igDragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
+      ImGui::Text("Lens size");
+      changed = changed || ImGui::DragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
+      ImGui::Text("Focal distance");
+      changed = changed || ImGui::DragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
+      ImGui::Text("Focal length");
+      changed = changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
 
       if (changed && callbacks.camera_changed) {
         camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
@@ -494,20 +494,20 @@ void UI::build(double dt, const char* status) {
         callbacks.camera_changed();
       }
     } else {
-      igText("No options available");
+      ImGui::Text("No options available");
     }
-    igEnd();
+    ImGui::End();
   }
 
   if (has_integrator && (_current_integrator->debug_info_count() > 0)) {
-    if (igBegin("Debug Info", nullptr, kWindowFlags)) {
+    if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
       auto debug_info = _current_integrator->debug_info();
       for (uint64_t i = 0, e = _current_integrator->debug_info_count(); i < e; ++i) {
         char buffer[8] = {};
         snprintf(buffer, sizeof(buffer), "%.3f     .", debug_info[i].value);
-        igLabelText(buffer, debug_info[i].title);
+        ImGui::LabelText(buffer, debug_info[i].title);
       }
-      igEnd();
+      ImGui::End();
     }
   }
 
@@ -659,7 +659,7 @@ void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& mat
 
 bool UI::build_material(Material& material) {
   int32_t material_cls = static_cast<int32_t>(material.cls);
-  bool changed = igCombo_FnBoolPtr(
+  bool changed = ImGui::Combo(
     "##type", &material_cls,
     [](void* data, int32_t idx, const char** out_text) -> bool {
       material_class_to_string(Material::Class(idx), out_text);
@@ -667,8 +667,8 @@ bool UI::build_material(Material& material) {
     },
     nullptr, int32_t(Material::Class::Count), 5);
   material.cls = static_cast<Material::Class>(material_cls);
-  changed |= igSliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-  changed |= igSliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  changed |= ImGui::SliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  changed |= ImGui::SliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= igSpectrumPicker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
   changed |= igSpectrumPicker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
   changed |= igSpectrumPicker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);
@@ -676,12 +676,12 @@ bool UI::build_material(Material& material) {
 
   auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
     bool has_medium = medium != kInvalidIndex;
-    bool changed = igCheckbox(name, &has_medium);
+    bool changed = ImGui::Checkbox(name, &has_medium);
     if (has_medium) {
       int32_t medium_index = static_cast<int32_t>(medium);
       if (medium_index == -1)
         medium_index = 0;
-      changed |= igSliderInt("##medium_index", &medium_index, 0, int32_t(medium_count), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
+      changed |= ImGui::SliderInt("##medium_index", &medium_index, 0, int32_t(medium_count), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
       medium = uint32_t(medium_index);
     } else {
       medium = kInvalidIndex;
@@ -701,7 +701,7 @@ bool UI::build_medium(Medium& m) {
   bool changed = false;
   changed |= igSpectrumPicker("Absorption", m.s_absorption, _current_scene->spectrums, true);
   changed |= igSpectrumPicker("Outscattering", m.s_outscattering, _current_scene->spectrums, true);
-  changed |= igSliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
+  changed |= ImGui::SliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
   return changed;
 }
 

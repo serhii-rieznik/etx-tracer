@@ -99,6 +99,10 @@ void TaskScheduler::execute(uint32_t range, std::function<void(uint32_t, uint32_
   wait(schedule(range, func));
 }
 
+void TaskScheduler::execute_linear(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
+  func(0u, range, 0u);
+}
+
 bool TaskScheduler::completed(Task::Handle handle) {
   if (handle.data == Task::InvalidHandle) {
     return true;

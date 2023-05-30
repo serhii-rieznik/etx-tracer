@@ -116,8 +116,9 @@ void RenderContext::cleanup() {
 
 void RenderContext::start_frame() {
   sg_pass_action pass_action = {};
-  pass_action.colors[0].action = SG_ACTION_CLEAR;
-  pass_action.colors[0].value = {0.05f, 0.07f, 0.1f, 1.0f};
+  pass_action.colors[0].load_action = SG_LOADACTION_CLEAR;
+  pass_action.colors[0].store_action = SG_STOREACTION_STORE;
+  pass_action.colors[0].clear_value = {0.05f, 0.07f, 0.1f, 1.0f};
   sg_apply_viewport(0, 0, sapp_width(), sapp_height(), sg_features().origin_top_left);
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 

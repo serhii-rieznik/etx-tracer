@@ -186,7 +186,7 @@ struct ImagePoolImpl {
     img.x_distributions.a = reinterpret_cast<Distribution*>(calloc(img.x_distributions.count, sizeof(Distribution)));
 
     std::atomic<float> total_weight = {0.0f};
-    scheduler.execute(img.isize.y, [&img, uniform_sampling, &total_weight, &y_dist](uint32_t begin, uint32_t end, uint32_t) {
+    scheduler.execute_linear(img.isize.y, [&img, uniform_sampling, &total_weight, &y_dist](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t y = begin; y < end; ++y) {
         float v = (float(y) + 0.5f) / img.fsize.y;
         float row_value = 0.0f;

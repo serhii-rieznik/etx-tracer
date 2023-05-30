@@ -15,6 +15,7 @@
 #include <set>
 
 #include <mikktspace.h>
+#include <tiny_gltf.hxx>
 #include <tiny_obj_loader.hxx>
 #include <jansson.h>
 
@@ -79,7 +80,7 @@ struct SceneRepresentationImpl {
   std::vector<Emitter> emitters;
 
   std::string json_file_name;
-  std::string obj_file_name;
+  std::string geometry_file_name;
   std::string mtl_file_name;
 
   ImagePool images;
@@ -321,6 +322,11 @@ struct SceneRepresentationImpl {
   };
 
   uint32_t load_from_obj(const char* file_name, const char* mtl_file);
+
+  uint32_t load_from_gltf(const char* file_name, bool binary);
+  void load_gltf_node(const tinygltf::Model& model, const tinygltf::Node&);
+  void load_gltf_mesh(const tinygltf::Model& model, const tinygltf::Mesh&);
+
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
@@ -537,15 +543,15 @@ void SceneRepresentation::write_materials(const char* filename) {
 }
 
 void SceneRepresentation::save_to_file(const char* filename) {
-  if (_private->obj_file_name.empty())
+  if (_private->geometry_file_name.empty())
     return;
 
   FILE* fout = fopen(filename, "w");
   if (fout == nullptr)
     return;
 
-  auto materials_file = _private->obj_file_name + ".materials";
-  auto relative_obj_file = std::filesystem::relative(_private->obj_file_name, std::filesystem::path(filename).parent_path()).string();
+  auto materials_file = _private->geometry_file_name + ".materials";
+  auto relative_obj_file = std::filesystem::relative(_private->geometry_file_name, std::filesystem::path(filename).parent_path()).string();
   auto relative_mtl_file = std::filesystem::relative(materials_file, std::filesystem::path(filename).parent_path()).string();
   write_materials(materials_file.c_str());
 
@@ -578,7 +584,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
 
   _private->json_file_name = {};
   _private->mtl_file_name = {};
-  _private->obj_file_name = filename;
+  _private->geometry_file_name = filename;
 
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
@@ -618,7 +624,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
           json_decref(js);
           return false;
         }
-        _private->obj_file_name = std::string(base_folder) + json_string_value(js_value);
+        _private->geometry_file_name = std::string(base_folder) + json_string_value(js_value);
       } else if (strcmp(key, "materials") == 0) {
         if (json_is_string(js_value) == false) {
           log::error("`materials` in scene description should be a string (file name)");
@@ -663,9 +669,13 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
     _private->json_file_name = filename;
   }
 
-  auto ext = get_file_ext(_private->obj_file_name.c_str());
+  auto ext = get_file_ext(_private->geometry_file_name.c_str());
   if (strcmp(ext, ".obj") == 0) {
-    load_result = _private->load_from_obj(_private->obj_file_name.c_str(), _private->mtl_file_name.c_str());
+    load_result = _private->load_from_obj(_private->geometry_file_name.c_str(), _private->mtl_file_name.c_str());
+  } else if (strcmp(ext, ".gltf") == 0) {
+    load_result = _private->load_from_gltf(_private->geometry_file_name.c_str(), false);
+  } else if (strcmp(ext, ".glb") == 0) {
+    load_result = _private->load_from_gltf(_private->geometry_file_name.c_str(), true);
   }
 
   if ((load_result & SceneRepresentationImpl::LoadSucceeded) == 0) {
@@ -1281,6 +1291,54 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
   images.load_images();
 }
 
+uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool binary) {
+  tinygltf::TinyGLTF loader;
+  tinygltf::Model model;
+  std::string errors;
+  std::string warnings;
+
+  bool load_result = false;
+
+  if (binary) {
+    load_result = loader.LoadBinaryFromFile(&model, &errors, &warnings, file_name);
+  } else {
+    load_result = loader.LoadASCIIFromFile(&model, &errors, &warnings, file_name);
+  }
+
+  if (load_result == false) {
+    log::error("Failed to load GLTF from %s:\n%s", file_name, errors.c_str());
+    return LoadFailed;
+  }
+
+  const auto& scene = model.scenes[model.defaultScene];
+  for (int32_t node_index : scene.nodes) {
+    if ((node_index < 0) || (node_index > model.nodes.size()))
+      continue;
+
+    load_gltf_node(model, model.nodes[node_index]);
+  }
+
+  return 0;
+}
+
+void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node) {
+  if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
+    const auto& mesh = model.meshes[node.mesh];
+    load_gltf_mesh(model, mesh);
+  }
+
+  for (const auto child_node : node.children) {
+    if ((child_node < 0) || (child_node > model.nodes.size()))
+      continue;
+
+    load_gltf_node(model, model.nodes[child_node]);
+  }
+}
+
+void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Model& model, const tinygltf::Mesh&) {
+
+}
+
 void build_emitters_distribution(Scene& scene) {
   DistributionBuilder emitters_distribution(scene.emitters_distribution, static_cast<uint32_t>(scene.emitters.count));
   scene.environment_emitters.count = 0;
@@ -1303,3 +1361,15 @@ void build_emitters_distribution(Scene& scene) {
 }
 
 }  // namespace etx
+
+namespace tinygltf {
+
+bool LoadImageData(Image* image, const int image_idx, std::string* err, std::string* warn, int req_width, int req_height, const unsigned char* bytes, int size, void*) {
+  return false;
+}
+
+bool WriteImageData(const std::string* basepath, const std::string* filename, const Image* image, bool embedImages, const URICallbacks* uri_cb, std::string* out_uri, void*) {
+  return false;
+}
+
+}  // namespace tinygltf
