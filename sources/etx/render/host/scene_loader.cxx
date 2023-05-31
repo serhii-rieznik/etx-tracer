@@ -1,5 +1,6 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
+#include <etx/core/json.hxx>
 
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/scene.hxx>
@@ -17,7 +18,7 @@
 #include <mikktspace.h>
 #include <tiny_gltf.hxx>
 #include <tiny_obj_loader.hxx>
-#include <jansson.h>
+#include <json.hpp>
 
 #include <filesystem>
 
@@ -414,66 +415,11 @@ SceneRepresentation::operator bool() const {
   return _private->loaded;
 }
 
-uint2 json_to_u2(json_t* a) {
-  uint2 result = {};
-  int i = 0;
-  json_t* val = {};
-  json_array_foreach(a, i, val) {
-    if ((i >= 2) || (json_is_number(val) == false))
-      break;
-
-    switch (i) {
-      case 0:
-        result.x = static_cast<uint32_t>(json_number_value(val));
-        break;
-      case 1:
-        result.y = static_cast<uint32_t>(json_number_value(val));
-        break;
-      default:
-        break;
-    }
+template <class T>
+inline void get_values(const std::vector<T>& a, T* ptr, uint64_t count) {
+  for (uint64_t i = 0, e = a.size() < count ? a.size() : count; i < e; ++i) {
+    *ptr++ = a[i];
   }
-  return result;
-}
-
-float3 json_to_f3(json_t* a) {
-  float3 result = {};
-  int i = 0;
-  json_t* val = {};
-  json_array_foreach(a, i, val) {
-    if ((i >= 3) || (json_is_number(val) == false))
-      break;
-
-    switch (i) {
-      case 0:
-        result.x = static_cast<float>(json_number_value(val));
-        break;
-      case 1:
-        result.y = static_cast<float>(json_number_value(val));
-        break;
-      case 2:
-        result.z = static_cast<float>(json_number_value(val));
-        break;
-      default:
-        break;
-    }
-  }
-  return result;
-}
-
-json_t* json_float3_to_array(const float3& v) {
-  json_t* j = json_array();
-  json_array_append(j, json_real(v.x));
-  json_array_append(j, json_real(v.y));
-  json_array_append(j, json_real(v.z));
-  return j;
-}
-
-json_t* json_uint2_to_array(const uint2& v) {
-  json_t* j = json_array();
-  json_array_append(j, json_integer(v.x));
-  json_array_append(j, json_integer(v.y));
-  return j;
 }
 
 void SceneRepresentation::write_materials(const char* filename) {
@@ -549,7 +495,7 @@ void SceneRepresentation::save_to_file(const char* filename) {
   FILE* fout = fopen(filename, "w");
   if (fout == nullptr)
     return;
-
+  /*
   auto materials_file = _private->geometry_file_name + ".materials";
   auto relative_obj_file = std::filesystem::relative(_private->geometry_file_name, std::filesystem::path(filename).parent_path()).string();
   auto relative_mtl_file = std::filesystem::relative(materials_file, std::filesystem::path(filename).parent_path()).string();
@@ -572,9 +518,9 @@ void SceneRepresentation::save_to_file(const char* filename) {
   }
 
   json_dumpf(j, fout, JSON_INDENT(2));
-  fclose(fout);
-
   json_decref(j);
+  */
+  fclose(fout);
 }
 
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
@@ -602,70 +548,53 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   bool use_focal_len = false;
 
   if (strcmp(get_file_ext(filename), ".json") == 0) {
-    json_error_t err = {};
-    auto js = json_load_file(filename, 0, &err);
-    if (js == nullptr) {
-      log::error("Failed to parse json file: %s\n%d / %d : %s", filename, err.line, err.column, err.text);
-      return false;
-    }
-
-    if (json_is_object(js) == false) {
-      log::error("Invalid scene description file: %s", filename);
-      json_decref(js);
-      return false;
-    }
-
-    const char* key = {};
-    json_t* js_value = {};
-    json_object_foreach(js, key, js_value) {
-      if (strcmp(key, "geometry") == 0) {
-        if (json_is_string(js_value) == false) {
-          log::error("`geometry` in scene description should be a string (file name)");
-          json_decref(js);
-          return false;
-        }
-        _private->geometry_file_name = std::string(base_folder) + json_string_value(js_value);
-      } else if (strcmp(key, "materials") == 0) {
-        if (json_is_string(js_value) == false) {
-          log::error("`materials` in scene description should be a string (file name)");
-          json_decref(js);
-          return false;
-        }
-        _private->mtl_file_name = json_string_value(js_value);
-      } else if (strcmp(key, "camera") == 0) {
-        if (json_is_object(js_value) == false) {
-          log::error("`camera` in scene description should be an object");
-          continue;
-        }
-        const char* cam_key = {};
-        json_t* cam_value = {};
-        json_object_foreach(js_value, cam_key, cam_value) {
-          if ((strcmp(cam_key, "class") == 0) && json_is_string(cam_value)) {
-            if (strcmp(json_string_value(cam_value), "eq") == 0) {
-              camera_cls = Camera::Class::Equirectangular;
-            }
-          } else if ((strcmp(cam_key, "origin") == 0) && json_is_array(cam_value)) {
-            camera_pos = json_to_f3(cam_value);
-          } else if ((strcmp(cam_key, "target") == 0) && json_is_array(cam_value)) {
-            camera_view = json_to_f3(cam_value);
-          } else if ((strcmp(cam_key, "up") == 0) && json_is_array(cam_value)) {
-            camera_up = json_to_f3(cam_value);
-          } else if ((strcmp(cam_key, "viewport") == 0) && json_is_array(cam_value)) {
-            viewport = json_to_u2(cam_value);
-          } else if ((strcmp(cam_key, "fov") == 0) && json_is_number(cam_value)) {
-            camera_fov = static_cast<float>(json_number_value(cam_value));
-          } else if ((strcmp(cam_key, "focal-length") == 0) && json_is_number(cam_value)) {
-            camera_focal_len = static_cast<float>(json_number_value(cam_value));
+    auto js = json_from_file(filename);
+    for (auto i = js.begin(), e = js.end(); i != e; ++i) {
+      const auto& key = i.key();
+      const auto& obj = i.value();
+      std::string str_value = {};
+      float float_value = 0.0f;
+      if (json_get_string(i, "geometry", str_value)) {
+        _private->geometry_file_name = std::string(base_folder) + str_value;
+      } else if (json_get_string(i, "materials", str_value)) {
+        _private->mtl_file_name = std::string(base_folder) + str_value;
+      } else if ((key == "camera") && obj.is_object()) {
+        for (auto ci = obj.begin(), ce = obj.end(); ci != ce; ++ci) {
+          const auto& ckey = ci.key();
+          const auto& cobj = ci.value();
+          if (json_get_string(ci, "class", str_value)) {
+            camera_cls = str_value == "eq" ? Camera::Class::Equirectangular : Camera::Class::Perspective;
+          } else if (json_get_float(ci, "fov", float_value)) {
+            camera_fov = float_value;
+          } else if (json_get_float(ci, "focal-length", float_value)) {
+            camera_focal_len = float_value;
             use_focal_len = true;
-          } else if ((strcmp(cam_key, "lens-radius") == 0) && json_is_number(cam_value)) {
-            cam.lens_radius = static_cast<float>(json_number_value(cam_value));
-          } else if ((strcmp(cam_key, "focal-distance") == 0) && json_is_number(cam_value)) {
-            cam.focal_distance = static_cast<float>(json_number_value(cam_value));
+          } else if (json_get_float(ci, "lens-radius", float_value)) {
+            cam.lens_radius = float_value;
+          } else if (json_get_float(ci, "focal-distance", float_value)) {
+            cam.focal_distance = float_value;
+          } else if (cobj.is_array()) {
+            if (ckey == "origin") {
+              auto values = cobj.get<std::vector<float>>();
+              get_values(values, &camera_pos.x, 3llu);
+            } else if (ckey == "target") {
+              auto values = cobj.get<std::vector<float>>();
+              get_values(values, &camera_view.x, 3llu);
+            } else if (ckey == "up") {
+              auto values = cobj.get<std::vector<float>>();
+              get_values(values, &camera_up.x, 3llu);
+            } else if (ckey == "viewport") {
+              auto values = cobj.get<std::vector<uint32_t>>();
+              get_values(values, &viewport.x, 2llu);
+            } else {
+              log::warning("Unhandled value in camera description : %s", key.c_str());
+            }
           }
         }
+      } else {
+        log::warning("Unhandled value in scene description : %s", key.c_str());
       }
     }
-    json_decref(js);
     _private->json_file_name = filename;
   }
 
@@ -1336,7 +1265,6 @@ void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const
 }
 
 void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Model& model, const tinygltf::Mesh&) {
-
 }
 
 void build_emitters_distribution(Scene& scene) {

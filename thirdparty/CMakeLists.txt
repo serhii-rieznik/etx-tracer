@@ -5,7 +5,6 @@ add_subdirectory(stb_image)
 add_subdirectory(tinyexr)
 
 add_subdirectory(json)
-add_subdirectory(jansson)
 
 add_subdirectory(tinyobjloader)
 add_subdirectory(tinygltf)

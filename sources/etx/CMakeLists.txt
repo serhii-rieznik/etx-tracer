@@ -54,18 +54,15 @@ function(create_library folder)
 endfunction(create_library)
 
 create_library(core)
-target_link_libraries(etx-core PUBLIC jansson)
-target_include_directories(etx-core PUBLIC .. ${JANSSON_INCLUDE_DIRS})
+target_link_libraries(etx-core PUBLIC json)
+target_include_directories(etx-core PUBLIC ..)
 
 if(APPLE)
 #  target_link_options(etx-core PUBLIC "-framework CoreFoundation")
 endif()
 
 create_library(render)
-target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS etx-core)
-target_include_directories(etx-render PRIVATE ${JANSSON_INCLUDE_DIRS})
-
-target_link_libraries(etx-render PUBLIC nanovdb)
+target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS nanovdb etx-core)
 target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 
 find_package(embree 4.0 REQUIRED)

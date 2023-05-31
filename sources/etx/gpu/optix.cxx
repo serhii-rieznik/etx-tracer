@@ -2,7 +2,7 @@
 #include <etx/core/environment.hxx>
 #include <etx/gpu/optix.hxx>
 
-#include <jansson.h>
+#include <json.hpp>
 
 #include <cuda_compiler/cuda_compiler_lib.hxx>
 
@@ -798,7 +798,9 @@ bool GPUOptixImplData::launch_cuda(GPUPipelineOptixImpl& pipeline, const char* f
   return ETX_CUDA_SUCCEED(call_result);
 }
 
-inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[], uint64_t buffer_size) {
+inline PipelineDesc parse_file(const nlohmann::json& json, const char* filename, char buffer[], uint64_t buffer_size) {
+  return {};
+  /*
   if (json_is_object(json) == false) {
     return {};
   }
@@ -864,9 +866,12 @@ inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[]
 
   result.completed = true;
   return result;
+  */
 }
 
 bool GPUOptixImplData::compile(const char* json_filename, bool force, GPUPipeline::Descriptor& desc, std::vector<uint8_t>& binary_data) {
+  return false;
+  /*
   json_error_t error = {};
   json_t* json_data = json_load_file(json_filename, 0, &error);
   if (json_data == nullptr) {
@@ -915,6 +920,7 @@ bool GPUOptixImplData::compile(const char* json_filename, bool force, GPUPipelin
   desc.entry_point_count = ps_desc.entry_point_count;
   desc.compile_options = uint32_t(ps_desc.target);
   return true;
+  */
 }
 
 /***********************************************
