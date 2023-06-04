@@ -8,7 +8,7 @@
 #include <stb_image.hxx>
 #include <stb_image_write.hxx>
 
-#if defined(_WIN32)
+#if defined(ETX_PLATFORM_WINDOWS)
 
 // TODO : fix hacks
 #define WIN32_LEAN_AND_MEAN 1
@@ -57,7 +57,7 @@ void RTApplication::init() {
     _options.add("ref", "none");
   }
 
-#if defined(_WIN32)
+#if defined(ETX_PLATFORM_WINDOWS)
   if (GetAsyncKeyState(VK_ESCAPE)) {
     _options.set("integrator", std::string());
   }
