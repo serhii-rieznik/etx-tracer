@@ -56,6 +56,11 @@ Pointer<Spectrums> spectrums() {
     return true;
   }();
 
+  if (invoke_once == false) {
+    log::error("Spectrums are not initialized");
+    std::terminate();
+  }
+
   return &_spectrums;
 }
 

@@ -705,13 +705,12 @@ void GPUVCM::run(const Options& in_opt) {
 }
 
 void GPUVCM::update() {
-  constexpr double kDeltaTime = 1.0 / 30.0;
-
   TimeMeasure tm = {};
 
   _private->reset_timers();
+  // constexpr double kDeltaTime = 1.0 / 30.0;
   // while ((current_state != State::Stopped) && (tm.measure() < kDeltaTime))
-  { _private->update(); }
+  _private->update();
   _private->commit_timers();
 
   ++_private->update_frame;

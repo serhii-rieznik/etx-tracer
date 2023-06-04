@@ -59,7 +59,7 @@ LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
   fflush(stdout);
 
   if (framesCaptured > 0) {
-    printf("Backtrace (hash = 0x%08X):\n", backtraceHash);
+    printf("Backtrace (hash = 0x%08X):\n", static_cast<uint32_t>(backtraceHash));
     fflush(stdout);
     for (unsigned int i = 0; i < framesCaptured; ++i) {
       SymFromAddr(process, reinterpret_cast<DWORD64>(backtrace[i]), 0, symbol);
@@ -164,7 +164,6 @@ inline void log::set_console_color(log::Color clr) {
       SetConsoleTextAttribute(con, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
   }
 }
-
 
 }  // namespace etx
 

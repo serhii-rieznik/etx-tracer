@@ -146,10 +146,7 @@ static int32_t g_compressor = BLOSC_BLOSCLZ;  /* the compressor to use by defaul
 static int32_t g_threads = 1;
 static int32_t g_force_blocksize = 0;
 static int32_t g_initlib = 0;
-static int32_t g_atfork_registered = 0;
 static int32_t g_splitmode = BLOSC_FORWARD_COMPAT_SPLIT;
-
-
 
 /* Wrapped function to adjust the number of threads used by blosc */
 int blosc_set_nthreads_(struct blosc_context*);

@@ -1139,7 +1139,7 @@ bool GPUOptixImpl::denoise(GPUBuffer input, GPUBuffer output) {
     .data = get_buffer_device_pointer(input),
     .width = _private->denoiser_image_size.x,
     .height = _private->denoiser_image_size.y,
-    .rowStrideInBytes = _private->denoiser_image_size.x * sizeof(float4),
+    .rowStrideInBytes = static_cast<uint32_t>(_private->denoiser_image_size.x * sizeof(float4)),
     .format = OptixPixelFormat::OPTIX_PIXEL_FORMAT_FLOAT4,
   };
 
@@ -1147,7 +1147,7 @@ bool GPUOptixImpl::denoise(GPUBuffer input, GPUBuffer output) {
     .data = get_buffer_device_pointer(output),
     .width = _private->denoiser_image_size.x,
     .height = _private->denoiser_image_size.y,
-    .rowStrideInBytes = _private->denoiser_image_size.x * sizeof(float4),
+    .rowStrideInBytes = static_cast<uint32_t>(_private->denoiser_image_size.x * sizeof(float4)),
     .format = OptixPixelFormat::OPTIX_PIXEL_FORMAT_FLOAT4,
   };
 

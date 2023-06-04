@@ -2970,7 +2970,6 @@ bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std
 
   // material
   std::map<std::string, int> material_map;
-  int material = -1;
 
   size_t line_num = 0;
   std::string linebuf;

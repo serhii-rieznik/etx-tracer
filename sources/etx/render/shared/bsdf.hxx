@@ -45,8 +45,8 @@ struct BSDFEval {
   BSDFEval() = default;
 
   ETX_GPU_CODE BSDFEval(float wl, float power)
-    : weight(wl, power)
-    , bsdf(wl, power) {
+    : bsdf(wl, power)
+    , weight(wl, power) {
   }
 
   SpectralResponse func = {};

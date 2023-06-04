@@ -17,7 +17,6 @@
 #define ETX_VALIDATE(VALUE)                                     \
   do {                                                          \
     if (valid_value((VALUE)) == false) {                        \
-      static uint32_t reported = 0;                             \
       if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
         print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
         ETX_DEBUG_BREAK();                                      \
@@ -28,7 +27,6 @@
 #define ETX_CHECK_FINITE(VALUE)                                 \
   do {                                                          \
     if (isfinite((VALUE)) == false) {                           \
-      static uint32_t reported = 0;                             \
       if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
         print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
         ETX_DEBUG_BREAK();                                      \

@@ -356,7 +356,6 @@ inline const float* power(uint32_t cls, uint32_t clr) {
 }
 
 void init_spectrums(Spectrums& spectrums) {
-  using SPD = SpectralDistribution;
   for (uint32_t i = 0; i < SampleCount; ++i) {
     for (uint32_t c = 0; c < Color::Count; ++c) {
       spectrums.rgb_reflection.values[c][i] = 0.941f * power(0u, c)[i];

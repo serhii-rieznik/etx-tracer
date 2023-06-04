@@ -46,7 +46,7 @@ void UI::initialize() {
   imggui_desc.no_default_font = true;
   simgui_setup(imggui_desc);
   {
-    auto font_config = ImFontConfig::ImFontConfig();
+    auto font_config = ImFontConfig();
     font_config.OversampleH = 4;
     font_config.OversampleV = 4;
 
@@ -86,7 +86,7 @@ bool UI::build_options(Options& options) {
   for (auto& option : options.values) {
     switch (option.cls) {
       case OptionalValue::Class::InfoString: {
-        ImGui::TextColored({1.0f, 0.5f, 0.25f, 1.0f}, option.name.c_str());
+        ImGui::TextColored({1.0f, 0.5f, 0.25f, 1.0f}, "%s", option.name.c_str());
         break;
       };
 
@@ -148,14 +148,12 @@ bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer
   float3 rgb = spectrum::xyz_to_rgb(spd.to_xyz());
   if (linear == false) {
     rgb = linear_to_gamma(rgb);
-  } else {
-    rgb = rgb;
   }
   uint32_t flags = linear ? ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_NoPicker  //
                           : ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar;                    //
 
   if (linear) {
-    ImGui::Text(name);
+    ImGui::Text("%s", name);
   }
 
   bool changed = false;
@@ -372,14 +370,14 @@ void UI::build(double dt, const char* status) {
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     char status_buffer[2048] = {};
     uint32_t cpu_load = static_cast<uint32_t>(get_cpu_load() * 100.0f);
-    snprintf(status_buffer, sizeof(status_buffer), "% 3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
-    ImGui::Text(status_buffer);
+    snprintf(status_buffer, sizeof(status_buffer), "%-3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
+    ImGui::Text("%s", status_buffer);
     ImGui::End();
   }
 
   if ((_ui_setup & UIIntegrator) && ImGui::Begin("Integrator options", nullptr, kWindowFlags)) {
     if (has_integrator) {
-      ImGui::Text(_current_integrator->name());
+      ImGui::Text("%s", _current_integrator->name());
       if (build_options(_integrator_options) && callbacks.options_changed) {
         callbacks.options_changed();
       }
@@ -418,7 +416,6 @@ void UI::build(double dt, const char* status) {
   }
 
   if ((_ui_setup & UIEmitters) && ImGui::Begin("Emitters", nullptr, kWindowFlags)) {
-    bool has_emitters = false;
     ImGui::Text("Emitters");
     if (ImGui::BeginListBox("##emitters", {})) {
       for (uint32_t index = 0; has_scene && (index < _current_scene->emitters.count); ++index) {
@@ -505,7 +502,7 @@ void UI::build(double dt, const char* status) {
       for (uint64_t i = 0, e = _current_integrator->debug_info_count(); i < e; ++i) {
         char buffer[8] = {};
         snprintf(buffer, sizeof(buffer), "%.3f     .", debug_info[i].value);
-        ImGui::LabelText(buffer, debug_info[i].title);
+        ImGui::LabelText(buffer, "%s", debug_info[i].title);
       }
       ImGui::End();
     }

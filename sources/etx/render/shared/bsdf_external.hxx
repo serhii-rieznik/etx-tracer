@@ -217,10 +217,10 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_conductor(SpectralQuery spect, c
 
   float d_ggx = D_ggx(wh, alpha_x, alpha_y);
   ETX_VALIDATE(d_ggx);
-  
+
   float d = d_ggx / (4.0f * projectedArea);
   ETX_VALIDATE(d);
-  
+
   return f * d;
 }
 

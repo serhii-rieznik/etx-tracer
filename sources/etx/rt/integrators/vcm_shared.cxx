@@ -46,7 +46,6 @@ void VCMOptions::store(Options& opt) {
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {
-
   data = {};
   if (sample_count == 0) {
     return;

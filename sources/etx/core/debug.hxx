@@ -52,9 +52,9 @@
 #else
 
 #if defined(ETX_PLATFORM_WINDOWS)
-  #define ETX_DEBUG_BREAK() __debugbreak()
+#define ETX_DEBUG_BREAK() __debugbreak()
 #else
-  #define ETX_DEBUG_BREAK()
+#define ETX_DEBUG_BREAK()
 #endif
 
 #define ETX_ABORT() abort()
@@ -84,8 +84,7 @@ ETX_GPU_CODE void printf_assert_info(const char* name_a, const uint64_t a, const
 #define ETX_ASSERT_SPECIFIC(A, B, OP)                              \
   do {                                                             \
     if (!((A)OP(B))) {                                             \
-      static uint32_t reported = 0;                                \
-      if (ETX_ASSERT_ATOMIC_CHECK()) {                         \
+      if (ETX_ASSERT_ATOMIC_CHECK()) {                             \
         printf_assert_info(#A, A, #OP, #B, B, __FILE__, __LINE__); \
         ETX_DEBUG_BREAK();                                         \
       }                                                            \
@@ -100,8 +99,7 @@ ETX_GPU_CODE void printf_assert_info(const char* name_a, const uint64_t a, const
 #define ETX_ASSERT(condition)                                                       \
   do {                                                                              \
     if (!(condition)) {                                                             \
-      static uint32_t reported = 0;                                                 \
-      if (ETX_ASSERT_ATOMIC_CHECK()) {                                          \
+      if (ETX_ASSERT_ATOMIC_CHECK()) {                                              \
         printf("Condition %s failed at %s [%u]\n", #condition, __FILE__, __LINE__); \
         ETX_DEBUG_BREAK();                                                          \
       }                                                                             \

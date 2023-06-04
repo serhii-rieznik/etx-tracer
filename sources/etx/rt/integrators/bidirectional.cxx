@@ -134,9 +134,9 @@ struct CPUBidirectionalImpl : public Task {
 
   CPUBidirectionalImpl(Raytracing& r, std::atomic<Integrator::State>* st)
     : rt(r)
-    , state(st)
     , samplers(rt.scheduler().max_thread_count())
-    , per_thread_path_data(rt.scheduler().max_thread_count()) {
+    , per_thread_path_data(rt.scheduler().max_thread_count())
+    , state(st) {
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) {
@@ -161,8 +161,6 @@ struct CPUBidirectionalImpl : public Task {
     auto ray = generate_ray(smp, rt.scene(), uv);
     build_camera_path(smp, spect, ray, path_data.camera_path);
     build_emitter_path(smp, spect, path_data.emitter_path);
-
-    uint64_t path_size = path_data.camera_path.size() + path_data.emitter_path.size() - 2llu;
 
     SpectralResponse result = {spect.wavelength, 0.0f};
     for (uint64_t eye_t = 1, eye_t_e = path_data.camera_path.size(); running() && (eye_t < eye_t_e); ++eye_t) {
@@ -787,7 +785,6 @@ float CPUBidirectionalImpl::PathVertex::pdf_area(SpectralQuery spect, PathSource
 
   float eval_pdf = 0.0f;
   if (is_surface_interaction()) {
-    const auto& tri = scene.triangles[triangle_index];
     const auto& mat = scene.materials[material_index];
     eval_pdf = bsdf::pdf({spect, medium_index, mode, *this, w_i}, w_o, mat, scene, smp);
   } else if (is_medium_interaction()) {

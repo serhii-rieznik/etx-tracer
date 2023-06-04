@@ -42,7 +42,6 @@ inline float ozone_vertical_profile(float h) {
   float x4 = x2 * x2;
   float x5 = x4 * x;
   float x6 = x3 * x3;
-  float x7 = x6 * x;
   float f = 3.759384E-08f * x6 - 1.067250E-05f * x5 + 1.080311E-03f * x4 - 4.851181E-02f * x3 + 9.185432E-01f * x2 - 4.886021E+00f * x + 7.900478E+00f;
   const float n = 30.8491249f;
   return max(0.0f, f / n);
@@ -70,7 +69,6 @@ inline float3 optical_length(float3 p, const float3& target, Sampler& smp, float
   float3 dp = (target - p);
   float total_distance = length(dp);
   dp /= total_distance;
-  float min_step = total_distance / kMaxSteps;
   float t = 0.0f;
   while (t < total_distance) {
     float3 current_density = density(length(p) - kPlanetRadius);
@@ -87,8 +85,6 @@ inline float3 optical_length(float3 p, const float3& target, Sampler& smp, float
 }
 
 inline float phase_rayleigh(float l_dot_v) {
-  constexpr float p = 0.035f;
-  constexpr float depolarisation = (6.0f + 3.0f * p) / (6.0f - 7.0f * p);
   return (3.0f / 4.0f) * (1.0f + l_dot_v * l_dot_v) * (1.0f / (4.0f * kPi));
 }
 
@@ -132,10 +128,6 @@ struct CPUAtmosphereImpl : public Task {
     if (rayleigh.count > 0) {
       return;
     }
-
-    constexpr float kSunTemperature = 5778.0f;
-    float sun_norm_w = spectrum::black_body_radiation_maximum_wavelength(kSunTemperature);
-    float sun_norm = 16.0f / spectrum::black_body_radiation(sun_norm_w, kSunTemperature);
 
     for (uint32_t w = spectrum::ShortestWavelength; w <= spectrum::LongestWavelength; ++w) {
       uint32_t i = w - spectrum::ShortestWavelength;
@@ -217,8 +209,6 @@ struct CPUAtmosphereImpl : public Task {
     for (uint32_t i = 0; i < entry_count; ++i) {
       result.entries[i].wavelength = float(spectrum::ShortestWavelength + i);
     }
-
-    float min_step = to_space / kMaxSteps;
 
     float3 position = ray.o;
     float3 total_optical_path = {};

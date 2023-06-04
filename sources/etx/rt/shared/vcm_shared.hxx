@@ -364,7 +364,6 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
 }
 
 ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state) {
-  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
   if (mat.cls != Material::Class::Boundary)
     return false;
@@ -454,7 +453,6 @@ ETX_GPU_CODE void vcm_update_camera_vcm(const Intersection& intersection, VCMPat
 }
 
 ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
-  const auto& tri = scene.triangles[intersection.triangle_index];
   if ((options.direct_hit() == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
@@ -523,7 +521,6 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
     return false;
   }
 
-  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
   auto camera_data = BSDFData{spect, state_medium, PathSource::Camera, intersection, intersection.w_i};
   auto camera_bsdf = bsdf::evaluate(camera_data, w_o, mat, scene, state.sampler);
@@ -578,7 +575,6 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
     return {state.spect.wavelength, 0.0f};
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[intersection.material_index];
   const auto& light_path = light_paths[state.global_index];
 
   SpectralResponse result = {state.spect.wavelength, 0.0f};
@@ -636,7 +632,6 @@ struct ETX_ALIGNED VCMSpatialGridData {
         continue;
       }
 
-      const auto& tri = scene.triangles[intersection.triangle_index];
       const auto& mat = scene.materials[intersection.material_index];
       auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
       auto camera_bsdf = bsdf::evaluate(camera_data, -light_vertex.w_i, mat, scene, state.sampler);
@@ -732,7 +727,6 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     return true;
   }
 
-  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
   auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, state.sampler);

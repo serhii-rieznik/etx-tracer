@@ -187,7 +187,6 @@ struct CPUWavefrontPTImpl {
   }
 
   void medium_execute_range(Raytracing& rt, uint32_t begin, uint32_t end, uint32_t thread_id) {
-    const auto& scene = rt.scene();
     for (uint32_t ri = begin; ri < end; ++ri) {
       uint32_t i = active_rays[ri];
 
@@ -256,7 +255,6 @@ struct CPUWavefrontPTImpl {
 
       auto& smp = payload.smp[i];
       const auto& intersection = payload.intersection[i];
-      const auto& tri = scene.triangles[intersection.triangle_index];
       const auto& mat = scene.materials[intersection.material_index];
       payload.bsdf_sample[i] = bsdf::sample({payload.spect[i], payload.medium[i], PathSource::Camera, intersection, intersection.w_i}, mat, scene, smp);
 
@@ -281,7 +279,6 @@ struct CPUWavefrontPTImpl {
       const auto& ss_gather = payload.ss_gather[i];
       const auto& bsdf_sample = payload.bsdf_sample[i];
       const auto& intersection = payload.intersection[i];
-      const auto& tri = scene.triangles[intersection.triangle_index];
       const auto& mat = scene.materials[intersection.material_index];
 
       if (options.nee && (payload.path_length[i] + 1 <= options.max_depth)) {
@@ -302,12 +299,12 @@ struct CPUWavefrontPTImpl {
         payload.accumulated[i] += payload.throughput[i] * direct_light;
       }
 
-      if (payload.bsdf_sample[i].valid() == false) {
+      if (bsdf_sample.valid() == false) {
         payload.ray_state[i] = PTRayState::EndIteration;
         continue;
       }
 
-      bool subsurface_path = mat.has_subsurface_scattering() && (payload.bsdf_sample[i].properties & BSDFSample::Diffuse);
+      bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
       if (subsurface_path && (payload.subsurface_sampled[i] == 0)) {
         payload.ray_state[i] = PTRayState::EndIteration;
         continue;
@@ -335,8 +332,6 @@ struct CPUWavefrontPTImpl {
       auto& smp = payload.smp[i];
       const auto& bsdf_sample = payload.bsdf_sample[i];
       const auto& intersection = payload.intersection[i];
-      const auto& tri = scene.triangles[intersection.triangle_index];
-      const auto& mat = scene.materials[intersection.material_index];
 
       if (payload.subsurface_sampled[i]) {
         payload.ray[i].d = sample_cosine_distribution(smp.next_2d(), intersection.nrm, 1.0f);
@@ -344,15 +339,15 @@ struct CPUWavefrontPTImpl {
         payload.mis_weight[i] = true;
         payload.ray[i].o = shading_pos(scene.vertices, scene.triangles[intersection.triangle_index], intersection.barycentric, payload.ray[i].d);
       } else {
-        payload.medium[i] = (payload.bsdf_sample[i].properties & BSDFSample::MediumChanged) ? payload.bsdf_sample[i].medium_index : payload.medium[i];
-        payload.sampled_bsdf_pdf[i] = payload.bsdf_sample[i].pdf;
-        payload.mis_weight[i] = payload.bsdf_sample[i].is_delta() == false;
-        payload.eta[i] *= payload.bsdf_sample[i].eta;
-        payload.ray[i].d = payload.bsdf_sample[i].w_o;
+        payload.medium[i] = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium[i];
+        payload.sampled_bsdf_pdf[i] = bsdf_sample.pdf;
+        payload.mis_weight[i] = bsdf_sample.is_delta() == false;
+        payload.eta[i] *= bsdf_sample.eta;
+        payload.ray[i].d = bsdf_sample.w_o;
         payload.ray[i].o = shading_pos(scene.vertices, scene.triangles[intersection.triangle_index], intersection.barycentric, payload.ray[i].d);
       }
 
-      payload.throughput[i] *= payload.bsdf_sample[i].weight;
+      payload.throughput[i] *= bsdf_sample.weight;
       if (payload.throughput[i].is_zero()) {
         payload.ray_state[i] = PTRayState::EndIteration;
         continue;

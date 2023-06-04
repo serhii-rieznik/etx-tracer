@@ -43,7 +43,6 @@ float sample_weight(const SpectralQuery& spect, Sampler& smp, const Intersection
     return 0.0f;
   }
 
-  const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
   float bsdf_pdf = bsdf::pdf({spect, kInvalidIndex, PathSource::Camera, intersection, intersection.w_i}, emitter_sample.direction, mat, scene, smp);
   float l_dot_n = fmaxf(0.0f, dot(emitter_sample.direction, intersection.nrm));
