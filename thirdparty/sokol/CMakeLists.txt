@@ -3,6 +3,7 @@ add_library(sokol STATIC
   sokol_gfx.h
   util/sokol_imgui.h
   sokol.cc
+  sokol.mm
 )
 
 set_target_properties(sokol PROPERTIES FOLDER "thirdparty")

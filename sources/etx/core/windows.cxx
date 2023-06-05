@@ -167,4 +167,27 @@ inline void log::set_console_color(log::Color clr) {
 
 }  // namespace etx
 
+#else
+
+#warning TODO : move to the proper place
+
+namespace etx {
+
+void init_platform() {
+}
+
+float get_cpu_load() {
+  return 0.0f;
+}
+
+std::string open_file(const std::vector<std::string>& filters) {
+  return {};
+}
+
+std::string save_file(const std::vector<std::string>& filters) {
+  return {};
+}
+
+}
+
 #endif

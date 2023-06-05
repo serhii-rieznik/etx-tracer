@@ -3775,7 +3775,7 @@ _SOKOL_PRIVATE void _sapp_macos_frame(void) {
         _sapp.macos.view.preferredFramesPerSecond = max_fps / _sapp.swap_interval;
         _sapp.macos.view.device = _sapp.macos.mtl_device;
         _sapp.macos.view.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
-        _sapp.macos.view.depthStencilPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+        _sapp.macos.view.depthStencilPixelFormat = MTLPixelFormatInvalid;
         _sapp.macos.view.sampleCount = (NSUInteger) _sapp.sample_count;
         _sapp.macos.view.autoResizeDrawable = false;
         _sapp.macos.window.contentView = _sapp.macos.view;
@@ -4423,7 +4423,7 @@ _SOKOL_PRIVATE void _sapp_ios_show_keyboard(bool shown) {
         _sapp.ios.view.preferredFramesPerSecond = max_fps / _sapp.swap_interval;
         _sapp.ios.view.device = _sapp.ios.mtl_device;
         _sapp.ios.view.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
-        _sapp.ios.view.depthStencilPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+        _sapp.ios.view.depthStencilPixelFormat = MTLPixelFormatNone;
         _sapp.ios.view.sampleCount = (NSUInteger)_sapp.sample_count;
         /* NOTE: iOS MTKView seems to ignore thew view's contentScaleFactor
             and automatically renders at Retina resolution. We'll disable

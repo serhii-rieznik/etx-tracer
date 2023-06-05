@@ -58,9 +58,19 @@ void RenderContext::init() {
   context.context.d3d11.device_context = sapp_d3d11_get_device_context();
   context.context.d3d11.depth_stencil_view_cb = sapp_d3d11_get_depth_stencil_view;
   context.context.d3d11.render_target_view_cb = sapp_d3d11_get_render_target_view;
+  
+  context.context.metal.device = sapp_metal_get_device();
+  context.context.metal.drawable_cb = []() {
+    return sapp_metal_get_drawable();
+  };
+  context.context.metal.renderpass_descriptor_cb = []() {
+    return reinterpret_cast<const void*>(sapp_metal_get_renderpass_descriptor());
+  };
+
   context.context.depth_format = SG_PIXELFORMAT_NONE;
   sg_setup(context);
 
+#if (ETX_PLATFORM_WIN)
   sg_shader_desc shader_desc = {};
   shader_desc.vs.source = shader_source;
   shader_desc.vs.entry = "vertex_main";
@@ -83,9 +93,11 @@ void RenderContext::init() {
   sg_pipeline_desc pipeline_desc = {};
   pipeline_desc.shader = _private->output_shader;
   _private->output_pipeline = sg_make_pipeline(pipeline_desc);
-
+#endif
+  
   apply_reference_image(_private->def_image_handle);
 
+#if (ETX_PLATFORM_WIN)
   set_output_dimensions({16, 16});
   float4 c_image[256] = {};
   float4 l_image[256] = {};
@@ -99,6 +111,7 @@ void RenderContext::init() {
   update_camera_image(c_image);
   update_light_image(l_image);
   sg_commit();
+#endif
 }
 
 void RenderContext::cleanup() {
@@ -122,6 +135,7 @@ void RenderContext::start_frame() {
   sg_apply_viewport(0, 0, sapp_width(), sapp_height(), sg_features().origin_top_left);
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 
+#if (ETX_PLATFORM_WIN)
   _private->constants = {
     {sapp_widthf(), sapp_heightf(), float(_private->output_dimensions.x), float(_private->output_dimensions.y)},
     uint32_t(_private->view_options.view),
@@ -144,6 +158,7 @@ void RenderContext::start_frame() {
   sg_apply_uniforms(SG_SHADERSTAGE_VS, 0, uniform_data);
   sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, uniform_data);
   sg_draw(0, 3, 1);
+#endif
 }
 
 void RenderContext::end_frame() {

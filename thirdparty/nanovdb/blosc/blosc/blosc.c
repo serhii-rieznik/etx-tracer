@@ -147,6 +147,7 @@ static int32_t g_threads = 1;
 static int32_t g_force_blocksize = 0;
 static int32_t g_initlib = 0;
 static int32_t g_splitmode = BLOSC_FORWARD_COMPAT_SPLIT;
+static int32_t g_atfork_registered = 0;
 
 /* Wrapped function to adjust the number of threads used by blosc */
 int blosc_set_nthreads_(struct blosc_context*);
@@ -2089,8 +2090,8 @@ int blosc_get_complib_info(const char *compname, char **complib, char **version)
     return -1;
   }
 
-  if (complib != NULL) *complib = _strdup(clibname);
-  if (version != NULL) *version = _strdup(clibversion);
+  if (complib != NULL) *complib = strdup(clibname);
+  if (version != NULL) *version = strdup(clibversion);
 
   return clibcode;
 }

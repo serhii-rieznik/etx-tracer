@@ -83,7 +83,8 @@ struct ETX_ALIGNED FilmData {
       new_value = std::bit_cast<long>(*ptr + value);
     } while (_InterlockedCompareExchange(iptr, new_value, old_value) != old_value);
 #else
-#error Implement proper atomic operator
+    #warning Implement proper atomic operator
+    *ptr += value;
 #endif
   }
 

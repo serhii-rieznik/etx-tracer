@@ -1,6 +1,6 @@
-#if defined(_WIN32)
+#if defined(__APPLE__)
 
-#define SOKOL_D3D11 1
+#define SOKOL_METAL 1
 #define SOKOL_NO_ENTRY 1
 
 #define SOKOL_APP_IMPL
