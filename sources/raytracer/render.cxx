@@ -70,7 +70,7 @@ void RenderContext::init() {
   context.context.depth_format = SG_PIXELFORMAT_NONE;
   sg_setup(context);
 
-#if (ETX_PLATFORM_WIN)
+#if (ETX_PLATFORM_WINDOWS)
   sg_shader_desc shader_desc = {};
   shader_desc.vs.source = shader_source;
   shader_desc.vs.entry = "vertex_main";
@@ -97,7 +97,7 @@ void RenderContext::init() {
   
   apply_reference_image(_private->def_image_handle);
 
-#if (ETX_PLATFORM_WIN)
+#if (ETX_PLATFORM_WINDOWS)
   set_output_dimensions({16, 16});
   float4 c_image[256] = {};
   float4 l_image[256] = {};
@@ -135,7 +135,7 @@ void RenderContext::start_frame() {
   sg_apply_viewport(0, 0, sapp_width(), sapp_height(), sg_features().origin_top_left);
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 
-#if (ETX_PLATFORM_WIN)
+#if (ETX_PLATFORM_WINDOWS)
   _private->constants = {
     {sapp_widthf(), sapp_heightf(), float(_private->output_dimensions.x), float(_private->output_dimensions.y)},
     uint32_t(_private->view_options.view),
