@@ -6,8 +6,6 @@
 namespace etx {
 
 struct ETX_ALIGNED PTOptions {
-  uint32_t iterations ETX_INIT_WITH(128u);
-  uint32_t max_depth ETX_INIT_WITH(65536u);
   uint32_t rr_start ETX_INIT_WITH(6u);
   uint32_t path_per_iteration ETX_INIT_WITH(1u);
   bool nee ETX_INIT_WITH(true);
@@ -119,12 +117,12 @@ ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload
   return medium_sample;
 }
 
-ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, uint32_t max_depth, const Raytracing& rt, PTRayPayload& payload) {
+ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const Raytracing& rt, PTRayPayload& payload) {
   const auto& medium = scene.mediums[payload.medium];
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-  if (payload.path_length + 1 <= max_depth) {
+  if (payload.path_length + 1 <= rt.scene().max_path_length) {
     uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
     auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, medium_sample.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
@@ -145,12 +143,12 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
   ETX_CHECK_FINITE(payload.ray.d);
 }
 
-ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, uint32_t max_depth, const Raytracing& rt, PTRayPayloadSoA& payload, uint32_t i) {
+ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const Raytracing& rt, PTRayPayloadSoA& payload, uint32_t i) {
   const auto& medium = scene.mediums[payload.medium[i]];
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-  if (payload.path_length[i] + 1 <= max_depth) {
+  if (payload.path_length[i] + 1 <= rt.scene().max_path_length) {
     uint32_t emitter_index = sample_emitter_index(scene, payload.smp[i]);
     auto emitter_sample = sample_emitter(payload.spect[i], emitter_index, payload.smp[i], medium_sample.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
@@ -260,7 +258,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  if (options.nee && (payload.path_length + 1 <= options.max_depth)) {
+  if (options.nee && (payload.path_length + 1 <= rt.scene().max_path_length)) {
     uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
     SpectralResponse direct_light = {payload.spect.wavelength, 0.0f};
     if (subsurface_sampled) {
@@ -329,7 +327,7 @@ ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
 }
 
 ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
-  if (payload.path_length > options.max_depth)
+  if (payload.path_length > rt.scene().max_path_length)
     return false;
 
   ETX_CHECK_FINITE(payload.ray.d);
@@ -340,7 +338,7 @@ ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& option
   Medium::Sample medium_sample = try_sampling_medium(scene, payload, intersection.t);
 
   if (medium_sample.sampled_medium()) {
-    handle_sampled_medium(scene, medium_sample, options.max_depth, rt, payload);
+    handle_sampled_medium(scene, medium_sample, rt, payload);
     return random_continue(payload.path_length, options.rr_start, payload.eta, payload.smp, payload.throughput);
   }
 

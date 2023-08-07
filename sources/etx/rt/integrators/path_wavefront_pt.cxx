@@ -84,13 +84,7 @@ struct CPUWavefrontPTImpl {
   std::vector<uint32_t> active_rays;
   std::atomic<uint32_t> active_ray_count = {};
 
-  CPUWavefrontPTImpl() {
-    options.iterations = 32;
-  }
-
   void start(Raytracing& rt, const Options& opt) {
-    options.iterations = opt.get("spp", options.iterations).to_integer();
-    options.max_depth = opt.get("pathlen", options.max_depth).to_integer();
     options.rr_start = opt.get("rrstart", options.rr_start).to_integer();
     options.nee = opt.get("nee", options.nee).to_bool();
     options.mis = opt.get("mis", options.mis).to_bool();
@@ -160,7 +154,7 @@ struct CPUWavefrontPTImpl {
           auto xyz = (payload.accumulated[i] / spectrum::sample_pdf()).to_xyz();
           camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, i % dimensions.x, i / dimensions.x, it);
           make_ray_payload(scene, dimensions, payload.iteration[i] + 1u, payload, i);
-          if (payload.iteration[i] == options.iterations) {
+          if (payload.iteration[i] == rt.scene().samples) {
             payload.ray_state[i] = PTRayState::Finished;
             completed_rays += 1u;
           }
@@ -201,7 +195,7 @@ struct CPUWavefrontPTImpl {
       const auto& scene = rt.scene();
       Medium::Sample medium_sample = try_sampling_medium(scene, payload, i);
       if (medium_sample.sampled_medium()) {
-        handle_sampled_medium(scene, medium_sample, options.max_depth, rt, payload, i);
+        handle_sampled_medium(scene, medium_sample, rt, payload, i);
         bool should_continue = random_continue(payload.path_length[i], options.rr_start, payload.eta[i], payload.smp[i], payload.throughput[i]);
         ray_state = should_continue ? PTRayState::ContinueIteration : PTRayState::EndIteration;
       } else if (ray_state == PTRayState::IntersectionFound) {
@@ -281,7 +275,7 @@ struct CPUWavefrontPTImpl {
       const auto& intersection = payload.intersection[i];
       const auto& mat = scene.materials[intersection.material_index];
 
-      if (options.nee && (payload.path_length[i] + 1 <= options.max_depth)) {
+      if (options.nee && (payload.path_length[i] + 1 <= rt.scene().max_path_length)) {
         uint32_t emitter_index = sample_emitter_index(scene, smp);
         SpectralResponse direct_light = {payload.spect[i].wavelength, 0.0f};
         if (payload.subsurface_sampled[i]) {
@@ -569,8 +563,6 @@ void CPUWavefrontPT::stop(Stop st) {
 
 Options CPUWavefrontPT::options() const {
   Options result = {};
-  result.add(1u, _private->options.iterations, 0xffffu, "spp", "Samples per Pixel");
-  result.add(1u, _private->options.max_depth, 65536u, "pathlen", "Maximal Path Length");
   result.add(1u, _private->options.rr_start, 65536u, "rrstart", "Start Random Path Termination at");
   result.add(_private->options.nee, "nee", "Next Event Estimation");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");

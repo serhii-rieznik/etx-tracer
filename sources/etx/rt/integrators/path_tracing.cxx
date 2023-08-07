@@ -22,6 +22,7 @@ struct CPUPathTracingImpl : public Task {
   uint32_t iteration = 0u;
   uint32_t preview_frames = 3;
   uint32_t current_scale = 1u;
+  uint32_t max_samples = 1u;
 
   PTOptions options = {};
 
@@ -33,8 +34,6 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void start(const Options& opt) {
-    options.iterations = opt.get("spp", options.iterations).to_integer();
-    options.max_depth = opt.get("pathlen", options.max_depth).to_integer();
     options.rr_start = opt.get("rrstart", options.rr_start).to_integer();
     options.nee = opt.get("nee", options.nee).to_bool();
     options.mis = opt.get("mis", options.mis).to_bool();
@@ -45,7 +44,7 @@ struct CPUPathTracingImpl : public Task {
     if (state->load() == Integrator::State::Running) {
       current_scale = 1;
     } else {
-      current_scale = max(1u, uint32_t(exp2(preview_frames)));
+      current_scale = 1u << preview_frames;
     }
     current_dimensions = camera_image.dimensions() / current_scale;
 
@@ -120,6 +119,7 @@ void CPUPathTracing::preview(const Options& opt) {
 
   if (rt.has_scene()) {
     current_state = State::Preview;
+    _private->max_samples = std::max(_private->preview_frames + 1u, rt.scene().samples);
     _private->start(opt);
   }
 }
@@ -129,6 +129,7 @@ void CPUPathTracing::run(const Options& opt) {
 
   if (rt.has_scene()) {
     current_state = State::Running;
+    _private->max_samples = rt.scene().samples;
     _private->start(opt);
   }
 }
@@ -137,7 +138,7 @@ void CPUPathTracing::update() {
   bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
 
   if (should_stop && rt.scheduler().completed(_private->current_task)) {
-    if ((current_state == State::WaitingForCompletion) || (_private->iteration + 1 >= _private->options.iterations)) {
+    if ((current_state == State::WaitingForCompletion) || (_private->iteration + 1 >= _private->max_samples)) {
       rt.scheduler().wait(_private->current_task);
       _private->current_task = {};
       if (current_state == State::Preview) {
@@ -156,7 +157,8 @@ void CPUPathTracing::update() {
       if (current_state == Integrator::State::Running) {
         _private->current_scale = 1;
       } else {
-        _private->current_scale = max(1u, uint32_t(exp2(_private->preview_frames - _private->iteration)));
+        uint32_t d_frame = (_private->preview_frames >= _private->iteration) ? (_private->preview_frames - _private->iteration) : 0u;
+        _private->current_scale = 1u << d_frame;
       }
       _private->current_dimensions = _private->camera_image.dimensions() / _private->current_scale;
 
@@ -183,8 +185,6 @@ void CPUPathTracing::stop(Stop st) {
 
 Options CPUPathTracing::options() const {
   Options result = {};
-  result.add(1u, _private->options.iterations, 0xffffu, "spp", "Samples per Pixel");
-  result.add(1u, _private->options.max_depth, 65536u, "pathlen", "Maximal Path Length");
   result.add(1u, _private->options.rr_start, 65536u, "rrstart", "Start Random Path Termination at");
   result.add(_private->options.nee, "nee", "Next Event Estimation");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");

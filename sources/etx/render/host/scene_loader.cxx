@@ -141,6 +141,8 @@ struct SceneRepresentationImpl {
     materials.clear();
     emitters.clear();
     material_mapping.clear();
+    triangle_to_material.clear();
+    triangle_to_emitter.clear();
     camera_medium_index = kInvalidIndex;
     camera_lens_shape_image_index = kInvalidIndex;
 

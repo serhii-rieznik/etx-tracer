@@ -23,8 +23,6 @@ struct ETX_ALIGNED GPUPathTracingImpl {
 
   bool start(const Options& opt, Raytracing& rt) {
     frame_time_ms = opt.get("framems", frame_time_ms).to_float();
-    gpu_data.options.iterations = opt.get("spp", gpu_data.options.iterations).to_integer();
-    gpu_data.options.max_depth = opt.get("pathlen", gpu_data.options.max_depth).to_integer();
     gpu_data.options.rr_start = opt.get("rrstart", gpu_data.options.rr_start).to_integer();
     gpu_data.options.path_per_iteration = opt.get("plen", gpu_data.options.path_per_iteration).to_integer();
     denoise = opt.get("denoise", denoise).to_bool();
@@ -80,8 +78,6 @@ bool GPUPathTracing::enabled() const {
 
 Options GPUPathTracing::options() const {
   Options result = {};
-  result.add(1u, _private->gpu_data.options.iterations, 0xffffu, "spp", "Samples per Pixel");
-  result.add(1u, _private->gpu_data.options.max_depth, 65536u, "pathlen", "Maximal Path Length");
   result.add(1u, _private->gpu_data.options.rr_start, 65536u, "rrstart", "Start Random Path Termination at");
   result.add(1u, _private->gpu_data.options.path_per_iteration, 256u, "plen", "Path Length per iteration");
   result.add(1.0f, _private->frame_time_ms, 100.0f, "framems", "CPU frame time (ms)");

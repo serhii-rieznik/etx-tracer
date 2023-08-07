@@ -36,6 +36,8 @@ struct ETX_ALIGNED Scene {
   uint64_t acceleration_structure ETX_EMPTY_INIT;
   uint32_t camera_medium_index ETX_INIT_WITH(kInvalidIndex);
   uint32_t camera_lens_shape_image_index ETX_INIT_WITH(kInvalidIndex);
+  uint32_t max_path_length ETX_INIT_WITH(65535u);
+  uint32_t samples ETX_INIT_WITH(256u);
 };
 
 struct ContinousTraceOptions {
@@ -152,7 +154,7 @@ template <class RT>
 ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp, Gather& result) {
   const auto& mtl = scene.materials[material_index].subsurface;
 
-  Sample ss_samples[3] = {
+  Sample ss_samples[kIntersectionDirections] = {
     sample(in_intersection, mtl, 0u, smp),
     sample(in_intersection, mtl, 1u, smp),
     sample(in_intersection, mtl, 2u, smp),
@@ -174,7 +176,7 @@ ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersec
 
   result = {};
   for (uint32_t i = 0; i < intersection_count; ++i) {
-    Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
+    const Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
 
     auto out_intersection = make_intersection(scene, in_intersection.w_i, intersections[i]);
 

@@ -351,20 +351,40 @@ void UI::build(double dt, const char* status) {
     }
 
     ImGui::PopStyleColor(4);
-
-    ImGui::SameLine(0.0f, wpadding.x);
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0.0f, wpadding.x);
 
-    ImGui::PushItemWidth(input_size);
+    ImGui::PushItemWidth(2.0f * input_size);
     ImGui::GetStyle().FramePadding.y = (button_size - text_size) / 2.0f;
-    ImGui::Text("Exposure:");
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::DragFloat("##exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
+    bool scene_settings_changed = false;
+    {
+      ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+      ImGui::SameLine(0.0f, wpadding.x);
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("Samples", reinterpret_cast<int*>(&_current_scene->samples));
+      ImGui::SameLine(0.0f, wpadding.x);
+    }
+    {
+      ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+      ImGui::SameLine(0.0f, wpadding.x);
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("Max Path Length", reinterpret_cast<int*>(&_current_scene->max_path_length));
+      ImGui::SameLine(0.0f, wpadding.x);
+    }
+    ImGui::PopItemWidth();
+    ImGui::PushItemWidth(input_size);
+    {
+      ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+      ImGui::SameLine(0.0f, wpadding.x);
+      ImGui::DragFloat("Exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
+      ImGui::SameLine(0.0f, wpadding.x);
+    }
     ImGui::GetStyle().FramePadding.y = fpadding.y;
     ImGui::PopItemWidth();
 
     ImGui::End();
+
+    if (scene_settings_changed && callbacks.scene_settings_changed) {
+      callbacks.scene_settings_changed();
+    }
+
   }
 
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {

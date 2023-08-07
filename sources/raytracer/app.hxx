@@ -52,6 +52,7 @@ struct RTApplication {
   void on_medium_changed(uint32_t index);
   void on_emitter_changed(uint32_t index);
   void on_camera_changed();
+  void on_scene_settings_changed();
 
  private:
   std::vector<float4> get_current_image(bool convert_to_rgb);

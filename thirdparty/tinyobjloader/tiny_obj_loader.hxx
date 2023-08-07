@@ -2296,8 +2296,9 @@ bool MaterialFileReader::operator()(const std::string& matId, std::vector<materi
 
     // https://stackoverflow.com/questions/5167625/splitting-a-c-stdstring-using-tokens-e-g
     std::vector<std::string> paths;
-    std::istringstream f(m_mtlBaseDir);
+    paths.emplace_back();
 
+    std::istringstream f(m_mtlBaseDir);
     std::string s;
     while (getline(f, s, sep)) {
       paths.push_back(s);
@@ -2377,12 +2378,21 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   }
 
   std::string baseDir = mtl_basedir ? mtl_basedir : "";
-  if (!baseDir.empty()) {
+  if (baseDir.empty() == false) {
 #ifndef _WIN32
     const char dirsep = '/';
+    for (auto& c : baseDir) {
+      if (c == '\\')
+        c = '/';
+    }
 #else
     const char dirsep = '\\';
+    for (auto& c : baseDir) {
+      if (c == '/')
+        c = '\\';
+    }
 #endif
+
     if (baseDir[baseDir.length() - 1] != dirsep)
       baseDir += dirsep;
   }

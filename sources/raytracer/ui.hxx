@@ -54,6 +54,7 @@ struct UI {
     std::function<void(uint32_t)> medium_changed;
     std::function<void(uint32_t)> emitter_changed;
     std::function<void()> camera_changed;
+    std::function<void()> scene_settings_changed;
   } callbacks;
 
  private:

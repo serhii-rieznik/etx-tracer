@@ -45,6 +45,7 @@ void RTApplication::init() {
   ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
   ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this);
+  ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -364,6 +365,10 @@ void RTApplication::on_emitter_changed(uint32_t index) {
 }
 
 void RTApplication::on_camera_changed() {
+  _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_scene_settings_changed() {
   _current_integrator->preview(ui.integrator_options());
 }
 

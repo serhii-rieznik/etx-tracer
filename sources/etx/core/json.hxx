@@ -18,7 +18,14 @@ inline nlohmann::json json_from_file(const char* filename) {
   fread(json_string.data(), 1, file_size, fin);
   fclose(fin);
 
-  return nlohmann::json::parse(json_string);
+  nlohmann::json result = {};
+  try {
+    auto parsed = nlohmann::json::parse(json_string);
+    result = parsed;
+  } catch (...) {
+  }
+
+  return result;
 }
 
 inline void json_to_file(const nlohmann::json& js, const char* filename) {
