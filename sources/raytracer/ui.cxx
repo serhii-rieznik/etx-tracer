@@ -353,22 +353,29 @@ void UI::build(double dt, const char* status) {
     ImGui::PopStyleColor(4);
     ImGui::SameLine(0.0f, wpadding.x);
 
-    ImGui::PushItemWidth(2.0f * input_size);
     ImGui::GetStyle().FramePadding.y = (button_size - text_size) / 2.0f;
-    bool scene_settings_changed = false;
-    {
-      ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-      ImGui::SameLine(0.0f, wpadding.x);
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt("Samples", reinterpret_cast<int*>(&_current_scene->samples));
-      ImGui::SameLine(0.0f, wpadding.x);
+
+    if (_current_scene != nullptr) {
+      bool scene_settings_changed = false;
+      ImGui::PushItemWidth(2.0f * input_size);
+      {
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine(0.0f, wpadding.x);
+        scene_settings_changed = scene_settings_changed || ImGui::InputInt("Samples", reinterpret_cast<int*>(&_current_scene->samples));
+        ImGui::SameLine(0.0f, wpadding.x);
+      }
+      {
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine(0.0f, wpadding.x);
+        scene_settings_changed = scene_settings_changed || ImGui::InputInt("Max Path Length", reinterpret_cast<int*>(&_current_scene->max_path_length));
+        ImGui::SameLine(0.0f, wpadding.x);
+      }
+      ImGui::PopItemWidth();
+      if (scene_settings_changed && callbacks.scene_settings_changed) {
+        callbacks.scene_settings_changed();
+      }
     }
-    {
-      ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-      ImGui::SameLine(0.0f, wpadding.x);
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt("Max Path Length", reinterpret_cast<int*>(&_current_scene->max_path_length));
-      ImGui::SameLine(0.0f, wpadding.x);
-    }
-    ImGui::PopItemWidth();
+
     ImGui::PushItemWidth(input_size);
     {
       ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
@@ -380,11 +387,6 @@ void UI::build(double dt, const char* status) {
     ImGui::PopItemWidth();
 
     ImGui::End();
-
-    if (scene_settings_changed && callbacks.scene_settings_changed) {
-      callbacks.scene_settings_changed();
-    }
-
   }
 
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
