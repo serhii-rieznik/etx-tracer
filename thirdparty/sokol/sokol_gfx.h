@@ -4910,6 +4910,9 @@ static void _sg_log(sg_log_item log_item, uint32_t log_level, const char* msg, u
         _sg.desc.logger.func("sg", log_level, log_item, msg, line_nr, filename, _sg.desc.logger.user_data);
     }
     else {
+        if (msg != nullptr) {
+          printf("%s\n", msg);
+        }
         // for log level PANIC it would be 'undefined behaviour' to continue
         if (log_level == 0) {
             abort();
