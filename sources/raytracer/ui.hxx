@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/core/options.hxx>
 
@@ -59,6 +59,7 @@ struct UI {
 
  private:
   bool build_options(Options&);
+  void quit();
   void select_scene_file();
   void save_scene_file();
   void save_image(SaveImageMode mode);

@@ -54,7 +54,7 @@ function(create_library folder)
 endfunction(create_library)
 
 create_library(core)
-target_link_libraries(etx-core PUBLIC json)
+target_link_libraries(etx-core PUBLIC json nativefiledialog)
 target_include_directories(etx-core PUBLIC ..)
 
 if(APPLE)

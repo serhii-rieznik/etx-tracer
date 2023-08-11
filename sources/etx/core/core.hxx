@@ -25,8 +25,8 @@ struct TimeMeasure {
 
 void init_platform();
 
-std::string open_file(const std::vector<std::string>& filters);
-std::string save_file(const std::vector<std::string>& filters);
+std::string open_file(const char* filters);
+std::string save_file(const char* filters);
 
 bool load_binary_file(const char* filename, std::vector<uint8_t>& data);
 float get_cpu_load();

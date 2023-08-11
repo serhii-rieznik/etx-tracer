@@ -59,7 +59,7 @@ void RenderContext::init() {
   context.context.d3d11.device_context = sapp_d3d11_get_device_context();
   context.context.d3d11.depth_stencil_view_cb = sapp_d3d11_get_depth_stencil_view;
   context.context.d3d11.render_target_view_cb = sapp_d3d11_get_render_target_view;
-  
+
   context.context.metal.device = sapp_metal_get_device();
   context.context.metal.drawable_cb = []() {
     return sapp_metal_get_drawable();
@@ -86,7 +86,7 @@ void RenderContext::init() {
   shader_desc.fs.images[2].name = "reference_image";
   shader_desc.fs.images[2].sampler_type = SG_SAMPLERTYPE_FLOAT;
   shader_desc.fs.uniform_blocks[0].size = sizeof(ShaderConstants);
-  
+
 #if (ETX_PLATFORM_WINDOWS)
   shader_desc.vs.source = shader_source_hlsl;
   shader_desc.fs.source = shader_source_hlsl;
@@ -100,7 +100,7 @@ void RenderContext::init() {
   sg_pipeline_desc pipeline_desc = {};
   pipeline_desc.shader = _private->output_shader;
   _private->output_pipeline = sg_make_pipeline(pipeline_desc);
-  
+
   apply_reference_image(_private->def_image_handle);
 
 #if (ETX_PLATFORM_WINDOWS)

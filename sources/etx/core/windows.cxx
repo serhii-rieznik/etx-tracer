@@ -1,6 +1,8 @@
 #include <etx/core/windows.hxx>
 #include <etx/core/log.hxx>
 
+#include <nfd.h>
+
 #if (ETX_PLATFORM_WINDOWS)
 
 #pragma comment(lib, "dbghelp.lib")
@@ -76,48 +78,6 @@ void init_platform() {
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
 }
 
-std::string open_file(const std::vector<std::string>& filters) {
-  char name_buffer[MAX_PATH] = {};
-
-  size_t fp = 0;
-  char filter_buffer[2048] = {};
-  for (const std::string& w : filters) {
-    memcpy(filter_buffer + fp, w.data(), w.length());
-    fp += 1 + w.length();
-  }
-
-  OPENFILENAME of = {};
-  of.lStructSize = sizeof(of);
-  of.hInstance = GetModuleHandle(nullptr);
-  of.Flags = OFN_ENABLESIZING | OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
-  of.lpstrFile = name_buffer;
-  of.nMaxFile = MAX_PATH;
-  of.lpstrFilter = filter_buffer;
-  of.nFilterIndex = filters.empty() ? 0 : 1;
-  return GetOpenFileNameA(&of) ? of.lpstrFile : "";
-}
-
-std::string save_file(const std::vector<std::string>& filters) {
-  char name_buffer[MAX_PATH] = {};
-
-  size_t fp = 0;
-  char filter_buffer[2048] = {};
-  for (const std::string& w : filters) {
-    memcpy(filter_buffer + fp, w.data(), w.length());
-    fp += 1 + w.length();
-  }
-
-  OPENFILENAME of = {};
-  of.lStructSize = sizeof(of);
-  of.hInstance = GetModuleHandle(nullptr);
-  of.Flags = OFN_ENABLESIZING | OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_OVERWRITEPROMPT;
-  of.lpstrFile = name_buffer;
-  of.nMaxFile = MAX_PATH;
-  of.lpstrFilter = filter_buffer;
-  of.nFilterIndex = filters.empty() ? 0 : 1;
-  return GetSaveFileName(&of) ? of.lpstrFile : "";
-}
-
 float get_cpu_load() {
   auto CalculateCPULoad = [](unsigned long long idleTicks, unsigned long long totalTicks) {
     static unsigned long long _previousTotalTicks = 0;
@@ -180,14 +140,22 @@ float get_cpu_load() {
   return 0.0f;
 }
 
-std::string open_file(const std::vector<std::string>& filters) {
-  return {};
-}
-
-std::string save_file(const std::vector<std::string>& filters) {
-  return {};
-}
-
-}
+}  // namespace etx
 
 #endif
+
+namespace etx {
+
+std::string open_file(const char* filters) {
+  nfdchar_t* selected_path = nullptr;
+  nfdresult_t result = NFD_OpenDialog(filters, nullptr, &selected_path);
+  return (result == NFD_OKAY) ? selected_path : std::string{};
+}
+
+std::string save_file(const char* filters) {
+  nfdchar_t* selected_path = nullptr;
+  nfdresult_t result = NFD_SaveDialog(filters, nullptr, &selected_path);
+  return (result == NFD_OKAY) ? selected_path : std::string{};
+}
+
+}  // namespace etx

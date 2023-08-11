@@ -87,7 +87,7 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
       uint32_t index = data.position_to_index(samples[i].position(scene));
       _position_to_index[i] = index;
 #if (ETX_PLATFORM_APPLE)
-      #warning Proper atomics
+#warning Proper atomics
       auto iptr = ptr + index;
       *iptr++;
 #else

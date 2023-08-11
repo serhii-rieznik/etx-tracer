@@ -546,8 +546,12 @@ bool UI::handle_event(const sapp_event* e) {
   bool has_alt = modifiers & SAPP_MODIFIER_ALT;
   bool has_shift = modifiers & SAPP_MODIFIER_SHIFT;
 
-  if (modifiers & SAPP_MODIFIER_CTRL) {
+  if ((modifiers & SAPP_MODIFIER_CTRL) || (modifiers & SAPP_MODIFIER_SUPER)) {
     switch (e->key_code) {
+      case SAPP_KEYCODE_Q: {
+        quit();
+        break;
+      }
       case SAPP_KEYCODE_O: {
         select_scene_file();
         break;
@@ -635,32 +639,33 @@ void UI::set_current_integrator(Integrator* i) {
   _integrator_options = _current_integrator ? _current_integrator->options() : Options{};
 }
 
+void UI::quit() {
+  sapp_quit();
+}
+
 void UI::select_scene_file() {
-  auto selected_file = open_file({"Supported formats", "*.json;*.obj"});  // TODO : add *.gltf;*.pbrt
+  auto selected_file = open_file("json;obj");  // TODO : add gltf;pbrt
   if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
     callbacks.scene_file_selected(selected_file);
   }
 }
 
 void UI::save_scene_file() {
-  auto selected_file = save_file({"Scene description", "*.json"});
+  auto selected_file = save_file("json");
   if ((selected_file.empty() == false) && callbacks.save_scene_file_selected) {
     callbacks.save_scene_file_selected(selected_file);
   }
 }
 
 void UI::save_image(SaveImageMode mode) {
-  auto selected_file = save_file({
-    mode == SaveImageMode::TonemappedLDR ? "PNG images" : "EXR images",
-    mode == SaveImageMode::TonemappedLDR ? "*.png" : "*.exr",
-  });
+  auto selected_file = save_file(mode == SaveImageMode::TonemappedLDR ? "png" : "exr");
   if ((selected_file.empty() == false) && callbacks.save_image_selected) {
     callbacks.save_image_selected(selected_file, mode);
   }
 }
 
 void UI::load_image() {
-  auto selected_file = open_file({"Supported images", "*.exr;*.png;*.hdr;*.pfm;*.jpg;*.bmp;*.tga"});
+  auto selected_file = open_file("exr;png;hdr;pfm;jpg;bmp;tga");
   if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
     callbacks.reference_image_selected(selected_file);
   }
