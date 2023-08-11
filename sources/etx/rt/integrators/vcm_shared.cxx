@@ -1,4 +1,4 @@
-#include <etx/rt/integrators/vcm_spatial_grid.hxx>
+ #include <etx/rt/integrators/vcm_spatial_grid.hxx>
 
 namespace etx {
 
@@ -81,18 +81,12 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
 
   static_assert(sizeof(std::atomic_int) == sizeof(uint32_t));
 
-  auto ptr = reinterpret_cast<volatile long*>(_cell_ends.data());
+  auto ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
   scheduler.execute(uint32_t(sample_count), [&scene, &samples, this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       uint32_t index = data.position_to_index(samples[i].position(scene));
       _position_to_index[i] = index;
-#if (ETX_PLATFORM_APPLE)
-#warning Proper atomics
-      auto iptr = ptr + index;
-      *iptr++;
-#else
-      _InterlockedIncrement(ptr + index);
-#endif
+      atomic_inc(ptr + index);
     }
   });
 
@@ -103,17 +97,11 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     sum += t;
   }
 
-  ptr = reinterpret_cast<volatile long*>(_cell_ends.data());
+  ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
   scheduler.execute(uint32_t(sample_count), [this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       uint32_t index = _position_to_index[i];
-#if (ETX_PLATFORM_APPLE)
-#warning Fix atomics
-      auto iptr = ptr + index;
-      uint32_t target_cell = *iptr++;
-#else
-      uint32_t target_cell = _InterlockedIncrement(ptr + index);
-#endif
+      uint32_t target_cell = atomic_inc(ptr + index);
       _indices[target_cell] = i;
     }
   });

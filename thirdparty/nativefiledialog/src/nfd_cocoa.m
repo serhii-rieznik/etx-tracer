@@ -17,12 +17,12 @@ static NSArray* BuildAllowedFileTypes(const char* filterList) {
   size_t filterListLen = strlen(filterList);
   char* p_typebuf = typebuf;
   for (size_t i = 0; i < filterListLen + 1; ++i) {
-    if (filterList[i] == ',' || filterList[i] == ';' || filterList[i] == '\0') {
+    if ((filterList[i] == ',') || (filterList[i] == ';') || (filterList[i] == '\0')) {
       if (filterList[i] != '\0')
         ++p_typebuf;
 
       *p_typebuf = '\0';
-      if (i < filterListLen) {
+      {
         NSString* thisType = [NSString stringWithUTF8String:typebuf];
         [buildFilterList addObject:thisType];
         p_typebuf = typebuf;

@@ -28,6 +28,10 @@ void init_platform();
 std::string open_file(const char* filters);
 std::string save_file(const char* filters);
 
+uint32_t atomic_inc(int32_t* ptr);
+uint32_t atomic_compare_exchange(int32_t* ptr, int32_t old_value, int32_t new_value);
+void atomic_add_float(float* ptr, float value);
+
 bool load_binary_file(const char* filename, std::vector<uint8_t>& data);
 float get_cpu_load();
 

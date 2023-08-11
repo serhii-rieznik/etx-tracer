@@ -1,4 +1,4 @@
-﻿#include <sokol_app.h>
+#include <sokol_app.h>
 
 #include <etx/render/shared/camera.hxx>
 
@@ -14,7 +14,12 @@ struct CameraController {
   void handle_event(const sapp_event* e) {
     switch (e->type) {
       case SAPP_EVENTTYPE_MOUSE_SCROLL: {
-        _move_speed = clamp(_move_speed + e->scroll_y / 256.0f, 1.0f / 1000.0f, 1000.0f);
+#if (ETX_PLATFORM_APPLE)
+        float scale_factor = -1.0f / 256.0f;
+#else
+        float scale_factor = 1.0f / 256.0f;
+#endif
+        _move_speed = clamp(_move_speed + e->scroll_y * scale_factor, 1.0f / 1000.0f, 1000.0f);
         break;
       }
       case SAPP_EVENTTYPE_KEY_DOWN: {

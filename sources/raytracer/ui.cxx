@@ -12,6 +12,8 @@
 #include <imgui_internal.h>
 #include <util/sokol_imgui.h>
 
+#include <unistd.h>
+
 namespace etx {
 
 inline void decrease_exposure(ViewOptions& o) {
@@ -55,7 +57,10 @@ void UI::initialize() {
     int font_width = 0;
     int font_height = 0;
     int bytes_per_pixel = 0;
-    auto font = io.Fonts->AddFontFromFileTTF("fonts/roboto.ttf", 15.0f * sapp_dpi_scale(), &font_config, nullptr);
+    
+    char font_file[1024] = {};
+    env().file_in_data("fonts/roboto.ttf", font_file, sizeof(font_file));
+    auto font = io.Fonts->AddFontFromFileTTF(font_file, 15.0f * sapp_dpi_scale(), &font_config, nullptr);
     font->Scale = 1.0f / sapp_dpi_scale();
     io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width, &font_height, &bytes_per_pixel);
 
