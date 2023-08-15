@@ -12,7 +12,9 @@
 #include <imgui_internal.h>
 #include <util/sokol_imgui.h>
 
+#if (ETX_PLATFORM_APPLE)
 #include <unistd.h>
+#endif
 
 namespace etx {
 

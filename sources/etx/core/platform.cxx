@@ -12,7 +12,8 @@ uint32_t atomic_compare_exchange(int32_t* ptr, int32_t old_value, int32_t new_va
 #if (ETX_PLATFORM_APPLE)
   return OSAtomicCompareAndSwap32(old_value, new_value, ptr);
 #elif (ETX_PLATFORM_WINDOWS)
-#error NO
+  static_assert(sizeof(long) == sizeof(int32_t));
+  return _InterlockedCompareExchange(reinterpret_cast<volatile long*>(ptr), new_value, old_value);
 #endif
 }
 
@@ -20,7 +21,8 @@ uint32_t atomic_inc(int32_t* ptr) {
 #if (ETX_PLATFORM_APPLE)
   return OSAtomicAdd32(1, ptr);
 #elif (ETX_PLATFORM_WINDOWS)
-#error NO
+  static_assert(sizeof(long) == sizeof(int32_t));
+  return _InterlockedIncrement(reinterpret_cast<volatile long*>(ptr));
 #endif
 }
 
@@ -34,4 +36,4 @@ void atomic_add_float(float* ptr, float value) {
   } while (atomic_compare_exchange(iptr, new_value, old_value) != old_value);
 }
 
-}
+}  // namespace etx
