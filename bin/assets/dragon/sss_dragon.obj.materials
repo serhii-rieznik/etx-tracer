@@ -1,22 +1,26 @@
 newmtl et::dir
-color 1.901 2.000 2.178
+color nblackbody 6500 scale 4.0
 direction 0.696 0.525 0.489
 angular_diameter 0.573
 
+newmtl et::medium
+id interior
+sigma_a 0.25 0.5 0.75
+sigma_s 0.5 5.0 50.0
+
 newmtl dragon
 material class plastic
-Pr 0.103
-Kd 0.449 0.449 0.449
-Ks 1.000 1.000 1.000
-Kt 1.000 1.000 1.000
-subsurface 2.000 0.500 0.125
+int_ior plastic
+int_medium interior
+thinfilm range 1.0 5000.0 ior diamond
+subsurface distance 2.0 0.500 0.125 scale 0.2 class exact
+Pr 0.05
+Kd 0.8 0.8 0.8
+Kt 0.6666 0.6666 0.6666
 
 newmtl plane
 material class diffuse
-Pr 0.000
-Kd 0.500 0.500 0.500
-Ks 1.000 1.000 1.000
-Kt 1.000 1.000 1.000
+Kd 0.18 0.18 0.18
 
 newmtl no-light0
 material class diffuse

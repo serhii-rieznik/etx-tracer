@@ -27,8 +27,15 @@ struct ETX_ALIGNED Thinfilm {
 };
 
 struct SubsurfaceMaterial {
+  enum class Class : uint32_t {
+    Disabled,
+    RandomWalk,
+    ChristensenBurley,
+  };
+
+  Class cls = Class::Disabled;
   SpectralDistribution scattering_distance;
-  float scattering_distance_scale = 0.2f;
+  float scale = 0.2f;
 };
 
 struct ETX_ALIGNED Material {
@@ -40,7 +47,6 @@ struct ETX_ALIGNED Material {
     Thinfilm,
     Mirror,
     Boundary,
-    Coating,
     Velvet,
 
     Count,
@@ -67,10 +73,6 @@ struct ETX_ALIGNED Material {
 
   float metalness = {};
   float normal_scale = 1.0f;
-
-  bool has_subsurface_scattering() const {
-    return ((cls == Class::Diffuse) || (cls == Class::Plastic) || (cls == Class::Velvet) || (cls == Class::Coating)) && (subsurface.scattering_distance.is_zero() == false);
-  }
 };
 
 }  // namespace etx

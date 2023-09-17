@@ -59,7 +59,7 @@ void UI::initialize() {
     int font_width = 0;
     int font_height = 0;
     int bytes_per_pixel = 0;
-    
+
     char font_file[1024] = {};
     env().file_in_data("fonts/roboto.ttf", font_file, sizeof(font_file));
     auto font = io.Fonts->AddFontFromFileTTF(font_file, 15.0f * sapp_dpi_scale(), &font_config, nullptr);
@@ -175,11 +175,11 @@ bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer
     changed = true;
   }
 
-  if (linear) {
-    if (ImGui::Button("Clear", {})) {
-      spd = SpectralDistribution::from_constant(0.0f);
-      changed = true;
-    }
+  char buffer[128] = {};
+  snprintf(buffer, sizeof(buffer), "Clear %s", name);
+  if (linear && ImGui::Button(buffer)) {
+    spd = SpectralDistribution::from_constant(0.0f);
+    changed = true;
   }
 
   return changed;
@@ -703,7 +703,27 @@ bool UI::build_material(Material& material) {
   changed |= igSpectrumPicker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
   changed |= igSpectrumPicker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
   changed |= igSpectrumPicker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);
-  changed |= igSpectrumPicker("Subsurface", material.subsurface.scattering_distance, _current_scene->spectrums, true);
+  ImGui::Separator();
+
+  ImGui::Text("%s", "Subsurface Scattering");
+  changed |= ImGui::Combo("Class", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley");
+  if (material.subsurface.cls == SubsurfaceMaterial::Class::RandomWalk) {
+    ImGui::Text("Random Walk SSS");
+    ImGui::Text("controlled by internal meidum");
+  } else if (material.subsurface.cls == SubsurfaceMaterial::Class::ChristensenBurley) {
+    changed |= igSpectrumPicker("Subsurface Distance", material.subsurface.scattering_distance, _current_scene->spectrums, true);
+    ImGui::Text("%s", "Subsurface Distance Scale");
+    changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
+  }
+  ImGui::Separator();
+
+  ImGui::Text("%s", "Thinfilm Thickness Range (nm)");
+  ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
+  changed |= ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
+  changed |= ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
+  ImGui::Separator();
 
   auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
     bool has_medium = medium != kInvalidIndex;
@@ -712,7 +732,7 @@ bool UI::build_material(Material& material) {
       int32_t medium_index = static_cast<int32_t>(medium);
       if (medium_index == -1)
         medium_index = 0;
-      changed |= ImGui::SliderInt("##medium_index", &medium_index, 0, int32_t(medium_count), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
+      changed |= ImGui::SliderInt("##medium_index", &medium_index, 0, int32_t(medium_count - 1u), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
       medium = uint32_t(medium_index);
     } else {
       medium = kInvalidIndex;

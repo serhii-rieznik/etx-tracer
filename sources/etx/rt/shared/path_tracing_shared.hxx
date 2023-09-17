@@ -100,7 +100,7 @@ ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload
     return {};
   }
 
-  auto medium_sample = scene.mediums[payload.medium].sample(payload.spect, payload.smp, payload.ray.o, payload.ray.d, max_t);
+  auto medium_sample = scene.mediums[payload.medium].sample(payload.spect, payload.throughput, payload.smp, payload.ray.o, payload.ray.d, max_t);
   payload.throughput *= medium_sample.weight;
   ETX_VALIDATE(payload.throughput);
   return medium_sample;
@@ -111,7 +111,8 @@ ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload
     return {};
   }
 
-  auto medium_sample = scene.mediums[payload.medium[i]].sample(payload.spect[i], payload.smp[i], payload.ray[i].o, payload.ray[i].d, payload.intersection[i].t);
+  auto medium_sample =
+    scene.mediums[payload.medium[i]].sample(payload.spect[i], payload.throughput[i], payload.smp[i], payload.ray[i].o, payload.ray[i].d, payload.intersection[i].t);
   payload.throughput[i] *= medium_sample.weight;
   ETX_VALIDATE(payload.throughput[i]);
   return medium_sample;
@@ -134,7 +135,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
     }
   }
 
-  float3 w_o = medium.sample_phase_function(payload.spect, payload.smp, medium_sample.pos, payload.ray.d);
+  float3 w_o = medium.sample_phase_function(payload.spect, payload.smp, payload.ray.d);
   payload.sampled_bsdf_pdf = medium.phase_function(payload.spect, medium_sample.pos, payload.ray.d, w_o);
   payload.mis_weight = true;
   payload.ray.o = medium_sample.pos;
@@ -160,7 +161,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
     }
   }
 
-  float3 w_o = medium.sample_phase_function(payload.spect[i], payload.smp[i], medium_sample.pos, payload.ray[i].d);
+  float3 w_o = medium.sample_phase_function(payload.spect[i], payload.smp[i], payload.ray[i].d);
   payload.sampled_bsdf_pdf[i] = medium.phase_function(payload.spect[i], medium_sample.pos, payload.ray[i].d, w_o);
   payload.mis_weight[i] = true;
   payload.ray[i].o = medium_sample.pos;
@@ -250,10 +251,10 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   handle_direct_emitter(scene, tri, intersection, rt, options.mis, payload);
 
   auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i}, mat, scene, payload.smp);
-  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
+  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
 
   subsurface::Gather ss_gather = {};
-  bool subsurface_sampled = subsurface_path && subsurface::gather(payload.spect, scene, intersection, intersection.material_index, rt, payload.smp, ss_gather);
+  bool subsurface_sampled = subsurface_path && subsurface::gather(payload.spect, scene, intersection, rt, payload.smp, ss_gather);
 
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling

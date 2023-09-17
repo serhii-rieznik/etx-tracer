@@ -345,7 +345,7 @@ ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathS
   if (state.medium_index == kInvalidIndex)
     return {};
 
-  auto medium_sample = scene.mediums[state.medium_index].sample(state.spect, state.sampler, state.ray.o, state.ray.d, max_t);
+  auto medium_sample = scene.mediums[state.medium_index].sample(state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
   state.throughput *= medium_sample.weight;
 
   ETX_VALIDATE(state.throughput);
@@ -358,7 +358,7 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
 
   const auto& medium = scene.mediums[state.medium_index];
   state.ray.o = medium_sample.pos;
-  state.ray.d = medium.sample_phase_function(state.spect, state.sampler, medium_sample.pos, state.ray.d);
+  state.ray.d = medium.sample_phase_function(state.spect, state.sampler, state.ray.d);
 
   return vcm_next_medium_ray(options, state);
 }
@@ -735,8 +735,8 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   vcm_handle_direct_hit(scene, options, intersection, state);
 
   subsurface::Gather ss_gather = {};
-  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
-  bool subsurface_sampled = subsurface_path && subsurface::gather(state.spect, scene, intersection, intersection.material_index, rt, state.sampler, ss_gather);
+  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
+  bool subsurface_sampled = subsurface_path && subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather);
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     if (subsurface_sampled) {
@@ -809,8 +809,8 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
   vcm_update_light_vcm(intersection, state);
 
   subsurface::Gather ss_gather = {};
-  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
-  bool subsurface_sampled = subsurface::gather(state.spect, scene, intersection, intersection.material_index, rt, state.sampler, ss_gather);
+  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
+  bool subsurface_sampled = subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather);
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     result.add_vertex = true;

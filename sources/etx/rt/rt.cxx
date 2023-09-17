@@ -298,6 +298,48 @@ const Scene& Raytracing::gpu_scene() const {
   return _private->gpu.scene;
 }
 
+bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t material_id, Intersection& result_intersection, Sampler& smp) const {
+  struct IntersectionContextExt {
+    RTCRayQueryContext context;
+    IntersectionBase i;
+    const Scene* scene;
+    Sampler* smp;
+    uint32_t m_id;
+  } context = {{}, {{}, kInvalidIndex, 0.0f}, &scene, &smp, material_id};
+
+  auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
+    auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
+    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    float3 bc = barycentrics({u, v});
+    const auto& scene = *ctx->scene;
+    const auto material_index = ctx->scene->triangle_to_material[triangle_index];
+    if (material_index != ctx->m_id) {
+      *args->valid = 0;
+      return;
+    }
+
+    const auto& tri = ctx->scene->triangles[triangle_index];
+    const auto& mat = ctx->scene->materials[material_index];
+    if (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp)) {
+      *args->valid = 0;
+      return;
+    }
+
+    ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0)};
+  };
+
+  ETX_ASSERT(_private != nullptr);
+  _private->trace_with_function(r, &context.context, filter_funtion);
+
+  if (context.i.triangle_index == kInvalidIndex)
+    return false;
+
+  result_intersection = make_intersection(scene, r.d, context.i);
+  return true;
+}
+
 uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const ContinousTraceOptions& options, Sampler& smp) const {
   struct IntersectionContextExt {
     RTCRayQueryContext context;
@@ -416,7 +458,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     }
 
     if (ctx->medium != kInvalidIndex) {
-      float dt = t - ctx->t;
+      float dt = fmaxf(0.0f, t - ctx->t);
       ctx->value *= scene.mediums[ctx->medium].transmittance(ctx->spect, *ctx->smp, ctx->origin, ctx->direction, dt);
       ETX_VALIDATE(ctx->value);
     }

@@ -679,7 +679,7 @@ inline std::vector<const char*> split_params(char* data) {
   return params;
 }
 
-inline SpectralDistribution load_reflectance_spectrum(char* data_buffer) {
+inline SpectralDistribution load_reflectance_spectrum(const char* data_buffer) {
   SpectralDistribution reflection_spectrum = SpectralDistribution::from_constant(0.0f);
   float value[3] = {};
   if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
@@ -731,7 +731,7 @@ inline auto get_param(const tinyobj::material_t& m, const char* param, char buff
 }
 
 Material::Class material_string_to_class(const char* s) {
-  if ((strcmp(s, "diffuse") == 0) || (strcmp(s, "translucent") == 0) || (strcmp(s, "subsurface") == 0))
+  if ((strcmp(s, "diffuse") == 0) || (strcmp(s, "translucent") == 0) || (strcmp(s, "  ace") == 0))
     return Material::Class::Diffuse;
   else if (strcmp(s, "plastic") == 0)
     return Material::Class::Plastic;
@@ -745,8 +745,6 @@ Material::Class material_string_to_class(const char* s) {
     return Material::Class::Mirror;
   else if (strcmp(s, "boundary") == 0)
     return Material::Class::Boundary;
-  else if (strcmp(s, "coating") == 0)
-    return Material::Class::Coating;
   else if (strcmp(s, "velvet") == 0)
     return Material::Class::Velvet;
   else {
@@ -764,7 +762,6 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "thinfilm",
     "mirror",
     "boundary",
-    "coating",
     "velvet",
     "undefined",
   };
@@ -1218,8 +1215,30 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       if (get_param(material, "subsurface", data_buffer)) {
-        mtl.subsurface.scattering_distance = load_reflectance_spectrum(data_buffer);
-        mtl.subsurface.scattering_distance_scale = 0.2f;
+        mtl.subsurface.cls = SubsurfaceMaterial::Class::RandomWalk;
+
+        auto params = split_params(data_buffer);
+        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+          if ((strcmp(params[i], "distance") == 0) && (i + 3 < e)) {
+            float dr = static_cast<float>(atof(params[i + 1]));
+            float dg = static_cast<float>(atof(params[i + 2]));
+            float db = static_cast<float>(atof(params[i + 3]));
+            mtl.subsurface.scattering_distance = rgb::make_reflectance_spd({dr, dg, db}, spectrums());
+            i += 3;
+          }
+
+          if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+            mtl.subsurface.scale = static_cast<float>(atof(params[i + 1]));
+            i += 1;
+          }
+
+          if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
+            if (strcmp(params[i + 1], "approximate") == 0) {
+              mtl.subsurface.cls = SubsurfaceMaterial::Class::ChristensenBurley;
+            }
+            i += 1;
+          }
+        }
       }
     }
   }

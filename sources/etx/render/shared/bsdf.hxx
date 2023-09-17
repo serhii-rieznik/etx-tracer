@@ -281,7 +281,7 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
   auto delta_21 = int_ior.real() > film_ior.real() ? 0.0f : kPi;
   auto phase_shift = delta_10 + delta_21;
   auto phi = (kDoublePi * 2.0f * thickness * cos_theta_1 + phase_shift * film_ior) / wavelength;
-  auto r10 = reflectance(film_ior, cos_theta_1, ext_ior, cos_theta_0);
+  auto r10 = reflectance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
   auto r12 = reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
   auto t01 = transmittance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
   auto t12 = transmittance(film_ior, cos_theta_1, int_ior, cos_theta_2);

@@ -31,8 +31,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   result.pdf = kInvPi * n_dot_o * (1.0f - f);
 
   if (reflection) {
-    bsdf += specular;
-    result.pdf += 1.0f;
+    bsdf += fr * specular;
+    result.pdf += f;
   }
 
   result.weight = bsdf / result.pdf;
@@ -52,18 +52,18 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto eta_e = mtl.ext_ior(data.spectrum_sample);
   auto eta_i = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  auto fr = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
+  auto inv_fr = 1.0f - fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
 
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
   BSDFEval result;
-  result.func = diffuse * (kInvPi * (1.0f - fr));
+  result.func = diffuse * (kInvPi * inv_fr);
   ETX_VALIDATE(result.func);
-  result.bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr));
+  result.bsdf = diffuse * (kInvPi * n_dot_o * inv_fr);
   ETX_VALIDATE(result.bsdf);
   result.weight = diffuse;
   ETX_VALIDATE(result.weight);
-  result.pdf = kInvPi * n_dot_o * (1.0f - fr.monochromatic());
+  result.pdf = kInvPi * n_dot_o * inv_fr.monochromatic();
   ETX_VALIDATE(result.pdf);
   return result;
 }

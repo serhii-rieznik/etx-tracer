@@ -205,7 +205,7 @@ struct CPUBidirectionalImpl : public Task {
 
       Medium::Sample medium_sample = {};
       if (medium_index != kInvalidIndex) {
-        medium_sample = rt.scene().mediums[medium_index].sample(spect, smp, ray.o, ray.d, found_intersection ? intersection.t : kMaxFloat);
+        medium_sample = rt.scene().mediums[medium_index].sample(spect, throughput, smp, ray.o, ray.d, found_intersection ? intersection.t : kMaxFloat);
         throughput *= medium_sample.weight;
         ETX_VALIDATE(throughput);
       }
@@ -214,7 +214,7 @@ struct CPUBidirectionalImpl : public Task {
         const auto& medium = rt.scene().mediums[medium_index];
 
         float3 w_i = ray.d;
-        float3 w_o = medium.sample_phase_function(spect, smp, medium_sample.pos, w_i);
+        float3 w_o = medium.sample_phase_function(spect, smp, w_i);
 
         auto& v = path.emplace_back(medium_sample, w_i);
         auto& w = path[path.size() - 2];

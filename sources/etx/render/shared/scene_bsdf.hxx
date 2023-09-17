@@ -17,7 +17,6 @@ ETX_DECLARE_BSDF(Dielectric);
 ETX_DECLARE_BSDF(Thinfilm);
 ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
-ETX_DECLARE_BSDF(Coating);
 ETX_DECLARE_BSDF(Velvet);
 
 #define CASE_IMPL(CLS, FUNC, ...) \
@@ -38,7 +37,6 @@ ETX_DECLARE_BSDF(Velvet);
     MACRO(Thinfilm);                        \
     MACRO(Mirror);                          \
     MACRO(Boundary);                        \
-    MACRO(Coating);                         \
     MACRO(Velvet);                          \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
@@ -105,17 +103,6 @@ namespace bsdf {
 #undef CASE_IMPL
 }  // namespace bsdf
 
-ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene) {
-  SpectralResponse result = img.spectrum(spect);
-
-  if (img.image_index != kInvalidIndex) {
-    float4 eval = scene.images[img.image_index].evaluate(uv);
-    result *= rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_reflection);
-    ETX_VALIDATE(result);
-  }
-  return result;
-}
-
 ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene) {
   if (film.max_thickness * film.min_thickness <= 0.0f) {
     return {{}, 0.0f};
@@ -146,7 +133,6 @@ ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const Spe
 #include <etx/render/shared/bsdf_external.hxx>
 #include <etx/render/shared/bsdf_conductor.hxx>
 #include <etx/render/shared/bsdf_dielectric.hxx>
-#include <etx/render/shared/bsdf_coating.hxx>
 #include <etx/render/shared/bsdf_plastic.hxx>
 #include <etx/render/shared/bsdf_various.hxx>
 #include <etx/render/shared/bsdf_velvet.hxx>

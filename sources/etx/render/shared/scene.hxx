@@ -148,20 +148,115 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
   return false;
 }
 
+ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene) {
+  SpectralResponse result = img.spectrum(spect);
+
+  if (img.image_index != kInvalidIndex) {
+    float4 eval = scene.images[img.image_index].evaluate(uv);
+    result *= rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_reflection);
+    ETX_VALIDATE(result);
+  }
+  return result;
+}
+
 namespace subsurface {
 
 template <class RT>
-ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp, Gather& result) {
-  const auto& mtl = scene.materials[material_index].subsurface;
+ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
+  constexpr uint32_t kMaxIterations = 1024u;
+  constexpr float kUniformPDF = 1.0f / float(SpectralResponse::component_count());
+
+  const auto& mat = scene.materials[in_intersection.material_index];
+  if (mat.int_medium == kInvalidIndex)
+    return false;
+
+  const Medium& medium = scene.mediums[mat.int_medium];
+
+  float anisotropy = medium.phase_function_g;
+  SpectralResponse scattering = medium.s_outscattering(spect);
+  SpectralResponse absorption = medium.s_absorption(spect);
+
+  SpectralResponse extinction = scattering + absorption;
+  SpectralResponse albedo = {
+    spect.wavelength,
+    {
+      scattering.components.x > 0.0f ? (extinction.components.x / scattering.components.x) : 0.0f,
+      scattering.components.y > 0.0f ? (extinction.components.y / scattering.components.y) : 0.0f,
+      scattering.components.z > 0.0f ? (extinction.components.z / scattering.components.z) : 0.0f,
+    },
+  };
+
+  float3 n = in_intersection.nrm * ((dot(in_intersection.w_i, in_intersection.nrm) < 0.0f) ? -1.0f : +1.0f);
+
+  Ray ray = {};
+  ray.d = sample_cosine_distribution(smp.next_2d(), n, 1.0f);
+  ray.min_t = kRayEpsilon;
+  ray.o = shading_pos(scene.vertices, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d);
+  ray.max_t = kMaxFloat;
+
+  SpectralResponse throughput = {spect.wavelength, 1.0f};
+  for (uint32_t i = 0; i < kMaxIterations; ++i) {
+    SpectralResponse pdf = {};
+    uint32_t channel = Medium::sample_spectrum_component(spect, albedo, throughput, smp, pdf);
+    float scattering_distance = extinction.component(channel);
+
+    ray.max_t = scattering_distance > 0.0f ? (-logf(1.0f - smp.next()) / scattering_distance) : kMaxFloat;
+    ETX_VALIDATE(ray.max_t);
+
+    Intersection local_i;
+    bool intersection_found = rt.trace_material(scene, ray, in_intersection.material_index, local_i, smp);
+    if (intersection_found) {
+      ray.max_t = local_i.t;
+    }
+
+    SpectralResponse tr = exp(-ray.max_t * extinction);
+    ETX_VALIDATE(tr);
+
+    pdf *= intersection_found ? tr : tr * extinction;
+    ETX_VALIDATE(pdf);
+
+    if (pdf.is_zero())
+      return false;
+
+    SpectralResponse weight = intersection_found ? tr : tr * scattering;
+    ETX_VALIDATE(weight);
+
+    throughput *= weight / pdf.sum();
+    ETX_VALIDATE(throughput);
+
+    if (throughput.maximum() <= kEpsilon)
+      return false;
+
+    if (intersection_found) {
+      result.intersections[0] = local_i;
+      result.intersections[0].w_i = in_intersection.w_i;
+      result.weights[0] = throughput * apply_image(spect, mat.transmittance, local_i.tex, scene);
+      result.intersection_count = 1u;
+      result.selected_intersection = 0;
+      result.selected_sample_weight = 1.0f;
+      result.total_weight = 1.0f;
+      return true;
+    }
+
+    ray.d = Medium::sample_phase_function(spect, smp, ray.d, anisotropy);
+    ray.o = ray.o + ray.d * ray.max_t;
+  }
+
+  return false;
+}
+
+template <class RT>
+ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
+  const auto& mtl = scene.materials[in_intersection.material_index].subsurface;
 
   Sample ss_samples[kIntersectionDirections] = {
-    sample(in_intersection, mtl, 0u, smp),
-    sample(in_intersection, mtl, 1u, smp),
-    sample(in_intersection, mtl, 2u, smp),
+    sample(spect, in_intersection, mtl, 0u, smp),
+    sample(spect, in_intersection, mtl, 1u, smp),
+    sample(spect, in_intersection, mtl, 2u, smp),
   };
 
   IntersectionBase intersections[kTotalIntersections] = {};
-  ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, material_index};
+  ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, in_intersection.material_index};
   uint32_t intersections_0 = rt.continuous_trace(scene, ss_samples[0].ray, ct, smp);
   ct.intersection_buffer += intersections_0;
   uint32_t intersections_1 = rt.continuous_trace(scene, ss_samples[1].ray, ct, smp);
@@ -219,6 +314,17 @@ ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersec
   }
 
   return result.intersection_count > 0;
+}
+
+template <class RT>
+ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
+  const auto& mtl = scene.materials[in_intersection.material_index].subsurface;
+  switch (mtl.cls) {
+    case SubsurfaceMaterial::Class::ChristensenBurley:
+      return gather_cb(spect, scene, in_intersection, rt, smp, result);
+    default:
+      return gather_rw(spect, scene, in_intersection, rt, smp, result);
+  }
 }
 
 }  // namespace subsurface

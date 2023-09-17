@@ -25,7 +25,7 @@ struct ImagePoolImpl {
   }
 
   void cleanup() {
-    ETX_ASSERT(image_pool.count_alive() == 0);
+    ETX_ASSERT(image_pool.alive_objects_count() == 0);
     image_pool.cleanup();
   }
 

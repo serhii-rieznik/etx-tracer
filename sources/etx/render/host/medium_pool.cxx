@@ -16,7 +16,7 @@ struct MediumPoolImpl {
   }
 
   void cleanup() {
-    ETX_ASSERT(medium_pool.count_alive() == 0);
+    ETX_ASSERT(medium_pool.alive_objects_count() == 0);
     medium_pool.cleanup();
   }
 

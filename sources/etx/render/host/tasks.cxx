@@ -54,7 +54,7 @@ struct TaskSchedulerImpl {
   }
 
   ~TaskSchedulerImpl() {
-    ETX_ASSERT(task_pool.count_alive() == 0);
+    ETX_ASSERT(task_pool.alive_objects_count() == 0);
     task_pool.cleanup();
   }
 };
