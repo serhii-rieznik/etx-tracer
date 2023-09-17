@@ -20,11 +20,12 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, Po
   return result;
 }
 
-void SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, Pointer<Spectrums> spectrums) {
+SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1,
+  Pointer<Spectrums> spectrums) {
   auto file = fopen(file_name, "r");
   if (file == nullptr) {
     printf("Failed to load SpectralDistribution from file: %s\n", file_name);
-    return;
+    return SpectralDistribution::Class::Invalid;
   }
 
   fseek(file, 0, SEEK_END);
@@ -43,6 +44,7 @@ void SpectralDistribution::load_from_file(const char* file_name, SpectralDistrib
     }
   };
 
+  Class cls = Class::Invalid;
   std::vector<Sample> samples;
   samples.reserve(spectrum::WavelengthCount);
 
@@ -55,13 +57,28 @@ void SpectralDistribution::load_from_file(const char* file_name, SpectralDistrib
     }
     *line_end = 0;
 
-    float wavelength = 0.0f;
-    float v0 = 1.0f;
-    float v1 = 0.0f;
+    if (begin[0] == '#') {
+      if (strstr(begin, "#class:") == begin) {
+        const char* cls_name = begin + 7;
+        if (strcmp(cls_name, "conductor") == 0) {
+          cls = Class::Conductor;
+        } else if (strcmp(cls_name, "dielectric") == 0) {
+          cls = Class::Dielectric;
+        } else if (strcmp(cls_name, "illuminant") == 0) {
+          cls = Class::Illuminant;
+        } else {
+          cls = Class::Reflectance;
+        }
+      }
+    } else {
+      float wavelength = 0.0f;
+      float v0 = 1.0f;
+      float v1 = 0.0f;
 
-    int args_read = sscanf(begin, "%f %f %f", &wavelength, &v0, &v1);
-    if (args_read >= 2) {
-      samples.emplace_back(Sample{wavelength, {v0, v1}});
+      int args_read = sscanf(begin, "%f %f %f", &wavelength, &v0, &v1);
+      if (args_read >= 2) {
+        samples.emplace_back(Sample{wavelength, {v0, v1}});
+      }
     }
 
     begin = line_end + 1;
@@ -80,23 +97,27 @@ void SpectralDistribution::load_from_file(const char* file_name, SpectralDistrib
     sample.wavelength *= scale;
   }
 
-  {
-    values0.count = 0;
-    for (const auto& sample : samples) {
-      if ((sample.wavelength >= spectrum::kShortestWavelength) && (sample.wavelength <= spectrum::kLongestWavelength)) {
-        values0.entries[values0.count++] = {sample.wavelength, sample.values[0]};
-        if (values0.count >= spectrum::kWavelengthCount) {
-          break;
-        }
+  values0.count = 0;
+
+  for (const auto& sample : samples) {
+    if ((sample.wavelength >= spectrum::kShortestWavelength) && (sample.wavelength <= spectrum::kLongestWavelength)) {
+      values0.entries[values0.count++] = {sample.wavelength, sample.values[0]};
+      if (values0.count >= spectrum::kWavelengthCount) {
+        break;
       }
-    }
-    if constexpr (spectrum::kSpectralRendering == false) {
-      float3 xyz = values0.integrate_to_xyz();
-      values0 = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
     }
   }
 
+  if (values0.count == 0)
+    return Class::Invalid;
+
+  if constexpr (spectrum::kSpectralRendering == false) {
+    float3 xyz = values0.integrate_to_xyz();
+    values0 = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
+  }
+
   if (values1 != nullptr) {
+    values1->count = 0;
     for (const auto& sample : samples) {
       if ((sample.wavelength >= spectrum::kShortestWavelength) && (sample.wavelength <= spectrum::kLongestWavelength)) {
         values1->entries[values1->count++] = {sample.wavelength, sample.values[1]};
@@ -105,11 +126,14 @@ void SpectralDistribution::load_from_file(const char* file_name, SpectralDistrib
         }
       }
     }
+
     if constexpr (spectrum::kSpectralRendering == false) {
       float3 xyz = values1->integrate_to_xyz();
-      *values1 = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
+      *values1 = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
     }
   }
+
+  return cls;
 }
 
 bool SpectralDistribution::valid() const {

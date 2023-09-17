@@ -425,7 +425,10 @@ struct Spectrums;
 
 struct ETX_ALIGNED SpectralDistribution {
   enum Class {
+    Invalid,
     Reflectance,
+    Conductor,
+    Dielectric,
     Illuminant,
   };
 
@@ -576,7 +579,7 @@ struct ETX_ALIGNED SpectralDistribution {
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_samples(const float2 wavelengths_power[], uint32_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_black_body(float temperature, Pointer<Spectrums>);
-  static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, Pointer<Spectrums>);
+  static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Pointer<Spectrums>);
 };
 
 constexpr uint64_t kSpectralDistributionSize = sizeof(SpectralDistribution);

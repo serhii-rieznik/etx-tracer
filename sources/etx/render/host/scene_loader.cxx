@@ -64,6 +64,10 @@ Pointer<Spectrums> spectrums() {
   return &_spectrums;
 }
 
+Pointer<Spectrums> shared_spectrums() {
+  return spectrums();
+}
+
 inline bool value_is_correct(float t) {
   return !std::isnan(t) && !std::isinf(t);
 }
@@ -918,7 +922,10 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
             } else if ((strcmp(params[i], "spectrum") == 0) && (i + 1 < end)) {
               char buffer[2048] = {};
               snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-              SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, SpectralDistribution::Class::Illuminant, spectrums());
+              auto cls = SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, spectrums());
+              if (cls != SpectralDistribution::Class::Illuminant) {
+                log::warning("Spectrum %s is not illuminant", buffer);
+              }
             }
           }
         }
@@ -1119,7 +1126,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         } else {
           char buffer[256] = {};
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-          SpectralDistribution::load_from_file(buffer, mtl.int_ior.eta, &mtl.int_ior.k, SpectralDistribution::Class::Reflectance, spectrums());
+          SpectralDistribution::load_from_file(buffer, mtl.int_ior.eta, &mtl.int_ior.k, spectrums());
         }
       }
 
@@ -1132,7 +1139,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         } else {
           char buffer[256] = {};
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-          SpectralDistribution::load_from_file(buffer, mtl.ext_ior.eta, &mtl.ext_ior.k, SpectralDistribution::Class::Reflectance, spectrums());
+          SpectralDistribution::load_from_file(buffer, mtl.ext_ior.eta, &mtl.ext_ior.k, spectrums());
         }
       }
 
@@ -1155,17 +1162,17 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       if (get_param(material, "spectrum_kd", data_buffer)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.diffuse.spectrum, nullptr, SpectralDistribution::Class::Reflectance, spectrums());
+        SpectralDistribution::load_from_file(buffer, mtl.diffuse.spectrum, nullptr, spectrums());
       }
       if (get_param(material, "spectrum_ks", data_buffer)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.specular.spectrum, nullptr, SpectralDistribution::Class::Reflectance, spectrums());
+        SpectralDistribution::load_from_file(buffer, mtl.specular.spectrum, nullptr, spectrums());
       }
       if (get_param(material, "spectrum_kt", data_buffer)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.transmittance.spectrum, nullptr, SpectralDistribution::Class::Reflectance, spectrums());
+        SpectralDistribution::load_from_file(buffer, mtl.transmittance.spectrum, nullptr, spectrums());
       }
 
       if (get_param(material, "normalmap", data_buffer)) {
@@ -1208,7 +1215,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
             } else {
               char buffer[256] = {};
               snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
-              SpectralDistribution::load_from_file(buffer, mtl.thinfilm.ior.eta, &mtl.thinfilm.ior.k, SpectralDistribution::Class::Reflectance, spectrums());
+              SpectralDistribution::load_from_file(buffer, mtl.thinfilm.ior.eta, &mtl.thinfilm.ior.k, spectrums());
             }
           }
         }

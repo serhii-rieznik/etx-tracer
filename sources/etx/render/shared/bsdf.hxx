@@ -112,6 +112,8 @@ struct BSDFSample {
 };
 
 struct NormalDistribution {
+  constexpr static const float kMinAlpha = 1.0f / 256.0f;
+
   struct Eval {
     float ndf = 0.0f;
     float g1_in = 0.0f;
@@ -121,7 +123,7 @@ struct NormalDistribution {
 
   ETX_GPU_CODE NormalDistribution(const LocalFrame& f, const float2& alpha)
     : _frame(f)
-    , _alpha(alpha) {
+    , _alpha{fmaxf(kMinAlpha, alpha.x), fmaxf(kMinAlpha, alpha.y)} {
   }
 
   [[nodiscard]] ETX_GPU_CODE float3 sample(Sampler& smp, const float3& in_w_i) const {
@@ -318,14 +320,13 @@ ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, co
     return result;
   }
 
-  const auto& flm_ior = thinfilm.ior;
   SpectralResponse result = {spect.wavelength, 0.0f};
   if constexpr (spectrum::kSpectralRendering) {
-    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex_x(), flm_ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
   } else {
-    result.components.x = fresnel_thinfilm(690.0f, cos_theta, ext_ior.as_complex_x(), flm_ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
-    result.components.y = fresnel_thinfilm(550.0f, cos_theta, ext_ior.as_complex_y(), flm_ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
-    result.components.z = fresnel_thinfilm(430.0f, cos_theta, ext_ior.as_complex_z(), flm_ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
+    result.components.x = fresnel_thinfilm(690.0f, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+    result.components.y = fresnel_thinfilm(550.0f, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
+    result.components.z = fresnel_thinfilm(430.0f, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
   }
   return result;
 }

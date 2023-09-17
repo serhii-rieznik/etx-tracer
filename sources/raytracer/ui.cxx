@@ -16,6 +16,8 @@
 #include <unistd.h>
 #endif
 
+#include <filesystem>
+
 namespace etx {
 
 inline void decrease_exposure(ViewOptions& o) {
@@ -81,6 +83,42 @@ void UI::initialize() {
     io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_image;
   }
   ImGui::LoadIniSettingsFromDisk(env().file_in_data("ui.ini"));
+
+  _ior_files.clear();
+
+  RefractiveIndex tmp;
+  std::string path = env().file_in_data("spectrum/");
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
+    auto filename = entry.path().filename();
+    const auto& ext = entry.path().extension();
+    if (ext != L".spd")
+      continue;
+
+    log::info("Preloading spectral distribution from %s", entry.path().string().c_str());
+
+    auto cls = SpectralDistribution::load_from_file(entry.path().string().c_str(), tmp.eta, &tmp.k, shared_spectrums());
+    if (cls == SpectralDistribution::Class::Invalid)
+      continue;
+
+    auto& e = _ior_files.emplace_back();
+    e.cls = cls;
+    e.filename = entry.path().string();
+    e.title = filename.string();
+    e.title.resize(e.title.size() - 4u);
+    e.title[0] = std::toupper(e.title[0]);
+    for (uint32_t i = 0; i < e.title.size(); ++i) {
+      if (e.title[i] == '_') {
+        e.title[i] = ' ';
+        if (i + 1llu < e.title.size()) {
+          e.title[i + 1llu] = std::toupper(e.title[i + 1llu]);
+        }
+      }
+    }
+  }
+
+  std::sort(_ior_files.begin(), _ior_files.end(), [](const IORFile& a, const IORFile& b) {
+    return a.cls < b.cls;
+  });
 }
 
 void UI::cleanup() {
@@ -151,21 +189,92 @@ bool UI::build_options(Options& options) {
   return changed;
 }
 
-bool igSpectrumPicker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear) {
+bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectrums> spectrums) {
+  bool changed = false;
+  bool selected = false;
+  bool load_from_file = false;
+
+  const char* names[5] = {
+    "Invalid",
+    "Reflectance",
+    "Conductors",
+    "Dielectrics",
+    "Illuminants",
+  };
+  const ImVec4 colors[5] = {
+    {0.3333f, 0.3333f, 0.3333f, 1.0f},
+    {1.0f, 1.0f, 1.0f, 1.0f},
+    {0.5f, 0.75f, 1.0f, 1.0f},
+    {1.0f, 0.75f, 0.5f, 1.0f},
+    {1.0f, 0.75f, 1.0f, 1.0f},
+  };
+
+  char buffer[64] = {};
+  snprintf(buffer, sizeof(buffer), "##%s", name);
+  if (ImGui::BeginCombo(buffer, name)) {
+    SpectralDistribution::Class cls = SpectralDistribution::Class::Reflectance;
+    if (_ior_files.empty() == false) {
+      cls = _ior_files[0].cls;
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Text, colors[0]);
+    ImGui::Text(names[cls]);
+    ImGui::PopStyleColor();
+
+    for (const auto& i : _ior_files) {
+      if (i.cls != cls) {
+        cls = i.cls;
+        ImGui::Separator();
+        ImGui::PushStyleColor(ImGuiCol_Text, colors[0]);
+        ImGui::Text(names[cls]);
+        ImGui::PopStyleColor();
+      }
+
+      ImGui::PushStyleColor(ImGuiCol_Text, colors[cls]);
+      if (ImGui::Selectable(i.title.c_str(), &selected)) {
+        SpectralDistribution::load_from_file(i.filename.c_str(), ior.eta, &ior.k, spectrums);
+        changed = true;
+      }
+      ImGui::PopStyleColor();
+    }
+    ImGui::Separator();
+    if (ImGui::Selectable("Load from file...", &selected)) {
+      changed = true;
+      load_from_file = true;
+    }
+    ImGui::EndCombo();
+  }
+
+  if (load_from_file) {
+    auto filename = open_file("spd");
+    RefractiveIndex tmp_ior = {};
+    auto cls = SpectralDistribution::load_from_file(filename.c_str(), tmp_ior.eta, &tmp_ior.k, spectrums);
+    if (cls != SpectralDistribution::Class::Invalid) {
+      ior = tmp_ior;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear) {
   float3 rgb = spectrum::xyz_to_rgb(spd.to_xyz());
   if (linear == false) {
     rgb = linear_to_gamma(rgb);
   }
-  uint32_t flags = linear ? ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_NoPicker  //
-                          : ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar;                    //
+
+  uint32_t flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB;
 
   if (linear) {
-    ImGui::Text("%s", name);
+    flags = flags | ImGuiColorEditFlags_HDR;
   }
+
+  ImGui::Text("%s", name);
 
   bool changed = false;
   char name_buffer[64] = {};
-  snprintf(name_buffer, sizeof(name_buffer), "%s%s", linear ? "##" : "", name);
+  snprintf(name_buffer, sizeof(name_buffer), "##%s", name);
   if (ImGui::ColorEdit3(name_buffer, &rgb.x, flags)) {
     if (linear == false) {
       rgb = gamma_to_linear(rgb);
@@ -475,7 +584,7 @@ void UI::build(double dt, const char* status) {
     if (scene_editable && (_selected_emitter >= 0) && (_selected_emitter < _current_scene->emitters.count)) {
       auto& emitter = _current_scene->emitters[_selected_emitter];
 
-      bool changed = igSpectrumPicker("Emission", emitter.emission.spectrum, _current_scene->spectrums, true);
+      bool changed = spectrum_picker("Emission", emitter.emission.spectrum, _current_scene->spectrums, true);
 
       if (emitter.cls == Emitter::Class::Directional) {
         ImGui::Text("Angular Size");
@@ -689,40 +798,53 @@ void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& mat
 }
 
 bool UI::build_material(Material& material) {
-  int32_t material_cls = static_cast<int32_t>(material.cls);
-  bool changed = ImGui::Combo(
-    "##type", &material_cls,
-    [](void* data, int32_t idx, const char** out_text) -> bool {
-      material_class_to_string(Material::Class(idx), out_text);
-      return true;
-    },
-    nullptr, int32_t(Material::Class::Count), 5);
-  material.cls = static_cast<Material::Class>(material_cls);
+  static uint32_t buffer_i = 0;
+
+  bool changed = false;
+
+  char buffer[64] = {};
+  snprintf(buffer + buffer_i, sizeof(buffer) - buffer_i, "%s", material_class_to_string(material.cls));
+  buffer[0] = std::toupper(buffer[0]);
+  if (ImGui::BeginCombo("##type", buffer)) {
+    for (uint32_t i = uint32_t(Material::Class::Diffuse); i < uint32_t(Material::Class::Count); ++i) {
+      snprintf(buffer + buffer_i, sizeof(buffer) - buffer_i, "%s", material_class_to_string(Material::Class(i)));
+      buffer[0] = std::toupper(buffer[0]);
+      bool selected = material.cls == Material::Class(i);
+      if (ImGui::Selectable(buffer, &selected)) {
+        material.cls = static_cast<Material::Class>(i);
+        changed = true;
+      }
+    }
+    ImGui::EndCombo();
+  }
+
   changed |= ImGui::SliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= ImGui::SliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-  changed |= igSpectrumPicker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
-  changed |= igSpectrumPicker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
-  changed |= igSpectrumPicker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);
+  changed |= ior_picker("Index Of Refraction", material.int_ior, _current_scene->spectrums);
+  changed |= spectrum_picker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
+  changed |= spectrum_picker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
+  changed |= spectrum_picker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);
   ImGui::Separator();
 
   ImGui::Text("%s", "Subsurface Scattering");
-  changed |= ImGui::Combo("Class", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley");
+  changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley");
   if (material.subsurface.cls == SubsurfaceMaterial::Class::RandomWalk) {
-    ImGui::Text("Random Walk SSS");
-    ImGui::Text("controlled by internal meidum");
+    ImGui::Text("(controlled by the internal meidum");
   } else if (material.subsurface.cls == SubsurfaceMaterial::Class::ChristensenBurley) {
-    changed |= igSpectrumPicker("Subsurface Distance", material.subsurface.scattering_distance, _current_scene->spectrums, true);
+    changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance, _current_scene->spectrums, true);
     ImGui::Text("%s", "Subsurface Distance Scale");
     changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
   }
   ImGui::Separator();
 
-  ImGui::Text("%s", "Thinfilm Thickness Range (nm)");
+  ImGui::Text("%s", "Thinfilm");
+  ImGui::Text("%s", "Thickness Range (nm)");
   ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
   changed |= ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
   ImGui::SameLine();
   ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
   changed |= ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
+  changed |= ior_picker("Thinn film IoR", material.thinfilm.ior, _current_scene->spectrums);
   ImGui::Separator();
 
   auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
@@ -750,8 +872,8 @@ bool UI::build_material(Material& material) {
 
 bool UI::build_medium(Medium& m) {
   bool changed = false;
-  changed |= igSpectrumPicker("Absorption", m.s_absorption, _current_scene->spectrums, true);
-  changed |= igSpectrumPicker("Outscattering", m.s_outscattering, _current_scene->spectrums, true);
+  changed |= spectrum_picker("Absorption", m.s_absorption, _current_scene->spectrums, true);
+  changed |= spectrum_picker("Outscattering", m.s_outscattering, _current_scene->spectrums, true);
   changed |= ImGui::SliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
   return changed;
 }

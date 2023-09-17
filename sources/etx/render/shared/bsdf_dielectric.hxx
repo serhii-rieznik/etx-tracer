@@ -113,6 +113,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
+
   const float m_eta = int_ior.eta.monochromatic() / ext_ior.eta.monochromatic();
   const float m_invEta = 1.0f / m_eta;
   const float alpha_x = mtl.roughness.x;

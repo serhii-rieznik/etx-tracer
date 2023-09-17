@@ -53,4 +53,6 @@ void material_class_to_string(Material::Class cls, const char** str);
 void build_emitters_distribution(Scene& scene);
 float emitter_weight(const Emitter&);
 
+Pointer<Spectrums> shared_spectrums();
+
 }  // namespace etx
