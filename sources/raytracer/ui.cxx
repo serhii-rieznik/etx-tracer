@@ -401,7 +401,8 @@ void UI::build(double dt, const char* status) {
         }
       };
       ui_toggle("Interator options", UIIntegrator);
-      ui_toggle("Materials and mediums", UIMaterial);
+      ui_toggle("Materials", UIMaterial);
+      ui_toggle("Mediums", UIMedium);
       ui_toggle("Emitters", UIEmitters);
       ui_toggle("Camera", UICamera);
       ImGui::EndMenu();
@@ -525,7 +526,7 @@ void UI::build(double dt, const char* status) {
     ImGui::End();
   }
 
-  if ((_ui_setup & UIMaterial) && ImGui::Begin("Materials and mediums", nullptr, kWindowFlags)) {
+  if ((_ui_setup & UIMaterial) && ImGui::Begin("Materials", nullptr, kWindowFlags)) {
     ImGui::Text("Materials");
     ImGui::ListBox("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
     if (scene_editable && (_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
@@ -536,9 +537,10 @@ void UI::build(double dt, const char* status) {
         callbacks.material_changed(material_index);
       }
     }
+    ImGui::End();
+  }
 
-    ImGui::Separator();
-
+  if ((_ui_setup & UIMedium) && ImGui::Begin("Mediums", nullptr, kWindowFlags)) {
     ImGui::Text("Mediums");
     ImGui::ListBox("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
     if (scene_editable && (_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
@@ -549,7 +551,6 @@ void UI::build(double dt, const char* status) {
         callbacks.medium_changed(medium_index);
       }
     }
-
     ImGui::End();
   }
 
@@ -844,7 +845,7 @@ bool UI::build_material(Material& material) {
   ImGui::SameLine();
   ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
   changed |= ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
-  changed |= ior_picker("Thinn film IoR", material.thinfilm.ior, _current_scene->spectrums);
+  changed |= ior_picker("Thinfilm IoR", material.thinfilm.ior, _current_scene->spectrums);
   ImGui::Separator();
 
   auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
@@ -873,7 +874,7 @@ bool UI::build_material(Material& material) {
 bool UI::build_medium(Medium& m) {
   bool changed = false;
   changed |= spectrum_picker("Absorption", m.s_absorption, _current_scene->spectrums, true);
-  changed |= spectrum_picker("Outscattering", m.s_outscattering, _current_scene->spectrums, true);
+  changed |= spectrum_picker("Scattering", m.s_scattering, _current_scene->spectrums, true);
   changed |= ImGui::SliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
   return changed;
 }

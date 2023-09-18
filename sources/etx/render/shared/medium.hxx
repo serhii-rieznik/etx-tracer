@@ -28,7 +28,7 @@ struct ETX_ALIGNED Medium {
 
   Class cls = Class::Vacuum;
   SpectralDistribution s_absorption = {};
-  SpectralDistribution s_outscattering = {};
+  SpectralDistribution s_scattering = {};
   ArrayView<float> density = {};
   BoundingBox bounds = {};
   float phase_function_g = 0.0f;
@@ -53,7 +53,7 @@ struct ETX_ALIGNED Medium {
   }
 
   ETX_GPU_CODE SpectralResponse transmittance_homogeneous(const SpectralQuery spect, float distance) const {
-    return exp((s_outscattering(spect) + s_absorption(spect)) * (-distance));
+    return exp((s_scattering(spect) + s_absorption(spect)) * (-distance));
   }
 
   ETX_GPU_CODE SpectralResponse transmittance_heterogeneous(const SpectralQuery spect, Sampler& smp, const float3& p, const float3& d, float max_t) const {
@@ -128,7 +128,7 @@ struct ETX_ALIGNED Medium {
   }
 
   ETX_GPU_CODE Sample sample_homogeneous(const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos, const float3& w_i, float max_t) const {
-    SpectralResponse scattering = s_outscattering(spect);
+    SpectralResponse scattering = s_scattering(spect);
     SpectralResponse absorption = s_absorption(spect);
     SpectralResponse extinction = scattering + absorption;
 
@@ -186,7 +186,7 @@ struct ETX_ALIGNED Medium {
       float density = sample_density(local_pos);
       if (smp.next() <= density) {
         Sample result;
-        result.weight = s_outscattering(spect) / (s_outscattering(spect) + s_absorption(spect));
+        result.weight = s_scattering(spect) / (s_scattering(spect) + s_absorption(spect));
         result.pos = bounds.from_local(local_pos);
         result.t = t;
         return result;

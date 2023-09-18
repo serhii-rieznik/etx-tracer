@@ -984,7 +984,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       SpectralDistribution s_a = SpectralDistribution::from_constant(0.0f);
-      if (get_param(material, "sigma_a", data_buffer)) {
+      if (get_param(material, "absorption", data_buffer)) {
         float val[3] = {};
         if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
           s_a = rgb::make_reflectance_spd({val[0], val[1], val[2]}, spectrums());
@@ -992,11 +992,53 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       SpectralDistribution s_t = SpectralDistribution::from_constant(0.0f);
-      if (get_param(material, "sigma_s", data_buffer)) {
+      if (get_param(material, "scattering", data_buffer)) {
         float val[3] = {};
         if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
           s_t = rgb::make_reflectance_spd({val[0], val[1], val[2]}, spectrums());
         }
+      }
+
+      if (get_param(material, "parametric", data_buffer)) {
+        float3 color = {1.0f, 1.0f, 1.0f};
+        float scattering_distance = 0.25f;
+
+        auto params = split_params(data_buffer);
+        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+          if ((strcmp(params[i], "color") == 0) && (i + 3 < e)) {
+            color = {
+              static_cast<float>(atof(params[i + 1])),
+              static_cast<float>(atof(params[i + 2])),
+              static_cast<float>(atof(params[i + 3])),
+            };
+            i += 3;
+          }
+          if ((strcmp(params[i], "distance") == 0) && (i + 1 < e)) {
+            scattering_distance = static_cast<float>(atof(params[i + 1]));
+            i += 1;
+          }
+        }
+
+        scattering_distance = fmaxf(scattering_distance, 1.0f / 256.0f);
+        color = saturate(color / fmaxf(fmaxf(1.0f, color.x), fmaxf(color.y, color.z)));
+
+        float3 albedo = 1.0f - exp(-5.09406f * color + 2.61188f * color - 4.31805f * color * color * color);
+        ETX_VALIDATE(albedo);
+
+        float3 s = 1.9f - color + 3.5f * sqr(color - 0.8f);
+        ETX_VALIDATE(s);
+
+        float3 extinction = 1.0f / (scattering_distance * s);
+        ETX_VALIDATE(extinction);
+
+        float3 scattering = extinction * albedo;
+        ETX_VALIDATE(scattering);
+
+        float3 absorption = extinction - scattering;
+        ETX_VALIDATE(absorption);
+
+        s_t = rgb::make_reflectance_spd(scattering, spectrums());
+        s_a = rgb::make_reflectance_spd(absorption, spectrums());
       }
 
       float g = 0.0f;

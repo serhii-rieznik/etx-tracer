@@ -173,7 +173,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
   const Medium& medium = scene.mediums[mat.int_medium];
 
   float anisotropy = medium.phase_function_g;
-  SpectralResponse scattering = medium.s_outscattering(spect);
+  SpectralResponse scattering = medium.s_scattering(spect);
   SpectralResponse absorption = medium.s_absorption(spect);
 
   SpectralResponse extinction = scattering + absorption;
@@ -238,8 +238,8 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
       return true;
     }
 
-    ray.d = Medium::sample_phase_function(spect, smp, ray.d, anisotropy);
     ray.o = ray.o + ray.d * ray.max_t;
+    ray.d = Medium::sample_phase_function(spect, smp, ray.d, anisotropy);
   }
 
   return false;

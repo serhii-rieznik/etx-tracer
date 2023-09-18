@@ -106,8 +106,10 @@ struct UI {
   enum UISetup : uint32_t {
     UIIntegrator = 1u << 0u,
     UIMaterial = 1u << 1u,
-    UIEmitters = 1u << 2u,
-    UICamera = 1u << 3u,
+    UIMedium = 1u << 2u,
+    UIEmitters = 1u << 3u,
+    UICamera = 1u << 4u,
+
     UIEverything = UIIntegrator,
   };
 
