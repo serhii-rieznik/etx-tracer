@@ -196,14 +196,14 @@ struct ETX_ALIGNED Medium {
     return {{spect.wavelength, 1.0f}};
   }
 
-  ETX_GPU_CODE float phase_function(const SpectralQuery spect, const float3& pos, const float3& w_i, const float3& w_o) const {
-    if (cls == Class::Vacuum) {
-      return 1.0f;
-    }
-
+  ETX_GPU_CODE static float phase_function(const SpectralQuery spect, const float3& pos, const float3& w_i, const float3& w_o, const float g) {
     float cos_t = dot(w_i, w_o);
-    float d = 1.0f + phase_function_g * phase_function_g - 2.0f * phase_function_g * cos_t;
-    return (1.0f / (4.0f * kPi)) * (1.0f - phase_function_g * phase_function_g) / (d * sqrtf(d));
+    float d = 1.0f + g * g - 2.0f * g * cos_t;
+    return (1.0f / (4.0f * kPi)) * (1.0f - g * g) / (d * sqrtf(d));
+  }
+
+  ETX_GPU_CODE float phase_function(const SpectralQuery spect, const float3& pos, const float3& w_i, const float3& w_o) const {
+    return (cls == Class::Vacuum) ? 1.0f : phase_function(spect, pos, w_i, w_o, phase_function_g);
   }
 
   ETX_GPU_CODE static float3 sample_phase_function(const SpectralQuery spect, Sampler& smp, const float3& w_i, const float g) {

@@ -1001,7 +1001,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
 
       if (get_param(material, "parametric", data_buffer)) {
         float3 color = {1.0f, 1.0f, 1.0f};
-        float scattering_distance = 0.25f;
+        float3 scattering_distances = {0.25f, 0.25f, 0.25f};
 
         auto params = split_params(data_buffer);
         for (uint64_t i = 0, e = params.size(); i < e; ++i) {
@@ -1014,12 +1014,23 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
             i += 3;
           }
           if ((strcmp(params[i], "distance") == 0) && (i + 1 < e)) {
-            scattering_distance = static_cast<float>(atof(params[i + 1]));
+            float value = static_cast<float>(atof(params[i + 1]));
+            scattering_distances = {value, value, value};
             i += 1;
+          }
+          if ((strcmp(params[i], "distances") == 0) && (i + 1 < e)) {
+            scattering_distances = {
+              static_cast<float>(atof(params[i + 1])),
+              static_cast<float>(atof(params[i + 2])),
+              static_cast<float>(atof(params[i + 3])),
+            };
+            i += 3;
           }
         }
 
-        scattering_distance = fmaxf(scattering_distance, 1.0f / 256.0f);
+        scattering_distances.x = fmaxf(scattering_distances.x, 1.0f / 256.0f);
+        scattering_distances.y = fmaxf(scattering_distances.y, 1.0f / 256.0f);
+        scattering_distances.z = fmaxf(scattering_distances.z, 1.0f / 256.0f);
         color = saturate(color / fmaxf(fmaxf(1.0f, color.x), fmaxf(color.y, color.z)));
 
         float3 albedo = 1.0f - exp(-5.09406f * color + 2.61188f * color - 4.31805f * color * color * color);
@@ -1028,7 +1039,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         float3 s = 1.9f - color + 3.5f * sqr(color - 0.8f);
         ETX_VALIDATE(s);
 
-        float3 extinction = 1.0f / (scattering_distance * s);
+        float3 extinction = 1.0f / (scattering_distances * s);
         ETX_VALIDATE(extinction);
 
         float3 scattering = extinction * albedo;

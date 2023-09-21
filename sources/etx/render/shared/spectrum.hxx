@@ -240,6 +240,14 @@ struct ETX_ALIGNED SpectralResponse {
     }
   }
 
+  ETX_GPU_CODE float minimum() const {
+    if constexpr (spectrum::kSpectralRendering) {
+      return components.x;
+    } else {
+      return min(components.x, min(components.y, components.z));
+    }
+  }
+
   ETX_GPU_CODE float maximum() const {
     if constexpr (spectrum::kSpectralRendering) {
       return components.x;
