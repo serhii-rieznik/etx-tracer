@@ -41,6 +41,7 @@ struct SubsurfaceMaterial {
 struct ETX_ALIGNED Material {
   enum class Class : uint32_t {
     Diffuse,
+    Translucent,
     Plastic,
     Conductor,
     Dielectric,

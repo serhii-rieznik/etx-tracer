@@ -8,7 +8,7 @@ namespace etx {
 #define ETX_FORCE_BSDF 0
 
 #if (ETX_FORCE_BSDF)
-#define ETX_FORCED_BSDF DiffuseBSDF
+# define ETX_FORCED_BSDF DiffuseBSDF
 #endif
 
 enum class PathSource : uint32_t {

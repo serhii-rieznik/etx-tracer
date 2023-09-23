@@ -13,7 +13,7 @@
 #include <util/sokol_imgui.h>
 
 #if (ETX_PLATFORM_APPLE)
-#include <unistd.h>
+# include <unistd.h>
 #endif
 
 #include <filesystem>
@@ -295,6 +295,8 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Poin
 }
 
 void UI::build(double dt, const char* status) {
+  ETX_FUNCTION_SCOPE();
+
   constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
   bool has_integrator = (_current_integrator != nullptr);
   bool has_scene = (_current_scene != nullptr);

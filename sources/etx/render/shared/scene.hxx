@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include <etx/core/profiler.hxx>
+
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/render/shared/image.hxx>
@@ -131,6 +133,8 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
 }
 
 ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
+  ETX_FUNCTION_SCOPE();
+
   if (path_length < start_path_length)
     return true;
 
@@ -319,6 +323,8 @@ ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Inter
 template <class RT>
 ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
   const auto& mtl = scene.materials[in_intersection.material_index].subsurface;
+  ETX_FUNCTION_SCOPE();
+
   switch (mtl.cls) {
     case SubsurfaceMaterial::Class::ChristensenBurley:
       return gather_cb(spect, scene, in_intersection, rt, smp, result);

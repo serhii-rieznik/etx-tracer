@@ -1,16 +1,17 @@
 ﻿#include <etx/core/handle.hxx>
+#include <etx/core/profiler.hxx>
 #include <etx/render/host/pool.hxx>
 #include <etx/render/host/tasks.hxx>
 
 #include <TaskScheduler.hxx>
 
 #define ETX_ALWAYS_SINGLE_THREAD 0
-#define ETX_DEBUG_SINGLE_THREAD 1
+#define ETX_DEBUG_SINGLE_THREAD  1
 
 #if (ETX_DEBUG || ETX_ALWAYS_SINGLE_THREAD)
-#define ETX_SINGLE_THREAD ETX_DEBUG_SINGLE_THREAD
+# define ETX_SINGLE_THREAD ETX_DEBUG_SINGLE_THREAD
 #else
-#define ETX_SINGLE_THREAD 0
+# define ETX_SINGLE_THREAD 0
 #endif
 
 namespace etx {
@@ -50,6 +51,9 @@ struct TaskSchedulerImpl {
   TaskSchedulerImpl() {
     task_pool.init(1024u);
     function_task_pool.init(1024u);
+    scheduler.GetProfilerCallbacks()->threadStart = [](uint32_t thread_id) {
+      ETX_PROFILER_REGISTER_THREAD;
+    };
     scheduler.Initialize(ETX_SINGLE_THREAD ? 2 : (enki::GetNumHardwareThreads() + 1u));
   }
 

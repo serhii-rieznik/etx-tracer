@@ -5,14 +5,14 @@
 
 #if (ETX_PLATFORM_WINDOWS)
 
-#pragma comment(lib, "dbghelp.lib")
+# pragma comment(lib, "dbghelp.lib")
 
 namespace etx {
 
 const char* exception_code_to_string(DWORD code) {
-#define CASE_TO_STRING(A) \
-  case A:                 \
-    return #A
+# define CASE_TO_STRING(A) \
+   case A:                 \
+     return #A
   switch (code) {
     CASE_TO_STRING(EXCEPTION_ACCESS_VIOLATION);
     CASE_TO_STRING(EXCEPTION_DATATYPE_MISALIGNMENT);
@@ -39,7 +39,7 @@ const char* exception_code_to_string(DWORD code) {
     default:
       return "Unknown exception code";
   }
-#undef CASE_TO_STRING
+# undef CASE_TO_STRING
 }
 
 LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
@@ -129,7 +129,7 @@ inline void log::set_console_color(log::Color clr) {
 
 #else
 
-#warning TODO : move to the proper place
+# warning TODO : move to the proper place
 
 namespace etx {
 

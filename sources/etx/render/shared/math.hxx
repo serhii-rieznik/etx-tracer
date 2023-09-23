@@ -2,7 +2,7 @@
 
 #if (ETX_RENDER_BASE_INCLUDED)
 #else
-#error This file should not be included separately. Use etx/render/shared/base.hxx instead
+# error This file should not be included separately. Use etx/render/shared/base.hxx instead
 #endif
 
 #include <cmath>
@@ -24,14 +24,14 @@ struct vector4 {
 };
 
 #if (ETX_NVCC_COMPILER)
-#if defined(__NVCC__)
-#include <thrust/complex.h>
-#define STD_NS thrust
+# if defined(__NVCC__)
+#  include <thrust/complex.h>
+#  define STD_NS thrust
+# else
+#  define STD_NS cuda::std
+# endif
 #else
-#define STD_NS cuda::std
-#endif
-#else
-#define STD_NS std
+# define STD_NS std
 using float2 = vector2<float>;
 using float3 = vector3<float>;
 using float4 = vector4<float>;

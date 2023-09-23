@@ -48,7 +48,7 @@ bool check_cuda_call_failed(CUresult result, const char* expr, const char* file,
     check_cuda_call_failed(expr, #expr, __FILE__, __LINE__); \
   } while (0)
 
-#define ETX_CUDA_FAILED(expr) check_cuda_call_failed(expr, #expr, __FILE__, __LINE__)
+#define ETX_CUDA_FAILED(expr)  check_cuda_call_failed(expr, #expr, __FILE__, __LINE__)
 #define ETX_CUDA_SUCCEED(expr) (check_cuda_call_failed(expr, #expr, __FILE__, __LINE__) == false)
 
 struct GPUBufferOptixImpl;
@@ -254,7 +254,7 @@ struct GPUOptixImplData {
  ***************************************************/
 
 #if !defined(ETX_OPTIX_INCLUDES)
-#error This file should not be included
+# error This file should not be included
 #endif
 
 struct GPUBufferOptixImpl {

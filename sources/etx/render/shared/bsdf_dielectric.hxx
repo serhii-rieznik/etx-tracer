@@ -134,6 +134,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
       result.eta = 1.0f;
       result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
       result.properties = BSDFSample::Reflection;
+      result.medium_index = mtl.ext_medium;
     } else {
       // refraction
       result.eta = m_eta;
@@ -164,7 +165,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
       // reflection
       result.eta = 1.0f;
       result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
-      result.properties = BSDFSample::Reflection | BSDFSample::MediumChanged;
+      result.properties = BSDFSample::Reflection;
+      result.medium_index = mtl.int_medium;
     }
   }
 

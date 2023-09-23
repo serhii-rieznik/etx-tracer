@@ -1,4 +1,5 @@
 ﻿#include <etx/core/environment.hxx>
+#include <etx/core/profiler.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/shared/scene.hxx>
 
@@ -11,8 +12,8 @@
 #if defined(ETX_PLATFORM_WINDOWS)
 
 // TODO : fix hacks
-#define WIN32_LEAN_AND_MEAN 1
-#include <Windows.h>
+# define WIN32_LEAN_AND_MEAN 1
+# include <Windows.h>
 
 #endif
 
@@ -88,6 +89,7 @@ void RTApplication::init() {
   }
 
   save_options();
+  ETX_PROFILER_RESET_COUNTERS();
 }
 
 void RTApplication::save_options() {
@@ -95,6 +97,7 @@ void RTApplication::save_options() {
 }
 
 void RTApplication::frame() {
+  ETX_FUNCTION_SCOPE();
   const float4* c_image = nullptr;
   const float4* l_image = nullptr;
   const char* status = "Not running";

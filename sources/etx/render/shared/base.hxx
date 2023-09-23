@@ -14,35 +14,35 @@
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
 
-#define ETX_VALIDATE(VALUE)                                     \
-  do {                                                          \
-    if (valid_value((VALUE)) == false) {                        \
-      if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
-        print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
-        ETX_DEBUG_BREAK();                                      \
-      }                                                         \
-    }                                                           \
-  } while (0)
+# define ETX_VALIDATE(VALUE)                                     \
+   do {                                                          \
+     if (valid_value((VALUE)) == false) {                        \
+       if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
+         print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
+         ETX_DEBUG_BREAK();                                      \
+       }                                                         \
+     }                                                           \
+   } while (0)
 
-#define ETX_CHECK_FINITE(VALUE)                                 \
-  do {                                                          \
-    if (isfinite((VALUE)) == false) {                           \
-      if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
-        print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
-        ETX_DEBUG_BREAK();                                      \
-      }                                                         \
-    }                                                           \
-  } while (0)
+# define ETX_CHECK_FINITE(VALUE)                                 \
+   do {                                                          \
+     if (isfinite((VALUE)) == false) {                           \
+       if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
+         print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
+         ETX_DEBUG_BREAK();                                      \
+       }                                                         \
+     }                                                           \
+   } while (0)
 
 #else
 
-#define ETX_VALIDATE(VALUE) \
-  do {                      \
-  } while (0)
+# define ETX_VALIDATE(VALUE) \
+   do {                      \
+   } while (0)
 
-#define ETX_CHECK_FINITE(VALUE) \
-  do {                          \
-  } while (0)
+# define ETX_CHECK_FINITE(VALUE) \
+   do {                          \
+   } while (0)
 
 #endif
 

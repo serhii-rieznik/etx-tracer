@@ -1,4 +1,5 @@
 #include <etx/core/environment.hxx>
+#include <etx/core/profiler.hxx>
 #include "app.hxx"
 
 #include <sokol_app.h>
@@ -6,6 +7,8 @@
 namespace etx {
 
 extern "C" int main(int argc, char* argv[]) {
+  ETX_PROFILER_REGISTER_THREAD;
+
   init_platform();
   env().setup(argv[0]);
 

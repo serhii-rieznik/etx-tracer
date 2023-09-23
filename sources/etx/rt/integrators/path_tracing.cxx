@@ -34,6 +34,8 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void start(const Options& opt) {
+    ETX_PROFILER_RESET_COUNTERS();
+
     options.rr_start = opt.get("rrstart", options.rr_start).to_integer();
     options.nee = opt.get("nee", options.nee).to_bool();
     options.mis = opt.get("mis", options.mis).to_bool();
@@ -54,6 +56,7 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+    ETX_FUNCTION_SCOPE();
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
@@ -135,6 +138,7 @@ void CPUPathTracing::run(const Options& opt) {
 }
 
 void CPUPathTracing::update() {
+  ETX_FUNCTION_SCOPE();
   bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
 
   if (should_stop && rt.scheduler().completed(_private->current_task)) {

@@ -11,6 +11,7 @@ namespace etx {
   }
 
 ETX_DECLARE_BSDF(Diffuse);
+ETX_DECLARE_BSDF(Translucent);
 ETX_DECLARE_BSDF(Plastic);
 ETX_DECLARE_BSDF(Conductor);
 ETX_DECLARE_BSDF(Dielectric);
@@ -23,14 +24,15 @@ ETX_DECLARE_BSDF(Velvet);
   case Material::Class::CLS:      \
     return CLS##BSDF::FUNC(__VA_ARGS__)
 
-#define CASE_IMPL_SAMPLE(A) CASE_IMPL(A, sample, data, mtl, scene, smp)
+#define CASE_IMPL_SAMPLE(A)   CASE_IMPL(A, sample, data, mtl, scene, smp)
 #define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, w_o, mtl, scene, smp)
-#define CASE_IMPL_PDF(A) CASE_IMPL(A, pdf, data, w_o, mtl, scene, smp)
+#define CASE_IMPL_PDF(A)      CASE_IMPL(A, pdf, data, w_o, mtl, scene, smp)
 #define CASE_IMPL_IS_DELTA(A) CASE_IMPL(A, is_delta, mtl, tex, scene, smp)
 
 #define ALL_CASES(MACRO)                    \
   switch (mtl.cls) {                        \
     MACRO(Diffuse);                         \
+    MACRO(Translucent);                     \
     MACRO(Plastic);                         \
     MACRO(Conductor);                       \
     MACRO(Dielectric);                      \
