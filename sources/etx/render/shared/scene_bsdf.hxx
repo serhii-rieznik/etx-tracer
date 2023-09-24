@@ -130,6 +130,15 @@ ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const Spe
   return result;
 }
 
+ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
+  if (mat.diffuse.image_index == kInvalidIndex)
+    return false;
+
+  auto uv = lerp_uv(scene.vertices, t, bc);
+  const auto& img = scene.images[mat.diffuse.image_index];
+  return (img.options & Image::HasAlphaChannel) && (img.evaluate(uv).w <= smp.next());
+}
+
 }  // namespace etx
 
 #include <etx/render/shared/bsdf_external.hxx>

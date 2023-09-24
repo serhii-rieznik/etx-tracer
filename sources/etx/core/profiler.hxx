@@ -10,7 +10,7 @@ namespace etx {
 
 #if (ETX_PROFILER_ENABLED)
 
-#error NOT IMPLEMENTED
+# error NOT IMPLEMENTED
 
 #else
 

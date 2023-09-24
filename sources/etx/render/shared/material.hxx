@@ -14,9 +14,6 @@ struct ETX_ALIGNED Thinfilm {
   struct Eval {
     RefractiveIndex::Sample ior;
     float thickness = 0.0f;
-    operator bool() const {
-      return thickness > 0.0f;
-    }
   };
 
   RefractiveIndex ior = {};
