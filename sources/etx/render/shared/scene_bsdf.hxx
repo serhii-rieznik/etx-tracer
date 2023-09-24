@@ -83,18 +83,6 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_PDF);
 }
 
-[[nodiscard]] ETX_GPU_CODE bool continue_tracing(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  if (mtl.diffuse.image_index == kInvalidIndex) {
-    return false;
-  }
-
-  const auto& img = scene.images[mtl.diffuse.image_index];
-  if ((img.options & Image::HasAlphaChannel) == 0)
-    return false;
-
-  return img.evaluate(tex).w <= smp.next();
-}
-
 [[nodiscard]] ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::is_delta(mtl, tex, scene, smp);
