@@ -93,7 +93,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   float n_dot_o = fabsf(dot(data.front_fracing_normal(), w_o));
-  float result = -kInvPi * n_dot_o;
+  float result = kInvPi * n_dot_o;
   ETX_VALIDATE(result);
   return result;
 }
