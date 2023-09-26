@@ -6,4 +6,4 @@ bin/options.json
 *.fatbin
 bin/ui.ini
 bin/raytracer
-_build_clang/
+
