@@ -37,7 +37,7 @@ uint64_t atomic_inc(int64_t* ptr) {
 
 int64_t atomic_add_int64(int64_t* ptr, int64_t value) {
 #if (ETX_PLATFORM_APPLE)
-# error IMPLEMENT
+  return OSAtomicAdd64(value, ptr);
 #elif (ETX_PLATFORM_WINDOWS)
   static_assert(sizeof(long) == sizeof(int32_t));
   return _InterlockedExchangeAdd64(reinterpret_cast<volatile long long*>(ptr), value);
