@@ -1,0 +1,5 @@
+{
+  "integrator": "Path Tracing (CPU)",
+  "ref": "",
+  "scene": "assets/cornellbox/cornellbox.json"
+}
