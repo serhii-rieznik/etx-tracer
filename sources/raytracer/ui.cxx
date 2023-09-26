@@ -840,7 +840,7 @@ bool UI::build_material(Material& material) {
   ImGui::Separator();
 
   ImGui::Text("%s", "Subsurface Scattering");
-  changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley");
+  changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
   if (material.subsurface.cls == SubsurfaceMaterial::Class::RandomWalk) {
     ImGui::Text("(controlled by the internal meidum");
   } else if (material.subsurface.cls == SubsurfaceMaterial::Class::ChristensenBurley) {

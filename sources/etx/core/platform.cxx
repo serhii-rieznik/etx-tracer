@@ -19,7 +19,7 @@ uint32_t atomic_compare_exchange(int32_t* ptr, int32_t old_value, int32_t new_va
 
 uint32_t atomic_inc(int32_t* ptr) {
 #if (ETX_PLATFORM_APPLE)
-  return OSAtomicAdd32(1, ptr);
+  return OSAtomicIncrement32(ptr);
 #elif (ETX_PLATFORM_WINDOWS)
   static_assert(sizeof(long) == sizeof(int32_t));
   return _InterlockedIncrement(reinterpret_cast<volatile long*>(ptr));
@@ -28,7 +28,7 @@ uint32_t atomic_inc(int32_t* ptr) {
 
 uint64_t atomic_inc(int64_t* ptr) {
 #if (ETX_PLATFORM_APPLE)
-  return OSAtomicAdd64(1, ptr);
+  return OSAtomicIncrement64(ptr);
 #elif (ETX_PLATFORM_WINDOWS)
   static_assert(sizeof(long long) == sizeof(int64_t));
   return _InterlockedIncrement64(reinterpret_cast<volatile long long*>(ptr));
@@ -37,7 +37,7 @@ uint64_t atomic_inc(int64_t* ptr) {
 
 int64_t atomic_add_int64(int64_t* ptr, int64_t value) {
 #if (ETX_PLATFORM_APPLE)
-# error IMPLEMENT
+  return OSAtomicAdd64(value, ptr);
 #elif (ETX_PLATFORM_WINDOWS)
   static_assert(sizeof(long) == sizeof(int32_t));
   return _InterlockedExchangeAdd64(reinterpret_cast<volatile long long*>(ptr), value);
