@@ -1,33 +1,36 @@
 newmtl et::medium
 id medium
-sigma_a 0.1 0.1 0.1
-sigma_s 5.0 10.0 20.0
+parametric color 1 1 1 distances 0.02 0.01 0.005
 
 newmtl diffuse
 material class diffuse
+int_medium medium
+subsurface class exact
+
+newmtl subsurface
+material class diffuse
+int_medium medium
+subsurface class approximate distance 0.4 0.2 0.1
+
+newmtl medium
+material class thinfilm
+int_ior diamond
+int_medium medium
 
 newmtl leftwall
 material class diffuse
 Kd 1 0 0 
 
-newmtl light
-material class diffuse
-Ke 1 1 1
-emitter nblackbody 5800 scale 48.0
-
-newmtl medium
-material class boundary
-int_medium medium
-
 newmtl rightwall
 material class diffuse
 Kd 0 1 0
 
-newmtl subsurface
-material class diffuse
-subsurface 0.4 0.2 0.1
-
 newmtl white
-material class plastic
+material class diffuse
 Pr 0.1
 Kd 0.18 0.18 0.18
+
+newmtl light
+material class diffuse
+Ke 1 1 1
+emitter nblackbody 5800 scale 48.0

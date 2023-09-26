@@ -121,10 +121,6 @@ struct CPUBidirectionalImpl : public Task {
   TimeMeasure iteration_time = {};
   Handle current_task = {};
   uint32_t iteration = 0;
-  uint32_t preview_frames = 3;
-  uint32_t opt_max_iterations = 0x7fffffff;
-  uint32_t opt_max_depth = 0x7fffffff;
-  uint32_t opt_rr_start = 0x5;
 
   bool conn_direct_hit = true;
   bool conn_connect_to_light = true;
@@ -166,7 +162,7 @@ struct CPUBidirectionalImpl : public Task {
     for (uint64_t eye_t = 1, eye_t_e = path_data.camera_path.size(); running() && (eye_t < eye_t_e); ++eye_t) {
       for (uint64_t light_s = 0, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
         auto depth = eye_t + light_s;
-        if (((eye_t == 1) && (light_s == 1)) || (depth < 2) || (depth > 2llu + opt_max_depth)) {
+        if (((eye_t == 1) && (light_s == 1)) || (depth < 2) || (depth > 2llu + rt.scene().max_path_length)) {
           continue;
         }
         if ((eye_t > 1) && (light_s != 0) && (path_data.camera_path[eye_t].cls == PathVertex::Class::Emitter)) {
@@ -199,7 +195,7 @@ struct CPUBidirectionalImpl : public Task {
     ETX_VALIDATE(throughput);
 
     float eta = 1.0f;
-    for (uint32_t path_length = 0; path_length <= opt_max_depth;) {
+    for (uint32_t path_length = 0; path_length <= rt.scene().max_path_length;) {
       Intersection intersection = {};
       bool found_intersection = rt.trace(rt.scene(), ray, intersection, smp);
 
@@ -304,7 +300,7 @@ struct CPUBidirectionalImpl : public Task {
         break;
       }
 
-      if (random_continue(path_length, opt_rr_start, eta, smp, throughput) == false) {
+      if (random_continue(path_length, rt.scene().random_path_termination, eta, smp, throughput) == false) {
         break;
       }
 
@@ -614,10 +610,6 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void start(const Options& opt) {
-    opt_max_iterations = opt.get("spp", opt_max_iterations).to_integer();
-    opt_max_depth = opt.get("pathlen", opt_max_depth).to_integer();
-    opt_rr_start = opt.get("rrstart", opt_rr_start).to_integer();
-
     conn_direct_hit = opt.get("conn_direct_hit", conn_direct_hit).to_bool();
     conn_connect_to_camera = opt.get("conn_connect_to_camera", conn_connect_to_camera).to_bool();
     conn_connect_to_light = opt.get("conn_connect_to_light", conn_connect_to_light).to_bool();
@@ -628,8 +620,8 @@ struct CPUBidirectionalImpl : public Task {
 
     uint32_t dim = camera_image.dimensions().x * camera_image.dimensions().y;
     for (auto& path_data : per_thread_path_data) {
-      path_data.camera_path.reserve(2llu + opt_max_depth);
-      path_data.emitter_path.reserve(2llu + opt_max_depth);
+      path_data.camera_path.reserve(2llu + rt.scene().max_path_length);
+      path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
     }
 
     iteration = 0;
@@ -686,7 +678,7 @@ void CPUBidirectional::update() {
 
     snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
     current_state = Integrator::State::Stopped;
-  } else if (_private->iteration + 1 < _private->opt_max_iterations) {
+  } else if (_private->iteration + 1u < rt.scene().samples) {
     _private->iteration_light_image.clear();
 
     snprintf(_private->status, sizeof(_private->status), "[%u] %s... (%.3fms per iteration)", _private->iteration,
@@ -718,9 +710,6 @@ void CPUBidirectional::stop(Stop st) {
 
 Options CPUBidirectional::options() const {
   Options result = {};
-  result.add(1u, _private->opt_max_iterations, 0xffffu, "spp", "Max Iterations");
-  result.add(1u, _private->opt_max_depth, 65536u, "pathlen", "Maximal Path Length");
-  result.add(1u, _private->opt_rr_start, 65536u, "rrstart", "Start Random Path Termination at");
   result.add(_private->conn_direct_hit, "conn_direct_hit", "Direct Hits");
   result.add(_private->conn_connect_to_camera, "conn_connect_to_camera", "Connect to Camera");
   result.add(_private->conn_connect_to_light, "conn_connect_to_light", "Connect to Light");

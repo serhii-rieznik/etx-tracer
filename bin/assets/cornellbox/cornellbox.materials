@@ -1,0 +1,31 @@
+newmtl frontwall
+material class diffuse
+Kd 1.000 1.000 1.000
+
+newmtl leftwall
+material class diffuse
+Kd 1.000 0.000 0.000
+
+newmtl floor
+material class diffuse
+Kd 1.000 1.000 1.000
+
+newmtl rightwall
+material class diffuse
+Kd 0.000 1.000 0.000
+
+newmtl ceiling
+material class diffuse
+Kd 1.000 1.000 1.000
+
+newmtl shortbox
+material class diffuse
+Kd 1.000 1.000 1.000
+
+newmtl tallbox
+material class diffuse
+Kd 1.000 1.000 1.000
+
+newmtl light
+Ke 5 4 3
+

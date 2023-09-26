@@ -1,10 +1,10 @@
 #pragma once
 
+#include <etx/core/core.hxx>
+
 #include <etx/render/shared/base.hxx>
 
 namespace etx {
-
-void atomic_add_float(float*, float);
 
 struct ETX_ALIGNED Camera {
   enum class Class : uint32_t {

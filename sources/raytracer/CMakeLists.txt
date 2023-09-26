@@ -36,6 +36,8 @@ if (APPLE)
     "-framework MetalKit"
     "-framework AppKit"
     )
+elseif(MSVC)
+  target_link_options(raytracer PRIVATE "/NODEFAULTLIB:LIBCMT")
 endif()
 
 set_property(TARGET raytracer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_folder}/bin")

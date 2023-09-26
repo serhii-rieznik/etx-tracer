@@ -48,7 +48,6 @@ struct UI {
     std::function<void()> reload_scene_selected;
     std::function<void()> reload_geometry_selected;
     std::function<void()> options_changed;
-    std::function<void()> reload_integrator;
     std::function<void()> use_image_as_reference;
     std::function<void(uint32_t)> material_changed;
     std::function<void(uint32_t)> medium_changed;

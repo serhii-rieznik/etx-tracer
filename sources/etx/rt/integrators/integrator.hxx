@@ -85,9 +85,6 @@ struct Integrator {
     return nullptr;
   }
 
-  virtual void reload() {
-  }
-
   virtual uint64_t debug_info_count() const {
     return 0llu;
   }

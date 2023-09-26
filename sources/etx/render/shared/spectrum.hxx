@@ -590,8 +590,6 @@ struct ETX_ALIGNED SpectralDistribution {
   static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Pointer<Spectrums>);
 };
 
-constexpr uint64_t kSpectralDistributionSize = sizeof(SpectralDistribution);
-
 struct RefractiveIndex {
   SpectralDistribution eta;
   SpectralDistribution k;

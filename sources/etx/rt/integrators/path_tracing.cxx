@@ -36,7 +36,6 @@ struct CPUPathTracingImpl : public Task {
   void start(const Options& opt) {
     ETX_PROFILER_RESET_COUNTERS();
 
-    options.rr_start = opt.get("rrstart", options.rr_start).to_integer();
     options.nee = opt.get("nee", options.nee).to_bool();
     options.mis = opt.get("mis", options.mis).to_bool();
 
@@ -189,7 +188,6 @@ void CPUPathTracing::stop(Stop st) {
 
 Options CPUPathTracing::options() const {
   Options result = {};
-  result.add(1u, _private->options.rr_start, 65536u, "rrstart", "Start Random Path Termination at");
   result.add(_private->options.nee, "nee", "Next Event Estimation");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
   return result;

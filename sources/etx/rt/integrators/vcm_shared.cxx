@@ -5,20 +5,14 @@ namespace etx {
 VCMOptions VCMOptions::default_values() {
   VCMOptions options = {};
   options.options = DefaultOptions;
-  options.max_samples = 128u;
-  options.max_depth = 65536u;
-  options.rr_start = 6u;
   options.radius_decay = 256u;
   options.initial_radius = 0.0f;
   return options;
 }
 
 void VCMOptions::load(const Options& opt) {
-  max_samples = opt.get("spp", max_samples).to_integer();
-  max_depth = opt.get("max_depth", max_depth).to_integer();
   initial_radius = opt.get("initial_radius", initial_radius).to_float();
   radius_decay = opt.get("radius_decay", radius_decay).to_integer();
-  rr_start = opt.get("rr_start", max_depth).to_integer();
 
   options = opt.get("direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
   options = opt.get("connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
@@ -30,9 +24,6 @@ void VCMOptions::load(const Options& opt) {
 }
 
 void VCMOptions::store(Options& opt) {
-  opt.add(1u, max_samples, 0xffffu, "spp", "Max Iterations");
-  opt.add(1u, max_depth, 65536u, "max_depth", "Max Path Length");
-  opt.add(1u, rr_start, 65536u, "rr_start", "RR Start Length");
   opt.add(0.0f, initial_radius, 10.0f, "initial_radius", "Initial Radius");
   opt.add(1u, uint32_t(radius_decay), 65536u, "radius_decay", "Radius Decay");
   opt.add("debug", "Compute:");

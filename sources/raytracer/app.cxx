@@ -40,7 +40,6 @@ void RTApplication::init() {
   ui.callbacks.reload_scene_selected = std::bind(&RTApplication::on_reload_scene_selected, this);
   ui.callbacks.reload_geometry_selected = std::bind(&RTApplication::on_reload_geometry_selected, this);
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
-  ui.callbacks.reload_integrator = std::bind(&RTApplication::on_reload_integrator_selected, this);
   ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
   ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
   ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
@@ -343,11 +342,6 @@ void RTApplication::on_reload_geometry_selected() {
 void RTApplication::on_options_changed() {
   ETX_ASSERT(_current_integrator);
   _current_integrator->update_options(ui.integrator_options());
-}
-
-void RTApplication::on_reload_integrator_selected() {
-  ETX_ASSERT(_current_integrator);
-  _current_integrator->reload();
 }
 
 void RTApplication::on_material_changed(uint32_t index) {

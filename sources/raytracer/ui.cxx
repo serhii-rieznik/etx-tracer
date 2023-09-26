@@ -218,7 +218,7 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
     }
 
     ImGui::PushStyleColor(ImGuiCol_Text, colors[0]);
-    ImGui::Text(names[cls]);
+    ImGui::Text("%s", names[cls]);
     ImGui::PopStyleColor();
 
     for (const auto& i : _ior_files) {
@@ -226,7 +226,7 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
         cls = i.cls;
         ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Text, colors[0]);
-        ImGui::Text(names[cls]);
+        ImGui::Text("%s", names[cls]);
         ImGui::PopStyleColor();
       }
 
@@ -304,6 +304,13 @@ void UI::build(double dt, const char* status) {
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
 
   if (ImGui::BeginMainMenuBar()) {
+    if (ImGui::BeginMenu("etx-tracer")) {
+      if (ImGui::MenuItem("Exit", "Ctrl+Q", false, true)) {
+        quit();
+      }
+      ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("Scene", true)) {
       if (ImGui::MenuItem("Open...", "Ctrl+O", false, true)) {
         select_scene_file();
@@ -328,26 +335,32 @@ void UI::build(double dt, const char* status) {
     }
 
     if (ImGui::BeginMenu("Integrator", true)) {
+      if (has_integrator) {
+        if (has_scene) {
+          bool scene_settings_changed = false;
+
+          ImGui::Text("Max samples per pixel / iterations:");
+          scene_settings_changed = scene_settings_changed || ImGui::InputInt("##amples", reinterpret_cast<int*>(&_current_scene->samples));
+          ImGui::Text("Maximum path length:");
+          scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
+          ImGui::Text("Path length w/o random termination:");
+          scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
+
+          if (scene_settings_changed) {
+            callbacks.scene_settings_changed();
+          }
+        }
+        ImGui::Separator();
+      }
+
       for (uint64_t i = 0; i < _integrators.count; ++i) {
-        if (ImGui::MenuItem(_integrators[i]->name(), nullptr, false, _integrators[i]->enabled())) {
+        if (ImGui::MenuItem(_integrators[i]->name(), nullptr, _current_integrator == _integrators[i], _integrators[i]->enabled())) {
           if (callbacks.integrator_selected) {
             callbacks.integrator_selected(_integrators[i]);
           }
         }
       }
 
-      if (has_integrator) {
-        ImGui::Separator();
-        if (ImGui::MenuItem("Reload Integrator State", "Ctrl+A", false, true)) {
-          if (callbacks.reload_integrator) {
-            callbacks.reload_integrator();
-          }
-        }
-      }
-
-      ImGui::Separator();
-      if (ImGui::MenuItem("Exit", "Ctrl+Q", false, true)) {
-      }
       ImGui::EndMenu();
     }
 
@@ -474,6 +487,7 @@ void UI::build(double dt, const char* status) {
 
     ImGui::GetStyle().FramePadding.y = (button_size - text_size) / 2.0f;
 
+    /*
     if (_current_scene != nullptr) {
       bool scene_settings_changed = false;
       ImGui::PushItemWidth(2.0f * input_size);
@@ -494,6 +508,7 @@ void UI::build(double dt, const char* status) {
         callbacks.scene_settings_changed();
       }
     }
+    */
 
     ImGui::PushItemWidth(input_size);
     {
@@ -692,11 +707,6 @@ bool UI::handle_event(const sapp_event* e) {
       case SAPP_KEYCODE_G: {
         if (callbacks.reload_geometry_selected)
           callbacks.reload_geometry_selected();
-        break;
-      }
-      case SAPP_KEYCODE_A: {
-        if (callbacks.reload_integrator)
-          callbacks.reload_integrator();
         break;
       }
       case SAPP_KEYCODE_S: {

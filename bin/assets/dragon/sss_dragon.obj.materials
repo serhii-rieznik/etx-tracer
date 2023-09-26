@@ -1,29 +1,25 @@
-newmtl et::env
-color nblackbody 20000 scale 2.0
-
-newmtl et::dir
-color nblackbody 5800 scale 10.0
-direction 0.696 0.525 0.489
-angular_diameter 0.573
-
 newmtl et::medium
 id interior
-parametric color 0.025 0.25 0.01 distances 0.125 0.5 0.25
+parametric color 1.0 0.2 0.01 distances 0.1 0.2 0.3
 
 newmtl dragon
 material class plastic
 int_ior sapphire
 int_medium interior
+Pr 0.05
+Kd 0.3333 0.3333 0.3333
 subsurface class exact
-Pr 0.25
-xKt 0.25 0.5 0.25
-xKd 0.25 0.5 0.25
 
 newmtl plane
 material class diffuse
 Kd 0.18 0.18 0.18
+map_Kd ../textures/checkers_grayscale.png
 
-newmtl off-light0
+newmtl light
 material class diffuse
 Ke 1 1 1
-emitter nblackbody 5800.0 scale 8.0
+emitter nblackbody 5800.0 scale 64.0
+
+newmtl background
+material class diffuse
+map_Kd ../textures/checkers_grayscale.png

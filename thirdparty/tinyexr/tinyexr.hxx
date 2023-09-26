@@ -13701,6 +13701,7 @@ static size_t SaveEXRNPartImageToMemory(const EXRImage* exr_images,
     }
   }
   assert(sum == total_size);
+  (void)sum; // shut up the release build
   return total_size;  // OK
 }
 

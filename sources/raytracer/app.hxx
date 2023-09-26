@@ -6,10 +6,8 @@
 #include <etx/render/host/scene_loader.hxx>
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
-#include <etx/rt/integrators/path_tracing_gpu.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
-#include <etx/rt/integrators/vcm_gpu.hxx>
 #include <etx/rt/integrators/atmosphere.hxx>
 #include <etx/rt/rt.hxx>
 
@@ -44,7 +42,6 @@ struct RTApplication {
   void on_reload_scene_selected();
   void on_reload_geometry_selected();
   void on_options_changed();
-  void on_reload_integrator_selected();
   void on_use_image_as_reference();
   void on_material_changed(uint32_t index);
   void on_medium_changed(uint32_t index);
@@ -67,10 +64,8 @@ struct RTApplication {
 
   CPUDebugIntegrator _preview = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
-  GPUPathTracing _gpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
-  GPUVCM _gpu_vcm = {raytracing};
   CPUAtmosphere _cpu_atmosphere = {raytracing};
 
   Integrator* _integrator_array[5] = {

@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include <inttypes.h>
+#include <etx/core/debug.hxx>
 
 namespace etx {
 

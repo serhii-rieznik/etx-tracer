@@ -1,0 +1,51 @@
+# Blender 3.6.2 MTL File: 'cb-candle.blend1'
+# www.blender.org
+
+newmtl et::env
+color nblackbody 20000.0 scale 2.0
+
+newmtl et::medium
+id wax
+absorption 1 2.5 5
+scattering 4 3 2
+
+newmtl candle
+material class diffuse
+int_medium wax
+subsurface class exact
+
+newmtl diamond
+material class dielectric
+int_ior diamond
+
+newmtl ceiling
+material class diffuse
+Kd 1 1 1
+
+newmtl floor
+material class diffuse
+Kd 1 1 1
+map_Kd ../textures/checkers_grayscale.png
+
+newmtl frontWall
+material class diffuse
+Kd 1 1 1
+map_Kd ../textures/checkers_grayscale.png
+
+newmtl leftWall
+material class diffuse
+Kd 0.25 0.25 1.0
+
+newmtl rightWall
+material class diffuse
+Kd 0.25 1 0.25
+
+newmtl fire
+material class translucent
+Kd 1 1 1
+Ks 1 1 1
+Kt 1 1 1
+emitter blackbody 2000.0 scale 1.0
+Ke 1 1 1
+
+newmtl wire
