@@ -43,7 +43,7 @@ struct GPUDummyDevice : public GPUDevice {
   bool launch(GPUPipeline, const char*, uint32_t, uint32_t, device_pointer_t, uint64_t) override {
     return false;
   }
-  void create_pipeline_from_files(TaskScheduler&, uint64_t, const char* [], GPUPipeline[], bool) override {
+  void create_pipeline_from_files(TaskScheduler&, uint64_t, const char*[], GPUPipeline[], bool) override {
   }
   void setup_denoiser(uint32_t, uint32_t) override {
   }

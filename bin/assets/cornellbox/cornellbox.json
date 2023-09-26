@@ -1,5 +1,6 @@
 {
     "geometry" : "cornellbox.obj",
+    "materials" : "cornellbox.materials",
     "camera" : {
         "viewport" : [1080.0, 1080.0],
         "origin" : [0.0, 1.0, 5.15],

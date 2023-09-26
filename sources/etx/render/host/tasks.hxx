@@ -32,6 +32,8 @@ struct TaskScheduler {
   void execute(uint32_t range, Task*);
   void execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
+  void execute_linear(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
+
   bool completed(Task::Handle);
   void wait(Task::Handle);
 

@@ -19,16 +19,15 @@ struct OptionalValue {
     Count,
   };
 
-  Class cls = Class::Integer;
-  std::string id = {};
-  std::string name = {};
-
   union Value {
     uint32_t integer;
     float flt;
     bool boolean;
   };
 
+  Class cls = Class::Integer;
+  std::string id = {};
+  std::string name = {};
   Value min_value = {};
   Value value = {};
   Value max_value = {};
@@ -88,9 +87,9 @@ struct OptionalValue {
   template <class T>
   OptionalValue(T v, T end, std::string (*f)(uint32_t), const std::string& a_id, const std::string& desc)
     : cls(Class::Enum)
-    , name_func(f)
     , id(a_id)
-    , name(desc) {
+    , name(desc)
+    , name_func(f) {
     min_value.integer = 0;
     value.integer = uint32_t(v);
     max_value.integer = uint32_t(end) - 1u;

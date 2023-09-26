@@ -25,7 +25,7 @@ struct ImagePoolImpl {
   }
 
   void cleanup() {
-    ETX_ASSERT(image_pool.count_alive() == 0);
+    ETX_ASSERT(image_pool.alive_objects_count() == 0);
     image_pool.cleanup();
   }
 
@@ -186,7 +186,7 @@ struct ImagePoolImpl {
     img.x_distributions.a = reinterpret_cast<Distribution*>(calloc(img.x_distributions.count, sizeof(Distribution)));
 
     std::atomic<float> total_weight = {0.0f};
-    scheduler.execute(img.isize.y, [&img, uniform_sampling, &total_weight, &y_dist](uint32_t begin, uint32_t end, uint32_t) {
+    scheduler.execute_linear(img.isize.y, [&img, uniform_sampling, &total_weight, &y_dist](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t y = begin; y < end; ++y) {
         float v = (float(y) + 0.5f) / img.fsize.y;
         float row_value = 0.0f;
@@ -438,14 +438,6 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
     fclose(in_file);
     return false;
   }
-
-  auto sw = [](float t) {
-    uint32_t x;
-    memcpy(&x, &t, 4);
-    x = ((x & 0x000000ff) >> 0) << 24 | ((x & 0x0000ff00) >> 8) << 16 | ((x & 0x00ff0000) >> 16) << 8 | ((x & 0xff000000) >> 24) << 0;
-    memcpy(&t, &x, 4);
-    return t;
-  };
 
   data.resize(sizeof(float4) * size.x * size.y);
   auto data_ptr = reinterpret_cast<float4*>(data.data());

@@ -29,6 +29,7 @@ struct ETX_ALIGNED Emitter {
   float equivalent_disk_size = 0.0f;
   float angular_size_cosine = 1.0f;
   float weight = 0.0f;
+  float triangle_area = 0.0f;
 
   Emitter() = default;
 

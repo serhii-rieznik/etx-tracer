@@ -1,4 +1,5 @@
 ﻿#include <etx/core/environment.hxx>
+#include <etx/core/profiler.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/shared/scene.hxx>
 
@@ -8,11 +9,11 @@
 #include <stb_image.hxx>
 #include <stb_image_write.hxx>
 
-#if defined(_WIN32)
+#if defined(ETX_PLATFORM_WINDOWS)
 
 // TODO : fix hacks
-#define WIN32_LEAN_AND_MEAN 1
-#include <Windows.h>
+# define WIN32_LEAN_AND_MEAN 1
+# include <Windows.h>
 
 #endif
 
@@ -39,12 +40,12 @@ void RTApplication::init() {
   ui.callbacks.reload_scene_selected = std::bind(&RTApplication::on_reload_scene_selected, this);
   ui.callbacks.reload_geometry_selected = std::bind(&RTApplication::on_reload_geometry_selected, this);
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
-  ui.callbacks.reload_integrator = std::bind(&RTApplication::on_reload_integrator_selected, this);
   ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
   ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
   ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
   ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this);
+  ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -57,7 +58,7 @@ void RTApplication::init() {
     _options.add("ref", "none");
   }
 
-#if defined(_WIN32)
+#if defined(ETX_PLATFORM_WINDOWS)
   if (GetAsyncKeyState(VK_ESCAPE)) {
     _options.set("integrator", std::string());
   }
@@ -87,6 +88,7 @@ void RTApplication::init() {
   }
 
   save_options();
+  ETX_PROFILER_RESET_COUNTERS();
 }
 
 void RTApplication::save_options() {
@@ -94,6 +96,7 @@ void RTApplication::save_options() {
 }
 
 void RTApplication::frame() {
+  ETX_FUNCTION_SCOPE();
   const float4* c_image = nullptr;
   const float4* l_image = nullptr;
   const char* status = "Not running";
@@ -341,11 +344,6 @@ void RTApplication::on_options_changed() {
   _current_integrator->update_options(ui.integrator_options());
 }
 
-void RTApplication::on_reload_integrator_selected() {
-  ETX_ASSERT(_current_integrator);
-  _current_integrator->reload();
-}
-
 void RTApplication::on_material_changed(uint32_t index) {
   // TODO : re-upload to GPU
   _current_integrator->preview(ui.integrator_options());
@@ -364,6 +362,10 @@ void RTApplication::on_emitter_changed(uint32_t index) {
 }
 
 void RTApplication::on_camera_changed() {
+  _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_scene_settings_changed() {
   _current_integrator->preview(ui.integrator_options());
 }
 

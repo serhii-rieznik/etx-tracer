@@ -1,3 +1,4 @@
+#include <etx/core/profiler.hxx>
 #include <etx/render/host/image_pool.hxx>
 
 #include "render.hxx"
@@ -9,7 +10,8 @@
 
 namespace etx {
 
-extern const char* shader_source;
+extern const char* shader_source_hlsl;
+extern const char* shader_source_metal;
 
 struct ShaderConstants {
   float4 dimensions = {};
@@ -58,15 +60,22 @@ void RenderContext::init() {
   context.context.d3d11.device_context = sapp_d3d11_get_device_context();
   context.context.d3d11.depth_stencil_view_cb = sapp_d3d11_get_depth_stencil_view;
   context.context.d3d11.render_target_view_cb = sapp_d3d11_get_render_target_view;
+
+  context.context.metal.device = sapp_metal_get_device();
+  context.context.metal.drawable_cb = []() {
+    return sapp_metal_get_drawable();
+  };
+  context.context.metal.renderpass_descriptor_cb = []() {
+    return reinterpret_cast<const void*>(sapp_metal_get_renderpass_descriptor());
+  };
+
   context.context.depth_format = SG_PIXELFORMAT_NONE;
   sg_setup(context);
 
   sg_shader_desc shader_desc = {};
-  shader_desc.vs.source = shader_source;
   shader_desc.vs.entry = "vertex_main";
   shader_desc.vs.uniform_blocks[0].size = sizeof(ShaderConstants);
 
-  shader_desc.fs.source = shader_source;
   shader_desc.fs.entry = "fragment_main";
   shader_desc.fs.images[0].image_type = SG_IMAGETYPE_2D;
   shader_desc.fs.images[0].name = "sample_image";
@@ -78,6 +87,15 @@ void RenderContext::init() {
   shader_desc.fs.images[2].name = "reference_image";
   shader_desc.fs.images[2].sampler_type = SG_SAMPLERTYPE_FLOAT;
   shader_desc.fs.uniform_blocks[0].size = sizeof(ShaderConstants);
+
+#if (ETX_PLATFORM_WINDOWS)
+  shader_desc.vs.source = shader_source_hlsl;
+  shader_desc.fs.source = shader_source_hlsl;
+#elif (ETX_PLATFORM_APPLE)
+  shader_desc.vs.source = shader_source_metal;
+  shader_desc.fs.source = shader_source_metal;
+#endif
+
   _private->output_shader = sg_make_shader(shader_desc);
 
   sg_pipeline_desc pipeline_desc = {};
@@ -86,6 +104,7 @@ void RenderContext::init() {
 
   apply_reference_image(_private->def_image_handle);
 
+#if (ETX_PLATFORM_WINDOWS)
   set_output_dimensions({16, 16});
   float4 c_image[256] = {};
   float4 l_image[256] = {};
@@ -99,6 +118,7 @@ void RenderContext::init() {
   update_camera_image(c_image);
   update_light_image(l_image);
   sg_commit();
+#endif
 }
 
 void RenderContext::cleanup() {
@@ -115,9 +135,11 @@ void RenderContext::cleanup() {
 }
 
 void RenderContext::start_frame() {
+  ETX_FUNCTION_SCOPE();
   sg_pass_action pass_action = {};
-  pass_action.colors[0].action = SG_ACTION_CLEAR;
-  pass_action.colors[0].value = {0.05f, 0.07f, 0.1f, 1.0f};
+  pass_action.colors[0].load_action = SG_LOADACTION_CLEAR;
+  pass_action.colors[0].store_action = SG_STOREACTION_STORE;
+  pass_action.colors[0].clear_value = {0.05f, 0.07f, 0.1f, 1.0f};
   sg_apply_viewport(0, 0, sapp_width(), sapp_height(), sg_features().origin_top_left);
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 
@@ -146,6 +168,7 @@ void RenderContext::start_frame() {
 }
 
 void RenderContext::end_frame() {
+  ETX_FUNCTION_SCOPE();
   sg_end_pass();
   sg_commit();
 }
@@ -224,6 +247,7 @@ void RenderContext::set_output_dimensions(const uint2& dim) {
 
 void RenderContext::update_camera_image(const float4* camera) {
   ETX_ASSERT(_private->sample_image.id != 0);
+  ETX_FUNCTION_SCOPE();
 
   sg_image_data data = {};
   data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
@@ -233,6 +257,7 @@ void RenderContext::update_camera_image(const float4* camera) {
 
 void RenderContext::update_light_image(const float4* light) {
   ETX_ASSERT(_private->light_image.id != 0);
+  ETX_FUNCTION_SCOPE();
 
   sg_image_data data = {};
   data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
@@ -240,7 +265,7 @@ void RenderContext::update_light_image(const float4* light) {
   sg_update_image(_private->light_image, data);
 }
 
-const char* shader_source = R"(
+const char* shader_source_hlsl = R"(
 
 cbuffer Constants : register(b0) {
   float4 dimensions;
@@ -261,7 +286,6 @@ struct VSOutput {
 
 VSOutput vertex_main(uint vertexIndex : SV_VertexID) {
   float2 pos = float2((vertexIndex << 1u) & 2u, vertexIndex & 2u);
-  float2 scale = dimensions.zw / dimensions.xy;
   float2 snapped_pos = floor(pos * 2.0f * dimensions.zw - dimensions.zw) / dimensions.xy;
 
   VSOutput output = (VSOutput)0;
@@ -389,6 +413,81 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
   };
 
   return result;
+}
+
+)";
+
+const char* shader_source_metal = R"(
+using namespace metal;
+
+struct Constants {
+  float4 dimensions;
+  uint image_view;
+  uint options;
+  float exposure;
+  float pad;
+};
+
+struct VSOutput {
+  float4 pos [[position]];
+  float2 uv;
+};
+
+constant constexpr uint ToneMapping = 1u << 0u;
+constant constexpr uint sRGB = 1u << 1u;
+
+float4 to_rgb(float4 xyz) {
+  float4 rgb;
+  rgb[0] = max(0.0, 3.240479f * xyz[0] - 1.537150f * xyz[1] - 0.498535f * xyz[2]);
+  rgb[1] = max(0.0, -0.969256f * xyz[0] + 1.875991f * xyz[1] + 0.041556f * xyz[2]);
+  rgb[2] = max(0.0, 0.055648f * xyz[0] - 0.204043f * xyz[1] + 1.057311f * xyz[2]);
+  rgb[3] = 1.0f;
+  return rgb;
+}
+
+float linear_to_gamma(float value) {
+  return value <= 0.0031308f ? 12.92f * value : 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
+}
+
+float4 tonemap(float4 value, float exposure, uint options) {
+  if (options & ToneMapping) {
+    value = 1.0f - exp(-exposure * value);
+  }
+
+  if (options & sRGB) {
+    value.x = linear_to_gamma(value.x);
+    value.y = linear_to_gamma(value.y);
+    value.z = linear_to_gamma(value.z);
+  }
+
+  return value;
+}
+
+vertex VSOutput vertex_main(constant Constants& params [[buffer(0)]], uint vertexIndex [[vertex_id]]) {
+  float2 pos = float2((vertexIndex << 1u) & 2u, vertexIndex & 2u);
+  float2 snapped_pos = floor(pos * 2.0f * params.dimensions.zw - params.dimensions.zw) / params.dimensions.xy;
+
+  VSOutput output = {};
+  output.pos = float4(snapped_pos, 0.0f, 1.0f);
+  output.uv = {pos.x, 1.0f - pos.y};
+  return output;
+}
+
+fragment float4 fragment_main(VSOutput input [[stage_in]],
+  constant Constants& params [[buffer(0)]], texture2d<float> color [[texture(0)]]) {
+  constexpr sampler linear_sampler(coord::normalized, address::clamp_to_edge, filter::linear);
+
+  float2 offset = 0.5f * (params.dimensions.xy - params.dimensions.zw);
+
+  int2 coord = int2(floor(input.pos.xy - offset));
+  int2 clamped = clamp(coord.xy, int2(0, 0), int2(params.dimensions.zw) - 1);
+  if (any(clamped != coord.xy)) {
+    discard_fragment();
+  }
+
+  float4 sampled_color_xyz = color.sample(linear_sampler, input.uv);
+  float4 sampled_color_rgb = to_rgb(sampled_color_xyz);
+  return tonemap(sampled_color_rgb, params.exposure, params.options);
 }
 
 )";

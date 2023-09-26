@@ -5,3 +5,5 @@ bin/options.json
 *.ptx
 *.fatbin
 bin/ui.ini
+bin/raytracer
+

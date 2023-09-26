@@ -299,7 +299,7 @@ void CPUVCM::update() {
     current_state = Integrator::State::Stopped;
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
-  } else if (_private->vcm_iteration.iteration + 1 < _private->vcm_options.max_samples) {
+  } else if (_private->vcm_iteration.iteration + 1 < rt.scene().samples) {
     _private->vcm_iteration.iteration += 1;
     _private->start_next_iteration();
   } else {

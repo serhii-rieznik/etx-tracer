@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include <etx/core/profiler.hxx>
+
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/render/shared/image.hxx>
@@ -22,6 +24,8 @@ struct ETX_ALIGNED Scene {
   Camera camera ETX_EMPTY_INIT;
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
+  ArrayView<uint32_t> triangle_to_material ETX_EMPTY_INIT;
+  ArrayView<uint32_t> triangle_to_emitter ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
   ArrayView<Emitter> emitters ETX_EMPTY_INIT;
   ArrayView<Image> images ETX_EMPTY_INIT;
@@ -34,6 +38,9 @@ struct ETX_ALIGNED Scene {
   uint64_t acceleration_structure ETX_EMPTY_INIT;
   uint32_t camera_medium_index ETX_INIT_WITH(kInvalidIndex);
   uint32_t camera_lens_shape_image_index ETX_INIT_WITH(kInvalidIndex);
+  uint32_t max_path_length ETX_INIT_WITH(65535u);
+  uint32_t samples ETX_INIT_WITH(256u);
+  uint32_t random_path_termination ETX_INIT_WITH(6u);
 };
 
 struct ContinousTraceOptions {
@@ -108,8 +115,10 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
   result_intersection.triangle_index = static_cast<uint32_t>(base.triangle_index);
   result_intersection.w_i = w_i;
   result_intersection.t = base.t;
+  result_intersection.material_index = scene.triangle_to_material[result_intersection.triangle_index];
+  result_intersection.emitter_index = scene.triangle_to_emitter[result_intersection.triangle_index];
 
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[result_intersection.material_index];
   if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {
     auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
     float3x3 from_local = {
@@ -125,6 +134,8 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
 }
 
 ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
+  ETX_FUNCTION_SCOPE();
+
   if (path_length < start_path_length)
     return true;
 
@@ -142,80 +153,17 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
   return false;
 }
 
-namespace subsurface {
+ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene) {
+  SpectralResponse result = img.spectrum(spect);
 
-template <class RT>
-ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const uint32_t material_index, const RT& rt, Sampler& smp, Gather& result) {
-  const auto& mtl = scene.materials[material_index].subsurface;
-
-  Sample ss_samples[3] = {
-    sample(in_intersection, mtl, 0u, smp),
-    sample(in_intersection, mtl, 1u, smp),
-    sample(in_intersection, mtl, 2u, smp),
-  };
-
-  IntersectionBase intersections[kTotalIntersections] = {};
-  ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, material_index};
-  uint32_t intersections_0 = rt.continuous_trace(scene, ss_samples[0].ray, ct, smp);
-  ct.intersection_buffer += intersections_0;
-  uint32_t intersections_1 = rt.continuous_trace(scene, ss_samples[1].ray, ct, smp);
-  ct.intersection_buffer += intersections_1;
-  uint32_t intersections_2 = rt.continuous_trace(scene, ss_samples[2].ray, ct, smp);
-
-  uint32_t intersection_count = intersections_0 + intersections_1 + intersections_2;
-  ETX_CRITICAL(intersection_count <= kTotalIntersections);
-  if (intersection_count == 0) {
-    return false;
+  if (img.image_index != kInvalidIndex) {
+    float4 eval = scene.images[img.image_index].evaluate(uv);
+    result *= rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_reflection);
+    ETX_VALIDATE(result);
   }
-
-  result = {};
-  for (uint32_t i = 0; i < intersection_count; ++i) {
-    Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
-
-    auto out_intersection = make_intersection(scene, in_intersection.w_i, intersections[i]);
-
-    float gw = geometric_weigth(out_intersection.nrm, ss_sample);
-    float pdf = evaluate(spect, mtl, ss_sample.sampled_radius).average();
-    ETX_VALIDATE(pdf);
-    if (pdf <= 0.0f)
-      continue;
-
-    auto eval = evaluate(spect, mtl, length(out_intersection.pos - in_intersection.pos));
-    ETX_VALIDATE(eval);
-
-    auto weight = eval / pdf * gw;
-    ETX_VALIDATE(weight);
-
-    if (weight.is_zero())
-      continue;
-
-    result.total_weight += weight.average();
-    result.intersections[result.intersection_count] = out_intersection;
-    result.weights[result.intersection_count] = weight;
-    result.intersection_count += 1u;
-  }
-
-  if (result.total_weight > 0.0f) {
-    float rnd = smp.next() * result.total_weight;
-    float partial_sum = 0.0f;
-    float sample_weight = 0.0f;
-    for (uint32_t i = 0; i < result.intersection_count; ++i) {
-      sample_weight = result.weights[i].average();
-      float next_sum = partial_sum + sample_weight;
-      if (rnd < next_sum) {
-        result.selected_intersection = i;
-        result.selected_sample_weight = result.total_weight / sample_weight;
-        break;
-      }
-      partial_sum = next_sum;
-    }
-    ETX_ASSERT(result.selected_intersection != kInvalidIndex);
-  }
-
-  return result.intersection_count > 0;
+  return result;
 }
 
-}  // namespace subsurface
 }  // namespace etx
 
 #include <etx/render/shared/scene_bsdf.hxx>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <etx/render/shared/scene.hxx>
+#include <etx/rt/shared/path_tracing_shared.hxx>
 
 namespace etx {
 
@@ -8,9 +9,6 @@ struct Options;
 
 struct ETX_ALIGNED VCMOptions {
   uint32_t options ETX_EMPTY_INIT;
-  uint32_t max_samples ETX_EMPTY_INIT;
-  uint32_t max_depth ETX_EMPTY_INIT;
-  uint32_t rr_start ETX_EMPTY_INIT;
   uint32_t radius_decay ETX_EMPTY_INIT;
   float initial_radius ETX_EMPTY_INIT;
 
@@ -134,16 +132,17 @@ constexpr uint64_t kVCMPathStateSize = sizeof(VCMPathState);
 struct ETX_ALIGNED VCMLightVertex {
   VCMLightVertex() = default;
 
-  ETX_GPU_CODE VCMLightVertex(const VCMPathState& s, const float3& a_pos, const float3& a_nrm, const float3& b, uint32_t tri, uint32_t index)
+  ETX_GPU_CODE VCMLightVertex(const VCMPathState& s, const Intersection& i, uint32_t index)
     : throughput(s.throughput)
     , w_i(s.ray.d)
     , d_vcm(s.d_vcm)
-    , bc(b)
+    , bc(i.barycentric)
     , d_vc(s.d_vc)
-    , pos(a_pos)
+    , pos(i.pos)
     , d_vm(s.d_vm)
-    , nrm(a_nrm)
-    , triangle_index(tri)
+    , nrm(i.nrm)
+    , triangle_index(i.triangle_index)
+    , material_index(i.material_index)
     , path_length(s.total_path_depth)
     , path_index(index) {
   }
@@ -161,6 +160,7 @@ struct ETX_ALIGNED VCMLightVertex {
 
   float3 nrm = {};
   uint32_t triangle_index = kInvalidIndex;
+  uint32_t material_index = kInvalidIndex;
 
   uint32_t path_length = 0;
   uint32_t path_index = 0;
@@ -185,23 +185,17 @@ struct ETX_ALIGNED VCMLightPath {
   uint32_t pad ETX_EMPTY_INIT;
 };
 
-ETX_GPU_CODE bool vcm_next_medium_ray(const VCMOptions& options, VCMPathState& state) {
-  if (state.total_path_depth + 1 > options.max_depth)
-    return false;
-
-  return random_continue(state.total_path_depth, options.rr_start, state.eta, state.sampler, state.throughput);
-}
-
 ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source, const VCMOptions& options, VCMPathState& state, const VCMIteration& it,
   const Intersection& intersection, const BSDFData& bsdf_data, const BSDFSample& bsdf_sample, bool subsurface_sample) {
-  if (state.total_path_depth + 1 > options.max_depth)
+  if (state.total_path_depth + 1 > scene.max_path_length)
     return false;
+
   if (bsdf_sample.valid() == false) {
     return false;
   }
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[intersection.material_index];
 
   state.throughput *= bsdf_sample.weight;
   ETX_VALIDATE(state.throughput);
@@ -214,7 +208,7 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
     return false;
   }
 
-  if (random_continue(state.total_path_depth, options.rr_start, state.eta, state.sampler, state.throughput) == false) {
+  if (random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput) == false) {
     return false;
   }
 
@@ -343,7 +337,7 @@ ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathS
   if (state.medium_index == kInvalidIndex)
     return {};
 
-  auto medium_sample = scene.mediums[state.medium_index].sample(state.spect, state.sampler, state.ray.o, state.ray.d, max_t);
+  auto medium_sample = scene.mediums[state.medium_index].sample(state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
   state.throughput *= medium_sample.weight;
 
   ETX_VALIDATE(state.throughput);
@@ -356,14 +350,16 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
 
   const auto& medium = scene.mediums[state.medium_index];
   state.ray.o = medium_sample.pos;
-  state.ray.d = medium.sample_phase_function(state.spect, state.sampler, medium_sample.pos, state.ray.d);
+  state.ray.d = medium.sample_phase_function(state.spect, state.sampler, state.ray.d);
 
-  return vcm_next_medium_ray(options, state);
+  if (state.total_path_depth + 1 > scene.max_path_length)
+    return false;
+
+  return random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput);
 }
 
 ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state) {
-  const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[intersection.material_index];
   if (mat.cls != Material::Class::Boundary)
     return false;
 
@@ -390,10 +386,9 @@ ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPath
   state.path_distance = 0.0f;
 }
 
-template <class RT>
-ETX_GPU_CODE float3 vcm_connect_to_camera(const RT& rt, const Scene& scene, const Material& mat, const Triangle& tri, const VCMIteration& vcm_iteration, const VCMOptions& options,
-  const Intersection& in_intersection, const Intersection& intersection, const SpectralResponse& scale, VCMPathState& state, float2& uv) {
-  if ((options.connect_to_camera() == false) || (state.total_path_depth + 1 >= options.max_depth)) {
+ETX_GPU_CODE float3 vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Material& mat, const Triangle& tri, const VCMIteration& vcm_iteration,
+  const VCMOptions& options, const Intersection& in_intersection, const Intersection& intersection, const SpectralResponse& scale, VCMPathState& state, float2& uv) {
+  if ((options.connect_to_camera() == false) || (state.total_path_depth + 1 >= scene.max_path_length)) {
     return {};
   }
 
@@ -452,22 +447,20 @@ ETX_GPU_CODE void vcm_update_camera_vcm(const Intersection& intersection, VCMPat
 }
 
 ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
-  const auto& tri = scene.triangles[intersection.triangle_index];
-  if ((options.direct_hit() == false) || (tri.emitter_index == kInvalidIndex))
+  if ((options.direct_hit() == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
-  const auto& emitter = scene.emitters[tri.emitter_index];
+  const auto& emitter = scene.emitters[intersection.emitter_index];
   state.gathered += vcm_get_radiance(scene, emitter, state, options, intersection);
 }
 
-template <class RT>
-ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, const Intersection& intersection, const RT& rt,
-  VCMPathState& state) {
-  if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > options.max_depth))
+ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, const Intersection& intersection,
+  const Raytracing& rt, VCMPathState& state) {
+  if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.max_path_length))
     return {state.spect.wavelength, 0.0f};
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[intersection.material_index];
   uint32_t emitter_index = sample_emitter_index(scene, state.sampler);
   auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler, intersection.pos, scene);
 
@@ -521,8 +514,7 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
     return false;
   }
 
-  const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[intersection.material_index];
   auto camera_data = BSDFData{spect, state_medium, PathSource::Camera, intersection, intersection.w_i};
   auto camera_bsdf = bsdf::evaluate(camera_data, w_o, mat, scene, state.sampler);
   if (camera_bsdf.valid() == false) {
@@ -539,7 +531,7 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
   }
 
   const auto& light_tri = scene.triangles[light_vertex.triangle_index];
-  const auto& light_mat = scene.materials[light_tri.material_index];
+  const auto& light_mat = scene.materials[light_vertex.material_index];
   auto light_data = BSDFData{spect, state_medium, PathSource::Light, light_v, light_vertex.w_i};
   auto light_bsdf = bsdf::evaluate(light_data, -w_o, light_mat, scene, state.sampler);
   if (light_bsdf.valid() == false) {
@@ -569,18 +561,16 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
   return true;
 }
 
-template <class RT>
 ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightPath>& light_paths,
-  const ArrayView<VCMLightVertex>& light_vertices, const VCMOptions& options, const Intersection& intersection, const RT& rt, VCMPathState& state) {
+  const ArrayView<VCMLightVertex>& light_vertices, const VCMOptions& options, const Intersection& intersection, const Raytracing& rt, VCMPathState& state) {
   if (options.connect_vertices() == false)
     return {state.spect.wavelength, 0.0f};
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
   const auto& light_path = light_paths[state.global_index];
 
   SpectralResponse result = {state.spect.wavelength, 0.0f};
-  for (uint64_t i = 0; (i < light_path.count) && (state.total_path_depth + i + 2 <= options.max_depth); ++i) {
+  for (uint64_t i = 0; (i < light_path.count) && (state.total_path_depth + i + 2 <= scene.max_path_length); ++i) {
     float3 target_position = {};
     SpectralResponse value = {};
     bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertices[light_path.index + i],  //
@@ -626,7 +616,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
       auto d = light_vertex.position(scene) - intersection.pos;
       float distance_squared = dot(d, d);
-      if ((distance_squared > radius_squared) || (light_vertex.path_length + state.total_path_depth > options.max_depth)) {
+      if ((distance_squared > radius_squared) || (light_vertex.path_length + state.total_path_depth + 1 > scene.max_path_length)) {
         continue;
       }
 
@@ -634,8 +624,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
         continue;
       }
 
-      const auto& tri = scene.triangles[intersection.triangle_index];
-      const auto& mat = scene.materials[tri.material_index];
+      const auto& mat = scene.materials[intersection.material_index];
       auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
       auto camera_bsdf = bsdf::evaluate(camera_data, -light_vertex.w_i, mat, scene, state.sampler);
       if (camera_bsdf.valid() == false) {
@@ -670,7 +659,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
   ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, const Intersection& intersection,
     float vc_weight) const {
-    if ((indices.count == 0) || (state.total_path_depth + 1 > options.max_depth)) {
+    if (indices.count == 0) {
       return {};
     }
 
@@ -710,9 +699,8 @@ struct ETX_ALIGNED VCMSpatialGridData {
   }
 };
 
-template <class RT>
 ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iteration, const VCMOptions& options, const ArrayView<VCMLightPath>& light_paths,
-  const ArrayView<VCMLightVertex>& light_vertices, VCMPathState& state, const RT& rt, const VCMSpatialGridData& spatial_grid) {
+  const ArrayView<VCMLightVertex>& light_vertices, VCMPathState& state, const Raytracing& rt, const VCMSpatialGridData& spatial_grid) {
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
@@ -730,8 +718,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     return true;
   }
 
-  const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[intersection.material_index];
   auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, state.sampler);
 
@@ -739,8 +726,8 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   vcm_handle_direct_hit(scene, options, intersection, state);
 
   subsurface::Gather ss_gather = {};
-  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
-  bool subsurface_sampled = subsurface_path && subsurface::gather(state.spect, scene, intersection, tri.material_index, rt, state.sampler, ss_gather);
+  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
+  bool subsurface_sampled = subsurface_path && subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather);
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     if (subsurface_sampled) {
@@ -762,7 +749,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     bsdf_sample.eta = 1.0f;
   }
 
-  if (options.enable_merging() && options.merge_vertices() && (state.total_path_depth + 1 <= options.max_depth)) {
+  if (options.enable_merging() && options.merge_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
     state.merged += spatial_grid.gather(scene, state, light_vertices, options, intersection, iteration.vc_weight);
   }
 
@@ -782,9 +769,8 @@ struct ETX_ALIGNED LightStepResult {
   bool continue_tracing = false;
 };
 
-template <class RT>
 ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIteration& iteration, const VCMOptions& options, const uint32_t path_index, VCMPathState& state,
-  const RT& rt) {
+  const Raytracing& rt) {
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
@@ -805,7 +791,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
   }
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  const auto& mat = scene.materials[tri.material_index];
+  const auto& mat = scene.materials[intersection.material_index];
   auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Light, intersection, intersection.w_i};
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, state.sampler);
   ETX_VALIDATE(bsdf_sample.weight);
@@ -813,15 +799,15 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
   vcm_update_light_vcm(intersection, state);
 
   subsurface::Gather ss_gather = {};
-  bool subsurface_path = mat.has_subsurface_scattering() && (bsdf_sample.properties & BSDFSample::Diffuse);
-  bool subsurface_sampled = subsurface::gather(state.spect, scene, intersection, tri.material_index, rt, state.sampler, ss_gather);
+  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
+  bool subsurface_sampled = subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather);
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     result.add_vertex = true;
-    result.vertex_to_add = {state, intersection.pos, intersection.nrm, intersection.barycentric, intersection.triangle_index, path_index};
+    result.vertex_to_add = {state, intersection, path_index};
     result.splat_count = 0;
 
-    if (options.connect_to_camera() && (state.total_path_depth + 1 <= options.max_depth)) {
+    if (options.connect_to_camera() && (state.total_path_depth + 1 <= scene.max_path_length)) {
       if (subsurface_sampled) {
         for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
           auto value = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options,  //

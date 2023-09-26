@@ -1,5 +1,7 @@
 #pragma once
 
+#include <etx/core/debug.hxx>
+
 namespace etx {
 
 struct log {

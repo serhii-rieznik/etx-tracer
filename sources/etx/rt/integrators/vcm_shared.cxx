@@ -5,20 +5,14 @@ namespace etx {
 VCMOptions VCMOptions::default_values() {
   VCMOptions options = {};
   options.options = DefaultOptions;
-  options.max_samples = 128u;
-  options.max_depth = 65536u;
-  options.rr_start = 6u;
   options.radius_decay = 256u;
   options.initial_radius = 0.0f;
   return options;
 }
 
 void VCMOptions::load(const Options& opt) {
-  max_samples = opt.get("spp", max_samples).to_integer();
-  max_depth = opt.get("max_depth", max_depth).to_integer();
   initial_radius = opt.get("initial_radius", initial_radius).to_float();
   radius_decay = opt.get("radius_decay", radius_decay).to_integer();
-  rr_start = opt.get("rr_start", max_depth).to_integer();
 
   options = opt.get("direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
   options = opt.get("connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
@@ -30,9 +24,6 @@ void VCMOptions::load(const Options& opt) {
 }
 
 void VCMOptions::store(Options& opt) {
-  opt.add(1u, max_samples, 0xffffu, "spp", "Max Iterations");
-  opt.add(1u, max_depth, 65536u, "max_depth", "Max Path Length");
-  opt.add(1u, rr_start, 65536u, "rr_start", "RR Start Length");
   opt.add(0.0f, initial_radius, 10.0f, "initial_radius", "Initial Radius");
   opt.add(1u, uint32_t(radius_decay), 65536u, "radius_decay", "Radius Decay");
   opt.add("debug", "Compute:");
@@ -46,8 +37,6 @@ void VCMOptions::store(Options& opt) {
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {
-  static_assert(sizeof(long) == sizeof(uint32_t));
-
   data = {};
   if (sample_count == 0) {
     return;
@@ -81,12 +70,14 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   _cell_ends.resize(hash_table_size);
   memset(_cell_ends.data(), 0, sizeof(uint32_t) * hash_table_size);
 
-  volatile long* ptr = reinterpret_cast<volatile long*>(_cell_ends.data());
+  static_assert(sizeof(std::atomic_int) == sizeof(uint32_t));
+
+  auto ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
   scheduler.execute(uint32_t(sample_count), [&scene, &samples, this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       uint32_t index = data.position_to_index(samples[i].position(scene));
       _position_to_index[i] = index;
-      _InterlockedIncrement(ptr + index);
+      atomic_inc(ptr + index);
     }
   });
 
@@ -97,12 +88,12 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     sum += t;
   }
 
-  ptr = reinterpret_cast<volatile long*>(_cell_ends.data());
+  ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
   scheduler.execute(uint32_t(sample_count), [this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       uint32_t index = _position_to_index[i];
-      uint32_t target_cell = _InterlockedIncrement(ptr + index);
-      _indices[target_cell - 1u] = i;
+      uint32_t target_cell = atomic_inc(ptr + index);
+      _indices[target_cell] = i;
     }
   });
 

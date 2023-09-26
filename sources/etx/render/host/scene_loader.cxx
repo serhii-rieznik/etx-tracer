@@ -1,5 +1,6 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
+#include <etx/core/json.hxx>
 
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/scene.hxx>
@@ -15,8 +16,9 @@
 #include <set>
 
 #include <mikktspace.h>
+#include <tiny_gltf.hxx>
 #include <tiny_obj_loader.hxx>
-#include <jansson.h>
+#include <json.hpp>
 
 #include <filesystem>
 
@@ -54,7 +56,16 @@ Pointer<Spectrums> spectrums() {
     return true;
   }();
 
+  if (invoke_once == false) {
+    log::error("Spectrums are not initialized");
+    std::terminate();
+  }
+
   return &_spectrums;
+}
+
+Pointer<Spectrums> shared_spectrums() {
+  return spectrums();
 }
 
 inline bool value_is_correct(float t) {
@@ -73,11 +84,13 @@ struct SceneRepresentationImpl {
   TaskScheduler& scheduler;
   std::vector<Vertex> vertices;
   std::vector<Triangle> triangles;
+  std::vector<uint32_t> triangle_to_material;
+  std::vector<uint32_t> triangle_to_emitter;
   std::vector<Material> materials;
   std::vector<Emitter> emitters;
 
   std::string json_file_name;
-  std::string obj_file_name;
+  std::string geometry_file_name;
   std::string mtl_file_name;
 
   ImagePool images;
@@ -132,6 +145,8 @@ struct SceneRepresentationImpl {
     materials.clear();
     emitters.clear();
     material_mapping.clear();
+    triangle_to_material.clear();
+    triangle_to_emitter.clear();
     camera_medium_index = kInvalidIndex;
     camera_lens_shape_image_index = kInvalidIndex;
 
@@ -149,11 +164,18 @@ struct SceneRepresentationImpl {
     loaded = false;
   }
 
-  bool calculate_area(Triangle& t) {
+  float triangle_area(const Triangle& t) {
+    return 0.5f * length(cross(vertices[t.i[1]].pos - vertices[t.i[0]].pos, vertices[t.i[2]].pos - vertices[t.i[0]].pos));
+  }
+
+  bool validate_triangle(Triangle& t) {
     t.geo_n = cross(vertices[t.i[1]].pos - vertices[t.i[0]].pos, vertices[t.i[2]].pos - vertices[t.i[0]].pos);
-    t.area = 0.5f * length(t.geo_n);
-    t.geo_n *= 0.5f / t.area;
-    return t.area > 0.0f;
+    float l = length(t.geo_n);
+    if (l == 0.0f)
+      return false;
+
+    t.geo_n /= l;
+    return true;
   }
 
   void validate_materials() {
@@ -178,16 +200,17 @@ struct SceneRepresentationImpl {
 
     referenced_vertices.resize(vertices.size());
     for (const auto& tri : triangles) {
+      const float tri_area = triangle_area(tri);
       for (uint32_t i = 0; i < 3; ++i) {
         uint32_t index = tri.i[i];
         ETX_CRITICAL(is_valid_vector(tri.geo_n));
         referenced_vertices[index] = true;
         if (is_valid_vector(vertices[index].nrm) == false) {
           if (reset_normals.count(index) == 0) {
-            vertices[index].nrm = tri.geo_n * tri.area;
+            vertices[index].nrm = tri.geo_n * tri_area;
             reset_normals.insert(index);
           } else {
-            vertices[index].nrm += tri.geo_n * tri.area;
+            vertices[index].nrm += tri.geo_n * tri_area;
           }
         }
       }
@@ -289,6 +312,8 @@ struct SceneRepresentationImpl {
     scene.camera_lens_shape_image_index = camera_lens_shape_image_index;
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
+    scene.triangle_to_material = {triangle_to_material.data(), triangle_to_material.size()};
+    scene.triangle_to_emitter = {triangle_to_emitter.data(), triangle_to_emitter.size()};
     scene.materials = {materials.data(), materials.size()};
     scene.emitters = {emitters.data(), emitters.size()};
     scene.images = {images.as_array(), images.array_size()};
@@ -309,6 +334,11 @@ struct SceneRepresentationImpl {
   };
 
   uint32_t load_from_obj(const char* file_name, const char* mtl_file);
+
+  uint32_t load_from_gltf(const char* file_name, bool binary);
+  void load_gltf_node(const tinygltf::Model& model, const tinygltf::Node&);
+  void load_gltf_mesh(const tinygltf::Model& model, const tinygltf::Mesh&);
+
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
@@ -396,66 +426,11 @@ SceneRepresentation::operator bool() const {
   return _private->loaded;
 }
 
-uint2 json_to_u2(json_t* a) {
-  uint2 result = {};
-  int i = 0;
-  json_t* val = {};
-  json_array_foreach(a, i, val) {
-    if ((i >= 2) || (json_is_number(val) == false))
-      break;
-
-    switch (i) {
-      case 0:
-        result.x = static_cast<uint32_t>(json_number_value(val));
-        break;
-      case 1:
-        result.y = static_cast<uint32_t>(json_number_value(val));
-        break;
-      default:
-        break;
-    }
+template <class T>
+inline void get_values(const std::vector<T>& a, T* ptr, uint64_t count) {
+  for (uint64_t i = 0, e = a.size() < count ? a.size() : count; i < e; ++i) {
+    *ptr++ = a[i];
   }
-  return result;
-}
-
-float3 json_to_f3(json_t* a) {
-  float3 result = {};
-  int i = 0;
-  json_t* val = {};
-  json_array_foreach(a, i, val) {
-    if ((i >= 3) || (json_is_number(val) == false))
-      break;
-
-    switch (i) {
-      case 0:
-        result.x = static_cast<float>(json_number_value(val));
-        break;
-      case 1:
-        result.y = static_cast<float>(json_number_value(val));
-        break;
-      case 2:
-        result.z = static_cast<float>(json_number_value(val));
-        break;
-      default:
-        break;
-    }
-  }
-  return result;
-}
-
-json_t* json_float3_to_array(const float3& v) {
-  json_t* j = json_array();
-  json_array_append(j, json_real(v.x));
-  json_array_append(j, json_real(v.y));
-  json_array_append(j, json_real(v.z));
-  return j;
-}
-
-json_t* json_uint2_to_array(const uint2& v) {
-  json_t* j = json_array();
-  json_array_append(j, json_integer(v.x));
-  json_array_append(j, json_integer(v.y));
-  return j;
 }
 
 void SceneRepresentation::write_materials(const char* filename) {
@@ -525,15 +500,15 @@ void SceneRepresentation::write_materials(const char* filename) {
 }
 
 void SceneRepresentation::save_to_file(const char* filename) {
-  if (_private->obj_file_name.empty())
+  if (_private->geometry_file_name.empty())
     return;
 
   FILE* fout = fopen(filename, "w");
   if (fout == nullptr)
     return;
-
-  auto materials_file = _private->obj_file_name + ".materials";
-  auto relative_obj_file = std::filesystem::relative(_private->obj_file_name, std::filesystem::path(filename).parent_path()).string();
+  /*
+  auto materials_file = _private->geometry_file_name + ".materials";
+  auto relative_obj_file = std::filesystem::relative(_private->geometry_file_name, std::filesystem::path(filename).parent_path()).string();
   auto relative_mtl_file = std::filesystem::relative(materials_file, std::filesystem::path(filename).parent_path()).string();
   write_materials(materials_file.c_str());
 
@@ -554,9 +529,9 @@ void SceneRepresentation::save_to_file(const char* filename) {
   }
 
   json_dumpf(j, fout, JSON_INDENT(2));
-  fclose(fout);
-
   json_decref(j);
+  */
+  fclose(fout);
 }
 
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
@@ -566,7 +541,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
 
   _private->json_file_name = {};
   _private->mtl_file_name = {};
-  _private->obj_file_name = filename;
+  _private->geometry_file_name = filename;
 
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
@@ -584,76 +559,63 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   bool use_focal_len = false;
 
   if (strcmp(get_file_ext(filename), ".json") == 0) {
-    json_error_t err = {};
-    auto js = json_load_file(filename, 0, &err);
-    if (js == nullptr) {
-      log::error("Failed to parse json file: %s\n%d / %d : %s", filename, err.line, err.column, err.text);
-      return false;
-    }
-
-    if (json_is_object(js) == false) {
-      log::error("Invalid scene description file: %s", filename);
-      json_decref(js);
-      return false;
-    }
-
-    const char* key = {};
-    json_t* js_value = {};
-    json_object_foreach(js, key, js_value) {
-      if (strcmp(key, "geometry") == 0) {
-        if (json_is_string(js_value) == false) {
-          log::error("`geometry` in scene description should be a string (file name)");
-          json_decref(js);
-          return false;
-        }
-        _private->obj_file_name = std::string(base_folder) + json_string_value(js_value);
-      } else if (strcmp(key, "materials") == 0) {
-        if (json_is_string(js_value) == false) {
-          log::error("`materials` in scene description should be a string (file name)");
-          json_decref(js);
-          return false;
-        }
-        _private->mtl_file_name = json_string_value(js_value);
-      } else if (strcmp(key, "camera") == 0) {
-        if (json_is_object(js_value) == false) {
-          log::error("`camera` in scene description should be an object");
-          continue;
-        }
-        const char* cam_key = {};
-        json_t* cam_value = {};
-        json_object_foreach(js_value, cam_key, cam_value) {
-          if ((strcmp(cam_key, "class") == 0) && json_is_string(cam_value)) {
-            if (strcmp(json_string_value(cam_value), "eq") == 0) {
-              camera_cls = Camera::Class::Equirectangular;
-            }
-          } else if ((strcmp(cam_key, "origin") == 0) && json_is_array(cam_value)) {
-            camera_pos = json_to_f3(cam_value);
-          } else if ((strcmp(cam_key, "target") == 0) && json_is_array(cam_value)) {
-            camera_view = json_to_f3(cam_value);
-          } else if ((strcmp(cam_key, "up") == 0) && json_is_array(cam_value)) {
-            camera_up = json_to_f3(cam_value);
-          } else if ((strcmp(cam_key, "viewport") == 0) && json_is_array(cam_value)) {
-            viewport = json_to_u2(cam_value);
-          } else if ((strcmp(cam_key, "fov") == 0) && json_is_number(cam_value)) {
-            camera_fov = static_cast<float>(json_number_value(cam_value));
-          } else if ((strcmp(cam_key, "focal-length") == 0) && json_is_number(cam_value)) {
-            camera_focal_len = static_cast<float>(json_number_value(cam_value));
+    auto js = json_from_file(filename);
+    for (auto i = js.begin(), e = js.end(); i != e; ++i) {
+      const auto& key = i.key();
+      const auto& obj = i.value();
+      std::string str_value = {};
+      float float_value = 0.0f;
+      if (json_get_string(i, "geometry", str_value)) {
+        _private->geometry_file_name = std::string(base_folder) + str_value;
+      } else if (json_get_string(i, "materials", str_value)) {
+        _private->mtl_file_name = std::string(base_folder) + str_value;
+      } else if ((key == "camera") && obj.is_object()) {
+        for (auto ci = obj.begin(), ce = obj.end(); ci != ce; ++ci) {
+          const auto& ckey = ci.key();
+          const auto& cobj = ci.value();
+          if (json_get_string(ci, "class", str_value)) {
+            camera_cls = str_value == "eq" ? Camera::Class::Equirectangular : Camera::Class::Perspective;
+          } else if (json_get_float(ci, "fov", float_value)) {
+            camera_fov = float_value;
+          } else if (json_get_float(ci, "focal-length", float_value)) {
+            camera_focal_len = float_value;
             use_focal_len = true;
-          } else if ((strcmp(cam_key, "lens-radius") == 0) && json_is_number(cam_value)) {
-            cam.lens_radius = static_cast<float>(json_number_value(cam_value));
-          } else if ((strcmp(cam_key, "focal-distance") == 0) && json_is_number(cam_value)) {
-            cam.focal_distance = static_cast<float>(json_number_value(cam_value));
+          } else if (json_get_float(ci, "lens-radius", float_value)) {
+            cam.lens_radius = float_value;
+          } else if (json_get_float(ci, "focal-distance", float_value)) {
+            cam.focal_distance = float_value;
+          } else if (cobj.is_array()) {
+            if (ckey == "origin") {
+              auto values = cobj.get<std::vector<float>>();
+              get_values(values, &camera_pos.x, 3llu);
+            } else if (ckey == "target") {
+              auto values = cobj.get<std::vector<float>>();
+              get_values(values, &camera_view.x, 3llu);
+            } else if (ckey == "up") {
+              auto values = cobj.get<std::vector<float>>();
+              get_values(values, &camera_up.x, 3llu);
+            } else if (ckey == "viewport") {
+              auto values = cobj.get<std::vector<uint32_t>>();
+              get_values(values, &viewport.x, 2llu);
+            } else {
+              log::warning("Unhandled value in camera description : %s", key.c_str());
+            }
           }
         }
+      } else {
+        log::warning("Unhandled value in scene description : %s", key.c_str());
       }
     }
-    json_decref(js);
     _private->json_file_name = filename;
   }
 
-  auto ext = get_file_ext(_private->obj_file_name.c_str());
+  auto ext = get_file_ext(_private->geometry_file_name.c_str());
   if (strcmp(ext, ".obj") == 0) {
-    load_result = _private->load_from_obj(_private->obj_file_name.c_str(), _private->mtl_file_name.c_str());
+    load_result = _private->load_from_obj(_private->geometry_file_name.c_str(), _private->mtl_file_name.c_str());
+  } else if (strcmp(ext, ".gltf") == 0) {
+    load_result = _private->load_from_gltf(_private->geometry_file_name.c_str(), false);
+  } else if (strcmp(ext, ".glb") == 0) {
+    load_result = _private->load_from_gltf(_private->geometry_file_name.c_str(), true);
   }
 
   if ((load_result & SceneRepresentationImpl::LoadSucceeded) == 0) {
@@ -721,7 +683,7 @@ inline std::vector<const char*> split_params(char* data) {
   return params;
 }
 
-inline SpectralDistribution load_reflectance_spectrum(char* data_buffer) {
+inline SpectralDistribution load_reflectance_spectrum(const char* data_buffer) {
   SpectralDistribution reflection_spectrum = SpectralDistribution::from_constant(0.0f);
   float value[3] = {};
   if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
@@ -773,13 +735,15 @@ inline auto get_param(const tinyobj::material_t& m, const char* param, char buff
 }
 
 Material::Class material_string_to_class(const char* s) {
-  if ((strcmp(s, "diffuse") == 0) || (strcmp(s, "translucent") == 0) || (strcmp(s, "subsurface") == 0))
+  if (strcmp(s, "diffuse") == 0)
     return Material::Class::Diffuse;
+  if (strcmp(s, "translucent") == 0)
+    return Material::Class::Translucent;
   else if (strcmp(s, "plastic") == 0)
     return Material::Class::Plastic;
-  else if ((strcmp(s, "conductor") == 0) || (strcmp(s, "msconductor") == 0))
+  else if (strcmp(s, "conductor") == 0)
     return Material::Class::Conductor;
-  else if ((strcmp(s, "dielectric") == 0) || (strcmp(s, "msdielectric") == 0))
+  else if (strcmp(s, "dielectric") == 0)
     return Material::Class::Dielectric;
   else if (strcmp(s, "thinfilm") == 0)
     return Material::Class::Thinfilm;
@@ -787,8 +751,6 @@ Material::Class material_string_to_class(const char* s) {
     return Material::Class::Mirror;
   else if (strcmp(s, "boundary") == 0)
     return Material::Class::Boundary;
-  else if (strcmp(s, "coating") == 0)
-    return Material::Class::Coating;
   else if (strcmp(s, "velvet") == 0)
     return Material::Class::Velvet;
   else {
@@ -800,13 +762,13 @@ Material::Class material_string_to_class(const char* s) {
 void material_class_to_string(Material::Class cls, const char** str) {
   static const char* names[] = {
     "diffuse",
+    "translucent",
     "plastic",
     "conductor",
     "dielectric",
     "thinfilm",
     "mirror",
     "boundary",
-    "coating",
     "velvet",
     "undefined",
   };
@@ -855,6 +817,8 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
   }
 
   triangles.reserve(total_triangles);
+  triangle_to_material.reserve(total_triangles);
+  triangle_to_emitter.reserve(total_triangles);
   vertices.reserve(total_triangles * 3);
 
   for (const auto& shape : obj_shapes) {
@@ -872,9 +836,12 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       uint64_t face_size = shape.mesh.num_face_vertices[face];
       ETX_ASSERT(face_size == 3);
 
+      uint32_t material_index = material_mapping[source_material.name];
+
+      triangle_to_emitter.emplace_back(kInvalidIndex);
+      triangle_to_material.emplace_back(material_index);
       auto& tri = triangles.emplace_back();
-      tri.material_index = material_mapping[source_material.name];
-      auto& mtl = materials[tri.material_index];
+      auto& mtl = materials[material_index];
 
       for (uint64_t vertex_index = 0; vertex_index < face_size; ++vertex_index) {
         const auto& index = shape.mesh.indices[index_offset + vertex_index];
@@ -890,7 +857,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       }
       index_offset += face_size;
 
-      if (calculate_area(tri) == false) {
+      if (validate_triangle(tri) == false) {
         triangles.pop_back();
       }
 
@@ -958,7 +925,10 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
             } else if ((strcmp(params[i], "spectrum") == 0) && (i + 1 < end)) {
               char buffer[2048] = {};
               snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-              SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, SpectralDistribution::Class::Illuminant, spectrums());
+              auto cls = SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, spectrums());
+              if (cls != SpectralDistribution::Class::Illuminant) {
+                log::warning("Spectrum %s is not illuminant", buffer);
+              }
             }
           }
         }
@@ -978,7 +948,8 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
         }
         e.medium_index = mtl.ext_medium;
         e.triangle_index = static_cast<uint32_t>(triangles.size() - 1llu);
-        e.weight = power_scale * (tri.area * kPi) * (e.emission.spectrum.total_power() * texture_emission);
+        e.triangle_area = triangle_area(tri);
+        e.weight = power_scale * (e.triangle_area * kPi) * (e.emission.spectrum.total_power() * texture_emission);
         e.emission.image_index = emissive_image_index;
       }
 
@@ -1016,7 +987,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       SpectralDistribution s_a = SpectralDistribution::from_constant(0.0f);
-      if (get_param(material, "sigma_a", data_buffer)) {
+      if (get_param(material, "absorption", data_buffer)) {
         float val[3] = {};
         if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
           s_a = rgb::make_reflectance_spd({val[0], val[1], val[2]}, spectrums());
@@ -1024,11 +995,64 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       SpectralDistribution s_t = SpectralDistribution::from_constant(0.0f);
-      if (get_param(material, "sigma_s", data_buffer)) {
+      if (get_param(material, "scattering", data_buffer)) {
         float val[3] = {};
         if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
           s_t = rgb::make_reflectance_spd({val[0], val[1], val[2]}, spectrums());
         }
+      }
+
+      if (get_param(material, "parametric", data_buffer)) {
+        float3 color = {1.0f, 1.0f, 1.0f};
+        float3 scattering_distances = {0.25f, 0.25f, 0.25f};
+
+        auto params = split_params(data_buffer);
+        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+          if ((strcmp(params[i], "color") == 0) && (i + 3 < e)) {
+            color = {
+              static_cast<float>(atof(params[i + 1])),
+              static_cast<float>(atof(params[i + 2])),
+              static_cast<float>(atof(params[i + 3])),
+            };
+            i += 3;
+          }
+          if ((strcmp(params[i], "distance") == 0) && (i + 1 < e)) {
+            float value = static_cast<float>(atof(params[i + 1]));
+            scattering_distances = {value, value, value};
+            i += 1;
+          }
+          if ((strcmp(params[i], "distances") == 0) && (i + 1 < e)) {
+            scattering_distances = {
+              static_cast<float>(atof(params[i + 1])),
+              static_cast<float>(atof(params[i + 2])),
+              static_cast<float>(atof(params[i + 3])),
+            };
+            i += 3;
+          }
+        }
+
+        scattering_distances.x = fmaxf(scattering_distances.x, 1.0f / 256.0f);
+        scattering_distances.y = fmaxf(scattering_distances.y, 1.0f / 256.0f);
+        scattering_distances.z = fmaxf(scattering_distances.z, 1.0f / 256.0f);
+        color = saturate(color / fmaxf(fmaxf(1.0f, color.x), fmaxf(color.y, color.z)));
+
+        float3 albedo = 1.0f - exp(-5.09406f * color + 2.61188f * color - 4.31805f * color * color * color);
+        ETX_VALIDATE(albedo);
+
+        float3 s = 1.9f - color + 3.5f * sqr(color - 0.8f);
+        ETX_VALIDATE(s);
+
+        float3 extinction = 1.0f / (scattering_distances * s);
+        ETX_VALIDATE(extinction);
+
+        float3 scattering = extinction * albedo;
+        ETX_VALIDATE(scattering);
+
+        float3 absorption = extinction - scattering;
+        ETX_VALIDATE(absorption);
+
+        s_t = rgb::make_reflectance_spd(scattering, spectrums());
+        s_a = rgb::make_reflectance_spd(absorption, spectrums());
       }
 
       float g = 0.0f;
@@ -1158,7 +1182,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         } else {
           char buffer[256] = {};
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-          SpectralDistribution::load_from_file(buffer, mtl.int_ior.eta, &mtl.int_ior.k, SpectralDistribution::Class::Reflectance, spectrums());
+          SpectralDistribution::load_from_file(buffer, mtl.int_ior.eta, &mtl.int_ior.k, spectrums());
         }
       }
 
@@ -1171,7 +1195,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         } else {
           char buffer[256] = {};
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-          SpectralDistribution::load_from_file(buffer, mtl.ext_ior.eta, &mtl.ext_ior.k, SpectralDistribution::Class::Reflectance, spectrums());
+          SpectralDistribution::load_from_file(buffer, mtl.ext_ior.eta, &mtl.ext_ior.k, spectrums());
         }
       }
 
@@ -1194,17 +1218,17 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       if (get_param(material, "spectrum_kd", data_buffer)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.diffuse.spectrum, nullptr, SpectralDistribution::Class::Reflectance, spectrums());
+        SpectralDistribution::load_from_file(buffer, mtl.diffuse.spectrum, nullptr, spectrums());
       }
       if (get_param(material, "spectrum_ks", data_buffer)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.specular.spectrum, nullptr, SpectralDistribution::Class::Reflectance, spectrums());
+        SpectralDistribution::load_from_file(buffer, mtl.specular.spectrum, nullptr, spectrums());
       }
       if (get_param(material, "spectrum_kt", data_buffer)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.transmittance.spectrum, nullptr, SpectralDistribution::Class::Reflectance, spectrums());
+        SpectralDistribution::load_from_file(buffer, mtl.transmittance.spectrum, nullptr, spectrums());
       }
 
       if (get_param(material, "normalmap", data_buffer)) {
@@ -1247,20 +1271,89 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
             } else {
               char buffer[256] = {};
               snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
-              SpectralDistribution::load_from_file(buffer, mtl.thinfilm.ior.eta, &mtl.thinfilm.ior.k, SpectralDistribution::Class::Reflectance, spectrums());
+              SpectralDistribution::load_from_file(buffer, mtl.thinfilm.ior.eta, &mtl.thinfilm.ior.k, spectrums());
             }
           }
         }
       }
 
       if (get_param(material, "subsurface", data_buffer)) {
-        mtl.subsurface.scattering_distance = load_reflectance_spectrum(data_buffer);
-        mtl.subsurface.scattering_distance_scale = 0.2f;
+        mtl.subsurface.cls = SubsurfaceMaterial::Class::RandomWalk;
+
+        auto params = split_params(data_buffer);
+        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+          if ((strcmp(params[i], "distance") == 0) && (i + 3 < e)) {
+            float dr = static_cast<float>(atof(params[i + 1]));
+            float dg = static_cast<float>(atof(params[i + 2]));
+            float db = static_cast<float>(atof(params[i + 3]));
+            mtl.subsurface.scattering_distance = rgb::make_reflectance_spd({dr, dg, db}, spectrums());
+            i += 3;
+          }
+
+          if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+            mtl.subsurface.scale = static_cast<float>(atof(params[i + 1]));
+            i += 1;
+          }
+
+          if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
+            if (strcmp(params[i + 1], "approximate") == 0) {
+              mtl.subsurface.cls = SubsurfaceMaterial::Class::ChristensenBurley;
+            }
+            i += 1;
+          }
+        }
       }
     }
   }
 
   images.load_images();
+}
+
+uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool binary) {
+  tinygltf::TinyGLTF loader;
+  tinygltf::Model model;
+  std::string errors;
+  std::string warnings;
+
+  bool load_result = false;
+
+  if (binary) {
+    load_result = loader.LoadBinaryFromFile(&model, &errors, &warnings, file_name);
+  } else {
+    load_result = loader.LoadASCIIFromFile(&model, &errors, &warnings, file_name);
+  }
+
+  if (load_result == false) {
+    log::error("Failed to load GLTF from %s:\n%s", file_name, errors.c_str());
+    return LoadFailed;
+  }
+
+  const auto& scene = model.scenes[model.defaultScene];
+  for (int32_t node_index : scene.nodes) {
+    if ((node_index < 0) || (node_index > model.nodes.size()))
+      continue;
+
+    load_gltf_node(model, model.nodes[node_index]);
+  }
+
+  return 0;
+}
+
+void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node) {
+  if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
+    const auto& mesh = model.meshes[node.mesh];
+    load_gltf_mesh(model, mesh);
+  }
+
+  for (const auto child_node : node.children) {
+    if ((child_node < 0) || (child_node > model.nodes.size()))
+      continue;
+
+    load_gltf_node(model, model.nodes[child_node]);
+  }
+}
+
+void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Model& model, const tinygltf::Mesh&) {
 }
 
 void build_emitters_distribution(Scene& scene) {
@@ -1276,7 +1369,7 @@ void build_emitters_distribution(Scene& scene) {
     emitters_distribution.add(emitter.weight);
 
     if (emitter.is_local()) {
-      scene.triangles[emitter.triangle_index].emitter_index = i;
+      scene.triangle_to_emitter[emitter.triangle_index] = i;
     } else if (emitter.is_distant() && (emitter.weight > 0.0f)) {
       scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
     }
@@ -1285,3 +1378,15 @@ void build_emitters_distribution(Scene& scene) {
 }
 
 }  // namespace etx
+
+namespace tinygltf {
+
+bool LoadImageData(Image* image, const int image_idx, std::string* err, std::string* warn, int req_width, int req_height, const unsigned char* bytes, int size, void*) {
+  return false;
+}
+
+bool WriteImageData(const std::string* basepath, const std::string* filename, const Image* image, bool embedImages, const URICallbacks* uri_cb, std::string* out_uri, void*) {
+  return false;
+}
+
+}  // namespace tinygltf

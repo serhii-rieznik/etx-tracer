@@ -146,10 +146,11 @@ static int32_t g_compressor = BLOSC_BLOSCLZ;  /* the compressor to use by defaul
 static int32_t g_threads = 1;
 static int32_t g_force_blocksize = 0;
 static int32_t g_initlib = 0;
-static int32_t g_atfork_registered = 0;
 static int32_t g_splitmode = BLOSC_FORWARD_COMPAT_SPLIT;
 
-
+#if !defined(_WIN32)
+static int32_t g_atfork_registered = 0;
+#endif
 
 /* Wrapped function to adjust the number of threads used by blosc */
 int blosc_set_nthreads_(struct blosc_context*);
@@ -473,7 +474,7 @@ static int zlib_wrap_compress(const char* input, size_t input_length,
                               char* output, size_t maxout, int clevel)
 {
   int status;
-  uLongf cl = maxout;
+  uLongf cl = (uLongf)maxout;
   status = compress2(
              (Bytef*)output, &cl, (Bytef*)input, (uLong)input_length, clevel);
   if (status != Z_OK){
@@ -1082,8 +1083,8 @@ static int initialize_context_compression(struct blosc_context* context,
   context->dest = (uint8_t *)(dest);
   context->num_output_bytes = 0;
   context->destsize = (int32_t)destsize;
-  context->sourcesize = sourcesize;
-  context->typesize = typesize;
+  context->sourcesize = (int32_t)sourcesize;
+  context->typesize = (int32_t)typesize;
   context->compcode = compressor;
   context->numthreads = numthreads;
   context->end_threads = 0;
@@ -1286,7 +1287,7 @@ int blosc_compress_ctx(int clevel, int doshuffle, size_t typesize,
   error = initialize_context_compression(&context, clevel, doshuffle, typesize,
 					 nbytes, src, dest, destsize,
 					 blosc_compname_to_compcode(compressor),
-					 blocksize, numinternalthreads);
+					 (int32_t)blocksize, numinternalthreads);
   if (error <= 0) { return error; }
 
   error = write_compression_header(&context, clevel, doshuffle);
@@ -1434,7 +1435,7 @@ static int blosc_run_decompression_with_context(struct blosc_context* context,
   context->compress = 0;
   context->src = (const uint8_t*)src;
   context->dest = (uint8_t*)dest;
-  context->destsize = destsize;
+  context->destsize = (int32_t)destsize;
   context->num_output_bytes = 0;
   context->numthreads = numinternalthreads;
   context->end_threads = 0;
@@ -2134,7 +2135,8 @@ void blosc_cbuffer_metainfo(const void *cbuffer, size_t *typesize,
   uint8_t version = _src[0];               /* version of header */
 
   if (version != BLOSC_VERSION_FORMAT) {
-    *flags = *typesize = 0;
+    *flags = 0;
+    *typesize = 0;
     return;
   }
 

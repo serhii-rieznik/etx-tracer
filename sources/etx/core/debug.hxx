@@ -6,58 +6,58 @@
 #include <etx/core/platform.hxx>
 
 #if defined(NDEBUG) || defined(_NDEBUG)
-#define ETX_DEBUG 0
+# define ETX_DEBUG 0
 #else
-#define ETX_DEBUG 1
+# define ETX_DEBUG 1
 #endif
 
 #if defined(__CUDACC__)
 
-#define ETX_NVCC_COMPILER 1
-#define ETX_CPU_CODE __host__
-#define ETX_GPU_CODE inline __device__
-#define ETX_SHARED_CODE ETX_GPU_CODE ETX_CPU_CODE
-#define ETX_GPU_DATA __device__
-#define ETX_GPU_CALLABLE extern "C" __global__
-#define ETX_INIT_WITH(S)
+# define ETX_NVCC_COMPILER 1
+# define ETX_CPU_CODE      __host__
+# define ETX_GPU_CODE      inline __device__
+# define ETX_SHARED_CODE   ETX_GPU_CODE ETX_CPU_CODE
+# define ETX_GPU_DATA      __device__
+# define ETX_GPU_CALLABLE  extern "C" __global__
+# define ETX_INIT_WITH(S)
 
-#define ETX_ASSERT_ATOMIC_CHECK() atomicAdd(reported, 1u) == 0
+# define ETX_ASSERT_ATOMIC_CHECK() atomicAdd(reported, 1u) == 0
 
 #else
 
-#include <stdio.h>
+# include <stdio.h>
 
-#define ETX_NVCC_COMPILER 0
-#define ETX_CPU_CODE
-#define ETX_GPU_CODE inline
-#define ETX_SHARED_CODE ETX_GPU_CODE ETX_CPU_CODE
-#define ETX_GPU_CALLABLE
-#define ETX_GPU_DATA
-#define ETX_INIT_WITH(S) = S
+# define ETX_NVCC_COMPILER 0
+# define ETX_CPU_CODE
+# define ETX_GPU_CODE    inline
+# define ETX_SHARED_CODE ETX_GPU_CODE ETX_CPU_CODE
+# define ETX_GPU_CALLABLE
+# define ETX_GPU_DATA
+# define ETX_INIT_WITH(S) = S
 
-#define ETX_ASSERT_ATOMIC_CHECK() true
+# define ETX_ASSERT_ATOMIC_CHECK() true
 
 #endif
 
 #if (ETX_NVCC_COMPILER)
 
-#define ETX_DEBUG_BREAK() \
-  do {                    \
-    __threadfence();      \
-    asm("trap;");         \
-  } while (0)
+# define ETX_DEBUG_BREAK() \
+   do {                    \
+     __threadfence();      \
+     asm("trap;");         \
+   } while (0)
 
-#define ETX_ABORT() assert(false)
+# define ETX_ABORT() assert(false)
 
 #else
 
-#if defined(ETX_PLATFORM_WINDOWS)
-  #define ETX_DEBUG_BREAK() __debugbreak()
-#else
-  #define ETX_DEBUG_BREAK()
-#endif
+# if defined(ETX_PLATFORM_WINDOWS)
+#  define ETX_DEBUG_BREAK() __debugbreak()
+# else
+#  define ETX_DEBUG_BREAK()
+# endif
 
-#define ETX_ABORT() abort()
+# define ETX_ABORT() abort()
 
 #endif
 
@@ -81,51 +81,49 @@ ETX_GPU_CODE void printf_assert_info(const char* name_a, const uint64_t a, const
   printf("Condition failed: (%s:%llu) %s (%s:%llu) at %s [%u]\n", name_a, a, op, name_b, b, filename, line);
 }
 
-#define ETX_ASSERT_SPECIFIC(A, B, OP)                              \
-  do {                                                             \
-    if (!((A)OP(B))) {                                             \
-      static uint32_t reported = 0;                                \
-      if (ETX_ASSERT_ATOMIC_CHECK()) {                         \
-        printf_assert_info(#A, A, #OP, #B, B, __FILE__, __LINE__); \
-        ETX_DEBUG_BREAK();                                         \
-      }                                                            \
-    }                                                              \
-  } while (0)
+# define ETX_ASSERT_SPECIFIC(A, B, OP)                              \
+   do {                                                             \
+     if (!((A)OP(B))) {                                             \
+       if (ETX_ASSERT_ATOMIC_CHECK()) {                             \
+         printf_assert_info(#A, A, #OP, #B, B, __FILE__, __LINE__); \
+         ETX_DEBUG_BREAK();                                         \
+       }                                                            \
+     }                                                              \
+   } while (0)
 
-#define ETX_ASSERT_EQUAL(A, B) ETX_ASSERT_SPECIFIC(A, B, ==)
-#define ETX_ASSERT_NOT_EQUAL(A, B) ETX_ASSERT_SPECIFIC(A, B, !=)
-#define ETX_ASSERT_LESS(A, B) ETX_ASSERT_SPECIFIC(A, B, <)
-#define ETX_ASSERT_GREATER(A, B) ETX_ASSERT_SPECIFIC(A, B, >)
+# define ETX_ASSERT_EQUAL(A, B)     ETX_ASSERT_SPECIFIC(A, B, ==)
+# define ETX_ASSERT_NOT_EQUAL(A, B) ETX_ASSERT_SPECIFIC(A, B, !=)
+# define ETX_ASSERT_LESS(A, B)      ETX_ASSERT_SPECIFIC(A, B, <)
+# define ETX_ASSERT_GREATER(A, B)   ETX_ASSERT_SPECIFIC(A, B, >)
 
-#define ETX_ASSERT(condition)                                                       \
-  do {                                                                              \
-    if (!(condition)) {                                                             \
-      static uint32_t reported = 0;                                                 \
-      if (ETX_ASSERT_ATOMIC_CHECK()) {                                          \
-        printf("Condition %s failed at %s [%u]\n", #condition, __FILE__, __LINE__); \
-        ETX_DEBUG_BREAK();                                                          \
-      }                                                                             \
-    }                                                                               \
-  } while (0)
+# define ETX_ASSERT(condition)                                                       \
+   do {                                                                              \
+     if (!(condition)) {                                                             \
+       if (ETX_ASSERT_ATOMIC_CHECK()) {                                              \
+         printf("Condition %s failed at %s [%u]\n", #condition, __FILE__, __LINE__); \
+         ETX_DEBUG_BREAK();                                                          \
+       }                                                                             \
+     }                                                                               \
+   } while (0)
 
 #else
 
-#define ETX_ASSERT(condition) \
-  do {                        \
-  } while (0)
+# define ETX_ASSERT(condition) \
+   do {                        \
+   } while (0)
 
-#define ETX_ASSERT_EQUAL(A, B) \
-  do {                         \
-  } while (0)
-#define ETX_ASSERT_NOT_EQUAL(A, B) \
-  do {                             \
-  } while (0)
-#define ETX_ASSERT_LESS(A, B) \
-  do {                        \
-  } while (0)
-#define ETX_ASSERT_GREATER(A, B) \
-  do {                           \
-  } while (0)
+# define ETX_ASSERT_EQUAL(A, B) \
+   do {                         \
+   } while (0)
+# define ETX_ASSERT_NOT_EQUAL(A, B) \
+   do {                             \
+   } while (0)
+# define ETX_ASSERT_LESS(A, B) \
+   do {                        \
+   } while (0)
+# define ETX_ASSERT_GREATER(A, B) \
+   do {                           \
+   } while (0)
 
 #endif
 

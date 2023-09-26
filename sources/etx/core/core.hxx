@@ -25,8 +25,14 @@ struct TimeMeasure {
 
 void init_platform();
 
-std::string open_file(const std::vector<std::string>& filters);
-std::string save_file(const std::vector<std::string>& filters);
+std::string open_file(const char* filters);
+std::string save_file(const char* filters);
+
+uint32_t atomic_inc(int32_t* ptr);
+uint64_t atomic_inc(int64_t* ptr);
+uint32_t atomic_compare_exchange(int32_t* ptr, int32_t old_value, int32_t new_value);
+void atomic_add_float(float* ptr, float value);
+int64_t atomic_add_int64(int64_t* ptr, int64_t value);
 
 bool load_binary_file(const char* filename, std::vector<uint8_t>& data);
 float get_cpu_load();

@@ -40,8 +40,12 @@
 
 #define ETX_PIMPL_IMPLEMENT_ALL(T, SUFFIX) \
   ETX_PIMPL_IMPLEMENT(T, SUFFIX)           \
-  T::T() { ETX_PIMPL_CREATE(T, SUFFIX); }  \
-  T::~T() { ETX_PIMPL_DESTROY(T, SUFFIX); }
+  T::T() {                                 \
+    ETX_PIMPL_CREATE(T, SUFFIX);           \
+  }                                        \
+  T::~T() {                                \
+    ETX_PIMPL_DESTROY(T, SUFFIX);          \
+  }
 
 #define ETX_PIMPL_CREATE(T, SUFFIX, ...)                                                                         \
   static_assert(sizeof(_private_storage) >= sizeof(T##SUFFIX), "Not enough storage for private implementation"); \
@@ -59,6 +63,6 @@
   } while (false)
 
 #define ETX_DECLARE_PIMPL(T, SZ) ETX_PIMPL_DECLARE(T, Impl, SZ)
-#define ETX_IMPLEMENT_PIMPL(T) ETX_PIMPL_IMPLEMENT(T, Impl)
-#define ETX_PIMPL_INIT(T, ...) ETX_PIMPL_CREATE(T, Impl, __VA_ARGS__)
-#define ETX_PIMPL_CLEANUP(T) ETX_PIMPL_DESTROY(T, Impl)
+#define ETX_IMPLEMENT_PIMPL(T)   ETX_PIMPL_IMPLEMENT(T, Impl)
+#define ETX_PIMPL_INIT(T, ...)   ETX_PIMPL_CREATE(T, Impl, __VA_ARGS__)
+#define ETX_PIMPL_CLEANUP(T)     ETX_PIMPL_DESTROY(T, Impl)

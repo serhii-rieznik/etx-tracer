@@ -16,8 +16,11 @@ Physically-based ray-tracer.
     - directional emitter with finite angluar size
     - collimated area lights (lasers)
  * Spectral representation of material's properties (colors, index of refractions, etc)
- * Subsurface scattering which could be applied to any material containing diffuse layer (diffuse, plastic, velvet)
- * Thin-film rendering over most of materials (including conductor materials)
+ * Subsurface scattering:
+    - random walk;
+    - Christensen-Burley approximation;
+    - could be applied to any material containing diffuse layer (diffuse, plastic, velvet)
+ * Thin-film rendering over all materials (including conductors)
  * Normal mapping
  * Atmosphere integrator;
 

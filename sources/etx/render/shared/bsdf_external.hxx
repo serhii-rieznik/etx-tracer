@@ -217,10 +217,10 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_conductor(SpectralQuery spect, c
 
   float d_ggx = D_ggx(wh, alpha_x, alpha_y);
   ETX_VALIDATE(d_ggx);
-  
+
   float d = d_ggx / (4.0f * projectedArea);
   ETX_VALIDATE(d);
-  
+
   return f * d;
 }
 
@@ -409,21 +409,22 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery s
     float i_dot_m = -dot(wh, ray.w);
     if (i_dot_m < 0)
       return {spect.wavelength, 0.0f};
+
     return f * i_dot_m * D_ggx(wh, alpha_x, alpha_y) / (4.0f * projectedArea * i_dot_m);
-  } else {
-    float eta = int_ior.eta.monochromatic() / ext_ior.eta.monochromatic();
-    float3 wh = normalize(-ray.w + wo * eta);
-    wh *= (wh.z > 0) ? 1.0f : -1.0f;
-
-    float i_dot_m = -dot(wh, ray.w);
-    float o_dot_m = dot(wo, wh);
-    if (i_dot_m < 0)
-      return {spect.wavelength, 0.0f};
-
-    SpectralResponse f = fresnel::dielectric(spect, ray.w, wh, ext_ior, int_ior, thinfilm);
-    return eta * eta * (1.0f - f) * i_dot_m * max(0.0f, -o_dot_m) * D_ggx(wh, alpha_x, alpha_y)  //
-           / (projectedArea * sqr(i_dot_m + eta * o_dot_m));
   }
+
+  float eta = int_ior.eta.monochromatic() / ext_ior.eta.monochromatic();
+  float3 wh = normalize(-ray.w + wo * eta);
+  wh *= (wh.z > 0) ? 1.0f : -1.0f;
+
+  float i_dot_m = -dot(wh, ray.w);
+  if (i_dot_m < 0)
+    return {spect.wavelength, 0.0f};
+
+  float o_dot_m = dot(wo, wh);
+  SpectralResponse f = fresnel::dielectric(spect, ray.w, wh, ext_ior, int_ior, thinfilm);
+  return eta * eta * (1.0f - f) * i_dot_m * max(0.0f, -o_dot_m) * D_ggx(wh, alpha_x, alpha_y)  //
+         / (projectedArea * sqr(i_dot_m + eta * o_dot_m));
 }
 
 // by convention, wi is always outside

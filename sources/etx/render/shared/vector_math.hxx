@@ -1,58 +1,86 @@
 #pragma once
 
 #if !defined(__CUDACC__)
-#pragma warning(push)
-#pragma warning(disable : 4146)
+# pragma warning(push)
+# pragma warning(disable : 4146)
 #endif
 
 /*
  * Float2
  */
-#define ETX_V2(V, C)                                                                  \
-  ETX_GPU_CODE V operator+(const V& a, C b) { return {a.x + b, a.y + b}; }            \
-  ETX_GPU_CODE V operator+(C b, const V& a) { return {a.x + b, a.y + b}; }            \
-  ETX_GPU_CODE V operator+(const V& a, const V& b) { return {a.x + b.x, a.y + b.y}; } \
-  ETX_GPU_CODE V& operator+=(V& a, const V& b) {                                      \
-    a.x += b.x;                                                                       \
-    a.y += b.y;                                                                       \
-    return a;                                                                         \
-  }                                                                                   \
-  ETX_GPU_CODE V operator-(const V& a) { return {-a.x, -a.y}; }                       \
-  ETX_GPU_CODE V operator-(const V& a, C b) { return {a.x - b, a.y - b}; }            \
-  ETX_GPU_CODE V operator-(C b, const V& a) { return {b - a.x, b - a.y}; }            \
-  ETX_GPU_CODE V operator-(const V& a, const V& b) { return {a.x - b.x, a.y - b.y}; } \
-  ETX_GPU_CODE V& operator-=(V& a, const V& b) {                                      \
-    a.x -= b.x;                                                                       \
-    a.y -= b.y;                                                                       \
-    return a;                                                                         \
-  }                                                                                   \
-  ETX_GPU_CODE V operator*(const V& a, C b) { return {a.x * b, a.y * b}; }            \
-  ETX_GPU_CODE V operator*(C b, const V& a) { return {a.x * b, a.y * b}; }            \
-  ETX_GPU_CODE V operator*(const V& a, const V& b) { return {a.x * b.x, a.y * b.y}; } \
-  ETX_GPU_CODE V& operator*=(V& a, const V& b) {                                      \
-    a.x *= b.x;                                                                       \
-    a.y *= b.y;                                                                       \
-    return a;                                                                         \
-  }                                                                                   \
-  ETX_GPU_CODE V& operator*=(V& a, C b) {                                             \
-    a.x *= b;                                                                         \
-    a.y *= b;                                                                         \
-    return a;                                                                         \
-  }                                                                                   \
-  ETX_GPU_CODE V operator/(const V& a, C b) { return {a.x / b, a.y / b}; }            \
-  ETX_GPU_CODE V operator/(C b, const V& a) { return {a.x / b, a.y / b}; }            \
-  ETX_GPU_CODE V operator/(const V& a, const V& b) { return {a.x / b.x, a.y / b.y}; } \
-  ETX_GPU_CODE V& operator/=(V& a, const V& b) {                                      \
-    a.x /= b.x;                                                                       \
-    a.y /= b.y;                                                                       \
-    return a;                                                                         \
-  }                                                                                   \
-  ETX_GPU_CODE V& operator/=(V& a, const C b) {                                       \
-    a.x /= b;                                                                         \
-    a.y /= b;                                                                         \
-    return a;                                                                         \
-  }                                                                                   \
-  ETX_GPU_CODE bool operator==(const V& a, const V& b) { return (a.x == b.x) && (a.y == b.y); }
+#define ETX_V2(V, C)                                     \
+  ETX_GPU_CODE V operator+(const V& a, C b) {            \
+    return {a.x + b, a.y + b};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator+(C b, const V& a) {            \
+    return {a.x + b, a.y + b};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator+(const V& a, const V& b) {     \
+    return {a.x + b.x, a.y + b.y};                       \
+  }                                                      \
+  ETX_GPU_CODE V& operator+=(V& a, const V& b) {         \
+    a.x += b.x;                                          \
+    a.y += b.y;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a) {                 \
+    return {-a.x, -a.y};                                 \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a, C b) {            \
+    return {a.x - b, a.y - b};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator-(C b, const V& a) {            \
+    return {b - a.x, b - a.y};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a, const V& b) {     \
+    return {a.x - b.x, a.y - b.y};                       \
+  }                                                      \
+  ETX_GPU_CODE V& operator-=(V& a, const V& b) {         \
+    a.x -= b.x;                                          \
+    a.y -= b.y;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator*(const V& a, C b) {            \
+    return {a.x * b, a.y * b};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator*(C b, const V& a) {            \
+    return {a.x * b, a.y * b};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator*(const V& a, const V& b) {     \
+    return {a.x * b.x, a.y * b.y};                       \
+  }                                                      \
+  ETX_GPU_CODE V& operator*=(V& a, const V& b) {         \
+    a.x *= b.x;                                          \
+    a.y *= b.y;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V& operator*=(V& a, C b) {                \
+    a.x *= b;                                            \
+    a.y *= b;                                            \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator/(const V& a, C b) {            \
+    return {a.x / b, a.y / b};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator/(C b, const V& a) {            \
+    return {a.x / b, a.y / b};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator/(const V& a, const V& b) {     \
+    return {a.x / b.x, a.y / b.y};                       \
+  }                                                      \
+  ETX_GPU_CODE V& operator/=(V& a, const V& b) {         \
+    a.x /= b.x;                                          \
+    a.y /= b.y;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V& operator/=(V& a, const C b) {          \
+    a.x /= b;                                            \
+    a.y /= b;                                            \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE bool operator==(const V& a, const V& b) { \
+    return (a.x == b.x) && (a.y == b.y);                 \
+  }
 
 ETX_V2(float2, float)
 ETX_V2(int2, int32_t)
@@ -61,54 +89,88 @@ ETX_V2(uint2, uint32_t)
 /*
  * Float3
  */
-#define ETX_V3(V, C)                                                                               \
-  ETX_GPU_CODE V operator+(const V& a, C b) { return {a.x + b, a.y + b, a.z + b}; }                \
-  ETX_GPU_CODE V operator+(C b, const V& a) { return {a.x + b, a.y + b, a.z + b}; }                \
-  ETX_GPU_CODE V operator+(const V& a, const V& b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }   \
-  ETX_GPU_CODE V& operator+=(V& a, const V& b) {                                                   \
-    a.x += b.x;                                                                                    \
-    a.y += b.y;                                                                                    \
-    a.z += b.z;                                                                                    \
-    return a;                                                                                      \
-  }                                                                                                \
-  ETX_GPU_CODE V& operator+=(V& a, const C b) {                                                    \
-    a.x += b;                                                                                      \
-    a.y += b;                                                                                      \
-    a.z += b;                                                                                      \
-    return a;                                                                                      \
-  }                                                                                                \
-  ETX_GPU_CODE V operator-(const V& a) { return {-a.x, -a.y, -a.z}; }                              \
-  ETX_GPU_CODE V operator-(const V& a, C b) { return {a.x - b, a.y - b, a.z - b}; }                \
-  ETX_GPU_CODE V operator-(C b, const V& a) { return {b - a.x, b - a.y, b - a.z}; }                \
-  ETX_GPU_CODE V operator-(const V& a, const V& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }   \
-  ETX_GPU_CODE V& operator-=(V& a, const V& b) {                                                   \
-    a.x -= b.x;                                                                                    \
-    a.y -= b.y;                                                                                    \
-    a.z -= b.z;                                                                                    \
-    return a;                                                                                      \
-  }                                                                                                \
-  ETX_GPU_CODE V& operator-=(V& a, C b) {                                                          \
-    a.x -= b;                                                                                      \
-    a.y -= b;                                                                                      \
-    a.z -= b;                                                                                      \
-    return a;                                                                                      \
-  }                                                                                                \
-  ETX_GPU_CODE V operator*(const V& a, C b) { return {a.x * b, a.y * b, a.z * b}; }                \
-  ETX_GPU_CODE V operator*(C b, const V& a) { return {a.x * b, a.y * b, a.z * b}; }                \
-  ETX_GPU_CODE V operator*(const V& a, const V& b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }   \
-  ETX_GPU_CODE V& operator*=(V& a, const V& b) { return (a = {a.x * b.x, a.y * b.y, a.z * b.z}); } \
-  ETX_GPU_CODE V& operator*=(V& a, C b) {                                                          \
-    a.x *= b;                                                                                      \
-    a.y *= b;                                                                                      \
-    a.z *= b;                                                                                      \
-    return a;                                                                                      \
-  }                                                                                                \
-  ETX_GPU_CODE V operator/(const V& a, C b) { return {a.x / b, a.y / b, a.z / b}; }                \
-  ETX_GPU_CODE V operator/(C b, const V& a) { return {b / a.x, b / a.y, b / a.z}; }                \
-  ETX_GPU_CODE V operator/(const V& a, const V& b) { return {a.x / b.x, a.y / b.y, a.z / b.z}; }   \
-  ETX_GPU_CODE V& operator/=(V& a, const V& b) { return (a = {a.x / b.x, a.y / b.y, a.z / b.z}); } \
-  ETX_GPU_CODE V& operator/=(V& a, const C b) { return (a = {a.x / b, a.y / b, a.z / b}); }        \
-  ETX_GPU_CODE bool operator==(const V& a, const V& b) { return (a.x == b.x) && (a.y == b.y) && (a.z == b.z); }
+#define ETX_V3(V, C)                                     \
+  ETX_GPU_CODE V operator+(const V& a, C b) {            \
+    return {a.x + b, a.y + b, a.z + b};                  \
+  }                                                      \
+  ETX_GPU_CODE V operator+(C b, const V& a) {            \
+    return {a.x + b, a.y + b, a.z + b};                  \
+  }                                                      \
+  ETX_GPU_CODE V operator+(const V& a, const V& b) {     \
+    return {a.x + b.x, a.y + b.y, a.z + b.z};            \
+  }                                                      \
+  ETX_GPU_CODE V& operator+=(V& a, const V& b) {         \
+    a.x += b.x;                                          \
+    a.y += b.y;                                          \
+    a.z += b.z;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V& operator+=(V& a, const C b) {          \
+    a.x += b;                                            \
+    a.y += b;                                            \
+    a.z += b;                                            \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a) {                 \
+    return {-a.x, -a.y, -a.z};                           \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a, C b) {            \
+    return {a.x - b, a.y - b, a.z - b};                  \
+  }                                                      \
+  ETX_GPU_CODE V operator-(C b, const V& a) {            \
+    return {b - a.x, b - a.y, b - a.z};                  \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a, const V& b) {     \
+    return {a.x - b.x, a.y - b.y, a.z - b.z};            \
+  }                                                      \
+  ETX_GPU_CODE V& operator-=(V& a, const V& b) {         \
+    a.x -= b.x;                                          \
+    a.y -= b.y;                                          \
+    a.z -= b.z;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V& operator-=(V& a, C b) {                \
+    a.x -= b;                                            \
+    a.y -= b;                                            \
+    a.z -= b;                                            \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator*(const V& a, C b) {            \
+    return {a.x * b, a.y * b, a.z * b};                  \
+  }                                                      \
+  ETX_GPU_CODE V operator*(C b, const V& a) {            \
+    return {a.x * b, a.y * b, a.z * b};                  \
+  }                                                      \
+  ETX_GPU_CODE V operator*(const V& a, const V& b) {     \
+    return {a.x * b.x, a.y * b.y, a.z * b.z};            \
+  }                                                      \
+  ETX_GPU_CODE V& operator*=(V& a, const V& b) {         \
+    return (a = {a.x * b.x, a.y * b.y, a.z * b.z});      \
+  }                                                      \
+  ETX_GPU_CODE V& operator*=(V& a, C b) {                \
+    a.x *= b;                                            \
+    a.y *= b;                                            \
+    a.z *= b;                                            \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator/(const V& a, C b) {            \
+    return {a.x / b, a.y / b, a.z / b};                  \
+  }                                                      \
+  ETX_GPU_CODE V operator/(C b, const V& a) {            \
+    return {b / a.x, b / a.y, b / a.z};                  \
+  }                                                      \
+  ETX_GPU_CODE V operator/(const V& a, const V& b) {     \
+    return {a.x / b.x, a.y / b.y, a.z / b.z};            \
+  }                                                      \
+  ETX_GPU_CODE V& operator/=(V& a, const V& b) {         \
+    return (a = {a.x / b.x, a.y / b.y, a.z / b.z});      \
+  }                                                      \
+  ETX_GPU_CODE V& operator/=(V& a, const C b) {          \
+    return (a = {a.x / b, a.y / b, a.z / b});            \
+  }                                                      \
+  ETX_GPU_CODE bool operator==(const V& a, const V& b) { \
+    return (a.x == b.x) && (a.y == b.y) && (a.z == b.z); \
+  }
 
 ETX_V3(float3, float)
 ETX_V3(int3, int32_t)
@@ -117,75 +179,101 @@ ETX_V3(uint3, uint32_t)
 /*
  * Float4
  */
-#define ETX_V4(V, C)                                                                                        \
-  ETX_GPU_CODE V operator+(const V& a, C b) { return {a.x + b, a.y + b, a.z + b, a.w + b}; }                \
-  ETX_GPU_CODE V operator+(C b, const V& a) { return {a.x + b, a.y + b, a.z + b, a.w + b}; }                \
-  ETX_GPU_CODE V operator+(const V& a, const V& b) { return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w}; } \
-  ETX_GPU_CODE V& operator+=(V& a, const V& b) {                                                            \
-    a.x += b.x;                                                                                             \
-    a.y += b.y;                                                                                             \
-    a.z += b.z;                                                                                             \
-    a.w += b.w;                                                                                             \
-    return a;                                                                                               \
-  }                                                                                                         \
-  ETX_GPU_CODE V& operator+=(V& a, C b) {                                                                   \
-    a.x += b;                                                                                               \
-    a.y += b;                                                                                               \
-    a.z += b;                                                                                               \
-    a.w += b;                                                                                               \
-    return a;                                                                                               \
-  }                                                                                                         \
-  ETX_GPU_CODE V operator-(const V& a) { return {-a.x, -a.y, -a.z, -a.w}; }                                 \
-  ETX_GPU_CODE V operator-(const V& a, C b) { return {a.x - b, a.y - b, a.z - b, a.w - b}; }                \
-  ETX_GPU_CODE V operator-(C b, const V& a) { return {b - a.x, b - a.y, b - a.z, b - a.w}; }                \
-  ETX_GPU_CODE V operator-(const V& a, const V& b) { return {a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w}; } \
-  ETX_GPU_CODE V& operator-=(V& a, const V& b) {                                                            \
-    a.x -= b.x;                                                                                             \
-    a.y -= b.y;                                                                                             \
-    a.z -= b.z;                                                                                             \
-    a.w -= b.w;                                                                                             \
-    return a;                                                                                               \
-  }                                                                                                         \
-  ETX_GPU_CODE V& operator-=(V& a, C b) {                                                                   \
-    a.x -= b;                                                                                               \
-    a.y -= b;                                                                                               \
-    a.z -= b;                                                                                               \
-    a.w -= b;                                                                                               \
-    return a;                                                                                               \
-  }                                                                                                         \
-  ETX_GPU_CODE V operator*(const V& a, C b) { return {a.x * b, a.y * b, a.z * b, a.w * b}; }                \
-  ETX_GPU_CODE V operator*(C b, const V& a) { return {a.x * b, a.y * b, a.z * b, a.w * b}; }                \
-  ETX_GPU_CODE V operator*(const V& a, const V& b) { return {a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w}; } \
-  ETX_GPU_CODE V& operator*=(V& a, const V& b) {                                                            \
-    a.x *= b.x;                                                                                             \
-    a.y *= b.y;                                                                                             \
-    a.z *= b.z;                                                                                             \
-    a.w *= b.w;                                                                                             \
-    return a;                                                                                               \
-  }                                                                                                         \
-  ETX_GPU_CODE V& operator*=(V& a, C b) {                                                                   \
-    a.x *= b;                                                                                               \
-    a.y *= b;                                                                                               \
-    a.z *= b;                                                                                               \
-    a.w *= b;                                                                                               \
-    return a;                                                                                               \
-  }                                                                                                         \
-  ETX_GPU_CODE V operator/(const V& a, C b) { return {a.x / b, a.y / b, a.z / b, a.w / b}; }                \
-  ETX_GPU_CODE V operator/(C b, const V& a) { return {b / a.x, b / a.y, b / a.z, b / a.w}; }                \
-  ETX_GPU_CODE V operator/(const V& a, const V& b) { return {a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w}; } \
-  ETX_GPU_CODE V& operator/=(V& a, const V& b) {                                                            \
-    a.x /= b.x;                                                                                             \
-    a.y /= b.y;                                                                                             \
-    a.z /= b.z;                                                                                             \
-    a.w /= b.w;                                                                                             \
-    return a;                                                                                               \
-  }                                                                                                         \
-  ETX_GPU_CODE V& operator/=(V& a, C b) {                                                                   \
-    a.x /= b;                                                                                               \
-    a.y /= b;                                                                                               \
-    a.z /= b;                                                                                               \
-    a.w /= b;                                                                                               \
-    return a;                                                                                               \
+#define ETX_V4(V, C)                                     \
+  ETX_GPU_CODE V operator+(const V& a, C b) {            \
+    return {a.x + b, a.y + b, a.z + b, a.w + b};         \
+  }                                                      \
+  ETX_GPU_CODE V operator+(C b, const V& a) {            \
+    return {a.x + b, a.y + b, a.z + b, a.w + b};         \
+  }                                                      \
+  ETX_GPU_CODE V operator+(const V& a, const V& b) {     \
+    return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w}; \
+  }                                                      \
+  ETX_GPU_CODE V& operator+=(V& a, const V& b) {         \
+    a.x += b.x;                                          \
+    a.y += b.y;                                          \
+    a.z += b.z;                                          \
+    a.w += b.w;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V& operator+=(V& a, C b) {                \
+    a.x += b;                                            \
+    a.y += b;                                            \
+    a.z += b;                                            \
+    a.w += b;                                            \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a) {                 \
+    return {-a.x, -a.y, -a.z, -a.w};                     \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a, C b) {            \
+    return {a.x - b, a.y - b, a.z - b, a.w - b};         \
+  }                                                      \
+  ETX_GPU_CODE V operator-(C b, const V& a) {            \
+    return {b - a.x, b - a.y, b - a.z, b - a.w};         \
+  }                                                      \
+  ETX_GPU_CODE V operator-(const V& a, const V& b) {     \
+    return {a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w}; \
+  }                                                      \
+  ETX_GPU_CODE V& operator-=(V& a, const V& b) {         \
+    a.x -= b.x;                                          \
+    a.y -= b.y;                                          \
+    a.z -= b.z;                                          \
+    a.w -= b.w;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V& operator-=(V& a, C b) {                \
+    a.x -= b;                                            \
+    a.y -= b;                                            \
+    a.z -= b;                                            \
+    a.w -= b;                                            \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator*(const V& a, C b) {            \
+    return {a.x * b, a.y * b, a.z * b, a.w * b};         \
+  }                                                      \
+  ETX_GPU_CODE V operator*(C b, const V& a) {            \
+    return {a.x * b, a.y * b, a.z * b, a.w * b};         \
+  }                                                      \
+  ETX_GPU_CODE V operator*(const V& a, const V& b) {     \
+    return {a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w}; \
+  }                                                      \
+  ETX_GPU_CODE V& operator*=(V& a, const V& b) {         \
+    a.x *= b.x;                                          \
+    a.y *= b.y;                                          \
+    a.z *= b.z;                                          \
+    a.w *= b.w;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V& operator*=(V& a, C b) {                \
+    a.x *= b;                                            \
+    a.y *= b;                                            \
+    a.z *= b;                                            \
+    a.w *= b;                                            \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V operator/(const V& a, C b) {            \
+    return {a.x / b, a.y / b, a.z / b, a.w / b};         \
+  }                                                      \
+  ETX_GPU_CODE V operator/(C b, const V& a) {            \
+    return {b / a.x, b / a.y, b / a.z, b / a.w};         \
+  }                                                      \
+  ETX_GPU_CODE V operator/(const V& a, const V& b) {     \
+    return {a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w}; \
+  }                                                      \
+  ETX_GPU_CODE V& operator/=(V& a, const V& b) {         \
+    a.x /= b.x;                                          \
+    a.y /= b.y;                                          \
+    a.z /= b.z;                                          \
+    a.w /= b.w;                                          \
+    return a;                                            \
+  }                                                      \
+  ETX_GPU_CODE V& operator/=(V& a, C b) {                \
+    a.x /= b;                                            \
+    a.y /= b;                                            \
+    a.z /= b;                                            \
+    a.w /= b;                                            \
+    return a;                                            \
   }
 
 ETX_V4(float4, float)
@@ -193,7 +281,7 @@ ETX_V4(int4, int32_t)
 ETX_V4(uint4, uint32_t)
 
 #if !defined(__CUDACC__)
-#pragma warning(pop)
+# pragma warning(pop)
 #endif
 
 ETX_GPU_CODE float2 abs(const float2& a) {

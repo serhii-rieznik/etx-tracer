@@ -476,7 +476,7 @@ int blosclz_compress(const int clevel, const void* input, int length,
 
   // Initialize the hash table
   uint32_t htab[1U << (uint8_t)HASH_LOG];
-  memset(htab, 0, (1U << hashlog) * sizeof(uint32_t));
+  memset(htab, 0, (1LLU << hashlog) * sizeof(uint32_t));
 
   /* we start with literal copy */
   copy = 4;

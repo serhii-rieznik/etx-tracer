@@ -1,0 +1,11 @@
+{
+    "geometry" : "cb-candle.obj",
+    "materials" : "cb-candle.materials",
+    "camera" : {
+        "viewport" : [1080.0, 1080.0],
+        "origin" : [0.0, 1.0, 5.15],
+        "target" : [0.0, 1.0, 0.0],
+        "up" : [0.0, 1.0, 0.0],
+        "fov" : 26.99
+    }
+}

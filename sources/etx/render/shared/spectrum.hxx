@@ -203,6 +203,13 @@ struct ETX_ALIGNED SpectralResponse {
   float3 components = {};
   float wavelength = 0.0f;
 
+  constexpr static uint32_t component_count() {
+    if constexpr (spectrum::kSpectralRendering)
+      return 1u;
+    else
+      return 3u;
+  }
+
   SpectralResponse() = default;
 
   ETX_GPU_CODE SpectralResponse(float w, const float3& value)
@@ -233,6 +240,14 @@ struct ETX_ALIGNED SpectralResponse {
     }
   }
 
+  ETX_GPU_CODE float minimum() const {
+    if constexpr (spectrum::kSpectralRendering) {
+      return components.x;
+    } else {
+      return min(components.x, min(components.y, components.z));
+    }
+  }
+
   ETX_GPU_CODE float maximum() const {
     if constexpr (spectrum::kSpectralRendering) {
       return components.x;
@@ -249,11 +264,28 @@ struct ETX_ALIGNED SpectralResponse {
     }
   }
 
+  ETX_GPU_CODE float sum() const {
+    if constexpr (spectrum::kSpectralRendering) {
+      return components.x;
+    } else {
+      return components.x + components.y + components.z;
+    }
+  }
+
   ETX_GPU_CODE float average() const {
     if constexpr (spectrum::kSpectralRendering) {
       return components.x;
     } else {
       return (components.x + components.y + components.z) / 3.0f;
+    }
+  }
+
+  ETX_GPU_CODE float component(uint32_t i) const {
+    if constexpr (spectrum::kSpectralRendering) {
+      return components.x;
+    } else {
+      ETX_ASSERT(i < 3);
+      return *(&components.x + i);
     }
   }
 
@@ -401,7 +433,10 @@ struct Spectrums;
 
 struct ETX_ALIGNED SpectralDistribution {
   enum Class {
+    Invalid,
     Reflectance,
+    Conductor,
+    Dielectric,
     Illuminant,
   };
 
@@ -443,11 +478,6 @@ struct ETX_ALIGNED SpectralDistribution {
 
   ETX_GPU_CODE SpectralResponse operator()(const SpectralQuery q) const {
     return query(q);
-  }
-
-  ETX_GPU_CODE float random_entry_power(float rnd) const {
-    uint32_t i = static_cast<uint32_t>(rnd * float(count));
-    return entries[i].power;
   }
 
   ETX_GPU_CODE uint32_t lower_bound(float wavelength) const {
@@ -557,10 +587,8 @@ struct ETX_ALIGNED SpectralDistribution {
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_samples(const float2 wavelengths_power[], uint32_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_black_body(float temperature, Pointer<Spectrums>);
-  static void load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Class cls, Pointer<Spectrums>);
+  static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Pointer<Spectrums>);
 };
-
-constexpr uint64_t kSpectralDistributionSize = sizeof(SpectralDistribution);
 
 struct RefractiveIndex {
   SpectralDistribution eta;

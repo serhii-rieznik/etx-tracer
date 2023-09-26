@@ -1,16 +1,17 @@
 ﻿#include <etx/core/handle.hxx>
+#include <etx/core/profiler.hxx>
 #include <etx/render/host/pool.hxx>
 #include <etx/render/host/tasks.hxx>
 
 #include <TaskScheduler.hxx>
 
 #define ETX_ALWAYS_SINGLE_THREAD 0
-#define ETX_DEBUG_SINGLE_THREAD 1
+#define ETX_DEBUG_SINGLE_THREAD  1
 
 #if (ETX_DEBUG || ETX_ALWAYS_SINGLE_THREAD)
-#define ETX_SINGLE_THREAD ETX_DEBUG_SINGLE_THREAD
+# define ETX_SINGLE_THREAD ETX_DEBUG_SINGLE_THREAD
 #else
-#define ETX_SINGLE_THREAD 0
+# define ETX_SINGLE_THREAD 0
 #endif
 
 namespace etx {
@@ -50,11 +51,14 @@ struct TaskSchedulerImpl {
   TaskSchedulerImpl() {
     task_pool.init(1024u);
     function_task_pool.init(1024u);
+    scheduler.GetProfilerCallbacks()->threadStart = [](uint32_t thread_id) {
+      ETX_PROFILER_REGISTER_THREAD;
+    };
     scheduler.Initialize(ETX_SINGLE_THREAD ? 2 : (enki::GetNumHardwareThreads() + 1u));
   }
 
   ~TaskSchedulerImpl() {
-    ETX_ASSERT(task_pool.count_alive() == 0);
+    ETX_ASSERT(task_pool.alive_objects_count() == 0);
     task_pool.cleanup();
   }
 };
@@ -97,6 +101,10 @@ void TaskScheduler::execute(uint32_t range, Task* t) {
 
 void TaskScheduler::execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
   wait(schedule(range, func));
+}
+
+void TaskScheduler::execute_linear(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
+  func(0u, range, 0u);
 }
 
 bool TaskScheduler::completed(Task::Handle handle) {

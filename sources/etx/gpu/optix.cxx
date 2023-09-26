@@ -2,7 +2,7 @@
 #include <etx/core/environment.hxx>
 #include <etx/gpu/optix.hxx>
 
-#include <jansson.h>
+#include <json.hpp>
 
 #include <cuda_compiler/cuda_compiler_lib.hxx>
 
@@ -48,7 +48,7 @@ bool check_cuda_call_failed(CUresult result, const char* expr, const char* file,
     check_cuda_call_failed(expr, #expr, __FILE__, __LINE__); \
   } while (0)
 
-#define ETX_CUDA_FAILED(expr) check_cuda_call_failed(expr, #expr, __FILE__, __LINE__)
+#define ETX_CUDA_FAILED(expr)  check_cuda_call_failed(expr, #expr, __FILE__, __LINE__)
 #define ETX_CUDA_SUCCEED(expr) (check_cuda_call_failed(expr, #expr, __FILE__, __LINE__) == false)
 
 struct GPUBufferOptixImpl;
@@ -254,7 +254,7 @@ struct GPUOptixImplData {
  ***************************************************/
 
 #if !defined(ETX_OPTIX_INCLUDES)
-#error This file should not be included
+# error This file should not be included
 #endif
 
 struct GPUBufferOptixImpl {
@@ -798,7 +798,9 @@ bool GPUOptixImplData::launch_cuda(GPUPipelineOptixImpl& pipeline, const char* f
   return ETX_CUDA_SUCCEED(call_result);
 }
 
-inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[], uint64_t buffer_size) {
+inline PipelineDesc parse_file(const nlohmann::json& json, const char* filename, char buffer[], uint64_t buffer_size) {
+  return {};
+  /*
   if (json_is_object(json) == false) {
     return {};
   }
@@ -864,9 +866,12 @@ inline PipelineDesc parse_file(json_t* json, const char* filename, char buffer[]
 
   result.completed = true;
   return result;
+  */
 }
 
 bool GPUOptixImplData::compile(const char* json_filename, bool force, GPUPipeline::Descriptor& desc, std::vector<uint8_t>& binary_data) {
+  return false;
+  /*
   json_error_t error = {};
   json_t* json_data = json_load_file(json_filename, 0, &error);
   if (json_data == nullptr) {
@@ -915,6 +920,7 @@ bool GPUOptixImplData::compile(const char* json_filename, bool force, GPUPipelin
   desc.entry_point_count = ps_desc.entry_point_count;
   desc.compile_options = uint32_t(ps_desc.target);
   return true;
+  */
 }
 
 /***********************************************
@@ -1133,7 +1139,7 @@ bool GPUOptixImpl::denoise(GPUBuffer input, GPUBuffer output) {
     .data = get_buffer_device_pointer(input),
     .width = _private->denoiser_image_size.x,
     .height = _private->denoiser_image_size.y,
-    .rowStrideInBytes = _private->denoiser_image_size.x * sizeof(float4),
+    .rowStrideInBytes = static_cast<uint32_t>(_private->denoiser_image_size.x * sizeof(float4)),
     .format = OptixPixelFormat::OPTIX_PIXEL_FORMAT_FLOAT4,
   };
 
@@ -1141,7 +1147,7 @@ bool GPUOptixImpl::denoise(GPUBuffer input, GPUBuffer output) {
     .data = get_buffer_device_pointer(output),
     .width = _private->denoiser_image_size.x,
     .height = _private->denoiser_image_size.y,
-    .rowStrideInBytes = _private->denoiser_image_size.x * sizeof(float4),
+    .rowStrideInBytes = static_cast<uint32_t>(_private->denoiser_image_size.x * sizeof(float4)),
     .format = OptixPixelFormat::OPTIX_PIXEL_FORMAT_FLOAT4,
   };
 

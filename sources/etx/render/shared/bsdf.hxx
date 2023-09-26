@@ -8,7 +8,7 @@ namespace etx {
 #define ETX_FORCE_BSDF 0
 
 #if (ETX_FORCE_BSDF)
-#define ETX_FORCED_BSDF DiffuseBSDF
+# define ETX_FORCED_BSDF DiffuseBSDF
 #endif
 
 enum class PathSource : uint32_t {
@@ -45,8 +45,8 @@ struct BSDFEval {
   BSDFEval() = default;
 
   ETX_GPU_CODE BSDFEval(float wl, float power)
-    : weight(wl, power)
-    , bsdf(wl, power) {
+    : bsdf(wl, power)
+    , weight(wl, power) {
   }
 
   SpectralResponse func = {};
@@ -112,6 +112,8 @@ struct BSDFSample {
 };
 
 struct NormalDistribution {
+  constexpr static const float kMinAlpha = 1.0f / 256.0f;
+
   struct Eval {
     float ndf = 0.0f;
     float g1_in = 0.0f;
@@ -121,7 +123,7 @@ struct NormalDistribution {
 
   ETX_GPU_CODE NormalDistribution(const LocalFrame& f, const float2& alpha)
     : _frame(f)
-    , _alpha(alpha) {
+    , _alpha{fmaxf(kMinAlpha, alpha.x), fmaxf(kMinAlpha, alpha.y)} {
   }
 
   [[nodiscard]] ETX_GPU_CODE float3 sample(Sampler& smp, const float3& in_w_i) const {
@@ -281,7 +283,7 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
   auto delta_21 = int_ior.real() > film_ior.real() ? 0.0f : kPi;
   auto phase_shift = delta_10 + delta_21;
   auto phi = (kDoublePi * 2.0f * thickness * cos_theta_1 + phase_shift * film_ior) / wavelength;
-  auto r10 = reflectance(film_ior, cos_theta_1, ext_ior, cos_theta_0);
+  auto r10 = reflectance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
   auto r12 = reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
   auto t01 = transmittance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
   auto t12 = transmittance(film_ior, cos_theta_1, int_ior, cos_theta_2);
@@ -318,14 +320,13 @@ ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, co
     return result;
   }
 
-  const auto& flm_ior = thinfilm.ior;
   SpectralResponse result = {spect.wavelength, 0.0f};
   if constexpr (spectrum::kSpectralRendering) {
-    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex_x(), flm_ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
   } else {
-    result.components.x = fresnel_thinfilm(690.0f, cos_theta, ext_ior.as_complex_x(), flm_ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
-    result.components.y = fresnel_thinfilm(550.0f, cos_theta, ext_ior.as_complex_y(), flm_ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
-    result.components.z = fresnel_thinfilm(430.0f, cos_theta, ext_ior.as_complex_z(), flm_ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
+    result.components.x = fresnel_thinfilm(690.0f, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+    result.components.y = fresnel_thinfilm(550.0f, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
+    result.components.z = fresnel_thinfilm(430.0f, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
   }
   return result;
 }

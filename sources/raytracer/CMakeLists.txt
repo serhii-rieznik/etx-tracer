@@ -10,7 +10,7 @@ add_executable(raytracer
   camera_controller.hxx
 )
 
-target_link_libraries(raytracer sokol_imgui etx-core etx-render etx-rt tinyexr stb_image)
+target_link_libraries(raytracer PRIVATE imgui sokol etx-core etx-render etx-rt tinyexr stb_image)
 
 set_target_properties(raytracer PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
@@ -24,6 +24,20 @@ if (ETX_GPU_RENDER)
   source_group(TREE "${root_folder}/bin/" FILES ${cu_sources})
   target_sources(raytracer PRIVATE ${cu_sources})
   set_source_files_properties(${cu_sources} PROPERTIES HEADER_FILE_ONLY TRUE)
-endif()                               
+endif()
+
+if (APPLE)
+  target_link_libraries(raytracer PRIVATE
+    "-framework Foundation"
+    "-framework QuartzCore"
+    "-framework CoreGraphics"
+    "-framework Foundation"
+    "-framework Metal"
+    "-framework MetalKit"
+    "-framework AppKit"
+    )
+elseif(MSVC)
+  target_link_options(raytracer PRIVATE "/NODEFAULTLIB:LIBCMT")
+endif()
 
 set_property(TARGET raytracer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_folder}/bin")

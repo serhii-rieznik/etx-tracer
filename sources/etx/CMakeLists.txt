@@ -12,7 +12,6 @@ function(etx_build_pack target folder)
 
   source_group(TREE "${folder}/../" FILES ${sources})
 
-# #[[
   set(lib_source "${CMAKE_CURRENT_BINARY_DIR}/../compile_packs/${target}.pack.cpp")
   file(WRITE ${lib_source})
 
@@ -27,10 +26,6 @@ function(etx_build_pack target folder)
   target_sources(${target} PRIVATE ${packed_sources})
   source_group("" FILES ${lib_source})
   target_sources(${target} PRIVATE ${headers})
-# #]]
-
-#  target_sources(${target} PRIVATE ${headers})
-#  target_sources(${target} PRIVATE ${sources})
 
 endfunction(etx_build_pack)
 
@@ -43,29 +38,33 @@ function(create_library folder)
   etx_build_pack(${lib_name} "${CMAKE_CURRENT_LIST_DIR}/${folder}")
 
   if(MSVC)
-    target_compile_options(${lib_name} PRIVATE "/Zl")
-    target_compile_options(${lib_name} PRIVATE -DNOMINMAX=1 -D_CRT_SECURE_NO_WARNINGS=1 -DWIN32_LEAN_AND_MEAN=1 -D_USE_MATH_DEFINES=1)
+    target_compile_options(${lib_name} PRIVATE -DNOMINMAX=1 -D_CRT_SECURE_NO_WARNINGS=1 -DWIN32_LEAN_AND_MEAN=1 -D_USE_MATH_DEFINES=1 -DETX_LIBRARY=1)
+    target_link_options(${lib_name} PRIVATE "/NODEFAULTLIB:LIBCMT")
   else()
-    target_compile_options(${lib_name} PRIVATE -D_USE_MATH_DEFINES=1)
+    target_compile_options(${lib_name} PRIVATE -D_USE_MATH_DEFINES=1 -DETX_LIBRARY=1)
   endif()
+
+  set_target_properties(${lib_name} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${root_folder}/bin"
+    LIBRARY_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
+    LIBRARY_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
+    LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"
+    LIBRARY_OUTPUT_DIRECTORY_MINSIZEREL "${root_folder}/bin"
+  )
 
   set_property(TARGET ${lib_name} PROPERTY FOLDER "etx")
   set_property(TARGET ${lib_name} PROPERTY LINKER_LANGUAGE CXX)
 endfunction(create_library)
 
 create_library(core)
-target_link_libraries(etx-core PUBLIC jansson)
-target_include_directories(etx-core PUBLIC .. ${JANSSON_INCLUDE_DIRS})
-
-if(APPLE)
-#  target_link_options(etx-core PUBLIC "-framework CoreFoundation")
-endif()
+target_link_libraries(etx-core PUBLIC json nativefiledialog)
+target_include_directories(etx-core PUBLIC ..)
 
 create_library(render)
-target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader mikktspace enkiTS etx-core)
-target_include_directories(etx-render PRIVATE ${JANSSON_INCLUDE_DIRS})
-
-target_link_libraries(etx-render PUBLIC nanovdb)
+target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS nanovdb etx-core)
 target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 
 find_package(embree 4.0 REQUIRED)
@@ -95,8 +94,7 @@ endif()
 
 if (HAS_OPTIX)
   create_library(gpu)
-  target_link_libraries(etx-gpu PUBLIC etx-core cuda-compiler-lib)
-  target_link_libraries(etx-gpu PUBLIC ${optix_LIBRARY} ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY})
+  target_link_libraries(etx-gpu PRIVATE etx-core etx-render cuda-compiler-lib ${optix_LIBRARY} ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY})
   target_include_directories(etx-gpu PUBLIC ${OptiX_INCLUDE} ${CUDA_TOOLKIT_ROOT_DIR}/include)
 else()
   create_library(gpu-off)
@@ -106,7 +104,7 @@ endif()
 create_library(rt)
 target_include_directories(etx-rt PUBLIC ${EMBREE_INCLUDE_DIR})
 target_compile_definitions(etx-rt PUBLIC -DETX_HAVE_GPU_RENDER=${ETX_GPU_RENDER})
-target_link_libraries(etx-rt PRIVATE ${EMBREE_LIBRARY} etx-core etx-render)
+target_link_libraries(etx-rt PRIVATE ${EMBREE_LIBRARY} etx-core etx-render etx-gpu)
 
 if(HAS_OPTIX)
   set(ETX_GPU_RENDER 1 PARENT_SCOPE)

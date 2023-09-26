@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <etx/core/options.hxx>
+#include <etx/core/profiler.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/rt/rt.hxx>
 
@@ -82,9 +83,6 @@ struct Integrator {
 
   virtual const float4* get_light_image(bool /* force update */) {
     return nullptr;
-  }
-
-  virtual void reload() {
   }
 
   virtual uint64_t debug_info_count() const {

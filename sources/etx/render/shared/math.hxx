@@ -2,7 +2,7 @@
 
 #if (ETX_RENDER_BASE_INCLUDED)
 #else
-#error This file should not be included separately. Use etx/render/shared/base.hxx instead
+# error This file should not be included separately. Use etx/render/shared/base.hxx instead
 #endif
 
 #include <cmath>
@@ -24,14 +24,14 @@ struct vector4 {
 };
 
 #if (ETX_NVCC_COMPILER)
-#if defined(__NVCC__)
-#include <thrust/complex.h>
-#define STD_NS thrust
+# if defined(__NVCC__)
+#  include <thrust/complex.h>
+#  define STD_NS thrust
+# else
+#  define STD_NS cuda::std
+# endif
 #else
-#define STD_NS cuda::std
-#endif
-#else
-#define STD_NS std
+# define STD_NS std
 using float2 = vector2<float>;
 using float3 = vector3<float>;
 using float4 = vector4<float>;
@@ -94,11 +94,11 @@ struct ETX_ALIGNED BoundingBox {
   float3 p_min ETX_EMPTY_INIT;
   float3 p_max ETX_EMPTY_INIT;
 
-  ETX_GPU_CODE float3 to_bounding_box(const float3& p) const {
+  ETX_GPU_CODE float3 to_local(const float3& p) const {
     return (p - p_min) / (p_max - p_min);
   }
 
-  ETX_GPU_CODE float3 from_bounding_box(const float3& p) const {
+  ETX_GPU_CODE float3 from_local(const float3& p) const {
     return p * (p_max - p_min) + p_min;
   }
 
@@ -118,11 +118,7 @@ struct ETX_ALIGNED Vertex {
 
 struct ETX_ALIGNED Triangle {
   uint32_t i[3] = {kInvalidIndex, kInvalidIndex, kInvalidIndex};
-  uint32_t material_index = kInvalidIndex;
   float3 geo_n = {};
-  float area = {};
-  uint32_t emitter_index = kInvalidIndex;
-  uint32_t pad[3] = {};
 };
 
 struct ETX_ALIGNED LocalFrame {
@@ -188,6 +184,8 @@ struct ETX_ALIGNED Intersection : public Vertex {
   uint32_t triangle_index = kInvalidIndex;
   float3 w_i = {};
   float t = kMaxFloat;
+  uint32_t material_index = kInvalidIndex;
+  uint32_t emitter_index = kInvalidIndex;
 
   Intersection() = default;
 

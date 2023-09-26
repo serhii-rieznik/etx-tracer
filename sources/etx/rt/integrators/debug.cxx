@@ -27,8 +27,8 @@ struct CPUDebugIntegratorImpl : public Task {
 
   CPUDebugIntegratorImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
-    , samplers(rt.scheduler().max_thread_count())
-    , state(st) {
+    , state(st)
+    , samplers(rt.scheduler().max_thread_count()) {
   }
 
   void start(const Options& opt) {
@@ -55,7 +55,6 @@ struct CPUDebugIntegratorImpl : public Task {
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     auto& smp = samplers[thread_id];
-    auto mode = state->load();
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
@@ -303,14 +302,12 @@ struct CPUDebugIntegratorImpl : public Task {
           break;
         };
         case CPUDebugIntegrator::Mode::DiffuseColors: {
-          const auto& tri = scene.triangles[intersection.triangle_index];
-          const auto& mat = scene.materials[tri.material_index];
+          const auto& mat = scene.materials[intersection.material_index];
           xyz = apply_image(spect, mat.diffuse, intersection.tex, rt.scene()).to_xyz();
           break;
         };
         case CPUDebugIntegrator::Mode::Fresnel: {
-          const auto& tri = scene.triangles[intersection.triangle_index];
-          const auto& mat = scene.materials[tri.material_index];
+          const auto& mat = scene.materials[intersection.material_index];
           auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, intersection.tex, scene);
           SpectralResponse fr = {};
           switch (mat.cls) {

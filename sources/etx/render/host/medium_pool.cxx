@@ -16,7 +16,7 @@ struct MediumPoolImpl {
   }
 
   void cleanup() {
-    ETX_ASSERT(medium_pool.count_alive() == 0);
+    ETX_ASSERT(medium_pool.alive_objects_count() == 0);
     medium_pool.cleanup();
   }
 
@@ -32,7 +32,7 @@ struct MediumPoolImpl {
     auto& medium = medium_pool.get(handle);
     medium.cls = cls;
     medium.s_absorption = s_a;
-    medium.s_outscattering = s_o;
+    medium.s_scattering = s_o;
     medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
     medium.phase_function_g = g;
 

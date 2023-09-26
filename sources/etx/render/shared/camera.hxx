@@ -1,5 +1,7 @@
 #pragma once
 
+#include <etx/core/core.hxx>
+
 #include <etx/render/shared/base.hxx>
 
 namespace etx {
@@ -71,22 +73,6 @@ struct ETX_ALIGNED FilmData {
     accumulate(value, ax, ay, t);
   }
 
-  ETX_GPU_CODE void atomic_add_impl(float* ptr, float value) {
-#if (ETX_NVCC_COMPILER)
-    atomicAdd(ptr, value);
-#elif defined(ETX_PLATFORM_WINDOWS)
-    volatile long* iptr = std::bit_cast<volatile long*>(ptr);
-    long old_value = {};
-    long new_value = {};
-    do {
-      old_value = std::bit_cast<long>(*ptr);
-      new_value = std::bit_cast<long>(*ptr + value);
-    } while (_InterlockedCompareExchange(iptr, new_value, old_value) != old_value);
-#else
-#error Implement proper atomic operator
-#endif
-  }
-
   ETX_GPU_CODE void atomic_add(const float4& value, uint32_t x, uint32_t y) {
     if ((x >= dimensions.x) || (y >= dimensions.y)) {
       return;
@@ -94,9 +80,9 @@ struct ETX_ALIGNED FilmData {
 
     ETX_VALIDATE(value);
     auto& ptr = data[x + 1llu * y * dimensions.x];
-    atomic_add_impl(&ptr.x, value.x);
-    atomic_add_impl(&ptr.y, value.y);
-    atomic_add_impl(&ptr.z, value.z);
+    atomic_add_float(&ptr.x, value.x);
+    atomic_add_float(&ptr.y, value.y);
+    atomic_add_float(&ptr.z, value.z);
   }
 };
 

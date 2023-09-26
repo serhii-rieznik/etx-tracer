@@ -298,7 +298,45 @@ const Scene& Raytracing::gpu_scene() const {
   return _private->gpu.scene;
 }
 
+bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t material_id, Intersection& result_intersection, Sampler& smp) const {
+  ETX_FUNCTION_SCOPE();
+
+  struct IntersectionContextExt {
+    RTCRayQueryContext context;
+    IntersectionBase i;
+    const Scene* scene;
+    Sampler* smp;
+    uint32_t m_id;
+  } context = {{}, {{}, kInvalidIndex, 0.0f}, &scene, &smp, material_id};
+
+  auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
+    auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
+
+    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    const auto material_index = ctx->scene->triangle_to_material[triangle_index];
+    if (material_index != ctx->m_id) {
+      *args->valid = 0;
+      return;
+    }
+
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0)};
+  };
+
+  ETX_ASSERT(_private != nullptr);
+  _private->trace_with_function(r, &context.context, filter_funtion);
+
+  if (context.i.triangle_index == kInvalidIndex)
+    return false;
+
+  result_intersection = make_intersection(scene, r.d, context.i);
+  return true;
+}
+
 uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const ContinousTraceOptions& options, Sampler& smp) const {
+  ETX_FUNCTION_SCOPE();
+
   struct IntersectionContextExt {
     RTCRayQueryContext context;
     const Scene* scene;
@@ -313,8 +351,8 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
     uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
 
-    const auto& tri = ctx->scene->triangles[triangle_index];
-    if ((tri.material_index != kInvalidIndex) && (ctx->mat_id != tri.material_index)) {
+    auto material_index = ctx->scene->triangle_to_material[triangle_index];
+    if ((material_index != kInvalidIndex) && (ctx->mat_id != material_index)) {
       *args->valid = 0;
       return;
     }
@@ -323,8 +361,15 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     float v = RTCHitN_v(args->hit, args->N, 0);
     float3 bc = barycentrics({u, v});
     const auto& scene = *ctx->scene;
-    const auto& mat = ctx->scene->materials[tri.material_index];
-    if ((ctx->count < ctx->max_count) && (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp) == false)) {
+    const auto& tri = ctx->scene->triangles[triangle_index];
+    const auto& mat = ctx->scene->materials[material_index];
+
+    if (alpha_test_pass(mat, tri, bc, scene, *ctx->smp)) {
+      *args->valid = 0;
+      return;
+    }
+
+    if (ctx->count < ctx->max_count) {
       ctx->buffer[ctx->count] = {
         .barycentric = {u, v},
         .triangle_index = triangle_index,
@@ -343,6 +388,8 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
 }
 
 bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_intersection, Sampler& smp) const {
+  ETX_FUNCTION_SCOPE();
+
   struct IntersectionContextExt {
     RTCRayQueryContext context;
     IntersectionBase i;
@@ -352,14 +399,16 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
 
   auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
-    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+
+    const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    const uint32_t material_index = ctx->scene->triangle_to_material[triangle_index];
+    const auto& tri = ctx->scene->triangles[triangle_index];
+    const auto& mat = ctx->scene->materials[material_index];
+    const auto& scene = *ctx->scene;
+
     float u = RTCHitN_u(args->hit, args->N, 0);
     float v = RTCHitN_v(args->hit, args->N, 0);
-    float3 bc = barycentrics({u, v});
-    const auto& scene = *ctx->scene;
-    const auto& tri = ctx->scene->triangles[triangle_index];
-    const auto& mat = ctx->scene->materials[tri.material_index];
-    if (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp)) {
+    if (alpha_test_pass(mat, tri, barycentrics({u, v}), scene, *ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -378,6 +427,7 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
 }
 
 SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const uint32_t medium, Sampler& smp) const {
+  ETX_FUNCTION_SCOPE();
   ETX_ASSERT(_private != nullptr);
 
   struct IntersectionContextExt {
@@ -401,24 +451,39 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     float3 bc = barycentrics({u, v});
     const auto& scene = *ctx->scene;
     const auto& tri = ctx->scene->triangles[triangle_index];
-    const auto& mat = ctx->scene->materials[tri.material_index];
-    if (bsdf::continue_tracing(mat, lerp_uv(scene.vertices, tri, bc), scene, *ctx->smp)) {
+    auto material_index = ctx->scene->triangle_to_material[triangle_index];
+    const auto& mat = ctx->scene->materials[material_index];
+
+    if (alpha_test_pass(mat, tri, bc, scene, *ctx->smp)) {
       *args->valid = 0;
       return;
     }
 
-    if (mat.cls != Material::Class::Boundary) {
+    auto uv = lerp_uv(scene.vertices, tri, bc);
+    auto nrm = lerp_normal(scene.vertices, tri, bc);
+
+    bool stop_tracing = mat.cls != Material::Class::Boundary;
+
+    if (mat.cls == Material::Class::Thinfilm) {
+      auto thinfilm = evaluate_thinfilm(ctx->spect, mat.thinfilm, uv, scene);
+      bool entering_material = dot(nrm, ctx->direction) < 0.0f;
+      SpectralResponse fr = fresnel::dielectric(ctx->spect, ctx->direction, (entering_material ? nrm : -nrm), mat.ext_ior(ctx->spect), mat.int_ior(ctx->spect), thinfilm);
+      ctx->value *= 1.0f - fr;
+      stop_tracing = ctx->smp->next() < fr.monochromatic();
+    }
+
+    if (stop_tracing) {
       ctx->value = {ctx->value.wavelength, 0.0f};
       *args->valid = -1;
+      return;
     }
 
     if (ctx->medium != kInvalidIndex) {
-      float dt = t - ctx->t;
+      float dt = fmaxf(0.0f, t - ctx->t);
       ctx->value *= scene.mediums[ctx->medium].transmittance(ctx->spect, *ctx->smp, ctx->origin, ctx->direction, dt);
       ETX_VALIDATE(ctx->value);
     }
 
-    float3 nrm = lerp_normal(scene.vertices, tri, bc);
     ctx->medium = (dot(nrm, ctx->direction) < 0.0f) ? mat.int_medium : mat.ext_medium;
     ctx->origin = lerp_pos(scene.vertices, tri, bc);
     ctx->t = t;
