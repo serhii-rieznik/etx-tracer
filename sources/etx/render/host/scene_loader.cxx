@@ -4,6 +4,7 @@
 
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/scene.hxx>
+#include <etx/render/shared/scattering.hxx>
 
 #include <etx/render/host/scene_loader.hxx>
 #include <etx/render/host/image_pool.hxx>
@@ -24,48 +25,40 @@
 
 namespace etx {
 
+static Spectrums shared_spectrums;
+
 Pointer<Spectrums> spectrums() {
-  static Spectrums _spectrums;
-  static auto invoke_once = []() {
-    using SPD = SpectralDistribution;
-    rgb::init_spectrums(_spectrums);
-    {
-      static float w[2] = {spectrum::kShortestWavelength, spectrum::kLongestWavelength};
-      static float eta[2] = {1.5f, 1.5f};
-      static float k[2] = {0.0f, 0.0f};
-
-      static const float2 chrome_samples_eta[] = {{0.354f, 1.84f}, {0.368f, 1.87f}, {0.381f, 1.92f}, {0.397f, 2.00f}, {0.413f, 2.08f}, {0.431f, 2.19f}, {0.451f, 2.33f},
-        {0.471f, 2.51f}, {0.496f, 2.75f}, {0.521f, 2.94f}, {0.549f, 3.18f}, {0.582f, 3.22f}, {0.617f, 3.17f}, {0.659f, 3.09f}, {0.704f, 3.05f}, {0.756f, 3.08f}, {0.821f, 3.20f},
-        {0.892f, 3.30f}};
-
-      static const float2 chrome_samples_k[] = {{0.354f, 2.64f}, {0.368f, 2.69f}, {0.381f, 2.74f}, {0.397f, 2.83f}, {0.413f, 2.93f}, {0.431f, 3.04f}, {0.451f, 3.14f},
-        {0.471f, 3.24f}, {0.496f, 3.30f}, {0.521f, 3.33f}, {0.549f, 3.33f}, {0.582f, 3.30f}, {0.617f, 3.30f}, {0.659f, 3.34f}, {0.704f, 3.39f}, {0.756f, 3.42f}, {0.821f, 3.48f},
-        {0.892f, 3.52f}};
-
-      static const float2 plastic_samples_eta[] = {{40.0000f, 1.519f}, {41.6667f, 1.519f}, {43.4783f, 1.519f}, {45.4545f, 1.520f}, {47.6190f, 1.521f}, {50.0000f, 1.521f},
-        {52.6316f, 1.521f}, {55.5556f, 1.521f}, {58.8235f, 1.521f}, {62.5000f, 1.521f}, {66.6667f, 1.521f}, {71.4286f, 1.521f}, {76.9231f, 1.520f}, {83.3333f, 1.520f},
-        {90.9091f, 1.520f}};
-
-      _spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2, SPD::Class::Reflectance, &_spectrums);
-      _spectrums.thinfilm.k = SPD::from_samples(w, k, 2, SPD::Class::Reflectance, &_spectrums);
-      _spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)), SPD::Class::Reflectance, &_spectrums);
-      _spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_k)), SPD::Class::Reflectance, &_spectrums);
-      _spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)), SPD::Class::Reflectance, &_spectrums);
-      _spectrums.dielectric.k = SPD::from_constant(0.0f);
-    }
-    return true;
-  }();
-
-  if (invoke_once == false) {
-    log::error("Spectrums are not initialized");
-    std::terminate();
-  }
-
-  return &_spectrums;
+  return &shared_spectrums;
 }
 
-Pointer<Spectrums> shared_spectrums() {
-  return spectrums();
+void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
+  using SPD = SpectralDistribution;
+  rgb::init_spectrums(shared_spectrums);
+  scattering::init(scheduler, &shared_spectrums, extinction);
+  {
+    static float w[2] = {spectrum::kShortestWavelength, spectrum::kLongestWavelength};
+    static float eta[2] = {1.5f, 1.5f};
+    static float k[2] = {0.0f, 0.0f};
+
+    static const float2 chrome_samples_eta[] = {{0.354f, 1.84f}, {0.368f, 1.87f}, {0.381f, 1.92f}, {0.397f, 2.00f}, {0.413f, 2.08f}, {0.431f, 2.19f}, {0.451f, 2.33f},
+      {0.471f, 2.51f}, {0.496f, 2.75f}, {0.521f, 2.94f}, {0.549f, 3.18f}, {0.582f, 3.22f}, {0.617f, 3.17f}, {0.659f, 3.09f}, {0.704f, 3.05f}, {0.756f, 3.08f}, {0.821f, 3.20f},
+      {0.892f, 3.30f}};
+
+    static const float2 chrome_samples_k[] = {{0.354f, 2.64f}, {0.368f, 2.69f}, {0.381f, 2.74f}, {0.397f, 2.83f}, {0.413f, 2.93f}, {0.431f, 3.04f}, {0.451f, 3.14f},
+      {0.471f, 3.24f}, {0.496f, 3.30f}, {0.521f, 3.33f}, {0.549f, 3.33f}, {0.582f, 3.30f}, {0.617f, 3.30f}, {0.659f, 3.34f}, {0.704f, 3.39f}, {0.756f, 3.42f}, {0.821f, 3.48f},
+      {0.892f, 3.52f}};
+
+    static const float2 plastic_samples_eta[] = {{40.0000f, 1.519f}, {41.6667f, 1.519f}, {43.4783f, 1.519f}, {45.4545f, 1.520f}, {47.6190f, 1.521f}, {50.0000f, 1.521f},
+      {52.6316f, 1.521f}, {55.5556f, 1.521f}, {58.8235f, 1.521f}, {62.5000f, 1.521f}, {66.6667f, 1.521f}, {71.4286f, 1.521f}, {76.9231f, 1.520f}, {83.3333f, 1.520f},
+      {90.9091f, 1.520f}};
+
+    shared_spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2, SPD::Class::Reflectance, spectrums());
+    shared_spectrums.thinfilm.k = SPD::from_samples(w, k, 2, SPD::Class::Reflectance, spectrums());
+    shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)), SPD::Class::Reflectance, spectrums());
+    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_k)), SPD::Class::Reflectance, spectrums());
+    shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)), SPD::Class::Reflectance, spectrums());
+    shared_spectrums.dielectric.k = SPD::from_constant(0.0f);
+  }
 }
 
 inline bool value_is_correct(float t) {
@@ -93,6 +86,7 @@ struct SceneRepresentationImpl {
   std::string geometry_file_name;
   std::string mtl_file_name;
 
+  Image extinction;
   ImagePool images;
   MediumPool mediums;
 
@@ -103,9 +97,21 @@ struct SceneRepresentationImpl {
   Scene scene;
   bool loaded = false;
 
-  uint32_t add_image(const char* path, uint32_t options) {
+  uint32_t add_image(const char* path, uint32_t options, const float2& offset) {
     std::string id = path ? path : ("image-" + std::to_string(images.array_size()));
-    return images.add_from_file(id, options | Image::DelayLoad);
+    return images.add_from_file(id, options | Image::Delay, offset);
+  }
+
+  uint32_t add_image(const Image& img) {
+    return images.add_copy(img);
+  }
+
+  uint32_t add_image(const char* path, uint32_t options) {
+    return add_image(path, options, {});
+  }
+
+  uint32_t add_image(const float4* data, const uint2& dim, uint32_t options) {
+    return images.add_from_data(data, dim, options, {});
   }
 
   uint32_t add_material(const char* name) {
@@ -130,11 +136,13 @@ struct SceneRepresentationImpl {
     , images(s) {
     images.init(1024u);
     mediums.init(1024u);
+    init_spectrums(s, extinction);
     scene.camera = build_camera({5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280u, 720u}, 26.99f, 0.0f, 1.0f);
   }
 
   ~SceneRepresentationImpl() {
     cleanup();
+    images.free_image(extinction);
     images.cleanup();
     mediums.cleanup();
   }
@@ -291,23 +299,18 @@ struct SceneRepresentationImpl {
   }
 
   void commit() {
-    if (triangles.empty()) {
-      scene.bounding_sphere_center = {};
-      scene.bounding_sphere_radius = kPlanetRadius + kAtmosphereRadius;
-    } else {
-      float3 bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
-      float3 bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
-      for (const auto& tri : triangles) {
-        bbox_min = min(bbox_min, vertices[tri.i[0]].pos);
-        bbox_min = min(bbox_min, vertices[tri.i[1]].pos);
-        bbox_min = min(bbox_min, vertices[tri.i[2]].pos);
-        bbox_max = max(bbox_max, vertices[tri.i[0]].pos);
-        bbox_max = max(bbox_max, vertices[tri.i[1]].pos);
-        bbox_max = max(bbox_max, vertices[tri.i[2]].pos);
-      }
-      scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
-      scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
+    float3 bbox_min = triangles.empty() ? float3{-1.0f, -1.0f, -1.0f} : float3{kMaxFloat, kMaxFloat, kMaxFloat};
+    float3 bbox_max = triangles.empty() ? float3{+1.0f, +1.0f, +1.0f} : float3{-kMaxFloat, -kMaxFloat, -kMaxFloat};
+    for (const auto& tri : triangles) {
+      bbox_min = min(bbox_min, vertices[tri.i[0]].pos);
+      bbox_min = min(bbox_min, vertices[tri.i[1]].pos);
+      bbox_min = min(bbox_min, vertices[tri.i[2]].pos);
+      bbox_max = max(bbox_max, vertices[tri.i[0]].pos);
+      bbox_max = max(bbox_max, vertices[tri.i[1]].pos);
+      bbox_max = max(bbox_max, vertices[tri.i[2]].pos);
     }
+    scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
+    scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
     scene.camera_medium_index = camera_medium_index;
     scene.camera_lens_shape_image_index = camera_lens_shape_image_index;
     scene.vertices = {vertices.data(), vertices.size()};
@@ -1114,12 +1117,101 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
       }
 
-      e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU);
+      float rotation = 0.0f;
+      if (get_param(material, "rotation", data_buffer)) {
+        rotation = static_cast<float>(atof(data_buffer)) / 360.0f;
+      }
+      e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f});
 
       if (get_param(material, "color", data_buffer)) {
         e.emission.spectrum = load_illuminant_spectrum(data_buffer);
       } else {
         e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
+      }
+    } else if (material.name == "et::atmosphere") {
+      float scale = 1.0f;
+      if (get_param(material, "scale", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          scale = val;
+        }
+      }
+
+      float radiance_scale = scale / exp2f(Film::calculate_ev(8.0f, 1.0f / 100.0f));
+      auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, spectrums()) * radiance_scale;
+
+      float3 direction = normalize(float3{1.0f, 1.0f, 1.0f});
+      float angular_size = 0.0f;
+
+      scattering::Parameters scattering_parameters = {};
+
+      if (get_param(material, "direction", data_buffer)) {
+        float value[3] = {};
+        if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
+          direction = normalize(float3{value[0], value[1], value[2]});
+        }
+      }
+      if (get_param(material, "angular_diameter", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          angular_size = val * kPi / 180.0f;
+        }
+      }
+      if (get_param(material, "anisotropy", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          scattering_parameters.anisotropy = val;
+        }
+      }
+      if (get_param(material, "altitude", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          scattering_parameters.altitude = val;
+        }
+      }
+      if (get_param(material, "rayleigh", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          scattering_parameters.rayleigh_scale = val;
+        }
+      }
+      if (get_param(material, "mie", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          scattering_parameters.mie_scale = val;
+        }
+      }
+      if (get_param(material, "ozone", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          scattering_parameters.ozone_scale = val;
+        }
+      }
+
+      constexpr uint2 kSkyImageDimensions = uint2{1024u, 512u};
+      constexpr uint2 kSunImageDimensions = uint2{256u, 256u};
+
+      {
+        auto& d = emitters.emplace_back(Emitter::Class::Directional);
+        d.emission.spectrum = sun_spectrum;
+        d.angular_size = angular_size;
+        d.direction = direction;
+
+        if (angular_size > 0.0f) {
+          d.emission.image_index = add_image(nullptr, kSunImageDimensions, Image::Delay);
+          auto& img = images.get(d.emission.image_index);
+          scattering::generate_sun_image(scattering_parameters, kSunImageDimensions, direction, angular_size, img.pixels.f32.a, scheduler);
+        }
+      }
+
+      {
+        auto& e = emitters.emplace_back(Emitter::Class::Environment);
+        e.emission.spectrum = sun_spectrum;
+        e.emission.image_index = add_image(nullptr, kSkyImageDimensions, Image::BuildSamplingTable | Image::Delay);
+        e.direction = direction;
+
+        auto& img = images.get(e.emission.image_index);
+        scattering::generate_sky_image(scattering_parameters, kSkyImageDimensions, direction, extinction, img.pixels.f32.a, scheduler);
       }
 
     } else {
@@ -1197,6 +1289,9 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
           SpectralDistribution::load_from_file(buffer, mtl.ext_ior.eta, &mtl.ext_ior.k, spectrums());
         }
+      } else {
+        mtl.ext_ior.eta = SpectralDistribution::from_constant(1.0f);
+        mtl.ext_ior.k = SpectralDistribution::from_constant(0.0f);
       }
 
       if (get_param(material, "int_medium", data_buffer)) {
@@ -1376,6 +1471,14 @@ void build_emitters_distribution(Scene& scene) {
   }
   emitters_distribution.finalize();
 }
+
+namespace spectrum {
+
+Pointer<Spectrums> shared() {
+  return &shared_spectrums;
+}
+
+}  // namespace spectrum
 
 }  // namespace etx
 

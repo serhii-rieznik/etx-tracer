@@ -16,7 +16,7 @@ struct sapp_event;
 namespace etx {
 
 struct UI {
-  void initialize();
+  void initialize(const Pointer<Spectrums>& spectrums);
   void cleanup();
 
   void build(double dt, const char* status);

@@ -29,7 +29,26 @@ struct ImagePoolImpl {
     image_pool.cleanup();
   }
 
-  uint32_t add_from_file(const std::string& path, uint32_t image_options) {
+  uint32_t add_copy(const Image& img) {
+    ETX_ASSERT((img.options & Image::BuildSamplingTable) == 0);
+    ETX_ASSERT(img.y_distribution.values.count == 0);
+    ETX_ASSERT(img.x_distributions.count == 0);
+
+    std::string path = "~mem" + std::to_string(1u + counter++);
+    auto handle = image_pool.alloc();
+    mapping[path] = handle;
+
+    auto ptr_pixels = reinterpret_cast<ubyte4*>(malloc(img.data_size));
+    memcpy(ptr_pixels, img.pixels.u8.a, img.data_size);
+
+    auto& image = image_pool.get(handle);
+    image = img;
+    image.pixels.u8.a = ptr_pixels;
+
+    return handle;
+  }
+
+  uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset) {
     auto i = mapping.find(path);
     if (i != mapping.end()) {
       return i->second;
@@ -39,32 +58,37 @@ struct ImagePoolImpl {
     mapping[path] = handle;
 
     auto& image = image_pool.get(handle);
-    image.options = image_options;
-    if ((image.options & Image::DelayLoad) == 0) {
+    image.offset = offset;
+    image.options = Image::PerformLoading | image_options;
+    if ((image.options & Image::Delay) == 0) {
       perform_loading(handle, image);
     }
 
     return handle;
   }
 
-  uint32_t add_from_data(const float4 data[], const uint2& dimensions) {
-    uint64_t data_size = sizeof(float4) * dimensions.x * dimensions.y;
-    uint32_t hash = fnv1a32(reinterpret_cast<const uint8_t*>(data), data_size);
-    char buffer[32] = {};
-    snprintf(buffer, sizeof(buffer), "#%u", hash);
-    auto i = mapping.find(buffer);
-    if (i != mapping.end()) {
-      return i->second;
-    }
-
+  uint32_t add_from_data(const float4 data[], const uint2& dimensions, uint32_t image_options, const float2& offset) {
+    std::string path = "~mem" + std::to_string(1u + counter++);
     auto handle = image_pool.alloc();
-    mapping[buffer] = handle;
+    mapping[path] = handle;
+
     auto& image = image_pool.get(handle);
+    image.offset = offset;
     image.format = Image::Format::RGBA32F;
-    image.pixels.f32 = make_array_view<float4>(calloc(1llu * dimensions.x * dimensions.y, sizeof(float4)), dimensions.x * dimensions.y);
-    memcpy(image.pixels.f32.a, data, data_size);
+    image.data_size = static_cast<uint32_t>(dimensions.x * dimensions.y * sizeof(float4));
+    image.pixels.f32 = make_array_view<float4>(calloc(image.data_size, 1u), dimensions.x * dimensions.y);
+    image.options = image_options;
     image.isize = dimensions;
     image.fsize = {float(dimensions.x), float(dimensions.y)};
+
+    if (data != nullptr) {
+      memcpy(image.pixels.f32.a, data, image.data_size);
+    }
+
+    if ((image.options & Image::BuildSamplingTable) && ((image.options & Image::Delay) == 0)) {
+      build_image_sampling_table(image, scheduler);
+    }
+
     return handle;
   }
 
@@ -73,11 +97,15 @@ struct ImagePoolImpl {
       if (cache.second != handle)
         continue;
 
-      load_image(image, cache.first.c_str());
-      if (image.options & Image::BuildSamplingTable) {
-        build_sampling_table(image);
+      if (image.options & Image::PerformLoading) {
+        load_image(image, cache.first.c_str());
       }
-      image.options &= ~Image::DelayLoad;
+
+      if (image.options & Image::BuildSamplingTable) {
+        build_image_sampling_table(image, scheduler);
+      }
+
+      image.options &= ~Image::Delay;
       break;
     }
   }
@@ -87,7 +115,7 @@ struct ImagePoolImpl {
     uint32_t object_count = image_pool.latest_alive_index() + 1u;
     scheduler.execute(object_count, [this, objects](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
-        if (image_pool.alive(i) && (objects[i].options & Image::DelayLoad)) {
+        if (image_pool.alive(i) && (objects[i].options & Image::Delay)) {
           perform_loading(i, objects[i]);
         }
       }
@@ -148,6 +176,7 @@ struct ImagePoolImpl {
       bool srgb = (img.options & Image::Linear) == 0;
       img.pixels.u8.count = 1llu * img.isize.x * img.isize.y;
       img.pixels.u8.a = reinterpret_cast<ubyte4*>(calloc(img.pixels.u8.count, sizeof(ubyte4)));
+      img.data_size = static_cast<uint32_t>(img.pixels.u8.count * sizeof(ubyte4));
       auto src_data = reinterpret_cast<const ubyte4*>(source_data.data());
       for (uint32_t y = 0; y < img.isize.y; ++y) {
         for (uint32_t x = 0; x < img.isize.x; ++x) {
@@ -165,6 +194,7 @@ struct ImagePoolImpl {
     } else if (img.format == Image::Format::RGBA32F) {
       img.pixels.f32.count = 1llu * img.isize.x * img.isize.y;
       img.pixels.f32.a = reinterpret_cast<float4*>(calloc(img.pixels.f32.count, sizeof(float4)));
+      img.data_size = static_cast<uint32_t>(img.pixels.f32.count * sizeof(float4));
       memcpy(img.pixels.f32.a, source_data.data(), source_data.size());
     } else {
       ETX_FAIL_FMT("Unsupported image format %u", img.format);
@@ -179,7 +209,7 @@ struct ImagePoolImpl {
     }
   }
 
-  void build_sampling_table(Image& img) {
+  void build_image_sampling_table(Image& img, TaskScheduler& scheduler) {
     bool uniform_sampling = (img.options & Image::UniformSamplingTable) == Image::UniformSamplingTable;
     DistributionBuilder y_dist(img.y_distribution, img.isize.y);
     img.x_distributions.count = img.isize.y;
@@ -344,6 +374,7 @@ struct ImagePoolImpl {
   ObjectIndexPool<Image> image_pool;
   std::unordered_map<std::string, uint32_t> mapping;
   Image empty;
+  uint32_t counter = 0;
 };
 
 ETX_PIMPL_IMPLEMENT(ImagePool, Impl);
@@ -364,16 +395,24 @@ void ImagePool::cleanup() {
   _private->cleanup();
 }
 
-uint32_t ImagePool::add_from_file(const std::string& path, uint32_t image_options) {
-  return _private->add_from_file(path, image_options);
+uint32_t ImagePool::add_copy(const Image& img) {
+  return _private->add_copy(img);
 }
 
-uint32_t ImagePool::add_from_data(const float4* data, const uint2& dimensions) {
-  return _private->add_from_data(data, dimensions);
+uint32_t ImagePool::add_from_file(const std::string& path, uint32_t image_options, const float2& offset) {
+  return _private->add_from_file(path, image_options, offset);
+}
+
+uint32_t ImagePool::add_from_data(const float4* data, const uint2& dimensions, uint32_t image_options, const float2& offset) {
+  return _private->add_from_data(data, dimensions, image_options, offset);
 }
 
 const Image& ImagePool::get(uint32_t handle) {
   return _private->get(handle);
+}
+
+void ImagePool::free_image(Image& img) {
+  _private->free_image(img);
 }
 
 void ImagePool::remove(uint32_t handle) {

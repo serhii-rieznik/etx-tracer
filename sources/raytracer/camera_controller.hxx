@@ -63,10 +63,10 @@ struct CameraController {
     float3 up = {0.0f, 1.0f, 0.0f};
 
     if (_mouse_control && ((_mouse_delta.x != 0.0f) || (_mouse_delta.y != 0.0f))) {
-      float2 pt = direction_to_phi_theta(_camera.direction);
-      pt.x += _rotation_speed * (_mouse_delta.x * kPi / 180.0f);
-      pt.y = clamp(pt.y - _rotation_speed * (_mouse_delta.y * kDoublePi / 180.0f), -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
-      direction = phi_theta_to_direction(pt.x, pt.y);
+      auto s = to_spherical(_camera.direction);
+      s.phi += _rotation_speed * (_mouse_delta.x * kPi / 180.0f);
+      s.theta = clamp(s.theta - _rotation_speed * (_mouse_delta.y * kDoublePi / 180.0f), -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
+      direction = from_spherical(s);  // phi_theta_to_direction(pt.x, pt.y);
       side = cross(direction, up);
       changed = true;
       _mouse_delta = {};

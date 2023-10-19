@@ -261,8 +261,7 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
     radiance = emitter_get_radiance(emitter, state.spect, intersection.tex, state.ray.o, intersection.pos,  //
       pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (state.total_path_depth == 1));        //
   } else {
-    radiance = emitter_get_radiance(emitter, state.spect, state.ray.d,  //
-      pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);   //
+    radiance = emitter_get_radiance(emitter, state.spect, state.ray.d, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
   }
 
   if (pdf_emitter_dir <= kEpsilon) {
@@ -462,7 +461,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
   uint32_t emitter_index = sample_emitter_index(scene, state.sampler);
-  auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler, intersection.pos, scene);
+  auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler, intersection.pos, intersection.w_i, scene);
 
   if (emitter_sample.pdf_dir <= 0)
     return {state.spect.wavelength, 0.0f};

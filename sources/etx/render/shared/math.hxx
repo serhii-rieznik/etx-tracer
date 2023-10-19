@@ -23,6 +23,11 @@ struct vector4 {
   t x, y, z, w;
 };
 
+struct SphericalCoordinates {
+  float phi;
+  float theta;
+};
+
 #if (ETX_NVCC_COMPILER)
 # if defined(__NVCC__)
 #  include <thrust/complex.h>
@@ -82,11 +87,9 @@ constexpr float kSqrt2 = 1.4142135623730950488016887242097f;
 constexpr float kInvPi = 0.31830988618379067153776752674503f;
 constexpr float kEpsilon = 1.192092896e-07f;
 constexpr float kMaxFloat = 3.402823466e+38f;
+constexpr float kMaxHalf = 65504.0f;
 constexpr float kRayEpsilon = 1.0f / 65535.0f;
 constexpr float kDeltaAlphaTreshold = 1.0e-4f;
-
-constexpr float kPlanetRadius = 6371e+3f;
-constexpr float kAtmosphereRadius = 120e+3f;
 
 constexpr uint32_t kInvalidIndex = ~0u;
 
@@ -215,14 +218,14 @@ ETX_GPU_CODE constexpr t clamp(t val, t min_val, t max_val) {
   return (val < min_val) ? min_val : (val > max_val ? max_val : val);
 }
 
-ETX_GPU_CODE float2 max(const float2& a, const float2& b) {
+ETX_GPU_CODE constexpr float2 max(const float2& a, const float2& b) {
   return {
     max(a.x, b.x),
     max(a.y, b.y),
   };
 }
 
-ETX_GPU_CODE float3 max(const float3& a, const float3& b) {
+ETX_GPU_CODE constexpr float3 max(const float3& a, const float3& b) {
   return {
     max(a.x, b.x),
     max(a.y, b.y),
@@ -230,7 +233,7 @@ ETX_GPU_CODE float3 max(const float3& a, const float3& b) {
   };
 }
 
-ETX_GPU_CODE float4 max(const float4& a, const float4& b) {
+ETX_GPU_CODE constexpr float4 max(const float4& a, const float4& b) {
   return {
     max(a.x, b.x),
     max(a.y, b.y),
@@ -239,14 +242,14 @@ ETX_GPU_CODE float4 max(const float4& a, const float4& b) {
   };
 }
 
-ETX_GPU_CODE float2 min(const float2& a, const float2& b) {
+ETX_GPU_CODE constexpr float2 min(const float2& a, const float2& b) {
   return {
     min(a.x, b.x),
     min(a.y, b.y),
   };
 }
 
-ETX_GPU_CODE float3 min(const float3& a, const float3& b) {
+ETX_GPU_CODE constexpr float3 min(const float3& a, const float3& b) {
   return {
     min(a.x, b.x),
     min(a.y, b.y),
@@ -254,7 +257,7 @@ ETX_GPU_CODE float3 min(const float3& a, const float3& b) {
   };
 }
 
-ETX_GPU_CODE float4 min(const float4& a, const float4& b) {
+ETX_GPU_CODE constexpr float4 min(const float4& a, const float4& b) {
   return {
     min(a.x, b.x),
     min(a.y, b.y),
@@ -510,32 +513,18 @@ ETX_GPU_CODE float area_to_solid_angle_probability(float pdf_pos, const float3& 
   return (cos_t > 1.0e-5f) ? (pdf_pos * a_distance_squared / cos_t) : 0.0f;
 }
 
-ETX_GPU_CODE float2 uv_to_phi_theta(float u, float v) {
-  float phi = (u * 2.0f - 1.0f) * kPi;
-  float theta = (0.5f - v) * kPi;
-  return {phi, theta};
+ETX_GPU_CODE SphericalCoordinates to_spherical(const float3& dir) {
+  return SphericalCoordinates{
+    .phi = atan2f(dir.z, dir.x),
+    .theta = asinf(dir.y),
+  };
 }
 
-ETX_GPU_CODE float2 phi_theta_to_uv(float phi, float theta) {
-  float u = (phi / kPi + 1.0f) / 2.0f;
-  float v = 0.5f - theta / kPi;
-  return {u, v};
-}
-
-ETX_GPU_CODE float2 direction_to_phi_theta(const float3& dir) {
-  return {atan2f(dir.z, dir.x), asinf(dir.y)};
-}
-
-ETX_GPU_CODE float2 direction_to_uv(const float3& dir) {
-  float2 p_t = direction_to_phi_theta(dir);
-  return phi_theta_to_uv(p_t.x, p_t.y);
-}
-
-ETX_GPU_CODE float3 phi_theta_to_direction(float phi, float theta) {
-  float cos_p = cosf(phi);
-  float sin_p = sinf(phi);
-  float cos_t = cosf(theta);
-  float sin_t = sinf(theta);
+ETX_GPU_CODE float3 from_spherical(const SphericalCoordinates& s) {
+  float cos_p = cosf(s.phi);
+  float sin_p = sinf(s.phi);
+  float cos_t = cosf(s.theta);
+  float sin_t = sinf(s.theta);
   return {
     cos_p * cos_t,
     sin_t,
@@ -543,9 +532,8 @@ ETX_GPU_CODE float3 phi_theta_to_direction(float phi, float theta) {
   };
 }
 
-ETX_GPU_CODE float3 uv_to_direction(const float2& uv) {
-  float2 p_t = uv_to_phi_theta(uv.x, uv.y);
-  return phi_theta_to_direction(p_t.x, p_t.y);
+ETX_GPU_CODE float3 from_spherical(float phi, float theta) {
+  return from_spherical({phi, theta});
 }
 
 ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {
@@ -560,7 +548,6 @@ ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {
 }
 
 ETX_GPU_CODE float distance_to_sphere(const float3& r_origin, const float3& r_direction, const float3& center, float radius) {
-  //
   float3 e = r_origin - center;
   float b = dot(r_direction, e);
   float d = (b * b) - dot(e, e) + (radius * radius);

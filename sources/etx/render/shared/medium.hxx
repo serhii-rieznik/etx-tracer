@@ -5,6 +5,52 @@
 
 namespace etx {
 
+namespace medium {
+
+ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, Sampler& smp,
+  SpectralResponse& pdf) {
+  if constexpr (spectrum::kSpectralRendering) {
+    pdf = {spect.wavelength, 1.0f};
+    return 0;
+  }
+  SpectralResponse at = albedo * throughput;
+
+  float rnd = smp.next();
+
+  if (at.is_zero()) {
+    pdf = {spect.wavelength, 1.0f / float(SpectralResponse::component_count())};
+    return uint32_t(SpectralResponse::component_count() * rnd);
+  }
+
+  pdf = at / at.sum();
+  return 2u - uint32_t(rnd < pdf.components.x + pdf.components.y) - uint32_t(rnd < pdf.components.x);
+}
+
+ETX_GPU_CODE float phase_function(const float3& w_i, const float3& w_o, const float g) {
+  float cos_t = dot(w_i, w_o);
+  float d = 1.0f + g * g - 2.0f * g * cos_t;
+  return (1.0f / (4.0f * kPi)) * (1.0f - g * g) / (d * sqrtf(d));
+}
+
+ETX_GPU_CODE float3 sample_phase_function(const float3& w_i, const float g, Sampler& smp) {
+  float2 xi = smp.next_2d();
+
+  float cos_theta = 0.0f;
+  if (fabsf(g) < 1e-3f) {
+    cos_theta = 1.0f - 2.0f * xi.x;
+  } else {
+    float sqr_term = (1.0f - g * g) / (1.0f + g * (2.0f * xi.x - 1.0f));
+    cos_theta = (1.0f + g * g - sqr_term * sqr_term) / (2.0f * g);
+  }
+
+  float sin_theta = sqrtf(max(0.0f, 1.0f - cos_theta * cos_theta));
+
+  auto basis = orthonormal_basis(w_i);
+  return (basis.u * cosf(xi.y * kDoublePi) + basis.v * sinf(xi.y * kDoublePi)) * sin_theta + w_i * cos_theta;
+}
+
+}  // namespace medium
+
 struct ETX_ALIGNED Medium {
   enum class Class : uint32_t {
     Vacuum,
@@ -108,25 +154,6 @@ struct ETX_ALIGNED Medium {
     }
   }
 
-  ETX_GPU_CODE static uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, Sampler& smp,
-    SpectralResponse& pdf) {
-    if constexpr (spectrum::kSpectralRendering) {
-      pdf = {spect.wavelength, 1.0f};
-      return 0;
-    }
-    SpectralResponse at = albedo * throughput;
-
-    float rnd = smp.next();
-
-    if (at.is_zero()) {
-      pdf = {spect.wavelength, 1.0f / float(SpectralResponse::component_count())};
-      return uint32_t(SpectralResponse::component_count() * rnd);
-    }
-
-    pdf = at / at.sum();
-    return 2u - uint32_t(rnd < pdf.components.x + pdf.components.y) - uint32_t(rnd < pdf.components.x);
-  }
-
   ETX_GPU_CODE Sample sample_homogeneous(const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos, const float3& w_i, float max_t) const {
     SpectralResponse scattering = s_scattering(spect);
     SpectralResponse absorption = s_absorption(spect);
@@ -142,7 +169,7 @@ struct ETX_ALIGNED Medium {
     };
 
     SpectralResponse pdf = {};
-    uint32_t channel = sample_spectrum_component(spect, albedo, throughput, smp, pdf);
+    uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp, pdf);
     float sample_t = extinction.component(channel);
 
     float t = (sample_t > 0.0f) ? -logf(1.0f - smp.next()) / sample_t : max_t;
@@ -196,36 +223,12 @@ struct ETX_ALIGNED Medium {
     return {{spect.wavelength, 1.0f}};
   }
 
-  ETX_GPU_CODE static float phase_function(const SpectralQuery spect, const float3& pos, const float3& w_i, const float3& w_o, const float g) {
-    float cos_t = dot(w_i, w_o);
-    float d = 1.0f + g * g - 2.0f * g * cos_t;
-    return (1.0f / (4.0f * kPi)) * (1.0f - g * g) / (d * sqrtf(d));
-  }
-
   ETX_GPU_CODE float phase_function(const SpectralQuery spect, const float3& pos, const float3& w_i, const float3& w_o) const {
-    return (cls == Class::Vacuum) ? 1.0f : phase_function(spect, pos, w_i, w_o, phase_function_g);
-  }
-
-  ETX_GPU_CODE static float3 sample_phase_function(const SpectralQuery spect, Sampler& smp, const float3& w_i, const float g) {
-    float xi0 = smp.next();
-    float xi1 = smp.next();
-
-    float cos_theta = 0.0f;
-    if (fabsf(g) < 1e-3f) {
-      cos_theta = 1.0f - 2.0f * xi0;
-    } else {
-      float sqr_term = (1.0f - g * g) / (1.0f + g * (2.0f * xi0 - 1.0f));
-      cos_theta = (1.0f + g * g - sqr_term * sqr_term) / (2.0f * g);
-    }
-
-    float sin_theta = sqrtf(max(0.0f, 1.0f - cos_theta * cos_theta));
-
-    auto basis = orthonormal_basis(w_i);
-    return (basis.u * cosf(xi1 * kDoublePi) + basis.v * sinf(xi1 * kDoublePi)) * sin_theta + w_i * cos_theta;
+    return (cls == Class::Vacuum) ? 1.0f : medium::phase_function(w_i, w_o, phase_function_g);
   }
 
   ETX_GPU_CODE float3 sample_phase_function(const SpectralQuery spect, Sampler& smp, const float3& w_i) const {
-    return (cls == Class::Vacuum) ? w_i : sample_phase_function(spect, smp, w_i, phase_function_g);
+    return (cls == Class::Vacuum) ? w_i : medium::sample_phase_function(w_i, phase_function_g, smp);
   }
 
   ETX_GPU_CODE float sample_density(const float3& coord) const {

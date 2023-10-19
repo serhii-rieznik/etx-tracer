@@ -46,7 +46,7 @@ void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint
   }
 }
 
-void UI::initialize() {
+void UI::initialize(const Pointer<Spectrums>& spectrums) {
   simgui_desc_t imggui_desc = {};
   imggui_desc.depth_format = SG_PIXELFORMAT_NONE;
   imggui_desc.no_default_font = true;
@@ -94,9 +94,7 @@ void UI::initialize() {
     if (ext != L".spd")
       continue;
 
-    log::info("Preloading spectral distribution from %s", entry.path().string().c_str());
-
-    auto cls = SpectralDistribution::load_from_file(entry.path().string().c_str(), tmp.eta, &tmp.k, shared_spectrums());
+    auto cls = SpectralDistribution::load_from_file(entry.path().string().c_str(), tmp.eta, &tmp.k, spectrums);
     if (cls == SpectralDistribution::Class::Invalid)
       continue;
 
@@ -612,9 +610,17 @@ void UI::build(double dt, const char* status) {
           changed = true;
         }
 
-        ImGui::Text("Direction");
-        if (ImGui::DragFloat3("##direction", &emitter.direction.x, 0.1f, -256.0f, 256.0f, "%.02f", ImGuiSliderFlags_NoRoundToFormat)) {
-          emitter.direction = normalize(emitter.direction);
+        bool direction_changed = false;
+
+        auto s = to_spherical(emitter.direction);
+        ImGui::Text("Rotation:");
+        direction_changed = direction_changed || ImGui::DragFloat("##rotation", &s.phi, kPi / 360.0f, -kPi, kPi);
+
+        ImGui::Text("Elevation:");
+        direction_changed = direction_changed || ImGui::DragFloat("##elevation", &s.theta, kPi / 180.0f, -kHalfPi, kHalfPi);
+
+        if (direction_changed) {
+          emitter.direction = from_spherical(s);
           changed = true;
         }
       }
@@ -623,6 +629,7 @@ void UI::build(double dt, const char* status) {
         callbacks.emitter_changed(_selected_emitter);
       }
     }
+
     ImGui::End();
   }
 

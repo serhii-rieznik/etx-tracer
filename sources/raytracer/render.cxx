@@ -53,7 +53,7 @@ RenderContext::~RenderContext() {
 
 void RenderContext::init() {
   _private->image_pool.init(1024u);
-  _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV);
+  _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV, {});
 
   sg_desc context = {};
   context.context.d3d11.device = sapp_d3d11_get_device();
@@ -206,13 +206,13 @@ void RenderContext::apply_reference_image(uint32_t handle) {
 
 void RenderContext::set_reference_image(const char* file_name) {
   _private->image_pool.remove(_private->ref_image_handle);
-  _private->ref_image_handle = _private->image_pool.add_from_file(file_name, 0);
+  _private->ref_image_handle = _private->image_pool.add_from_file(file_name, 0, {});
   apply_reference_image(_private->ref_image_handle);
 }
 
 void RenderContext::set_reference_image(const float4 data[], const uint2 dimensions) {
   _private->image_pool.remove(_private->ref_image_handle);
-  _private->ref_image_handle = _private->image_pool.add_from_data(data, dimensions);
+  _private->ref_image_handle = _private->image_pool.add_from_data(data, dimensions, 0u, {});
   apply_reference_image(_private->ref_image_handle);
 }
 
@@ -329,7 +329,7 @@ float4 validate(in float4 xyz) {
 }
 
 float linear_to_gamma(float value) {
-  return value <= 0.0031308f ? 12.92f * value : 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
+  return value <= 0.0031308f ? (12.92f * value) : (1.055f * pow(abs(value), 1.0f / 2.4f) - 0.055f);
 }
 
 float4 tonemap(float4 value) {

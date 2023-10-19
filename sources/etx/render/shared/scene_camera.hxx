@@ -19,7 +19,7 @@ ETX_GPU_CODE Ray generate_ray(Sampler& smp, const Scene& scene, const float2& uv
   ETX_CHECK_FINITE(uv);
 
   if (scene.camera.cls == Camera::Class::Equirectangular) {
-    return {scene.camera.position, phi_theta_to_direction(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat};
+    return {scene.camera.position, from_spherical(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat};
   }
 
   float3 origin = scene.camera.position;

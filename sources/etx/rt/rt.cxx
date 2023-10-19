@@ -12,30 +12,31 @@ struct RaytracingImpl {
   RTCDevice rt_device = {};
   RTCScene rt_scene = {};
 
+  /*
   GPUDevice* gpu_device = nullptr;
   struct {
     Scene scene = {};
     GPUAccelerationStructure accel = {};
     std::vector<GPUBuffer> buffers = {};
   } gpu = {};
+  */
 
   RaytracingImpl() {
-    gpu_device = GPUDevice::create_optix_device();
+    // gpu_device = GPUDevice::create_optix_device();
   }
 
   ~RaytracingImpl() {
     release_host_scene();
-    release_device_scene();
-    GPUDevice::free_device(gpu_device);
+    // release_device_scene();
+    // GPUDevice::free_device(gpu_device);
   }
 
   void set_scene(const Scene& s) {
     source_scene = &s;
     release_host_scene();
     build_host_scene();
-
-    release_device_scene();
-    build_device_scene();
+    // release_device_scene();
+    // build_device_scene();
   }
 
   void build_host_scene() {
@@ -81,13 +82,12 @@ struct RaytracingImpl {
     return align_up(a.count * sizeof(T), 16llu);
   }
 
+  /*
   template <class T>
   inline void upload_array_view_to_gpu(ArrayView<T>& a, GPUBuffer* out_buffer) {
     GPUBuffer buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({array_size(a), a.a}));
-
     auto device_ptr = gpu_device->get_buffer_device_pointer(buffer);
     a.a = reinterpret_cast<T*>(device_ptr);
-
     if (out_buffer != nullptr) {
       *out_buffer = buffer;
     }
@@ -217,7 +217,6 @@ struct RaytracingImpl {
     desc.index_buffer_stride = sizeof(Triangle);
     desc.triangle_count = static_cast<uint32_t>(gpu.scene.triangles.count);
     gpu.accel = gpu_device->create_acceleration_structure(desc);
-
     gpu.scene.acceleration_structure = gpu_device->get_acceleration_structure_device_pointer(gpu.accel);
   }
 
@@ -229,6 +228,7 @@ struct RaytracingImpl {
     gpu.buffers.clear();
     gpu = {};
   }
+  // */
 
   void trace_with_function(const Ray& r, RTCRayQueryContext* context, RTCFilterFunctionN filter_funtion) {
     ETX_CHECK_FINITE(r.o);
@@ -275,9 +275,17 @@ TaskScheduler& Raytracing::scheduler() {
   return _private->scheduler;
 }
 
+/*
 GPUDevice* Raytracing::gpu() {
   return _private->gpu_device;
 }
+
+const Scene& Raytracing::gpu_scene() const {
+  ETX_ASSERT(has_scene());
+  _private->gpu.scene.camera = _private->source_scene->camera;
+  return _private->gpu.scene;
+}
+// */
 
 void Raytracing::set_scene(const Scene& scene) {
   _private->set_scene(scene);
@@ -290,12 +298,6 @@ bool Raytracing::has_scene() const {
 const Scene& Raytracing::scene() const {
   ETX_ASSERT(has_scene());
   return *(_private->source_scene);
-}
-
-const Scene& Raytracing::gpu_scene() const {
-  ETX_ASSERT(has_scene());
-  _private->gpu.scene.camera = _private->source_scene->camera;
-  return _private->gpu.scene;
 }
 
 bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t material_id, Intersection& result_intersection, Sampler& smp) const {

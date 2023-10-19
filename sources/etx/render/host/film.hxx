@@ -37,6 +37,10 @@ struct Film {
     return _sequence[i];
   }
 
+  static float calculate_ev(float f, float s) {
+    return log2f(f * f / s);
+  }
+
  private:
   Film(const Film&) = delete;
   Film& operator=(const Film&) = delete;

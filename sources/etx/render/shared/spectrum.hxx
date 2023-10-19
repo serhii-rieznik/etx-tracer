@@ -183,7 +183,7 @@ ETX_GPU_CODE float black_body_radiation(float wavelength_nm, float t_kelvins) {
 
 ETX_GPU_CODE SpectralQuery sample(float rnd) {
   if constexpr (kSpectralRendering) {
-    return SpectralQuery{kShortestWavelength + rnd * kWavelengthCount};
+    return SpectralQuery{kShortestWavelength + rnd * (kLongestWavelength - kShortestWavelength)};
   } else {
     return SpectralQuery{kUndefinedWavelength};
   }
@@ -374,6 +374,9 @@ ETX_GPU_CODE SpectralResponse operator/(float other, const SpectralResponse& s) 
 }
 ETX_GPU_CODE SpectralResponse operator+(float other, const SpectralResponse& s) {
   return s + other;
+}
+ETX_GPU_CODE SpectralResponse operator-(const SpectralResponse& s) {
+  return {s.wavelength, -s.components};
 }
 ETX_GPU_CODE SpectralResponse operator-(float other, const SpectralResponse& s) {
   return {s.wavelength, other - s.components};
@@ -663,9 +666,19 @@ struct ETX_ALIGNED Spectrums {
   RefractiveIndex thinfilm = {};
   RefractiveIndex conductor = {};
   RefractiveIndex dielectric = {};
+  SpectralDistribution rayleigh = {};
+  SpectralDistribution mie = {};
+  SpectralDistribution ozone = {};
+  SpectralDistribution black = {};
   rgb::SpectrumSet rgb_reflection = {};
   rgb::SpectrumSet rgb_illuminant = {};
 };
+
+namespace spectrum {
+
+Pointer<Spectrums> shared();
+
+}
 
 namespace rgb {
 

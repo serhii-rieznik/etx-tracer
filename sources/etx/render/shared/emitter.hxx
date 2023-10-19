@@ -9,6 +9,7 @@ struct ETX_ALIGNED Emitter {
     Area,
     Environment,
     Directional,
+
     Undefined = kInvalidIndex,
   };
 
@@ -38,7 +39,7 @@ struct ETX_ALIGNED Emitter {
   }
 
   ETX_GPU_CODE bool is_distant() const {
-    return (cls == Class::Environment) || (cls == Class::Directional);
+    return !is_local();
   }
 
   ETX_GPU_CODE bool is_local() const {

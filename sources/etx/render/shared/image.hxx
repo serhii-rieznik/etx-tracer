@@ -20,7 +20,8 @@ struct Image {
     Linear = 1u << 3u,
     HasAlphaChannel = 1u << 4u,
     UniformSamplingTable = 1u << 5u,
-    DelayLoad = 1u << 6u,
+    PerformLoading = 1u << 6u,
+    Delay = 1u << 7u,
   };
 
   struct Gather {
@@ -40,11 +41,12 @@ struct Image {
   ArrayView<Distribution> x_distributions = {};
   Distribution y_distribution = {};
   float2 fsize = {};
+  float2 offset = {};
   uint2 isize = {};
   float normalization = 0.0f;
   uint32_t options = 0;
   Format format = Format::Undefined;
-  uint32_t pad = {};
+  uint32_t data_size = 0u;
 
   ETX_GPU_CODE Gather gather(const float2& in_uv) const {
     float2 uv = in_uv * fsize;

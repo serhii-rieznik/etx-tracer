@@ -16,14 +16,18 @@ struct ImagePool {
   void init(uint32_t capacity);
   void cleanup();
 
-  uint32_t add_from_file(const std::string& path, uint32_t image_options);
-  uint32_t add_from_data(const float4* data, const uint2& dimensions);
+  uint32_t add_copy(const Image& img);
+  uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset);
+  uint32_t add_from_data(const float4* data, const uint2& dimensions, uint32_t image_options, const float2& offset);
+
   void remove(uint32_t handle);
   void remove_all();
 
   void load_images();
 
   const Image& get(uint32_t);
+
+  void free_image(Image&);
 
   Image* as_array();
   uint64_t array_size();

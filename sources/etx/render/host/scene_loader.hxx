@@ -36,7 +36,7 @@ struct SceneRepresentation {
 
   operator bool() const;
 
-  ETX_DECLARE_PIMPL(SceneRepresentation, 2048);
+  ETX_DECLARE_PIMPL(SceneRepresentation, 24u * 1024u);
 };
 
 Camera build_camera(const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov, float lens_radius, float focal_distance);
@@ -52,7 +52,5 @@ void material_class_to_string(Material::Class cls, const char** str);
 
 void build_emitters_distribution(Scene& scene);
 float emitter_weight(const Emitter&);
-
-Pointer<Spectrums> shared_spectrums();
 
 }  // namespace etx

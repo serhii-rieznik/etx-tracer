@@ -13,11 +13,10 @@ struct Raytracing {
   ~Raytracing();
 
   TaskScheduler& scheduler();
-  GPUDevice* gpu();
-
   const Scene& scene() const;
 
-  const Scene& gpu_scene() const;
+  // GPUDevice* gpu();
+  // const Scene& gpu_scene() const;
 
   bool has_scene() const;
   void set_scene(const Scene&);

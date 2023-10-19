@@ -27,7 +27,7 @@ RTApplication::RTApplication()
 
 void RTApplication::init() {
   render.init();
-  ui.initialize();
+  ui.initialize(spectrum::shared());
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
