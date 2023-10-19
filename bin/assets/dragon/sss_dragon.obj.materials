@@ -1,9 +1,11 @@
 newmtl et::atmosphere
 direction 1.0 1.0 1.0
-angular_diameter 0.526
+angular_diameter 0.53
 anisotropy 0.75
 altitude 100.0
 scale 1.0
+rayleigh 1.0
+mie 1.0
 ozone 1.0
 
 newmtl et::medium

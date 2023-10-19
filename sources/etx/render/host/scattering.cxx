@@ -314,7 +314,7 @@ void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinct
     }
   });
 
-  stbi_write_hdr("D:\\scattering.hdr", kImageWidth, kImageHeight, 4, &image->x);
+  // stbi_write_hdr("D:\\scattering.hdr", kImageWidth, kImageHeight, 4, &image->x);
 }
 
 void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const Image& extinction, float4* buffer, TaskScheduler& scheduler) {
@@ -341,7 +341,7 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
   auto duration = (t1 - t0).count() / 1.0e+6;
   log::info("Sky image generated: %.3f ms (%.3f ms/pixel)", duration, duration / double(dimensions.x * dimensions.y));
 
-  stbi_write_hdr("D:\\generated-sky.hdr", dimensions.x, dimensions.y, 4, &buffer->x);
+  // stbi_write_hdr("D:\\generated-sky.hdr", dimensions.x, dimensions.y, 4, &buffer->x);
 }
 
 void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer, TaskScheduler& scheduler) {
@@ -371,7 +371,7 @@ void generate_sun_image(const Parameters& parameters, const uint2& dimensions, c
   auto duration = (t1 - t0).count() / 1.0e+6;
   log::info("Sun image generated: %.3f ms (%.3f ms/pixel)", duration, duration / double(dimensions.x * dimensions.y));
 
-  stbi_write_hdr("D:\\generated-sun.hdr", dimensions.x, dimensions.y, 4, &buffer->x);
+  // stbi_write_hdr("D:\\generated-sun.hdr", dimensions.x, dimensions.y, 4, &buffer->x);
 }
 
 }  // namespace scattering
