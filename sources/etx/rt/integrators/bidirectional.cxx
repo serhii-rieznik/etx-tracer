@@ -1,6 +1,8 @@
 #include <etx/core/core.hxx>
 
 #include <etx/render/host/film.hxx>
+#include <etx/render/host/rnd_sampler.hxx>
+
 #include <etx/rt/integrators/bidirectional.hxx>
 
 #include <atomic>
@@ -491,14 +493,22 @@ struct CPUBidirectionalImpl : public Task {
     if (z_i.is_specific_emitter()) {
       const auto& emitter = rt.scene().emitters[z_i.emitter_index];
       ETX_ASSERT(emitter.is_local());
-      emitter_value = emitter_get_radiance(emitter, spect, z_i.tex, z_prev.pos, z_i.pos, pdf_area, pdf_dir, pdf_dir_out, rt.scene(), (eye_t <= 2));
+      EmitterRadianceQuery q = {
+        .source_position = z_prev.pos,
+        .target_position = z_i.pos,
+        .uv = z_i.tex,
+        .directly_visible = eye_t <= 2,
+      };
+      emitter_value = emitter_get_radiance(emitter, spect, q, pdf_area, pdf_dir, pdf_dir_out, rt.scene());
     } else if (rt.scene().environment_emitters.count > 0) {
-      auto w_o = normalize(z_i.pos - z_prev.pos);
+      EmitterRadianceQuery q = {
+        .direction = normalize(z_i.pos - z_prev.pos),
+      };
       for (uint32_t ie = 0; ie < rt.scene().environment_emitters.count; ++ie) {
         const auto& emitter = rt.scene().emitters[rt.scene().environment_emitters.emitters[ie]];
         float local_pdf_dir = 0.0f;
         float local_pdf_dir_out = 0.0f;
-        emitter_value += emitter_get_radiance(emitter, spect, w_o, pdf_area, local_pdf_dir, local_pdf_dir_out, rt.scene());
+        emitter_value += emitter_get_radiance(emitter, spect, q, pdf_area, local_pdf_dir, local_pdf_dir_out, rt.scene());
         pdf_dir += local_pdf_dir;
       }
       pdf_dir = pdf_dir / float(rt.scene().environment_emitters.count);

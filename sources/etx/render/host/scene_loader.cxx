@@ -1129,6 +1129,14 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
       }
     } else if (material.name == "et::atmosphere") {
+      float quality = 1.0f;
+      if (get_param(material, "quality", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          quality = val;
+        }
+      }
+
       float scale = 1.0f;
       if (get_param(material, "scale", data_buffer)) {
         float val = {};
@@ -1136,12 +1144,23 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
           scale = val;
         }
       }
-
-      float radiance_scale = scale / exp2f(Film::calculate_ev(8.0f, 1.0f / 100.0f));
-      auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, spectrums()) * radiance_scale;
+      float sun_scale = 1.0f;
+      if (get_param(material, "sun_scale", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          sun_scale = val;
+        }
+      }
+      float sky_scale = 1.0f;
+      if (get_param(material, "sky_scale", data_buffer)) {
+        float val = {};
+        if (sscanf(data_buffer, "%f", &val) == 1) {
+          sky_scale = val;
+        }
+      }
 
       float3 direction = normalize(float3{1.0f, 1.0f, 1.0f});
-      float angular_size = 0.0f;
+      float angular_size = 0.5422f * (kPi / 180.0f);
 
       scattering::Parameters scattering_parameters = {};
 
@@ -1154,7 +1173,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       if (get_param(material, "angular_diameter", data_buffer)) {
         float val = {};
         if (sscanf(data_buffer, "%f", &val) == 1) {
-          angular_size = val * kPi / 180.0f;
+          angular_size = val * (kPi / 180.0f);
         }
       }
       if (get_param(material, "anisotropy", data_buffer)) {
@@ -1188,12 +1207,15 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         }
       }
 
-      constexpr uint2 kSkyImageDimensions = uint2{1024u, 512u};
-      constexpr uint2 kSunImageDimensions = uint2{256u, 256u};
+      float radiance_scale = scale * (kDoublePi * (1.0f - cosf(0.5f * angular_size)));
+      auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, spectrums()) * radiance_scale;
+
+      uint2 kSkyImageDimensions = uint2{1024u, uint32_t(1024u / quality)};
+      uint2 kSunImageDimensions = uint2{128u, 128u};
 
       {
         auto& d = emitters.emplace_back(Emitter::Class::Directional);
-        d.emission.spectrum = sun_spectrum;
+        d.emission.spectrum = sun_spectrum * sun_scale;
         d.angular_size = angular_size;
         d.direction = direction;
 
@@ -1206,7 +1228,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
 
       {
         auto& e = emitters.emplace_back(Emitter::Class::Environment);
-        e.emission.spectrum = sun_spectrum;
+        e.emission.spectrum = sun_spectrum * sky_scale;
         e.emission.image_index = add_image(nullptr, kSkyImageDimensions, Image::BuildSamplingTable | Image::Delay);
         e.direction = direction;
 

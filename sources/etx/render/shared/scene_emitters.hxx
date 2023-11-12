@@ -1,7 +1,5 @@
 #pragma once
 
-#include <etx/render/shared/scattering.hxx>
-
 namespace etx {
 
 ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset) {
@@ -20,29 +18,6 @@ ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset) {
 ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene) {
   ETX_ASSERT(em.is_local());
   return 1.0f / em.triangle_area;
-}
-
-ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& pos, const float3& to_point, float& pdf_area,
-  float& pdf_dir, float& pdf_dir_out, const Scene& scene, const bool no_collimation) {
-  ETX_ASSERT(em.is_local());
-
-  const auto& tri = scene.triangles[em.triangle_index];
-  if ((em.emission_direction == Emitter::Direction::Single) && (dot(tri.geo_n, to_point - pos) >= 0.0f)) {
-    return {spect.wavelength, 0.0f};
-  }
-
-  auto dp = pos - to_point;
-
-  pdf_area = emitter_pdf_area_local(em, scene);
-  if (em.emission_direction == Emitter::Direction::Omni) {
-    pdf_dir = pdf_area * dot(dp, dp);
-    pdf_dir_out = pdf_area;
-  } else {
-    pdf_dir = area_to_solid_angle_probability(pdf_area, to_point, tri.geo_n, pos, no_collimation ? 1.0f : em.collimation);
-    pdf_dir_out = pdf_area * fabsf(dot(tri.geo_n, normalize(dp))) * kInvPi;
-  }
-
-  return apply_emitter_image(spect, em.emission, uv, scene);
 }
 
 ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
@@ -74,30 +49,29 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
   return apply_emitter_image(spect, em.emission, uv, scene);
 }
 
-ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir, float& pdf_dir_out,
-  const Scene& scene) {
-  ETX_ASSERT(em.is_distant());
-
+ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
+  float& pdf_dir_out, const Scene& scene) {
   pdf_area = 0.0f;
   pdf_dir = 0.0f;
   pdf_dir_out = 0.0f;
 
   switch (em.cls) {
     case Emitter::Class::Directional: {
-      if ((em.angular_size <= 0.0f) || (dot(in_direction, em.direction) < em.angular_size_cosine)) {
+      if ((em.angular_size <= 0.0f) || (dot(query.direction, em.direction) < em.angular_size_cosine)) {
         return {spect.wavelength, 0.0f};
       }
 
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = 1.0f;
       pdf_dir_out = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
-      float2 uv = disk_uv(em.direction, in_direction, em.equivalent_disk_size, em.angular_size_cosine);
-      return apply_image(spect, em.emission, uv, scene);
+      float2 uv = disk_uv(em.direction, query.direction, em.equivalent_disk_size, em.angular_size_cosine);
+      SpectralResponse direct_scale = 1.0f / (em.emission.spectrum(spect) * kDoublePi * (1.0f - em.angular_size_cosine));
+      return apply_image(spect, em.emission, uv, scene) * (query.directly_visible ? direct_scale : SpectralResponse(spect.wavelength, 1.0f));
     }
 
     case Emitter::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
-      float2 uv = direction_to_uv(in_direction, img.offset);
+      float2 uv = direction_to_uv(query.direction, img.offset);
       float sin_t = sinf(uv.y * kPi);
       if (sin_t == 0.0f) {
         return {spect.wavelength, 0.0f};
@@ -108,6 +82,26 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       ETX_VALIDATE(pdf_dir);
       pdf_dir_out = pdf_area * pdf_dir;
       return apply_emitter_image(spect, em.emission, uv, scene);
+    }
+
+    case Emitter::Class::Area: {
+      const auto& tri = scene.triangles[em.triangle_index];
+      if ((em.emission_direction == Emitter::Direction::Single) && (dot(tri.geo_n, query.target_position - query.source_position) >= 0.0f)) {
+        return {spect.wavelength, 0.0f};
+      }
+
+      float3 dp = query.source_position - query.target_position;
+
+      pdf_area = emitter_pdf_area_local(em, scene);
+      if (em.emission_direction == Emitter::Direction::Omni) {
+        pdf_dir = pdf_area * dot(dp, dp);
+        pdf_dir_out = pdf_area;
+      } else {
+        pdf_dir = area_to_solid_angle_probability(pdf_area, query.target_position, tri.geo_n, query.source_position, query.directly_visible ? 1.0f : em.collimation);
+        pdf_dir_out = pdf_area * fabsf(dot(tri.geo_n, normalize(dp))) * kInvPi;
+      }
+
+      return apply_emitter_image(spect, em.emission, query.uv, scene);
     }
 
     default: {
@@ -186,8 +180,14 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
       result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
       result.direction = normalize(result.origin - from_point);
-      result.value = emitter_get_radiance(em, spect, lerp_uv(scene.vertices, tri, result.barycentric), from_point, result.origin, result.pdf_area, result.pdf_dir,
-        result.pdf_dir_out, scene, false);
+
+      EmitterRadianceQuery q = {
+        .source_position = from_point,
+        .target_position = result.origin,
+        .uv = lerp_uv(scene.vertices, tri, result.barycentric),
+      };
+
+      result.value = emitter_get_radiance(em, spect, q, result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);
       break;
     }
 

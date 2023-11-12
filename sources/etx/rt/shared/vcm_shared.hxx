@@ -255,14 +255,15 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;
 
-  SpectralResponse radiance = {};
+  EmitterRadianceQuery q = {
+    .source_position = state.ray.o,
+    .target_position = intersection.pos,
+    .direction = state.ray.d,
+    .uv = intersection.tex,
+    .directly_visible = state.total_path_depth == 1,
+  };
 
-  if (emitter.is_local()) {
-    radiance = emitter_get_radiance(emitter, state.spect, intersection.tex, state.ray.o, intersection.pos,  //
-      pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene, (state.total_path_depth == 1));        //
-  } else {
-    radiance = emitter_get_radiance(emitter, state.spect, state.ray.d, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
-  }
+  SpectralResponse radiance = emitter_get_radiance(emitter, state.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
 
   if (pdf_emitter_dir <= kEpsilon) {
     return {state.spect.wavelength, 0.0f};

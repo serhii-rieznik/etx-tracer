@@ -337,6 +337,10 @@ ETX_GPU_CODE float dot(const float2& a, const float2& b) {
   return a.x * b.x + a.y * b.y;
 }
 
+ETX_GPU_CODE float length(const float2& v) {
+  return sqrtf(dot(v, v));
+}
+
 ETX_GPU_CODE float dot(const float3& a, const float3& b) {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }

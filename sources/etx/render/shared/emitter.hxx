@@ -75,4 +75,12 @@ struct ETX_ALIGNED EmitterSample {
   bool is_distant = false;
 };
 
+struct EmitterRadianceQuery {
+  float3 source_position = {};
+  float3 target_position = {};
+  float3 direction = {};
+  float2 uv = {};
+  bool directly_visible = false;
+};
+
 }  // namespace etx
