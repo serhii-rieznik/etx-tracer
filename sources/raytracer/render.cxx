@@ -174,7 +174,7 @@ void RenderContext::end_frame() {
 }
 
 void RenderContext::apply_reference_image(uint32_t handle) {
-  auto img = _private->image_pool.get(handle);
+  const auto& img = _private->image_pool.get(handle);
 
   sg_destroy_image(_private->reference_image);
 

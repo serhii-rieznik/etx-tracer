@@ -278,21 +278,51 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
   log::info("Generating sky image %u x %u...", dimensions.x, dimensions.y);
 
   auto t0 = std::chrono::steady_clock::now();
-  scheduler.execute(dimensions.x * dimensions.y, [&parameters, &dimensions, light_direction, &extinction, buffer](uint32_t begin, uint32_t end, uint32_t thread_id) {
-    SpectralDistribution radiance = spectrum::shared()->black;
-    for (uint32_t i = begin; i < end; ++i) {
-      uint32_t x = i % dimensions.x;
-      uint32_t y = i / dimensions.x;
-      float u = float(x + 0.5f) / float(dimensions.x) * 2.0f - 1.0f;
-      float v = float(y + 0.5f) / float(dimensions.y) * 2.0f - 1.0f;
-      float3 direction = from_spherical(u * kPi, v * kHalfPi);
-      radiance_spectrum_at_direction(spectrum::shared(), extinction, direction, light_direction, parameters, radiance);
+  std::atomic<float> ax = {};
+  std::atomic<float> ay = {};
+  std::atomic<float> az = {};
+  std::atomic<float> aw = {};
+  scheduler.execute(dimensions.x * dimensions.y,
+    [&parameters, &dimensions, light_direction, &extinction, buffer, &ax, &ay, &az, &aw](uint32_t begin, uint32_t end, uint32_t thread_id) {
+      float3 avg = {};
+      float w = 0.0f;
+      SpectralDistribution radiance = spectrum::shared()->black;
+      for (uint32_t i = begin; i < end; ++i) {
+        uint32_t x = i % dimensions.x;
+        uint32_t y = i / dimensions.x;
+        float u = float(x + 0.5f) / float(dimensions.x) * 2.0f - 1.0f;
+        float v = float(y + 0.5f) / float(dimensions.y) * 2.0f - 1.0f;
+        float3 direction = from_spherical(u * kPi, v * kHalfPi);
+        radiance_spectrum_at_direction(spectrum::shared(), extinction, direction, light_direction, parameters, radiance);
+        float3 xyz = radiance.integrate_to_xyz();
+        float3 rgb = max({}, spectrum::xyz_to_rgb(xyz));
+        if (v > 0.0f) {
+          // Poor man multiple scattering
+          // Gather average color of the upper hemisphere
+          // Weighted in the way that top pixels contribute more
+          // Not physically correct, but looks nice
+          float weight = sinf(v * kHalfPi);
+          w += weight;
+          avg += rgb * weight;
+        }
+        buffer[x + dimensions.x * (dimensions.y - y - 1u)] = {rgb.x, rgb.y, rgb.z, 1.0f};
+      }
+      ax += avg.x;
+      ay += avg.y;
+      az += avg.z;
+      aw += w;
+    });
 
-      float3 xyz = radiance.integrate_to_xyz();
-      float3 rgb = max({}, spectrum::xyz_to_rgb(xyz));
-      buffer[x + dimensions.x * (dimensions.y - y - 1u)] = {rgb.x, rgb.y, rgb.z, 1.0f};
+  float3 average_color = float3{ax.load(), ay.load(), az.load()} / aw.load();
+
+  scheduler.execute(dimensions.x * dimensions.y, [buffer, average_color](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    for (uint32_t i = begin; i < end; ++i) {
+      buffer[i].x += kDoublePi * average_color.x * buffer[i].x + average_color.x;
+      buffer[i].y += kDoublePi * average_color.y * buffer[i].y + average_color.y;
+      buffer[i].z += kDoublePi * average_color.z * buffer[i].z + average_color.z;
     }
   });
+
   auto t1 = std::chrono::steady_clock::now();
   auto duration = (t1 - t0).count() / 1.0e+6;
   log::info("Sky image generated: %.3f ms (%.3f ms/pixel)", duration, duration / double(dimensions.x * dimensions.y));

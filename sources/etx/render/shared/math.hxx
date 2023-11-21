@@ -26,6 +26,7 @@ struct vector4 {
 struct SphericalCoordinates {
   float phi;
   float theta;
+  float r;
 };
 
 #if (ETX_NVCC_COMPILER)
@@ -514,9 +515,11 @@ ETX_GPU_CODE float area_to_solid_angle_probability(float pdf_pos, const float3& 
 }
 
 ETX_GPU_CODE SphericalCoordinates to_spherical(const float3& dir) {
+  float r = length(dir);
   return SphericalCoordinates{
     .phi = atan2f(dir.z, dir.x),
-    .theta = asinf(dir.y),
+    .theta = asinf(dir.y / r),
+    .r = r,
   };
 }
 
@@ -526,14 +529,14 @@ ETX_GPU_CODE float3 from_spherical(const SphericalCoordinates& s) {
   float cos_t = cosf(s.theta);
   float sin_t = sinf(s.theta);
   return {
-    cos_p * cos_t,
-    sin_t,
-    sin_p * cos_t,
+    s.r * cos_p * cos_t,
+    s.r * sin_t,
+    s.r * sin_p * cos_t,
   };
 }
 
 ETX_GPU_CODE float3 from_spherical(float phi, float theta) {
-  return from_spherical({phi, theta});
+  return from_spherical({phi, theta, 1.0f});
 }
 
 ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {

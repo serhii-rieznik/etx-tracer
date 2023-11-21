@@ -23,7 +23,7 @@ void VCMOptions::load(const Options& opt) {
   options = opt.get("merging", enable_merging()).to_bool() ? (options | EnableMerging) : (options & ~EnableMerging);
 }
 
-void VCMOptions::store(Options& opt) {
+void VCMOptions::store(Options& opt) const {
   opt.add(0.0f, initial_radius, 10.0f, "initial_radius", "Initial Radius");
   opt.add(1u, uint32_t(radius_decay), 65536u, "radius_decay", "Radius Decay");
   opt.add("debug", "Compute:");
@@ -65,7 +65,7 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   data.hash_table_mask = hash_table_size - 1u;
 
   _position_to_index.resize(sample_count);
-  _indices.resize(sample_count);
+  _indices.resize(sample_count + 1llu);
 
   _cell_ends.resize(hash_table_size);
   memset(_cell_ends.data(), 0, sizeof(uint32_t) * hash_table_size);

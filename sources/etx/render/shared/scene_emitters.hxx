@@ -73,7 +73,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       const auto& img = scene.images[em.emission.image_index];
       float2 uv = direction_to_uv(query.direction, img.offset);
       float sin_t = sinf(uv.y * kPi);
-      if (sin_t == 0.0f) {
+      if (sin_t <= kEpsilon) {
         return {spect.wavelength, 0.0f};
       }
 
@@ -132,7 +132,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
       float2 offset = scene.images[em.emission.image_index].offset;
       float2 uv = direction_to_uv(in_direction, offset);
       float sin_t = sinf(uv.y * kPi);
-      if (sin_t == 0.0f) {
+      if (sin_t <= kEpsilon) {
         return {spect.wavelength, 0.0f};
       }
 
@@ -215,7 +215,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       uint2 image_location = {};
       float2 uv = img.sample(smp.next_2d(), pdf_image, image_location);
       float sin_t = sinf(uv.y * kPi);
-      if (sin_t == 0.0f) {
+      if (sin_t <= kEpsilon) {
         result = {{spect.wavelength, 0.0f}};
         return result;
       }

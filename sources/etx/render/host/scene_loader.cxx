@@ -358,6 +358,7 @@ void update_camera(Camera& camera, const float3& origin, const float3& target, c
   float4x4 proj = perspective(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
   float4x4 inv_view = inverse(view);
 
+  camera.target = target;
   camera.position = {inv_view.col[3].x, inv_view.col[3].y, inv_view.col[3].z};
   camera.side = {view.col[0].x, view.col[1].x, view.col[2].x};
   camera.up = {view.col[0].y, view.col[1].y, view.col[2].y};
@@ -568,7 +569,12 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       const auto& obj = i.value();
       std::string str_value = {};
       float float_value = 0.0f;
-      if (json_get_string(i, "geometry", str_value)) {
+      int64_t int_value = 0;
+      if (json_get_int(i, "samples", int_value)) {
+        _private->scene.samples = static_cast<uint32_t>(std::max(1ll, int_value));
+      } else if (json_get_int(i, "max-path-length", int_value)) {
+        _private->scene.max_path_length = static_cast<uint32_t>(std::max(1ll, int_value));
+      } else if (json_get_string(i, "geometry", str_value)) {
         _private->geometry_file_name = std::string(base_folder) + str_value;
       } else if (json_get_string(i, "materials", str_value)) {
         _private->mtl_file_name = std::string(base_folder) + str_value;

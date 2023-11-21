@@ -40,11 +40,11 @@ struct ETX_ALIGNED VCMOptions {
   ETX_GPU_CODE bool connect_vertices() const {
     return options & ConnectVertices;
   }
-  ETX_GPU_CODE bool merge_vertices() const {
-    return options & MergeVertices;
-  }
   ETX_GPU_CODE bool enable_mis() const {
     return options & EnableMis;
+  }
+  ETX_GPU_CODE bool merge_vertices() const {
+    return enable_merging() && (options & MergeVertices);
   }
   ETX_GPU_CODE bool enable_merging() const {
     return options & EnableMerging;
@@ -52,7 +52,7 @@ struct ETX_ALIGNED VCMOptions {
 
   static VCMOptions default_values();
 
-  void store(Options&);
+  void store(Options&) const;
   void load(const Options&);
 };
 
@@ -78,6 +78,7 @@ struct ETX_ALIGNED VCMPathState {
     DeltaEmitter = 1u << 0u,
     ContinueRay = 1u << 1u,
     RayActionSet = 1u << 2u,
+    LocalEmitter = 1u << 3u,
   };
 
   SpectralResponse throughput = {};
@@ -103,6 +104,10 @@ struct ETX_ALIGNED VCMPathState {
 
   ETX_GPU_CODE bool delta_emitter() const {
     return (flags & DeltaEmitter) == DeltaEmitter;
+  }
+
+  ETX_GPU_CODE bool local_emitter() const {
+    return (flags & LocalEmitter) == LocalEmitter;
   }
 
   ETX_GPU_CODE bool should_continue_ray() const {
@@ -296,8 +301,10 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   state.d_vcm = emitter_sample.pdf_area / emitter_sample.pdf_dir_out;
   ETX_VALIDATE(state.d_vcm);
 
-  state.d_vc = emitter_sample.is_delta ? 0.0f : (cos_t / (emitter_sample.pdf_dir_out * emitter_sample.pdf_sample));
-  ETX_VALIDATE(state.d_vc);
+  if (emitter_sample.is_delta == false) {
+    state.d_vc = (emitter_sample.is_distant ? 1.0f : cos_t) / (emitter_sample.pdf_dir_out * emitter_sample.pdf_sample);
+    ETX_VALIDATE(state.d_vc);
+  }
 
   state.d_vm = state.d_vc * it.vc_weight;
   ETX_VALIDATE(state.d_vm);
@@ -305,6 +312,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   state.eta = 1.0f;
   state.medium_index = emitter_sample.medium_index;
   state.set_flags(VCMPathState::DeltaEmitter, emitter_sample.is_delta);
+  state.set_flags(VCMPathState::LocalEmitter, emitter_sample.is_distant == false);
   return state;
 }
 
@@ -375,7 +383,7 @@ ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource 
 }
 
 ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPathState& state) {
-  if ((state.total_path_depth > 0) || (state.delta_emitter() == false)) {
+  if ((state.total_path_depth > 0) || state.local_emitter()) {
     state.d_vcm *= sqr(state.path_distance + intersection.t);
   }
 
@@ -480,12 +488,8 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
   float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
   float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
   float reverse_pdf = bsdf::reverse_pdf(connection_data, emitter_sample.direction, mat, scene, state.sampler);
-
   float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
-
-  float w_camera = (emitter_sample.pdf_dir_out * l_dot_n) / (emitter_sample.pdf_dir * l_dot_e) *  //
-                   (vcm_iteration.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);            //
-
+  float w_camera = (emitter_sample.pdf_dir_out * l_dot_n) / (emitter_sample.pdf_dir * l_dot_e) * (vcm_iteration.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);
   float weight = options.enable_mis() ? 1.0f / (1.0f + w_light + w_camera) : 1.0f;
   return tr * state.throughput * connection_eval.bsdf * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 }
@@ -749,7 +753,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     bsdf_sample.eta = 1.0f;
   }
 
-  if (options.enable_merging() && options.merge_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
+  if (options.merge_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
     state.merged += spatial_grid.gather(scene, state, light_vertices, options, intersection, iteration.vc_weight);
   }
 

@@ -99,7 +99,7 @@ struct UI {
   struct IORFile {
     std::string filename;
     std::string title;
-    SpectralDistribution::Class cls;
+    SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
   };
 
   enum UISetup : uint32_t {
