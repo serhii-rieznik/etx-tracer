@@ -2,19 +2,6 @@
 
 namespace etx {
 
-ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset) {
-  float phi = (uv.x * 2.0f - 1.0f) * kPi;
-  float theta = (0.5f - uv.y) * kPi;
-  return from_spherical(phi, theta);
-}
-
-ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset) {
-  auto s = to_spherical(dir);
-  float u = (s.phi / kPi + 1.0f) / 2.0f;
-  float v = 0.5f - s.theta / kPi;
-  return {u, v};
-}
-
 ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene) {
   ETX_ASSERT(em.is_local());
   return 1.0f / em.triangle_area;
@@ -97,7 +84,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
         pdf_dir = pdf_area * dot(dp, dp);
         pdf_dir_out = pdf_area;
       } else {
-        pdf_dir = area_to_solid_angle_probability(pdf_area, query.target_position, tri.geo_n, query.source_position, query.directly_visible ? 1.0f : em.collimation);
+        pdf_dir = pdf_area * area_to_solid_angle_probability(dp, tri.geo_n, query.directly_visible ? 1.0f : em.collimation);
         pdf_dir_out = pdf_area * fabsf(dot(tri.geo_n, normalize(dp))) * kInvPi;
       }
 
@@ -260,8 +247,12 @@ ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_
   return sample;
 }
 
-ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQuery spect, Sampler& smp, const struct Scene& scene) {
+ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQuery spect, Sampler& smp) {
   EmitterSample result = {};
+  result.emitter_index = scene.emitters_distribution.sample(smp.next(), result.pdf_sample);
+  ETX_ASSERT(result.emitter_index < scene.emitters.count);
+
+  const auto& em = scene.emitters[result.emitter_index];
   switch (em.cls) {
     case Emitter::Class::Area: {
       const auto& tri = scene.triangles[em.triangle_index];
@@ -352,19 +343,8 @@ ETX_GPU_CODE EmitterSample emitter_sample_out(const Emitter& em, const SpectralQ
       ETX_FAIL("Unknown emitter class");
     }
   }
-  return result;
-}
-
-ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQuery spect, Sampler& smp) {
-  float pdf_sample = {};
-  uint32_t i = scene.emitters_distribution.sample(smp.next(), pdf_sample);
-  ETX_ASSERT(i < scene.emitters.count);
-  const auto& em = scene.emitters[i];
-  EmitterSample result = emitter_sample_out(em, spect, smp, scene);
-  result.pdf_sample = pdf_sample;
-  result.emitter_index = i;
-  result.triangle_index = scene.emitters[i].triangle_index;
-  result.medium_index = scene.emitters[i].medium_index;
+  result.triangle_index = em.triangle_index;
+  result.medium_index = em.medium_index;
   result.is_delta = em.is_delta();
   result.is_distant = em.is_distant();
   return result;

@@ -275,9 +275,7 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
   }
 
   float emitter_sample_pdf = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-  pdf_emitter_area *= emitter_sample_pdf;
-  pdf_emitter_dir_out *= emitter_sample_pdf;
-  float w_camera = state.d_vcm * pdf_emitter_area + state.d_vc * pdf_emitter_dir_out;
+  float w_camera = state.d_vcm * pdf_emitter_area * emitter_sample_pdf + state.d_vc * (pdf_emitter_dir_out * emitter_sample_pdf);
   float weight = (options.enable_mis() && (state.total_path_depth > 1)) ? (1.0f / (1.0f + w_camera)) : 1.0f;
   return weight * (state.throughput * radiance);
 }
@@ -298,11 +296,11 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
     state.ray.o = shading_pos(scene.vertices, scene.triangles[emitter_sample.triangle_index], emitter_sample.barycentric, state.ray.d);
   }
 
-  state.d_vcm = emitter_sample.pdf_area / emitter_sample.pdf_dir_out;
+  state.d_vcm = emitter_sample.is_distant ? 1.0f / emitter_sample.pdf_area : 1.0f / emitter_sample.pdf_dir;
   ETX_VALIDATE(state.d_vcm);
 
   if (emitter_sample.is_delta == false) {
-    state.d_vc = (emitter_sample.is_distant ? 1.0f : cos_t) / (emitter_sample.pdf_dir_out * emitter_sample.pdf_sample);
+    state.d_vc = (emitter_sample.is_distant ? 1.0f : cos_t) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample);
     ETX_VALIDATE(state.d_vc);
   }
 
@@ -371,14 +369,10 @@ ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource 
   if (mat.cls != Material::Class::Boundary)
     return false;
 
-  auto bsdf_sample = bsdf::sample({state.spect, state.medium_index, path_source, intersection, intersection.w_i}, mat, scene, state.sampler);
-  if (bsdf_sample.properties & BSDFSample::MediumChanged) {
-    state.medium_index = bsdf_sample.medium_index;
-  }
-
+  const auto& tri = scene.triangles[intersection.triangle_index];
+  state.medium_index = (dot(intersection.nrm, state.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
+  state.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, state.ray.d);
   state.path_distance += intersection.t;
-  state.ray.o = intersection.pos;
-  state.ray.d = bsdf_sample.w_o;
   return true;
 }
 

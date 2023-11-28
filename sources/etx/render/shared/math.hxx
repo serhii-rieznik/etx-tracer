@@ -499,19 +499,13 @@ ETX_GPU_CODE float power_heuristic(float f, float g) {
   return saturate(f2 / (f2 + g2));
 }
 
-ETX_GPU_CODE float area_to_solid_angle_probability(float pdf_pos, const float3& source_point, const float3& target_normal, const float3& target_point, float p) {
-  auto w_o = source_point - target_point;
-  float a_distance_squared = dot(w_o, w_o);
-  if (a_distance_squared == 0.0f) {
+ETX_GPU_CODE float area_to_solid_angle_probability(const float3& dp, const float3& n, float collimation) {
+  float distance_squared = dot(dp, dp);
+  if (distance_squared <= kEpsilon)
     return 0.0f;
-  }
 
-  w_o = w_o / sqrtf(a_distance_squared);
-  float cos_t = fabsf(clamp(dot(w_o, target_normal), -1.0f, 1.0f));
-  if (p != 1.0f) {
-    cos_t = powf(cos_t, p);
-  }
-  return (cos_t > 1.0e-5f) ? (pdf_pos * a_distance_squared / cos_t) : 0.0f;
+  float cos_t = powf(fabsf(dot(dp, n) / sqrtf(distance_squared)), collimation);
+  return (cos_t > kEpsilon) ? (distance_squared / cos_t) : 0.0f;
 }
 
 ETX_GPU_CODE SphericalCoordinates to_spherical(const float3& dir) {
@@ -537,6 +531,19 @@ ETX_GPU_CODE float3 from_spherical(const SphericalCoordinates& s) {
 
 ETX_GPU_CODE float3 from_spherical(float phi, float theta) {
   return from_spherical({phi, theta, 1.0f});
+}
+
+ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset) {
+  float phi = (uv.x * 2.0f - 1.0f) * kPi;
+  float theta = (0.5f - uv.y) * kPi;
+  return from_spherical(phi, theta);
+}
+
+ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset) {
+  auto s = to_spherical(dir);
+  float u = (s.phi / kPi + 1.0f) / 2.0f;
+  float v = 0.5f - s.theta / kPi;
+  return {u, v};
 }
 
 ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {

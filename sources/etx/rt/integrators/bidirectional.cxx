@@ -197,7 +197,7 @@ struct CPUBidirectionalImpl : public Task {
     ETX_VALIDATE(throughput);
 
     float eta = 1.0f;
-    for (uint32_t path_length = 0; path_length <= rt.scene().max_path_length;) {
+    for (uint32_t path_length = 0; running() && (path_length <= rt.scene().max_path_length);) {
       Intersection intersection = {};
       bool found_intersection = rt.trace(rt.scene(), ray, intersection, smp);
 
@@ -233,12 +233,8 @@ struct CPUBidirectionalImpl : public Task {
         const auto& mat = rt.scene().materials[intersection.material_index];
 
         if (mat.cls == Material::Class::Boundary) {
-          auto bsdf_sample = bsdf::sample({spect, medium_index, mode, intersection, intersection.w_i}, mat, rt.scene(), smp);
-          if (bsdf_sample.properties & BSDFSample::MediumChanged) {
-            medium_index = bsdf_sample.medium_index;
-          }
-          ray.o = intersection.pos;
-          ray.d = bsdf_sample.w_o;
+          medium_index = (dot(intersection.nrm, ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
+          ray.o = shading_pos(rt.scene().vertices, tri, intersection.barycentric, ray.d);
           continue;
         }
 
