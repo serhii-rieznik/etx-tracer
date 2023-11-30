@@ -66,25 +66,25 @@ THE SOFTWARE.
 #include <algorithm>
 
 #if !defined(_MSC_VER)
-#define _strnicmp strncasecmp
+# define _strnicmp strncasecmp
 #endif
 
 namespace tinyobj {
 
 // TODO(syoyo): Better C++11 detection for older compiler
 #if __cplusplus > 199711L
-#define TINYOBJ_OVERRIDE override
+# define TINYOBJ_OVERRIDE override
 #else
-#define TINYOBJ_OVERRIDE
+# define TINYOBJ_OVERRIDE
 #endif
 
 #ifdef __clang__
-#pragma clang diagnostic push
-#if __has_warning("-Wzero-as-null-pointer-constant")
-#pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant"
-#endif
+# pragma clang diagnostic push
+# if __has_warning("-Wzero-as-null-pointer-constant")
+#  pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant"
+# endif
 
-#pragma clang diagnostic ignored "-Wpadded"
+# pragma clang diagnostic ignored "-Wpadded"
 
 #endif
 
@@ -243,7 +243,7 @@ struct material_t {
 
   int pad2;
 
-  std::map<std::string, std::string> unknown_parameter;
+  std::vector<std::pair<std::string, std::string>> unknown_parameter;
 
 #ifdef TINY_OBJ_LOADER_PYTHON_BINDING
   // For pybind11
@@ -680,23 +680,23 @@ bool ParseTextureNameAndOption(std::string* texname, texture_option_t* texopt, c
 
 #ifdef TINYOBJLOADER_USE_MAPBOX_EARCUT
 
-#ifdef TINYOBJLOADER_DONOT_INCLUDE_MAPBOX_EARCUT
+# ifdef TINYOBJLOADER_DONOT_INCLUDE_MAPBOX_EARCUT
 // Assume earcut.hpp is included outside of tiny_obj_loader.h
-#else
+# else
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Weverything"
-#endif
+#  ifdef __clang__
+#   pragma clang diagnostic push
+#   pragma clang diagnostic ignored "-Weverything"
+#  endif
 
-#include <array>
-#include "mapbox/earcut.hpp"
+#  include <array>
+#  include "mapbox/earcut.hpp"
 
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
+#  ifdef __clang__
+#   pragma clang diagnostic pop
+#  endif
 
-#endif
+# endif
 
 #endif  // TINYOBJLOADER_USE_MAPBOX_EARCUT
 
@@ -829,8 +829,8 @@ static std::istream& safeGetline(std::istream& is, std::string& t) {
   return is;
 }
 
-#define IS_SPACE(x) (((x) == ' ') || ((x) == '\t'))
-#define IS_DIGIT(x) (static_cast<unsigned int>((x) - '0') < static_cast<unsigned int>(10))
+#define IS_SPACE(x)    (((x) == ' ') || ((x) == '\t'))
+#define IS_DIGIT(x)    (static_cast<unsigned int>((x) - '0') < static_cast<unsigned int>(10))
 #define IS_NEW_LINE(x) (((x) == '\r') || ((x) == '\n') || ((x) == '\0'))
 
 // Make index zero-base, and also support relative index.
@@ -1614,7 +1614,7 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, con
 
           // first polyline define the main polygon.
           // following polylines define holes(not used in tinyobj).
-          std::vector<std::vector<Point> > polygon;
+          std::vector<std::vector<Point>> polygon;
 
           std::vector<Point> polyline;
 
@@ -2273,7 +2273,7 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
       std::ptrdiff_t len = _space - token;
       std::string key(token, static_cast<size_t>(len));
       std::string value = _space + 1;
-      material.unknown_parameter.insert(std::pair<std::string, std::string>(key, value));
+      material.unknown_parameter.emplace_back(std::pair<std::string, std::string>(key, value));
     }
   }
   // flush last material.
@@ -3379,7 +3379,7 @@ bool ObjReader::ParseFromString(const std::string& obj_text, const std::string& 
 }
 
 #ifdef __clang__
-#pragma clang diagnostic pop
+# pragma clang diagnostic pop
 #endif
 }  // namespace tinyobj
 

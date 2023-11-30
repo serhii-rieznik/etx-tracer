@@ -1250,11 +1250,19 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       auto& mtl = materials[material_index];
 
       mtl.cls = Material::Class::Diffuse;
+
+      if (get_param(material, "base", data_buffer)) {
+        auto i = material_mapping.find(data_buffer);
+        if (i != material_mapping.end()) {
+          mtl = materials[i->second];
+        }
+      }
+
       mtl.diffuse.spectrum = rgb::make_reflectance_spd(to_float3(material.diffuse), spectrums());
       mtl.specular.spectrum = rgb::make_reflectance_spd(to_float3(material.specular), spectrums());
       mtl.transmittance.spectrum = rgb::make_reflectance_spd(to_float3(material.transmittance), spectrums());
       mtl.emission.spectrum = rgb::make_reflectance_spd(to_float3(material.emission), spectrums());
-      mtl.roughness = {material.roughness, material.roughness};
+      mtl.roughness = {sqr(material.roughness), sqr(material.roughness)};
       mtl.metalness = material.metallic;
 
       if (get_file(base_dir, material.diffuse_texname, data_buffer, sizeof(data_buffer))) {
