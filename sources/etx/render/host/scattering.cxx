@@ -307,10 +307,10 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
         }
         buffer[x + dimensions.x * (dimensions.y - y - 1u)] = {rgb.x, rgb.y, rgb.z, 1.0f};
       }
-      ax += avg.x;
-      ay += avg.y;
-      az += avg.z;
-      aw += w;
+      ax = ax + avg.x;
+      ay = ay + avg.y;
+      az = az + avg.z;
+      aw = aw + w;
     });
 
   float3 average_color = float3{ax.load(), ay.load(), az.load()} / aw.load();
