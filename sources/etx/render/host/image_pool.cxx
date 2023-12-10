@@ -7,6 +7,7 @@
 #include <tinyexr.hxx>
 #include <stb_image.hxx>
 
+#include <atomic>
 #include <vector>
 #include <unordered_map>
 #include <functional>

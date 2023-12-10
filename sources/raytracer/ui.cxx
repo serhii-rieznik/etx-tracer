@@ -485,29 +485,6 @@ void UI::build(double dt, const char* status) {
 
     ImGui::GetStyle().FramePadding.y = (button_size - text_size) / 2.0f;
 
-    /*
-    if (_current_scene != nullptr) {
-      bool scene_settings_changed = false;
-      ImGui::PushItemWidth(2.0f * input_size);
-      {
-        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-        ImGui::SameLine(0.0f, wpadding.x);
-        scene_settings_changed = scene_settings_changed || ImGui::InputInt("Samples", reinterpret_cast<int*>(&_current_scene->samples));
-        ImGui::SameLine(0.0f, wpadding.x);
-      }
-      {
-        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-        ImGui::SameLine(0.0f, wpadding.x);
-        scene_settings_changed = scene_settings_changed || ImGui::InputInt("Max Path Length", reinterpret_cast<int*>(&_current_scene->max_path_length));
-        ImGui::SameLine(0.0f, wpadding.x);
-      }
-      ImGui::PopItemWidth();
-      if (scene_settings_changed && callbacks.scene_settings_changed) {
-        callbacks.scene_settings_changed();
-      }
-    }
-    */
-
     ImGui::PushItemWidth(input_size);
     {
       ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
@@ -747,7 +724,8 @@ bool UI::handle_event(const sapp_event* e) {
     case SAPP_KEYCODE_3:
     case SAPP_KEYCODE_4:
     case SAPP_KEYCODE_5:
-    case SAPP_KEYCODE_6: {
+    case SAPP_KEYCODE_6:
+    case SAPP_KEYCODE_7: {
       _view_options.view = static_cast<OutputView>(e->key_code - SAPP_KEYCODE_1);
       break;
     }

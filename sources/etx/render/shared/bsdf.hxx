@@ -240,45 +240,66 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
 
 namespace fresnel {
 
-ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
+ETX_GPU_CODE auto reflectance(const complex& ext_ior, float cos_theta_i, const complex& int_ior, float cos_theta_j) {
   struct result {
     complex rs, rp;
   };
-  auto ni = ext_ior;
-  auto nj = int_ior;
-  auto rs = (ni * cos_theta_i - nj * cos_theta_j) / (ni * cos_theta_i + nj * cos_theta_j);
-  ETX_CHECK_FINITE(rs);
-  auto rp = (nj * cos_theta_i - ni * cos_theta_j) / (nj * cos_theta_i + ni * cos_theta_j);
-  ETX_CHECK_FINITE(rp);
-  return result{rs, rp};
+
+  if ((ext_ior.imag() == 0.0f) && (int_ior.imag() == 0.0f)) {
+    float ni = ext_ior.real();
+    float nj = int_ior.real();
+    complex rs = (ni * cos_theta_i - nj * cos_theta_j) / (ni * cos_theta_i + nj * cos_theta_j);
+    ETX_CHECK_FINITE(rs);
+    complex rp = (nj * cos_theta_i - ni * cos_theta_j) / (nj * cos_theta_i + ni * cos_theta_j);
+    ETX_CHECK_FINITE(rp);
+    return result{rs, rp};
+  } else {
+    const complex& ni = ext_ior;
+    const complex& nj = int_ior;
+    complex rs = (ni * cos_theta_i - nj * cos_theta_j) / (ni * cos_theta_i + nj * cos_theta_j);
+    ETX_CHECK_FINITE(rs);
+    complex rp = (nj * cos_theta_i - ni * cos_theta_j) / (nj * cos_theta_i + ni * cos_theta_j);
+    ETX_CHECK_FINITE(rp);
+    return result{rs, rp};
+  }
 }
 
-ETX_GPU_CODE auto transmittance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
+ETX_GPU_CODE auto transmittance(const complex& ext_ior, float cos_theta_i, const complex& int_ior, float cos_theta_j) {
   struct result {
     complex ts, tp;
   };
-  auto ni = ext_ior;
-  auto nj = int_ior;
-  auto ts = (2.0f * ni * cos_theta_i) / (ni * cos_theta_i + nj * cos_theta_j);
-  ETX_CHECK_FINITE(ts);
-  auto tp = (2.0f * ni * cos_theta_i) / (ni * cos_theta_j + nj * cos_theta_i);
-  ETX_CHECK_FINITE(tp);
-  return result{ts, tp};
+  if ((ext_ior.imag() == 0.0f) && (int_ior.imag() == 0.0f)) {
+    float ni = ext_ior.real();
+    float nj = int_ior.real();
+    float ts = (2.0f * ni * cos_theta_i) / (ni * cos_theta_i + nj * cos_theta_j);
+    ETX_CHECK_FINITE(ts);
+    float tp = (2.0f * ni * cos_theta_i) / (ni * cos_theta_j + nj * cos_theta_i);
+    ETX_CHECK_FINITE(tp);
+    return result{ts, tp};
+  } else {
+    const complex& ni = ext_ior;
+    const complex& nj = int_ior;
+    complex ts = (2.0f * ni * cos_theta_i) / (ni * cos_theta_i + nj * cos_theta_j);
+    ETX_CHECK_FINITE(ts);
+    complex tp = (2.0f * ni * cos_theta_i) / (ni * cos_theta_j + nj * cos_theta_i);
+    ETX_CHECK_FINITE(tp);
+    return result{ts, tp};
+  }
 }
 
 ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_ior, const complex& int_ior) {
-  auto sin_theta_o_squared = sqr(ext_ior / int_ior) * (1.0f - cos_theta_i * cos_theta_i);
-  auto cos_theta_o = complex_sqrt(complex{1.0f, 0.0f} - sin_theta_o_squared);
+  auto sin_theta_o_squared = sqr(ext_ior / int_ior).real() * (1.0f - cos_theta_i * cos_theta_i);
+  auto cos_theta_o = sqrtf(1.0f - sin_theta_o_squared);
   ETX_VALIDATE(cos_theta_o);
   auto rsrp = reflectance(ext_ior, cos_theta_i, int_ior, cos_theta_o);
   return saturate(0.5f * (complex_norm(rsrp.rs) + complex_norm(rsrp.rp)));
 }
 
 ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
-  auto sin_theta_1_squared = sqr(ext_ior / film_ior) * (1.0f - cos_theta_0 * cos_theta_0);
-  auto cos_theta_1 = complex_sqrt(complex{1.0f, 0.0f} - sin_theta_1_squared);
-  auto sin_theta_2_squared = sqr(film_ior / int_ior) * (1.0f - cos_theta_1 * cos_theta_1);
-  auto cos_theta_2 = complex_sqrt(1.0f - sin_theta_2_squared);
+  float sin_theta_1_squared = sqr(ext_ior / film_ior).real() * (1.0f - cos_theta_0 * cos_theta_0);
+  float cos_theta_1 = sqrtf(1.0f - sin_theta_1_squared);
+  float sin_theta_2_squared = sqr(film_ior / int_ior).real() * (1.0f - cos_theta_1 * cos_theta_1);
+  float cos_theta_2 = sqrtf(1.0f - sin_theta_2_squared);
   auto delta_10 = film_ior.real() > ext_ior.real() ? 0.0f : kPi;
   auto delta_21 = int_ior.real() > film_ior.real() ? 0.0f : kPi;
   auto phase_shift = delta_10 + delta_21;

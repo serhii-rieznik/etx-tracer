@@ -129,8 +129,10 @@ void RTApplication::frame() {
     _current_integrator->preview(ui.integrator_options());
   }
 
+  uint32_t sample_count = _current_integrator ? _current_integrator->sample_count() : 1u;
+
   render.set_view_options(ui.view_options());
-  render.start_frame();
+  render.start_frame(sample_count);
 
   if (_reset_images || c_image_updated) {
     render.update_camera_image(c_image);

@@ -93,6 +93,10 @@ struct Integrator {
     return nullptr;
   }
 
+  virtual uint32_t sample_count() const {
+    return 1u;
+  }
+
  public:
   bool can_run() const {
     return rt.has_scene();

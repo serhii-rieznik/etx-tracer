@@ -253,7 +253,7 @@ endif()
 # flags
 # Set -Wall and other useful warning flags.
 if(CMAKE_C_COMPILER_ID STREQUAL GNU OR CMAKE_C_COMPILER_ID STREQUAL Clang OR CMAKE_C_COMPILER_ID STREQUAL Intel)
-    add_compile_options(-Wmost -Wwrite-strings 
+    add_compile_options(-Wwrite-strings 
       -Wno-unused-function -Wno-comma -Wno-disabled-macro-expansion -Wno-extra-semi-stmt -Wno-cast-qual -Wno-documentation 
       -Wno-sign-conversion -Wno-cast-align -Wno-sign-compare -Wno-sign-conversion -Wno-implicit-fallthrough -Wno-deprecated-non-prototype
       -Wno-language-extension-token -Wno-reserved-identifier -Wno-declaration-after-statement -Wno-missing-prototypes

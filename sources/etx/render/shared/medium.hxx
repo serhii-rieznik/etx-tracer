@@ -242,14 +242,14 @@ struct ETX_ALIGNED Medium {
     float py = clamp(coord.y * float(dimensions.y) - 0.5f, 0.0f, float(dimensions.y) - 1.0f);
     float pz = clamp(coord.z * float(dimensions.z) - 0.5f, 0.0f, float(dimensions.z) - 1.0f);
 
-    uint64_t ix = min(dimensions.x - 1llu, static_cast<uint64_t>(px));
-    uint64_t nx = min(dimensions.x - 1llu, ix + 1);
+    uint32_t ix = min(dimensions.x - 1u, static_cast<uint32_t>(px));
+    uint32_t nx = min(dimensions.x - 1u, ix + 1u);
 
-    uint64_t iy = min(dimensions.y - 1llu, static_cast<uint64_t>(py));
-    uint64_t ny = min(dimensions.y - 1llu, iy + 1);
+    uint32_t iy = min(dimensions.y - 1u, static_cast<uint32_t>(py));
+    uint32_t ny = min(dimensions.y - 1u, iy + 1u);
 
-    uint64_t iz = min(dimensions.z - 1llu, static_cast<uint64_t>(pz));
-    uint64_t nz = min(dimensions.z - 1llu, iz + 1);
+    uint32_t iz = min(dimensions.z - 1u, static_cast<uint32_t>(pz));
+    uint32_t nz = min(dimensions.z - 1u, iz + 1u);
 
     float d000 = density[ix + iy * dimensions.x + iz * dimensions.x * dimensions.y];
     float d001 = density[nx + iy * dimensions.x + iz * dimensions.x * dimensions.y];

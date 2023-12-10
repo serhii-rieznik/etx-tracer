@@ -99,7 +99,7 @@ struct Image {
   }
 
   ETX_GPU_CODE float4 pixel(uint32_t x, uint32_t y) const {
-    int32_t i = min(x + y * isize.x, isize.x * isize.y - 1u);
+    uint32_t i = min(x + y * isize.x, isize.x * isize.y - 1u);
     return pixel(i);
   }
 
@@ -121,14 +121,14 @@ struct Image {
     location.x = x_distribution.sample(rnd.x, x_pdf);
 
     auto x0 = x_distribution.values[location.x];
-    auto x1 = x_distribution.values[min(location.x + 1llu, x_distribution.values.count - 1)];
+    auto x1 = x_distribution.values[min(location.x + 1u, uint32_t(x_distribution.values.count) - 1u)];
     float dx = (rnd.x - x0.cdf);
     if (x1.cdf - x0.cdf > 0.0f) {
       dx /= (x1.cdf - x0.cdf);
     }
 
     auto y0 = y_distribution.values[location.y];
-    auto y1 = y_distribution.values[min(location.y + 1llu, y_distribution.values.count - 1)];
+    auto y1 = y_distribution.values[min(location.y + 1u, uint32_t(y_distribution.values.count) - 1u)];
     float dy = (rnd.y - y0.cdf);
     if (y1.cdf - y0.cdf > 0.0f) {
       dy /= (y1.cdf - y0.cdf);

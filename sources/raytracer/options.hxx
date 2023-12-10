@@ -11,6 +11,7 @@ enum class OutputView : uint32_t {
   ReferenceImage,
   RelativeDifference,
   AbsoluteDifference,
+  Variance,
   Count,
 };
 
@@ -34,6 +35,8 @@ inline std::string output_view_to_string(uint32_t i) {
       return "[5] Relative Difference ";
     case OutputView::AbsoluteDifference:
       return "[6] Absolute Difference ";
+    case OutputView::Variance:
+      return "[7] Variance";
     default:
       return "???";
   }

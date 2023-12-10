@@ -1,6 +1,7 @@
 #include <etx/core/log.hxx>
 #include <etx/render/shared/scattering.hxx>
 
+#include <atomic>
 #include <chrono>
 #include <stb_image_write.hxx>
 

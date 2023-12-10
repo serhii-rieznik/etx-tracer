@@ -5,8 +5,9 @@
 # error This file should not be included separately. Use etx/render/shared/base.hxx instead
 #endif
 
-#include <cmath>
-#include <complex>
+#include <math.h>
+#include <complex.h>
+#include <string.h>
 
 template <class t>
 struct vector2 {
@@ -409,7 +410,7 @@ ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& b, const float3
   return normalize(t - n * dot(n, t)) * (dot(cross(n, t), b) < 0.0f ? -1.0f : 1.0f);
 }
 
-ETX_GPU_CODE float isfinite(float t) {
+ETX_GPU_CODE bool isfinite(float t) {
   return ::isfinite(t);
 }
 

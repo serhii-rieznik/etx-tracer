@@ -53,8 +53,20 @@ void Film::accumulate(const float4& value, uint32_t x, uint32_t y, float t) {
     return;
   }
   ETX_VALIDATE(value);
+
   uint32_t i = x + (_dimensions.y - 1 - y) * _dimensions.x;
-  _buffer[i] = (t <= 0.0f) ? value : lerp(value, _buffer[i], t);
+
+  float lum_sq = sqr(luminance({value.x, value.y, value.z}));
+  float4 existing_value = _buffer[i];
+
+  float4 new_value = {value.x, value.y, value.z, lum_sq};
+  if (t > 0.0f) {
+    new_value.x = lerp(value.x, existing_value.x, t);
+    new_value.y = lerp(value.y, existing_value.y, t);
+    new_value.z = lerp(value.z, existing_value.z, t);
+    new_value.w = existing_value.w + lum_sq;
+  }
+  _buffer[i] = new_value;
 }
 
 void Film::accumulate(const float4& value, const float2& ndc_coord, float t) {

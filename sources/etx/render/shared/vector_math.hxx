@@ -365,11 +365,6 @@ ETX_GPU_CODE float3 cross(const float3& a, const float3& b) {
   };
 }
 
-ETX_GPU_CODE float lerp(float a, float b, float t) {
-  float inv_t = 1.0f - t;
-  return a * inv_t + b * t;
-}
-
 ETX_GPU_CODE float2 lerp(const float2& a, const float2& b, float t) {
   float inv_t = 1.0f - t;
   return {

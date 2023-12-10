@@ -14,7 +14,7 @@ struct RenderContext {
   void init();
   void cleanup();
 
-  void start_frame();
+  void start_frame(uint32_t sample_count);
   void end_frame();
 
   void set_output_dimensions(const uint2&);

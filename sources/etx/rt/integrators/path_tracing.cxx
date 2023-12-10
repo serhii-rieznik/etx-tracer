@@ -199,4 +199,8 @@ void CPUPathTracing::update_options(const Options& opt) {
   }
 }
 
+uint32_t CPUPathTracing::sample_count() const {
+  return _private->iteration;
+}
+
 }  // namespace etx

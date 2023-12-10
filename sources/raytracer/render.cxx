@@ -15,10 +15,10 @@ extern const char* shader_source_metal;
 
 struct ShaderConstants {
   float4 dimensions = {};
+  float exposure = 1.0f;
   uint32_t image_view = 0;
   uint32_t options = ViewOptions::ToneMapping;
-  float exposure = 1.0f;
-  float pad = 0.0f;
+  uint32_t sample_count = 0;
 };
 
 struct RenderContextImpl {
@@ -134,7 +134,7 @@ void RenderContext::cleanup() {
   _private->image_pool.cleanup();
 }
 
-void RenderContext::start_frame() {
+void RenderContext::start_frame(uint32_t sample_count) {
   ETX_FUNCTION_SCOPE();
   sg_pass_action pass_action = {};
   pass_action.colors[0].load_action = SG_LOADACTION_CLEAR;
@@ -144,10 +144,16 @@ void RenderContext::start_frame() {
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 
   _private->constants = {
-    {sapp_widthf(), sapp_heightf(), float(_private->output_dimensions.x), float(_private->output_dimensions.y)},
+    {
+      sapp_widthf(),
+      sapp_heightf(),
+      float(_private->output_dimensions.x),
+      float(_private->output_dimensions.y),
+    },
+    _private->view_options.exposure,
     uint32_t(_private->view_options.view),
     _private->view_options.options,
-    _private->view_options.exposure,
+    sample_count,
   };
 
   sg_range uniform_data = {
@@ -269,10 +275,10 @@ const char* shader_source_hlsl = R"(
 
 cbuffer Constants : register(b0) {
   float4 dimensions;
+  float exposure;
   uint image_view;
   uint options;
-  float exposure;
-  float pad;
+  uint sample_count;
 }
 
 Texture2D<float4> sample_image : register(t0);
@@ -300,11 +306,16 @@ static const uint kViewLightImage = 2;
 static const uint kViewReferenceImage = 3;
 static const uint kViewRelativeDifference = 4;
 static const uint kViewAbsoluteDifference = 5;
+static const uint kVariance = 6;
 
 static const uint ToneMapping = 1u << 0u;
 static const uint sRGB = 1u << 1u;
 
 static const float3 lum = float3(0.2627, 0.6780, 0.0593);
+
+float sqr(float t) { 
+  return t * t; 
+}
 
 float4 to_rgb(in float4 xyz) {
   float4 rgb;
@@ -408,6 +419,12 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
       result.y = float(max(0.0f, v_lum - r_lum) > c_treshold);
       break;
     }
+    case kVariance: {
+      float square_mean = sqr(v_lum);
+      float mean_squares = t_image.w / float(sample_count);
+      result = abs(mean_squares - square_mean);
+      break;
+    }
     default:
       break;
   };
@@ -422,10 +439,10 @@ using namespace metal;
 
 struct Constants {
   float4 dimensions;
+  float exposure;
   uint image_view;
   uint options;
-  float exposure;
-  float pad;
+  uint sample_count;
 };
 
 struct VSOutput {
