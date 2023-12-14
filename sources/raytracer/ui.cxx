@@ -758,7 +758,7 @@ void UI::quit() {
 }
 
 void UI::select_scene_file() {
-  auto selected_file = open_file("json;obj");  // TODO : add gltf;pbrt
+  auto selected_file = open_file("json,obj");  // TODO : add gltf;pbrt
   if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
     callbacks.scene_file_selected(selected_file);
   }

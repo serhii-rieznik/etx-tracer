@@ -289,6 +289,9 @@ ETX_GPU_CODE auto transmittance(const complex& ext_ior, float cos_theta_i, const
 
 ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_ior, const complex& int_ior) {
   auto sin_theta_o_squared = sqr(ext_ior / int_ior).real() * (1.0f - cos_theta_i * cos_theta_i);
+  if (sin_theta_o_squared > 1.0f)
+    return 1.0f;
+
   auto cos_theta_o = sqrtf(1.0f - sin_theta_o_squared);
   ETX_VALIDATE(cos_theta_o);
   auto rsrp = reflectance(ext_ior, cos_theta_i, int_ior, cos_theta_o);

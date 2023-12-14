@@ -40,6 +40,7 @@ struct ImagePoolImpl {
     mapping[path] = handle;
 
     auto ptr_pixels = reinterpret_cast<ubyte4*>(malloc(img.data_size));
+    ETX_CRITICAL(ptr_pixels != nullptr);
     memcpy(ptr_pixels, img.pixels.u8.a, img.data_size);
 
     auto& image = image_pool.get(handle);
@@ -196,6 +197,7 @@ struct ImagePoolImpl {
       img.pixels.f32.count = 1llu * img.isize.x * img.isize.y;
       img.pixels.f32.a = reinterpret_cast<float4*>(calloc(img.pixels.f32.count, sizeof(float4)));
       img.data_size = static_cast<uint32_t>(img.pixels.f32.count * sizeof(float4));
+      ETX_CRITICAL(img.pixels.f32.a);
       memcpy(img.pixels.f32.a, source_data.data(), source_data.size());
     } else {
       ETX_FAIL_FMT("Unsupported image format %u", img.format);

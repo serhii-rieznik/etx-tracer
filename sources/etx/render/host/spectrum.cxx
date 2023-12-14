@@ -1,7 +1,6 @@
 ﻿#include <etx/render/shared/spectrum.hxx>
 
 #include <vector>
-#include <algorithm>
 
 namespace etx {
 

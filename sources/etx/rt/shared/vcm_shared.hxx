@@ -635,22 +635,14 @@ struct ETX_ALIGNED VCMSpatialGridData {
       float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;
       float weight = 1.0f / (1.0f + w_light + w_camera);
 
-      if constexpr (spectrum::kSpectralRendering) {
-        auto c_value = ((camera_bsdf.func * state.throughput / spectrum::sample_pdf()).to_xyz());
-        c_value = max(c_value, float3{0.0f, 0.0f, 0.0f});
-        ETX_VALIDATE(c_value);
-        auto l_value = ((light_vertex.throughput / spectrum::sample_pdf()).to_xyz());
-        l_value = max(l_value, float3{0.0f, 0.0f, 0.0f});
-        ETX_VALIDATE(l_value);
-        merged += (c_value * l_value) * weight;
-        ETX_VALIDATE(merged);
-      } else {
-        // mul as RGB
-        auto value = light_vertex.throughput * camera_bsdf.func * state.throughput * (weight / sqr(spectrum::sample_pdf()));
-        ETX_VALIDATE(value);
-        merged += value.to_xyz();
-        ETX_VALIDATE(merged);
-      }
+      auto c_value = ((camera_bsdf.func * state.throughput / spectrum::sample_pdf()).to_xyz());
+      c_value = max(c_value, float3{0.0f, 0.0f, 0.0f});
+      ETX_VALIDATE(c_value);
+      auto l_value = ((light_vertex.throughput / spectrum::sample_pdf()).to_xyz());
+      l_value = max(l_value, float3{0.0f, 0.0f, 0.0f});
+      ETX_VALIDATE(l_value);
+      merged += (c_value * l_value) * weight;
+      ETX_VALIDATE(merged);
     }
     return merged;
   }

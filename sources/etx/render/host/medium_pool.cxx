@@ -5,7 +5,6 @@
 
 #include <nanovdb/util/IO.h>
 
-#include <unordered_map>
 #include <functional>
 
 namespace etx {
