@@ -201,6 +201,10 @@ struct SpectralQuery {
     return spectral() ? 1.0f / spectrum::kWavelengthCount : 1.0f;
   }
 
+  bool valid() const {
+    return (wavelength >= spectrum::kShortestWavelength) && (wavelength <= spectrum::kLongestWavelength);
+  }
+
   static SpectralQuery sample(float rnd) {
     return SpectralQuery{
       spectrum::kShortestWavelength + rnd * (spectrum::kLongestWavelength - spectrum::kShortestWavelength),
@@ -237,70 +241,43 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
   }
 
   ETX_GPU_CODE float3 to_xyz() const {
-    if constexpr (spectrum::kSpectralRendering) {
-      if ((wavelength < spectrum::kShortestWavelength) || (wavelength > spectrum::kLongestWavelength)) {
-        return {};
-      }
-
-      float w = floorf(wavelength);
-      float dw = wavelength - w;
-      uint32_t i = static_cast<uint32_t>(w - spectrum::kShortestWavelength);
-      uint32_t j = min(i + 1u, spectrum::WavelengthCount - 1u);
-      float3 xyz0 = spectrum::spectral_xyz(i);
-      float3 xyz1 = spectrum::spectral_xyz(j);
-      return lerp<float3>(xyz0, xyz1, dw) * (components.x / spectrum::kYIntegral);
-    } else {
+    if (spectral() == false) {
       return spectrum::rgb_to_xyz({components.x, components.y, components.z});
     }
+
+    ETX_ASSERT(valid());
+    float w = floorf(wavelength);
+    float dw = wavelength - w;
+    uint32_t i = static_cast<uint32_t>(w - spectrum::kShortestWavelength);
+    uint32_t j = min(i + 1u, spectrum::WavelengthCount - 1u);
+    float3 xyz0 = spectrum::spectral_xyz(i);
+    float3 xyz1 = spectrum::spectral_xyz(j);
+    return lerp<float3>(xyz0, xyz1, dw) * (components.x / spectrum::kYIntegral);
   }
 
   ETX_GPU_CODE float minimum() const {
-    if constexpr (spectrum::kSpectralRendering) {
-      return components.x;
-    } else {
-      return min(components.x, min(components.y, components.z));
-    }
+    return spectral() ? components.x : min(components.x, min(components.y, components.z));
   }
 
   ETX_GPU_CODE float maximum() const {
-    if constexpr (spectrum::kSpectralRendering) {
-      return components.x;
-    } else {
-      return max(components.x, max(components.y, components.z));
-    }
+    return spectral() ? components.x : max(components.x, max(components.y, components.z));
   }
 
   ETX_GPU_CODE float monochromatic() const {
-    if constexpr (spectrum::kSpectralRendering) {
-      return components.x;
-    } else {
-      return luminance(components);
-    }
+    return spectral() ? components.x : luminance(components);
   }
 
   ETX_GPU_CODE float sum() const {
-    if constexpr (spectrum::kSpectralRendering) {
-      return components.x;
-    } else {
-      return components.x + components.y + components.z;
-    }
+    return spectral() ? components.x : components.x + components.y + components.z;
   }
 
   ETX_GPU_CODE float average() const {
-    if constexpr (spectrum::kSpectralRendering) {
-      return components.x;
-    } else {
-      return (components.x + components.y + components.z) / 3.0f;
-    }
+    return spectral() ? components.x : (components.x + components.y + components.z) / 3.0f;
   }
 
   ETX_GPU_CODE float component(uint32_t i) const {
-    if constexpr (spectrum::kSpectralRendering) {
-      return components.x;
-    } else {
-      ETX_ASSERT(i < 3);
-      return *(&components.x + i);
-    }
+    ETX_ASSERT(i < 3);
+    return spectral() ? components.x : *(&components.x + i);
   }
 
   ETX_GPU_CODE bool valid() const {
@@ -465,32 +442,30 @@ struct ETX_ALIGNED SpectralDistribution {
 
  public:  // device
   ETX_GPU_CODE SpectralResponse query(const SpectralQuery q) const {
-    if constexpr (spectrum::kSpectralRendering) {
-      if ((q.wavelength < spectrum::kShortestWavelength) || (q.wavelength > spectrum::kLongestWavelength)) {
-        return {q.wavelength, 0.0f};
-      }
-
-      uint32_t i = lower_bound(q.wavelength);
-      if (i >= count) {
-        return {q.wavelength, 0.0f};
-      }
-
-      if ((i == 0) && (q.wavelength < entries[i].wavelength)) {
-        return {q.wavelength, entries[i].power};
-      }
-
-      if (i + 1 == count) {
-        return {q.wavelength, entries[i].power};
-      }
-
-      uint32_t j = min(i + 1u, count - 1);
-      float t = (q.wavelength - entries[i].wavelength) / (entries[j].wavelength - entries[i].wavelength);
-      float p = lerp(entries[i].power, entries[j].power, t);
-      ETX_VALIDATE(p);
-      return SpectralResponse{q, p};
-    } else {
+    if (q.spectral() == false) {
       return SpectralResponse{q, {entries[0].power, entries[1].power, entries[2].power}};
     }
+
+    ETX_ASSERT(q.valid());
+
+    uint32_t i = lower_bound(q.wavelength);
+    if (i >= count) {
+      return {q, 0.0f};
+    }
+
+    if ((i == 0) && (q.wavelength < entries[i].wavelength)) {
+      return {q, entries[i].power};
+    }
+
+    if (i + 1 == count) {
+      return {q, entries[i].power};
+    }
+
+    uint32_t j = min(i + 1u, count - 1);
+    float t = (q.wavelength - entries[i].wavelength) / (entries[j].wavelength - entries[i].wavelength);
+    float p = lerp(entries[i].power, entries[j].power, t);
+    ETX_VALIDATE(p);
+    return SpectralResponse{q, p};
   }
 
   ETX_GPU_CODE SpectralResponse operator()(const SpectralQuery q) const {
@@ -577,6 +552,8 @@ struct ETX_ALIGNED SpectralDistribution {
   }
 
  public:
+  SpectralDistribution() = default;
+
   float3 integrate_to_xyz() const;
   float3 to_xyz() const;
 
