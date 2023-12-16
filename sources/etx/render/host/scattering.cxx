@@ -20,6 +20,8 @@ constexpr const float kMieDensityScale = 1200.0f;
 
 namespace scattering {
 
+namespace {
+
 float rayleigh(float l) {
   l /= 100.0f;
   float l2 = l * l;
@@ -211,6 +213,8 @@ void extinction_spectrum_at_direction(Pointer<Spectrums> spectrums, const float3
     result.entries[i].power = expf(-tr);
   }
 }
+
+}  // namespace
 
 void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinction) {
   constexpr uint32_t kSpectrumStepSize = 5u;

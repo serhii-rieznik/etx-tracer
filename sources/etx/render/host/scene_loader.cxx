@@ -718,14 +718,15 @@ inline SpectralDistribution load_illuminant_spectrum(char* data_buffer) {
         float t = static_cast<float>(atof(params[i + 1]));
         float w = spectrum::black_body_radiation_maximum_wavelength(t);
         float r = spectrum::black_body_radiation(w, t);
-        emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums()) / r;
+        emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums());
+        emitter_spectrum.scale(1.0f / r);
         i += 1;
       } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
         scale = static_cast<float>(atof(params[i + 1]));
         i += 1;
       }
     }
-    emitter_spectrum *= scale;
+    emitter_spectrum.scale(scale);
   }
   return emitter_spectrum;
 };
@@ -926,10 +927,11 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
               float t = static_cast<float>(atof(params[i + 1]));
               float w = spectrum::black_body_radiation_maximum_wavelength(t);
               float r = spectrum::black_body_radiation(w, t);
-              e.emission.spectrum = SpectralDistribution::from_black_body(t, spectrums()) / r;
+              e.emission.spectrum = SpectralDistribution::from_black_body(t, spectrums());
+              e.emission.spectrum.scale(1.0f / r);
               i += 1;
             } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < end)) {
-              e.emission.spectrum *= static_cast<float>(atof(params[i + 1]));
+              e.emission.spectrum.scale(static_cast<float>(atof(params[i + 1])));
               i += 1;
             } else if ((strcmp(params[i], "spectrum") == 0) && (i + 1 < end)) {
               char buffer[2048] = {};
@@ -1214,14 +1216,16 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       float radiance_scale = scale * (kDoublePi * (1.0f - cosf(0.5f * angular_size)));
-      auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, spectrums()) * radiance_scale;
+      auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, spectrums());
+      sun_spectrum.scale(radiance_scale);
 
       uint2 kSkyImageDimensions = uint2{1024u, uint32_t(1024u / quality)};
       uint2 kSunImageDimensions = uint2{128u, 128u};
 
       {
         auto& d = emitters.emplace_back(Emitter::Class::Directional);
-        d.emission.spectrum = sun_spectrum * sun_scale;
+        d.emission.spectrum = sun_spectrum;
+        d.emission.spectrum.scale(sun_scale);
         d.angular_size = angular_size;
         d.direction = direction;
 
@@ -1234,7 +1238,8 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
 
       {
         auto& e = emitters.emplace_back(Emitter::Class::Environment);
-        e.emission.spectrum = sun_spectrum * sky_scale;
+        e.emission.spectrum = sun_spectrum;
+        e.emission.spectrum.scale(sky_scale);
         e.emission.image_index = add_image(nullptr, kSkyImageDimensions, Image::BuildSamplingTable | Image::Delay);
         e.direction = direction;
 

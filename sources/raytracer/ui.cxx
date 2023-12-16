@@ -819,6 +819,7 @@ bool UI::build_material(Material& material) {
   changed |= ImGui::SliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= ImGui::SliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= ior_picker("Index Of Refraction", material.int_ior, _current_scene->spectrums);
+  changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior, _current_scene->spectrums);
   changed |= spectrum_picker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
   changed |= spectrum_picker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
   changed |= spectrum_picker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);

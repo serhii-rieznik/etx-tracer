@@ -4,6 +4,12 @@
 
 namespace etx {
 
+namespace rgb {
+
+struct SpectrumSet;
+
+}
+
 namespace spectrum {
 
 constexpr bool kSpectralRendering = false;
@@ -506,53 +512,9 @@ struct ETX_ALIGNED SpectralDistribution {
   }
 
  public:
-  SpectralDistribution& operator*=(float other) {
-    for (uint32_t i = 0; i < count; ++i) {
-      entries[i].power *= other;
-    }
-    return *this;
-  }
-  SpectralDistribution& operator/=(float other) {
-    for (uint32_t i = 0; i < count; ++i) {
-      entries[i].power /= other;
-    }
-    return *this;
-  }
-  SpectralDistribution& operator+=(float other) {
-    for (uint32_t i = 0; i < count; ++i) {
-      entries[i].power += other;
-    }
-    return *this;
-  }
-  SpectralDistribution& operator-=(float other) {
-    for (uint32_t i = 0; i < count; ++i) {
-      entries[i].power -= other;
-    }
-    return *this;
-  }
-  SpectralDistribution operator*(float other) const {
-    SpectralDistribution result = *this;
-    result *= other;
-    return result;
-  }
-  SpectralDistribution operator/(float other) const {
-    SpectralDistribution result = *this;
-    result /= other;
-    return result;
-  }
-  SpectralDistribution operator+(float other) const {
-    SpectralDistribution result = *this;
-    result += other;
-    return result;
-  }
-  SpectralDistribution operator-(float other) const {
-    SpectralDistribution result = *this;
-    result -= other;
-    return result;
-  }
-
- public:
   SpectralDistribution() = default;
+
+  void scale(float factor);
 
   float3 integrate_to_xyz() const;
   float3 to_xyz() const;
@@ -564,16 +526,10 @@ struct ETX_ALIGNED SpectralDistribution {
 
   static constexpr SpectralDistribution from_constant(float value) {
     SpectralDistribution result;
-    if constexpr (spectrum::kSpectralRendering) {
-      result.count = 2;
-      result.entries[0] = {spectrum::kShortestWavelength, value};
-      result.entries[1] = {spectrum::kLongestWavelength, value};
-    } else {
-      result.count = 3;
-      result.entries[0] = {spectrum::kUndefinedWavelength, value};
-      result.entries[1] = {spectrum::kUndefinedWavelength, value};
-      result.entries[2] = {spectrum::kUndefinedWavelength, value};
-    }
+    result.count = 3;
+    result.entries[0] = {spectrum::kShortestWavelength, value};
+    result.entries[1] = {0.5f * (spectrum::kShortestWavelength + spectrum::kLongestWavelength), value};
+    result.entries[2] = {spectrum::kLongestWavelength, value};
     return result;
   }
 
@@ -581,6 +537,8 @@ struct ETX_ALIGNED SpectralDistribution {
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_samples(const float2 wavelengths_power[], uint32_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_black_body(float temperature, Pointer<Spectrums>);
+  static SpectralDistribution rgb(float3 rgb, const rgb::SpectrumSet& spectrums);
+
   static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Pointer<Spectrums>);
 };
 
@@ -704,96 +662,61 @@ ETX_GPU_CODE void compute_weights(const float3& rgb, float weights[Color::Count]
   }
 }
 
-ETX_GPU_CODE SpectralDistribution make_spd(float3 rgb, const SpectrumSet& spectrums) {
-  rgb = max(float3{0.0f, 0.0f, 0.0f}, rgb);
-
-  SpectralDistribution r;
-  if constexpr (spectrum::kSpectralRendering == false) {
-    r.count = 3;
-    r.entries[0] = {spectrum::kUndefinedWavelength, rgb.x};
-    r.entries[1] = {spectrum::kUndefinedWavelength, rgb.y};
-    r.entries[2] = {spectrum::kUndefinedWavelength, rgb.z};
-  } else {
-    constexpr float wavelengths[SampleCount] = {380.000000f, 390.967743f, 401.935486f, 412.903229f, 423.870972f, 434.838715f, 445.806458f, 456.774200f, 467.741943f, 478.709686f,
-      489.677429f, 500.645172f, 511.612915f, 522.580627f, 533.548340f, 544.516052f, 555.483765f, 566.451477f, 577.419189f, 588.386902f, 599.354614f, 610.322327f, 621.290039f,
-      632.257751f, 643.225464f, 654.193176f, 665.160889f, 676.128601f, 687.096313f, 698.064026f, 709.031738f, 720.000000f};
-
-    float weights[Color::Count] = {};
-    compute_weights(rgb, weights);
-
-    r.count = SampleCount;
-    for (uint32_t i = 0; i < SampleCount; ++i) {
-      r.entries[i].wavelength = wavelengths[i];
-      r.entries[i].power = weights[0] * spectrums.values[0][i] +  //
-                           weights[1] * spectrums.values[1][i] +  //
-                           weights[2] * spectrums.values[2][i] +  //
-                           weights[3] * spectrums.values[3][i] +  //
-                           weights[4] * spectrums.values[4][i] +  //
-                           weights[5] * spectrums.values[5][i] +  //
-                           weights[6] * spectrums.values[6][i];
-    }
-    for (uint32_t i = 0; i < r.count; ++i) {
-      r.entries[i].power = max(0.0f, r.entries[i].power);
-    }
-  }
-  return r;
-}
-
 ETX_GPU_CODE SpectralDistribution make_reflectance_spd(const float3& rgb, const Pointer<Spectrums> spectrums) {
-  return make_spd(rgb, spectrums->rgb_reflection);
+  return SpectralDistribution::rgb(rgb, spectrums->rgb_reflection);
 }
 
 ETX_GPU_CODE SpectralDistribution make_illuminant_spd(const float3& rgb, const Pointer<Spectrums> spectrums) {
-  return make_spd(rgb, spectrums->rgb_illuminant);
+  return SpectralDistribution::rgb(rgb, spectrums->rgb_illuminant);
 }
 
 ETX_GPU_CODE SpectralResponse query_spd(const SpectralQuery spect, const float3& rgb, const SpectrumSet& spectrums) {
-  if constexpr (spectrum::kSpectralRendering == false) {
+  if (spect.spectral() == false) {
     return SpectralResponse(spect, rgb);
-  } else {
-    constexpr float wavelengths[SampleCount] = {380.000000f, 390.967743f, 401.935486f, 412.903229f, 423.870972f, 434.838715f, 445.806458f, 456.774200f, 467.741943f, 478.709686f,
-      489.677429f, 500.645172f, 511.612915f, 522.580627f, 533.548340f, 544.516052f, 555.483765f, 566.451477f, 577.419189f, 588.386902f, 599.354614f, 610.322327f, 621.290039f,
-      632.257751f, 643.225464f, 654.193176f, 665.160889f, 676.128601f, 687.096313f, 698.064026f, 709.031738f, 720.000000f};
-
-    uint32_t i = 0;
-    uint32_t e = SampleCount;
-    do {
-      uint32_t m = i + (e - i) / 2;
-      if (wavelengths[m] > spect.wavelength) {
-        e = m;
-      } else {
-        i = m;
-      }
-    } while ((e - i) > 1);
-
-    if (i >= SampleCount) {
-      return {spect, 0.0f};
-    }
-
-    uint32_t j = min(i + 1u, SampleCount - 1u);
-
-    float t;
-    if ((i == 0) && (spect.wavelength < wavelengths[0])) {
-      t = 0.0f;
-    } else if (i + 1 == SampleCount) {
-      t = 1.0f;
-    } else {
-      t = (spect.wavelength - wavelengths[i]) / (wavelengths[j] - wavelengths[i]);
-    }
-
-    float weights[Color::Count] = {};
-    compute_weights(rgb, weights);
-
-    float p = weights[0] * lerp(spectrums.values[0][i], spectrums.values[0][j], t) +  //
-              weights[1] * lerp(spectrums.values[1][i], spectrums.values[1][j], t) +  //
-              weights[2] * lerp(spectrums.values[2][i], spectrums.values[2][j], t) +  //
-              weights[3] * lerp(spectrums.values[3][i], spectrums.values[3][j], t) +  //
-              weights[4] * lerp(spectrums.values[4][i], spectrums.values[4][j], t) +  //
-              weights[5] * lerp(spectrums.values[5][i], spectrums.values[5][j], t) +  //
-              weights[6] * lerp(spectrums.values[6][i], spectrums.values[6][j], t);
-
-    return SpectralResponse{spect, max(0.0f, p)};
   }
+
+  constexpr float wavelengths[SampleCount] = {380.000000f, 390.967743f, 401.935486f, 412.903229f, 423.870972f, 434.838715f, 445.806458f, 456.774200f, 467.741943f, 478.709686f,
+    489.677429f, 500.645172f, 511.612915f, 522.580627f, 533.548340f, 544.516052f, 555.483765f, 566.451477f, 577.419189f, 588.386902f, 599.354614f, 610.322327f, 621.290039f,
+    632.257751f, 643.225464f, 654.193176f, 665.160889f, 676.128601f, 687.096313f, 698.064026f, 709.031738f, 720.000000f};
+
+  uint32_t i = 0;
+  uint32_t e = SampleCount;
+  do {
+    uint32_t m = i + (e - i) / 2;
+    if (wavelengths[m] > spect.wavelength) {
+      e = m;
+    } else {
+      i = m;
+    }
+  } while ((e - i) > 1);
+
+  if (i >= SampleCount) {
+    return {spect, 0.0f};
+  }
+
+  uint32_t j = min(i + 1u, SampleCount - 1u);
+
+  float t;
+  if ((i == 0) && (spect.wavelength < wavelengths[0])) {
+    t = 0.0f;
+  } else if (i + 1 == SampleCount) {
+    t = 1.0f;
+  } else {
+    t = (spect.wavelength - wavelengths[i]) / (wavelengths[j] - wavelengths[i]);
+  }
+
+  float weights[Color::Count] = {};
+  compute_weights(rgb, weights);
+
+  float p = weights[0] * lerp(spectrums.values[0][i], spectrums.values[0][j], t) +  //
+            weights[1] * lerp(spectrums.values[1][i], spectrums.values[1][j], t) +  //
+            weights[2] * lerp(spectrums.values[2][i], spectrums.values[2][j], t) +  //
+            weights[3] * lerp(spectrums.values[3][i], spectrums.values[3][j], t) +  //
+            weights[4] * lerp(spectrums.values[4][i], spectrums.values[4][j], t) +  //
+            weights[5] * lerp(spectrums.values[5][i], spectrums.values[5][j], t) +  //
+            weights[6] * lerp(spectrums.values[6][i], spectrums.values[6][j], t);
+
+  return SpectralResponse{spect, max(0.0f, p)};
 }
 
 void init_spectrums(Spectrums&);

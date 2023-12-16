@@ -14,9 +14,44 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, Po
 
   if constexpr (spectrum::kSpectralRendering == false) {
     float3 xyz = result.integrate_to_xyz();
-    result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), spectrums->rgb_illuminant);
+    result = rgb(spectrum::xyz_to_rgb(xyz), spectrums->rgb_illuminant);
   }
   return result;
+}
+
+SpectralDistribution SpectralDistribution::rgb(float3 rgb, const rgb::SpectrumSet& spectrums) {
+  rgb = max(float3{0.0f, 0.0f, 0.0f}, rgb);
+
+  SpectralDistribution r;
+  if constexpr (spectrum::kSpectralRendering == false) {
+    r.count = 3;
+    r.entries[0] = {spectrum::kUndefinedWavelength, rgb.x};
+    r.entries[1] = {spectrum::kUndefinedWavelength, rgb.y};
+    r.entries[2] = {spectrum::kUndefinedWavelength, rgb.z};
+  } else {
+    constexpr float wavelengths[rgb::SampleCount] = {380.000000f, 390.967743f, 401.935486f, 412.903229f, 423.870972f, 434.838715f, 445.806458f, 456.774200f, 467.741943f,
+      478.709686f, 489.677429f, 500.645172f, 511.612915f, 522.580627f, 533.548340f, 544.516052f, 555.483765f, 566.451477f, 577.419189f, 588.386902f, 599.354614f, 610.322327f,
+      621.290039f, 632.257751f, 643.225464f, 654.193176f, 665.160889f, 676.128601f, 687.096313f, 698.064026f, 709.031738f, 720.000000f};
+
+    float weights[rgb::Color::Count] = {};
+    rgb::compute_weights(rgb, weights);
+
+    r.count = rgb::SampleCount;
+    for (uint32_t i = 0; i < rgb::SampleCount; ++i) {
+      r.entries[i].wavelength = wavelengths[i];
+      r.entries[i].power = weights[0] * spectrums.values[0][i] +  //
+                           weights[1] * spectrums.values[1][i] +  //
+                           weights[2] * spectrums.values[2][i] +  //
+                           weights[3] * spectrums.values[3][i] +  //
+                           weights[4] * spectrums.values[4][i] +  //
+                           weights[5] * spectrums.values[5][i] +  //
+                           weights[6] * spectrums.values[6][i];
+    }
+    for (uint32_t i = 0; i < r.count; ++i) {
+      r.entries[i].power = max(0.0f, r.entries[i].power);
+    }
+  }
+  return r;
 }
 
 SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1,
@@ -112,7 +147,7 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
 
   if constexpr (spectrum::kSpectralRendering == false) {
     float3 xyz = values0.integrate_to_xyz();
-    values0 = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
+    values0 = rgb(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
   }
 
   if (values1 != nullptr) {
@@ -128,7 +163,7 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
 
     if constexpr (spectrum::kSpectralRendering == false) {
       float3 xyz = values1->integrate_to_xyz();
-      *values1 = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
+      *values1 = rgb(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
     }
   }
 
@@ -142,6 +177,12 @@ bool SpectralDistribution::valid() const {
     }
   }
   return true;
+}
+
+void SpectralDistribution::scale(float factor) {
+  for (uint32_t i = 0; i < count; ++i) {
+    entries[i].power *= factor;
+  }
 }
 
 float3 SpectralDistribution::to_xyz() const {
@@ -243,7 +284,7 @@ SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[
   auto result = from_samples(wavelengths, power, count);
   if constexpr (spectrum::kSpectralRendering == false) {
     float3 xyz = result.integrate_to_xyz();
-    result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
+    result = rgb(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
   }
   return result;
 }
@@ -274,7 +315,7 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
 
   if constexpr (spectrum::kSpectralRendering == false) {
     float3 xyz = result.integrate_to_xyz();
-    result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
+    result = rgb(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
   }
 
   return result;
