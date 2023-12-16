@@ -10,7 +10,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   float n_dot_o = dot(data.front_fracing_normal(), w_o);
   if (n_dot_o <= kEpsilon)
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
 
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
 
@@ -76,7 +76,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   bool reflection = n_dot_o * n_dot_i > 0.0f;
 
   if ((reflection && transmittance) || ((reflection == false) && (transmittance == false))) {
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
   }
 
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
@@ -118,7 +118,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {data.spectrum_sample.wavelength, 0.0f};
+  return {data.spectrum_sample, 0.0f};
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
@@ -139,14 +139,14 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   BSDFSample result;
   result.w_o = data.w_i;
   result.pdf = 1.0f;
-  result.weight = {data.spectrum_sample.wavelength, 1.0f};
+  result.weight = {data.spectrum_sample, 1.0f};
   result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged;
   result.medium_index = entering_material ? mtl.int_medium : mtl.ext_medium;
   return result;
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {data.spectrum_sample.wavelength, 0.0f};
+  return {data.spectrum_sample, 0.0f};
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {

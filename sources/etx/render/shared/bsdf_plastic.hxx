@@ -45,7 +45,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
 
   float n_dot_o = dot(frame.nrm, w_o);
   if (n_dot_o <= kEpsilon) {
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
   }
 
   float3 m = normalize(w_o - data.w_i);
@@ -129,7 +129,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   float m_dot_o = dot(m, w_o);
 
   if ((n_dot_o <= kEpsilon) || (n_dot_i <= kEpsilon) || (m_dot_o <= kEpsilon)) {
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
   }
 
   auto eta_e = mtl.ext_ior(data.spectrum_sample);

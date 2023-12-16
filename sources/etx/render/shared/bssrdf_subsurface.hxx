@@ -57,8 +57,9 @@ struct Sample {
 };
 
 ETX_GPU_CODE Sample sample(SpectralQuery spect, const Vertex& data, const SubsurfaceMaterial& mtl, const uint32_t direction, Sampler& smp) {
-  uint32_t channel = uint32_t(SpectralResponse::component_count() * smp.next());
-  float scattering_distance = mtl.scale * mtl.scattering_distance(spect).component(channel);
+  SpectralResponse sampled_distance = mtl.scattering_distance(spect);
+  uint32_t channel = uint32_t(sampled_distance.component_count() * smp.next());
+  float scattering_distance = mtl.scale * sampled_distance.component(channel);
   if (scattering_distance == 0.0f)
     return {};
 

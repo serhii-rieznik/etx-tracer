@@ -13,8 +13,8 @@ struct ETX_ALIGNED PTOptions {
 
 struct ETX_ALIGNED PTRayPayload {
   Ray ray = {};
-  SpectralResponse throughput = {spectrum::kUndefinedWavelength, 1.0f};
-  SpectralResponse accumulated = {spectrum::kUndefinedWavelength, 0.0f};
+  SpectralResponse throughput = {};
+  SpectralResponse accumulated = {};
   uint32_t index = kInvalidIndex;
   uint32_t medium = kInvalidIndex;
   uint32_t path_length = 0u;
@@ -52,7 +52,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
 
   SpectralResponse extinction = scattering + absorption;
   SpectralResponse albedo = {
-    spect.wavelength,
+    spect,
     {
       scattering.components.x > 0.0f ? (extinction.components.x / scattering.components.x) : 0.0f,
       scattering.components.y > 0.0f ? (extinction.components.y / scattering.components.y) : 0.0f,
@@ -68,7 +68,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
   ray.o = shading_pos(scene.vertices, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d);
   ray.max_t = kMaxFloat;
 
-  SpectralResponse throughput = {spect.wavelength, 1.0f};
+  SpectralResponse throughput = {spect, 1.0f};
   for (uint32_t i = 0; i < kMaxIterations; ++i) {
     SpectralResponse pdf = {};
     uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp, pdf);
@@ -211,11 +211,11 @@ ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, uint2 px, uint2 d
   payload.index = px.x + px.y * dim.x;
   payload.iteration = iteration;
   payload.smp.init(payload.index, payload.iteration);
-  payload.spect = spectrum::sample(payload.smp.next());
+  payload.spect = SpectralQuery::sample(payload.smp.next());
   payload.uv = get_jittered_uv(payload.smp, px, dim);
   payload.ray = generate_ray(payload.smp, scene, payload.uv);
-  payload.throughput = {payload.spect.wavelength, 1.0f};
-  payload.accumulated = {payload.spect.wavelength, 0.0f};
+  payload.throughput = {payload.spect, 1.0f};
+  payload.accumulated = {payload.spect, 0.0f};
   payload.medium = scene.camera_medium_index;
   payload.path_length = 1;
   payload.eta = 1.0f;
@@ -270,12 +270,12 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
   ETX_FUNCTION_SCOPE();
 
   if (emitter_sample.pdf_dir == 0.0f) {
-    return {spect.wavelength, 0.0f};
+    return {spect, 0.0f};
   }
 
   BSDFEval bsdf_eval = bsdf::evaluate({spect, medium, PathSource::Camera, intersection, intersection.w_i}, emitter_sample.direction, mat, scene, smp);
   if (bsdf_eval.valid() == false) {
-    return {spect.wavelength, 0.0f};
+    return {spect, 0.0f};
   }
 
   ETX_VALIDATE(bsdf_eval.bsdf);
@@ -347,7 +347,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   if (options.nee && (payload.path_length + 1 <= rt.scene().max_path_length)) {
     uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
-    SpectralResponse direct_light = {payload.spect.wavelength, 0.0f};
+    SpectralResponse direct_light = {payload.spect, 0.0f};
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
         auto local_sample = sample_emitter(payload.spect, emitter_index, payload.smp, ss_gather.intersections[i].pos, ss_gather.intersections[i].w_i, scene);

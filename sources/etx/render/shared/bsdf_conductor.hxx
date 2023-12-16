@@ -17,7 +17,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {data.spectrum_sample.wavelength, 0.0f};
+  return {data.spectrum_sample, 0.0f};
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
@@ -69,11 +69,11 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   LocalFrame local_frame(frame);
   auto w_o = local_frame.to_local(in_w_o);
   if (w_o.z <= kEpsilon) {
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
   }
   auto w_i = local_frame.to_local(-data.w_i);
   if (w_i.z <= kEpsilon) {
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
   }
 
   auto alpha_x = mtl.roughness.x;

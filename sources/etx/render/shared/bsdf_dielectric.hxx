@@ -7,7 +7,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   float cos_theta_i = dot(frame.nrm, -data.w_i);
   if (cos_theta_i == 0.0f)
-    return {{data.spectrum_sample.wavelength, 0.0f}};
+    return {{data.spectrum_sample, 0.0f}};
 
   auto ior_i = (frame.entering_material() ? mtl.ext_ior : mtl.int_ior)(data.spectrum_sample);
   auto ior_o = (frame.entering_material() ? mtl.int_ior : mtl.ext_ior)(data.spectrum_sample);
@@ -45,7 +45,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {data.spectrum_sample.wavelength, 0.0f};
+  return {data.spectrum_sample, 0.0f};
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
@@ -67,7 +67,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   if (smp.next() <= f) {
     result.w_o = reflect(data.w_i, frame.nrm);
     if (dot(data.w_i, frame.nrm) * dot(result.w_o, frame.nrm) >= 0.0f) {
-      return {{data.spectrum_sample.wavelength, 0.0f}};
+      return {{data.spectrum_sample, 0.0f}};
     }
     result.w_o = normalize(result.w_o);
     result.pdf = f;
@@ -88,7 +88,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {data.spectrum_sample.wavelength, 0.0f};
+  return {data.spectrum_sample, 0.0f};
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
@@ -122,7 +122,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   BSDFSample result = {};
   if (LocalFrame::cos_theta(w_i) > 0) {  // outside
     if (external::sample_dielectric(data.spectrum_sample, smp, w_i, alpha_x, alpha_y, ext_ior, int_ior, thinfilm, result.w_o) == false) {
-      return {{data.spectrum_sample.wavelength, 0.0f}};
+      return {{data.spectrum_sample, 0.0f}};
     }
 
     float3 w_o = normalize(local_frame.from_local(result.w_o));
@@ -145,7 +145,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     }
   } else {  // inside
     if (external::sample_dielectric(data.spectrum_sample, smp, -w_i, alpha_x, alpha_y, int_ior, ext_ior, thinfilm, result.w_o) == false) {
-      return {{data.spectrum_sample.wavelength, 0.0f}};
+      return {{data.spectrum_sample, 0.0f}};
     }
 
     result.w_o = -result.w_o;
@@ -182,7 +182,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
   auto w_i = local_frame.to_local(-data.w_i);
   if (LocalFrame::cos_theta(w_i) == 0)
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
 
   auto w_o = local_frame.to_local(in_w_o);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
@@ -217,7 +217,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   }
 
   if (value.is_zero())
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
 
   BSDFEval eval;
   eval.func = apply_image(data.spectrum_sample, reflection ? mtl.specular : mtl.transmittance, data.tex, scene) * (2.0f * value);

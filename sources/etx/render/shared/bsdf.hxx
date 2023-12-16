@@ -44,9 +44,9 @@ struct BSDFData : public Vertex {
 struct BSDFEval {
   BSDFEval() = default;
 
-  ETX_GPU_CODE BSDFEval(float wl, float power)
-    : bsdf(wl, power)
-    , weight(wl, power) {
+  ETX_GPU_CODE BSDFEval(const SpectralQuery q, float power)
+    : bsdf(q, power)
+    , weight(q, power) {
   }
 
   SpectralResponse func = {};
@@ -336,16 +336,16 @@ ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, co
 
   float cos_theta = fabsf(dot(i, m));
   if (thinfilm.thickness == 0.0f) {
-    SpectralResponse result = {spect.wavelength, fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x())};
-    if constexpr (spectrum::kSpectralRendering == false) {
+    SpectralResponse result = {spect, fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x())};
+    if (spect.spectral() == false) {
       result.components.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
       result.components.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
     }
     return result;
   }
 
-  SpectralResponse result = {spect.wavelength, 0.0f};
-  if constexpr (spectrum::kSpectralRendering) {
+  SpectralResponse result = {spect, 0.0f};
+  if (spect.spectral()) {
     result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
   } else {
     result.components.x = fresnel_thinfilm(690.0f, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
@@ -361,18 +361,18 @@ ETX_GPU_CODE SpectralResponse dielectric(SpectralQuery spect, const float3& i, c
   auto c_e = ext_ior.as_monochromatic_complex();
   auto c_i = int_ior.as_monochromatic_complex();
   if (thinfilm.thickness == 0.0f) {
-    return {spect.wavelength, fresnel_generic(cos_theta, c_e, c_i)};
+    return {spect, fresnel_generic(cos_theta, c_e, c_i)};
   }
 
   auto c_f = thinfilm.ior.as_monochromatic_complex();
 
-  SpectralResponse result = {spect.wavelength, 0.0f};
-  if constexpr (spectrum::kSpectralRendering) {
-    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
-  } else {
+  SpectralResponse result = {spect, 0.0f};
+  if (spect.spectral()) {
     result.components.x = fresnel_thinfilm(690.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
     result.components.y = fresnel_thinfilm(550.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
     result.components.z = fresnel_thinfilm(430.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
+  } else {
+    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
   }
   return result;
 }

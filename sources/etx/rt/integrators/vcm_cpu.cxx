@@ -230,7 +230,7 @@ struct CPUVCMImpl {
       }
 
       state.merged *= vcm_iteration.vm_normalization;
-      state.merged += (state.gathered / spectrum::sample_pdf()).to_xyz();
+      state.merged += (state.gathered / state.spect.sampling_pdf()).to_xyz();
 
       float t = float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1);
       camera_image.accumulate({state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);

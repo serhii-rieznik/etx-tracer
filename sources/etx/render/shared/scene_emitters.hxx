@@ -45,7 +45,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
   switch (em.cls) {
     case Emitter::Class::Directional: {
       if ((em.angular_size <= 0.0f) || (dot(query.direction, em.direction) < em.angular_size_cosine)) {
-        return {spect.wavelength, 0.0f};
+        return {spect, 0.0f};
       }
 
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
@@ -53,7 +53,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       pdf_dir_out = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       float2 uv = disk_uv(em.direction, query.direction, em.equivalent_disk_size, em.angular_size_cosine);
       SpectralResponse direct_scale = 1.0f / (em.emission.spectrum(spect) * kDoublePi * (1.0f - em.angular_size_cosine));
-      return apply_image(spect, em.emission, uv, scene) * (query.directly_visible ? direct_scale : SpectralResponse(spect.wavelength, 1.0f));
+      return apply_image(spect, em.emission, uv, scene) * (query.directly_visible ? direct_scale : SpectralResponse(spect, 1.0f));
     }
 
     case Emitter::Class::Environment: {
@@ -61,7 +61,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       float2 uv = direction_to_uv(query.direction, img.offset);
       float sin_t = sinf(uv.y * kPi);
       if (sin_t <= kEpsilon) {
-        return {spect.wavelength, 0.0f};
+        return {spect, 0.0f};
       }
 
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
@@ -74,7 +74,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
     case Emitter::Class::Area: {
       const auto& tri = scene.triangles[em.triangle_index];
       if ((em.emission_direction == Emitter::Direction::Single) && (dot(tri.geo_n, query.target_position - query.source_position) >= 0.0f)) {
-        return {spect.wavelength, 0.0f};
+        return {spect, 0.0f};
       }
 
       float3 dp = query.source_position - query.target_position;
@@ -93,7 +93,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
 
     default: {
       ETX_FAIL("Unknown emitter class");
-      return {spect.wavelength, 0.0f};
+      return {spect, 0.0f};
     }
   }
 }
@@ -120,7 +120,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
       float2 uv = direction_to_uv(in_direction, offset);
       float sin_t = sinf(uv.y * kPi);
       if (sin_t <= kEpsilon) {
-        return {spect.wavelength, 0.0f};
+        return {spect, 0.0f};
       }
 
       const auto& img = scene.images[em.emission.image_index];
@@ -133,7 +133,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
 
     default:
       ETX_FAIL("Unknown emitter class");
-      return {spect.wavelength, 0.0f};
+      return {spect, 0.0f};
   }
 }
 
@@ -203,7 +203,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       float2 uv = img.sample(smp.next_2d(), pdf_image, image_location);
       float sin_t = sinf(uv.y * kPi);
       if (sin_t <= kEpsilon) {
-        result = {{spect.wavelength, 0.0f}};
+        result = {{spect, 0.0f}};
         return result;
       }
 

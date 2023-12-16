@@ -442,7 +442,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     float3 origin;
     float3 direction;
     float t;
-  } context = {{}, &scene, &smp, spect, {spect.wavelength, 1.0f}, medium, p0};
+  } context = {{}, &scene, &smp, spect, {spect, 1.0f}, medium, p0};
 
   auto filter_function = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
@@ -475,7 +475,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     }
 
     if (stop_tracing) {
-      ctx->value = {ctx->value.wavelength, 0.0f};
+      ctx->value = {ctx->value, 0.0f};
       *args->valid = -1;
       return;
     }
@@ -498,7 +498,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
   float t_max = dot(context.direction, context.direction);
   if (t_max <= kRayEpsilon) {
-    return {spect.wavelength, 1.0f};
+    return {spect, 1.0f};
   }
 
   t_max = sqrtf(t_max);

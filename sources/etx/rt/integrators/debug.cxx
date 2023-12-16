@@ -267,7 +267,7 @@ struct CPUDebugIntegratorImpl : public Task {
   float3 preview_pixel(RNDSampler& smp, const float2& uv) {
     const auto& scene = rt.scene();
     auto ray = generate_ray(smp, scene, uv);
-    auto spect = spectrum::sample(smp.next());
+    auto spect = SpectralQuery::sample(smp.next());
 
     float3 xyz = {0.1f, 0.1f, 0.1f};
 

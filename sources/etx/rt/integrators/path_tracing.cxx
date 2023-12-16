@@ -61,11 +61,12 @@ struct CPUPathTracingImpl : public Task {
       uint32_t y = i / current_dimensions.x;
 
       PTRayPayload payload = make_ray_payload(rt.scene(), {x, y}, current_dimensions, iteration);
+
       while ((state->load() != Integrator::State::Stopped) && run_path_iteration(rt.scene(), options, rt, payload)) {
         ETX_VALIDATE(payload.accumulated);
       }
 
-      auto xyz = (payload.accumulated / spectrum::sample_pdf()).to_xyz();
+      auto xyz = (payload.accumulated / payload.spect.sampling_pdf()).to_xyz();
       ETX_VALIDATE(xyz);
 
       if (state->load() == Integrator::State::Running) {
