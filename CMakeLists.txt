@@ -4,6 +4,7 @@ cmake_policy(SET CMP0074 NEW)
 cmake_policy(SET CMP0091 NEW)
 cmake_policy(SET CMP0056 NEW)
 cmake_policy(SET CMP0066 NEW)
+set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0")
 
 project(etx-tracer VERSION 0.0.1)
 
