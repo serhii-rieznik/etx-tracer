@@ -1,0 +1,28 @@
+{
+  "geometry": "balls.obj",
+  "materials": "balls.materials",
+  "camera": {
+    "viewport": [
+      1920,
+      1080
+    ],
+    "origin": [
+      2.0,
+      30.0,
+      -30.0
+    ],
+    "target": [
+      2.0,
+      1.0,
+      0.0
+    ],
+    "up": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "lens-radius": 0.0,
+    "focal-distance": 0.0,
+    "focal-length": 55.0
+  }
+}

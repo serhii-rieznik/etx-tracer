@@ -335,6 +335,7 @@ ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, co
   ETX_ASSERT(spect.wavelength == int_ior.wavelength);
 
   float cos_theta = fabsf(dot(i, m));
+
   if (thinfilm.thickness == 0.0f) {
     SpectralResponse result = {spect, fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x())};
     if (spect.spectral() == false) {
@@ -368,11 +369,11 @@ ETX_GPU_CODE SpectralResponse dielectric(SpectralQuery spect, const float3& i, c
 
   SpectralResponse result = {spect, 0.0f};
   if (spect.spectral()) {
+    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
+  } else {
     result.components.x = fresnel_thinfilm(690.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
     result.components.y = fresnel_thinfilm(550.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
     result.components.z = fresnel_thinfilm(430.0f, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
-  } else {
-    result.components.x = fresnel_thinfilm(spect.wavelength, cos_theta, c_e, c_f, c_i, thinfilm.thickness);
   }
   return result;
 }

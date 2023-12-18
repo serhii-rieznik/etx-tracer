@@ -1,4 +1,4 @@
-﻿namespace etx {
+namespace etx {
 
 namespace DeltaPlasticBSDF {
 
@@ -27,15 +27,14 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
   auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
 
-  auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr));
-  result.pdf = kInvPi * n_dot_o * (1.0f - f);
-
   if (reflection) {
-    bsdf += fr * specular;
-    result.pdf += f;
+    result.weight = specular * fr / f;
+    ETX_VALIDATE(result.weight);
+    result.pdf = kMaxHalf;
+  } else {
+    result.weight = diffuse * (1.0f - fr) / (1.0f - f);
+    result.pdf = kInvPi * n_dot_o * (1.0f - f);
   }
-
-  result.weight = bsdf / result.pdf;
 
   return result;
 }

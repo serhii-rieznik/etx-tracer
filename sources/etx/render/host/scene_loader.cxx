@@ -831,6 +831,8 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
   triangle_to_emitter.reserve(total_triangles);
   vertices.reserve(total_triangles * 3);
 
+  char data_buffer[1024] = {};
+
   for (const auto& shape : obj_shapes) {
     uint64_t index_offset = 0;
     float3 shape_bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
@@ -871,10 +873,14 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
         triangles.pop_back();
       }
 
-      bool emissive_material = (source_material.emission[0] > 0.0f) || (source_material.emission[1] > 0.0f) || (source_material.emission[2] > 0.0f);
+      if (get_param(source_material, "Ke", data_buffer)) {
+        auto& e = emitters.emplace_back(Emitter::Class::Area);
 
-      if (emissive_material) {
-        char data_buffer[2048] = {};
+        float val[3] = {};
+        if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
+          e.emission.spectrum = rgb::make_illuminant_spd({val[0], val[1], val[2]}, spectrums());
+        }
+
         uint32_t emissive_image_index = kInvalidIndex;
         if (get_file(base_dir, source_material.emissive_texname, data_buffer, sizeof(data_buffer))) {
           emissive_image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable);
@@ -905,9 +911,6 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
             }
           }
         }
-
-        auto& e = emitters.emplace_back(Emitter::Class::Area);
-        e.emission.spectrum = rgb::make_illuminant_spd(to_float3(source_material.emission), spectrums());
 
         if (get_param(obj_materials[material_id], "emitter", data_buffer)) {
           auto params = split_params(data_buffer);
@@ -1263,12 +1266,35 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
         }
       }
 
-      mtl.diffuse.spectrum = rgb::make_reflectance_spd(to_float3(material.diffuse), spectrums());
-      mtl.specular.spectrum = rgb::make_reflectance_spd(to_float3(material.specular), spectrums());
-      mtl.transmittance.spectrum = rgb::make_reflectance_spd(to_float3(material.transmittance), spectrums());
-      mtl.emission.spectrum = rgb::make_reflectance_spd(to_float3(material.emission), spectrums());
-      mtl.roughness = {sqr(material.roughness), sqr(material.roughness)};
-      mtl.metalness = material.metallic;
+      if (get_param(material, "Kd", data_buffer)) {
+        float3 value = {};
+        if (sscanf(data_buffer, "%f %f %f", &value.x, &value.y, &value.z) == 3) {
+          mtl.diffuse.spectrum = rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
+        }
+      }
+
+      if (get_param(material, "Ks", data_buffer)) {
+        float3 value = {};
+        if (sscanf(data_buffer, "%f %f %f", &value.x, &value.y, &value.z) == 3) {
+          mtl.specular.spectrum = rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
+        }
+      }
+
+      if (get_param(material, "Ks", data_buffer)) {
+        float3 value = {};
+        if (sscanf(data_buffer, "%f %f %f", &value.x, &value.y, &value.z) == 3) {
+          mtl.transmittance.spectrum = rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
+        }
+      }
+
+      if (get_param(material, "Pr", data_buffer)) {
+        float2 value = {};
+        if (sscanf(data_buffer, "%f %f", &value.x, &value.y) == 2) {
+          mtl.roughness = sqr(value);
+        } else if (sscanf(data_buffer, "%f", &value.x) == 1) {
+          mtl.roughness = {sqr(value.x), sqr(value.x)};
+        }
+      }
 
       if (get_file(base_dir, material.diffuse_texname, data_buffer, sizeof(data_buffer))) {
         mtl.diffuse.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
