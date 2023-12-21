@@ -138,8 +138,8 @@ void radiance_spectrum_at_direction(Pointer<Spectrums> spectrums, const Image& e
   float3 view_optical_path = {};
   float3 current_density = density(height_above_surface);
 
-  for (uint32_t i = 0; i < result.count; ++i) {
-    result.entries[i].power = 0;
+  for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
+    result.spectral_entries[i].power = 0;
   }
 
   float t = 0.0f;
@@ -164,13 +164,13 @@ void radiance_spectrum_at_direction(Pointer<Spectrums> spectrums, const Image& e
     float3 light_optical_path = density_scale * sample_optical_length(p, light_direction, extinction);
     float3 total_optical_path = view_optical_path + light_optical_path;
 
-    for (uint32_t i = 0; i < result.count; ++i) {
-      float r = spectrums->rayleigh.entries[i].power;
-      float m = spectrums->mie.entries[i].power;
-      float o = spectrums->ozone.entries[i].power;
+    for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
+      float r = spectrums->rayleigh.spectral_entries[i].power;
+      float m = spectrums->mie.spectral_entries[i].power;
+      float o = spectrums->ozone.spectral_entries[i].power;
       float tr = r * total_optical_path.x + m * total_optical_path.y + o * total_optical_path.z;
       float value = expf(-tr) * dt * (phase_r * r * density_scale.x * current_density.x + phase_m * m * density_scale.y * current_density.y);
-      result.entries[i].power += value;
+      result.spectral_entries[i].power += value;
     }
   }
 }
@@ -205,12 +205,12 @@ void extinction_spectrum_at_direction(Pointer<Spectrums> spectrums, const float3
     view_optical_path += dt * density_scale * current_density;
   }
 
-  for (uint32_t i = 0; i < result.count; ++i) {
-    float r = spectrums->rayleigh.entries[i].power;
-    float m = spectrums->mie.entries[i].power;
-    float o = spectrums->ozone.entries[i].power;
+  for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
+    float r = spectrums->rayleigh.spectral_entries[i].power;
+    float m = spectrums->mie.spectral_entries[i].power;
+    float o = spectrums->ozone.spectral_entries[i].power;
     float tr = r * view_optical_path.x + m * view_optical_path.y + o * view_optical_path.z;
-    result.entries[i].power = expf(-tr);
+    result.spectral_entries[i].power = expf(-tr);
   }
 }
 
@@ -232,19 +232,19 @@ void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinct
     accum.z += scattering::ozone_absorbtion(float(w));
 
     if (i % kSpectrumStepSize == 0) {
-      spectrums->rayleigh.entries[count] = {float(w), accum.x / static_cast<float>(kSpectrumStepSize)};
-      spectrums->mie.entries[count] = {float(w), accum.y / static_cast<float>(kSpectrumStepSize)};
-      spectrums->ozone.entries[count] = {float(w), accum.z / static_cast<float>(kSpectrumStepSize)};
-      spectrums->black.entries[count] = {float(w), 0.0f};
+      spectrums->rayleigh.spectral_entries[count] = {float(w), accum.x / static_cast<float>(kSpectrumStepSize)};
+      spectrums->mie.spectral_entries[count] = {float(w), accum.y / static_cast<float>(kSpectrumStepSize)};
+      spectrums->ozone.spectral_entries[count] = {float(w), accum.z / static_cast<float>(kSpectrumStepSize)};
+      spectrums->black.spectral_entries[count] = {float(w), 0.0f};
       accum = {};
       ++count;
     }
   }
 
-  spectrums->rayleigh.count = count;
-  spectrums->mie.count = count;
-  spectrums->ozone.count = count;
-  spectrums->black.count = count;
+  spectrums->rayleigh.spectral_entry_count = count;
+  spectrums->mie.spectral_entry_count = count;
+  spectrums->ozone.spectral_entry_count = count;
+  spectrums->black.spectral_entry_count = count;
 
   extinction = {};
 }

@@ -280,10 +280,10 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
   return weight * (state.throughput * radiance);
 }
 
-ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
+ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it, bool spectral) {
   VCMPathState state = {};
   state.sampler.init(index, it.iteration);
-  state.spect = SpectralQuery::sample(state.sampler.next());
+  state.spect = spectral ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.global_index = index;
 
   auto emitter_sample = sample_emission(scene, state.spect, state.sampler);
@@ -319,7 +319,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const Sc
   state.global_index = coord.x + coord.y * scene.camera.image_size.x;
 
   state.sampler.init(state.global_index, it.iteration);
-  auto sampled_spectrum = SpectralQuery::sample(state.sampler.next());
+  auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
 
   state.uv = get_jittered_uv(state.sampler, coord, scene.camera.image_size);

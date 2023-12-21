@@ -52,11 +52,11 @@ void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
       {52.6316f, 1.521f}, {55.5556f, 1.521f}, {58.8235f, 1.521f}, {62.5000f, 1.521f}, {66.6667f, 1.521f}, {71.4286f, 1.521f}, {76.9231f, 1.520f}, {83.3333f, 1.520f},
       {90.9091f, 1.520f}};
 
-    shared_spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2, SPD::Class::Reflectance, spectrums());
-    shared_spectrums.thinfilm.k = SPD::from_samples(w, k, 2, SPD::Class::Reflectance, spectrums());
-    shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)), SPD::Class::Reflectance, spectrums());
-    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_k)), SPD::Class::Reflectance, spectrums());
-    shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)), SPD::Class::Reflectance, spectrums());
+    shared_spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2);
+    shared_spectrums.thinfilm.k = SPD::from_samples(w, k, 2);
+    shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)));
+    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_k)));
+    shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)));
     shared_spectrums.dielectric.k = SPD::from_constant(0.0f);
   }
 }
@@ -447,7 +447,7 @@ void SceneRepresentation::write_materials(const char* filename) {
   for (const auto& em : _private->scene.emitters) {
     switch (em.cls) {
       case Emitter::Class::Directional: {
-        float3 e = em.emission.spectrum.to_xyz();
+        float3 e = em.emission.spectrum.integrate_to_xyz();
         fprintf(fout, "newmtl et::dir\n");
         fprintf(fout, "color %.3f %.3f %.3f\n", e.x, e.y, e.z);
         fprintf(fout, "direction %.3f %.3f %.3f\n", em.direction.x, em.direction.y, em.direction.z);
@@ -456,7 +456,7 @@ void SceneRepresentation::write_materials(const char* filename) {
         break;
       }
       case Emitter::Class::Environment: {
-        float3 e = em.emission.spectrum.to_xyz();
+        float3 e = em.emission.spectrum.integrate_to_xyz();
         fprintf(fout, "newmtl et::env\n");
         fprintf(fout, "color %.3f %.3f %.3f\n", e.x, e.y, e.z);
         fprintf(fout, "\n");
@@ -475,25 +475,25 @@ void SceneRepresentation::write_materials(const char* filename) {
     // TODO : support anisotripic roughness
     fprintf(fout, "Pr %.3f\n", sqrtf(0.5f * (sqr(material.roughness.x) + sqr(material.roughness.y))));
     {
-      float3 kd = spectrum::xyz_to_rgb(material.diffuse.spectrum.to_xyz());
+      float3 kd = spectrum::xyz_to_rgb(material.diffuse.spectrum.integrate_to_xyz());
       fprintf(fout, "Kd %.3f %.3f %.3f\n", kd.x, kd.y, kd.z);
     }
     {
-      float3 ks = spectrum::xyz_to_rgb(material.specular.spectrum.to_xyz());
+      float3 ks = spectrum::xyz_to_rgb(material.specular.spectrum.integrate_to_xyz());
       fprintf(fout, "Ks %.3f %.3f %.3f\n", ks.x, ks.y, ks.z);
     }
     {
-      float3 kt = spectrum::xyz_to_rgb(material.transmittance.spectrum.to_xyz());
+      float3 kt = spectrum::xyz_to_rgb(material.transmittance.spectrum.integrate_to_xyz());
       fprintf(fout, "Kt %.3f %.3f %.3f\n", kt.x, kt.y, kt.z);
     }
 
     if (material.emission.spectrum.is_zero() == false) {
-      float3 ke = spectrum::xyz_to_rgb(material.emission.spectrum.to_xyz());
+      float3 ke = spectrum::xyz_to_rgb(material.emission.spectrum.integrate_to_xyz());
       fprintf(fout, "Ke %.3f %.3f %.3f\n", ke.x, ke.y, ke.z);
     }
 
     if (material.subsurface.scattering_distance.is_zero() == false) {
-      float3 ss = spectrum::xyz_to_rgb(material.subsurface.scattering_distance.to_xyz());
+      float3 ss = spectrum::xyz_to_rgb(material.subsurface.scattering_distance.integrate_to_xyz());
       fprintf(fout, "subsurface %.3f %.3f %.3f\n", ss.x, ss.y, ss.z);
     }
 
@@ -1258,6 +1258,9 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       auto& mtl = materials[material_index];
 
       mtl.cls = Material::Class::Diffuse;
+      mtl.diffuse = {SpectralDistribution::from_constant(1.0f)};
+      mtl.specular = {SpectralDistribution::from_constant(1.0f)};
+      mtl.transmittance = {SpectralDistribution::from_constant(1.0f)};
 
       if (get_param(material, "base", data_buffer)) {
         auto i = material_mapping.find(data_buffer);

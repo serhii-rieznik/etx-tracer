@@ -1,57 +1,79 @@
 ﻿#include <etx/render/shared/spectrum.hxx>
 
 #include <vector>
+#include <algorithm>
 
 namespace etx {
 
-SpectralDistribution SpectralDistribution::from_black_body(float temperature, Pointer<Spectrums> spectrums) {
-  SpectralDistribution result;
-  result.count = spectrum::WavelengthCount;
-  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
-    float wl = float(i + spectrum::ShortestWavelength);
-    result.entries[i] = {wl, spectrum::black_body_radiation(wl, temperature)};
+SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint32_t count) {
+  float value = (count > 0) ? wavelengths_power[0].x : 100.0f;
+  float wavelength_scale = 1.0f;
+  while (value < 100.0f) {
+    wavelength_scale *= 10.0f;
+    value *= 10.0f;
   }
 
-  if constexpr (spectrum::kSpectralRendering == false) {
-    float3 xyz = result.integrate_to_xyz();
-    result = rgb(spectrum::xyz_to_rgb(xyz), spectrums->rgb_illuminant);
+  SpectralDistribution result;
+  result.spectral_entry_count = count;
+  for (uint32_t i = 0; i < count; ++i) {
+    result.spectral_entries[i] = {wavelengths_power[i].x * wavelength_scale, wavelengths_power[i].y};
   }
+
+  for (uint32_t i = 0; i < count; ++i) {
+    for (uint32_t j = i + 1; j < count; ++j) {
+      if (result.spectral_entries[i].wavelength > result.spectral_entries[j].wavelength) {
+        auto t = result.spectral_entries[i];
+        result.spectral_entries[i] = result.spectral_entries[j];
+        result.spectral_entries[j] = t;
+      }
+    }
+  }
+
+  result.integrated = max(float3{0.0f, 0.0f, 0.0f}, spectrum::xyz_to_rgb(result.integrate_to_xyz()));
   return result;
+}
+
+SpectralDistribution SpectralDistribution::from_constant(float value) {
+  SpectralDistribution result = {};
+  result.spectral_entry_count = 2;
+  result.spectral_entries[0] = {spectrum::kShortestWavelength, value};
+  result.spectral_entries[1] = {spectrum::kLongestWavelength, value};
+  result.integrated = {value, value, value};
+  return result;
+}
+
+SpectralDistribution SpectralDistribution::from_black_body(float temperature, Pointer<Spectrums> spectrums) {
+  float2 samples[spectrum::WavelengthCount] = {};
+  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
+    float wl = float(i + spectrum::ShortestWavelength);
+    samples[i] = {wl, spectrum::black_body_radiation(wl, temperature)};
+  }
+  return from_samples(samples, spectrum::WavelengthCount);
 }
 
 SpectralDistribution SpectralDistribution::rgb(float3 rgb, const rgb::SpectrumSet& spectrums) {
   rgb = max(float3{0.0f, 0.0f, 0.0f}, rgb);
 
-  SpectralDistribution r;
-  if constexpr (spectrum::kSpectralRendering == false) {
-    r.count = 3;
-    r.entries[0] = {spectrum::kUndefinedWavelength, rgb.x};
-    r.entries[1] = {spectrum::kUndefinedWavelength, rgb.y};
-    r.entries[2] = {spectrum::kUndefinedWavelength, rgb.z};
-  } else {
-    constexpr float wavelengths[rgb::SampleCount] = {380.000000f, 390.967743f, 401.935486f, 412.903229f, 423.870972f, 434.838715f, 445.806458f, 456.774200f, 467.741943f,
-      478.709686f, 489.677429f, 500.645172f, 511.612915f, 522.580627f, 533.548340f, 544.516052f, 555.483765f, 566.451477f, 577.419189f, 588.386902f, 599.354614f, 610.322327f,
-      621.290039f, 632.257751f, 643.225464f, 654.193176f, 665.160889f, 676.128601f, 687.096313f, 698.064026f, 709.031738f, 720.000000f};
+  constexpr float wavelengths[rgb::SampleCount] = {380.000000f, 390.967743f, 401.935486f, 412.903229f, 423.870972f, 434.838715f, 445.806458f, 456.774200f, 467.741943f, 478.709686f,
+    489.677429f, 500.645172f, 511.612915f, 522.580627f, 533.548340f, 544.516052f, 555.483765f, 566.451477f, 577.419189f, 588.386902f, 599.354614f, 610.322327f, 621.290039f,
+    632.257751f, 643.225464f, 654.193176f, 665.160889f, 676.128601f, 687.096313f, 698.064026f, 709.031738f, 720.000000f};
 
-    float weights[rgb::Color::Count] = {};
-    rgb::compute_weights(rgb, weights);
+  float weights[rgb::Color::Count] = {};
+  rgb::compute_weights(rgb, weights);
 
-    r.count = rgb::SampleCount;
-    for (uint32_t i = 0; i < rgb::SampleCount; ++i) {
-      r.entries[i].wavelength = wavelengths[i];
-      r.entries[i].power = weights[0] * spectrums.values[0][i] +  //
-                           weights[1] * spectrums.values[1][i] +  //
-                           weights[2] * spectrums.values[2][i] +  //
-                           weights[3] * spectrums.values[3][i] +  //
-                           weights[4] * spectrums.values[4][i] +  //
-                           weights[5] * spectrums.values[5][i] +  //
-                           weights[6] * spectrums.values[6][i];
-    }
-    for (uint32_t i = 0; i < r.count; ++i) {
-      r.entries[i].power = max(0.0f, r.entries[i].power);
-    }
+  float2 samples[rgb::SampleCount] = {};
+  for (uint32_t i = 0; i < rgb::SampleCount; ++i) {
+    float p = weights[0] * spectrums.values[0][i] + weights[1] * spectrums.values[1][i] +  //
+              weights[2] * spectrums.values[2][i] + weights[3] * spectrums.values[3][i] +  //
+              weights[4] * spectrums.values[4][i] + weights[5] * spectrums.values[5][i] +  //
+              weights[6] * spectrums.values[6][i];
+
+    samples[i] = {wavelengths[i], max(0.0f, p)};
   }
-  return r;
+
+  SpectralDistribution result = from_samples(samples, rgb::SampleCount);
+  result.integrated = rgb;
+  return result;
 }
 
 SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1,
@@ -131,48 +153,41 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     sample.wavelength *= scale;
   }
 
-  values0.count = 0;
+  values0.spectral_entry_count = 0;
 
   for (const auto& sample : samples) {
     if ((sample.wavelength >= spectrum::kShortestWavelength) && (sample.wavelength <= spectrum::kLongestWavelength)) {
-      values0.entries[values0.count++] = {sample.wavelength, sample.values[0]};
-      if (values0.count >= spectrum::kWavelengthCount) {
+      values0.spectral_entries[values0.spectral_entry_count++] = {sample.wavelength, sample.values[0]};
+      if (values0.spectral_entry_count >= spectrum::kWavelengthCount) {
         break;
       }
     }
   }
 
-  if (values0.count == 0)
+  if (values0.spectral_entry_count == 0)
     return Class::Invalid;
 
-  if constexpr (spectrum::kSpectralRendering == false) {
-    float3 xyz = values0.integrate_to_xyz();
-    values0 = rgb(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
-  }
+  values0.integrated = spectrum::xyz_to_rgb(values0.integrate_to_xyz());
 
   if (values1 != nullptr) {
-    values1->count = 0;
+    values1->spectral_entry_count = 0;
     for (const auto& sample : samples) {
       if ((sample.wavelength >= spectrum::kShortestWavelength) && (sample.wavelength <= spectrum::kLongestWavelength)) {
-        values1->entries[values1->count++] = {sample.wavelength, sample.values[1]};
-        if (values1->count >= spectrum::kWavelengthCount) {
+        values1->spectral_entries[values1->spectral_entry_count++] = {sample.wavelength, sample.values[1]};
+        if (values1->spectral_entry_count >= spectrum::kWavelengthCount) {
           break;
         }
       }
     }
-
-    if constexpr (spectrum::kSpectralRendering == false) {
-      float3 xyz = values1->integrate_to_xyz();
-      *values1 = rgb(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
-    }
+    values1->integrated = spectrum::xyz_to_rgb(values1->integrate_to_xyz());
   }
 
   return cls;
 }
 
 bool SpectralDistribution::valid() const {
-  for (uint32_t i = 0; i < count; ++i) {
-    if (valid_value(entries[i].power) == false) {
+  for (uint32_t i = 0; i < spectral_entry_count; ++i) {
+    if (valid_value(spectral_entries[i].power) == false) {
       return false;
     }
   }
@@ -180,23 +195,16 @@ bool SpectralDistribution::valid() const {
 }
 
 void SpectralDistribution::scale(float factor) {
-  for (uint32_t i = 0; i < count; ++i) {
-    entries[i].power *= factor;
+  for (uint32_t i = 0; i < spectral_entry_count; ++i) {
+    spectral_entries[i].power *= factor;
   }
-}
-
-float3 SpectralDistribution::to_xyz() const {
-  if constexpr (spectrum::kSpectralRendering) {
-    return integrate_to_xyz();
-  } else {
-    return spectrum::rgb_to_xyz({entries[0].power, entries[1].power, entries[2].power});
-  }
+  integrated *= factor;
 }
 
 float SpectralDistribution::maximum_power() const {
-  float result = entries[0].power;
-  for (uint32_t i = 0; i < count; ++i) {
-    result = max(result, entries[i].power);
+  float result = spectral_entries[0].power;
+  for (uint32_t i = 0; i < spectral_entry_count; ++i) {
+    result = max(result, spectral_entries[i].power);
   }
   return result;
 }
@@ -211,7 +219,7 @@ float3 SpectralDistribution::integrate_to_xyz() const {
     return lerp(v0, v1, dw);
   };
 
-  auto integrate = [entries = entries, xyz_at](uint32_t index) -> float3 {
+  auto integrate = [entries = spectral_entries, xyz_at](uint32_t index) -> float3 {
     float3 result = {};
 
     float l0 = entries[index + 0].wavelength;
@@ -239,86 +247,22 @@ float3 SpectralDistribution::integrate_to_xyz() const {
   };
 
   float3 result = {};
-  for (uint32_t i = 0; i + 1 < count; ++i) {
+  for (uint32_t i = 0; i + 1 < spectral_entry_count; ++i) {
     result += integrate(i);
   }
   return result;
 }
 
 float SpectralDistribution::total_power() const {
-  if constexpr (spectrum::kSpectralRendering) {
-    return integrate_to_xyz().y;
-  } else {
-    return entries[0].power * 0.2627f + entries[1].power * 0.678f + entries[2].power * 0.0593f;
-  }
+  return integrate_to_xyz().y;
 }
 
 SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count) {
-  float value = (count > 0) ? wavelengths[0] : 100.0f;
-  float wavelength_scale = 1.0f;
-  while (value < 100.0f) {
-    wavelength_scale *= 10.0f;
-    value *= 10.0f;
-  }
-
-  SpectralDistribution result;
-  result.count = count;
+  std::vector<float2> combined(count);
   for (uint32_t i = 0; i < count; ++i) {
-    result.entries[i] = {wavelengths[i] * wavelength_scale, power ? power[i] : 0.0f};
+    combined[i] = {wavelengths[i], power[i]};
   }
-
-  for (uint32_t i = 0; i < count; ++i) {
-    for (uint32_t j = i + 1; j < count; ++j) {
-      if (result.entries[i].wavelength > result.entries[j].wavelength) {
-        auto t = result.entries[i];
-        result.entries[i] = result.entries[j];
-        result.entries[j] = t;
-      }
-    }
-  }
-
-  return result;
-}
-
-SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count, Class cls, Pointer<Spectrums> spectrums) {
-  auto result = from_samples(wavelengths, power, count);
-  if constexpr (spectrum::kSpectralRendering == false) {
-    float3 xyz = result.integrate_to_xyz();
-    result = rgb(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
-  }
-  return result;
-}
-
-SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint32_t count, Class cls, Pointer<Spectrums> spectrums) {
-  float value = (count > 0) ? wavelengths_power[0].x : 100.0f;
-  float wavelength_scale = 1.0f;
-  while (value < 100.0f) {
-    wavelength_scale *= 10.0f;
-    value *= 10.0f;
-  }
-
-  SpectralDistribution result;
-  result.count = count;
-  for (uint32_t i = 0; i < count; ++i) {
-    result.entries[i] = {wavelengths_power[i].x * wavelength_scale, wavelengths_power[i].y};
-  }
-
-  for (uint32_t i = 0; i < count; ++i) {
-    for (uint32_t j = i + 1; j < count; ++j) {
-      if (result.entries[i].wavelength > result.entries[j].wavelength) {
-        auto t = result.entries[i];
-        result.entries[i] = result.entries[j];
-        result.entries[j] = t;
-      }
-    }
-  }
-
-  if constexpr (spectrum::kSpectralRendering == false) {
-    float3 xyz = result.integrate_to_xyz();
-    result = rgb(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
-  }
-
-  return result;
+  return from_samples(combined.data(), uint32_t(combined.size()));
 }
 
 namespace rgb {

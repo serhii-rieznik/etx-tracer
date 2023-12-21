@@ -300,8 +300,14 @@ ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_i
 
 ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
   float sin_theta_1_squared = sqr(ext_ior / film_ior).real() * (1.0f - cos_theta_0 * cos_theta_0);
+  if (sin_theta_1_squared > 1.0f)
+    return 0.0f;
+
   float cos_theta_1 = sqrtf(1.0f - sin_theta_1_squared);
   float sin_theta_2_squared = sqr(film_ior / int_ior).real() * (1.0f - cos_theta_1 * cos_theta_1);
+  if (sin_theta_2_squared > 1.0f)
+    return 1.0f;
+
   float cos_theta_2 = sqrtf(1.0f - sin_theta_2_squared);
   auto delta_10 = film_ior.real() > ext_ior.real() ? 0.0f : kPi;
   auto delta_21 = int_ior.real() > film_ior.real() ? 0.0f : kPi;

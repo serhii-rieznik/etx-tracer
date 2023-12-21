@@ -43,6 +43,7 @@ struct CPUVCMImpl {
 
   bool light_image_updated = false;
   bool camera_image_updated = false;
+  bool spectral = false;
 
   struct {
     std::atomic<uint32_t> l;
@@ -177,7 +178,7 @@ struct CPUVCMImpl {
     for (uint64_t i = range_begin; running() && (i < range_end); ++i) {
       stats.l++;
 
-      VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration);
+      VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration, spectral);
 
       uint32_t path_begin = static_cast<uint32_t>(local_vertices.size());
       while (running()) {

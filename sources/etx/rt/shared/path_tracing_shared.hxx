@@ -9,6 +9,7 @@ struct ETX_ALIGNED PTOptions {
   uint32_t path_per_iteration ETX_INIT_WITH(1u);
   bool nee ETX_INIT_WITH(true);
   bool mis ETX_INIT_WITH(true);
+  bool spectral ETX_INIT_WITH(false);
 };
 
 struct ETX_ALIGNED PTRayPayload {
@@ -204,14 +205,14 @@ ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersec
 
 }  // namespace subsurface
 
-ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, uint2 px, uint2 dim, uint32_t iteration) {
+ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, uint2 px, uint2 dim, uint32_t iteration, bool spectral) {
   ETX_FUNCTION_SCOPE();
 
   PTRayPayload payload = {};
   payload.index = px.x + px.y * dim.x;
   payload.iteration = iteration;
   payload.smp.init(payload.index, payload.iteration);
-  payload.spect = SpectralQuery::sample(payload.smp.next());
+  payload.spect = spectral ? SpectralQuery::spectral_sample(payload.smp.next()) : SpectralQuery::sample();
   payload.uv = get_jittered_uv(payload.smp, px, dim);
   payload.ray = generate_ray(payload.smp, scene, payload.uv);
   payload.throughput = {payload.spect, 1.0f};

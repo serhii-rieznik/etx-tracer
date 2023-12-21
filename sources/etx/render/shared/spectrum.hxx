@@ -12,7 +12,6 @@ struct SpectrumSet;
 
 namespace spectrum {
 
-constexpr bool kSpectralRendering = false;
 constexpr float kUndefinedWavelength = -1.0f;
 
 constexpr uint32_t WavelengthCount = 471u;
@@ -211,10 +210,17 @@ struct SpectralQuery {
     return (wavelength >= spectrum::kShortestWavelength) && (wavelength <= spectrum::kLongestWavelength);
   }
 
-  static SpectralQuery sample(float rnd) {
+  static SpectralQuery sample() {
+    return SpectralQuery{
+      spectrum::kUndefinedWavelength,
+      0u,
+    };
+  }
+
+  static SpectralQuery spectral_sample(float rnd) {
     return SpectralQuery{
       spectrum::kShortestWavelength + rnd * (spectrum::kLongestWavelength - spectrum::kShortestWavelength),
-      spectrum::kSpectralRendering ? Spectral : 0u,
+      Spectral,
     };
   }
 };
@@ -443,33 +449,49 @@ struct ETX_ALIGNED SpectralDistribution {
   struct {
     float wavelength = 0.0f;
     float power = 0.0f;
-  } entries[spectrum::WavelengthCount] = {};
-  uint32_t count = 0u;
+  } spectral_entries[spectrum::WavelengthCount] = {};
+
+  float3 integrated = {};
+  uint32_t spectral_entry_count = 0u;
 
  public:  // device
   ETX_GPU_CODE SpectralResponse query(const SpectralQuery q) const {
     if (q.spectral() == false) {
-      return SpectralResponse{q, {entries[0].power, entries[1].power, entries[2].power}};
+      return SpectralResponse{q, integrated};
     }
 
     ETX_ASSERT(q.valid());
 
+    auto lower_bound = [this](float wavelength) {
+      uint32_t b = 0;
+      uint32_t e = spectral_entry_count;
+      do {
+        uint32_t m = b + (e - b) / 2;
+        if (spectral_entries[m].wavelength > wavelength) {
+          e = m;
+        } else {
+          b = m;
+        }
+      } while ((e - b) > 1);
+      return b;
+    };
+
     uint32_t i = lower_bound(q.wavelength);
-    if (i >= count) {
+    if (i >= spectral_entry_count) {
       return {q, 0.0f};
     }
 
-    if ((i == 0) && (q.wavelength < entries[i].wavelength)) {
-      return {q, entries[i].power};
+    if ((i == 0) && (q.wavelength < spectral_entries[i].wavelength)) {
+      return {q, spectral_entries[i].power};
     }
 
-    if (i + 1 == count) {
-      return {q, entries[i].power};
+    if (i + 1 == spectral_entry_count) {
+      return {q, spectral_entries[i].power};
     }
 
-    uint32_t j = min(i + 1u, count - 1);
-    float t = (q.wavelength - entries[i].wavelength) / (entries[j].wavelength - entries[i].wavelength);
-    float p = lerp(entries[i].power, entries[j].power, t);
+    uint32_t j = min(i + 1u, spectral_entry_count - 1);
+    float t = (q.wavelength - spectral_entries[i].wavelength) / (spectral_entries[j].wavelength - spectral_entries[i].wavelength);
+    float p = lerp(spectral_entries[i].power, spectral_entries[j].power, t);
     ETX_VALIDATE(p);
     return SpectralResponse{q, p};
   }
@@ -478,33 +500,20 @@ struct ETX_ALIGNED SpectralDistribution {
     return query(q);
   }
 
-  ETX_GPU_CODE uint32_t lower_bound(float wavelength) const {
-    uint32_t b = 0;
-    uint32_t e = count;
-    do {
-      uint32_t m = b + (e - b) / 2;
-      if (entries[m].wavelength > wavelength) {
-        e = m;
-      } else {
-        b = m;
-      }
-    } while ((e - b) > 1);
-    return b;
-  }
-
   ETX_SHARED_CODE void make_constant(float power) {
-    for (uint32_t i = 0; i < count; ++i) {
-      entries[i].power = power;
+    for (uint32_t i = 0; i < spectral_entry_count; ++i) {
+      spectral_entries[i].power = power;
     }
+    integrated = {power, power, power};
   }
 
   ETX_GPU_CODE bool empty() const {
-    return count == 0;
+    return spectral_entry_count == 0;
   }
 
   ETX_GPU_CODE bool is_zero() const {
-    for (uint32_t i = 0; i < count; ++i) {
-      if (entries[i].power != 0.0f) {
+    for (uint32_t i = 0; i < spectral_entry_count; ++i) {
+      if (spectral_entries[i].power != 0.0f) {
         return false;
       }
     }
@@ -517,25 +526,17 @@ struct ETX_ALIGNED SpectralDistribution {
   void scale(float factor);
 
   float3 integrate_to_xyz() const;
-  float3 to_xyz() const;
+  // float3 to_xyz() const;
 
   float total_power() const;
   float maximum_power() const;
 
   bool valid() const;
 
-  static constexpr SpectralDistribution from_constant(float value) {
-    SpectralDistribution result;
-    result.count = 3;
-    result.entries[0] = {spectrum::kShortestWavelength, value};
-    result.entries[1] = {0.5f * (spectrum::kShortestWavelength + spectrum::kLongestWavelength), value};
-    result.entries[2] = {spectrum::kLongestWavelength, value};
-    return result;
-  }
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint32_t count);
 
+  static SpectralDistribution from_constant(float value);
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count);
-  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count, Class cls, Pointer<Spectrums>);
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint32_t count, Class cls, Pointer<Spectrums>);
   static SpectralDistribution from_black_body(float temperature, Pointer<Spectrums>);
   static SpectralDistribution rgb(float3 rgb, const rgb::SpectrumSet& spectrums);
 

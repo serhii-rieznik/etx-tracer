@@ -257,7 +257,8 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
 }
 
 bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear) {
-  float3 rgb = spectrum::xyz_to_rgb(spd.to_xyz());
+  float3 rgb = spd.integrated;
+
   if (linear == false) {
     rgb = linear_to_gamma(rgb);
   }
