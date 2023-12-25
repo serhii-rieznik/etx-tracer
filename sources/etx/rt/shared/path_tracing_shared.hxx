@@ -340,7 +340,8 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i}, mat, scene, payload.smp);
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
 
-  subsurface::Gather ss_gather = {};
+  // uint8_t ss_gather_data[sizeof(subsurface::Gather)];
+  subsurface::Gather ss_gather;
   bool subsurface_sampled = subsurface_path && subsurface::gather(payload.spect, scene, intersection, rt, payload.smp, ss_gather);
 
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -427,7 +428,7 @@ ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& option
   ETX_FUNCTION_SCOPE();
   ETX_CHECK_FINITE(payload.ray.d);
 
-  Intersection intersection = {};
+  Intersection intersection;
   bool found_intersection = rt.trace(scene, payload.ray, intersection, payload.smp);
 
   Medium::Sample medium_sample = try_sampling_medium(scene, payload, intersection.t);

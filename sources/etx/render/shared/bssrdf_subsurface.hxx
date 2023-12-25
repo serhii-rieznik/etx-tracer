@@ -6,12 +6,12 @@ constexpr uint32_t kIntersectionsPerDirection = 8u;
 constexpr uint32_t kTotalIntersections = kIntersectionDirections * kIntersectionsPerDirection;
 
 struct Gather {
-  Intersection intersections[kTotalIntersections] = {};
-  SpectralResponse weights[kTotalIntersections] = {};
-  uint32_t intersection_count = 0u;
-  uint32_t selected_intersection = 0u;
-  float selected_sample_weight = 0.0f;
-  float total_weight = 0.0f;
+  Intersection intersections[kTotalIntersections];
+  SpectralResponse weights[kTotalIntersections];
+  uint32_t intersection_count;
+  uint32_t selected_intersection;
+  float selected_sample_weight;
+  float total_weight;
 };
 
 ETX_GPU_CODE float sample_s_r(float rnd) {

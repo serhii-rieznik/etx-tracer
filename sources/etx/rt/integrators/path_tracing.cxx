@@ -103,7 +103,7 @@ void CPUPathTracing::set_output_size(const uint2& dim) {
   if (current_state != State::Stopped) {
     stop(Stop::Immediate);
   }
-  _private->camera_image.resize(dim, 1);
+  _private->camera_image.allocate(dim, Film::Layer::CameraRays, 1);
 }
 
 const float4* CPUPathTracing::get_camera_image(bool force_update) {

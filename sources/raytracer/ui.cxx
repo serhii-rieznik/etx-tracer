@@ -20,6 +20,8 @@
 
 namespace etx {
 
+namespace {
+
 inline void decrease_exposure(ViewOptions& o) {
   o.exposure = fmaxf(1.0f / 1024.0f, 0.5f * o.exposure);
 }
@@ -27,6 +29,8 @@ inline void decrease_exposure(ViewOptions& o) {
 inline void increase_exposure(ViewOptions& o) {
   o.exposure = fmaxf(1.0f / 1024.0f, 2.0f * o.exposure);
 }
+
+}  // namespace
 
 void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint32_t>& mapping) {
   constexpr uint64_t kMaterialNameMaxSize = 1024llu;
@@ -480,8 +484,22 @@ void UI::build(double dt, const char* status) {
     if (ImGui::Button(labels[3].c_str(), {0.0f, button_size})) {
       callbacks.stop_selected(false);
     }
-
     ImGui::PopStyleColor(4);
+
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+
+    ImGui::SameLine(0.0f, wpadding.x);
+    if (state_available[0] == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("  Denoise  ", {0.0f, button_size})) {
+      callbacks.denoise_selected();
+    }
+    if (state_available[0] == false) {
+      ImGui::EndDisabled();
+    }
+
     ImGui::SameLine(0.0f, wpadding.x);
 
     ImGui::GetStyle().FramePadding.y = (button_size - text_size) / 2.0f;

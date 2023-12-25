@@ -1,12 +1,9 @@
 ﻿#include <etx/core/environment.hxx>
 #include <etx/core/profiler.hxx>
-#include <etx/render/host/image_pool.hxx>
-#include <etx/render/shared/scene.hxx>
 
 #include "app.hxx"
 
 #include <tinyexr.hxx>
-#include <stb_image.hxx>
 #include <stb_image_write.hxx>
 
 #if defined(ETX_PLATFORM_WINDOWS)
@@ -27,6 +24,7 @@ RTApplication::RTApplication()
 
 void RTApplication::init() {
   render.init();
+  denoiser.init();
   ui.initialize(spectrum::shared());
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
@@ -46,6 +44,7 @@ void RTApplication::init() {
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
   ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this);
   ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
+  ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -222,18 +221,16 @@ std::vector<float4> RTApplication::get_current_image(bool convert_to_rgb) {
   uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
 
   std::vector<float4> output(image_size.x * image_size.y, float4{});
-  for (uint32_t i = 0, e = image_size.x * image_size.y; (c_image != nullptr) && (i < e); ++i) {
-    output[i] = c_image[i];
-  }
 
-  for (uint32_t i = 0, e = image_size.x * image_size.y; (l_image != nullptr) && (i < e); ++i) {
-    output[i] += l_image[i];
-  }
-
-  for (uint32_t i = 0, e = image_size.x * image_size.y; convert_to_rgb && (i < e); ++i) {
-    auto rgb = spectrum::xyz_to_rgb(to_float3(output[i]));
-    output[i] = {rgb.x, rgb.y, rgb.z, 1.0f};
-  }
+  raytracing.scheduler().execute(image_size.x * image_size.y, [out = output.data(), &c_image, &l_image, convert_to_rgb](uint32_t b, uint32_t e, uint32_t) {
+    for (uint32_t i = b; i < e; ++i) {
+      out[i] = c_image[i] + (l_image ? l_image[i] : float4{});
+      if (convert_to_rgb) {
+        auto rgb = spectrum::xyz_to_rgb(to_float3(out[i]));
+        out[i] = max({rgb.x, rgb.y, rgb.z, 1.0f}, float4{});
+      }
+    }
+  });
 
   return output;
 }
@@ -369,6 +366,23 @@ void RTApplication::on_camera_changed() {
 
 void RTApplication::on_scene_settings_changed() {
   _current_integrator->preview(ui.integrator_options());
+}
+
+void RTApplication::on_denoise_selected() {
+  auto image = get_current_image(false);
+
+  uint2 image_size = {
+    raytracing.scene().camera.image_size.x,
+    raytracing.scene().camera.image_size.y,
+  };
+
+  std::vector<float4> output(image.size());
+  std::vector<float4> empty(image.size(), float4{});
+
+  denoiser.denoise(image.data(), nullptr, nullptr, output.data(), image_size);
+
+  render.update_camera_image(output.data());
+  render.update_light_image(empty.data());
 }
 
 }  // namespace etx

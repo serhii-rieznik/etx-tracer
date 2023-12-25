@@ -735,9 +735,9 @@ void CPUBidirectional::set_output_size(const uint2& dim) {
   if (current_state != State::Stopped) {
     stop(Stop::Immediate);
   }
-  _private->camera_image.resize(dim, 1);
-  _private->light_image.resize(dim, 1);
-  _private->iteration_light_image.resize(dim, rt.scheduler().max_thread_count());
+  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
+  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
+  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, rt.scheduler().max_thread_count());
 }
 
 const float4* CPUBidirectional::get_camera_image(bool) {
