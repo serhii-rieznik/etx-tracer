@@ -20,8 +20,6 @@ struct CPUVCM : public Integrator {
   void stop(Stop) override;
   void update_options(const Options&) override;
 
-  bool have_updated_camera_image() const override;
-  bool have_updated_light_image() const override;
   const float4* get_camera_image(bool) override;
   const float4* get_light_image(bool) override;
   const char* status() const override;

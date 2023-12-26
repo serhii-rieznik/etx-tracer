@@ -20,6 +20,7 @@ struct ETX_ALIGNED VCMOptions {
     MergeVertices = 1u << 4u,
     EnableMis = 1u << 5u,
     EnableMerging = 1u << 6u,
+    SpectralRendering = 1u << 7u,
 
     DefaultOptions = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices | EnableMis | EnableMerging,
   };
@@ -48,6 +49,9 @@ struct ETX_ALIGNED VCMOptions {
   }
   ETX_GPU_CODE bool enable_merging() const {
     return options & EnableMerging;
+  }
+  ETX_GPU_CODE bool spectral() const {
+    return options & SpectralRendering;
   }
 
   static VCMOptions default_values();

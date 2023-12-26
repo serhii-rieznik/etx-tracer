@@ -21,6 +21,7 @@ void VCMOptions::load(const Options& opt) {
   options = opt.get("merge_vertices", merge_vertices()).to_bool() ? (options | MergeVertices) : (options & ~MergeVertices);
   options = opt.get("mis", enable_mis()).to_bool() ? (options | EnableMis) : (options & ~EnableMis);
   options = opt.get("merging", enable_merging()).to_bool() ? (options | EnableMerging) : (options & ~EnableMerging);
+  options = opt.get("spectral", spectral()).to_bool() ? (options | SpectralRendering) : (options & ~SpectralRendering);
 }
 
 void VCMOptions::store(Options& opt) const {
@@ -34,6 +35,7 @@ void VCMOptions::store(Options& opt) const {
   opt.add(merge_vertices(), "merge_vertices", "Merge Vertices");
   opt.add(enable_mis(), "mis", "Multiple Importance Sampling");
   opt.add(enable_merging(), "merging", "Enable Merging");
+  opt.add(spectral(), "spectral", "Spectral Rendering");
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {
