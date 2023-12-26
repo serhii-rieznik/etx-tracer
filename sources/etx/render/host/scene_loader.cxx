@@ -55,7 +55,7 @@ void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
     shared_spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2);
     shared_spectrums.thinfilm.k = SPD::from_samples(w, k, 2);
     shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)));
-    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_k)));
+    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)));
     shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)));
     shared_spectrums.dielectric.k = SPD::from_constant(0.0f);
   }
@@ -712,14 +712,13 @@ inline SpectralDistribution load_illuminant_spectrum(char* data_buffer) {
     for (uint64_t i = 0, e = params.size(); i < e; ++i) {
       if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < e)) {
         float t = static_cast<float>(atof(params[i + 1]));
-        emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums());
+        emitter_spectrum = SpectralDistribution::from_black_body(t, 1.0f);
         i += 1;
       } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < e)) {
         float t = static_cast<float>(atof(params[i + 1]));
         float w = spectrum::black_body_radiation_maximum_wavelength(t);
         float r = spectrum::black_body_radiation(w, t);
-        emitter_spectrum = SpectralDistribution::from_black_body(t, spectrums());
-        emitter_spectrum.scale(1.0f / r);
+        emitter_spectrum = SpectralDistribution::from_black_body(t, 1.0f / r);
         i += 1;
       } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
         scale = static_cast<float>(atof(params[i + 1]));
@@ -924,14 +923,13 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
               e.collimation = static_cast<float>(atof(params[i + 1]));
               i += 1;
             } else if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < end)) {
-              e.emission.spectrum = SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), spectrums());
+              e.emission.spectrum = SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), 1.0f);
               i += 1;
             } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < end)) {
               float t = static_cast<float>(atof(params[i + 1]));
               float w = spectrum::black_body_radiation_maximum_wavelength(t);
               float r = spectrum::black_body_radiation(w, t);
-              e.emission.spectrum = SpectralDistribution::from_black_body(t, spectrums());
-              e.emission.spectrum.scale(1.0f / r);
+              e.emission.spectrum = SpectralDistribution::from_black_body(t, 1.0f / r);
               i += 1;
             } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < end)) {
               e.emission.spectrum.scale(static_cast<float>(atof(params[i + 1])));
@@ -963,7 +961,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
         e.medium_index = mtl.ext_medium;
         e.triangle_index = static_cast<uint32_t>(triangles.size() - 1llu);
         e.triangle_area = triangle_area(tri);
-        e.weight = power_scale * (e.triangle_area * kPi) * (e.emission.spectrum.total_power() * texture_emission);
+        e.weight = power_scale * (e.triangle_area * kPi) * (e.emission.spectrum.luminance() * texture_emission);
         e.emission.image_index = emissive_image_index;
       }
 
@@ -1219,8 +1217,7 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
       }
 
       float radiance_scale = scale * (kDoublePi * (1.0f - cosf(0.5f * angular_size)));
-      auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, spectrums());
-      sun_spectrum.scale(radiance_scale);
+      auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, radiance_scale);
 
       uint2 kSkyImageDimensions = uint2{1024u, uint32_t(1024u / quality)};
       uint2 kSunImageDimensions = uint2{128u, 128u};
@@ -1527,7 +1524,7 @@ void build_emitters_distribution(Scene& scene) {
   for (uint32_t i = 0; i < scene.emitters.count; ++i) {
     auto& emitter = scene.emitters[i];
     if (emitter.is_distant()) {
-      emitter.weight = emitter.emission.spectrum.total_power() * kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
+      emitter.weight = emitter.emission.spectrum.luminance() * kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
     }
     emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
     emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);

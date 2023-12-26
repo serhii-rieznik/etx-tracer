@@ -158,9 +158,13 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralIma
 
   if (img.image_index != kInvalidIndex) {
     float4 eval = scene.images[img.image_index].evaluate(uv);
-    result *= rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_reflection);
+    ETX_VALIDATE(eval);
+    auto scale = rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_reflection);
+    ETX_VALIDATE(scale);
+    result *= scale;
     ETX_VALIDATE(result);
   }
+
   return result;
 }
 
@@ -172,10 +176,11 @@ ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const Spe
     float4 eval = scene.images[img.image_index].evaluate(uv);
     ETX_VALIDATE(eval);
     auto scale = rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_illuminant);
-    ETX_VALIDATE(result);
+    ETX_VALIDATE(scale);
     result *= scale;
     ETX_VALIDATE(result);
   }
+
   return result;
 }
 

@@ -221,6 +221,18 @@ void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinct
 
   log::info("Precomputing atmosphere spectrums and extinction image %u x %u...", kExtinctionImageWidth, kExtinctionImageHeight);
 
+  std::vector<float2> r_samples;
+  r_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
+
+  std::vector<float2> m_samples;
+  m_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
+
+  std::vector<float2> o_samples;
+  o_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
+
+  std::vector<float2> b_samples;
+  b_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
+
   auto t0 = std::chrono::steady_clock::now();
   uint32_t count = 0;
   float3 accum = {};
@@ -232,19 +244,19 @@ void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinct
     accum.z += scattering::ozone_absorbtion(float(w));
 
     if (i % kSpectrumStepSize == 0) {
-      spectrums->rayleigh.spectral_entries[count] = {float(w), accum.x / static_cast<float>(kSpectrumStepSize)};
-      spectrums->mie.spectral_entries[count] = {float(w), accum.y / static_cast<float>(kSpectrumStepSize)};
-      spectrums->ozone.spectral_entries[count] = {float(w), accum.z / static_cast<float>(kSpectrumStepSize)};
-      spectrums->black.spectral_entries[count] = {float(w), 0.0f};
+      r_samples.emplace_back(float(w), accum.x / static_cast<float>(kSpectrumStepSize));
+      m_samples.emplace_back(float(w), accum.y / static_cast<float>(kSpectrumStepSize));
+      o_samples.emplace_back(float(w), accum.z / static_cast<float>(kSpectrumStepSize));
+      b_samples.emplace_back(float(w), 0.0f);
       accum = {};
       ++count;
     }
   }
 
-  spectrums->rayleigh.spectral_entry_count = count;
-  spectrums->mie.spectral_entry_count = count;
-  spectrums->ozone.spectral_entry_count = count;
-  spectrums->black.spectral_entry_count = count;
+  spectrums->rayleigh = SpectralDistribution::from_samples(r_samples.data(), r_samples.size());
+  spectrums->mie = SpectralDistribution::from_samples(m_samples.data(), m_samples.size());
+  spectrums->ozone = SpectralDistribution::from_samples(o_samples.data(), o_samples.size());
+  spectrums->black = SpectralDistribution::from_samples(b_samples.data(), b_samples.size());
 
   extinction = {};
 }

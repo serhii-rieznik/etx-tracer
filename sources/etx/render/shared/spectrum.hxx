@@ -254,7 +254,7 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
 
   ETX_GPU_CODE float3 to_xyz() const {
     if (spectral() == false) {
-      return spectrum::rgb_to_xyz({components.x, components.y, components.z});
+      return {components.x, components.y, components.z};
     }
 
     ETX_ASSERT(valid());
@@ -500,13 +500,6 @@ struct ETX_ALIGNED SpectralDistribution {
     return query(q);
   }
 
-  ETX_SHARED_CODE void make_constant(float power) {
-    for (uint32_t i = 0; i < spectral_entry_count; ++i) {
-      spectral_entries[i].power = power;
-    }
-    integrated = {power, power, power};
-  }
-
   ETX_GPU_CODE bool empty() const {
     return spectral_entry_count == 0;
   }
@@ -526,18 +519,17 @@ struct ETX_ALIGNED SpectralDistribution {
   void scale(float factor);
 
   float3 integrate_to_xyz() const;
-  // float3 to_xyz() const;
 
-  float total_power() const;
-  float maximum_power() const;
+  float luminance() const;
+  float maximum_spectral_power() const;
 
   bool valid() const;
 
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint32_t count);
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count);
 
   static SpectralDistribution from_constant(float value);
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count);
-  static SpectralDistribution from_black_body(float temperature, Pointer<Spectrums>);
+  static SpectralDistribution from_black_body(float temperature, float scale);
   static SpectralDistribution rgb(float3 rgb, const rgb::SpectrumSet& spectrums);
 
   static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Pointer<Spectrums>);
@@ -582,11 +574,6 @@ struct RefractiveIndex {
 
   ETX_GPU_CODE Sample operator()(const SpectralQuery q) const {
     return at(q);
-  }
-
-  ETX_SHARED_CODE void make_constant(float a_eta, float a_k) {
-    eta.make_constant(a_eta);
-    k.make_constant(a_k);
   }
 };
 
@@ -673,7 +660,7 @@ ETX_GPU_CODE SpectralDistribution make_illuminant_spd(const float3& rgb, const P
 
 ETX_GPU_CODE SpectralResponse query_spd(const SpectralQuery spect, const float3& rgb, const SpectrumSet& spectrums) {
   if (spect.spectral() == false) {
-    return SpectralResponse(spect, rgb);
+    return SpectralResponse(spect, spectrum::rgb_to_xyz(rgb));
   }
 
   constexpr float wavelengths[SampleCount] = {380.000000f, 390.967743f, 401.935486f, 412.903229f, 423.870972f, 434.838715f, 445.806458f, 456.774200f, 467.741943f, 478.709686f,
