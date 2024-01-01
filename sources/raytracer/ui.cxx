@@ -20,6 +20,8 @@
 
 namespace etx {
 
+namespace {
+
 inline void decrease_exposure(ViewOptions& o) {
   o.exposure = fmaxf(1.0f / 1024.0f, 0.5f * o.exposure);
 }
@@ -27,6 +29,8 @@ inline void decrease_exposure(ViewOptions& o) {
 inline void increase_exposure(ViewOptions& o) {
   o.exposure = fmaxf(1.0f / 1024.0f, 2.0f * o.exposure);
 }
+
+}  // namespace
 
 void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint32_t>& mapping) {
   constexpr uint64_t kMaterialNameMaxSize = 1024llu;
@@ -257,35 +261,32 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
 }
 
 bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear) {
-  float3 rgb = spectrum::xyz_to_rgb(spd.to_xyz());
-  if (linear == false) {
-    rgb = linear_to_gamma(rgb);
+  float3 rgb = {};
+
+  if (_editor_values.count(name) == 0) {
+    rgb = max(float3{}, spectrum::xyz_to_rgb(spd.integrated));
+    if (linear == false) {
+      rgb = linear_to_gamma(rgb);
+    }
+    _editor_values.emplace(name, rgb);
+  } else {
+    rgb = _editor_values.at(name);
   }
-
-  uint32_t flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB;
-
-  if (linear) {
-    flags = flags | ImGuiColorEditFlags_HDR;
-  }
-
-  ImGui::Text("%s", name);
 
   bool changed = false;
   char name_buffer[64] = {};
   snprintf(name_buffer, sizeof(name_buffer), "##%s", name);
-  if (ImGui::ColorEdit3(name_buffer, &rgb.x, flags)) {
+  if (ImGui::ColorEdit3(name_buffer, &rgb.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB | (linear ? ImGuiColorEditFlags_HDR : 0))) {
+    _editor_values[name] = rgb;
+  }
+
+  snprintf(name_buffer, sizeof(name_buffer), "Set %s", name);
+  if (ImGui::Button(name_buffer)) {
     if (linear == false) {
       rgb = gamma_to_linear(rgb);
     }
     rgb = max(rgb, float3{});
     spd = rgb::make_reflectance_spd(rgb, spectrums);
-    changed = true;
-  }
-
-  char buffer[128] = {};
-  snprintf(buffer, sizeof(buffer), "Clear %s", name);
-  if (linear && ImGui::Button(buffer)) {
-    spd = SpectralDistribution::from_constant(0.0f);
     changed = true;
   }
 
@@ -479,8 +480,22 @@ void UI::build(double dt, const char* status) {
     if (ImGui::Button(labels[3].c_str(), {0.0f, button_size})) {
       callbacks.stop_selected(false);
     }
-
     ImGui::PopStyleColor(4);
+
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+
+    ImGui::SameLine(0.0f, wpadding.x);
+    if (state_available[0] == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("  Denoise  ", {0.0f, button_size})) {
+      callbacks.denoise_selected();
+    }
+    if (state_available[0] == false) {
+      ImGui::EndDisabled();
+    }
+
     ImGui::SameLine(0.0f, wpadding.x);
 
     ImGui::GetStyle().FramePadding.y = (button_size - text_size) / 2.0f;
@@ -520,8 +535,12 @@ void UI::build(double dt, const char* status) {
 
   if ((_ui_setup & UIMaterial) && ImGui::Begin("Materials", nullptr, kWindowFlags)) {
     ImGui::Text("Materials");
+    int32_t previous_selected = _selected_material;
     ImGui::ListBox("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
     if (scene_editable && (_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
+      if (previous_selected != _selected_material) {
+        _editor_values.clear();
+      }
       uint32_t material_index = _material_mapping.at(_selected_material);
       Material& material = _current_scene->materials[material_index];
       bool changed = build_material(material);
@@ -819,6 +838,7 @@ bool UI::build_material(Material& material) {
   changed |= ImGui::SliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= ImGui::SliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= ior_picker("Index Of Refraction", material.int_ior, _current_scene->spectrums);
+  changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior, _current_scene->spectrums);
   changed |= spectrum_picker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
   changed |= spectrum_picker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
   changed |= spectrum_picker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);

@@ -1,4 +1,4 @@
-﻿namespace etx {
+namespace etx {
 
 namespace DeltaPlasticBSDF {
 
@@ -27,15 +27,14 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
   auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
 
-  auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr));
-  result.pdf = kInvPi * n_dot_o * (1.0f - f);
-
   if (reflection) {
-    bsdf += fr * specular;
-    result.pdf += f;
+    result.weight = specular * fr / f;
+    ETX_VALIDATE(result.weight);
+    result.pdf = kMaxHalf;
+  } else {
+    result.weight = diffuse * (1.0f - fr) / (1.0f - f);
+    result.pdf = kInvPi * n_dot_o * (1.0f - f);
   }
-
-  result.weight = bsdf / result.pdf;
 
   return result;
 }
@@ -45,7 +44,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
 
   float n_dot_o = dot(frame.nrm, w_o);
   if (n_dot_o <= kEpsilon) {
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
   }
 
   float3 m = normalize(w_o - data.w_i);
@@ -129,7 +128,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   float m_dot_o = dot(m, w_o);
 
   if ((n_dot_o <= kEpsilon) || (n_dot_i <= kEpsilon) || (m_dot_o <= kEpsilon)) {
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
   }
 
   auto eta_e = mtl.ext_ior(data.spectrum_sample);

@@ -1,0 +1,100 @@
+# Blender 4.0.2 MTL File: 'balls.blend'
+# www.blender.org
+
+newmtl xet::env
+color 0.5 0.5 0.5
+
+newmtl base
+material class plastic
+int_ior plastic
+ext_ior air
+Kt 1 1 1
+Kd 0.125 0.25 0.5
+Ks 1 1 1
+Pr 0.0
+thinfilm range 1 2500 ior glass
+
+newmtl Material.000
+base base
+Pr 0.0
+xKd 0.0 0.0 0.0
+xKs 0.0 0.0 0.0
+xKt 0.0 0.0 0.0
+
+newmtl Material.001
+base base
+Pr 0.1 0.2
+xKd 0.1 0.1 0.1
+xKs 0.1 0.1 0.1
+xKt 0.1 0.1 0.1
+
+newmtl Material.002
+base base
+Pr 0.2 0.3
+xKd 0.2 0.2 0.2
+xKs 0.2 0.2 0.2
+xKt 0.2 0.2 0.2
+
+newmtl Material.003
+base base
+Pr 0.3 0.4
+xKd 0.3 0.3 0.3
+xKs 0.3 0.3 0.3
+xKt 0.3 0.3 0.3
+
+newmtl Material.004
+base base
+Pr 0.4 0.5
+xKd 0.4 0.4 0.4
+xKs 0.4 0.4 0.4
+xKt 0.4 0.4 0.4
+
+newmtl Material.005
+base base
+Pr 0.5 0.6
+xKd 0.5 0.5 0.5
+xKs 0.5 0.5 0.5
+xKt 0.5 0.5 0.5
+
+newmtl Material.006
+base base
+Pr 0.6 0.7
+xKd 0.6 0.6 0.6
+xKs 0.6 0.6 0.6
+xKt 0.6 0.6 0.6
+
+newmtl Material.007
+base base
+Pr 0.7 0.8
+xKd 0.7 0.7 0.7
+xKs 0.7 0.7 0.7
+xKt 0.7 0.7 0.7
+
+newmtl Material.008
+base base
+Pr 0.8 0.9
+xKd 0.8 0.8 0.8
+xKs 0.8 0.8 0.8
+xKt 0.8 0.8 0.8
+
+newmtl Material.009
+base base
+Pr 0.9 1.0
+xKd 0.9 0.9 0.9
+xKs 0.9 0.9 0.9
+xKt 0.9 0.9 0.9
+
+newmtl Material.010
+base base
+Pr 1.0 1.0
+xKd 1.0 1.0 1.0
+xKs 1.0 1.0 1.0
+xKt 1.0 1.0 1.0
+
+newmtl plane
+material class diffuse
+int_ior chrome
+Pr 0.2
+Ks 1 1 1
+Kd 0.5 0.5 0.5
+Pr 0.0 0.0

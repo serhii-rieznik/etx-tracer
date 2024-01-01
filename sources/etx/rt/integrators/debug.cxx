@@ -24,6 +24,7 @@ struct CPUDebugIntegratorImpl : public Task {
   uint32_t preview_frames = 3u;
   CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Geometry;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
+  bool spectral = false;
 
   CPUDebugIntegratorImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
@@ -267,7 +268,7 @@ struct CPUDebugIntegratorImpl : public Task {
   float3 preview_pixel(RNDSampler& smp, const float2& uv) {
     const auto& scene = rt.scene();
     auto ray = generate_ray(smp, scene, uv);
-    auto spect = spectrum::sample(smp.next());
+    auto spect = spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
     float3 xyz = {0.1f, 0.1f, 0.1f};
 
@@ -353,7 +354,7 @@ CPUDebugIntegrator::~CPUDebugIntegrator() {
 }
 
 void CPUDebugIntegrator::set_output_size(const uint2& dim) {
-  _private->camera_image.resize(dim, 1);
+  _private->camera_image.allocate(dim, Film::Layer::CameraRays, 1);
 }
 
 const float4* CPUDebugIntegrator::get_camera_image(bool) {

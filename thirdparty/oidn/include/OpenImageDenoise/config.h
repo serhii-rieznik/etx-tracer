@@ -4,12 +4,13 @@
 #pragma once
 
 #define OIDN_VERSION_MAJOR 2
-#define OIDN_VERSION_MINOR 0
-#define OIDN_VERSION_PATCH 1
-#define OIDN_VERSION 20001
-#define OIDN_VERSION_STRING "2.0.1"
+#define OIDN_VERSION_MINOR 1
+#define OIDN_VERSION_PATCH 0
+#define OIDN_VERSION 20100
+#define OIDN_VERSION_STRING "2.1.0"
 
 /* #undef OIDN_API_NAMESPACE */
+/* #undef OIDN_STATIC_LIB */
 
 #if defined(OIDN_API_NAMESPACE)
   #define OIDN_API_NAMESPACE_BEGIN namespace  {
@@ -37,7 +38,10 @@
 
 #define OIDN_NAMESPACE_USING using namespace OIDN_NAMESPACE;
 
-#if defined(_WIN32)
+#if defined(OIDN_STATIC_LIB)
+  #define OIDN_API_IMPORT OIDN_API_EXTERN_C
+  #define OIDN_API_EXPORT OIDN_API_EXTERN_C
+#elif defined(_WIN32)
   #define OIDN_API_IMPORT OIDN_API_EXTERN_C __declspec(dllimport)
   #define OIDN_API_EXPORT OIDN_API_EXTERN_C __declspec(dllexport)
 #else

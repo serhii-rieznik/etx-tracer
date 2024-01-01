@@ -129,6 +129,7 @@ struct CPUBidirectionalImpl : public Task {
   bool conn_connect_to_camera = true;
   bool conn_connect_vertices = true;
   bool conn_mis = true;
+  bool spectral = false;
 
   CPUBidirectionalImpl(Raytracing& r, std::atomic<Integrator::State>* st)
     : rt(r)
@@ -155,12 +156,12 @@ struct CPUBidirectionalImpl : public Task {
   float3 trace_pixel(RNDSampler& smp, const float2& uv, uint32_t thread_id) {
     auto& path_data = per_thread_path_data[thread_id];
 
-    auto spect = spectrum::sample(smp.next());
+    auto spect = spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
     auto ray = generate_ray(smp, rt.scene(), uv);
     build_camera_path(smp, spect, ray, path_data.camera_path);
     build_emitter_path(smp, spect, path_data.emitter_path);
 
-    SpectralResponse result = {spect.wavelength, 0.0f};
+    SpectralResponse result = {spect, 0.0f};
     for (uint64_t eye_t = 1, eye_t_e = path_data.camera_path.size(); running() && (eye_t < eye_t_e); ++eye_t) {
       for (uint64_t light_s = 0, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
         auto depth = eye_t + light_s;
@@ -190,7 +191,7 @@ struct CPUBidirectionalImpl : public Task {
         ETX_VALIDATE(result);
       }
     }
-    return (result / spectrum::sample_pdf()).to_xyz();
+    return (result / spect.sampling_pdf()).to_xyz();
   }
 
   void build_path(Sampler& smp, SpectralQuery spect, Ray ray, std::vector<PathVertex>& path, PathSource mode, SpectralResponse throughput, float pdf_dir, uint32_t medium_index) {
@@ -309,13 +310,13 @@ struct CPUBidirectionalImpl : public Task {
   void build_camera_path(Sampler& smp, SpectralQuery spect, Ray ray, std::vector<PathVertex>& path) {
     path.clear();
     auto& z0 = path.emplace_back(PathVertex::Class::Camera);
-    z0.throughput = {spect.wavelength, 1.0f};
+    z0.throughput = {spect, 1.0f};
 
     auto eval = film_evaluate_out(spect, rt.scene().camera, ray);
 
     auto& z1 = path.emplace_back(PathVertex::Class::Camera);
     z1.medium_index = rt.scene().camera_medium_index;
-    z1.throughput = {spect.wavelength, 1.0f};
+    z1.throughput = {spect, 1.0f};
     z1.pos = ray.o;
     z1.nrm = eval.normal;
     z1.w_i = ray.d;
@@ -332,7 +333,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     auto& y0 = path.emplace_back(PathVertex::Class::Emitter);
-    y0.throughput = {spect.wavelength, 1.0f};
+    y0.throughput = {spect, 1.0f};
     y0.delta = emitter_sample.is_delta;
 
     auto& y1 = path.emplace_back(PathVertex::Class::Emitter);
@@ -475,7 +476,7 @@ struct CPUBidirectionalImpl : public Task {
   SpectralResponse direct_hit(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s, Sampler& smp) {
     const auto& z_i = c.camera_path[eye_t];
     if ((conn_direct_hit == false) || (z_i.is_emitter() == false)) {
-      return {spect.wavelength, 0.0f};
+      return {spect, 0.0f};
     }
 
     const auto& z_prev = c.camera_path[eye_t - 1];
@@ -484,7 +485,7 @@ struct CPUBidirectionalImpl : public Task {
     float pdf_dir = 0.0f;
     float pdf_dir_out = 0.0f;
 
-    SpectralResponse emitter_value = {spect.wavelength, 0.0f};
+    SpectralResponse emitter_value = {spect, 0.0f};
 
     if (z_i.is_specific_emitter()) {
       const auto& emitter = rt.scene().emitters[z_i.emitter_index];
@@ -511,7 +512,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     if (pdf_dir == 0.0f) {
-      return {spect.wavelength, 0.0f};
+      return {spect, 0.0f};
     }
 
     ETX_VALIDATE(emitter_value);
@@ -527,12 +528,12 @@ struct CPUBidirectionalImpl : public Task {
     uint32_t emitter_index = sample_emitter_index(rt.scene(), smp);
     auto emitter_sample = sample_emitter(spect, emitter_index, smp, z_i.pos, z_i.w_i, rt.scene());
     if (emitter_sample.value.is_zero() || (emitter_sample.pdf_dir == 0.0f)) {
-      return {spect.wavelength, 0.0f};
+      return {spect, 0.0f};
     }
 
     auto dp = emitter_sample.origin - z_i.pos;
     if (dot(dp, dp) <= kEpsilon) {
-      return {spect.wavelength, 0.0f};
+      return {spect, 0.0f};
     }
 
     sampled_vertex.w_i = normalize(dp);
@@ -556,7 +557,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& y_i = c.emitter_path[light_s];
     camera_sample = sample_film(smp, rt.scene(), y_i.pos);
     if (camera_sample.valid() == false) {
-      return {spect.wavelength, 0.0f};
+      return {spect, 0.0f};
     }
 
     ETX_VALIDATE(camera_sample.weight);
@@ -569,7 +570,7 @@ struct CPUBidirectionalImpl : public Task {
     SpectralResponse bsdf = y_i.bsdf_in_direction(spect, PathSource::Light, camera_sample.direction, rt.scene(), smp);
     float weight = mis_weight(c, spect, eye_t, light_s, sampled_vertex, smp);
 
-    SpectralResponse splat = y_i.throughput * bsdf * camera_sample.weight * (weight / spectrum::sample_pdf());
+    SpectralResponse splat = y_i.throughput * bsdf * camera_sample.weight * (weight / spect.sampling_pdf());
     ETX_VALIDATE(splat);
 
     if (splat.is_zero() == false) {
@@ -593,7 +594,7 @@ struct CPUBidirectionalImpl : public Task {
     ETX_VALIDATE(result);
 
     if (result.is_zero()) {
-      return {spect.wavelength, 0.0f};
+      return {spect, 0.0f};
     }
 
     SpectralResponse tr = local_transmittance(spect, smp, y_i, z_i);
@@ -734,9 +735,9 @@ void CPUBidirectional::set_output_size(const uint2& dim) {
   if (current_state != State::Stopped) {
     stop(Stop::Immediate);
   }
-  _private->camera_image.resize(dim, 1);
-  _private->light_image.resize(dim, 1);
-  _private->iteration_light_image.resize(dim, rt.scheduler().max_thread_count());
+  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
+  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
+  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, rt.scheduler().max_thread_count());
 }
 
 const float4* CPUBidirectional::get_camera_image(bool) {
@@ -893,11 +894,11 @@ SpectralResponse CPUBidirectionalImpl::PathVertex::bsdf_in_direction(SpectralQue
   }
 
   if (is_medium_interaction()) {
-    return {spect.wavelength, scene.mediums[medium_index].phase_function(spect, pos, w_i, w_o)};
+    return {spect, scene.mediums[medium_index].phase_function(spect, pos, w_i, w_o)};
   }
 
   ETX_FAIL("Invalid vertex class");
-  return {spect.wavelength, 0.0f};
+  return {spect, 0.0f};
 }
 
 }  // namespace etx

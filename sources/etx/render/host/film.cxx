@@ -6,7 +6,7 @@
 
 namespace etx {
 
-void Film::resize(const uint2& dim, uint32_t threads) {
+void Film::allocate(const uint2& dim, uint32_t layers, uint32_t threads) {
   _dimensions = dim;
   _thread_count = threads;
 

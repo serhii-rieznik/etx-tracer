@@ -32,7 +32,7 @@ struct MediumPoolImpl {
     medium.cls = cls;
     medium.s_absorption = s_a;
     medium.s_scattering = s_o;
-    medium.max_sigma = s_a.maximum_power() + s_o.maximum_power();
+    medium.max_sigma = s_a.maximum_spectral_power() + s_o.maximum_spectral_power();
     medium.phase_function_g = g;
 
     if (strlen(volume_file) > 0) {

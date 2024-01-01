@@ -6,10 +6,19 @@
 namespace etx {
 
 struct Film {
+  struct Layer {
+    enum : uint32_t {
+      CameraRays = 1u << 0u,
+      LightRays = 1u << 1u,
+      InfoNormals = 1u << 2u,
+      InfoAlbedo = 1u << 3u,
+    };
+  };
+
   Film() = default;
   ~Film() = default;
 
-  void resize(const uint2& dim, uint32_t threads);
+  void allocate(const uint2& dim, uint32_t layers, uint32_t threads);
 
   void atomic_add(const float4& value, const float2& ndc_coord, uint32_t thread_id);
   void atomic_add(const float4& value, uint32_t x, uint32_t y, uint32_t thread_id);

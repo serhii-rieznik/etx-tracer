@@ -22,11 +22,17 @@ struct RaytracingImpl {
   */
 
   RaytracingImpl() {
+    rt_device = rtcNewDevice(nullptr);
     // gpu_device = GPUDevice::create_optix_device();
   }
 
   ~RaytracingImpl() {
     release_host_scene();
+
+    if (rt_device) {
+      rtcReleaseDevice(rt_device);
+      rt_device = {};
+    }
     // release_device_scene();
     // GPUDevice::free_device(gpu_device);
   }
@@ -40,7 +46,6 @@ struct RaytracingImpl {
   }
 
   void build_host_scene() {
-    rt_device = rtcNewDevice(nullptr);
     rtcSetDeviceErrorFunction(
       rt_device,
       [](void* userPtr, enum RTCError code, const char* str) {
@@ -65,16 +70,10 @@ struct RaytracingImpl {
   }
 
   void release_host_scene() {
-#if (ETX_RT_API == ETX_RT_API_EMBREE)
     if (rt_scene) {
       rtcReleaseScene(rt_scene);
       rt_scene = {};
     }
-    if (rt_device) {
-      rtcReleaseDevice(rt_device);
-      rt_device = {};
-    }
-#endif
   }
 
   template <class T>
@@ -442,7 +441,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     float3 origin;
     float3 direction;
     float t;
-  } context = {{}, &scene, &smp, spect, {spect.wavelength, 1.0f}, medium, p0};
+  } context = {{}, &scene, &smp, spect, {spect, 1.0f}, medium, p0};
 
   auto filter_function = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
@@ -475,7 +474,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     }
 
     if (stop_tracing) {
-      ctx->value = {ctx->value.wavelength, 0.0f};
+      ctx->value = {ctx->value, 0.0f};
       *args->valid = -1;
       return;
     }
@@ -498,7 +497,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
   float t_max = dot(context.direction, context.direction);
   if (t_max <= kRayEpsilon) {
-    return {spect.wavelength, 1.0f};
+    return {spect, 1.0f};
   }
 
   t_max = sqrtf(t_max);

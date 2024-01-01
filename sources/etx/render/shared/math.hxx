@@ -114,11 +114,11 @@ struct ETX_ALIGNED BoundingBox {
 };
 
 struct ETX_ALIGNED Vertex {
-  float3 pos = {};
-  float3 nrm = {};
-  float3 tan = {};
-  float3 btn = {};
-  float2 tex = {};
+  float3 pos;
+  float3 nrm;
+  float3 tan;
+  float3 btn;
+  float2 tex;
 };
 
 struct ETX_ALIGNED Triangle {
@@ -185,12 +185,12 @@ struct ETX_ALIGNED IntersectionBase {
 };
 
 struct ETX_ALIGNED Intersection : public Vertex {
-  float3 barycentric = {};
-  uint32_t triangle_index = kInvalidIndex;
-  float3 w_i = {};
-  float t = kMaxFloat;
-  uint32_t material_index = kInvalidIndex;
-  uint32_t emitter_index = kInvalidIndex;
+  float3 barycentric;
+  uint32_t triangle_index;
+  float3 w_i;
+  float t;
+  uint32_t material_index;
+  uint32_t emitter_index;
 
   Intersection() = default;
 

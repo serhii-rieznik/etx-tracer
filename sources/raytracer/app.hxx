@@ -14,6 +14,7 @@
 
 #include "ui.hxx"
 #include "render.hxx"
+#include "denoiser.hxx"
 #include "camera_controller.hxx"
 
 namespace etx {
@@ -47,6 +48,7 @@ struct RTApplication {
   void on_emitter_changed(uint32_t index);
   void on_camera_changed();
   void on_scene_settings_changed();
+  void on_denoise_selected();
 
  private:
   std::vector<float4> get_current_image(bool convert_to_rgb);
@@ -58,6 +60,8 @@ struct RTApplication {
   Raytracing raytracing;
 
   RenderContext render;
+  Denoiser denoiser;
+
   SceneRepresentation scene;
   CameraController camera_controller;
 

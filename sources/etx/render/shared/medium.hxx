@@ -9,17 +9,18 @@ namespace medium {
 
 ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, Sampler& smp,
   SpectralResponse& pdf) {
-  if constexpr (spectrum::kSpectralRendering) {
-    pdf = {spect.wavelength, 1.0f};
+  if (spect.spectral()) {
+    pdf = {spect, 1.0f};
     return 0;
   }
+
   SpectralResponse at = albedo * throughput;
 
   float rnd = smp.next();
 
   if (at.is_zero()) {
-    pdf = {spect.wavelength, 1.0f / float(SpectralResponse::component_count())};
-    return uint32_t(SpectralResponse::component_count() * rnd);
+    pdf = {spect, 1.0f / at.component_count()};
+    return uint32_t(at.component_count() * rnd);
   }
 
   pdf = at / at.sum();
@@ -84,7 +85,7 @@ struct ETX_ALIGNED Medium {
   ETX_GPU_CODE SpectralResponse transmittance(const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction, float distance) const {
     switch (cls) {
       case Class::Vacuum:
-        return {spect.wavelength, 1.0f};
+        return {spect, 1.0f};
 
       case Class::Homogeneous:
         return transmittance_homogeneous(spect, distance);
@@ -108,7 +109,7 @@ struct ETX_ALIGNED Medium {
     float t_min = 0.0f;
     float t_max = 0.0f;
     if (intersects_medium_bounds(p, d, max_t, pos, dir, t_min, t_max) == false) {
-      return {spect.wavelength, 1.0f};
+      return {spect, 1.0f};
     }
 
     const float rr_threshold = 0.1f;
@@ -128,19 +129,19 @@ struct ETX_ALIGNED Medium {
         float q = max(0.05f, 1.0f - tr);
 
         if (smp.next() < q)
-          return {spect.wavelength, 0.0f};
+          return {spect, 0.0f};
 
         tr /= 1.0f - q;
       }
     }
 
-    return {spect.wavelength, tr};
+    return {spect, tr};
   }
 
   ETX_GPU_CODE Sample sample(const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos, const float3& w_i, float max_t) const {
     switch (cls) {
       case Class::Vacuum:
-        return {{spect.wavelength, 1.0f}};
+        return {{spect, 1.0f}};
 
       case Class::Homogeneous:
         return sample_homogeneous(spect, throughput, smp, pos, w_i, max_t);
@@ -160,7 +161,7 @@ struct ETX_ALIGNED Medium {
     SpectralResponse extinction = scattering + absorption;
 
     SpectralResponse albedo = {
-      spect.wavelength,
+      spect,
       {
         scattering.components.x > 0.0f ? (extinction.components.x / scattering.components.x) : 0.0f,
         scattering.components.y > 0.0f ? (extinction.components.y / scattering.components.y) : 0.0f,
@@ -184,7 +185,7 @@ struct ETX_ALIGNED Medium {
     pdf *= sampled_medium ? tr * extinction : tr;
 
     if (pdf.is_zero())
-      return {{spect.wavelength, 0.0f}};
+      return {{spect, 0.0f}};
 
     Sample result = {};
     result.pos = pos + w_i * t;
@@ -200,7 +201,7 @@ struct ETX_ALIGNED Medium {
     float t_min = 0.0f;
     float t_max = 0.0f;
     if (intersects_medium_bounds(in_pos, in_dir, in_max_t, pos, dir, t_min, t_max) == false) {
-      return {{spect.wavelength, 1.0f}};
+      return {{spect, 1.0f}};
     }
 
     float t = t_min;
@@ -220,7 +221,7 @@ struct ETX_ALIGNED Medium {
       }
     }
 
-    return {{spect.wavelength, 1.0f}};
+    return {{spect, 1.0f}};
   }
 
   ETX_GPU_CODE float phase_function(const SpectralQuery spect, const float3& pos, const float3& w_i, const float3& w_o) const {

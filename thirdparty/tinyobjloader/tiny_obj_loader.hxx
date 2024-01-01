@@ -186,18 +186,10 @@ struct texture_option_t {
 struct material_t {
   std::string name;
 
-  real_t ambient[3];
-  real_t diffuse[3] = {1.0f, 1.0f, 1.0f};
-  real_t specular[3] = {1.0f, 1.0f, 1.0f};
-  real_t transmittance[3] = {1.0f, 1.0f, 1.0f};
-  real_t emission[3] = {0.0f, 0.0f, 0.0f};
   real_t shininess;
   real_t ior;       // index of refraction
   real_t dissolve;  // 1 == opaque; 0 == fully transparent
-  // illumination model (see http://www.fileformat.info/format/material/)
   int illum;
-
-  int dummy;  // Suppress padding warning.
 
   std::string ambient_texname;             // map_Ka
   std::string diffuse_texname;             // map_Kd
@@ -221,14 +213,13 @@ struct material_t {
 
   // PBR extension
   // http://exocortex.com/blog/extending_wavefront_mtl_to_support_pbr
-  real_t roughness;            // [0, 1] default 0
   real_t metallic;             // [0, 1] default 0
   real_t sheen;                // [0, 1] default 0
   real_t clearcoat_thickness;  // [0, 1] default 0
   real_t clearcoat_roughness;  // [0, 1] default 0
   real_t anisotropy;           // aniso. [0, 1] default 0
   real_t anisotropy_rotation;  // anisor. [0, 1] default 0
-  real_t pad0;
+
   std::string roughness_texname;  // map_Pr
   std::string metallic_texname;   // map_Pm
   std::string sheen_texname;      // map_Ps
@@ -1380,19 +1371,10 @@ static void InitMaterial(material_t* material) {
   material->displacement_texname = "";
   material->reflection_texname = "";
   material->alpha_texname = "";
-  for (int i = 0; i < 3; i++) {
-    material->ambient[i] = static_cast<real_t>(0.0);
-    material->diffuse[i] = static_cast<real_t>(1.0);
-    material->specular[i] = static_cast<real_t>(1.0);
-    material->transmittance[i] = static_cast<real_t>(1.0);
-    material->emission[i] = static_cast<real_t>(0.0);
-  }
   material->illum = 0;
   material->dissolve = static_cast<real_t>(1.0);
   material->shininess = static_cast<real_t>(1.0);
   material->ior = static_cast<real_t>(1.0);
-
-  material->roughness = static_cast<real_t>(0.0);
   material->metallic = static_cast<real_t>(0.0);
   material->sheen = static_cast<real_t>(0.0);
   material->clearcoat_thickness = static_cast<real_t>(0.0);
@@ -1997,76 +1979,13 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
       continue;
     }
 
-    // ambient
-    if (token[0] == 'K' && token[1] == 'a' && IS_SPACE((token[2]))) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.ambient[0] = r;
-      material.ambient[1] = g;
-      material.ambient[2] = b;
-      continue;
-    }
-
-    // diffuse
-    if (token[0] == 'K' && token[1] == 'd' && IS_SPACE((token[2]))) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.diffuse[0] = r;
-      material.diffuse[1] = g;
-      material.diffuse[2] = b;
-      has_kd = true;
-      continue;
-    }
-
-    // specular
-    if (token[0] == 'K' && token[1] == 's' && IS_SPACE((token[2]))) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.specular[0] = r;
-      material.specular[1] = g;
-      material.specular[2] = b;
-      continue;
-    }
-
-    // transmittance
-    if ((token[0] == 'K' && token[1] == 't' && IS_SPACE((token[2]))) || (token[0] == 'T' && token[1] == 'f' && IS_SPACE((token[2])))) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.transmittance[0] = r;
-      material.transmittance[1] = g;
-      material.transmittance[2] = b;
-      continue;
-    }
-
     // ior(index of refraction)
     if (token[0] == 'N' && token[1] == 'i' && IS_SPACE((token[2]))) {
       token += 2;
       material.ior = parseReal(&token);
       continue;
     }
-
-    // emission
-    if (token[0] == 'K' && token[1] == 'e' && IS_SPACE(token[2])) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.emission[0] = r;
-      material.emission[1] = g;
-      material.emission[2] = b;
-      continue;
-    }
-
-    // shininess
-    if (token[0] == 'N' && token[1] == 's' && IS_SPACE(token[2])) {
-      token += 2;
-      material.shininess = parseReal(&token);
-      continue;
-    }
-
+    
     // illum model
     if (0 == _strnicmp(token, "illum", 5) && IS_SPACE(token[5])) {
       token += 6;
@@ -2097,13 +2016,6 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
         material.dissolve = static_cast<real_t>(1.0) - parseReal(&token);
       }
       has_tr = true;
-      continue;
-    }
-
-    // PBR: roughness
-    if (token[0] == 'P' && token[1] == 'r' && IS_SPACE(token[2])) {
-      token += 2;
-      material.roughness = parseReal(&token);
       continue;
     }
 
@@ -2160,15 +2072,6 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
     if ((0 == _strnicmp(token, "map_Kd", 6)) && IS_SPACE(token[6])) {
       token += 7;
       ParseTextureNameAndOption(&(material.diffuse_texname), &(material.diffuse_texopt), token);
-
-      // Set a decent diffuse default value if a diffuse texture is specified
-      // without a matching Kd value.
-      if (!has_kd) {
-        material.diffuse[0] = static_cast<real_t>(0.6);
-        material.diffuse[1] = static_cast<real_t>(0.6);
-        material.diffuse[2] = static_cast<real_t>(0.6);
-      }
-
       continue;
     }
 

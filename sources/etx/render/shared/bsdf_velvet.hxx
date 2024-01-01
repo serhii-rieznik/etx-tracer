@@ -47,13 +47,13 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   float n_dot_o = fmaxf(0.0f, dot(w_o, frame.nrm));
   float n_dot_i = fmaxf(0.0f, -dot(data.w_i, frame.nrm));
   if ((n_dot_o <= kEpsilon) || (n_dot_i <= kEpsilon))
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
 
   float3 m = normalize(w_o - data.w_i);
   float m_dot_o = fmaxf(0.0f, dot(w_o, m));
   float m_dot_i = fmaxf(0.0f, -dot(data.w_i, m));
   if ((m_dot_o <= kEpsilon) || (m_dot_i <= kEpsilon))
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
 
   float specular_scale_base = 0.0f;
   float alpha = 0.5f * (mtl.roughness.x + mtl.roughness.y);

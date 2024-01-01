@@ -70,7 +70,7 @@ struct Integrator {
   }
 
   virtual bool have_updated_camera_image() const {
-    return true;
+    return (state() == State::Preview) || (state() == State::Running);
   }
 
   virtual const float4* get_camera_image(bool /* force update */) {
@@ -78,7 +78,7 @@ struct Integrator {
   }
 
   virtual bool have_updated_light_image() const {
-    return true;
+    return (state() == State::Preview) || (state() == State::Running);
   }
 
   virtual const float4* get_light_image(bool /* force update */) {

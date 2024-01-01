@@ -6,12 +6,12 @@ constexpr uint32_t kIntersectionsPerDirection = 8u;
 constexpr uint32_t kTotalIntersections = kIntersectionDirections * kIntersectionsPerDirection;
 
 struct Gather {
-  Intersection intersections[kTotalIntersections] = {};
-  SpectralResponse weights[kTotalIntersections] = {};
-  uint32_t intersection_count = 0u;
-  uint32_t selected_intersection = 0u;
-  float selected_sample_weight = 0.0f;
-  float total_weight = 0.0f;
+  Intersection intersections[kTotalIntersections];
+  SpectralResponse weights[kTotalIntersections];
+  uint32_t intersection_count;
+  uint32_t selected_intersection;
+  float selected_sample_weight;
+  float total_weight;
 };
 
 ETX_GPU_CODE float sample_s_r(float rnd) {
@@ -57,8 +57,9 @@ struct Sample {
 };
 
 ETX_GPU_CODE Sample sample(SpectralQuery spect, const Vertex& data, const SubsurfaceMaterial& mtl, const uint32_t direction, Sampler& smp) {
-  uint32_t channel = uint32_t(SpectralResponse::component_count() * smp.next());
-  float scattering_distance = mtl.scale * mtl.scattering_distance(spect).component(channel);
+  SpectralResponse sampled_distance = mtl.scattering_distance(spect);
+  uint32_t channel = uint32_t(sampled_distance.component_count() * smp.next());
+  float scattering_distance = mtl.scale * sampled_distance.component(channel);
   if (scattering_distance == 0.0f)
     return {};
 

@@ -20,6 +20,7 @@ struct ETX_ALIGNED VCMOptions {
     MergeVertices = 1u << 4u,
     EnableMis = 1u << 5u,
     EnableMerging = 1u << 6u,
+    SpectralRendering = 1u << 7u,
 
     DefaultOptions = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices | EnableMis | EnableMerging,
   };
@@ -48,6 +49,9 @@ struct ETX_ALIGNED VCMOptions {
   }
   ETX_GPU_CODE bool enable_merging() const {
     return options & EnableMerging;
+  }
+  ETX_GPU_CODE bool spectral() const {
+    return options & SpectralRendering;
   }
 
   static VCMOptions default_values();
@@ -271,7 +275,7 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
   SpectralResponse radiance = emitter_get_radiance(emitter, state.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
 
   if (pdf_emitter_dir <= kEpsilon) {
-    return {state.spect.wavelength, 0.0f};
+    return {state.spect, 0.0f};
   }
 
   float emitter_sample_pdf = emitter_discrete_pdf(emitter, scene.emitters_distribution);
@@ -280,10 +284,10 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
   return weight * (state.throughput * radiance);
 }
 
-ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
+ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it, bool spectral) {
   VCMPathState state = {};
   state.sampler.init(index, it.iteration);
-  state.spect = spectrum::sample(state.sampler.next());
+  state.spect = spectral ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.global_index = index;
 
   auto emitter_sample = sample_emission(scene, state.spect, state.sampler);
@@ -319,13 +323,13 @@ ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const Sc
   state.global_index = coord.x + coord.y * scene.camera.image_size.x;
 
   state.sampler.init(state.global_index, it.iteration);
-  auto sampled_spectrum = spectrum::sample(state.sampler.next());
+  auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
 
   state.uv = get_jittered_uv(state.sampler, coord, scene.camera.image_size);
   state.ray = generate_ray(state.sampler, scene, state.uv);
-  state.throughput = {state.spect.wavelength, 1.0f};
-  state.gathered = {state.spect.wavelength, 0.0f};
+  state.throughput = {state.spect, 1.0f};
+  state.gathered = {state.spect, 0.0f};
   state.merged = {};
 
   auto film_eval = film_evaluate_out(state.spect, scene.camera, state.ray);
@@ -427,7 +431,7 @@ ETX_GPU_CODE float3 vcm_connect_to_camera(const Raytracing& rt, const Scene& sce
   auto result = (tr * eval.bsdf * state.throughput * camera_sample.weight) * weight;
 
   uv = camera_sample.uv;
-  return (scale * result / spectrum::sample_pdf()).to_xyz();
+  return (scale * result / state.spect.sampling_pdf()).to_xyz();
 }
 
 ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
@@ -459,7 +463,7 @@ ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& op
 ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, const Intersection& intersection,
   const Raytracing& rt, VCMPathState& state) {
   if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.max_path_length))
-    return {state.spect.wavelength, 0.0f};
+    return {state.spect, 0.0f};
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
@@ -467,17 +471,17 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
   auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler, intersection.pos, intersection.w_i, scene);
 
   if (emitter_sample.pdf_dir <= 0)
-    return {state.spect.wavelength, 0.0f};
+    return {state.spect, 0.0f};
 
   BSDFData connection_data = {state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
   BSDFEval connection_eval = bsdf::evaluate(connection_data, emitter_sample.direction, mat, scene, state.sampler);
   if (connection_eval.valid() == false)
-    return {state.spect.wavelength, 0.0f};
+    return {state.spect, 0.0f};
 
   float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
   auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, state.medium_index, state.sampler);
   if (tr.is_zero())
-    return {state.spect.wavelength, 0.0f};
+    return {state.spect, 0.0f};
 
   float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
   float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
@@ -562,12 +566,12 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
 ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightPath>& light_paths,
   const ArrayView<VCMLightVertex>& light_vertices, const VCMOptions& options, const Intersection& intersection, const Raytracing& rt, VCMPathState& state) {
   if (options.connect_vertices() == false)
-    return {state.spect.wavelength, 0.0f};
+    return {state.spect, 0.0f};
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& light_path = light_paths[state.global_index];
 
-  SpectralResponse result = {state.spect.wavelength, 0.0f};
+  SpectralResponse result = {state.spect, 0.0f};
   for (uint64_t i = 0; (i < light_path.count) && (state.total_path_depth + i + 2 <= scene.max_path_length); ++i) {
     float3 target_position = {};
     SpectralResponse value = {};
@@ -635,10 +639,10 @@ struct ETX_ALIGNED VCMSpatialGridData {
       float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;
       float weight = 1.0f / (1.0f + w_light + w_camera);
 
-      auto c_value = ((camera_bsdf.func * state.throughput / spectrum::sample_pdf()).to_xyz());
+      auto c_value = (camera_bsdf.func * state.throughput / state.spect.sampling_pdf()).to_xyz();
       c_value = max(c_value, float3{0.0f, 0.0f, 0.0f});
       ETX_VALIDATE(c_value);
-      auto l_value = ((light_vertex.throughput / spectrum::sample_pdf()).to_xyz());
+      auto l_value = (light_vertex.throughput / state.spect.sampling_pdf()).to_xyz();
       l_value = max(l_value, float3{0.0f, 0.0f, 0.0f});
       ETX_VALIDATE(l_value);
       merged += (c_value * l_value) * weight;
@@ -810,7 +814,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
           }
         }
       } else {
-        SpectralResponse no_scale = {state.spect.wavelength, 1.0f};
+        SpectralResponse no_scale = {state.spect, 1.0f};
         auto value = vcm_connect_to_camera(rt, scene, mat, tri, iteration, options, intersection, intersection, no_scale, state, result.splat_uvs[0]);
         ETX_VALIDATE(value);
         if (dot(value, value) > kEpsilon) {

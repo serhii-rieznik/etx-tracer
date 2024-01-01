@@ -41,9 +41,6 @@ struct CPUVCMImpl {
   Film iteration_light_image;
   Task::Handle current_task = {};
 
-  bool light_image_updated = false;
-  bool camera_image_updated = false;
-
   struct {
     std::atomic<uint32_t> l;
     std::atomic<uint32_t> c;
@@ -106,8 +103,6 @@ struct CPUVCMImpl {
     camera_image.clear();
     light_image.clear();
     iteration_light_image.clear();
-    light_image_updated = true;
-    camera_image_updated = true;
     vcm_options.load(opt);
     stats.total_time = {};
     vcm_iteration.iteration = 0;
@@ -177,7 +172,7 @@ struct CPUVCMImpl {
     for (uint64_t i = range_begin; running() && (i < range_end); ++i) {
       stats.l++;
 
-      VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration);
+      VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration, vcm_options.spectral());
 
       uint32_t path_begin = static_cast<uint32_t>(local_vertices.size());
       while (running()) {
@@ -230,7 +225,7 @@ struct CPUVCMImpl {
       }
 
       state.merged *= vcm_iteration.vm_normalization;
-      state.merged += (state.gathered / spectrum::sample_pdf()).to_xyz();
+      state.merged += (state.gathered / state.spect.sampling_pdf()).to_xyz();
 
       float t = float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1);
       camera_image.accumulate({state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);
@@ -258,9 +253,9 @@ void CPUVCM::set_output_size(const uint2& dim) {
   if (current_state != State::Stopped) {
     stop(Stop::Immediate);
   }
-  _private->camera_image.resize(dim, 1);
-  _private->light_image.resize(dim, 1);
-  _private->iteration_light_image.resize(dim, rt.scheduler().max_thread_count());
+  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
+  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
+  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, rt.scheduler().max_thread_count());
 }
 
 void CPUVCM::preview(const Options& opt) {
@@ -283,7 +278,6 @@ void CPUVCM::run(const Options& opt) {
 
 void CPUVCM::update() {
   _private->build_stats();
-  _private->camera_image_updated = _private->vcm_state == VCMState::GatheringCameraVertices;
 
   if ((current_state == State::Stopped) || (rt.scheduler().completed(_private->current_task) == false)) {
     return;
@@ -291,7 +285,6 @@ void CPUVCM::update() {
 
   if (_private->vcm_state == VCMState::GatheringLightVertices) {
     TimeMeasure tm = {};
-    _private->light_image_updated = true;
     _private->iteration_light_image.flush_to(_private->light_image, float(_private->vcm_iteration.iteration) / float(_private->vcm_iteration.iteration + 1));
     _private->stats.m_time = tm.measure();
     _private->continue_iteration();
@@ -330,21 +323,11 @@ void CPUVCM::update_options(const Options& opt) {
   }
 }
 
-bool CPUVCM::have_updated_camera_image() const {
-  return _private->camera_image_updated;
-}
-
-bool CPUVCM::have_updated_light_image() const {
-  return _private->light_image_updated;
-}
-
 const float4* CPUVCM::get_camera_image(bool) {
-  _private->camera_image_updated = false;
   return _private->camera_image.data();
 }
 
 const float4* CPUVCM::get_light_image(bool) {
-  _private->light_image_updated = false;
   return _private->light_image.data();
 }
 
