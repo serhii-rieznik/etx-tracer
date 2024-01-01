@@ -121,6 +121,7 @@ struct UI {
   int32_t _selected_emitter = -1;
   uint32_t _ui_setup = UIEverything;
   uint32_t _font_image = 0u;
+  std::unordered_map<const char*, float3> _editor_values;
 };
 
 }  // namespace etx

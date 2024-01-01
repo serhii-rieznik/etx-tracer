@@ -22,11 +22,17 @@ struct RaytracingImpl {
   */
 
   RaytracingImpl() {
+    rt_device = rtcNewDevice(nullptr);
     // gpu_device = GPUDevice::create_optix_device();
   }
 
   ~RaytracingImpl() {
     release_host_scene();
+
+    if (rt_device) {
+      rtcReleaseDevice(rt_device);
+      rt_device = {};
+    }
     // release_device_scene();
     // GPUDevice::free_device(gpu_device);
   }
@@ -40,7 +46,6 @@ struct RaytracingImpl {
   }
 
   void build_host_scene() {
-    rt_device = rtcNewDevice(nullptr);
     rtcSetDeviceErrorFunction(
       rt_device,
       [](void* userPtr, enum RTCError code, const char* str) {
@@ -65,16 +70,10 @@ struct RaytracingImpl {
   }
 
   void release_host_scene() {
-#if (ETX_RT_API == ETX_RT_API_EMBREE)
     if (rt_scene) {
       rtcReleaseScene(rt_scene);
       rt_scene = {};
     }
-    if (rt_device) {
-      rtcReleaseDevice(rt_device);
-      rt_device = {};
-    }
-#endif
   }
 
   template <class T>

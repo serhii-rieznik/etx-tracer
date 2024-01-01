@@ -261,36 +261,32 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
 }
 
 bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear) {
-  float3 rgb = max(float3{}, spectrum::xyz_to_rgb(spd.integrated));
+  float3 rgb = {};
 
-  if (linear == false) {
-    rgb = linear_to_gamma(rgb);
+  if (_editor_values.count(name) == 0) {
+    rgb = max(float3{}, spectrum::xyz_to_rgb(spd.integrated));
+    if (linear == false) {
+      rgb = linear_to_gamma(rgb);
+    }
+    _editor_values.emplace(name, rgb);
+  } else {
+    rgb = _editor_values.at(name);
   }
-
-  uint32_t flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB;
-
-  if (linear) {
-    flags = flags | ImGuiColorEditFlags_HDR;
-  }
-
-  ImGui::Text("%s", name);
 
   bool changed = false;
   char name_buffer[64] = {};
   snprintf(name_buffer, sizeof(name_buffer), "##%s", name);
-  if (ImGui::ColorEdit3(name_buffer, &rgb.x, flags)) {
+  if (ImGui::ColorEdit3(name_buffer, &rgb.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB | (linear ? ImGuiColorEditFlags_HDR : 0))) {
+    _editor_values[name] = rgb;
+  }
+
+  snprintf(name_buffer, sizeof(name_buffer), "Set %s", name);
+  if (ImGui::Button(name_buffer)) {
     if (linear == false) {
       rgb = gamma_to_linear(rgb);
     }
     rgb = max(rgb, float3{});
     spd = rgb::make_reflectance_spd(rgb, spectrums);
-    changed = true;
-  }
-
-  char buffer[128] = {};
-  snprintf(buffer, sizeof(buffer), "Clear %s", name);
-  if (linear && ImGui::Button(buffer)) {
-    spd = SpectralDistribution::from_constant(0.0f);
     changed = true;
   }
 
@@ -539,8 +535,12 @@ void UI::build(double dt, const char* status) {
 
   if ((_ui_setup & UIMaterial) && ImGui::Begin("Materials", nullptr, kWindowFlags)) {
     ImGui::Text("Materials");
+    int32_t previous_selected = _selected_material;
     ImGui::ListBox("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
     if (scene_editable && (_selected_material >= 0) && (_selected_material < _material_mapping.size())) {
+      if (previous_selected != _selected_material) {
+        _editor_values.clear();
+      }
       uint32_t material_index = _material_mapping.at(_selected_material);
       Material& material = _current_scene->materials[material_index];
       bool changed = build_material(material);
