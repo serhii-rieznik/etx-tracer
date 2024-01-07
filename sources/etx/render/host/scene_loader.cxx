@@ -1256,7 +1256,7 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
       static_cast<float>(atof(params[2])),
     };
 
-    scene_spectrums[name] = illuminant ? rgb::make_illuminant_spd(gamma_to_linear(value), spectrums()) : rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
+    scene_spectrums[name] = illuminant ? rgb::make_illuminant_spd(value, spectrums()) : rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
     rgb_used = true;
   }
 
@@ -1345,7 +1345,7 @@ SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* dat
       static_cast<float>(atof(params[1])),
       static_cast<float>(atof(params[2])),
     };
-    return rgb::make_illuminant_spd(gamma_to_linear(value), spectrums());
+    return rgb::make_illuminant_spd(value, spectrums());
   }
 
   SpectralDistribution emitter_spectrum = SpectralDistribution::from_constant(1.0f);
