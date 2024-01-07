@@ -490,7 +490,7 @@ struct ETX_ALIGNED SpectralDistribution {
     }
 
     uint32_t j = min(i + 1u, spectral_entry_count - 1);
-    float t = (q.wavelength - spectral_entries[i].wavelength) / (spectral_entries[j].wavelength - spectral_entries[i].wavelength);
+    float t = (i == j) ? 0.0f : (q.wavelength - spectral_entries[i].wavelength) / (spectral_entries[j].wavelength - spectral_entries[i].wavelength);
     float p = lerp(spectral_entries[i].power, spectral_entries[j].power, t);
     ETX_VALIDATE(p);
     return SpectralResponse{q, p};
