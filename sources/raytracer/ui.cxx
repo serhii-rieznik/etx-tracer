@@ -98,7 +98,7 @@ void UI::initialize(const Pointer<Spectrums>& spectrums) {
     if (ext != L".spd")
       continue;
 
-    auto cls = SpectralDistribution::load_from_file(entry.path().string().c_str(), tmp.eta, &tmp.k, spectrums);
+    auto cls = SpectralDistribution::load_from_file(entry.path().string().c_str(), tmp.eta, &tmp.k, false);
     if (cls == SpectralDistribution::Class::Invalid)
       continue;
 
@@ -234,7 +234,7 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
 
       ImGui::PushStyleColor(ImGuiCol_Text, colors[cls]);
       if (ImGui::Selectable(i.title.c_str(), &selected)) {
-        SpectralDistribution::load_from_file(i.filename.c_str(), ior.eta, &ior.k, spectrums);
+        SpectralDistribution::load_from_file(i.filename.c_str(), ior.eta, &ior.k, true);
         changed = true;
       }
       ImGui::PopStyleColor();
@@ -250,7 +250,7 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
   if (load_from_file) {
     auto filename = open_file("spd");
     RefractiveIndex tmp_ior = {};
-    auto cls = SpectralDistribution::load_from_file(filename.c_str(), tmp_ior.eta, &tmp_ior.k, spectrums);
+    auto cls = SpectralDistribution::load_from_file(filename.c_str(), tmp_ior.eta, &tmp_ior.k, true);
     if (cls != SpectralDistribution::Class::Invalid) {
       ior = tmp_ior;
       changed = true;
@@ -315,16 +315,10 @@ void UI::build(double dt, const char* status) {
         select_scene_file();
       }
       if (ImGui::MenuItem("Reload Scene", "Ctrl+R", false, true)) {
-        if (callbacks.reload_scene_selected) {
-          callbacks.reload_scene_selected();
-        }
+        reload_scene();
       }
       if (ImGui::MenuItem("Reload Geometry and Materials", "Ctrl+G", false, true)) {
-        if (callbacks.reload_geometry_selected) {
-          callbacks.reload_geometry_selected();
-        }
-      }
-      if (ImGui::MenuItem("Reload Materials", "Ctrl+M", false, false)) {
+        reload_geometry();
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Save...", nullptr, false, true)) {
@@ -344,6 +338,7 @@ void UI::build(double dt, const char* status) {
           scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
           ImGui::Text("Path length w/o random termination:");
           scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
+          scene_settings_changed = scene_settings_changed || ImGui::MenuItem("Spectral rendering:", nullptr, &_current_scene->spectral);
 
           if (scene_settings_changed) {
             callbacks.scene_settings_changed();
@@ -553,8 +548,12 @@ void UI::build(double dt, const char* status) {
 
   if ((_ui_setup & UIMedium) && ImGui::Begin("Mediums", nullptr, kWindowFlags)) {
     ImGui::Text("Mediums");
+    int32_t previous_selected = _selected_material;
     ImGui::ListBox("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
     if (scene_editable && (_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
+      if (previous_selected != _selected_medium) {
+        _editor_values.clear();
+      }
       uint32_t medium_index = _medium_mapping.at(_selected_medium);
       Medium& m = _current_scene->mediums[medium_index];
       bool changed = build_medium(m);
@@ -702,14 +701,13 @@ bool UI::handle_event(const sapp_event* e) {
           if (callbacks.use_image_as_reference) {
             callbacks.use_image_as_reference();
           }
-        } else if (callbacks.reload_scene_selected) {
-          callbacks.reload_scene_selected();
+        } else {
+          reload_scene();
         }
         break;
       }
       case SAPP_KEYCODE_G: {
-        if (callbacks.reload_geometry_selected)
-          callbacks.reload_geometry_selected();
+        reload_geometry();
         break;
       }
       case SAPP_KEYCODE_S: {
@@ -894,6 +892,28 @@ bool UI::build_medium(Medium& m) {
   changed |= spectrum_picker("Scattering", m.s_scattering, _current_scene->spectrums, true);
   changed |= ImGui::SliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
   return changed;
+}
+
+void UI::reset_selection() {
+  _selected_emitter = -1;
+  _selected_material = -1;
+  _selected_medium = -1;
+}
+
+void UI::reload_geometry() {
+  reset_selection();
+
+  if (callbacks.reload_geometry_selected) {
+    callbacks.reload_geometry_selected();
+  }
+}
+
+void UI::reload_scene() {
+  reset_selection();
+
+  if (callbacks.reload_scene_selected) {
+    callbacks.reload_scene_selected();
+  }
 }
 
 }  // namespace etx

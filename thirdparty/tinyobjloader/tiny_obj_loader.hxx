@@ -1985,7 +1985,7 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
       material.ior = parseReal(&token);
       continue;
     }
-    
+
     // illum model
     if (0 == _strnicmp(token, "illum", 5) && IS_SPACE(token[5])) {
       token += 6;
@@ -2172,13 +2172,13 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
     if (!_space) {
       _space = strchr(token, '\t');
     }
-    if (_space) {
-      std::ptrdiff_t len = _space - token;
-      std::string key(token, static_cast<size_t>(len));
-      std::string value = _space + 1;
-      material.unknown_parameter.emplace_back(std::pair<std::string, std::string>(key, value));
-    }
+
+    std::ptrdiff_t len = _space ? _space - token : strlen(token);
+    std::string key(token, static_cast<size_t>(len));
+    std::string value = _space ? _space + 1 : "";
+    material.unknown_parameter.emplace_back(std::pair<std::string, std::string>(key, value));
   }
+
   // flush last material.
   std::transform(material.name.begin(), material.name.end(), material.name.begin(), tolower);
   material_map->insert(std::pair<std::string, int>(material.name, static_cast<int>(materials->size())));

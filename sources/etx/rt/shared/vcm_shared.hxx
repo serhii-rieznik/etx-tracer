@@ -20,7 +20,6 @@ struct ETX_ALIGNED VCMOptions {
     MergeVertices = 1u << 4u,
     EnableMis = 1u << 5u,
     EnableMerging = 1u << 6u,
-    SpectralRendering = 1u << 7u,
 
     DefaultOptions = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices | EnableMis | EnableMerging,
   };
@@ -49,9 +48,6 @@ struct ETX_ALIGNED VCMOptions {
   }
   ETX_GPU_CODE bool enable_merging() const {
     return options & EnableMerging;
-  }
-  ETX_GPU_CODE bool spectral() const {
-    return options & SpectralRendering;
   }
 
   static VCMOptions default_values();
@@ -284,10 +280,10 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
   return weight * (state.throughput * radiance);
 }
 
-ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it, bool spectral) {
+ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
   VCMPathState state = {};
   state.sampler.init(index, it.iteration);
-  state.spect = spectral ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
+  state.spect = scene.spectral ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.global_index = index;
 
   auto emitter_sample = sample_emission(scene, state.spect, state.sampler);

@@ -129,7 +129,6 @@ struct CPUBidirectionalImpl : public Task {
   bool conn_connect_to_camera = true;
   bool conn_connect_vertices = true;
   bool conn_mis = true;
-  bool spectral = false;
 
   CPUBidirectionalImpl(Raytracing& r, std::atomic<Integrator::State>* st)
     : rt(r)
@@ -156,7 +155,7 @@ struct CPUBidirectionalImpl : public Task {
   float3 trace_pixel(RNDSampler& smp, const float2& uv, uint32_t thread_id) {
     auto& path_data = per_thread_path_data[thread_id];
 
-    auto spect = spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
+    auto spect = rt.scene().spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
     auto ray = generate_ray(smp, rt.scene(), uv);
     build_camera_path(smp, spect, ray, path_data.camera_path);
     build_emitter_path(smp, spect, path_data.emitter_path);

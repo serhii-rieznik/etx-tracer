@@ -12,16 +12,12 @@
 #include <etx/render/host/distribution_builder.hxx>
 
 #include <vector>
-#include <unordered_map>
 #include <string>
 #include <set>
 
 #include <mikktspace.h>
 #include <tiny_gltf.hxx>
 #include <tiny_obj_loader.hxx>
-#include <json.hpp>
-
-#include <filesystem>
 
 namespace etx {
 
@@ -31,7 +27,9 @@ Pointer<Spectrums> spectrums() {
   return &shared_spectrums;
 }
 
-void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
+namespace {
+
+inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
   using SPD = SpectralDistribution;
   rgb::init_spectrums(shared_spectrums);
   scattering::init(scheduler, &shared_spectrums, extinction);
@@ -73,6 +71,102 @@ inline bool is_valid_vector(const float3& v) {
   return value_is_correct(v) && (dot(v, v) > 0.0f);
 }
 
+inline auto to_float2(const float values[]) -> float2 {
+  return {values[0], values[1]};
+};
+
+inline auto to_float3(const float values[]) -> float3 {
+  return {values[0], values[1], values[2]};
+};
+
+inline std::vector<const char*> split_params(char* data) {
+  std::vector<const char*> params;
+  const char* begin = data;
+  char* token = data;
+  while (*token != 0) {
+    if (*token == 0x20) {
+      *token++ = 0;
+      params.emplace_back(begin);
+      begin = token;
+    } else {
+      ++token;
+    }
+  }
+  params.emplace_back(begin);
+  return params;
+}
+
+inline auto get_param(const tinyobj::material_t& m, const char* param, char buffer[]) -> bool {
+  for (const auto& p : m.unknown_parameter) {
+    if (_stricmp(p.first.c_str(), param) == 0) {
+      if (buffer != nullptr) {
+        memcpy(buffer, p.second.c_str(), p.second.size());
+        buffer[p.second.size()] = 0;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool get_file(const char* base_dir, const std::string& base, char buffer[], uint64_t buffer_size) {
+  if (base.empty()) {
+    return false;
+  }
+  snprintf(buffer, buffer_size, "%s/%s", base_dir, base.c_str());
+  return true;
+};
+
+}  // namespace
+
+inline Material::Class material_string_to_class(const char* s) {
+  if (strcmp(s, "diffuse") == 0)
+    return Material::Class::Diffuse;
+  if (strcmp(s, "translucent") == 0)
+    return Material::Class::Translucent;
+  else if (strcmp(s, "plastic") == 0)
+    return Material::Class::Plastic;
+  else if (strcmp(s, "conductor") == 0)
+    return Material::Class::Conductor;
+  else if (strcmp(s, "dielectric") == 0)
+    return Material::Class::Dielectric;
+  else if (strcmp(s, "thinfilm") == 0)
+    return Material::Class::Thinfilm;
+  else if (strcmp(s, "mirror") == 0)
+    return Material::Class::Mirror;
+  else if (strcmp(s, "boundary") == 0)
+    return Material::Class::Boundary;
+  else if (strcmp(s, "velvet") == 0)
+    return Material::Class::Velvet;
+  else {
+    log::error("Undefined BSDF: `%s`", s);
+    return Material::Class::Diffuse;
+  }
+}
+
+void material_class_to_string(Material::Class cls, const char** str) {
+  static const char* names[] = {
+    "diffuse",
+    "translucent",
+    "plastic",
+    "conductor",
+    "dielectric",
+    "thinfilm",
+    "mirror",
+    "boundary",
+    "velvet",
+    "undefined",
+  };
+  static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);
+  *str = cls < Material::Class::Count ? names[uint32_t(cls)] : "undefined";
+}
+
+const char* material_class_to_string(Material::Class cls) {
+  const char* result = nullptr;
+  material_class_to_string(cls, &result);
+  return result;
+}
+
 struct SceneRepresentationImpl {
   TaskScheduler& scheduler;
   std::vector<Vertex> vertices;
@@ -81,6 +175,7 @@ struct SceneRepresentationImpl {
   std::vector<uint32_t> triangle_to_emitter;
   std::vector<Material> materials;
   std::vector<Emitter> emitters;
+  std::unordered_map<std::string, SpectralDistribution> scene_spectrums;
 
   std::string json_file_name;
   std::string geometry_file_name;
@@ -93,6 +188,9 @@ struct SceneRepresentationImpl {
   SceneRepresentation::MaterialMapping material_mapping;
   uint32_t camera_medium_index = kInvalidIndex;
   uint32_t camera_lens_shape_image_index = kInvalidIndex;
+
+  char tmp_buffer[4096] = {};
+  char data_buffer[4096] = {};
 
   Scene scene;
   bool loaded = false;
@@ -342,6 +440,17 @@ struct SceneRepresentationImpl {
   void load_gltf_node(const tinygltf::Model& model, const tinygltf::Node&);
   void load_gltf_mesh(const tinygltf::Model& model, const tinygltf::Mesh&);
 
+  void parse_material(const char* base_dir, const tinyobj::material_t& material);
+  void parse_camera(const char* base_dir, const tinyobj::material_t& material);
+  void parse_medium(const char* base_dir, const tinyobj::material_t& material);
+  void parse_directional_light(const char* base_dir, const tinyobj::material_t& material);
+  void parse_env_light(const char* base_dir, const tinyobj::material_t& material);
+  void parse_atmosphere_light(const char* base_dir, const tinyobj::material_t& material);
+  void parse_spectrum(const char* base_dir, const tinyobj::material_t& material);
+
+  SpectralDistribution load_reflectance_spectrum(char* data);
+  SpectralDistribution load_illuminant_spectrum(char* data);
+
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
@@ -570,6 +679,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       std::string str_value = {};
       float float_value = 0.0f;
       int64_t int_value = 0;
+      bool bool_value = false;
       if (json_get_int(i, "samples", int_value)) {
         _private->scene.samples = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_int(i, "max-path-length", int_value)) {
@@ -578,6 +688,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
         _private->geometry_file_name = std::string(base_folder) + str_value;
       } else if (json_get_string(i, "materials", str_value)) {
         _private->mtl_file_name = std::string(base_folder) + str_value;
+      } else if (json_get_bool(i, "spectral", bool_value)) {
+        _private->scene.spectral = bool_value;
       } else if ((key == "camera") && obj.is_object()) {
         for (auto ci = obj.begin(), ce = obj.end(); ci != ce; ++ci) {
           const auto& ckey = ci.key();
@@ -667,138 +779,6 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   return true;
 }
 
-inline auto to_float2(const float values[]) -> float2 {
-  return {values[0], values[1]};
-};
-
-inline auto to_float3(const float values[]) -> float3 {
-  return {values[0], values[1], values[2]};
-};
-
-inline std::vector<const char*> split_params(char* data) {
-  std::vector<const char*> params;
-  const char* begin = data;
-  char* token = data;
-  while (*token != 0) {
-    if (*token == 0x20) {
-      *token++ = 0;
-      params.emplace_back(begin);
-      begin = token;
-    } else {
-      ++token;
-    }
-  }
-  params.emplace_back(begin);
-  return params;
-}
-
-inline SpectralDistribution load_reflectance_spectrum(const char* data_buffer) {
-  SpectralDistribution reflection_spectrum = SpectralDistribution::from_constant(0.0f);
-  float value[3] = {};
-  if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-    reflection_spectrum = rgb::make_reflectance_spd({value[0], value[1], value[2]}, spectrums());
-  }
-  return reflection_spectrum;
-}
-
-inline SpectralDistribution load_illuminant_spectrum(char* data_buffer) {
-  SpectralDistribution emitter_spectrum = SpectralDistribution::from_constant(0.0f);
-  float value[3] = {};
-  if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-    emitter_spectrum = rgb::make_illuminant_spd({value[0], value[1], value[2]}, spectrums());
-  } else {
-    float scale = 1.0f;
-    auto params = split_params(data_buffer);
-    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-      if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < e)) {
-        float t = static_cast<float>(atof(params[i + 1]));
-        emitter_spectrum = SpectralDistribution::from_black_body(t, 1.0f);
-        i += 1;
-      } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < e)) {
-        float t = static_cast<float>(atof(params[i + 1]));
-        float w = spectrum::black_body_radiation_maximum_wavelength(t);
-        float r = spectrum::black_body_radiation(w, t);
-        emitter_spectrum = SpectralDistribution::from_black_body(t, 1.0f / r);
-        i += 1;
-      } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
-        scale = static_cast<float>(atof(params[i + 1]));
-        i += 1;
-      }
-    }
-    emitter_spectrum.scale(scale);
-  }
-  return emitter_spectrum;
-};
-
-inline auto get_param(const tinyobj::material_t& m, const char* param, char buffer[]) -> bool {
-  for (const auto& p : m.unknown_parameter) {
-    if (_stricmp(p.first.c_str(), param) == 0) {
-      if (buffer != nullptr) {
-        memcpy(buffer, p.second.c_str(), p.second.size());
-        buffer[p.second.size()] = 0;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-Material::Class material_string_to_class(const char* s) {
-  if (strcmp(s, "diffuse") == 0)
-    return Material::Class::Diffuse;
-  if (strcmp(s, "translucent") == 0)
-    return Material::Class::Translucent;
-  else if (strcmp(s, "plastic") == 0)
-    return Material::Class::Plastic;
-  else if (strcmp(s, "conductor") == 0)
-    return Material::Class::Conductor;
-  else if (strcmp(s, "dielectric") == 0)
-    return Material::Class::Dielectric;
-  else if (strcmp(s, "thinfilm") == 0)
-    return Material::Class::Thinfilm;
-  else if (strcmp(s, "mirror") == 0)
-    return Material::Class::Mirror;
-  else if (strcmp(s, "boundary") == 0)
-    return Material::Class::Boundary;
-  else if (strcmp(s, "velvet") == 0)
-    return Material::Class::Velvet;
-  else {
-    log::error("Undefined BSDF: `%s`", s);
-    return Material::Class::Diffuse;
-  }
-}
-
-void material_class_to_string(Material::Class cls, const char** str) {
-  static const char* names[] = {
-    "diffuse",
-    "translucent",
-    "plastic",
-    "conductor",
-    "dielectric",
-    "thinfilm",
-    "mirror",
-    "boundary",
-    "velvet",
-    "undefined",
-  };
-  static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);
-  *str = cls < Material::Class::Count ? names[uint32_t(cls)] : "undefined";
-}
-
-const char* material_class_to_string(Material::Class cls) {
-  const char* result = nullptr;
-  material_class_to_string(cls, &result);
-  return result;
-}
-
-inline bool get_file(const char* base_dir, const std::string& base, char buffer[], uint64_t buffer_size) {
-  if (base.empty()) {
-    return false;
-  }
-  snprintf(buffer, buffer_size, "%s/%s", base_dir, base.c_str());
-  return true;
-};
-
 uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const char* mtl_file) {
   tinyobj::attrib_t obj_attrib;
   std::vector<tinyobj::shape_t> obj_shapes;
@@ -874,11 +854,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
 
       if (get_param(source_material, "Ke", data_buffer)) {
         auto& e = emitters.emplace_back(Emitter::Class::Area);
-
-        float val[3] = {};
-        if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
-          e.emission.spectrum = rgb::make_illuminant_spd({val[0], val[1], val[2]}, spectrums());
-        }
+        e.emission.spectrum = load_illuminant_spectrum(data_buffer);
 
         uint32_t emissive_image_index = kInvalidIndex;
         if (get_file(base_dir, source_material.emissive_texname, data_buffer, sizeof(data_buffer))) {
@@ -937,7 +913,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
             } else if ((strcmp(params[i], "spectrum") == 0) && (i + 1 < end)) {
               char buffer[2048] = {};
               snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-              auto cls = SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, spectrums());
+              auto cls = SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, false);
               if (cls != SpectralDistribution::Class::Illuminant) {
                 log::warning("Spectrum %s is not illuminant", buffer);
               }
@@ -982,489 +958,618 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
   return true;
 }
 
+void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::material_t& material) {
+  if (get_param(material, "shape", data_buffer)) {
+    snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
+    camera_lens_shape_image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
+  }
+}
+
+void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::material_t& material) {
+  if (get_param(material, "id", data_buffer) == false) {
+    log::warning("Medium does not have identifier - skipped");
+    return;
+  }
+
+  std::string name = data_buffer;
+
+  SpectralDistribution s_a = SpectralDistribution::from_constant(0.0f);
+  if (get_param(material, "absorption", data_buffer)) {
+    float val[3] = {};
+    if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
+      s_a = rgb::make_reflectance_spd({val[0], val[1], val[2]}, spectrums());
+    }
+  }
+
+  SpectralDistribution s_t = SpectralDistribution::from_constant(0.0f);
+  if (get_param(material, "scattering", data_buffer)) {
+    float val[3] = {};
+    if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
+      s_t = rgb::make_reflectance_spd({val[0], val[1], val[2]}, spectrums());
+    }
+  }
+
+  if (get_param(material, "parametric", data_buffer)) {
+    float3 color = {1.0f, 1.0f, 1.0f};
+    float3 scattering_distances = {0.25f, 0.25f, 0.25f};
+
+    auto params = split_params(data_buffer);
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "color") == 0) && (i + 3 < e)) {
+        color = {
+          static_cast<float>(atof(params[i + 1])),
+          static_cast<float>(atof(params[i + 2])),
+          static_cast<float>(atof(params[i + 3])),
+        };
+        i += 3;
+      }
+      if ((strcmp(params[i], "distance") == 0) && (i + 1 < e)) {
+        float value = static_cast<float>(atof(params[i + 1]));
+        scattering_distances = {value, value, value};
+        i += 1;
+      }
+      if ((strcmp(params[i], "distances") == 0) && (i + 1 < e)) {
+        scattering_distances = {
+          static_cast<float>(atof(params[i + 1])),
+          static_cast<float>(atof(params[i + 2])),
+          static_cast<float>(atof(params[i + 3])),
+        };
+        i += 3;
+      }
+    }
+
+    scattering_distances.x = fmaxf(scattering_distances.x, 1.0f / 256.0f);
+    scattering_distances.y = fmaxf(scattering_distances.y, 1.0f / 256.0f);
+    scattering_distances.z = fmaxf(scattering_distances.z, 1.0f / 256.0f);
+    color = saturate(color / fmaxf(fmaxf(1.0f, color.x), fmaxf(color.y, color.z)));
+
+    float3 albedo = 1.0f - exp(-5.09406f * color + 2.61188f * color - 4.31805f * color * color * color);
+    ETX_VALIDATE(albedo);
+
+    float3 s = 1.9f - color + 3.5f * sqr(color - 0.8f);
+    ETX_VALIDATE(s);
+
+    float3 extinction = 1.0f / (scattering_distances * s);
+    ETX_VALIDATE(extinction);
+
+    float3 scattering = extinction * albedo;
+    ETX_VALIDATE(scattering);
+
+    float3 absorption = extinction - scattering;
+    ETX_VALIDATE(absorption);
+
+    s_t = rgb::make_reflectance_spd(scattering, spectrums());
+    s_a = rgb::make_reflectance_spd(absorption, spectrums());
+  }
+
+  float g = 0.0f;
+  if (get_param(material, "g", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      g = val;
+    }
+  }
+
+  Medium::Class cls = Medium::Class::Homogeneous;
+
+  if (get_param(material, "volume", data_buffer)) {
+    if (strlen(data_buffer) > 0) {
+      snprintf(tmp_buffer, sizeof(tmp_buffer), "%s%s", base_dir, data_buffer);
+      cls = Medium::Class::Heterogeneous;
+    }
+  }
+
+  uint32_t medium_index = add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, g);
+
+  if (name == "camera") {
+    camera_medium_index = medium_index;
+  }
+}
+
+void SceneRepresentationImpl::parse_directional_light(const char* base_dir, const tinyobj::material_t& material) {
+  auto& e = emitters.emplace_back(Emitter::Class::Directional);
+
+  if (get_param(material, "color", data_buffer)) {
+    e.emission.spectrum = load_illuminant_spectrum(data_buffer);
+  } else {
+    e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
+  }
+
+  e.direction = float3{1.0f, 1.0f, 1.0f};
+  if (get_param(material, "direction", data_buffer)) {
+    float value[3] = {};
+    if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
+      e.direction = {value[0], value[1], value[2]};
+    }
+  }
+  e.direction = normalize(e.direction);
+
+  if (get_param(material, "image", data_buffer)) {
+    snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
+    e.emission.image_index = add_image(tmp_buffer, Image::Regular);
+  }
+
+  if (get_param(material, "angular_diameter", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      e.angular_size = val * kPi / 180.0f;
+    }
+  }
+}
+
+void SceneRepresentationImpl::parse_env_light(const char* base_dir, const tinyobj::material_t& material) {
+  auto& e = emitters.emplace_back(Emitter::Class::Environment);
+
+  if (get_param(material, "image", data_buffer)) {
+    snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
+  }
+
+  float rotation = 0.0f;
+  if (get_param(material, "rotation", data_buffer)) {
+    rotation = static_cast<float>(atof(data_buffer)) / 360.0f;
+  }
+  e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f});
+
+  if (get_param(material, "color", data_buffer)) {
+    e.emission.spectrum = load_illuminant_spectrum(data_buffer);
+  } else {
+    e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
+  }
+}
+
+void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const tinyobj::material_t& material) {
+  float quality = 1.0f;
+  if (get_param(material, "quality", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      quality = val;
+    }
+  }
+
+  float scale = 1.0f;
+  if (get_param(material, "scale", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      scale = val;
+    }
+  }
+  float sun_scale = 1.0f;
+  if (get_param(material, "sun_scale", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      sun_scale = val;
+    }
+  }
+  float sky_scale = 1.0f;
+  if (get_param(material, "sky_scale", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      sky_scale = val;
+    }
+  }
+
+  float3 direction = normalize(float3{1.0f, 1.0f, 1.0f});
+  float angular_size = 0.5422f * (kPi / 180.0f);
+
+  scattering::Parameters scattering_parameters = {};
+
+  if (get_param(material, "direction", data_buffer)) {
+    float value[3] = {};
+    if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
+      direction = normalize(float3{value[0], value[1], value[2]});
+    }
+  }
+  if (get_param(material, "angular_diameter", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      angular_size = val * (kPi / 180.0f);
+    }
+  }
+  if (get_param(material, "anisotropy", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      scattering_parameters.anisotropy = val;
+    }
+  }
+  if (get_param(material, "altitude", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      scattering_parameters.altitude = val;
+    }
+  }
+  if (get_param(material, "rayleigh", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      scattering_parameters.rayleigh_scale = val;
+    }
+  }
+  if (get_param(material, "mie", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      scattering_parameters.mie_scale = val;
+    }
+  }
+  if (get_param(material, "ozone", data_buffer)) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      scattering_parameters.ozone_scale = val;
+    }
+  }
+
+  float radiance_scale = scale * (kDoublePi * (1.0f - cosf(0.5f * angular_size)));
+  auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, radiance_scale);
+
+  uint2 kSkyImageDimensions = uint2{1024u, uint32_t(1024u / quality)};
+  uint2 kSunImageDimensions = uint2{128u, 128u};
+
+  {
+    auto& d = emitters.emplace_back(Emitter::Class::Directional);
+    d.emission.spectrum = sun_spectrum;
+    d.emission.spectrum.scale(sun_scale);
+    d.angular_size = angular_size;
+    d.direction = direction;
+
+    if (angular_size > 0.0f) {
+      d.emission.image_index = add_image(nullptr, kSunImageDimensions, Image::Delay);
+      auto& img = images.get(d.emission.image_index);
+      scattering::generate_sun_image(scattering_parameters, kSunImageDimensions, direction, angular_size, img.pixels.f32.a, scheduler);
+    }
+  }
+
+  {
+    auto& e = emitters.emplace_back(Emitter::Class::Environment);
+    e.emission.spectrum = sun_spectrum;
+    e.emission.spectrum.scale(sky_scale);
+    e.emission.image_index = add_image(nullptr, kSkyImageDimensions, Image::BuildSamplingTable | Image::Delay);
+    e.direction = direction;
+
+    auto& img = images.get(e.emission.image_index);
+    scattering::generate_sky_image(scattering_parameters, kSkyImageDimensions, direction, extinction, img.pixels.f32.a, scheduler);
+  }
+}
+
+void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj::material_t& material) {
+  if (get_param(material, "id", data_buffer) == false) {
+    log::warning("Spectrum does not have identifier - skipped");
+    return;
+  }
+  std::string name = data_buffer;
+
+  bool rgb_used = false;
+  bool illuminant = false;
+
+  if (get_param(material, "illuminant", data_buffer)) {
+    illuminant = true;
+  }
+
+  if (get_param(material, "rgb", data_buffer)) {
+    auto params = split_params(data_buffer);
+
+    if (params.size() < 3) {
+      log::warning("Spectrum `%s` uses RGB but did not provide all values - skipped", name.c_str());
+      return;
+    }
+
+    float3 value = {
+      static_cast<float>(atof(params[0])),
+      static_cast<float>(atof(params[1])),
+      static_cast<float>(atof(params[2])),
+    };
+
+    scene_spectrums[name] = illuminant ? rgb::make_illuminant_spd(gamma_to_linear(value), spectrums()) : rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
+    rgb_used = true;
+  }
+
+  bool have_samples = get_param(material, "samples", data_buffer);
+  if ((have_samples == false) && (rgb_used == false)) {
+    log::warning("Spectrum `%s` does not have samples or RBG - skipped", name.c_str());
+    return;
+  } else if (rgb_used && have_samples) {
+    log::warning("Spectrum `%s` uses both RGB and samples set - samples will be used", name.c_str());
+  } else if (rgb_used) {
+    return;
+  }
+
+  auto params = split_params(data_buffer);
+  if (params.size() % 2) {
+    log::warning("Spectrum `%s` have uneven number samples - skipped", name.c_str());
+    return;
+  }
+
+  std::vector<float2> samples;
+  samples.reserve(params.size() / 2 + 1);
+
+  for (uint64_t i = 0, e = params.size(); i < e; i += 2) {
+    float2& smp = samples.emplace_back();
+    smp.x = static_cast<float>(atof(params[i + 0]));
+    smp.y = static_cast<float>(atof(params[i + 1]));
+  }
+
+  if (samples.empty() == false) {
+    log::warning("Spectrum `%s` sample set is empty - skipped", name.c_str());
+  }
+
+  auto spectrum = SpectralDistribution::from_samples(samples.data(), samples.size());
+
+  if (get_param(material, "normalize", data_buffer)) {
+    if (strcmp(data_buffer, "rgb") == 0) {
+      float3 rgb = spectrum::xyz_to_rgb(spectrum.integrate_to_xyz());
+      float m_value = max(rgb.x, max(rgb.y, rgb.z));
+      if (m_value > kEpsilon) {
+        spectrum.scale(1.0f / m_value);
+      }
+    } else {
+      float3 xyz = spectrum.integrate_to_xyz();
+      if (xyz.y > kEpsilon) {
+        spectrum.scale(1.0f / xyz.y);
+      }
+    }
+  }
+
+  scene_spectrums[name] = spectrum;
+}
+
+SpectralDistribution SceneRepresentationImpl::load_reflectance_spectrum(char* data) {
+  auto params = split_params(data);
+
+  if (params.size() == 1) {
+    auto i = scene_spectrums.find(params.front());
+    if (i != scene_spectrums.end())
+      return i->second;
+  }
+
+  if (params.size() == 3) {
+    float3 value = {
+      static_cast<float>(atof(params[0])),
+      static_cast<float>(atof(params[1])),
+      static_cast<float>(atof(params[2])),
+    };
+    return rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
+  }
+
+  return SpectralDistribution::from_constant(0.0f);
+}
+
+SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* data) {
+  auto params = split_params(data);
+
+  if (params.size() == 1) {
+    auto i = scene_spectrums.find(params.front());
+    if (i != scene_spectrums.end())
+      return i->second;
+  }
+
+  if (params.size() == 3) {
+    float3 value = {
+      static_cast<float>(atof(params[0])),
+      static_cast<float>(atof(params[1])),
+      static_cast<float>(atof(params[2])),
+    };
+    return rgb::make_illuminant_spd(gamma_to_linear(value), spectrums());
+  }
+
+  SpectralDistribution emitter_spectrum = SpectralDistribution::from_constant(1.0f);
+
+  float scale = 1.0f;
+  for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+    if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < e)) {
+      float t = static_cast<float>(atof(params[i + 1]));
+      emitter_spectrum = SpectralDistribution::from_black_body(t, 1.0f);
+      i += 1;
+    } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < e)) {
+      float t = static_cast<float>(atof(params[i + 1]));
+      float w = spectrum::black_body_radiation_maximum_wavelength(t);
+      float r = spectrum::black_body_radiation(w, t);
+      emitter_spectrum = SpectralDistribution::from_black_body(t, 1.0f / r);
+      i += 1;
+    } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+      scale = static_cast<float>(atof(params[i + 1]));
+      i += 1;
+    }
+  }
+  emitter_spectrum.scale(scale);
+
+  return emitter_spectrum;
+}
+
+void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj::material_t& material) {
+  if (material_mapping.count(material.name) == 0) {
+    add_material(material.name.c_str());
+  }
+
+  uint32_t material_index = material_mapping[material.name];
+  auto& mtl = materials[material_index];
+
+  mtl.cls = Material::Class::Diffuse;
+  mtl.diffuse = {SpectralDistribution::from_constant(1.0f)};
+  mtl.specular = {SpectralDistribution::from_constant(1.0f)};
+  mtl.transmittance = {SpectralDistribution::from_constant(1.0f)};
+
+  if (get_param(material, "base", data_buffer)) {
+    auto i = material_mapping.find(data_buffer);
+    if (i != material_mapping.end()) {
+      mtl = materials[i->second];
+    }
+  }
+
+  if (get_param(material, "Kd", data_buffer)) {
+    mtl.diffuse.spectrum = load_reflectance_spectrum(data_buffer);
+  }
+
+  if (get_param(material, "Ks", data_buffer)) {
+    mtl.specular.spectrum = load_reflectance_spectrum(data_buffer);
+  }
+
+  if (get_param(material, "Ks", data_buffer)) {
+    mtl.transmittance.spectrum = load_reflectance_spectrum(data_buffer);
+  }
+
+  if (get_param(material, "Pr", data_buffer)) {
+    float2 value = {};
+    if (sscanf(data_buffer, "%f %f", &value.x, &value.y) == 2) {
+      mtl.roughness = sqr(value);
+    } else if (sscanf(data_buffer, "%f", &value.x) == 1) {
+      mtl.roughness = {sqr(value.x), sqr(value.x)};
+    }
+  }
+
+  if (get_file(base_dir, material.diffuse_texname, data_buffer, sizeof(data_buffer))) {
+    mtl.diffuse.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+  }
+
+  if (get_file(base_dir, material.specular_texname, data_buffer, sizeof(data_buffer))) {
+    mtl.specular.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+  }
+
+  if (get_file(base_dir, material.transmittance_texname, data_buffer, sizeof(data_buffer))) {
+    mtl.transmittance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+  }
+
+  if (get_param(material, "material", data_buffer)) {
+    auto params = split_params(data_buffer);
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
+        mtl.cls = material_string_to_class(params[i + 1]);
+        i += 1;
+      }
+    }
+  }
+
+  if (get_param(material, "int_ior", data_buffer)) {
+    float2 values = {};
+    if (sscanf(data_buffer, "%f %f", &values.x, &values.y) == 2) {
+      // interpret as eta/k
+      mtl.int_ior.eta = SpectralDistribution::from_constant(values.x);
+      mtl.int_ior.k = SpectralDistribution::from_constant(values.y);
+    } else {
+      char buffer[256] = {};
+      snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
+      SpectralDistribution::load_from_file(buffer, mtl.int_ior.eta, &mtl.int_ior.k, true);
+    }
+  }
+
+  if (get_param(material, "ext_ior", data_buffer)) {
+    float2 values = {};
+    if (sscanf(data_buffer, "%f %f", &values.x, &values.y) == 2) {
+      // interpret as eta/k
+      mtl.ext_ior.eta = SpectralDistribution::from_constant(values.x);
+      mtl.ext_ior.k = SpectralDistribution::from_constant(values.y);
+    } else {
+      char buffer[256] = {};
+      snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
+      SpectralDistribution::load_from_file(buffer, mtl.ext_ior.eta, &mtl.ext_ior.k, true);
+    }
+  } else {
+    mtl.ext_ior.eta = SpectralDistribution::from_constant(1.0f);
+    mtl.ext_ior.k = SpectralDistribution::from_constant(0.0f);
+  }
+
+  if (get_param(material, "int_medium", data_buffer)) {
+    auto m = mediums.find(data_buffer);
+    if (m == kInvalidIndex) {
+      log::warning("Medium %s was not declared, but used in material %s as internal medium", data_buffer, material.name.c_str());
+    }
+    mtl.int_medium = m;
+  }
+
+  if (get_param(material, "ext_medium", data_buffer)) {
+    auto m = mediums.find(data_buffer);
+    if (m == kInvalidIndex) {
+      log::warning("Medium %s was not declared, but used in material %s as external medium\n", data_buffer, material.name.c_str());
+    }
+    mtl.ext_medium = m;
+  }
+
+  if (get_param(material, "normalmap", data_buffer)) {
+    auto params = split_params(data_buffer);
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
+        char buffer[1024] = {};
+        snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
+        mtl.normal_image_index = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::Linear);
+        i += 1;
+      }
+      if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+        mtl.normal_scale = static_cast<float>(atof(params[i + 1]));
+        i += 1;
+      }
+    }
+  }
+
+  if (get_param(material, "thinfilm", data_buffer)) {
+    auto params = split_params(data_buffer);
+
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
+        char buffer[1024] = {};
+        snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
+        mtl.thinfilm.thinkness_image = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::Linear);
+        i += 1;
+      }
+
+      if ((strcmp(params[i], "range") == 0) && (i + 2 < e)) {
+        mtl.thinfilm.min_thickness = static_cast<float>(atof(params[i + 1]));
+        mtl.thinfilm.max_thickness = static_cast<float>(atof(params[i + 2]));
+        i += 2;
+      }
+
+      if ((strcmp(params[i], "ior") == 0) && (i + 1 < e)) {
+        float value = 0.0f;
+        if (sscanf(params[i + 1], "%f", &value) == 1) {
+          mtl.thinfilm.ior.eta = SpectralDistribution::from_constant(value);
+        } else {
+          char buffer[256] = {};
+          snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
+          SpectralDistribution::load_from_file(buffer, mtl.thinfilm.ior.eta, &mtl.thinfilm.ior.k, true);
+        }
+      }
+    }
+  }
+
+  if (get_param(material, "subsurface", data_buffer)) {
+    mtl.subsurface.cls = SubsurfaceMaterial::Class::RandomWalk;
+
+    auto params = split_params(data_buffer);
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "distance") == 0) && (i + 3 < e)) {
+        float dr = static_cast<float>(atof(params[i + 1]));
+        float dg = static_cast<float>(atof(params[i + 2]));
+        float db = static_cast<float>(atof(params[i + 3]));
+        mtl.subsurface.scattering_distance = rgb::make_reflectance_spd({dr, dg, db}, spectrums());
+        i += 3;
+      }
+
+      if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+        mtl.subsurface.scale = static_cast<float>(atof(params[i + 1]));
+        i += 1;
+      }
+
+      if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
+        if (strcmp(params[i + 1], "approximate") == 0) {
+          mtl.subsurface.cls = SubsurfaceMaterial::Class::ChristensenBurley;
+        }
+        i += 1;
+      }
+    }
+  }
+}
+
 void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials) {
   for (const auto& material : obj_materials) {
-    char data_buffer[1024] = {};
-    char tmp_buffer[2048] = {};
-
     if (material.name == "et::camera") {
-      if (get_param(material, "shape", data_buffer)) {
-        snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
-        camera_lens_shape_image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
-      }
+      parse_camera(base_dir, material);
     } else if (material.name == "et::medium") {
-      char name_buffer[2048] = {};
-      if (get_param(material, "id", name_buffer) == false) {
-        continue;
-      }
-
-      SpectralDistribution s_a = SpectralDistribution::from_constant(0.0f);
-      if (get_param(material, "absorption", data_buffer)) {
-        float val[3] = {};
-        if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
-          s_a = rgb::make_reflectance_spd({val[0], val[1], val[2]}, spectrums());
-        }
-      }
-
-      SpectralDistribution s_t = SpectralDistribution::from_constant(0.0f);
-      if (get_param(material, "scattering", data_buffer)) {
-        float val[3] = {};
-        if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
-          s_t = rgb::make_reflectance_spd({val[0], val[1], val[2]}, spectrums());
-        }
-      }
-
-      if (get_param(material, "parametric", data_buffer)) {
-        float3 color = {1.0f, 1.0f, 1.0f};
-        float3 scattering_distances = {0.25f, 0.25f, 0.25f};
-
-        auto params = split_params(data_buffer);
-        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-          if ((strcmp(params[i], "color") == 0) && (i + 3 < e)) {
-            color = {
-              static_cast<float>(atof(params[i + 1])),
-              static_cast<float>(atof(params[i + 2])),
-              static_cast<float>(atof(params[i + 3])),
-            };
-            i += 3;
-          }
-          if ((strcmp(params[i], "distance") == 0) && (i + 1 < e)) {
-            float value = static_cast<float>(atof(params[i + 1]));
-            scattering_distances = {value, value, value};
-            i += 1;
-          }
-          if ((strcmp(params[i], "distances") == 0) && (i + 1 < e)) {
-            scattering_distances = {
-              static_cast<float>(atof(params[i + 1])),
-              static_cast<float>(atof(params[i + 2])),
-              static_cast<float>(atof(params[i + 3])),
-            };
-            i += 3;
-          }
-        }
-
-        scattering_distances.x = fmaxf(scattering_distances.x, 1.0f / 256.0f);
-        scattering_distances.y = fmaxf(scattering_distances.y, 1.0f / 256.0f);
-        scattering_distances.z = fmaxf(scattering_distances.z, 1.0f / 256.0f);
-        color = saturate(color / fmaxf(fmaxf(1.0f, color.x), fmaxf(color.y, color.z)));
-
-        float3 albedo = 1.0f - exp(-5.09406f * color + 2.61188f * color - 4.31805f * color * color * color);
-        ETX_VALIDATE(albedo);
-
-        float3 s = 1.9f - color + 3.5f * sqr(color - 0.8f);
-        ETX_VALIDATE(s);
-
-        float3 extinction = 1.0f / (scattering_distances * s);
-        ETX_VALIDATE(extinction);
-
-        float3 scattering = extinction * albedo;
-        ETX_VALIDATE(scattering);
-
-        float3 absorption = extinction - scattering;
-        ETX_VALIDATE(absorption);
-
-        s_t = rgb::make_reflectance_spd(scattering, spectrums());
-        s_a = rgb::make_reflectance_spd(absorption, spectrums());
-      }
-
-      float g = 0.0f;
-      if (get_param(material, "g", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          g = val;
-        }
-      }
-
-      Medium::Class cls = Medium::Class::Homogeneous;
-
-      if (get_param(material, "volume", data_buffer)) {
-        if (strlen(data_buffer) > 0) {
-          snprintf(tmp_buffer, sizeof(tmp_buffer), "%s%s", base_dir, data_buffer);
-          cls = Medium::Class::Heterogeneous;
-        }
-      }
-
-      uint32_t medium_index = add_medium(cls, name_buffer, tmp_buffer, s_a, s_t, g);
-
-      if (strcmp(name_buffer, "camera") == 0) {
-        camera_medium_index = medium_index;
-      }
-
+      parse_medium(base_dir, material);
     } else if (material.name == "et::dir") {
-      auto& e = emitters.emplace_back(Emitter::Class::Directional);
-
-      if (get_param(material, "color", data_buffer)) {
-        e.emission.spectrum = load_illuminant_spectrum(data_buffer);
-      } else {
-        e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
-      }
-
-      e.direction = float3{1.0f, 1.0f, 1.0f};
-      if (get_param(material, "direction", data_buffer)) {
-        float value[3] = {};
-        if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-          e.direction = {value[0], value[1], value[2]};
-        }
-      }
-      e.direction = normalize(e.direction);
-
-      if (get_param(material, "image", data_buffer)) {
-        snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
-        e.emission.image_index = add_image(tmp_buffer, Image::Regular);
-      }
-
-      if (get_param(material, "angular_diameter", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          e.angular_size = val * kPi / 180.0f;
-        }
-      }
+      parse_directional_light(base_dir, material);
     } else if (material.name == "et::env") {
-      auto& e = emitters.emplace_back(Emitter::Class::Environment);
-
-      if (get_param(material, "image", data_buffer)) {
-        snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
-      }
-
-      float rotation = 0.0f;
-      if (get_param(material, "rotation", data_buffer)) {
-        rotation = static_cast<float>(atof(data_buffer)) / 360.0f;
-      }
-      e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f});
-
-      if (get_param(material, "color", data_buffer)) {
-        e.emission.spectrum = load_illuminant_spectrum(data_buffer);
-      } else {
-        e.emission.spectrum = SpectralDistribution::from_constant(1.0f);
-      }
+      parse_env_light(base_dir, material);
     } else if (material.name == "et::atmosphere") {
-      float quality = 1.0f;
-      if (get_param(material, "quality", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          quality = val;
-        }
-      }
-
-      float scale = 1.0f;
-      if (get_param(material, "scale", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          scale = val;
-        }
-      }
-      float sun_scale = 1.0f;
-      if (get_param(material, "sun_scale", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          sun_scale = val;
-        }
-      }
-      float sky_scale = 1.0f;
-      if (get_param(material, "sky_scale", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          sky_scale = val;
-        }
-      }
-
-      float3 direction = normalize(float3{1.0f, 1.0f, 1.0f});
-      float angular_size = 0.5422f * (kPi / 180.0f);
-
-      scattering::Parameters scattering_parameters = {};
-
-      if (get_param(material, "direction", data_buffer)) {
-        float value[3] = {};
-        if (sscanf(data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-          direction = normalize(float3{value[0], value[1], value[2]});
-        }
-      }
-      if (get_param(material, "angular_diameter", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          angular_size = val * (kPi / 180.0f);
-        }
-      }
-      if (get_param(material, "anisotropy", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          scattering_parameters.anisotropy = val;
-        }
-      }
-      if (get_param(material, "altitude", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          scattering_parameters.altitude = val;
-        }
-      }
-      if (get_param(material, "rayleigh", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          scattering_parameters.rayleigh_scale = val;
-        }
-      }
-      if (get_param(material, "mie", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          scattering_parameters.mie_scale = val;
-        }
-      }
-      if (get_param(material, "ozone", data_buffer)) {
-        float val = {};
-        if (sscanf(data_buffer, "%f", &val) == 1) {
-          scattering_parameters.ozone_scale = val;
-        }
-      }
-
-      float radiance_scale = scale * (kDoublePi * (1.0f - cosf(0.5f * angular_size)));
-      auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, radiance_scale);
-
-      uint2 kSkyImageDimensions = uint2{1024u, uint32_t(1024u / quality)};
-      uint2 kSunImageDimensions = uint2{128u, 128u};
-
-      {
-        auto& d = emitters.emplace_back(Emitter::Class::Directional);
-        d.emission.spectrum = sun_spectrum;
-        d.emission.spectrum.scale(sun_scale);
-        d.angular_size = angular_size;
-        d.direction = direction;
-
-        if (angular_size > 0.0f) {
-          d.emission.image_index = add_image(nullptr, kSunImageDimensions, Image::Delay);
-          auto& img = images.get(d.emission.image_index);
-          scattering::generate_sun_image(scattering_parameters, kSunImageDimensions, direction, angular_size, img.pixels.f32.a, scheduler);
-        }
-      }
-
-      {
-        auto& e = emitters.emplace_back(Emitter::Class::Environment);
-        e.emission.spectrum = sun_spectrum;
-        e.emission.spectrum.scale(sky_scale);
-        e.emission.image_index = add_image(nullptr, kSkyImageDimensions, Image::BuildSamplingTable | Image::Delay);
-        e.direction = direction;
-
-        auto& img = images.get(e.emission.image_index);
-        scattering::generate_sky_image(scattering_parameters, kSkyImageDimensions, direction, extinction, img.pixels.f32.a, scheduler);
-      }
-
+      parse_atmosphere_light(base_dir, material);
+    } else if (material.name == "et::spectrum") {
+      parse_spectrum(base_dir, material);
     } else {
-      if (material_mapping.count(material.name) == 0) {
-        add_material(material.name.c_str());
-      }
-      uint32_t material_index = material_mapping[material.name];
-      auto& mtl = materials[material_index];
-
-      mtl.cls = Material::Class::Diffuse;
-      mtl.diffuse = {SpectralDistribution::from_constant(1.0f)};
-      mtl.specular = {SpectralDistribution::from_constant(1.0f)};
-      mtl.transmittance = {SpectralDistribution::from_constant(1.0f)};
-
-      if (get_param(material, "base", data_buffer)) {
-        auto i = material_mapping.find(data_buffer);
-        if (i != material_mapping.end()) {
-          mtl = materials[i->second];
-        }
-      }
-
-      if (get_param(material, "Kd", data_buffer)) {
-        float3 value = {};
-        if (sscanf(data_buffer, "%f %f %f", &value.x, &value.y, &value.z) == 3) {
-          mtl.diffuse.spectrum = rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
-        }
-      }
-
-      if (get_param(material, "Ks", data_buffer)) {
-        float3 value = {};
-        if (sscanf(data_buffer, "%f %f %f", &value.x, &value.y, &value.z) == 3) {
-          mtl.specular.spectrum = rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
-        }
-      }
-
-      if (get_param(material, "Ks", data_buffer)) {
-        float3 value = {};
-        if (sscanf(data_buffer, "%f %f %f", &value.x, &value.y, &value.z) == 3) {
-          mtl.transmittance.spectrum = rgb::make_reflectance_spd(gamma_to_linear(value), spectrums());
-        }
-      }
-
-      if (get_param(material, "Pr", data_buffer)) {
-        float2 value = {};
-        if (sscanf(data_buffer, "%f %f", &value.x, &value.y) == 2) {
-          mtl.roughness = sqr(value);
-        } else if (sscanf(data_buffer, "%f", &value.x) == 1) {
-          mtl.roughness = {sqr(value.x), sqr(value.x)};
-        }
-      }
-
-      if (get_file(base_dir, material.diffuse_texname, data_buffer, sizeof(data_buffer))) {
-        mtl.diffuse.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
-      }
-
-      if (get_file(base_dir, material.specular_texname, data_buffer, sizeof(data_buffer))) {
-        mtl.specular.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
-      }
-
-      if (get_file(base_dir, material.transmittance_texname, data_buffer, sizeof(data_buffer))) {
-        mtl.transmittance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
-      }
-
-      if (get_param(material, "material", data_buffer)) {
-        auto params = split_params(data_buffer);
-        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-          if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
-            mtl.cls = material_string_to_class(params[i + 1]);
-            i += 1;
-          }
-          if ((strcmp(params[i], "uroughness") == 0) && (i + 1 < e)) {
-            float param = 0.0f;
-            if (sscanf(params[i + 1], "%f", &param) == 1) {
-              mtl.roughness.x = param;
-            }
-            i += 1;
-          }
-          if ((strcmp(params[i], "vroughness") == 0) && (i + 1 < e)) {
-            float param = 0.0f;
-            if (sscanf(params[i + 1], "%f", &param) == 1) {
-              mtl.roughness.y = param;
-            }
-            i += 1;
-          }
-        }
-      }
-
-      if (get_param(material, "int_ior", data_buffer)) {
-        float2 values = {};
-        if (sscanf(data_buffer, "%f %f", &values.x, &values.y) == 2) {
-          // interpret as eta/k
-          mtl.int_ior.eta = SpectralDistribution::from_constant(values.x);
-          mtl.int_ior.k = SpectralDistribution::from_constant(values.y);
-        } else {
-          char buffer[256] = {};
-          snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-          SpectralDistribution::load_from_file(buffer, mtl.int_ior.eta, &mtl.int_ior.k, spectrums());
-        }
-      }
-
-      if (get_param(material, "ext_ior", data_buffer)) {
-        float2 values = {};
-        if (sscanf(data_buffer, "%f %f", &values.x, &values.y) == 2) {
-          // interpret as eta/k
-          mtl.ext_ior.eta = SpectralDistribution::from_constant(values.x);
-          mtl.ext_ior.k = SpectralDistribution::from_constant(values.y);
-        } else {
-          char buffer[256] = {};
-          snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-          SpectralDistribution::load_from_file(buffer, mtl.ext_ior.eta, &mtl.ext_ior.k, spectrums());
-        }
-      } else {
-        mtl.ext_ior.eta = SpectralDistribution::from_constant(1.0f);
-        mtl.ext_ior.k = SpectralDistribution::from_constant(0.0f);
-      }
-
-      if (get_param(material, "int_medium", data_buffer)) {
-        auto m = mediums.find(data_buffer);
-        if (m == kInvalidIndex) {
-          log::warning("Medium %s was not declared, but used in material %s as internal medium", data_buffer, material.name.c_str());
-        }
-        mtl.int_medium = m;
-      }
-
-      if (get_param(material, "ext_medium", data_buffer)) {
-        auto m = mediums.find(data_buffer);
-        if (m == kInvalidIndex) {
-          log::warning("Medium %s was not declared, but used in material %s as external medium\n", data_buffer, material.name.c_str());
-        }
-        mtl.ext_medium = m;
-      }
-
-      if (get_param(material, "spectrum_kd", data_buffer)) {
-        char buffer[1024] = {};
-        snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.diffuse.spectrum, nullptr, spectrums());
-      }
-      if (get_param(material, "spectrum_ks", data_buffer)) {
-        char buffer[1024] = {};
-        snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.specular.spectrum, nullptr, spectrums());
-      }
-      if (get_param(material, "spectrum_kt", data_buffer)) {
-        char buffer[1024] = {};
-        snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-        SpectralDistribution::load_from_file(buffer, mtl.transmittance.spectrum, nullptr, spectrums());
-      }
-
-      if (get_param(material, "normalmap", data_buffer)) {
-        auto params = split_params(data_buffer);
-        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-          if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
-            char buffer[1024] = {};
-            snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-            mtl.normal_image_index = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::Linear);
-            i += 1;
-          }
-          if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
-            mtl.normal_scale = static_cast<float>(atof(params[i + 1]));
-            i += 1;
-          }
-        }
-      }
-
-      if (get_param(material, "thinfilm", data_buffer)) {
-        auto params = split_params(data_buffer);
-
-        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-          if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
-            char buffer[1024] = {};
-            snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-            mtl.thinfilm.thinkness_image = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::Linear);
-            i += 1;
-          }
-
-          if ((strcmp(params[i], "range") == 0) && (i + 2 < e)) {
-            mtl.thinfilm.min_thickness = static_cast<float>(atof(params[i + 1]));
-            mtl.thinfilm.max_thickness = static_cast<float>(atof(params[i + 2]));
-            i += 2;
-          }
-
-          if ((strcmp(params[i], "ior") == 0) && (i + 1 < e)) {
-            float value = 0.0f;
-            if (sscanf(params[i + 1], "%f", &value) == 1) {
-              mtl.thinfilm.ior.eta = SpectralDistribution::from_constant(value);
-            } else {
-              char buffer[256] = {};
-              snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
-              SpectralDistribution::load_from_file(buffer, mtl.thinfilm.ior.eta, &mtl.thinfilm.ior.k, spectrums());
-            }
-          }
-        }
-      }
-
-      if (get_param(material, "subsurface", data_buffer)) {
-        mtl.subsurface.cls = SubsurfaceMaterial::Class::RandomWalk;
-
-        auto params = split_params(data_buffer);
-        for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-          if ((strcmp(params[i], "distance") == 0) && (i + 3 < e)) {
-            float dr = static_cast<float>(atof(params[i + 1]));
-            float dg = static_cast<float>(atof(params[i + 2]));
-            float db = static_cast<float>(atof(params[i + 3]));
-            mtl.subsurface.scattering_distance = rgb::make_reflectance_spd({dr, dg, db}, spectrums());
-            i += 3;
-          }
-
-          if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
-            mtl.subsurface.scale = static_cast<float>(atof(params[i + 1]));
-            i += 1;
-          }
-
-          if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
-            if (strcmp(params[i + 1], "approximate") == 0) {
-              mtl.subsurface.cls = SubsurfaceMaterial::Class::ChristensenBurley;
-            }
-            i += 1;
-          }
-        }
-      }
+      parse_material(base_dir, material);
     }
   }
 

@@ -63,4 +63,12 @@ inline bool json_get_int(const nlohmann::json::const_iterator& js, const std::st
   return false;
 }
 
+inline bool json_get_bool(const nlohmann::json::const_iterator& js, const std::string& id, bool& value) {
+  if ((js.key() == id) && js.value().is_boolean()) {
+    value = js.value().get<bool>();
+    return true;
+  }
+  return false;
+}
+
 }  // namespace etx

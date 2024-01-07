@@ -69,6 +69,10 @@ struct UI {
   bool spectrum_picker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear);
   bool ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectrums> spectrums);
 
+  void reset_selection();
+  void reload_geometry();
+  void reload_scene();
+
  private:
   Integrator* _current_integrator = nullptr;
   Scene* _current_scene = nullptr;

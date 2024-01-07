@@ -1,31 +1,48 @@
+newmtl et::spectrum
+id green
+rgb 0 1 0
+
+newmtl et::spectrum
+id red
+rgb 1 0 0
+
+newmtl et::spectrum
+id light
+rgb 5 4 3
+illuminant
+
+newmtl et::spectrum
+id white
+rgb 1 1 1
+
 newmtl frontwall
 material class diffuse
-Kd 1.000 1.000 1.000
+Kd white
 
 newmtl leftwall
 material class diffuse
-Kd 1.000 0.000 0.000
-
-newmtl floor
-material class diffuse
-Kd 1.000 1.000 1.000
+Kd red
 
 newmtl rightwall
 material class diffuse
-Kd 0.000 1.000 0.000
+Kd green
+
+newmtl floor
+material class diffuse
+Kd white
 
 newmtl ceiling
 material class diffuse
-Kd 1.000 1.000 1.000
+Kd white
 
 newmtl shortbox
 material class diffuse
-Kd 1.000 1.000 1.000
+Kd white
 
 newmtl tallbox
 material class diffuse
-Kd 1.000 1.000 1.000
+Kd white
 
 newmtl light
-Ke 5 4 3
+Ke light
 

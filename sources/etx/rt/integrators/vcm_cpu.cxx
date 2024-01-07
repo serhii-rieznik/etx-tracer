@@ -172,7 +172,7 @@ struct CPUVCMImpl {
     for (uint64_t i = range_begin; running() && (i < range_end); ++i) {
       stats.l++;
 
-      VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration, vcm_options.spectral());
+      VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration);
 
       uint32_t path_begin = static_cast<uint32_t>(local_vertices.size());
       while (running()) {

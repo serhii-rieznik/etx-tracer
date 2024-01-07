@@ -19,6 +19,13 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
     result.spectral_entries[i] = {wavelengths_power[i].x * wavelength_scale, wavelengths_power[i].y};
   }
 
+  if (count == 1) {
+    result.spectral_entries[1] = result.spectral_entries[0];
+    result.spectral_entries[0].wavelength -= 0.5f;
+    result.spectral_entries[1].wavelength += 0.5f;
+    result.spectral_entry_count = 2;
+  }
+
   for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
     for (uint32_t j = i + 1; j < result.spectral_entry_count; ++j) {
       if (result.spectral_entries[i].wavelength > result.spectral_entries[j].wavelength) {
@@ -80,8 +87,7 @@ SpectralDistribution SpectralDistribution::rgb(float3 rgb, const rgb::SpectrumSe
   return from_samples(samples, rgb::SampleCount);
 }
 
-SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1,
-  Pointer<Spectrums> spectrums) {
+SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range) {
   auto file = fopen(file_name, "r");
   if (file == nullptr) {
     printf("Failed to load SpectralDistribution from file: %s\n", file_name);
@@ -162,6 +168,24 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     if ((w >= spectrum::kShortestWavelength) && (w <= spectrum::kLongestWavelength)) {
       samples0.emplace_back(w, sample.values[0]);
       samples1.emplace_back(w, sample.values[1]);
+    }
+  }
+
+  if (extend_range) {
+    if ((samples0.size() < spectrum::WavelengthCount) && (samples0.front().x > spectrum::kShortestWavelength)) {
+      samples0.insert(samples0.begin(), samples0.front())->x = spectrum::kShortestWavelength;
+    }
+    if ((samples0.size() < spectrum::WavelengthCount) && (samples0.back().x < spectrum::kLongestWavelength)) {
+      samples0.emplace_back(samples0.back()).x = spectrum::kLongestWavelength;
+    }
+
+    if (samples1.empty() == false) {
+      if ((samples1.size() < spectrum::WavelengthCount) && (samples1.front().x > spectrum::kShortestWavelength)) {
+        samples1.insert(samples1.begin(), samples1.front())->x = spectrum::kShortestWavelength;
+      }
+      if ((samples1.size() < spectrum::WavelengthCount) && (samples1.back().x < spectrum::kLongestWavelength)) {
+        samples1.emplace_back(samples1.back()).x = spectrum::kLongestWavelength;
+      }
     }
   }
 

@@ -9,7 +9,7 @@ struct ETX_ALIGNED PTOptions {
   uint32_t path_per_iteration ETX_INIT_WITH(1u);
   bool nee ETX_INIT_WITH(true);
   bool mis ETX_INIT_WITH(true);
-  bool spectral ETX_INIT_WITH(false);
+  // bool spectral ETX_INIT_WITH(false);
 };
 
 struct ETX_ALIGNED PTRayPayload {

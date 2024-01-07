@@ -38,7 +38,7 @@ struct CPUPathTracingImpl : public Task {
 
     options.nee = opt.get("nee", options.nee).to_bool();
     options.mis = opt.get("mis", options.mis).to_bool();
-    options.spectral = opt.get("spectral", options.mis).to_bool();
+    // options.spectral = opt.get("spectral", options.mis).to_bool();
 
     iteration = 0;
     snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
@@ -61,7 +61,7 @@ struct CPUPathTracingImpl : public Task {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
 
-      PTRayPayload payload = make_ray_payload(rt.scene(), {x, y}, current_dimensions, iteration, options.spectral);
+      PTRayPayload payload = make_ray_payload(rt.scene(), {x, y}, current_dimensions, iteration, rt.scene().spectral);
 
       while ((state->load() != Integrator::State::Stopped) && run_path_iteration(rt.scene(), options, rt, payload)) {
         ETX_VALIDATE(payload.accumulated);
@@ -192,7 +192,6 @@ Options CPUPathTracing::options() const {
   Options result = {};
   result.add(_private->options.nee, "nee", "Next Event Estimation");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
-  result.add(_private->options.spectral, "spectral", "Spectral Rendering");
   return result;
 }
 

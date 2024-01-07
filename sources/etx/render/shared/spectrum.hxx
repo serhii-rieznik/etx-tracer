@@ -482,11 +482,11 @@ struct ETX_ALIGNED SpectralDistribution {
     }
 
     if ((i == 0) && (q.wavelength < spectral_entries[i].wavelength)) {
-      return {q, spectral_entries[i].power};
+      return {q, 0.0f};
     }
 
-    if (i + 1 == spectral_entry_count) {
-      return {q, spectral_entries[i].power};
+    if ((i + 1 == spectral_entry_count) && (q.wavelength > spectral_entries[i].wavelength)) {
+      return {q, 0.0f};
     }
 
     uint32_t j = min(i + 1u, spectral_entry_count - 1);
@@ -532,7 +532,7 @@ struct ETX_ALIGNED SpectralDistribution {
   static SpectralDistribution from_black_body(float temperature, float scale);
   static SpectralDistribution rgb(float3 rgb, const rgb::SpectrumSet& spectrums);
 
-  static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, Pointer<Spectrums>);
+  static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range);
 };
 
 struct RefractiveIndex {

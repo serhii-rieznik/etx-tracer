@@ -104,11 +104,15 @@ ETX_GPU_CODE float D_ggx(const float3& wm, const float alpha_x, const float alph
   const float slope_x = -wm.x / wm.z;
   const float slope_y = -wm.y / wm.z;
 
+  float ax = fmaxf(kEpsilon, alpha_x * alpha_x);
+  float ay = fmaxf(kEpsilon, alpha_y * alpha_y);
+  float axy = fmaxf(kEpsilon, alpha_x * alpha_y);
+
   // P22
-  const float tmp = 1.0f + slope_x * slope_x / (alpha_x * alpha_x) + slope_y * slope_y / (alpha_y * alpha_y);
+  const float tmp = 1.0f + slope_x * slope_x / ax + slope_y * slope_y / ay;
   ETX_VALIDATE(tmp);
 
-  const float P22 = 1.0f / (kPi * alpha_x * alpha_y) / (tmp * tmp);
+  const float P22 = 1.0f / (kPi * axy * tmp * tmp);
   ETX_VALIDATE(P22);
 
   // value
