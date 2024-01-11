@@ -159,29 +159,17 @@ struct CPUBidirectionalImpl : public Task {
     auto ray = generate_ray(smp, rt.scene(), uv);
 
     SpectralResponse result = {spect, 0.0f};
-    result += build_camera_path(smp, spect, ray, path_data.camera_path, thread_id);
     build_emitter_path(smp, spect, path_data.emitter_path, thread_id);
+    result += build_camera_path(smp, spect, ray, path_data.camera_path, thread_id);
 
-    for (uint64_t eye_t = 1, eye_t_e = path_data.camera_path.size(); running() && (eye_t < eye_t_e); ++eye_t) {
-      for (uint64_t light_s = 0, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
-        auto depth = eye_t + light_s;
-        if (((eye_t == 1) && (light_s == 1)) || (depth < 2) || (depth > 2llu + rt.scene().max_path_length)) {
-          continue;
-        }
-        if ((eye_t > 1) && (light_s != 0) && (path_data.camera_path[eye_t].cls == PathVertex::Class::Emitter)) {
-          continue;
-        }
-
-        if (light_s == 0) {
-          // result += direct_hit(path_data.camera_path, spect, eye_t, smp);
-        } else if (eye_t == 1) {
-        } else if (light_s == 1) {
-        } else if (conn_connect_vertices) {
+    for (uint64_t light_s = 2, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
+      for (uint64_t eye_t = 2, eye_t_e = path_data.camera_path.size(); running() && (eye_t < eye_t_e); ++eye_t) {
+        if (eye_t + light_s - 2u < rt.scene().max_path_length) {
           result += connect_vertices(smp, path_data, spect, eye_t, light_s);
         }
-        ETX_VALIDATE(result);
       }
     }
+
     return (result / spect.sampling_pdf()).to_xyz();
   }
 
@@ -192,7 +180,9 @@ struct CPUBidirectionalImpl : public Task {
     SpectralResponse result = {spect, 0.0f};
 
     float eta = 1.0f;
-    for (uint32_t path_length = 0; running() && (path_length <= rt.scene().max_path_length);) {
+    uint32_t max_path_len = rt.scene().max_path_length;
+
+    for (uint32_t path_length = 0; running() && (path_length < max_path_len);) {
       Intersection intersection = {};
       bool found_intersection = rt.trace(rt.scene(), ray, intersection, smp);
 
@@ -223,10 +213,14 @@ struct CPUBidirectionalImpl : public Task {
         ray.o = medium_sample.pos;
         ray.d = w_o;
 
+        bool can_connect = path.size() <= max_path_len + 1u;
+
         if (mode == PathSource::Camera) {
           result += direct_hit(path, spect, path.size() - 1u, smp);
-          result += connect_to_light(smp, path, spect, path.size() - 1u);
-        } else if (conn_connect_to_camera) {
+          if (can_connect) {
+            result += connect_to_light(smp, path, spect, path.size() - 1u);
+          }
+        } else if (conn_connect_to_camera && can_connect) {
           CameraSample camera_sample = {};
           auto splat = connect_to_camera(smp, path, spect, path.size() - 1u, camera_sample);
           auto xyz = splat.to_xyz();
@@ -292,10 +286,14 @@ struct CPUBidirectionalImpl : public Task {
           terminate_path = true;
         }
 
+        bool can_connect = path.size() <= max_path_len + 1u;
+
         if (mode == PathSource::Camera) {
           result += direct_hit(path, spect, path.size() - 1u, smp);
-          result += connect_to_light(smp, path, spect, path.size() - 1u);
-        } else if (conn_connect_to_camera) {
+          if (can_connect) {
+            result += connect_to_light(smp, path, spect, path.size() - 1u);
+          }
+        } else if (conn_connect_to_camera && can_connect) {
           CameraSample camera_sample = {};
           auto splat = connect_to_camera(smp, path, spect, path.size() - 1u, camera_sample);
           auto xyz = splat.to_xyz();
@@ -315,6 +313,7 @@ struct CPUBidirectionalImpl : public Task {
         v.pos = ray.o + rt.scene().bounding_sphere_radius * v.w_i;
         v.nrm = -v.w_i;
         result += direct_hit(path, spect, path.size() - 1u, smp);
+        path.pop_back();
         break;
       } else {
         break;
@@ -559,7 +558,7 @@ struct CPUBidirectionalImpl : public Task {
     return 1.0f / (1.0f + result);
   }
 
-  float mis_weight(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s, const PathVertex& sampled, Sampler& smp) {
+  float mis_weight(PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s, const PathVertex& sampled, Sampler& smp) const {
     if (conn_mis == false) {
       return 1.0f;
     }
@@ -667,7 +666,7 @@ struct CPUBidirectionalImpl : public Task {
     return 1.0f / (1.0f + result);
   }
 
-  SpectralResponse direct_hit(std::vector<PathVertex>& camera_path, SpectralQuery spect, uint64_t eye_t, Sampler& smp) {
+  SpectralResponse direct_hit(std::vector<PathVertex>& camera_path, SpectralQuery spect, uint64_t eye_t, Sampler& smp) const {
     const auto& z_i = camera_path[eye_t];
     if ((conn_direct_hit == false) || (z_i.is_emitter() == false)) {
       return {spect, 0.0f};
