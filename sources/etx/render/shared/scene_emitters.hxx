@@ -25,7 +25,10 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
       break;
     }
   }
-  ETX_ASSERT(pdf_dir > 0.0f);
+
+  if (pdf_dir <= 0.0f) {
+    return {spect, 0.0f};
+  }
 
   pdf_area = emitter_pdf_area_local(em, scene);
   ETX_ASSERT(pdf_area > 0.0f);
