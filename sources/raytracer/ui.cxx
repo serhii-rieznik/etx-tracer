@@ -548,7 +548,7 @@ void UI::build(double dt, const char* status) {
 
   if ((_ui_setup & UIMedium) && ImGui::Begin("Mediums", nullptr, kWindowFlags)) {
     ImGui::Text("Mediums");
-    int32_t previous_selected = _selected_material;
+    int32_t previous_selected = _selected_medium;
     ImGui::ListBox("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
     if (scene_editable && (_selected_medium >= 0) && (_selected_medium < _medium_mapping.size())) {
       if (previous_selected != _selected_medium) {
