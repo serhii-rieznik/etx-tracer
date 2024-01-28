@@ -113,8 +113,9 @@ struct UI {
     UIMedium = 1u << 2u,
     UIEmitters = 1u << 3u,
     UICamera = 1u << 4u,
+    UIScene = 1u << 5u,
 
-    UIEverything = UIIntegrator,
+    UIDefaults = UIScene | UIIntegrator,
   };
 
   MappingRepresentation _material_mapping;
@@ -123,7 +124,7 @@ struct UI {
   int32_t _selected_material = -1;
   int32_t _selected_medium = -1;
   int32_t _selected_emitter = -1;
-  uint32_t _ui_setup = UIEverything;
+  uint32_t _ui_setup = UIDefaults;
   uint32_t _font_image = 0u;
   std::unordered_map<const char*, float3> _editor_values;
 };

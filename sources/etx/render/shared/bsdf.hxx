@@ -102,6 +102,10 @@ struct BSDFSample {
     return (pdf > 0.0f);
   }
 
+  ETX_GPU_CODE bool invalid() const {
+    return (pdf <= 0.0f);
+  }
+
   ETX_GPU_CODE bool is_diffuse() const {
     return (properties & Diffuse) != 0;
   }

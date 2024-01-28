@@ -328,25 +328,6 @@ void UI::build(double dt, const char* status) {
     }
 
     if (ImGui::BeginMenu("Integrator", true)) {
-      if (has_integrator) {
-        if (has_scene) {
-          bool scene_settings_changed = false;
-
-          ImGui::Text("Max samples per pixel / iterations:");
-          scene_settings_changed = scene_settings_changed || ImGui::InputInt("##amples", reinterpret_cast<int*>(&_current_scene->samples));
-          ImGui::Text("Maximum path length:");
-          scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
-          ImGui::Text("Path length w/o random termination:");
-          scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
-          scene_settings_changed = scene_settings_changed || ImGui::MenuItem("Spectral rendering:", nullptr, &_current_scene->spectral);
-
-          if (scene_settings_changed) {
-            callbacks.scene_settings_changed();
-          }
-        }
-        ImGui::Separator();
-      }
-
       for (uint64_t i = 0; i < _integrators.count; ++i) {
         if (ImGui::MenuItem(_integrators[i]->name(), nullptr, _current_integrator == _integrators[i], _integrators[i]->enabled())) {
           if (callbacks.integrator_selected) {
@@ -414,6 +395,7 @@ void UI::build(double dt, const char* status) {
       ui_toggle("Mediums", UIMedium);
       ui_toggle("Emitters", UIEmitters);
       ui_toggle("Camera", UICamera);
+      ui_toggle("Scene", UIScene);
       ImGui::EndMenu();
     }
 
@@ -654,6 +636,28 @@ void UI::build(double dt, const char* status) {
     ImGui::End();
   }
 
+  if ((_ui_setup & UIScene) && ImGui::Begin("Scene", nullptr, kWindowFlags)) {
+    if (scene_editable) {
+      bool scene_settings_changed = false;
+
+      ImGui::Text("Max samples per pixel / iterations:");
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##samples", reinterpret_cast<int*>(&_current_scene->samples));
+      ImGui::Text("Maximum path length:");
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
+      ImGui::Text("Path length w/o random termination:");
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
+      scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", &_current_scene->spectral);
+
+      if (scene_settings_changed) {
+        callbacks.scene_settings_changed();
+      }
+    } else {
+      ImGui::Text("No options available");
+    }
+
+    ImGui::End();
+  }
+
   if (has_integrator && (_current_integrator->debug_info_count() > 0)) {
     if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
       auto debug_info = _current_integrator->debug_info();
@@ -730,7 +734,8 @@ bool UI::handle_event(const sapp_event* e) {
     case SAPP_KEYCODE_F2:
     case SAPP_KEYCODE_F3:
     case SAPP_KEYCODE_F4:
-    case SAPP_KEYCODE_F5: {
+    case SAPP_KEYCODE_F5:
+    case SAPP_KEYCODE_F6: {
       uint32_t flag = 1u << (e->key_code - SAPP_KEYCODE_F1);
       _ui_setup = (_ui_setup & flag) ? (_ui_setup & (~flag)) : (_ui_setup | flag);
       break;

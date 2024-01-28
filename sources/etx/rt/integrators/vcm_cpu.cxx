@@ -84,18 +84,27 @@ struct CPUVCMImpl {
     };
     static const char* str_vcm_state[] = {
       "Stopped",
-      "Gathering Light Vertices",
-      "Gathering Camera Vertices",
+      "Lights Path",
+      "Camera Path",
     };
 
     double l_c = 100.0 * double(stats.l.load()) / double(camera_image.count());
     double c_c = 100.0 * double(stats.c.load()) / double(camera_image.count());
 
-    if (vcm_iteration.iteration == 0) {
-      snprintf(status, sizeof(status), "0 | %s / %s : L: %.2f, C: %.2f", str_state[uint32_t(state->load())], str_vcm_state[uint32_t(vcm_state)], l_c, c_c);
-    } else {
-      snprintf(status, sizeof(status), "%u | %s / %s : L: %.2f, C: %.2f, last iteration time: %.2fs (L: %.2fs, C: %.2fs, G: %.2fs, M: %.2f)", vcm_iteration.iteration,  //
-        str_state[uint32_t(state->load())], str_vcm_state[uint32_t(vcm_state)], l_c, c_c, stats.last_iteration_time, stats.l_time, stats.c_time, stats.g_time, stats.m_time);
+    switch (vcm_state) {
+      case VCMState::GatheringLightVertices: {
+        snprintf(status, sizeof(status), "%u | %s (%s, %5.2f%%) ... %.2fms / iteration", vcm_iteration.iteration,  //
+          str_state[uint32_t(state->load())], str_vcm_state[uint32_t(vcm_state)], l_c, stats.last_iteration_time);
+        break;
+      }
+      case VCMState::GatheringCameraVertices: {
+        snprintf(status, sizeof(status), "%u | %s (%s, %5.2f%%) ... %.2fms / iteration", vcm_iteration.iteration,  //
+          str_state[uint32_t(state->load())], str_vcm_state[uint32_t(vcm_state)], c_c, stats.last_iteration_time);
+        break;
+      }
+      default: {
+        break;
+      }
     }
   }
 
@@ -115,7 +124,7 @@ struct CPUVCMImpl {
     rt.scheduler().wait(current_task);
 
     stats.c_time = stats.camera_gather_time.measure();
-    stats.last_iteration_time = stats.iteration_time.measure();
+    stats.last_iteration_time = stats.iteration_time.measure_ms();
     stats.iteration_time = {};
     stats.light_gather_time = {};
     stats.l = 0;

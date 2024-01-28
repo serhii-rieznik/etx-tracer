@@ -290,7 +290,9 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
   auto weight = no_weight ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
   ETX_VALIDATE(weight);
 
-  return bsdf_eval.bsdf * emitter_sample.value * tr * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
+  float wscale = weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
+  ETX_VALIDATE(wscale);
+  return bsdf_eval.bsdf * emitter_sample.value * tr * wscale;
 }
 
 ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, const bool mis, PTRayPayload& payload) {
@@ -360,9 +362,10 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     } else {
       auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, intersection.pos, intersection.w_i, scene);
       direct_light += evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, options.mis);
-      ETX_VALIDATE(payload.accumulated);
+      ETX_VALIDATE(direct_light);
     }
     payload.accumulated += payload.throughput * direct_light;
+    ETX_VALIDATE(payload.accumulated);
   }
 
   if (bsdf_sample.valid() == false) {

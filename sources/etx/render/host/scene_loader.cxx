@@ -853,7 +853,8 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       }
 
       if (get_param(source_material, "Ke", data_buffer)) {
-        auto& e = emitters.emplace_back(Emitter::Class::Area);
+        Emitter e = {};
+        e.cls = Emitter::Class::Area;
         e.emission.spectrum = load_illuminant_spectrum(data_buffer);
 
         uint32_t emissive_image_index = kInvalidIndex;
@@ -934,11 +935,16 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
           default:
             break;
         }
+
         e.medium_index = mtl.ext_medium;
         e.triangle_index = static_cast<uint32_t>(triangles.size() - 1llu);
         e.triangle_area = triangle_area(tri);
         e.weight = power_scale * (e.triangle_area * kPi) * (e.emission.spectrum.luminance() * texture_emission);
         e.emission.image_index = emissive_image_index;
+
+        if (e.weight > 0.0f) {
+          emitters.emplace_back(e);
+        }
       }
 
       // TODO : deal with bounds!
