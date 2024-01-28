@@ -254,7 +254,7 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
 
   ETX_GPU_CODE float3 to_xyz() const {
     if (spectral() == false) {
-      return {components.x, components.y, components.z};
+      return components;
     }
 
     ETX_ASSERT(valid());

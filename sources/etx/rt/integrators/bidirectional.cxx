@@ -28,6 +28,7 @@ struct CPUBidirectionalImpl : public Task {
       float backward = 0.0f;
     } pdf;
 
+    bool delta_light = false;
     bool delta = false;
 
     PathVertex() = default;
@@ -109,6 +110,10 @@ struct CPUBidirectionalImpl : public Task {
   struct PathData {
     std::vector<PathVertex> camera_path;
     std::vector<PathVertex> emitter_path;
+
+    PathData() = default;
+    PathData(const PathData&) = delete;
+    PathData& operator=(const PathData&) = delete;
   };
 
   char status[2048] = {};
@@ -142,35 +147,31 @@ struct CPUBidirectionalImpl : public Task {
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint32_t x = i % camera_image.dimensions().x;
       uint32_t y = i / camera_image.dimensions().x;
+
+      auto& path_data = per_thread_path_data[thread_id];
+      auto spect = rt.scene().spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
+
+      build_emitter_path(smp, spect, path_data.emitter_path, thread_id);
+
       float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
-      float3 xyz = trace_pixel(smp, uv, thread_id);
+      SpectralResponse result = build_camera_path(smp, spect, uv, path_data.camera_path, thread_id);
+
+      for (uint64_t light_s = 2, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
+        for (uint64_t eye_t = 2, eye_t_e = path_data.camera_path.size(); running() && (eye_t < eye_t_e); ++eye_t) {
+          if (eye_t + light_s - 2u < rt.scene().max_path_length) {
+            result += connect_vertices(smp, path_data, spect, eye_t, light_s);
+          }
+        }
+      }
+
+      auto xyz = (result / spect.sampling_pdf()).to_xyz();
+
       camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(iteration) / float(iteration + 1));
     }
   }
 
   bool running() const {
     return state->load() != Integrator::State::Stopped;
-  }
-
-  float3 trace_pixel(RNDSampler& smp, const float2& uv, uint32_t thread_id) {
-    auto& path_data = per_thread_path_data[thread_id];
-
-    auto spect = rt.scene().spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
-    auto ray = generate_ray(smp, rt.scene(), uv);
-
-    SpectralResponse result = {spect, 0.0f};
-    build_emitter_path(smp, spect, path_data.emitter_path, thread_id);
-    result += build_camera_path(smp, spect, ray, path_data.camera_path, thread_id);
-
-    for (uint64_t light_s = 2, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
-      for (uint64_t eye_t = 2, eye_t_e = path_data.camera_path.size(); running() && (eye_t < eye_t_e); ++eye_t) {
-        if (eye_t + light_s - 2u < rt.scene().max_path_length) {
-          result += connect_vertices(smp, path_data, spect, eye_t, light_s);
-        }
-      }
-    }
-
-    return (result / spect.sampling_pdf()).to_xyz();
   }
 
   SpectralResponse build_path(Sampler& smp, SpectralQuery spect, Ray ray, std::vector<PathVertex>& path, PathSource mode, SpectralResponse throughput, float pdf_dir,
@@ -293,11 +294,18 @@ struct CPUBidirectionalImpl : public Task {
           terminate_path = true;
         }
 
-        if ((mode == PathSource::Light) && (path.size() == 3) && em.is_distant) {
-          path[1].pdf.forward = emitter_pdf_in_dist(rt.scene().emitters[em.emitter_index], em.direction, rt.scene());
-          ETX_VALIDATE(path[1].pdf.forward);
-          path[2].pdf.forward = em.pdf_area * fabsf(dot(em.direction, tri.geo_n));
-          ETX_VALIDATE(path[2].pdf.forward);
+        if ((mode == PathSource::Light) && em.is_distant) {
+          if (path.size() == 2) {
+            path[1].pdf.forward = emitter_pdf_in_dist(rt.scene().emitters[em.emitter_index], em.direction, rt.scene());
+            ETX_VALIDATE(path[1].pdf.forward);
+          }
+          if (path.size() == 3) {
+            path[2].pdf.forward = em.pdf_area;
+            if (path[2].cls == PathVertex::Class::Surface) {
+              path[2].pdf.forward *= fabsf(dot(em.direction, tri.geo_n));
+              ETX_VALIDATE(path[2].pdf.forward);
+            }
+          }
         }
 
         bool can_connect = path.size() <= max_path_len + 1u;
@@ -345,11 +353,12 @@ struct CPUBidirectionalImpl : public Task {
     return result;
   }
 
-  SpectralResponse build_camera_path(Sampler& smp, SpectralQuery spect, Ray ray, std::vector<PathVertex>& path, uint32_t thread_id) {
+  SpectralResponse build_camera_path(Sampler& smp, SpectralQuery spect, const float2& uv, std::vector<PathVertex>& path, uint32_t thread_id) {
     path.clear();
     auto& z0 = path.emplace_back(PathVertex::Class::Camera);
     z0.throughput = {spect, 1.0f};
 
+    auto ray = generate_ray(smp, rt.scene(), uv);
     auto eval = film_evaluate_out(spect, rt.scene().camera, ray);
 
     auto& z1 = path.emplace_back(PathVertex::Class::Camera);
@@ -358,7 +367,6 @@ struct CPUBidirectionalImpl : public Task {
     z1.pos = ray.o;
     z1.nrm = eval.normal;
     z1.w_i = ray.d;
-    z1.pdf.forward = 1.0f;
 
     return build_path(smp, spect, ray, path, PathSource::Camera, z1.throughput, eval.pdf_dir, z1.medium_index, thread_id, {});
   }
@@ -372,7 +380,8 @@ struct CPUBidirectionalImpl : public Task {
 
     auto& y0 = path.emplace_back(PathVertex::Class::Emitter);
     y0.throughput = {spect, 1.0f};
-    y0.delta = emitter_sample.is_delta;
+    y0.delta = false;
+    y0.delta_light = emitter_sample.is_delta;
 
     auto& y1 = path.emplace_back(PathVertex::Class::Emitter);
     y1.triangle_index = emitter_sample.triangle_index;
@@ -384,7 +393,8 @@ struct CPUBidirectionalImpl : public Task {
     y1.nrm = emitter_sample.normal;
     y1.pdf.forward = emitter_sample.pdf_area * emitter_sample.pdf_sample;
     y1.w_i = emitter_sample.direction;
-    y1.delta = emitter_sample.is_delta;
+    y1.delta = false;
+    y1.delta_light = emitter_sample.is_delta;
 
     float3 o = offset_ray(emitter_sample.origin, y1.nrm);
     SpectralResponse throughput = y1.throughput * dot(emitter_sample.direction, y1.nrm) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample);
@@ -437,10 +447,12 @@ struct CPUBidirectionalImpl : public Task {
       }
     }
 
-    r = MAP(y_curr.pdf.backward) / MAP(y_curr.pdf.forward);
-    ETX_VALIDATE(r);
-    result += r;
-    ETX_VALIDATE(result);
+    if (y_curr.delta_light == false) {
+      r = MAP(y_curr.pdf.backward) / MAP(y_curr.pdf.forward);
+      ETX_VALIDATE(r);
+      result += r;
+      ETX_VALIDATE(result);
+    }
 
     return 1.0f / (1.0f + result);
   }
@@ -537,7 +549,8 @@ struct CPUBidirectionalImpl : public Task {
       r *= MAP(emitter_path[si].pdf.backward) / MAP(emitter_path[si].pdf.forward);
       ETX_VALIDATE(r);
 
-      if ((emitter_path[si].delta == false) && (emitter_path[si - 1].delta == false)) {
+      bool delta_emitter = si > 1 ? emitter_path[si - 1u].delta : emitter_path[1].delta_light;
+      if ((emitter_path[si].delta == false) && (delta_emitter == false)) {
         result += r;
         ETX_VALIDATE(result);
       }
@@ -620,7 +633,8 @@ struct CPUBidirectionalImpl : public Task {
       r *= MAP(c.emitter_path[si].pdf.backward) / MAP(c.emitter_path[si].pdf.forward);
       ETX_VALIDATE(r);
 
-      if ((c.emitter_path[si].delta == false) && (c.emitter_path[si - 1].delta == false)) {
+      bool delta_emitter = si > 1 ? c.emitter_path[si - 1u].delta : c.emitter_path[1].delta_light;
+      if ((c.emitter_path[si].delta == false) && (delta_emitter == false)) {
         result += r;
         ETX_VALIDATE(result);
       }
@@ -630,6 +644,9 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse direct_hit(std::vector<PathVertex>& camera_path, SpectralQuery spect, uint64_t eye_t, Sampler& smp) const {
+    if (conn_direct_hit == false)
+      return {spect, 0.0f};
+
     const auto& z_i = camera_path[eye_t];
     if ((conn_direct_hit == false) || (z_i.is_emitter() == false)) {
       return {spect, 0.0f};
@@ -676,7 +693,10 @@ struct CPUBidirectionalImpl : public Task {
     return emitter_value * z_i.throughput * weight;
   }
 
-  SpectralResponse connect_to_light(Sampler& smp, std::vector<PathVertex>& camera_path, SpectralQuery spect, uint64_t eye_t) {
+  SpectralResponse connect_to_light(Sampler& smp, std::vector<PathVertex>& camera_path, SpectralQuery spect, uint64_t eye_t) const {
+    if (conn_connect_to_light == false)
+      return {spect, 0.0f};
+
     const auto& z_i = camera_path[eye_t];
 
     uint32_t emitter_index = sample_emitter_index(rt.scene(), smp);
@@ -697,7 +717,7 @@ struct CPUBidirectionalImpl : public Task {
     sampled_vertex.pos = emitter_sample.origin;
     sampled_vertex.nrm = emitter_sample.normal;
     sampled_vertex.pdf.forward = sampled_vertex.pdf_to_light_in(spect, &z_i, rt.scene());
-    sampled_vertex.delta = emitter_sample.is_delta;
+    sampled_vertex.delta_light = emitter_sample.is_delta;
 
     SpectralResponse emitter_throughput = emitter_sample.value / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
     ETX_VALIDATE(emitter_throughput);
@@ -709,6 +729,9 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse connect_to_camera(Sampler& smp, std::vector<PathVertex>& emitter_path, SpectralQuery spect, uint64_t light_s, CameraSample& camera_sample) const {
+    if (conn_connect_to_camera == false)
+      return {spect, 0.0f};
+
     const auto& y_i = emitter_path[light_s];
     camera_sample = sample_film(smp, rt.scene(), y_i.pos);
     if (camera_sample.valid() == false) {
@@ -735,7 +758,10 @@ struct CPUBidirectionalImpl : public Task {
     return splat;
   }
 
-  SpectralResponse connect_vertices(Sampler& smp, PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s) {
+  SpectralResponse connect_vertices(Sampler& smp, PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s) const {
+    if (conn_connect_vertices == false)
+      return {spect, 0.0f};
+
     const auto& y_i = c.emitter_path[light_s];
     const auto& z_i = c.camera_path[eye_t];
 
