@@ -28,8 +28,8 @@ struct CPUBidirectionalImpl : public Task {
       float backward = 0.0f;
     } pdf;
 
-    bool delta_light = false;
-    bool delta = false;
+    bool delta_connection = false;
+    bool delta_emitter = false;
 
     PathVertex() = default;
 
@@ -204,7 +204,6 @@ struct CPUBidirectionalImpl : public Task {
         auto& w = path[path.size() - 2];
         v.medium_index = medium_index;
         v.throughput = throughput;
-        v.delta = false;
         v.pdf.forward = w.pdf_solid_angle_to_area(pdf_dir, v);
 
         float rev_pdf = medium.phase_function(spect, medium_sample.pos, w_o, w_i);
@@ -258,7 +257,7 @@ struct CPUBidirectionalImpl : public Task {
         auto bsdf_sample = bsdf::sample(bsdf_data, mat, rt.scene(), smp);
         ETX_VALIDATE(bsdf_sample.weight);
 
-        v.delta = bsdf_sample.is_delta();
+        v.delta_connection = bsdf_sample.is_delta();
 
         if (bsdf_sample.properties & BSDFSample::MediumChanged) {
           medium_index = bsdf_sample.medium_index;
@@ -277,7 +276,7 @@ struct CPUBidirectionalImpl : public Task {
             eta *= bsdf_sample.eta;
           }
 
-          pdf_dir = v.delta ? 0.0f : bsdf_sample.pdf;
+          pdf_dir = v.delta_connection ? 0.0f : bsdf_sample.pdf;
           ETX_VALIDATE(pdf_dir);
 
           throughput *= bsdf_sample.weight;
@@ -380,8 +379,7 @@ struct CPUBidirectionalImpl : public Task {
 
     auto& y0 = path.emplace_back(PathVertex::Class::Emitter);
     y0.throughput = {spect, 1.0f};
-    y0.delta = false;
-    y0.delta_light = emitter_sample.is_delta;
+    y0.delta_emitter = emitter_sample.is_delta;
 
     auto& y1 = path.emplace_back(PathVertex::Class::Emitter);
     y1.triangle_index = emitter_sample.triangle_index;
@@ -393,8 +391,7 @@ struct CPUBidirectionalImpl : public Task {
     y1.nrm = emitter_sample.normal;
     y1.pdf.forward = emitter_sample.pdf_area * emitter_sample.pdf_sample;
     y1.w_i = emitter_sample.direction;
-    y1.delta = false;
-    y1.delta_light = emitter_sample.is_delta;
+    y1.delta_emitter = emitter_sample.is_delta;
 
     float3 o = offset_ray(emitter_sample.origin, y1.nrm);
     SpectralResponse throughput = y1.throughput * dot(emitter_sample.direction, y1.nrm) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample);
@@ -410,7 +407,6 @@ struct CPUBidirectionalImpl : public Task {
     PathVertex& z_prev = camera_path[eye_t - 1];
 
     PathVertex y_curr = sampled;
-    y_curr.delta = false;
     y_curr.pdf.backward = z_curr.pdf_area(spect, PathSource::Camera, &z_prev, &y_curr, rt.scene(), smp);
 
     ReplaceInScope<bool> z_delta_new;
@@ -418,7 +414,7 @@ struct CPUBidirectionalImpl : public Task {
     ReplaceInScope<float> z_prev_new;
 
     {
-      z_delta_new = {&z_curr.delta, false};
+      z_delta_new = {&z_curr.delta_connection, false};
       float z_curr_pdf = y_curr.pdf_area(spect, PathSource::Light, nullptr, &z_curr, rt.scene(), smp);
       ETX_VALIDATE(z_curr_pdf);
       z_curr_new = {&z_curr.pdf.backward, z_curr_pdf};
@@ -441,13 +437,13 @@ struct CPUBidirectionalImpl : public Task {
       r *= MAP(camera_path[ti].pdf.backward) / MAP(camera_path[ti].pdf.forward);
       ETX_VALIDATE(r);
 
-      if ((camera_path[ti].delta == false) && (camera_path[ti - 1].delta == false)) {
+      if ((camera_path[ti].delta_connection == false) && (camera_path[ti - 1].delta_connection == false)) {
         result += r;
         ETX_VALIDATE(result);
       }
     }
 
-    if (y_curr.delta_light == false) {
+    if (y_curr.delta_emitter == false) {
       r = MAP(y_curr.pdf.backward) / MAP(y_curr.pdf.forward);
       ETX_VALIDATE(r);
       result += r;
@@ -474,7 +470,7 @@ struct CPUBidirectionalImpl : public Task {
     ReplaceInScope<float> z_prev_new;
 
     {
-      z_delta_new = {&z_curr.delta, false};
+      z_delta_new = {&z_curr.delta_connection, false};
       float z_curr_pdf = z_curr.pdf_to_light_in(spect, &z_prev, rt.scene());
       ETX_VALIDATE(z_curr_pdf);
       z_curr_new = {&z_curr.pdf.backward, z_curr_pdf};
@@ -497,7 +493,7 @@ struct CPUBidirectionalImpl : public Task {
       r *= MAP(camera_path[ti].pdf.backward) / MAP(camera_path[ti].pdf.forward);
       ETX_VALIDATE(r);
 
-      if ((camera_path[ti].delta == false) && (camera_path[ti - 1].delta == false)) {
+      if ((camera_path[ti].delta_connection == false) && (camera_path[ti - 1].delta_connection == false)) {
         result += r;
         ETX_VALIDATE(result);
       }
@@ -511,7 +507,6 @@ struct CPUBidirectionalImpl : public Task {
       return 1.0f;
     }
 
-    PathVertex z_curr = sampled;
     PathVertex& y_curr = emitter_path[light_s];
     PathVertex& y_prev = emitter_path[light_s - 1];
 
@@ -519,11 +514,11 @@ struct CPUBidirectionalImpl : public Task {
     ReplaceInScope<float> y_curr_new;
     ReplaceInScope<float> y_prev_new;
 
-    z_curr.delta = false;
+    PathVertex z_curr = sampled;
     z_curr.pdf.backward = y_curr.pdf_area(spect, PathSource::Light, &y_prev, &z_curr, rt.scene(), smp);
 
     {
-      y_delta_new = {&y_curr.delta, false};
+      y_delta_new = {&y_curr.delta_connection, false};
       float y_curr_pdf = 0.0f;
       ETX_ASSERT(z_curr.cls == PathVertex::Class::Camera);
       float pdf_dir = film_pdf_out(rt.scene().camera, y_curr.pos);
@@ -549,8 +544,8 @@ struct CPUBidirectionalImpl : public Task {
       r *= MAP(emitter_path[si].pdf.backward) / MAP(emitter_path[si].pdf.forward);
       ETX_VALIDATE(r);
 
-      bool delta_emitter = si > 1 ? emitter_path[si - 1u].delta : emitter_path[1].delta_light;
-      if ((emitter_path[si].delta == false) && (delta_emitter == false)) {
+      bool delta_emitter = (si > 1) ? emitter_path[si - 1u].delta_connection : emitter_path[1u].delta_emitter;
+      if ((emitter_path[si].delta_connection == false) && (delta_emitter == false)) {
         result += r;
         ETX_VALIDATE(result);
       }
@@ -578,7 +573,7 @@ struct CPUBidirectionalImpl : public Task {
     ReplaceInScope<float> y_prev_new;
 
     {
-      z_delta_new = {&z_curr.delta, false};
+      z_delta_new = {&z_curr.delta_connection, false};
       float z_curr_pdf = 0.0f;
       if (light_s > 0) {
         z_curr_pdf = y_curr.pdf_area(spect, PathSource::Light, &y_prev, &z_curr, rt.scene(), smp);
@@ -598,7 +593,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     {
-      y_delta_new = {&y_curr.delta, false};
+      y_delta_new = {&y_curr.delta_connection, false};
       float y_curr_pdf = 0.0f;
       y_curr_pdf = z_curr.pdf_area(spect, PathSource::Camera, &z_prev, &y_curr, rt.scene(), smp);
       ETX_VALIDATE(y_curr_pdf);
@@ -622,7 +617,7 @@ struct CPUBidirectionalImpl : public Task {
       r *= MAP(c.camera_path[ti].pdf.backward) / MAP(c.camera_path[ti].pdf.forward);
       ETX_VALIDATE(r);
 
-      if ((c.camera_path[ti].delta == false) && (c.camera_path[ti - 1].delta == false)) {
+      if ((c.camera_path[ti].delta_connection == false) && (c.camera_path[ti - 1].delta_connection == false)) {
         result += r;
         ETX_VALIDATE(result);
       }
@@ -633,8 +628,8 @@ struct CPUBidirectionalImpl : public Task {
       r *= MAP(c.emitter_path[si].pdf.backward) / MAP(c.emitter_path[si].pdf.forward);
       ETX_VALIDATE(r);
 
-      bool delta_emitter = si > 1 ? c.emitter_path[si - 1u].delta : c.emitter_path[1].delta_light;
-      if ((c.emitter_path[si].delta == false) && (delta_emitter == false)) {
+      bool delta_emitter = (si > 1) ? c.emitter_path[si - 1u].delta_connection : c.emitter_path[1u].delta_emitter;
+      if ((c.emitter_path[si].delta_connection == false) && (delta_emitter == false)) {
         result += r;
         ETX_VALIDATE(result);
       }
@@ -717,7 +712,7 @@ struct CPUBidirectionalImpl : public Task {
     sampled_vertex.pos = emitter_sample.origin;
     sampled_vertex.nrm = emitter_sample.normal;
     sampled_vertex.pdf.forward = sampled_vertex.pdf_to_light_in(spect, &z_i, rt.scene());
-    sampled_vertex.delta_light = emitter_sample.is_delta;
+    sampled_vertex.delta_emitter = emitter_sample.is_delta;
 
     SpectralResponse emitter_throughput = emitter_sample.value / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
     ETX_VALIDATE(emitter_throughput);
