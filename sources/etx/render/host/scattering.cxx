@@ -244,10 +244,10 @@ void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinct
     accum.z += scattering::ozone_absorbtion(float(w));
 
     if (i % kSpectrumStepSize == 0) {
-      r_samples.emplace_back(float(w), accum.x / static_cast<float>(kSpectrumStepSize));
-      m_samples.emplace_back(float(w), accum.y / static_cast<float>(kSpectrumStepSize));
-      o_samples.emplace_back(float(w), accum.z / static_cast<float>(kSpectrumStepSize));
-      b_samples.emplace_back(float(w), 0.0f);
+      r_samples.emplace_back(float2{float(w), accum.x / static_cast<float>(kSpectrumStepSize)});
+      m_samples.emplace_back(float2{float(w), accum.y / static_cast<float>(kSpectrumStepSize)});
+      o_samples.emplace_back(float2{float(w), accum.z / static_cast<float>(kSpectrumStepSize)});
+      b_samples.emplace_back(float2{float(w), 0.0f});
       accum = {};
       ++count;
     }

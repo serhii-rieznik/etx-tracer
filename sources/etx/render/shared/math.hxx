@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #if (ETX_RENDER_BASE_INCLUDED)
 #else

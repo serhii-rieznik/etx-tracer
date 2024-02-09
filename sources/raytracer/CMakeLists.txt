@@ -12,7 +12,11 @@ add_executable(raytracer
   denoiser.hxx
 )
 
-target_link_libraries(raytracer PRIVATE imgui sokol etx-core etx-render etx-rt tinyexr stb_image oidn)
+target_link_libraries(raytracer PRIVATE imgui sokol etx-core etx-render etx-rt tinyexr stb_image)
+
+if(WIN32)
+  target_link_libraries(raytracer PRIVATE oidn)
+endif()
 
 set_target_properties(raytracer PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"

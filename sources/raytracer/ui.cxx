@@ -16,6 +16,7 @@
 # include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <filesystem>
 
 namespace etx {
@@ -459,6 +460,7 @@ void UI::build(double dt, const char* status) {
     }
     ImGui::PopStyleColor(4);
 
+#if (ETX_PLATFORM_WINDOWS)
     ImGui::SameLine(0.0f, wpadding.x);
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
 
@@ -472,6 +474,7 @@ void UI::build(double dt, const char* status) {
     if (state_available[0] == false) {
       ImGui::EndDisabled();
     }
+#endif
 
     ImGui::SameLine(0.0f, wpadding.x);
 

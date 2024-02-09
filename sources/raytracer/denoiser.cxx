@@ -3,11 +3,14 @@
 #include <etx/core/log.hxx>
 #include <etx/render/shared/spectrum.hxx>
 
-#include <OpenImageDenoise/oidn.hpp>
+#if (ETX_PLATFORM_WINDOWS)
+# include <OpenImageDenoise/oidn.hpp>
+#endif
 
 namespace etx {
 
 struct DenoiserImpl {
+#if (ETX_PLATFORM_WINDOWS)
   OIDNDevice device = {};
 
   bool check_errors() {
@@ -19,6 +22,7 @@ struct DenoiserImpl {
     log::error(error_str);
     return false;
   }
+#endif
 };
 
 Denoiser::Denoiser() {
@@ -30,17 +34,21 @@ Denoiser::~Denoiser() {
 }
 
 void Denoiser::init() {
+#if (ETX_PLATFORM_WINDOWS)
   int32_t device_count = oidnGetNumPhysicalDevices();
-
   _private->device = oidnNewDevice(OIDN_DEVICE_TYPE_DEFAULT);
   oidnCommitDevice(_private->device);
+#endif
 }
 
 void Denoiser::shutdown() {
+#if (ETX_PLATFORM_WINDOWS)
   oidnReleaseDevice(_private->device);
+#endif
 }
 
 void Denoiser::denoise(const float4* image, const float4* albedo, const float4* normal, float4* output, const uint2 size) {
+#if (ETX_PLATFORM_WINDOWS)
   auto color_buffer = oidnNewBuffer(_private->device, sizeof(float3) * size.x * size.y);
   auto normal_buffer = oidnNewBuffer(_private->device, sizeof(float3) * size.x * size.y);
   auto filter = oidnNewFilter(_private->device, "RT");
@@ -71,6 +79,11 @@ void Denoiser::denoise(const float4* image, const float4* albedo, const float4* 
 
   oidnReleaseBuffer(color_buffer);
   oidnReleaseBuffer(normal_buffer);
+#else
+  for (uint32_t i = 0, e = size.x * size.y; i < e; ++i) {
+    output[i] = image[i];
+  }
+#endif
 }
 
 }  // namespace etx
