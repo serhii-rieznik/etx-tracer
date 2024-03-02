@@ -65,13 +65,13 @@
   #define OIDN_DEVICE_CPU
 #endif
 #if !defined(OIDN_DEVICE_SYCL)
-  #define OIDN_DEVICE_SYCL
+/* #undef OIDN_DEVICE_SYCL */
 #endif
 #if !defined(OIDN_DEVICE_CUDA)
-  #define OIDN_DEVICE_CUDA
+/* #undef OIDN_DEVICE_CUDA */
 #endif
 #if !defined(OIDN_DEVICE_HIP)
-  #define OIDN_DEVICE_HIP
+/* #undef OIDN_DEVICE_HIP */
 #endif
 
 #define OIDN_FILTER_RT

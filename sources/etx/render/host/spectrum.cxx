@@ -1,4 +1,4 @@
-﻿#include <etx/render/shared/spectrum.hxx>
+#include <etx/render/shared/spectrum.hxx>
 
 #include <vector>
 #include <algorithm>
@@ -168,8 +168,8 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
   for (auto& sample : samples) {
     float w = sample.wavelength * scale;
     if ((w >= spectrum::kShortestWavelength) && (w <= spectrum::kLongestWavelength)) {
-      samples0.emplace_back(w, sample.values[0]);
-      samples1.emplace_back(w, sample.values[1]);
+      samples0.emplace_back(float2{w, sample.values[0]});
+      samples1.emplace_back(float2{w, sample.values[1]});
     }
   }
 
