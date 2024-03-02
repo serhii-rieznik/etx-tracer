@@ -16,6 +16,8 @@ struct CPUDebugIntegrator : public Integrator {
     FaceOrientation,
     DiffuseColors,
     Fresnel,
+    Thickness,
+    Spectrum,
     Count,
   };
   static std::string mode_to_string(uint32_t);

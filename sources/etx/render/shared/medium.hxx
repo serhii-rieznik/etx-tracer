@@ -24,7 +24,7 @@ ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const
   }
 
   pdf = at / at.sum();
-  return 2u - uint32_t(rnd < pdf.components.x + pdf.components.y) - uint32_t(rnd < pdf.components.x);
+  return 2u - uint32_t(rnd < pdf.components.xyz.x + pdf.components.xyz.y) - uint32_t(rnd < pdf.components.xyz.x);
 }
 
 ETX_GPU_CODE float phase_function(const float3& w_i, const float3& w_o, const float g) {
@@ -155,19 +155,20 @@ struct ETX_ALIGNED Medium {
     }
   }
 
+  static SpectralResponse calculate_albedo(const SpectralQuery spect, const SpectralResponse& scattering, const SpectralResponse& extinction) {
+    SpectralResponse albedo = {spect, scattering.components.w > 0.0f ? (extinction.components.w / scattering.components.w) : 0.0f};
+    albedo.components.xyz.x = scattering.components.xyz.x > 0.0f ? (extinction.components.xyz.x / scattering.components.xyz.x) : 0.0f;
+    albedo.components.xyz.y = scattering.components.xyz.y > 0.0f ? (extinction.components.xyz.y / scattering.components.xyz.y) : 0.0f;
+    albedo.components.xyz.z = scattering.components.xyz.z > 0.0f ? (extinction.components.xyz.z / scattering.components.xyz.z) : 0.0f;
+    return albedo;
+  }
+
   ETX_GPU_CODE Sample sample_homogeneous(const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos, const float3& w_i, float max_t) const {
     SpectralResponse scattering = s_scattering(spect);
     SpectralResponse absorption = s_absorption(spect);
     SpectralResponse extinction = scattering + absorption;
 
-    SpectralResponse albedo = {
-      spect,
-      {
-        scattering.components.x > 0.0f ? (extinction.components.x / scattering.components.x) : 0.0f,
-        scattering.components.y > 0.0f ? (extinction.components.y / scattering.components.y) : 0.0f,
-        scattering.components.z > 0.0f ? (extinction.components.z / scattering.components.z) : 0.0f,
-      },
-    };
+    SpectralResponse albedo = calculate_albedo(spect, scattering, extinction);
 
     SpectralResponse pdf = {};
     uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp, pdf);

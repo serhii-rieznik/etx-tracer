@@ -9,7 +9,6 @@ struct ETX_ALIGNED PTOptions {
   uint32_t path_per_iteration ETX_INIT_WITH(1u);
   bool nee ETX_INIT_WITH(true);
   bool mis ETX_INIT_WITH(true);
-  // bool spectral ETX_INIT_WITH(false);
 };
 
 struct ETX_ALIGNED PTRayPayload {
@@ -52,14 +51,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
   SpectralResponse absorption = medium.s_absorption(spect);
 
   SpectralResponse extinction = scattering + absorption;
-  SpectralResponse albedo = {
-    spect,
-    {
-      scattering.components.x > 0.0f ? (extinction.components.x / scattering.components.x) : 0.0f,
-      scattering.components.y > 0.0f ? (extinction.components.y / scattering.components.y) : 0.0f,
-      scattering.components.z > 0.0f ? (extinction.components.z / scattering.components.z) : 0.0f,
-    },
-  };
+  SpectralResponse albedo = Medium::calculate_albedo(spect, scattering, extinction);
 
   float3 n = in_intersection.nrm * ((dot(in_intersection.w_i, in_intersection.nrm) < 0.0f) ? -1.0f : +1.0f);
 
@@ -105,7 +97,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
     if (intersection_found) {
       result.intersections[0] = local_i;
       result.intersections[0].w_i = in_intersection.w_i;
-      result.weights[0] = throughput * apply_image(spect, mat.transmittance, local_i.tex, scene);
+      result.weights[0] = throughput * apply_image(spect, mat.transmittance, local_i.tex, scene, rgb::SpectrumClass::Reflection);
       result.intersection_count = 1u;
       result.selected_intersection = 0;
       result.selected_sample_weight = 1.0f;

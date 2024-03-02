@@ -19,12 +19,13 @@ struct CPUDebugIntegratorImpl : public Task {
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   uint32_t iteration = 0u;
-  uint32_t max_iterations = 32u;
   uint32_t current_scale = 1u;
   uint32_t preview_frames = 3u;
-  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Geometry;
+  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Spectrum;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
-  bool spectral = false;
+  float th_factor = 1.0f;
+  float th_min = 0.0f;
+  float th_max = 1.0f;
 
   CPUDebugIntegratorImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
@@ -34,6 +35,10 @@ struct CPUDebugIntegratorImpl : public Task {
 
   void start(const Options& opt) {
     mode = opt.get("mode", uint32_t(mode)).to_enum<CPUDebugIntegrator::Mode>();
+    th_factor = opt.get("t-factor", th_factor).to_float();
+    th_min = opt.get("t-min", th_min).to_float();
+    th_max = opt.get("t-max", th_max).to_float();
+
     voxel_data[0] = opt.get("v000", voxel_data[0]).to_float();
     voxel_data[1] = opt.get("v001", voxel_data[1]).to_float();
     voxel_data[2] = opt.get("v100", voxel_data[2]).to_float();
@@ -60,7 +65,7 @@ struct CPUDebugIntegratorImpl : public Task {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
       float2 uv = get_jittered_uv(smp, {x, y}, current_dimensions);
-      float3 xyz = preview_pixel(smp, uv);
+      float3 xyz = preview_pixel(smp, uv, {x, y});
 
       if (state->load() == Integrator::State::Running) {
         camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(iteration) / (float(iteration + 1)));
@@ -265,15 +270,48 @@ struct CPUDebugIntegratorImpl : public Task {
     return normalize(result);
   }
 
-  float3 preview_pixel(RNDSampler& smp, const float2& uv) {
+  float3 preview_pixel(RNDSampler& smp, const float2& uv, const uint2& xy) const {
     const auto& scene = rt.scene();
     auto ray = generate_ray(smp, scene, uv);
-    auto spect = spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
+    auto spect = scene.spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
-    float3 xyz = {0.1f, 0.1f, 0.1f};
+    float3 xyz = {};
 
     Intersection intersection;
-    if (rt.trace(scene, ray, intersection, smp)) {
+
+    if (mode == CPUDebugIntegrator::Mode::Spectrum) {
+      float t = float(xy.x) / float(current_dimensions.x - 1u);
+      float s = float(xy.y) / float(current_dimensions.y - 1u);
+
+      constexpr float kBandCount = 3.0f;
+      uint32_t band = static_cast<uint32_t>(clamp(kBandCount * s, 0.0f, kBandCount - 1.0f));
+
+      uint32_t band_size = current_dimensions.y / uint32_t(kBandCount);
+
+      static auto s00 = SpectralDistribution::from_constant(0.5f);
+      static auto s01 = SpectralDistribution::from_constant(1.0f);
+      static auto s10 = rgb::make_spd({0.5f, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Reflection);
+      static auto s11 = rgb::make_spd({1.0f, 1.0f, 1.0f}, scene.spectrums, rgb::SpectrumClass::Reflection);
+      static auto s20 = rgb::make_spd({0.5f, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Illuminant);
+      static auto s21 = rgb::make_spd({1.0f, 1.0f, 1.0f}, scene.spectrums, rgb::SpectrumClass::Illuminant);
+
+      switch (band) {
+        case 0: {
+          xyz = (t < 0.5f ? s00 : s01)(spect).to_xyz() / spect.sampling_pdf();
+          break;
+        }
+        case 1: {
+          xyz = (t < 0.5f ? s10 : s11)(spect).to_xyz() / spect.sampling_pdf();
+          break;
+        }
+        case 2: {
+          xyz = (t < 0.5f ? s20 : s21)(spect).to_xyz() / spect.sampling_pdf();
+          break;
+        }
+        default:
+          break;
+      }
+    } else if (rt.trace(scene, ray, intersection, smp)) {
       bool entering_material = dot(ray.d, intersection.nrm) < 0.0f;
 
       switch (mode) {
@@ -304,7 +342,7 @@ struct CPUDebugIntegratorImpl : public Task {
         };
         case CPUDebugIntegrator::Mode::DiffuseColors: {
           const auto& mat = scene.materials[intersection.material_index];
-          xyz = apply_image(spect, mat.diffuse, intersection.tex, rt.scene()).to_xyz();
+          xyz = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), rgb::SpectrumClass::Reflection).to_xyz();
           break;
         };
         case CPUDebugIntegrator::Mode::Fresnel: {
@@ -331,6 +369,68 @@ struct CPUDebugIntegratorImpl : public Task {
           xyz = fr.to_xyz();
           break;
         };
+        case CPUDebugIntegrator::Mode::Thickness: {
+          auto remap_color = [this](float t) -> float3 {
+            t = saturate((t - th_min) / (th_max - th_min));
+            float3 result = {
+              fmaxf(0.0f, cosf(t * kHalfPi)),
+              fmaxf(0.0f, sinf(t * kPi)),
+              fmaxf(0.0f, sinf(t * kHalfPi)),
+            };
+            ETX_VALIDATE(result);
+            result = gamma_to_linear(result);
+            ETX_VALIDATE(result);
+            return result;
+          };
+
+          constexpr uint32_t kSampleCount = 64u;
+          float distances[kSampleCount] = {};
+          float average = 0.0f;
+          uint32_t distance_count = 0;
+          const float3 p0 = offset_ray(intersection.pos, -intersection.nrm);
+          for (uint32_t i = 0; i < kSampleCount; ++i) {
+            float3 d = -sample_cosine_distribution(smp.next_2d(), intersection.nrm, th_factor);
+            Intersection e;
+            Ray tr = {p0, d};
+            tr.max_t = 2.0f * th_max;
+            bool intersection_found = rt.trace(scene, tr, e, smp);
+            average += intersection_found ? e.t : tr.max_t;
+            distances[distance_count++] = intersection_found ? e.t : tr.max_t;
+          }
+
+          if (distance_count == 0) {
+            xyz = spectrum::rgb_to_xyz({1.0f, 0.0f, 1.0f});
+            break;
+          }
+
+          if (distance_count == 1) {
+            xyz = spectrum::rgb_to_xyz(remap_color(distances[0]));
+            break;
+          }
+
+          average /= float(distance_count);
+
+          float std_dev = 0.0f;
+          for (uint32_t i = 0; i < distance_count; ++i) {
+            std_dev += sqr(distances[i] - average);
+          }
+          std_dev = sqrtf(std_dev / distance_count);
+
+          float thickness = 0.0f;
+          float total_count = 0.0f;
+          for (uint32_t i = 0; i < distance_count; ++i) {
+            float dev = fabsf(distances[i] - average) / (std_dev + kEpsilon);
+            if (dev <= 1.0f) {
+              thickness += distances[i];
+              total_count += 1.0f;
+            }
+          }
+
+          float out_value = thickness / (total_count + kEpsilon);
+
+          xyz = spectrum::rgb_to_xyz(remap_color(out_value));
+          break;
+        }
         default: {
           float d = fabsf(dot(intersection.nrm, ray.d));
           xyz = spectrum::rgb_to_xyz({d, d, d});
@@ -391,7 +491,7 @@ void CPUDebugIntegrator::update() {
   bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
 
   if (should_stop && rt.scheduler().completed(_private->current_task)) {
-    if ((current_state == State::WaitingForCompletion) || (_private->iteration >= _private->max_iterations)) {
+    if ((current_state == State::WaitingForCompletion) || (_private->iteration >= rt.scene().samples)) {
       rt.scheduler().wait(_private->current_task);
       _private->current_task = {};
       if (current_state == State::Preview) {
@@ -434,6 +534,13 @@ void CPUDebugIntegrator::stop(Stop st) {
 Options CPUDebugIntegrator::options() const {
   Options result = {};
   result.add(_private->mode, Mode::Count, &CPUDebugIntegrator::mode_to_string, "mode", "Visualize");
+
+  if (_private->mode == Mode::Thickness) {
+    result.add(0.0f, _private->th_factor, 1024.0f, "t-factor", "Thickness cone factor");
+    result.add(0.0f, _private->th_min, 1024.0f, "t-min", "Min Thickness");
+    result.add(0.0f, _private->th_max, 1024.0f, "t-max", "Max Thickness");
+  }
+
   return result;
 }
 
@@ -457,6 +564,10 @@ std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
       return "Diffuse Colors";
     case Mode::Fresnel:
       return "Fresnel Coefficients";
+    case Mode::Thickness:
+      return "Thickness";
+    case Mode::Spectrum:
+      return "Spectrum";
     default:
       return "???";
   }

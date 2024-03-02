@@ -39,18 +39,9 @@ struct OptionalValue {
     : cls(Class::Integer)
     , id(a_id)
     , name(desc) {
-    min_value.integer = val;
+    min_value.integer = 0;
     value.integer = val;
-    max_value.integer = val;
-  }
-
-  OptionalValue(float val, const std::string& a_id, const std::string& desc)
-    : cls(Class::Float)
-    , id(a_id)
-    , name(desc) {
-    min_value.flt = val;
-    value.flt = val;
-    max_value.flt = val;
+    max_value.integer = std::numeric_limits<uint32_t>::max();
   }
 
   OptionalValue(uint32_t min_val, uint32_t val, uint32_t max_val, const std::string& a_id, const std::string& desc)
@@ -60,6 +51,15 @@ struct OptionalValue {
     min_value.integer = min_val;
     value.integer = val;
     max_value.integer = max_val;
+  }
+
+  OptionalValue(float val, const std::string& a_id, const std::string& desc)
+    : cls(Class::Float)
+    , id(a_id)
+    , name(desc) {
+    min_value.flt = -std::numeric_limits<float>::max();
+    value.flt = val;
+    max_value.flt = std::numeric_limits<float>::max();
   }
 
   OptionalValue(float min_val, float val, float max_val, const std::string& a_id, const std::string& desc)

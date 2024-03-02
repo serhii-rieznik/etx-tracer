@@ -316,7 +316,7 @@ struct ImagePoolImpl {
         memcpy(ptr, image, sizeof(float4) * w * h);
       } else {
         for (int i = 0; i < w * h; ++i) {
-          ptr[i] = {image[3 * i + 0], image[3 * i + 1], image[3 * i + 1], 1.0f};
+          ptr[i] = {image[3 * i + 0], image[3 * i + 1], image[3 * i + 2], 1.0f};
         }
       }
       free(image);

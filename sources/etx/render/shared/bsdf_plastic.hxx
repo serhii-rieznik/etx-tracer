@@ -24,8 +24,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   }
 
   float n_dot_o = dot(frame.nrm, result.w_o);
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection);
+  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection);
 
   if (reflection) {
     result.weight = specular * fr / f;
@@ -53,7 +53,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
   auto inv_fr = 1.0f - fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection);
 
   BSDFEval result;
   result.func = diffuse * (kInvPi * inv_fr);
@@ -141,8 +141,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto eval = ggx.evaluate(m, data.w_i, w_o);
   float j = 1.0f / (4.0f * m_dot_o);
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection);
+  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection);
 
   BSDFEval result;
   result.func = diffuse * (kInvPi * (1.0f - fr)) + specular * (fr * eval.ndf * eval.visibility / (4.0f * n_dot_i * n_dot_o));

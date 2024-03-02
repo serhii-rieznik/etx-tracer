@@ -213,11 +213,11 @@ struct CPUBidirectionalImpl : public Task {
         ray.o = medium_sample.pos;
         ray.d = w_o;
 
-        if ((mode == PathSource::Light) && (path.size() == 3) && em.is_distant) {
-          path[1].pdf.forward = emitter_pdf_in_dist(rt.scene().emitters[em.emitter_index], em.direction, rt.scene());
-          ETX_VALIDATE(path[1].pdf.forward);
-          path[2].pdf.forward = em.pdf_area;
-          ETX_VALIDATE(path[2].pdf.forward);
+        if ((mode == PathSource::Light) && em.is_distant && (path.size() == 3)) {
+            path[1].pdf.forward = emitter_pdf_in_dist(rt.scene().emitters[em.emitter_index], em.direction, rt.scene());
+            ETX_VALIDATE(path[1].pdf.forward);
+            path[2].pdf.forward = em.pdf_area;
+            ETX_VALIDATE(path[2].pdf.forward);
         }
 
         bool can_connect = path.size() <= max_path_len + 1u;
@@ -293,17 +293,13 @@ struct CPUBidirectionalImpl : public Task {
           terminate_path = true;
         }
 
-        if ((mode == PathSource::Light) && em.is_distant) {
-          if (path.size() == 2) {
-            path[1].pdf.forward = emitter_pdf_in_dist(rt.scene().emitters[em.emitter_index], em.direction, rt.scene());
-            ETX_VALIDATE(path[1].pdf.forward);
-          }
-          if (path.size() == 3) {
-            path[2].pdf.forward = em.pdf_area;
-            if (path[2].cls == PathVertex::Class::Surface) {
-              path[2].pdf.forward *= fabsf(dot(em.direction, tri.geo_n));
-              ETX_VALIDATE(path[2].pdf.forward);
-            }
+        if ((mode == PathSource::Light) && em.is_distant && (path.size() == 3)) {
+          path[1].pdf.forward = emitter_pdf_in_dist(rt.scene().emitters[em.emitter_index], em.direction, rt.scene());
+          ETX_VALIDATE(path[1].pdf.forward);
+          path[2].pdf.forward = em.pdf_area;
+          if (path[2].cls == PathVertex::Class::Surface) {
+            path[2].pdf.forward *= fabsf(dot(em.direction, tri.geo_n));
+            ETX_VALIDATE(path[2].pdf.forward);
           }
         }
 

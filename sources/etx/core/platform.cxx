@@ -1,7 +1,3 @@
-#include <etx/core/core.hxx>
-
-#include <atomic>
-
 #if (ETX_PLATFORM_APPLE)
 # include <libkern/OSAtomic.h>
 #endif

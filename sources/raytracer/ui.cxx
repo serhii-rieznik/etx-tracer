@@ -1,6 +1,5 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
-#include <etx/render/host/image_pool.hxx>
 
 #include "ui.hxx"
 
@@ -286,7 +285,7 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Poin
       rgb = gamma_to_linear(rgb);
     }
     rgb = max(rgb, float3{});
-    spd = rgb::make_reflectance_spd(rgb, spectrums);
+    spd = rgb::make_spd(rgb, spectrums, rgb::SpectrumClass::Reflection);
     changed = true;
   }
 
@@ -501,6 +500,7 @@ void UI::build(double dt, const char* status) {
   if ((_ui_setup & UIIntegrator) && ImGui::Begin("Integrator options", nullptr, kWindowFlags)) {
     if (has_integrator) {
       ImGui::Text("%s", _current_integrator->name());
+      _integrator_options = _current_integrator->options();
       if (build_options(_integrator_options) && callbacks.options_changed) {
         callbacks.options_changed();
       }
@@ -772,7 +772,6 @@ ViewOptions UI::view_options() const {
 
 void UI::set_current_integrator(Integrator* i) {
   _current_integrator = i;
-  _integrator_options = _current_integrator ? _current_integrator->options() : Options{};
 }
 
 void UI::quit() {
