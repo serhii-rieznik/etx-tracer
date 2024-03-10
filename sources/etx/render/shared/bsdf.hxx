@@ -360,17 +360,18 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
       result.components.w = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), thinfilm.ior.as_complex(), int_ior.as_complex(), thinfilm.thickness);
     }
   } else {
-    float3 result_rgb = {};
+    float3 values = {};
     if ((thinfilm.thickness == 0.0f) || thinfilm.ior.eta.is_zero()) {
-      result_rgb.x = fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x());
-      result_rgb.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
-      result_rgb.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
+      values.x = fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x());
+      values.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
+      values.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
     } else {
-      result_rgb.x = fresnel_thinfilm(rgb_wl.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
-      result_rgb.y = fresnel_thinfilm(rgb_wl.y, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
-      result_rgb.z = fresnel_thinfilm(rgb_wl.z, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
+      values.x = fresnel_thinfilm(rgb_wl.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+      values.y = fresnel_thinfilm(rgb_wl.y, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
+      values.z = fresnel_thinfilm(rgb_wl.z, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
+      values = max(float3{}, spectrum::rgb_to_xyz(values));
     }
-    result.components.xyz = max(float3{}, spectrum::rgb_to_xyz(result_rgb));
+    result.components.xyz = values;  // max(float3{}, spectrum::rgb_to_xyz(result_rgb));
   }
 
   return result;
