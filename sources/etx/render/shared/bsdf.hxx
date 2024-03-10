@@ -244,6 +244,8 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
 
 namespace fresnel {
 
+constexpr float3 kThinfilmRGBWavelengths = {621.0f, 543.0f, 452.0f};
+
 ETX_GPU_CODE auto reflectance(const complex& ext_ior, float cos_theta_i, const complex& int_ior, float cos_theta_j) {
   struct result {
     complex rs, rp;
@@ -293,7 +295,7 @@ ETX_GPU_CODE auto transmittance(const complex& ext_ior, float cos_theta_i, const
 
 ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_ior, const complex& int_ior) {
   auto sin_theta_o_squared = sqr(ext_ior / int_ior).real() * (1.0f - cos_theta_i * cos_theta_i);
-  if (sin_theta_o_squared > 1.0f)
+  if (sin_theta_o_squared >= 1.0f)
     return 1.0f;
 
   auto cos_theta_o = sqrtf(1.0f - sin_theta_o_squared);
@@ -303,6 +305,9 @@ ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_i
 }
 
 ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
+  if (cos_theta_0 == 0.0f)
+    return 0.0f;
+
   float sin_theta_1_squared = sqr(ext_ior / film_ior).real() * (1.0f - cos_theta_0 * cos_theta_0);
   if (sin_theta_1_squared > 1.0f)
     return 0.0f;
@@ -339,51 +344,35 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
   return complex_abs(1.0f - ratio * 0.5f * (tp + ts));
 }
 
-ETX_GPU_CODE SpectralResponse conductor(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior,
-  const Thinfilm::Eval& thinfilm) {
+ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior,
+  const Thinfilm::Eval& thinfilm, const float3& rgb_wl = kThinfilmRGBWavelengths) {
   ETX_ASSERT(spect.wavelength == ext_ior.wavelength);
   ETX_ASSERT(spect.wavelength == int_ior.wavelength);
 
-  float cos_theta = fabsf(dot(i, m));
+  cos_theta = fabsf(cos_theta);
 
   SpectralResponse result = {spect, 0.0f};
 
-  if (thinfilm.thickness == 0.0f) {
-    if (spect.spectral()) {
-      result.components.w = fresnel_generic(cos_theta, ext_ior.as_complex(), int_ior.as_complex());
-    } else if (spect.spectral() == false) {
-      result.components.xyz.x = fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x());
-      result.components.xyz.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
-      result.components.xyz.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
-    }
-  } else if (spect.spectral()) {
-    result.components.w = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), thinfilm.ior.as_complex(), int_ior.as_complex(), thinfilm.thickness);
-  } else {
-    result.components.xyz.x = fresnel_thinfilm(690.0f, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
-    result.components.xyz.y = fresnel_thinfilm(550.0f, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
-    result.components.xyz.z = fresnel_thinfilm(430.0f, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
-  }
-
-  return result;
-}
-
-ETX_GPU_CODE SpectralResponse dielectric(SpectralQuery spect, const float3& i, const float3& m, const RefractiveIndex::Sample ext_ior, const RefractiveIndex::Sample int_ior,
-  const Thinfilm::Eval& thinfilm) {
-  float cos_theta = fabsf(dot(i, m));
-  if (thinfilm.thickness == 0.0f) {
-    auto c_e = ext_ior.as_monochromatic_complex();
-    auto c_i = int_ior.as_monochromatic_complex();
-    return {spect, fresnel_generic(cos_theta, c_e, c_i)};
-  }
-
-  SpectralResponse result = {spect, 0.0f};
   if (spect.spectral()) {
-    result.components.w = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), thinfilm.ior.as_complex(), int_ior.as_complex(), thinfilm.thickness);
+    if ((thinfilm.thickness == 0.0f) || thinfilm.ior.eta.is_zero()) {
+      result.components.w = fresnel_generic(cos_theta, ext_ior.as_complex(), int_ior.as_complex());
+    } else {
+      result.components.w = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), thinfilm.ior.as_complex(), int_ior.as_complex(), thinfilm.thickness);
+    }
   } else {
-    result.components.xyz.x = fresnel_thinfilm(690.0f, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_y(), int_ior.as_complex_z(), thinfilm.thickness);
-    result.components.xyz.y = fresnel_thinfilm(550.0f, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_y(), int_ior.as_complex_z(), thinfilm.thickness);
-    result.components.xyz.z = fresnel_thinfilm(430.0f, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_y(), int_ior.as_complex_z(), thinfilm.thickness);
+    float3 result_rgb = {};
+    if ((thinfilm.thickness == 0.0f) || thinfilm.ior.eta.is_zero()) {
+      result_rgb.x = fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x());
+      result_rgb.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
+      result_rgb.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
+    } else {
+      result_rgb.x = fresnel_thinfilm(rgb_wl.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+      result_rgb.y = fresnel_thinfilm(rgb_wl.y, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
+      result_rgb.z = fresnel_thinfilm(rgb_wl.z, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
+    }
+    result.components.xyz = max(float3{}, spectrum::rgb_to_xyz(result_rgb));
   }
+
   return result;
 }
 

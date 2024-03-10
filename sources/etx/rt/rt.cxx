@@ -467,8 +467,8 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
     if (mat.cls == Material::Class::Thinfilm) {
       auto thinfilm = evaluate_thinfilm(ctx->spect, mat.thinfilm, uv, scene);
-      bool entering_material = dot(nrm, ctx->direction) < 0.0f;
-      SpectralResponse fr = fresnel::dielectric(ctx->spect, ctx->direction, (entering_material ? nrm : -nrm), mat.ext_ior(ctx->spect), mat.int_ior(ctx->spect), thinfilm);
+      float n_dot_t = dot(nrm, ctx->direction);
+      SpectralResponse fr = fresnel::calculate(ctx->spect, n_dot_t, mat.ext_ior(ctx->spect), mat.int_ior(ctx->spect), thinfilm);
       ctx->value *= 1.0f - fr;
       stop_tracing = ctx->smp->next() < fr.monochromatic();
     }

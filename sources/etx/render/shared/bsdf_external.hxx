@@ -216,7 +216,7 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_conductor(SpectralQuery spect, c
     return {spect, 0.0f};
 
   // value
-  auto f = fresnel::conductor(spect, -ray.w, wh, ext_ior, int_ior, thinfilm);
+  auto f = fresnel::calculate(spect, w_dot_h, ext_ior, int_ior, thinfilm);
   ETX_VALIDATE(f);
 
   float d_ggx = D_ggx(wh, alpha_x, alpha_y);
@@ -255,8 +255,9 @@ ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& 
   }
 
   // reflect
-  weight = fresnel::conductor(spect, wi, wm, ext_ior, int_ior, thinfilm);
-  return -wi + 2.0f * wm * dot(wi, wm);
+  float i_dot_m = dot(wi, wm);
+  weight = fresnel::calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
+  return -wi + 2.0f * wm * i_dot_m;
 }
 
 ETX_GPU_CODE float3 sample_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y, const RefractiveIndex::Sample& ext_ior,
@@ -317,7 +318,7 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
   const float3 wh = normalize(wi + wo);
   const float D = D_ggx(wh, alpha_x, alpha_y);
   const float G2 = 1.0f / (1.0f + (-ray.Lambda - 1.0f) + ray_shadowing.Lambda);
-  SpectralResponse singleScattering = fresnel::conductor(spect, ray.w, wh, ext_ior, int_ior, thinfilm) * D * G2 / (4.0f * wi.z);
+  SpectralResponse singleScattering = fresnel::calculate(spect, dot(ray.w, wh), ext_ior, int_ior, thinfilm) * D * G2 / (4.0f * wi.z);
   ETX_VALIDATE(singleScattering);
 
   // MIS weight
@@ -409,7 +410,7 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery s
     if (wh.z < 0.0f)
       return {spect, 0.0f};
 
-    SpectralResponse f = fresnel::dielectric(spect, ray.w, wh, ext_ior, int_ior, thinfilm);
+    SpectralResponse f = fresnel::calculate(spect, dot(ray.w, wh), ext_ior, int_ior, thinfilm);
     float i_dot_m = -dot(wh, ray.w);
     if (i_dot_m < 0)
       return {spect, 0.0f};
@@ -426,7 +427,7 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery s
     return {spect, 0.0f};
 
   float o_dot_m = dot(wo, wh);
-  SpectralResponse f = fresnel::dielectric(spect, ray.w, wh, ext_ior, int_ior, thinfilm);
+  SpectralResponse f = fresnel::calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
   return eta * eta * (1.0f - f) * i_dot_m * max(0.0f, -o_dot_m) * D_ggx(wh, alpha_x, alpha_y)  //
          / (projectedArea * sqr(i_dot_m + eta * o_dot_m));
 }
@@ -461,11 +462,12 @@ ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sa
     wm = normalize(float3{-slope.x, -slope.y, 1.0f});
   }
 
-  auto f = fresnel::dielectric(spect, wi, wm, ext_ior, int_ior, thinfilm);
+  float i_dot_m = dot(wi, wm);
+  auto f = fresnel::calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
   reflection = smp.next() < f.monochromatic();
 
   float eta = int_ior.eta.monochromatic() / ext_ior.eta.monochromatic();
-  return reflection ? (-wi + 2.0f * wm * dot(wi, wm)) : normalize(refract(wi, wm, eta));
+  return reflection ? (-wi + 2.0f * wm * i_dot_m) : normalize(refract(wi, wm, eta));
 }
 
 // MIS weights for bidirectional path tracing on the microsurface

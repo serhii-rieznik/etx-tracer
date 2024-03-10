@@ -17,7 +17,7 @@ struct CPUDebugIntegrator : public Integrator {
     DiffuseColors,
     Fresnel,
     Thickness,
-    Spectrum,
+    Thinfilm,
     Count,
   };
   static std::string mode_to_string(uint32_t);
@@ -43,7 +43,7 @@ struct CPUDebugIntegrator : public Integrator {
   void stop(Stop) override;
 
  private:
-  ETX_DECLARE_PIMPL(CPUDebugIntegrator, 4096);
+  ETX_DECLARE_PIMPL(CPUDebugIntegrator, 1024u * 32u);
 };
 
 }  // namespace etx

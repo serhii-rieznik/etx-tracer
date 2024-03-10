@@ -12,7 +12,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto ior_i = (frame.entering_material() ? mtl.ext_ior : mtl.int_ior)(data.spectrum_sample);
   auto ior_o = (frame.entering_material() ? mtl.int_ior : mtl.ext_ior)(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  SpectralResponse fr = fresnel::dielectric(data.spectrum_sample, data.w_i, frame.nrm, ior_i, ior_o, thinfilm);
+  SpectralResponse fr = fresnel::calculate(data.spectrum_sample, cos_theta_i, ior_i, ior_o, thinfilm);
   float f = fr.monochromatic();
   BSDFSample result;
   if (smp.next() <= f) {
@@ -60,13 +60,14 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  SpectralResponse fr = fresnel::dielectric(data.spectrum_sample, data.w_i, frame.nrm, ext_ior, int_ior, thinfilm);
+  float i_dot_n = dot(data.w_i, frame.nrm);
+  SpectralResponse fr = fresnel::calculate(data.spectrum_sample, i_dot_n, ext_ior, int_ior, thinfilm);
   float f = fr.monochromatic();
 
   BSDFSample result = {};
   if (smp.next() <= f) {
     result.w_o = reflect(data.w_i, frame.nrm);
-    if (dot(data.w_i, frame.nrm) * dot(result.w_o, frame.nrm) >= 0.0f) {
+    if (i_dot_n * dot(result.w_o, frame.nrm) >= 0.0f) {
       return {{data.spectrum_sample, 0.0f}};
     }
     result.w_o = normalize(result.w_o);
@@ -274,7 +275,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   float prob = max(0.0f, dot(wh, ray.w)) * d_ggx / (1.0f + ray.Lambda) / LocalFrame::cos_theta(ray.w);
   ETX_VALIDATE(prob);
 
-  float F = fresnel::dielectric(data.spectrum_sample, w_i, wh, outside ? ext_ior : int_ior, outside ? int_ior : ext_ior, thinfilm).monochromatic();
+  float F = fresnel::calculate(data.spectrum_sample, dot(w_i, wh), outside ? ext_ior : int_ior, outside ? int_ior : ext_ior, thinfilm).monochromatic();
   ETX_VALIDATE(F);
 
   prob *= reflect ? F : (1 - F);
