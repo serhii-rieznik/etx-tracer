@@ -98,7 +98,7 @@ ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfil
     return {{}, 0.0f};
   }
 
-  float t = (film.thinkness_image == kInvalidIndex) ? 1.0f : scene.images[film.thinkness_image].evaluate(uv).x;
+  float t = (film.thinkness_image == kInvalidIndex) ? 1.0f : scene.images[film.thinkness_image].evaluate(uv, nullptr).x;
   float thickness = lerp(film.min_thickness, film.max_thickness, t);
   return {film.ior(spect), thickness};
 }
@@ -109,7 +109,7 @@ ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const 
 
   auto uv = lerp_uv(scene.vertices, t, bc);
   const auto& img = scene.images[mat.diffuse.image_index];
-  return (img.options & Image::HasAlphaChannel) && (img.evaluate(uv).w <= smp.next());
+  return (img.options & Image::HasAlphaChannel) && (img.evaluate_alpha(uv) <= smp.next());
 }
 
 }  // namespace etx

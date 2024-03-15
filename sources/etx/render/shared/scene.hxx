@@ -154,26 +154,34 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
   return false;
 }
 
-ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, rgb::SpectrumClass cls) {
+ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene, rgb::SpectrumClass cls) {
+  if (spect.spectral()) {
+    auto scale = rgb::query_spd(spect, {value.x, value.y, value.z}, cls == rgb::SpectrumClass::Illuminant ? scene.spectrums->rgb_illuminant : scene.spectrums->rgb_reflection);
+    ETX_VALIDATE(scale);
+    response *= scale;
+    ETX_VALIDATE(result);
+  } else {
+    float3 result_rgb = spectrum::xyz_to_rgb(response.components.xyz);
+    response.components.xyz = spectrum::rgb_to_xyz(result_rgb * float3{value.x, value.y, value.z});
+  }
+
+  return response;
+}
+
+ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, rgb::SpectrumClass cls, float* image_pdf) {
+  if (image_pdf) {
+    *image_pdf = 0.0f;
+  }
+
   auto result = img.spectrum(spect);
   ETX_VALIDATE(result);
   if (img.image_index == kInvalidIndex) {
     return result;
   }
 
-  float4 eval = scene.images[img.image_index].evaluate(uv);
+  float4 eval = scene.images[img.image_index].evaluate(uv, image_pdf);
   ETX_VALIDATE(eval);
-  if (spect.spectral()) {
-    auto scale = rgb::query_spd(spect, {eval.x, eval.y, eval.z}, cls == rgb::SpectrumClass::Illuminant ? scene.spectrums->rgb_illuminant : scene.spectrums->rgb_reflection);
-    ETX_VALIDATE(scale);
-    result *= scale;
-    ETX_VALIDATE(result);
-  } else {
-    float3 result_rgb = spectrum::xyz_to_rgb(result.components.xyz);
-    result.components.xyz = spectrum::rgb_to_xyz(result_rgb * float3{eval.x, eval.y, eval.z});
-  }
-
-  return result;
+  return apply_rgb(spect, result, eval, scene, cls);
 }
 
 }  // namespace etx

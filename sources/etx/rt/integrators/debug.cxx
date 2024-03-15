@@ -432,7 +432,7 @@ struct CPUDebugIntegratorImpl : public Task {
         };
         case CPUDebugIntegrator::Mode::DiffuseColors: {
           const auto& mat = scene.materials[intersection.material_index];
-          xyz = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), rgb::SpectrumClass::Reflection).to_xyz();
+          xyz = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), rgb::SpectrumClass::Reflection, nullptr).to_xyz();
           break;
         };
         case CPUDebugIntegrator::Mode::Fresnel: {

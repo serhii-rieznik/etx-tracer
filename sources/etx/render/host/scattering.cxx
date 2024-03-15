@@ -88,7 +88,7 @@ float3 sample_optical_length(const float3& pos, const float3& light_direction, c
   float height = length(pos);
   float n_dot_l = dot(pos / height, light_direction);
   float2 uv = precomputed_params_to_uv({n_dot_l, height - kPlanetRadius});
-  float4 e = img.evaluate(uv);
+  float4 e = img.evaluate(uv, nullptr);
   ETX_VALIDATE(e);
   return {e.x, e.y, e.z};
 }

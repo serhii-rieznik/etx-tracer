@@ -97,7 +97,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
     if (intersection_found) {
       result.intersections[0] = local_i;
       result.intersections[0].w_i = in_intersection.w_i;
-      result.weights[0] = throughput * apply_image(spect, mat.transmittance, local_i.tex, scene, rgb::SpectrumClass::Reflection);
+      result.weights[0] = throughput * apply_image(spect, mat.transmittance, local_i.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
       result.intersection_count = 1u;
       result.selected_intersection = 0;
       result.selected_sample_weight = 1.0f;

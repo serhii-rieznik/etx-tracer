@@ -332,6 +332,9 @@ ETX_GPU_CODE float3 cos(const float3& a) {
 ETX_GPU_CODE float4 cos(const float4& a) {
   return {cosf(a.x), cosf(a.y), cosf(a.z), cosf(a.w)};
 }
+ETX_GPU_CODE float dot(const float4& a, const float4& b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z + a.w + b.w;
+}
 
 ETX_GPU_CODE float dot(const float2& a, const float2& b) {
   return a.x * b.x + a.y * b.y;

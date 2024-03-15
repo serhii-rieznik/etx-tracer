@@ -72,21 +72,23 @@ struct Image {
     return {p00, p01, p10, p11, row_0, row_1};
   }
 
-  ETX_GPU_CODE float4 evaluate(const float2& in_uv) const {
+  ETX_GPU_CODE float4 evaluate(const float2& in_uv, float* pdf) const {
     auto g = gather(in_uv);
+
+    if (pdf) {
+      float s_t = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : sinf(kPi * saturate(in_uv.y + 0.0f / fsize.y)));
+      auto t = luminance(to_float3(g.p00 + g.p01)) * s_t;
+      float s_b = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : sinf(kPi * saturate(in_uv.y + 1.0f / fsize.y)));
+      auto b = luminance(to_float3(g.p10 + g.p11)) * s_b;
+      *pdf = (t + b) / normalization;
+    }
+
     return g.p00 + g.p01 + g.p10 + g.p11;
   }
 
-  ETX_GPU_CODE float pdf(const float2& in_uv) const {
+  ETX_GPU_CODE float evaluate_alpha(const float2& in_uv) const {
     auto g = gather(in_uv);
-
-    float s_t = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : sinf(kPi * saturate(in_uv.y + 0.0f / fsize.y)));
-    auto t = luminance(to_float3(g.p00 + g.p01)) * s_t;
-
-    float s_b = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : sinf(kPi * saturate(in_uv.y + 1.0f / fsize.y)));
-    auto b = luminance(to_float3(g.p10 + g.p11)) * s_b;
-
-    return (t + b) / normalization;
+    return g.p00.w + g.p01.w + g.p10.w + g.p11.w;
   }
 
   ETX_GPU_CODE float4 pixel(uint32_t i) const {
@@ -94,8 +96,8 @@ struct Image {
 
     if (format == Format::RGBA8)
       return to_float4(pixels.u8[i]);
-    else
-      return pixels.f32[i];
+
+    return pixels.f32[i];
   }
 
   ETX_GPU_CODE float4 pixel(uint32_t x, uint32_t y) const {
@@ -104,7 +106,7 @@ struct Image {
   }
 
   ETX_GPU_CODE float3 evaluate_normal(const float2& uv, float scale) const {
-    float4 value = evaluate(uv);
+    float4 value = evaluate(uv, nullptr);
     return {
       scale * (value.x * 2.0f - 1.0f),
       scale * (value.y * 2.0f - 1.0f),
@@ -112,7 +114,7 @@ struct Image {
     };
   }
 
-  ETX_GPU_CODE float2 sample(const float2& rnd, float& image_pdf, uint2& location) const {
+  ETX_GPU_CODE float2 sample(const float2& rnd, float& image_pdf, uint2& location, float4& eval) const {
     float y_pdf = 0.0f;
     location.y = y_distribution.sample(rnd.y, y_pdf);
 
@@ -139,7 +141,7 @@ struct Image {
       (float(location.y) + dy) / fsize.y,
     };
 
-    image_pdf = pdf(uv);
+    eval = evaluate(uv, &image_pdf);
     return uv;
   }
 

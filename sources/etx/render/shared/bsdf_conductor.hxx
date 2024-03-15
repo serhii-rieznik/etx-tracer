@@ -5,7 +5,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto frame = data.get_normal_frame();
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
   auto f = fresnel::calculate(data.spectrum_sample, dot(data.w_i, frame.nrm), mtl.ext_ior(data.spectrum_sample), mtl.int_ior(data.spectrum_sample), thinfilm);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection);
+  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
 
   BSDFSample result;
   result.w_o = normalize(reflect(data.w_i, frame.nrm));
@@ -52,7 +52,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.pdf = external::D_ggx(normalize(result.w_o + w_i), alpha_x, alpha_y) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + result.w_o.z;
     ETX_VALIDATE(result.pdf);
   }
-  result.weight *= apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection);
+  result.weight *= apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
   ETX_VALIDATE(result.weight);
 
   result.w_o = normalize(local_frame.from_local(result.w_o));
@@ -90,7 +90,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
     result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_o, w_i, alpha_x, alpha_y, ext_ior, int_ior, thinfilm) / w_i.z * w_o.z;
     ETX_VALIDATE(result.bsdf);
   }
-  result.bsdf *= apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection);
+  result.bsdf *= apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
   ETX_VALIDATE(result.bsdf);
 
   result.func = result.bsdf / w_o.z;
