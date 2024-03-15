@@ -174,6 +174,24 @@ struct CPUBidirectionalImpl : public Task {
     return state->load() != Integrator::State::Stopped;
   }
 
+  void update_emitter_path_pdfs(std::vector<PathVertex>& path, const EmitterSample& em, const Triangle* tri) const {
+    const auto& scene = rt.scene();
+
+    float total_pdf = 0.0f;
+    for (uint32_t ei = 0, ee = scene.environment_emitters.count; ei < ee; ++ei) {
+      float weight = scene.emitters_distribution.values[ei].value;
+      total_pdf += weight * emitter_pdf_in_dist(scene.emitters[em.emitter_index], em.direction, rt.scene());
+    }
+    path[1].pdf.forward = total_pdf / (scene.emitters_distribution.total_weight * float(scene.emitters_distribution.values.count));
+    ETX_VALIDATE(path[1].pdf.forward);
+
+    path[2].pdf.forward = em.pdf_area;
+    if (tri != nullptr) {
+      path[2].pdf.forward *= fabsf(dot(em.direction, tri->geo_n));
+      ETX_VALIDATE(path[2].pdf.forward);
+    }
+  }
+
   SpectralResponse build_path(Sampler& smp, SpectralQuery spect, Ray ray, std::vector<PathVertex>& path, PathSource mode, SpectralResponse throughput, float pdf_dir,
     uint32_t medium_index, uint32_t thread_id, const EmitterSample& em) {
     ETX_VALIDATE(throughput);
@@ -214,13 +232,10 @@ struct CPUBidirectionalImpl : public Task {
         ray.d = w_o;
 
         if ((mode == PathSource::Light) && em.is_distant && (path.size() == 3)) {
-            path[1].pdf.forward = emitter_pdf_in_dist(rt.scene().emitters[em.emitter_index], em.direction, rt.scene());
-            ETX_VALIDATE(path[1].pdf.forward);
-            path[2].pdf.forward = em.pdf_area;
-            ETX_VALIDATE(path[2].pdf.forward);
+          update_emitter_path_pdfs(path, em, nullptr);
         }
 
-        bool can_connect = path.size() <= max_path_len + 1u;
+        bool can_connect = path.size() <= 1llu + max_path_len;
 
         if (mode == PathSource::Camera) {
           result += direct_hit(path, spect, path.size() - 1u, smp);
@@ -294,16 +309,10 @@ struct CPUBidirectionalImpl : public Task {
         }
 
         if ((mode == PathSource::Light) && em.is_distant && (path.size() == 3)) {
-          path[1].pdf.forward = emitter_pdf_in_dist(rt.scene().emitters[em.emitter_index], em.direction, rt.scene());
-          ETX_VALIDATE(path[1].pdf.forward);
-          path[2].pdf.forward = em.pdf_area;
-          if (path[2].cls == PathVertex::Class::Surface) {
-            path[2].pdf.forward *= fabsf(dot(em.direction, tri.geo_n));
-            ETX_VALIDATE(path[2].pdf.forward);
-          }
+          update_emitter_path_pdfs(path, em, &tri);
         }
 
-        bool can_connect = path.size() <= max_path_len + 1u;
+        bool can_connect = path.size() <= 1llu + max_path_len;
 
         if (mode == PathSource::Camera) {
           result += direct_hit(path, spect, path.size() - 1u, smp);
@@ -664,6 +673,7 @@ struct CPUBidirectionalImpl : public Task {
     } else if (rt.scene().environment_emitters.count > 0) {
       EmitterRadianceQuery q = {
         .direction = normalize(z_i.pos - z_prev.pos),
+        .directly_visible = eye_t <= 2,
       };
       for (uint32_t ie = 0; ie < rt.scene().environment_emitters.count; ++ie) {
         const auto& emitter = rt.scene().emitters[rt.scene().environment_emitters.emitters[ie]];
@@ -672,7 +682,6 @@ struct CPUBidirectionalImpl : public Task {
         emitter_value += emitter_get_radiance(emitter, spect, q, pdf_area, local_pdf_dir, local_pdf_dir_out, rt.scene());
         pdf_dir += local_pdf_dir;
       }
-      pdf_dir = pdf_dir / float(rt.scene().environment_emitters.count);
     }
 
     if (pdf_dir == 0.0f) {
@@ -737,6 +746,10 @@ struct CPUBidirectionalImpl : public Task {
     sampled_vertex.w_i = camera_sample.direction;
 
     SpectralResponse bsdf = y_i.bsdf_in_direction(spect, PathSource::Light, camera_sample.direction, rt.scene(), smp);
+    if (bsdf.is_zero()) {
+      return {spect, 0.0f};
+    }
+
     float weight = mis_weight_camera(emitter_path, spect, light_s, sampled_vertex, smp);
 
     SpectralResponse splat = y_i.throughput * bsdf * camera_sample.weight * (weight / spect.sampling_pdf());

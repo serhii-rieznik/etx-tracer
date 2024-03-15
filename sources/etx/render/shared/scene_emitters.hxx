@@ -47,7 +47,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
 
   switch (em.cls) {
     case Emitter::Class::Directional: {
-      if ((em.angular_size <= 0.0f) || (dot(query.direction, em.direction) < em.angular_size_cosine)) {
+      if ((query.directly_visible == false) || (em.angular_size <= 0.0f) || (dot(query.direction, em.direction) < em.angular_size_cosine)) {
         return {spect, 0.0f};
       }
 
@@ -56,7 +56,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       pdf_dir_out = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       float2 uv = disk_uv(em.direction, query.direction, em.equivalent_disk_size, em.angular_size_cosine);
       SpectralResponse direct_scale = 1.0f / (em.emission.spectrum(spect) * kDoublePi * (1.0f - em.angular_size_cosine));
-      return apply_image(spect, em.emission, uv, scene, rgb::SpectrumClass::Reflection) * (query.directly_visible ? direct_scale : SpectralResponse(spect, 1.0f));
+      return apply_image(spect, em.emission, uv, scene, rgb::SpectrumClass::Reflection) * direct_scale;
     }
 
     case Emitter::Class::Environment: {
@@ -71,8 +71,6 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       pdf_dir = img.pdf(uv) / (2.0f * kPi * kPi * sin_t);
       ETX_VALIDATE(pdf_dir);
       pdf_dir_out = pdf_area * pdf_dir;
-
-      const auto& c = em.emission.spectrum.integrated;
       return apply_image(spect, em.emission, uv, scene, rgb::SpectrumClass::Reflection);
     }
 
@@ -147,7 +145,7 @@ ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em, const float3& in_direc
 
   switch (em.cls) {
     case Emitter::Class::Directional: {
-      return (em.angular_size > 0.0f) && (dot(in_direction, em.direction) >= em.angular_size_cosine) ? 1.0f : 0.0f;
+      return 0.0f;
     }
 
     case Emitter::Class::Environment: {

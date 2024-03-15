@@ -47,7 +47,7 @@ struct ETX_ALIGNED Emitter {
   }
 
   ETX_GPU_CODE bool is_delta() const {
-    return (cls == Class::Directional) && (angular_size <= 0.0f);
+    return (cls == Class::Directional);
   }
 };
 

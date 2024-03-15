@@ -15,7 +15,7 @@
 namespace etx {
 
 struct ETX_ALIGNED EnvironmentEmitters {
-  constexpr static const uint32_t kMaxCount = 7;
+  constexpr static const uint32_t kMaxCount = 256;
   uint32_t emitters[kMaxCount] ETX_EMPTY_INIT;
   uint32_t count ETX_EMPTY_INIT;
 };
