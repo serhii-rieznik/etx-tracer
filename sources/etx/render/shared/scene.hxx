@@ -159,7 +159,7 @@ ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralRespo
     auto scale = rgb::query_spd(spect, {value.x, value.y, value.z}, cls == rgb::SpectrumClass::Illuminant ? scene.spectrums->rgb_illuminant : scene.spectrums->rgb_reflection);
     ETX_VALIDATE(scale);
     response *= scale;
-    ETX_VALIDATE(result);
+    ETX_VALIDATE(response);
   } else {
     float3 result_rgb = spectrum::xyz_to_rgb(response.components.xyz);
     response.components.xyz = spectrum::rgb_to_xyz(result_rgb * float3{value.x, value.y, value.z});

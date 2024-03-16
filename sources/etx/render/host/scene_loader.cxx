@@ -900,11 +900,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
               e.emission.spectrum = SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), 1.0f);
               i += 1;
             } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < end)) {
-              float t = static_cast<float>(atof(params[i + 1]));
-              float w = spectrum::black_body_radiation_maximum_wavelength(t);
-              float r = spectrum::black_body_radiation(w, t);
-              e.emission.spectrum = SpectralDistribution::from_black_body(t, 1.0f / r);
-              e.emission.spectrum.scale(1.0f / e.emission.spectrum.integrated.y);
+              e.emission.spectrum = SpectralDistribution::from_normalized_black_body(static_cast<float>(atof(params[i + 1])), 1.0f);
               i += 1;
             } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < end)) {
               e.emission.spectrum.scale(static_cast<float>(atof(params[i + 1])));
@@ -1244,7 +1240,7 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
   }
   std::string name = data_buffer;
 
-  bool rgb_used = false;
+  bool initialized = false;
   rgb::SpectrumClass cls = rgb::SpectrumClass::Reflection;
 
   if (get_param(material, "illuminant")) {
@@ -1266,16 +1262,53 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
     };
 
     scene_spectrums[name] = rgb::make_spd(gamma_to_linear(value), spectrums(), cls);
-    rgb_used = true;
+    initialized = true;
+  } else if (get_param(material, "blackbody")) {
+    auto params = split_params(data_buffer);
+    if (params.size() < 1) {
+      log::warning("Spectrum `%s` uses blackbody but did not provide temperature value - skipped", name.c_str());
+      return;
+    }
+
+    float scale = 1.0f;
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((i + 1 < e) && (strcmp(params[i], "scale") == 0)) {
+        scale = static_cast<float>(atof(params[i + 1]));
+        ++i;
+      }
+    }
+
+    float t = static_cast<float>(atof(params[0]));
+    scene_spectrums[name] = SpectralDistribution::from_black_body(t, scale);
+    initialized = true;
+  } else if (get_param(material, "nblackbody")) {
+    auto params = split_params(data_buffer);
+    if (params.size() < 1) {
+      log::warning("Spectrum `%s` uses nblackbody but did not provide temperature value - skipped", name.c_str());
+      return;
+    }
+
+    float scale = 1.0f;
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((i + 1 < e) && (strcmp(params[i], "scale") == 0)) {
+        scale = static_cast<float>(atof(params[i + 1]));
+        ++i;
+      }
+    }
+
+    float t = static_cast<float>(atof(params[0]));
+    scene_spectrums[name] = SpectralDistribution::from_normalized_black_body(t, scale);
+    initialized = true;
   }
 
   bool have_samples = get_param(material, "samples");
-  if ((have_samples == false) && (rgb_used == false)) {
-    log::warning("Spectrum `%s` does not have samples or RBG - skipped", name.c_str());
+
+  if ((have_samples == false) && (initialized == false)) {
+    log::warning("Spectrum `%s` does not have samples or RBG or (n)blackbody - skipped", name.c_str());
     return;
-  } else if (rgb_used && have_samples) {
-    log::warning("Spectrum `%s` uses both RGB and samples set - samples will be used", name.c_str());
-  } else if (rgb_used) {
+  } else if (initialized && have_samples) {
+    log::warning("Spectrum `%s` uses both RGB or (n)blackbody and samples set - samples will be used", name.c_str());
+  } else if (initialized) {
     return;
   }
 
@@ -1301,17 +1334,10 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
   auto spectrum = SpectralDistribution::from_samples(samples.data(), samples.size());
 
   if (get_param(material, "normalize")) {
-    if (strcmp(data_buffer, "rgb") == 0) {
-      float3 rgb = spectrum::xyz_to_rgb(spectrum.integrate_to_xyz());
-      float m_value = max(rgb.x, max(rgb.y, rgb.z));
-      if (m_value > kEpsilon) {
-        spectrum.scale(1.0f / m_value);
-      }
-    } else {
-      float3 xyz = spectrum.integrate_to_xyz();
-      if (xyz.y > kEpsilon) {
-        spectrum.scale(1.0f / xyz.y);
-      }
+    float3 rgb = max(float3{}, spectrum::xyz_to_rgb(spectrum.integrate_to_xyz()));
+    float lum = fmaxf(fmaxf(0.0f, rgb.x), fmaxf(rgb.y, rgb.z));
+    if (lum > kEpsilon) {
+      spectrum.scale(1.0f / lum);
     }
   }
 
@@ -1367,10 +1393,7 @@ SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* dat
       i += 1;
     } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < e)) {
       float t = static_cast<float>(atof(params[i + 1]));
-      float w = spectrum::black_body_radiation_maximum_wavelength(t);
-      float r = spectrum::black_body_radiation(w, t);
-      emitter_spectrum = SpectralDistribution::from_black_body(t, 1.0f / r);
-      emitter_spectrum.scale(1.0f / emitter_spectrum.integrated.y);
+      emitter_spectrum = SpectralDistribution::from_normalized_black_body(t, 1.0f);
       i += 1;
     } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
       scale = static_cast<float>(atof(params[i + 1]));

@@ -64,6 +64,14 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, fl
   return from_samples(samples, spectrum::WavelengthCount);
 }
 
+SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, float scale) {
+  float w = spectrum::black_body_radiation_maximum_wavelength(t);
+  float r = spectrum::black_body_radiation(w, t);
+  auto spd = SpectralDistribution::from_black_body(t, 1.0f / r);
+  spd.scale(scale / spd.integrated.y);
+  return spd;
+}
+
 SpectralDistribution SpectralDistribution::rgb(float3 rgb, const rgb::SpectrumSet& spectrums) {
   rgb = max(float3{0.0f, 0.0f, 0.0f}, rgb);
 

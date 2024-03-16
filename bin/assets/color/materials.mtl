@@ -1,0 +1,12 @@
+# Blender 4.0.2 MTL File: 'color.blend'
+# www.blender.org
+
+newmtl ceil
+material class diffuse
+Ke 1 1 1
+emitter nblackbody 6500.0
+
+newmtl main
+material class diffuse
+Kd 1 1 1
+map_Kd color-rgb.png

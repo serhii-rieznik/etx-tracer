@@ -517,6 +517,7 @@ struct ETX_ALIGNED SpectralDistribution {
   static SpectralDistribution from_constant(float value);
   static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count);
   static SpectralDistribution from_black_body(float temperature, float scale);
+  static SpectralDistribution from_normalized_black_body(float temperature, float scale);
   static SpectralDistribution rgb(float3 rgb, const rgb::SpectrumSet& spectrums);
 
   static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range);

@@ -1,0 +1,62 @@
+# Blender 4.0.1 MTL File: 'light-types.blend'
+# www.blender.org
+           
+newmtl et::env
+color 0.125 0 0
+newmtl et::env
+color 0.125 0 0
+newmtl et::env
+color 0.125 0 0
+newmtl et::env
+color 0.125 0 0
+
+newmtl et::env
+color 0 0.125 0
+newmtl et::env
+color 0 0.125 0
+newmtl et::env
+color 0 0.125 0
+newmtl et::env
+color 0 0.125 0
+
+newmtl et::env
+color 0 0 0.125
+newmtl et::env
+color 0 0 0.125
+newmtl et::env
+color 0 0 0.125
+newmtl et::env
+color 0 0 0.125
+
+newmtl et::dir
+direction -1 1 0
+color nblackbody 5800 scale 1.0
+angular_diameter 1.54
+
+newmtl et::medium
+id ball
+absorption 0.5 0.66666 0.75
+scattering 0.01 0.1 1.0
+
+newmtl back
+material class diffuse
+Kd 0.0 1.0 0.0
+
+newmtl ball
+material class plastic
+subsurface class exact
+int_medium ball
+int_ior sapphire
+
+newmtl light
+material class diffuse
+emitter nblackbody 2700 scale 8.0
+Ke 1 1 1
+
+newmtl plane
+material class diffuse
+Kd 1 1 1 
+
+newmtl wall
+material class diffuse
+Kd 1 0.0 0.0

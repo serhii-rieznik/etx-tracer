@@ -8,7 +8,7 @@ rgb 1 0 0
 
 newmtl et::spectrum
 id light
-rgb 5 4 3
+nblackbody 6500.0 scale 5.0
 illuminant
 
 newmtl et::spectrum
@@ -45,4 +45,3 @@ Kd white
 
 newmtl light
 Ke light
-
