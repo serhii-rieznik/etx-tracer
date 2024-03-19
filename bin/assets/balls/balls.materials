@@ -1,18 +1,22 @@
 # Blender 4.0.2 MTL File: 'balls.blend'
 # www.blender.org
 
-newmtl xet::env
-color 0.5 0.5 0.5
+newmtl et::env
+color nblackbody 20000 scale 1.0
+
+newmtl et::dir
+color nblackbody 5800 scale 5.0
+angular_diameter 0.54
 
 newmtl base
-material class plastic
+material class dielectric
 int_ior plastic
 ext_ior air
 Kt 1 1 1
 Kd 0.125 0.25 0.5
 Ks 1 1 1
 Pr 0.0
-thinfilm range 1 2500 ior glass
+#thinfilm range 1 2500 ior sapphire
 
 newmtl Material.000
 base base
@@ -93,8 +97,4 @@ xKt 1.0 1.0 1.0
 
 newmtl plane
 material class diffuse
-int_ior chrome
-Pr 0.2
-Ks 1 1 1
-Kd 0.5 0.5 0.5
-Pr 0.0 0.0
+map_Kd ../textures/checkers_grayscale.png

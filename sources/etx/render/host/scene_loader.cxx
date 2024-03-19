@@ -1334,8 +1334,10 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
   auto spectrum = SpectralDistribution::from_samples(samples.data(), samples.size());
 
   if (get_param(material, "normalize")) {
-    float3 rgb = max(float3{}, spectrum::xyz_to_rgb(spectrum.integrate_to_xyz()));
-    float lum = fmaxf(fmaxf(0.0f, rgb.x), fmaxf(rgb.y, rgb.z));
+    float3 xyz = spectrum.integrate_to_xyz();
+    bool normalize_rgb = strcmp(data_buffer, "luminance") != 0;
+    float3 rgb = max(float3{}, spectrum::xyz_to_rgb(xyz));
+    float lum = normalize_rgb ? fmaxf(fmaxf(0.0f, rgb.x), fmaxf(rgb.y, rgb.z)) : xyz.y;
     if (lum > kEpsilon) {
       spectrum.scale(1.0f / lum);
     }

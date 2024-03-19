@@ -137,8 +137,9 @@ ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const f
 
   // projected area
   const float projectedarea = 0.5f * (cos_theta_i + 1.0f);
-  if (projectedarea < 0.0001f || projectedarea != projectedarea)
+  if (projectedarea < 0.0001f)
     return {};
+
   // normalization coefficient
   const float c = 1.0f / projectedarea;
 
@@ -196,9 +197,14 @@ ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float alpha
   return normalize(float3{-slope.x, -slope.y, 1.0f});
 }
 
-ETX_GPU_CODE SpectralResponse evalPhaseFunction_conductor(SpectralQuery spect, const RayInfo& ray, const float3& wo, const float alpha_x, const float alpha_y,
+ETX_GPU_CODE SpectralResponse phase_function_reflection(SpectralQuery spect, const RayInfo& ray, const float3& wo, const float alpha_x, const float alpha_y,
   const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm) {
   if (ray.w.z > 0.9999f)
+    return {spect, 0.0f};
+
+  // projected area
+  float projectedArea = (ray.w.z < -0.9999f) ? 1.0f : ray.Lambda * ray.w.z;
+  if (projectedArea < kEpsilon)
     return {spect, 0.0f};
 
   // half float3
@@ -208,11 +214,6 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_conductor(SpectralQuery spect, c
 
   float w_dot_h = dot(-ray.w, wh);
   if (w_dot_h < kEpsilon)
-    return {spect, 0.0f};
-
-  // projected area
-  float projectedArea = (ray.w.z < -0.9999f) ? 1.0f : ray.Lambda * ray.w.z;
-  if (projectedArea < kEpsilon)
     return {spect, 0.0f};
 
   // value
@@ -342,7 +343,7 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
     // next event estimation
     if (current_scatteringOrder > 1)  // single scattering is already computed
     {
-      SpectralResponse phasefunction = evalPhaseFunction_conductor(spect, ray, wo, alpha_x, alpha_y, ext_ior, int_ior, thinfilm);
+      SpectralResponse phasefunction = phase_function_reflection(spect, ray, wo, alpha_x, alpha_y, ext_ior, int_ior, thinfilm);
       ETX_VALIDATE(phasefunction);
 
       ray_shadowing.updateHeight(ray.h);
@@ -403,22 +404,15 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery s
   if (ray.w.z > 0.9999f)
     return {spect, 0.0f};
 
-  float projectedArea = (ray.w.z < -0.9999f) ? 1.0f : ray.Lambda * ray.w.z;
-
   if (reflection) {
-    const float3 wh = normalize(-ray.w + wo);
-    if (wh.z < 0.0f)
-      return {spect, 0.0f};
-
-    SpectralResponse f = fresnel::calculate(spect, dot(ray.w, wh), ext_ior, int_ior, thinfilm);
-    float i_dot_m = -dot(wh, ray.w);
-    if (i_dot_m < 0)
-      return {spect, 0.0f};
-
-    return f * i_dot_m * D_ggx(wh, alpha_x, alpha_y) / (4.0f * projectedArea * i_dot_m);
+    return phase_function_reflection(spect, ray, wo, alpha_x, alpha_y, ext_ior, int_ior, thinfilm);
   }
 
-  float eta = int_ior.eta.monochromatic() / ext_ior.eta.monochromatic();
+  float projectedArea = (ray.w.z < -0.9999f) ? 1.0f : ray.Lambda * ray.w.z;
+  if (projectedArea < kEpsilon)
+    return {spect, 0.0f};
+
+  float eta = (int_ior.eta / ext_ior.eta).monochromatic();
   float3 wh = normalize(-ray.w + wo * eta);
   wh *= (wh.z > 0) ? 1.0f : -1.0f;
 
@@ -466,7 +460,7 @@ ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sa
   auto f = fresnel::calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
   reflection = smp.next() < f.monochromatic();
 
-  float eta = int_ior.eta.monochromatic() / ext_ior.eta.monochromatic();
+  float eta = (int_ior.eta / ext_ior.eta).monochromatic();
   return reflection ? (-wi + 2.0f * wm * i_dot_m) : normalize(refract(wi, wm, eta));
 }
 
@@ -499,7 +493,7 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
   SpectralResponse multipleScattering = {spect, 0.0f};
   float wi_MISweight = 0.0f;
 
-  float eta = int_ior.eta.monochromatic() / ext_ior.eta.monochromatic();
+  float eta = (int_ior.eta / ext_ior.eta).monochromatic();
 
   // random walk
   int current_scatteringOrder = 0;
