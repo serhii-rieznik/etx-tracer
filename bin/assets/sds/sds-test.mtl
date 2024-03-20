@@ -6,8 +6,8 @@ image ../hdri/environment.exr
 
 newmtl et::medium
 id glass
-sigma_a 0.1 0.125 0.15
-sigma_s 0.0 0.0 0.0
+absorbtion 0.1 0.125 0.15
+scattering 0.1 0.1 1.0
 
 newmtl plane
 map_Kd ../textures/checkers_grayscale.png
