@@ -178,11 +178,13 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     float total_pdf = 0.0f;
+    float total_weight = 0.0f;
     for (uint32_t ei = 0, ee = scene.environment_emitters.count; ei < ee; ++ei) {
       float weight = scene.emitters_distribution.values[ei].value;
-      total_pdf += weight * emitter_pdf_in_dist(scene.emitters[em.emitter_index], em.direction, rt.scene());
+      total_weight += weight;
+      total_pdf += weight * emitter_pdf_in_dist(scene.emitters[em.emitter_index], em.direction, scene);
     }
-    path[1].pdf.forward = total_pdf / (scene.emitters_distribution.total_weight * float(scene.emitters_distribution.values.count));
+    path[1].pdf.forward = total_pdf / (total_weight * float(scene.environment_emitters.count));
     ETX_VALIDATE(path[1].pdf.forward);
 
     path[2].pdf.forward = em.pdf_area;
@@ -238,13 +240,13 @@ struct CPUBidirectionalImpl : public Task {
         bool can_connect = path.size() <= 1llu + max_path_len;
 
         if (mode == PathSource::Camera) {
-          result += direct_hit(path, spect, path.size() - 1u, smp);
+          result += direct_hit(path, spect, smp);
           if (can_connect) {
-            result += connect_to_light(smp, path, spect, path.size() - 1u);
+            result += connect_to_light(smp, path, spect);
           }
         } else if (conn_connect_to_camera && can_connect) {
           CameraSample camera_sample = {};
-          auto splat = connect_to_camera(smp, path, spect, path.size() - 1u, camera_sample);
+          auto splat = connect_to_camera(smp, path, spect, camera_sample);
           auto xyz = splat.to_xyz();
           iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv, thread_id);
         }
@@ -315,13 +317,13 @@ struct CPUBidirectionalImpl : public Task {
         bool can_connect = path.size() <= 1llu + max_path_len;
 
         if (mode == PathSource::Camera) {
-          result += direct_hit(path, spect, path.size() - 1u, smp);
+          result += direct_hit(path, spect, smp);
           if (can_connect) {
-            result += connect_to_light(smp, path, spect, path.size() - 1u);
+            result += connect_to_light(smp, path, spect);
           }
         } else if (conn_connect_to_camera && can_connect) {
           CameraSample camera_sample = {};
-          auto splat = connect_to_camera(smp, path, spect, path.size() - 1u, camera_sample);
+          auto splat = connect_to_camera(smp, path, spect, camera_sample);
           if (splat.is_zero() == false) {
             auto xyz = splat.to_xyz();
             iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv, thread_id);
@@ -340,7 +342,7 @@ struct CPUBidirectionalImpl : public Task {
         v.w_i = ray.d;
         v.pos = ray.o + rt.scene().bounding_sphere_radius * v.w_i;
         v.nrm = -v.w_i;
-        result += direct_hit(path, spect, path.size() - 1u, smp);
+        result += direct_hit(path, spect, smp);
         path.pop_back();
         break;
       } else {
@@ -643,9 +645,11 @@ struct CPUBidirectionalImpl : public Task {
     return 1.0f / (1.0f + result);
   }
 
-  SpectralResponse direct_hit(std::vector<PathVertex>& camera_path, SpectralQuery spect, uint64_t eye_t, Sampler& smp) const {
+  SpectralResponse direct_hit(std::vector<PathVertex>& camera_path, SpectralQuery spect, Sampler& smp) const {
     if (conn_direct_hit == false)
       return {spect, 0.0f};
+
+    uint64_t eye_t = camera_path.size() - 1u;
 
     const auto& z_i = camera_path[eye_t];
     if ((conn_direct_hit == false) || (z_i.is_emitter() == false)) {
@@ -693,10 +697,11 @@ struct CPUBidirectionalImpl : public Task {
     return emitter_value * z_i.throughput * weight;
   }
 
-  SpectralResponse connect_to_light(Sampler& smp, std::vector<PathVertex>& camera_path, SpectralQuery spect, uint64_t eye_t) const {
+  SpectralResponse connect_to_light(Sampler& smp, std::vector<PathVertex>& camera_path, SpectralQuery spect) const {
     if (conn_connect_to_light == false)
       return {spect, 0.0f};
 
+    uint64_t eye_t = camera_path.size() - 1u;
     const auto& z_i = camera_path[eye_t];
 
     uint32_t emitter_index = sample_emitter_index(rt.scene(), smp);
@@ -728,9 +733,11 @@ struct CPUBidirectionalImpl : public Task {
     return z_i.throughput * bsdf * emitter_throughput * tr * weight;
   }
 
-  SpectralResponse connect_to_camera(Sampler& smp, std::vector<PathVertex>& emitter_path, SpectralQuery spect, uint64_t light_s, CameraSample& camera_sample) const {
+  SpectralResponse connect_to_camera(Sampler& smp, std::vector<PathVertex>& emitter_path, SpectralQuery spect, CameraSample& camera_sample) const {
     if (conn_connect_to_camera == false)
       return {spect, 0.0f};
+
+    uint64_t light_s = emitter_path.size() - 1u;
 
     const auto& y_i = emitter_path[light_s];
     camera_sample = sample_film(smp, rt.scene(), y_i.pos);

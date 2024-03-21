@@ -21,12 +21,23 @@ struct ETX_ALIGNED RayInfo {
   float G1 = {};
   float pad = {};
 
-  ETX_GPU_CODE RayInfo(const float3& w, const float alpha_x, const float alpha_y) {
-    updateDirection(w, alpha_x, alpha_y);
+  ETX_GPU_CODE RayInfo(const float3& w, const float2& alpha) {
+    updateDirection(w, alpha);
   }
 
-  ETX_GPU_CODE void updateDirection(const float3& in_w, const float alpha_x, const float alpha_y) {
+  ETX_GPU_CODE void updateDirection(const float3& in_w, const float2& alpha) {
     w = in_w;
+
+    if (w.z > 0.9999f) {
+      Lambda = 0.0f;
+      return;
+    }
+
+    if (w.z < -0.9999f) {
+      Lambda = -1.0f;
+      return;
+    }
+    
     float theta = acosf(w.z);
     float cosTheta = w.z;
     float sinTheta = sinf(theta);
@@ -34,16 +45,9 @@ struct ETX_ALIGNED RayInfo {
     const float invSinTheta2 = 1.0f / (1.0f - w.z * w.z);
     const float cosPhi2 = w.x * w.x * invSinTheta2;
     const float sinPhi2 = w.y * w.y * invSinTheta2;
-    float alpha = sqrtf(cosPhi2 * alpha_x * alpha_x + sinPhi2 * alpha_y * alpha_y);
-    // Lambda
-    if (w.z > 0.9999f)
-      Lambda = 0.0f;
-    else if (w.z < -0.9999f)
-      Lambda = -1.0f;
-    else {
-      const float a = 1.0f / tanTheta / alpha;
-      Lambda = 0.5f * (-1.0f + ((a > 0) ? 1.0f : -1.0f) * sqrtf(1.0f + 1.0f / (a * a)));
-    }
+    float alpha_value = sqrtf(cosPhi2 * alpha.x * alpha.x + sinPhi2 * alpha.y * alpha.y);
+    const float a = 1.0f / tanTheta / alpha_value;
+    Lambda = 0.5f * (-1.0f + ((a > 0) ? 1.0f : -1.0f) * sqrtf(1.0f + 1.0f / (a * a)));
   }
 
   ETX_GPU_CODE void updateHeight(const float& in_h) {
@@ -96,7 +100,7 @@ ETX_GPU_CODE float sampleHeight(const RayInfo& ray, const float U) {
   return result;
 }
 
-ETX_GPU_CODE float D_ggx(const float3& wm, const float alpha_x, const float alpha_y) {
+ETX_GPU_CODE float D_ggx(const float3& wm, const float2& alpha) {
   if (wm.z <= kEpsilon)
     return 0.0f;
 
@@ -104,9 +108,9 @@ ETX_GPU_CODE float D_ggx(const float3& wm, const float alpha_x, const float alph
   const float slope_x = -wm.x / wm.z;
   const float slope_y = -wm.y / wm.z;
 
-  float ax = fmaxf(kEpsilon, alpha_x * alpha_x);
-  float ay = fmaxf(kEpsilon, alpha_y * alpha_y);
-  float axy = fmaxf(kEpsilon, alpha_x * alpha_y);
+  float ax = fmaxf(kEpsilon, alpha.x * alpha.x);
+  float ay = fmaxf(kEpsilon, alpha.y * alpha.y);
+  float axy = fmaxf(kEpsilon, alpha.x * alpha.y);
 
   // P22
   const float tmp = 1.0f + slope_x * slope_x / ax + slope_y * slope_y / ay;
@@ -119,7 +123,7 @@ ETX_GPU_CODE float D_ggx(const float3& wm, const float alpha_x, const float alph
   return P22 / (wm.z * wm.z * wm.z * wm.z);
 }
 
-ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const float alpha_x, const float alpha_y) {
+ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const float2& alpha) {
   float2 slope;
 
   if (theta_i < 0.0001f) {
@@ -167,13 +171,13 @@ ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const f
   return slope;
 }
 
-ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y) {
+ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float2& alpha) {
   // sample D_wi
   // stretch to match configuration with alpha=1.0
-  const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
+  const float3 wi_11 = normalize(float3{alpha.x * wi.x, alpha.y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
-  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha_x, alpha_y);
+  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha);
 
   // align with view direction
   const float phi = atan2f(wi_11.y, wi_11.x);
@@ -183,8 +187,8 @@ ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float alpha
   };
 
   // stretch back
-  slope.x *= alpha_x;
-  slope.y *= alpha_y;
+  slope.x *= alpha.x;
+  slope.y *= alpha.y;
 
   // if numerical instability
   if ((slope.x != slope.x) || isinf(slope.x)) {
@@ -197,8 +201,8 @@ ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float alpha
   return normalize(float3{-slope.x, -slope.y, 1.0f});
 }
 
-ETX_GPU_CODE SpectralResponse phase_function_reflection(SpectralQuery spect, const RayInfo& ray, const float3& wo, const float alpha_x, const float alpha_y,
-  const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm) {
+ETX_GPU_CODE SpectralResponse phase_function_reflection(SpectralQuery spect, const RayInfo& ray, const float3& wo, const float2& alpha, const RefractiveIndex::Sample& ext_ior,
+  const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm) {
   if (ray.w.z > 0.9999f)
     return {spect, 0.0f};
 
@@ -220,7 +224,7 @@ ETX_GPU_CODE SpectralResponse phase_function_reflection(SpectralQuery spect, con
   auto f = fresnel::calculate(spect, w_dot_h, ext_ior, int_ior, thinfilm);
   ETX_VALIDATE(f);
 
-  float d_ggx = D_ggx(wh, alpha_x, alpha_y);
+  float d_ggx = D_ggx(wh, alpha);
   ETX_VALIDATE(d_ggx);
 
   float d = d_ggx / (4.0f * projectedArea);
@@ -229,22 +233,22 @@ ETX_GPU_CODE SpectralResponse phase_function_reflection(SpectralQuery spect, con
   return f * d;
 }
 
-ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y,
-  const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, SpectralResponse& weight) {
+ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float2& alpha, const RefractiveIndex::Sample& ext_ior,
+  const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, SpectralResponse& weight) {
   // sample D_wi
   // stretch to match configuration with alpha=1.0
-  const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
+  const float3 wi_11 = normalize(float3{alpha.x * wi.x, alpha.y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
-  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha_x, alpha_y);
+  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha);
 
   // align with view direction
   const float phi = atan2f(wi_11.y, wi_11.x);
   float2 slope = {cosf(phi) * slope_11.x - sinf(phi) * slope_11.y, sinf(phi) * slope_11.x + cosf(phi) * slope_11.y};
 
   // stretch back
-  slope.x *= alpha_x;
-  slope.y *= alpha_y;
+  slope.x *= alpha.x;
+  slope.y *= alpha.y;
 
   // compute normal
   float3 wm = {};
@@ -261,12 +265,12 @@ ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& 
   return -wi + 2.0f * wm * i_dot_m;
 }
 
-ETX_GPU_CODE float3 sample_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y, const RefractiveIndex::Sample& ext_ior,
+ETX_GPU_CODE float3 sample_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float2& alpha, const RefractiveIndex::Sample& ext_ior,
   const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, SpectralResponse& energy) {
   energy = {spect, 1.0f};
 
   // init
-  RayInfo ray = {-wi, alpha_x, alpha_y};
+  RayInfo ray = {-wi, alpha};
   ray.updateHeight(1.0f);
 
   // random walk
@@ -282,7 +286,7 @@ ETX_GPU_CODE float3 sample_conductor(SpectralQuery spect, Sampler& smp, const fl
 
     // next direction
     SpectralResponse weight;
-    ray.updateDirection(samplePhaseFunction_conductor(spect, smp, -ray.w, alpha_x, alpha_y, ext_ior, int_ior, thinfilm, weight), alpha_x, alpha_y);
+    ray.updateDirection(samplePhaseFunction_conductor(spect, smp, -ray.w, alpha, ext_ior, int_ior, thinfilm, weight), alpha);
     energy = energy * weight;
     ray.updateHeight(ray.h);
 
@@ -296,28 +300,28 @@ ETX_GPU_CODE float3 sample_conductor(SpectralQuery spect, Sampler& smp, const fl
 }
 
 // MIS weights for bidirectional path tracing on the microsurface
-ETX_GPU_CODE float MISweight_conductor(const float3& wi, const float3& wo, const float alpha_x, const float alpha_y) {
+ETX_GPU_CODE float MISweight_conductor(const float3& wi, const float3& wo, const float2& alpha) {
   if (wi.x == -wo.x && wi.y == -wo.y && wi.z == -wo.z)
     return 1.0f;
   const float3 wh = normalize(wi + wo);
-  return D_ggx((wh.z > 0) ? wh : -wh, alpha_x, alpha_y);
+  return D_ggx((wh.z > 0) ? wh : -wh, alpha);
 }
 
-ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const float alpha_x, const float alpha_y,
-  const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm) {
+ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const float2& alpha, const RefractiveIndex::Sample& ext_ior,
+  const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm) {
   if (wi.z <= 0 || wo.z <= 0)
     return {spect, 0.0f};
 
   // init
-  RayInfo ray = {-wi, alpha_x, alpha_y};
+  RayInfo ray = {-wi, alpha};
   ray.updateHeight(1.0f);
   SpectralResponse energy = {spect, 1.0f};
 
-  RayInfo ray_shadowing = {wo, alpha_x, alpha_y};
+  RayInfo ray_shadowing = {wo, alpha};
 
   // eval single scattering
   const float3 wh = normalize(wi + wo);
-  const float D = D_ggx(wh, alpha_x, alpha_y);
+  const float D = D_ggx(wh, alpha);
   const float G2 = 1.0f / (1.0f + (-ray.Lambda - 1.0f) + ray_shadowing.Lambda);
   SpectralResponse singleScattering = fresnel::calculate(spect, dot(ray.w, wh), ext_ior, int_ior, thinfilm) * D * G2 / (4.0f * wi.z);
   ETX_VALIDATE(singleScattering);
@@ -343,7 +347,7 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
     // next event estimation
     if (current_scatteringOrder > 1)  // single scattering is already computed
     {
-      SpectralResponse phasefunction = phase_function_reflection(spect, ray, wo, alpha_x, alpha_y, ext_ior, int_ior, thinfilm);
+      SpectralResponse phasefunction = phase_function_reflection(spect, ray, wo, alpha, ext_ior, int_ior, thinfilm);
       ETX_VALIDATE(phasefunction);
 
       ray_shadowing.updateHeight(ray.h);
@@ -352,7 +356,7 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
       ETX_VALIDATE(I);
 
       // MIS
-      const float MIS = wi_MISweight / (wi_MISweight + MISweight_conductor(-ray.w, wo, alpha_x, alpha_y));
+      const float MIS = wi_MISweight / (wi_MISweight + MISweight_conductor(-ray.w, wo, alpha));
       ETX_VALIDATE(MIS);
       multipleScattering += I * MIS;
       ETX_VALIDATE(multipleScattering);
@@ -360,12 +364,12 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
 
     // next direction
     SpectralResponse weight;
-    ray.updateDirection(samplePhaseFunction_conductor(spect, smp, -ray.w, alpha_x, alpha_y, ext_ior, int_ior, thinfilm, weight), alpha_x, alpha_y);
+    ray.updateDirection(samplePhaseFunction_conductor(spect, smp, -ray.w, alpha, ext_ior, int_ior, thinfilm, weight), alpha);
     energy = energy * weight;
     ray.updateHeight(ray.h);
 
     if (current_scatteringOrder == 1)
-      wi_MISweight = MISweight_conductor(wi, ray.w, alpha_x, alpha_y);
+      wi_MISweight = MISweight_conductor(wi, ray.w, alpha);
 
     // if NaN (should not happen, just in case)
     if ((ray.h != ray.h) || (ray.w.x != ray.w.x))
@@ -400,12 +404,12 @@ ETX_GPU_CODE float3 refract(const float3& wi, const float3& wm, const float eta)
 
 // by convention, ray is always outside
 ETX_GPU_CODE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery spect, const RayInfo& ray, const float3& wo, const bool reflection,
-  const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, const float alpha_x, const float alpha_y) {
+  const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, const float2& alpha) {
   if (ray.w.z > 0.9999f)
     return {spect, 0.0f};
 
   if (reflection) {
-    return phase_function_reflection(spect, ray, wo, alpha_x, alpha_y, ext_ior, int_ior, thinfilm);
+    return phase_function_reflection(spect, ray, wo, alpha, ext_ior, int_ior, thinfilm);
   }
 
   float projectedArea = (ray.w.z < -0.9999f) ? 1.0f : ray.Lambda * ray.w.z;
@@ -422,18 +426,18 @@ ETX_GPU_CODE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery s
 
   float o_dot_m = dot(wo, wh);
   SpectralResponse f = fresnel::calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
-  return eta * eta * (1.0f - f) * i_dot_m * max(0.0f, -o_dot_m) * D_ggx(wh, alpha_x, alpha_y)  //
+  return eta * eta * (1.0f - f) * i_dot_m * max(0.0f, -o_dot_m) * D_ggx(wh, alpha)  //
          / (projectedArea * sqr(i_dot_m + eta * o_dot_m));
 }
 
 // by convention, wi is always outside
-ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y,
-  const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, bool& reflection) {
+ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float2& alpha, const RefractiveIndex::Sample& ext_ior,
+  const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, bool& reflection) {
   // stretch to match configuration with alpha=1.0
-  const float3 wi_11 = normalize(float3{alpha_x * wi.x, alpha_y * wi.y, wi.z});
+  const float3 wi_11 = normalize(float3{alpha.x * wi.x, alpha.y * wi.y, wi.z});
 
   // sample visible slope with alpha=1.0
-  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha_x, alpha_y);
+  float2 slope_11 = sampleP22_11(acosf(wi_11.z), smp.next_2d(), alpha);
 
   // align with view direction
   const float phi = atan2f(wi_11.y, wi_11.x);
@@ -443,8 +447,8 @@ ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sa
   };
 
   // stretch back
-  slope.x *= alpha_x;
-  slope.y *= alpha_y;
+  slope.x *= alpha.x;
+  slope.y *= alpha.y;
 
   // compute normal
   float3 wm = {};
@@ -465,29 +469,29 @@ ETX_GPU_CODE float3 samplePhaseFunction_dielectric(const SpectralQuery spect, Sa
 }
 
 // MIS weights for bidirectional path tracing on the microsurface
-ETX_GPU_CODE float MISweight_dielectric(const float3& wi, const float3& wo, const bool reflection, const float eta, const float alpha_x, const float alpha_y) {
+ETX_GPU_CODE float MISweight_dielectric(const float3& wi, const float3& wo, const bool reflection, const float eta, const float2& alpha) {
   if (reflection) {
     if (wi.x == -wo.x && wi.y == -wo.y && wi.z == -wo.z)
       return 1.0f;
     const float3 wh = normalize(wi + wo);
-    return D_ggx((wh.z > 0) ? wh : -wh, alpha_x, alpha_y);
+    return D_ggx((wh.z > 0) ? wh : -wh, alpha);
   } else {
     const float3 wh = normalize(wi + wo * eta);
-    return D_ggx((wh.z > 0) ? wh : -wh, alpha_x, alpha_y);
+    return D_ggx((wh.z > 0) ? wh : -wh, alpha);
   }
 }
 
-ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const bool wo_outside, const float alpha_x,
-  const float alpha_y, const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm) {
+ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const bool wo_outside, const float2& alpha,
+  const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm) {
   if ((wi.z <= 0) || (wo.z <= 0 && wo_outside) || (wo.z >= 0 && !wo_outside))
     return {spect, 0.0f};
 
   // init
-  RayInfo ray = {-wi, alpha_x, alpha_y};
+  RayInfo ray = {-wi, alpha};
   ray.updateHeight(1.0f);
   bool outside = true;
 
-  RayInfo ray_shadowing = {wo_outside ? wo : -wo, alpha_x, alpha_y};
+  RayInfo ray_shadowing = {wo_outside ? wo : -wo, alpha};
 
   SpectralResponse singleScattering = {spect, 0.0f};
   SpectralResponse multipleScattering = {spect, 0.0f};
@@ -510,7 +514,7 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
     // next event estimation
     if (current_scatteringOrder == 1)  // single scattering
     {
-      auto phasefunction = evalPhaseFunction_dielectric(spect, ray, wo, wo_outside, ext_ior, int_ior, thinfilm, alpha_x, alpha_y);
+      auto phasefunction = evalPhaseFunction_dielectric(spect, ray, wo, wo_outside, ext_ior, int_ior, thinfilm, alpha);
 
       // closed masking and shadowing (we compute G2 / G1 because G1 is already in the phase function)
       float G2_G1;
@@ -530,11 +534,11 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
       SpectralResponse phasefunction = {};
       float MIS = {};
       if (outside) {
-        phasefunction = evalPhaseFunction_dielectric(spect, ray, wo, wo_outside, ext_ior, int_ior, thinfilm, alpha_x, alpha_y);
-        MIS = wi_MISweight / (wi_MISweight + MISweight_dielectric(-ray.w, wo, wo_outside, eta, alpha_x, alpha_y));
+        phasefunction = evalPhaseFunction_dielectric(spect, ray, wo, wo_outside, ext_ior, int_ior, thinfilm, alpha);
+        MIS = wi_MISweight / (wi_MISweight + MISweight_dielectric(-ray.w, wo, wo_outside, eta, alpha));
       } else {
-        phasefunction = evalPhaseFunction_dielectric(spect, ray, -wo, !wo_outside, int_ior, ext_ior, thinfilm, alpha_x, alpha_y);
-        MIS = wi_MISweight / (wi_MISweight + MISweight_dielectric(-ray.w, -wo, !wo_outside, 1.0f / eta, alpha_x, alpha_y));
+        phasefunction = evalPhaseFunction_dielectric(spect, ray, -wo, !wo_outside, int_ior, ext_ior, thinfilm, alpha);
+        MIS = wi_MISweight / (wi_MISweight + MISweight_dielectric(-ray.w, -wo, !wo_outside, 1.0f / eta, alpha));
       }
 
       ray_shadowing.updateHeight((outside == wo_outside) ? ray.h : -ray.h);
@@ -545,18 +549,18 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
 
     // next direction
     bool next_outside;
-    float3 w = samplePhaseFunction_dielectric(spect, smp, -ray.w, alpha_x, alpha_y, (outside ? ext_ior : int_ior), (outside ? int_ior : ext_ior), thinfilm, next_outside);
+    float3 w = samplePhaseFunction_dielectric(spect, smp, -ray.w, alpha, (outside ? ext_ior : int_ior), (outside ? int_ior : ext_ior), thinfilm, next_outside);
     if (next_outside) {
-      ray.updateDirection(w, alpha_x, alpha_y);
+      ray.updateDirection(w, alpha);
       ray.updateHeight(ray.h);
     } else {
       outside = !outside;
-      ray.updateDirection(-w, alpha_x, alpha_y);
+      ray.updateDirection(-w, alpha);
       ray.updateHeight(-ray.h);
     }
 
     if (current_scatteringOrder == 1)
-      wi_MISweight = MISweight_dielectric(wi, ray.w, outside, eta, alpha_x, alpha_y);
+      wi_MISweight = MISweight_dielectric(wi, ray.w, outside, eta, alpha);
 
     if ((ray.h != ray.h) || (ray.w.x != ray.w.x))
       return {spect, 0.0f};
@@ -567,10 +571,10 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
   return 0.5f * singleScattering + multipleScattering;
 }
 
-ETX_GPU_CODE bool sample_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y, const RefractiveIndex::Sample& ext_ior,
+ETX_GPU_CODE bool sample_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float2& alpha, const RefractiveIndex::Sample& ext_ior,
   const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, float3& w_o) {
   // init
-  RayInfo ray = {-wi, alpha_x, alpha_y};
+  RayInfo ray = {-wi, alpha};
   ray.updateHeight(1.0f);
   bool outside = true;
 
@@ -588,13 +592,13 @@ ETX_GPU_CODE bool sample_dielectric(const SpectralQuery spect, Sampler& smp, con
 
     // next direction
     bool next_outside;
-    float3 w = samplePhaseFunction_dielectric(spect, smp, -ray.w, alpha_x, alpha_y, (outside ? ext_ior : int_ior), (outside ? int_ior : ext_ior), thinfilm, next_outside);
+    float3 w = samplePhaseFunction_dielectric(spect, smp, -ray.w, alpha, (outside ? ext_ior : int_ior), (outside ? int_ior : ext_ior), thinfilm, next_outside);
     if (next_outside) {
-      ray.updateDirection(w, alpha_x, alpha_y);
+      ray.updateDirection(w, alpha);
       ray.updateHeight(ray.h);
     } else {
       outside = !outside;
-      ray.updateDirection(-w, alpha_x, alpha_y);
+      ray.updateDirection(-w, alpha);
       ray.updateHeight(-ray.h);
     }
 
@@ -630,10 +634,10 @@ ETX_GPU_CODE float3 samplePhaseFunction_diffuse(Sampler& smp, const float3& wm) 
   return x * basis.u + y * basis.v + z * wm;
 }
 
-ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const float3& wo, const float alpha_x, const float alpha_y, const SpectralResponse& albedo) {
-  RayInfo ray_shadowing = {wo, alpha_x, alpha_y};
+ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const float3& wo, const float2& alpha, const SpectralResponse& albedo) {
+  RayInfo ray_shadowing = {wo, alpha};
 
-  RayInfo ray = {-wi, alpha_x, alpha_y};
+  RayInfo ray = {-wi, alpha};
   ray.updateHeight(1.0f);
 
   SpectralResponse res = {albedo, 0.0f};
@@ -651,7 +655,7 @@ ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const
     current_scatteringOrder++;
 
     // sample VNDF
-    float3 wm = sampleVNDF(smp, -ray.w, alpha_x, alpha_y);
+    float3 wm = sampleVNDF(smp, -ray.w, alpha);
 
     // next event estimation
     SpectralResponse phasefunction = energy * albedo * max(0.0f, dot(wm, wo) / kPi);
@@ -670,7 +674,7 @@ ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const
     }
 
     // next direction
-    ray.updateDirection(samplePhaseFunction_diffuse(smp, wm), alpha_x, alpha_y);
+    ray.updateDirection(samplePhaseFunction_diffuse(smp, wm), alpha);
     ray.updateHeight(ray.h);
 
     energy = energy * albedo;
@@ -683,11 +687,11 @@ ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const
   return res;
 }
 
-ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float alpha_x, const float alpha_y, const SpectralResponse& albedo, SpectralResponse& energy) {
+ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2& alpha, const SpectralResponse& albedo, SpectralResponse& energy) {
   energy = {albedo, 1.0f};
 
   // init
-  RayInfo ray = {-wi, alpha_x, alpha_y};
+  RayInfo ray = {-wi, alpha};
   ray.updateHeight(1.0f);
 
   // random walk
@@ -701,10 +705,10 @@ ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float a
     current_scatteringOrder++;
 
     // sample VNDF
-    float3 wm = sampleVNDF(smp, -ray.w, alpha_x, alpha_y);
+    float3 wm = sampleVNDF(smp, -ray.w, alpha);
 
     // next direction
-    ray.updateDirection(samplePhaseFunction_diffuse(smp, wm), alpha_x, alpha_y);
+    ray.updateDirection(samplePhaseFunction_diffuse(smp, wm), alpha);
     ray.updateHeight(ray.h);
 
     energy = energy * albedo;
