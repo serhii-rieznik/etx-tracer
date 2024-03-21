@@ -248,7 +248,7 @@ struct CPUBidirectionalImpl : public Task {
           CameraSample camera_sample = {};
           auto splat = connect_to_camera(smp, path, spect, camera_sample);
           auto xyz = splat.to_xyz();
-          iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv, thread_id);
+          iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
         }
 
       } else if (found_intersection) {
@@ -326,7 +326,7 @@ struct CPUBidirectionalImpl : public Task {
           auto splat = connect_to_camera(smp, path, spect, camera_sample);
           if (splat.is_zero() == false) {
             auto xyz = splat.to_xyz();
-            iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv, thread_id);
+            iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
           }
         }
 
@@ -927,9 +927,9 @@ void CPUBidirectional::set_output_size(const uint2& dim) {
   if (current_state != State::Stopped) {
     stop(Stop::Immediate);
   }
-  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
-  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
-  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, rt.scheduler().max_thread_count());
+  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
+  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
+  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
 }
 
 const float4* CPUBidirectional::get_camera_image(bool) {

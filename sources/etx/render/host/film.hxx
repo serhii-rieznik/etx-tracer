@@ -18,10 +18,10 @@ struct Film {
   Film() = default;
   ~Film() = default;
 
-  void allocate(const uint2& dim, uint32_t layers, uint32_t threads);
+  void allocate(const uint2& dim, uint32_t layers);
 
-  void atomic_add(const float4& value, const float2& ndc_coord, uint32_t thread_id);
-  void atomic_add(const float4& value, uint32_t x, uint32_t y, uint32_t thread_id);
+  void atomic_add(const float4& value, const float2& ndc_coord);
+  void atomic_add(const float4& value, uint32_t x, uint32_t y);
 
   void accumulate(const float4& value, const float2& ndc_coord, float t);
   void accumulate(const float4& value, uint32_t x, uint32_t y, float t);
@@ -42,10 +42,6 @@ struct Film {
     return _buffer.data();
   }
 
-  uint32_t pixel_at(uint32_t i) const {
-    return _sequence[i];
-  }
-
   static float calculate_ev(float f, float s) {
     return log2f(f * f / s);
   }
@@ -58,9 +54,7 @@ struct Film {
 
  private:
   uint2 _dimensions = {};
-  uint32_t _thread_count = 0;
   std::vector<float4> _buffer = {};
-  std::vector<uint32_t> _sequence = {};
 };
 
 }  // namespace etx

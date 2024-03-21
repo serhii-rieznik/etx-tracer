@@ -193,7 +193,7 @@ struct CPUVCMImpl {
 
         for (uint32_t i = 0; i < step_result.splat_count; ++i) {
           const float3& val = step_result.values_to_splat[i];
-          iteration_light_image.atomic_add({val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i], thread_id);
+          iteration_light_image.atomic_add({val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i]);
         }
 
         if (step_result.continue_tracing == false) {
@@ -262,9 +262,9 @@ void CPUVCM::set_output_size(const uint2& dim) {
   if (current_state != State::Stopped) {
     stop(Stop::Immediate);
   }
-  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
-  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, 1);
-  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays, rt.scheduler().max_thread_count());
+  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
+  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
+  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
 }
 
 void CPUVCM::preview(const Options& opt) {
