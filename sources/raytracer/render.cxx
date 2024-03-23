@@ -306,7 +306,6 @@ static const uint kViewLightImage = 2;
 static const uint kViewReferenceImage = 3;
 static const uint kViewRelativeDifference = 4;
 static const uint kViewAbsoluteDifference = 5;
-static const uint kVariance = 6;
 
 static const uint ToneMapping = 1u << 0u;
 static const uint sRGB = 1u << 1u;
@@ -419,12 +418,6 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
       result.y = float(max(0.0f, v_lum - r_lum) > c_treshold);
       break;
     }
-    case kVariance: {
-      float square_mean = sqr(v_lum);
-      float mean_squares = t_image.w / float(sample_count);
-      result = abs(mean_squares - square_mean);
-      break;
-    }
     default:
       break;
   };
@@ -452,6 +445,15 @@ struct VSOutput {
 
 constant constexpr uint ToneMapping = 1u << 0u;
 constant constexpr uint sRGB = 1u << 1u;
+constant constexpr float c_treshold = 1.0f / 65536.0f;
+constant constexpr float3 lum = {0.2627, 0.6780, 0.0593};
+
+constant constexpr uint kViewResult = 0;
+constant constexpr uint kViewCameraImage = 1;
+constant constexpr uint kViewLightImage = 2;
+constant constexpr uint kViewReferenceImage = 3;
+constant constexpr uint kViewRelativeDifference = 4;
+constant constexpr uint kViewAbsoluteDifference = 5;
 
 float4 to_rgb(float4 xyz) {
   float4 rgb;
@@ -466,12 +468,12 @@ float linear_to_gamma(float value) {
   return value <= 0.0031308f ? 12.92f * value : 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
 }
 
-float4 tonemap(float4 value, float exposure, uint options) {
-  if (options & ToneMapping) {
-    value = 1.0f - exp(-exposure * value);
+float4 tonemap(float4 value, constant const Constants& params) {
+  if (params.options & ToneMapping) {
+    value = 1.0f - exp(-params.exposure * value);
   }
 
-  if (options & sRGB) {
+  if (params.options & sRGB) {
     value.x = linear_to_gamma(value.x);
     value.y = linear_to_gamma(value.y);
     value.z = linear_to_gamma(value.z);
@@ -491,7 +493,11 @@ vertex VSOutput vertex_main(constant Constants& params [[buffer(0)]], uint verte
 }
 
 fragment float4 fragment_main(VSOutput input [[stage_in]],
-  constant Constants& params [[buffer(0)]], texture2d<float> color [[texture(0)]]) {
+  constant Constants& params [[buffer(0)]],
+  texture2d<float> sample_image [[texture(0)]],
+  texture2d<float> light_image [[texture(1)]],
+  texture2d<float> reference_image [[texture(2)]]
+) {
   constexpr sampler linear_sampler(coord::normalized, address::clamp_to_edge, filter::linear);
 
   float2 offset = 0.5f * (params.dimensions.xy - params.dimensions.zw);
@@ -502,9 +508,53 @@ fragment float4 fragment_main(VSOutput input [[stage_in]],
     discard_fragment();
   }
 
-  float4 sampled_color_xyz = color.sample(linear_sampler, input.uv);
-  float4 sampled_color_rgb = to_rgb(sampled_color_xyz);
-  return tonemap(sampled_color_rgb, params.exposure, params.options);
+  float4 sampled_color_xyz = sample_image.sample(linear_sampler, input.uv);
+  float4 light_color_xyz = light_image.sample(linear_sampler, input.uv);
+
+  float4 r_image = reference_image.sample(linear_sampler, input.uv);
+  float r_lum = dot(r_image.xyz, lum);
+
+  float4 c_image = to_rgb(sampled_color_xyz);
+  float4 l_image = to_rgb(light_color_xyz);
+  float4 v_image = c_image + l_image;
+  // float c_lum = dot(c_image.xyz, lum);
+  // float l_lum = dot(l_image.xyz, lum);
+  float v_lum = dot(v_image.xyz, lum);
+
+  float4 result = {};
+
+  switch (params.image_view) {
+    case kViewResult: {
+      result = tonemap(v_image, params);
+      break;
+    }
+    case kViewCameraImage: {
+      result = tonemap(c_image, params);
+      break;
+    }
+    case kViewLightImage: {
+      result = tonemap(l_image, params);
+      break;
+    }
+    case kViewReferenceImage: {
+      result = tonemap(r_image, params);
+      break;
+    }
+    case kViewRelativeDifference: {
+      result.x = params.exposure * max(0.0f, r_lum - v_lum);
+      result.y = params.exposure * max(0.0f, v_lum - r_lum);
+      break;
+    }
+    case kViewAbsoluteDifference: {
+      result.x = float(max(0.0f, r_lum - v_lum) > c_treshold);
+      result.y = float(max(0.0f, v_lum - r_lum) > c_treshold);
+      break;
+    }
+    default:
+      break;
+  };
+
+  return result;
 }
 
 )";

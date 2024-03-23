@@ -111,7 +111,6 @@ struct CPUVCMImpl {
   void start(const Options& opt) {
     camera_image.clear();
     light_image.clear();
-    iteration_light_image.clear();
     vcm_options.load(opt);
     stats.total_time = {};
     vcm_iteration.iteration = 0;
@@ -147,6 +146,7 @@ struct CPUVCMImpl {
 
     _light_paths.clear();
     _light_vertices.clear();
+    iteration_light_image.clear();
     current_task = rt.scheduler().schedule(camera_image.count(), &gather_light_job);
   }
 

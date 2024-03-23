@@ -459,7 +459,6 @@ void UI::build(double dt, const char* status) {
     }
     ImGui::PopStyleColor(4);
 
-#if (ETX_PLATFORM_WINDOWS)
     ImGui::SameLine(0.0f, wpadding.x);
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
 
@@ -467,13 +466,12 @@ void UI::build(double dt, const char* status) {
     if (state_available[0] == false) {
       ImGui::BeginDisabled();
     }
-    if (ImGui::Button("  Denoise  ", {0.0f, button_size})) {
+    if (ImGui::Button("  Denoise (preview)  ", {0.0f, button_size})) {
       callbacks.denoise_selected();
     }
     if (state_available[0] == false) {
       ImGui::EndDisabled();
     }
-#endif
 
     ImGui::SameLine(0.0f, wpadding.x);
 
@@ -494,8 +492,7 @@ void UI::build(double dt, const char* status) {
 
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     char status_buffer[2048] = {};
-    uint32_t cpu_load = static_cast<uint32_t>(get_cpu_load() * 100.0f);
-    snprintf(status_buffer, sizeof(status_buffer), "%-3u cpu | %.2fms | %.2ffps | %s", cpu_load, 1000.0 * dt, 1.0f / dt, status ? status : "");
+    snprintf(status_buffer, sizeof(status_buffer), "%.2fms | %s", 1000.0 * dt, status ? status : "");
     ImGui::Text("%s", status_buffer);
     ImGui::End();
   }
@@ -749,8 +746,7 @@ bool UI::handle_event(const sapp_event* e) {
     case SAPP_KEYCODE_3:
     case SAPP_KEYCODE_4:
     case SAPP_KEYCODE_5:
-    case SAPP_KEYCODE_6:
-    case SAPP_KEYCODE_7: {
+    case SAPP_KEYCODE_6: {
       _view_options.view = static_cast<OutputView>(e->key_code - SAPP_KEYCODE_1);
       break;
     }

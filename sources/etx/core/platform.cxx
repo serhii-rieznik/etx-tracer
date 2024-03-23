@@ -40,7 +40,12 @@ void atomic_add_float(float* ptr, float value) {
     new_value = std::bit_cast<long>(*ptr + value);
   } while (_InterlockedCompareExchange(iptr, new_value, old_value) != old_value);
 #elif (ETX_PLATFORM_APPLE)
-# error Implement
+  volatile int32_t* iptr = std::bit_cast<volatile int32_t*>(ptr);
+  int32_t old_value, new_value;
+  do {
+    old_value = std::bit_cast<int32_t>(*ptr);
+    new_value = std::bit_cast<int32_t>(*ptr + value);
+  } while (!OSAtomicCompareAndSwap32(old_value, new_value, iptr));
 #endif
 }
 

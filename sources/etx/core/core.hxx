@@ -35,7 +35,6 @@ void atomic_add_float(float* ptr, float value);
 int64_t atomic_add_int64(int64_t* ptr, int64_t value);
 
 bool load_binary_file(const char* filename, std::vector<uint8_t>& data);
-float get_cpu_load();
 
 template <class T>
 constexpr inline T align_up(T sz, T al) {

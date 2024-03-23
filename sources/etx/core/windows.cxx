@@ -78,29 +78,6 @@ void init_platform() {
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
 }
 
-float get_cpu_load() {
-  auto CalculateCPULoad = [](unsigned long long idleTicks, unsigned long long totalTicks) {
-    static unsigned long long _previousTotalTicks = 0;
-    static unsigned long long _previousIdleTicks = 0;
-
-    unsigned long long totalTicksSinceLastTime = totalTicks - _previousTotalTicks;
-    unsigned long long idleTicksSinceLastTime = idleTicks - _previousIdleTicks;
-
-    float ret = 1.0f - ((totalTicksSinceLastTime > 0) ? ((float)idleTicksSinceLastTime) / totalTicksSinceLastTime : 0);
-
-    _previousTotalTicks = totalTicks;
-    _previousIdleTicks = idleTicks;
-    return ret;
-  };
-
-  auto FileTimeToInt64 = [](const FILETIME& ft) {
-    return (((unsigned long long)(ft.dwHighDateTime)) << 32) | ((unsigned long long)ft.dwLowDateTime);
-  };
-
-  FILETIME idleTime = {}, kernelTime = {}, userTime = {};
-  return GetSystemTimes(&idleTime, &kernelTime, &userTime) ? CalculateCPULoad(FileTimeToInt64(idleTime), FileTimeToInt64(kernelTime) + FileTimeToInt64(userTime)) : -1.0f;
-}
-
 inline void log::set_console_color(log::Color clr) {
   auto con = GetStdHandle(STD_OUTPUT_HANDLE);
   switch (clr) {
@@ -134,10 +111,6 @@ inline void log::set_console_color(log::Color clr) {
 namespace etx {
 
 void init_platform() {
-}
-
-float get_cpu_load() {
-  return 0.0f;
 }
 
 }  // namespace etx

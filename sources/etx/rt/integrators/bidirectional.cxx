@@ -815,8 +815,6 @@ struct CPUBidirectionalImpl : public Task {
     conn_connect_vertices = opt.get("conn_connect_vertices", conn_connect_vertices).to_bool();
     conn_mis = opt.get("conn_mis", conn_mis).to_bool();
 
-    iteration_light_image.clear();
-
     uint32_t dim = camera_image.dimensions().x * camera_image.dimensions().y;
     for (auto& path_data : per_thread_path_data) {
       path_data.camera_path.reserve(2llu + rt.scene().max_path_length);
@@ -828,6 +826,7 @@ struct CPUBidirectionalImpl : public Task {
 
     total_time = {};
     iteration_time = {};
+    iteration_light_image.clear();
     current_task = rt.scheduler().schedule(dim, this);
   }
 };
@@ -868,18 +867,15 @@ void CPUBidirectional::update() {
   }
 
   _private->iteration_light_image.flush_to(_private->light_image, float(_private->iteration) / float(_private->iteration + 1));
-
+  _private->iteration_light_image.clear();
+  
   if (current_state == State::WaitingForCompletion) {
-    _private->iteration_light_image.clear();
-
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
 
     snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
     current_state = Integrator::State::Stopped;
   } else if (_private->iteration + 1u < rt.scene().samples) {
-    _private->iteration_light_image.clear();
-
     snprintf(_private->status, sizeof(_private->status), "[%u] %s... (%.3fms per iteration)", _private->iteration,
       (current_state == Integrator::State::Running ? "Running" : "Preview"), _private->iteration_time.measure_ms());
 

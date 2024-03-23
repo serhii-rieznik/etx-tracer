@@ -41,15 +41,12 @@ void Film::accumulate(const float4& value, uint32_t x, uint32_t y, float t) {
 
   uint32_t i = x + (_dimensions.y - 1 - y) * _dimensions.x;
 
-  float lum_sq = sqr(luminance({value.x, value.y, value.z}));
-  float4 existing_value = _buffer[i];
-
-  float4 new_value = {value.x, value.y, value.z, lum_sq};
+  float4 new_value = {value.x, value.y, value.z, 1.0f};
   if (t > 0.0f) {
+    const float4& existing_value = _buffer[i];
     new_value.x = lerp(value.x, existing_value.x, t);
     new_value.y = lerp(value.y, existing_value.y, t);
     new_value.z = lerp(value.z, existing_value.z, t);
-    new_value.w = existing_value.w + lum_sq;
   }
   _buffer[i] = new_value;
 }
@@ -73,7 +70,7 @@ void Film::flush_to(Film& other, float t) {
 }
 
 void Film::clear() {
-  std::fill(_buffer.begin(), _buffer.end(), float4{});
+  memset(_buffer.data(), 0, count() * sizeof(float4));
 }
 
 }  // namespace etx
