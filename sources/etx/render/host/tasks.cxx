@@ -1,4 +1,4 @@
-﻿#include <etx/core/handle.hxx>
+#include <etx/core/handle.hxx>
 #include <etx/core/profiler.hxx>
 #include <etx/render/host/pool.hxx>
 #include <etx/render/host/tasks.hxx>
@@ -26,6 +26,10 @@ struct TaskWrapper : public enki::ITaskSet {
 
   void ExecuteRange(enki::TaskSetPartition range_, uint32_t threadnum_) override {
     task->execute_range(range_.start, range_.end, threadnum_);
+  }
+
+  void OnComplete() override {
+    task->completed();
   }
 };
 

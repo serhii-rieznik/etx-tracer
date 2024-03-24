@@ -37,7 +37,7 @@ struct ETX_ALIGNED RayInfo {
       Lambda = -1.0f;
       return;
     }
-    
+
     float theta = acosf(w.z);
     float cosTheta = w.z;
     float sinTheta = sinf(theta);

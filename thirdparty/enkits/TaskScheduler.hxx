@@ -104,6 +104,7 @@ namespace enki
             return 0 == m_RunningCount.load( std::memory_order_acquire );
         }
 
+        virtual void OnComplete() {}
         virtual ~ICompletable();
 
         // Dependency helpers, see Dependencies.cpp

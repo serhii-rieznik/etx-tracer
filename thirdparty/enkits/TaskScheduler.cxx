@@ -432,6 +432,7 @@ void TaskScheduler::TaskComplete(ICompletable* pTask_, bool bWakeThreads_, uint3
 
   // Do not access pTask_ below this line unless we have dependencies.
   pTask_->m_RunningCount.store(0, std::memory_order_release);
+  pTask_->OnComplete();
 
   if (bCallWakeThreads) {
     WakeThreadsForTaskCompletion();

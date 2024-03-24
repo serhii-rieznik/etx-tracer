@@ -868,7 +868,7 @@ void CPUBidirectional::update() {
 
   _private->iteration_light_image.flush_to(_private->light_image, float(_private->iteration) / float(_private->iteration + 1));
   _private->iteration_light_image.clear();
-  
+
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};

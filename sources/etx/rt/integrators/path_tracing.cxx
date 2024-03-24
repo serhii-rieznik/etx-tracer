@@ -1,4 +1,4 @@
-﻿#include <etx/core/core.hxx>
+#include <etx/core/core.hxx>
 
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/bsdf.hxx>
@@ -23,6 +23,8 @@ struct CPUPathTracingImpl : public Task {
   uint32_t preview_frames = 3;
   uint32_t current_scale = 1u;
   uint32_t max_samples = 1u;
+  double last_iteration_time = 0.0;
+  double total_iterations_time = 0.0;
 
   PTOptions options = {};
 
@@ -38,10 +40,8 @@ struct CPUPathTracingImpl : public Task {
 
     options.nee = opt.get("nee", options.nee).to_bool();
     options.mis = opt.get("mis", options.mis).to_bool();
-    // options.spectral = opt.get("spectral", options.mis).to_bool();
 
     iteration = 0;
-    snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
 
     if (state->load() == Integrator::State::Running) {
       current_scale = 1;
@@ -52,6 +52,8 @@ struct CPUPathTracingImpl : public Task {
 
     total_time = {};
     iteration_time = {};
+    last_iteration_time = 0.0;
+    total_iterations_time = 0.0;
     current_task = rt.scheduler().schedule(current_dimensions.x * current_dimensions.y, this);
   }
 
@@ -84,6 +86,29 @@ struct CPUPathTracingImpl : public Task {
       }
     }
   }
+
+  void completed() override {
+    last_iteration_time = iteration_time.measure();
+    if (iteration >= preview_frames) {
+      total_iterations_time += last_iteration_time;
+    }
+  }
+
+  void update_status(Integrator::State st) {
+    constexpr const char* status_str[] = {
+      "Stopped",
+      "Preview",
+      "Running",
+      "Completing",
+    };
+
+    uint32_t i_frame = (iteration >= preview_frames) ? (iteration - preview_frames) : 0u;
+    double average_time = total_iterations_time / double(i_frame + 1u);
+
+    snprintf(status, sizeof(status), "%-4d | %s | %.3fms last, %.3fms avg, %.3fs total",  //
+      iteration, status_str[uint32_t(st)],                                                //
+      last_iteration_time * 1000.0, average_time * 1000.0f, total_iterations_time);
+  };
 };
 
 CPUPathTracing::CPUPathTracing(Raytracing& rt)
@@ -126,6 +151,8 @@ void CPUPathTracing::preview(const Options& opt) {
     _private->max_samples = std::max(_private->preview_frames + 1u, rt.scene().samples);
     _private->start(opt);
   }
+
+  _private->update_status(current_state);
 }
 
 void CPUPathTracing::run(const Options& opt) {
@@ -136,39 +163,42 @@ void CPUPathTracing::run(const Options& opt) {
     _private->max_samples = rt.scene().samples;
     _private->start(opt);
   }
+
+  _private->update_status(current_state);
 }
 
 void CPUPathTracing::update() {
   ETX_FUNCTION_SCOPE();
-  bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
+  if ((current_state == State::Stopped) || (rt.scheduler().completed(_private->current_task) == false)) {
+    return;
+  }
 
-  if (should_stop && rt.scheduler().completed(_private->current_task)) {
-    if ((current_state == State::WaitingForCompletion) || (_private->iteration + 1 >= _private->max_samples)) {
-      rt.scheduler().wait(_private->current_task);
-      _private->current_task = {};
-      if (current_state == State::Preview) {
-        snprintf(_private->status, sizeof(_private->status), "[%u] Preview completed", _private->iteration);
-        current_state = Integrator::State::Preview;
-      } else {
-        snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
-        current_state = Integrator::State::Stopped;
-      }
+  if ((current_state == State::WaitingForCompletion) || (_private->iteration + 1 >= _private->max_samples)) {
+    rt.scheduler().wait(_private->current_task);
+    _private->current_task = {};
+
+    if (current_state == State::Preview) {
+      current_state = Integrator::State::Preview;
     } else {
-      snprintf(_private->status, sizeof(_private->status), "[%u] %s... (%.3fms per iteration)", _private->iteration,
-        (current_state == Integrator::State::Running ? "Running" : "Preview"), _private->iteration_time.measure_ms());
-      _private->iteration_time = {};
-      _private->iteration += 1;
-
-      if (current_state == Integrator::State::Running) {
-        _private->current_scale = 1;
-      } else {
-        uint32_t d_frame = (_private->preview_frames >= _private->iteration) ? (_private->preview_frames - _private->iteration) : 0u;
-        _private->current_scale = 1u << d_frame;
-      }
-      _private->current_dimensions = _private->camera_image.dimensions() / _private->current_scale;
-
-      rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
+      current_state = Integrator::State::Stopped;
     }
+
+    _private->update_status(current_state);
+  } else {
+    _private->update_status(current_state);
+
+    _private->iteration += 1;
+
+    if (current_state == Integrator::State::Running) {
+      _private->current_scale = 1;
+    } else {
+      uint32_t d_frame = (_private->preview_frames >= _private->iteration) ? (_private->preview_frames - _private->iteration) : 0u;
+      _private->current_scale = 1u << d_frame;
+    }
+    _private->current_dimensions = _private->camera_image.dimensions() / _private->current_scale;
+
+    _private->iteration_time = {};
+    rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
   }
 }
 
@@ -179,13 +209,13 @@ void CPUPathTracing::stop(Stop st) {
 
   if (st == Stop::WaitForCompletion) {
     current_state = State::WaitingForCompletion;
-    snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->iteration);
   } else {
     current_state = State::Stopped;
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
-    snprintf(_private->status, sizeof(_private->status), "[%u] Stopped", _private->iteration);
   }
+
+  _private->update_status(current_state);
 }
 
 Options CPUPathTracing::options() const {
