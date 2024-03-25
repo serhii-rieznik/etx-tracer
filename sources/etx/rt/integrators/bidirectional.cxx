@@ -116,7 +116,6 @@ struct CPUBidirectionalImpl : public Task {
     PathData& operator=(const PathData&) = delete;
   };
 
-  char status[2048] = {};
   Raytracing& rt;
   std::vector<RNDSampler> samplers;
   std::vector<PathData> per_thread_path_data;
@@ -124,10 +123,9 @@ struct CPUBidirectionalImpl : public Task {
   Film camera_image;
   Film light_image;
   Film iteration_light_image;
-  TimeMeasure total_time = {};
   TimeMeasure iteration_time = {};
   Handle current_task = {};
-  uint32_t iteration = 0;
+  Integrator::Status status = {};
 
   bool conn_direct_hit = true;
   bool conn_connect_to_light = true;
@@ -166,8 +164,14 @@ struct CPUBidirectionalImpl : public Task {
 
       auto xyz = (result / spect.sampling_pdf()).to_xyz();
 
-      camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(iteration) / float(iteration + 1));
+      camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / float(status.current_iteration + 1));
     }
+  }
+
+  void completed() {
+    status.last_iteration_time = iteration_time.measure();
+    status.total_time += status.last_iteration_time;
+    status.completed_iterations += 1u;
   }
 
   bool running() const {
@@ -821,10 +825,7 @@ struct CPUBidirectionalImpl : public Task {
       path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
     }
 
-    iteration = 0;
-    snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
-
-    total_time = {};
+    status = {};
     iteration_time = {};
     iteration_light_image.clear();
     current_task = rt.scheduler().schedule(dim, this);
@@ -866,24 +867,18 @@ void CPUBidirectional::update() {
     return;
   }
 
-  _private->iteration_light_image.flush_to(_private->light_image, float(_private->iteration) / float(_private->iteration + 1));
+  _private->iteration_light_image.flush_to(_private->light_image, float(_private->status.current_iteration) / float(_private->status.current_iteration + 1));
   _private->iteration_light_image.clear();
 
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
-
-    snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
     current_state = Integrator::State::Stopped;
-  } else if (_private->iteration + 1u < rt.scene().samples) {
-    snprintf(_private->status, sizeof(_private->status), "[%u] %s... (%.3fms per iteration)", _private->iteration,
-      (current_state == Integrator::State::Running ? "Running" : "Preview"), _private->iteration_time.measure_ms());
-
+  } else if (_private->status.current_iteration + 1u < rt.scene().samples) {
     _private->iteration_time = {};
-    _private->iteration += 1;
+    _private->status.current_iteration += 1;
     rt.scheduler().restart(_private->current_task, _private->camera_image.dimensions().x * _private->camera_image.dimensions().y);
   } else {
-    snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
     current_state = Integrator::State::Stopped;
   }
 }
@@ -899,7 +894,6 @@ void CPUBidirectional::stop(Stop st) {
     _private->current_task = {};
   } else {
     current_state = State::WaitingForCompletion;
-    snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->iteration);
   }
 }
 
@@ -936,7 +930,7 @@ const float4* CPUBidirectional::get_light_image(bool) {
   return _private->light_image.data();
 }
 
-const char* CPUBidirectional::status() const {
+Integrator::Status CPUBidirectional::status() const {
   return _private->status;
 }
 

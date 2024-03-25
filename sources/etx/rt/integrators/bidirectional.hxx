@@ -22,7 +22,7 @@ struct CPUBidirectional : public Integrator {
 
   const float4* get_camera_image(bool) override;
   const float4* get_light_image(bool) override;
-  const char* status() const override;
+  Status status() const override;
 
  private:
   ETX_DECLARE_PIMPL(CPUBidirectional, 4096);

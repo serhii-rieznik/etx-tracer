@@ -98,7 +98,6 @@ void RTApplication::frame() {
   ETX_FUNCTION_SCOPE();
   const float4* c_image = nullptr;
   const float4* l_image = nullptr;
-  const char* status = "Not running";
 
   bool can_change_camera = true;
   bool c_image_updated = false;
@@ -106,7 +105,6 @@ void RTApplication::frame() {
 
   if (_current_integrator != nullptr) {
     _current_integrator->update();
-    status = _current_integrator->status();
 
     if (_reset_images == false) {
       c_image_updated = _current_integrator->have_updated_camera_image();
@@ -128,7 +126,7 @@ void RTApplication::frame() {
     _current_integrator->preview(ui.integrator_options());
   }
 
-  uint32_t sample_count = _current_integrator ? _current_integrator->sample_count() : 1u;
+  uint32_t sample_count = _current_integrator ? _current_integrator->status().current_iteration : 1u;
 
   render.set_view_options(ui.view_options());
   render.start_frame(sample_count);
@@ -141,7 +139,7 @@ void RTApplication::frame() {
   }
   _reset_images = false;
 
-  ui.build(dt, status);
+  ui.build(dt);
   render.end_frame();
 }
 

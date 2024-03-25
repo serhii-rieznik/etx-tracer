@@ -27,6 +27,14 @@ struct Integrator {
     float value = 0.0f;
   };
 
+  struct Status {
+    double last_iteration_time = 0.0;
+    double total_time = 0.0;
+    uint32_t preview_frames = 0;
+    uint32_t completed_iterations = 0;
+    uint32_t current_iteration = 0;
+  };
+
   Integrator(Raytracing& r)
     : rt(r) {
   }
@@ -41,7 +49,7 @@ struct Integrator {
     return true;
   }
 
-  virtual const char* status() const {
+  virtual const char* status_str() const {
     return "Basic Integrator (not able to render anything)";
   }
 
@@ -70,7 +78,7 @@ struct Integrator {
   }
 
   virtual bool have_updated_camera_image() const {
-    return (state() == State::Preview) || (state() == State::Running);
+    return state() != State::Stopped;
   }
 
   virtual const float4* get_camera_image(bool /* force update */) {
@@ -78,7 +86,7 @@ struct Integrator {
   }
 
   virtual bool have_updated_light_image() const {
-    return (state() == State::Preview) || (state() == State::Running);
+    return state() != State::Stopped;
   }
 
   virtual const float4* get_light_image(bool /* force update */) {
@@ -93,9 +101,9 @@ struct Integrator {
     return nullptr;
   }
 
-  virtual uint32_t sample_count() const {
-    return 1u;
-  }
+  virtual Status status() const {
+    return {};
+  };
 
  public:
   bool can_run() const {

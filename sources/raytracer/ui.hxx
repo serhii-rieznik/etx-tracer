@@ -1,4 +1,5 @@
 #pragma once
+#pragma once
 
 #include <etx/core/options.hxx>
 
@@ -16,10 +17,13 @@ struct sapp_event;
 namespace etx {
 
 struct UI {
+  UI() = default;
+  ~UI() = default;
+
   void initialize(const Pointer<Spectrums>& spectrums);
   void cleanup();
 
-  void build(double dt, const char* status);
+  void build(double dt);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};

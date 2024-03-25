@@ -293,7 +293,7 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Poin
   return changed;
 }
 
-void UI::build(double dt, const char* status) {
+void UI::build(double dt) {
   ETX_FUNCTION_SCOPE();
 
   constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
@@ -491,9 +491,31 @@ void UI::build(double dt, const char* status) {
   }
 
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
-    char status_buffer[2048] = {};
-    snprintf(status_buffer, sizeof(status_buffer), "%.2fms | %s", 1000.0 * dt, status ? status : "");
-    ImGui::Text("%s", status_buffer);
+    constexpr const char* status_str[] = {
+      "Stopped",
+      "Preview",
+      "Running",
+      "Completing",
+    };
+
+    auto status = _current_integrator ? _current_integrator->status() : Integrator::Status{};
+    auto state = _current_integrator ? _current_integrator->state() : Integrator::State::Stopped;
+
+    double average_time = 0.0;
+
+    if (status.preview_frames > 0) {
+      uint32_t i_frame = (status.completed_iterations >= status.preview_frames) ? (status.completed_iterations - status.preview_frames) : 0u;
+      average_time = status.total_time / double(i_frame + 1u);
+    } else {
+      average_time = status.completed_iterations > 0 ? status.total_time / status.completed_iterations : 0.0;
+    }
+
+    char buffer[2048] = {};
+    snprintf(buffer, sizeof(buffer), "%-4d | %s | %.3fms last, %.3fms avg, %.3fs total",  //
+      status.completed_iterations, status_str[uint32_t(state)],                      //
+      status.last_iteration_time * 1000.0, average_time * 1000.0f, status.total_time);
+
+    ImGui::Text("%s", buffer);
     ImGui::End();
   }
 

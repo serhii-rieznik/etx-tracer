@@ -10,7 +10,10 @@
 namespace etx {
 
 struct CPUDebugIntegratorImpl : public Task {
-  char status[2048] = {};
+  Integrator::Status status = {
+    .preview_frames = 3u,
+  };
+
   Raytracing& rt;
   std::atomic<Integrator::State>* state = nullptr;
   std::vector<RNDSampler> samplers;
@@ -19,9 +22,7 @@ struct CPUDebugIntegratorImpl : public Task {
   TimeMeasure total_time = {};
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
-  uint32_t iteration = 0u;
   uint32_t current_scale = 1u;
-  uint32_t preview_frames = 3u;
   CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Thinfilm;
   RefractiveIndex spd_air;
   Thinfilm thinfilm;
@@ -65,10 +66,11 @@ struct CPUDebugIntegratorImpl : public Task {
     voxel_data[6] = opt.get("v110", voxel_data[6]).to_float();
     voxel_data[7] = opt.get("v111", voxel_data[7]).to_float();
 
-    iteration = 0;
-    snprintf(status, sizeof(status), "[%u] %s ...", iteration, (state->load() == Integrator::State::Running ? "Running" : "Preview"));
+    status = {
+      .preview_frames = 3u,
+    };
 
-    current_scale = (state->load() == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(preview_frames)));
+    current_scale = (state->load() == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(status.preview_frames)));
     current_dimensions = camera_image.dimensions() / current_scale;
 
     total_time = {};
@@ -85,9 +87,11 @@ struct CPUDebugIntegratorImpl : public Task {
       float3 xyz = preview_pixel(smp, uv, {x, y});
 
       if (state->load() == Integrator::State::Running) {
-        camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(iteration) / (float(iteration + 1)));
+        camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / (float(status.current_iteration + 1)));
       } else {
-        float t = iteration < preview_frames ? 0.0f : float(iteration - preview_frames) / float(iteration - preview_frames + 1);
+        float t = status.current_iteration < status.preview_frames
+                    ? 0.0f
+                    : float(status.current_iteration - status.preview_frames) / float(status.current_iteration - status.preview_frames + 1);
         for (uint32_t ay = 0; ay < current_scale; ++ay) {
           for (uint32_t ax = 0; ax < current_scale; ++ax) {
             uint32_t rx = x * current_scale + ax;
@@ -299,7 +303,6 @@ struct CPUDebugIntegratorImpl : public Task {
     if (mode == CPUDebugIntegrator::Mode::Thinfilm) {
       float t = float(xy.x) / float(current_dimensions.x - 1u);
       float s = float(xy.y) / float(current_dimensions.y - 1u);
-      float it = saturate(float(iteration) / float(scene.samples - 1u));
       float cos_theta = 0.5f;
       float thickness = t * 2500.0f;
 
@@ -540,7 +543,7 @@ const float4* CPUDebugIntegrator::get_light_image(bool) {
   return nullptr;
 }
 
-const char* CPUDebugIntegrator::status() const {
+Integrator::Status CPUDebugIntegrator::status() const {
   return _private->status;
 }
 
@@ -566,23 +569,19 @@ void CPUDebugIntegrator::update() {
   bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
 
   if (should_stop && rt.scheduler().completed(_private->current_task)) {
-    if ((current_state == State::WaitingForCompletion) || (_private->iteration >= rt.scene().samples)) {
+    if ((current_state == State::WaitingForCompletion) || (_private->status.current_iteration >= rt.scene().samples)) {
       rt.scheduler().wait(_private->current_task);
       _private->current_task = {};
       if (current_state == State::Preview) {
-        snprintf(_private->status, sizeof(_private->status), "[%u] Preview completed", _private->iteration);
         current_state = Integrator::State::Preview;
       } else {
-        snprintf(_private->status, sizeof(_private->status), "[%u] Completed in %.2f seconds", _private->iteration, _private->total_time.measure());
         current_state = Integrator::State::Stopped;
       }
     } else {
-      snprintf(_private->status, sizeof(_private->status), "[%u] %s... (%.3fms per iteration)", _private->iteration,
-        (current_state == Integrator::State::Running ? "Running" : "Preview"), _private->iteration_time.measure_ms());
       _private->iteration_time = {};
-      _private->iteration += 1;
+      _private->status.current_iteration += 1;
 
-      _private->current_scale = (current_state == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(_private->preview_frames - _private->iteration)));
+      _private->current_scale = (current_state == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(_private->status.preview_frames - _private->status.current_iteration)));
       _private->current_dimensions = _private->camera_image.dimensions() / _private->current_scale;
 
       rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
@@ -597,12 +596,10 @@ void CPUDebugIntegrator::stop(Stop st) {
 
   if (st == Stop::WaitForCompletion) {
     current_state = State::WaitingForCompletion;
-    snprintf(_private->status, sizeof(_private->status), "[%u] Waiting for completion", _private->iteration);
   } else {
     current_state = State::Stopped;
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
-    snprintf(_private->status, sizeof(_private->status), "[%u] Stopped", _private->iteration);
   }
 }
 

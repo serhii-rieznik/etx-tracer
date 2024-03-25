@@ -35,7 +35,7 @@ struct CPUDebugIntegrator : public Integrator {
   void set_output_size(const uint2&) override;
   const float4* get_camera_image(bool) override;
   const float4* get_light_image(bool) override;
-  const char* status() const override;
+  Status status() const override;
 
   void preview(const Options&) override;
   void run(const Options&) override;
