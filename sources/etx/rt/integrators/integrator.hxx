@@ -59,9 +59,6 @@ struct Integrator {
     return result;
   }
 
-  virtual void set_output_size(const uint2&) {
-  }
-
   virtual void preview(const Options&) {
   }
 
@@ -81,16 +78,8 @@ struct Integrator {
     return state() != State::Stopped;
   }
 
-  virtual const float4* get_camera_image(bool /* force update */) {
-    return nullptr;
-  }
-
   virtual bool have_updated_light_image() const {
     return state() != State::Stopped;
-  }
-
-  virtual const float4* get_light_image(bool /* force update */) {
-    return nullptr;
   }
 
   virtual uint64_t debug_info_count() const {

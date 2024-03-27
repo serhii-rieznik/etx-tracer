@@ -12,7 +12,6 @@ namespace etx {
 
 struct CPUPathTracingImpl : public Task {
   Raytracing& rt;
-  Film camera_image;
   uint2 current_dimensions = {};
 
   TimeMeasure total_time = {};
@@ -45,7 +44,7 @@ struct CPUPathTracingImpl : public Task {
     } else {
       current_scale = 1u << status.preview_frames;
     }
-    current_dimensions = camera_image.dimensions() / current_scale;
+    current_dimensions = rt.film().dimensions() / current_scale;
 
     status = {
       .preview_frames = 3,
@@ -58,6 +57,7 @@ struct CPUPathTracingImpl : public Task {
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     ETX_FUNCTION_SCOPE();
+    auto& film = rt.film();
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint32_t x = i % current_dimensions.x;
       uint32_t y = i / current_dimensions.x;
@@ -68,11 +68,19 @@ struct CPUPathTracingImpl : public Task {
         ETX_VALIDATE(payload.accumulated);
       }
 
+      auto normal = payload.view_normal;
+
+      auto albedo = (payload.view_albedo / payload.spect.sampling_pdf()).to_xyz();
+      ETX_VALIDATE(albedo);
+
       auto xyz = (payload.accumulated / payload.spect.sampling_pdf()).to_xyz();
       ETX_VALIDATE(xyz);
 
       if (state->load() == Integrator::State::Running) {
-        camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, payload.uv, float(status.current_iteration) / float(status.current_iteration + 1));
+        float t = float(status.current_iteration) / float(status.current_iteration + 1);
+        film.accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, payload.uv, t);
+        film.accumulate(Film::Normals, {normal.x, normal.y, normal.z, 1.0f}, payload.uv, t);
+        film.accumulate(Film::Albedo, {albedo.x, albedo.y, albedo.z, 1.0f}, payload.uv, t);
       } else {
         float t = status.current_iteration < status.preview_frames
                     ? 0.0f
@@ -81,7 +89,9 @@ struct CPUPathTracingImpl : public Task {
           for (uint32_t ax = 0; ax < current_scale; ++ax) {
             uint32_t rx = x * current_scale + ax;
             uint32_t ry = y * current_scale + ay;
-            camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, rx, ry, t);
+            film.accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, rx, ry, t);
+            film.accumulate(Film::Normals, {normal.x, normal.y, normal.z, 1.0f}, rx, ry, t);
+            film.accumulate(Film::Albedo, {albedo.x, albedo.y, albedo.z, 1.0f}, rx, ry, t);
           }
         }
       }
@@ -108,21 +118,6 @@ CPUPathTracing::~CPUPathTracing() {
   }
 
   ETX_PIMPL_CLEANUP(CPUPathTracing);
-}
-
-void CPUPathTracing::set_output_size(const uint2& dim) {
-  if (current_state != State::Stopped) {
-    stop(Stop::Immediate);
-  }
-  _private->camera_image.allocate(dim, Film::Layer::CameraRays);
-}
-
-const float4* CPUPathTracing::get_camera_image(bool force_update) {
-  return _private->camera_image.data();
-}
-
-const float4* CPUPathTracing::get_light_image(bool force_update) {
-  return nullptr;
 }
 
 Integrator::Status CPUPathTracing::status() const {
@@ -173,7 +168,7 @@ void CPUPathTracing::update() {
       uint32_t d_frame = (_private->status.preview_frames >= _private->status.current_iteration) ? (_private->status.preview_frames - _private->status.current_iteration) : 0u;
       _private->current_scale = 1u << d_frame;
     }
-    _private->current_dimensions = _private->camera_image.dimensions() / _private->current_scale;
+    _private->current_dimensions = rt.film().dimensions() / _private->current_scale;
 
     _private->iteration_time = {};
     rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);

@@ -100,6 +100,10 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
   return true;
 }
 
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+}
+
 }  // namespace ThinfilmBSDF
 
 namespace DielectricBSDF {
@@ -296,6 +300,10 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
+}
+
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
 }
 
 }  // namespace DielectricBSDF

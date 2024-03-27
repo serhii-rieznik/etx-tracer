@@ -96,49 +96,26 @@ void RTApplication::save_options() {
 
 void RTApplication::frame() {
   ETX_FUNCTION_SCOPE();
-  const float4* c_image = nullptr;
-  const float4* l_image = nullptr;
-
-  bool can_change_camera = true;
-  bool c_image_updated = false;
-  bool l_image_updated = false;
+  auto dt = time_measure.lap();
 
   if (_current_integrator != nullptr) {
     _current_integrator->update();
-
-    if (_reset_images == false) {
-      c_image_updated = _current_integrator->have_updated_camera_image();
-      if (c_image_updated) {
-        c_image = _current_integrator->get_camera_image(false);
-      }
-
-      l_image_updated = _current_integrator->have_updated_light_image();
-      if (l_image_updated) {
-        l_image = _current_integrator->get_light_image(false);
-      }
+    bool can_change_camera = _current_integrator->state() == Integrator::State::Preview;
+    if (can_change_camera && camera_controller.update(dt)) {
+      _current_integrator->preview(ui.integrator_options());
     }
-
-    can_change_camera = _current_integrator->state() == Integrator::State::Preview;
-  }
-
-  auto dt = time_measure.lap();
-  if (can_change_camera && camera_controller.update(dt) && (_current_integrator != nullptr)) {
-    _current_integrator->preview(ui.integrator_options());
   }
 
   uint32_t sample_count = _current_integrator ? _current_integrator->status().current_iteration : 1u;
 
-  render.set_view_options(ui.view_options());
-  render.start_frame(sample_count);
-
-  if (_reset_images || c_image_updated) {
-    render.update_camera_image(c_image);
+  auto options = ui.view_options();
+  if (options.layer == Film::Normals) {
+    options.options = ViewOptions::SkipColorConversion;
   }
-  if (_reset_images || l_image_updated) {
-    render.update_light_image(l_image);
-  }
-  _reset_images = false;
+  const float4* c_image = raytracing.film().layer(options.layer);
 
+  render.start_frame(sample_count, options);
+  render.update_image(c_image);
   ui.build(dt);
   render.end_frame();
 }
@@ -159,6 +136,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   _current_scene_file = file_name;
 
   log::warning("Loading scene %s...", _current_scene_file.c_str());
+
   if (_current_integrator) {
     _current_integrator->stop(Integrator::Stop::Immediate);
   }
@@ -174,18 +152,17 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
 
   raytracing.set_scene(scene.scene());
   ui.set_scene(scene.mutable_scene_pointer(), scene.material_mapping(), scene.medium_mapping());
+  render.set_output_dimensions(scene.scene().camera.image_size);
 
-  if (scene) {
-    render.set_output_dimensions(scene.scene().camera.image_size);
+  if ((scene.valid() == false) || (_current_integrator == nullptr)) {
+    return;
+  }
 
-    if (_current_integrator != nullptr) {
-      if (start_rendering) {
-        _current_integrator->run(ui.integrator_options());
-      } else {
-        _current_integrator->set_output_size(scene.scene().camera.image_size);
-        _current_integrator->preview(ui.integrator_options());
-      }
-    }
+  if (start_rendering) {
+    _current_integrator->run(ui.integrator_options());
+  } else {
+    // _current_integrator->set_output_size(scene.scene().camera.image_size);
+    _current_integrator->preview(ui.integrator_options());
   }
 }
 
@@ -214,8 +191,8 @@ void RTApplication::on_use_image_as_reference() {
 }
 
 std::vector<float4> RTApplication::get_current_image(bool convert_to_rgb) {
-  auto c_image = _current_integrator->get_camera_image(true);
-  auto l_image = _current_integrator->get_light_image(true);
+  auto c_image = raytracing.film().layer(Film::Camera);
+  auto l_image = raytracing.film().layer(Film::LightImage);
   uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
 
   std::vector<float4> output(image_size.x * image_size.y, float4{});
@@ -298,13 +275,11 @@ void RTApplication::on_integrator_selected(Integrator* i) {
 
   _current_integrator = i;
   ui.set_current_integrator(_current_integrator);
+  raytracing.film().clear();
 
-  if (scene) {
-    _current_integrator->set_output_size(scene.scene().camera.image_size);
+  if (scene.valid()) {
     _current_integrator->preview(ui.integrator_options());
   }
-
-  _reset_images = true;
 }
 
 void RTApplication::on_preview_selected() {
@@ -367,20 +342,12 @@ void RTApplication::on_scene_settings_changed() {
 }
 
 void RTApplication::on_denoise_selected() {
-  auto image = get_current_image(false);
-
-  uint2 image_size = {
-    raytracing.scene().camera.image_size.x,
-    raytracing.scene().camera.image_size.y,
-  };
-
-  std::vector<float4> output(image.size());
-  std::vector<float4> empty(image.size(), float4{});
-
-  denoiser.denoise(image.data(), nullptr, nullptr, output.data(), image_size);
-
-  render.update_camera_image(output.data());
-  render.update_light_image(empty.data());
+  const float4* source = raytracing.film().combined_result();
+  const float4* albedo = raytracing.film().layer(Film::Albedo);
+  const float4* normals = raytracing.film().layer(Film::Normals);
+  float4* denoised = raytracing.film().mutable_layer(Film::Denoised);
+  denoiser.denoise(source, albedo, normals, denoised, raytracing.film().dimensions());
+  ui.mutable_view_options().layer = Film::Denoised;
 }
 
 }  // namespace etx

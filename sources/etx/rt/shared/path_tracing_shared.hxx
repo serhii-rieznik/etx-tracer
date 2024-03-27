@@ -15,6 +15,8 @@ struct ETX_ALIGNED PTRayPayload {
   Ray ray = {};
   SpectralResponse throughput = {};
   SpectralResponse accumulated = {};
+  SpectralResponse view_albedo = {};
+  float3 view_normal = {};
   uint32_t index = kInvalidIndex;
   uint32_t medium = kInvalidIndex;
   uint32_t path_length = 0u;
@@ -331,7 +333,14 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   handle_direct_emitter(scene, tri, intersection, rt, options.mis, payload);
 
-  auto bsdf_sample = bsdf::sample({payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i}, mat, scene, payload.smp);
+  BSDFData bsdf_data = {payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i};
+
+  if (payload.path_length == 1) {
+    payload.view_normal = intersection.nrm;
+    payload.view_albedo = bsdf::albedo(bsdf_data, mat, scene, payload.smp);
+  }
+
+  auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, payload.smp);
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
 
   // uint8_t ss_gather_data[sizeof(subsurface::Gather)];

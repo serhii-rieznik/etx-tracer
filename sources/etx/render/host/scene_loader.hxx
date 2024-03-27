@@ -34,7 +34,7 @@ struct SceneRepresentation {
 
   Camera& camera();
 
-  operator bool() const;
+  bool valid() const;
 
   ETX_DECLARE_PIMPL(SceneRepresentation, 24u * 1024u);
 };

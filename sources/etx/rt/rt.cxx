@@ -7,6 +7,7 @@ namespace etx {
 
 struct RaytracingImpl {
   TaskScheduler scheduler;
+  Film film;
 
   const Scene* source_scene = nullptr;
   RTCDevice rt_device = {};
@@ -21,7 +22,8 @@ struct RaytracingImpl {
   } gpu = {};
   */
 
-  RaytracingImpl() {
+  RaytracingImpl()
+    : film(scheduler) {
     rt_device = rtcNewDevice(nullptr);
     // gpu_device = GPUDevice::create_optix_device();
   }
@@ -39,8 +41,10 @@ struct RaytracingImpl {
 
   void set_scene(const Scene& s) {
     source_scene = &s;
+    film.allocate(s.camera.image_size, {Film::Camera, Film::LightImage, Film::LightIteration, Film::Normals, Film::Albedo, Film::Result, Film::Denoised});
     release_host_scene();
     build_host_scene();
+
     // release_device_scene();
     // build_device_scene();
   }
@@ -513,6 +517,14 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
   }
 
   return context.value;
+}
+
+const Film& Raytracing::film() const {
+  return _private->film;
+}
+
+Film& Raytracing::film() {
+  return _private->film;
 }
 
 }  // namespace etx

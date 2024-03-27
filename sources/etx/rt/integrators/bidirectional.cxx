@@ -120,9 +120,6 @@ struct CPUBidirectionalImpl : public Task {
   std::vector<RNDSampler> samplers;
   std::vector<PathData> per_thread_path_data;
   std::atomic<Integrator::State>* state = {};
-  Film camera_image;
-  Film light_image;
-  Film iteration_light_image;
   TimeMeasure iteration_time = {};
   Handle current_task = {};
   Integrator::Status status = {};
@@ -141,17 +138,18 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) {
+    auto film_dimensions = rt.film().dimensions();
     auto& smp = samplers[thread_id];
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-      uint32_t x = i % camera_image.dimensions().x;
-      uint32_t y = i / camera_image.dimensions().x;
+      uint32_t x = i % film_dimensions.x;
+      uint32_t y = i / film_dimensions.x;
 
       auto& path_data = per_thread_path_data[thread_id];
       auto spect = rt.scene().spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
       build_emitter_path(smp, spect, path_data.emitter_path, thread_id);
 
-      float2 uv = get_jittered_uv(smp, {x, y}, camera_image.dimensions());
+      float2 uv = get_jittered_uv(smp, {x, y}, film_dimensions);
       SpectralResponse result = build_camera_path(smp, spect, uv, path_data.camera_path, thread_id);
 
       for (uint64_t light_s = 2, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
@@ -164,7 +162,7 @@ struct CPUBidirectionalImpl : public Task {
 
       auto xyz = (result / spect.sampling_pdf()).to_xyz();
 
-      camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / float(status.current_iteration + 1));
+      rt.film().accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / float(status.current_iteration + 1));
     }
   }
 
@@ -252,7 +250,7 @@ struct CPUBidirectionalImpl : public Task {
           CameraSample camera_sample = {};
           auto splat = connect_to_camera(smp, path, spect, camera_sample);
           auto xyz = splat.to_xyz();
-          iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
+          rt.film().atomic_add(Film::LightIteration, {xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
         }
 
       } else if (found_intersection) {
@@ -330,7 +328,7 @@ struct CPUBidirectionalImpl : public Task {
           auto splat = connect_to_camera(smp, path, spect, camera_sample);
           if (splat.is_zero() == false) {
             auto xyz = splat.to_xyz();
-            iteration_light_image.atomic_add({xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
+            rt.film().atomic_add(Film::LightIteration, {xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
           }
         }
 
@@ -819,7 +817,6 @@ struct CPUBidirectionalImpl : public Task {
     conn_connect_vertices = opt.get("conn_connect_vertices", conn_connect_vertices).to_bool();
     conn_mis = opt.get("conn_mis", conn_mis).to_bool();
 
-    uint32_t dim = camera_image.dimensions().x * camera_image.dimensions().y;
     for (auto& path_data : per_thread_path_data) {
       path_data.camera_path.reserve(2llu + rt.scene().max_path_length);
       path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
@@ -827,8 +824,8 @@ struct CPUBidirectionalImpl : public Task {
 
     status = {};
     iteration_time = {};
-    iteration_light_image.clear();
-    current_task = rt.scheduler().schedule(dim, this);
+    rt.film().clear({Film::LightIteration});
+    current_task = rt.scheduler().schedule(rt.film().count(), this);
   }
 };
 
@@ -867,8 +864,7 @@ void CPUBidirectional::update() {
     return;
   }
 
-  _private->iteration_light_image.flush_to(_private->light_image, float(_private->status.current_iteration) / float(_private->status.current_iteration + 1));
-  _private->iteration_light_image.clear();
+  rt.film().commit_light_iteration(_private->status.current_iteration);
 
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);
@@ -877,7 +873,7 @@ void CPUBidirectional::update() {
   } else if (_private->status.current_iteration + 1u < rt.scene().samples) {
     _private->iteration_time = {};
     _private->status.current_iteration += 1;
-    rt.scheduler().restart(_private->current_task, _private->camera_image.dimensions().x * _private->camera_image.dimensions().y);
+    rt.scheduler().restart(_private->current_task, rt.film().count());
   } else {
     current_state = Integrator::State::Stopped;
   }
@@ -911,23 +907,6 @@ void CPUBidirectional::update_options(const Options& opt) {
   if (current_state == State::Preview) {
     preview(opt);
   }
-}
-
-void CPUBidirectional::set_output_size(const uint2& dim) {
-  if (current_state != State::Stopped) {
-    stop(Stop::Immediate);
-  }
-  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
-  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
-  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
-}
-
-const float4* CPUBidirectional::get_camera_image(bool) {
-  return _private->camera_image.data();
-}
-
-const float4* CPUBidirectional::get_light_image(bool) {
-  return _private->light_image.data();
 }
 
 Integrator::Status CPUBidirectional::status() const {

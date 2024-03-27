@@ -1,6 +1,8 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 
+#include <etx/render/host/film.hxx>
+
 #include "ui.hxx"
 
 #include <sokol_app.h>
@@ -484,8 +486,25 @@ void UI::build(double dt) {
       ImGui::DragFloat("Exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
       ImGui::SameLine(0.0f, wpadding.x);
     }
-    ImGui::GetStyle().FramePadding.y = fpadding.y;
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine(0.0f, wpadding.x);
     ImGui::PopItemWidth();
+
+    ImGui::PushItemWidth(2.0f * input_size);
+    if (ImGui::BeginCombo("Layer", Film::layer_name(_view_options.layer))) {
+      for (uint32_t i = 0; i < Film::LayerCount; ++i) {
+        bool selected = i == _view_options.layer;
+        if (ImGui::Selectable(Film::layer_name(i), &selected)) {
+          if (selected) {
+            _view_options.layer = i;
+          }
+        }
+      }
+      ImGui::EndCombo();
+    }
+
+    ImGui::PopItemWidth();
+    ImGui::GetStyle().FramePadding.y = fpadding.y;
 
     ImGui::End();
   }
@@ -512,7 +531,7 @@ void UI::build(double dt) {
 
     char buffer[2048] = {};
     snprintf(buffer, sizeof(buffer), "%-4d | %s | %.3fms last, %.3fms avg, %.3fs total",  //
-      status.completed_iterations, status_str[uint32_t(state)],                      //
+      status.completed_iterations, status_str[uint32_t(state)],                           //
       status.last_iteration_time * 1000.0, average_time * 1000.0f, status.total_time);
 
     ImGui::Text("%s", buffer);
@@ -788,6 +807,10 @@ bool UI::handle_event(const sapp_event* e) {
 }
 
 ViewOptions UI::view_options() const {
+  return _view_options;
+}
+
+ViewOptions& UI::mutable_view_options() {
   return _view_options;
 }
 

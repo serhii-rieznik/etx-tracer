@@ -36,6 +36,10 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
   return false;
 }
 
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+}
+
 }  // namespace DiffuseBSDF
 
 namespace TranslucentBSDF {
@@ -102,6 +106,10 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
   return false;
 }
 
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+}
+
 }  // namespace TranslucentBSDF
 
 namespace MirrorBSDF {
@@ -127,6 +135,10 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return true;
+}
+
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return {data.spectrum_sample, 1.0f};
 }
 
 }  // namespace MirrorBSDF
@@ -155,6 +167,10 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
+}
+
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return {data.spectrum_sample, 1.0f};
 }
 
 }  // namespace BoundaryBSDF

@@ -4,6 +4,8 @@
 #include <etx/core/handle.hxx>
 
 #include <etx/render/host/scene_loader.hxx>
+#include <etx/render/host/film.hxx>
+
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
@@ -80,8 +82,6 @@ struct RTApplication {
   Integrator* _current_integrator = nullptr;
   std::string _current_scene_file = {};
   Options _options;
-
-  bool _reset_images = true;
 };
 
 }  // namespace etx

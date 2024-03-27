@@ -39,6 +39,7 @@ struct UI {
   bool handle_event(const sapp_event*);
 
   ViewOptions view_options() const;
+  ViewOptions& mutable_view_options();
 
   struct {
     std::function<void(std::string)> reference_image_selected;

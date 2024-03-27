@@ -135,5 +135,9 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
   return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
 }
 
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+}
+
 }  // namespace ConductorBSDF
 }  // namespace etx

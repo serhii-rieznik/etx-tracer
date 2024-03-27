@@ -13,15 +13,13 @@ struct CPUBidirectional : public Integrator {
   }
 
   Options options() const override;
-  void set_output_size(const uint2&) override;
+
   void preview(const Options&) override;
   void run(const Options&) override;
   void update() override;
   void stop(Stop) override;
   void update_options(const Options&) override;
 
-  const float4* get_camera_image(bool) override;
-  const float4* get_light_image(bool) override;
   Status status() const override;
 
  private:

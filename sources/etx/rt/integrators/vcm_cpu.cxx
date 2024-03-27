@@ -37,9 +37,6 @@ struct CPUVCMImpl : public Task {
   Raytracing& rt;
   std::atomic<Integrator::State>* state = {};
   Integrator::Status status = {};
-  Film camera_image;
-  Film light_image;
-  Film iteration_light_image;
   TimeMeasure iteration_time = {};
   Task::Handle task_handle = {};
   std::atomic<bool> have_light_image = {};
@@ -74,10 +71,8 @@ struct CPUVCMImpl : public Task {
 
     status = {};
 
-    camera_image.clear();
+    rt.film().clear();
     have_camera_image = true;
-
-    light_image.clear();
     have_light_image = true;
 
     vcm_options.load(opt);
@@ -90,13 +85,13 @@ struct CPUVCMImpl : public Task {
 
     float used_radius = vcm_options.initial_radius;
     if (used_radius == 0.0f) {
-      used_radius = 5.0f * rt.scene().bounding_sphere_radius * min(1.0f / float(camera_image.dimensions().x), 1.0f / float(camera_image.dimensions().y));
+      used_radius = 5.0f * rt.scene().bounding_sphere_radius * min(1.0f / float(rt.film().dimensions().x), 1.0f / float(rt.film().dimensions().y));
     }
 
     float radius_scale = 1.0f / (1.0f + float(vcm_iteration.iteration) / float(vcm_options.radius_decay));
     vcm_iteration.current_radius = used_radius * radius_scale;
 
-    float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(camera_image.count());
+    float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(rt.film().count());
     vcm_iteration.vc_weight = 1.0f / eta_vcm;
     vcm_iteration.vm_weight = vcm_options.enable_merging() ? eta_vcm : 0.0f;
     vcm_iteration.vm_normalization = 1.0f / eta_vcm;
@@ -105,19 +100,20 @@ struct CPUVCMImpl : public Task {
 
     _light_paths.clear();
     _light_vertices.clear();
-    iteration_light_image.clear();
+    rt.film().clear({Film::LightIteration});
 
     mode = Mode::LightPath;
 
     if (task_handle.data == Task::InvalidHandle) {
-      task_handle = rt.scheduler().schedule(camera_image.count(), this);
+      task_handle = rt.scheduler().schedule(rt.film().count(), this);
     } else {
-      rt.scheduler().restart(task_handle, camera_image.count());
+      rt.scheduler().restart(task_handle, rt.film().count());
     }
   }
 
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
     const Scene& scene = rt.scene();
+    auto& film = rt.film();
 
     std::vector<VCMLightVertex> local_vertices;
     local_vertices.reserve(4llu * (range_end - range_begin));
@@ -139,7 +135,7 @@ struct CPUVCMImpl : public Task {
         for (uint32_t i = 0; i < step_result.splat_count; ++i) {
           const float3& val = step_result.values_to_splat[i];
           if (dot(val, val) > kEpsilon) {
-            iteration_light_image.atomic_add({val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i]);
+            film.atomic_add(Film::LightImage, {val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i]);
           }
         }
 
@@ -168,10 +164,11 @@ struct CPUVCMImpl : public Task {
     auto light_vertices = make_array_view<VCMLightVertex>(_light_vertices.data(), _light_vertices.size());
     auto light_paths = make_array_view<VCMLightPath>(_light_paths.data(), _light_paths.size());
     const auto& scene = rt.scene();
+    auto& film = rt.film();
 
     for (uint32_t pi = range_begin; running() && (pi < range_end); ++pi) {
-      uint32_t x = pi % camera_image.dimensions().x;
-      uint32_t y = pi / camera_image.dimensions().x;
+      uint32_t x = pi % film.dimensions().x;
+      uint32_t y = pi / film.dimensions().x;
 
       const auto& light_path = _light_paths[pi];
 
@@ -188,7 +185,7 @@ struct CPUVCMImpl : public Task {
       state.merged += (state.gathered / state.spect.sampling_pdf()).to_xyz();
 
       float t = float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1);
-      camera_image.accumulate({state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);
+      film.accumulate(Film::Camera, {state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);
 
       if (pi % 256 == 0) {
         have_camera_image = true;
@@ -199,7 +196,7 @@ struct CPUVCMImpl : public Task {
   }
 
   void complete_light_vertices() {
-    iteration_light_image.flush_to(light_image, float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1));
+    rt.film().commit_light_iteration(vcm_iteration.iteration);
     have_light_image = true;
 
     if (*state == Integrator::State::Stopped) {
@@ -211,7 +208,7 @@ struct CPUVCMImpl : public Task {
     }
 
     mode = Mode::CameraPath;
-    rt.scheduler().restart(task_handle, camera_image.count());
+    rt.scheduler().restart(task_handle, rt.film().count());
   }
 
   void complete_camera_vertices() {
@@ -245,15 +242,6 @@ Options CPUVCM::options() const {
   Options result = {};
   _private->vcm_options.store(result);
   return result;
-}
-
-void CPUVCM::set_output_size(const uint2& dim) {
-  if (current_state != State::Stopped) {
-    stop(Stop::Immediate);
-  }
-  _private->camera_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
-  _private->light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
-  _private->iteration_light_image.allocate(dim, Film::Layer::CameraRays | Film::Layer::LightRays);
 }
 
 void CPUVCM::preview(const Options& opt) {
@@ -302,18 +290,10 @@ bool CPUVCM::have_updated_camera_image() const {
   return result;
 }
 
-const float4* CPUVCM::get_camera_image(bool) {
-  return _private->camera_image.data();
-}
-
 bool CPUVCM::have_updated_light_image() const {
   bool result = _private->have_light_image;
   _private->have_light_image = false;
   return result;
-}
-
-const float4* CPUVCM::get_light_image(bool) {
-  return _private->light_image.data();
 }
 
 Integrator::Status CPUVCM::status() const {

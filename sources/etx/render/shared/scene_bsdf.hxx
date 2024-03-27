@@ -8,6 +8,7 @@ namespace etx {
     ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&); \
     ETX_GPU_CODE float pdf(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&);         \
     ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);                          \
+    ETX_GPU_CODE SpectralResponse albedo(const BSDFData&, const Material&, const Scene&, Sampler&);              \
   }
 
 ETX_DECLARE_BSDF(Diffuse);
@@ -28,6 +29,7 @@ ETX_DECLARE_BSDF(Velvet);
 #define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, w_o, mtl, scene, smp)
 #define CASE_IMPL_PDF(A)      CASE_IMPL(A, pdf, data, w_o, mtl, scene, smp)
 #define CASE_IMPL_IS_DELTA(A) CASE_IMPL(A, is_delta, mtl, tex, scene, smp)
+#define CASE_IMPL_ALBEDO(A)   CASE_IMPL(A, albedo, data, mtl, scene, smp)
 
 #define ALL_CASES(MACRO)                    \
   switch (mtl.cls) {                        \
@@ -88,6 +90,14 @@ namespace bsdf {
   return ETX_FORCED_BSDF::is_delta(mtl, tex, scene, smp);
 #endif
   ALL_CASES(CASE_IMPL_IS_DELTA);
+}
+
+[[nodiscard]] ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::albedo(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_ALBEDO);
 }
 
 #undef CASE_IMPL

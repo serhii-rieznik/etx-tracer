@@ -17,7 +17,6 @@ struct CPUDebugIntegratorImpl : public Task {
   Raytracing& rt;
   std::atomic<Integrator::State>* state = nullptr;
   std::vector<RNDSampler> samplers;
-  Film camera_image;
   uint2 current_dimensions = {};
   TimeMeasure total_time = {};
   TimeMeasure iteration_time = {};
@@ -71,7 +70,7 @@ struct CPUDebugIntegratorImpl : public Task {
     };
 
     current_scale = (state->load() == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(status.preview_frames)));
-    current_dimensions = camera_image.dimensions() / current_scale;
+    current_dimensions = rt.film().dimensions() / current_scale;
 
     total_time = {};
     iteration_time = {};
@@ -87,7 +86,7 @@ struct CPUDebugIntegratorImpl : public Task {
       float3 xyz = preview_pixel(smp, uv, {x, y});
 
       if (state->load() == Integrator::State::Running) {
-        camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / (float(status.current_iteration + 1)));
+        rt.film().accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / (float(status.current_iteration + 1)));
       } else {
         float t = status.current_iteration < status.preview_frames
                     ? 0.0f
@@ -96,7 +95,7 @@ struct CPUDebugIntegratorImpl : public Task {
           for (uint32_t ax = 0; ax < current_scale; ++ax) {
             uint32_t rx = x * current_scale + ax;
             uint32_t ry = y * current_scale + ay;
-            camera_image.accumulate({xyz.x, xyz.y, xyz.z, 1.0f}, rx, ry, t);
+            rt.film().accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, rx, ry, t);
           }
         }
       }
@@ -531,18 +530,6 @@ CPUDebugIntegrator::~CPUDebugIntegrator() {
   ETX_PIMPL_CLEANUP(CPUDebugIntegrator);
 }
 
-void CPUDebugIntegrator::set_output_size(const uint2& dim) {
-  _private->camera_image.allocate(dim, Film::Layer::CameraRays);
-}
-
-const float4* CPUDebugIntegrator::get_camera_image(bool) {
-  return _private->camera_image.data();
-}
-
-const float4* CPUDebugIntegrator::get_light_image(bool) {
-  return nullptr;
-}
-
 Integrator::Status CPUDebugIntegrator::status() const {
   return _private->status;
 }
@@ -582,7 +569,7 @@ void CPUDebugIntegrator::update() {
       _private->status.current_iteration += 1;
 
       _private->current_scale = (current_state == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(_private->status.preview_frames - _private->status.current_iteration)));
-      _private->current_dimensions = _private->camera_image.dimensions() / _private->current_scale;
+      _private->current_dimensions = rt.film().dimensions() / _private->current_scale;
 
       rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
     }

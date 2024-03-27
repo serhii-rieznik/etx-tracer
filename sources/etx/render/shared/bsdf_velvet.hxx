@@ -104,5 +104,9 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
   return false;
 }
 
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+}
+
 }  // namespace VelvetBSDF
 }  // namespace etx

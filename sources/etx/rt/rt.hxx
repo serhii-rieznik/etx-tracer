@@ -8,12 +8,18 @@
 
 namespace etx {
 
+struct Film;
+
 struct Raytracing {
   Raytracing();
   ~Raytracing();
 
   TaskScheduler& scheduler();
+
   const Scene& scene() const;
+  const Film& film() const;
+
+  Film& film();
 
   // GPUDevice* gpu();
   // const Scene& gpu_scene() const;

@@ -1,60 +1,60 @@
 ﻿#pragma once
 
+#include <etx/core/pimpl.hxx>
 #include <etx/render/shared/base.hxx>
-#include <vector>
 
 namespace etx {
 
+struct TaskScheduler;
+struct FilmImpl;
 struct Film {
-  struct Layer {
-    enum : uint32_t {
-      CameraRays = 1u << 0u,
-      LightRays = 1u << 1u,
-      InfoNormals = 1u << 2u,
-      InfoAlbedo = 1u << 3u,
-    };
+  enum : uint32_t {
+    Camera,
+    LightImage,
+    LightIteration,
+    Normals,
+    Albedo,
+    Result,
+    Denoised,
+
+    LayerCount,
   };
 
-  Film() = default;
-  ~Film() = default;
+  using Layers = std::initializer_list<uint32_t>;
 
-  void allocate(const uint2& dim, uint32_t layers);
+  Film(TaskScheduler&);
+  ~Film();
 
-  void atomic_add(const float4& value, const float2& ndc_coord);
-  void atomic_add(const float4& value, uint32_t x, uint32_t y);
+  void allocate(const uint2& dim, const Layers& layers);
 
-  void accumulate(const float4& value, const float2& ndc_coord, float t);
-  void accumulate(const float4& value, uint32_t x, uint32_t y, float t);
+  void atomic_add(uint32_t layer, const float4& value, const float2& ndc_coord);
+  void atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t y);
 
-  void flush_to(Film& other, float t);
+  void accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, float t);
+  void accumulate(uint32_t layer, const float4& value, uint32_t x, uint32_t y, float t);
 
+  void flush_to(Film& other, float t, const Layers& layers);
+
+  void commit_light_iteration(uint32_t i);
+  const float4* combined_result() const;
+
+  void clear(const Layers& layers);
   void clear();
 
-  const uint2& dimensions() const {
-    return _dimensions;
-  }
+  const uint2& dimensions() const;
+  const uint32_t count() const;
+  const float4* layer(uint32_t layer) const;
 
-  const uint32_t count() const {
-    return _dimensions.x * _dimensions.y;
-  }
-
-  const float4* data() const {
-    return _buffer.data();
-  }
+  float4* mutable_layer(uint32_t layer);
 
   static float calculate_ev(float f, float s) {
     return log2f(f * f / s);
   }
 
- private:
-  Film(const Film&) = delete;
-  Film& operator=(const Film&) = delete;
-  Film(Film&&) = delete;
-  Film& operator=(Film&&) = delete;
+  static const char* layer_name(uint32_t layer);
 
  private:
-  uint2 _dimensions = {};
-  std::vector<float4> _buffer = {};
+  ETX_DECLARE_PIMPL(Film, 256);
 };
 
 }  // namespace etx

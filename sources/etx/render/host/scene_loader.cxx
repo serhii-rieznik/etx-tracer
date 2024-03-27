@@ -534,7 +534,7 @@ Camera& SceneRepresentation::camera() {
   return _private->scene.camera;
 }
 
-SceneRepresentation::operator bool() const {
+bool SceneRepresentation::valid() const {
   return _private->loaded;
 }
 
