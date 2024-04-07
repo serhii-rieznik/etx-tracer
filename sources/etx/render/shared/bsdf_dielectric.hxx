@@ -24,7 +24,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.properties = BSDFSample::Delta | BSDFSample::Reflection;
     result.medium_index = frame.entering_material() ? mtl.ext_medium : mtl.int_medium;
   } else {
-    float eta = ior_i.eta.monochromatic() / ior_o.eta.monochromatic();
+    float eta = (ior_i.eta / ior_o.eta).monochromatic();
     float sin_theta_o_squared = (eta * eta) * (1.0f - cos_theta_i * cos_theta_i);
     float cos_theta_o = sqrtf(clamp(1.0f - sin_theta_o_squared, 0.0f, 1.0f));
     result.w_o = normalize(eta * data.w_i + frame.nrm * (eta * cos_theta_i - cos_theta_o));

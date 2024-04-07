@@ -317,8 +317,8 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
   auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
 
-    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
-    const auto material_index = ctx->scene->triangle_to_material[triangle_index];
+    const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    const uint32_t material_index = ctx->scene->triangle_to_material[triangle_index];
     if (material_index != ctx->m_id) {
       *args->valid = 0;
       return;

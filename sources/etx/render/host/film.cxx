@@ -72,7 +72,6 @@ void Film::accumulate(uint32_t layer, const float4& value, uint32_t x, uint32_t 
   if ((x >= _private->dimensions.x) || (y >= _private->dimensions.y) || (layer >= LayerCount)) {
     return;
   }
-  ETX_VALIDATE(value);
 
   float4* layer_data = _private->layer(layer);
 

@@ -171,7 +171,7 @@ ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em, const float3& in_direc
   }
 }
 
-ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQuery spect, const float3& from_point, const float3& w_i, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQuery spect, const float3& from_point, const Scene& scene, Sampler& smp) {
   EmitterSample result;
   switch (em.cls) {
     case Emitter::Class::Area: {
@@ -251,9 +251,9 @@ ETX_GPU_CODE uint32_t sample_emitter_index(const Scene& scene, Sampler& smp) {
   return emitter_index;
 }
 
-ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_index, Sampler& smp, const float3& from_point, const float3& w_i, const Scene& scene) {
+ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_index, Sampler& smp, const float3& from_point, const Scene& scene) {
   const auto& emitter = scene.emitters[emitter_index];
-  EmitterSample sample = emitter_sample_in(emitter, spect, from_point, w_i, scene, smp);
+  EmitterSample sample = emitter_sample_in(emitter, spect, from_point, scene, smp);
   sample.pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
   sample.emitter_index = emitter_index;
   sample.triangle_index = emitter.triangle_index;

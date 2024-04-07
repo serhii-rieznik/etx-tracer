@@ -133,9 +133,9 @@ struct CPUVCMImpl : public Task {
         }
 
         for (uint32_t i = 0; i < step_result.splat_count; ++i) {
-          const float3& val = step_result.values_to_splat[i];
+          const float3& val = step_result.values_to_splat[i].to_xyz() / step_result.values_to_splat[i].sampling_pdf();
           if (dot(val, val) > kEpsilon) {
-            film.atomic_add(Film::LightImage, {val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i]);
+            film.atomic_add(Film::LightIteration, {val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i]);
           }
         }
 

@@ -55,10 +55,8 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
   SpectralResponse extinction = scattering + absorption;
   SpectralResponse albedo = Medium::calculate_albedo(spect, scattering, extinction);
 
-  float3 n = in_intersection.nrm * ((dot(in_intersection.w_i, in_intersection.nrm) < 0.0f) ? -1.0f : +1.0f);
-
   Ray ray = {};
-  ray.d = sample_cosine_distribution(smp.next_2d(), n, 1.0f);
+  ray.d = sample_cosine_distribution(smp.next_2d(), -in_intersection.nrm, 1.0f);
   ray.min_t = kRayEpsilon;
   ray.o = shading_pos(scene.vertices, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d);
   ray.max_t = kMaxFloat;
@@ -97,8 +95,10 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
       return false;
 
     if (intersection_found) {
+      bool w_i_in = dot(local_i.w_i, local_i.nrm) > 0.0f;
+
       result.intersections[0] = local_i;
-      result.intersections[0].w_i = in_intersection.w_i;
+      result.intersections[0].w_i *= w_i_in ? -1.0f : +1.0f;
       result.weights[0] = throughput * apply_image(spect, mat.transmittance, local_i.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
       result.intersection_count = 1u;
       result.selected_intersection = 0;
@@ -110,7 +110,6 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
     ray.o = ray.o + ray.d * ray.max_t;
     ray.d = medium::sample_phase_function(ray.d, anisotropy, smp);
   }
-
   return false;
 }
 
@@ -141,7 +140,7 @@ ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Inter
   for (uint32_t i = 0; i < intersection_count; ++i) {
     const Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
 
-    auto out_intersection = make_intersection(scene, in_intersection.w_i, intersections[i]);
+    auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
 
     float gw = geometric_weigth(out_intersection.nrm, ss_sample);
     float pdf = evaluate(spect, mtl, ss_sample.sampled_radius).average();
@@ -241,7 +240,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
   if (payload.path_length + 1 <= rt.scene().max_path_length) {
     uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
-    auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, medium_sample.pos, payload.ray.d, scene);
+    auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, medium_sample.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
       auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, payload.medium, payload.smp);
       float phase_function = medium.phase_function(payload.spect, medium_sample.pos, payload.ray.d, emitter_sample.direction);
@@ -355,13 +354,13 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     SpectralResponse direct_light = {payload.spect, 0.0f};
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-        auto local_sample = sample_emitter(payload.spect, emitter_index, payload.smp, ss_gather.intersections[i].pos, ss_gather.intersections[i].w_i, scene);
+        auto local_sample = sample_emitter(payload.spect, emitter_index, payload.smp, ss_gather.intersections[i].pos, scene);
         SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, mat, payload.medium, payload.spect, local_sample, payload.smp, options.mis);
         direct_light += ss_gather.weights[i] * light_value;
         ETX_VALIDATE(direct_light);
       }
     } else {
-      auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, intersection.pos, intersection.w_i, scene);
+      auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, intersection.pos, scene);
       direct_light += evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, options.mis);
       ETX_VALIDATE(direct_light);
     }

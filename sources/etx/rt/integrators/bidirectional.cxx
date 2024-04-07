@@ -707,7 +707,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& z_i = camera_path[eye_t];
 
     uint32_t emitter_index = sample_emitter_index(rt.scene(), smp);
-    auto emitter_sample = sample_emitter(spect, emitter_index, smp, z_i.pos, z_i.w_i, rt.scene());
+    auto emitter_sample = sample_emitter(spect, emitter_index, smp, z_i.pos, rt.scene());
     if (emitter_sample.value.is_zero() || (emitter_sample.pdf_dir == 0.0f)) {
       return {spect, 0.0f};
     }
