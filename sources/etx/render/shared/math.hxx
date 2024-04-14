@@ -268,6 +268,54 @@ ETX_GPU_CODE constexpr float4 min(const float4& a, const float4& b) {
   };
 }
 
+ETX_GPU_CODE float2 pow(const float2& a, const float b) {
+  return {
+    powf(a.x, b),
+    powf(a.y, b),
+  };
+}
+
+ETX_GPU_CODE float3 pow(const float3& a, const float b) {
+  return {
+    powf(a.x, b),
+    powf(a.y, b),
+    powf(a.z, b),
+  };
+}
+
+ETX_GPU_CODE float4 pow(const float4& a, const float b) {
+  return {
+    powf(a.x, b),
+    powf(a.y, b),
+    powf(a.z, b),
+    powf(a.w, b),
+  };
+}
+
+ETX_GPU_CODE float2 atan(const float2& a) {
+  return {
+    atanf(a.x),
+    atanf(a.y),
+  };
+}
+
+ETX_GPU_CODE float3 atan(const float3& a) {
+  return {
+    atanf(a.x),
+    atanf(a.y),
+    atanf(a.z),
+  };
+}
+
+ETX_GPU_CODE float4 atan(const float4& a) {
+  return {
+    atanf(a.x),
+    atanf(a.y),
+    atanf(a.z),
+    atanf(a.w),
+  };
+}
+
 ETX_GPU_CODE constexpr float saturate(float val) {
   return clamp(val, 0.0f, 1.0f);
 }

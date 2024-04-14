@@ -966,6 +966,22 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
   }
 }
 
+static void remap_subsurface_values(const float3& color, const float3& scattering_distances, float3& albedo, float3& extinction) {
+  constexpr float a = 1.826052378200f;
+  constexpr float b = 4.985111943850f + 0.12735595943800f;
+  constexpr float c = 1.096861024240f;
+  constexpr float d = 0.496310210422f;
+  constexpr float e = 4.231902997010f + 0.00310603949088f;
+  constexpr float f = 2.406029994080f;
+  constexpr float3 kEvaluationMinimumValue = {1.0f / 1023.0f, 1.0f / 1023.0f, 1.0f / 1023.0f};
+  float3 blend = pow(color, 0.25f);
+  albedo = (1.0f - blend) * a * pow(atan(b * color), c) + blend * d * pow(atan(e * color), f);
+  ETX_VALIDATE(albedo);
+
+  extinction = 1.0f / max(scattering_distances, kEvaluationMinimumValue);
+  ETX_VALIDATE(extinction);
+}
+
 void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::material_t& material) {
   if (get_param(material, "id") == false) {
     log::warning("Medium does not have identifier - skipped");
@@ -973,6 +989,21 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
   }
 
   std::string name = data_buffer;
+
+  float anisotropy = 0.0f;
+  if (get_param(material, "g")) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      anisotropy = val;
+    }
+  }
+
+  if (get_param(material, "anisotropy")) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      anisotropy = val;
+    }
+  }
 
   SpectralDistribution s_a = SpectralDistribution::from_constant(0.0f);
   if (get_param(material, "absorption")) {
@@ -1019,19 +1050,9 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
       }
     }
 
-    scattering_distances.x = fmaxf(scattering_distances.x, 1.0f / 256.0f);
-    scattering_distances.y = fmaxf(scattering_distances.y, 1.0f / 256.0f);
-    scattering_distances.z = fmaxf(scattering_distances.z, 1.0f / 256.0f);
-    color = saturate(color / fmaxf(fmaxf(1.0f, color.x), fmaxf(color.y, color.z)));
-
-    float3 albedo = 1.0f - exp(-5.09406f * color + 2.61188f * color - 4.31805f * color * color * color);
-    ETX_VALIDATE(albedo);
-
-    float3 s = 1.9f - color + 3.5f * sqr(color - 0.8f);
-    ETX_VALIDATE(s);
-
-    float3 extinction = 1.0f / (scattering_distances * s);
-    ETX_VALIDATE(extinction);
+    float3 albedo = {};
+    float3 extinction = {};
+    remap_subsurface_values(color, scattering_distances, albedo, extinction);
 
     float3 scattering = extinction * albedo;
     ETX_VALIDATE(scattering);
@@ -1041,14 +1062,6 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
 
     s_t = rgb::make_spd(scattering, spectrums(), rgb::SpectrumClass::Reflection);
     s_a = rgb::make_spd(absorption, spectrums(), rgb::SpectrumClass::Reflection);
-  }
-
-  float g = 0.0f;
-  if (get_param(material, "g")) {
-    float val = {};
-    if (sscanf(data_buffer, "%f", &val) == 1) {
-      g = val;
-    }
   }
 
   Medium::Class cls = Medium::Class::Homogeneous;
@@ -1062,7 +1075,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     }
   }
 
-  uint32_t medium_index = add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, g);
+  uint32_t medium_index = add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy);
 
   if (name == "camera") {
     camera_medium_index = medium_index;
@@ -1472,12 +1485,17 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
 
   if (get_param(material, "int_ior")) {
     float2 values = {};
-    if (sscanf(data_buffer, "%f %f", &values.x, &values.y) == 2) {
-      // interpret as eta/k
+    int values_read = sscanf(data_buffer, "%f %f", &values.x, &values.y);
+    if (values_read == 1) {
+      // interpret as eta
+      mtl.int_ior.eta = SpectralDistribution::from_constant(values.x);
+      mtl.int_ior.k = SpectralDistribution::from_constant(0.0f);
+    } else if (values_read == 2) {
+      // interpret as eta / k
       mtl.int_ior.eta = SpectralDistribution::from_constant(values.x);
       mtl.int_ior.k = SpectralDistribution::from_constant(values.y);
     } else {
-      char buffer[256] = {};
+      char buffer[1024] = {};
       snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
       SpectralDistribution::load_from_file(buffer, mtl.int_ior.eta, &mtl.int_ior.k, true);
     }
