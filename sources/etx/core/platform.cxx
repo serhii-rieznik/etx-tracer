@@ -2,6 +2,8 @@
 # include <libkern/OSAtomic.h>
 #endif
 
+#include <nfd.h>
+
 namespace etx {
 
 uint32_t atomic_inc(int32_t* ptr) {
@@ -47,6 +49,18 @@ void atomic_add_float(float* ptr, float value) {
     new_value = std::bit_cast<int32_t>(*ptr + value);
   } while (!OSAtomicCompareAndSwap32(old_value, new_value, iptr));
 #endif
+}
+
+std::string open_file(const char* filters) {
+  nfdchar_t* selected_path = nullptr;
+  nfdresult_t result = NFD_OpenDialog(filters, nullptr, &selected_path);
+  return (result == NFD_OKAY) ? selected_path : std::string{};
+}
+
+std::string save_file(const char* filters) {
+  nfdchar_t* selected_path = nullptr;
+  nfdresult_t result = NFD_SaveDialog(filters, nullptr, &selected_path);
+  return (result == NFD_OKAY) ? selected_path : std::string{};
 }
 
 }  // namespace etx

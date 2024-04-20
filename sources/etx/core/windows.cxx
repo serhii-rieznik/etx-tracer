@@ -1,9 +1,8 @@
 #include <etx/core/windows.hxx>
-#include <etx/core/log.hxx>
-
-#include <nfd.h>
 
 #if (ETX_PLATFORM_WINDOWS)
+
+# include <etx/core/log.hxx>
 
 # pragma comment(lib, "dbghelp.lib")
 
@@ -104,31 +103,4 @@ inline void log::set_console_color(log::Color clr) {
 
 }  // namespace etx
 
-#else
-
-# warning TODO : move to the proper place
-
-namespace etx {
-
-void init_platform() {
-}
-
-}  // namespace etx
-
 #endif
-
-namespace etx {
-
-std::string open_file(const char* filters) {
-  nfdchar_t* selected_path = nullptr;
-  nfdresult_t result = NFD_OpenDialog(filters, nullptr, &selected_path);
-  return (result == NFD_OKAY) ? selected_path : std::string{};
-}
-
-std::string save_file(const char* filters) {
-  nfdchar_t* selected_path = nullptr;
-  nfdresult_t result = NFD_SaveDialog(filters, nullptr, &selected_path);
-  return (result == NFD_OKAY) ? selected_path : std::string{};
-}
-
-}  // namespace etx
