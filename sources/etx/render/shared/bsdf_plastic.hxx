@@ -141,6 +141,13 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto eval = ggx.evaluate(m, data.w_i, w_o);
   float j = 1.0f / (4.0f * m_dot_o);
 
+  float sample_pdf = kInvPi * n_dot_o * (1.0f - f) + eval.pdf * j * f;
+  ETX_VALIDATE(sample_pdf);
+
+  if (sample_pdf <= kEpsilon) {
+    return {data.spectrum_sample, 0.0f};
+  }
+
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
   auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
 
@@ -149,7 +156,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   ETX_VALIDATE(result.func);
   result.bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr)) + specular * (fr * eval.ndf * eval.visibility / (4.0f * n_dot_i));
   ETX_VALIDATE(result.bsdf);
-  result.pdf = kInvPi * n_dot_o * (1.0f - f) + eval.pdf * j * f;
+  result.pdf = sample_pdf;
   ETX_VALIDATE(result.pdf);
   result.weight = result.bsdf / result.pdf;
   ETX_VALIDATE(result.weight);

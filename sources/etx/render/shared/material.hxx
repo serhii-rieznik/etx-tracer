@@ -30,9 +30,15 @@ struct SubsurfaceMaterial {
     ChristensenBurley,
   };
 
+  enum class Path : uint32_t {
+    Diffuse,
+    Refracted,
+  };
+
   Class cls = Class::Disabled;
+  Path path = Path::Diffuse;
   SpectralDistribution scattering_distance;
-  float scale = 0.2f;
+  float scale = 1.0f;
 };
 
 struct ETX_ALIGNED Material {

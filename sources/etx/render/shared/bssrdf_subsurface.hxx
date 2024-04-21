@@ -14,6 +14,34 @@ struct Gather {
   float total_weight;
 };
 
+ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, float& albedo, float& extinction, float& scattering) {
+  constexpr float a = 1.826052378200f;
+  constexpr float b = 4.985111943850f + 0.12735595943800f;
+  constexpr float c = 1.096861024240f;
+  constexpr float d = 0.496310210422f;
+  constexpr float e = 4.231902997010f + 0.00310603949088f;
+  constexpr float f = 2.406029994080f;
+  constexpr float kEvaluationMinimumValue = 1.0f / 1023.0f;
+
+  color = max(color, {});
+
+  float blend = powf(color, 0.25f);
+  albedo = (1.0f - blend) * a * powf(atanf(b * color), c) + blend * d * powf(atanf(e * color), f);
+  ETX_VALIDATE(albedo);
+
+  extinction = 1.0f / fmaxf(scattering_distances, kEvaluationMinimumValue);
+  ETX_VALIDATE(extinction);
+
+  scattering = extinction * albedo;
+  ETX_VALIDATE(scattering);
+}
+
+ETX_GPU_CODE void remap(float3 color, const float3& scattering_distances, float3& albedo, float3& extinction, float3& scattering) {
+  remap_channel(color.x, scattering_distances.x, albedo.x, extinction.x, scattering.x);
+  remap_channel(color.y, scattering_distances.y, albedo.y, extinction.y, scattering.y);
+  remap_channel(color.z, scattering_distances.z, albedo.z, extinction.z, scattering.z);
+}
+
 ETX_GPU_CODE float sample_s_r(float rnd) {
   if (rnd < 0.25f) {
     rnd = fminf(4.0f * rnd, 1.0f - kEpsilon);

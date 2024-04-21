@@ -892,13 +892,10 @@ bool UI::build_material(Material& material) {
 
   ImGui::Text("%s", "Subsurface Scattering");
   changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
-  if (material.subsurface.cls == SubsurfaceMaterial::Class::RandomWalk) {
-    ImGui::Text("(controlled by the internal meidum");
-  } else if (material.subsurface.cls == SubsurfaceMaterial::Class::ChristensenBurley) {
-    changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance, _current_scene->spectrums, true);
-    ImGui::Text("%s", "Subsurface Distance Scale");
-    changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
-  }
+  changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
+  changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance, _current_scene->spectrums, true);
+  ImGui::Text("%s", "Subsurface Distance Scale");
+  changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
   ImGui::Separator();
 
   ImGui::Text("%s", "Thinfilm");

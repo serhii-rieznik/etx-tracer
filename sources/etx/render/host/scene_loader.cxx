@@ -966,22 +966,6 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
   }
 }
 
-static void remap_subsurface_values(const float3& color, const float3& scattering_distances, float3& albedo, float3& extinction) {
-  constexpr float a = 1.826052378200f;
-  constexpr float b = 4.985111943850f + 0.12735595943800f;
-  constexpr float c = 1.096861024240f;
-  constexpr float d = 0.496310210422f;
-  constexpr float e = 4.231902997010f + 0.00310603949088f;
-  constexpr float f = 2.406029994080f;
-  constexpr float3 kEvaluationMinimumValue = {1.0f / 1023.0f, 1.0f / 1023.0f, 1.0f / 1023.0f};
-  float3 blend = pow(color, 0.25f);
-  albedo = (1.0f - blend) * a * pow(atan(b * color), c) + blend * d * pow(atan(e * color), f);
-  ETX_VALIDATE(albedo);
-
-  extinction = 1.0f / max(scattering_distances, kEvaluationMinimumValue);
-  ETX_VALIDATE(extinction);
-}
-
 void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::material_t& material) {
   if (get_param(material, "id") == false) {
     log::warning("Medium does not have identifier - skipped");
@@ -1021,6 +1005,32 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     }
   }
 
+  if (get_param(material, "rayleigh")) {
+    s_t = spectrums()->rayleigh;
+
+    float scale = 1.0f;
+    auto params = split_params(data_buffer);
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+        scale = static_cast<float>(atof(params[i + 1]));
+      }
+    }
+    s_t.scale(scale / s_t.maximum_spectral_power());
+  }
+
+  if (get_param(material, "mie")) {
+    s_t = spectrums()->mie;
+
+    float scale = 1.0f;
+    auto params = split_params(data_buffer);
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+        scale = static_cast<float>(atof(params[i + 1]));
+      }
+    }
+    s_t.scale(scale / s_t.maximum_spectral_power());
+  }
+
   if (get_param(material, "parametric")) {
     float3 color = {1.0f, 1.0f, 1.0f};
     float3 scattering_distances = {0.25f, 0.25f, 0.25f};
@@ -1052,12 +1062,10 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
 
     float3 albedo = {};
     float3 extinction = {};
-    remap_subsurface_values(color, scattering_distances, albedo, extinction);
+    float3 scattering = {};
+    subsurface::remap(color, scattering_distances, albedo, extinction, scattering);
 
-    float3 scattering = extinction * albedo;
-    ETX_VALIDATE(scattering);
-
-    float3 absorption = extinction - scattering;
+    float3 absorption = max({}, extinction - scattering);
     ETX_VALIDATE(absorption);
 
     s_t = rgb::make_spd(scattering, spectrums(), rgb::SpectrumClass::Reflection);
@@ -1432,6 +1440,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   mtl.diffuse = {SpectralDistribution::from_constant(1.0f)};
   mtl.specular = {SpectralDistribution::from_constant(1.0f)};
   mtl.transmittance = {SpectralDistribution::from_constant(1.0f)};
+  mtl.subsurface.scattering_distance = rgb::make_spd({1.0f, 0.2f, 0.04f}, spectrums(), rgb::SpectrumClass::Reflection);
 
   if (get_param(material, "base")) {
     auto i = material_mapping.find(data_buffer);
@@ -1584,7 +1593,11 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
 
     auto params = split_params(data_buffer);
     for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-      if ((strcmp(params[i], "distance") == 0) && (i + 3 < e)) {
+      if ((strcmp(params[i], "path") == 0) && (i + 1 < e)) {
+        mtl.subsurface.path = strcmp(params[i + 1], "refracted") == 0 ? SubsurfaceMaterial::Path::Refracted : SubsurfaceMaterial::Path::Diffuse;
+      }
+
+      if ((strcmp(params[i], "distances") == 0) && (i + 3 < e)) {
         float dr = static_cast<float>(atof(params[i + 1]));
         float dg = static_cast<float>(atof(params[i + 2]));
         float db = static_cast<float>(atof(params[i + 3]));

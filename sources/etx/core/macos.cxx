@@ -13,7 +13,7 @@ static bool debugger_present = false;
 
 void init_platform() {
   static dispatch_once_t predicate = {};
-  
+
   dispatch_once(&predicate, ^{
     struct kinfo_proc info;
     size_t info_size = sizeof(info);
