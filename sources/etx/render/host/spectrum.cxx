@@ -5,7 +5,7 @@
 
 namespace etx {
 
-SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count) {
+SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count, Usage usage) {
   float value = (count > 0) ? wavelengths_power[0].x : 100.0f;
   float wavelength_scale = 1.0f;
   while (value < 100.0f) {
@@ -36,7 +36,8 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
     }
   }
 
-  result.integrated = max({}, spectrum::xyz_to_rgb(result.integrate_to_xyz()));
+  float3 xyz = result.integrate_to_xyz();
+  result.integrated = usage == Usage::Color ? max({}, spectrum::xyz_to_rgb(xyz)) : xyz;
   return result;
 }
 
@@ -48,28 +49,8 @@ void SpectralDistribution::scale(float factor) {
 }
 
 SpectralDistribution SpectralDistribution::from_constant(float value) {
-  float2 samples[spectrum::WavelengthCount] = {};
-  float min_y = kMaxFloat;
-  float max_y = 0.0f;
-  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
-    float y = spectrum::spectral_xyz(i).y;
-    min_y = fminf(min_y, y);
-    max_y = fmaxf(max_y, y);
-  }
-
-  float nrm = 0.0f;
-  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
-    float3 t = spectrum::spectral_xyz(i);
-    samples[i] = {float(spectrum::ShortestWavelength + i), max_y / t.y};
-    nrm += max_y / t.y;
-  }
-  SpectralDistribution result = from_samples(samples, spectrum::WavelengthCount);
-  float lum = result.luminance();
-  float3 aaa = result.integrated;
-  float3 xxx = spectrum::rgb_to_xyz(aaa);
-  result.scale(value / nrm);
-  // result.integrated = {value, value, value};
-  return result;
+  float2 samples[2] = {{spectrum::kShortestWavelength, value}, {spectrum::kLongestWavelength, value},};
+  return from_samples(samples, 2, Usage::Values);
 }
 
 SpectralDistribution SpectralDistribution::from_black_body(float temperature, float scale) {
@@ -78,7 +59,7 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, fl
     float wl = float(i + spectrum::ShortestWavelength);
     samples[i] = {wl, spectrum::black_body_radiation(wl, temperature) * scale};
   }
-  return from_samples(samples, spectrum::WavelengthCount);
+  return from_samples(samples, spectrum::WavelengthCount, Usage::Color);
 }
 
 SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, float scale) {
@@ -111,7 +92,7 @@ SpectralDistribution SpectralDistribution::rgb(float3 rgb, const rgb::SpectrumSe
     samples[i] = {wavelengths[i], max(0.0f, p)};
   }
 
-  return from_samples(samples, rgb::SampleCount);
+  return from_samples(samples, rgb::SampleCount, SpectralDistribution::Usage::Color);
 }
 
 SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range) {
@@ -216,10 +197,10 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     }
   }
 
-  values0 = from_samples(samples0.data(), samples0.size());
+  values0 = from_samples(samples0.data(), samples0.size(), Usage::Values);
 
   if (values1) {
-    *values1 = from_samples(samples1.data(), samples1.size());
+    *values1 = from_samples(samples1.data(), samples1.size(), Usage::Values );
   }
 
   return cls;
@@ -290,12 +271,12 @@ float SpectralDistribution::luminance() const {
   return etx::luminance(integrated);
 }
 
-SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count) {
+SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count, Usage usage) {
   std::vector<float2> combined(count);
   for (uint32_t i = 0; i < count; ++i) {
     combined[i] = {wavelengths[i], power[i]};
   }
-  return from_samples(combined.data(), uint32_t(combined.size()));
+  return from_samples(combined.data(), uint32_t(combined.size()), usage);
 }
 
 namespace rgb {

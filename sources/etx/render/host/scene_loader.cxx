@@ -50,11 +50,11 @@ inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
       {52.6316f, 1.521f}, {55.5556f, 1.521f}, {58.8235f, 1.521f}, {62.5000f, 1.521f}, {66.6667f, 1.521f}, {71.4286f, 1.521f}, {76.9231f, 1.520f}, {83.3333f, 1.520f},
       {90.9091f, 1.520f}};
 
-    shared_spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2);
-    shared_spectrums.thinfilm.k = SPD::from_samples(w, k, 2);
-    shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)));
-    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)));
-    shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)));
+    shared_spectrums.thinfilm.eta = SPD::from_samples(w, eta, 2, SPD::Usage::Values);
+    shared_spectrums.thinfilm.k = SPD::from_samples(w, k, 2, SPD::Usage::Values);
+    shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)), SPD::Usage::Values);
+    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)), SPD::Usage::Values);
+    shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)), SPD::Usage::Values);
     shared_spectrums.dielectric.k = SPD::from_constant(0.0f);
   }
 }
@@ -1352,7 +1352,7 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
     log::warning("Spectrum `%s` sample set is empty - skipped", name.c_str());
   }
 
-  auto spectrum = SpectralDistribution::from_samples(samples.data(), samples.size());
+  auto spectrum = SpectralDistribution::from_samples(samples.data(), samples.size(), SpectralDistribution::Usage::Color);
 
   if (get_param(material, "normalize")) {
     float3 xyz = spectrum.integrate_to_xyz();

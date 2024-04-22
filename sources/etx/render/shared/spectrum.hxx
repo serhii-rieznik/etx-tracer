@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/render/shared/base.hxx>
 
@@ -427,12 +427,17 @@ ETX_GPU_CODE void print_invalid_value<SpectralResponse>(const char* name, const 
 struct Spectrums;
 
 struct ETX_ALIGNED SpectralDistribution {
-  enum Class {
+  enum Class : uint32_t {
     Invalid,
     Reflectance,
     Conductor,
     Dielectric,
     Illuminant,
+  };
+  
+  enum Usage : uint32_t {
+    Color,
+    Values,
   };
 
   struct {
@@ -513,11 +518,11 @@ struct ETX_ALIGNED SpectralDistribution {
   float maximum_spectral_power() const;
 
   bool valid() const;
-
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count);
+  
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Usage usage);
+  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count, Usage usage);
 
   static SpectralDistribution from_constant(float value);
-  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count);
   static SpectralDistribution from_black_body(float temperature, float scale);
   static SpectralDistribution from_normalized_black_body(float temperature, float scale);
   static SpectralDistribution rgb(float3 rgb, const rgb::SpectrumSet& spectrums);
