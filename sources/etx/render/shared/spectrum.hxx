@@ -226,7 +226,7 @@ struct SpectralQuery {
 };
 
 struct ETX_ALIGNED SpectralValue {
-  float3 xyz = {};
+  float3 rgb = {};
   float w = 0.0f;
 };
 
@@ -257,9 +257,9 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     return *this;
   }
 
-  ETX_GPU_CODE float3 to_xyz() const {
+  ETX_GPU_CODE float3 to_rgb() const {
     if (spectral() == false) {
-      return components.xyz;
+      return components.rgb;
     }
 
     ETX_ASSERT(valid());
@@ -269,48 +269,50 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     uint32_t j = min(i + 1u, spectrum::WavelengthCount - 1u);
     float3 xyz0 = spectrum::spectral_xyz(i);
     float3 xyz1 = spectrum::spectral_xyz(j);
-    return lerp<float3>(xyz0, xyz1, dw) * (components.w / spectrum::kYIntegral);
+    float3 xyz = lerp<float3>(xyz0, xyz1, dw) * (components.w / spectrum::kYIntegral);
+
+    return max({}, spectrum::xyz_to_rgb(xyz));
   }
 
   ETX_GPU_CODE float minimum() const {
-    return spectral() ? components.w : min(components.xyz.x, min(components.xyz.y, components.xyz.z));
+    return spectral() ? components.w : min(components.rgb.x, min(components.rgb.y, components.rgb.z));
   }
 
   ETX_GPU_CODE float maximum() const {
-    return spectral() ? components.w : max(components.xyz.x, max(components.xyz.y, components.xyz.z));
+    return spectral() ? components.w : max(components.rgb.x, max(components.rgb.y, components.rgb.z));
   }
 
   ETX_GPU_CODE float monochromatic() const {
-    return spectral() ? components.w : components.xyz.y;
+    return spectral() ? components.w : components.rgb.y;
   }
 
   ETX_GPU_CODE float sum() const {
-    return spectral() ? components.w : components.xyz.x + components.xyz.y + components.xyz.z;
+    return spectral() ? components.w : components.rgb.x + components.rgb.y + components.rgb.z;
   }
 
   ETX_GPU_CODE float average() const {
-    return spectral() ? components.w : (components.xyz.x + components.xyz.y + components.xyz.z) / 3.0f;
+    return spectral() ? components.w : (components.rgb.x + components.rgb.y + components.rgb.z) / 3.0f;
   }
 
   ETX_GPU_CODE float component(uint32_t i) const {
     ETX_ASSERT(i < 3);
-    return spectral() ? components.w : *(&components.xyz.x + i);
+    return spectral() ? components.w : *(&components.rgb.x + i);
   }
 
   ETX_GPU_CODE bool valid() const {
-    return spectral() ? valid_value(components.w) : valid_value(components.xyz);
+    return spectral() ? valid_value(components.w) : valid_value(components.rgb);
   }
 
   ETX_GPU_CODE bool is_zero() const {
-    return spectral() ? (components.w <= kEpsilon) : (components.xyz.x <= kEpsilon) && (components.xyz.y <= kEpsilon) && (components.xyz.z <= kEpsilon);
+    return spectral() ? (components.w <= kEpsilon) : (components.rgb.x <= kEpsilon) && (components.rgb.y <= kEpsilon) && (components.rgb.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                       \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
-    components.xyz OP other.components.xyz;                                   \
-    components.w OP other.components.w;                                       \
-    return *this;                                                             \
+#define SPECTRAL_OP(OP)                                                        \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
+    components.rgb OP other.components.rgb;                                    \
+    components.w OP other.components.w;                                        \
+    return *this;                                                              \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)
@@ -322,7 +324,7 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
   ETX_GPU_CODE SpectralResponse operator OP(const SpectralResponse& other) const {                                                                         \
     ETX_ASSERT_EQUAL(wavelength, other.wavelength);                                                                                                        \
     ETX_ASSERT((spectral() && other.spectral()) || ((spectral() == false) && (other.spectral() == false)));                                                \
-    return spectral() ? SpectralResponse{query(), components.w OP other.components.w} : SpectralResponse{query(), components.xyz OP other.components.xyz}; \
+    return spectral() ? SpectralResponse{query(), components.w OP other.components.w} : SpectralResponse{query(), components.rgb OP other.components.rgb}; \
   }
   SPECTRAL_OP(+)
   SPECTRAL_OP(-)
@@ -332,7 +334,7 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
 
 #define SPECTRAL_OP(OP)                                     \
   ETX_GPU_CODE SpectralResponse& operator OP(float other) { \
-    components.xyz OP other;                                \
+    components.rgb OP other;                                \
     components.w OP other;                                  \
     return *this;                                           \
   }
@@ -344,7 +346,7 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
 
 #define SPECTRAL_OP(OP)                                                                                                        \
   ETX_GPU_CODE SpectralResponse operator OP(float other) const {                                                               \
-    return spectral() ? SpectralResponse{query(), components.w OP other} : SpectralResponse{query(), components.xyz OP other}; \
+    return spectral() ? SpectralResponse{query(), components.w OP other} : SpectralResponse{query(), components.rgb OP other}; \
   }
   SPECTRAL_OP(+)
   SPECTRAL_OP(-)
@@ -360,31 +362,31 @@ ETX_GPU_CODE SpectralResponse operator*(float other, const SpectralResponse& s) 
   return s * other;
 }
 ETX_GPU_CODE SpectralResponse operator/(float other, const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.query(), other / s.components.w} : SpectralResponse{s.query(), other / s.components.xyz};
+  return s.spectral() ? SpectralResponse{s.query(), other / s.components.w} : SpectralResponse{s.query(), other / s.components.rgb};
 }
 ETX_GPU_CODE SpectralResponse operator+(float other, const SpectralResponse& s) {
   return s + other;
 }
 ETX_GPU_CODE SpectralResponse operator-(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.query(), -s.components.w} : SpectralResponse{s.query(), -s.components.xyz};
+  return s.spectral() ? SpectralResponse{s.query(), -s.components.w} : SpectralResponse{s.query(), -s.components.rgb};
 }
 ETX_GPU_CODE SpectralResponse operator-(float other, const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.query(), other - s.components.w} : SpectralResponse{s.query(), other - s.components.xyz};
+  return s.spectral() ? SpectralResponse{s.query(), other - s.components.w} : SpectralResponse{s.query(), other - s.components.rgb};
 }
 ETX_GPU_CODE SpectralResponse exp(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.query(), expf(s.components.w)} : SpectralResponse{s.query(), exp(s.components.xyz)};
+  return s.spectral() ? SpectralResponse{s.query(), expf(s.components.w)} : SpectralResponse{s.query(), exp(s.components.rgb)};
 }
 ETX_GPU_CODE SpectralResponse sqrt(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.query(), sqrtf(s.components.w)} : SpectralResponse{s.query(), sqrt(s.components.xyz)};
+  return s.spectral() ? SpectralResponse{s.query(), sqrtf(s.components.w)} : SpectralResponse{s.query(), sqrt(s.components.rgb)};
 }
 ETX_GPU_CODE SpectralResponse cos(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.query(), cosf(s.components.w)} : SpectralResponse{s.query(), cos(s.components.xyz)};
+  return s.spectral() ? SpectralResponse{s.query(), cosf(s.components.w)} : SpectralResponse{s.query(), cos(s.components.rgb)};
 }
 ETX_GPU_CODE SpectralResponse abs(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.query(), fabsf(s.components.w)} : SpectralResponse{s.query(), abs(s.components.xyz)};
+  return s.spectral() ? SpectralResponse{s.query(), fabsf(s.components.w)} : SpectralResponse{s.query(), abs(s.components.rgb)};
 }
 ETX_GPU_CODE SpectralResponse saturate(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.query(), saturate(s.components.w)} : SpectralResponse{s.query(), saturate(s.components.xyz)};
+  return s.spectral() ? SpectralResponse{s.query(), saturate(s.components.w)} : SpectralResponse{s.query(), saturate(s.components.rgb)};
 }
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
@@ -418,7 +420,7 @@ ETX_GPU_CODE void print_invalid_value<complex>(const char* name, const complex& 
 
 template <>
 ETX_GPU_CODE void print_invalid_value<SpectralResponse>(const char* name, const SpectralResponse& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f : %f %f %f / %f) at %s [%u]\n", name, v.wavelength, v.components.xyz.x, v.components.xyz.y, v.components.xyz.z, v.components.w, filename, line);
+  printf("Validation failed: %s (%f : %f %f %f / %f) at %s [%u]\n", name, v.wavelength, v.components.rgb.x, v.components.rgb.y, v.components.rgb.z, v.components.w, filename, line);
 }
 #endif
 
@@ -533,17 +535,17 @@ struct RefractiveIndex {
 
     ETX_GPU_CODE complex as_complex_x() const {
       ETX_ASSERT(spectral() == false);
-      return complex{eta.components.xyz.x, k.components.xyz.x};
+      return complex{eta.components.rgb.x, k.components.rgb.x};
     }
 
     ETX_GPU_CODE complex as_complex_y() const {
       ETX_ASSERT(spectral() == false);
-      return {eta.components.xyz.y, k.components.xyz.y};
+      return {eta.components.rgb.y, k.components.rgb.y};
     }
 
     ETX_GPU_CODE complex as_complex_z() const {
       ETX_ASSERT(spectral() == false);
-      return {eta.components.xyz.z, k.components.xyz.z};
+      return {eta.components.rgb.z, k.components.rgb.z};
     }
 
     ETX_GPU_CODE complex as_complex() const {
@@ -647,7 +649,9 @@ ETX_GPU_CODE void compute_weights(const float3& rgb, float weights[Color::Count]
 }
 
 ETX_GPU_CODE SpectralDistribution make_spd(const float3& rgb, const Pointer<Spectrums> spectrums, SpectrumClass cls) {
-  return SpectralDistribution::rgb(rgb, cls == SpectrumClass::Reflection ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
+  SpectralDistribution result = SpectralDistribution::rgb(rgb, cls == SpectrumClass::Reflection ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
+  result.integrated = rgb;
+  return result;
 }
 
 ETX_GPU_CODE SpectralResponse query_spd(const SpectralQuery spect, const float3& rgb, const SpectrumSet& spectrums) {

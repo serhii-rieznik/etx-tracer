@@ -289,15 +289,6 @@ float sqr(float t) {
   return t * t; 
 }
 
-float4 to_rgb(in float4 xyz) {
-  float4 rgb;
-  rgb[0] = max(0.0, 3.240479f * xyz[0] - 1.537150f * xyz[1] - 0.498535f * xyz[2]);
-  rgb[1] = max(0.0, -0.969256f * xyz[0] + 1.875991f * xyz[1] + 0.041556f * xyz[2]);
-  rgb[2] = max(0.0, 0.055648f * xyz[0] - 0.204043f * xyz[1] + 1.057311f * xyz[2]);
-  rgb[3] = 1.0f;
-  return rgb;
-}
-
 float4 validate(in float4 xyz) {
   if (any(isnan(xyz))) {
     return float4(123456.0, 0.0, 123456.0, 1.0);
@@ -358,8 +349,8 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
     return v_image;
   }
 
-  c_image = to_rgb(c_image);
-  v_image = to_rgb(v_image);
+  c_image = c_image;
+  v_image = v_image;
   float v_lum = dot(v_image.xyz, lum);
   float c_treshold = 1.0f / 65536.0f;
 
@@ -424,15 +415,6 @@ constant constexpr uint kViewReferenceImage = 3;
 constant constexpr uint kViewRelativeDifference = 4;
 constant constexpr uint kViewAbsoluteDifference = 5;
 
-float4 to_rgb(float4 xyz) {
-  float4 rgb;
-  rgb[0] = max(0.0, 3.240479f * xyz[0] - 1.537150f * xyz[1] - 0.498535f * xyz[2]);
-  rgb[1] = max(0.0, -0.969256f * xyz[0] + 1.875991f * xyz[1] + 0.041556f * xyz[2]);
-  rgb[2] = max(0.0, 0.055648f * xyz[0] - 0.204043f * xyz[1] + 1.057311f * xyz[2]);
-  rgb[3] = 1.0f;
-  return rgb;
-}
-
 float linear_to_gamma(float value) {
   return value <= 0.0031308f ? 12.92f * value : 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
 }
@@ -481,7 +463,7 @@ fragment float4 fragment_main(VSOutput input [[stage_in]],
   float4 r_image = reference_image.sample(linear_sampler, input.uv);
   float r_lum = dot(r_image.xyz, lum);
 
-  float4 c_image = to_rgb(sampled_color_xyz);
+  float4 c_image = sampled_color_xyz;
   float4 v_image = c_image;
   float v_lum = dot(v_image.xyz, lum);
 

@@ -19,7 +19,6 @@ enum class OutputView : uint32_t {
 enum class SaveImageMode : uint32_t {
   RGB,
   TonemappedLDR,
-  XYZ,
 };
 
 inline std::string output_view_to_string(uint32_t i) {

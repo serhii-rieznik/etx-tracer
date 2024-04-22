@@ -24,7 +24,7 @@ ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const
   }
 
   pdf = at / at.sum();
-  return 2u - uint32_t(rnd < pdf.components.xyz.x + pdf.components.xyz.y) - uint32_t(rnd < pdf.components.xyz.x);
+  return 2u - uint32_t(rnd < pdf.components.rgb.x + pdf.components.rgb.y) - uint32_t(rnd < pdf.components.rgb.x);
 }
 
 ETX_GPU_CODE float phase_function(const float3& w_i, const float3& w_o, const float g) {
@@ -156,10 +156,10 @@ struct ETX_ALIGNED Medium {
   }
 
   static SpectralResponse calculate_albedo(const SpectralQuery spect, const SpectralResponse& scattering, const SpectralResponse& extinction) {
-    SpectralResponse albedo = {spect, scattering.components.w > 0.0f ? (extinction.components.w / scattering.components.w) : 0.0f};
-    albedo.components.xyz.x = scattering.components.xyz.x > 0.0f ? (extinction.components.xyz.x / scattering.components.xyz.x) : 0.0f;
-    albedo.components.xyz.y = scattering.components.xyz.y > 0.0f ? (extinction.components.xyz.y / scattering.components.xyz.y) : 0.0f;
-    albedo.components.xyz.z = scattering.components.xyz.z > 0.0f ? (extinction.components.xyz.z / scattering.components.xyz.z) : 0.0f;
+    SpectralResponse albedo = {spect, extinction.components.w > 0.0f ? (scattering.components.w / extinction.components.w) : 0.0f};
+    albedo.components.rgb.x = extinction.components.rgb.x > 0.0f ? (scattering.components.rgb.x / extinction.components.rgb.x) : 0.0f;
+    albedo.components.rgb.y = extinction.components.rgb.y > 0.0f ? (scattering.components.rgb.y / extinction.components.rgb.y) : 0.0f;
+    albedo.components.rgb.z = extinction.components.rgb.z > 0.0f ? (scattering.components.rgb.z / extinction.components.rgb.z) : 0.0f;
     return albedo;
   }
 

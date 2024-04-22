@@ -343,9 +343,8 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
       values.x = fresnel_thinfilm(rgb_wl.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
       values.y = fresnel_thinfilm(rgb_wl.y, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
       values.z = fresnel_thinfilm(rgb_wl.z, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
-      values = spectrum::rgb_to_xyz(values);
     }
-    result.components.xyz = saturate(values);
+    result.components.rgb = saturate(values);
   }
 
   return result;

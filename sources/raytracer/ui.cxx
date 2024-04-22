@@ -266,7 +266,7 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Poin
   float3 rgb = {};
 
   if (_editor_values.count(name) == 0) {
-    rgb = max(float3{}, spectrum::xyz_to_rgb(spd.integrated));
+    rgb = spd.integrated;
     if (linear == false) {
       rgb = linear_to_gamma(rgb);
     }
@@ -351,9 +351,6 @@ void UI::build(double dt) {
       }
       if (ImGui::MenuItem("Save Current Image (LDR)...", "Shift+Ctrl+S", false, true)) {
         save_image(SaveImageMode::TonemappedLDR);
-      }
-      if (ImGui::MenuItem("Save Current Image (XYZ)...", "Alt+Ctrl+S", false, true)) {
-        save_image(SaveImageMode::XYZ);
       }
       if (ImGui::MenuItem("Use as Reference", "Ctrl+Shift+R", false, true)) {
         if (callbacks.use_image_as_reference) {
@@ -756,9 +753,9 @@ bool UI::handle_event(const sapp_event* e) {
         break;
       }
       case SAPP_KEYCODE_S: {
-        if (has_alt && (has_shift == false))
-          save_image(SaveImageMode::XYZ);
-        else if (has_shift && (has_alt == false)) {
+        if (has_alt && (has_shift == false)) {
+          // TODO : use
+        } else if (has_shift && (has_alt == false)) {
           save_image(SaveImageMode::TonemappedLDR);
         } else if ((has_shift == false) && (has_alt == false)) {
           save_image(SaveImageMode::RGB);

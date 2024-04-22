@@ -366,12 +366,12 @@ struct CPUDebugIntegratorImpl : public Task {
         auto thinfilm_eval_s = evaluate_thinfilm(q_s, thinfilm, {}, scene);
         thinfilm_eval_s.thickness = thickness;
         auto f_s = fresnel::calculate(q_s, cos_theta, spd_air(q_s), spd_air(q_s), thinfilm_eval_s, rgb_wl);
-        float3 xyz_s = f_s.to_xyz() / q_s.sampling_pdf();
+        float3 xyz_s = f_s.to_rgb() / q_s.sampling_pdf();
 
         auto thinfilm_eval_i = evaluate_thinfilm(q_i, thinfilm, {}, scene);
         thinfilm_eval_i.thickness = thickness;
         auto f_i = fresnel::calculate(q_i, cos_theta, spd_air(q_i), spd_air(q_i), thinfilm_eval_i, rgb_wl);
-        float3 xyz_i = f_i.to_xyz() / q_i.sampling_pdf();
+        float3 xyz_i = f_i.to_rgb() / q_i.sampling_pdf();
 
         xyz = render_spectrum ? xyz_s : xyz_i;
       }
@@ -434,7 +434,7 @@ struct CPUDebugIntegratorImpl : public Task {
         };
         case CPUDebugIntegrator::Mode::DiffuseColors: {
           const auto& mat = scene.materials[intersection.material_index];
-          xyz = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), rgb::SpectrumClass::Reflection, nullptr).to_xyz();
+          xyz = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), rgb::SpectrumClass::Reflection, nullptr).to_rgb();
           break;
         };
         case CPUDebugIntegrator::Mode::Fresnel: {
@@ -443,7 +443,7 @@ struct CPUDebugIntegratorImpl : public Task {
           auto eta_i = (entering_material ? mat.ext_ior : mat.int_ior)(spect);
           auto eta_o = (entering_material ? mat.int_ior : mat.ext_ior)(spect);
           SpectralResponse fr = fresnel::calculate(spect, dot(ray.d, intersection.nrm), eta_i, eta_o, thinfilm);
-          xyz = fr.to_xyz();
+          xyz = fr.to_rgb();
           break;
         };
         case CPUDebugIntegrator::Mode::Thickness: {

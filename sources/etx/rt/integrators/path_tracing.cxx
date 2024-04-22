@@ -70,10 +70,10 @@ struct CPUPathTracingImpl : public Task {
 
       auto normal = payload.view_normal;
 
-      auto albedo = (payload.view_albedo / payload.spect.sampling_pdf()).to_xyz();
+      auto albedo = (payload.view_albedo / payload.spect.sampling_pdf()).to_rgb();
       ETX_VALIDATE(albedo);
 
-      auto xyz = (payload.accumulated / payload.spect.sampling_pdf()).to_xyz();
+      auto xyz = (payload.accumulated / payload.spect.sampling_pdf()).to_rgb();
       ETX_VALIDATE(xyz);
 
       if (state->load() == Integrator::State::Running) {

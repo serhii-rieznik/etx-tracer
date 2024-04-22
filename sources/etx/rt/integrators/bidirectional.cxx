@@ -160,8 +160,7 @@ struct CPUBidirectionalImpl : public Task {
         }
       }
 
-      auto xyz = (result / spect.sampling_pdf()).to_xyz();
-
+      auto xyz = (result / spect.sampling_pdf()).to_rgb();
       rt.film().accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / float(status.current_iteration + 1));
     }
   }
@@ -249,7 +248,7 @@ struct CPUBidirectionalImpl : public Task {
         } else if (conn_connect_to_camera && can_connect) {
           CameraSample camera_sample = {};
           auto splat = connect_to_camera(smp, path, spect, camera_sample);
-          auto xyz = splat.to_xyz();
+          auto xyz = splat.to_rgb();
           rt.film().atomic_add(Film::LightIteration, {xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
         }
 
@@ -265,7 +264,6 @@ struct CPUBidirectionalImpl : public Task {
 
         auto& v = path.emplace_back(PathVertex::Class::Surface, intersection);
         auto& w = path[path.size() - 2];
-        v.medium_index = medium_index;
         v.emitter_index = intersection.emitter_index;
         v.throughput = throughput;
         v.pdf.forward = w.pdf_solid_angle_to_area(pdf_dir, v);
@@ -277,10 +275,8 @@ struct CPUBidirectionalImpl : public Task {
         ETX_VALIDATE(bsdf_sample.weight);
 
         v.delta_connection = bsdf_sample.is_delta();
-
-        if (bsdf_sample.properties & BSDFSample::MediumChanged) {
-          medium_index = bsdf_sample.medium_index;
-        }
+        v.medium_index = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : medium_index;
+        medium_index = v.medium_index;
 
         bool terminate_path = false;
 
@@ -327,7 +323,7 @@ struct CPUBidirectionalImpl : public Task {
           CameraSample camera_sample = {};
           auto splat = connect_to_camera(smp, path, spect, camera_sample);
           if (splat.is_zero() == false) {
-            auto xyz = splat.to_xyz();
+            auto xyz = splat.to_rgb();
             rt.film().atomic_add(Film::LightIteration, {xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
           }
         }

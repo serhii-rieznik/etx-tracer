@@ -68,8 +68,8 @@ void Denoiser::denoise(const float4* image, const float4* albedo, const float4* 
     auto alb = reinterpret_cast<float3*>(oidnGetBufferData(albedo_buffer));
     auto nrm = reinterpret_cast<float3*>(oidnGetBufferData(normal_buffer));
     for (uint32_t i = 0, e = size.x * size.y; i < e; ++i) {
-      ptr[i] = max(float3{}, spectrum::xyz_to_rgb({image[i].x, image[i].y, image[i].z}));
-      alb[i] = max(float3{}, spectrum::xyz_to_rgb({albedo[i].x, albedo[i].y, albedo[i].z}));
+      ptr[i] = {image[i].x, image[i].y, image[i].z};
+      alb[i] = {albedo[i].x, albedo[i].y, albedo[i].z};
       nrm[i] = {normal[i].x, normal[i].y, normal[i].z};
     }
   }
@@ -89,8 +89,7 @@ void Denoiser::denoise(const float4* image, const float4* albedo, const float4* 
   if (_private->check_errors()) {
     auto ptr = reinterpret_cast<float3*>(oidnGetBufferData(color_buffer));
     for (uint32_t i = 0, e = size.x * size.y; i < e; ++i) {
-      float3 xyz = max(float3{}, spectrum::rgb_to_xyz({ptr[i].x, ptr[i].y, ptr[i].z}));
-      output[i] = {xyz.x, xyz.y, xyz.z, image[i].w};
+      output[i] = {fmaxf(0.0f, ptr[i].x), fmaxf(0.0f, ptr[i].y), fmaxf(0.0f, ptr[i].z), image[i].w};
     }
   }
 

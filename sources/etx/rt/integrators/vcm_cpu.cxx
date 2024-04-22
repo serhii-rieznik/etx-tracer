@@ -133,7 +133,7 @@ struct CPUVCMImpl : public Task {
         }
 
         for (uint32_t i = 0; i < step_result.splat_count; ++i) {
-          const float3& val = step_result.values_to_splat[i].to_xyz() / step_result.values_to_splat[i].sampling_pdf();
+          const float3& val = step_result.values_to_splat[i].to_rgb() / step_result.values_to_splat[i].sampling_pdf();
           if (dot(val, val) > kEpsilon) {
             film.atomic_add(Film::LightIteration, {val.x, val.y, val.z, 1.0f}, step_result.splat_uvs[i]);
           }
@@ -182,7 +182,7 @@ struct CPUVCMImpl : public Task {
       }
 
       state.merged *= vcm_iteration.vm_normalization;
-      state.merged += (state.gathered / state.spect.sampling_pdf()).to_xyz();
+      state.merged += (state.gathered / state.spect.sampling_pdf()).to_rgb();
 
       float t = float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1);
       film.accumulate(Film::Camera, {state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);

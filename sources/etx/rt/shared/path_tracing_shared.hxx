@@ -45,18 +45,19 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
   const auto& mat = scene.materials[in_intersection.material_index];
 
   float anisotropy = 0.0f;
-  SpectralResponse albedo = {spect};
   SpectralResponse extinction = {spect};
   SpectralResponse scattering = {spect};
+  SpectralResponse albedo = {spect};
+
+  auto color = apply_image(spect, mat.diffuse, in_intersection.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
 
   if (mat.int_medium == kInvalidIndex) {
-    auto color = apply_image(spect, mat.diffuse, in_intersection.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
     auto distances = mat.subsurface.scale * mat.subsurface.scattering_distance(spect);
-    remap(color.components.xyz, distances.components.xyz, albedo.components.xyz, extinction.components.xyz, scattering.components.xyz);
+    remap(color.components.rgb, distances.components.rgb, albedo.components.rgb, extinction.components.rgb, scattering.components.rgb);
     remap_channel(color.components.w, distances.components.w, albedo.components.w, extinction.components.w, scattering.components.w);
   } else {
     const Medium& medium = scene.mediums[mat.int_medium];
-    float anisotropy = medium.phase_function_g;
+    anisotropy = medium.phase_function_g;
     scattering = medium.s_scattering(spect);
     extinction = scattering + medium.s_absorption(spect);
     albedo = Medium::calculate_albedo(spect, scattering, extinction);
@@ -106,7 +107,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
 
       result.intersections[0] = local_i;
       result.intersections[0].w_i *= w_i_in ? -1.0f : +1.0f;
-      result.weights[0] = throughput * apply_image(spect, mat.transmittance, local_i.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+      result.weights[0] = throughput;
       result.intersection_count = 1u;
       result.selected_intersection = 0;
       result.selected_sample_weight = 1.0f;
@@ -121,12 +122,13 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
 }
 
 ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
-  const auto& mtl = scene.materials[in_intersection.material_index].subsurface;
+  const auto& mat = scene.materials[in_intersection.material_index];
+  const auto& sss = mat.subsurface;
 
   Sample ss_samples[kIntersectionDirections] = {
-    sample(spect, in_intersection, mtl, 0u, smp),
-    sample(spect, in_intersection, mtl, 1u, smp),
-    sample(spect, in_intersection, mtl, 2u, smp),
+    sample(spect, in_intersection, sss, 0u, smp),
+    sample(spect, in_intersection, sss, 1u, smp),
+    sample(spect, in_intersection, sss, 2u, smp),
   };
 
   IntersectionBase intersections[kTotalIntersections] = {};
@@ -143,6 +145,8 @@ ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Inter
     return false;
   }
 
+  SpectralResponse base_weight = apply_image(spect, mat.diffuse, in_intersection.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+
   result = {};
   for (uint32_t i = 0; i < intersection_count; ++i) {
     const Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
@@ -150,15 +154,15 @@ ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Inter
     auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
 
     float gw = geometric_weigth(out_intersection.nrm, ss_sample);
-    float pdf = evaluate(spect, mtl, ss_sample.sampled_radius).average();
+    float pdf = evaluate(spect, sss, ss_sample.sampled_radius).average();
     ETX_VALIDATE(pdf);
     if (pdf <= 0.0f)
       continue;
 
-    auto eval = evaluate(spect, mtl, length(out_intersection.pos - in_intersection.pos));
+    auto eval = evaluate(spect, sss, length(out_intersection.pos - in_intersection.pos));
     ETX_VALIDATE(eval);
 
-    auto weight = eval / pdf * gw;
+    auto weight = base_weight * eval / pdf * gw;
     ETX_VALIDATE(weight);
 
     if (weight.is_zero())
@@ -364,6 +368,12 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     return false;
   }
 
+  if (bsdf_sample.valid() == false) {
+    return false;
+  }
+
+  payload.medium = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium;
+
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
@@ -387,10 +397,6 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     ETX_VALIDATE(payload.accumulated);
   }
 
-  if (bsdf_sample.valid() == false) {
-    return false;
-  }
-
   if (subsurface_sampled) {
     const auto& out_intersection = ss_gather.intersections[ss_gather.selected_intersection];
     const float3 w_o = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
@@ -401,7 +407,6 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     payload.mis_weight = true;
     payload.ray.o = shading_pos(scene.vertices, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, payload.ray.d);
   } else {
-    payload.medium = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium;
     payload.throughput *= bsdf_sample.weight;
     payload.sampled_bsdf_pdf = bsdf_sample.pdf;
     payload.mis_weight = bsdf_sample.is_delta() == false;
