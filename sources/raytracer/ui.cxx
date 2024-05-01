@@ -100,7 +100,7 @@ void UI::initialize(const Pointer<Spectrums>& spectrums) {
     if (ext != L".spd")
       continue;
 
-    auto cls = SpectralDistribution::load_from_file(entry.path().string().c_str(), tmp.eta, &tmp.k, false);
+    auto cls = SpectralDistribution::load_from_file(entry.path().string().c_str(), tmp.eta, &tmp.k, false, SpectralDistribution::Mapping::Direct);
     if (cls == SpectralDistribution::Class::Invalid)
       continue;
 
@@ -236,7 +236,7 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
 
       ImGui::PushStyleColor(ImGuiCol_Text, colors[cls]);
       if (ImGui::Selectable(i.title.c_str(), &selected)) {
-        SpectralDistribution::load_from_file(i.filename.c_str(), ior.eta, &ior.k, true);
+        SpectralDistribution::load_from_file(i.filename.c_str(), ior.eta, &ior.k, true, SpectralDistribution::Mapping::Direct);
         changed = true;
       }
       ImGui::PopStyleColor();
@@ -252,7 +252,7 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
   if (load_from_file) {
     auto filename = open_file("spd");
     RefractiveIndex tmp_ior = {};
-    auto cls = SpectralDistribution::load_from_file(filename.c_str(), tmp_ior.eta, &tmp_ior.k, true);
+    auto cls = SpectralDistribution::load_from_file(filename.c_str(), tmp_ior.eta, &tmp_ior.k, true, SpectralDistribution::Mapping::Direct);
     if (cls != SpectralDistribution::Class::Invalid) {
       ior = tmp_ior;
       changed = true;
@@ -266,7 +266,7 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Poin
   float3 rgb = {};
 
   if (_editor_values.count(name) == 0) {
-    rgb = spd.integrated;
+    rgb = spd.integrated();
     if (linear == false) {
       rgb = linear_to_gamma(rgb);
     }
@@ -287,7 +287,6 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Poin
     if (linear == false) {
       rgb = gamma_to_linear(rgb);
     }
-    rgb = max(rgb, float3{});
     spd = rgb::make_spd(rgb, spectrums, rgb::SpectrumClass::Reflection);
     changed = true;
   }

@@ -22,8 +22,6 @@ struct SceneRepresentation {
   ~SceneRepresentation();
 
   bool load_from_file(const char* filename, uint32_t options);
-  void save_to_file(const char* filename);
-  void write_materials(const char* filename);
 
   Scene& mutable_scene();
   Scene* mutable_scene_pointer();

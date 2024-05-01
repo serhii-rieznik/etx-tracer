@@ -254,10 +254,10 @@ void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinct
   }
 
   using SPD = SpectralDistribution;
-  spectrums->rayleigh = SPD::from_samples(r_samples.data(), r_samples.size(), SPD::Usage::Color);
-  spectrums->mie = SPD::from_samples(m_samples.data(), m_samples.size(), SPD::Usage::Color);
-  spectrums->ozone = SPD::from_samples(o_samples.data(), o_samples.size(), SPD::Usage::Color);
-  spectrums->black = SPD::from_samples(b_samples.data(), b_samples.size(), SPD::Usage::Color);
+  spectrums->rayleigh = SPD::from_samples(r_samples.data(), r_samples.size(), SPD::Mapping::Color);
+  spectrums->mie = SPD::from_samples(m_samples.data(), m_samples.size(), SPD::Mapping::Color);
+  spectrums->ozone = SPD::from_samples(o_samples.data(), o_samples.size(), SPD::Mapping::Color);
+  spectrums->black = SPD::from_samples(b_samples.data(), b_samples.size(), SPD::Mapping::Color);
 
   extinction = {};
 }

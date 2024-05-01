@@ -53,7 +53,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
 
   if (mat.int_medium == kInvalidIndex) {
     auto distances = mat.subsurface.scale * mat.subsurface.scattering_distance(spect);
-    remap(color.components.rgb, distances.components.rgb, albedo.components.rgb, extinction.components.rgb, scattering.components.rgb);
+    remap(color.components.integrated, distances.components.integrated, albedo.components.integrated, extinction.components.integrated, scattering.components.integrated);
     remap_channel(color.components.w, distances.components.w, albedo.components.w, extinction.components.w, scattering.components.w);
   } else {
     const Medium& medium = scene.mediums[mat.int_medium];

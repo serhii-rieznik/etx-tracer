@@ -5,7 +5,7 @@
 
 namespace etx {
 
-SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count, Usage usage) {
+SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count, Mapping mapping) {
   float value = (count > 0) ? wavelengths_power[0].x : 100.0f;
   float wavelength_scale = 1.0f;
   while (value < 100.0f) {
@@ -37,7 +37,10 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
   }
 
   float3 xyz = result.integrate_to_xyz();
-  result.integrated = usage == Usage::Color ? max({}, spectrum::xyz_to_rgb(xyz)) : xyz;
+  float3 rgb = spectrum::xyz_to_rgb(xyz);
+
+  result.integrated_value = mapping == Mapping::Color ? rgb : xyz;
+
   return result;
 }
 
@@ -45,12 +48,17 @@ void SpectralDistribution::scale(float factor) {
   for (uint32_t i = 0; i < spectral_entry_count; ++i) {
     spectral_entries[i].power *= factor;
   }
-  integrated *= factor;
+  integrated_value *= factor;
 }
 
 SpectralDistribution SpectralDistribution::from_constant(float value) {
-  float2 samples[2] = {{spectrum::kShortestWavelength, value}, {spectrum::kLongestWavelength, value},};
-  return from_samples(samples, 2, Usage::Values);
+  float2 samples[2] = {
+    {spectrum::kShortestWavelength, value},
+    {spectrum::kLongestWavelength, value},
+  };
+  SpectralDistribution spd = from_samples(samples, 2, Mapping::Direct);
+  spd.integrated_value = {value, value, value};
+  return spd;
 }
 
 SpectralDistribution SpectralDistribution::from_black_body(float temperature, float scale) {
@@ -59,7 +67,7 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, fl
     float wl = float(i + spectrum::ShortestWavelength);
     samples[i] = {wl, spectrum::black_body_radiation(wl, temperature) * scale};
   }
-  return from_samples(samples, spectrum::WavelengthCount, Usage::Color);
+  return from_samples(samples, spectrum::WavelengthCount, Mapping::Color);
 }
 
 SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, float scale) {
@@ -92,10 +100,13 @@ SpectralDistribution SpectralDistribution::rgb(float3 rgb, const rgb::SpectrumSe
     samples[i] = {wavelengths[i], max(0.0f, p)};
   }
 
-  return from_samples(samples, rgb::SampleCount, SpectralDistribution::Usage::Color);
+  SpectralDistribution spd = from_samples(samples, rgb::SampleCount, SpectralDistribution::Mapping::Color);
+  spd.integrated_value = rgb;
+  return spd;
 }
 
-SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range) {
+SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range,
+  Mapping mapping) {
   auto file = fopen(file_name, "r");
   if (file == nullptr) {
     printf("Failed to load SpectralDistribution from file: %s\n", file_name);
@@ -197,10 +208,10 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     }
   }
 
-  values0 = from_samples(samples0.data(), samples0.size(), Usage::Values);
+  values0 = from_samples(samples0.data(), samples0.size(), mapping);
 
   if (values1) {
-    *values1 = from_samples(samples1.data(), samples1.size(), Usage::Values );
+    *values1 = from_samples(samples1.data(), samples1.size(), mapping);
   }
 
   return cls;
@@ -264,19 +275,23 @@ float3 SpectralDistribution::integrate_to_xyz() const {
   for (uint32_t i = 0; i + 1 < spectral_entry_count; ++i) {
     result += integrate(i);
   }
-  return max(float3{}, result);
+  return result;
 }
 
 float SpectralDistribution::luminance() const {
-  return etx::luminance(integrated);
+  return etx::luminance(integrated_value);
 }
 
-SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count, Usage usage) {
+const float3& SpectralDistribution::integrated() const {
+  return integrated_value;
+}
+
+SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count, Mapping mapping) {
   std::vector<float2> combined(count);
   for (uint32_t i = 0; i < count; ++i) {
     combined[i] = {wavelengths[i], power[i]};
   }
-  return from_samples(combined.data(), uint32_t(combined.size()), usage);
+  return from_samples(combined.data(), uint32_t(combined.size()), mapping);
 }
 
 namespace rgb {

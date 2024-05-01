@@ -66,7 +66,7 @@ ETX_GPU_CODE SpectralResponse evaluate(const SpectralQuery spect, const Subsurfa
 
   auto div = sd * (4.0f * radius * kDoublePi);
   ETX_VALIDATE(div);
-  div.components.rgb = max(div.components.rgb, float3{kEpsilon, kEpsilon, kEpsilon});
+  div.components.integrated = max(div.components.integrated, float3{kEpsilon, kEpsilon, kEpsilon});
   div.components.w = max(div.components.w, kEpsilon);
 
   return (term_0 + term_1) / div;

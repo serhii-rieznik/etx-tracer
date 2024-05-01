@@ -18,6 +18,8 @@ struct CPUDebugIntegrator : public Integrator {
     Fresnel,
     Thickness,
     Thinfilm,
+    Spectrums,
+
     Count,
   };
   static std::string mode_to_string(uint32_t);

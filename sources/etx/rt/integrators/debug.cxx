@@ -22,7 +22,7 @@ struct CPUDebugIntegratorImpl : public Task {
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   uint32_t current_scale = 1u;
-  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Thinfilm;
+  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Spectrums;
   RefractiveIndex spd_air;
   Thinfilm thinfilm;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
@@ -295,7 +295,7 @@ struct CPUDebugIntegratorImpl : public Task {
     auto ray = generate_ray(smp, scene, uv);
     auto spect = scene.spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
-    float3 xyz = {};
+    float3 output = {};
 
     Intersection intersection;
 
@@ -373,68 +373,86 @@ struct CPUDebugIntegratorImpl : public Task {
         auto f_i = fresnel::calculate(q_i, cos_theta, spd_air(q_i), spd_air(q_i), thinfilm_eval_i, rgb_wl);
         float3 xyz_i = f_i.to_rgb() / q_i.sampling_pdf();
 
-        xyz = render_spectrum ? xyz_s : xyz_i;
+        output = render_spectrum ? xyz_s : xyz_i;
+      }
+    } else if (mode == CPUDebugIntegrator::Mode::Spectrums) {
+      float t = float(xy.x) / float(current_dimensions.x - 1u);
+      float s = float(xy.y) / float(current_dimensions.y - 1u);
+
+      constexpr float kBandCount = 9.0f;
+      uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
+
+      static SpectralDistribution spds[uint32_t(kBandCount)];
+
+      static bool init_spectrums = ([&](const Scene& scene) -> bool {
+        spds[0] = SpectralDistribution::from_black_body(2700.0f, 1.0f);
+        spds[1] = SpectralDistribution::from_black_body(4000.0f, 1.0f);
+        spds[2] = SpectralDistribution::from_black_body(6500.0f, 1.0f);
+        spds[3] = SpectralDistribution::from_black_body(12000.0f, 1.0f);
+        spds[4] = SpectralDistribution::from_black_body(20000.0f, 1.0f);
+
+        SpectralDistribution::load_from_file(env().file_in_data("spectrum/d65.spd"), spds[5], nullptr, false, SpectralDistribution::Mapping::Color);
+
+        spds[6] = SpectralDistribution::from_constant(0.5f);
+        spds[7] = rgb::make_spd({0.5, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Reflection);
+        spds[8] = rgb::make_spd({0.5, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Illuminant);
+
+        for (uint32_t i = 0; i < 6; ++i) {
+          spds[i].scale(1.0f / spds[i].luminance());
+        }
+
+        return true;
+      })(scene);
+
+      float3 value_rgb = {};
+      float3 value_spectrum = {};
+
+      if (t >= 0.5f) {
+        SpectralQuery s_rgb = SpectralQuery::sample();
+        value_rgb = (spds[band](s_rgb) / s_rgb.sampling_pdf()).to_rgb();
+      } else {
+        constexpr uint64_t kSampleCount = 1;  // spectrum::WavelengthCount;
+        for (uint64_t i = 0; i < kSampleCount; ++i) {
+          SpectralQuery s_s = SpectralQuery::spectral_sample(smp.next());
+          auto r = spds[band](s_s);
+          value_spectrum += r.to_rgb() / s_s.sampling_pdf();
+        }
+        value_spectrum *= 1.0f / float(kSampleCount);
       }
 
-      /*
-    uint32_t band_size = current_dimensions.y / uint32_t(kBandCount);
-
-    static auto s00 = SpectralDistribution::from_constant(0.5f);
-    static auto s01 = SpectralDistribution::from_constant(1.0f);
-    static auto s10 = rgb::make_spd({0.5f, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Reflection);
-    static auto s11 = rgb::make_spd({1.0f, 1.0f, 1.0f}, scene.spectrums, rgb::SpectrumClass::Reflection);
-    static auto s20 = rgb::make_spd({0.5f, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Illuminant);
-    static auto s21 = rgb::make_spd({1.0f, 1.0f, 1.0f}, scene.spectrums, rgb::SpectrumClass::Illuminant);
-
-    switch (band) {
-      case 0: {
-        xyz = (t < 0.5f ? s00 : s01)(spect).to_xyz() / spect.sampling_pdf();
-        break;
-      }
-      case 1: {
-        xyz = (t < 0.5f ? s10 : s11)(spect).to_xyz() / spect.sampling_pdf();
-        break;
-      }
-      case 2: {
-        xyz = (t < 0.5f ? s20 : s21)(spect).to_xyz() / spect.sampling_pdf();
-        break;
-      }
-      default:
-        break;
-    }
-    */
+      output = (t < 0.5f ? value_spectrum : value_rgb);
     } else if (rt.trace(scene, ray, intersection, smp)) {
       bool entering_material = dot(ray.d, intersection.nrm) < 0.0f;
 
       switch (mode) {
         case CPUDebugIntegrator::Mode::Barycentrics: {
-          xyz = spectrum::rgb_to_xyz(intersection.barycentric);
+          output = intersection.barycentric;
           break;
         }
         case CPUDebugIntegrator::Mode::Normals: {
-          xyz = spectrum::rgb_to_xyz(intersection.nrm * 0.5f + 0.5f);
+          output = saturate(intersection.nrm * 0.5f + 0.5f);
           break;
         }
         case CPUDebugIntegrator::Mode::Tangents: {
-          xyz = spectrum::rgb_to_xyz(intersection.tan * 0.5f + 0.5f);
+          output = saturate(intersection.tan * 0.5f + 0.5f);
           break;
         }
         case CPUDebugIntegrator::Mode::Bitangents: {
-          xyz = spectrum::rgb_to_xyz(intersection.btn * 0.5f + 0.5f);
+          output = saturate(intersection.btn * 0.5f + 0.5f);
           break;
         }
         case CPUDebugIntegrator::Mode::TexCoords: {
-          xyz = spectrum::rgb_to_xyz({intersection.tex.x, intersection.tex.y, 0.0f});
+          output = {intersection.tex.x, intersection.tex.y, 0.0f};
           break;
         }
         case CPUDebugIntegrator::Mode::FaceOrientation: {
           float d = fabsf(dot(intersection.nrm, ray.d));
-          xyz = spectrum::rgb_to_xyz(d * (entering_material ? float3{0.2f, 0.2f, 1.0f} : float3{1.0f, 0.2f, 0.2f}));
+          output = d * (entering_material ? float3{0.2f, 0.2f, 1.0f} : float3{1.0f, 0.2f, 0.2f});
           break;
         };
         case CPUDebugIntegrator::Mode::DiffuseColors: {
           const auto& mat = scene.materials[intersection.material_index];
-          xyz = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), rgb::SpectrumClass::Reflection, nullptr).to_rgb();
+          output = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), rgb::SpectrumClass::Reflection, nullptr).to_rgb();
           break;
         };
         case CPUDebugIntegrator::Mode::Fresnel: {
@@ -443,9 +461,10 @@ struct CPUDebugIntegratorImpl : public Task {
           auto eta_i = (entering_material ? mat.ext_ior : mat.int_ior)(spect);
           auto eta_o = (entering_material ? mat.int_ior : mat.ext_ior)(spect);
           SpectralResponse fr = fresnel::calculate(spect, dot(ray.d, intersection.nrm), eta_i, eta_o, thinfilm);
-          xyz = fr.to_rgb();
+          output = fr.to_rgb();
           break;
         };
+
         case CPUDebugIntegrator::Mode::Thickness: {
           auto remap_color = [this](float t) -> float3 {
             t = saturate((t - th_min) / (th_max - th_min));
@@ -476,12 +495,12 @@ struct CPUDebugIntegratorImpl : public Task {
           }
 
           if (distance_count == 0) {
-            xyz = spectrum::rgb_to_xyz({1.0f, 0.0f, 1.0f});
+            output = {1.0f, 0.0f, 1.0f};
             break;
           }
 
           if (distance_count == 1) {
-            xyz = spectrum::rgb_to_xyz(remap_color(distances[0]));
+            output = remap_color(distances[0]);
             break;
           }
 
@@ -504,17 +523,18 @@ struct CPUDebugIntegratorImpl : public Task {
           }
 
           float out_value = thickness / (total_count + kEpsilon);
-
-          xyz = spectrum::rgb_to_xyz(remap_color(out_value));
+          output = remap_color(out_value);
           break;
         }
+
         default: {
           float d = fabsf(dot(intersection.nrm, ray.d));
-          xyz = spectrum::rgb_to_xyz({d, d, d});
+          output = {d, d, d};
         }
       }
     }
-    return xyz;
+
+    return output;
   }
 };
 
@@ -633,6 +653,8 @@ std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
       return "Thickness";
     case Mode::Thinfilm:
       return "Thinfilm";
+    case Mode::Spectrums:
+      return "Spectrums";
     default:
       return "???";
   }

@@ -1,6 +1,8 @@
 ﻿#include <etx/core/environment.hxx>
 #include <etx/core/profiler.hxx>
 
+#include <etx/render/host/scene_saver.hxx>
+
 #include "app.hxx"
 
 #include <tinyexr.hxx>
@@ -168,7 +170,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
 
 void RTApplication::save_scene_file(const std::string& file_name) {
   log::info("Saving %s..", file_name.c_str());
-  scene.save_to_file(file_name.c_str());
+  save_scene_to_file(scene, file_name.c_str());
 }
 
 void RTApplication::on_referenece_image_selected(std::string file_name) {

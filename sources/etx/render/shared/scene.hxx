@@ -156,12 +156,13 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
 
 ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene, rgb::SpectrumClass cls) {
   if (spect.spectral()) {
-    auto scale = rgb::query_spd(spect, {value.x, value.y, value.z}, cls == rgb::SpectrumClass::Illuminant ? scene.spectrums->rgb_illuminant : scene.spectrums->rgb_reflection);
+    auto spectrum_set = cls == rgb::SpectrumClass::Illuminant ? scene.spectrums->rgb_illuminant : scene.spectrums->rgb_reflection;
+    auto scale = rgb::query_spd(spect, {value.x, value.y, value.z}, spectrum_set);
     ETX_VALIDATE(scale);
     response *= scale;
     ETX_VALIDATE(response);
   } else {
-    response.components.rgb *= float3{value.x, value.y, value.z};
+    response.components.integrated *= float3{value.x, value.y, value.z};
   }
 
   return response;
