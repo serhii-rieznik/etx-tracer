@@ -109,7 +109,7 @@ void Film::commit_light_iteration(uint32_t i) {
 const float4* Film::combined_result() const {
   _private->tasks.execute(count(), [this](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
-      _private->buffers[Result][i] = _private->buffers[Camera][i] + _private->buffers[LightImage][i];
+      _private->buffers[Result][i] = max({}, _private->buffers[Camera][i] + _private->buffers[LightImage][i]);
     }
   });
   return _private->buffers[Result].data();

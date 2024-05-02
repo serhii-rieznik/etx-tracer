@@ -37,10 +37,10 @@ struct CPUDebugIntegratorImpl : public Task {
     : rt(a_rt)
     , state(st)
     , samplers(rt.scheduler().max_thread_count()) {
-    spd_air.eta = SpectralDistribution::from_constant(1.001f);
-    spd_air.k = SpectralDistribution::from_constant(0.000f);
-    thinfilm.ior.eta = SpectralDistribution::from_constant(1.50f);
-    thinfilm.ior.k = SpectralDistribution::from_constant(0.000f);
+    spd_air.eta = SpectralDistribution::constant(1.001f);
+    spd_air.k = SpectralDistribution::null();
+    thinfilm.ior.eta = SpectralDistribution::constant(1.50f);
+    thinfilm.ior.k = SpectralDistribution::null();
     thinfilm.min_thickness = 1.0f;
     thinfilm.max_thickness = 1.0f;
   }
@@ -393,7 +393,7 @@ struct CPUDebugIntegratorImpl : public Task {
 
         SpectralDistribution::load_from_file(env().file_in_data("spectrum/d65.spd"), spds[5], nullptr, false, SpectralDistribution::Mapping::Color);
 
-        spds[6] = SpectralDistribution::from_constant(0.5f);
+        spds[6] = SpectralDistribution::constant(0.5f);
         spds[7] = rgb::make_spd({0.5, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Reflection);
         spds[8] = rgb::make_spd({0.5, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Illuminant);
 

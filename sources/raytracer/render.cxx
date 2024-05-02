@@ -296,6 +296,9 @@ float4 validate(in float4 xyz) {
   if (any(isinf(xyz))) {
     return float4(0.0, 123456.0, 123456.0, 1.0);
   }
+  if (any(xyz < 0.0f)) {
+    return float4(0.0, 0.0, 123456.0, 1.0);
+  }
   return max(0.0f, xyz);
 }
 

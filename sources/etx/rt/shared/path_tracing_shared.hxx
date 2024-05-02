@@ -334,7 +334,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   static const Material kSubsurfaceExitMaterial = {
     .cls = Material::Class::Diffuse,
-    .diffuse = SpectralDistribution::from_constant(1.0f),
+    .diffuse = rgb::make_spd({1.0f, 1.0f, 1.0f}, scene.spectrums, rgb::SpectrumClass::Reflection),
   };
 
   const auto& tri = scene.triangles[intersection.triangle_index];

@@ -51,7 +51,11 @@ void SpectralDistribution::scale(float factor) {
   integrated_value *= factor;
 }
 
-SpectralDistribution SpectralDistribution::from_constant(float value) {
+SpectralDistribution SpectralDistribution::null() {
+  return constant(0.0f);
+}
+
+SpectralDistribution SpectralDistribution::constant(float value) {
   float2 samples[2] = {
     {spectrum::kShortestWavelength, value},
     {spectrum::kLongestWavelength, value},
@@ -100,7 +104,7 @@ SpectralDistribution SpectralDistribution::rgb(float3 rgb, const rgb::SpectrumSe
     samples[i] = {wavelengths[i], max(0.0f, p)};
   }
 
-  SpectralDistribution spd = from_samples(samples, rgb::SampleCount, SpectralDistribution::Mapping::Color);
+  SpectralDistribution spd = from_samples(samples, rgb::SampleCount, Mapping::Color);
   spd.integrated_value = rgb;
   return spd;
 }
@@ -284,14 +288,6 @@ float SpectralDistribution::luminance() const {
 
 const float3& SpectralDistribution::integrated() const {
   return integrated_value;
-}
-
-SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count, Mapping mapping) {
-  std::vector<float2> combined(count);
-  for (uint32_t i = 0; i < count; ++i) {
-    combined[i] = {wavelengths[i], power[i]};
-  }
-  return from_samples(combined.data(), uint32_t(combined.size()), mapping);
 }
 
 namespace rgb {

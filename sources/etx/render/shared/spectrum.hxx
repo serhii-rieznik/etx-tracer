@@ -521,10 +521,10 @@ struct ETX_ALIGNED SpectralDistribution {
 
   bool valid() const;
 
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Mapping usage);
-  static SpectralDistribution from_samples(const float wavelengths[], const float power[], uint32_t count, Mapping usage);
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Mapping mapping);
 
-  static SpectralDistribution from_constant(float value);
+  static SpectralDistribution null();
+  static SpectralDistribution constant(float value);
   static SpectralDistribution from_black_body(float temperature, float scale);
   static SpectralDistribution from_normalized_black_body(float temperature, float scale);
   static SpectralDistribution rgb(float3 rgb, const rgb::SpectrumSet& spectrums);
