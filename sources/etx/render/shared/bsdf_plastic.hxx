@@ -24,8 +24,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   }
 
   float n_dot_o = dot(frame.nrm, result.w_o);
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, nullptr);
+  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
 
   if (reflection) {
     result.weight = specular * fr / f;
@@ -53,7 +53,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
   auto inv_fr = 1.0f - fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, nullptr);
 
   BSDFEval result;
   result.func = diffuse * (kInvPi * inv_fr);
@@ -148,8 +148,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
     return {data.spectrum_sample, 0.0f};
   }
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, nullptr);
+  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
 
   BSDFEval result;
   result.func = diffuse * (kInvPi * (1.0f - fr)) + specular * (fr * eval.ndf * eval.visibility / (4.0f * n_dot_i * n_dot_o));
@@ -197,7 +197,7 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+  return apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, nullptr);
 }
 
 }  // namespace PlasticBSDF

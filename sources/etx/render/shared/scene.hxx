@@ -154,10 +154,9 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
   return false;
 }
 
-ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene, rgb::SpectrumClass cls) {
+ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {
   if (spect.spectral()) {
-    auto spectrum_set = cls == rgb::SpectrumClass::Illuminant ? scene.spectrums->rgb_illuminant : scene.spectrums->rgb_reflection;
-    auto scale = rgb::query_spd(spect, {value.x, value.y, value.z}, spectrum_set);
+    auto scale = rgb::query_spd(spect, {value.x, value.y, value.z}, scene.spectrums->rgb_reflection);
     ETX_VALIDATE(scale);
     response *= scale;
     ETX_VALIDATE(response);
@@ -168,7 +167,7 @@ ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralRespo
   return response;
 }
 
-ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, rgb::SpectrumClass cls, float* image_pdf) {
+ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, float* image_pdf) {
   if (image_pdf) {
     *image_pdf = 0.0f;
   }
@@ -181,7 +180,7 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralIma
 
   float4 eval = scene.images[img.image_index].evaluate(uv, image_pdf);
   ETX_VALIDATE(eval);
-  return apply_rgb(spect, result, eval, scene, cls);
+  return apply_rgb(spect, result, eval, scene);
 }
 
 }  // namespace etx

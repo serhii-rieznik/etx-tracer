@@ -239,46 +239,33 @@ float SpectralDistribution::maximum_spectral_power() const {
 }
 
 float3 SpectralDistribution::integrate_to_xyz() const {
-  auto xyz_at = [](float wl) -> float3 {
-    uint32_t i = static_cast<uint32_t>(clamp(wl, spectrum::kShortestWavelength, spectrum::kLongestWavelength) - spectrum::ShortestWavelength);
-    uint32_t j = min(i + 1u, spectrum::WavelengthCount - 1);
-    auto v0 = spectrum::spectral_xyz(i);
-    auto v1 = spectrum::spectral_xyz(j);
-    float dw = wl - floorf(wl);
-    return lerp(v0, v1, dw);
-  };
-
-  auto integrate = [entries = spectral_entries, xyz_at](uint32_t index) -> float3 {
-    float3 result = {};
-
-    float l0 = entries[index + 0].wavelength;
-    float l1 = entries[index + 1].wavelength;
-    float p0 = entries[index + 0].power;
-    float p1 = entries[index + 1].power;
-    float begin = l0;
-    for (;;) {
-      float end = min(l1, begin + 1.0f);
-      float t0 = (begin - l0) / (l1 - l0);
-      float t1 = (end - l0) / (l1 - l0);
-      float p_begin = lerp(p0, p1, t0);
-      float p_end = lerp(p0, p1, t1);
-
-      auto v0 = xyz_at(begin) * p_begin;
-      auto v1 = xyz_at(end) * p_end;
-
-      result += (end - begin) * (v0 + 0.5f * (v1 - v0));
-      if (end == l1) {
-        break;
-      }
-      begin = end;
-    }
-    return result / spectrum::kYIntegral;
-  };
-
   float3 result = {};
-  for (uint32_t i = 0; i + 1 < spectral_entry_count; ++i) {
-    result += integrate(i);
+  SpectralResponse s_begin = {{0.0f, SpectralQuery::Spectral}};
+  SpectralResponse s_end = {{0.0f, SpectralQuery::Spectral}};
+
+  for (uint32_t index = 0; index + 1 < spectral_entry_count; ++index) {
+    float l0 = spectral_entries[index + 0].wavelength;
+    float l1 = spectral_entries[index + 1].wavelength;
+    float p0 = spectral_entries[index + 0].power;
+    float p1 = spectral_entries[index + 1].power;
+    s_begin.wavelength = l0;
+    while (s_end.wavelength < l1) {
+      float t0 = (s_begin.wavelength - l0) / (l1 - l0);
+      s_begin.components.w = lerp(p0, p1, t0);
+
+      s_end.wavelength = min(l1, s_begin.wavelength + 1.0f);
+      float t1 = (s_end.wavelength - l0) / (l1 - l0);
+      s_end.components.w = lerp(p0, p1, t1);
+
+      auto v_begin = s_begin.to_xyz();
+      auto v_end = s_end.to_xyz();
+
+      result += (s_end.wavelength - s_begin.wavelength) * (v_begin + 0.5f * (v_end - v_begin));
+
+      s_begin.wavelength = s_end.wavelength;
+    }
   }
+
   return result;
 }
 

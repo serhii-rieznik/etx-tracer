@@ -49,7 +49,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
   SpectralResponse scattering = {spect};
   SpectralResponse albedo = {spect};
 
-  auto color = apply_image(spect, mat.diffuse, in_intersection.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+  auto color = apply_image(spect, mat.diffuse, in_intersection.tex, scene, nullptr);
 
   if (mat.int_medium == kInvalidIndex) {
     auto distances = mat.subsurface.scale * mat.subsurface.scattering_distance(spect);
@@ -145,7 +145,7 @@ ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Inter
     return false;
   }
 
-  SpectralResponse base_weight = apply_image(spect, mat.diffuse, in_intersection.tex, scene, rgb::SpectrumClass::Reflection, nullptr);
+  SpectralResponse base_weight = apply_image(spect, mat.diffuse, in_intersection.tex, scene, nullptr);
 
   result = {};
   for (uint32_t i = 0; i < intersection_count; ++i) {

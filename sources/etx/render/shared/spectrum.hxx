@@ -257,10 +257,13 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     return *this;
   }
 
-  ETX_GPU_CODE float3 to_rgb() const {
+  ETX_GPU_CODE float3 to_xyz() const {
     if (spectral() == false) {
-      return components.integrated;
+      return spectrum::rgb_to_xyz(components.integrated);
     }
+
+    if ((components.w == 0.0f) || (wavelength < spectrum::kShortestWavelength) || (wavelength > spectrum::kLongestWavelength))
+      return {};
 
     ETX_ASSERT(valid());
     float w = floorf(wavelength);
@@ -269,9 +272,11 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     uint32_t j = min(i + 1u, spectrum::WavelengthCount - 1u);
     float3 xyz0 = spectrum::spectral_xyz(i);
     float3 xyz1 = spectrum::spectral_xyz(j);
-    float3 xyz = lerp<float3>(xyz0, xyz1, dw) * (components.w / spectrum::kYIntegral);
+    return lerp<float3>(xyz0, xyz1, dw) * (components.w / spectrum::kYIntegral);
+  }
 
-    return spectrum::xyz_to_rgb(xyz);
+  ETX_GPU_CODE float3 to_rgb() const {
+    return spectral() ? spectrum::xyz_to_rgb(to_xyz()) : components.integrated;
   }
 
   ETX_GPU_CODE float minimum() const {
@@ -307,12 +312,12 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     return spectral() ? (components.w <= kEpsilon) : (components.integrated.x <= kEpsilon) && (components.integrated.y <= kEpsilon) && (components.integrated.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                        \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
-    components.integrated OP other.components.integrated;                      \
-    components.w OP other.components.w;                                        \
-    return *this;                                                              \
+#define SPECTRAL_OP(OP)                                                       \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
+    components.integrated OP other.components.integrated;                     \
+    components.w OP other.components.w;                                       \
+    return *this;                                                             \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)

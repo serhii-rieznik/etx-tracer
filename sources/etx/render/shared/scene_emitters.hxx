@@ -36,7 +36,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
   pdf_dir_out = pdf_dir * pdf_area;
   ETX_ASSERT(pdf_dir_out > 0.0f);
 
-  return apply_image(spect, em.emission, uv, scene, rgb::SpectrumClass::Illuminant, nullptr);
+  return apply_image(spect, em.emission, uv, scene, nullptr);
 }
 
 ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
@@ -56,7 +56,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       pdf_dir_out = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       float2 uv = disk_uv(em.direction, query.direction, em.equivalent_disk_size, em.angular_size_cosine);
       SpectralResponse direct_scale = 1.0f / (em.emission.spectrum(spect) * kDoublePi * (1.0f - em.angular_size_cosine));
-      return apply_image(spect, em.emission, uv, scene, rgb::SpectrumClass::Illuminant, nullptr) * direct_scale;
+      return apply_image(spect, em.emission, uv, scene, nullptr) * direct_scale;
     }
 
     case Emitter::Class::Environment: {
@@ -68,7 +68,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       }
 
       float image_pdf = 0.0f;
-      auto eval = apply_image(spect, em.emission, uv, scene, rgb::SpectrumClass::Illuminant, &image_pdf);
+      auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
 
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       ETX_VALIDATE(pdf_area);
@@ -97,7 +97,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
         pdf_dir_out = pdf_area * fabsf(dot(tri.geo_n, normalize(dp))) * kInvPi;
       }
 
-      return apply_image(spect, em.emission, query.uv, scene, rgb::SpectrumClass::Illuminant, nullptr);
+      return apply_image(spect, em.emission, query.uv, scene, nullptr);
     }
 
     default: {
@@ -121,7 +121,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
       pdf_dir = 1.0f;
       pdf_dir_out = pdf_dir * pdf_area;
       float2 uv = disk_uv(em.direction, in_direction, em.equivalent_disk_size, em.angular_size_cosine);
-      return apply_image(spect, em.emission, uv, scene, rgb::SpectrumClass::Illuminant, nullptr);
+      return apply_image(spect, em.emission, uv, scene, nullptr);
     }
 
     case Emitter::Class::Environment: {
@@ -134,7 +134,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
 
       const auto& img = scene.images[em.emission.image_index];
       float image_pdf = 0.0f;
-      auto eval = apply_image(spect, em.emission, uv, scene, rgb::SpectrumClass::Illuminant, &image_pdf);
+      auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = image_pdf / (2.0f * kPi * kPi * sin_t);
       ETX_VALIDATE(pdf_dir);
@@ -205,7 +205,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
       result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
       result.normal = em.direction * (-1.0f);
-      result.value = apply_image(spect, em.emission, disk_sample * 0.5f + 0.5f, scene, rgb::SpectrumClass::Illuminant, nullptr);
+      result.value = apply_image(spect, em.emission, disk_sample * 0.5f + 0.5f, scene, nullptr);
       break;
     }
 
@@ -228,7 +228,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir_out = result.pdf_area * result.pdf_dir;
-      result.value = apply_rgb(spect, em.emission.spectrum(spect), image_value, scene, rgb::SpectrumClass::Illuminant);
+      result.value = apply_rgb(spect, em.emission.spectrum(spect), image_value, scene);
       break;
     }
 
@@ -319,7 +319,7 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       result.normal = direction_to_scene;
       result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (pos_sample.x * basis.u + pos_sample.y * basis.v - direction_to_scene);
       result.origin += result.direction * distance_to_sphere(result.origin, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
-      result.value = apply_image(spect, em.emission, dir_sample * 0.5f + 0.5f, scene, rgb::SpectrumClass::Illuminant, nullptr);
+      result.value = apply_image(spect, em.emission, dir_sample * 0.5f + 0.5f, scene, nullptr);
       break;
     }
 
@@ -343,7 +343,7 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       result.normal = result.direction;
       result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - result.direction);
       result.origin += result.direction * distance_to_sphere(result.origin, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
-      result.value = apply_rgb(spect, em.emission.spectrum(spect), image_value, scene, rgb::SpectrumClass::Illuminant);
+      result.value = apply_rgb(spect, em.emission.spectrum(spect), image_value, scene);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
       result.pdf_dir_out = result.pdf_area * result.pdf_dir;

@@ -385,11 +385,11 @@ struct CPUDebugIntegratorImpl : public Task {
       static SpectralDistribution spds[uint32_t(kBandCount)];
 
       static bool init_spectrums = ([&](const Scene& scene) -> bool {
-        spds[0] = SpectralDistribution::from_black_body(2700.0f, 1.0f);
-        spds[1] = SpectralDistribution::from_black_body(4000.0f, 1.0f);
-        spds[2] = SpectralDistribution::from_black_body(6500.0f, 1.0f);
-        spds[3] = SpectralDistribution::from_black_body(12000.0f, 1.0f);
-        spds[4] = SpectralDistribution::from_black_body(20000.0f, 1.0f);
+        spds[0] = SpectralDistribution::from_normalized_black_body(2700.0f, 1.0f);
+        spds[1] = SpectralDistribution::from_normalized_black_body(4000.0f, 1.0f);
+        spds[2] = SpectralDistribution::from_normalized_black_body(6500.0f, 1.0f);
+        spds[3] = SpectralDistribution::from_normalized_black_body(12000.0f, 1.0f);
+        spds[4] = SpectralDistribution::from_normalized_black_body(20000.0f, 1.0f);
 
         SpectralDistribution::load_from_file(env().file_in_data("spectrum/d65.spd"), spds[5], nullptr, false, SpectralDistribution::Mapping::Color);
 
@@ -397,7 +397,7 @@ struct CPUDebugIntegratorImpl : public Task {
         spds[7] = rgb::make_spd({0.5, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Reflection);
         spds[8] = rgb::make_spd({0.5, 0.5f, 0.5f}, scene.spectrums, rgb::SpectrumClass::Illuminant);
 
-        for (uint32_t i = 0; i < 6; ++i) {
+        for (uint32_t i = 0; i < 9; ++i) {
           spds[i].scale(1.0f / spds[i].luminance());
         }
 
@@ -452,7 +452,7 @@ struct CPUDebugIntegratorImpl : public Task {
         };
         case CPUDebugIntegrator::Mode::DiffuseColors: {
           const auto& mat = scene.materials[intersection.material_index];
-          output = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), rgb::SpectrumClass::Reflection, nullptr).to_rgb();
+          output = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), nullptr).to_rgb();
           break;
         };
         case CPUDebugIntegrator::Mode::Fresnel: {
@@ -586,6 +586,7 @@ void CPUDebugIntegrator::update() {
       }
     } else {
       _private->iteration_time = {};
+      _private->status.completed_iterations = _private->status.current_iteration + 1;
       _private->status.current_iteration += 1;
 
       _private->current_scale = (current_state == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(_private->status.preview_frames - _private->status.current_iteration)));
