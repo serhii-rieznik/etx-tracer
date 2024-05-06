@@ -394,8 +394,8 @@ struct CPUDebugIntegratorImpl : public Task {
         SpectralDistribution::load_from_file(env().file_in_data("spectrum/d65.spd"), spds[5], nullptr, false, SpectralDistribution::Mapping::Color);
 
         spds[6] = SpectralDistribution::constant(0.5f);
-        spds[7] = SpectralDistribution::rgb({0.5, 0.5f, 0.5f});
-        spds[8] = SpectralDistribution::rgb({0.5, 0.5f, 0.5f});
+        spds[7] = SpectralDistribution::rgb_reflectance({0.5, 0.5f, 0.5f});
+        spds[8] = SpectralDistribution::rgb_luminance({0.5, 0.5f, 0.5f});
 
         for (uint32_t i = 0; i < 9; ++i) {
           spds[i].scale(1.0f / spds[i].luminance());

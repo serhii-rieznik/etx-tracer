@@ -651,7 +651,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   if (_private->emitters.empty()) {
     log::warning("No emitters found, adding default environment image...");
     auto& sky = _private->emitters.emplace_back(Emitter::Class::Environment);
-    sky.emission.spectrum = SpectralDistribution::rgb({1.0f, 1.0f, 1.0f});
+    sky.emission.spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
     sky.emission.image_index = _private->add_image(env().file_in_data("assets/hdri/environment.exr"), Image::RepeatU | Image::BuildSamplingTable);
     _private->images.load_images();
   }
@@ -889,9 +889,9 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     float val[3] = {};
     int params_read = sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2);
     if (params_read == 3) {
-      s_a = SpectralDistribution::rgb({val[0], val[1], val[2]});
+      s_a = SpectralDistribution::rgb_reflectance({val[0], val[1], val[2]});
     } else if (params_read == 1) {
-      s_a = SpectralDistribution::rgb({val[0], val[0], val[0]});
+      s_a = SpectralDistribution::rgb_reflectance({val[0], val[0], val[0]});
     }
   }
   if (get_param(material, "absorbtion")) {
@@ -899,9 +899,9 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     float val[3] = {};
     int params_read = sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2);
     if (params_read == 3) {
-      s_a = SpectralDistribution::rgb({val[0], val[1], val[2]});
+      s_a = SpectralDistribution::rgb_reflectance({val[0], val[1], val[2]});
     } else if (params_read == 1) {
-      s_a = SpectralDistribution::rgb({val[0], val[0], val[0]});
+      s_a = SpectralDistribution::rgb_reflectance({val[0], val[0], val[0]});
     }
   }
 
@@ -910,9 +910,9 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     float val[3] = {};
     int params_read = sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2);
     if (params_read == 3) {
-      s_t = SpectralDistribution::rgb({val[0], val[1], val[2]});
+      s_t = SpectralDistribution::rgb_reflectance({val[0], val[1], val[2]});
     } else if (params_read == 1) {
-      s_t = SpectralDistribution::rgb({val[0], val[0], val[0]});
+      s_t = SpectralDistribution::rgb_reflectance({val[0], val[0], val[0]});
     }
   }
 
@@ -979,8 +979,8 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     float3 absorption = max({}, extinction - scattering);
     ETX_VALIDATE(absorption);
 
-    s_t = SpectralDistribution::rgb(scattering);
-    s_a = SpectralDistribution::rgb(absorption);
+    s_t = SpectralDistribution::rgb_reflectance(scattering);
+    s_a = SpectralDistribution::rgb_reflectance(absorption);
   }
 
   Medium::Class cls = Medium::Class::Homogeneous;
@@ -1007,7 +1007,7 @@ void SceneRepresentationImpl::parse_directional_light(const char* base_dir, cons
   if (get_param(material, "color")) {
     e.emission.spectrum = load_illuminant_spectrum(data_buffer);
   } else {
-    e.emission.spectrum = SpectralDistribution::rgb({1.0f, 1.0f, 1.0f});
+    e.emission.spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
   }
 
   e.direction = float3{1.0f, 1.0f, 1.0f};
@@ -1050,7 +1050,7 @@ void SceneRepresentationImpl::parse_env_light(const char* base_dir, const tinyob
   if (get_param(material, "color")) {
     e.emission.spectrum = load_illuminant_spectrum(data_buffer);
   } else {
-    e.emission.spectrum = SpectralDistribution::rgb({1.0f, 1.0f, 1.0f});
+    e.emission.spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
   }
 }
 
@@ -1173,11 +1173,16 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
   std::string name = data_buffer;
 
   bool initialized = false;
+  bool illuminant = false;
 
   float scale = 1.0f;
 
   if (get_param(material, "scale")) {
     scale = static_cast<float>(atof(data_buffer));
+  }
+
+  if (get_param(material, "illuminant")) {
+    illuminant = true;
   }
 
   if (get_param(material, "rgb")) {
@@ -1193,8 +1198,9 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
       static_cast<float>(atof(params[1])),
       static_cast<float>(atof(params[2])),
     };
+    value = gamma_to_linear(value);
 
-    scene_spectrums[name] = SpectralDistribution::rgb(gamma_to_linear(value));
+    scene_spectrums[name] = illuminant ? SpectralDistribution::rgb_luminance(value) : SpectralDistribution::rgb_reflectance(value);
     initialized = true;
   } else if (get_param(material, "blackbody")) {
     auto params = split_params(data_buffer);
@@ -1285,7 +1291,7 @@ SpectralDistribution SceneRepresentationImpl::load_reflectance_spectrum(char* da
       static_cast<float>(atof(params[1])),
       static_cast<float>(atof(params[2])),
     });
-    return SpectralDistribution::rgb(value);
+    return SpectralDistribution::rgb_reflectance(value);
   }
 
   return SpectralDistribution::null();
@@ -1297,7 +1303,7 @@ SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* dat
   if (params.size() == 1) {
     float value = 0.0f;
     if (sscanf(params[0], "%f", &value) == 1) {
-      return SpectralDistribution::rgb({value, value, value});
+      return SpectralDistribution::rgb_luminance({value, value, value});
     } else {
       auto i = scene_spectrums.find(params.front());
       if (i != scene_spectrums.end())
@@ -1311,10 +1317,10 @@ SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* dat
       static_cast<float>(atof(params[1])),
       static_cast<float>(atof(params[2])),
     };
-    return SpectralDistribution::rgb(value);
+    return SpectralDistribution::rgb_luminance(value);
   }
 
-  SpectralDistribution emitter_spectrum = SpectralDistribution::rgb({1.0f, 1.0f, 1.0f});
+  SpectralDistribution emitter_spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
 
   float scale = 1.0f;
   for (uint64_t i = 0, e = params.size(); i < e; ++i) {
@@ -1345,10 +1351,10 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   auto& mtl = materials[material_index];
 
   mtl.cls = Material::Class::Diffuse;
-  mtl.diffuse = {SpectralDistribution::rgb({1.0f, 1.0f, 1.0f})};
-  mtl.specular = {SpectralDistribution::rgb({1.0f, 1.0f, 1.0f})};
-  mtl.transmittance = {SpectralDistribution::rgb({1.0f, 1.0f, 1.0f})};
-  mtl.subsurface.scattering_distance = SpectralDistribution::rgb({1.0f, 0.2f, 0.04f});
+  mtl.diffuse = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
+  mtl.specular = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
+  mtl.transmittance = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
+  mtl.subsurface.scattering_distance = SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f});
 
   if (get_param(material, "base")) {
     auto i = material_mapping.find(data_buffer);
@@ -1510,7 +1516,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
         float dr = static_cast<float>(atof(params[i + 1]));
         float dg = static_cast<float>(atof(params[i + 2]));
         float db = static_cast<float>(atof(params[i + 3]));
-        mtl.subsurface.scattering_distance = SpectralDistribution::rgb({dr, dg, db});
+        mtl.subsurface.scattering_distance = SpectralDistribution::rgb_reflectance({dr, dg, db});
         i += 3;
       }
 

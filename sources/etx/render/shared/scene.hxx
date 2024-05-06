@@ -156,7 +156,7 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
 
 ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {
   if (spect.spectral()) {
-    auto scale = rgb::query_spd(spect, {value.x, value.y, value.z});
+    auto scale = rgb_response(spect, {value.x, value.y, value.z});
     ETX_VALIDATE(scale);
     response *= scale;
     ETX_VALIDATE(response);
