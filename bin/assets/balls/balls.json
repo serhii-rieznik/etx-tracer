@@ -3,8 +3,8 @@
   "materials": "balls.materials",
   "camera": {
     "viewport": [
-      1920,
-      1080
+      1280,
+      720
     ],
     "origin": [
       2.0,

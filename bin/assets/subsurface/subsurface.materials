@@ -12,19 +12,23 @@ parametric color 1 1 1 distances 1 0.1 0.01
 
 newmtl m00
 material class diffuse
+int_ior glass
 int_medium sss 
-subsurface color 1 1 1 distances 1 0.1 0.01 scale 0.2
+subsurface
 
 newmtl m01
-material class diffuse
-subsurface color 1 1 1 distances 1 0.1 0.01 scale 0.2
+material class thinfilm
+int_ior glass
+int_medium sss         
 
 newmtl m10
 material class translucent
+int_ior glass
 int_medium sss
 
 newmtl m11
 material class dielectric
+int_ior glass
 int_medium sss
 Pr 1.0 1.0
 

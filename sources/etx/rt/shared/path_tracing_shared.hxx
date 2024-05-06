@@ -334,7 +334,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   static const Material kSubsurfaceExitMaterial = {
     .cls = Material::Class::Diffuse,
-    .diffuse = rgb::make_spd({1.0f, 1.0f, 1.0f}, scene.spectrums, rgb::SpectrumClass::Reflection),
+    .diffuse = SpectralDistribution::rgb({1.0f, 1.0f, 1.0f}),
   };
 
   const auto& tri = scene.triangles[intersection.triangle_index];
@@ -399,11 +399,9 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   if (subsurface_sampled) {
     const auto& out_intersection = ss_gather.intersections[ss_gather.selected_intersection];
-    const float3 w_o = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
-    const float bsdf = fabsf(dot(w_o, out_intersection.nrm)) / kPi;
-    payload.ray.d = w_o;
-    payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * (bsdf * ss_gather.selected_sample_weight);
-    payload.sampled_bsdf_pdf = bsdf;
+    payload.ray.d = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
+    payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
+    payload.sampled_bsdf_pdf = fabsf(dot(payload.ray.d, out_intersection.nrm)) / kPi;
     payload.mis_weight = true;
     payload.ray.o = shading_pos(scene.vertices, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, payload.ray.d);
   } else {

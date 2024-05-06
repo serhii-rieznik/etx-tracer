@@ -287,7 +287,7 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Poin
     if (linear == false) {
       rgb = gamma_to_linear(rgb);
     }
-    spd = rgb::make_spd(rgb, spectrums, rgb::SpectrumClass::Reflection);
+    spd = SpectralDistribution::rgb(rgb);
     changed = true;
   }
 
