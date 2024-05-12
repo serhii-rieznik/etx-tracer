@@ -92,7 +92,6 @@ void UI::initialize(const Pointer<Spectrums>& spectrums) {
 
   _ior_files.clear();
 
-  RefractiveIndex tmp;
   std::string path = env().file_in_data("spectrum/");
   for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
     auto filename = entry.path().filename();
@@ -100,7 +99,7 @@ void UI::initialize(const Pointer<Spectrums>& spectrums) {
     if (ext != L".spd")
       continue;
 
-    auto cls = SpectralDistribution::load_from_file(entry.path().string().c_str(), tmp.eta, &tmp.k, false, SpectralDistribution::Mapping::Direct);
+    auto cls = RefractiveIndex::load_from_file(entry.path().string().c_str()).cls;
     if (cls == SpectralDistribution::Class::Invalid)
       continue;
 
@@ -236,7 +235,7 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
 
       ImGui::PushStyleColor(ImGuiCol_Text, colors[cls]);
       if (ImGui::Selectable(i.title.c_str(), &selected)) {
-        SpectralDistribution::load_from_file(i.filename.c_str(), ior.eta, &ior.k, true, SpectralDistribution::Mapping::Direct);
+        ior = RefractiveIndex::load_from_file(i.filename.c_str());
         changed = true;
       }
       ImGui::PopStyleColor();
@@ -251,9 +250,8 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
 
   if (load_from_file) {
     auto filename = open_file("spd");
-    RefractiveIndex tmp_ior = {};
-    auto cls = SpectralDistribution::load_from_file(filename.c_str(), tmp_ior.eta, &tmp_ior.k, true, SpectralDistribution::Mapping::Direct);
-    if (cls != SpectralDistribution::Class::Invalid) {
+    RefractiveIndex tmp_ior = RefractiveIndex::load_from_file(filename.c_str());
+    if (tmp_ior.cls != SpectralDistribution::Class::Invalid) {
       ior = tmp_ior;
       changed = true;
     }

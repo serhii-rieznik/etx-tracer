@@ -19,6 +19,7 @@ struct CPUDebugIntegrator : public Integrator {
     Thickness,
     Thinfilm,
     Spectrums,
+    IOR,
 
     Count,
   };

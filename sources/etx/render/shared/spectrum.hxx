@@ -148,9 +148,9 @@ ETX_GPU_CODE float3 xyz_to_rgb(const float3& xyz) {
 
 ETX_GPU_CODE float3 rgb_to_xyz(const float3& rgb) {
   return {
-    0.4124564f * rgb.x + 0.3575761f * rgb.y + 0.1804375f + rgb.z,
-    0.2126729f * rgb.x + 0.7151522f * rgb.y + 0.0721750f + rgb.z,
-    0.0193339f * rgb.x + 0.1191920f * rgb.y + 0.9503041f + rgb.z,
+    0.4124564f * rgb.x + 0.3575760f * rgb.y + 0.1804375f * rgb.z,
+    0.2126729f * rgb.x + 0.7151521f * rgb.y + 0.0721750f * rgb.z,
+    0.0193339f * rgb.x + 0.1191920f * rgb.y + 0.9503041f * rgb.z,
   };
 }
 
@@ -327,12 +327,12 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     return spectral() ? (components.w <= kEpsilon) : (components.integrated.x <= kEpsilon) && (components.integrated.y <= kEpsilon) && (components.integrated.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                        \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
-    components.integrated OP other.components.integrated;                      \
-    components.w OP other.components.w;                                        \
-    return *this;                                                              \
+#define SPECTRAL_OP(OP)                                                       \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
+    components.integrated OP other.components.integrated;                     \
+    components.w OP other.components.w;                                       \
+    return *this;                                                             \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)
@@ -456,11 +456,6 @@ struct ETX_ALIGNED SpectralDistribution {
     Illuminant,
   };
 
-  enum Mapping : uint32_t {
-    Direct,
-    Color,
-  };
-
   struct {
     float wavelength = 0.0f;
     float power = 0.0f;
@@ -541,7 +536,7 @@ struct ETX_ALIGNED SpectralDistribution {
 
   bool valid() const;
 
-  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count, Mapping mapping);
+  static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count);
 
   static SpectralDistribution null();
   static SpectralDistribution constant(float value);
@@ -550,15 +545,19 @@ struct ETX_ALIGNED SpectralDistribution {
   static SpectralDistribution rgb_reflectance(const float3& rgb);
   static SpectralDistribution rgb_luminance(const float3& rgb);
 
-  static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range, Mapping mapping);
+  static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range);
 
  private:
+  friend struct RefractiveIndex;
   float3 integrated_value = {};
 };
 
 struct RefractiveIndex {
+  SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
   SpectralDistribution eta;
   SpectralDistribution k;
+
+  static RefractiveIndex load_from_file(const char* file_name);
 
   struct Sample : public SpectralQuery {
     SpectralResponse eta;

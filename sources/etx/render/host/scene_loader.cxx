@@ -48,9 +48,9 @@ inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
     shared_spectrums.thinfilm.eta = SPD::constant(1.5f);
     shared_spectrums.thinfilm.k = SPD::null();
 
-    shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)), SPD::Mapping::Direct);
-    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)), SPD::Mapping::Direct);
-    shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)), SPD::Mapping::Direct);
+    shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)));
+    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)));
+    shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)));
     shared_spectrums.dielectric.k = SPD::null();
   }
 }
@@ -803,7 +803,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
             } else if ((strcmp(params[i], "spectrum") == 0) && (i + 1 < end)) {
               char buffer[2048] = {};
               snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-              auto cls = SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, false, SpectralDistribution::Mapping::Color);
+              auto cls = SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, false);
               if (cls != SpectralDistribution::Class::Illuminant) {
                 log::warning("Spectrum %s is not illuminant", buffer);
               }
@@ -1259,7 +1259,7 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
       log::warning("Spectrum `%s` sample set is empty - skipped", name.c_str());
     }
 
-    auto spectrum = SpectralDistribution::from_samples(samples.data(), samples.size(), SpectralDistribution::Mapping::Color);
+    auto spectrum = SpectralDistribution::from_samples(samples.data(), samples.size());
 
     if (get_param(material, "normalize")) {
       float3 xyz = spectrum.integrate_to_xyz();
@@ -1420,7 +1420,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     } else {
       char buffer[1024] = {};
       snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-      SpectralDistribution::load_from_file(buffer, mtl.int_ior.eta, &mtl.int_ior.k, true, SpectralDistribution::Mapping::Direct);
+      mtl.int_ior = RefractiveIndex::load_from_file(buffer);
     }
   }
 
@@ -1433,7 +1433,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     } else {
       char buffer[256] = {};
       snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-      SpectralDistribution::load_from_file(buffer, mtl.ext_ior.eta, &mtl.ext_ior.k, true, SpectralDistribution::Mapping::Direct);
+      mtl.ext_ior = RefractiveIndex::load_from_file(buffer);
     }
   } else {
     mtl.ext_ior.eta = SpectralDistribution::constant(1.0f);
@@ -1496,7 +1496,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
         } else {
           char buffer[256] = {};
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
-          SpectralDistribution::load_from_file(buffer, mtl.thinfilm.ior.eta, &mtl.thinfilm.ior.k, true, SpectralDistribution::Mapping::Direct);
+          mtl.thinfilm.ior = RefractiveIndex::load_from_file(buffer);
         }
       }
     }

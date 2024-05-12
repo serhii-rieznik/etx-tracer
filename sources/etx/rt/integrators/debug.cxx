@@ -22,7 +22,7 @@ struct CPUDebugIntegratorImpl : public Task {
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   uint32_t current_scale = 1u;
-  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Spectrums;
+  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::IOR;
   RefractiveIndex spd_air;
   Thinfilm thinfilm;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
@@ -391,7 +391,7 @@ struct CPUDebugIntegratorImpl : public Task {
         spds[3] = SpectralDistribution::from_normalized_black_body(12000.0f, 1.0f);
         spds[4] = SpectralDistribution::from_normalized_black_body(20000.0f, 1.0f);
 
-        SpectralDistribution::load_from_file(env().file_in_data("spectrum/d65.spd"), spds[5], nullptr, false, SpectralDistribution::Mapping::Color);
+        SpectralDistribution::load_from_file(env().file_in_data("spectrum/d65.spd"), spds[5], nullptr, false);
 
         spds[6] = SpectralDistribution::constant(0.5f);
         spds[7] = SpectralDistribution::rgb_reflectance({0.5, 0.5f, 0.5f});
@@ -418,6 +418,46 @@ struct CPUDebugIntegratorImpl : public Task {
           value_spectrum += r.to_rgb() / s_s.sampling_pdf();
         }
         value_spectrum *= 1.0f / float(kSampleCount);
+      }
+
+      output = (t < 0.5f ? value_spectrum : value_rgb);
+    } else if (mode == CPUDebugIntegrator::Mode::IOR) {
+      float t = float(xy.x) / float(current_dimensions.x - 1u);
+      float s = float(xy.y) / float(current_dimensions.y - 1u);
+
+      constexpr float kBandCount = 10.0f;
+      uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
+
+      static RefractiveIndex spds[uint32_t(kBandCount)];
+
+      static bool init_spectrums = ([&](const Scene& scene) -> bool {
+        uint32_t i = 0;
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/air.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/diamond.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/brass.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/bronze.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/carbon.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/chrome.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/copper.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/gold.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/osmium.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/nickel.spd"));
+        return true;
+      })(scene);
+
+      float3 value_rgb = {};
+      float3 value_spectrum = {};
+
+      if (t >= 0.5f) {
+        float cos_t = cosf(2.0f * (t - 0.5f) * kHalfPi);
+        SpectralQuery s_rgb = SpectralQuery::sample();
+        auto f = fresnel::calculate(s_rgb, cos_t, spds[0](s_rgb), spds[band](s_rgb), {});
+        value_rgb = f.to_rgb();
+      } else {
+        float cos_t = cosf(2.0f * t * kHalfPi);
+        SpectralQuery s_s = SpectralQuery::spectral_sample(smp.next());
+        auto f = fresnel::calculate(s_s, cos_t, spds[0](s_s), spds[band](s_s), {});
+        value_spectrum = f.to_rgb() / s_s.sampling_pdf();
       }
 
       output = (t < 0.5f ? value_spectrum : value_rgb);
@@ -656,6 +696,8 @@ std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
       return "Thinfilm";
     case Mode::Spectrums:
       return "Spectrums";
+    case Mode::IOR:
+      return "IOR";
     default:
       return "???";
   }

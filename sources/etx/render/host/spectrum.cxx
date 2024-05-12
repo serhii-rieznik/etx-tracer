@@ -5,7 +5,7 @@
 
 namespace etx {
 
-SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count, Mapping mapping) {
+SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count) {
   float value = (count > 0) ? wavelengths_power[0].x : 100.0f;
   float wavelength_scale = 1.0f;
   while (value < 100.0f) {
@@ -37,10 +37,7 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
   }
 
   float3 xyz = result.integrate_to_xyz();
-  float3 rgb = spectrum::xyz_to_rgb(xyz);
-
-  result.integrated_value = mapping == Mapping::Color ? rgb : xyz;
-
+  result.integrated_value = spectrum::xyz_to_rgb(xyz);
   return result;
 }
 
@@ -60,7 +57,7 @@ SpectralDistribution SpectralDistribution::constant(float value) {
     {spectrum::kShortestWavelength, value},
     {spectrum::kLongestWavelength, value},
   };
-  SpectralDistribution spd = from_samples(samples, 2, Mapping::Direct);
+  SpectralDistribution spd = from_samples(samples, 2);
   spd.integrated_value = {value, value, value};
   return spd;
 }
@@ -71,7 +68,7 @@ SpectralDistribution SpectralDistribution::from_black_body(float temperature, fl
     float wl = float(i + spectrum::ShortestWavelength);
     samples[i] = {wl, spectrum::black_body_radiation(wl, temperature) * scale};
   }
-  return from_samples(samples, spectrum::WavelengthCount, Mapping::Color);
+  return from_samples(samples, spectrum::WavelengthCount);
 }
 
 SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, float scale) {
@@ -89,7 +86,7 @@ SpectralDistribution SpectralDistribution::rgb_reflectance(const float3& rgb) {
     samples[i - spectrum::RGBResponseShortestWavelength] = {float(i), p.components.w};
   }
 
-  SpectralDistribution spd = from_samples(samples, spectrum::RGBResponseWavelengthCount, Mapping::Color);
+  SpectralDistribution spd = from_samples(samples, spectrum::RGBResponseWavelengthCount);
   spd.integrated_value = rgb;
   return spd;
 }
@@ -101,11 +98,10 @@ SpectralDistribution SpectralDistribution::rgb_luminance(const float3& rgb) {
   return result;
 }
 
-SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range,
-  Mapping mapping) {
+SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range) {
   auto file = fopen(file_name, "r");
   if (file == nullptr) {
-    printf("Failed to load SpectralDistribution from file: %s\n", file_name);
+    log::error("Failed to load SpectralDistribution from file: %s\n", file_name);
     return SpectralDistribution::Class::Invalid;
   }
 
@@ -165,6 +161,11 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     begin = line_end + 1;
   }
 
+  if (samples.empty()) {
+    log::error("Failed to load SpectralDistribution from file: %s\n", file_name);
+    return SpectralDistribution::Class::Invalid;
+  }
+
   std::sort(samples.begin(), samples.end());
 
   float scale = 1.0f;
@@ -204,10 +205,10 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     }
   }
 
-  values0 = from_samples(samples0.data(), samples0.size(), mapping);
+  values0 = from_samples(samples0.data(), samples0.size());
 
   if (values1) {
-    *values1 = from_samples(samples1.data(), samples1.size(), mapping);
+    *values1 = from_samples(samples1.data(), samples1.size());
   }
 
   return cls;
@@ -267,6 +268,21 @@ float SpectralDistribution::luminance() const {
 
 const float3& SpectralDistribution::integrated() const {
   return integrated_value;
+}
+
+RefractiveIndex RefractiveIndex::load_from_file(const char* file_name) {
+  RefractiveIndex result = {};
+  result.cls = SpectralDistribution::load_from_file(file_name, result.eta, &result.k, true);
+
+  if (result.cls != SpectralDistribution::Class::Invalid) {
+    result.eta.integrated_value = spectrum::rgb_to_xyz(result.eta.integrated_value);
+    result.k.integrated_value = spectrum::rgb_to_xyz(result.k.integrated_value);
+  } else {
+    result.eta = SpectralDistribution::constant(1.0f);
+    result.k = SpectralDistribution::constant(0.0f);
+  }
+
+  return result;
 }
 
 SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb) {
