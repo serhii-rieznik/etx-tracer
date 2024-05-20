@@ -20,7 +20,7 @@ struct UI {
   UI() = default;
   ~UI() = default;
 
-  void initialize(const Pointer<Spectrums>& spectrums);
+  void initialize();
   void cleanup();
 
   void build(double dt);
@@ -71,8 +71,8 @@ struct UI {
   void load_image();
   bool build_material(Material&);
   bool build_medium(Medium&);
-  bool spectrum_picker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear);
-  bool ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectrums> spectrums);
+  bool spectrum_picker(const char* name, SpectralDistribution& spd, bool linear);
+  bool ior_picker(const char* name, RefractiveIndex& ior);
 
   void reset_selection();
   void reload_geometry();

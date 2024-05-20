@@ -20,7 +20,7 @@ struct MediumPoolImpl {
   }
 
   uint32_t add(Medium::Class cls, const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
-    const Pointer<Spectrums> s) {
+    bool explicit_connections) {
     auto i = mapping.find(id);
     if (i != mapping.end()) {
       return i->second;
@@ -34,6 +34,7 @@ struct MediumPoolImpl {
     medium.s_scattering = s_o;
     medium.max_sigma = s_a.maximum_spectral_power() + s_o.maximum_spectral_power();
     medium.phase_function_g = g;
+    medium.enable_explicit_connections = explicit_connections;
 
     if (strlen(volume_file) > 0) {
       float max_density = 0.0f;
@@ -181,8 +182,8 @@ void MediumPool::cleanup() {
 }
 
 uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
-  const Pointer<Spectrums> s) {
-  return _private->add(cls, id, volume, s_a, s_o, g, s);
+  bool explicit_connections) {
+  return _private->add(cls, id, volume, s_a, s_o, g, explicit_connections);
 }
 
 Medium& MediumPool::get(uint32_t handle) {

@@ -82,6 +82,8 @@ struct ETX_ALIGNED Medium {
   float max_sigma = 0.0f;
   uint3 dimensions = {};
 
+  bool enable_explicit_connections = true;
+
   ETX_GPU_CODE SpectralResponse transmittance(const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction, float distance) const {
     switch (cls) {
       case Class::Vacuum:

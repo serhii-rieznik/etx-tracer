@@ -238,7 +238,7 @@ struct CPUBidirectionalImpl : public Task {
           update_emitter_path_pdfs(path, em, nullptr);
         }
 
-        bool can_connect = path.size() <= 1llu + max_path_len;
+        bool can_connect = (path.size() <= 1llu + max_path_len) && medium.enable_explicit_connections;
 
         if (mode == PathSource::Camera) {
           result += direct_hit(path, spect, smp);

@@ -52,7 +52,7 @@ void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint
   }
 }
 
-void UI::initialize(const Pointer<Spectrums>& spectrums) {
+void UI::initialize() {
   simgui_desc_t imggui_desc = {};
   imggui_desc.depth_format = SG_PIXELFORMAT_NONE;
   imggui_desc.no_default_font = true;
@@ -192,7 +192,7 @@ bool UI::build_options(Options& options) {
   return changed;
 }
 
-bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectrums> spectrums) {
+bool UI::ior_picker(const char* name, RefractiveIndex& ior) {
   bool changed = false;
   bool selected = false;
   bool load_from_file = false;
@@ -260,7 +260,7 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior, const Pointer<Spectr
   return changed;
 }
 
-bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, const Pointer<Spectrums> spectrums, bool linear) {
+bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, bool linear) {
   float3 rgb = {};
 
   if (_editor_values.count(name) == 0) {
@@ -612,7 +612,7 @@ void UI::build(double dt) {
     if (scene_editable && (_selected_emitter >= 0) && (_selected_emitter < _current_scene->emitters.count)) {
       auto& emitter = _current_scene->emitters[_selected_emitter];
 
-      bool changed = spectrum_picker("Emission", emitter.emission.spectrum, _current_scene->spectrums, true);
+      bool changed = spectrum_picker("Emission", emitter.emission.spectrum, true);
 
       if (emitter.cls == Emitter::Class::Directional) {
         ImGui::Text("Angular Size");
@@ -877,17 +877,17 @@ bool UI::build_material(Material& material) {
 
   changed |= ImGui::SliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= ImGui::SliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-  changed |= ior_picker("Index Of Refraction", material.int_ior, _current_scene->spectrums);
-  changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior, _current_scene->spectrums);
-  changed |= spectrum_picker("Diffuse", material.diffuse.spectrum, _current_scene->spectrums, false);
-  changed |= spectrum_picker("Specular", material.specular.spectrum, _current_scene->spectrums, false);
-  changed |= spectrum_picker("Transmittance", material.transmittance.spectrum, _current_scene->spectrums, false);
+  changed |= ior_picker("Index Of Refraction", material.int_ior);
+  changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior);
+  changed |= spectrum_picker("Diffuse", material.diffuse.spectrum, false);
+  changed |= spectrum_picker("Specular", material.specular.spectrum, false);
+  changed |= spectrum_picker("Transmittance", material.transmittance.spectrum, false);
   ImGui::Separator();
 
   ImGui::Text("%s", "Subsurface Scattering");
   changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
   changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
-  changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance, _current_scene->spectrums, true);
+  changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance, true);
   ImGui::Text("%s", "Subsurface Distance Scale");
   changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
   ImGui::Separator();
@@ -899,7 +899,7 @@ bool UI::build_material(Material& material) {
   ImGui::SameLine();
   ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
   changed |= ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
-  changed |= ior_picker("Thinfilm IoR", material.thinfilm.ior, _current_scene->spectrums);
+  changed |= ior_picker("Thinfilm IoR", material.thinfilm.ior);
   ImGui::Separator();
 
   auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {
@@ -927,8 +927,8 @@ bool UI::build_material(Material& material) {
 
 bool UI::build_medium(Medium& m) {
   bool changed = false;
-  changed |= spectrum_picker("Absorption", m.s_absorption, _current_scene->spectrums, true);
-  changed |= spectrum_picker("Scattering", m.s_scattering, _current_scene->spectrums, true);
+  changed |= spectrum_picker("Absorption", m.s_absorption, true);
+  changed |= spectrum_picker("Scattering", m.s_scattering, true);
   changed |= ImGui::SliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
   return changed;
 }

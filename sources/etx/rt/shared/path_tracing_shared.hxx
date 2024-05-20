@@ -249,7 +249,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-  if (payload.path_length + 1 <= rt.scene().max_path_length) {
+  if ((payload.path_length + 1 <= rt.scene().max_path_length) && medium.enable_explicit_connections) {
     uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
     auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp, medium_sample.pos, scene);
     if (emitter_sample.pdf_dir > 0) {

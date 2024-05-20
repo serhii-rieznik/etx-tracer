@@ -23,10 +23,6 @@ namespace etx {
 
 static Spectrums shared_spectrums;
 
-Pointer<Spectrums> spectrums() {
-  return &shared_spectrums;
-}
-
 namespace {
 
 inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
@@ -219,9 +215,10 @@ struct SceneRepresentationImpl {
     return index;
   }
 
-  uint32_t add_medium(Medium::Class cls, const char* name, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g) {
+  uint32_t add_medium(Medium::Class cls, const char* name, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g,
+    bool explicit_connections) {
     std::string id = name ? name : ("medium-" + std::to_string(mediums.array_size()));
-    return mediums.add(cls, id, volume_file, s_a, s_t, g, spectrums());
+    return mediums.add(cls, id, volume_file, s_a, s_t, g, explicit_connections);
   }
 
   SceneRepresentationImpl(TaskScheduler& s)
@@ -288,9 +285,9 @@ struct SceneRepresentationImpl {
 
       if (mtl.int_ior.eta.empty() && mtl.int_ior.k.empty()) {
         if (mtl.cls == Material::Class::Conductor) {
-          mtl.int_ior = spectrums()->conductor;
+          mtl.int_ior = shared_spectrums.conductor;
         } else {
-          mtl.int_ior = spectrums()->dielectric;
+          mtl.int_ior = shared_spectrums.dielectric;
         }
       }
     }
@@ -414,7 +411,6 @@ struct SceneRepresentationImpl {
     scene.emitters = {emitters.data(), emitters.size()};
     scene.images = {images.as_array(), images.array_size()};
     scene.mediums = {mediums.as_array(), mediums.array_size()};
-    scene.spectrums = spectrums();
     scene.environment_emitters.count = 0;
 
     log::info("Building emitters distribution for %llu emitters...\n", scene.emitters.count);
@@ -917,7 +913,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
   }
 
   if (get_param(material, "rayleigh")) {
-    s_t = spectrums()->rayleigh;
+    s_t = shared_spectrums.rayleigh;
 
     float scale = 1.0f;
     auto params = split_params(data_buffer);
@@ -930,7 +926,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
   }
 
   if (get_param(material, "mie")) {
-    s_t = spectrums()->mie;
+    s_t = shared_spectrums.mie;
 
     float scale = 1.0f;
     auto params = split_params(data_buffer);
@@ -983,6 +979,11 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     s_a = SpectralDistribution::rgb_reflectance(absorption);
   }
 
+  bool explicit_connections = true;
+  if (get_param(material, "closed")) {
+    explicit_connections = false;
+  }
+
   Medium::Class cls = Medium::Class::Homogeneous;
 
   char tmp_buffer[2048] = {};
@@ -994,7 +995,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     }
   }
 
-  uint32_t medium_index = add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy);
+  uint32_t medium_index = add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
 
   if (name == "camera") {
     camera_medium_index = medium_index;
@@ -1626,6 +1627,7 @@ void build_emitters_distribution(Scene& scene) {
 }
 
 namespace spectrum {
+
 Pointer<Spectrums> shared() {
   return &shared_spectrums;
 }
