@@ -905,7 +905,7 @@ void CPUBidirectional::update_options(const Options& opt) {
   }
 }
 
-Integrator::Status CPUBidirectional::status() const {
+const Integrator::Status& CPUBidirectional::status() const {
   return _private->status;
 }
 

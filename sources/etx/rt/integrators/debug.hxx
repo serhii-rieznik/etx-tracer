@@ -35,7 +35,7 @@ struct CPUDebugIntegrator : public Integrator {
   Options options() const override;
   void update_options(const Options&) override;
 
-  Status status() const override;
+  const Status& status() const override;
 
   void preview(const Options&) override;
   void run(const Options&) override;

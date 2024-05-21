@@ -22,17 +22,20 @@ struct Integrator {
     WaitForCompletion,
   };
 
-  struct DebugInfo {
-    const char* title = "";
-    float value = 0.0f;
-  };
-
   struct Status {
+    struct DebugInfo {
+      const char* title = "";
+      float value = 0.0f;
+    };
+
     double last_iteration_time = 0.0;
     double total_time = 0.0;
     uint32_t preview_frames = 0;
     uint32_t completed_iterations = 0;
     uint32_t current_iteration = 0;
+
+    DebugInfo* debug_info = nullptr;
+    uint32_t debug_info_count = 0;
   };
 
   Integrator(Raytracing& r)
@@ -82,17 +85,7 @@ struct Integrator {
     return state() != State::Stopped;
   }
 
-  virtual uint64_t debug_info_count() const {
-    return 0llu;
-  }
-
-  virtual DebugInfo* debug_info() const {
-    return nullptr;
-  }
-
-  virtual Status status() const {
-    return {};
-  };
+  virtual const Status& status() const = 0;
 
  public:
   bool can_run() const {

@@ -120,7 +120,7 @@ CPUPathTracing::~CPUPathTracing() {
   ETX_PIMPL_CLEANUP(CPUPathTracing);
 }
 
-Integrator::Status CPUPathTracing::status() const {
+const Integrator::Status& CPUPathTracing::status() const {
   return _private->status;
 }
 

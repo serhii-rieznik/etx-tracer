@@ -20,7 +20,7 @@ struct CPUBidirectional : public Integrator {
   void stop(Stop) override;
   void update_options(const Options&) override;
 
-  Status status() const override;
+  const Status& status() const override;
 
  private:
   ETX_DECLARE_PIMPL(CPUBidirectional, 4096);

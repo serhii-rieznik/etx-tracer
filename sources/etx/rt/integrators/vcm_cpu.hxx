@@ -22,7 +22,7 @@ struct CPUVCM : public Integrator {
   bool have_updated_camera_image() const override;
   bool have_updated_light_image() const override;
 
-  Status status() const override;
+  const Status& status() const override;
 
  private:
   ETX_DECLARE_PIMPL(CPUVCM, 4096);

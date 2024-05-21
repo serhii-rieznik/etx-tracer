@@ -590,7 +590,7 @@ CPUDebugIntegrator::~CPUDebugIntegrator() {
   ETX_PIMPL_CLEANUP(CPUDebugIntegrator);
 }
 
-Integrator::Status CPUDebugIntegrator::status() const {
+const Integrator::Status& CPUDebugIntegrator::status() const {
   return _private->status;
 }
 

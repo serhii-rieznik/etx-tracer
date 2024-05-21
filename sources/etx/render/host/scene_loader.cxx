@@ -572,6 +572,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       bool bool_value = false;
       if (json_get_int(i, "samples", int_value)) {
         _private->scene.samples = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+      } else if (json_get_int(i, "random-termination-start", int_value)) {
+        _private->scene.random_path_termination = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_int(i, "max-path-length", int_value)) {
         _private->scene.max_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_string(i, "geometry", str_value)) {

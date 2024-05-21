@@ -19,7 +19,7 @@ struct CPUPathTracing : public Integrator {
     return false;
   }
 
-  Status status() const override;
+  const Status& status() const override;
 
   void preview(const Options&) override;
   void run(const Options&) override;

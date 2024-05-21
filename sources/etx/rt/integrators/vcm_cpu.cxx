@@ -296,7 +296,7 @@ bool CPUVCM::have_updated_light_image() const {
   return result;
 }
 
-Integrator::Status CPUVCM::status() const {
+const Integrator::Status& CPUVCM::status() const {
   return _private->status;
 }
 

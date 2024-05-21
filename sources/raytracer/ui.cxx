@@ -693,10 +693,10 @@ void UI::build(double dt) {
     ImGui::End();
   }
 
-  if (has_integrator && (_current_integrator->debug_info_count() > 0)) {
+  if (has_integrator && (_current_integrator->status().debug_info_count > 0)) {
     if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
-      auto debug_info = _current_integrator->debug_info();
-      for (uint64_t i = 0, e = _current_integrator->debug_info_count(); i < e; ++i) {
+      auto debug_info = _current_integrator->status().debug_info;
+      for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
         char buffer[8] = {};
         snprintf(buffer, sizeof(buffer), "%.3f     .", debug_info[i].value);
         ImGui::LabelText(buffer, "%s", debug_info[i].title);
@@ -930,6 +930,7 @@ bool UI::build_medium(Medium& m) {
   changed |= spectrum_picker("Absorption", m.s_absorption, true);
   changed |= spectrum_picker("Scattering", m.s_scattering, true);
   changed |= ImGui::SliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
+  changed |= ImGui::Checkbox("Connections to light / camera", &m.enable_explicit_connections);
   return changed;
 }
 
