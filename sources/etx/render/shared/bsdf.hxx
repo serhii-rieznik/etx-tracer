@@ -251,7 +251,7 @@ ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i
     complex rs, rp;
   };
 
-  if ((cos_theta_i == 0.0f) && (cos_theta_j == 0.0f))
+  if ((cos_theta_i.real() == 0.0f) && (cos_theta_j.real() == 0.0f) && (cos_theta_i.imag() == 0.0f) && (cos_theta_j.imag() == 0.0f))
     return result{1.0f, 1.0f};
 
   const complex& ni = ext_ior;
@@ -272,9 +272,8 @@ ETX_GPU_CODE auto transmittance(const complex& ext_ior, const complex& cos_theta
     complex ts, tp;
   };
 
-  if ((cos_theta_i == 0.0f) && (cos_theta_j == 0.0f)) {
+  if ((cos_theta_i.real() == 0.0f) && (cos_theta_j.real() == 0.0f) && (cos_theta_i.imag() == 0.0f) && (cos_theta_j.imag() == 0.0f))
     return result{0.0f, 0.0f};
-  }
 
   const complex& ni = ext_ior;
   const complex& nj = int_ior;

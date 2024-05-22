@@ -1,7 +1,8 @@
+#include <etx/render/host/film.hxx>
+
 #include <etx/core/core.hxx>
 #include <etx/render/host/tasks.hxx>
-#include <etx/render/host/film.hxx>
-#include <etx/render/shared/spectrum.hxx>
+#include <etx/render/host/denoiser.hxx>
 
 #include <vector>
 
@@ -10,9 +11,11 @@ namespace etx {
 struct FilmImpl {
   FilmImpl(TaskScheduler& t)
     : tasks(t) {
+    denoiser.init();
   }
 
   TaskScheduler& tasks;
+  Denoiser denoiser;
   uint2 dimensions = {};
   std::vector<float4> buffers[Film::LayerCount] = {};
 
@@ -31,20 +34,20 @@ Film::~Film() {
   ETX_PIMPL_CLEANUP(Film);
 }
 
-void Film::allocate(const uint2& dim, const Layers& layers) {
-  _private->dimensions = dim;
-
-  for (auto& buffer : _private->buffers) {
-    buffer.clear();
-  }
-
-  for (uint32_t l : layers) {
-    if (l < LayerCount) {
-      _private->buffers[l].resize(1llu * _private->dimensions.x * _private->dimensions.y);
+void Film::allocate(const uint2& dim) {
+  if (_private->dimensions != dim) {
+    _private->dimensions = dim;
+    for (auto& buffer : _private->buffers) {
+      buffer.clear();
+      buffer.resize(1llu * _private->dimensions.x * _private->dimensions.y);
     }
+    float4* source = mutable_layer(Film::Result);
+    float4* albedo = mutable_layer(Film::Albedo);
+    float4* normals = mutable_layer(Film::Normals);
+    float4* denoised = mutable_layer(Film::Denoised);
+    _private->denoiser.allocate_buffers(source, albedo, normals, denoised, _private->dimensions);
   }
-
-  clear(layers);
+  clear(kAllLayers);
 }
 
 void Film::atomic_add(uint32_t layer, const float4& value, const float2& ndc_coord) {
@@ -107,6 +110,10 @@ void Film::commit_light_iteration(uint32_t i) {
 }
 
 const float4* Film::combined_result() const {
+  return mutable_combined_result();
+}
+
+float4* Film::mutable_combined_result() const {
   _private->tasks.execute(count(), [this](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
       _private->buffers[Result][i] = max({}, _private->buffers[Camera][i] + _private->buffers[LightImage][i]);
@@ -115,7 +122,7 @@ const float4* Film::combined_result() const {
   return _private->buffers[Result].data();
 }
 
-void Film::flush_to(Film& other, float t, const Layers& layers) {
+void Film::flush_to(Film& other, float t, const Layers& layers) const {
   ETX_ASSERT(_private->dimensions == other._private->dimensions);
 
   const float4* src[LayerCount] = {
@@ -172,8 +179,12 @@ const float4* Film::layer(uint32_t layer) const {
   return (layer == Result) ? combined_result() : _private->layer(layer);
 }
 
-float4* Film::mutable_layer(uint32_t layer) {
-  return _private->layer(layer);
+float4* Film::mutable_layer(uint32_t layer) const {
+  return (layer == Result) ? mutable_combined_result() : _private->layer(layer);
+}
+
+void Film::denoise() {
+  _private->denoiser.denoise();
 }
 
 const char* Film::layer_name(uint32_t layer) {

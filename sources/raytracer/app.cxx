@@ -26,7 +26,6 @@ RTApplication::RTApplication()
 
 void RTApplication::init() {
   render.init();
-  denoiser.init();
   ui.initialize();
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
@@ -163,7 +162,6 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   if (start_rendering) {
     _current_integrator->run(ui.integrator_options());
   } else {
-    // _current_integrator->set_output_size(scene.scene().camera.image_size);
     _current_integrator->preview(ui.integrator_options());
   }
 }
@@ -283,11 +281,17 @@ void RTApplication::on_integrator_selected(Integrator* i) {
 
 void RTApplication::on_preview_selected() {
   ETX_ASSERT(_current_integrator != nullptr);
+  if (ui.view_options().layer == Film::Denoised) {
+    ui.mutable_view_options().layer = Film::Result;
+  }
   _current_integrator->preview(ui.integrator_options());
 }
 
 void RTApplication::on_run_selected() {
   ETX_ASSERT(_current_integrator != nullptr);
+  if (ui.view_options().layer == Film::Denoised) {
+    ui.mutable_view_options().layer = Film::Result;
+  }
   _current_integrator->run(ui.integrator_options());
 }
 
@@ -341,12 +345,11 @@ void RTApplication::on_scene_settings_changed() {
 }
 
 void RTApplication::on_denoise_selected() {
-  const float4* source = raytracing.film().combined_result();
-  const float4* albedo = raytracing.film().layer(Film::Albedo);
-  const float4* normals = raytracing.film().layer(Film::Normals);
-  float4* denoised = raytracing.film().mutable_layer(Film::Denoised);
-  denoiser.denoise(source, albedo, normals, denoised, raytracing.film().dimensions());
-  ui.mutable_view_options().layer = Film::Denoised;
+  raytracing.film().denoise();
+
+  if (ui.view_options().layer == Film::Result) {
+    ui.mutable_view_options().layer = Film::Denoised;
+  }
 }
 
 }  // namespace etx

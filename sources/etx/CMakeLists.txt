@@ -64,7 +64,7 @@ target_link_libraries(etx-core PUBLIC json nativefiledialog)
 target_include_directories(etx-core PUBLIC ..)
 
 create_library(render)
-target_link_libraries(etx-render PRIVATE stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS nanovdb etx-core)
+target_link_libraries(etx-render PRIVATE etx-core stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS nanovdb oidn)
 target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 
 find_package(embree 4.0 REQUIRED)

@@ -8,12 +8,10 @@ add_executable(raytracer
   render.cxx
   options.hxx
   camera_controller.hxx
-  denoiser.cxx
-  denoiser.hxx
 )
 
 target_link_libraries(raytracer
-  PRIVATE imgui sokol etx-core etx-render etx-rt tinyexr stb_image oidn
+  PRIVATE imgui sokol etx-core etx-render etx-rt tinyexr stb_image
 )
 
 set_target_properties(raytracer PROPERTIES

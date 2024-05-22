@@ -16,7 +16,6 @@
 
 #include "ui.hxx"
 #include "render.hxx"
-#include "denoiser.hxx"
 #include "camera_controller.hxx"
 
 namespace etx {
@@ -62,7 +61,6 @@ struct RTApplication {
   Raytracing raytracing;
 
   RenderContext render;
-  Denoiser denoiser;
 
   SceneRepresentation scene;
   CameraController camera_controller;

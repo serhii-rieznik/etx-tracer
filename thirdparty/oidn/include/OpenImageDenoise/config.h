@@ -4,10 +4,10 @@
 #pragma once
 
 #define OIDN_VERSION_MAJOR 2
-#define OIDN_VERSION_MINOR 2
-#define OIDN_VERSION_PATCH 2
-#define OIDN_VERSION 20202
-#define OIDN_VERSION_STRING "2.2.2"
+#define OIDN_VERSION_MINOR 3
+#define OIDN_VERSION_PATCH 0
+#define OIDN_VERSION 20300
+#define OIDN_VERSION_STRING "2.3.0-beta"
 
 /* #undef OIDN_API_NAMESPACE */
 /* #undef OIDN_STATIC_LIB */
@@ -65,16 +65,16 @@
   #define OIDN_DEVICE_CPU
 #endif
 #if !defined(OIDN_DEVICE_SYCL)
-/* #undef OIDN_DEVICE_SYCL */
+  #define OIDN_DEVICE_SYCL
 #endif
 #if !defined(OIDN_DEVICE_CUDA)
-/* #undef OIDN_DEVICE_CUDA */
+  #define OIDN_DEVICE_CUDA
 #endif
 #if !defined(OIDN_DEVICE_HIP)
-/* #undef OIDN_DEVICE_HIP */
+  #define OIDN_DEVICE_HIP
 #endif
 #if !defined(OIDN_DEVICE_METAL)
-  #define OIDN_DEVICE_METAL
+/* #undef OIDN_DEVICE_METAL */
 #endif
 
 #define OIDN_FILTER_RT

@@ -41,7 +41,7 @@ struct RaytracingImpl {
 
   void set_scene(const Scene& s) {
     source_scene = &s;
-    film.allocate(s.camera.image_size, {Film::Camera, Film::LightImage, Film::LightIteration, Film::Normals, Film::Albedo, Film::Result, Film::Denoised});
+    film.allocate(s.camera.image_size);
     release_host_scene();
     build_host_scene();
 

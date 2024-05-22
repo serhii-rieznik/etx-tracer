@@ -80,6 +80,9 @@ SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, f
 }
 
 SpectralDistribution SpectralDistribution::rgb_reflectance(const float3& rgb) {
+  if (etx::luminance(rgb) == 0.0f)
+    return SpectralDistribution::null();
+
   float2 samples[spectrum::RGBResponseWavelengthCount] = {};
   for (uint32_t i = spectrum::RGBResponseShortestWavelength; i <= spectrum::RGBResponseLongestWavelength; ++i) {
     auto p = rgb_response({float(i), SpectralQuery::Spectral}, rgb);
@@ -287,6 +290,9 @@ RefractiveIndex RefractiveIndex::load_from_file(const char* file_name) {
 
 SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb) {
   ETX_ASSERT(spect.spectral());
+
+  if (luminance(rgb) == 0.0f)
+    return {spect, 0.0f};
 
   constexpr float3 response[spectrum::RGBResponseWavelengthCount] = {{0.361396471056708f, 0.252275705864828f, 0.386327749991032f},
     {0.366205305492837f, 0.235416148479571f, 0.398378488359465f}, {0.371266544491276f, 0.21551362909132f, 0.413219780889496f},

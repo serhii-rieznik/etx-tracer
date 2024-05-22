@@ -11,10 +11,14 @@
 
 #if defined(__cplusplus)
   #if defined(SYCL_LANGUAGE_VERSION)
-    #include <CL/sycl.hpp>
+    #include <sycl/sycl.hpp>
+    #define OIDN_SYCL_HPP
+  #elif defined(SYCL_FEATURE_SET_FULL) || defined(SYCL_FEATURE_SET_REDUCED)
+    #define OIDN_SYCL_HPP // not using a SYCL compiler but SYCL headers are included
   #else
     namespace sycl
     {
+      class device;
       class queue;
       class event;
     }
@@ -25,12 +29,15 @@ typedef struct CUstream_st* cudaStream_t;
 typedef struct ihipStream_t* hipStream_t;
 
 #if defined(__OBJC__)
+  @protocol MTLDevice;
   @protocol MTLCommandQueue;
   @protocol MTLBuffer;
 
+  typedef id<MTLDevice> MTLDevice_id;
   typedef id<MTLCommandQueue> MTLCommandQueue_id;
   typedef id<MTLBuffer> MTLBuffer_id;
 #else
+  typedef void* MTLDevice_id;
   typedef void* MTLCommandQueue_id;
   typedef void* MTLBuffer_id;
 #endif
@@ -100,6 +107,23 @@ typedef void (*OIDNErrorFunction)(void* userPtr, OIDNError code, const char* mes
 // Device handle
 typedef struct OIDNDeviceImpl* OIDNDevice;
 
+// Returns whether the CPU device is supported.
+OIDN_API bool oidnIsCPUDeviceSupported();
+
+#if defined(__cplusplus)
+// Returns whether the specified SYCL device is supported.
+OIDN_API bool oidnIsSYCLDeviceSupported(const sycl::device* device);
+#endif
+
+// Returns whether the specified CUDA device is supported.
+OIDN_API bool oidnIsCUDADeviceSupported(int deviceID);
+
+// Returns whether the specified HIP device is supported.
+OIDN_API bool oidnIsHIPDeviceSupported(int deviceID);
+
+// Returns whether the specified Metal device is supported.
+OIDN_API bool oidnIsMetalDeviceSupported(MTLDevice_id device);
+
 // Creates a device of the specified type.
 OIDN_API OIDNDevice oidnNewDevice(OIDNDeviceType type);
 
@@ -123,15 +147,13 @@ OIDN_API OIDNDevice oidnNewDeviceByPCIAddress(int pciDomain, int pciBus, int pci
 OIDN_API OIDNDevice oidnNewSYCLDevice(const sycl::queue* queues, int numQueues);
 #endif
 
-// Creates a device from the specified pairs of CUDA device IDs (negative ID corresponds to the
-// current device) and streams (null stream corresponds to the default stream).
-// Currently only one device ID/stream is supported.
+// Creates a device from the specified pairs of CUDA device IDs and streams (null stream
+// corresponds to the default stream). Currently only one device ID/stream is supported.
 OIDN_API OIDNDevice oidnNewCUDADevice(const int* deviceIDs, const cudaStream_t* streams,
                                       int numPairs);
 
-// Creates a device from the specified pairs of HIP device IDs (negative ID corresponds to the
-// current device) and streams (null stream corresponds to the default stream).
-// Currently only one device ID/stream is supported.
+// Creates a device from the specified pairs of HIP device IDs and streams (null stream
+// corresponds to the default stream). Currently only one device ID/stream is supported.
 OIDN_API OIDNDevice oidnNewHIPDevice(const int* deviceIDs, const hipStream_t* streams,
                                      int numPairs);
 
@@ -355,7 +377,7 @@ typedef enum
 {
   OIDN_QUALITY_DEFAULT  = 0, // default quality
 
-//OIDN_QUALITY_FAST     = 4
+  OIDN_QUALITY_FAST     = 4, // high performance (for interactive/real-time preview rendering)
   OIDN_QUALITY_BALANCED = 5, // balanced quality/performance (for interactive/real-time rendering)
   OIDN_QUALITY_HIGH     = 6, // high quality (for final-frame rendering)
 } OIDNQuality;
