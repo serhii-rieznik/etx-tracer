@@ -23,6 +23,7 @@ struct CPUDebugIntegratorImpl : public Task {
   Task::Handle current_task = {};
   uint32_t current_scale = 1u;
   CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::IOR;
+  RefractiveIndex spd_plastic;
   RefractiveIndex spd_air;
   Thinfilm thinfilm;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
@@ -30,19 +31,17 @@ struct CPUDebugIntegratorImpl : public Task {
   float th_min = 0.0f;
   float th_max = 1.0f;
   float test_wl = 0.5f * (spectrum::kShortestWavelength + spectrum::kLongestWavelength);
-  float test_th = 1500.0f;
   float3 rgb_wl = fresnel::kThinfilmRGBWavelengths;
 
   CPUDebugIntegratorImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
     , state(st)
     , samplers(rt.scheduler().max_thread_count()) {
-    spd_air.eta = SpectralDistribution::constant(1.001f);
-    spd_air.k = SpectralDistribution::null();
-    thinfilm.ior.eta = SpectralDistribution::constant(1.50f);
-    thinfilm.ior.k = SpectralDistribution::null();
-    thinfilm.min_thickness = 1.0f;
-    thinfilm.max_thickness = 1.0f;
+    spd_air = RefractiveIndex::load_from_file(env().file_in_data("spectrum/air.spd"));
+    spd_plastic = RefractiveIndex::load_from_file(env().file_in_data("spectrum/plastic.spd"));
+    thinfilm.ior = RefractiveIndex::load_from_file(env().file_in_data("spectrum/sapphire.spd"));
+    thinfilm.min_thickness = 100.0f;
+    thinfilm.max_thickness = 850.0f;
   }
 
   void start(const Options& opt) {
@@ -51,7 +50,7 @@ struct CPUDebugIntegratorImpl : public Task {
     th_min = opt.get("t-min", th_min).to_float();
     th_max = opt.get("t-max", th_max).to_float();
     test_wl = opt.get("test_wl", test_wl).to_float();
-    test_th = opt.get("test_th", test_th).to_float();
+    thinfilm.max_thickness = opt.get("test_th", thinfilm.max_thickness).to_float();
     rgb_wl.x = opt.get("rgb_wl.x", rgb_wl.x).to_float();
     rgb_wl.y = opt.get("rgb_wl.y", rgb_wl.y).to_float();
     rgb_wl.z = opt.get("rgb_wl.z", rgb_wl.z).to_float();
@@ -336,14 +335,14 @@ struct CPUDebugIntegratorImpl : public Task {
         case 3: {
           // variable angle, all wavelengths
           cos_theta = t;
-          thickness = test_th;
+          thickness = thinfilm.max_thickness;
           render_spectrum = true;
           break;
         }
         case 4: {
           // variable angle, rgb
           cos_theta = t;
-          thickness = test_th;
+          thickness = thinfilm.max_thickness;
           render_spectrum = false;
           break;
         }
@@ -351,7 +350,7 @@ struct CPUDebugIntegratorImpl : public Task {
           // variable angle, single wavelength
           render = (test_wl >= spectrum::kShortestWavelength) && (test_wl <= spectrum::kLongestWavelength);
           cos_theta = t;
-          thickness = test_th;
+          thickness = thinfilm.max_thickness;
           q_s.wavelength = test_wl;
           q_i.wavelength = test_wl;
           render_spectrum = true;
@@ -365,12 +364,12 @@ struct CPUDebugIntegratorImpl : public Task {
       if (render) {
         auto thinfilm_eval_s = evaluate_thinfilm(q_s, thinfilm, {}, scene);
         thinfilm_eval_s.thickness = thickness;
-        auto f_s = fresnel::calculate(q_s, cos_theta, spd_air(q_s), spd_air(q_s), thinfilm_eval_s, rgb_wl);
+        auto f_s = fresnel::calculate(q_s, cos_theta, spd_plastic(q_s), spd_air(q_s), thinfilm_eval_s, rgb_wl);
         float3 xyz_s = f_s.to_rgb() / q_s.sampling_pdf();
 
         auto thinfilm_eval_i = evaluate_thinfilm(q_i, thinfilm, {}, scene);
         thinfilm_eval_i.thickness = thickness;
-        auto f_i = fresnel::calculate(q_i, cos_theta, spd_air(q_i), spd_air(q_i), thinfilm_eval_i, rgb_wl);
+        auto f_i = fresnel::calculate(q_i, cos_theta, spd_air(q_i), spd_plastic(q_i), thinfilm_eval_i, rgb_wl);
         float3 xyz_i = f_i.to_rgb() / q_i.sampling_pdf();
 
         output = render_spectrum ? xyz_s : xyz_i;
@@ -661,7 +660,7 @@ Options CPUDebugIntegrator::options() const {
     result.add(0.0f, _private->th_max, 1024.0f, "t-max", "Max Thickness");
   } else if (_private->mode == Mode::Thinfilm) {
     result.add(0.0f, _private->test_wl, spectrum::kLongestWavelength, "test_wl", "Wavelength");
-    result.add(0.0f, _private->test_th, 10000.0f, "test_th", "Thickness");
+    result.add(0.0f, _private->thinfilm.max_thickness, 10000.0f, "test_th", "Thickness");
     result.add(spectrum::kShortestWavelength, _private->rgb_wl.x, spectrum::kLongestWavelength, "rgb_wl.x", "Red Wavelength");
     result.add(spectrum::kShortestWavelength, _private->rgb_wl.y, spectrum::kLongestWavelength, "rgb_wl.y", "Green Wavelength");
     result.add(spectrum::kShortestWavelength, _private->rgb_wl.z, spectrum::kLongestWavelength, "rgb_wl.z", "Blue Wavelength");

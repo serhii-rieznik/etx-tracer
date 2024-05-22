@@ -301,27 +301,38 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
     return 0.0f;
 
   complex sin_theta_1_squared = sqr(ext_ior / film_ior) * (1.0f - cos_theta_0 * cos_theta_0);
+  if (sin_theta_1_squared.real() >= 1.0f)
+    return 1.0f;
+
   complex cos_theta_1 = sqrt(1.0f - sin_theta_1_squared);
+
   complex sin_theta_2_squared = sqr(film_ior / int_ior) * (1.0f - cos_theta_1 * cos_theta_1);
+  if (sin_theta_2_squared.real() >= 1.0f)
+    return 1.0f;
+
   complex cos_theta_2 = sqrt(1.0f - sin_theta_2_squared);
-  auto delta_10 = film_ior.real() > ext_ior.real() ? 0.0f : kPi;
-  auto delta_21 = int_ior.real() > film_ior.real() ? 0.0f : kPi;
+
+  constexpr complex i = {0.0f, 1.0f};
+
+  auto delta_10 = complex_abs(ext_ior) < complex_abs(film_ior) ? kPi : 0.0f;
+  auto delta_21 = complex_abs(film_ior) < complex_abs(int_ior) ? kPi : 0.0f;
   auto phase_shift = delta_10 + delta_21;
   auto phi = (kDoublePi * 2.0f * thickness * cos_theta_1 + phase_shift * film_ior) / wavelength;
-  auto r10 = reflectance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
-  auto r12 = reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
-  auto t01 = transmittance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
-  auto t12 = transmittance(film_ior, cos_theta_1, int_ior, cos_theta_2);
-  auto alpha_p = r10.rp * r12.rp;
-  auto beta_p = t01.tp * t12.tp;
+  auto exp_i_phi = complex_exp(i * phi);
 
-  auto tp = (beta_p * beta_p) / ((alpha_p * alpha_p) - 2.0f * alpha_p * complex_cos(phi) + 1.0f);
+  auto r01 = reflectance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
+  auto t01 = transmittance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
+
+  auto r12 = reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
+  auto t12 = transmittance(film_ior, cos_theta_1, int_ior, cos_theta_2);
+  auto alpha_p = r01.rp * r12.rp;
+  auto beta_p = t01.tp * t12.tp;
+  auto tp = sqr(beta_p / (1.0f - alpha_p * exp_i_phi));
   ETX_CHECK_FINITE(tp);
 
-  auto alpha_s = r10.rs * r12.rs;
+  auto alpha_s = r01.rs * r12.rs;
   auto beta_s = t01.ts * t12.ts;
-
-  auto ts = (beta_s * beta_s) / ((alpha_s * alpha_s) - 2.0f * alpha_s * complex_cos(phi) + 1.0f);
+  auto ts = sqr(beta_s / (1.0f - alpha_s * exp_i_phi));
   ETX_CHECK_FINITE(ts);
 
   auto ratio = (int_ior * cos_theta_2) / (ext_ior * cos_theta_0);

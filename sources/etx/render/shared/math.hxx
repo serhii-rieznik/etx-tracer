@@ -58,6 +58,9 @@ ETX_GPU_CODE complex complex_sqrt(complex c) {
 ETX_GPU_CODE complex complex_cos(complex c) {
   return STD_NS::cos(c);
 }
+ETX_GPU_CODE complex complex_exp(complex c) {
+  return STD_NS::exp(c);
+}
 ETX_GPU_CODE float complex_abs(complex c) {
   return STD_NS::abs(c);
 }

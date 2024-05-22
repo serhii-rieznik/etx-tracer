@@ -92,7 +92,7 @@ ETX_GPU_CODE void lerp_vertex(Vertex& v, const ArrayView<Vertex>& vertices, cons
 }
 
 ETX_GPU_CODE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
-  return position - dot(position - origin, normal) * normal;
+  return position - max(0.0f, dot(position - origin, normal)) * normal;
 }
 
 ETX_GPU_CODE float3 shading_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc, const float3& w_o) {

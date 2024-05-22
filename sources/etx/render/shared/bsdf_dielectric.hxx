@@ -60,17 +60,12 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  float i_dot_n = dot(data.w_i, frame.nrm);
-  SpectralResponse fr = fresnel::calculate(data.spectrum_sample, i_dot_n, ext_ior, int_ior, thinfilm);
+  SpectralResponse fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, data.nrm), ext_ior, int_ior, thinfilm);
   float f = fr.monochromatic();
 
   BSDFSample result = {};
   if (smp.next() <= f) {
-    result.w_o = reflect(data.w_i, frame.nrm);
-    if (i_dot_n * dot(result.w_o, frame.nrm) >= 0.0f) {
-      return {{data.spectrum_sample, 0.0f}};
-    }
-    result.w_o = normalize(result.w_o);
+    result.w_o = normalize(reflect(data.w_i, frame.nrm));
     result.pdf = f;
     result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
     result.weight *= (fr / f);
