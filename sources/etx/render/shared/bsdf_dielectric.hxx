@@ -11,7 +11,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   auto ior_i = (frame.entering_material() ? mtl.ext_ior : mtl.int_ior)(data.spectrum_sample);
   auto ior_o = (frame.entering_material() ? mtl.int_ior : mtl.ext_ior)(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
   SpectralResponse fr = fresnel::calculate(data.spectrum_sample, cos_theta_i, ior_i, ior_o, thinfilm);
   float f = fr.monochromatic();
   BSDFSample result;
@@ -59,7 +59,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto frame = data.get_normal_frame();
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
   SpectralResponse fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, data.nrm), ext_ior, int_ior, thinfilm);
   float f = fr.monochromatic();
 
@@ -112,7 +112,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto w_i = local_frame.to_local(-data.w_i);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
   const float m_eta = int_ior.eta.monochromatic() / ext_ior.eta.monochromatic();
   const float m_invEta = 1.0f / m_eta;
@@ -189,7 +189,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
 
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
   const float m_eta = (int_ior.eta / ext_ior.eta).monochromatic();
 
   bool forward_path = smp.next() > 0.5f;
@@ -251,7 +251,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
 
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
   const float alpha_x = mtl.roughness.x;
   const float alpha_y = mtl.roughness.y;
