@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <etx/core/debug.hxx>
+#include <etx/render/shared/base.hxx>
 
 #include <vector>
 #include <string>
@@ -15,11 +16,13 @@ struct OptionalValue {
     InfoString,
     Float,
     Enum,
+    Float3,
 
     Count,
   };
 
   union Value {
+    float3 f3;
     uint32_t integer;
     float flt;
     bool boolean;
@@ -62,6 +65,15 @@ struct OptionalValue {
     max_value.flt = std::numeric_limits<float>::max();
   }
 
+  OptionalValue(const float3& val, const std::string& a_id, const std::string& desc)
+    : cls(Class::Float3)
+    , id(a_id)
+    , name(desc) {
+    min_value.f3 = {-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
+    value.f3 = val;
+    max_value.f3 = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+  }
+
   OptionalValue(float min_val, float val, float max_val, const std::string& a_id, const std::string& desc)
     : cls(Class::Float)
     , id(a_id)
@@ -69,6 +81,15 @@ struct OptionalValue {
     min_value.flt = min_val;
     value.flt = val;
     max_value.flt = max_val;
+  }
+
+  OptionalValue(const float3& min_val, const float3& val, const float3& max_val, const std::string& a_id, const std::string& desc)
+    : cls(Class::Float3)
+    , id(a_id)
+    , name(desc) {
+    min_value.f3 = min_val;
+    value.f3 = val;
+    max_value.f3 = max_val;
   }
 
   OptionalValue(bool val, const std::string& a_id, const std::string& desc)
@@ -110,6 +131,11 @@ struct OptionalValue {
     value.flt = new_float_value;
   }
 
+  void set(const float3& new_float3_value) {
+    ETX_ASSERT(cls == Class::Float3);
+    value.f3 = new_float3_value;
+  }
+
   uint32_t to_integer() const {
     ETX_ASSERT((cls == Class::Integer) || (cls == Class::Enum));
     return clamp_to(value.integer, min_value.integer, max_value.integer);
@@ -129,6 +155,15 @@ struct OptionalValue {
   T to_enum() {
     ETX_ASSERT((cls == Class::Enum) || (cls == Class::Integer));
     return T(value.integer);
+  }
+
+  float3 to_float3() const {
+    ETX_ASSERT(cls == Class::Float3);
+    return {
+      clamp_to(value.f3.x, min_value.f3.x, max_value.f3.x),
+      clamp_to(value.f3.y, min_value.f3.y, max_value.f3.y),
+      clamp_to(value.f3.z, min_value.f3.z, max_value.f3.z),
+    };
   }
 
  private:

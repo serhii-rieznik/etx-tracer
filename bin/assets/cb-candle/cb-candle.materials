@@ -2,17 +2,17 @@
 # www.blender.org
 
 newmtl et::env
-color nblackbody 20000.0 scale 2.0
+color nblackbody 20000.0 scale 0.5
 
 newmtl et::medium
 id wax
 absorption 1 2.5 5
 scattering 4 3 2
+#enclosed
 
 newmtl candle
-material class diffuse
+material class translucent
 int_medium wax
-subsurface class exact
 
 newmtl diamond
 material class dielectric
@@ -34,18 +34,15 @@ map_Kd ../textures/checkers_grayscale.png
 
 newmtl leftWall
 material class diffuse
-Kd 0.25 0.25 1.0
+Kd 0.75 0.5 0.75
 
 newmtl rightWall
 material class diffuse
-Kd 0.25 1 0.25
+Kd 0.5 0.75 0.5
 
 newmtl fire
 material class translucent
-Kd 1 1 1
-Ks 1 1 1
-Kt 1 1 1
-emitter blackbody 2000.0 scale 1.0
+emitter blackbody 1932.0 scale 4.0
 Ke 1 1 1
 
 newmtl wire

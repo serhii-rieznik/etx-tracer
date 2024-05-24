@@ -67,6 +67,9 @@ create_library(render)
 target_link_libraries(etx-render PRIVATE etx-core stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS nanovdb oidn)
 target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 
+create_library(util)
+target_link_libraries(etx-util PRIVATE etx-core etx-render)
+
 find_package(embree 4.0 REQUIRED)
 
 set(HAS_OPTIX 0)

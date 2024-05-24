@@ -1,7 +1,6 @@
 #pragma once
-#pragma once
 
-#include <etx/core/options.hxx>
+#include <etx/util/options.hxx>
 
 #include <etx/render/shared/base.hxx>
 #include <etx/rt/integrators/integrator.hxx>

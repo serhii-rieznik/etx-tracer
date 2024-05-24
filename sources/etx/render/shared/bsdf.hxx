@@ -244,8 +244,6 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
 
 namespace fresnel {
 
-constexpr float3 kThinfilmRGBWavelengths = {621.0f, 543.0f, 452.0f};
-
 ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
   struct result {
     complex rs, rp;
@@ -297,6 +295,8 @@ ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_i
 }
 
 ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
+  constexpr complex i = {0.0f, 1.0f};
+
   if (cos_theta_0 == 0.0f)
     return 0.0f;
 
@@ -312,37 +312,31 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
 
   complex cos_theta_2 = sqrt(1.0f - sin_theta_2_squared);
 
-  constexpr complex i = {0.0f, 1.0f};
+  auto ratio = (int_ior * cos_theta_2) / (ext_ior * cos_theta_0);
+  ETX_CHECK_FINITE(ratio);
 
-  auto delta_10 = complex_abs(ext_ior) < complex_abs(film_ior) ? kPi : 0.0f;
-  auto delta_21 = complex_abs(film_ior) < complex_abs(int_ior) ? kPi : 0.0f;
+  auto delta_10 = ext_ior.real() < film_ior.real() ? kPi : 0.0f;
+  auto delta_21 = film_ior.real() < int_ior.real() ? kPi : 0.0f;
   auto phase_shift = delta_10 + delta_21;
-  auto phi = (kDoublePi * 2.0f * thickness * cos_theta_1 + phase_shift * film_ior) / wavelength;
-  auto exp_i_phi = complex_exp(i * phi);
 
   auto r01 = reflectance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
   auto t01 = transmittance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
 
   auto r12 = reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
   auto t12 = transmittance(film_ior, cos_theta_1, int_ior, cos_theta_2);
-  auto alpha_p = r01.rp * r12.rp;
-  auto beta_p = t01.tp * t12.tp;
-  auto tp = sqr(beta_p / (1.0f - alpha_p * exp_i_phi));
+
+  auto phi = (kDoublePi * 2.0f * thickness * cos_theta_1 + phase_shift * film_ior) / wavelength;
+  auto exp_i_phi = complex_exp(i * phi);
+  auto tp = sqr(t01.tp * t12.tp / (1.0f - r01.rp * r12.rp * exp_i_phi));
   ETX_CHECK_FINITE(tp);
-
-  auto alpha_s = r01.rs * r12.rs;
-  auto beta_s = t01.ts * t12.ts;
-  auto ts = sqr(beta_s / (1.0f - alpha_s * exp_i_phi));
+  auto ts = sqr(t01.ts * t12.ts / (1.0f - r01.rs * r12.rs * exp_i_phi));
   ETX_CHECK_FINITE(ts);
-
-  auto ratio = (int_ior * cos_theta_2) / (ext_ior * cos_theta_0);
-  ETX_CHECK_FINITE(ratio);
 
   return complex_abs(1.0f - ratio * 0.5f * (tp + ts));
 }
 
 ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior,
-  const Thinfilm::Eval& thinfilm, const float3& rgb_wl = kThinfilmRGBWavelengths) {
+  const Thinfilm::Eval& thinfilm) {
   ETX_ASSERT(spect.wavelength == ext_ior.wavelength);
   ETX_ASSERT(spect.wavelength == int_ior.wavelength);
 
@@ -366,9 +360,9 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
       values.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
       values = spectrum::xyz_to_rgb(values);
     } else {
-      values.x = fresnel_thinfilm(rgb_wl.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
-      values.y = fresnel_thinfilm(rgb_wl.y, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
-      values.z = fresnel_thinfilm(rgb_wl.z, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
+      values.x = fresnel_thinfilm(thinfilm.rgb_wavelengths.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
+      values.y = fresnel_thinfilm(thinfilm.rgb_wavelengths.y, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
+      values.z = fresnel_thinfilm(thinfilm.rgb_wavelengths.z, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
     }
     result.components.integrated = saturate(values);
   }

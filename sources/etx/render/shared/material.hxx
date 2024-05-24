@@ -11,8 +11,12 @@ struct ETX_ALIGNED SpectralImage {
 };
 
 struct ETX_ALIGNED Thinfilm {
+  constexpr static const float3 kRGBWavelengths = {610.0f, 537.0f, 450.0f};
+  constexpr static const float3 kRGBWavelengthsSpan = {45.0f, 47.0f, 23.5f};
+
   struct Eval {
     RefractiveIndex::Sample ior;
+    float3 rgb_wavelengths = kRGBWavelengths;
     float thickness = 0.0f;
   };
 

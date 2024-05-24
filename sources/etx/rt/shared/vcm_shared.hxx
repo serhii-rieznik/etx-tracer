@@ -638,10 +638,8 @@ struct ETX_ALIGNED VCMSpatialGridData {
       float weight = 1.0f / (1.0f + w_light + w_camera);
 
       auto c_value = (camera_bsdf.func * state.throughput / state.spect.sampling_pdf()).to_rgb();
-      c_value = max(c_value, float3{0.0f, 0.0f, 0.0f});
       ETX_VALIDATE(c_value);
       auto l_value = (light_vertex.throughput / state.spect.sampling_pdf()).to_rgb();
-      l_value = max(l_value, float3{0.0f, 0.0f, 0.0f});
       ETX_VALIDATE(l_value);
       merged += (c_value * l_value) * weight;
       ETX_VALIDATE(merged);
