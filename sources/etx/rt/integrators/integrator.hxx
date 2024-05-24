@@ -1,8 +1,8 @@
 ﻿#pragma once
 
-#include <etx/core/options.hxx>
 #include <etx/core/profiler.hxx>
 #include <etx/render/shared/scene.hxx>
+#include <etx/util/options.hxx>
 #include <etx/rt/rt.hxx>
 
 #include <atomic>

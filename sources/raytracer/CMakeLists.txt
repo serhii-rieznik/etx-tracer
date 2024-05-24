@@ -11,7 +11,7 @@ add_executable(raytracer
 )
 
 target_link_libraries(raytracer
-  PRIVATE imgui sokol etx-core etx-render etx-rt tinyexr stb_image
+  PRIVATE imgui sokol etx-core etx-render etx-rt etx-util tinyexr stb_image
 )
 
 set_target_properties(raytracer PROPERTIES

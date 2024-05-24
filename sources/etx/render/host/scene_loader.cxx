@@ -982,7 +982,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
   }
 
   bool explicit_connections = true;
-  if (get_param(material, "closed")) {
+  if (get_param(material, "enclosed")) {
     explicit_connections = false;
   }
 

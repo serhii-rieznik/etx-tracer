@@ -150,7 +150,20 @@ bool UI::build_options(Options& options) {
       case OptionalValue::Class::Float: {
         float value = option.to_float();
         ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
-        if (ImGui::DragFloat(option.name.c_str(), &value, 0.001f, option.min_value.flt, option.max_value.flt, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+        if (ImGui::DragFloat(option.name.c_str(), &value, 0.1f, option.min_value.flt, option.max_value.flt, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+          option.set(value);
+          changed = true;
+        }
+        break;
+      }
+
+      case OptionalValue::Class::Float3: {
+        float3 value = option.to_float3();
+        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
+        ImGui::Text("%s", option.name.c_str());
+        char buffer_name[128] = {};
+        snprintf(buffer_name, sizeof(buffer_name), "##%s", option.name.c_str());
+        if (ImGui::DragFloat3(buffer_name, &value.x, 0.1f, option.min_value.f3.x, option.max_value.f3.x, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           option.set(value);
           changed = true;
         }

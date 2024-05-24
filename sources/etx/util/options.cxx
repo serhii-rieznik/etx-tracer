@@ -1,6 +1,6 @@
-﻿#include <etx/core/options.hxx>
+﻿#include <etx/util/options.hxx>
 #include <etx/core/json.hxx>
-
+#include <etx/core/log.hxx>
 #include <json.hpp>
 
 namespace etx {

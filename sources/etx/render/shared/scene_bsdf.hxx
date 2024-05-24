@@ -103,14 +103,22 @@ namespace bsdf {
 #undef CASE_IMPL
 }  // namespace bsdf
 
-ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene) {
+ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene, Sampler& smp) {
   if (film.max_thickness * film.min_thickness <= 0.0f) {
     return {{}, 0.0f};
   }
 
   float t = (film.thinkness_image == kInvalidIndex) ? 1.0f : scene.images[film.thinkness_image].evaluate(uv, nullptr).x;
   float thickness = lerp(film.min_thickness, film.max_thickness, t);
-  return {film.ior(spect), thickness};
+
+  float3 wavelengths = {spect.wavelength, spect.wavelength, spect.wavelength};
+  if (spect.spectral() == false) {
+    wavelengths.x = Thinfilm::kRGBWavelengths.x + Thinfilm::kRGBWavelengthsSpan.x * (2.0f * smp.next() - 1.0f);
+    wavelengths.y = Thinfilm::kRGBWavelengths.y + Thinfilm::kRGBWavelengthsSpan.y * (2.0f * smp.next() - 1.0f);
+    wavelengths.z = Thinfilm::kRGBWavelengths.z + Thinfilm::kRGBWavelengthsSpan.z * (2.0f * smp.next() - 1.0f);
+  }
+
+  return {film.ior(spect), wavelengths, thickness};
 }
 
 ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {

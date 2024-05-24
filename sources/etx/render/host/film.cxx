@@ -62,7 +62,6 @@ void Film::atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t 
     return;
   }
 
-  ETX_VALIDATE(value);
   uint32_t index = x + y * _private->dimensions.x;
   auto ptr = _private->layer(layer) + index;
   atomic_add_float(&ptr->x, value.x);
