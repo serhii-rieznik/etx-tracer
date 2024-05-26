@@ -1,67 +1,62 @@
 ﻿namespace etx {
-namespace DeltaConductorBSDF {
-
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame();
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
-  auto f = fresnel::calculate(data.spectrum_sample, dot(data.w_i, frame.nrm), mtl.ext_ior(data.spectrum_sample), mtl.int_ior(data.spectrum_sample), thinfilm);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
-
-  BSDFSample result;
-  result.w_o = normalize(reflect(data.w_i, frame.nrm));
-  result.weight = specular * f;
-  ETX_VALIDATE(result.weight);
-  result.pdf = 1.0f;
-  result.properties = BSDFSample::Delta | BSDFSample::Reflection;
-  return result;
-}
-
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {data.spectrum_sample, 0.0f};
-}
-
-ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return 0.0f;
-}
-
-}  // namespace DeltaConductorBSDF
 
 namespace ConductorBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::sample(data, mtl, scene, smp);
-  }
-
   auto frame = data.get_normal_frame();
 
   LocalFrame local_frame(frame);
   auto w_i = local_frame.to_local(-data.w_i);
+  auto ext_ior = mtl.ext_ior(data.spectrum_sample);
+  auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
   BSDFSample result;
   result.properties = BSDFSample::Reflection;
   result.medium_index = data.medium_index;
   result.eta = 1.0f;
-  result.w_o = external::sample_conductor(data.spectrum_sample, smp, w_i, mtl.roughness,  //
-    mtl.ext_ior(data.spectrum_sample), mtl.int_ior(data.spectrum_sample), thinfilm, result.weight);
+
+  result.weight = {data.spectrum_sample, 1.0f};
+
+  // init
+  external::RayInfo ray = {-w_i, mtl.roughness};
+  ray.updateHeight(1.0f);
+
+  uint32_t scattering_order = 0;
+  while (true) {
+    ray.updateHeight(external::sampleHeight(ray, smp.next()));
+    if (ray.h == kMaxFloat)
+      break;
+
+    SpectralResponse weight = {data.spectrum_sample, 1.0f};
+    ray.updateDirection(external::samplePhaseFunction_conductor(data.spectrum_sample, smp, -ray.w, mtl.roughness, ext_ior, int_ior, thinfilm, weight), mtl.roughness);
+    ray.updateHeight(ray.h);
+
+    result.weight *= weight;
+
+    if ((scattering_order++ > external::kScatteringOrderMax) || (ray.h != ray.h) || (ray.w.x != ray.w.x)) {
+      result.weight = {data.spectrum_sample, 0.0f};
+      ray.w = float3{0, 0, 1};
+      break;
+    }
+  }
+
+  result.w_o = ray.w;
+
+  result.weight *= apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
+  ETX_VALIDATE(result.weight);
+
   {
     external::RayInfo ray = {w_i, mtl.roughness};
     result.pdf = external::D_ggx(normalize(result.w_o + w_i), mtl.roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + result.w_o.z;
     ETX_VALIDATE(result.pdf);
   }
-  result.weight *= apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
-  ETX_VALIDATE(result.weight);
 
   result.w_o = normalize(local_frame.from_local(result.w_o));
   return result;
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::evaluate(data, in_w_o, mtl, scene, smp);
-  }
-
   auto frame = data.get_normal_frame();
 
   LocalFrame local_frame(frame);
@@ -107,10 +102,6 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (is_delta(mtl, data.tex, scene, smp)) {
-    return DeltaConductorBSDF::pdf(data, in_w_o, mtl, scene, smp);
-  }
-
   auto frame = data.get_normal_frame();
 
   LocalFrame local_frame(frame);

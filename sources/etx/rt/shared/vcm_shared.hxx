@@ -705,6 +705,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   }
 
   if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, intersection, state)) {
+    // TODO : infinite loop
     return true;
   }
 

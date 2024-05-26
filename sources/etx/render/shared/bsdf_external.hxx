@@ -15,11 +15,11 @@ constexpr uint32_t kScatteringOrderMax = 16u;
 
 struct ETX_ALIGNED RayInfo {
   float3 w = {};
-  float Lambda = {};
-  float h = {};
-  float C1 = {};
-  float G1 = {};
-  float pad = {};
+  float Lambda = 0.0f;
+  float h = 0.0f;
+  float C1 = 0.0f;
+  float G1 = 0.0f;
+  float pad = 0.0f;
 
   ETX_GPU_CODE RayInfo(const float3& w, const float2& alpha) {
     updateDirection(w, alpha);
@@ -38,14 +38,14 @@ struct ETX_ALIGNED RayInfo {
       return;
     }
 
-    float theta = acosf(w.z);
-    float cosTheta = w.z;
-    float sinTheta = sinf(theta);
-    float tanTheta = sinTheta / cosTheta;
+    const float theta = acosf(w.z);
+    const float cosTheta = w.z;
+    const float sinTheta = sinf(theta);
+    const float tanTheta = sinTheta / cosTheta;
     const float invSinTheta2 = 1.0f / (1.0f - w.z * w.z);
     const float cosPhi2 = w.x * w.x * invSinTheta2;
     const float sinPhi2 = w.y * w.y * invSinTheta2;
-    float alpha_value = sqrtf(cosPhi2 * alpha.x * alpha.x + sinPhi2 * alpha.y * alpha.y);
+    const float alpha_value = sqrtf(cosPhi2 * alpha.x * alpha.x + sinPhi2 * alpha.y * alpha.y);
     const float a = 1.0f / tanTheta / alpha_value;
     Lambda = 0.5f * (-1.0f + ((a > 0) ? 1.0f : -1.0f) * sqrtf(1.0f + 1.0f / (a * a)));
   }
@@ -110,9 +110,9 @@ ETX_GPU_CODE float D_ggx(const float3& wm, const float2& alpha) {
   const float slope_x = -wm.x / wm.z;
   const float slope_y = -wm.y / wm.z;
 
-  float ax = fmaxf(kEpsilon, alpha.x * alpha.x);
-  float ay = fmaxf(kEpsilon, alpha.y * alpha.y);
-  float axy = fmaxf(kEpsilon, alpha.x * alpha.y);
+  const float ax = fmaxf(kEpsilon, alpha.x * alpha.x);
+  const float ay = fmaxf(kEpsilon, alpha.y * alpha.y);
+  const float axy = fmaxf(kEpsilon, alpha.x * alpha.y);
 
   // P22
   const float tmp = 1.0f + slope_x * slope_x / ax + slope_y * slope_y / ay;
@@ -126,11 +126,11 @@ ETX_GPU_CODE float D_ggx(const float3& wm, const float2& alpha) {
 }
 
 ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const float2& alpha) {
-  float2 slope;
+  float2 slope = {};
 
   if (theta_i < 0.0001f) {
     const float r = sqrtf(rnd.x / (1.0f - rnd.x));
-    const float phi = 6.28318530718f * rnd.y;
+    const float phi = kDoublePi * rnd.y;
     slope.x = r * cosf(phi);
     slope.y = r * sinf(phi);
     return slope;
@@ -167,6 +167,7 @@ ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const f
     S = -1.0f;
     U2 = 2.0f * (0.5f - rnd.y);
   }
+
   const float z = (U2 * (U2 * (U2 * 0.27385f - 0.73369f) + 0.46341f)) / (U2 * (U2 * (U2 * 0.093073f + 0.309420f) - 1.000000f) + 0.597999f);
   slope.y = S * z * sqrtf(1.0f + slope.x * slope.x);
 
@@ -225,13 +226,13 @@ ETX_GPU_CODE SpectralResponse phase_function_reflection(SpectralQuery spect, con
     return {spect, 0.0f};
 
   // value
-  auto f = fresnel::calculate(spect, w_dot_h, ext_ior, int_ior, thinfilm);
+  const auto f = fresnel::calculate(spect, w_dot_h, ext_ior, int_ior, thinfilm);
   ETX_VALIDATE(f);
 
-  float d_ggx = D_ggx(wh, alpha);
+  const float d_ggx = D_ggx(wh, alpha);
   ETX_VALIDATE(d_ggx);
 
-  float d = d_ggx / (4.0f * projectedArea);
+  const float d = d_ggx / (4.0f * projectedArea);
   ETX_VALIDATE(d);
 
   return f * d;
@@ -267,40 +268,6 @@ ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, Sampler& 
   float i_dot_m = dot(wi, wm);
   weight = fresnel::calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
   return -wi + 2.0f * wm * i_dot_m;
-}
-
-ETX_GPU_CODE float3 sample_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float2& alpha, const RefractiveIndex::Sample& ext_ior,
-  const RefractiveIndex::Sample& int_ior, const Thinfilm::Eval& thinfilm, SpectralResponse& energy) {
-  energy = {spect, 1.0f};
-
-  // init
-  RayInfo ray = {-wi, alpha};
-  ray.updateHeight(1.0f);
-
-  // random walk
-  uint32_t current_scatteringOrder = 0;
-  while (true) {
-    // next height
-    ray.updateHeight(sampleHeight(ray, smp.next()));
-
-    // leave the microsurface?
-    if (ray.h == kMaxFloat)
-      break;
-    current_scatteringOrder++;
-
-    // next direction
-    SpectralResponse weight;
-    ray.updateDirection(samplePhaseFunction_conductor(spect, smp, -ray.w, alpha, ext_ior, int_ior, thinfilm, weight), alpha);
-    energy = energy * weight;
-    ray.updateHeight(ray.h);
-
-    if ((ray.h != ray.h) || (ray.w.x != ray.w.x) || (current_scatteringOrder > kScatteringOrderMax)) {
-      energy = {spect, 0.0f};
-      return float3{0, 0, 1};
-    }
-  }
-
-  return ray.w;
 }
 
 // MIS weights for bidirectional path tracing on the microsurface

@@ -94,16 +94,16 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     }
 
     if (scattering_order++ > external::kScatteringOrderMax) {
-      return {{data.spectrum_sample, {100.0f, 0.0f, 0.0f}}};
+      return {{data.spectrum_sample, {0.0f, 0.0f, 0.0f}}};
     }
-    }
+  }
 
   result.w_o = direction_scale * (ray_outside ? ray.w : -ray.w);
 
   if (LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(result.w_o) > 0.0f) {
-      result.eta = 1.0f;
+    result.eta = 1.0f;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
-      result.properties = BSDFSample::Reflection;
+    result.properties = BSDFSample::Reflection;
     result.medium_index = in_outside ? mtl.ext_medium : mtl.int_medium;
   } else {
     float eta = (int_ior.eta / ext_ior.eta).monochromatic();
@@ -112,7 +112,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr) * factor;
     result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged;
     result.medium_index = in_outside ? mtl.int_medium : mtl.ext_medium;
-    }
+  }
 
   result.w_o = normalize(local_frame.from_local(result.w_o));
   result.pdf = pdf(data, result.w_o, mtl, scene, smp);
@@ -192,9 +192,6 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
-
-  const float alpha_x = mtl.roughness.x;
-  const float alpha_y = mtl.roughness.y;
 
   const bool outside = LocalFrame::cos_theta(w_i) > 0;
   const bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;

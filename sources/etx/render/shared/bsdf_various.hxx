@@ -3,22 +3,42 @@
 namespace DiffuseBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  float3 w_o = sample_cosine_distribution(smp.next_2d(), data.front_fracing_normal(), 1.0f);
-  return {w_o, evaluate(data, w_o, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::Reflection};
+  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, nullptr);
+
+  SpectralResponse weight = {};
+  auto frame = data.get_normal_frame();
+  auto w_i = frame.to_local(-data.w_i);
+  auto w_o = external::sample_diffuse(smp, w_i, mtl.roughness, diffuse, weight);
+  if (w_o.z <= kEpsilon)
+    return {{data.spectrum_sample, 0.0f}};
+
+  BSDFSample result = {};
+  result.eta = 1.0f;
+  result.weight = weight;
+  result.properties = BSDFSample::Reflection | BSDFSample::Diffuse;
+  result.medium_index = mtl.ext_medium;
+  result.w_o = normalize(frame.from_local(w_o));
+  result.pdf = kInvPi * w_o.z;
+  return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  float n_dot_o = dot(data.front_fracing_normal(), w_o);
-  if (n_dot_o <= kEpsilon)
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+  auto frame = data.get_normal_frame();
+  auto w_o = frame.to_local(in_w_o);
+
+  if (w_o.z <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
   auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, nullptr);
 
-  BSDFEval result;
-  result.func = diffuse * kInvPi;
-  result.bsdf = diffuse * (kInvPi * n_dot_o);
-  result.weight = diffuse;
-  result.pdf = kInvPi * n_dot_o;
+  auto w_i = frame.to_local(-data.w_i);
+
+  BSDFEval result = {};
+  result.pdf = kInvPi * w_o.z;
+  result.bsdf = external::eval_diffuse(smp, w_i, w_o, mtl.roughness, diffuse);
+  result.func = result.bsdf / w_o.z;
+  result.weight = result.bsdf / result.pdf;
+
   return result;
 }
 
