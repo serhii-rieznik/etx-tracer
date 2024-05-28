@@ -78,24 +78,26 @@ struct BSDFSample {
 
   BSDFSample() = default;
 
-  ETX_GPU_CODE BSDFSample(const SpectralResponse& a_weight)
-    : weight(a_weight) {
+  ETX_GPU_CODE BSDFSample(const SpectralQuery& q)
+    : weight(q, 0.0f) {
   }
 
-  ETX_GPU_CODE BSDFSample(const float3& a_w_o, const SpectralResponse& a_weight, float a_pdf, float a_eta, uint32_t props)
+  ETX_GPU_CODE BSDFSample(const float3& a_w_o, const SpectralResponse& a_weight, float a_pdf, float a_eta, uint32_t props, uint32_t medium)
     : weight(a_weight)
     , w_o(a_w_o)
     , pdf(a_pdf)
     , eta(a_eta)
-    , properties(props) {
+    , properties(props)
+    , medium_index(medium) {
   }
 
-  ETX_GPU_CODE BSDFSample(const float3& w, const BSDFEval& eval, uint32_t props)
+  ETX_GPU_CODE BSDFSample(const float3& w, const BSDFEval& eval, uint32_t props, uint32_t medium)
     : weight(eval.weight)
     , w_o(w)
     , pdf(eval.pdf)
     , eta(eval.eta)
-    , properties(props) {
+    , properties(props)
+    , medium_index(medium) {
   }
 
   ETX_GPU_CODE bool valid() const {

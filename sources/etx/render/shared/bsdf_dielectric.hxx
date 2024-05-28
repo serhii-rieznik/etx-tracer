@@ -94,7 +94,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     }
 
     if (scattering_order++ > external::kScatteringOrderMax) {
-      return {{data.spectrum_sample, {0.0f, 0.0f, 0.0f}}};
+      return {data.spectrum_sample};
     }
   }
 

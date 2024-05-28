@@ -586,26 +586,24 @@ ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const
   SpectralResponse energy = {albedo, 1.0f};
 
   // random walk
-  int current_scatteringOrder = 0;
-  while (current_scatteringOrder < kScatteringOrderMax) {
+  int scattering_order = 0;
+  while (true) {
     // next height
     ray.updateHeight(sampleHeight(ray, smp.next()));
     // leave the microsurface?
     if (ray.h == kMaxFloat)
       break;
 
-    current_scatteringOrder++;
-
     // sample VNDF
     float3 wm = sampleVNDF(smp, -ray.w, alpha);
 
     // next event estimation
-    SpectralResponse phasefunction = energy * albedo * max(0.0f, dot(wm, wo) / kPi);
+    SpectralResponse phasefunction = energy * albedo * max(0.0f, dot(wm, wo) * kInvPi);
     ETX_VALIDATE(phasefunction);
 
-    if (current_scatteringOrder == 1) {  // closed masking and shadowing (we compute G2 / G1 because G1 is  already in the phase function)
-      float G2_G1 = (1.0f + (-ray.Lambda - 1.0f)) / (1.0f + (-ray.Lambda - 1.0f) + ray_shadowing.Lambda);
-      if (isfinite(G2_G1)) {
+    if (scattering_order == 0) {  // closed masking and shadowing (we compute G2 / G1 because G1 is already in the phase function)
+      float G2_G1 = -ray.Lambda / (ray_shadowing.Lambda - ray.Lambda);
+      if (G2_G1 > 0) {
         res += phasefunction * G2_G1;
         ETX_VALIDATE(res);
       }
@@ -622,11 +620,40 @@ ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const
     energy = energy * albedo;
 
     // if NaN (should not happen, just in case)
-    if ((ray.h != ray.h) || (ray.w.x != ray.w.x))
+    if ((scattering_order++ > kScatteringOrderMax) || (ray.h != ray.h) || (ray.w.x != ray.w.x))
       return {albedo, 0.0f};
   }
 
   return res;
+}
+
+ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2& alpha) {
+  // init
+  RayInfo ray = {-wi, alpha};
+  ray.updateHeight(1.0f);
+
+  // random walk
+  int current_scatteringOrder = 0;
+  while (true) {
+    ray.updateHeight(sampleHeight(ray, smp.next()));
+    // leave the microsurface?
+    if (ray.h == kMaxFloat)
+      break;
+
+    current_scatteringOrder++;
+
+    // sample VNDF
+    float3 wm = sampleVNDF(smp, -ray.w, alpha);
+
+    // next direction
+    ray.updateDirection(samplePhaseFunction_diffuse(smp, wm), alpha);
+    ray.updateHeight(ray.h);
+    if (current_scatteringOrder > kScatteringOrderMax) {
+      return float3{0, 0, 1};
+    }
+  }
+
+  return ray.w;
 }
 
 ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2& alpha, const SpectralResponse& albedo, SpectralResponse& energy) {
