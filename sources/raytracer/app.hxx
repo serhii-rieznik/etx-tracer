@@ -52,7 +52,6 @@ struct RTApplication {
   void on_denoise_selected();
 
  private:
-  std::vector<float4> get_current_image();
   void save_options();
 
  private:

@@ -185,26 +185,9 @@ void RTApplication::on_use_image_as_reference() {
   _options.set("ref", std::string());
   save_options();
 
-  auto image = get_current_image();
-  uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
-  render.set_reference_image(image.data(), image_size);
-}
-
-std::vector<float4> RTApplication::get_current_image() {
-  auto c_image = raytracing.film().layer(Film::Camera);
-  auto l_image = raytracing.film().layer(Film::LightImage);
-  uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
-
-  std::vector<float4> output(image_size.x * image_size.y, float4{});
-
-  raytracing.scheduler().execute(image_size.x * image_size.y, [out = output.data(), &c_image, &l_image](uint32_t b, uint32_t e, uint32_t) {
-    for (uint32_t i = b; i < e; ++i) {
-      out[i] = c_image[i] + (l_image ? l_image[i] : float4{});
-      out[i] = max({out[i].x, out[i].y, out[i].z, 1.0f}, float4{});
-    }
-  });
-
-  return output;
+  const float4* data = raytracing.film().combined_result();
+  uint2 size = raytracing.film().dimensions();
+  render.set_reference_image(data, size);
 }
 
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
@@ -213,7 +196,7 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
   }
 
   uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
-  std::vector<float4> output = get_current_image();
+  const float4* output = raytracing.film().layer(ui.view_options().layer);
 
   if (mode == SaveImageMode::TonemappedLDR) {
     if (strlen(get_file_ext(file_name.c_str())) == 0) {
@@ -241,7 +224,7 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
       file_name += ".exr";
     }
     const char* error = nullptr;
-    if (SaveEXR(reinterpret_cast<const float*>(output.data()), image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
+    if (SaveEXR(reinterpret_cast<const float*>(output), image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
       log::error("Failed to save EXR image to %s: %s", file_name.c_str(), error);
     }
   }

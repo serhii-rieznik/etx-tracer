@@ -138,33 +138,30 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
 
   bool forward_path = smp.next() > 0.5f;
 
+  float factor = (data.path_source == PathSource::Camera) ? sqr(LocalFrame::cos_theta(w_i) < 0.0f ? 1.0f / m_eta : m_eta) : 1.0f;
+  float backward_scale = fabsf(1.0f / LocalFrame::cos_theta(w_i));
+
   SpectralResponse value = {};
   if (LocalFrame::cos_theta(w_i) > 0) {
-    if (LocalFrame::cos_theta(w_o) > 0) {
+    if (LocalFrame::cos_theta(w_o) >= 0) {
       value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, true, mtl.roughness, ext_ior, int_ior, thinfilm)
-                           : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, true, mtl.roughness, ext_ior, int_ior, thinfilm);
+                           : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, true, mtl.roughness, ext_ior, int_ior, thinfilm) * backward_scale;
     } else {
       value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, false, mtl.roughness, ext_ior, int_ior, thinfilm)
-                           : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, mtl.roughness, int_ior, ext_ior, thinfilm);
-
-      value *= (data.path_source == PathSource::Camera) ? sqr(m_eta) : 1.0f;
+                           : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, mtl.roughness, int_ior, ext_ior, thinfilm) * backward_scale * factor;
+      value *= factor;
     }
-  } else if (LocalFrame::cos_theta(w_o) < 0) {
+  } else if (LocalFrame::cos_theta(w_o) <= 0) {
     value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, true, mtl.roughness, int_ior, ext_ior, thinfilm)
-                         : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, true, mtl.roughness, int_ior, ext_ior, thinfilm);
+                         : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, true, mtl.roughness, int_ior, ext_ior, thinfilm) * backward_scale;
   } else {
     value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, false, mtl.roughness, int_ior, ext_ior, thinfilm)
-                         : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, mtl.roughness, ext_ior, int_ior, thinfilm);
-
-    value *= (data.path_source == PathSource::Camera) ? sqr(1.0f / m_eta) : 1.0f;
+                         : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, mtl.roughness, ext_ior, int_ior, thinfilm) * backward_scale * factor;
+    value *= factor;
   }
 
   if (value.is_zero())
     return {data.spectrum_sample, 0.0f};
-
-  if (forward_path == false) {
-    value *= fabsf(1.0f / LocalFrame::cos_theta(w_i));
-  }
 
   bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
 

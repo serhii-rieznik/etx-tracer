@@ -15,9 +15,13 @@ ETX_GPU_CODE SpectralResponse spec_eval(const BSDFData& data, const float3& in_w
 
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
+  auto m_eta = (int_ior.eta / ext_ior.eta).monochromatic();
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
-  SpectralResponse value = external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, true, mtl.roughness, ext_ior, int_ior, thinfilm);
+  bool forward_path = smp.next() > 0.5f;
+
+  SpectralResponse value = external::eval_dielectric(data.spectrum_sample, smp,  //
+    forward_path ? w_i : w_o, forward_path ? w_o : w_i, true, mtl.roughness, ext_ior, int_ior, thinfilm);
 
   if (value.is_zero())
     return {data.spectrum_sample, 0.0f};
@@ -123,12 +127,12 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.medium_index = mtl.ext_medium;
 
     auto diffuse_bsdf = external::eval_diffuse(smp, w_i, frame.to_local(in_w_o), mtl.roughness, diffuse) * (1.0f - fr);
-    auto specular_bsdf = spec_eval(data, in_w_o, mtl, scene, smp);
+    auto specular_bsdf = spec_eval(data, in_w_o, mtl, scene, smp) * fr;
     auto bsdf = diffuse_bsdf + specular_bsdf;
     ETX_VALIDATE(bsdf);
 
     float diffuse_pdf = kInvPi * n_dot_o * (1.0f - fr).monochromatic();
-    float specular_pdf = spec_pdf(data, in_w_o, mtl, scene, smp);
+    float specular_pdf = spec_pdf(data, in_w_o, mtl, scene, smp) * fr.monochromatic();
     result.pdf = diffuse_pdf + specular_pdf;
     ETX_VALIDATE(result.pdf);
 
@@ -167,7 +171,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto local_w_o = frame.to_local(w_o);
 
   auto diffuse_bsdf = external::eval_diffuse(smp, local_w_i, local_w_o, mtl.roughness, diffuse) * (1.0f - fr);
-  auto specular_func = spec_eval(data, w_o, mtl, scene, smp);
+  auto specular_func = spec_eval(data, w_o, mtl, scene, smp) * fr;
   auto specular_bsdf = specular_func * n_dot_o;
 
   BSDFEval result = {};
@@ -178,7 +182,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   ETX_VALIDATE(result.func);
 
   float diffuse_pdf = kInvPi * n_dot_o * (1.0f - fr).monochromatic();
-  float specular_pdf = spec_pdf(data, w_o, mtl, scene, smp);
+  float specular_pdf = spec_pdf(data, w_o, mtl, scene, smp) * fr.monochromatic();
   result.pdf = diffuse_pdf + specular_pdf;
   ETX_VALIDATE(result.pdf);
 
@@ -205,7 +209,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   auto fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 
   float diffuse_pdf = kInvPi * n_dot_o * (1.0f - fr).monochromatic();
-  float specular_pdf = spec_pdf(data, w_o, mtl, scene, smp);
+  float specular_pdf = spec_pdf(data, w_o, mtl, scene, smp) * fr.monochromatic();
 
   float result = diffuse_pdf + specular_pdf;
   ETX_VALIDATE(result);
