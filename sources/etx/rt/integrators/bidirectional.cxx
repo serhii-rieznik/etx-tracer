@@ -161,7 +161,7 @@ struct CPUBidirectionalImpl : public Task {
       }
 
       auto xyz = (result / spect.sampling_pdf()).to_rgb();
-      rt.film().accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / float(status.current_iteration + 1));
+      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / float(status.current_iteration + 1));
     }
   }
 
@@ -362,7 +362,7 @@ struct CPUBidirectionalImpl : public Task {
     auto& z0 = path.emplace_back(PathVertex::Class::Camera);
     z0.throughput = {spect, 1.0f};
 
-    auto ray = generate_ray(smp, rt.scene(), uv);
+    auto ray = generate_ray(rt.scene(), uv, smp.next_2d());
     auto eval = film_evaluate_out(spect, rt.scene().camera, ray);
 
     auto& z1 = path.emplace_back(PathVertex::Class::Camera);
@@ -703,7 +703,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& z_i = camera_path[eye_t];
 
     uint32_t emitter_index = sample_emitter_index(rt.scene(), smp);
-    auto emitter_sample = sample_emitter(spect, emitter_index, smp, z_i.pos, rt.scene());
+    auto emitter_sample = sample_emitter(spect, emitter_index, smp.next_2d(), z_i.pos, rt.scene());
     if (emitter_sample.value.is_zero() || (emitter_sample.pdf_dir == 0.0f)) {
       return {spect, 0.0f};
     }
@@ -837,15 +837,6 @@ CPUBidirectional::~CPUBidirectional() {
   ETX_PIMPL_CLEANUP(CPUBidirectional);
 }
 
-void CPUBidirectional::preview(const Options& opt) {
-  stop(Stop::Immediate);
-
-  if (rt.has_scene()) {
-    current_state = State::Preview;
-    _private->start(opt);
-  }
-}
-
 void CPUBidirectional::run(const Options& opt) {
   stop(Stop::Immediate);
 
@@ -900,8 +891,8 @@ Options CPUBidirectional::options() const {
 }
 
 void CPUBidirectional::update_options(const Options& opt) {
-  if (current_state == State::Preview) {
-    preview(opt);
+  if (current_state == State::Running) {
+    run(opt);
   }
 }
 

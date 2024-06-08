@@ -600,11 +600,22 @@ ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset) {
 
 ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {
   v--;
-  v |= v >> 1;
-  v |= v >> 2;
-  v |= v >> 4;
-  v |= v >> 8;
-  v |= v >> 16;
+  v |= v >> 1llu;
+  v |= v >> 2llu;
+  v |= v >> 4llu;
+  v |= v >> 8llu;
+  v |= v >> 16llu;
+  v++;
+  return v;
+}
+
+ETX_GPU_CODE uint32_t next_power_of_two(uint32_t v) {
+  v--;
+  v |= v >> 1u;
+  v |= v >> 2u;
+  v |= v >> 4u;
+  v |= v >> 8u;
+  v |= v >> 16u;
   v++;
   return v;
 }

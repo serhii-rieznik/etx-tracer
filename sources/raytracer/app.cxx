@@ -28,14 +28,16 @@ void RTApplication::init() {
   render.init();
   ui.initialize();
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
+  ui.set_film(&raytracing.film());
+
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
   ui.callbacks.scene_file_selected = std::bind(&RTApplication::on_scene_file_selected, this, std::placeholders::_1);
   ui.callbacks.save_scene_file_selected = std::bind(&RTApplication::on_save_scene_file_selected, this, std::placeholders::_1);
   ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
-  ui.callbacks.preview_selected = std::bind(&RTApplication::on_preview_selected, this);
   ui.callbacks.run_selected = std::bind(&RTApplication::on_run_selected, this);
   ui.callbacks.stop_selected = std::bind(&RTApplication::on_stop_selected, this, std::placeholders::_1);
+  ui.callbacks.restart_selected = std::bind(&RTApplication::on_restart_selected, this);
   ui.callbacks.reload_scene_selected = std::bind(&RTApplication::on_reload_scene_selected, this);
   ui.callbacks.reload_geometry_selected = std::bind(&RTApplication::on_reload_geometry_selected, this);
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
@@ -101,9 +103,11 @@ void RTApplication::frame() {
 
   if (_current_integrator != nullptr) {
     _current_integrator->update();
-    bool can_change_camera = _current_integrator->state() == Integrator::State::Preview;
+    // TODO : lock
+    bool can_change_camera = true;
+    // _current_integrator->state() == Integrator::State::Preview;
     if (can_change_camera && camera_controller.update(dt)) {
-      _current_integrator->preview(ui.integrator_options());
+      _current_integrator->run(ui.integrator_options());
     }
   }
 
@@ -159,11 +163,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return;
   }
 
-  if (start_rendering) {
-    _current_integrator->run(ui.integrator_options());
-  } else {
-    _current_integrator->preview(ui.integrator_options());
-  }
+  _current_integrator->run(ui.integrator_options());
 }
 
 void RTApplication::save_scene_file(const std::string& file_name) {
@@ -258,16 +258,8 @@ void RTApplication::on_integrator_selected(Integrator* i) {
   raytracing.film().clear();
 
   if (scene.valid()) {
-    _current_integrator->preview(ui.integrator_options());
+    _current_integrator->run(ui.integrator_options());
   }
-}
-
-void RTApplication::on_preview_selected() {
-  ETX_ASSERT(_current_integrator != nullptr);
-  if (ui.view_options().layer == Film::Denoised) {
-    ui.mutable_view_options().layer = Film::Result;
-  }
-  _current_integrator->preview(ui.integrator_options());
 }
 
 void RTApplication::on_run_selected() {
@@ -275,12 +267,18 @@ void RTApplication::on_run_selected() {
   if (ui.view_options().layer == Film::Denoised) {
     ui.mutable_view_options().layer = Film::Result;
   }
+  raytracing.film().clear();
   _current_integrator->run(ui.integrator_options());
 }
 
 void RTApplication::on_stop_selected(bool wait_for_completion) {
   ETX_ASSERT(_current_integrator != nullptr);
   _current_integrator->stop(wait_for_completion ? Integrator::Stop::WaitForCompletion : Integrator::Stop::Immediate);
+}
+
+void RTApplication::on_restart_selected() {
+  on_stop_selected(false);
+  on_run_selected();
 }
 
 void RTApplication::on_reload_scene_selected() {
@@ -304,27 +302,27 @@ void RTApplication::on_options_changed() {
 
 void RTApplication::on_material_changed(uint32_t index) {
   // TODO : re-upload to GPU
-  _current_integrator->preview(ui.integrator_options());
+  _current_integrator->run(ui.integrator_options());
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
   // TODO : re-upload to GPU
-  _current_integrator->preview(ui.integrator_options());
+  _current_integrator->run(ui.integrator_options());
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
   // TODO : re-upload to GPU
   _current_integrator->stop(Integrator::Stop::Immediate);
   build_emitters_distribution(scene.mutable_scene());
-  _current_integrator->preview(ui.integrator_options());
+  _current_integrator->run(ui.integrator_options());
 }
 
 void RTApplication::on_camera_changed() {
-  _current_integrator->preview(ui.integrator_options());
+  _current_integrator->run(ui.integrator_options());
 }
 
 void RTApplication::on_scene_settings_changed() {
-  _current_integrator->preview(ui.integrator_options());
+  _current_integrator->run(ui.integrator_options());
 }
 
 void RTApplication::on_denoise_selected() {

@@ -37,9 +37,9 @@ struct RTApplication {
   void on_scene_file_selected(std::string);
   void on_save_scene_file_selected(std::string);
   void on_integrator_selected(Integrator*);
-  void on_preview_selected();
   void on_run_selected();
   void on_stop_selected(bool wait_for_completion);
+  void on_restart_selected();
   void on_reload_scene_selected();
   void on_reload_geometry_selected();
   void on_options_changed();
@@ -64,13 +64,13 @@ struct RTApplication {
   SceneRepresentation scene;
   CameraController camera_controller;
 
-  CPUDebugIntegrator _preview = {raytracing};
+  CPUDebugIntegrator _debug = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
 
   Integrator* _integrator_array[4] = {
-    &_preview,
+    &_debug,
     &_cpu_pt,
     &_cpu_bidir,
     &_cpu_vcm,

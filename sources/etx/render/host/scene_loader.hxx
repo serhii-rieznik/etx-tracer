@@ -2,6 +2,7 @@
 
 #include <etx/core/pimpl.hxx>
 #include <etx/render/host/tasks.hxx>
+#include <etx/render/host/film.hxx>
 #include <etx/render/shared/scene.hxx>
 
 #include <unordered_map>
@@ -37,8 +38,8 @@ struct SceneRepresentation {
   ETX_DECLARE_PIMPL(SceneRepresentation, 24u * 1024u);
 };
 
-Camera build_camera(const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov, float lens_radius, float focal_distance);
-void update_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov);
+void build_camera(Camera& camera, float3 origin, float3 target, float3 up, uint2 viewport, float fov);
+
 float get_camera_fov(const Camera& camera);
 float get_camera_focal_length(const Camera& camera);
 float fov_to_focal_length(float fov);

@@ -411,8 +411,8 @@ void UI::build(double dt) {
     ImGui::EndMainMenuBar();
   }
 
-  bool scene_editable = has_integrator && has_scene &&  //
-                        ((_current_integrator->state() == Integrator::State::Preview) || (_current_integrator->state() == Integrator::State::Stopped));
+  // TODO : lock
+  bool scene_editable = has_integrator && has_scene && (_current_integrator->state() != Integrator::State::WaitingForCompletion);
 
   ImVec2 wpadding = ImGui::GetStyle().WindowPadding;
   ImVec2 fpadding = ImGui::GetStyle().FramePadding;
@@ -425,47 +425,49 @@ void UI::build(double dt) {
 
     bool state_available[4] = {
       can_run && (state == Integrator::State::Stopped),
-      can_run && ((state == Integrator::State::Stopped) || (state == Integrator::State::Preview)),
       can_run && (state == Integrator::State::Running),
-      can_run && ((state != Integrator::State::Stopped)),
+      can_run && (state != Integrator::State::Stopped),
+      can_run && (state == Integrator::State::Running),
     };
 
     ImVec4 colors[4] = {
-      state_available[0] ? ImVec4{0.1f, 0.1f, 0.33f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
-      state_available[1] ? ImVec4{0.1f, 0.33f, 0.1f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
-      state_available[2] ? ImVec4{0.33f, 0.22f, 0.11f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
-      state_available[3] ? ImVec4{0.33f, 0.1f, 0.1f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
+      state_available[0] ? ImVec4{0.11f, 0.44f, 0.11f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
+      state_available[1] ? ImVec4{0.44f, 0.33f, 0.11f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
+      state_available[2] ? ImVec4{0.44f, 0.11f, 0.11f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
+      state_available[3] ? ImVec4{0.11f, 0.22f, 0.44f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
     };
 
     std::string labels[4] = {
-      (state == Integrator::State::Preview) ? "> Preview <" : "  Preview  ",
-      (state == Integrator::State::Running) ? "> Launch <" : "  Launch  ",
-      (state == Integrator::State::WaitingForCompletion) ? "> Finish <" : "  Finish  ",
+      (state == Integrator::State::Running) ? "> Running <" : "  Launch  ",
+      (state == Integrator::State::WaitingForCompletion) ? "> Finishing <" : "  Finish  ",
       " Terminate ",
+      (state == Integrator::State::Running) ? " Restart " : "  Restart  ",
     };
 
+    ImGui::SameLine(0.0f, wpadding.x);
     ImGui::PushStyleColor(ImGuiCol_Button, colors[0]);
     if (ImGui::Button(labels[0].c_str(), {0.0f, button_size})) {
-      callbacks.preview_selected();
+      callbacks.run_selected();
     }
 
     ImGui::SameLine(0.0f, wpadding.x);
     ImGui::PushStyleColor(ImGuiCol_Button, colors[1]);
     if (ImGui::Button(labels[1].c_str(), {0.0f, button_size})) {
-      callbacks.run_selected();
+      callbacks.stop_selected(true);
     }
 
     ImGui::SameLine(0.0f, wpadding.x);
     ImGui::PushStyleColor(ImGuiCol_Button, colors[2]);
     if (ImGui::Button(labels[2].c_str(), {0.0f, button_size})) {
-      callbacks.stop_selected(true);
+      callbacks.stop_selected(false);
     }
 
     ImGui::SameLine(0.0f, wpadding.x);
     ImGui::PushStyleColor(ImGuiCol_Button, colors[3]);
     if (ImGui::Button(labels[3].c_str(), {0.0f, button_size})) {
-      callbacks.stop_selected(false);
+      callbacks.restart_selected();
     }
+
     ImGui::PopStyleColor(4);
 
     ImGui::SameLine(0.0f, wpadding.x);
@@ -519,7 +521,6 @@ void UI::build(double dt) {
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, text_size + 2.0f * wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     constexpr const char* status_str[] = {
       "Stopped",
-      "Preview",
       "Running",
       "Completing",
     };
@@ -527,14 +528,7 @@ void UI::build(double dt) {
     auto status = _current_integrator ? _current_integrator->status() : Integrator::Status{};
     auto state = _current_integrator ? _current_integrator->state() : Integrator::State::Stopped;
 
-    double average_time = 0.0;
-
-    if (status.preview_frames > 0) {
-      uint32_t i_frame = (status.completed_iterations >= status.preview_frames) ? (status.completed_iterations - status.preview_frames) : 0u;
-      average_time = status.total_time / double(i_frame + 1u);
-    } else {
-      average_time = status.completed_iterations > 0 ? status.total_time / status.completed_iterations : 0.0;
-    }
+    double average_time = status.completed_iterations > 0 ? status.total_time / status.completed_iterations : 0.0;
 
     char buffer[2048] = {};
     snprintf(buffer, sizeof(buffer), "%-4d | %s | %.3fms last, %.3fms avg, %.3fs total",  //
@@ -661,21 +655,22 @@ void UI::build(double dt) {
   if ((_ui_setup & UICamera) && ImGui::Begin("Camera", nullptr, kWindowFlags)) {
     if (scene_editable) {
       auto& camera = _current_scene->camera;
-      bool changed = false;
+      bool camera_changed = false;
+      bool film_changed = false;
       float3 pos = camera.position;
       float3 target = camera.position + camera.direction;
       float focal_len = get_camera_focal_length(camera);
-      ImGui::Text("Lens size");
-      changed = changed || ImGui::DragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
+      ImGui::Text("Lens Radius");
+      camera_changed = camera_changed || ImGui::DragFloat("##lens", &_current_scene->lens.radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
       ImGui::Text("Focal distance");
-      changed = changed || ImGui::DragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
+      camera_changed = camera_changed || ImGui::DragFloat("##focaldist", &_current_scene->lens.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
       ImGui::Text("Focal length");
-      changed = changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
+      camera_changed = camera_changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
 
-      if (changed && callbacks.camera_changed) {
-        camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
-        camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
-        update_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, focal_length_to_fov(focal_len) * 180.0f / kPi);
+      if (camera_changed && callbacks.camera_changed) {
+        _current_scene->lens.radius = fmaxf(_current_scene->lens.radius, 0.0f);
+        _current_scene->lens.focal_distance = fmaxf(_current_scene->lens.focal_distance, 0.0f);
+        build_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, focal_length_to_fov(focal_len) * 180.0f / kPi);
         callbacks.camera_changed();
       }
     } else {
@@ -855,6 +850,10 @@ void UI::load_image() {
   if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
     callbacks.reference_image_selected(selected_file);
   }
+}
+
+void UI::set_film(Film* film) {
+  _film = film;
 }
 
 void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums) {

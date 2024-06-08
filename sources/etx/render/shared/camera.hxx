@@ -1,7 +1,6 @@
 #pragma once
 
 #include <etx/core/core.hxx>
-
 #include <etx/render/shared/base.hxx>
 
 namespace etx {
@@ -27,11 +26,10 @@ struct ETX_ALIGNED Camera {
   float area ETX_EMPTY_INIT;
 
   float3 direction ETX_EMPTY_INIT;
-  float lens_radius ETX_EMPTY_INIT;
+  float image_plane ETX_EMPTY_INIT;
 
   uint2 image_size ETX_EMPTY_INIT;
-  float image_plane ETX_EMPTY_INIT;
-  float focal_distance ETX_EMPTY_INIT;
+  uint2 pad ETX_EMPTY_INIT;
 };
 
 struct ETX_ALIGNED CameraSample {
@@ -85,6 +83,19 @@ struct ETX_ALIGNED FilmData {
     atomic_add_float(&ptr.y, value.y);
     atomic_add_float(&ptr.z, value.z);
   }
+};
+
+struct PixelSampler {
+  uint32_t image_index = kInvalidIndex;
+  float radius = 1.0f;
+
+  static PixelSampler empty() {
+    return {kInvalidIndex, 0.0f};
+  }
+};
+
+struct Lens : PixelSampler {
+  float focal_distance = 0.0f;
 };
 
 }  // namespace etx

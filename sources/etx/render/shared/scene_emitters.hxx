@@ -171,12 +171,12 @@ ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em, const float3& in_direc
   }
 }
 
-ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQuery spect, const float3& from_point, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQuery spect, const float3& from_point, const Scene& scene, const float2& smp) {
   EmitterSample result;
   switch (em.cls) {
     case Emitter::Class::Area: {
       const auto& tri = scene.triangles[em.triangle_index];
-      result.barycentric = random_barycentric(smp.next_2d());
+      result.barycentric = random_barycentric(smp);
       result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
       result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
       result.direction = normalize(result.origin - from_point);
@@ -195,7 +195,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       float2 disk_sample = {};
       if (em.angular_size > 0.0f) {
         auto basis = orthonormal_basis(em.direction);
-        disk_sample = sample_disk(smp.next_2d());
+        disk_sample = sample_disk(smp);
         result.direction = normalize(em.direction + basis.u * disk_sample.x * em.equivalent_disk_size + basis.v * disk_sample.y * em.equivalent_disk_size);
       } else {
         result.direction = em.direction;
@@ -214,7 +214,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       float pdf_image = 0.0f;
       uint2 image_location = {};
       float4 image_value = {};
-      float2 uv = img.sample(smp.next_2d(), pdf_image, image_location, image_value);
+      float2 uv = img.sample(smp, pdf_image, image_location, image_value);
       float sin_t = sinf(uv.y * kPi);
       if (sin_t <= kEpsilon) {
         result = {{spect, 0.0f}};
@@ -251,7 +251,7 @@ ETX_GPU_CODE uint32_t sample_emitter_index(const Scene& scene, Sampler& smp) {
   return emitter_index;
 }
 
-ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_index, Sampler& smp, const float3& from_point, const Scene& scene) {
+ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_index, const float2& smp, const float3& from_point, const Scene& scene) {
   const auto& emitter = scene.emitters[emitter_index];
   EmitterSample sample = emitter_sample_in(emitter, spect, from_point, scene, smp);
   sample.pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);

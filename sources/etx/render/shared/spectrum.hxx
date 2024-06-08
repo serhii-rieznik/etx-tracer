@@ -327,12 +327,12 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     return spectral() ? (components.w <= kEpsilon) : (components.integrated.x <= kEpsilon) && (components.integrated.y <= kEpsilon) && (components.integrated.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                       \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
-    components.integrated OP other.components.integrated;                     \
-    components.w OP other.components.w;                                       \
-    return *this;                                                             \
+#define SPECTRAL_OP(OP)                                                        \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
+    components.integrated OP other.components.integrated;                      \
+    components.w OP other.components.w;                                        \
+    return *this;                                                              \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)
@@ -410,29 +410,6 @@ ETX_GPU_CODE SpectralResponse saturate(const SpectralResponse& s) {
 }
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
-template <class T>
-ETX_GPU_CODE void print_invalid_value(const char* name, const T& v, const char* filename, uint32_t line);
-
-template <>
-ETX_GPU_CODE void print_invalid_value<float>(const char* name, const float& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f) at %s [%u]\n", name, v, filename, line);
-}
-
-template <>
-ETX_GPU_CODE void print_invalid_value<float2>(const char* name, const float2& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f) at %s [%u]\n", name, v.x, v.y, filename, line);
-}
-
-template <>
-ETX_GPU_CODE void print_invalid_value<float3>(const char* name, const float3& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, filename, line);
-}
-
-template <>
-ETX_GPU_CODE void print_invalid_value<float4>(const char* name, const float4& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, v.w, filename, line);
-}
-
 template <>
 ETX_GPU_CODE void print_invalid_value<complex>(const char* name, const complex& z, const char* filename, uint32_t line) {
   printf("Validation failed: %s (%f + i * %f) at %s [%u]\n", name, z.real(), z.imag(), filename, line);
@@ -560,6 +537,7 @@ struct RefractiveIndex {
   static RefractiveIndex load_from_file(const char* file_name);
 
   struct Sample : public SpectralQuery {
+    SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
     SpectralResponse eta;
     SpectralResponse k;
 
@@ -589,7 +567,8 @@ struct RefractiveIndex {
   };
 
   ETX_GPU_CODE Sample at(SpectralQuery q) const {
-    Sample result = {q};
+    Sample result = {};
+    result.cls = cls;
     result.eta = eta.empty() ? SpectralResponse(q, 1.0f) : eta(q);
     result.k = k.empty() ? SpectralResponse(q, 0.0f) : k(q);
     return result;

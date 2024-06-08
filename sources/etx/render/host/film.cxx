@@ -4,9 +4,31 @@
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/denoiser.hxx>
 
-#include <vector>
+#include <etx/render/shared/scene.hxx>
 
 namespace etx {
+
+namespace {
+
+float filter_box(const float2& p, float radius) {
+  return float(fabsf(p.x) < radius) * float(fabsf(p.y) < radius);
+}
+
+float filter_tent(const float2& p, float radius) {
+  float dx = fmaxf(0.0, radius - fabsf(p.x)) / radius;
+  float dy = fmaxf(0.0, radius - fabsf(p.y)) / radius;
+  return dx * dy;
+}
+
+float filter_blackman_harris(const float2& p, float radius) {
+  float sample_distance = sqrtf(p.x * p.x + p.y * p.y);
+  float r = kDoublePi * saturate(0.5f + sample_distance / (2.0f * radius));
+  return 0.35875f - 0.48829f * cosf(r) + 0.14128f * cosf(2.0f * r) - 0.01168f * cosf(3.0f * r);
+}
+
+using filter_function = float (*)(const float2&, float);
+
+}  // namespace
 
 struct FilmImpl {
   FilmImpl(TaskScheduler& t)
@@ -50,6 +72,30 @@ void Film::allocate(const uint2& dim) {
   clear(kAllLayers);
 }
 
+void Film::generate_filter_image(uint32_t filter, std::vector<float4>& data) {
+  constexpr float2 center = {float(PixelSamplerSize) * 0.5f, float(PixelSamplerSize) * 0.5f};
+  constexpr float radius = float(PixelSamplerSize) * 0.5f;
+
+  data.resize(PixelSamplerSize * PixelSamplerSize);
+  for (uint32_t y = 0; y < PixelSamplerSize; ++y) {
+    for (uint32_t x = 0; x < PixelSamplerSize; ++x) {
+      float2 pos = {float(x), float(y)};
+      float value = filter_blackman_harris(pos - center, radius);
+      data[x + y * PixelSamplerSize] = {value, value, value, 1.0f};
+    }
+  }
+}
+
+float2 Film::sample(const Scene& scene, const PixelSampler& sampler, const uint2& pixel, const float2& rnd) const {
+  float2 jitter = rnd * 2.0f - 1.0f;
+  if (sampler.image_index != kInvalidIndex) {
+    jitter = scene.images[sampler.image_index].sample(rnd) * 2.0f - 1.0f;
+  }
+  float u = (float(pixel.x) + 0.5f + sampler.radius * jitter.x) / float(_private->dimensions.x) * 2.0f - 1.0f;
+  float v = (float(pixel.y) + 0.5f + sampler.radius * jitter.y) / float(_private->dimensions.y) * 2.0f - 1.0f;
+  return {u, v};
+}
+
 void Film::atomic_add(uint32_t layer, const float4& value, const float2& ndc_coord) {
   float2 uv = ndc_coord * 0.5f + 0.5f;
   uint32_t ax = static_cast<uint32_t>(uv.x * float(_private->dimensions.x));
@@ -62,22 +108,22 @@ void Film::atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t 
     return;
   }
 
-  uint32_t index = x + y * _private->dimensions.x;
-  auto ptr = _private->layer(layer) + index;
+  uint32_t i = x + (_private->dimensions.y - 1 - y) * _private->dimensions.x;
+  auto ptr = _private->layer(layer) + i;
   atomic_add_float(&ptr->x, value.x);
   atomic_add_float(&ptr->y, value.y);
   atomic_add_float(&ptr->z, value.z);
   atomic_add_float(&ptr->w, value.w);
 }
 
-void Film::accumulate(uint32_t layer, const float4& value, uint32_t x, uint32_t y, float t) {
-  if ((x >= _private->dimensions.x) || (y >= _private->dimensions.y) || (layer >= LayerCount)) {
+void Film::accumulate(uint32_t layer, const float4& value, const uint2& pixel, float t) {
+  if ((pixel.x >= _private->dimensions.x) || (pixel.y >= _private->dimensions.y) || (layer >= LayerCount)) {
     return;
   }
 
   float4* layer_data = _private->layer(layer);
 
-  uint32_t i = x + (_private->dimensions.y - 1 - y) * _private->dimensions.x;
+  uint32_t i = pixel.x + (_private->dimensions.y - 1u - pixel.y) * _private->dimensions.x;
   float4 new_value = {value.x, value.y, value.z, 1.0f};
   if (t > 0.0f) {
     const float4& existing_value = layer_data[i];
@@ -92,7 +138,20 @@ void Film::accumulate(uint32_t layer, const float4& value, const float2& ndc_coo
   float2 uv = ndc_coord * 0.5f + 0.5f;
   uint32_t ax = static_cast<uint32_t>(uv.x * float(_private->dimensions.x));
   uint32_t ay = static_cast<uint32_t>(uv.y * float(_private->dimensions.y));
-  accumulate(layer, value, ax, ay, t);
+  accumulate(layer, value, uint2{ax, ay}, t);
+}
+
+void Film::commit_camera_iteration(uint32_t i) {
+  float t = float(double(i) / double(i + 1u));
+
+  auto sptr = _private->layer(CameraIteration);
+  auto dptr = _private->layer(CameraImage);
+
+  uint64_t pixel_count = count();
+  for (uint64_t i = 0; i < pixel_count; ++i) {
+    dptr[i] = (t == 0.0f) ? sptr[i] : lerp(sptr[i], dptr[i], t);
+    sptr[i] = {};
+  }
 }
 
 void Film::commit_light_iteration(uint32_t i) {
@@ -115,39 +174,13 @@ const float4* Film::combined_result() const {
 float4* Film::mutable_combined_result() const {
   _private->tasks.execute(count(), [this](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
-      _private->buffers[Result][i] = max({}, _private->buffers[Camera][i] + _private->buffers[LightImage][i]);
+      float4 c = _private->buffers[CameraImage][i];
+      float4 l = _private->buffers[LightImage][i];
+      _private->buffers[Result][i] = max({}, c + l);
+      _private->buffers[Result][i] = max({}, c + l);
     }
   });
   return _private->buffers[Result].data();
-}
-
-void Film::flush_to(Film& other, float t, const Layers& layers) const {
-  ETX_ASSERT(_private->dimensions == other._private->dimensions);
-
-  const float4* src[LayerCount] = {
-    _private->layer(Camera),
-    _private->layer(LightImage),
-    _private->layer(Normals),
-    _private->layer(Albedo),
-  };
-
-  float4* dst[LayerCount] = {
-    other._private->layer(Camera),
-    other._private->layer(LightImage),
-    other._private->layer(Normals),
-    other._private->layer(Albedo),
-  };
-
-  uint64_t pixel_count = count();
-  for (uint64_t i = 0; i < pixel_count; ++i) {
-    for (uint32_t l : layers) {
-      const auto sptr = src[l];
-      auto dptr = dst[l];
-      if ((sptr != nullptr) && (dptr != nullptr)) {
-        dptr[i] = (t == 0.0f) ? sptr[i] : lerp(sptr[i], dptr[i], t);
-      }
-    }
-  }
 }
 
 void Film::clear(const Layers& layers) {
@@ -188,7 +221,8 @@ void Film::denoise() {
 
 const char* Film::layer_name(uint32_t layer) {
   static const char* names[] = {
-    "Camera",
+    "Camera Image",
+    "Camera Iteration",
     "Light Image",
     "Light Iteration",
     "Normals",

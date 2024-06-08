@@ -64,7 +64,7 @@ struct CameraController {
     }
 
     if (movement || rotation || zoom) {
-      update_camera(_camera, _camera.position, _camera.target, kUpVector, _camera.image_size, get_camera_fov(_camera));
+      build_camera(_camera, _camera.position, _camera.target, kUpVector, _camera.image_size, get_camera_fov(_camera));
       return true;
     }
 

@@ -1,15 +1,18 @@
 ﻿#pragma once
 
 #include <etx/core/pimpl.hxx>
-#include <etx/render/shared/base.hxx>
+#include <etx/render/shared/camera.hxx>
 
 namespace etx {
 
 struct TaskScheduler;
+struct Scene;
+
 struct FilmImpl;
 struct Film {
   enum : uint32_t {
-    Camera,
+    CameraImage,
+    CameraIteration,
     LightImage,
     LightIteration,
     Normals,
@@ -20,23 +23,31 @@ struct Film {
     LayerCount,
   };
 
+  enum : uint32_t {
+    PixelSamplerBlackmanHarris,
+    PixelSamplerCount,
+
+    PixelSamplerSize = 128u,
+  };
+
   using Layers = std::initializer_list<uint32_t>;
 
-  static constexpr Layers kAllLayers = {Camera, LightImage, LightIteration, Normals, Albedo, Result, Denoised};
+  static constexpr Layers kAllLayers = {CameraImage, CameraIteration, LightImage, LightIteration, Normals, Albedo, Result, Denoised};
 
   Film(TaskScheduler&);
   ~Film();
 
   void allocate(const uint2& dim);
 
+  float2 sample(const Scene& scene, const PixelSampler& sampler, const uint2& pixel, const float2& rnd) const;
+
   void atomic_add(uint32_t layer, const float4& value, const float2& ndc_coord);
   void atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t y);
 
   void accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, float t);
-  void accumulate(uint32_t layer, const float4& value, uint32_t x, uint32_t y, float t);
+  void accumulate(uint32_t layer, const float4& value, const uint2& pixel, float t);
 
-  void flush_to(Film& other, float t, const Layers& layers) const;
-
+  void commit_camera_iteration(uint32_t i);
   void commit_light_iteration(uint32_t i);
 
   void clear(const Layers& layers);
@@ -52,6 +63,8 @@ struct Film {
   float4* mutable_combined_result() const;
 
   void denoise();
+
+  static void generate_filter_image(uint32_t filter, std::vector<float4>&);
 
   static float calculate_ev(float f, float s) {
     return log2f(f * f / s);

@@ -12,7 +12,6 @@ namespace etx {
 struct Integrator {
   enum class State : uint32_t {
     Stopped,
-    Preview,
     Running,
     WaitingForCompletion,
   };
@@ -30,7 +29,6 @@ struct Integrator {
 
     double last_iteration_time = 0.0;
     double total_time = 0.0;
-    uint32_t preview_frames = 0;
     uint32_t completed_iterations = 0;
     uint32_t current_iteration = 0;
 
@@ -60,9 +58,6 @@ struct Integrator {
     Options result = {};
     result.set("desc", "No options available");
     return result;
-  }
-
-  virtual void preview(const Options&) {
   }
 
   virtual void run(const Options&) {

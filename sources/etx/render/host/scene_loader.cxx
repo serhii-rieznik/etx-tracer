@@ -156,9 +156,10 @@ struct SceneRepresentationImpl {
   ImagePool images;
   MediumPool mediums;
 
+  Lens lens = {};
+
   SceneRepresentation::MaterialMapping material_mapping;
   uint32_t camera_medium_index = kInvalidIndex;
-  uint32_t camera_lens_shape_image_index = kInvalidIndex;
 
   Scene scene;
   bool loaded = false;
@@ -227,7 +228,7 @@ struct SceneRepresentationImpl {
     images.init(1024u);
     mediums.init(1024u);
     init_spectrums(s, extinction);
-    scene.camera = build_camera({5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280u, 720u}, 26.99f, 0.0f, 1.0f);
+    build_camera(scene.camera, {5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280u, 720u}, 26.99f);
   }
 
   ~SceneRepresentationImpl() {
@@ -246,7 +247,7 @@ struct SceneRepresentationImpl {
     triangle_to_material.clear();
     triangle_to_emitter.clear();
     camera_medium_index = kInvalidIndex;
-    camera_lens_shape_image_index = kInvalidIndex;
+    lens.image_index = kInvalidIndex;
 
     images.remove_all();
     mediums.remove_all();
@@ -389,6 +390,12 @@ struct SceneRepresentationImpl {
   }
 
   void commit() {
+    log::info("Building pixel sampler...");
+    std::vector<float4> sampler_image;
+    Film::generate_filter_image(Film::PixelSamplerBlackmanHarris, sampler_image);
+    uint32_t image = images.add_from_data(sampler_image.data(), {Film::PixelSamplerSize, Film::PixelSamplerSize}, Image::BuildSamplingTable | Image::UniformSamplingTable, {});
+    scene.pixel_sampler = {kInvalidIndex, 0.5f};
+
     float3 bbox_min = triangles.empty() ? float3{-1.0f, -1.0f, -1.0f} : float3{kMaxFloat, kMaxFloat, kMaxFloat};
     float3 bbox_max = triangles.empty() ? float3{+1.0f, +1.0f, +1.0f} : float3{-kMaxFloat, -kMaxFloat, -kMaxFloat};
     for (const auto& tri : triangles) {
@@ -402,7 +409,6 @@ struct SceneRepresentationImpl {
     scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
     scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
     scene.camera_medium_index = camera_medium_index;
-    scene.camera_lens_shape_image_index = camera_lens_shape_image_index;
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
     scene.triangle_to_material = {triangle_to_material.data(), triangle_to_material.size()};
@@ -412,8 +418,9 @@ struct SceneRepresentationImpl {
     scene.images = {images.as_array(), images.array_size()};
     scene.mediums = {mediums.as_array(), mediums.array_size()};
     scene.environment_emitters.count = 0;
+    scene.lens = lens;
 
-    log::info("Building emitters distribution for %llu emitters...\n", scene.emitters.count);
+    log::info("Building emitters distribution for %llu emitters...", scene.emitters.count);
     build_emitters_distribution(scene);
 
     loaded = true;
@@ -445,15 +452,7 @@ struct SceneRepresentationImpl {
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
-Camera build_camera(const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov, float lens_radius, float focal_distance) {
-  Camera result = {};
-  result.focal_distance = focal_distance;
-  result.lens_radius = lens_radius;
-  update_camera(result, origin, target, up, viewport, fov);
-  return result;
-}
-
-void update_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov) {
+void build_camera(Camera& camera, float3 origin, float3 target, float3 up, uint2 viewport, float fov) {
   float4x4 view = look_at(origin, target, up);
   float4x4 proj = perspective(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
   float4x4 inv_view = inverse(view);
@@ -549,9 +548,10 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
 
-  auto& cam = _private->scene.camera;
-  cam.lens_radius = 0.0f;
+  _private->lens.radius = 0.0f;
+  _private->lens.focal_distance = 0.0f;
 
+  auto& cam = _private->scene.camera;
   Camera::Class camera_cls = Camera::Class::Perspective;
   float3 camera_pos = cam.position;
   float3 camera_up = {0.0f, 1.0f, 0.0f};
@@ -594,9 +594,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
             camera_focal_len = float_value;
             use_focal_len = true;
           } else if (json_get_float(ci, "lens-radius", float_value)) {
-            cam.lens_radius = float_value;
+            _private->lens.radius = float_value;
           } else if (json_get_float(ci, "focal-distance", float_value)) {
-            cam.focal_distance = float_value;
+            _private->lens.focal_distance = float_value;
           } else if (cobj.is_array()) {
             if (ckey == "origin") {
               auto values = cobj.get<std::vector<float>>();
@@ -643,7 +643,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
     if (use_focal_len) {
       camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
     }
-    update_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
+    build_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
   }
 
   if (_private->emitters.empty()) {
@@ -855,7 +855,7 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
   if (get_param(material, "shape")) {
     char tmp_buffer[2048] = {};
     snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
-    camera_lens_shape_image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
+    lens.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
   }
 }
 

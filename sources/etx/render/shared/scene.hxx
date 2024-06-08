@@ -22,6 +22,8 @@ struct ETX_ALIGNED EnvironmentEmitters {
 
 struct ETX_ALIGNED Scene {
   Camera camera ETX_EMPTY_INIT;
+  PixelSampler pixel_sampler ETX_EMPTY_INIT;
+  Lens lens ETX_EMPTY_INIT;
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<uint32_t> triangle_to_material ETX_EMPTY_INIT;
@@ -36,7 +38,6 @@ struct ETX_ALIGNED Scene {
   float bounding_sphere_radius ETX_EMPTY_INIT;
   uint64_t acceleration_structure ETX_EMPTY_INIT;
   uint32_t camera_medium_index ETX_INIT_WITH(kInvalidIndex);
-  uint32_t camera_lens_shape_image_index ETX_INIT_WITH(kInvalidIndex);
   uint32_t max_path_length ETX_INIT_WITH(65535u);
   uint32_t samples ETX_INIT_WITH(256u);
   uint32_t random_path_termination ETX_INIT_WITH(6u);
@@ -83,7 +84,7 @@ ETX_GPU_CODE Vertex lerp_vertex(const ArrayView<Vertex>& vertices, const Triangl
 }
 
 ETX_GPU_CODE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
-  return position - max(0.0f, dot(position - origin, normal)) * normal;
+  return position - dot(position - origin, normal) * normal;
 }
 
 ETX_GPU_CODE float3 shading_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc, const float3& w_o) {

@@ -185,7 +185,7 @@ struct CPUVCMImpl : public Task {
       state.merged += (state.gathered / state.spect.sampling_pdf()).to_rgb();
 
       float t = float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1);
-      film.accumulate(Film::Camera, {state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);
+      film.accumulate(Film::CameraImage, {state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);
 
       if (pi % 256 == 0) {
         have_camera_image = true;
@@ -244,15 +244,6 @@ Options CPUVCM::options() const {
   return result;
 }
 
-void CPUVCM::preview(const Options& opt) {
-  stop(Stop::Immediate);
-
-  if (rt.has_scene()) {
-    current_state = State::Preview;
-    _private->start(opt);
-  }
-}
-
 void CPUVCM::run(const Options& opt) {
   stop(Stop::Immediate);
 
@@ -279,8 +270,8 @@ void CPUVCM::stop(Stop st) {
 }
 
 void CPUVCM::update_options(const Options& opt) {
-  if (current_state == State::Preview) {
-    preview(opt);
+  if (current_state == State::Running) {
+    run(opt);
   }
 }
 

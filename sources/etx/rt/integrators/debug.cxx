@@ -10,14 +10,11 @@
 namespace etx {
 
 struct CPUDebugIntegratorImpl : public Task {
-  Integrator::Status status = {
-    .preview_frames = 3u,
-  };
+  Integrator::Status status = {};
 
   Raytracing& rt;
   std::atomic<Integrator::State>* state = nullptr;
-  std::vector<RNDSampler> samplers;
-  uint2 current_dimensions = {};
+  std::vector<Sampler> samplers;
   TimeMeasure total_time = {};
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
@@ -65,40 +62,21 @@ struct CPUDebugIntegratorImpl : public Task {
     voxel_data[6] = opt.get("v110", voxel_data[6]).to_float();
     voxel_data[7] = opt.get("v111", voxel_data[7]).to_float();
 
-    status = {
-      .preview_frames = 3u,
-    };
-
-    current_scale = (state->load() == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(status.preview_frames)));
-    current_dimensions = rt.film().dimensions() / current_scale;
-
+    status = {};
     total_time = {};
     iteration_time = {};
-    current_task = rt.scheduler().schedule(current_dimensions.x * current_dimensions.y, this);
+    current_task = rt.scheduler().schedule(rt.film().count(), this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+    const auto& film = rt.film();
     auto& smp = samplers[thread_id];
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-      uint32_t x = i % current_dimensions.x;
-      uint32_t y = i / current_dimensions.x;
-      float2 uv = get_jittered_uv(smp, {x, y}, current_dimensions);
+      uint32_t x = i % film.dimensions().x;
+      uint32_t y = i / film.dimensions().x;
+      float2 uv = get_jittered_uv(smp, {x, y}, film.dimensions());
       float3 xyz = preview_pixel(smp, uv, {x, y});
-
-      if (state->load() == Integrator::State::Running) {
-        rt.film().accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / (float(status.current_iteration + 1)));
-      } else {
-        float t = status.current_iteration < status.preview_frames
-                    ? 0.0f
-                    : float(status.current_iteration - status.preview_frames) / float(status.current_iteration - status.preview_frames + 1);
-        for (uint32_t ay = 0; ay < current_scale; ++ay) {
-          for (uint32_t ax = 0; ax < current_scale; ++ax) {
-            uint32_t rx = x * current_scale + ax;
-            uint32_t ry = y * current_scale + ay;
-            rt.film().accumulate(Film::Camera, {xyz.x, xyz.y, xyz.z, 1.0f}, rx, ry, t);
-          }
-        }
-      }
+      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / (float(status.current_iteration + 1)));
     }
   }
 
@@ -290,9 +268,10 @@ struct CPUDebugIntegratorImpl : public Task {
     return normalize(result);
   }
 
-  float3 preview_pixel(RNDSampler& smp, const float2& uv, const uint2& xy) const {
+  float3 preview_pixel(Sampler& smp, const float2& uv, const uint2& xy) const {
     const auto& scene = rt.scene();
-    auto ray = generate_ray(smp, scene, uv);
+    auto& film = rt.film();
+    auto ray = generate_ray(scene, uv, smp.next_2d());
     auto spect = scene.spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
     float3 output = {};
@@ -300,8 +279,8 @@ struct CPUDebugIntegratorImpl : public Task {
     Intersection intersection;
 
     if (mode == CPUDebugIntegrator::Mode::Thinfilm) {
-      float t = float(xy.x) / float(current_dimensions.x - 1u);
-      float s = float(xy.y) / float(current_dimensions.y - 1u);
+      float t = float(xy.x) / float(film.dimensions().x - 1u);
+      float s = float(xy.y) / float(film.dimensions().y - 1u);
       float cos_theta = 1.0f - t;
       float thickness = s * 2500.0f;
 
@@ -393,8 +372,8 @@ struct CPUDebugIntegratorImpl : public Task {
       */
 
     } else if (mode == CPUDebugIntegrator::Mode::Spectrums) {
-      float t = float(xy.x) / float(current_dimensions.x - 1u);
-      float s = float(xy.y) / float(current_dimensions.y - 1u);
+      float t = float(xy.x) / float(film.dimensions().x - 1u);
+      float s = float(xy.y) / float(film.dimensions().y - 1u);
 
       constexpr float kBandCount = 9.0f;
       uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
@@ -439,45 +418,42 @@ struct CPUDebugIntegratorImpl : public Task {
 
       output = (t < 0.5f ? value_spectrum : value_rgb);
     } else if (mode == CPUDebugIntegrator::Mode::IOR) {
-      float t = float(xy.x) / float(current_dimensions.x - 1u);
-      float s = float(xy.y) / float(current_dimensions.y - 1u);
+      float t = float(xy.x) / float(film.dimensions().x - 1u);
+      float s = float(xy.y) / float(film.dimensions().y - 1u);
 
-      constexpr float kBandCount = 10.0f;
+      constexpr float kBandCount = 20.0f;
       uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
 
-      static RefractiveIndex spds[uint32_t(kBandCount)];
+      static RefractiveIndex spds[uint32_t(kBandCount) / 2u];
 
       static bool init_spectrums = ([&](const Scene& scene) -> bool {
         uint32_t i = 0;
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/air.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/water.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/plastic.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/sapphire.spd"));
         spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/diamond.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/brass.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/bronze.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/carbon.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/chrome.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/copper.spd"));
         spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/gold.spd"));
         spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/osmium.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/copper.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/chrome.spd"));
         spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/nickel.spd"));
+        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/silver.spd"));
         return true;
       })(scene);
 
-      float3 value_rgb = {};
-      float3 value_spectrum = {};
+      float cos_t = cosf(t * kHalfPi);
 
-      if (t >= 0.5f) {
-        float cos_t = cosf(2.0f * (t - 0.5f) * kHalfPi);
-        SpectralQuery s_rgb = SpectralQuery::sample();
-        auto f = fresnel::calculate(s_rgb, cos_t, spds[0](s_rgb), spds[band](s_rgb), {});
-        value_rgb = f.to_rgb();
-      } else {
-        float cos_t = cosf(2.0f * t * kHalfPi);
-        SpectralQuery s_s = SpectralQuery::spectral_sample(smp.next());
-        auto f = fresnel::calculate(s_s, cos_t, spds[0](s_s), spds[band](s_s), {});
-        value_spectrum = f.to_rgb() / s_s.sampling_pdf();
-      }
+      constexpr float3 kRGBLuminanceScale = {0.817660332f, 1.05418909f, 1.09945524f};
 
-      output = (t < 0.5f ? value_spectrum : value_rgb);
+      SpectralQuery s_s = SpectralQuery::spectral_sample(smp.next());
+      auto f_s = fresnel::calculate(s_s, cos_t, spds[0](s_s), spds[band / 2u](s_s), {});
+      float3 value_spectrum = f_s.to_rgb() / s_s.sampling_pdf();
+
+      SpectralQuery s_rgb = SpectralQuery::sample();
+      auto f_rgb = fresnel::calculate(s_rgb, cos_t, spds[0](s_rgb), spds[band / 2u](s_rgb), {});
+      float3 value_rgb = f_rgb.to_rgb() / s_rgb.sampling_pdf();
+
+      output = (band % 2 == 0 ? value_spectrum : value_rgb);
     } else if (rt.trace(scene, ray, intersection, smp)) {
       bool entering_material = dot(ray.d, intersection.nrm) < 0.0f;
 
@@ -611,15 +587,6 @@ const Integrator::Status& CPUDebugIntegrator::status() const {
   return _private->status;
 }
 
-void CPUDebugIntegrator::preview(const Options& opt) {
-  stop(Stop::Immediate);
-
-  if (rt.has_scene()) {
-    current_state = State::Preview;
-    _private->start(opt);
-  }
-}
-
 void CPUDebugIntegrator::run(const Options& opt) {
   stop(Stop::Immediate);
 
@@ -630,27 +597,21 @@ void CPUDebugIntegrator::run(const Options& opt) {
 }
 
 void CPUDebugIntegrator::update() {
-  bool should_stop = (current_state != State::Stopped) || (current_state == State::WaitingForCompletion);
+  if ((current_state == State::Stopped) || (rt.scheduler().completed(_private->current_task) == false)) {
+    return;
+  }
 
-  if (should_stop && rt.scheduler().completed(_private->current_task)) {
-    if ((current_state == State::WaitingForCompletion) || (_private->status.current_iteration >= rt.scene().samples)) {
-      rt.scheduler().wait(_private->current_task);
-      _private->current_task = {};
-      if (current_state == State::Preview) {
-        current_state = Integrator::State::Preview;
-      } else {
-        current_state = Integrator::State::Stopped;
-      }
-    } else {
-      _private->iteration_time = {};
-      _private->status.completed_iterations = _private->status.current_iteration + 1;
-      _private->status.current_iteration += 1;
+  rt.film().commit_camera_iteration(_private->status.current_iteration);
 
-      _private->current_scale = (current_state == Integrator::State::Running) ? 1u : max(1u, uint32_t(exp2(_private->status.preview_frames - _private->status.current_iteration)));
-      _private->current_dimensions = rt.film().dimensions() / _private->current_scale;
-
-      rt.scheduler().restart(_private->current_task, _private->current_dimensions.x * _private->current_dimensions.y);
-    }
+  if (current_state == State::WaitingForCompletion) {
+    rt.scheduler().wait(_private->current_task);
+    _private->current_task = {};
+    current_state = Integrator::State::Stopped;
+  } else {
+    _private->iteration_time = {};
+    _private->status.completed_iterations = _private->status.current_iteration + 1;
+    _private->status.current_iteration += 1;
+    rt.scheduler().restart(_private->current_task, rt.film().count());
   }
 }
 
@@ -724,8 +685,8 @@ std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
 }
 
 void CPUDebugIntegrator::update_options(const Options& opt) {
-  if (current_state == State::Preview) {
-    preview(opt);
+  if (current_state == State::Running) {
+    run(opt);
   }
 }
 

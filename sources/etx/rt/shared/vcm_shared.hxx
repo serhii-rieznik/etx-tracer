@@ -324,7 +324,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const Sc
   state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
 
   state.uv = get_jittered_uv(state.sampler, coord, scene.camera.image_size);
-  state.ray = generate_ray(state.sampler, scene, state.uv);
+  state.ray = generate_ray(scene, state.uv, state.sampler.next_2d());
   state.throughput = {state.spect, 1.0f};
   state.gathered = {state.spect, 0.0f};
   state.merged = {};
@@ -466,7 +466,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
   uint32_t emitter_index = sample_emitter_index(scene, state.sampler);
-  auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler, intersection.pos, scene);
+  auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler.next_2d(), intersection.pos, scene);
 
   if (emitter_sample.pdf_dir <= 0)
     return {state.spect, 0.0f};

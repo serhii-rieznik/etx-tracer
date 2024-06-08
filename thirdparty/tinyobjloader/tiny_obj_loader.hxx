@@ -2366,6 +2366,8 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
 
   size_t line_num = 0;
   std::string linebuf;
+  linebuf.reserve(256);
+
   while (inStream->peek() != -1) {
     safeGetline(*inStream, linebuf);
 

@@ -30,6 +30,7 @@ struct UI {
 
   void set_current_integrator(Integrator*);
   void set_scene(Scene* scene, const SceneRepresentation::MaterialMapping&, const SceneRepresentation::MediumMapping&);
+  void set_film(Film* film);
 
   const Options& integrator_options() const {
     return _integrator_options;
@@ -47,8 +48,8 @@ struct UI {
     std::function<void(std::string)> save_scene_file_selected;
     std::function<void(Integrator*)> integrator_selected;
     std::function<void(bool)> stop_selected;
-    std::function<void()> preview_selected;
     std::function<void()> run_selected;
+    std::function<void()> restart_selected;
     std::function<void()> reload_scene_selected;
     std::function<void()> reload_geometry_selected;
     std::function<void()> options_changed;
@@ -80,6 +81,7 @@ struct UI {
  private:
   Integrator* _current_integrator = nullptr;
   Scene* _current_scene = nullptr;
+  Film* _film = nullptr;
 
   ArrayView<Integrator*> _integrators = {};
   ViewOptions _view_options = {};

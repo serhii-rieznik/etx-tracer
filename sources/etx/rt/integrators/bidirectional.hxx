@@ -14,7 +14,6 @@ struct CPUBidirectional : public Integrator {
 
   Options options() const override;
 
-  void preview(const Options&) override;
   void run(const Options&) override;
   void update() override;
   void stop(Stop) override;

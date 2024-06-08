@@ -122,15 +122,15 @@ struct Image {
     const auto& x_distribution = x_distributions[location.y];
     location.x = x_distribution.sample(rnd.x, x_pdf);
 
-    auto x0 = x_distribution.values[location.x];
-    auto x1 = x_distribution.values[min(location.x + 1u, uint32_t(x_distribution.values.count) - 1u)];
+    const auto& x0 = x_distribution.values[location.x];
+    const auto& x1 = x_distribution.values[min(location.x + 1u, uint32_t(x_distribution.values.count) - 1u)];
     float dx = (rnd.x - x0.cdf);
     if (x1.cdf - x0.cdf > 0.0f) {
       dx /= (x1.cdf - x0.cdf);
     }
 
-    auto y0 = y_distribution.values[location.y];
-    auto y1 = y_distribution.values[min(location.y + 1u, uint32_t(y_distribution.values.count) - 1u)];
+    const auto& y0 = y_distribution.values[location.y];
+    const auto& y1 = y_distribution.values[min(location.y + 1u, uint32_t(y_distribution.values.count) - 1u)];
     float dy = (rnd.y - y0.cdf);
     if (y1.cdf - y0.cdf > 0.0f) {
       dy /= (y1.cdf - y0.cdf);
@@ -143,6 +143,13 @@ struct Image {
 
     eval = evaluate(uv, &image_pdf);
     return uv;
+  }
+
+  ETX_GPU_CODE float2 sample(const float2& rnd) const {
+    float image_pdf = 0.0f;
+    uint2 location = {};
+    float4 eval = {};
+    return sample(rnd, image_pdf, location, eval);
   }
 
   ETX_GPU_CODE float tex_coord_repeat(float u, float size) const {
