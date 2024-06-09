@@ -662,14 +662,17 @@ void UI::build(double dt) {
       float focal_len = get_camera_focal_length(camera);
       ImGui::Text("Lens Radius");
       camera_changed = camera_changed || ImGui::DragFloat("##lens", &_current_scene->lens.radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
-      ImGui::Text("Focal distance");
+      ImGui::Text("Focal Distance");
       camera_changed = camera_changed || ImGui::DragFloat("##focaldist", &_current_scene->lens.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
-      ImGui::Text("Focal length");
+      ImGui::Text("Focal Length");
       camera_changed = camera_changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
+      ImGui::Text("Pixel Filter Radius");
+      camera_changed = camera_changed || ImGui::DragFloat("##pixelfiler", &_current_scene->pixel_sampler.radius, 0.05f, 0.0f, 32.0f, "%.3fpx", ImGuiSliderFlags_None);
 
       if (camera_changed && callbacks.camera_changed) {
         _current_scene->lens.radius = fmaxf(_current_scene->lens.radius, 0.0f);
         _current_scene->lens.focal_distance = fmaxf(_current_scene->lens.focal_distance, 0.0f);
+        _current_scene->pixel_sampler.radius = clamp(_current_scene->pixel_sampler.radius, 0.0f, 32.0f);
         build_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, focal_length_to_fov(focal_len) * 180.0f / kPi);
         callbacks.camera_changed();
       }

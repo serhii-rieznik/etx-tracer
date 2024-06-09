@@ -12,7 +12,6 @@ struct FilmImpl;
 struct Film {
   enum : uint32_t {
     CameraImage,
-    CameraIteration,
     LightImage,
     LightIteration,
     Normals,
@@ -24,22 +23,24 @@ struct Film {
   };
 
   enum : uint32_t {
-    PixelSamplerBlackmanHarris,
-    PixelSamplerCount,
+    PixelFilterBlackmanHarris,
+    PixelFilterCount,
 
-    PixelSamplerSize = 128u,
+    PixelFilterSize = 128u,
   };
 
   using Layers = std::initializer_list<uint32_t>;
 
-  static constexpr Layers kAllLayers = {CameraImage, CameraIteration, LightImage, LightIteration, Normals, Albedo, Result, Denoised};
+  static constexpr Layers kAllLayers = {CameraImage, LightImage, LightIteration, Normals, Albedo, Result, Denoised};
+  static constexpr float kFilmHorizontalSize = 36.0f;
+  static constexpr float kFilmVerticalSize = 36.0f;
 
   Film(TaskScheduler&);
   ~Film();
 
   void allocate(const uint2& dim);
 
-  float2 sample(const Scene& scene, const PixelSampler& sampler, const uint2& pixel, const float2& rnd) const;
+  float2 sample(const Scene& scene, const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const;
 
   void atomic_add(uint32_t layer, const float4& value, const float2& ndc_coord);
   void atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t y);
@@ -47,7 +48,6 @@ struct Film {
   void accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, float t);
   void accumulate(uint32_t layer, const float4& value, const uint2& pixel, float t);
 
-  void commit_camera_iteration(uint32_t i);
   void commit_light_iteration(uint32_t i);
 
   void clear(const Layers& layers);

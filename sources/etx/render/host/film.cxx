@@ -73,20 +73,20 @@ void Film::allocate(const uint2& dim) {
 }
 
 void Film::generate_filter_image(uint32_t filter, std::vector<float4>& data) {
-  constexpr float2 center = {float(PixelSamplerSize) * 0.5f, float(PixelSamplerSize) * 0.5f};
-  constexpr float radius = float(PixelSamplerSize) * 0.5f;
+  constexpr float2 center = {float(PixelFilterSize) * 0.5f, float(PixelFilterSize) * 0.5f};
+  constexpr float radius = float(PixelFilterSize) * 0.5f;
 
-  data.resize(PixelSamplerSize * PixelSamplerSize);
-  for (uint32_t y = 0; y < PixelSamplerSize; ++y) {
-    for (uint32_t x = 0; x < PixelSamplerSize; ++x) {
+  data.resize(PixelFilterSize * PixelFilterSize);
+  for (uint32_t y = 0; y < PixelFilterSize; ++y) {
+    for (uint32_t x = 0; x < PixelFilterSize; ++x) {
       float2 pos = {float(x), float(y)};
       float value = filter_blackman_harris(pos - center, radius);
-      data[x + y * PixelSamplerSize] = {value, value, value, 1.0f};
+      data[x + y * PixelFilterSize] = {value, value, value, 1.0f};
     }
   }
 }
 
-float2 Film::sample(const Scene& scene, const PixelSampler& sampler, const uint2& pixel, const float2& rnd) const {
+float2 Film::sample(const Scene& scene, const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const {
   float2 jitter = rnd * 2.0f - 1.0f;
   if (sampler.image_index != kInvalidIndex) {
     jitter = scene.images[sampler.image_index].sample(rnd) * 2.0f - 1.0f;
@@ -139,19 +139,6 @@ void Film::accumulate(uint32_t layer, const float4& value, const float2& ndc_coo
   uint32_t ax = static_cast<uint32_t>(uv.x * float(_private->dimensions.x));
   uint32_t ay = static_cast<uint32_t>(uv.y * float(_private->dimensions.y));
   accumulate(layer, value, uint2{ax, ay}, t);
-}
-
-void Film::commit_camera_iteration(uint32_t i) {
-  float t = float(double(i) / double(i + 1u));
-
-  auto sptr = _private->layer(CameraIteration);
-  auto dptr = _private->layer(CameraImage);
-
-  uint64_t pixel_count = count();
-  for (uint64_t i = 0; i < pixel_count; ++i) {
-    dptr[i] = (t == 0.0f) ? sptr[i] : lerp(sptr[i], dptr[i], t);
-    sptr[i] = {};
-  }
 }
 
 void Film::commit_light_iteration(uint32_t i) {
@@ -222,7 +209,6 @@ void Film::denoise() {
 const char* Film::layer_name(uint32_t layer) {
   static const char* names[] = {
     "Camera Image",
-    "Camera Iteration",
     "Light Image",
     "Light Iteration",
     "Normals",

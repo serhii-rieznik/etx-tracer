@@ -215,7 +215,7 @@ ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Film& film,
   payload.smp.init(px.x + px.y * film.dimensions().x, payload.iteration);
   payload.spect = spectral ? SpectralQuery::spectral_sample(payload.smp.next()) : SpectralQuery::sample();
 
-  float2 uv = film.sample(scene, iteration == 0u ? PixelSampler::empty() : scene.pixel_sampler, px, payload.smp.next_2d());
+  float2 uv = film.sample(scene, iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, px, payload.smp.next_2d());
   payload.ray = generate_ray(scene, uv, payload.smp.next_2d());
   payload.throughput = {payload.spect, 1.0f};
   payload.accumulated = {payload.spect, 0.0f};

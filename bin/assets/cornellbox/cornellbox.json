@@ -1,7 +1,9 @@
 {
     "geometry" : "cornellbox.obj",
     "materials" : "cornellbox.materials",
-    "spectral" : true,
+    "spectral" : false,
+    "max-path-length" : 65536,
+    "samples" : 256,
     "camera" : {
         "viewport" : [1080.0, 1080.0],
         "origin" : [0.0, 1.0, 5.15],

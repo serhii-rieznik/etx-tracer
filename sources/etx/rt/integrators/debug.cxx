@@ -601,8 +601,6 @@ void CPUDebugIntegrator::update() {
     return;
   }
 
-  rt.film().commit_camera_iteration(_private->status.current_iteration);
-
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};

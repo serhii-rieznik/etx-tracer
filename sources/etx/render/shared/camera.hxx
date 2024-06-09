@@ -85,16 +85,16 @@ struct ETX_ALIGNED FilmData {
   }
 };
 
-struct PixelSampler {
+struct PixelFilter {
   uint32_t image_index = kInvalidIndex;
   float radius = 1.0f;
 
-  static PixelSampler empty() {
+  static PixelFilter empty() {
     return {kInvalidIndex, 0.0f};
   }
 };
 
-struct Lens : PixelSampler {
+struct Lens : PixelFilter {
   float focal_distance = 0.0f;
 };
 

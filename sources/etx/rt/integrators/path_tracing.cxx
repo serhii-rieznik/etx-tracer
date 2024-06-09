@@ -62,7 +62,7 @@ struct CPUPathTracingImpl : public Task {
       ETX_CHECK_FINITE(xyz);
 
       float t = float(status.current_iteration) / float(status.current_iteration + 1);
-      film.accumulate(Film::CameraIteration, {xyz.x, xyz.y, xyz.z, 1.0f}, pixel, 0.0f);
+      film.accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, pixel, t);
       film.accumulate(Film::Normals, {normal.x, normal.y, normal.z, 1.0f}, pixel, t);
       film.accumulate(Film::Albedo, {albedo.x, albedo.y, albedo.z, 1.0f}, pixel, t);
     }
@@ -106,8 +106,6 @@ void CPUPathTracing::update() {
   if ((current_state == State::Stopped) || (rt.scheduler().completed(_private->current_task) == false)) {
     return;
   }
-
-  rt.film().commit_camera_iteration(_private->status.current_iteration);
 
   if ((current_state == State::WaitingForCompletion) || (_private->status.current_iteration + 1 >= _private->rt.scene().samples)) {
     rt.scheduler().wait(_private->current_task);

@@ -22,7 +22,7 @@ struct ETX_ALIGNED EnvironmentEmitters {
 
 struct ETX_ALIGNED Scene {
   Camera camera ETX_EMPTY_INIT;
-  PixelSampler pixel_sampler ETX_EMPTY_INIT;
+  PixelFilter pixel_sampler ETX_EMPTY_INIT;
   Lens lens ETX_EMPTY_INIT;
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;

@@ -392,9 +392,11 @@ struct SceneRepresentationImpl {
   void commit() {
     log::info("Building pixel sampler...");
     std::vector<float4> sampler_image;
-    Film::generate_filter_image(Film::PixelSamplerBlackmanHarris, sampler_image);
-    uint32_t image = images.add_from_data(sampler_image.data(), {Film::PixelSamplerSize, Film::PixelSamplerSize}, Image::BuildSamplingTable | Image::UniformSamplingTable, {});
-    scene.pixel_sampler = {kInvalidIndex, 0.5f};
+    Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
+    uint32_t image = images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, Image::BuildSamplingTable | Image::UniformSamplingTable, {});
+    scene.pixel_sampler = {image, 1.5f};
+
+    stbi_write_hdr(env().file_in_data("pixel-filter.hdr"), Film::PixelFilterSize, Film::PixelFilterSize, 4, &sampler_image.data()->x);
 
     float3 bbox_min = triangles.empty() ? float3{-1.0f, -1.0f, -1.0f} : float3{kMaxFloat, kMaxFloat, kMaxFloat};
     float3 bbox_max = triangles.empty() ? float3{+1.0f, +1.0f, +1.0f} : float3{-kMaxFloat, -kMaxFloat, -kMaxFloat};
@@ -473,22 +475,20 @@ void build_camera(Camera& camera, float3 origin, float3 target, float3 up, uint2
   camera.image_plane = float(camera.image_size.x) / (2.0f * camera.tan_half_fov);
 }
 
-static const float kFilmSize = 36.0f;
-
 float get_camera_fov(const Camera& camera) {
   return 2.0f * atanf(camera.tan_half_fov) * 180.0f / kPi;
 }
 
 float get_camera_focal_length(const Camera& camera) {
-  return 0.5f * kFilmSize / camera.tan_half_fov;
+  return 0.5f * Film::kFilmHorizontalSize / camera.tan_half_fov;
 }
 
 float fov_to_focal_length(float fov) {
-  return 0.5f * kFilmSize / tanf(0.5f * fov);
+  return 0.5f * Film::kFilmHorizontalSize / tanf(0.5f * fov);
 }
 
 float focal_length_to_fov(float focal_len) {
-  return 2.0f * atanf(kFilmSize / (2.0f * focal_len));
+  return 2.0f * atanf(Film::kFilmHorizontalSize / (2.0f * focal_len));
 }
 
 ETX_PIMPL_IMPLEMENT(SceneRepresentation, Impl);
