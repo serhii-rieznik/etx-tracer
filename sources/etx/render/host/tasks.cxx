@@ -27,10 +27,6 @@ struct TaskWrapper : public enki::ITaskSet {
   void ExecuteRange(enki::TaskSetPartition range_, uint32_t threadnum_) override {
     task->execute_range(range_.start, range_.end, threadnum_);
   }
-
-  void OnComplete() override {
-    task->completed();
-  }
 };
 
 struct FunctionTask : public Task {
@@ -55,10 +51,13 @@ struct TaskSchedulerImpl {
   TaskSchedulerImpl() {
     task_pool.init(1024u);
     function_task_pool.init(1024u);
-    scheduler.GetProfilerCallbacks()->threadStart = [](uint32_t thread_id) {
+
+    enki::TaskSchedulerConfig config = {};
+    config.numTaskThreadsToCreate = ETX_SINGLE_THREAD ? 2 : (enki::GetNumHardwareThreads() + 1u);
+    config.profilerCallbacks.threadStart = [](uint32_t thread_id) {
       ETX_PROFILER_REGISTER_THREAD;
     };
-    scheduler.Initialize(ETX_SINGLE_THREAD ? 2 : (enki::GetNumHardwareThreads() + 1u));
+    scheduler.Initialize(config);
   }
 
   ~TaskSchedulerImpl() {
@@ -100,11 +99,13 @@ Task::Handle TaskScheduler::schedule(uint32_t range, std::function<void(uint32_t
 }
 
 void TaskScheduler::execute(uint32_t range, Task* t) {
-  wait(schedule(range, t));
+  auto handle = schedule(range, t);
+  wait(handle);
 }
 
 void TaskScheduler::execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
-  wait(schedule(range, func));
+  auto handle = schedule(range, func);
+  wait(handle);
 }
 
 void TaskScheduler::execute_linear(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
@@ -120,13 +121,13 @@ bool TaskScheduler::completed(Task::Handle handle) {
   return task_wrapper.GetIsComplete();
 }
 
-void TaskScheduler::wait(Task::Handle handle) {
+void TaskScheduler::wait(Task::Handle& handle) {
   if (handle.data == Task::InvalidHandle) {
     return;
   }
 
   auto& task_wrapper = _private->task_pool.get(handle.data);
-  _private->scheduler.WaitforTaskSet(&task_wrapper);
+  _private->scheduler.WaitforTask(&task_wrapper);
   _private->task_pool.free(handle.data);
 
   auto func_task = _private->task_to_function.find(handle.data);
@@ -134,27 +135,18 @@ void TaskScheduler::wait(Task::Handle handle) {
     _private->function_task_pool.free(func_task->second);
     _private->task_to_function.erase(func_task);
   }
-}
 
-void TaskScheduler::restart(Task::Handle handle, uint32_t new_rage) {
-  if (handle.data == Task::InvalidHandle) {
-    return;
-  }
-
-  auto& task_wrapper = _private->task_pool.get(handle.data);
-  if (task_wrapper.GetIsComplete() == false) {
-    _private->scheduler.WaitforTaskSet(&task_wrapper);
-  }
-  task_wrapper.m_SetSize = new_rage;
-  _private->scheduler.AddTaskSetToPipe(&task_wrapper);
+  handle.data = Task::InvalidHandle;
 }
 
 void TaskScheduler::restart(Task::Handle handle) {
   if (handle.data == Task::InvalidHandle) {
     return;
   }
+
   auto& task_wrapper = _private->task_pool.get(handle.data);
-  restart(handle, task_wrapper.m_SetSize);
+  _private->scheduler.WaitforTask(&task_wrapper);
+  _private->scheduler.AddTaskSetToPipe(&task_wrapper);
 }
 
 }  // namespace etx

@@ -67,12 +67,6 @@ struct CPUPathTracingImpl : public Task {
       film.accumulate(Film::Albedo, {albedo.x, albedo.y, albedo.z, 1.0f}, pixel, t);
     }
   }
-
-  void completed() override {
-    status.last_iteration_time = iteration_time.measure();
-    status.total_time += status.last_iteration_time;
-    status.completed_iterations += 1u;
-  }
 };
 
 CPUPathTracing::CPUPathTracing(Raytracing& rt)
@@ -107,6 +101,10 @@ void CPUPathTracing::update() {
     return;
   }
 
+  _private->status.last_iteration_time = _private->iteration_time.measure();
+  _private->status.total_time += _private->status.last_iteration_time;
+  _private->status.completed_iterations += 1u;
+
   if ((current_state == State::WaitingForCompletion) || (_private->status.current_iteration + 1 >= _private->rt.scene().samples)) {
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
@@ -114,7 +112,7 @@ void CPUPathTracing::update() {
   } else {
     _private->iteration_time = {};
     _private->status.current_iteration += 1;
-    rt.scheduler().restart(_private->current_task, rt.film().count());
+    rt.scheduler().restart(_private->current_task);
   }
 }
 

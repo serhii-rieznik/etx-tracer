@@ -860,7 +860,7 @@ void CPUBidirectional::update() {
   } else if (_private->status.current_iteration + 1u < rt.scene().samples) {
     _private->iteration_time = {};
     _private->status.current_iteration += 1;
-    rt.scheduler().restart(_private->current_task, rt.film().count());
+    rt.scheduler().restart(_private->current_task);
   } else {
     current_state = Integrator::State::Stopped;
   }

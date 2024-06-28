@@ -10,35 +10,50 @@
 
 #include <mutex>
 
+static std::atomic<uint32_t> counter = {};
+static std::mutex m;
+
+#define vcm_log_impl(f, l, tag)                                                \
+  do {                                                                         \
+    std::unique_lock lock(m);                                                  \
+    log::info("VCM [% 3u : % 5u]: %s : %s", l, counter.fetch_add(1u), f, tag); \
+  } while (0)
+
+#define vcm_log(tag) vcm_log_impl(__FUNCTION__, __LINE__, tag)
+
 namespace etx {
 
-struct CPUVCMImpl : public Task {
-  void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
-    if (mode == Mode::LightPath) {
-      gather_light_vertices(begin, end, thread_id);
-    } else {
-      gather_camera_vertices(begin, end, thread_id);
-    }
-  }
+struct CPUVCMImpl {
+  struct LightGather : public Task {
+    CPUVCMImpl* i = nullptr;
 
-  void completed() override {
-    if (mode == Mode::LightPath) {
-      complete_light_vertices();
-    } else {
-      complete_camera_vertices();
+    LightGather(CPUVCMImpl* ptr)
+      : i(ptr) {
     }
-  }
 
-  enum Mode : uint32_t {
-    LightPath,
-    CameraPath,
-  } mode = Mode::LightPath;
+    void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+      i->gather_light_vertices(begin, end, thread_id);
+    }
+
+  } light_gather = {this};
+
+  struct CameraGather : public Task {
+    CPUVCMImpl* i = nullptr;
+    CameraGather(CPUVCMImpl* ptr)
+      : i(ptr) {
+    }
+    void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+      i->gather_camera_vertices(begin, end, thread_id);
+    }
+  } camera_gather = {this};
 
   Raytracing& rt;
   std::atomic<Integrator::State>* state = {};
   Integrator::Status status = {};
   TimeMeasure iteration_time = {};
+
   Task::Handle task_handle = {};
+
   std::atomic<bool> have_light_image = {};
   std::atomic<bool> have_camera_image = {};
 
@@ -50,6 +65,11 @@ struct CPUVCMImpl : public Task {
   std::vector<VCMLightPath> _light_paths;
   std::vector<VCMLightVertex> _light_vertices;
 
+  enum class Mode : uint32_t {
+    Light,
+    Camera,
+  } mode = Mode::Light;
+
   CPUVCMImpl(Raytracing& r, std::atomic<Integrator::State>* st)
     : rt(r)
     , state(st)
@@ -57,17 +77,22 @@ struct CPUVCMImpl : public Task {
   }
 
   ~CPUVCMImpl() {
-    rt.scheduler().wait(task_handle);
-    task_handle = {};
+    wait_for_tasks();
   }
 
   bool running() const {
     return state->load() != Integrator::State::Stopped;
   }
 
-  void start(const Options& opt) {
+  void wait_for_tasks() {
     rt.scheduler().wait(task_handle);
     task_handle = {};
+  }
+
+  void start(const Options& opt) {
+    vcm_log("begin");
+
+    wait_for_tasks();
 
     status = {};
 
@@ -81,7 +106,10 @@ struct CPUVCMImpl : public Task {
   }
 
   void start_next_iteration() {
+    vcm_log("begin");
     iteration_time = {};
+
+    wait_for_tasks();
 
     float used_radius = vcm_options.initial_radius;
     if (used_radius == 0.0f) {
@@ -102,13 +130,8 @@ struct CPUVCMImpl : public Task {
     _light_vertices.clear();
     rt.film().clear({Film::LightIteration});
 
-    mode = Mode::LightPath;
-
-    if (task_handle.data == Task::InvalidHandle) {
-      task_handle = rt.scheduler().schedule(rt.film().count(), this);
-    } else {
-      rt.scheduler().restart(task_handle, rt.film().count());
-    }
+    mode = Mode::Light;
+    task_handle = rt.scheduler().schedule(rt.film().count(), &light_gather);
   }
 
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
@@ -196,22 +219,28 @@ struct CPUVCMImpl : public Task {
   }
 
   void complete_light_vertices() {
+    vcm_log("begin");
+
     rt.film().commit_light_iteration(vcm_iteration.iteration);
     have_light_image = true;
 
     if (*state == Integrator::State::Stopped) {
+      vcm_log("exit");
       return;
     }
+
+    ETX_ASSERT(_light_paths.size() == rt.film().count());
 
     if (vcm_options.merge_vertices()) {
       _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius, rt.scheduler());
     }
 
-    mode = Mode::CameraPath;
-    rt.scheduler().restart(task_handle, rt.film().count());
+    vcm_log("end");
   }
 
   void complete_camera_vertices() {
+    vcm_log("begin");
+
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
@@ -219,11 +248,14 @@ struct CPUVCMImpl : public Task {
     have_camera_image = true;
 
     if ((*state == Integrator::State::WaitingForCompletion) || (*state == Integrator::State::Stopped) || (vcm_iteration.iteration + 1 >= rt.scene().samples)) {
+      vcm_log("exit");
       *state = Integrator::State::Stopped;
       return;
     }
 
     vcm_iteration.iteration += 1;
+    vcm_log("end");
+
     start_next_iteration();
   }
 };
@@ -245,6 +277,7 @@ Options CPUVCM::options() const {
 }
 
 void CPUVCM::run(const Options& opt) {
+  vcm_log("begin");
   stop(Stop::Immediate);
 
   if (rt.has_scene()) {
@@ -254,6 +287,19 @@ void CPUVCM::run(const Options& opt) {
 }
 
 void CPUVCM::update() {
+  if ((current_state == State::Stopped) || (rt.scheduler().completed(_private->task_handle) == false)) {
+    return;
+  }
+
+  _private->wait_for_tasks();
+
+  if (_private->mode == CPUVCMImpl::Mode::Light) {
+    _private->complete_light_vertices();
+    _private->task_handle = rt.scheduler().schedule(rt.film().count(), &_private->camera_gather);
+  } else {
+    _private->complete_camera_vertices();
+    _private->start_next_iteration();
+  }
 }
 
 void CPUVCM::stop(Stop st) {
@@ -261,15 +307,21 @@ void CPUVCM::stop(Stop st) {
     return;
   }
 
+  vcm_log("begin");
   current_state = (st == Stop::Immediate) ? State::Stopped : State::WaitingForCompletion;
 
   if (current_state == State::Stopped) {
-    rt.scheduler().wait(_private->task_handle);
-    _private->task_handle = {};
+    vcm_log("wait...");
+    _private->wait_for_tasks();
+    vcm_log("wait done");
   }
+
+  vcm_log("end");
 }
 
 void CPUVCM::update_options(const Options& opt) {
+  vcm_log("begin");
+
   if (current_state == State::Running) {
     run(opt);
   }

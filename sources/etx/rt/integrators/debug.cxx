@@ -609,7 +609,7 @@ void CPUDebugIntegrator::update() {
     _private->iteration_time = {};
     _private->status.completed_iterations = _private->status.current_iteration + 1;
     _private->status.current_iteration += 1;
-    rt.scheduler().restart(_private->current_task, rt.film().count());
+    rt.scheduler().restart(_private->current_task);
   }
 }
 
