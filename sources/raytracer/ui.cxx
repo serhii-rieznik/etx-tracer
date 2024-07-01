@@ -344,6 +344,7 @@ void UI::build(double dt) {
         if (ImGui::MenuItem(_integrators[i]->name(), nullptr, _current_integrator == _integrators[i], _integrators[i]->enabled())) {
           if (callbacks.integrator_selected) {
             callbacks.integrator_selected(_integrators[i]);
+            set_current_integrator(_integrators[i]);
           }
         }
       }

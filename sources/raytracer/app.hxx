@@ -58,11 +58,10 @@ struct RTApplication {
   UI ui;
   TimeMeasure time_measure;
   Raytracing raytracing;
-
   RenderContext render;
-
   SceneRepresentation scene;
   CameraController camera_controller;
+  IntegratorThread integrator_thread;
 
   CPUDebugIntegrator _debug = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
@@ -76,7 +75,6 @@ struct RTApplication {
     &_cpu_vcm,
   };
 
-  Integrator* _current_integrator = nullptr;
   std::string _current_scene_file = {};
   Options _options;
 };

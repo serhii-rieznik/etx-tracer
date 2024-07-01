@@ -295,82 +295,8 @@ struct CPUDebugIntegratorImpl : public Task {
       thinfilm_eval_s.thickness = thickness;
       thinfilm_eval_s.rgb_wavelengths = local_wl;
       auto f_s = fresnel::calculate(q_s, cos_theta, spd_air(q_s), spd_base(q_s), thinfilm_eval_s);
-      float3 xyz_s = f_s.to_rgb() / q_s.sampling_pdf();
-
-      if (thinfilm_spectral) {
-        constexpr float3 kRGBLuminanceScale = {0.817660332f, 1.05418909f, 1.09945524f};
-        xyz_s *= kRGBLuminanceScale;
-      }
-
+      float3 xyz_s = (thinfilm_spectral ? SpectralDistribution::kRGBLuminanceScale : float3{1.0f, 1.0f, 1.0f}) * f_s.to_rgb() / q_s.sampling_pdf();
       output = xyz_s;
-      /*
-      constexpr float kBandCount = 5.0f;
-      uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
-
-      SpectralQuery q_s = SpectralQuery::spectral_sample(smp.next());
-      SpectralQuery q_i = SpectralQuery::sample();
-
-      switch (band) {
-        case 2:
-        case 3: {
-          cos_theta = t;
-          thickness = thinfilm.max_thickness;
-          break;
-        }
-        default:
-          break;
-      }
-
-      float3 local_wl = {
-        .x = thinfilm_rgb.x + thinfilm_span.x * (smp.next() * 2.0f - 1.0f),
-        .y = thinfilm_rgb.y + thinfilm_span.y * (smp.next() * 2.0f - 1.0f),
-        .z = thinfilm_rgb.z + thinfilm_span.z * (smp.next() * 2.0f - 1.0f),
-      };
-
-      if (band == 4) {
-        uint32_t stripe = static_cast<uint32_t>(4.0f * t);
-
-        SpectralResponse s_r = {{local_wl.x, SpectralQuery::Spectral}, 1.0f};
-        SpectralResponse s_g = {{local_wl.y, SpectralQuery::Spectral}, 1.0f};
-        SpectralResponse s_b = {{local_wl.z, SpectralQuery::Spectral}, 1.0f};
-        switch (stripe) {
-          case 0: {
-            output = s_r.to_rgb() / s_r.sampling_pdf();
-            break;
-          }
-          case 1: {
-            output = s_g.to_rgb() / s_g.sampling_pdf();
-            break;
-          }
-          case 2: {
-            output = s_b.to_rgb() / s_b.sampling_pdf();
-            break;
-          }
-          case 3: {
-            output = s_r.to_rgb() / s_r.sampling_pdf();
-            output += s_g.to_rgb() / s_g.sampling_pdf();
-            output += s_b.to_rgb() / s_b.sampling_pdf();
-            break;
-          }
-          default:
-            break;
-        }
-      } else {
-        auto thinfilm_eval_s = evaluate_thinfilm(q_s, thinfilm, {}, scene, smp);
-        thinfilm_eval_s.thickness = thickness;
-        thinfilm_eval_s.rgb_wavelengths = local_wl;
-        auto f_s = fresnel::calculate(q_s, cos_theta, spd_air(q_s), spd_base(q_s), thinfilm_eval_s);
-        float3 xyz_s = f_s.to_rgb() / q_s.sampling_pdf();
-
-        auto thinfilm_eval_i = evaluate_thinfilm(q_i, thinfilm, {}, scene, smp);
-        thinfilm_eval_i.thickness = thickness;
-        thinfilm_eval_i.rgb_wavelengths = local_wl;
-        auto f_i = fresnel::calculate(q_i, cos_theta, spd_air(q_i), spd_base(q_i), thinfilm_eval_i);
-        float3 xyz_i = f_i.to_rgb() / q_i.sampling_pdf();
-        output = (band % 2) == 0 ? xyz_s : xyz_i;
-      }
-      */
-
     } else if (mode == CPUDebugIntegrator::Mode::Spectrums) {
       float t = float(xy.x) / float(film.dimensions().x - 1u);
       float s = float(xy.y) / float(film.dimensions().y - 1u);
@@ -442,8 +368,6 @@ struct CPUDebugIntegratorImpl : public Task {
       })(scene);
 
       float cos_t = cosf(t * kHalfPi);
-
-      constexpr float3 kRGBLuminanceScale = {0.817660332f, 1.05418909f, 1.09945524f};
 
       SpectralQuery s_s = SpectralQuery::spectral_sample(smp.next());
       auto f_s = fresnel::calculate(s_s, cos_t, spds[0](s_s), spds[band / 2u](s_s), {});

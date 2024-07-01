@@ -95,7 +95,6 @@ SpectralDistribution SpectralDistribution::rgb_reflectance(const float3& rgb) {
 }
 
 SpectralDistribution SpectralDistribution::rgb_luminance(const float3& rgb) {
-  constexpr float3 kRGBLuminanceScale = {0.817660332f, 1.05418909f, 1.09945524f};
   SpectralDistribution result = rgb_reflectance(rgb * kRGBLuminanceScale);
   result.integrated_value = rgb;
   return result;

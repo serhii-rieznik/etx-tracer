@@ -26,6 +26,8 @@ struct TaskScheduler {
 
   uint32_t max_thread_count();
 
+  void register_thread();
+
   Task::Handle schedule(uint32_t range, Task*);
   Task::Handle schedule(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 

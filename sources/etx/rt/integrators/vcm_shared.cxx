@@ -93,7 +93,7 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     for (uint32_t i = begin; i < end; ++i) {
       uint32_t index = _position_to_index[i];
       uint32_t target_cell = atomic_inc(ptr + index);
-      _indices[target_cell] = i;
+      _indices[target_cell - 1u] = i;
     }
   });
 

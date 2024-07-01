@@ -295,6 +295,7 @@ void CPUVCM::update() {
 
   if (_private->mode == CPUVCMImpl::Mode::Light) {
     _private->complete_light_vertices();
+    _private->mode = CPUVCMImpl::Mode::Camera;
     _private->task_handle = rt.scheduler().schedule(rt.film().count(), &_private->camera_gather);
   } else {
     _private->complete_camera_vertices();

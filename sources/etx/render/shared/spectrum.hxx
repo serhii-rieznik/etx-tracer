@@ -425,6 +425,8 @@ ETX_GPU_CODE void print_invalid_value<SpectralResponse>(const char* name, const 
 struct Spectrums;
 
 struct ETX_ALIGNED SpectralDistribution {
+  constexpr static const float3 kRGBLuminanceScale = {0.817660332f, 1.05418909f, 1.09945524f};
+
   enum Class : uint32_t {
     Invalid,
     Reflectance,

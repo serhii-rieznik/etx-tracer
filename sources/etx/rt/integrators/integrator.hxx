@@ -95,4 +95,28 @@ struct Integrator {
   std::atomic<State> current_state = {State::Stopped};
 };
 
+struct TaskScheduler;
+struct IntegratorThreadImpl;
+struct IntegratorThread {
+  IntegratorThread(TaskScheduler&);
+  ~IntegratorThread();
+
+  void start();
+  void terminate();
+
+  Integrator* integrator();
+  void set_integrator(Integrator*);
+
+  bool running();
+  const Integrator::Status& status() const;
+
+  void run(const Options&);
+  void stop(Integrator::Stop);
+  void restart(const Options&);
+  void restart();
+
+ private:
+  ETX_DECLARE_PIMPL(IntegratorThread, 256);
+};
+
 }  // namespace etx

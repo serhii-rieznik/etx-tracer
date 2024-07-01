@@ -53,7 +53,8 @@ struct TaskSchedulerImpl {
     function_task_pool.init(1024u);
 
     enki::TaskSchedulerConfig config = {};
-    config.numTaskThreadsToCreate = ETX_SINGLE_THREAD ? 2 : (enki::GetNumHardwareThreads() + 1u);
+    config.numExternalTaskThreads = 1u;
+    config.numTaskThreadsToCreate = ETX_SINGLE_THREAD ? 1 : (enki::GetNumHardwareThreads() + 1u + config.numExternalTaskThreads);
     config.profilerCallbacks.threadStart = [](uint32_t thread_id) {
       ETX_PROFILER_REGISTER_THREAD;
     };
@@ -75,7 +76,11 @@ TaskScheduler::~TaskScheduler() {
 }
 
 uint32_t TaskScheduler::max_thread_count() {
-  return _private->scheduler.GetConfig().numTaskThreadsToCreate + 1;
+  return _private->scheduler.GetConfig().numTaskThreadsToCreate + 2u;
+}
+
+void TaskScheduler::register_thread() {
+  _private->scheduler.RegisterExternalTaskThread();
 }
 
 Task::Handle TaskScheduler::schedule(uint32_t range, Task* t) {

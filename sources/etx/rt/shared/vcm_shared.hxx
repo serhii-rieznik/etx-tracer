@@ -639,8 +639,14 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
       auto c_value = (camera_bsdf.func * state.throughput / state.spect.sampling_pdf()).to_rgb();
       ETX_VALIDATE(c_value);
+
       auto l_value = (light_vertex.throughput / state.spect.sampling_pdf()).to_rgb();
       ETX_VALIDATE(l_value);
+
+      if (state.spect.spectral()) {
+        l_value *= SpectralDistribution::kRGBLuminanceScale;
+      }
+
       merged += (c_value * l_value) * weight;
       ETX_VALIDATE(merged);
     }
