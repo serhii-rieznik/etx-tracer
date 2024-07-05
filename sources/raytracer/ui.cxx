@@ -372,15 +372,6 @@ void UI::build(double dt) {
     }
 
     if (ImGui::BeginMenu("View", true)) {
-      char shortcut[2] = "X";
-      for (uint32_t i = 0; i < uint32_t(OutputView::Count); ++i) {
-        shortcut[0] = char('1' + i);
-        if (ImGui::MenuItem(output_view_to_string(i).c_str(), shortcut, uint32_t(_view_options.view) == i, true)) {
-          _view_options.view = static_cast<OutputView>(i);
-        }
-      }
-
-      ImGui::Separator();
       if (ImGui::MenuItem("Increase Exposure", "*", false, true)) {
         increase_exposure(_view_options);
       }
@@ -506,16 +497,29 @@ void UI::build(double dt) {
         bool selected = i == _view_options.layer;
         if (ImGui::Selectable(Film::layer_name(i), &selected)) {
           if (selected) {
-            _view_options.layer = i;
+            _view_options.layer = i == Film::DataTmp ? Film::Data : i;
           }
         }
       }
       ImGui::EndCombo();
+      ImGui::PopItemWidth();
     }
 
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::PushItemWidth(2.5f * input_size);
+    if (ImGui::BeginCombo("##view_opt", output_view_to_string(uint32_t(_view_options.view)).c_str())) {
+      for (uint32_t i = 0; i < uint32_t(OutputView::Count); ++i) {
+        bool selected = i == uint32_t(_view_options.view);
+        if (ImGui::Selectable(output_view_to_string(i).c_str(), &selected)) {
+          _view_options.view = static_cast<OutputView>(i);
+        }
+      }
+      ImGui::EndCombo();
+    }
     ImGui::PopItemWidth();
     ImGui::GetStyle().FramePadding.y = fpadding.y;
-
     ImGui::End();
   }
 
@@ -693,6 +697,8 @@ void UI::build(double dt) {
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
       ImGui::Text("Path length w/o random termination:");
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
+      ImGui::Text("Noise Threshold:");
+      scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##noiseth", &_current_scene->noise_threshold, 0.0001f, 0.01f, "%0.5f");
       scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", &_current_scene->spectral);
 
       if (scene_settings_changed) {

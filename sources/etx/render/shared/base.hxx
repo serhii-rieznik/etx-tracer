@@ -10,9 +10,10 @@
 #include <etx/render/shared/math.hxx>
 #undef ETX_RENDER_BASE_INCLUDED
 
-#define ETX_FORCE_VALIDATION 0
+#define ETX_FORCE_VALIDATION   0
+#define ETX_DISABLE_VALIDATION 1
 
-#if (ETX_DEBUG || ETX_FORCE_VALIDATION)
+#if (ETX_DISABLE_VALIDATION == 0) && (ETX_DEBUG || ETX_FORCE_VALIDATION)
 
 # define ETX_VALIDATE(VALUE)                                     \
    do {                                                          \

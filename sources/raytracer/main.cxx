@@ -34,6 +34,7 @@ extern "C" int main(int argc, char* argv[]) {
     desc.win32_console_utf8 = true;
     desc.win32_console_create = true;
     desc.user_data = &app;
+    desc.swap_interval = 0;
   };
   sapp_run(desc);
   return 0;

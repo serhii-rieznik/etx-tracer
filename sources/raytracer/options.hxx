@@ -7,12 +7,13 @@
 namespace etx {
 
 enum class OutputView : uint32_t {
-  Result,
-  CameraImage,
-  LightImage,
+  TonemappedImage,
+  AlphaChannel,
+  HDRImage,
   ReferenceImage,
   RelativeDifference,
   AbsoluteDifference,
+
   Count,
 };
 
@@ -23,18 +24,18 @@ enum class SaveImageMode : uint32_t {
 
 inline std::string output_view_to_string(uint32_t i) {
   switch (OutputView(i)) {
-    case OutputView::Result:
-      return "[1] Result Image ";
-    case OutputView::CameraImage:
-      return "[2] Camera Image ";
-    case OutputView::LightImage:
-      return "[3] Light Image ";
+    case OutputView::TonemappedImage:
+      return "Tonemapped Image";
+    case OutputView::HDRImage:
+      return "HDR Image";
     case OutputView::ReferenceImage:
-      return "[4] Reference Image ";
+      return "Reference Image";
     case OutputView::RelativeDifference:
-      return "[5] Relative Difference ";
+      return "Relative Difference";
     case OutputView::AbsoluteDifference:
-      return "[6] Absolute Difference ";
+      return "Absolute Difference";
+    case OutputView::AlphaChannel:
+      return "Alpha Channel";
     default:
       return "???";
   }
@@ -47,7 +48,7 @@ struct ViewOptions {
     SkipColorConversion = 1u << 2u,
   };
 
-  OutputView view = OutputView::Result;
+  OutputView view = OutputView::TonemappedImage;
   uint32_t layer = Film::Result;
   uint32_t options = ToneMapping | sRGB;
   float exposure = 1.0f;

@@ -19,9 +19,9 @@ struct ITMessage {
 };
 
 struct IntegratorThreadImpl {
+  IntegratorThread* i = nullptr;
   std::thread thread;
   std::atomic<bool> running = {};
-  std::atomic<bool> synced = {};
   std::deque<ITMessage> messages;
   std::mutex lock;
 
@@ -31,15 +31,22 @@ struct IntegratorThreadImpl {
   Integrator::Status latest_status = {};
   Options options = {};
 
-  IntegratorThreadImpl(TaskScheduler& sch)
-    : scheduler(sch) {
-    running = true;
-    thread = std::thread(&IntegratorThreadImpl::thread_function, this);
+  bool async = false;
+
+  IntegratorThreadImpl(TaskScheduler& sch, bool create_thread)
+    : scheduler(sch)
+    , async(create_thread)
+    , running(true) {
+    if (async) {
+      thread = std::thread(&IntegratorThreadImpl::thread_function, this);
+    }
   }
 
   ~IntegratorThreadImpl() {
     running = false;
-    thread.join();
+    if (async && thread.joinable()) {
+      thread.join();
+    }
   }
 
   void post_message(const ITMessage& msg) {
@@ -92,23 +99,17 @@ struct IntegratorThreadImpl {
     scheduler.register_thread();
 
     while (running) {
-      process_messages();
+      i->update();
 
-      if (integrator != nullptr) {
-        integrator->update();
-        latest_state = integrator->state();
-        latest_status = integrator->status();
-
-        if (latest_state == Integrator::State::Stopped) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+      if (latest_state == Integrator::State::Stopped) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
   }
 };
 
-IntegratorThread::IntegratorThread(TaskScheduler& scheduler) {
-  ETX_PIMPL_INIT(IntegratorThread, scheduler);
+IntegratorThread::IntegratorThread(TaskScheduler& scheduler, Mode mode) {
+  ETX_PIMPL_INIT(IntegratorThread, scheduler, mode == Mode::Async);
 }
 
 IntegratorThread ::~IntegratorThread() {
@@ -157,7 +158,11 @@ void IntegratorThread::stop(Integrator::Stop st) {
 
   if (st == Integrator::Stop::Immediate) {
     while (_private->latest_state != Integrator::State::Stopped) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1u));
+      if (_private->async) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1u));
+      } else {
+        update();
+      }
     }
   }
 }
@@ -184,6 +189,17 @@ void IntegratorThread::restart(const Options& opt) {
   _private->post_message({
     .cls = ITMessage::Cls::Run,
   });
+}
+
+void IntegratorThread::update() {
+  _private->process_messages();
+
+  if (_private->integrator == nullptr)
+    return;
+
+  _private->integrator->update();
+  _private->latest_state = _private->integrator->state();
+  _private->latest_status = _private->integrator->status();
 }
 
 }  // namespace etx

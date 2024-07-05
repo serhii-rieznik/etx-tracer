@@ -161,7 +161,7 @@ struct CPUBidirectionalImpl : public Task {
       }
 
       auto xyz = (result / spect.sampling_pdf()).to_rgb();
-      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / float(status.current_iteration + 1));
+      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, status.current_iteration);
     }
   }
 
@@ -821,7 +821,7 @@ struct CPUBidirectionalImpl : public Task {
     status = {};
     iteration_time = {};
     rt.film().clear({Film::LightIteration});
-    current_task = rt.scheduler().schedule(rt.film().count(), this);
+    current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), this);
   }
 };
 

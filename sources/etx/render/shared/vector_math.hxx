@@ -284,70 +284,53 @@ ETX_V4(uint4, uint32_t)
 # pragma warning(pop)
 #endif
 
-ETX_GPU_CODE float2 abs(const float2& a) {
-  return {fabsf(a.x), fabsf(a.y)};
-}
-ETX_GPU_CODE float3 abs(const float3& a) {
-  return {fabsf(a.x), fabsf(a.y), fabsf(a.z)};
-}
-ETX_GPU_CODE float4 abs(const float4& a) {
-  return {fabsf(a.x), fabsf(a.y), fabsf(a.z), fabsf(a.w)};
-}
+#define ETX_FUNC_2(func, cfunc)               \
+  ETX_GPU_CODE float2 func(const float2& a) { \
+    return {cfunc(a.x), cfunc(a.y)};          \
+  }
+#define ETX_FUNC_3(func, cfunc)                  \
+  ETX_GPU_CODE float3 func(const float3& a) {    \
+    return {cfunc(a.x), cfunc(a.y), cfunc(a.z)}; \
+  }
+#define ETX_FUNC_4(func, cfunc)                              \
+  ETX_GPU_CODE float4 func(const float4& a) {                \
+    return {cfunc(a.x), cfunc(a.y), cfunc(a.z), cfunc(a.w)}; \
+  }
 
-ETX_GPU_CODE float2 exp(const float2& a) {
-  return {expf(a.x), expf(a.y)};
-}
-ETX_GPU_CODE float3 exp(const float3& a) {
-  return {expf(a.x), expf(a.y), expf(a.z)};
-}
-ETX_GPU_CODE float4 exp(const float4& a) {
-  return {expf(a.x), expf(a.y), expf(a.z), expf(a.w)};
-}
-ETX_GPU_CODE float2 sqrt(const float2& a) {
-  return {sqrtf(a.x), sqrtf(a.y)};
-}
-ETX_GPU_CODE float3 sqrt(const float3& a) {
-  return {sqrtf(a.x), sqrtf(a.y), sqrtf(a.z)};
-}
-ETX_GPU_CODE float4 sqrt(const float4& a) {
-  return {sqrtf(a.x), sqrtf(a.y), sqrtf(a.z), sqrtf(a.w)};
-}
+#define ETX_UNARY_FUNC(func, cfunc) \
+  ETX_FUNC_2(func, cfunc)           \
+  ETX_FUNC_3(func, cfunc)           \
+  ETX_FUNC_4(func, cfunc)
 
-ETX_GPU_CODE float2 sin(const float2& a) {
-  return {sinf(a.x), sinf(a.y)};
-}
-ETX_GPU_CODE float3 sin(const float3& a) {
-  return {sinf(a.x), sinf(a.y), sinf(a.z)};
-}
-ETX_GPU_CODE float4 sin(const float4& a) {
-  return {sinf(a.x), sinf(a.y), sinf(a.z), sinf(a.w)};
-}
+ETX_UNARY_FUNC(abs, fabsf);
+ETX_UNARY_FUNC(exp, expf);
+ETX_UNARY_FUNC(sqrt, sqrtf);
+ETX_UNARY_FUNC(sin, sinf);
+ETX_UNARY_FUNC(cos, cosf);
+ETX_UNARY_FUNC(floor, floorf);
 
-ETX_GPU_CODE float2 cos(const float2& a) {
-  return {cosf(a.x), cosf(a.y)};
+ETX_GPU_CODE float dot(const float2& a, const float b) {
+  return a.x * b + a.y * b;
 }
-ETX_GPU_CODE float3 cos(const float3& a) {
-  return {cosf(a.x), cosf(a.y), cosf(a.z)};
+ETX_GPU_CODE float dot(const float3& a, const float b) {
+  return a.x * b + a.y * b + a.z * b;
 }
-ETX_GPU_CODE float4 cos(const float4& a) {
-  return {cosf(a.x), cosf(a.y), cosf(a.z), cosf(a.w)};
+ETX_GPU_CODE float dot(const float4& a, const float b) {
+  return a.x * b + a.y * b + a.z * b + a.w * b;
 }
-ETX_GPU_CODE float dot(const float4& a, const float4& b) {
-  return a.x * b.x + a.y * b.y + a.z * b.z + a.w + b.w;
-}
-
 ETX_GPU_CODE float dot(const float2& a, const float2& b) {
   return a.x * b.x + a.y * b.y;
+}
+ETX_GPU_CODE float dot(const float3& a, const float3& b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+ETX_GPU_CODE float dot(const float4& a, const float4& b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
 }
 
 ETX_GPU_CODE float length(const float2& v) {
   return sqrtf(dot(v, v));
 }
-
-ETX_GPU_CODE float dot(const float3& a, const float3& b) {
-  return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
 ETX_GPU_CODE float length(const float3& v) {
   return sqrtf(dot(v, v));
 }
@@ -393,17 +376,6 @@ ETX_GPU_CODE float4 lerp(const float4& a, const float4& b, float t) {
     a.z * inv_t + b.z * t,
     a.w * inv_t + b.w * t,
   };
-}
-
-ETX_GPU_CODE float2 floor(const float2& v) {
-  return {floorf(v.x), floorf(v.y)};
-}
-ETX_GPU_CODE float3 floor(const float3& v) {
-  return {floorf(v.x), floorf(v.y), floorf(v.z)};
-}
-
-ETX_GPU_CODE float4 floor(const float4& v) {
-  return {floorf(v.x), floorf(v.y), floorf(v.z), floorf(v.w)};
 }
 
 ETX_GPU_CODE float4x4 operator*(const float4x4& m1, const float4x4& m2) {

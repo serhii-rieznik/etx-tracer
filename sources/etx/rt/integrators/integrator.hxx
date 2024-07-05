@@ -98,11 +98,18 @@ struct Integrator {
 struct TaskScheduler;
 struct IntegratorThreadImpl;
 struct IntegratorThread {
-  IntegratorThread(TaskScheduler&);
+  enum Mode : uint32_t {
+    ExternalControl,
+    Async,
+  };
+  
+  IntegratorThread(TaskScheduler&, Mode mode);
   ~IntegratorThread();
 
   void start();
   void terminate();
+
+  void update();
 
   Integrator* integrator();
   void set_integrator(Integrator*);

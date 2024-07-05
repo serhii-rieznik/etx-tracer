@@ -52,39 +52,6 @@ struct ETX_ALIGNED CameraEval {
   float pdf_dir ETX_EMPTY_INIT;
 };
 
-struct ETX_ALIGNED FilmData {
-  ArrayView<float4> data ETX_EMPTY_INIT;
-  uint2 dimensions ETX_EMPTY_INIT;
-
-  ETX_GPU_CODE void accumulate(const float4& value, uint32_t x, uint32_t y, float t) {
-    if ((x >= dimensions.x) || (y >= dimensions.y)) {
-      return;
-    }
-    ETX_VALIDATE(value);
-    uint32_t i = x + (dimensions.y - 1 - y) * dimensions.x;
-    data[i] = (t <= 0.0f) ? value : lerp(value, data[i], t);
-  }
-
-  ETX_GPU_CODE void accumulate(const float4& value, const float2& ndc_coord, float t) {
-    float2 uv = ndc_coord * 0.5f + 0.5f;
-    uint32_t ax = static_cast<uint32_t>(uv.x * float(dimensions.x));
-    uint32_t ay = static_cast<uint32_t>(uv.y * float(dimensions.y));
-    accumulate(value, ax, ay, t);
-  }
-
-  ETX_GPU_CODE void atomic_add(const float4& value, uint32_t x, uint32_t y) {
-    if ((x >= dimensions.x) || (y >= dimensions.y)) {
-      return;
-    }
-
-    ETX_VALIDATE(value);
-    auto& ptr = data[x + 1llu * y * dimensions.x];
-    atomic_add_float(&ptr.x, value.x);
-    atomic_add_float(&ptr.y, value.y);
-    atomic_add_float(&ptr.z, value.z);
-  }
-};
-
 struct PixelFilter {
   uint32_t image_index = kInvalidIndex;
   float radius = 1.0f;

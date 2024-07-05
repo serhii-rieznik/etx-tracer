@@ -65,7 +65,7 @@ struct CPUDebugIntegratorImpl : public Task {
     status = {};
     total_time = {};
     iteration_time = {};
-    current_task = rt.scheduler().schedule(rt.film().count(), this);
+    current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
@@ -76,7 +76,7 @@ struct CPUDebugIntegratorImpl : public Task {
       uint32_t y = i / film.dimensions().x;
       float2 uv = get_jittered_uv(smp, {x, y}, film.dimensions());
       float3 xyz = preview_pixel(smp, uv, {x, y});
-      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, float(status.current_iteration) / (float(status.current_iteration + 1)));
+      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, status.current_iteration);
     }
   }
 

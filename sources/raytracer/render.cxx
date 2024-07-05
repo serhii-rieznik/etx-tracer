@@ -274,7 +274,8 @@ VSOutput vertex_main(uint vertexIndex : SV_VertexID) {
 }
 
 static const uint kViewResult = 0;
-static const uint kViewCameraImage = 1;
+static const uint kViewAlpha = 1;
+static const uint kViewOriginal = 2;
 static const uint kViewReferenceImage = 3;
 static const uint kViewRelativeDifference = 4;
 static const uint kViewAbsoluteDifference = 5;
@@ -331,33 +332,34 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
   int3 load_coord = int3(clamped, 0);
 
   float4 c_image = sample_image.Load(load_coord);
-  if (options & SkipColorConversion)
-    return c_image;
 
-  float c_lum = dot(c_image.xyz, lum);
+  if (image_view == kViewAlpha)
+    return exposure * c_image.w;
+
+  if (options & SkipColorConversion)
+    return exposure * c_image;
+
+  {
+    float4 v_image = validate(c_image);
+    if (any(v_image != c_image)) {
+      return v_image;
+    }
+  }
 
   float4 r_image = reference_image.Load(load_coord);
   float r_lum = dot(r_image.xyz, lum);
 
-  float4 t_image = c_image;
-  float4 v_image = validate(t_image);
-  if (any(v_image != t_image)) {
-    return v_image;
-  }
-
-  c_image = c_image;
-  v_image = v_image;
-  float v_lum = dot(v_image.xyz, lum);
+  float c_lum = dot(c_image.xyz, lum);
   float c_treshold = 1.0f / 65536.0f;
 
   float4 result = float4(0.0f, 0.0f, 0.0f, 0.0f);
   switch (image_view) {
     case kViewResult: {
-      result = tonemap(v_image);
+      result = tonemap(c_image);
       break;
     }
-    case kViewCameraImage: {
-      result = tonemap(c_image);
+    case kViewOriginal: {
+      result = exposure * c_image;
       break;
     }
     case kViewReferenceImage: {
@@ -365,13 +367,13 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
       break;
     }
     case kViewRelativeDifference: {
-      result.x = exposure * max(0.0f, r_lum - v_lum);
-      result.y = exposure * max(0.0f, v_lum - r_lum);
+      result.x = exposure * max(0.0f, r_lum - c_lum);
+      result.y = exposure * max(0.0f, c_lum - r_lum);
       break;
     }
     case kViewAbsoluteDifference: {
-      result.x = float(max(0.0f, r_lum - v_lum) > c_treshold);
-      result.y = float(max(0.0f, v_lum - r_lum) > c_treshold);
+      result.x = float(max(0.0f, r_lum - c_lum) > c_treshold);
+      result.y = float(max(0.0f, c_lum - r_lum) > c_treshold);
       break;
     }
     default:

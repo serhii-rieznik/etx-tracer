@@ -18,6 +18,8 @@ struct Film {
     Albedo,
     Result,
     Denoised,
+    Data,
+    DataTmp,
 
     LayerCount,
   };
@@ -31,9 +33,9 @@ struct Film {
 
   using Layers = std::initializer_list<uint32_t>;
 
-  static constexpr Layers kAllLayers = {CameraImage, LightImage, LightIteration, Normals, Albedo, Result, Denoised};
+  static constexpr Layers kAllLayers = {CameraImage, LightImage, LightIteration, Normals, Albedo, Result, Denoised, Data, DataTmp};
   static constexpr float kFilmHorizontalSize = 36.0f;
-  static constexpr float kFilmVerticalSize = 36.0f;
+  static constexpr float kFilmVerticalSize = 24.0f;
 
   Film(TaskScheduler&);
   ~Film();
@@ -45,8 +47,8 @@ struct Film {
   void atomic_add(uint32_t layer, const float4& value, const float2& ndc_coord);
   void atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t y);
 
-  void accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, float t);
-  void accumulate(uint32_t layer, const float4& value, const uint2& pixel, float t);
+  void accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, uint32_t sample_index);
+  void accumulate(uint32_t layer, const float4& value, const uint2& pixel, uint32_t sample_index);
 
   void commit_light_iteration(uint32_t i);
 
@@ -54,7 +56,6 @@ struct Film {
   void clear();
 
   const uint2& dimensions() const;
-  const uint32_t count() const;
 
   const float4* layer(uint32_t layer) const;
   float4* mutable_layer(uint32_t layer) const;
@@ -63,6 +64,14 @@ struct Film {
   float4* mutable_combined_result() const;
 
   void denoise();
+
+  /*
+   * Adaptive sampling
+   */
+  uint32_t total_pixel_count() const;
+  uint32_t active_pixel_count() const;
+  bool active_pixel(uint32_t linear_index, uint2& location);
+  void estimate_noise_levels(uint32_t sample_index, float threshold);
 
   static void generate_filter_image(uint32_t filter, std::vector<float4>&);
 

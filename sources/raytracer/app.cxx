@@ -22,7 +22,7 @@ RTApplication::RTApplication()
   : render(raytracing.scheduler())
   , scene(raytracing.scheduler())
   , camera_controller(scene.camera())
-  , integrator_thread(raytracing.scheduler()) {
+  , integrator_thread(raytracing.scheduler(), IntegratorThread::Mode::ExternalControl) {
 }
 
 void RTApplication::init() {
@@ -122,6 +122,8 @@ void RTApplication::frame() {
   if (options.layer == Film::Normals) {
     options.options = ViewOptions::SkipColorConversion;
   }
+
+  integrator_thread.update();
 
   render.start_frame(integrator_thread.status().current_iteration, options);
   render.update_image(raytracing.film().layer(options.layer));

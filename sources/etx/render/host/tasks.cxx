@@ -18,6 +18,7 @@ namespace etx {
 
 struct TaskWrapper : public enki::ITaskSet {
   Task* task = nullptr;
+  bool executed = false;
 
   TaskWrapper(Task* t, uint32_t range, uint32_t min_size)
     : enki::ITaskSet(range, min_size)
@@ -25,6 +26,7 @@ struct TaskWrapper : public enki::ITaskSet {
   }
 
   void ExecuteRange(enki::TaskSetPartition range_, uint32_t threadnum_) override {
+    executed = true;
     task->execute_range(range_.start, range_.end, threadnum_);
   }
 };
@@ -123,7 +125,7 @@ bool TaskScheduler::completed(Task::Handle handle) {
   }
 
   auto& task_wrapper = _private->task_pool.get(handle.data);
-  return task_wrapper.GetIsComplete();
+  return task_wrapper.executed && task_wrapper.GetIsComplete();
 }
 
 void TaskScheduler::wait(Task::Handle& handle) {

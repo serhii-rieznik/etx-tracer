@@ -116,16 +116,32 @@ void Film::atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t 
   atomic_add_float(&ptr->w, value.w);
 }
 
-void Film::accumulate(uint32_t layer, const float4& value, const uint2& pixel, float t) {
+void Film::accumulate(uint32_t layer, const float4& value, const uint2& pixel, uint32_t sample_index) {
   if ((pixel.x >= _private->dimensions.x) || (pixel.y >= _private->dimensions.y) || (layer >= LayerCount)) {
     return;
   }
 
-  float4* layer_data = _private->layer(layer);
-
   uint32_t i = pixel.x + (_private->dimensions.y - 1u - pixel.y) * _private->dimensions.x;
-  float4 new_value = {value.x, value.y, value.z, 1.0f};
-  if (t > 0.0f) {
+
+  float4* layer_data = _private->layer(layer);
+  float4* var_data = _private->layer(Data);
+
+  float4 new_data_value = {value.x, value.y, value.z, 0.0f};
+  if ((layer == CameraImage) && (sample_index % 2 == 0)) {
+    if (sample_index > 0) {
+      float t = float(sample_index / 2) / float(sample_index / 2 + 1u);
+      const float4& existing_value = var_data[i];
+      new_data_value.x = lerp(new_data_value.x, existing_value.x, t);
+      new_data_value.y = lerp(new_data_value.y, existing_value.y, t);
+      new_data_value.z = lerp(new_data_value.z, existing_value.z, t);
+      new_data_value.w = existing_value.w;
+    }
+    var_data[i] = new_data_value;
+  }
+
+  float4 new_value = {value.x, value.y, value.z, 0.0f};
+  if (sample_index > 0) {
+    float t = float(sample_index) / float(sample_index + 1u);
     const float4& existing_value = layer_data[i];
     new_value.x = lerp(value.x, existing_value.x, t);
     new_value.y = lerp(value.y, existing_value.y, t);
@@ -134,11 +150,66 @@ void Film::accumulate(uint32_t layer, const float4& value, const uint2& pixel, f
   layer_data[i] = new_value;
 }
 
-void Film::accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, float t) {
+void Film::estimate_noise_levels(uint32_t sample_index, float threshold) {
+  float4* var_data = _private->layer(Data);
+  float4* cam_data = _private->layer(CameraImage);
+
+  _private->tasks.execute(total_pixel_count(), [var_data, cam_data, sample_index](uint32_t begin, uint32_t end, uint32_t) {
+    for (uint32_t i = begin; i < end; ++i) {
+      const float3& v_i = *reinterpret_cast<const float3*>(var_data + i);
+      const float3& v_a = *reinterpret_cast<const float3*>(cam_data + i);
+      float error_diff =
+        // fabsf(luminance(v_i) - luminance(v_a));
+        dot(abs(v_i - v_a), 1.0f);
+      float error_norm =
+        // sqrtf(luminance({v_i.x, v_i.y, v_i.z}));
+        sqrtf(dot(v_i, 1.0f));
+      var_data[i].w = error_diff / (error_norm + kEpsilon);
+    }
+  });
+
+  constexpr uint32_t block_size = 8u;
+  uint2 blocks = _private->dimensions / block_size;
+
+  _private->tasks.execute(blocks.x * blocks.y, [var_data, cam_data, sample_index, threshold, this](uint32_t begin, uint32_t end, uint32_t) {
+    for (uint32_t block_i = begin; block_i < end; ++block_i) {
+      uint2 b_loc = {
+        block_i % (_private->dimensions.x / block_size),
+        block_i / (_private->dimensions.x / block_size),
+      };
+
+      float avg_err = 0.0f;
+      uint32_t x0 = b_loc.x * block_size;
+      uint32_t x1 = min(x0 + block_size, _private->dimensions.x);
+
+      uint32_t y0 = b_loc.y * block_size;
+      uint32_t y1 = min(y0 + block_size, _private->dimensions.y);
+
+      float area = 0.0f;
+      for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = x0; x < x1; ++x) {
+          avg_err += var_data[x + y * _private->dimensions.x].w;
+          area += 1.0f;
+        }
+      }
+      // float area = sqrtf(w / float(total_pixel_count()));
+      avg_err *= 1.0f / (area + kEpsilon);
+
+      float error_level = avg_err;
+      for (uint32_t y = y0; y < y1; ++y) {
+        for (uint32_t x = x0; x < x1; ++x) {
+          cam_data[x + y * _private->dimensions.x].w = (sample_index < 64) || (error_level > threshold) ? 0.0f : 1.0f;
+        }
+      }
+    }
+  });
+}
+
+void Film::accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, uint32_t sample_index) {
   float2 uv = ndc_coord * 0.5f + 0.5f;
   uint32_t ax = static_cast<uint32_t>(uv.x * float(_private->dimensions.x));
   uint32_t ay = static_cast<uint32_t>(uv.y * float(_private->dimensions.y));
-  accumulate(layer, value, uint2{ax, ay}, t);
+  accumulate(layer, value, uint2{ax, ay}, sample_index);
 }
 
 void Film::commit_light_iteration(uint32_t i) {
@@ -147,7 +218,7 @@ void Film::commit_light_iteration(uint32_t i) {
   auto sptr = _private->layer(LightIteration);
   auto dptr = _private->layer(LightImage);
 
-  uint64_t pixel_count = count();
+  uint64_t pixel_count = total_pixel_count();
   for (uint64_t i = 0; i < pixel_count; ++i) {
     dptr[i] = (t == 0.0f) ? sptr[i] : lerp(sptr[i], dptr[i], t);
     sptr[i] = {};
@@ -159,7 +230,7 @@ const float4* Film::combined_result() const {
 }
 
 float4* Film::mutable_combined_result() const {
-  _private->tasks.execute(count(), [this](uint32_t begin, uint32_t end, uint32_t) {
+  _private->tasks.execute(total_pixel_count(), [this](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
       float4 c = _private->buffers[CameraImage][i];
       float4 l = _private->buffers[LightImage][i];
@@ -190,20 +261,46 @@ const uint2& Film::dimensions() const {
   return _private->dimensions;
 }
 
-const uint32_t Film::count() const {
-  return _private->dimensions.x * _private->dimensions.y;
-}
-
 const float4* Film::layer(uint32_t layer) const {
-  return (layer == Result) ? combined_result() : _private->layer(layer);
+  switch (layer) {
+    case Result:
+      return combined_result();
+    default:
+      return _private->layer(layer);
+  }
 }
 
 float4* Film::mutable_layer(uint32_t layer) const {
-  return (layer == Result) ? mutable_combined_result() : _private->layer(layer);
+  switch (layer) {
+    case Result:
+      return mutable_combined_result();
+    default:
+      return _private->layer(layer);
+  }
 }
 
 void Film::denoise() {
   _private->denoiser.denoise();
+}
+
+uint32_t Film::total_pixel_count() const {
+  return _private->dimensions.x * _private->dimensions.y;
+}
+
+uint32_t Film::active_pixel_count() const {
+  return _private->dimensions.x * _private->dimensions.y;
+}
+
+bool Film::active_pixel(uint32_t linear_index, uint2& location) {
+  uint32_t sz = _private->dimensions.x;
+
+  location = {
+    linear_index % sz,
+    linear_index / sz,
+  };
+
+  uint32_t i = location.x + (_private->dimensions.y - 1u - location.y) * _private->dimensions.x;
+  return (_private->layer(CameraImage) + i)->w == 0.0f;
 }
 
 const char* Film::layer_name(uint32_t layer) {
@@ -215,6 +312,8 @@ const char* Film::layer_name(uint32_t layer) {
     "Albedo",
     "Result",
     "Denoised",
+    "Data",
+    "(data storage)",
   };
   static_assert(std::size(names) == LayerCount);
   ETX_ASSERT(layer < LayerCount);

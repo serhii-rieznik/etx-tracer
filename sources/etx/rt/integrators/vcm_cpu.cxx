@@ -10,17 +10,6 @@
 
 #include <mutex>
 
-static std::atomic<uint32_t> counter = {};
-static std::mutex m;
-
-#define vcm_log_impl(f, l, tag)                                                \
-  do {                                                                         \
-    std::unique_lock lock(m);                                                  \
-    log::info("VCM [% 3u : % 5u]: %s : %s", l, counter.fetch_add(1u), f, tag); \
-  } while (0)
-
-#define vcm_log(tag) vcm_log_impl(__FUNCTION__, __LINE__, tag)
-
 namespace etx {
 
 struct CPUVCMImpl {
@@ -90,8 +79,6 @@ struct CPUVCMImpl {
   }
 
   void start(const Options& opt) {
-    vcm_log("begin");
-
     wait_for_tasks();
 
     status = {};
@@ -106,7 +93,6 @@ struct CPUVCMImpl {
   }
 
   void start_next_iteration() {
-    vcm_log("begin");
     iteration_time = {};
 
     wait_for_tasks();
@@ -119,7 +105,7 @@ struct CPUVCMImpl {
     float radius_scale = 1.0f / (1.0f + float(vcm_iteration.iteration) / float(vcm_options.radius_decay));
     vcm_iteration.current_radius = used_radius * radius_scale;
 
-    float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(rt.film().count());
+    float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(rt.film().total_pixel_count());
     vcm_iteration.vc_weight = 1.0f / eta_vcm;
     vcm_iteration.vm_weight = vcm_options.enable_merging() ? eta_vcm : 0.0f;
     vcm_iteration.vm_normalization = 1.0f / eta_vcm;
@@ -131,7 +117,7 @@ struct CPUVCMImpl {
     rt.film().clear({Film::LightIteration});
 
     mode = Mode::Light;
-    task_handle = rt.scheduler().schedule(rt.film().count(), &light_gather);
+    task_handle = rt.scheduler().schedule(rt.film().total_pixel_count(), &light_gather);
   }
 
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
@@ -207,8 +193,7 @@ struct CPUVCMImpl {
       state.merged *= vcm_iteration.vm_normalization;
       state.merged += (state.gathered / state.spect.sampling_pdf()).to_rgb();
 
-      float t = float(vcm_iteration.iteration) / float(vcm_iteration.iteration + 1);
-      film.accumulate(Film::CameraImage, {state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, t);
+      film.accumulate(Film::CameraImage, {state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, vcm_iteration.iteration);
 
       if (pi % 256 == 0) {
         have_camera_image = true;
@@ -219,28 +204,21 @@ struct CPUVCMImpl {
   }
 
   void complete_light_vertices() {
-    vcm_log("begin");
-
     rt.film().commit_light_iteration(vcm_iteration.iteration);
     have_light_image = true;
 
     if (*state == Integrator::State::Stopped) {
-      vcm_log("exit");
       return;
     }
 
-    ETX_ASSERT(_light_paths.size() == rt.film().count());
+    ETX_ASSERT(_light_paths.size() == rt.film().total_pixel_count());
 
     if (vcm_options.merge_vertices()) {
       _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius, rt.scheduler());
     }
-
-    vcm_log("end");
   }
 
   void complete_camera_vertices() {
-    vcm_log("begin");
-
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
@@ -248,14 +226,11 @@ struct CPUVCMImpl {
     have_camera_image = true;
 
     if ((*state == Integrator::State::WaitingForCompletion) || (*state == Integrator::State::Stopped) || (vcm_iteration.iteration + 1 >= rt.scene().samples)) {
-      vcm_log("exit");
       *state = Integrator::State::Stopped;
       return;
     }
 
     vcm_iteration.iteration += 1;
-    vcm_log("end");
-
     start_next_iteration();
   }
 };
@@ -277,7 +252,6 @@ Options CPUVCM::options() const {
 }
 
 void CPUVCM::run(const Options& opt) {
-  vcm_log("begin");
   stop(Stop::Immediate);
 
   if (rt.has_scene()) {
@@ -296,7 +270,7 @@ void CPUVCM::update() {
   if (_private->mode == CPUVCMImpl::Mode::Light) {
     _private->complete_light_vertices();
     _private->mode = CPUVCMImpl::Mode::Camera;
-    _private->task_handle = rt.scheduler().schedule(rt.film().count(), &_private->camera_gather);
+    _private->task_handle = rt.scheduler().schedule(rt.film().total_pixel_count(), &_private->camera_gather);
   } else {
     _private->complete_camera_vertices();
     _private->start_next_iteration();
@@ -308,21 +282,14 @@ void CPUVCM::stop(Stop st) {
     return;
   }
 
-  vcm_log("begin");
   current_state = (st == Stop::Immediate) ? State::Stopped : State::WaitingForCompletion;
 
   if (current_state == State::Stopped) {
-    vcm_log("wait...");
     _private->wait_for_tasks();
-    vcm_log("wait done");
   }
-
-  vcm_log("end");
 }
 
 void CPUVCM::update_options(const Options& opt) {
-  vcm_log("begin");
-
   if (current_state == State::Running) {
     run(opt);
   }
