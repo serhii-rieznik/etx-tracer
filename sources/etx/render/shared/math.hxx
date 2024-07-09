@@ -319,6 +319,22 @@ ETX_GPU_CODE float4 atan(const float4& a) {
   };
 }
 
+ETX_GPU_CODE float3 mod(const float3& a, float b) {
+  return {
+    fmodf(a.x, b),
+    fmodf(a.y, b),
+    fmodf(a.z, b),
+  };
+}
+
+ETX_GPU_CODE float3 mod(const float3& a, const float3& b) {
+  return {
+    fmodf(a.x, b.x),
+    fmodf(a.y, b.y),
+    fmodf(a.z, b.z),
+  };
+}
+
 ETX_GPU_CODE constexpr float saturate(float val) {
   return clamp(val, 0.0f, 1.0f);
 }
@@ -364,6 +380,13 @@ ETX_GPU_CODE ubyte4 to_ubyte4(const float4& v) {
     static_cast<uint8_t>(saturate(v.z) * 255.0f),
     static_cast<uint8_t>(saturate(v.w) * 255.0f),
   };
+}
+
+ETX_GPU_CODE float3 hsv_to_rgb(const float3& hsv) {
+  float h = hsv.x;
+  float s = hsv.y;
+  float v = hsv.z;
+  return v * (1.0f - s * saturate(2.0f - abs(mod(h * 6.0f + float3{0.0f, 4.0f, 2.0f}, 6.0f) - 3.0f)));
 }
 
 ETX_GPU_CODE float luminance(const float3& value) {

@@ -41,7 +41,8 @@ struct ETX_ALIGNED Scene {
   uint32_t max_path_length ETX_INIT_WITH(65535u);
   uint32_t samples ETX_INIT_WITH(256u);
   uint32_t random_path_termination ETX_INIT_WITH(6u);
-  float noise_threshold ETX_INIT_WITH(0.0002f);
+  float noise_threshold ETX_INIT_WITH(0.1f);
+  float radiance_clamp ETX_INIT_WITH(0.0f);
   bool spectral ETX_INIT_WITH(false);
 };
 

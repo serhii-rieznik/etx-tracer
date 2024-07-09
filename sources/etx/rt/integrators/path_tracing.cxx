@@ -37,12 +37,16 @@ struct CPUPathTracingImpl : public Task {
     total_time = {};
     iteration_time = {};
     pixels_processed = 0;
+
+    rt.film().clear();
     current_task = rt.scheduler().schedule(rt.film().active_pixel_count(), this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     ETX_FUNCTION_SCOPE();
     auto& film = rt.film();
+    const auto& scene = rt.scene();
+
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint2 pixel = {};
       if (film.active_pixel(i, pixel) == false) {
@@ -50,21 +54,26 @@ struct CPUPathTracingImpl : public Task {
       }
 
       pixels_processed++;
-      PTRayPayload payload = make_ray_payload(rt.scene(), film, pixel, status.current_iteration, rt.scene().spectral);
+      PTRayPayload payload = make_ray_payload(scene, film, pixel, status.current_iteration, scene.spectral);
 
-      while ((state->load() != Integrator::State::Stopped) && run_path_iteration(rt.scene(), options, rt, payload)) {
+      while ((state->load() != Integrator::State::Stopped) && run_path_iteration(scene, options, rt, payload)) {
         ETX_VALIDATE(payload.accumulated);
       }
 
       auto normal = payload.view_normal;
-
       auto albedo = (payload.view_albedo / payload.spect.sampling_pdf()).to_rgb();
       ETX_CHECK_FINITE(albedo);
+      auto color = (payload.accumulated / payload.spect.sampling_pdf()).to_rgb();
+      ETX_CHECK_FINITE(color);
 
-      auto xyz = (payload.accumulated / payload.spect.sampling_pdf()).to_rgb();
-      ETX_CHECK_FINITE(xyz);
+      if ((scene.radiance_clamp > 0.0f) && (payload.path_length > 1)) {
+        float lum = luminance(color);
+        if (lum > scene.radiance_clamp) {
+          color *= scene.radiance_clamp / lum;
+        }
+      }
 
-      film.accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, pixel, status.current_iteration);
+      film.accumulate(Film::CameraImage, {color.x, color.y, color.z, 1.0f}, pixel, status.current_iteration);
       film.accumulate(Film::Normals, {normal.x, normal.y, normal.z, 1.0f}, pixel, status.current_iteration);
       film.accumulate(Film::Albedo, {albedo.x, albedo.y, albedo.z, 1.0f}, pixel, status.current_iteration);
     }
@@ -112,10 +121,7 @@ void CPUPathTracing::update() {
   _private->status.completed_iterations += 1u;
 
   rt.scheduler().wait(_private->current_task);
-
-  if ((rt.scene().noise_threshold > 0.0f) && (_private->status.current_iteration > 0) && ((_private->status.current_iteration % 2) == 0)) {
-    rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().noise_threshold);
-  }
+  rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().noise_threshold);
 
   if ((current_state == State::WaitingForCompletion) || (_private->status.current_iteration + 1 >= _private->rt.scene().samples)) {
     _private->current_task = {};

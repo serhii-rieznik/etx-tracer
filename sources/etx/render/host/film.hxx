@@ -18,8 +18,9 @@ struct Film {
     Albedo,
     Result,
     Denoised,
-    Data,
-    DataTmp,
+    Adaptive,
+    Internal,
+    Debug,
 
     LayerCount,
   };
@@ -33,7 +34,7 @@ struct Film {
 
   using Layers = std::initializer_list<uint32_t>;
 
-  static constexpr Layers kAllLayers = {CameraImage, LightImage, LightIteration, Normals, Albedo, Result, Denoised, Data, DataTmp};
+  static constexpr Layers kAllLayers = {CameraImage, LightImage, LightIteration, Normals, Albedo, Result, Denoised, Adaptive, Internal, Debug};
   static constexpr float kFilmHorizontalSize = 36.0f;
   static constexpr float kFilmVerticalSize = 24.0f;
 
@@ -72,6 +73,7 @@ struct Film {
   uint32_t active_pixel_count() const;
   bool active_pixel(uint32_t linear_index, uint2& location);
   void estimate_noise_levels(uint32_t sample_index, float threshold);
+  float noise_level() const;
 
   static void generate_filter_image(uint32_t filter, std::vector<float4>&);
 
@@ -82,7 +84,7 @@ struct Film {
   static const char* layer_name(uint32_t layer);
 
  private:
-  ETX_DECLARE_PIMPL(Film, 512);
+  ETX_DECLARE_PIMPL(Film, 1024);
 };
 
 }  // namespace etx

@@ -497,7 +497,7 @@ void UI::build(double dt) {
         bool selected = i == _view_options.layer;
         if (ImGui::Selectable(Film::layer_name(i), &selected)) {
           if (selected) {
-            _view_options.layer = i == Film::DataTmp ? Film::Data : i;
+            _view_options.layer = i;
           }
         }
       }
@@ -699,6 +699,9 @@ void UI::build(double dt) {
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
       ImGui::Text("Noise Threshold:");
       scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##noiseth", &_current_scene->noise_threshold, 0.0001f, 0.01f, "%0.5f");
+      ImGui::Text("Radiance Clamp:");
+      scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##radclmp", &_current_scene->radiance_clamp, 0.1f, 1.f, "%0.2f");
+      ImGui::Text("Current noise level: %0.5f", _film->noise_level());
       scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", &_current_scene->spectral);
 
       if (scene_settings_changed) {
