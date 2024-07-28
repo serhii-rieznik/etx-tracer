@@ -691,5 +691,206 @@ ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2&
   return ray.w;
 }
 
+//
+// VMF Diffuse: A Unified Rough Diffuse BRDF
+// Eugene d’Eon and Andrea Weidlich
+// Reference: https://www.shadertoy.com/view/MXKSWW
+//
+
+inline float erf(float x) {
+  // https://en.wikipedia.org/wiki/Error_function (Bürmann series)
+  float e = expf(-x * x);
+  return (x >= 0.0f ? 1.0f : -1.0f) * 2.0f / kSqrtPI * sqrtf(1.0f - e) * (kSqrtPI / 2.0f + 31.0f / 200.0f * e - 341.0f / 8000.0f * e * e);
+}
+
+inline SpectralResponse erf(const SpectralResponse& x) {
+  // https://en.wikipedia.org/wiki/Error_function (Bürmann series)
+  if (x.spectral()) {
+    return {x.query(), erf(x.components.w)};
+  }
+
+  SpectralResponse e = exp(-x * x);
+  return sign(x) * 2.0f / kSqrtPI * sqrt(1.0f - e) * (kSqrtPI / 2.0f + 31.0f / 200.0f * e - 341.0f / 8000.0f * e * e);
+}
+
+inline SpectralResponse fm(float ui, float uo, float r, SpectralResponse c) {
+  SpectralResponse C = sqrt(1.0f - c);
+  SpectralResponse Ck = (1.0f - 0.5441615108674713f * C - 0.45302863761693374f * (1.0f - c)) / (1.0f + 1.4293127703064865f * C);
+  SpectralResponse Ca = c / pow(1.0075f + 1.16942f * C, atan((0.0225272f + (-0.264641f + r) * r) * erf(c)));
+  return max(0.0f, 0.384016f * (-0.341969f + Ca) * Ca * Ck * (-0.0578978f / (0.287663f + ui * uo) + fabsf(-0.0898863f + tanhf(r))));
+}
+
+inline float sigmaBeckmannExpanded(float u, float m) {
+  if (0.0f == m)
+    return (u + fabsf(u)) / 2.0f;
+
+  float m2 = m * m;
+
+  if (1.0f == u)
+    return 1.0f - 0.5f * m2;
+
+  float expansionTerm = -0.25f * m2 * (u + fabsf(u));  // accurate approximation for m < 0.25 that avoids numerical issues
+
+  float u2 = u * u;
+  return ((expf(u2 / (m2 * (-1.0f + u2))) * m * sqrtf(1.0f - u2)) / sqrtf(kPi) + u * (1.0f + erf(u / (m * sqrtf(1.0f - u2))))) / 2.0f + expansionTerm;
+}
+
+inline float coth(float x) {
+  return (expf(-x) + expf(x)) / (-expf(-x) + expf(x));
+}
+
+// vmf sigma (cross section)
+inline float sigmaVMF(float u, float m) {
+  if (m < 0.25f)
+    return sigmaBeckmannExpanded(u, m);
+
+  float m2 = m * m;
+  float m4 = m2 * m2;
+  float m8 = m4 * m4;
+
+  float u2 = u * u;
+  float u4 = u2 * u2;
+  float u6 = u2 * u4;
+  float u8 = u4 * u4;
+  float u10 = u6 * u4;
+  float u12 = u6 * u6;
+
+  float coth2m2 = coth(2.0f / m2);
+  float sinh2m2 = sinhf(2.0f / m2);
+
+  if (m > 0.9f)
+    return 0.25f - 0.25f * u * (m2 - 2.0f * coth2m2) + 0.0390625f * (-1.0f + 3.0f * u2) * (4.0f + 3.0f * m4 - 6.0f * m2 * coth2m2);
+
+  float q2 =
+    1.0132789611816406e-6f * (35.0f - 1260.0f * u2 + 6930.0f * u4 - 12012.0f * u6 + 6435.0f * u8) * (1.0f + coth2m2) *
+    (-256.0f - 315.0f * m4 * (128.0f + 33.0f * m4 * (80.0f + 364.0f * m4 + 195.0f * m8)) + 18.0f * m2 * (256.0f + 385.0f * m4 * (32.0f + 312.0f * m4 + 585.0f * m8)) * coth2m2) *
+    sinh2m2;
+
+  float q1 = 9.12696123123169e-8f * (-63.0f + 3465.0f * u2 - 30030.0f * u4 + 90090.0f * u6 - 109395.0f * u8 + 46189.0f * u10) * (1.0f + coth2m2) *
+             (-1024.0f - 495.0f * m4 * (768.0f + 91.0f * m4 * (448.0f + 15.0f * m4 * (448.0f + 1836.0f * m4 + 969.0f * m8))) +
+               110.0f * m2 * (256.0f + 117.0f * m4 * (256.0f + 21.0f * m4 * (336.0f + 85.0f * m4 * (32.0f + 57.0f * m4)))) * coth2m2) *
+             sinh2m2;
+
+  float q0 = 4.3655745685100555e-9f * (231.0f - 18018.0f * u2 + 225225.0f * u4 - 1.02102e6f * u6 + 2.078505e6f * u8 - 1.939938e6f * u10 + 676039.0f * u12) * (1.0f + coth2m2) *
+             (-4096.0f - 3003.0f * m4 * (1024.0f + 45.0f * m4 * (2560.0f + 51.0f * m4 * (1792.0f + 285.0f * m4 * (80.0f + 308.0f * m4 + 161.0f * m8)))) +
+               78.0f * m2 * (2048.0f + 385.0f * m4 * (1280.0f + 153.0f * m4 * (512.0f + 57.0f * m4 * (192.0f + 35.0f * m4 * (40.0f + 69.0f * m4))))) * coth2m2) *
+             sinh2m2;
+
+  return 0.25f - 0.25f * u * (m2 - 2.0f * coth2m2) + 0.0390625f * (-1.0f + 3.0f * u2) * (4.0f + 3.0f * m4 - 6.0f * m2 * coth2m2) -
+         0.000732421875f * (3.0f - 30.0f * u2 + 35.0f * u4) * (16.0f + 180.0f * m4 + 105.0f * m8 - 10.0f * m2 * (8.0f + 21.0f * m4) * coth2m2) +
+         0.000049591064453125f * (-5.0f + 105.0f * u2 - 315.0f * u4 + 231.0f * u6) *
+           (64.0f + 105.0f * m4 * (32.0f + 180.0f * m4 + 99.0f * m8) - 42.0f * m2 * (16.0f + 240.0f * m4 + 495.0f * m8) * coth2m2) +
+         (q2 / expf(2.0f / m2)) - (q1 / expf(2.0f / m2)) + (q0 / expf(2.0f / m2));
+}
+
+inline SpectralResponse vMFdiffuseBRDF(const float3& w_i, const float3& w_o, const float2& roughness, SpectralResponse albedo_in) {
+  float r = clamp(sqrtf(roughness.x * roughness.y), 0.0f, 1.0f - 4.0f * kEpsilon);
+  if (r == 0.0f)
+    return albedo_in * kInvPi;
+
+  SpectralResponse albedo = albedo_in;
+  // SpectralResponse albedo = {};
+  /*/
+  {
+    auto s = 0.64985f + 0.631112f * r + 1.38922f * r * r;
+    ETX_VALIDATE(s);
+    auto sterm = sqrt(1.0f - 2.0f * kd + sqr(kd) + 4.0f * sqr(s) * sqr(kd));
+    auto nom = -1.0f + kd + sterm;
+    auto denom = 2.0f * s * kd + kEpsilon;
+    albedo = kd * (1.0f - sqrtf(r)) + sqrtf(r) * (nom / denom);
+    ETX_VALIDATE(albedo);
+  }
+  // */
+
+  float cosThetaI = w_i.z;
+  float sinThetaI = sqrtf(1.0f - cosThetaI * cosThetaI);
+  float cosThetaO = w_o.z;
+  float sinThetaO = sqrtf(1.0f - cosThetaO * cosThetaO);
+
+  float cosPhiDiff = 0.0;
+  if (sinThetaI > 0.0f && sinThetaO > 0.0) {
+    /* Compute cos(phiO-phiI) using the half-angle formulae */
+    float sinPhiI = clamp(w_i.y / sinThetaI, -1.0f, 1.0f);
+    float cosPhiI = clamp(w_i.x / sinThetaI, -1.0f, 1.0f);
+    float sinPhiO = clamp(w_o.y / sinThetaO, -1.0f, 1.0f);
+    float cosPhiO = clamp(w_o.x / sinThetaO, -1.0f, 1.0f);
+    cosPhiDiff = clamp(cosPhiI * cosPhiO + sinPhiI * sinPhiO, -1.0f, 1.0f);
+  }
+
+  float phi = acosf(cosPhiDiff);
+  float ui = w_i.z;
+  float uo = w_o.z;
+  float m = -logf(1.0f - sqrtf(r));
+  float sigmai = sigmaVMF(ui, m);
+  float sigmao = sigmaVMF(uo, m);
+  float sigmano = sigmaVMF(-uo, m);
+  float sigio = sigmai * sigmao;
+  float sigdenom = uo * sigmai + ui * sigmano;
+
+  float r2 = r * r;
+  float r25 = r2 * sqrtf(r);
+  float r3 = r * r2;
+  float r4 = r2 * r2;
+  float r45 = r4 * sqrtf(r);
+  float r5 = r3 * r2;
+
+  float ui2 = saturate(ui * ui);
+  float uo2 = saturate(uo * uo);
+  float sqrtuiuo = sqrtf((1.0f - ui2) * (1.0f - uo2));
+
+  float C100 = 1.0f + (-0.1f * r + 0.84f * r4) / (1.0f + 9.0f * r3);
+  float C101 = (0.0173f * r + 20.4f * r2 - 9.47f * r3) / (1.0f + 7.46f * r);
+  float C102 = (-0.927f * r + 2.37f * r2) / (1.24f + r2);
+  float C103 = (-0.110f * r - 1.54f * r2) / (1.0f - 1.05f * r + 7.1f * r2);
+  float f10 = ((C100 + C101 * ui * uo + C102 * ui2 * uo2 + C103 * (ui2 + uo2)) * sigio) / sigdenom;
+
+  float C110 = (0.54f * r - 0.182f * r3) / (1.0f + 1.32f * r2);
+  float C111 = (-0.097f * r + 0.62f * r2 - 0.375f * r3) / (1.0f + 0.4f * r3);
+  float C112 = 0.283f + 0.862f * r - 0.681f * r2;
+  float f11 = (sqrtuiuo * (C110 + C111 * ui * uo)) * powf(sigio, C112) / sigdenom;
+
+  float C120 = (2.25f * r + 5.1f * r2) / (1.0f + 9.8f * r + 32.4f * r2);
+  float C121 = (-4.32f * r + 6.0f * r3) / (1.0f + 9.7f * r + 287.0f * r3);
+  float f12 = ((1.0f - ui2) * (1.0f - uo2) * (C120 + C121 * uo) * (C120 + C121 * ui)) / (ui + uo);
+
+  float C200 = (0.00056f * r + 0.226f * r2) / (1.0f + 7.07f * r2);
+  float C201 = (-0.268f * r + 4.57f * r2 - 12.04f * r3) / (1.0f + 36.7f * r3);
+  float C202 = (0.418f * r + 2.52f * r2 - 0.97f * r3) / (1.0f + 10.0f * r2);
+  float C203 = (0.068f * r - 2.25f * r2 + 2.65f * r3) / (1.0f + 21.4f * r3);
+  float C204 = (0.050f * r - 4.22f * r3) / (1.0f + 17.6f * r2 + 43.1f * r3);
+  float f20 = (C200 + C201 * ui * uo + C203 * ui2 * uo2 + C202 * (ui + uo) + C204 * (ui2 + uo2)) / (ui + uo);
+
+  float C210 = (-0.049f * r - 0.027f * r3) / (1.0f + 3.36f * r2);
+  float C211 = (2.77f * r2 - 8.332f * r25 + 6.073f * r3) / (1.0f + 50.0f * r4);
+  float C212 = (-0.431f * r2 - 0.295f * r3) / (1.0f + 23.9f * r3);
+  float f21 = (sqrtuiuo * (C210 + C211 * ui * uo + C212 * (ui + uo))) / (ui + uo);
+
+  float C300 = (-0.083f * r3 + 0.262f * r4) / (1.0f - 1.9f * r2 + 38.6f * r4);
+  float C301 = (-0.627f * r2 + 4.95f * r25 - 2.44f * r3) / (1.0f + 31.5f * r4);
+  float C302 = (0.33f * r2 + 0.31f * r25 + 1.4f * r3) / (1.0f + 20.0f * r3);
+  float C303 = (-0.74f * r2 + 1.77f * r25 - 4.06f * r3) / (1.0f + 215.0f * r5);
+  float C304 = (-1.026f * r3) / (1.0f + 5.81f * r2 + 13.2f * r3);
+  float f30 = (C300 + C301 * ui * uo + C303 * ui2 * uo2 + C302 * (ui + uo) + C304 * (ui2 + uo2)) / (ui + uo);
+
+  float C310 = (0.028f * r2 - 0.0132f * r3) / (1.0f + 7.46f * r2 - 3.315f * r4);
+  float C311 = (-0.134f * r2 + 0.162f * r25 + 0.302f * r3) / (1.0f + 57.5f * r45);
+  float C312 = (-0.119f * r2 + 0.5f * r25 - 0.207f * r3) / (1.0f + 18.7f * r3);
+  float f31 = (sqrtuiuo * (C310 + C311 * ui * uo + C312 * (ui + uo))) / (ui + uo);
+
+  auto t0 = albedo * max(0.0f, f10 + f11 * cosf(phi) * 2.0f + f12 * cosf(2.0f * phi) * 2.0f);
+  ETX_VALIDATE(t0);
+
+  auto t1 = albedo * albedo * max(0.0f, f20 + f21 * cosf(phi) * 2.0f);
+  ETX_VALIDATE(t1);
+
+  auto t2 = albedo * albedo * albedo * max(0.0f, f30 + f31 * cosf(phi) * 2.0f);
+  ETX_VALIDATE(t2);
+
+  auto t4 = fm(ui, uo, r, albedo);
+  ETX_VALIDATE(t4);
+
+  return kInvPi * (t0 + t1 + t2) + t4;
+}
+
 }  // namespace external
 }  // namespace etx

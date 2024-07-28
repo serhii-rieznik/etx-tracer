@@ -75,12 +75,15 @@ struct ETX_ALIGNED Material {
   SubsurfaceMaterial subsurface = {};
 
   float2 roughness = {};
+  float2 specular_roughness = {};
 
   uint32_t normal_image_index = kInvalidIndex;
   uint32_t metal_roughness_image_index = kInvalidIndex;
 
   float metalness = {};
   float normal_scale = 1.0f;
+
+  uint32_t variant = 0;
 };
 
 }  // namespace etx

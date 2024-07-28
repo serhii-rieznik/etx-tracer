@@ -344,6 +344,8 @@ void Film::clear(const Layers& layers) {
       memset(_private->buffers[l].data(), 0, _private->buffers[l].size() * sizeof(float4));
     }
   }
+  _private->last_noise_level = {};
+  _private->active_pixels = total_pixel_count();
 }
 
 void Film::clear() {
@@ -352,6 +354,8 @@ void Film::clear() {
       memset(buffer.data(), 0, buffer.size() * sizeof(float4));
     }
   }
+  _private->last_noise_level = {};
+  _private->active_pixels = total_pixel_count();
 }
 
 const uint2& Film::dimensions() const {

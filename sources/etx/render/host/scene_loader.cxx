@@ -1387,6 +1387,15 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     }
   }
 
+  if (get_param(material, "Sr")) {
+    float2 value = {};
+    if (sscanf(data_buffer, "%f %f", &value.x, &value.y) == 2) {
+      mtl.specular_roughness = sqr(value);
+    } else if (sscanf(data_buffer, "%f", &value.x) == 1) {
+      mtl.specular_roughness = {sqr(value.x), sqr(value.x)};
+    }
+  }
+
   if (get_file(base_dir, material.diffuse_texname)) {
     mtl.diffuse.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
   }
@@ -1406,6 +1415,13 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
         mtl.cls = material_string_to_class(params[i + 1]);
         i += 1;
       }
+    }
+  }
+
+  if (get_param(material, "variant")) {
+    uint32_t var = 0;
+    if (sscanf(data_buffer, "%u", &var) == 1) {
+      mtl.variant = var;
     }
   }
 

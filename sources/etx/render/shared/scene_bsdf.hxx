@@ -133,8 +133,8 @@ ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const 
 }  // namespace etx
 
 #include <etx/render/shared/bsdf_external.hxx>
+#include <etx/render/shared/bsdf_various.hxx>
+#include <etx/render/shared/bsdf_plastic.hxx>
 #include <etx/render/shared/bsdf_conductor.hxx>
 #include <etx/render/shared/bsdf_dielectric.hxx>
-#include <etx/render/shared/bsdf_plastic.hxx>
-#include <etx/render/shared/bsdf_various.hxx>
 #include <etx/render/shared/bsdf_velvet.hxx>

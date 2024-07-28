@@ -64,6 +64,7 @@ THE SOFTWARE.
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <chrono>
 
 #if !defined(_MSC_VER)
 # define _strnicmp strncasecmp
@@ -1920,7 +1921,8 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
   size_t line_no = 0;
   std::string linebuf;
   while (inStream->peek() != -1) {
-    safeGetline(*inStream, linebuf);
+    std::getline(*inStream, linebuf);
+    // safeGetline(*inStream, linebuf);
     line_no++;
 
     // Trim trailing whitespace.
@@ -2332,6 +2334,7 @@ bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std
 
 bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<material_t>* materials, std::string* warn, std::string* err, std::istream* inStream,
   MaterialReader* readMatFn, const std::string& customMaterials, bool triangulate, bool default_vcols_fallback) {
+  auto t0 = std::chrono::steady_clock::now();
   std::stringstream errss;
 
   std::vector<real_t> v;
@@ -2368,8 +2371,11 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   std::string linebuf;
   linebuf.reserve(256);
 
+  auto t1 = std::chrono::steady_clock::now();
+
   while (inStream->peek() != -1) {
-    safeGetline(*inStream, linebuf);
+    std::getline(*inStream, linebuf);
+    // safeGetline(*inStream, linebuf);
 
     line_num++;
 
@@ -2827,6 +2833,8 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
     // Ignore unknown command.
   }
 
+  auto t2 = std::chrono::steady_clock::now();
+
   // not all vertices have colors, no default colors desired? -> clear colors
   if (!found_all_colors && !default_vcols_fallback) {
     vc.clear();
@@ -2875,6 +2883,14 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   attrib->texcoord_ws.swap(vt);
   attrib->colors.swap(vc);
   attrib->skin_weights.swap(vw);
+
+  auto t3 = std::chrono::steady_clock::now();
+  auto d1 = (t1 - t0).count() / 1.0e+6;
+  auto d2 = (t2 - t1).count() / 1.0e+6;
+  auto d3 = (t3 - t2).count() / 1.0e+6;
+  auto d4 = (t3 - t0).count() / 1.0e+6;
+
+  printf(">> %.3f - %.3f - %.3f -> %.3f\n", d1, d2, d3, d4);
 
   return true;
 }

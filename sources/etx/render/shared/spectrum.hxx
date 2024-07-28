@@ -327,12 +327,12 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     return spectral() ? (components.w <= kEpsilon) : (components.integrated.x <= kEpsilon) && (components.integrated.y <= kEpsilon) && (components.integrated.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                       \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
-    components.integrated OP other.components.integrated;                     \
-    components.w OP other.components.w;                                       \
-    return *this;                                                             \
+#define SPECTRAL_OP(OP)                                                        \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
+    components.integrated OP other.components.integrated;                      \
+    components.w OP other.components.w;                                        \
+    return *this;                                                              \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)
@@ -375,9 +375,6 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
 #undef SPECTRAL_OP
 };
 
-ETX_GPU_CODE bool valid_value(const SpectralResponse& v) {
-  return v.valid();
-}
 ETX_GPU_CODE SpectralResponse operator*(float other, const SpectralResponse& s) {
   return s * other;
 }
@@ -407,6 +404,34 @@ ETX_GPU_CODE SpectralResponse abs(const SpectralResponse& s) {
 }
 ETX_GPU_CODE SpectralResponse saturate(const SpectralResponse& s) {
   return s.spectral() ? SpectralResponse{s.query(), saturate(s.components.w)} : SpectralResponse{s.query(), saturate(s.components.integrated)};
+}
+ETX_GPU_CODE SpectralResponse sign(const SpectralResponse& b) {
+  return b.spectral() ? SpectralResponse{b.query(), sign(b.components.w)} : SpectralResponse(b.query(), sign(b.components.integrated));
+}
+ETX_GPU_CODE SpectralResponse atan(const SpectralResponse& b) {
+  return b.spectral() ? SpectralResponse{b.query(), atanf(b.components.w)} : SpectralResponse(b.query(), atan(b.components.integrated));
+}
+ETX_GPU_CODE SpectralResponse pow(const SpectralResponse& a, float b) {
+  return a.spectral() ? SpectralResponse{a.query(), powf(a.components.w, b)} : SpectralResponse(a.query(), pow(a.components.integrated, b));
+}
+ETX_GPU_CODE SpectralResponse pow(const SpectralResponse& a, const SpectralResponse& b) {
+  return a.spectral() ? SpectralResponse{b.query(), powf(a.components.w, b.components.w)} : SpectralResponse(b.query(), pow(a.components.integrated, b.components.integrated));
+}
+ETX_GPU_CODE SpectralResponse max(const SpectralResponse& a, float b) {
+  return a.spectral() ? SpectralResponse{a.query(), fmaxf(a.components.w, b)} : SpectralResponse(a.query(), max(a.components.integrated, b));
+}
+ETX_GPU_CODE SpectralResponse max(float a, const SpectralResponse& b) {
+  return b.spectral() ? SpectralResponse{b.query(), fmaxf(b.components.w, a)} : SpectralResponse(b.query(), max(b.components.integrated, a));
+}
+ETX_GPU_CODE SpectralResponse min(const SpectralResponse& a, float b) {
+  return a.spectral() ? SpectralResponse{a.query(), fminf(a.components.w, b)} : SpectralResponse(a.query(), min(a.components.integrated, b));
+}
+ETX_GPU_CODE SpectralResponse min(float a, const SpectralResponse& b) {
+  return b.spectral() ? SpectralResponse{b.query(), fminf(b.components.w, a)} : SpectralResponse(b.query(), min(b.components.integrated, a));
+}
+
+ETX_GPU_CODE bool valid_value(const SpectralResponse& v) {
+  return v.valid();
 }
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
