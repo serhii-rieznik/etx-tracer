@@ -10,7 +10,7 @@ add_library(oidn INTERFACE
   ${include_path}/OpenImageDenoise/oidn.hpp
 )
 
-if (APPLE)
+if(APPLE)
   target_link_libraries(oidn INTERFACE
     "${library_path}/libOpenImageDenoise.dylib"
   )
@@ -24,6 +24,8 @@ endif()
 set_target_properties(oidn PROPERTIES LINKER_LANGUAGE CXX FOLDER "thirdparty")
 target_include_directories(oidn INTERFACE "${include_path}")
 
-configure_file("${binary_path}/OpenImageDenoise.dll" "${root_folder}/bin/" COPYONLY)
-configure_file("${binary_path}/OpenImageDenoise_core.dll" "${root_folder}/bin/" COPYONLY)
-configure_file("${binary_path}/OpenImageDenoise_device_cpu.dll" "${root_folder}/bin/" COPYONLY)
+if (WIN32) 
+  configure_file("${binary_path}/OpenImageDenoise.dll" "${root_folder}/bin/" COPYONLY)
+  configure_file("${binary_path}/OpenImageDenoise_core.dll" "${root_folder}/bin/" COPYONLY)
+  configure_file("${binary_path}/OpenImageDenoise_device_cpu.dll" "${root_folder}/bin/" COPYONLY)
+endif()
