@@ -102,7 +102,7 @@ struct IntegratorThread {
     ExternalControl,
     Async,
   };
-  
+
   IntegratorThread(TaskScheduler&, Mode mode);
   ~IntegratorThread();
 

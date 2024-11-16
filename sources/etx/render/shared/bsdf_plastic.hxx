@@ -172,7 +172,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto specular_func = spec_eval(data, w_o, mtl, scene, smp);
 
   BSDFEval result = {};
- 
+
   result.func = diffuse_layer.func * (1.0f - fr) + specular_func * fr;
   ETX_VALIDATE(result.func);
 
