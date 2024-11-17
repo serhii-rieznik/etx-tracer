@@ -701,7 +701,7 @@ void UI::build(double dt) {
       scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##noiseth", &_current_scene->noise_threshold, 0.0001f, 0.01f, "%0.5f");
       ImGui::Text("Radiance Clamp:");
       scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##radclmp", &_current_scene->radiance_clamp, 0.1f, 1.f, "%0.2f");
-      ImGui::Text("Current noise level: %0.5f", _film->noise_level());
+      ImGui::Text("Active pixels: %0.2f%%", double(_film->active_pixel_count()) / double(_film->total_pixel_count()) * 100.0);
       scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", &_current_scene->spectral);
 
       if (scene_settings_changed) {

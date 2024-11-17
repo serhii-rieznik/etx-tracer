@@ -39,7 +39,7 @@ struct CPUPathTracingImpl : public Task {
     pixels_processed = 0;
 
     rt.film().clear();
-    current_task = rt.scheduler().schedule(rt.film().active_pixel_count(), this);
+    current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
@@ -130,7 +130,7 @@ void CPUPathTracing::update() {
     _private->iteration_time = {};
     _private->pixels_processed = 0;
     _private->status.current_iteration += 1;
-    _private->current_task = rt.scheduler().schedule(rt.film().active_pixel_count(), _private);
+    _private->current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), _private);
   }
 }
 

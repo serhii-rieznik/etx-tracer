@@ -33,19 +33,12 @@ direction -1 1 0
 color nblackbody 5800 scale 1.0
 angular_diameter 1.54
 
-newmtl et::medium
-id ball
-absorption 0.5 0.66666 0.75
-scattering 0.01 0.1 1.0
-
 newmtl back
 material class diffuse
 Kd 0.0 1.0 0.0
 
 newmtl ball
-material class plastic
-subsurface class exact
-int_medium ball
+material class dielectric
 int_ior sapphire
 
 newmtl light

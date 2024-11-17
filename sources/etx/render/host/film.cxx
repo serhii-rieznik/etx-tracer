@@ -6,6 +6,8 @@
 
 #include <etx/render/shared/scene.hxx>
 
+#define ETX_LOG_NOISE_LEVEL 0
+
 namespace etx {
 
 namespace {
@@ -218,7 +220,9 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
   if ((threshold == 0.0f) || (sample_index < kMinSamples) || (sample_index % 2) != 0)
     return;
 
+#if (ETX_LOG_NOISE_LEVEL)
   auto t0 = std::chrono::steady_clock::now();
+#endif
 
   float4* var_data = _private->layer(Adaptive);
   float4* cam_data = _private->layer(CameraImage);
@@ -249,7 +253,9 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
     _private->last_noise_level.fetch_add(total_noise);
   });
 
+#if (ETX_LOG_NOISE_LEVEL)
   auto t1 = std::chrono::steady_clock::now();
+#endif
 
   constexpr uint32_t kBlockSize = 5u;
 
@@ -274,7 +280,9 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
     }
   });
 
+#if (ETX_LOG_NOISE_LEVEL)
   auto t2 = std::chrono::steady_clock::now();
+#endif
 
   _private->tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
@@ -295,13 +303,14 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
     }
   });
 
+#if (ETX_LOG_NOISE_LEVEL)
   auto t3 = std::chrono::steady_clock::now();
-  double a0 = (t1 - t0).count() / 1.0e+6;
-  double a1 = (t2 - t1).count() / 1.0e+6;
-  double a2 = (t3 - t2).count() / 1.0e+6;
-  double a3 = (t3 - t0).count() / 1.0e+6;
-
+  auto a0 = (t1 - t0).count() / 1.0e+6;
+  auto a1 = (t2 - t1).count() / 1.0e+6;
+  auto a2 = (t3 - t2).count() / 1.0e+6;
+  auto a3 = (t3 - t0).count() / 1.0e+6;
   log::info("[%u] Estimated noise level in %.2fms (%.2f + %.2f + %.2f) -> %u active pixels", sample_index, a2, a0, a1, a2, _private->active_pixels.load());
+#endif
 }
 
 void Film::accumulate(uint32_t layer, const float4& value, const float2& ndc_coord) {
@@ -409,7 +418,7 @@ uint32_t Film::total_pixel_count() const {
 }
 
 uint32_t Film::active_pixel_count() const {
-  return _private->dimensions.x * _private->dimensions.y;
+  return _private->active_pixels.load();
 }
 
 bool Film::active_pixel(uint32_t linear_index, uint2& location) {
