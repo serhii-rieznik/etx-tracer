@@ -67,8 +67,8 @@ struct UI {
   void quit();
   void select_scene_file();
   void save_scene_file();
-  void save_image(SaveImageMode mode);
-  void load_image();
+  void save_image(SaveImageMode mode) const;
+  void load_image() const;
   bool build_material(Material&);
   bool build_medium(Medium&);
   bool spectrum_picker(const char* name, SpectralDistribution& spd, bool linear);

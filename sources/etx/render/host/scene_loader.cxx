@@ -1354,8 +1354,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   auto& mtl = materials[material_index];
 
   mtl.cls = Material::Class::Diffuse;
-  mtl.diffuse = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
-  mtl.specular = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
+  mtl.reflectance = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
   mtl.transmittance = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
   mtl.subsurface.scattering_distance = SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f});
 
@@ -1367,14 +1366,14 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   }
 
   if (get_param(material, "Kd")) {
-    mtl.diffuse.spectrum = load_reflectance_spectrum(data_buffer);
+    mtl.transmittance.spectrum = load_reflectance_spectrum(data_buffer);
   }
 
   if (get_param(material, "Ks")) {
-    mtl.specular.spectrum = load_reflectance_spectrum(data_buffer);
+    mtl.reflectance.spectrum = load_reflectance_spectrum(data_buffer);
   }
 
-  if (get_param(material, "Ks")) {
+  if (get_param(material, "Kt")) {
     mtl.transmittance.spectrum = load_reflectance_spectrum(data_buffer);
   }
 
@@ -1387,21 +1386,12 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     }
   }
 
-  if (get_param(material, "Sr")) {
-    float2 value = {};
-    if (sscanf(data_buffer, "%f %f", &value.x, &value.y) == 2) {
-      mtl.specular_roughness = sqr(value);
-    } else if (sscanf(data_buffer, "%f", &value.x) == 1) {
-      mtl.specular_roughness = {sqr(value.x), sqr(value.x)};
-    }
-  }
-
   if (get_file(base_dir, material.diffuse_texname)) {
-    mtl.diffuse.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+    mtl.transmittance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
   }
 
   if (get_file(base_dir, material.specular_texname)) {
-    mtl.specular.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+    mtl.reflectance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
   }
 
   if (get_file(base_dir, material.transmittance_texname)) {
@@ -1418,10 +1408,10 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     }
   }
 
-  if (get_param(material, "variant")) {
+  if (get_param(material, "diffuse")) {
     uint32_t var = 0;
     if (sscanf(data_buffer, "%u", &var) == 1) {
-      mtl.variant = var;
+      mtl.diffuse_variation = var;
     }
   }
 

@@ -21,12 +21,12 @@ ETX_GPU_CODE SpectralResponse spec_eval(const BSDFData& data, const float3& in_w
   bool forward_path = smp.next() > 0.5f;
 
   SpectralResponse value = external::eval_dielectric(data.spectrum_sample, smp,  //
-    forward_path ? w_i : w_o, forward_path ? w_o : w_i, true, mtl.specular_roughness, ext_ior, int_ior, thinfilm);
+    forward_path ? w_i : w_o, forward_path ? w_o : w_i, true, mtl.roughness, ext_ior, int_ior, thinfilm);
 
   if (value.is_zero())
     return {data.spectrum_sample, 0.0f};
 
-  auto func = (2.0f * value) * apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
+  auto func = (2.0f * value) * apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
   ETX_VALIDATE(func);
 
   return func;
@@ -50,9 +50,9 @@ ETX_GPU_CODE float spec_pdf(const BSDFData& data, const float3& in_w_o, const Ma
   float3 wh = normalize(w_o + w_i);
   float dwh_dwo = 1.0f / (4.0f * dot(w_o, wh));
 
-  external::RayInfo ray = {w_i, mtl.specular_roughness};
+  external::RayInfo ray = {w_i, mtl.roughness};
 
-  auto d_ggx = external::D_ggx(wh, mtl.specular_roughness);
+  auto d_ggx = external::D_ggx(wh, mtl.roughness);
   ETX_VALIDATE(d_ggx);
 
   float prob = max(0.0f, dot(wh, ray.w) * d_ggx / ((1.0f + ray.Lambda) * LocalFrame::cos_theta(ray.w)));
@@ -73,7 +73,7 @@ ETX_GPU_CODE float spec_pdf(const BSDFData& data, const float3& in_w_o, const Ma
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
-  auto ggx = NormalDistribution(frame, mtl.specular_roughness);
+  auto ggx = NormalDistribution(frame, mtl.roughness);
   auto m = ggx.sample(smp, data.w_i);
 
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
@@ -172,7 +172,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto specular_func = spec_eval(data, w_o, mtl, scene, smp);
 
   BSDFEval result = {};
- 
+
   result.func = diffuse_layer.func * (1.0f - fr) + specular_func * fr;
   ETX_VALIDATE(result.func);
 
@@ -218,7 +218,7 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene, nullptr);
+  return apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
 }
 
 }  // namespace PlasticBSDF

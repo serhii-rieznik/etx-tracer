@@ -76,7 +76,7 @@ struct CPUDebugIntegratorImpl : public Task {
       uint32_t y = i / film.dimensions().x;
       float2 uv = get_jittered_uv(smp, {x, y}, film.dimensions());
       float3 xyz = preview_pixel(smp, uv, {x, y});
-      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, status.current_iteration);
+      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv);
     }
   }
 
@@ -407,9 +407,14 @@ struct CPUDebugIntegratorImpl : public Task {
           output = d * (entering_material ? float3{0.2f, 0.2f, 1.0f} : float3{1.0f, 0.2f, 0.2f});
           break;
         };
-        case CPUDebugIntegrator::Mode::DiffuseColors: {
+        case CPUDebugIntegrator::Mode::TransmittanceColor: {
           const auto& mat = scene.materials[intersection.material_index];
-          output = apply_image(spect, mat.diffuse, intersection.tex, rt.scene(), nullptr).to_rgb();
+          output = apply_image(spect, mat.transmittance, intersection.tex, rt.scene(), nullptr).to_rgb();
+          break;
+        };
+        case CPUDebugIntegrator::Mode::ReflectanceColor: {
+          const auto& mat = scene.materials[intersection.material_index];
+          output = apply_image(spect, mat.reflectance, intersection.tex, rt.scene(), nullptr).to_rgb();
           break;
         };
         case CPUDebugIntegrator::Mode::Fresnel: {
@@ -589,8 +594,10 @@ std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
       return "Texture Coordinates";
     case Mode::FaceOrientation:
       return "Face Orientation";
-    case Mode::DiffuseColors:
-      return "Diffuse Colors";
+    case Mode::TransmittanceColor:
+      return "Transmittance Colors";
+    case Mode::ReflectanceColor:
+      return "Reflectance Colors";
     case Mode::Fresnel:
       return "Fresnel Coefficients";
     case Mode::Thickness:

@@ -62,8 +62,7 @@ struct ETX_ALIGNED Material {
   };
 
   Class cls = Class::Undefined;
-  SpectralImage diffuse;
-  SpectralImage specular;
+  SpectralImage reflectance;
   SpectralImage transmittance;
   SpectralImage emission;
 
@@ -75,15 +74,15 @@ struct ETX_ALIGNED Material {
   SubsurfaceMaterial subsurface = {};
 
   float2 roughness = {};
-  float2 specular_roughness = {};
 
   uint32_t normal_image_index = kInvalidIndex;
-  uint32_t metal_roughness_image_index = kInvalidIndex;
-
-  float metalness = {};
   float normal_scale = 1.0f;
 
-  uint32_t variant = 0;
+  uint32_t diffuse_variation = 0;
+
+  bool has_diffuse() const {
+    return (cls == Class::Diffuse) || (cls == Class::Plastic);
+  }
 };
 
 }  // namespace etx

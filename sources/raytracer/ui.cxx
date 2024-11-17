@@ -851,14 +851,14 @@ void UI::save_scene_file() {
   }
 }
 
-void UI::save_image(SaveImageMode mode) {
+void UI::save_image(SaveImageMode mode) const {
   auto selected_file = save_file(mode == SaveImageMode::TonemappedLDR ? "png" : "exr");
   if ((selected_file.empty() == false) && callbacks.save_image_selected) {
     callbacks.save_image_selected(selected_file, mode);
   }
 }
 
-void UI::load_image() {
+void UI::load_image() const {
   auto selected_file = open_file("exr;png;hdr;pfm;jpg;bmp;tga");
   if ((selected_file.empty() == false) && callbacks.reference_image_selected) {
     callbacks.reference_image_selected(selected_file);
@@ -900,13 +900,23 @@ bool UI::build_material(Material& material) {
     ImGui::EndCombo();
   }
 
-  changed |= ImGui::InputInt("##var", reinterpret_cast<int32_t*>(&material.variant));
+  if (material.has_diffuse()) {
+    ImGui::Text("Diffuse variation:");
+    changed |= ImGui::InputInt("##var", reinterpret_cast<int32_t*>(&material.diffuse_variation));
+  }
+  ImGui::Separator();
+
   changed |= ImGui::SliderFloat("##r_u", &material.roughness.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   changed |= ImGui::SliderFloat("##r_v", &material.roughness.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  if (ImGui::Button("Sync Roughness")) {
+    material.roughness.y = material.roughness.x;
+  }
+  ImGui::Separator();
+
   changed |= ior_picker("Index Of Refraction", material.int_ior);
   changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior);
-  changed |= spectrum_picker("Diffuse", material.diffuse.spectrum, false);
-  changed |= spectrum_picker("Specular", material.specular.spectrum, false);
+  ImGui::Separator();
+  changed |= spectrum_picker("Reflectance", material.reflectance.spectrum, false);
   changed |= spectrum_picker("Transmittance", material.transmittance.spectrum, false);
   ImGui::Separator();
 

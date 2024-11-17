@@ -43,7 +43,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   result.w_o = ray.w;
 
-  result.weight *= apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
+  result.weight *= apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
   ETX_VALIDATE(result.weight);
 
   {
@@ -83,7 +83,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
     result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_o, w_i, mtl.roughness, ext_ior, int_ior, thinfilm) / w_i.z * w_o.z;
     ETX_VALIDATE(result.bsdf);
   }
-  result.bsdf *= apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
+  result.bsdf *= apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
   ETX_VALIDATE(result.bsdf);
 
   result.func = result.bsdf / w_o.z;
@@ -127,7 +127,7 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
+  return apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
 }
 
 }  // namespace ConductorBSDF

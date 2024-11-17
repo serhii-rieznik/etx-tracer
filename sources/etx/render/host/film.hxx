@@ -48,8 +48,8 @@ struct Film {
   void atomic_add(uint32_t layer, const float4& value, const float2& ndc_coord);
   void atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t y);
 
-  void accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, uint32_t sample_index);
-  void accumulate(uint32_t layer, const float4& value, const uint2& pixel, uint32_t sample_index);
+  void accumulate(uint32_t layer, const float4& value, const float2& ndc_coord);
+  void accumulate(uint32_t layer, const float4& value, const uint2& pixel);
 
   void commit_light_iteration(uint32_t i);
 
@@ -72,7 +72,7 @@ struct Film {
   uint32_t total_pixel_count() const;
   uint32_t active_pixel_count() const;
   bool active_pixel(uint32_t linear_index, uint2& location);
-  void estimate_noise_levels(uint32_t sample_index, float threshold);
+  void estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, float threshold);
   float noise_level() const;
 
   static void generate_filter_image(uint32_t filter, std::vector<float4>&);

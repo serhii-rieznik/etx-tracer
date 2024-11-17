@@ -161,7 +161,7 @@ struct CPUBidirectionalImpl : public Task {
       }
 
       auto xyz = (result / spect.sampling_pdf()).to_rgb();
-      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv, status.current_iteration);
+      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv);
     }
   }
 

@@ -10,6 +10,8 @@ namespace etx {
 
 namespace {
 
+constexpr uint32_t kMinSamples = 32u;
+
 struct InternalData {
   float sample_count = 0.0f;
   float tmp0 = 0.0f;
@@ -92,7 +94,7 @@ struct FilmImpl {
   std::vector<float4> buffers[Film::LayerCount] = {};
   std::atomic<float> last_noise_level = {};
   std::atomic<uint32_t> active_pixels = {};
-  float max_sample_count = 0.0f;
+  uint32_t max_sample_count = 0u;
 
   float4* layer(uint32_t layer) {
     ETX_ASSERT(layer < Film::LayerCount);
@@ -169,7 +171,7 @@ void Film::atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t 
   atomic_add_float(&ptr->w, value.w);
 }
 
-void Film::accumulate(uint32_t layer, const float4& value, const uint2& pixel, uint32_t total_samples) {
+void Film::accumulate(uint32_t layer, const float4& value, const uint2& pixel) {
   if ((pixel.x >= _private->dimensions.x) || (pixel.y >= _private->dimensions.y) || (layer >= LayerCount)) {
     return;
   }
@@ -210,10 +212,10 @@ void Film::accumulate(uint32_t layer, const float4& value, const uint2& pixel, u
   }
 }
 
-void Film::estimate_noise_levels(uint32_t sample_index, float threshold) {
-  _private->max_sample_count = float(sample_index);
+void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, float threshold) {
+  _private->max_sample_count = total_samples;
 
-  if ((threshold == 0.0f) || (sample_index < 32u) || (sample_index % 2) != 0)
+  if ((threshold == 0.0f) || (sample_index < kMinSamples) || (sample_index % 2) != 0)
     return;
 
   auto t0 = std::chrono::steady_clock::now();
@@ -302,11 +304,11 @@ void Film::estimate_noise_levels(uint32_t sample_index, float threshold) {
   log::info("[%u] Estimated noise level in %.2fms (%.2f + %.2f + %.2f) -> %u active pixels", sample_index, a2, a0, a1, a2, _private->active_pixels.load());
 }
 
-void Film::accumulate(uint32_t layer, const float4& value, const float2& ndc_coord, uint32_t sample_index) {
+void Film::accumulate(uint32_t layer, const float4& value, const float2& ndc_coord) {
   float2 uv = ndc_coord * 0.5f + 0.5f;
   uint32_t ax = static_cast<uint32_t>(uv.x * float(_private->dimensions.x));
   uint32_t ay = static_cast<uint32_t>(uv.y * float(_private->dimensions.y));
-  accumulate(layer, value, uint2{ax, ay}, sample_index);
+  accumulate(layer, value, uint2{ax, ay});
 }
 
 void Film::commit_light_iteration(uint32_t i) {
@@ -370,10 +372,12 @@ const float4* Film::layer(uint32_t layer) const {
     _private->tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
         float pixel_sample_count = int_data[i].sample_count;
-        float t = _private->max_sample_count > 0.0f ? pixel_sample_count / _private->max_sample_count : 0.0f;
-        float h0 = 2.0f / 3.0f;
-        float h1 = 0.0f;
-        float h = lerp(h0, h1, t);
+        
+        float t = (pixel_sample_count >= kMinSamples) && (_private->max_sample_count > kMinSamples)
+                    ? float(pixel_sample_count - kMinSamples) / float(_private->max_sample_count - kMinSamples)
+                    : 0.0f;
+
+        float h = lerp(2.0f / 3.0f, 0.0f, t);
         dbg_data[i] = to_float4(hsv_to_rgb({h, 1.0f, 1.0f}));
       }
     });

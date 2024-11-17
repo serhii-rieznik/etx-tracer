@@ -193,7 +193,7 @@ struct CPUVCMImpl {
       state.merged *= vcm_iteration.vm_normalization;
       state.merged += (state.gathered / state.spect.sampling_pdf()).to_rgb();
 
-      film.accumulate(Film::CameraImage, {state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv, vcm_iteration.iteration);
+      film.accumulate(Film::CameraImage, {state.merged.x, state.merged.y, state.merged.z, 1.0f}, state.uv);
 
       if (pi % 256 == 0) {
         have_camera_image = true;

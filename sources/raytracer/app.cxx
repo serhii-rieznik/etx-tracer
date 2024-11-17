@@ -80,10 +80,8 @@ void RTApplication::init() {
     }
   }
 
-  integrator_thread.start();
-  integrator_thread.set_integrator(integrator);
-
-  ui.set_current_integrator(integrator_thread.integrator());
+  integrator_thread.start(integrator);
+  ui.set_current_integrator(integrator);
 
   _current_scene_file = _options.get("scene", std::string{}).name;
   if (_current_scene_file.empty() == false) {

@@ -47,7 +47,7 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
   SpectralResponse scattering = {spect};
   SpectralResponse albedo = {spect};
 
-  auto color = apply_image(spect, mat.diffuse, in_intersection.tex, scene, nullptr);
+  auto color = apply_image(spect, mat.transmittance, in_intersection.tex, scene, nullptr);
 
   if (mat.int_medium == kInvalidIndex) {
     auto distances = mat.subsurface.scale * mat.subsurface.scattering_distance(spect);
@@ -143,7 +143,7 @@ ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Inter
     return false;
   }
 
-  SpectralResponse base_weight = apply_image(spect, mat.diffuse, in_intersection.tex, scene, nullptr);
+  SpectralResponse base_weight = apply_image(spect, mat.transmittance, in_intersection.tex, scene, nullptr);
 
   result = {};
   for (uint32_t i = 0; i < intersection_count; ++i) {
@@ -332,7 +332,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   static const Material kSubsurfaceExitMaterial = {
     .cls = Material::Class::Diffuse,
-    .diffuse = SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}),
+    .transmittance = SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}),
   };
 
   const auto& tri = scene.triangles[intersection.triangle_index];

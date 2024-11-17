@@ -73,9 +73,9 @@ struct CPUPathTracingImpl : public Task {
         }
       }
 
-      film.accumulate(Film::CameraImage, {color.x, color.y, color.z, 1.0f}, pixel, status.current_iteration);
-      film.accumulate(Film::Normals, {normal.x, normal.y, normal.z, 1.0f}, pixel, status.current_iteration);
-      film.accumulate(Film::Albedo, {albedo.x, albedo.y, albedo.z, 1.0f}, pixel, status.current_iteration);
+      film.accumulate(Film::CameraImage, {color.x, color.y, color.z, 1.0f}, pixel);
+      film.accumulate(Film::Normals, {normal.x, normal.y, normal.z, 1.0f}, pixel);
+      film.accumulate(Film::Albedo, {albedo.x, albedo.y, albedo.z, 1.0f}, pixel);
     }
   }
 };
@@ -121,7 +121,7 @@ void CPUPathTracing::update() {
   _private->status.completed_iterations += 1u;
 
   rt.scheduler().wait(_private->current_task);
-  rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().noise_threshold);
+  rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
 
   if ((current_state == State::WaitingForCompletion) || (_private->status.current_iteration + 1 >= _private->rt.scene().samples)) {
     _private->current_task = {};

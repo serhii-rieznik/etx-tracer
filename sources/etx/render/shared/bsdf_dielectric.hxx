@@ -14,7 +14,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   if (smp.next() <= f) {
     result.w_o = normalize(reflect(data.w_i, frame.nrm));
     result.pdf = f;
-    result.weight = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
+    result.weight = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
     result.weight *= (fr / f);
     result.properties = BSDFSample::Delta | BSDFSample::Reflection;
     result.medium_index = frame.entering_material() ? mtl.ext_medium : mtl.int_medium;
@@ -102,7 +102,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   if (LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(result.w_o) > 0.0f) {
     result.eta = 1.0f;
-    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.specular, data.tex, scene, nullptr);
+    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
     result.properties = BSDFSample::Reflection;
     result.medium_index = in_outside ? mtl.ext_medium : mtl.int_medium;
   } else {
@@ -166,7 +166,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
 
   BSDFEval eval;
-  eval.func = (2.0f * value) * apply_image(data.spectrum_sample, reflection ? mtl.specular : mtl.transmittance, data.tex, scene, nullptr);
+  eval.func = (2.0f * value) * apply_image(data.spectrum_sample, reflection ? mtl.reflectance : mtl.transmittance, data.tex, scene, nullptr);
   ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
   eval.pdf = pdf(data, in_w_o, mtl, scene, smp);

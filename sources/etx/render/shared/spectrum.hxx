@@ -216,7 +216,7 @@ struct SpectralQuery {
   };
 
   float sampling_pdf() const {
-    return spectral() ? 1.0f / spectrum::kWavelengthCount : 1.0f;
+    return spectral() ? (0.0039398042f / sqr(std::cosh(0.0072f * (wavelength - 538.0f)))) : 1.0f;
   }
 
   bool valid() const {
@@ -231,10 +231,10 @@ struct SpectralQuery {
   }
 
   static SpectralQuery spectral_sample(float rnd) {
-    return SpectralQuery{
-      spectrum::kShortestWavelength + rnd * (spectrum::kLongestWavelength - spectrum::kShortestWavelength),
-      Spectral,
-    };
+    constexpr auto offset = 0x1.35ce7a0000000p-5f;
+    constexpr auto scale = 1.0f - offset;
+    float w = 538.0f - 138.888889f * std::atanh(0.85691062f - 1.82750197f * (rnd * scale + offset));
+    return SpectralQuery{w, Spectral};
   }
 };
 

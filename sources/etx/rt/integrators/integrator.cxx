@@ -117,7 +117,8 @@ IntegratorThread ::~IntegratorThread() {
   ETX_PIMPL_CLEANUP(IntegratorThread);
 }
 
-void IntegratorThread::start() {
+void IntegratorThread::start(Integrator* i) {
+  _private->integrator = i;
 }
 
 void IntegratorThread::terminate() {
