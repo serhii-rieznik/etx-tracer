@@ -372,7 +372,7 @@ const float4* Film::layer(uint32_t layer) const {
     _private->tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
         float pixel_sample_count = int_data[i].sample_count;
-        
+
         float t = (pixel_sample_count >= kMinSamples) && (_private->max_sample_count > kMinSamples)
                     ? float(pixel_sample_count - kMinSamples) / float(_private->max_sample_count - kMinSamples)
                     : 0.0f;
