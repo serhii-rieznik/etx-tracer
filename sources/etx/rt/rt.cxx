@@ -43,13 +43,13 @@ struct RaytracingImpl {
     source_scene = &s;
     film.allocate(s.camera.image_size);
     release_host_scene();
-    build_host_scene();
+    build_host_scene(s);
 
     // release_device_scene();
     // build_device_scene();
   }
 
-  void build_host_scene() {
+  void build_host_scene(const Scene& s) {
     rtcSetDeviceErrorFunction(
       rt_device,
       [](void* userPtr, enum RTCError code, const char* str) {
@@ -62,10 +62,10 @@ struct RaytracingImpl {
     auto geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_TRIANGLE);
 
     rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_VERTEX, 0, RTCFormat::RTC_FORMAT_FLOAT3,  //
-      source_scene->vertices.a, 0, sizeof(Vertex), source_scene->vertices.count);
+      s.vertices.a, 0, sizeof(Vertex), s.vertices.count);
 
     rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_INDEX, 0, RTCFormat::RTC_FORMAT_UINT3,  //
-      source_scene->triangles.a, 0, sizeof(Triangle), source_scene->triangles.count);
+      s.triangles.a, 0, sizeof(Triangle), s.triangles.count);
 
     rtcCommitGeometry(geometry);
     rtcAttachGeometry(rt_scene, geometry);

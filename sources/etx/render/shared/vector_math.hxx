@@ -126,3 +126,39 @@ ETX_GPU_CODE float4x4 perspective(float fov, uint32_t width, uint32_t height, fl
   result.col[3].z = -(z_far * z_near) / (z_far - z_near);
   return result;
 }
+
+ETX_GPU_CODE float4x4 transform_matrix(const float3& translation, const float4& quaterion, const float3& scale) {
+  float4x4 result = {};
+
+  float xx = quaterion.x * quaterion.x;
+  float yy = quaterion.y * quaterion.y;
+  float zz = quaterion.z * quaterion.z;
+  float xy = quaterion.x * quaterion.y;
+  float xz = quaterion.x * quaterion.z;
+  float yz = quaterion.y * quaterion.z;
+  float wx = quaterion.w * quaterion.x;
+  float wy = quaterion.w * quaterion.y;
+  float wz = quaterion.w * quaterion.z;
+
+  result.col[0].x = scale.x * (1.0f - 2.0f * (yy + zz));
+  result.col[0].y = scale.x * (2.0f * (xy + wz));
+  result.col[0].z = scale.x * (2.0f * (xz - wy));
+  result.col[0].w = 0.0f;
+
+  result.col[1].x = scale.y * (2.0f * (xy - wz));
+  result.col[1].y = scale.y * (1.0f - 2.0f * (xx + zz));
+  result.col[1].z = scale.y * (2.0f * (yz + wx));
+  result.col[1].w = 0.0f;
+
+  result.col[2].x = scale.z * (2.0f * (xz + wy));
+  result.col[2].y = scale.z * (2.0f * (yz - wx));
+  result.col[2].z = scale.z * (1.0f - 2.0f * (xx + yy));
+  result.col[2].w = 0.0f;
+
+  result.col[3].x = translation.x;
+  result.col[3].y = translation.y;
+  result.col[3].z = translation.z;
+  result.col[3].w = 1.0f;
+
+  return result;
+}

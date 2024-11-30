@@ -48,6 +48,24 @@ using int4 = vector4<int32_t>;
 using uint2 = vector2<uint32_t>;
 using uint3 = vector3<uint32_t>;
 using uint4 = vector4<uint32_t>;
+using short2 = vector2<int16_t>;
+using short3 = vector3<int16_t>;
+using short4 = vector4<int16_t>;
+using ushort2 = vector2<uint16_t>;
+using ushort3 = vector3<uint16_t>;
+using ushort4 = vector4<uint16_t>;
+using byte2 = vector2<int8_t>;
+using byte3 = vector3<int8_t>;
+using byte4 = vector4<int8_t>;
+using ubyte2 = vector2<uint8_t>;
+using ubyte3 = vector3<uint8_t>;
+using ubyte4 = vector4<uint8_t>;
+using char2 = byte2;
+using char3 = byte3;
+using char4 = byte4;
+using uchar2 = ubyte2;
+using uchar3 = ubyte3;
+using uchar4 = ubyte4;
 #endif
 
 using complex = STD_NS::complex<float>;
@@ -68,16 +86,13 @@ ETX_GPU_CODE float complex_norm(complex c) {
   return STD_NS::norm(c);
 }
 
-using ubyte2 = vector2<uint8_t>;
-using ubyte3 = vector3<uint8_t>;
-using ubyte4 = vector4<uint8_t>;
-
 struct float3x3 {
   float3 col[3] ETX_EMPTY_INIT;
 };
 
-struct float4x4 {
+union float4x4 {
   float4 col[4] ETX_EMPTY_INIT;
+  float val[16];
 };
 
 namespace etx {

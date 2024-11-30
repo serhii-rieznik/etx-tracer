@@ -63,6 +63,13 @@ struct CameraController {
       _camera.target = _camera.position + direction;
     }
 
+    if (scheduled.active) {
+      scheduled.active = false;
+      _camera.position = scheduled.pos;
+      _camera.target = scheduled.center;
+      movement = true;
+    }
+
     if (movement || rotation || zoom) {
       build_camera(_camera, _camera.position, _camera.target, kUpVector, _camera.image_size, get_camera_fov(_camera));
       return true;
@@ -126,6 +133,10 @@ struct CameraController {
     }
   }
 
+  void schedule(const float3& pos, const float3& view_center) {
+    scheduled = {pos, view_center, true};
+  }
+
  protected:
   enum : uint32_t {
     MouseLeft = 1u << 0u,
@@ -139,6 +150,12 @@ struct CameraController {
   uint32_t mouse_buttons = 0;
   float _move_speed = 1.0f / 100.0f;
   float _rotation_speed = 1.0f / 32.0f;
+
+  struct {
+    float3 pos;
+    float3 center;
+    bool active = false;
+  } scheduled = {};
 };
 
 }  // namespace etx

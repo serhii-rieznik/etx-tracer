@@ -60,13 +60,14 @@ struct UI {
     std::function<void()> camera_changed;
     std::function<void()> scene_settings_changed;
     std::function<void()> denoise_selected;
+    std::function<void()> view_scene;
   } callbacks;
 
  private:
   bool build_options(Options&);
   void quit();
-  void select_scene_file();
-  void save_scene_file();
+  void select_scene_file() const;
+  void save_scene_file() const;
   void save_image(SaveImageMode mode) const;
   void load_image() const;
   bool build_material(Material&);

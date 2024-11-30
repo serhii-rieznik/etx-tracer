@@ -327,12 +327,12 @@ struct ETX_ALIGNED SpectralResponse : public SpectralQuery {
     return spectral() ? (components.w <= kEpsilon) : (components.integrated.x <= kEpsilon) && (components.integrated.y <= kEpsilon) && (components.integrated.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                       \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
-    components.integrated OP other.components.integrated;                     \
-    components.w OP other.components.w;                                       \
-    return *this;                                                             \
+#define SPECTRAL_OP(OP)                                                        \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
+    components.integrated OP other.components.integrated;                      \
+    components.w OP other.components.w;                                        \
+    return *this;                                                              \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)
@@ -594,7 +594,7 @@ struct RefractiveIndex {
   };
 
   ETX_GPU_CODE Sample at(SpectralQuery q) const {
-    Sample result = {};
+    Sample result = {q};
     result.cls = cls;
     result.eta = eta.empty() ? SpectralResponse(q, 1.0f) : eta(q);
     result.k = k.empty() ? SpectralResponse(q, 0.0f) : k(q);

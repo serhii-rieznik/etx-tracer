@@ -19,7 +19,7 @@ struct CPUDebugIntegratorImpl : public Task {
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   uint32_t current_scale = 1u;
-  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Thinfilm;
+  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Geometry;
   RefractiveIndex spd_base;
   RefractiveIndex spd_air;
   Thinfilm thinfilm;

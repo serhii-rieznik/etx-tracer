@@ -49,6 +49,7 @@ void RTApplication::init() {
   ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this);
   ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
   ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
+  ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -168,7 +169,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   integrator_thread.run(ui.integrator_options());
 }
 
-void RTApplication::save_scene_file(const std::string& file_name) {
+void RTApplication::save_scene_file(const std::string& file_name) const {
   log::info("Saving %s..", file_name.c_str());
   save_scene_to_file(scene, file_name.c_str());
 }
@@ -315,6 +316,12 @@ void RTApplication::on_denoise_selected() {
   if (ui.view_options().layer == Film::Result) {
     ui.mutable_view_options().layer = Film::Denoised;
   }
+}
+
+void RTApplication::on_view_scene() {
+  const float3 position = 2.0f * scene.scene().bounding_sphere_radius * float3{1.0f, 1.0f, 1.0f};
+  const auto view_center = scene.scene().bounding_sphere_center;
+  camera_controller.schedule(position, view_center);
 }
 
 }  // namespace etx

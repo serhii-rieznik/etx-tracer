@@ -15,7 +15,7 @@
 namespace etx {
 
 struct ETX_ALIGNED EnvironmentEmitters {
-  constexpr static const uint32_t kMaxCount = 256;
+  constexpr static const uint32_t kMaxCount = 255;
   uint32_t emitters[kMaxCount] ETX_EMPTY_INIT;
   uint32_t count ETX_EMPTY_INIT;
 };
@@ -36,7 +36,6 @@ struct ETX_ALIGNED Scene {
   EnvironmentEmitters environment_emitters ETX_EMPTY_INIT;
   float3 bounding_sphere_center ETX_EMPTY_INIT;
   float bounding_sphere_radius ETX_EMPTY_INIT;
-  uint64_t acceleration_structure ETX_EMPTY_INIT;
   uint32_t camera_medium_index ETX_INIT_WITH(kInvalidIndex);
   uint32_t max_path_length ETX_INIT_WITH(65535u);
   uint32_t samples ETX_INIT_WITH(256u);

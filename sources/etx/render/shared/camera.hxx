@@ -62,7 +62,8 @@ struct PixelFilter {
 };
 
 struct Lens : PixelFilter {
-  float focal_distance = 0.0f;
+  float focal_distance ETX_EMPTY_INIT;
+  uint32_t medium_index ETX_INIT_WITH(kInvalidIndex);
 };
 
 }  // namespace etx

@@ -30,7 +30,7 @@ struct RTApplication {
 
  private:
   void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
-  void save_scene_file(const std::string&);
+  void save_scene_file(const std::string&) const;
 
   void on_referenece_image_selected(std::string);
   void on_save_image_selected(std::string, SaveImageMode);
@@ -50,6 +50,7 @@ struct RTApplication {
   void on_camera_changed();
   void on_scene_settings_changed();
   void on_denoise_selected();
+  void on_view_scene();
 
  private:
   void save_options();

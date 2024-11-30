@@ -30,7 +30,7 @@ ETX_GPU_CODE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_
   eval.pdf = kInvPi * local_w_o.z;
   ETX_VALIDATE(eval.pdf);
 
-  eval.weight = eval.bsdf / eval.pdf;
+  eval.weight = eval.pdf > 0.0f ? eval.bsdf / eval.pdf : SpectralResponse{data.spectrum_sample, 0.0f};
   ETX_VALIDATE(eval.weight);
 
   return eval;

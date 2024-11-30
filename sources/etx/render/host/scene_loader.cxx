@@ -10,13 +10,13 @@
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/distribution_builder.hxx>
+#include <etx/render/host/gltf_accessor.hxx>
 
 #include <vector>
 #include <string>
 #include <set>
 
 #include <mikktspace.h>
-#include <tiny_gltf.hxx>
 #include <tiny_obj_loader.hxx>
 
 namespace etx {
@@ -438,7 +438,7 @@ struct SceneRepresentationImpl {
 
   uint32_t load_from_gltf(const char* file_name, bool binary);
   void load_gltf_node(const tinygltf::Model& model, const tinygltf::Node&);
-  void load_gltf_mesh(const tinygltf::Model& model, const tinygltf::Mesh&);
+  void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh&);
 
   void parse_material(const char* base_dir, const tinyobj::material_t& material);
   void parse_camera(const char* base_dir, const tinyobj::material_t& material);
@@ -454,7 +454,7 @@ struct SceneRepresentationImpl {
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
-void build_camera(Camera& camera, float3 origin, float3 target, float3 up, uint2 viewport, float fov) {
+void build_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov) {
   float4x4 view = look_at(origin, target, up);
   float4x4 proj = perspective(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
   float4x4 inv_view = inverse(view);
@@ -717,7 +717,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       uint64_t face_size = shape.mesh.num_face_vertices[face];
       ETX_ASSERT(face_size == 3);
 
-      uint32_t material_index = material_mapping[source_material.name];
+      uint32_t material_index = material_mapping.at(source_material.name);
 
       triangle_to_emitter.emplace_back(kInvalidIndex);
       triangle_to_material.emplace_back(material_index);
@@ -1350,7 +1350,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     add_material(material.name.c_str());
   }
 
-  uint32_t material_index = material_mapping[material.name];
+  uint32_t material_index = material_mapping.at(material.name);
   auto& mtl = materials[material_index];
 
   mtl.cls = Material::Class::Diffuse;
@@ -1566,6 +1566,16 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
   images.load_images();
 }
 
+void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node) {
+  if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
+    load_gltf_mesh(node, model, model.meshes.at(node.mesh));
+  }
+
+  for (const auto& child : node.children) {
+    load_gltf_node(model, model.nodes[child]);
+  }
+}
+
 uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool binary) {
   tinygltf::TinyGLTF loader;
   tinygltf::Model model;
@@ -1580,37 +1590,165 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
     load_result = loader.LoadASCIIFromFile(&model, &errors, &warnings, file_name);
   }
 
+  if (warnings.empty() == false) {
+    log::warning("GLTF warning(s): %s", warnings.c_str());
+  }
+
+  if (errors.empty() == false) {
+    log::error("GLTF error(s): %s", errors.c_str());
+  }
+
   if (load_result == false) {
     log::error("Failed to load GLTF from %s:\n%s", file_name, errors.c_str());
     return LoadFailed;
   }
 
-  const auto& scene = model.scenes[model.defaultScene];
-  for (int32_t node_index : scene.nodes) {
-    if ((node_index < 0) || (node_index > model.nodes.size()))
-      continue;
+  for (const auto& material : model.materials) {
+    uint32_t material_index = add_material(material.name.c_str());
+    auto& mtl = materials[material_index];
+    mtl.cls = Material::Class::Diffuse;
+    float3 rgb = {1.0f, 1.0f, 1.0f};
 
-    load_gltf_node(model, model.nodes[node_index]);
+    const auto& base_color = material.pbrMetallicRoughness.baseColorFactor;
+
+    if (base_color.size() >= 3) {
+      rgb = {float(base_color[0]), float(base_color[1]), float(base_color[2])};
+    }
+    mtl.transmittance.spectrum = SpectralDistribution::rgb_reflectance(rgb);
+    mtl.reflectance.spectrum = SpectralDistribution::constant(1.0f);
   }
 
-  return 0;
+  if (materials.empty()) {
+    uint32_t material_index = add_material("default");
+    auto& mtl = materials[material_index];
+    mtl.cls = Material::Class::Diffuse;
+    mtl.transmittance.spectrum = SpectralDistribution::constant(1.0f);
+    mtl.reflectance.spectrum = SpectralDistribution::constant(1.0f);
+  }
+
+  for (const auto& scene : model.scenes) {
+    for (int32_t node_index : scene.nodes) {
+      if ((node_index < 0) || (node_index > model.nodes.size()))
+        continue;
+
+      const auto& node = model.nodes[node_index];
+      load_gltf_node(model, node);
+    }
+  }
+
+  return LoadSucceeded;
 }
 
-void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node) {
-  if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
-    const auto& mesh = model.meshes[node.mesh];
-    load_gltf_mesh(model, mesh);
-  }
+void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh& mesh) {
+  for (const auto& primitive : mesh.primitives) {
+    bool has_positions = primitive.attributes.count("POSITION") > 0;
+    bool has_normals = primitive.attributes.count("NORMAL") > 0;
+    bool has_tex_coords = primitive.attributes.count("TEXCOORD_0") > 0;
 
-  for (const auto child_node : node.children) {
-    if ((child_node < 0) || (child_node > model.nodes.size()))
+    if (has_positions == false)
       continue;
 
-    load_gltf_node(model, model.nodes[child_node]);
-  }
-}
+    bool valid_material = (primitive.material >= 0) && (primitive.material < model.materials.size());
+    uint32_t material_index = valid_material ? static_cast<uint32_t>(primitive.material) : 0;
 
-void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Model& model, const tinygltf::Mesh&) {
+    const tinygltf::Accessor& pos_accessor = model.accessors[primitive.attributes.find("POSITION")->second];
+    const tinygltf::BufferView& pos_buffer_view = model.bufferViews[pos_accessor.bufferView];
+    const tinygltf::Buffer& pos_buffer = model.buffers[pos_buffer_view.buffer];
+
+    tinygltf::Accessor nrm_accessor = {};
+    tinygltf::BufferView nrm_buffer_view = {};
+    tinygltf::Buffer nrm_buffer = {};
+    if (has_normals) {
+      nrm_accessor = model.accessors[primitive.attributes.find("NORMAL")->second];
+      nrm_buffer_view = model.bufferViews[nrm_accessor.bufferView];
+      nrm_buffer = model.buffers[nrm_buffer_view.buffer];
+    }
+
+    tinygltf::Accessor tex_accessor = {};
+    tinygltf::BufferView tex_buffer_view = {};
+    tinygltf::Buffer tex_buffer = {};
+    if (has_tex_coords) {
+      tex_accessor = model.accessors[primitive.attributes.find("TEXCOORD_0")->second];
+      tex_buffer_view = model.bufferViews[tex_accessor.bufferView];
+      tex_buffer = model.buffers[tex_buffer_view.buffer];
+    }
+
+    bool has_indices = (primitive.indices >= 0) && (primitive.indices < model.accessors.size());
+
+    tinygltf::Accessor idx_accessor = {};
+    tinygltf::BufferView idx_buffer_view = {};
+    tinygltf::Buffer idx_buffer = {};
+    if (has_indices) {
+      idx_accessor = model.accessors[primitive.indices];
+      idx_buffer_view = model.bufferViews[idx_accessor.bufferView];
+      idx_buffer = model.buffers[idx_buffer_view.buffer];
+    }
+
+    float4x4 transform = {};
+    if (node.matrix.size() == 16) {
+      for (uint32_t i = 0; i < 16u; ++i) {
+        transform.val[i] = float(node.matrix[i]);
+      }
+    } else {
+      float3 translation = {0.0f, 0.0f, 0.0f};
+      if (node.translation.size() == 3) {
+        translation = {float(node.translation[0]), float(node.translation[1]), float(node.translation[2])};
+      }
+      float4 rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+      if (node.rotation.size() == 4) {
+        rotation = {float(node.rotation[0]), float(node.rotation[1]), float(node.rotation[2]), float(node.rotation[3])};
+      }
+      float3 scale = {1.0f, 1.0f, 1.0f};
+      if (node.scale.size() == 3) {
+        scale = {float(node.scale[0]), float(node.scale[1]), float(node.scale[2])};
+      }
+      transform = transform_matrix(translation, rotation, scale);
+    }
+
+    ETX_ASSERT(idx_accessor.count % 3 == 0);
+    uint32_t triangle_count = static_cast<uint32_t>(has_indices ? idx_accessor.count : pos_accessor.count) / 3u;
+
+    uint32_t linear_index = 0;
+    for (uint32_t tri_index = 0; tri_index < triangle_count; ++tri_index) {
+      triangle_to_material.emplace_back(material_index);
+      triangle_to_emitter.emplace_back(kInvalidIndex);
+
+      uint32_t base_index = static_cast<uint32_t>(vertices.size());
+      Triangle& tri = triangles.emplace_back();
+      tri.i[0] = base_index + 0;
+      tri.i[1] = base_index + 1;
+      tri.i[2] = base_index + 2;
+
+      for (uint32_t j = 0; j < 3; ++j, ++linear_index) {
+        auto index = has_indices ? gltf_read_buffer_as_uint(idx_buffer, idx_accessor, idx_buffer_view, 3u * tri_index + j) : linear_index;
+
+        auto& v0 = vertices.emplace_back();
+
+        auto p = gltf_read_buffer<float3>(pos_buffer, pos_accessor, pos_buffer_view, index);
+        auto tp = transform * float4{p.x, p.y, p.z, 1.0f};
+        v0.pos = {tp.x, tp.y, tp.z};
+
+        if (has_normals) {
+          auto n = gltf_read_buffer<float3>(nrm_buffer, nrm_accessor, nrm_buffer_view, index);
+          auto tn = transform * float4{n.x, n.y, n.z, 0.0f};
+          v0.nrm = {tn.x, tn.y, tn.z};
+        }
+
+        if (has_tex_coords) {
+          v0.tex = gltf_read_buffer<float2>(tex_buffer, tex_accessor, tex_buffer_view, index);
+        }
+      }
+
+      if (validate_triangle(tri) == false) {
+        triangles.pop_back();
+        triangle_to_material.pop_back();
+      } else if (has_normals == false) {
+        vertices[vertices.size() - 1u].nrm = tri.geo_n;
+        vertices[vertices.size() - 2u].nrm = tri.geo_n;
+        vertices[vertices.size() - 3u].nrm = tri.geo_n;
+      }
+    }
+  }
 }
 
 void build_emitters_distribution(Scene& scene) {
@@ -1647,7 +1785,7 @@ Pointer<Spectrums> shared() {
 namespace tinygltf {
 
 bool LoadImageData(Image* image, const int image_idx, std::string* err, std::string* warn, int req_width, int req_height, const unsigned char* bytes, int size, void*) {
-  return false;
+  return true;
 }
 
 bool WriteImageData(const std::string* basepath, const std::string* filename, const Image* image, bool embedImages, const URICallbacks* uri_cb, std::string* out_uri, void*) {

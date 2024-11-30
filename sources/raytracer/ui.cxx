@@ -8,7 +8,6 @@
 #include <sokol_app.h>
 #include <sokol_gfx.h>
 
-#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <util/sokol_imgui.h>
@@ -372,12 +371,20 @@ void UI::build(double dt) {
     }
 
     if (ImGui::BeginMenu("View", true)) {
+      if (ImGui::MenuItem("View whole scene", nullptr, false, true)) {
+        if (callbacks.view_scene)
+          callbacks.view_scene();
+      }
+
+      ImGui::Separator();
+
       if (ImGui::MenuItem("Increase Exposure", "*", false, true)) {
         increase_exposure(_view_options);
       }
       if (ImGui::MenuItem("Decrease Exposure", "/", false, true)) {
         increase_exposure(_view_options);
       }
+
       ImGui::Separator();
 
       auto ui_toggle = [this](const char* label, uint32_t flag) {
@@ -837,14 +844,14 @@ void UI::quit() {
   sapp_quit();
 }
 
-void UI::select_scene_file() {
-  auto selected_file = open_file("json,obj");  // TODO : add gltf;pbrt
+void UI::select_scene_file() const {
+  auto selected_file = open_file("json,obj,gltf,glb");
   if ((selected_file.empty() == false) && callbacks.scene_file_selected) {
     callbacks.scene_file_selected(selected_file);
   }
 }
 
-void UI::save_scene_file() {
+void UI::save_scene_file() const {
   auto selected_file = save_file("json");
   if ((selected_file.empty() == false) && callbacks.save_scene_file_selected) {
     callbacks.save_scene_file_selected(selected_file);
