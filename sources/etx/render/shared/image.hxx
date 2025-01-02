@@ -17,7 +17,7 @@ struct Image {
     BuildSamplingTable = 1u << 0u,
     RepeatU = 1u << 1u,
     RepeatV = 1u << 2u,
-    Linear = 1u << 3u,
+    SkipSRGBConversion = 1u << 3u,
     HasAlphaChannel = 1u << 4u,
     UniformSamplingTable = 1u << 5u,
     PerformLoading = 1u << 6u,

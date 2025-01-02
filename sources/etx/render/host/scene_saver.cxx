@@ -40,7 +40,7 @@ void write_materials(const SceneRepresentation& scene_rep, const char* filename)
     fprintf(fout, "newmtl %s\n", mmap.first.c_str());
     fprintf(fout, "material class %s\n", material_class_to_string(material.cls));
     // TODO : support anisotripic roughness
-    fprintf(fout, "Pr %.3f\n", sqrtf(0.5f * (sqr(material.roughness.x) + sqr(material.roughness.y))));
+    fprintf(fout, "Pr %.3f\n", sqrtf(0.5f * (sqr(material.roughness.value.x) + sqr(material.roughness.value.y))));
     {
       float3 ks = spectrum::xyz_to_rgb(material.reflectance.spectrum.integrate_to_xyz());
       fprintf(fout, "Ks %.3f %.3f %.3f\n", ks.x, ks.y, ks.z);

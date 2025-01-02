@@ -55,8 +55,9 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   if ((m_dot_o <= kEpsilon) || (m_dot_i <= kEpsilon))
     return {data.spectrum_sample, 0.0f};
 
+  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
   float specular_scale_base = 0.0f;
-  float alpha = 0.5f * (mtl.roughness.x + mtl.roughness.y);
+  float alpha = 0.5f * (roughness.x + roughness.y);
   if (alpha > kEpsilon) {
     float inv_alpha = 1.0f / (kEpsilon + alpha);
     float m_dot_n = dot(m, frame.nrm);

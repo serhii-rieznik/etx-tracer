@@ -163,10 +163,10 @@ struct ImagePoolImpl {
       source_data.resize(sizeof(float4));
       *(float4*)(source_data.data()) = {1.0f, 1.0f, 1.0f, 1.0f};
       img.format = Image::Format::RGBA32F;
-      img.options = img.options & (~Image::Linear);
+      img.options = img.options & (~Image::SkipSRGBConversion);
       img.options = img.options & (~Image::RepeatU);
-      img.options = img.options & (~Image::Linear);
-      img.options = img.options | Image::Linear | Image::RepeatU | Image::RepeatV;
+      img.options = img.options & (~Image::SkipSRGBConversion);
+      img.options = img.options | Image::SkipSRGBConversion | Image::RepeatU | Image::RepeatV;
       img.isize.x = 1;
       img.isize.y = 1;
     }
@@ -175,7 +175,7 @@ struct ImagePoolImpl {
     img.fsize.y = static_cast<float>(img.isize.y);
 
     if (img.format == Image::Format::RGBA8) {
-      bool srgb = (img.options & Image::Linear) == 0;
+      bool convert_from_srgb = (img.options & Image::SkipSRGBConversion) == 0;
       img.pixels.u8.count = 1llu * img.isize.x * img.isize.y;
       img.pixels.u8.a = reinterpret_cast<ubyte4*>(calloc(img.pixels.u8.count, sizeof(ubyte4)));
       img.data_size = static_cast<uint32_t>(img.pixels.u8.count * sizeof(ubyte4));
@@ -183,14 +183,13 @@ struct ImagePoolImpl {
       for (uint32_t y = 0; y < img.isize.y; ++y) {
         for (uint32_t x = 0; x < img.isize.x; ++x) {
           uint32_t i = x + y * img.isize.x;
-          uint32_t j = x + (img.isize.y - 1 - y) * img.isize.x;
+          uint32_t j = x + (img.isize.y - 1u - y) * img.isize.x;
           float4 f = to_float4(src_data[i]);
-          if (srgb) {
+          if (convert_from_srgb) {
             float3 linear = gamma_to_linear({f.x, f.y, f.z});
             f = {linear.x, linear.y, linear.z, f.w};
           }
-          auto val = to_ubyte4(f);
-          img.pixels.u8[j] = val;
+          img.pixels.u8[j] = to_ubyte4(f);
         }
       }
     } else if (img.format == Image::Format::RGBA32F) {
@@ -330,7 +329,7 @@ struct ImagePoolImpl {
     int w = 0;
     int h = 0;
     int c = 0;
-    stbi_set_flip_vertically_on_load(false);
+    stbi_set_flip_vertically_on_load(true);
     auto image = stbi_load(source, &w, &h, &c, 0);
     if (image == nullptr) {
       return Image::Format::Undefined;
@@ -513,6 +512,10 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
 
   fclose(in_file);
   return true;
+}
+
+void ImagePool::add_options(uint32_t index, uint32_t options) {
+  _private->image_pool.get(index).options |= options;
 }
 
 void ImagePool::load_images() {

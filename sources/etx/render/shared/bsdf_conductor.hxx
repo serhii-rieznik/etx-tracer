@@ -19,7 +19,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   result.weight = {data.spectrum_sample, 1.0f};
 
   // init
-  external::RayInfo ray = {-w_i, mtl.roughness};
+  float2 roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  external::RayInfo ray = {-w_i, roughness};
   ray.updateHeight(1.0f);
 
   uint32_t scattering_order = 0;
@@ -29,7 +30,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
       break;
 
     SpectralResponse weight = {data.spectrum_sample, 1.0f};
-    ray.updateDirection(external::samplePhaseFunction_conductor(data.spectrum_sample, smp, -ray.w, mtl.roughness, ext_ior, int_ior, thinfilm, weight), mtl.roughness);
+    ray.updateDirection(external::samplePhaseFunction_conductor(data.spectrum_sample, smp, -ray.w, roughness, ext_ior, int_ior, thinfilm, weight), roughness);
     ray.updateHeight(ray.h);
 
     result.weight *= weight;
@@ -47,8 +48,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   ETX_VALIDATE(result.weight);
 
   {
-    external::RayInfo ray = {w_i, mtl.roughness};
-    result.pdf = external::D_ggx(normalize(result.w_o + w_i), mtl.roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + result.w_o.z;
+    external::RayInfo ray = {w_i, roughness};
+    result.pdf = external::D_ggx(normalize(result.w_o + w_i), roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + result.w_o.z;
     ETX_VALIDATE(result.pdf);
   }
 
@@ -69,18 +70,19 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
     return {data.spectrum_sample, 0.0f};
   }
 
-  auto alpha_x = mtl.roughness.x;
-  auto alpha_y = mtl.roughness.y;
+  float2 roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto alpha_x = roughness.x;
+  auto alpha_y = roughness.y;
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
   BSDFEval result;
   if (smp.next() > 0.5f) {
-    result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, mtl.roughness, ext_ior, int_ior, thinfilm);
+    result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, roughness, ext_ior, int_ior, thinfilm);
     ETX_VALIDATE(result.bsdf);
   } else {
-    result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_o, w_i, mtl.roughness, ext_ior, int_ior, thinfilm) / w_i.z * w_o.z;
+    result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_o, w_i, roughness, ext_ior, int_ior, thinfilm) / w_i.z * w_o.z;
     ETX_VALIDATE(result.bsdf);
   }
   result.bsdf *= apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
@@ -90,8 +92,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   ETX_VALIDATE(result.func);
 
   {
-    external::RayInfo ray = {w_i, mtl.roughness};
-    result.pdf = external::D_ggx(normalize(w_o + w_i), mtl.roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
+    external::RayInfo ray = {w_i, roughness};
+    result.pdf = external::D_ggx(normalize(w_o + w_i), roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
     ETX_VALIDATE(result.pdf);
   }
 
@@ -114,16 +116,18 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
     return 0.0f;
   }
 
-  auto alpha_x = mtl.roughness.x;
-  auto alpha_y = mtl.roughness.y;
-  external::RayInfo ray = {w_i, mtl.roughness};
-  float result = external::D_ggx(normalize(w_o + w_i), mtl.roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
+  float2 roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto alpha_x = roughness.x;
+  auto alpha_y = roughness.y;
+  external::RayInfo ray = {w_i, roughness};
+  float result = external::D_ggx(normalize(w_o + w_i), roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
   ETX_VALIDATE(result);
   return result;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
+ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+  float2 roughness = evaluate_roughness(mtl.roughness, tex, scene);
+  return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {

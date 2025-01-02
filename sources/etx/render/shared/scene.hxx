@@ -160,6 +160,26 @@ ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralRespo
   return response;
 }
 
+ETX_GPU_CODE float4 sample_whole_image(const SampledImage& img, const float2& uv, const Scene& scene) {
+  if (img.image_index == kInvalidIndex) {
+    return img.value;
+  }
+
+  float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
+  return img.value * eval;
+}
+
+ETX_GPU_CODE float2 evaluate_roughness(const SampledImage& img, const float2& uv, const Scene& scene) {
+  float2 result = {img.value.x, img.value.y};
+  if ((img.image_index == kInvalidIndex) || (img.channel >= 4u)) {
+    return result;
+  }
+
+  float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
+  const float* data = reinterpret_cast<const float*>(&eval);
+  return result * data[img.channel];
+}
+
 ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, float* image_pdf) {
   if (image_pdf) {
     *image_pdf = 0.0f;

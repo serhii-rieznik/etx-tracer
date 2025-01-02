@@ -65,6 +65,8 @@ struct CPUDebugIntegratorImpl : public Task {
     status = {};
     total_time = {};
     iteration_time = {};
+
+    rt.film().clear();
     current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), this);
   }
 

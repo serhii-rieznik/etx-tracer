@@ -8,14 +8,15 @@ ETX_GPU_CODE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_
   BSDFEval eval = {};
   eval.eta = 1.0f;
 
+  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
   switch (mtl.diffuse_variation) {
     case 1: {
-      eval.bsdf = external::eval_diffuse(smp, local_w_i, local_w_o, mtl.roughness, diffuse);
+      eval.bsdf = external::eval_diffuse(smp, local_w_i, local_w_o, roughness, diffuse);
       eval.func = eval.bsdf / local_w_o.z;
       break;
     }
     case 2: {
-      eval.func = external::vMFdiffuseBRDF(local_w_i, local_w_o, mtl.roughness, diffuse);
+      eval.func = external::vMFdiffuseBRDF(local_w_i, local_w_o, roughness, diffuse);
       eval.bsdf = eval.func * local_w_o.z;
       break;
     }
@@ -39,6 +40,7 @@ ETX_GPU_CODE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   auto local_w_i = frame.to_local(-data.w_i);
+  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
 
   BSDFSample result = {};
   result.eta = 1.0f;
@@ -48,7 +50,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   float3 local_w_o = {};
   if (mtl.diffuse_variation == 1) {
     SpectralResponse diffuse = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
-    local_w_o = external::sample_diffuse(smp, local_w_i, mtl.roughness, diffuse, result.weight);
+    local_w_o = external::sample_diffuse(smp, local_w_i, roughness, diffuse, result.weight);
     result.pdf = kInvPi * local_w_o.z;
     ETX_VALIDATE(result.pdf);
   } else {

@@ -65,7 +65,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   result.weight = {data.spectrum_sample, 1.0f};
 
   // init
-  external::RayInfo ray = {-direction_scale * w_i, mtl.roughness};
+  float2 roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  external::RayInfo ray = {-direction_scale * w_i, roughness};
   ray.updateHeight(1.0f);
   bool ray_outside = true;
 
@@ -79,17 +80,17 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     ray.updateHeight(sampled_height);
 
     // next direction
-    auto sample = external::samplePhaseFunction_dielectric(data.spectrum_sample, smp, -ray.w, mtl.roughness,  //
+    auto sample = external::samplePhaseFunction_dielectric(data.spectrum_sample, smp, -ray.w, roughness,  //
       (ray_outside ? ext_ior : int_ior), (ray_outside ? int_ior : ext_ior), thinfilm);
 
     result.weight *= sample.weight;
 
     if (sample.reflection) {
-      ray.updateDirection(sample.w_o, mtl.roughness);
+      ray.updateDirection(sample.w_o, roughness);
       ray.updateHeight(ray.h);
     } else {
       ray_outside = !ray_outside;
-      ray.updateDirection(-sample.w_o, mtl.roughness);
+      ray.updateDirection(-sample.w_o, roughness);
       ray.updateHeight(-ray.h);
     }
 
@@ -131,6 +132,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
+  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
@@ -144,19 +146,19 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   SpectralResponse value = {};
   if (LocalFrame::cos_theta(w_i) > 0) {
     if (LocalFrame::cos_theta(w_o) >= 0) {
-      value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, true, mtl.roughness, ext_ior, int_ior, thinfilm)
-                           : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, true, mtl.roughness, ext_ior, int_ior, thinfilm) * backward_scale;
+      value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, true, roughness, ext_ior, int_ior, thinfilm)
+                           : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, true, roughness, ext_ior, int_ior, thinfilm) * backward_scale;
     } else {
-      value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, false, mtl.roughness, ext_ior, int_ior, thinfilm)
-                           : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, mtl.roughness, int_ior, ext_ior, thinfilm) * backward_scale * factor;
+      value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, false, roughness, ext_ior, int_ior, thinfilm)
+                           : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, roughness, int_ior, ext_ior, thinfilm) * backward_scale * factor;
       value *= factor;
     }
   } else if (LocalFrame::cos_theta(w_o) <= 0) {
-    value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, true, mtl.roughness, int_ior, ext_ior, thinfilm)
-                         : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, true, mtl.roughness, int_ior, ext_ior, thinfilm) * backward_scale;
+    value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, true, roughness, int_ior, ext_ior, thinfilm)
+                         : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, true, roughness, int_ior, ext_ior, thinfilm) * backward_scale;
   } else {
-    value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, false, mtl.roughness, int_ior, ext_ior, thinfilm)
-                         : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, mtl.roughness, ext_ior, int_ior, thinfilm) * backward_scale * factor;
+    value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, false, roughness, int_ior, ext_ior, thinfilm)
+                         : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, roughness, ext_ior, int_ior, thinfilm) * backward_scale * factor;
     value *= factor;
   }
 
@@ -186,6 +188,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
     return 0.0f;
 
+  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
@@ -208,9 +211,9 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
 
   wh *= (LocalFrame::cos_theta(wh) >= 0.0f) ? 1.0f : -1.0f;
 
-  external::RayInfo ray = {w_i * (outside ? 1.0f : -1.0f), mtl.roughness};
+  external::RayInfo ray = {w_i * (outside ? 1.0f : -1.0f), roughness};
 
-  auto d_ggx = external::D_ggx(wh, mtl.roughness);
+  auto d_ggx = external::D_ggx(wh, roughness);
   ETX_VALIDATE(d_ggx);
 
   float prob = max(0.0f, dot(wh, ray.w) * d_ggx / ((1.0f + ray.Lambda) * LocalFrame::cos_theta(ray.w)));
@@ -227,8 +230,9 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   return result;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
-  return max(material.roughness.x, material.roughness.y) <= kDeltaAlphaTreshold;
+ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+  auto roughness = evaluate_roughness(mtl.roughness, tex, scene);
+  return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {

@@ -159,6 +159,7 @@ struct SceneRepresentationImpl {
   Lens lens = {};
 
   SceneRepresentation::MaterialMapping material_mapping;
+  std::unordered_map<uint32_t, uint32_t> gltf_image_mapping;
   uint32_t camera_medium_index = kInvalidIndex;
 
   Scene scene;
@@ -202,6 +203,14 @@ struct SceneRepresentationImpl {
 
   uint32_t add_image(const float4* data, const uint2& dim, uint32_t options) {
     return images.add_from_data(data, dim, options, {});
+  }
+
+  void add_image_options(uint32_t index, uint32_t options) {
+    images.add_options(index, options);
+  }
+
+  bool has_material(const char* name) const {
+    return material_mapping.count(name) > 0;
   }
 
   uint32_t add_material(const char* name) {
@@ -279,9 +288,9 @@ struct SceneRepresentationImpl {
 
   void validate_materials() {
     for (auto& mtl : materials) {
-      if ((mtl.roughness.x > 0.0f) || (mtl.roughness.y > 0.0f)) {
-        mtl.roughness.x = max(kEpsilon, mtl.roughness.x);
-        mtl.roughness.y = max(kEpsilon, mtl.roughness.y);
+      if ((mtl.roughness.value.x > 0.0f) || (mtl.roughness.value.y > 0.0f)) {
+        mtl.roughness.value.x = max(kEpsilon, mtl.roughness.value.x);
+        mtl.roughness.value.y = max(kEpsilon, mtl.roughness.value.y);
       }
 
       if (mtl.int_ior.eta.empty() && mtl.int_ior.k.empty()) {
@@ -396,8 +405,6 @@ struct SceneRepresentationImpl {
     uint32_t image = images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, Image::BuildSamplingTable | Image::UniformSamplingTable, {});
     scene.pixel_sampler = {image, 1.5f};
 
-    stbi_write_hdr(env().file_in_data("pixel-filter.hdr"), Film::PixelFilterSize, Film::PixelFilterSize, 4, &sampler_image.data()->x);
-
     float3 bbox_min = triangles.empty() ? float3{-1.0f, -1.0f, -1.0f} : float3{kMaxFloat, kMaxFloat, kMaxFloat};
     float3 bbox_max = triangles.empty() ? float3{+1.0f, +1.0f, +1.0f} : float3{-kMaxFloat, -kMaxFloat, -kMaxFloat};
     for (const auto& tri : triangles) {
@@ -437,8 +444,9 @@ struct SceneRepresentationImpl {
   uint32_t load_from_obj(const char* file_name, const char* mtl_file);
 
   uint32_t load_from_gltf(const char* file_name, bool binary);
-  void load_gltf_node(const tinygltf::Model& model, const tinygltf::Node&);
-  void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh&);
+  float4x4 build_gltf_node_transform(const tinygltf::Node& node);
+  void load_gltf_node(const tinygltf::Model& model, const tinygltf::Node&, const float4x4& transform);
+  void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh&, const float4x4& transform);
 
   void parse_material(const char* base_dir, const tinyobj::material_t& material);
   void parse_camera(const char* base_dir, const tinyobj::material_t& material);
@@ -1346,11 +1354,14 @@ SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* dat
 }
 
 void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj::material_t& material) {
+  uint32_t material_index = kInvalidIndex;
+
   if (material_mapping.count(material.name) == 0) {
-    add_material(material.name.c_str());
+    material_index = add_material(material.name.c_str());
+  } else {
+    material_index = material_mapping.at(material.name);
   }
 
-  uint32_t material_index = material_mapping.at(material.name);
   auto& mtl = materials[material_index];
 
   mtl.cls = Material::Class::Diffuse;
@@ -1378,9 +1389,9 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   }
 
   if (get_param(material, "Pr")) {
-    float2 value = {};
+    float4 value = {};
     if (sscanf(data_buffer, "%f %f", &value.x, &value.y) == 2) {
-      mtl.roughness = sqr(value);
+      mtl.roughness.value = sqr(value);
     } else if (sscanf(data_buffer, "%f", &value.x) == 1) {
       mtl.roughness = {sqr(value.x), sqr(value.x)};
     }
@@ -1471,7 +1482,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-        mtl.normal_image_index = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::Linear);
+        mtl.normal_image_index = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
         i += 1;
       }
       if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
@@ -1488,7 +1499,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-        mtl.thinfilm.thinkness_image = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::Linear);
+        mtl.thinfilm.thinkness_image = add_image(buffer, Image::RepeatU | Image::RepeatV);
         i += 1;
       }
 
@@ -1566,13 +1577,38 @@ void SceneRepresentationImpl::parse_obj_materials(const char* base_dir, const st
   images.load_images();
 }
 
-void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node) {
+float4x4 SceneRepresentationImpl::build_gltf_node_transform(const tinygltf::Node& node) {
+  float4x4 transform = {};
+  if (node.matrix.size() == 16) {
+    for (uint32_t i = 0; i < 16u; ++i) {
+      transform.val[i] = float(node.matrix[i]);
+    }
+  } else {
+    float3 translation = {0.0f, 0.0f, 0.0f};
+    if (node.translation.size() == 3) {
+      translation = {float(node.translation[0]), float(node.translation[1]), float(node.translation[2])};
+    }
+    float4 rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+    if (node.rotation.size() == 4) {
+      rotation = {float(node.rotation[0]), float(node.rotation[1]), float(node.rotation[2]), float(node.rotation[3])};
+    }
+    float3 scale = {1.0f, 1.0f, 1.0f};
+    if (node.scale.size() == 3) {
+      scale = {float(node.scale[0]), float(node.scale[1]), float(node.scale[2])};
+    }
+    transform = transform_matrix(translation, rotation, scale);
+  }
+  return transform;
+}
+
+void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node, const float4x4& transform) {
   if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
-    load_gltf_mesh(node, model, model.meshes.at(node.mesh));
+    load_gltf_mesh(node, model, model.meshes.at(node.mesh), transform);
   }
 
   for (const auto& child : node.children) {
-    load_gltf_node(model, model.nodes[child]);
+    auto child_transform = transform * build_gltf_node_transform(model.nodes[child]);
+    load_gltf_node(model, model.nodes[child], child_transform);
   }
 }
 
@@ -1583,6 +1619,32 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
   std::string warnings;
 
   bool load_result = false;
+
+  gltf_image_mapping.clear();
+  auto image_loader = [](tinygltf::Image* image, const int image_index, std::string* errors, std::string* warnings,  //
+                        int width, int height, const unsigned char* data, int data_size, void* user_pointer) -> bool {
+    auto self = reinterpret_cast<SceneRepresentationImpl*>(user_pointer);
+
+    if (((width == 0) || (height == 0)) && (data != nullptr)) {
+      bool can_write = std::filesystem::exists("./tmp") || std::filesystem::create_directory("./tmp");
+
+      if (can_write) {
+        char buffer[2048] = {};
+        uint32_t hash = fnv1a32(data, data_size, kFnv1a32Begin);
+        snprintf(buffer, sizeof(buffer), "./tmp/img-%x.png", hash);
+        if (auto fout = fopen(buffer, "wb")) {
+          if (fwrite(data, 1, data_size, fout) == data_size) {
+            self->gltf_image_mapping[image_index] = self->add_image(buffer, Image::RepeatU | Image::RepeatV, {});
+          }
+          fclose(fout);
+        }
+      }
+    }
+
+    return true;
+  };
+
+  loader.SetImageLoader(image_loader, this);
 
   if (binary) {
     load_result = loader.LoadBinaryFromFile(&model, &errors, &warnings, file_name);
@@ -1603,18 +1665,52 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
     return LoadFailed;
   }
 
-  for (const auto& material : model.materials) {
-    uint32_t material_index = add_material(material.name.c_str());
+  for (auto& material : model.materials) {
+    std::string material_name = material.name;
+    uint32_t index = 1;
+    while (has_material(material_name.c_str())) {
+      char buffer[1024] = {};
+      snprintf(buffer, sizeof(buffer), "%s-%04u", material.name.c_str(), index);
+      material_name = buffer;
+      ++index;
+    }
+
+    const auto& pbr = material.pbrMetallicRoughness;
+
+    uint32_t material_index = add_material(material_name.c_str());
+
     auto& mtl = materials[material_index];
-    mtl.cls = Material::Class::Diffuse;
+    mtl.cls = Material::Class::Plastic;
+    mtl.roughness.value = {float(pbr.roughnessFactor), float(pbr.roughnessFactor)};
+    mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
+    mtl.ext_ior.eta = SpectralDistribution::constant(1.0f);
+    mtl.ext_ior.k = SpectralDistribution::null();
+    mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
+    mtl.int_ior.eta = SpectralDistribution::constant(1.5f);
+    mtl.int_ior.k = SpectralDistribution::null();
+
     float3 rgb = {1.0f, 1.0f, 1.0f};
-
     const auto& base_color = material.pbrMetallicRoughness.baseColorFactor;
-
     if (base_color.size() >= 3) {
       rgb = {float(base_color[0]), float(base_color[1]), float(base_color[2])};
     }
     mtl.transmittance.spectrum = SpectralDistribution::rgb_reflectance(rgb);
+
+    if ((pbr.baseColorTexture.index != -1) && (gltf_image_mapping.count(pbr.baseColorTexture.index) > 0)) {
+      mtl.transmittance.image_index = gltf_image_mapping.at(pbr.baseColorTexture.index);
+    }
+
+    if ((pbr.metallicRoughnessTexture.index != -1) && (gltf_image_mapping.count(pbr.metallicRoughnessTexture.index) > 0)) {
+      mtl.roughness.image_index = gltf_image_mapping.at(pbr.metallicRoughnessTexture.index);
+      mtl.roughness.channel = 1u;
+    }
+
+    if ((material.normalTexture.index != -1) && gltf_image_mapping.count(material.normalTexture.index) > 0) {
+      mtl.normal_image_index = gltf_image_mapping.at(material.normalTexture.index);
+      mtl.normal_scale = 1.0f;
+      add_image_options(mtl.normal_image_index, Image::SkipSRGBConversion);
+    }
+
     mtl.reflectance.spectrum = SpectralDistribution::constant(1.0f);
   }
 
@@ -1628,18 +1724,19 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
 
   for (const auto& scene : model.scenes) {
     for (int32_t node_index : scene.nodes) {
-      if ((node_index < 0) || (node_index > model.nodes.size()))
+      if ((node_index < 0) || (node_index >= model.nodes.size()))
         continue;
 
+      const float4x4 identity = build_gltf_node_transform({});
       const auto& node = model.nodes[node_index];
-      load_gltf_node(model, node);
+      load_gltf_node(model, node, identity);
     }
   }
 
   return LoadSucceeded;
 }
 
-void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh& mesh) {
+void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh& mesh, const float4x4& transform) {
   for (const auto& primitive : mesh.primitives) {
     bool has_positions = primitive.attributes.count("POSITION") > 0;
     bool has_normals = primitive.attributes.count("NORMAL") > 0;
@@ -1682,27 +1779,6 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
       idx_accessor = model.accessors[primitive.indices];
       idx_buffer_view = model.bufferViews[idx_accessor.bufferView];
       idx_buffer = model.buffers[idx_buffer_view.buffer];
-    }
-
-    float4x4 transform = {};
-    if (node.matrix.size() == 16) {
-      for (uint32_t i = 0; i < 16u; ++i) {
-        transform.val[i] = float(node.matrix[i]);
-      }
-    } else {
-      float3 translation = {0.0f, 0.0f, 0.0f};
-      if (node.translation.size() == 3) {
-        translation = {float(node.translation[0]), float(node.translation[1]), float(node.translation[2])};
-      }
-      float4 rotation = {0.0f, 0.0f, 0.0f, 1.0f};
-      if (node.rotation.size() == 4) {
-        rotation = {float(node.rotation[0]), float(node.rotation[1]), float(node.rotation[2]), float(node.rotation[3])};
-      }
-      float3 scale = {1.0f, 1.0f, 1.0f};
-      if (node.scale.size() == 3) {
-        scale = {float(node.scale[0]), float(node.scale[1]), float(node.scale[2])};
-      }
-      transform = transform_matrix(translation, rotation, scale);
     }
 
     ETX_ASSERT(idx_accessor.count % 3 == 0);
@@ -1781,15 +1857,3 @@ Pointer<Spectrums> shared() {
 }  // namespace spectrum
 
 }  // namespace etx
-
-namespace tinygltf {
-
-bool LoadImageData(Image* image, const int image_idx, std::string* err, std::string* warn, int req_width, int req_height, const unsigned char* bytes, int size, void*) {
-  return true;
-}
-
-bool WriteImageData(const std::string* basepath, const std::string* filename, const Image* image, bool embedImages, const URICallbacks* uri_cb, std::string* out_uri, void*) {
-  return false;
-}
-
-}  // namespace tinygltf
