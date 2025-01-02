@@ -37,7 +37,29 @@ enum PTRayState : uint8_t {
 
 namespace subsurface {
 
-ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
+enum class GatherResult {
+  Failed = 0u,
+  Succeedded = 1u,
+  Fallback = 2u,
+};
+
+inline float safe_mul(const float a, const float b) {
+  return (a == 0.0f) || (b == 0.0f) ? 0.0f : a * b;
+}
+
+inline SpectralResponse safe_mul(const SpectralResponse& a, const SpectralResponse& b) {
+  ETX_ASSERT((a.spectral() && b.spectral()) || ((a.spectral() == false) && (b.spectral() == false)));
+  ETX_ASSERT(a.wavelength == b.wavelength);
+
+  return a.spectral() ? SpectralResponse{a.query(), safe_mul(a.components.w, b.components.w)}
+                      : SpectralResponse{a.query(), {
+                                                      safe_mul(a.components.integrated.x, b.components.integrated.x),
+                                                      safe_mul(a.components.integrated.y, b.components.integrated.y),
+                                                      safe_mul(a.components.integrated.z, b.components.integrated.z),
+                                                    }};
+}
+
+ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
   constexpr uint32_t kMaxIterations = 1024u;
 
   const auto& mat = scene.materials[in_intersection.material_index];
@@ -76,6 +98,10 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
     ray.max_t = scattering_distance > 0.0f ? (-logf(1.0f - smp.next()) / scattering_distance) : kMaxFloat;
     ETX_VALIDATE(ray.max_t);
 
+    if ((i == 0) && (ray.max_t <= kRayEpsilon)) {
+      return GatherResult::Fallback;
+    }
+
     Intersection local_i;
     bool intersection_found = rt.trace_material(scene, ray, in_intersection.material_index, local_i, smp);
     if (intersection_found) {
@@ -85,20 +111,20 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
     SpectralResponse tr = exp(-ray.max_t * extinction);
     ETX_VALIDATE(tr);
 
-    pdf *= intersection_found ? tr : tr * extinction;
+    pdf *= intersection_found ? tr : safe_mul(tr, extinction);
     ETX_VALIDATE(pdf);
 
     if (pdf.is_zero())
-      return false;
+      return GatherResult::Failed;
 
-    SpectralResponse weight = intersection_found ? tr : tr * scattering;
+    SpectralResponse weight = intersection_found ? tr : safe_mul(tr, scattering);
     ETX_VALIDATE(weight);
 
     throughput *= weight / pdf.sum();
     ETX_VALIDATE(throughput);
 
     if (throughput.maximum() <= kEpsilon)
-      return false;
+      return GatherResult::Failed;
 
     if (intersection_found) {
       bool w_i_in = dot(local_i.w_i, local_i.nrm) > 0.0f;
@@ -110,16 +136,16 @@ ETX_GPU_CODE bool gather_rw(SpectralQuery spect, const Scene& scene, const Inter
       result.selected_intersection = 0;
       result.selected_sample_weight = 1.0f;
       result.total_weight = 1.0f;
-      return true;
+      return GatherResult::Succeedded;
     }
 
     ray.o = ray.o + ray.d * ray.max_t;
     ray.d = medium::sample_phase_function(ray.d, anisotropy, smp);
   }
-  return false;
+  return GatherResult::Failed;
 }
 
-ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
+ETX_GPU_CODE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
   const auto& mat = scene.materials[in_intersection.material_index];
   const auto& sss = mat.subsurface;
 
@@ -140,7 +166,7 @@ ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Inter
   uint32_t intersection_count = intersections_0 + intersections_1 + intersections_2;
   ETX_CRITICAL(intersection_count <= kTotalIntersections);
   if (intersection_count == 0) {
-    return false;
+    return GatherResult::Failed;
   }
 
   SpectralResponse base_weight = apply_image(spect, mat.transmittance, in_intersection.tex, scene, nullptr);
@@ -189,11 +215,11 @@ ETX_GPU_CODE bool gather_cb(SpectralQuery spect, const Scene& scene, const Inter
     ETX_ASSERT(result.selected_intersection != kInvalidIndex);
   }
 
-  return result.intersection_count > 0;
+  return result.intersection_count > 0 ? GatherResult::Succeedded : GatherResult::Failed;
 }
 
 template <class RT>
-ETX_GPU_CODE bool gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
+ETX_GPU_CODE GatherResult gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
   const auto& mtl = scene.materials[in_intersection.material_index].subsurface;
   ETX_FUNCTION_SCOPE();
 
@@ -360,7 +386,15 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   // uint8_t ss_gather_data[sizeof(subsurface::Gather)];
   subsurface::Gather ss_gather;
-  bool subsurface_sampled = subsurface_path && subsurface::gather(payload.spect, scene, intersection, rt, payload.smp, ss_gather);
+  subsurface::GatherResult ss_gather_result = subsurface::GatherResult::Failed;
+  bool subsurface_sampled = false;
+  if (subsurface_path) {
+    ss_gather_result = subsurface::gather(payload.spect, scene, intersection, rt, payload.smp, ss_gather);
+    if (ss_gather_result == subsurface::GatherResult::Fallback) {
+      subsurface_path = false;
+    }
+    subsurface_sampled = ss_gather_result == subsurface::GatherResult::Succeedded;
+  }
 
   if (subsurface_path && (subsurface_sampled == false)) {
     return false;

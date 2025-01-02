@@ -724,7 +724,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
 
   subsurface::Gather ss_gather = {};
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
-  bool subsurface_sampled = subsurface_path && subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather);
+  bool subsurface_sampled = subsurface_path && (subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather) == subsurface::GatherResult::Succeedded);
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     if (subsurface_sampled) {
@@ -797,7 +797,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
 
   subsurface::Gather ss_gather = {};
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
-  bool subsurface_sampled = subsurface_path && subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather);
+  bool subsurface_sampled = subsurface_path && (subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather) == subsurface::GatherResult::Succeedded);
 
   if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
     result.add_vertex = true;

@@ -81,7 +81,6 @@ struct ETX_ALIGNED Material {
   SubsurfaceMaterial subsurface = {};
 
   SampledImage roughness = {};
-  // float2 roughness = {};
 
   uint32_t normal_image_index = kInvalidIndex;
   float normal_scale = 1.0f;
