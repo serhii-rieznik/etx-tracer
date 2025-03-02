@@ -40,7 +40,6 @@ namespace subsurface {
 enum class GatherResult {
   Failed = 0u,
   Succeedded = 1u,
-  Fallback = 2u,
 };
 
 inline float safe_mul(const float a, const float b) {
@@ -95,7 +94,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
     ETX_VALIDATE(ray.max_t);
 
     if ((i == 0) && (ray.max_t <= kRayEpsilon)) {
-      return GatherResult::Fallback;
+      return GatherResult::Failed;
     }
 
     Intersection local_i;
@@ -382,13 +381,9 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   // uint8_t ss_gather_data[sizeof(subsurface::Gather)];
   subsurface::Gather ss_gather;
-  subsurface::GatherResult ss_gather_result = subsurface::GatherResult::Failed;
   bool subsurface_sampled = false;
   if (subsurface_path) {
-    ss_gather_result = subsurface::gather(payload.spect, scene, intersection, rt, payload.smp, ss_gather);
-    if (ss_gather_result == subsurface::GatherResult::Fallback) {
-      subsurface_path = false;
-    }
+    auto ss_gather_result = subsurface::gather(payload.spect, scene, intersection, rt, payload.smp, ss_gather);
     subsurface_sampled = ss_gather_result == subsurface::GatherResult::Succeedded;
   }
 
