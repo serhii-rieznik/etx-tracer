@@ -81,6 +81,7 @@ struct Image {
       float s_b = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : sinf(kPi * saturate(in_uv.y + 1.0f / fsize.y)));
       auto b = luminance(to_float3(g.p10 + g.p11)) * s_b;
       *pdf = (t + b) / normalization;
+      ETX_VALIDATE(*pdf);
     }
 
     return g.p00 + g.p01 + g.p10 + g.p11;

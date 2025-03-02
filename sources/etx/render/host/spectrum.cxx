@@ -86,7 +86,7 @@ SpectralDistribution SpectralDistribution::rgb_reflectance(const float3& rgb) {
   float2 samples[spectrum::RGBResponseWavelengthCount] = {};
   for (uint32_t i = spectrum::RGBResponseShortestWavelength; i <= spectrum::RGBResponseLongestWavelength; ++i) {
     auto p = rgb_response({float(i), SpectralQuery::Spectral}, rgb);
-    samples[i - spectrum::RGBResponseShortestWavelength] = {float(i), p.components.w};
+    samples[i - spectrum::RGBResponseShortestWavelength] = {float(i), p.value};
   }
 
   SpectralDistribution spd = from_samples(samples, spectrum::RGBResponseWavelengthCount);
@@ -246,11 +246,11 @@ float3 SpectralDistribution::integrate_to_xyz() const {
     s_begin.wavelength = l0;
     while (s_end.wavelength < l1) {
       float t0 = (s_begin.wavelength - l0) / (l1 - l0);
-      s_begin.components.w = lerp(p0, p1, t0);
+      s_begin.value = lerp(p0, p1, t0);
 
       s_end.wavelength = min(l1, s_begin.wavelength + 1.0f);
       float t1 = (s_end.wavelength - l0) / (l1 - l0);
-      s_end.components.w = lerp(p0, p1, t1);
+      s_end.value = lerp(p0, p1, t1);
 
       auto v_begin = s_begin.to_xyz();
       auto v_end = s_end.to_xyz();

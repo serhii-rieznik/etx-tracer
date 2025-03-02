@@ -21,6 +21,7 @@ ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, f
   constexpr float d = 0.496310210422f;
   constexpr float e = 4.231902997010f + 0.00310603949088f;
   constexpr float f = 2.406029994080f;
+  constexpr float kMinScattering = 1.0f / 1024.0f;
 
   color = max(color, 0.0f);
 
@@ -28,15 +29,11 @@ ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, f
   albedo = (1.0f - blend) * a * powf(atanf(b * color), c) + blend * d * powf(atanf(e * color), f);
   ETX_VALIDATE(albedo);
 
-  if (scattering_distances <= kEpsilon) {
-    extinction = std::numeric_limits<float>::infinity();
-    scattering = std::numeric_limits<float>::infinity();
-  } else {
-    extinction = scattering_distances;
-    ETX_VALIDATE(extinction);
-    scattering = extinction * albedo;
-    ETX_VALIDATE(scattering);
-  }
+  extinction = 1.0f / fmaxf(scattering_distances, kMinScattering);
+  ETX_VALIDATE(extinction);
+
+  scattering = extinction * albedo;
+  ETX_VALIDATE(scattering);
 }
 
 ETX_GPU_CODE void remap(float3 color, const float3& scattering_distances, float3& albedo, float3& extinction, float3& scattering) {
@@ -69,8 +66,8 @@ ETX_GPU_CODE SpectralResponse evaluate(const SpectralQuery spect, const Subsurfa
 
   auto div = sd * (4.0f * radius * kDoublePi);
   ETX_VALIDATE(div);
-  div.components.integrated = max(div.components.integrated, float3{kEpsilon, kEpsilon, kEpsilon});
-  div.components.w = max(div.components.w, kEpsilon);
+  div.integrated = max(div.integrated, float3{kEpsilon, kEpsilon, kEpsilon});
+  div.value = max(div.value, kEpsilon);
 
   return (term_0 + term_1) / div;
 }

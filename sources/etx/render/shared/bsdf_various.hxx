@@ -8,7 +8,7 @@ ETX_GPU_CODE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_
   BSDFEval eval = {};
   eval.eta = 1.0f;
 
-  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
   switch (mtl.diffuse_variation) {
     case 1: {
       eval.bsdf = external::eval_diffuse(smp, local_w_i, local_w_o, roughness, diffuse);
@@ -40,7 +40,7 @@ ETX_GPU_CODE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   auto local_w_i = frame.to_local(-data.w_i);
-  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
 
   BSDFSample result = {};
   result.eta = 1.0f;

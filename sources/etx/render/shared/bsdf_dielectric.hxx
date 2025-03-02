@@ -65,7 +65,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   result.weight = {data.spectrum_sample, 1.0f};
 
   // init
-  float2 roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  float2 roughness = evaluate_roughness(mtl, data.tex, scene);
   external::RayInfo ray = {-direction_scale * w_i, roughness};
   ray.updateHeight(1.0f);
   bool ray_outside = true;
@@ -132,7 +132,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
-  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
@@ -188,7 +188,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
     return 0.0f;
 
-  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
@@ -231,7 +231,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
 }
 
 ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  auto roughness = evaluate_roughness(mtl.roughness, tex, scene);
+  auto roughness = evaluate_roughness(mtl, tex, scene);
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 

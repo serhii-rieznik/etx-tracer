@@ -13,7 +13,7 @@ ETX_GPU_CODE SpectralResponse spec_eval(const BSDFData& data, const float3& in_w
   if (LocalFrame::cos_theta(w_o) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
-  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto m_eta = (int_ior.eta / ext_ior.eta).monochromatic();
@@ -46,7 +46,7 @@ ETX_GPU_CODE float spec_pdf(const BSDFData& data, const float3& in_w_o, const Ma
 
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
-  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
   float3 wh = normalize(w_o + w_i);
@@ -75,7 +75,7 @@ ETX_GPU_CODE float spec_pdf(const BSDFData& data, const float3& in_w_o, const Ma
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
-  auto roughness = evaluate_roughness(mtl.roughness, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
   auto ggx = NormalDistribution(frame, roughness);
   auto m = ggx.sample(smp, data.w_i);
 

@@ -20,6 +20,7 @@ ETX_DECLARE_BSDF(Thinfilm);
 ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
 ETX_DECLARE_BSDF(Velvet);
+ETX_DECLARE_BSDF(Principled)
 
 #define CASE_IMPL(CLS, FUNC, ...) \
   case Material::Class::CLS:      \
@@ -42,6 +43,7 @@ ETX_DECLARE_BSDF(Velvet);
     MACRO(Mirror);                          \
     MACRO(Boundary);                        \
     MACRO(Velvet);                          \
+    MACRO(Principled);                      \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
       return {};                            \
@@ -138,3 +140,4 @@ ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const 
 #include <etx/render/shared/bsdf_conductor.hxx>
 #include <etx/render/shared/bsdf_dielectric.hxx>
 #include <etx/render/shared/bsdf_velvet.hxx>
+#include <etx/render/shared/bsdf_principled.hxx>

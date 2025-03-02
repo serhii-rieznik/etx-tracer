@@ -233,7 +233,7 @@ struct RaytracingImpl {
   }
   // */
 
-  void trace_with_function(const Ray& r, RTCRayQueryContext* context, RTCFilterFunctionN filter_funtion) {
+  void trace_with_function(const Ray& r, RTCRayQueryContext* context, RTCFilterFunctionN filter_funtion) const {
     ETX_CHECK_FINITE(r.o);
     ETX_CHECK_FINITE(r.d);
 

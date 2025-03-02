@@ -73,13 +73,11 @@ ETX_GPU_CODE Vertex lerp_vertex(const ArrayView<Vertex>& vertices, const Triangl
   const auto& v0 = vertices[t.i[0]];
   const auto& v1 = vertices[t.i[1]];
   const auto& v2 = vertices[t.i[2]];
-  float3 n = normalize(v0.nrm * bc.x + v1.nrm * bc.y + v2.nrm * bc.z);
-  auto [u, v] = orthonormal_basis(n);
   return {
     v0.pos * bc.x + v1.pos * bc.y + v2.pos * bc.z,
-    n,
-    u,
-    v,
+    v0.nrm * bc.x + v1.nrm * bc.y + v2.nrm * bc.z,
+    v0.tan * bc.x + v1.tan * bc.y + v2.tan * bc.z,
+    v0.btn * bc.x + v1.btn * bc.y + v2.btn * bc.z,
     v0.tex * bc.x + v1.tex * bc.y + v2.tex * bc.z,
   };
 }
@@ -100,6 +98,20 @@ ETX_GPU_CODE float3 shading_pos(const ArrayView<Vertex>& vertices, const Triangl
   return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
 }
 
+ETX_GPU_CODE float3 orient_normals_to_hemisphere(float3 n_s, const float3& n_g, const float3& v) {
+  constexpr uint32_t kMaxAttempts = 16u;
+  const float i_dot_g = dot(v, n_g);
+
+  float i_dot_s = dot(v, n_s);
+  for (uint32_t i = 0; ((i_dot_s * i_dot_g) <= kEpsilon) && (i < kMaxAttempts); ++i) {
+    n_s = normalize(8.0 * n_s + n_g);
+    ETX_ASSERT(is_valid_vector(n_s));
+    i_dot_s = dot(v, n_s);
+  }
+
+  return n_s;
+}
+
 ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
   float3 bc = barycentrics(base.barycentric);
   const auto& tri = scene.triangles[base.triangle_index];
@@ -112,18 +124,17 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
   result_intersection.emitter_index = scene.triangle_to_emitter[result_intersection.triangle_index];
 
   const auto& mat = scene.materials[result_intersection.material_index];
-  if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > 0.0f)) {
+  if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > kEpsilon)) {
     auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
-    float3x3 from_local = {
-      float3{result_intersection.tan.x, result_intersection.tan.y, result_intersection.tan.z},
-      float3{result_intersection.btn.x, result_intersection.btn.y, result_intersection.btn.z},
-      float3{result_intersection.nrm.x, result_intersection.nrm.y, result_intersection.nrm.z},
-    };
-    result_intersection.nrm = normalize(from_local * sampled_normal);
-    auto [t, b] = orthonormal_basis(result_intersection.nrm);
-    result_intersection.tan = t;
-    result_intersection.btn = b;
+    result_intersection.nrm = normalize(result_intersection.tan * sampled_normal.x + result_intersection.btn * sampled_normal.y + result_intersection.nrm * sampled_normal.z);
+    result_intersection.nrm = orient_normals_to_hemisphere(result_intersection.nrm, tri.geo_n, w_i);
+    ETX_ASSERT(is_valid_vector(result_intersection.nrm));
+    result_intersection.tan = orthonormalize(result_intersection.nrm, result_intersection.tan);
+    ETX_ASSERT(is_valid_vector(result_intersection.tan));
+    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan));
+    ETX_ASSERT(is_valid_vector(result_intersection.btn));
   }
+
   return result_intersection;
 }
 
@@ -154,7 +165,7 @@ ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralRespo
     response *= scale;
     ETX_VALIDATE(response);
   } else {
-    response.components.integrated *= float3{value.x, value.y, value.z};
+    response.integrated *= float3{value.x, value.y, value.z};
   }
 
   return response;
@@ -169,15 +180,23 @@ ETX_GPU_CODE float4 sample_whole_image(const SampledImage& img, const float2& uv
   return img.value * eval;
 }
 
-ETX_GPU_CODE float2 evaluate_roughness(const SampledImage& img, const float2& uv, const Scene& scene) {
-  float2 result = {img.value.x, img.value.y};
+ETX_GPU_CODE float evaluate_image(const SampledImage& img, const float2& uv, const Scene& scene, const float default_value) {
+  float result = default_value;
   if ((img.image_index == kInvalidIndex) || (img.channel >= 4u)) {
     return result;
   }
 
   float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
   const float* data = reinterpret_cast<const float*>(&eval);
-  return result * data[img.channel];
+  return data[img.channel];
+}
+
+ETX_GPU_CODE float evaluate_metalness(const Material& material, const float2& uv, const Scene& scene) {
+  return material.metalness.value.x * evaluate_image(material.metalness, uv, scene, 1.0f);
+}
+
+ETX_GPU_CODE float2 evaluate_roughness(const Material& material, const float2& uv, const Scene& scene) {
+  return float2{material.roughness.value.x, material.roughness.value.y} * evaluate_image(material.roughness, uv, scene, 1.0f);
 }
 
 ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, float* image_pdf) {

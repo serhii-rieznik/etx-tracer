@@ -7,8 +7,8 @@
 
 namespace etx {
 
-constexpr uint32_t kExtinctionImageWidth = 1024u;
-constexpr uint32_t kExtinctionImageHeight = 1024u;
+constexpr uint32_t kExtinctionImageWidth = ETX_DEBUG ? 128u : 1024u;
+constexpr uint32_t kExtinctionImageHeight = ETX_DEBUG ? 128u : 1024u;
 constexpr uint32_t kExtinctionImageSize = kExtinctionImageWidth * kExtinctionImageHeight;
 
 constexpr const float kPlanetRadius = 6371e+3f;

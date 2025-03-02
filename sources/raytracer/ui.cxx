@@ -370,10 +370,30 @@ void UI::build(double dt) {
       ImGui::EndMenu();
     }
 
-    if (ImGui::BeginMenu("View", true)) {
+    if (callbacks.view_scene && ImGui::BeginMenu("View", true)) {
       if (ImGui::MenuItem("View whole scene", nullptr, false, true)) {
-        if (callbacks.view_scene)
-          callbacks.view_scene();
+        callbacks.view_scene(0);
+      }
+      if (ImGui::BeginMenu("View scene")) {
+        if (ImGui::MenuItem("From +X", nullptr, false, true)) {
+          callbacks.view_scene(1);
+        }
+        if (ImGui::MenuItem("From -X", nullptr, false, true)) {
+          callbacks.view_scene(2);
+        }
+        if (ImGui::MenuItem("From +Y", nullptr, false, true)) {
+          callbacks.view_scene(3);
+        }
+        if (ImGui::MenuItem("From -Y", nullptr, false, true)) {
+          callbacks.view_scene(4);
+        }
+        if (ImGui::MenuItem("From +Z", nullptr, false, true)) {
+          callbacks.view_scene(5);
+        }
+        if (ImGui::MenuItem("From -Z", nullptr, false, true)) {
+          callbacks.view_scene(6);
+        }
+        ImGui::EndMenu();
       }
 
       ImGui::Separator();

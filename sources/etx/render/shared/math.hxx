@@ -589,7 +589,7 @@ struct ETX_ALIGNED BoundingBox {
 #include <etx/render/shared/vector_math.hxx>
 #undef ETX_MATH_INCLUDES
 
-struct ETX_ALIGNED Vertex {
+struct Vertex {
   float3 pos;
   float3 nrm;
   float3 tan;
@@ -721,6 +721,10 @@ ETX_GPU_CODE float luminance(const float3& value) {
   return value.x * 0.212671f + value.y * 0.715160f + value.z * 0.072169f;
 }
 
+ETX_GPU_CODE float3 orthonormalize(const float3& nrm, const float3& tan) {
+  return normalize(tan - dot(tan, nrm) * nrm);
+}
+
 ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
   struct basis {
     float3 u, v;
@@ -835,6 +839,18 @@ ETX_GPU_CODE bool valid_value(const float3& v) {
 
 ETX_GPU_CODE bool valid_value(const float4& v) {
   return valid_value(v.x) && valid_value(v.y) && valid_value(v.z) && valid_value(v.w);
+}
+
+ETX_GPU_CODE bool value_is_correct(float t) {
+  return !std::isnan(t) && !std::isinf(t);
+}
+
+ETX_GPU_CODE bool value_is_correct(const float3& v) {
+  return value_is_correct(v.x) && value_is_correct(v.y) && value_is_correct(v.z);
+}
+
+ETX_GPU_CODE bool is_valid_vector(const float3& v) {
+  return value_is_correct(v) && (dot(v, v) > 0.0f);
 }
 
 ETX_GPU_CODE bool isfinite(const float2& v) {

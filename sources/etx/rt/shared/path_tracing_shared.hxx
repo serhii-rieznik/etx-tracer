@@ -51,12 +51,8 @@ inline SpectralResponse safe_mul(const SpectralResponse& a, const SpectralRespon
   ETX_ASSERT((a.spectral() && b.spectral()) || ((a.spectral() == false) && (b.spectral() == false)));
   ETX_ASSERT(a.wavelength == b.wavelength);
 
-  return a.spectral() ? SpectralResponse{a.query(), safe_mul(a.components.w, b.components.w)}
-                      : SpectralResponse{a.query(), {
-                                                      safe_mul(a.components.integrated.x, b.components.integrated.x),
-                                                      safe_mul(a.components.integrated.y, b.components.integrated.y),
-                                                      safe_mul(a.components.integrated.z, b.components.integrated.z),
-                                                    }};
+  return a.spectral() ? SpectralResponse{a.query(), safe_mul(a.value, b.value)}
+                      : SpectralResponse{a.query(), {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}};
 }
 
 ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
@@ -73,8 +69,8 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
 
   if (mat.int_medium == kInvalidIndex) {
     auto distances = mat.subsurface.scale * mat.subsurface.scattering_distance(spect);
-    remap(color.components.integrated, distances.components.integrated, albedo.components.integrated, extinction.components.integrated, scattering.components.integrated);
-    remap_channel(color.components.w, distances.components.w, albedo.components.w, extinction.components.w, scattering.components.w);
+    remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
+    remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
   } else {
     const Medium& medium = scene.mediums[mat.int_medium];
     anisotropy = medium.phase_function_g;

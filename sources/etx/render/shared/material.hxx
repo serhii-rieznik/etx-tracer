@@ -63,6 +63,7 @@ struct ETX_ALIGNED Material {
     Mirror,
     Boundary,
     Velvet,
+    Principled,
 
     Count,
     Undefined = kInvalidIndex,
@@ -81,6 +82,7 @@ struct ETX_ALIGNED Material {
   SubsurfaceMaterial subsurface = {};
 
   SampledImage roughness = {};
+  SampledImage metalness = {};
 
   uint32_t normal_image_index = kInvalidIndex;
   float normal_scale = 1.0f;

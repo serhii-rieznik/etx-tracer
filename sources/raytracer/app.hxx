@@ -50,7 +50,7 @@ struct RTApplication {
   void on_camera_changed();
   void on_scene_settings_changed();
   void on_denoise_selected();
-  void on_view_scene();
+  void on_view_scene(uint32_t direction);
 
  private:
   void save_options();

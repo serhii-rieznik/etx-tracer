@@ -70,11 +70,14 @@ struct BSDFSample {
   };
 
   SpectralResponse weight = {};
+
   float3 w_o = {};
   float pdf = 0.0f;
+
   float eta = 1.0f;
   uint32_t properties = 0u;
   uint32_t medium_index = kInvalidIndex;
+  uint32_t pad = 0u;
 
   BSDFSample() = default;
 
@@ -353,7 +356,7 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
     } else {
       value = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), thinfilm.ior.as_complex(), int_ior.as_complex(), thinfilm.thickness);
     }
-    result.components.w = saturate(value);
+    result.value = saturate(value);
   } else {
     float3 values = {};
     if ((thinfilm.thickness == 0.0f) || thinfilm.ior.eta.is_zero()) {
@@ -368,7 +371,7 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
       values.y = fresnel_thinfilm(thinfilm.rgb_wavelengths.y, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
       values.z = fresnel_thinfilm(thinfilm.rgb_wavelengths.z, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
     }
-    result.components.integrated = saturate(values);
+    result.integrated = saturate(values);
   }
 
   return result;

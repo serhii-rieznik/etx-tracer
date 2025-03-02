@@ -60,7 +60,7 @@ struct UI {
     std::function<void()> camera_changed;
     std::function<void()> scene_settings_changed;
     std::function<void()> denoise_selected;
-    std::function<void()> view_scene;
+    std::function<void(uint32_t)> view_scene;
   } callbacks;
 
  private:

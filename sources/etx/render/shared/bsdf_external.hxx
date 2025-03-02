@@ -706,7 +706,7 @@ inline float erf(float x) {
 inline SpectralResponse erf(const SpectralResponse& x) {
   // https://en.wikipedia.org/wiki/Error_function (Bürmann series)
   if (x.spectral()) {
-    return {x.query(), erf(x.components.w)};
+    return {x.query(), erf(x.value)};
   }
 
   SpectralResponse e = exp(-x * x);

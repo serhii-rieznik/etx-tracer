@@ -49,7 +49,7 @@ void RTApplication::init() {
   ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this);
   ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
   ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
-  ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this);
+  ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
 
   _options.load_from_file(env().file_in_data("options.json"));
   if (_options.has("integrator") == false) {
@@ -318,8 +318,19 @@ void RTApplication::on_denoise_selected() {
   }
 }
 
-void RTApplication::on_view_scene() {
-  const float3 position = 2.0f * scene.scene().bounding_sphere_radius * float3{1.0f, 1.0f, 1.0f};
+void RTApplication::on_view_scene(uint32_t direction) {
+  constexpr float3 directions[] = {
+    {1.0f, 1.0f, 1.0f},
+    {+1.0f, 0.0f, 0.0f},
+    {-1.0f, 0.0f, 0.0f},
+    {0.0f, +1.0f, 0.0f},
+    {0.0f, -1.0f, 0.0f},
+    {0.0f, 0.0f, +1.0f},
+    {0.0f, 0.0f, -1.0f},
+  };
+  direction = clamp(direction, 0u, uint32_t(sizeof(directions) / sizeof(directions[0])));
+
+  const float3 position = 3.0f * scene.scene().bounding_sphere_radius * normalize(directions[direction]);
   const auto view_center = scene.scene().bounding_sphere_center;
   camera_controller.schedule(position, view_center);
 }

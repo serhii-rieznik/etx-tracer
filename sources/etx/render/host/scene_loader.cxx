@@ -51,18 +51,6 @@ inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
   }
 }
 
-inline bool value_is_correct(float t) {
-  return !std::isnan(t) && !std::isinf(t);
-}
-
-inline bool value_is_correct(const float3& v) {
-  return value_is_correct(v.x) && value_is_correct(v.y) && value_is_correct(v.z);
-}
-
-inline bool is_valid_vector(const float3& v) {
-  return value_is_correct(v) && (dot(v, v) > 0.0f);
-}
-
 inline auto to_float2(const float values[]) -> float2 {
   return {values[0], values[1]};
 };
@@ -126,6 +114,7 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "mirror",
     "boundary",
     "velvet",
+    "principled",
     "undefined",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);
@@ -313,37 +302,42 @@ struct SceneRepresentationImpl {
         uint32_t index = tri.i[i];
         ETX_CRITICAL(is_valid_vector(tri.geo_n));
         referenced_vertices[index] = true;
-        if (is_valid_vector(vertices[index].nrm) == false) {
-          if (reset_normals.count(index) == 0) {
-            vertices[index].nrm = tri.geo_n * tri_area;
-            reset_normals.insert(index);
-          } else {
-            vertices[index].nrm += tri.geo_n * tri_area;
-          }
+
+        if (is_valid_vector(vertices[index].nrm))
+          continue;
+
+        if (reset_normals.count(index) == 0) {
+          vertices[index].nrm = tri.geo_n * tri_area;
+          reset_normals.insert(index);
+        } else {
+          vertices[index].nrm += tri.geo_n * tri_area;
         }
       }
     }
 
-    if (reset_normals.empty() == false) {
-      for (auto i : reset_normals) {
-        ETX_ASSERT(is_valid_vector(vertices[i].nrm));
-        vertices[i].nrm = normalize(vertices[i].nrm);
-        ETX_ASSERT(is_valid_vector(vertices[i].nrm));
-      }
+    if (reset_normals.empty())
+      return;
+
+    for (auto i : reset_normals) {
+      ETX_ASSERT(is_valid_vector(vertices[i].nrm));
+      vertices[i].nrm = normalize(vertices[i].nrm);
+      ETX_ASSERT(is_valid_vector(vertices[i].nrm));
     }
   }
 
   void build_tangents() {
+    static std::map<uint32_t, uint32_t> a = {};
+
     SMikkTSpaceInterface contextInterface = {};
     contextInterface.m_getNumFaces = [](const SMikkTSpaceContext* pContext) -> int {
-      auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
-      return static_cast<int>(data->triangles.count);
+      auto data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData);
+      return static_cast<int>(data->triangles.size());
     };
     contextInterface.m_getNumVerticesOfFace = [](const SMikkTSpaceContext* pContext, const int iFace) -> int {
       return 3;
     };
     contextInterface.m_getPosition = [](const SMikkTSpaceContext* pContext, float fvPosOut[], const int iFace, const int iVert) {
-      auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
+      auto data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData);
       const auto& tri = data->triangles[iFace];
       const auto& vertex = data->vertices[tri.i[iVert]];
       fvPosOut[0] = vertex.pos.x;
@@ -351,7 +345,7 @@ struct SceneRepresentationImpl {
       fvPosOut[2] = vertex.pos.z;
     };
     contextInterface.m_getNormal = [](const SMikkTSpaceContext* pContext, float fvNormOut[], const int iFace, const int iVert) {
-      auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
+      auto data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData);
       const auto& tri = data->triangles[iFace];
       const auto& vertex = data->vertices[tri.i[iVert]];
       fvNormOut[0] = vertex.nrm.x;
@@ -359,24 +353,24 @@ struct SceneRepresentationImpl {
       fvNormOut[2] = vertex.nrm.z;
     };
     contextInterface.m_getTexCoord = [](const SMikkTSpaceContext* pContext, float fvTexcOut[], const int iFace, const int iVert) {
-      auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
+      auto data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData);
       const auto& tri = data->triangles[iFace];
       const auto& vertex = data->vertices[tri.i[iVert]];
       fvTexcOut[0] = vertex.tex.x;
       fvTexcOut[1] = vertex.tex.y;
     };
     contextInterface.m_setTSpaceBasic = [](const SMikkTSpaceContext* pContext, const float fvTangent[], const float fSign, const int iFace, const int iVert) {
-      auto data = reinterpret_cast<Scene*>(pContext->m_pUserData);
+      auto data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData);
       const auto& tri = data->triangles[iFace];
       auto& vertex = data->vertices[tri.i[iVert]];
-      vertex.tan.x = fvTangent[0];
-      vertex.tan.y = fvTangent[1];
-      vertex.tan.z = fvTangent[2];
-      vertex.btn = normalize(cross(vertex.tan, vertex.nrm) * fSign);
+      if (is_valid_vector(vertex.tan) == false) {
+        vertex.tan = normalize(float3{fvTangent[0], fvTangent[1], fvTangent[2]});
+        vertex.btn = normalize(cross(vertex.tan, vertex.nrm) * fSign);
+      }
     };
 
     SMikkTSpaceContext context = {};
-    context.m_pUserData = &scene;
+    context.m_pUserData = this;
     context.m_pInterface = &contextInterface;
 
     genTangSpaceDefault(&context);
@@ -438,7 +432,6 @@ struct SceneRepresentationImpl {
   enum : uint32_t {
     LoadFailed = 0u,
     LoadSucceeded = 1u << 0u,
-    HaveTangents = 1u << 1u,
   };
 
   uint32_t load_from_obj(const char* file_name, const char* mtl_file);
@@ -545,6 +538,11 @@ inline void get_values(const std::vector<T>& a, T* ptr, uint64_t count) {
 }
 
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
+  auto s = SpectralDistribution::from_black_body(5800.0f, 1.0f);
+  auto q = s.integrated();
+  q /= fmaxf(q.x, fmaxf(q.y, q.z));
+  log::info("%.5f, %.5f, %.5f", q.x, q.y, q.z);
+
   _private->cleanup();
 
   uint32_t load_result = SceneRepresentationImpl::LoadFailed;
@@ -655,25 +653,34 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   }
 
   if (_private->emitters.empty()) {
-    log::warning("No emitters found, adding default environment image...");
-    auto& sky = _private->emitters.emplace_back(Emitter::Class::Environment);
-    sky.emission.spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
-    sky.emission.image_index = _private->add_image(env().file_in_data("assets/hdri/environment.exr"), Image::RepeatU | Image::BuildSamplingTable);
+    tinyobj::material_t mtl;
+    mtl.unknown_parameter.emplace_back("direction", "0.0 2.0 1.0");
+    mtl.unknown_parameter.emplace_back("quality", ETX_DEBUG ? "0.0625" : "0.125");
+    mtl.unknown_parameter.emplace_back("angular_diameter", "0.5422");
+    mtl.unknown_parameter.emplace_back("anisotropy", "0.825");
+    mtl.unknown_parameter.emplace_back("altitude", "1000.0");
+    mtl.unknown_parameter.emplace_back("scale", "1.0");
+    mtl.unknown_parameter.emplace_back("sky_scale", "1.0");
+    mtl.unknown_parameter.emplace_back("sun_scale", "1.0");
+    mtl.unknown_parameter.emplace_back("rayleigh", "1.0");
+    mtl.unknown_parameter.emplace_back("mie", "1.0");
+    mtl.unknown_parameter.emplace_back("ozone", "1.0");
+    _private->parse_atmosphere_light(base_folder, mtl);
     _private->images.load_images();
   }
 
   _private->validate_materials();
 
-  std::vector<bool> referenced_vertices;
-  _private->validate_normals(referenced_vertices);
-
-  if ((load_result & SceneRepresentationImpl::HaveTangents) == 0) {
+  {
     TimeMeasure m = {};
-    log::warning("Calculating tangents...");
+    log::warning("Validating normals and tangents...");
+    std::vector<bool> referenced_vertices;
+    _private->validate_normals(referenced_vertices);
     _private->build_tangents();
+    _private->validate_tangents(referenced_vertices);
     log::warning("Tangents calculated in %.2f sec\n", m.measure());
   }
-  _private->validate_tangents(referenced_vertices);
+
   _private->commit();
 
   return true;
@@ -1147,8 +1154,12 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
   float radiance_scale = scale * (kDoublePi * (1.0f - cosf(0.5f * angular_size)));
   auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, radiance_scale);
 
-  uint2 kSkyImageDimensions = uint2{1024u, uint32_t(1024u / quality)};
-  uint2 kSunImageDimensions = uint2{128u, 128u};
+  constexpr uint2 kSunImageDimensions = uint2{128u, 128u};
+  constexpr uint32_t kSkyImageBaseDimensions = 1024u;
+
+  uint2 sky_image_dimensions = uint2{2u * kSkyImageBaseDimensions, kSkyImageBaseDimensions};
+  sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * quality));
+  sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * quality));
 
   {
     auto& d = emitters.emplace_back(Emitter::Class::Directional);
@@ -1168,11 +1179,11 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
     auto& e = emitters.emplace_back(Emitter::Class::Environment);
     e.emission.spectrum = sun_spectrum;
     e.emission.spectrum.scale(sky_scale);
-    e.emission.image_index = add_image(nullptr, kSkyImageDimensions, Image::BuildSamplingTable | Image::Delay);
+    e.emission.image_index = add_image(nullptr, sky_image_dimensions, Image::BuildSamplingTable | Image::Delay);
     e.direction = direction;
 
     auto& img = images.get(e.emission.image_index);
-    scattering::generate_sky_image(scattering_parameters, kSkyImageDimensions, direction, extinction, img.pixels.f32.a, scheduler);
+    scattering::generate_sky_image(scattering_parameters, sky_image_dimensions, direction, extinction, img.pixels.f32.a, scheduler);
   }
 }
 
@@ -1680,12 +1691,13 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
     uint32_t material_index = add_material(material_name.c_str());
 
     auto& mtl = materials[material_index];
-    mtl.cls = Material::Class::Plastic;
+    mtl.cls = Material::Class::Principled;
     mtl.roughness.value = {float(pbr.roughnessFactor), float(pbr.roughnessFactor)};
+    mtl.metalness.value = {float(pbr.metallicFactor), float(pbr.metallicFactor)};
     mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
     mtl.ext_ior.eta = SpectralDistribution::constant(1.0f);
     mtl.ext_ior.k = SpectralDistribution::null();
-    mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
+    mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
     mtl.int_ior.eta = SpectralDistribution::constant(1.5f);
     mtl.int_ior.k = SpectralDistribution::null();
 
@@ -1698,11 +1710,15 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
 
     if ((pbr.baseColorTexture.index != -1) && (gltf_image_mapping.count(pbr.baseColorTexture.index) > 0)) {
       mtl.transmittance.image_index = gltf_image_mapping.at(pbr.baseColorTexture.index);
+      mtl.reflectance.image_index = mtl.transmittance.image_index;
     }
 
     if ((pbr.metallicRoughnessTexture.index != -1) && (gltf_image_mapping.count(pbr.metallicRoughnessTexture.index) > 0)) {
-      mtl.roughness.image_index = gltf_image_mapping.at(pbr.metallicRoughnessTexture.index);
+      auto image_index = gltf_image_mapping.at(pbr.metallicRoughnessTexture.index);
+      mtl.roughness.image_index = image_index;
       mtl.roughness.channel = 1u;
+      mtl.metalness.image_index = image_index;
+      mtl.metalness.channel = 2u;
     }
 
     if ((material.normalTexture.index != -1) && gltf_image_mapping.count(material.normalTexture.index) > 0) {
@@ -1741,6 +1757,7 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
     bool has_positions = primitive.attributes.count("POSITION") > 0;
     bool has_normals = primitive.attributes.count("NORMAL") > 0;
     bool has_tex_coords = primitive.attributes.count("TEXCOORD_0") > 0;
+    bool has_tangents = primitive.attributes.count("TANGENT") > 0;
 
     if (has_positions == false)
       continue;
@@ -1752,37 +1769,46 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
     const tinygltf::BufferView& pos_buffer_view = model.bufferViews[pos_accessor.bufferView];
     const tinygltf::Buffer& pos_buffer = model.buffers[pos_buffer_view.buffer];
 
-    tinygltf::Accessor nrm_accessor = {};
-    tinygltf::BufferView nrm_buffer_view = {};
-    tinygltf::Buffer nrm_buffer = {};
+    const tinygltf::Accessor* nrm_accessor = nullptr;
+    const tinygltf::BufferView* nrm_buffer_view = nullptr;
+    const tinygltf::Buffer* nrm_buffer = nullptr;
     if (has_normals) {
-      nrm_accessor = model.accessors[primitive.attributes.find("NORMAL")->second];
-      nrm_buffer_view = model.bufferViews[nrm_accessor.bufferView];
-      nrm_buffer = model.buffers[nrm_buffer_view.buffer];
+      nrm_accessor = model.accessors.data() + primitive.attributes.find("NORMAL")->second;
+      nrm_buffer_view = model.bufferViews.data() + nrm_accessor->bufferView;
+      nrm_buffer = model.buffers.data() + nrm_buffer_view->buffer;
     }
 
-    tinygltf::Accessor tex_accessor = {};
-    tinygltf::BufferView tex_buffer_view = {};
-    tinygltf::Buffer tex_buffer = {};
+    const tinygltf::Accessor* tex_accessor = nullptr;
+    const tinygltf::BufferView* tex_buffer_view = nullptr;
+    const tinygltf::Buffer* tex_buffer = nullptr;
     if (has_tex_coords) {
-      tex_accessor = model.accessors[primitive.attributes.find("TEXCOORD_0")->second];
-      tex_buffer_view = model.bufferViews[tex_accessor.bufferView];
-      tex_buffer = model.buffers[tex_buffer_view.buffer];
+      tex_accessor = model.accessors.data() + primitive.attributes.find("TEXCOORD_0")->second;
+      tex_buffer_view = model.bufferViews.data() + tex_accessor->bufferView;
+      tex_buffer = model.buffers.data() + tex_buffer_view->buffer;
+    }
+
+    const tinygltf::Accessor* tan_accessor = nullptr;
+    const tinygltf::BufferView* tan_buffer_view = nullptr;
+    const tinygltf::Buffer* tan_buffer = nullptr;
+    if (has_tangents) {
+      tan_accessor = model.accessors.data() + primitive.attributes.find("TANGENT")->second;
+      tan_buffer_view = model.bufferViews.data() + tan_accessor->bufferView;
+      tan_buffer = model.buffers.data() + tan_buffer_view->buffer;
     }
 
     bool has_indices = (primitive.indices >= 0) && (primitive.indices < model.accessors.size());
 
-    tinygltf::Accessor idx_accessor = {};
-    tinygltf::BufferView idx_buffer_view = {};
-    tinygltf::Buffer idx_buffer = {};
+    const tinygltf::Accessor* idx_accessor = nullptr;
+    const tinygltf::BufferView* idx_buffer_view = nullptr;
+    const tinygltf::Buffer* idx_buffer = nullptr;
     if (has_indices) {
-      idx_accessor = model.accessors[primitive.indices];
-      idx_buffer_view = model.bufferViews[idx_accessor.bufferView];
-      idx_buffer = model.buffers[idx_buffer_view.buffer];
+      idx_accessor = model.accessors.data() + primitive.indices;
+      idx_buffer_view = model.bufferViews.data() + idx_accessor->bufferView;
+      idx_buffer = model.buffers.data() + idx_buffer_view->buffer;
     }
 
-    ETX_ASSERT(idx_accessor.count % 3 == 0);
-    uint32_t triangle_count = static_cast<uint32_t>(has_indices ? idx_accessor.count : pos_accessor.count) / 3u;
+    ETX_ASSERT(idx_accessor->count % 3 == 0);
+    uint32_t triangle_count = static_cast<uint32_t>(has_indices ? idx_accessor->count : pos_accessor.count) / 3u;
 
     uint32_t linear_index = 0;
     for (uint32_t tri_index = 0; tri_index < triangle_count; ++tri_index) {
@@ -1796,7 +1822,7 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
       tri.i[2] = base_index + 2;
 
       for (uint32_t j = 0; j < 3; ++j, ++linear_index) {
-        auto index = has_indices ? gltf_read_buffer_as_uint(idx_buffer, idx_accessor, idx_buffer_view, 3u * tri_index + j) : linear_index;
+        auto index = has_indices ? gltf_read_buffer_as_uint(*idx_buffer, *idx_accessor, *idx_buffer_view, 3u * tri_index + j) : linear_index;
 
         auto& v0 = vertices.emplace_back();
 
@@ -1805,13 +1831,20 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
         v0.pos = {tp.x, tp.y, tp.z};
 
         if (has_normals) {
-          auto n = gltf_read_buffer<float3>(nrm_buffer, nrm_accessor, nrm_buffer_view, index);
+          auto n = gltf_read_buffer<float3>(*nrm_buffer, *nrm_accessor, *nrm_buffer_view, index);
           auto tn = transform * float4{n.x, n.y, n.z, 0.0f};
           v0.nrm = {tn.x, tn.y, tn.z};
         }
 
         if (has_tex_coords) {
-          v0.tex = gltf_read_buffer<float2>(tex_buffer, tex_accessor, tex_buffer_view, index);
+          v0.tex = gltf_read_buffer<float2>(*tex_buffer, *tex_accessor, *tex_buffer_view, index);
+        }
+
+        if (has_tangents) {
+          auto t = gltf_read_buffer<float4>(*tan_buffer, *tan_accessor, *tan_buffer_view, index);
+          auto tt = transform * float4{t.x, t.y, t.z, 0.0f};
+          v0.tan = normalize(float3{tt.x, tt.y, tt.z});
+          v0.btn = cross(v0.nrm, v0.tan) * t.w;
         }
       }
 
