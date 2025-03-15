@@ -30,6 +30,7 @@ void RTApplication::init() {
   ui.initialize();
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
   ui.set_film(&raytracing.film());
+  ui.set_camera(&scene.camera());
 
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
@@ -159,8 +160,9 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   }
 
   raytracing.set_scene(scene.scene());
+  raytracing.set_camera(scene.camera());
   ui.set_scene(scene.mutable_scene_pointer(), scene.material_mapping(), scene.medium_mapping());
-  render.set_output_dimensions(scene.scene().camera.image_size);
+  render.set_output_dimensions(scene.camera().film_size);
 
   if (scene.valid() == false) {
     return;
@@ -193,7 +195,7 @@ void RTApplication::on_use_image_as_reference() {
 }
 
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
-  uint2 image_size = {raytracing.scene().camera.image_size.x, raytracing.scene().camera.image_size.y};
+  uint2 image_size = {raytracing.camera().film_size.x, raytracing.camera().film_size.y};
   const float4* output = raytracing.film().layer(ui.view_options().layer);
 
   if (mode == SaveImageMode::TonemappedLDR) {

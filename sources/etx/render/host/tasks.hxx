@@ -42,7 +42,7 @@ struct TaskScheduler {
   void restart(Task::Handle);
 
  private:
-  ETX_DECLARE_PIMPL(TaskScheduler, 512);
+  ETX_DECLARE_PIMPL(TaskScheduler, 296);
 };
 
 }  // namespace etx

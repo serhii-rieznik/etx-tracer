@@ -66,19 +66,20 @@ struct CPUDebugIntegratorImpl : public Task {
     total_time = {};
     iteration_time = {};
 
-    rt.film().clear();
-    current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), this);
+    rt.film().clear({Film::Internal});
+    current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     const auto& film = rt.film();
     auto& smp = samplers[thread_id];
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-      uint32_t x = i % film.dimensions().x;
-      uint32_t y = i / film.dimensions().x;
-      float2 uv = get_jittered_uv(smp, {x, y}, film.dimensions());
-      float3 xyz = preview_pixel(smp, uv, {x, y});
-      rt.film().accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uv);
+      uint2 pixel = {};
+      if (film.active_pixel(i, pixel)) {
+        float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
+        float3 xyz = preview_pixel(smp, uv, pixel);
+        rt.film().accumulate(pixel, {{xyz, Film::CameraImage}});
+      }
     }
   }
 
@@ -272,17 +273,18 @@ struct CPUDebugIntegratorImpl : public Task {
 
   float3 preview_pixel(Sampler& smp, const float2& uv, const uint2& xy) const {
     const auto& scene = rt.scene();
+    const auto& camera = rt.camera();
     auto& film = rt.film();
-    auto ray = generate_ray(scene, uv, smp.next_2d());
+    auto ray = generate_ray(scene, camera, uv, smp.next_2d());
     auto spect = scene.spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
     float3 output = {};
+    const float t = uv.x * 0.5f + 0.5f;
+    const float s = uv.y * 0.5f + 0.5f;
 
     Intersection intersection;
 
     if (mode == CPUDebugIntegrator::Mode::Thinfilm) {
-      float t = float(xy.x) / float(film.dimensions().x - 1u);
-      float s = float(xy.y) / float(film.dimensions().y - 1u);
       float cos_theta = 1.0f - t;
       float thickness = s * 2500.0f;
 
@@ -300,9 +302,6 @@ struct CPUDebugIntegratorImpl : public Task {
       float3 xyz_s = (thinfilm_spectral ? SpectralDistribution::kRGBLuminanceScale : float3{1.0f, 1.0f, 1.0f}) * f_s.to_rgb() / q_s.sampling_pdf();
       output = xyz_s;
     } else if (mode == CPUDebugIntegrator::Mode::Spectrums) {
-      float t = float(xy.x) / float(film.dimensions().x - 1u);
-      float s = float(xy.y) / float(film.dimensions().y - 1u);
-
       constexpr float kBandCount = 9.0f;
       uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
 
@@ -346,9 +345,6 @@ struct CPUDebugIntegratorImpl : public Task {
 
       output = (t < 0.5f ? value_spectrum : value_rgb);
     } else if (mode == CPUDebugIntegrator::Mode::IOR) {
-      float t = float(xy.x) / float(film.dimensions().x - 1u);
-      float s = float(xy.y) / float(film.dimensions().y - 1u);
-
       constexpr float kBandCount = 20.0f;
       uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
 

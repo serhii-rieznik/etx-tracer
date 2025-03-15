@@ -28,8 +28,14 @@ struct ETX_ALIGNED Camera {
   float3 direction ETX_EMPTY_INIT;
   float image_plane ETX_EMPTY_INIT;
 
-  uint2 image_size ETX_EMPTY_INIT;
-  uint2 pad ETX_EMPTY_INIT;
+  uint2 film_size ETX_EMPTY_INIT;
+  uint32_t apixel_size ETX_EMPTY_INIT;
+  uint32_t pad ETX_EMPTY_INIT;
+
+  uint32_t lens_image ETX_EMPTY_INIT;
+  float lens_radius ETX_EMPTY_INIT;
+  float focal_distance ETX_EMPTY_INIT;
+  uint32_t medium_index ETX_EMPTY_INIT;
 };
 
 struct ETX_ALIGNED CameraSample {
@@ -59,11 +65,6 @@ struct PixelFilter {
   static PixelFilter empty() {
     return {kInvalidIndex, 0.0f};
   }
-};
-
-struct Lens : PixelFilter {
-  float focal_distance ETX_EMPTY_INIT;
-  uint32_t medium_index ETX_INIT_WITH(kInvalidIndex);
 };
 
 }  // namespace etx

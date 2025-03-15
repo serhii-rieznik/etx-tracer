@@ -16,16 +16,17 @@ struct Raytracing {
 
   TaskScheduler& scheduler();
 
-  const Scene& scene() const;
   const Film& film() const;
-
   Film& film();
 
-  // GPUDevice* gpu();
-  // const Scene& gpu_scene() const;
+  void set_camera(const Camera& camera);
+  bool has_camera() const;
+  const Camera& camera() const;
+  // Camera& camera();
 
-  bool has_scene() const;
   void set_scene(const Scene&);
+  bool has_scene() const;
+  const Scene& scene() const;
 
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
   bool trace_material(const Scene& scene, const Ray&, const uint32_t material_id, Intersection&, Sampler& smp) const;

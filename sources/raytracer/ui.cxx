@@ -684,28 +684,36 @@ void UI::build(double dt) {
     ImGui::End();
   }
 
-  if ((_ui_setup & UICamera) && ImGui::Begin("Camera", nullptr, kWindowFlags)) {
-    if (scene_editable) {
-      auto& camera = _current_scene->camera;
+  if ((_ui_setup & UICamera) && ImGui::Begin("Camera and Film", nullptr, kWindowFlags)) {
+    if (scene_editable && (_current_camera != nullptr)) {
       bool camera_changed = false;
       bool film_changed = false;
-      float3 pos = camera.position;
-      float3 target = camera.position + camera.direction;
-      float focal_len = get_camera_focal_length(camera);
+      float3 pos = _current_camera->position;
+      float3 target = _current_camera->position + _current_camera->direction;
+      float focal_len = get_camera_focal_length(*_current_camera);
       ImGui::Text("Lens Radius");
-      camera_changed = camera_changed || ImGui::DragFloat("##lens", &_current_scene->lens.radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
+      camera_changed = camera_changed || ImGui::DragFloat("##lens", &_current_camera->lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
       ImGui::Text("Focal Distance");
-      camera_changed = camera_changed || ImGui::DragFloat("##focaldist", &_current_scene->lens.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
+      camera_changed = camera_changed || ImGui::DragFloat("##focaldist", &_current_camera->focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
       ImGui::Text("Focal Length");
       camera_changed = camera_changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
       ImGui::Text("Pixel Filter Radius");
       camera_changed = camera_changed || ImGui::DragFloat("##pixelfiler", &_current_scene->pixel_sampler.radius, 0.05f, 0.0f, 32.0f, "%.3fpx", ImGuiSliderFlags_None);
 
+      ImGui::Text("Pixel Size");
+      int32_t pixel_size = std::countr_zero(_film->pixel_size());
+      camera_changed = camera_changed || ImGui::Combo("##pixelsize", &pixel_size, "Default\0Scaled 2x\0Scaled 4x\0Scaled 8x\0Scaled 16x\0");
+
       if (camera_changed && callbacks.camera_changed) {
-        _current_scene->lens.radius = fmaxf(_current_scene->lens.radius, 0.0f);
-        _current_scene->lens.focal_distance = fmaxf(_current_scene->lens.focal_distance, 0.0f);
+        _film->set_pixel_size(1u << pixel_size);
+
+        _current_camera->lens_radius = fmaxf(_current_camera->lens_radius, 0.0f);
+        _current_camera->focal_distance = fmaxf(_current_camera->focal_distance, 0.0f);
         _current_scene->pixel_sampler.radius = clamp(_current_scene->pixel_sampler.radius, 0.0f, 32.0f);
-        build_camera(camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera.image_size, focal_length_to_fov(focal_len) * 180.0f / kPi);
+
+        auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
+        build_camera(*_current_camera, pos, target, float3{0.0f, 1.0f, 0.0f}, _current_camera->film_size, fov);
+
         callbacks.camera_changed();
       }
     } else {
@@ -728,8 +736,8 @@ void UI::build(double dt) {
       scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##noiseth", &_current_scene->noise_threshold, 0.0001f, 0.01f, "%0.5f");
       ImGui::Text("Radiance Clamp:");
       scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##radclmp", &_current_scene->radiance_clamp, 0.1f, 1.f, "%0.2f");
-      ImGui::Text("Active pixels: %0.2f%%", double(_film->active_pixel_count()) / double(_film->total_pixel_count()) * 100.0);
-      scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", &_current_scene->spectral);
+      ImGui::Text("Active pixels: %0.2f%%", double(_film->active_pixel_count()) / double(_film->pixel_count()) * 100.0);
+      scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", reinterpret_cast<bool*>(&_current_scene->spectral));
 
       if (scene_settings_changed) {
         callbacks.scene_settings_changed();
@@ -894,6 +902,10 @@ void UI::load_image() const {
 
 void UI::set_film(Film* film) {
   _film = film;
+}
+
+void UI::set_camera(Camera* camera) {
+  _current_camera = camera;
 }
 
 void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums) {

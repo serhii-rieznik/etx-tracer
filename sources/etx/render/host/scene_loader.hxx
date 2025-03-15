@@ -32,13 +32,14 @@ struct SceneRepresentation {
   const MediumMapping& medium_mapping() const;
 
   Camera& camera();
+  const Camera& camera() const;
 
   bool valid() const;
 
   ETX_DECLARE_PIMPL(SceneRepresentation, 24u * 1024u);
 };
 
-void build_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov);
+void build_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, const float fov);
 
 float get_camera_fov(const Camera& camera);
 float get_camera_focal_length(const Camera& camera);

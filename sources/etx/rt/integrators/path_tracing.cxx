@@ -1,4 +1,5 @@
 #include <etx/core/core.hxx>
+#include <etx/core/core.hxx>
 
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/bsdf.hxx>
@@ -12,6 +13,8 @@ namespace etx {
 
 struct CPUPathTracingImpl : public Task {
   Raytracing& rt;
+  Film& film;
+  TaskScheduler& scheduler;
 
   TimeMeasure total_time = {};
   TimeMeasure iteration_time = {};
@@ -24,6 +27,8 @@ struct CPUPathTracingImpl : public Task {
 
   CPUPathTracingImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
+    , film(a_rt.film())
+    , scheduler(a_rt.scheduler())
     , state(st) {
   }
 
@@ -38,14 +43,14 @@ struct CPUPathTracingImpl : public Task {
     iteration_time = {};
     pixels_processed = 0;
 
-    rt.film().clear();
-    current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), this);
+    film.clear({Film::Internal});
+    current_task = scheduler.schedule(film.pixel_count(), this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     ETX_FUNCTION_SCOPE();
-    auto& film = rt.film();
     const auto& scene = rt.scene();
+    const auto& camera = rt.camera();
 
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
       uint2 pixel = {};
@@ -54,7 +59,7 @@ struct CPUPathTracingImpl : public Task {
       }
 
       pixels_processed++;
-      PTRayPayload payload = make_ray_payload(scene, film, pixel, status.current_iteration, scene.spectral);
+      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, i, status.current_iteration, scene.spectral);
 
       while ((state->load() != Integrator::State::Stopped) && run_path_iteration(scene, options, rt, payload)) {
         ETX_VALIDATE(payload.accumulated);
@@ -73,9 +78,34 @@ struct CPUPathTracingImpl : public Task {
         }
       }
 
-      film.accumulate(Film::CameraImage, {color.x, color.y, color.z, 1.0f}, pixel);
-      film.accumulate(Film::Normals, {normal.x, normal.y, normal.z, 1.0f}, pixel);
-      film.accumulate(Film::Albedo, {albedo.x, albedo.y, albedo.z, 1.0f}, pixel);
+      film.accumulate(pixel, {{color, Film::CameraImage}, {normal, Film::Normals}, {albedo, Film::Albedo}});
+    }
+  }
+
+  void update(std::atomic<Integrator::State>& current_state) {
+    if ((current_task.data == kInvalidHandle) || (current_state == Integrator::State::Stopped) || (scheduler.completed(current_task) == false)) {
+      return;
+    }
+
+    if (pixels_processed == 0) {
+      current_state = Integrator::State::WaitingForCompletion;
+    }
+
+    status.last_iteration_time = iteration_time.measure();
+    status.total_time += status.last_iteration_time;
+    status.completed_iterations += 1u;
+
+    scheduler.wait(current_task);
+    film.estimate_noise_levels(status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
+
+    if ((current_state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1 > rt.scene().samples)) {
+      current_task = {};
+      current_state = Integrator::State::Stopped;
+    } else {
+      iteration_time = {};
+      pixels_processed = 0;
+      status.current_iteration += 1;
+      current_task = scheduler.schedule(film.pixel_count(), this);
     }
   }
 };
@@ -108,30 +138,7 @@ void CPUPathTracing::run(const Options& opt) {
 
 void CPUPathTracing::update() {
   ETX_FUNCTION_SCOPE();
-  if ((_private->current_task.data == kInvalidHandle) || (current_state == State::Stopped) || (rt.scheduler().completed(_private->current_task) == false)) {
-    return;
-  }
-
-  if (_private->pixels_processed == 0) {
-    current_state = State::WaitingForCompletion;
-  }
-
-  _private->status.last_iteration_time = _private->iteration_time.measure();
-  _private->status.total_time += _private->status.last_iteration_time;
-  _private->status.completed_iterations += 1u;
-
-  rt.scheduler().wait(_private->current_task);
-  rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
-
-  if ((current_state == State::WaitingForCompletion) || (_private->status.current_iteration + 1 >= _private->rt.scene().samples)) {
-    _private->current_task = {};
-    current_state = Integrator::State::Stopped;
-  } else {
-    _private->iteration_time = {};
-    _private->pixels_processed = 0;
-    _private->status.current_iteration += 1;
-    _private->current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), _private);
-  }
+  _private->update(current_state);
 }
 
 void CPUPathTracing::stop(Stop st) {
@@ -143,7 +150,7 @@ void CPUPathTracing::stop(Stop st) {
     current_state = State::WaitingForCompletion;
   } else {
     current_state = State::Stopped;
-    rt.scheduler().wait(_private->current_task);
+    _private->scheduler.wait(_private->current_task);
     _private->current_task = {};
   }
 }

@@ -93,6 +93,7 @@ struct Integrator {
  protected:
   Raytracing& rt;
   std::atomic<State> current_state = {State::Stopped};
+  uint32_t pad = 0;
 };
 
 struct TaskScheduler;

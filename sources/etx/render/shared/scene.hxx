@@ -15,15 +15,12 @@
 namespace etx {
 
 struct ETX_ALIGNED EnvironmentEmitters {
-  constexpr static const uint32_t kMaxCount = 255;
+  constexpr static const uint32_t kMaxCount = 63;
   uint32_t emitters[kMaxCount] ETX_EMPTY_INIT;
   uint32_t count ETX_EMPTY_INIT;
 };
 
 struct ETX_ALIGNED Scene {
-  Camera camera ETX_EMPTY_INIT;
-  PixelFilter pixel_sampler ETX_EMPTY_INIT;
-  Lens lens ETX_EMPTY_INIT;
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<uint32_t> triangle_to_material ETX_EMPTY_INIT;
@@ -36,13 +33,14 @@ struct ETX_ALIGNED Scene {
   EnvironmentEmitters environment_emitters ETX_EMPTY_INIT;
   float3 bounding_sphere_center ETX_EMPTY_INIT;
   float bounding_sphere_radius ETX_EMPTY_INIT;
-  uint32_t camera_medium_index ETX_INIT_WITH(kInvalidIndex);
+  PixelFilter pixel_sampler ETX_EMPTY_INIT;
   uint32_t max_path_length ETX_INIT_WITH(65535u);
   uint32_t samples ETX_INIT_WITH(256u);
   uint32_t random_path_termination ETX_INIT_WITH(6u);
   float noise_threshold ETX_INIT_WITH(0.1f);
   float radiance_clamp ETX_INIT_WITH(0.0f);
-  bool spectral ETX_INIT_WITH(false);
+  uint8_t spectral ETX_INIT_WITH(0);
+  uint8_t pad[3] ETX_INIT_WITH({});
 };
 
 struct ContinousTraceOptions {

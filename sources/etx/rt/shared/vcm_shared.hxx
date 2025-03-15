@@ -315,25 +315,26 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   return state;
 }
 
-ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const Scene& scene, const VCMIteration& it, const SpectralQuery spect) {
+ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const uint32_t index, const Scene& scene, const Camera& camera, const VCMIteration& it,
+  const SpectralQuery spect) {
   VCMPathState state = {};
-  state.global_index = coord.x + coord.y * scene.camera.image_size.x;
+  state.global_index = index;
 
   state.sampler.init(state.global_index, it.iteration);
   auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
 
-  state.uv = get_jittered_uv(state.sampler, coord, scene.camera.image_size);
-  state.ray = generate_ray(scene, state.uv, state.sampler.next_2d());
+  state.uv = get_jittered_uv(state.sampler, coord, camera.film_size);
+  state.ray = generate_ray(scene, camera, state.uv, state.sampler.next_2d());
   state.throughput = {state.spect, 1.0f};
   state.gathered = {state.spect, 0.0f};
   state.merged = {};
 
-  auto film_eval = film_evaluate_out(state.spect, scene.camera, state.ray);
+  auto film_eval = film_evaluate_out(state.spect, camera, state.ray);
   state.d_vcm = 1.0f / film_eval.pdf_dir;
   state.d_vc = 0.0f;
   state.d_vm = 0.0f;
-  state.medium_index = scene.camera_medium_index;
+  state.medium_index = camera.medium_index;
   state.eta = 1.0f;
   state.path_distance = 0.0f;
   state.total_path_depth = 1;
@@ -389,13 +390,13 @@ ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPath
   state.path_distance = 0.0f;
 }
 
-ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Material& mat, const VCMIteration& vcm_iteration, const VCMOptions& options,
-  const Intersection& intersection, VCMPathState& state, float2& uv) {
+ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const Material& mat, const VCMIteration& vcm_iteration,
+  const VCMOptions& options, const Intersection& intersection, VCMPathState& state, float2& uv) {
   if ((options.connect_to_camera() == false) || (state.total_path_depth + 1 >= scene.max_path_length)) {
     return {};
   }
 
-  auto camera_sample = sample_film(state.sampler, scene, intersection.pos);
+  auto camera_sample = sample_film(state.sampler, scene, camera, intersection.pos);
   if (camera_sample.pdf_dir <= 0.0f) {
     return {};
   }
@@ -767,8 +768,8 @@ struct ETX_ALIGNED LightStepResult {
   bool continue_tracing = false;
 };
 
-ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIteration& iteration, const VCMOptions& options, const uint32_t path_index, VCMPathState& state,
-  const Raytracing& rt) {
+ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& camera, const VCMIteration& iteration, const VCMOptions& options, const uint32_t path_index,
+  VCMPathState& state, const Raytracing& rt) {
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
@@ -807,7 +808,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
     if (options.connect_to_camera() && (state.total_path_depth + 1 <= scene.max_path_length)) {
       if (subsurface_sampled) {
         for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-          auto value = vcm_connect_to_camera(rt, scene, mat, iteration, options,  //
+          auto value = vcm_connect_to_camera(rt, scene, camera, mat, iteration, options,  //
             ss_gather.intersections[i], state, result.splat_uvs[result.splat_count]);
           ETX_VALIDATE(value);
           if (value.maximum() > kEpsilon) {
@@ -817,7 +818,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const VCMIterati
           }
         }
       } else {
-        auto value = vcm_connect_to_camera(rt, scene, mat, iteration, options, intersection, state, result.splat_uvs[0]);
+        auto value = vcm_connect_to_camera(rt, scene, camera, mat, iteration, options, intersection, state, result.splat_uvs[0]);
         ETX_VALIDATE(value);
         if (value.maximum() > kEpsilon) {
           result.values_to_splat[0] = value;

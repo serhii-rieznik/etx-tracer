@@ -38,6 +38,11 @@ struct Film {
   static constexpr float kFilmHorizontalSize = 36.0f;
   static constexpr float kFilmVerticalSize = 24.0f;
 
+  struct LayerValue {
+    float3 value = {};
+    uint32_t layer = 0;
+  };
+
   Film(TaskScheduler&);
   ~Film();
 
@@ -45,18 +50,22 @@ struct Film {
 
   float2 sample(const Scene& scene, const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const;
 
-  void atomic_add(uint32_t layer, const float4& value, const float2& ndc_coord);
-  void atomic_add(uint32_t layer, const float4& value, uint32_t x, uint32_t y);
+  void atomic_add(uint32_t layer, const float3& value, const float2& ndc_coord);
+  void atomic_add(uint32_t layer, const float3& value, uint32_t x, uint32_t y);
 
-  void accumulate(uint32_t layer, const float4& value, const float2& ndc_coord);
-  void accumulate(uint32_t layer, const float4& value, const uint2& pixel);
+  void accumulate(uint32_t layer, const float3& value, const uint2& pixel);
+  void accumulate(const uint2& pixel, const std::initializer_list<LayerValue>& lv);
 
   void commit_light_iteration(uint32_t i);
 
   void clear(const Layers& layers);
   void clear();
 
-  const uint2& dimensions() const;
+  // total size of the film in pixels
+  const uint2& size() const;
+
+  // current size of the film in pixels, accounting for pixel size
+  uint2 dimensions() const;
 
   const float4* layer(uint32_t layer) const;
   float4* mutable_layer(uint32_t layer) const;
@@ -66,12 +75,16 @@ struct Film {
 
   void denoise();
 
+  uint32_t pixel_size() const;
+  void set_pixel_size(uint32_t size);
+
   /*
    * Adaptive sampling
    */
-  uint32_t total_pixel_count() const;
+  uint32_t pixel_count() const;
   uint32_t active_pixel_count() const;
-  bool active_pixel(uint32_t linear_index, uint2& location);
+
+  bool active_pixel(uint32_t linear_index, uint2& location) const;
   void estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, float threshold);
   float noise_level() const;
 
@@ -84,7 +97,7 @@ struct Film {
   static const char* layer_name(uint32_t layer);
 
  private:
-  ETX_DECLARE_PIMPL(Film, 1024);
+  ETX_DECLARE_PIMPL(Film, 512);
 };
 
 }  // namespace etx

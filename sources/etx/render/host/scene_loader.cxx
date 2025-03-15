@@ -145,13 +145,12 @@ struct SceneRepresentationImpl {
   ImagePool images;
   MediumPool mediums;
 
-  Lens lens = {};
-
   SceneRepresentation::MaterialMapping material_mapping;
   std::unordered_map<uint32_t, uint32_t> gltf_image_mapping;
-  uint32_t camera_medium_index = kInvalidIndex;
 
   Scene scene;
+  Camera camera;
+
   bool loaded = false;
 
   char data_buffer[2048] = {};
@@ -226,7 +225,7 @@ struct SceneRepresentationImpl {
     images.init(1024u);
     mediums.init(1024u);
     init_spectrums(s, extinction);
-    build_camera(scene.camera, {5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280u, 720u}, 26.99f);
+    build_camera(camera, {5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280u, 720u}, 26.99f);
   }
 
   ~SceneRepresentationImpl() {
@@ -244,8 +243,6 @@ struct SceneRepresentationImpl {
     material_mapping.clear();
     triangle_to_material.clear();
     triangle_to_emitter.clear();
-    camera_medium_index = kInvalidIndex;
-    lens.image_index = kInvalidIndex;
 
     images.remove_all();
     mediums.remove_all();
@@ -254,9 +251,8 @@ struct SceneRepresentationImpl {
     free(scene.emitters_distribution.values.a);
     scene.emitters_distribution = {};
 
-    auto camera = scene.camera;
     scene = {};
-    scene.camera = camera;
+    camera.lens_image = kInvalidIndex;
 
     loaded = false;
   }
@@ -411,7 +407,6 @@ struct SceneRepresentationImpl {
     }
     scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
     scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
-    scene.camera_medium_index = camera_medium_index;
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
     scene.triangle_to_material = {triangle_to_material.data(), triangle_to_material.size()};
@@ -421,7 +416,6 @@ struct SceneRepresentationImpl {
     scene.images = {images.as_array(), images.array_size()};
     scene.mediums = {mediums.as_array(), mediums.array_size()};
     scene.environment_emitters.count = 0;
-    scene.lens = lens;
 
     log::info("Building emitters distribution for %llu emitters...", scene.emitters.count);
     build_emitters_distribution(scene);
@@ -455,7 +449,7 @@ struct SceneRepresentationImpl {
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
-void build_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, float fov) {
+void build_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, const float fov) {
   float4x4 view = look_at(origin, target, up);
   float4x4 proj = perspective(fov * kPi / 180.0f, viewport.x, viewport.y, 1.0f, 1024.0f);
   float4x4 inv_view = inverse(view);
@@ -472,8 +466,8 @@ void build_camera(Camera& camera, const float3& origin, const float3& target, co
   float plane_w = 2.0f * camera.tan_half_fov * camera.aspect;
   float plane_h = 2.0f * camera.tan_half_fov;
   camera.area = plane_w * plane_h;
-  camera.image_size = viewport;
-  camera.image_plane = float(camera.image_size.x) / (2.0f * camera.tan_half_fov);
+  camera.film_size = viewport;
+  camera.image_plane = float(camera.film_size.x) / (2.0f * camera.tan_half_fov);
 }
 
 float get_camera_fov(const Camera& camera) {
@@ -523,7 +517,11 @@ const SceneRepresentation::MediumMapping& SceneRepresentation::medium_mapping() 
 }
 
 Camera& SceneRepresentation::camera() {
-  return _private->scene.camera;
+  return _private->camera;
+}
+
+const Camera& SceneRepresentation::camera() const {
+  return _private->camera;
 }
 
 bool SceneRepresentation::valid() const {
@@ -543,27 +541,22 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   q /= fmaxf(q.x, fmaxf(q.y, q.z));
   log::info("%.5f, %.5f, %.5f", q.x, q.y, q.z);
 
-  _private->cleanup();
-
-  uint32_t load_result = SceneRepresentationImpl::LoadFailed;
-
-  _private->json_file_name = {};
-  _private->mtl_file_name = {};
-  _private->geometry_file_name = filename;
-
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
 
-  _private->lens.radius = 0.0f;
-  _private->lens.focal_distance = 0.0f;
+  _private->cleanup();
+  _private->json_file_name = {};
+  _private->mtl_file_name = {};
+  _private->geometry_file_name = filename;
+  _private->camera.lens_radius = 0.0f;
+  _private->camera.focal_distance = 0.0f;
+  _private->camera.lens_image = kInvalidIndex;
+  _private->camera.medium_index = kInvalidIndex;
+  _private->camera.up = {0.0f, 1.0f, 0.0f};
 
-  auto& cam = _private->scene.camera;
-  Camera::Class camera_cls = Camera::Class::Perspective;
-  float3 camera_pos = cam.position;
-  float3 camera_up = {0.0f, 1.0f, 0.0f};
-  float3 camera_view = cam.position + cam.direction;
-  uint2 viewport = cam.image_size;
-  float camera_fov = get_camera_fov(cam);
+  auto& camera = _private->camera;
+  float3 camera_target = camera.position + camera.direction;
+  float camera_fov = get_camera_fov(camera);
   float camera_focal_len = fov_to_focal_length(camera_fov);
   bool use_focal_len = false;
 
@@ -593,29 +586,29 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
           const auto& ckey = ci.key();
           const auto& cobj = ci.value();
           if (json_get_string(ci, "class", str_value)) {
-            camera_cls = str_value == "eq" ? Camera::Class::Equirectangular : Camera::Class::Perspective;
+            camera.cls = str_value == "eq" ? Camera::Class::Equirectangular : Camera::Class::Perspective;
           } else if (json_get_float(ci, "fov", float_value)) {
             camera_fov = float_value;
           } else if (json_get_float(ci, "focal-length", float_value)) {
             camera_focal_len = float_value;
             use_focal_len = true;
           } else if (json_get_float(ci, "lens-radius", float_value)) {
-            _private->lens.radius = float_value;
+            _private->camera.lens_radius = float_value;
           } else if (json_get_float(ci, "focal-distance", float_value)) {
-            _private->lens.focal_distance = float_value;
+            _private->camera.focal_distance = float_value;
           } else if (cobj.is_array()) {
             if (ckey == "origin") {
               auto values = cobj.get<std::vector<float>>();
-              get_values(values, &camera_pos.x, 3llu);
+              get_values(values, &camera.position.x, 3llu);
             } else if (ckey == "target") {
               auto values = cobj.get<std::vector<float>>();
-              get_values(values, &camera_view.x, 3llu);
+              get_values(values, &camera_target.x, 3llu);
             } else if (ckey == "up") {
               auto values = cobj.get<std::vector<float>>();
-              get_values(values, &camera_up.x, 3llu);
+              get_values(values, &camera.up.x, 3llu);
             } else if (ckey == "viewport") {
               auto values = cobj.get<std::vector<uint32_t>>();
-              get_values(values, &viewport.x, 2llu);
+              get_values(values, &camera.film_size.x, 2llu);
             } else {
               log::warning("Unhandled value in camera description : %s", key.c_str());
             }
@@ -627,6 +620,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
     }
     _private->json_file_name = filename;
   }
+
+  uint32_t load_result = SceneRepresentationImpl::LoadFailed;
 
   auto ext = get_file_ext(_private->geometry_file_name.c_str());
   if (strcmp(ext, ".obj") == 0) {
@@ -642,14 +637,13 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   }
 
   if (options & SetupCamera) {
-    if (viewport.x * viewport.y == 0) {
-      viewport = {1280, 720};
+    if (camera.film_size.x * camera.film_size.y == 0) {
+      camera.film_size = {1280, 720};
     }
-    cam.cls = camera_cls;
     if (use_focal_len) {
       camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
     }
-    build_camera(cam, camera_pos, camera_view, camera_up, viewport, camera_fov);
+    build_camera(camera, camera.position, camera_target, camera.up, camera.film_size, camera_fov);
   }
 
   if (_private->emitters.empty()) {
@@ -870,7 +864,7 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
   if (get_param(material, "shape")) {
     char tmp_buffer[2048] = {};
     snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
-    lens.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
+    camera.lens_image = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
   }
 }
 
@@ -1015,7 +1009,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
   uint32_t medium_index = add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
 
   if (name == "camera") {
-    camera_medium_index = medium_index;
+    camera.medium_index = medium_index;
   }
 }
 

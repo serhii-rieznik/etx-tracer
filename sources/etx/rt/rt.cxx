@@ -10,6 +10,7 @@ struct RaytracingImpl {
   Film film;
 
   const Scene* source_scene = nullptr;
+  const Camera* source_camera = nullptr;
   RTCDevice rt_device = {};
   RTCScene rt_scene = {};
 
@@ -35,18 +36,22 @@ struct RaytracingImpl {
       rtcReleaseDevice(rt_device);
       rt_device = {};
     }
+
     // release_device_scene();
     // GPUDevice::free_device(gpu_device);
   }
 
   void set_scene(const Scene& s) {
     source_scene = &s;
-    film.allocate(s.camera.image_size);
     release_host_scene();
     build_host_scene(s);
-
     // release_device_scene();
     // build_device_scene();
+  }
+
+  void set_camera(const Camera& c) {
+    source_camera = &c;
+    film.allocate(c.film_size);
   }
 
   void build_host_scene(const Scene& s) {
@@ -292,6 +297,18 @@ const Scene& Raytracing::gpu_scene() const {
 
 void Raytracing::set_scene(const Scene& scene) {
   _private->set_scene(scene);
+}
+
+void Raytracing::set_camera(const Camera& camera) {
+  _private->set_camera(camera);
+}
+
+bool Raytracing::has_camera() const {
+  return _private->source_camera != nullptr;
+}
+
+const Camera& Raytracing::camera() const {
+  return *_private->source_camera;
 }
 
 bool Raytracing::has_scene() const {

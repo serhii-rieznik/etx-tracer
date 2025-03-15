@@ -138,23 +138,22 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) {
-    const uint2 film_dimensions = rt.film().dimensions();
-
     auto& smp = samplers[thread_id];
     auto& path_data = per_thread_path_data[thread_id];
     auto& film = rt.film();
     auto& scene = rt.scene();
 
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-      uint32_t x = i % film_dimensions.x;
-      uint32_t y = i / film_dimensions.x;
+      uint2 pixel = {};
+      if (film.active_pixel(i, pixel) == false)
+        return;
 
       auto spect = scene.spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
       build_emitter_path(smp, spect, path_data.emitter_path, thread_id);
 
-      float2 uv = get_jittered_uv(smp, {x, y}, film_dimensions);
-      SpectralResponse result = build_camera_path(smp, spect, uv, path_data.camera_path, thread_id);
+      float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
+      SpectralResponse result = build_camera_path(smp, spect, uv, path_data.camera_path);
 
       for (uint64_t light_s = 2, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
         for (uint64_t eye_t = 2, eye_t_e = path_data.camera_path.size(); running() && (eye_t < eye_t_e); ++eye_t) {
@@ -165,7 +164,7 @@ struct CPUBidirectionalImpl : public Task {
       }
 
       auto xyz = (result / spect.sampling_pdf()).to_rgb();
-      film.accumulate(Film::CameraImage, {xyz.x, xyz.y, xyz.z, 1.0f}, uint2{x, y});
+      film.accumulate(pixel, {{xyz, Film::CameraImage}});
     }
   }
 
@@ -202,7 +201,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse build_path(Sampler& smp, SpectralQuery spect, Ray ray, std::vector<PathVertex>& path, PathSource mode, SpectralResponse throughput, float pdf_dir,
-    uint32_t medium_index, uint32_t thread_id, const EmitterSample& em) {
+    uint32_t medium_index, const EmitterSample& em) {
     ETX_VALIDATE(throughput);
 
     const auto& scene = rt.scene();
@@ -256,7 +255,7 @@ struct CPUBidirectionalImpl : public Task {
           CameraSample camera_sample = {};
           auto splat = connect_to_camera(smp, path, spect, camera_sample);
           auto xyz = splat.to_rgb();
-          rt.film().atomic_add(Film::LightIteration, {xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
+          rt.film().atomic_add(Film::LightIteration, xyz, camera_sample.uv);
         }
 
       } else if (found_intersection) {
@@ -331,7 +330,7 @@ struct CPUBidirectionalImpl : public Task {
           auto splat = connect_to_camera(smp, path, spect, camera_sample);
           if (splat.is_zero() == false) {
             auto xyz = splat.to_rgb();
-            rt.film().atomic_add(Film::LightIteration, {xyz.x, xyz.y, xyz.z, 1.0f}, camera_sample.uv);
+            rt.film().atomic_add(Film::LightIteration, xyz, camera_sample.uv);
           }
         }
 
@@ -364,22 +363,22 @@ struct CPUBidirectionalImpl : public Task {
     return result;
   }
 
-  SpectralResponse build_camera_path(Sampler& smp, SpectralQuery spect, const float2& uv, std::vector<PathVertex>& path, uint32_t thread_id) {
+  SpectralResponse build_camera_path(Sampler& smp, SpectralQuery spect, const float2& uv, std::vector<PathVertex>& path) {
     path.clear();
     auto& z0 = path.emplace_back(PathVertex::Class::Camera);
     z0.throughput = {spect, 1.0f};
 
-    auto ray = generate_ray(rt.scene(), uv, smp.next_2d());
-    auto eval = film_evaluate_out(spect, rt.scene().camera, ray);
+    auto ray = generate_ray(rt.scene(), rt.camera(), uv, smp.next_2d());
+    auto eval = film_evaluate_out(spect, rt.camera(), ray);
 
     auto& z1 = path.emplace_back(PathVertex::Class::Camera);
-    z1.medium_index = rt.scene().camera_medium_index;
+    z1.medium_index = rt.camera().medium_index;
     z1.throughput = {spect, 1.0f};
     z1.pos = ray.o;
     z1.nrm = eval.normal;
     z1.w_i = ray.d;
 
-    return build_path(smp, spect, ray, path, PathSource::Camera, z1.throughput, eval.pdf_dir, z1.medium_index, thread_id, {});
+    return build_path(smp, spect, ray, path, PathSource::Camera, z1.throughput, eval.pdf_dir, z1.medium_index, {});
   }
 
   SpectralResponse build_emitter_path(Sampler& smp, SpectralQuery spect, std::vector<PathVertex>& path, uint32_t thread_id) {
@@ -407,7 +406,7 @@ struct CPUBidirectionalImpl : public Task {
 
     float3 o = offset_ray(emitter_sample.origin, y1.nrm);
     SpectralResponse throughput = y1.throughput * dot(emitter_sample.direction, y1.nrm) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample);
-    return build_path(smp, spect, {o, emitter_sample.direction}, path, PathSource::Light, throughput, emitter_sample.pdf_dir, y1.medium_index, thread_id, emitter_sample);
+    return build_path(smp, spect, {o, emitter_sample.direction}, path, PathSource::Light, throughput, emitter_sample.pdf_dir, y1.medium_index, emitter_sample);
   }
 
   float mis_weight_light(std::vector<PathVertex>& camera_path, SpectralQuery spect, uint64_t eye_t, PathVertex y_curr, Sampler& smp) const {
@@ -532,7 +531,7 @@ struct CPUBidirectionalImpl : public Task {
       y_delta_new = {&y_curr.delta_connection, false};
       float y_curr_pdf = 0.0f;
       ETX_ASSERT(z_curr.cls == PathVertex::Class::Camera);
-      float pdf_dir = film_pdf_out(rt.scene().camera, y_curr.pos);
+      float pdf_dir = film_pdf_out(rt.camera(), y_curr.pos);
       y_curr_pdf = z_curr.pdf_solid_angle_to_area(pdf_dir, y_curr);
       ETX_VALIDATE(y_curr_pdf);
       y_curr_new = {&y_curr.pdf.backward, y_curr_pdf};
@@ -744,7 +743,7 @@ struct CPUBidirectionalImpl : public Task {
     uint64_t light_s = emitter_path.size() - 1u;
 
     const auto& y_i = emitter_path[light_s];
-    camera_sample = sample_film(smp, rt.scene(), y_i.pos);
+    camera_sample = sample_film(smp, rt.scene(), rt.camera(), y_i.pos);
     if (camera_sample.valid() == false) {
       return {spect, 0.0f};
     }
@@ -826,8 +825,8 @@ struct CPUBidirectionalImpl : public Task {
 
     status = {};
     iteration_time = {};
-    rt.film().clear({Film::LightIteration});
-    current_task = rt.scheduler().schedule(rt.film().total_pixel_count(), this);
+    rt.film().clear({Film::Internal, Film::LightImage, Film::LightIteration});
+    current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
   }
 };
 

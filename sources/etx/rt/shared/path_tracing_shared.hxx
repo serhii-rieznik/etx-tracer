@@ -228,19 +228,20 @@ ETX_GPU_CODE GatherResult gather(SpectralQuery spect, const Scene& scene, const 
 
 }  // namespace subsurface
 
-ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Film& film, uint2 px, uint32_t iteration, bool spectral) {
+ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Camera& camera, const Film& film, const uint2& px, const uint32_t pixel_index, const uint32_t iteration,
+  const bool spectral) {
   ETX_FUNCTION_SCOPE();
 
   PTRayPayload payload = {};
   payload.iteration = iteration;
-  payload.smp.init(px.x + px.y * film.dimensions().x, payload.iteration);
+  payload.smp.init(pixel_index, payload.iteration);
   payload.spect = spectral ? SpectralQuery::spectral_sample(payload.smp.next()) : SpectralQuery::sample();
 
   float2 uv = film.sample(scene, iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, px, payload.smp.next_2d());
-  payload.ray = generate_ray(scene, uv, payload.smp.next_2d());
+  payload.ray = generate_ray(scene, camera, uv, payload.smp.next_2d());
   payload.throughput = {payload.spect, 1.0f};
   payload.accumulated = {payload.spect, 0.0f};
-  payload.medium = scene.camera_medium_index;
+  payload.medium = camera.medium_index;
   payload.path_length = 1;
   payload.eta = 1.0f;
   payload.sampled_bsdf_pdf = 0.0f;

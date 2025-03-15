@@ -6,16 +6,17 @@
 #include <stdint.h>
 #include <new>
 
-#define ETX_PIMPL_DECLARE(T, SUFFIX, SZ)      \
- public:                                      \
-  T(const T&) = delete;                       \
-  T& operator=(const T&) = delete;            \
-  T(T&&) noexcept;                            \
-  T& operator=(T&&) noexcept;                 \
-                                              \
- private:                                     \
-  alignas(16) uint8_t _private_storage[SZ]{}; \
-  struct T##SUFFIX* _private = nullptr
+#define ETX_PIMPL_DECLARE(T, SUFFIX, SZ)     \
+ public:                                     \
+  T(const T&) = delete;                      \
+  T& operator=(const T&) = delete;           \
+  T(T&&) noexcept;                           \
+  T& operator=(T&&) noexcept;                \
+                                             \
+ private:                                    \
+  struct T##SUFFIX* _private = nullptr;      \
+  alignas(16) uint8_t _private_storage[SZ] { \
+  }
 
 #define ETX_PIMPL_IMPLEMENT(T, SUFFIX)                                          \
   T::T(T&& other) noexcept {                                                    \

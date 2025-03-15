@@ -31,6 +31,7 @@ struct UI {
   void set_current_integrator(Integrator*);
   void set_scene(Scene* scene, const SceneRepresentation::MaterialMapping&, const SceneRepresentation::MediumMapping&);
   void set_film(Film* film);
+  void set_camera(Camera* camera);
 
   const Options& integrator_options() const {
     return _integrator_options;
@@ -82,6 +83,7 @@ struct UI {
  private:
   Integrator* _current_integrator = nullptr;
   Scene* _current_scene = nullptr;
+  Camera* _current_camera = nullptr;
   Film* _film = nullptr;
 
   ArrayView<Integrator*> _integrators = {};
