@@ -69,6 +69,8 @@ struct RTApplication {
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
 
+  bool last_camera_controller_state = false;
+
   Integrator* _integrator_array[4] = {
     &_debug,
     &_cpu_pt,

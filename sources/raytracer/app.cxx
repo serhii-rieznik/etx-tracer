@@ -113,9 +113,16 @@ void RTApplication::frame() {
   // }
 
   bool can_change_camera = true;  // _current_integrator->state() == Integrator::State::Preview;
-  if (can_change_camera && camera_controller.update(dt)) {
-    integrator_thread.restart();
-    // _current_integrator->run(ui.integrator_options());
+  if (can_change_camera) {
+    bool camera_controller_state = camera_controller.update(dt);
+    if (camera_controller_state) {
+      raytracing.film().set_pixel_size(8u);
+      integrator_thread.restart();
+    } else if (camera_controller_state != last_camera_controller_state) {
+      last_camera_controller_state = camera_controller_state;
+      raytracing.film().set_pixel_size(1u);
+      integrator_thread.restart();
+    }
   }
 
   auto options = ui.view_options();
