@@ -119,10 +119,10 @@ void RTApplication::frame() {
       raytracing.film().set_pixel_size(8u);
       integrator_thread.restart();
     } else if (camera_controller_state != last_camera_controller_state) {
-      last_camera_controller_state = camera_controller_state;
       raytracing.film().set_pixel_size(1u);
       integrator_thread.restart();
     }
+    last_camera_controller_state = camera_controller_state;
   }
 
   auto options = ui.view_options();

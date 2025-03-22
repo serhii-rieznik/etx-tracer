@@ -80,6 +80,31 @@ ETX_GPU_CODE Vertex lerp_vertex(const ArrayView<Vertex>& vertices, const Triangl
   };
 }
 
+ETX_GPU_CODE float3 barycentrics(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& p) {
+  const float3& a = vertices[t.i[0]].pos;
+  const float3& b = vertices[t.i[1]].pos;
+  const float3& c = vertices[t.i[2]].pos;
+
+  const float3 v0 = b - a;
+  const float3 v1 = c - a;
+  const float3 v2 = p - a;
+
+  // Compute dot products
+  float d00 = dot(v0, v0);
+  float d01 = dot(v0, v1);
+  float d11 = dot(v1, v1);
+  float d20 = dot(v2, v0);
+  float d21 = dot(v2, v1);
+
+  // Compute denominator
+  float denom = d00 * d11 - d01 * d01;
+
+  // Compute barycentric coordinates
+  float u = (d11 * d20 - d01 * d21) / denom;
+  float v = (d00 * d21 - d01 * d20) / denom;
+  return {1.0f - u - v, u, v};
+}
+
 ETX_GPU_CODE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
   return position - dot(position - origin, normal) * normal;
 }

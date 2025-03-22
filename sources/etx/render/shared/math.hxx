@@ -1029,4 +1029,31 @@ ETX_GPU_CODE float3 linear_to_gamma(const float3& value) {
   };
 }
 
+ETX_GPU_CODE float3 slerp(const float3& start, const float3& end, float t) {
+  constexpr float kThreshold = 100.0f * kEpsilon;
+
+  float dot_product = clamp(dot(start, end), -1.0f, 1.0f);
+  float theta = acosf(dot_product);
+  if (fabsf(theta) <= kThreshold) {
+    return lerp(start, end, theta);
+  }
+
+  float sinTheta = sinf(theta);
+  float sinThetaInv = 1.0f / sinTheta;
+  float a = sinf((1.0f - t) * theta) * sinThetaInv;
+  float b = sinf(t * theta) * sinThetaInv;
+  return float3(start.x * a + end.x * b, start.y * a + end.y * b, start.z * a + end.z * b);
+}
+
+ETX_GPU_CODE float3 project_point_plane(const float3& v, const float3& plane_n, const float3& plane_o) {
+  float3 v_to_o = v - plane_o;
+  float distance = dot(v_to_o, plane_n);
+  return v - distance * plane_n;
+}
+
+ETX_GPU_CODE float intersect_ray_plane(const float3& ray_o, const float3& ray_d, const float3& plane_n, const float3& plane_o) {
+  float denom = dot(plane_n, ray_d);
+  return (denom > -kEpsilon) ? -1.0f : (dot(plane_n, plane_o - ray_o)) / denom;
+}
+
 }  // namespace etx
