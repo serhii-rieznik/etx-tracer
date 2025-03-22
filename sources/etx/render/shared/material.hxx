@@ -6,8 +6,9 @@
 namespace etx {
 
 struct ETX_ALIGNED SpectralImage {
-  SpectralDistribution spectrum = {};
+  uint32_t spectrum_index = kInvalidIndex;
   uint32_t image_index = kInvalidIndex;
+  uint32_t pad[2] = {};
 };
 
 struct ETX_ALIGNED SampledImage {
@@ -48,7 +49,7 @@ struct SubsurfaceMaterial {
 
   Class cls = Class::Disabled;
   Path path = Path::Diffuse;
-  SpectralDistribution scattering_distance;
+  uint32_t scattering_distance_spectrum = kInvalidIndex;
   float scale = 1.0f;
 };
 

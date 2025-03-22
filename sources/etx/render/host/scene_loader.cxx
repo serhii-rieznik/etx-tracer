@@ -128,6 +128,11 @@ const char* material_class_to_string(Material::Class cls) {
 }
 
 struct SceneRepresentationImpl {
+  struct SpectrumID {
+    SpectralDistribution spectrum;
+    std::string id;
+  };
+
   TaskScheduler& scheduler;
   std::vector<Vertex> vertices;
   std::vector<Triangle> triangles;
@@ -135,7 +140,8 @@ struct SceneRepresentationImpl {
   std::vector<uint32_t> triangle_to_emitter;
   std::vector<Material> materials;
   std::vector<Emitter> emitters;
-  std::unordered_map<std::string, SpectralDistribution> scene_spectrums;
+  std::vector<SpectrumID> scene_spectrums;
+  std::vector<SpectralDistribution> scene_spectrum_array;
 
   std::string json_file_name;
   std::string geometry_file_name;
@@ -174,6 +180,41 @@ struct SceneRepresentationImpl {
       return true;
     }
     return false;
+  }
+
+  uint32_t add_spectrum(const char* id, const SpectralDistribution& spd) {
+    auto& spectrum = scene_spectrums.emplace_back(SpectrumID{
+      .spectrum = spd,
+      .id = id,
+    });
+    return uint32_t(scene_spectrums.size() - 1u);
+  }
+
+  uint32_t add_spectrum(const char* id) {
+    return add_spectrum(id, {});
+  }
+
+  uint32_t add_spectrum() {
+    char buffer[64] = {};
+    snprintf(buffer, sizeof(buffer), "##spectrum_%llu", scene_spectrums.size());
+    return add_spectrum(buffer);
+  }
+
+  uint32_t add_spectrum(const SpectralDistribution& spd) {
+    uint32_t i = add_spectrum();
+    scene_spectrums[i].spectrum = spd;
+    return i;
+  }
+
+  uint32_t find_spectrum(const char* id) const {
+    auto i = std::find_if(scene_spectrums.begin(), scene_spectrums.end(), [id](const SpectrumID& value) {
+      return value.id == id;
+    });
+
+    if (i == scene_spectrums.end())
+      return kInvalidIndex;
+
+    return uint32_t(std::distance(scene_spectrums.begin(), i));
   }
 
   uint32_t add_image(const char* path, uint32_t options, const float2& offset) {
@@ -243,6 +284,7 @@ struct SceneRepresentationImpl {
     material_mapping.clear();
     triangle_to_material.clear();
     triangle_to_emitter.clear();
+    scene_spectrums.clear();
 
     images.remove_all();
     mediums.remove_all();
@@ -390,10 +432,18 @@ struct SceneRepresentationImpl {
 
   void commit() {
     log::info("Building pixel sampler...");
+
     std::vector<float4> sampler_image;
     Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
     uint32_t image = images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, Image::BuildSamplingTable | Image::UniformSamplingTable, {});
     scene.pixel_sampler = {image, 1.5f};
+
+    scene_spectrum_array.resize(scene_spectrums.size());
+    scene_spectrum_array.clear();
+
+    for (const auto& spd : scene_spectrums) {
+      scene_spectrum_array.emplace_back(spd.spectrum);
+    }
 
     float3 bbox_min = triangles.empty() ? float3{-1.0f, -1.0f, -1.0f} : float3{kMaxFloat, kMaxFloat, kMaxFloat};
     float3 bbox_max = triangles.empty() ? float3{+1.0f, +1.0f, +1.0f} : float3{-kMaxFloat, -kMaxFloat, -kMaxFloat};
@@ -415,6 +465,7 @@ struct SceneRepresentationImpl {
     scene.emitters = {emitters.data(), emitters.size()};
     scene.images = {images.as_array(), images.array_size()};
     scene.mediums = {mediums.as_array(), mediums.array_size()};
+    scene.spectrums = {scene_spectrum_array.data(), scene_spectrum_array.size()};
     scene.environment_emitters.count = 0;
 
     log::info("Building emitters distribution for %llu emitters...", scene.emitters.count);
@@ -443,8 +494,8 @@ struct SceneRepresentationImpl {
   void parse_atmosphere_light(const char* base_dir, const tinyobj::material_t& material);
   void parse_spectrum(const char* base_dir, const tinyobj::material_t& material);
 
-  SpectralDistribution load_reflectance_spectrum(char* data);
-  SpectralDistribution load_illuminant_spectrum(char* data);
+  uint32_t load_reflectance_spectrum(char* data);
+  uint32_t load_illuminant_spectrum(char* data);
 
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
@@ -553,6 +604,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   _private->camera.lens_image = kInvalidIndex;
   _private->camera.medium_index = kInvalidIndex;
   _private->camera.up = {0.0f, 1.0f, 0.0f};
+
+  _private->add_spectrum(SpectralDistribution::null());
+  _private->add_spectrum(SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f}));
 
   auto& camera = _private->camera;
   float3 camera_target = camera.position + camera.direction;
@@ -754,7 +808,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       if (get_param(source_material, "Ke")) {
         Emitter e = {};
         e.cls = Emitter::Class::Area;
-        e.emission.spectrum = load_illuminant_spectrum(data_buffer);
+        e.emission.spectrum_index = load_illuminant_spectrum(data_buffer);
 
         uint32_t emissive_image_index = kInvalidIndex;
         if (get_file(base_dir, source_material.emissive_texname)) {
@@ -799,19 +853,24 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
               e.collimation = static_cast<float>(atof(params[i + 1]));
               i += 1;
             } else if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < end)) {
-              e.emission.spectrum = SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), 1.0f);
+              e.emission.spectrum_index = add_spectrum(SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), 1.0f));
               i += 1;
             } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < end)) {
-              e.emission.spectrum = SpectralDistribution::from_normalized_black_body(static_cast<float>(atof(params[i + 1])), 1.0f);
+              e.emission.spectrum_index = add_spectrum(SpectralDistribution::from_normalized_black_body(static_cast<float>(atof(params[i + 1])), 1.0f));
               i += 1;
             } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < end)) {
-              e.emission.spectrum.scale(static_cast<float>(atof(params[i + 1])));
+              if (e.emission.spectrum_index != kInvalidIndex) {
+                scene_spectrums[e.emission.spectrum_index].spectrum.scale(static_cast<float>(atof(params[i + 1])));
+              }
               i += 1;
             } else if ((strcmp(params[i], "spectrum") == 0) && (i + 1 < end)) {
               char buffer[2048] = {};
               snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, data_buffer);
-              auto cls = SpectralDistribution::load_from_file(buffer, e.emission.spectrum, nullptr, false);
-              if (cls != SpectralDistribution::Class::Illuminant) {
+              SpectralDistribution emission_spectrum;
+              auto cls = SpectralDistribution::load_from_file(buffer, emission_spectrum, nullptr, false);
+              if (cls == SpectralDistribution::Class::Illuminant) {
+                e.emission.spectrum_index = add_spectrum(emission_spectrum);
+              } else {
                 log::warning("Spectrum %s is not illuminant", buffer);
               }
             }
@@ -832,14 +891,18 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
             break;
         }
 
-        e.medium_index = mtl.ext_medium;
-        e.triangle_index = static_cast<uint32_t>(triangles.size() - 1llu);
-        e.triangle_area = triangle_area(tri);
-        e.weight = power_scale * (e.triangle_area * kPi) * (e.emission.spectrum.luminance() * texture_emission);
-        e.emission.image_index = emissive_image_index;
+        if (e.emission.spectrum_index != kInvalidIndex) {
+          auto lum = scene_spectrums[e.emission.spectrum_index].spectrum.luminance();
 
-        if (e.weight > 0.0f) {
-          emitters.emplace_back(e);
+          e.medium_index = mtl.ext_medium;
+          e.triangle_index = static_cast<uint32_t>(triangles.size() - 1llu);
+          e.triangle_area = triangle_area(tri);
+          e.weight = power_scale * (e.triangle_area * kPi) * (lum * texture_emission);
+          e.emission.image_index = emissive_image_index;
+
+          if (e.weight > 0.0f) {
+            emitters.emplace_back(e);
+          }
         }
       }
 
@@ -1017,9 +1080,9 @@ void SceneRepresentationImpl::parse_directional_light(const char* base_dir, cons
   auto& e = emitters.emplace_back(Emitter::Class::Directional);
 
   if (get_param(material, "color")) {
-    e.emission.spectrum = load_illuminant_spectrum(data_buffer);
+    e.emission.spectrum_index = load_illuminant_spectrum(data_buffer);
   } else {
-    e.emission.spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
+    e.emission.spectrum_index = 1u;
   }
 
   e.direction = float3{1.0f, 1.0f, 1.0f};
@@ -1060,9 +1123,9 @@ void SceneRepresentationImpl::parse_env_light(const char* base_dir, const tinyob
   e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f});
 
   if (get_param(material, "color")) {
-    e.emission.spectrum = load_illuminant_spectrum(data_buffer);
+    e.emission.spectrum_index = load_illuminant_spectrum(data_buffer);
   } else {
-    e.emission.spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
+    e.emission.spectrum_index = 1u;
   }
 }
 
@@ -1157,8 +1220,8 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
 
   {
     auto& d = emitters.emplace_back(Emitter::Class::Directional);
-    d.emission.spectrum = sun_spectrum;
-    d.emission.spectrum.scale(sun_scale);
+    d.emission.spectrum_index = add_spectrum(sun_spectrum);
+    scene_spectrums[d.emission.spectrum_index].spectrum.scale(sun_scale);
     d.angular_size = angular_size;
     d.direction = direction;
 
@@ -1171,8 +1234,8 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
 
   {
     auto& e = emitters.emplace_back(Emitter::Class::Environment);
-    e.emission.spectrum = sun_spectrum;
-    e.emission.spectrum.scale(sky_scale);
+    e.emission.spectrum_index = add_spectrum(sun_spectrum);
+    scene_spectrums[e.emission.spectrum_index].spectrum.scale(sky_scale);
     e.emission.image_index = add_image(nullptr, sky_image_dimensions, Image::BuildSamplingTable | Image::Delay);
     e.direction = direction;
 
@@ -1216,7 +1279,7 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
     };
     value = gamma_to_linear(value);
 
-    scene_spectrums[name] = illuminant ? SpectralDistribution::rgb_luminance(value) : SpectralDistribution::rgb_reflectance(value);
+    add_spectrum(name.c_str(), illuminant ? SpectralDistribution::rgb_luminance(value) : SpectralDistribution::rgb_reflectance(value));
     initialized = true;
   } else if (get_param(material, "blackbody")) {
     auto params = split_params(data_buffer);
@@ -1226,7 +1289,7 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
     }
 
     float t = static_cast<float>(atof(params[0]));
-    scene_spectrums[name] = SpectralDistribution::from_black_body(t, scale);
+    add_spectrum(name.c_str(), SpectralDistribution::from_black_body(t, scale));
     initialized = true;
   } else if (get_param(material, "nblackbody")) {
     auto params = split_params(data_buffer);
@@ -1244,7 +1307,7 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
     }
 
     float t = static_cast<float>(atof(params[0]));
-    scene_spectrums[name] = SpectralDistribution::from_normalized_black_body(t, scale);
+    add_spectrum(name.c_str(), SpectralDistribution::from_normalized_black_body(t, scale));
     initialized = true;
   }
 
@@ -1286,19 +1349,22 @@ void SceneRepresentationImpl::parse_spectrum(const char* base_dir, const tinyobj
         spectrum.scale(1.0f / lum);
       }
     }
-    scene_spectrums[name] = spectrum;
+    add_spectrum(name.c_str(), spectrum);
   }
 
-  scene_spectrums[name].scale(scale);
+  uint32_t i = find_spectrum(name.c_str());
+  if (i != kInvalidIndex) {
+    scene_spectrums[i].spectrum.scale(scale);
+  }
 }
 
-SpectralDistribution SceneRepresentationImpl::load_reflectance_spectrum(char* data) {
+uint32_t SceneRepresentationImpl::load_reflectance_spectrum(char* data) {
   auto params = split_params(data);
 
   if (params.size() == 1) {
-    auto i = scene_spectrums.find(params.front());
-    if (i != scene_spectrums.end())
-      return i->second;
+    auto i = find_spectrum(params[0]);
+    if (i != kInvalidIndex)
+      return i;
   }
 
   if (params.size() == 3) {
@@ -1307,24 +1373,26 @@ SpectralDistribution SceneRepresentationImpl::load_reflectance_spectrum(char* da
       static_cast<float>(atof(params[1])),
       static_cast<float>(atof(params[2])),
     });
-    return SpectralDistribution::rgb_reflectance(value);
+    char buffer[128] = {};
+    snprintf(buffer, sizeof(buffer), "spectrum%.4f%.4f%.4f", value.x, value.y, value.z);
+    return add_spectrum(buffer, SpectralDistribution::rgb_reflectance(value));
   }
 
-  return SpectralDistribution::null();
+  return 0;
 }
 
-SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* data) {
+uint32_t SceneRepresentationImpl::load_illuminant_spectrum(char* data) {
   auto params = split_params(data);
 
   if (params.size() == 1) {
     float value = 0.0f;
     if (sscanf(params[0], "%f", &value) == 1) {
-      return SpectralDistribution::rgb_luminance({value, value, value});
-    } else {
-      auto i = scene_spectrums.find(params.front());
-      if (i != scene_spectrums.end())
-        return i->second;
+      return add_spectrum(params[0], SpectralDistribution::rgb_luminance({value, value, value}));
     }
+
+    auto i = find_spectrum(params[0]);
+    if (i != kInvalidIndex)
+      return i;
   }
 
   if (params.size() == 3) {
@@ -1333,7 +1401,9 @@ SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* dat
       static_cast<float>(atof(params[1])),
       static_cast<float>(atof(params[2])),
     };
-    return SpectralDistribution::rgb_luminance(value);
+    char buffer[128] = {};
+    snprintf(buffer, sizeof(buffer), "spectrum%.4f%.4f%.4f", value.x, value.y, value.z);
+    return add_spectrum(buffer, SpectralDistribution::rgb_luminance(value));
   }
 
   SpectralDistribution emitter_spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
@@ -1355,7 +1425,7 @@ SpectralDistribution SceneRepresentationImpl::load_illuminant_spectrum(char* dat
   }
   emitter_spectrum.scale(scale);
 
-  return emitter_spectrum;
+  return add_spectrum(data, emitter_spectrum);
 }
 
 void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj::material_t& material) {
@@ -1370,9 +1440,9 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   auto& mtl = materials[material_index];
 
   mtl.cls = Material::Class::Diffuse;
-  mtl.reflectance = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
-  mtl.transmittance = {SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f})};
-  mtl.subsurface.scattering_distance = SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f});
+  mtl.reflectance = {add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}))};
+  mtl.transmittance = {add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}))};
+  mtl.subsurface.scattering_distance_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
 
   if (get_param(material, "base")) {
     auto i = material_mapping.find(data_buffer);
@@ -1382,15 +1452,15 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   }
 
   if (get_param(material, "Kd")) {
-    mtl.transmittance.spectrum = load_reflectance_spectrum(data_buffer);
+    mtl.transmittance.spectrum_index = load_reflectance_spectrum(data_buffer);
   }
 
   if (get_param(material, "Ks")) {
-    mtl.reflectance.spectrum = load_reflectance_spectrum(data_buffer);
+    mtl.reflectance.spectrum_index = load_reflectance_spectrum(data_buffer);
   }
 
   if (get_param(material, "Kt")) {
-    mtl.transmittance.spectrum = load_reflectance_spectrum(data_buffer);
+    mtl.transmittance.spectrum_index = load_reflectance_spectrum(data_buffer);
   }
 
   if (get_param(material, "Pr")) {
@@ -1541,7 +1611,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
         float dr = static_cast<float>(atof(params[i + 1]));
         float dg = static_cast<float>(atof(params[i + 2]));
         float db = static_cast<float>(atof(params[i + 3]));
-        mtl.subsurface.scattering_distance = SpectralDistribution::rgb_reflectance({dr, dg, db});
+        mtl.subsurface.scattering_distance_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({dr, dg, db}));
         i += 3;
       }
 
@@ -1700,7 +1770,7 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
     if (base_color.size() >= 3) {
       rgb = {float(base_color[0]), float(base_color[1]), float(base_color[2])};
     }
-    mtl.transmittance.spectrum = SpectralDistribution::rgb_reflectance(rgb);
+    mtl.transmittance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance(rgb));
 
     if ((pbr.baseColorTexture.index != -1) && (gltf_image_mapping.count(pbr.baseColorTexture.index) > 0)) {
       mtl.transmittance.image_index = gltf_image_mapping.at(pbr.baseColorTexture.index);
@@ -1721,15 +1791,15 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
       add_image_options(mtl.normal_image_index, Image::SkipSRGBConversion);
     }
 
-    mtl.reflectance.spectrum = SpectralDistribution::constant(1.0f);
+    mtl.reflectance.spectrum_index = add_spectrum(SpectralDistribution::constant(1.0f));
   }
 
   if (materials.empty()) {
     uint32_t material_index = add_material("default");
     auto& mtl = materials[material_index];
     mtl.cls = Material::Class::Diffuse;
-    mtl.transmittance.spectrum = SpectralDistribution::constant(1.0f);
-    mtl.reflectance.spectrum = SpectralDistribution::constant(1.0f);
+    mtl.transmittance.spectrum_index = add_spectrum(SpectralDistribution::constant(1.0f));
+    mtl.reflectance.spectrum_index = add_spectrum(SpectralDistribution::constant(1.0f));
   }
 
   for (const auto& scene : model.scenes) {
@@ -1860,7 +1930,9 @@ void build_emitters_distribution(Scene& scene) {
   for (uint32_t i = 0; i < scene.emitters.count; ++i) {
     auto& emitter = scene.emitters[i];
     if (emitter.is_distant()) {
-      emitter.weight = emitter.emission.spectrum.luminance() * kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
+      uint32_t spectrum_index = emitter.emission.spectrum_index;
+      ETX_CRITICAL(spectrum_index != kInvalidIndex);
+      emitter.weight = scene.spectrums[spectrum_index].luminance() * kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
     }
     emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
     emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);

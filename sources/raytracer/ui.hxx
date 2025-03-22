@@ -74,6 +74,7 @@ struct UI {
   bool build_material(Material&);
   bool build_medium(Medium&);
   bool spectrum_picker(const char* name, SpectralDistribution& spd, bool linear);
+  bool spectrum_picker(const char* name, uint32_t spd_index, bool linear);
   bool ior_picker(const char* name, RefractiveIndex& ior);
 
   void reset_selection();

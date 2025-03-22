@@ -272,6 +272,11 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior) {
   return changed;
 }
 
+bool UI::spectrum_picker(const char* name, uint32_t spd_index, bool linear) {
+  auto& spd = _current_scene->spectrums[spd_index];
+  return spectrum_picker(name, spd, linear);
+}
+
 bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, bool linear) {
   float3 rgb = {};
 
@@ -651,7 +656,7 @@ void UI::build(double dt) {
     if (scene_editable && (_selected_emitter >= 0) && (_selected_emitter < _current_scene->emitters.count)) {
       auto& emitter = _current_scene->emitters[_selected_emitter];
 
-      bool changed = spectrum_picker("Emission", emitter.emission.spectrum, true);
+      bool changed = spectrum_picker("Emission", emitter.emission.spectrum_index, true);
 
       if (emitter.cls == Emitter::Class::Directional) {
         ImGui::Text("Angular Size");
@@ -955,14 +960,14 @@ bool UI::build_material(Material& material) {
   changed |= ior_picker("Index Of Refraction", material.int_ior);
   changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior);
   ImGui::Separator();
-  changed |= spectrum_picker("Reflectance", material.reflectance.spectrum, false);
-  changed |= spectrum_picker("Transmittance", material.transmittance.spectrum, false);
+  changed |= spectrum_picker("Reflectance", material.reflectance.spectrum_index, false);
+  changed |= spectrum_picker("Transmittance", material.transmittance.spectrum_index, false);
   ImGui::Separator();
 
   ImGui::Text("%s", "Subsurface Scattering");
   changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
   changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
-  changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance, true);
+  changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance_spectrum, true);
   ImGui::Text("%s", "Subsurface Distance Scale");
   changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
   ImGui::Separator();

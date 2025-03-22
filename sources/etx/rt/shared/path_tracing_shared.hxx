@@ -67,7 +67,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   auto color = apply_image(spect, mat.transmittance, in_intersection.tex, scene, nullptr);
 
   if (mat.int_medium == kInvalidIndex) {
-    auto distances = mat.subsurface.scale * mat.subsurface.scattering_distance(spect);
+    auto distances = mat.subsurface.scale * scene.spectrums[mat.subsurface.scattering_distance_spectrum](spect);
     remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
     remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
   } else {
@@ -145,9 +145,9 @@ ETX_GPU_CODE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, con
   const auto& sss = mat.subsurface;
 
   Sample ss_samples[kIntersectionDirections] = {
-    sample(spect, in_intersection, sss, 0u, smp),
-    sample(spect, in_intersection, sss, 1u, smp),
-    sample(spect, in_intersection, sss, 2u, smp),
+    sample(spect, scene, in_intersection, sss, 0u, smp),
+    sample(spect, scene, in_intersection, sss, 1u, smp),
+    sample(spect, scene, in_intersection, sss, 2u, smp),
   };
 
   IntersectionBase intersections[kTotalIntersections] = {};
@@ -173,12 +173,12 @@ ETX_GPU_CODE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, con
     auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
 
     float gw = geometric_weigth(out_intersection.nrm, ss_sample);
-    float pdf = evaluate(spect, sss, ss_sample.sampled_radius).average();
+    float pdf = evaluate(spect, scene, sss, ss_sample.sampled_radius).average();
     ETX_VALIDATE(pdf);
     if (pdf <= 0.0f)
       continue;
 
-    auto eval = evaluate(spect, sss, length(out_intersection.pos - in_intersection.pos));
+    auto eval = evaluate(spect, scene, sss, length(out_intersection.pos - in_intersection.pos));
     ETX_VALIDATE(eval);
 
     auto weight = base_weight * eval / pdf * gw;
@@ -354,7 +354,10 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   static const Material kSubsurfaceExitMaterial = {
     .cls = Material::Class::Diffuse,
-    .transmittance = SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}),
+    .transmittance =
+      {
+        .spectrum_index = 1u,
+      },
   };
 
   const auto& tri = scene.triangles[intersection.triangle_index];
@@ -443,7 +446,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   payload.path_length += 1;
   ETX_CHECK_FINITE(payload.ray.d);
   return random_continue(payload.path_length, scene.random_path_termination, payload.eta, payload.smp, payload.throughput);
-}
+}  // namespace etx
 
 ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
   ETX_FUNCTION_SCOPE();

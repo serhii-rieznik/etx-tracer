@@ -10,7 +10,6 @@
 #include <etx/render/shared/emitter.hxx>
 #include <etx/render/shared/sampler.hxx>
 #include <etx/render/shared/bsdf.hxx>
-#include <etx/render/shared/bssrdf_subsurface.hxx>
 
 namespace etx {
 
@@ -29,6 +28,7 @@ struct ETX_ALIGNED Scene {
   ArrayView<Emitter> emitters ETX_EMPTY_INIT;
   ArrayView<Image> images ETX_EMPTY_INIT;
   ArrayView<Medium> mediums ETX_EMPTY_INIT;
+  ArrayView<SpectralDistribution> spectrums ETX_EMPTY_INIT;
   Distribution emitters_distribution ETX_EMPTY_INIT;
   EnvironmentEmitters environment_emitters ETX_EMPTY_INIT;
   float3 bounding_sphere_center ETX_EMPTY_INIT;
@@ -103,6 +103,12 @@ ETX_GPU_CODE float3 barycentrics(const ArrayView<Vertex>& vertices, const Triang
   float u = (d11 * d20 - d01 * d21) / denom;
   float v = (d00 * d21 - d01 * d20) / denom;
   return {1.0f - u - v, u, v};
+}
+
+ETX_GPU_CODE bool valid_barycentrics(const float3& p) {
+  return (p.x >= 0.0f) && (p.x <= 1.0f) &&  //
+         (p.y >= 0.0f) && (p.y <= 1.0f) &&  //
+         (p.z >= 0.0f) && (p.z <= 1.0f);
 }
 
 ETX_GPU_CODE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
@@ -227,7 +233,7 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralIma
     *image_pdf = 0.0f;
   }
 
-  auto result = img.spectrum(spect);
+  auto result = scene.spectrums[img.spectrum_index](spect);
   ETX_VALIDATE(result);
   if (img.image_index == kInvalidIndex) {
     return result;
@@ -241,5 +247,6 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralIma
 }  // namespace etx
 
 #include <etx/render/shared/scene_bsdf.hxx>
+#include <etx/render/shared/scene_bssrdf_subsurface.hxx>
 #include <etx/render/shared/scene_camera.hxx>
 #include <etx/render/shared/scene_emitters.hxx>

@@ -55,7 +55,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       pdf_dir = 1.0f;
       pdf_dir_out = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       float2 uv = disk_uv(em.direction, query.direction, em.equivalent_disk_size, em.angular_size_cosine);
-      SpectralResponse direct_scale = 1.0f / (em.emission.spectrum(spect) * kDoublePi * (1.0f - em.angular_size_cosine));
+      SpectralResponse direct_scale = 1.0f / (scene.spectrums[em.emission.spectrum_index](spect) * kDoublePi * (1.0f - em.angular_size_cosine));
       return apply_image(spect, em.emission, uv, scene, nullptr) * direct_scale;
     }
 
@@ -228,7 +228,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir_out = result.pdf_area * result.pdf_dir;
-      result.value = apply_rgb(spect, em.emission.spectrum(spect), image_value, scene);
+      result.value = apply_rgb(spect, scene.spectrums[em.emission.spectrum_index](spect), image_value, scene);
       break;
     }
 
@@ -343,7 +343,7 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       result.normal = result.direction;
       result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - result.direction);
       result.origin += result.direction * distance_to_sphere(result.origin, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
-      result.value = apply_rgb(spect, em.emission.spectrum(spect), image_value, scene);
+      result.value = apply_rgb(spect, scene.spectrums[em.emission.spectrum_index](spect), image_value, scene);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
       result.pdf_dir_out = result.pdf_area * result.pdf_dir;
