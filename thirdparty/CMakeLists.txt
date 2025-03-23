@@ -10,4 +10,5 @@ add_subdirectory(mikktspace)
 add_subdirectory(enkits)
 add_subdirectory(nanovdb)
 add_subdirectory(oidn)
+add_subdirectory(bluenoise)
 

@@ -1,4 +1,4 @@
-﻿#include <etx/core/core.hxx>
+#include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 
 #include <etx/render/host/rnd_sampler.hxx>
@@ -6,6 +6,8 @@
 #include <etx/render/shared/base.hxx>
 
 #include <etx/rt/integrators/debug.hxx>
+
+#include <bluenoise.hxx>
 
 namespace etx {
 
@@ -28,8 +30,8 @@ struct CPUDebugIntegratorImpl : public Task {
   float th_max = 1.0f;
   float3 thinfilm_rgb = Thinfilm::kRGBWavelengths;
   float3 thinfilm_span = Thinfilm::kRGBWavelengthsSpan;
-  uint32_t random_iteration = ~0u;
-  uint32_t random_dimension = ~0u;
+  uint32_t random_iteration = 0u;
+  uint32_t random_dimension = 0u;
 
   bool thinfilm_spectral = true;
 
@@ -296,16 +298,15 @@ struct CPUDebugIntegratorImpl : public Task {
         uint32_t it = random_iteration == ~0u ? status.current_iteration : random_iteration;
         uint32_t dim = random_dimension == ~0u ? 0 : min(16u, random_dimension);
 
-        RNDSampler local_smp = {};
-        local_smp.init(pixel_index, it);
+        BNSampler local_smp(xy.x, xy.y, scene.samples, it);
 
-        float2 t = {};
+        float t = {};
         uint32_t k = 0;
         do {
-          t = local_smp.next_2d();
+          t = local_smp.next();
           ++k;
         } while (k < dim);
-        output = {t.x, t.y, 0.0f};
+        output = {t, t, t};
       }
     } else if (mode == CPUDebugIntegrator::Mode::Thinfilm) {
       float cos_theta = 1.0f - t;

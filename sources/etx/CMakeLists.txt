@@ -107,7 +107,7 @@ endif()
 create_library(rt)
 target_include_directories(etx-rt PUBLIC ${EMBREE_INCLUDE_DIR})
 target_compile_definitions(etx-rt PUBLIC -DETX_HAVE_GPU_RENDER=${ETX_GPU_RENDER})
-target_link_libraries(etx-rt PRIVATE ${EMBREE_LIBRARY} etx-core etx-render)
+target_link_libraries(etx-rt PRIVATE ${EMBREE_LIBRARY} etx-core etx-render bluenoise)
 
 if(HAS_OPTIX)
   set(ETX_GPU_RENDER 1 PARENT_SCOPE)
