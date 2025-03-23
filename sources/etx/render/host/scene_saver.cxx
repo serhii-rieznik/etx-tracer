@@ -55,8 +55,8 @@ void write_materials(const SceneRepresentation& scene_rep, const char* filename)
       fprintf(fout, "Ke %.3f %.3f %.3f\n", ke.x, ke.y, ke.z);
     }
 
-    if (scene.spectrums[material.subsurface.scattering_distance_spectrum].is_zero() == false) {
-      float3 ss = spectrum::xyz_to_rgb(scene.spectrums[material.subsurface.scattering_distance_spectrum].integrate_to_xyz());
+    if (scene.spectrums[material.subsurface.spectrum_index].is_zero() == false) {
+      float3 ss = spectrum::xyz_to_rgb(scene.spectrums[material.subsurface.spectrum_index].integrate_to_xyz());
       fprintf(fout, "subsurface %.3f %.3f %.3f\n", ss.x, ss.y, ss.z);
     }
 

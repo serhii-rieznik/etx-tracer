@@ -315,6 +315,16 @@ struct SceneRepresentationImpl {
 
   void validate_materials() {
     for (auto& mtl : materials) {
+      if (mtl.reflectance.spectrum_index == kInvalidIndex) {
+        mtl.reflectance.spectrum_index = {add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}))};
+      }
+      if (mtl.transmittance.spectrum_index == kInvalidIndex) {
+        mtl.transmittance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+      }
+      if (mtl.subsurface.spectrum_index == kInvalidIndex) {
+        mtl.subsurface.spectrum_index = {add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}))};
+      }
+
       if ((mtl.roughness.value.x > 0.0f) || (mtl.roughness.value.y > 0.0f)) {
         mtl.roughness.value.x = max(kEpsilon, mtl.roughness.value.x);
         mtl.roughness.value.y = max(kEpsilon, mtl.roughness.value.y);
@@ -964,7 +974,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
       s_a = SpectralDistribution::rgb_reflectance({val[0], val[0], val[0]});
     }
   }
-  
+
   if (get_param(material, "absorbtion")) {
     log::warning("absorBtion used in medium: %s", name.c_str());
     float val[3] = {};
@@ -1441,9 +1451,6 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   auto& mtl = materials[material_index];
 
   mtl.cls = Material::Class::Diffuse;
-  mtl.reflectance = {add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}))};
-  mtl.transmittance = {add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}))};
-  mtl.subsurface.scattering_distance_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
 
   if (get_param(material, "base")) {
     auto i = material_mapping.find(data_buffer);
@@ -1612,7 +1619,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
         float dr = static_cast<float>(atof(params[i + 1]));
         float dg = static_cast<float>(atof(params[i + 2]));
         float db = static_cast<float>(atof(params[i + 3]));
-        mtl.subsurface.scattering_distance_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({dr, dg, db}));
+        mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({dr, dg, db}));
         i += 3;
       }
 
@@ -1765,6 +1772,7 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
     mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
     mtl.int_ior.eta = SpectralDistribution::constant(1.5f);
     mtl.int_ior.k = SpectralDistribution::null();
+    mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
 
     float3 rgb = {1.0f, 1.0f, 1.0f};
     const auto& base_color = material.pbrMetallicRoughness.baseColorFactor;

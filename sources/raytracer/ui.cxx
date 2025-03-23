@@ -967,7 +967,7 @@ bool UI::build_material(Material& material) {
   ImGui::Text("%s", "Subsurface Scattering");
   changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
   changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
-  changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance_spectrum, true);
+  changed |= spectrum_picker("Subsurface Distance", material.subsurface.spectrum_index, true);
   ImGui::Text("%s", "Subsurface Distance Scale");
   changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
   ImGui::Separator();

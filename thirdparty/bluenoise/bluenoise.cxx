@@ -1,1 +1,103 @@
-#include <bluenoise.hxx>#include <assert.h>#include <stdio.h>#include <bluenoise_shared.hpp>namespace spp_1 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp.hpp>}namespace spp_2 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_2spp.hpp>}namespace spp_4 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_4spp.hpp>}namespace spp_8 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_8spp.hpp>}namespace spp_16 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_16spp.hpp>}namespace spp_32 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_32spp.hpp>}namespace spp_64 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_64spp.hpp>}namespace spp_128 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_128spp.hpp>}namespace spp_256 {#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_256spp.hpp>}struct BNSampler::Impl {  // (int pixel_i, int pixel_j, int sampleIndex, int sampleDimension)  using sampling_function = float(*)(int, int, int, int);    static constexpr sampling_function sampling_functions[] = {    spp_1::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp,    spp_2::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_2spp,    spp_4::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_4spp,    spp_8::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_8spp,    spp_16::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_16spp,    spp_32::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_32spp,    spp_64::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_64spp,    spp_128::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_128spp,    spp_256::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_256spp,  };    sampling_function func;  uint32_t dim = 0;  uint32_t px = 0;  uint32_t py = 0;  uint32_t sample = 0;};uint32_t next_power(uint32_t v) {  v--;  v |= v >> 1;  v |= v >> 2;  v |= v >> 4;  v |= v >> 8;  v |= v >> 16;  v++;  return v;}BNSampler::BNSampler(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples, uint32_t current_sample) {  init(pixel_x, pixel_y, target_samples, current_sample);}void BNSampler::init(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples, uint32_t current_sample) {  static_assert(sizeof(_impl_data) >= sizeof(Impl), "Not enought storage");    target_samples = next_power((target_samples == 0u) ? 1u : (target_samples > 256u ? 256u : target_samples));  uint32_t p = 31u - __builtin_clz(target_samples);  assert(p <= 9);  auto impl = reinterpret_cast<Impl*>(_impl_data);  impl->dim = 0;  impl->px = pixel_x;  impl->py = pixel_y;  impl->sample = current_sample;  impl->func = BNSampler::Impl::sampling_functions[p];}float BNSampler::next() {  auto impl = reinterpret_cast<Impl*>(_impl_data);  return impl->func(impl->px, impl->py, impl->sample, impl->dim++);}
+#include <bluenoise.hxx>
+
+#include <assert.h>
+#include <stdio.h>
+#include <bluenoise_shared.hpp>
+
+#if defined(_MSC_VER)
+# include <intrin.h>
+#endif
+
+namespace spp_1 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp.hpp>
+}
+namespace spp_2 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_2spp.hpp>
+}
+namespace spp_4 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_4spp.hpp>
+}
+namespace spp_8 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_8spp.hpp>
+}
+namespace spp_16 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_16spp.hpp>
+}
+namespace spp_32 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_32spp.hpp>
+}
+namespace spp_64 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_64spp.hpp>
+}
+namespace spp_128 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_128spp.hpp>
+}
+namespace spp_256 {
+#include <samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_256spp.hpp>
+}
+
+struct BNSampler::Impl {
+  // (int pixel_i, int pixel_j, int sampleIndex, int sampleDimension)
+  using sampling_function = float (*)(int, int, int, int);
+
+  static constexpr sampling_function sampling_functions[] = {
+    spp_1::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_1spp,
+    spp_2::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_2spp,
+    spp_4::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_4spp,
+    spp_8::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_8spp,
+    spp_16::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_16spp,
+    spp_32::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_32spp,
+    spp_64::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_64spp,
+    spp_128::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_128spp,
+    spp_256::samplerBlueNoiseErrorDistribution_128x128_OptimizedFor_2d2d2d2d_256spp,
+  };
+
+  sampling_function func;
+  uint32_t dim = 0;
+  uint32_t px = 0;
+  uint32_t py = 0;
+  uint32_t sample = 0;
+};
+
+uint32_t next_power(uint32_t v) {
+  v--;
+  v |= v >> 1;
+  v |= v >> 2;
+  v |= v >> 4;
+  v |= v >> 8;
+  v |= v >> 16;
+  v++;
+  return v;
+}
+
+BNSampler::BNSampler(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples, uint32_t current_sample) {
+  init(pixel_x, pixel_y, target_samples, current_sample);
+}
+
+void BNSampler::init(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples, uint32_t current_sample) {
+  static_assert(sizeof(_impl_data) >= sizeof(Impl), "Not enought storage");
+
+  target_samples = next_power((target_samples == 0u) ? 1u : (target_samples > 256u ? 256u : target_samples));
+
+#if defined(_MSC_VER)
+  unsigned long p = 1;
+  _BitScanForward(&p, target_samples);
+#else
+  uint32_t p = 31u - __builtin_clz(target_samples);
+#endif
+
+  constexpr auto sampling_functions_count = sizeof(BNSampler::Impl::sampling_functions) / sizeof(BNSampler::Impl::sampling_functions[0]);
+  assert(p < sampling_functions_count);
+
+  auto impl = reinterpret_cast<Impl*>(_impl_data);
+  impl->dim = 0;
+  impl->px = pixel_x;
+  impl->py = pixel_y;
+  impl->sample = current_sample;
+  impl->func = BNSampler::Impl::sampling_functions[p];
+}
+
+float BNSampler::next() {
+  auto impl = reinterpret_cast<Impl*>(_impl_data);
+  return impl->func(impl->px, impl->py, impl->sample, impl->dim++);
+}

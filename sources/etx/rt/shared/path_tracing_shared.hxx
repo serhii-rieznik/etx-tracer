@@ -67,7 +67,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   auto color = apply_image(spect, mat.transmittance, in_intersection.tex, scene, nullptr);
 
   if (mat.int_medium == kInvalidIndex) {
-    auto distances = mat.subsurface.scale * scene.spectrums[mat.subsurface.scattering_distance_spectrum](spect);
+    auto distances = mat.subsurface.scale * apply_image(spect, mat.subsurface, in_intersection.tex, scene, nullptr);
     remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
     remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
   } else {
@@ -173,12 +173,12 @@ ETX_GPU_CODE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, con
     auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
 
     float gw = geometric_weigth(out_intersection.nrm, ss_sample);
-    float pdf = evaluate(spect, scene, sss, ss_sample.sampled_radius).average();
+    float pdf = evaluate(spect, scene, out_intersection, sss, ss_sample.sampled_radius).average();
     ETX_VALIDATE(pdf);
     if (pdf <= 0.0f)
       continue;
 
-    auto eval = evaluate(spect, scene, sss, length(out_intersection.pos - in_intersection.pos));
+    auto eval = evaluate(spect, scene, out_intersection, sss, length(out_intersection.pos - in_intersection.pos));
     ETX_VALIDATE(eval);
 
     auto weight = base_weight * eval / pdf * gw;
@@ -353,11 +353,8 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   ETX_FUNCTION_SCOPE();
 
   static const Material kSubsurfaceExitMaterial = {
+    .transmittance = {.spectrum_index = 1u},
     .cls = Material::Class::Diffuse,
-    .transmittance =
-      {
-        .spectrum_index = 1u,
-      },
   };
 
   const auto& tri = scene.triangles[intersection.triangle_index];
