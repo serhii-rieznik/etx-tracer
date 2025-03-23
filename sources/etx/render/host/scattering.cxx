@@ -34,7 +34,7 @@ float mie(float l) {
   return scale / (l * l);
 }
 
-float ozone_absorbtion(float l) {
+float ozone_absorption(float l) {
   const float na = 6.022140857f /* e+23f cancelled with base */;
   const float concentration = 41.58e-6f;
   float x = l;
@@ -241,7 +241,7 @@ void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinct
 
     accum.x += scattering::rayleigh(float(w));
     accum.y += scattering::mie(float(w));
-    accum.z += scattering::ozone_absorbtion(float(w));
+    accum.z += scattering::ozone_absorption(float(w));
 
     if (i % kSpectrumStepSize == 0) {
       r_samples.emplace_back(float2{float(w), accum.x / static_cast<float>(kSpectrumStepSize)});

@@ -964,6 +964,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
       s_a = SpectralDistribution::rgb_reflectance({val[0], val[0], val[0]});
     }
   }
+  
   if (get_param(material, "absorbtion")) {
     log::warning("absorBtion used in medium: %s", name.c_str());
     float val[3] = {};
