@@ -82,9 +82,11 @@ struct ETX_ALIGNED Material {
   uint32_t int_medium = kInvalidIndex;
   uint32_t ext_medium = kInvalidIndex;
   uint32_t normal_image_index = kInvalidIndex;
-  uint32_t diffuse_variation = 0;
+
+  uint32_t diffuse_variation = 0u;
   float normal_scale = 1.0f;
-  float pad = 0.0f;
+  float emission_collimation = 1.0f;
+  uint32_t emission_direction = 0u;
 
   bool has_diffuse() const {
     return (cls == Class::Diffuse) || (cls == Class::Plastic);
