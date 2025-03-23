@@ -72,6 +72,7 @@ struct ETX_ALIGNED Material {
   SpectralImage emission;
   SampledImage roughness;
   SampledImage metalness;
+  SampledImage transmission;
   SubsurfaceMaterial subsurface;
 
   RefractiveIndex ext_ior = {};

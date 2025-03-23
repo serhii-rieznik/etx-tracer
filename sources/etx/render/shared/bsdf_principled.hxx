@@ -31,7 +31,11 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& in_mtl, con
   } else {
     m_local.int_ior = spectrum::shared()->dielectric;
     m_local.reflectance.image_index = kInvalidIndex;
-    return PlasticBSDF::sample(data, m_local, scene, smp);
+    if (smp.next() < m_local.transmission.value.x) {
+      return DielectricBSDF::sample(data, m_local, scene, smp);
+    } else {
+      return PlasticBSDF::sample(data, m_local, scene, smp);
+    }
   }
 }
 
@@ -59,7 +63,11 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   } else {
     m_local.int_ior = spectrum::shared()->dielectric;
     m_local.reflectance.image_index = kInvalidIndex;
-    return PlasticBSDF::evaluate(data, w_o, m_local, scene, smp);
+    if (smp.next() < m_local.transmission.value.x) {
+      return DielectricBSDF::evaluate(data, w_o, m_local, scene, smp);
+    } else {
+      return PlasticBSDF::evaluate(data, w_o, m_local, scene, smp);
+    }
   }
 }
 
@@ -77,7 +85,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   } else {
     m_local.int_ior = spectrum::shared()->dielectric;
     m_local.reflectance.image_index = kInvalidIndex;
-    return PlasticBSDF::pdf(data, w_o, m_local, scene, smp);
+    if (smp.next() < m_local.transmission.value.x) {
+      return DielectricBSDF::pdf(data, w_o, m_local, scene, smp);
+    } else {
+      return PlasticBSDF::pdf(data, w_o, m_local, scene, smp);
+    }
   }
 }
 

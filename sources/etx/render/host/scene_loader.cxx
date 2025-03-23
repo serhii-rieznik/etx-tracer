@@ -37,16 +37,16 @@ inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
       {0.471f, 3.24f}, {0.496f, 3.30f}, {0.521f, 3.33f}, {0.549f, 3.33f}, {0.582f, 3.30f}, {0.617f, 3.30f}, {0.659f, 3.34f}, {0.704f, 3.39f}, {0.756f, 3.42f}, {0.821f, 3.48f},
       {0.892f, 3.52f}};
 
-    static const float2 plastic_samples_eta[] = {{40.0000f, 1.519f}, {41.6667f, 1.519f}, {43.4783f, 1.519f}, {45.4545f, 1.520f}, {47.6190f, 1.521f}, {50.0000f, 1.521f},
-      {52.6316f, 1.521f}, {55.5556f, 1.521f}, {58.8235f, 1.521f}, {62.5000f, 1.521f}, {66.6667f, 1.521f}, {71.4286f, 1.521f}, {76.9231f, 1.520f}, {83.3333f, 1.520f},
-      {90.9091f, 1.520f}};
-
-    shared_spectrums.thinfilm.eta = SPD::constant(1.5f);
+    shared_spectrums.thinfilm.cls = SpectralDistribution::Class::Dielectric;
+    shared_spectrums.thinfilm.eta = SPD::constant(1.73f);
     shared_spectrums.thinfilm.k = SPD::null();
 
+    shared_spectrums.conductor.cls = SpectralDistribution::Class::Conductor;
     shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)));
     shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)));
-    shared_spectrums.dielectric.eta = SPD::from_samples(plastic_samples_eta, uint32_t(std::size(plastic_samples_eta)));
+
+    shared_spectrums.dielectric.cls = SpectralDistribution::Class::Dielectric;
+    shared_spectrums.dielectric.eta = SPD::constant(1.521f);
     shared_spectrums.dielectric.k = SPD::null();
   }
 }
@@ -1864,6 +1864,18 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
         }
 
         mtl.emission = {add_spectrum(spd)};
+      }
+
+      for (const auto& ext : material.extensions) {
+        if (ext.first == "KHR_materials_transmission") {
+          if (ext.second.IsObject() && ext.second.Has("transmissionFactor")) {
+            const auto& value = ext.second.Get("transmissionFactor");
+            if (value.IsNumber()) {
+              float transmission = float(value.GetNumberAsDouble());
+              mtl.transmission.value = {transmission, transmission, transmission, transmission};
+            }
+          }
+        }
       }
     }
 
