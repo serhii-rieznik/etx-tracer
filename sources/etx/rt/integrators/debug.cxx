@@ -14,12 +14,11 @@ struct CPUDebugIntegratorImpl : public Task {
 
   Raytracing& rt;
   std::atomic<Integrator::State>* state = nullptr;
-  std::vector<Sampler> samplers;
   TimeMeasure total_time = {};
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   uint32_t current_scale = 1u;
-  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Geometry;
+  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Random;
   RefractiveIndex spd_base;
   RefractiveIndex spd_air;
   Thinfilm thinfilm;
@@ -29,12 +28,14 @@ struct CPUDebugIntegratorImpl : public Task {
   float th_max = 1.0f;
   float3 thinfilm_rgb = Thinfilm::kRGBWavelengths;
   float3 thinfilm_span = Thinfilm::kRGBWavelengthsSpan;
+  uint32_t random_iteration = ~0u;
+  uint32_t random_dimension = ~0u;
+
   bool thinfilm_spectral = true;
 
   CPUDebugIntegratorImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
-    , state(st)
-    , samplers(rt.scheduler().max_thread_count()) {
+    , state(st) {
     spd_air = RefractiveIndex::load_from_file(env().file_in_data("spectrum/air.spd"));
     spd_base = RefractiveIndex::load_from_file(env().file_in_data("spectrum/water.spd"));
     thinfilm.ior = RefractiveIndex::load_from_file(env().file_in_data("spectrum/glycerol.spd"));
@@ -52,6 +53,9 @@ struct CPUDebugIntegratorImpl : public Task {
     thinfilm_rgb = opt.get("thinfilm_rgb", thinfilm_rgb).to_float3();
     thinfilm_span = opt.get("thinfilm_span", thinfilm_span).to_float3();
     thinfilm_spectral = opt.get("thinfilm_spectral", thinfilm_spectral).to_bool();
+
+    random_iteration = opt.get("rnd_smp", random_iteration).to_integer();
+    random_dimension = opt.get("rnd_dim", random_dimension).to_integer();
 
     voxel_data[0] = opt.get("v000", voxel_data[0]).to_float();
     voxel_data[1] = opt.get("v001", voxel_data[1]).to_float();
@@ -72,12 +76,13 @@ struct CPUDebugIntegratorImpl : public Task {
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     const auto& film = rt.film();
-    auto& smp = samplers[thread_id];
+    RNDSampler smp = {};
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
+      smp.init(i, status.current_iteration);
       uint2 pixel = {};
       if (film.active_pixel(i, pixel)) {
         float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
-        float3 xyz = preview_pixel(smp, uv, pixel);
+        float3 xyz = preview_pixel(smp, uv, pixel, i);
         rt.film().accumulate(pixel, {{xyz, Film::CameraImage}});
       }
     }
@@ -271,11 +276,10 @@ struct CPUDebugIntegratorImpl : public Task {
     return normalize(result);
   }
 
-  float3 preview_pixel(Sampler& smp, const float2& uv, const uint2& xy) const {
+  float3 preview_pixel(Sampler& smp, const float2& uv, const uint2& xy, const uint32_t pixel_index) const {
     const auto& scene = rt.scene();
     const auto& camera = rt.camera();
     auto& film = rt.film();
-    auto ray = generate_ray(scene, camera, uv, smp.next_2d());
     auto spect = scene.spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
     float3 output = {};
@@ -284,7 +288,26 @@ struct CPUDebugIntegratorImpl : public Task {
 
     Intersection intersection;
 
-    if (mode == CPUDebugIntegrator::Mode::Thinfilm) {
+    if (mode == CPUDebugIntegrator::Mode::Random) {
+      if ((random_iteration == ~0u) && (random_dimension == ~0u)) {
+        float t = smp.next();
+        output = {t, t, t};
+      } else {
+        uint32_t it = random_iteration == ~0u ? status.current_iteration : random_iteration;
+        uint32_t dim = random_dimension == ~0u ? 0 : min(16u, random_dimension);
+
+        RNDSampler local_smp = {};
+        local_smp.init(pixel_index, it);
+
+        float2 t = {};
+        uint32_t k = 0;
+        do {
+          t = local_smp.next_2d();
+          ++k;
+        } while (k < dim);
+        output = {t.x, t.y, 0.0f};
+      }
+    } else if (mode == CPUDebugIntegrator::Mode::Thinfilm) {
       float cos_theta = 1.0f - t;
       float thickness = s * 2500.0f;
 
@@ -376,120 +399,123 @@ struct CPUDebugIntegratorImpl : public Task {
       float3 value_rgb = f_rgb.to_rgb() / s_rgb.sampling_pdf();
 
       output = (band % 2 == 0 ? value_spectrum : value_rgb);
-    } else if (rt.trace(scene, ray, intersection, smp)) {
-      bool entering_material = dot(ray.d, intersection.nrm) < 0.0f;
+    } else {
+      auto ray = generate_ray(scene, camera, uv, smp.next_2d());
+      if (rt.trace(scene, ray, intersection, smp)) {
+        bool entering_material = dot(ray.d, intersection.nrm) < 0.0f;
 
-      switch (mode) {
-        case CPUDebugIntegrator::Mode::Barycentrics: {
-          output = intersection.barycentric;
-          break;
-        }
-        case CPUDebugIntegrator::Mode::Normals: {
-          output = saturate(intersection.nrm * 0.5f + 0.5f);
-          break;
-        }
-        case CPUDebugIntegrator::Mode::Tangents: {
-          output = saturate(intersection.tan * 0.5f + 0.5f);
-          break;
-        }
-        case CPUDebugIntegrator::Mode::Bitangents: {
-          output = saturate(intersection.btn * 0.5f + 0.5f);
-          break;
-        }
-        case CPUDebugIntegrator::Mode::TexCoords: {
-          output = {intersection.tex.x, intersection.tex.y, 0.0f};
-          break;
-        }
-        case CPUDebugIntegrator::Mode::FaceOrientation: {
-          float d = fabsf(dot(intersection.nrm, ray.d));
-          output = d * (entering_material ? float3{0.2f, 0.2f, 1.0f} : float3{1.0f, 0.2f, 0.2f});
-          break;
-        };
-        case CPUDebugIntegrator::Mode::TransmittanceColor: {
-          const auto& mat = scene.materials[intersection.material_index];
-          output = apply_image(spect, mat.transmittance, intersection.tex, rt.scene(), nullptr).to_rgb();
-          break;
-        };
-        case CPUDebugIntegrator::Mode::ReflectanceColor: {
-          const auto& mat = scene.materials[intersection.material_index];
-          output = apply_image(spect, mat.reflectance, intersection.tex, rt.scene(), nullptr).to_rgb();
-          break;
-        };
-        case CPUDebugIntegrator::Mode::Fresnel: {
-          const auto& mat = scene.materials[intersection.material_index];
-          auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, intersection.tex, scene, smp);
-          auto eta_i = (entering_material ? mat.ext_ior : mat.int_ior)(spect);
-          auto eta_o = (entering_material ? mat.int_ior : mat.ext_ior)(spect);
-          SpectralResponse fr = fresnel::calculate(spect, dot(ray.d, intersection.nrm), eta_i, eta_o, thinfilm);
-          output = fr.to_rgb();
-          break;
-        };
-
-        case CPUDebugIntegrator::Mode::Thickness: {
-          auto remap_color = [this](float t) -> float3 {
-            t = saturate((t - th_min) / (th_max - th_min));
-            float3 result = {
-              fmaxf(0.0f, cosf(t * kHalfPi)),
-              fmaxf(0.0f, sinf(t * kPi)),
-              fmaxf(0.0f, sinf(t * kHalfPi)),
-            };
-            ETX_VALIDATE(result);
-            result = gamma_to_linear(result);
-            ETX_VALIDATE(result);
-            return result;
+        switch (mode) {
+          case CPUDebugIntegrator::Mode::Barycentrics: {
+            output = intersection.barycentric;
+            break;
+          }
+          case CPUDebugIntegrator::Mode::Normals: {
+            output = saturate(intersection.nrm * 0.5f + 0.5f);
+            break;
+          }
+          case CPUDebugIntegrator::Mode::Tangents: {
+            output = saturate(intersection.tan * 0.5f + 0.5f);
+            break;
+          }
+          case CPUDebugIntegrator::Mode::Bitangents: {
+            output = saturate(intersection.btn * 0.5f + 0.5f);
+            break;
+          }
+          case CPUDebugIntegrator::Mode::TexCoords: {
+            output = {intersection.tex.x, intersection.tex.y, 0.0f};
+            break;
+          }
+          case CPUDebugIntegrator::Mode::FaceOrientation: {
+            float d = fabsf(dot(intersection.nrm, ray.d));
+            output = d * (entering_material ? float3{0.2f, 0.2f, 1.0f} : float3{1.0f, 0.2f, 0.2f});
+            break;
+          };
+          case CPUDebugIntegrator::Mode::TransmittanceColor: {
+            const auto& mat = scene.materials[intersection.material_index];
+            output = apply_image(spect, mat.transmittance, intersection.tex, rt.scene(), nullptr).to_rgb();
+            break;
+          };
+          case CPUDebugIntegrator::Mode::ReflectanceColor: {
+            const auto& mat = scene.materials[intersection.material_index];
+            output = apply_image(spect, mat.reflectance, intersection.tex, rt.scene(), nullptr).to_rgb();
+            break;
+          };
+          case CPUDebugIntegrator::Mode::Fresnel: {
+            const auto& mat = scene.materials[intersection.material_index];
+            auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, intersection.tex, scene, smp);
+            auto eta_i = (entering_material ? mat.ext_ior : mat.int_ior)(spect);
+            auto eta_o = (entering_material ? mat.int_ior : mat.ext_ior)(spect);
+            SpectralResponse fr = fresnel::calculate(spect, dot(ray.d, intersection.nrm), eta_i, eta_o, thinfilm);
+            output = fr.to_rgb();
+            break;
           };
 
-          constexpr uint32_t kSampleCount = 64u;
-          float distances[kSampleCount] = {};
-          float average = 0.0f;
-          uint32_t distance_count = 0;
-          const float3 p0 = offset_ray(intersection.pos, -intersection.nrm);
-          for (uint32_t i = 0; i < kSampleCount; ++i) {
-            float3 d = -sample_cosine_distribution(smp.next_2d(), intersection.nrm, th_factor);
-            Intersection e;
-            Ray tr = {p0, d};
-            tr.max_t = 2.0f * th_max;
-            bool intersection_found = rt.trace(scene, tr, e, smp);
-            average += intersection_found ? e.t : tr.max_t;
-            distances[distance_count++] = intersection_found ? e.t : tr.max_t;
-          }
+          case CPUDebugIntegrator::Mode::Thickness: {
+            auto remap_color = [this](float t) -> float3 {
+              t = saturate((t - th_min) / (th_max - th_min));
+              float3 result = {
+                fmaxf(0.0f, cosf(t * kHalfPi)),
+                fmaxf(0.0f, sinf(t * kPi)),
+                fmaxf(0.0f, sinf(t * kHalfPi)),
+              };
+              ETX_VALIDATE(result);
+              result = gamma_to_linear(result);
+              ETX_VALIDATE(result);
+              return result;
+            };
 
-          if (distance_count == 0) {
-            output = {1.0f, 0.0f, 1.0f};
-            break;
-          }
-
-          if (distance_count == 1) {
-            output = remap_color(distances[0]);
-            break;
-          }
-
-          average /= float(distance_count);
-
-          float std_dev = 0.0f;
-          for (uint32_t i = 0; i < distance_count; ++i) {
-            std_dev += sqr(distances[i] - average);
-          }
-          std_dev = sqrtf(std_dev / distance_count);
-
-          float thickness = 0.0f;
-          float total_count = 0.0f;
-          for (uint32_t i = 0; i < distance_count; ++i) {
-            float dev = fabsf(distances[i] - average) / (std_dev + kEpsilon);
-            if (dev <= 1.0f) {
-              thickness += distances[i];
-              total_count += 1.0f;
+            constexpr uint32_t kSampleCount = 64u;
+            float distances[kSampleCount] = {};
+            float average = 0.0f;
+            uint32_t distance_count = 0;
+            const float3 p0 = offset_ray(intersection.pos, -intersection.nrm);
+            for (uint32_t i = 0; i < kSampleCount; ++i) {
+              float3 d = -sample_cosine_distribution(smp.next_2d(), intersection.nrm, th_factor);
+              Intersection e;
+              Ray tr = {p0, d};
+              tr.max_t = 2.0f * th_max;
+              bool intersection_found = rt.trace(scene, tr, e, smp);
+              average += intersection_found ? e.t : tr.max_t;
+              distances[distance_count++] = intersection_found ? e.t : tr.max_t;
             }
+
+            if (distance_count == 0) {
+              output = {1.0f, 0.0f, 1.0f};
+              break;
+            }
+
+            if (distance_count == 1) {
+              output = remap_color(distances[0]);
+              break;
+            }
+
+            average /= float(distance_count);
+
+            float std_dev = 0.0f;
+            for (uint32_t i = 0; i < distance_count; ++i) {
+              std_dev += sqr(distances[i] - average);
+            }
+            std_dev = sqrtf(std_dev / distance_count);
+
+            float thickness = 0.0f;
+            float total_count = 0.0f;
+            for (uint32_t i = 0; i < distance_count; ++i) {
+              float dev = fabsf(distances[i] - average) / (std_dev + kEpsilon);
+              if (dev <= 1.0f) {
+                thickness += distances[i];
+                total_count += 1.0f;
+              }
+            }
+
+            float out_value = thickness / (total_count + kEpsilon);
+            output = remap_color(out_value);
+            break;
           }
 
-          float out_value = thickness / (total_count + kEpsilon);
-          output = remap_color(out_value);
-          break;
-        }
-
-        default: {
-          float d = fabsf(dot(intersection.nrm, ray.d));
-          output = {d, d, d};
+          default: {
+            float d = fabsf(dot(intersection.nrm, ray.d));
+            output = {d, d, d};
+          }
         }
       }
     }
@@ -573,6 +599,11 @@ Options CPUDebugIntegrator::options() const {
     // result.add(0.0f, _private->thinfilm.max_thickness, 10000.0f, "test_th", "Thickness");
   }
 
+  if (_private->mode == Mode::Random) {
+    result.add(_private->random_iteration, "rnd_smp", "Sample");
+    result.add(_private->random_dimension, "rnd_dim", "Dimension");
+  }
+
   return result;
 }
 
@@ -606,6 +637,8 @@ std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
       return "Spectrums";
     case Mode::IOR:
       return "IOR";
+    case Mode::Random:
+      return "Random Sampler";
     default:
       return "???";
   }

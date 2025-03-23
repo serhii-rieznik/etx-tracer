@@ -21,6 +21,7 @@ struct CPUDebugIntegrator : public Integrator {
     Thinfilm,
     Spectrums,
     IOR,
+    Random,
 
     Count,
   };
