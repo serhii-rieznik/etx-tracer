@@ -1692,13 +1692,12 @@ float4x4 SceneRepresentationImpl::build_gltf_node_transform(const tinygltf::Node
   return transform;
 }
 
-void SceneRepresentationImpl::load_gltf_camera(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Camera& pcam, const float4x4& parent_transform) {
+void SceneRepresentationImpl::load_gltf_camera(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Camera& pcam, const float4x4& transform) {
   if (pcam.type != "perspective") {
     log::warning("Loading non-perspective not yet supported");
     return;
   }
 
-  const auto& transform = parent_transform * build_gltf_node_transform(node);
   const auto& cam = pcam.perspective;
 
   auto position = to_float3(transform * float4{0.0f, 0.0f, 0.0f, 1.0f});
@@ -1709,17 +1708,18 @@ void SceneRepresentationImpl::load_gltf_camera(const tinygltf::Node& node, const
 }
 
 void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node, const float4x4& parent_transform) {
+  auto current_transform = parent_transform * build_gltf_node_transform(node);
+
   if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
-    load_gltf_mesh(node, model, model.meshes.at(node.mesh), parent_transform);
+    load_gltf_mesh(node, model, model.meshes.at(node.mesh), current_transform);
   }
 
   if ((node.camera >= 0) && (node.camera < model.cameras.size())) {
-    load_gltf_camera(node, model, model.cameras.at(node.camera), parent_transform);
+    load_gltf_camera(node, model, model.cameras.at(node.camera), current_transform);
   }
 
   for (const auto& child : node.children) {
-    auto child_transform = parent_transform * build_gltf_node_transform(model.nodes[child]);
-    load_gltf_node(model, model.nodes[child], child_transform);
+    load_gltf_node(model, model.nodes[child], current_transform);
   }
 }
 
@@ -1893,8 +1893,7 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
   images.load_images();
 }
 
-void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh& mesh, const float4x4& parent_transform) {
-  const auto& transform = parent_transform * build_gltf_node_transform(node);
+void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh& mesh, const float4x4& transform) {
   for (const auto& primitive : mesh.primitives) {
     bool has_positions = primitive.attributes.count("POSITION") > 0;
     bool has_normals = primitive.attributes.count("NORMAL") > 0;
