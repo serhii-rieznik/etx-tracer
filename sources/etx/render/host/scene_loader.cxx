@@ -615,9 +615,6 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   _private->camera.medium_index = kInvalidIndex;
   _private->camera.up = {0.0f, 1.0f, 0.0f};
 
-  _private->add_spectrum(SpectralDistribution::null());
-  _private->add_spectrum(SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f}));
-
   auto& camera = _private->camera;
   float3 camera_target = camera.position + camera.direction;
   float camera_fov = get_camera_fov(camera);
@@ -1093,7 +1090,7 @@ void SceneRepresentationImpl::parse_directional_light(const char* base_dir, cons
   if (get_param(material, "color")) {
     e.emission.spectrum_index = load_illuminant_spectrum(data_buffer);
   } else {
-    e.emission.spectrum_index = 1u;
+    e.emission.spectrum_index = add_spectrum(SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f}));
   }
 
   e.direction = float3{1.0f, 1.0f, 1.0f};
@@ -1136,7 +1133,7 @@ void SceneRepresentationImpl::parse_env_light(const char* base_dir, const tinyob
   if (get_param(material, "color")) {
     e.emission.spectrum_index = load_illuminant_spectrum(data_buffer);
   } else {
-    e.emission.spectrum_index = 1u;
+    e.emission.spectrum_index = add_spectrum(SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f}));
   }
 }
 
@@ -1384,9 +1381,7 @@ uint32_t SceneRepresentationImpl::load_reflectance_spectrum(char* data) {
       static_cast<float>(atof(params[1])),
       static_cast<float>(atof(params[2])),
     });
-    char buffer[128] = {};
-    snprintf(buffer, sizeof(buffer), "spectrum%.4f%.4f%.4f", value.x, value.y, value.z);
-    return add_spectrum(buffer, SpectralDistribution::rgb_reflectance(value));
+    return add_spectrum(SpectralDistribution::rgb_reflectance(value));
   }
 
   return 0;
@@ -1398,7 +1393,7 @@ uint32_t SceneRepresentationImpl::load_illuminant_spectrum(char* data) {
   if (params.size() == 1) {
     float value = 0.0f;
     if (sscanf(params[0], "%f", &value) == 1) {
-      return add_spectrum(params[0], SpectralDistribution::rgb_luminance({value, value, value}));
+      return add_spectrum(SpectralDistribution::rgb_luminance({value, value, value}));
     }
 
     auto i = find_spectrum(params[0]);
@@ -1412,9 +1407,7 @@ uint32_t SceneRepresentationImpl::load_illuminant_spectrum(char* data) {
       static_cast<float>(atof(params[1])),
       static_cast<float>(atof(params[2])),
     };
-    char buffer[128] = {};
-    snprintf(buffer, sizeof(buffer), "spectrum%.4f%.4f%.4f", value.x, value.y, value.z);
-    return add_spectrum(buffer, SpectralDistribution::rgb_luminance(value));
+    return add_spectrum(SpectralDistribution::rgb_luminance(value));
   }
 
   SpectralDistribution emitter_spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
@@ -1436,7 +1429,7 @@ uint32_t SceneRepresentationImpl::load_illuminant_spectrum(char* data) {
   }
   emitter_spectrum.scale(scale);
 
-  return add_spectrum(data, emitter_spectrum);
+  return add_spectrum(emitter_spectrum);
 }
 
 void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj::material_t& material) {
