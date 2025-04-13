@@ -80,7 +80,9 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     ray.updateHeight(sampled_height);
 
     // next direction
-    auto sample = external::samplePhaseFunction_dielectric(data.spectrum_sample, smp, -ray.w, roughness,  //
+    float2 rnd_slope = (scattering_order == 0) && smp.has_fixed() ? float2{smp.fixed_u, smp.fixed_v} : smp.next_2d();
+    float rnd_reflection = (scattering_order == 0) && smp.has_fixed() ? smp.fixed_w : smp.next();
+    auto sample = external::samplePhaseFunction_dielectric(data.spectrum_sample, rnd_slope, rnd_reflection, -ray.w, roughness,  //
       (ray_outside ? ext_ior : int_ior), (ray_outside ? int_ior : ext_ior), thinfilm);
 
     result.weight *= sample.weight;

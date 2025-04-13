@@ -29,8 +29,10 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     if (ray.h == kMaxFloat)
       break;
 
+    float2 slope_rnd = (scattering_order == 0) && smp.has_fixed() ? float2{smp.fixed_u, smp.fixed_v} : smp.next_2d();
+
     SpectralResponse weight = {data.spectrum_sample, 1.0f};
-    ray.updateDirection(external::samplePhaseFunction_conductor(data.spectrum_sample, smp, -ray.w, roughness, ext_ior, int_ior, thinfilm, weight), roughness);
+    ray.updateDirection(external::samplePhaseFunction_conductor(data.spectrum_sample, slope_rnd, -ray.w, roughness, ext_ior, int_ior, thinfilm, weight), roughness);
     ray.updateHeight(ray.h);
 
     result.weight *= weight;

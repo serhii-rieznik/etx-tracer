@@ -3,7 +3,6 @@
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/image.hxx>
-#include <etx/render/host/rnd_sampler.hxx>
 
 namespace etx {
 

@@ -244,9 +244,9 @@ ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distributi
   return emitter.weight / dist.total_weight;
 }
 
-ETX_GPU_CODE uint32_t sample_emitter_index(const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE uint32_t sample_emitter_index(const Scene& scene, float rnd) {
   float pdf_sample = 0.0f;
-  uint32_t emitter_index = static_cast<uint32_t>(scene.emitters_distribution.sample(smp.next(), pdf_sample));
+  uint32_t emitter_index = static_cast<uint32_t>(scene.emitters_distribution.sample(rnd, pdf_sample));
   ETX_ASSERT(emitter_index < scene.emitters_distribution.values.count);
   return emitter_index;
 }

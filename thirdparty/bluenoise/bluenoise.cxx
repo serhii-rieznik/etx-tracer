@@ -71,10 +71,6 @@ uint32_t next_power(uint32_t v) {
 }
 
 BNSampler::BNSampler(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples, uint32_t current_sample) {
-  init(pixel_x, pixel_y, target_samples, current_sample);
-}
-
-void BNSampler::init(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples, uint32_t current_sample) {
   static_assert(sizeof(_impl_data) >= sizeof(Impl), "Not enought storage");
 
   target_samples = next_power((target_samples == 0u) ? 1u : (target_samples > 256u ? 256u : target_samples));
@@ -99,5 +95,11 @@ void BNSampler::init(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples
 
 float BNSampler::next() {
   auto impl = reinterpret_cast<Impl*>(_impl_data);
-  return impl->func(impl->px, impl->py, impl->sample, impl->dim++);
+  return get(impl->dim++);
+  // impl->func(impl->px, impl->py, impl->sample, impl->dim++);
+}
+
+float BNSampler::get(uint32_t dimension) const {
+  auto impl = reinterpret_cast<const Impl*>(_impl_data);
+  return impl->func(impl->px, impl->py, impl->sample, dimension);
 }

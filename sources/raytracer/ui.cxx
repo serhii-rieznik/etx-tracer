@@ -734,7 +734,11 @@ void UI::build(double dt) {
       ImGui::Text("Max samples per pixel / iterations:");
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##samples", reinterpret_cast<int*>(&_current_scene->samples));
       ImGui::Text("Maximum path length:");
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxcampathlLength", reinterpret_cast<int*>(&_current_scene->max_camera_path_length));
+      _current_scene->max_camera_path_length = std::min(_current_scene->max_camera_path_length, 65536u);
+      ImGui::Text("Maximum light path length:");
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxlightpathlLength", reinterpret_cast<int*>(&_current_scene->max_light_path_length));
+      _current_scene->max_light_path_length = std::min(_current_scene->max_light_path_length, 65536u);
       ImGui::Text("Path length w/o random termination:");
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
       ImGui::Text("Noise Threshold:");
@@ -754,7 +758,7 @@ void UI::build(double dt) {
     ImGui::End();
   }
 
-  if (has_integrator && (_current_integrator->status().debug_info_count > 0)) {
+  if (has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr)) {
     if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
       auto debug_info = _current_integrator->status().debug_info;
       for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {

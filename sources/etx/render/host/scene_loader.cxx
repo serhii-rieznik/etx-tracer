@@ -425,14 +425,14 @@ struct SceneRepresentationImpl {
     genTangSpaceDefault(&context);
   }
 
-  void validate_tangents(std::vector<bool>& referenced_vertices) {
+  void validate_tangents(std::vector<bool>& referenced_vertices, bool force) {
     for (uint64_t vertex_index = 0, e = vertices.size(); vertex_index < e; ++vertex_index) {
       auto& v = vertices[vertex_index];
-      if (is_valid_vector(v.tan) && is_valid_vector(v.btn)) {
+      if ((force == false) && is_valid_vector(v.tan) && is_valid_vector(v.btn)) {
         continue;
       }
 
-      if (referenced_vertices[vertex_index]) {
+      if (force || referenced_vertices[vertex_index]) {
         ETX_ASSERT(is_valid_vector(v.nrm));
         auto [t, b] = orthonormal_basis(v.nrm);
         v.tan = t;
@@ -626,6 +626,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   float camera_fov = get_camera_fov(camera);
   float camera_focal_len = fov_to_focal_length(camera_fov);
   bool use_focal_len = false;
+  bool force_tangents = false;
 
   if (strcmp(get_file_ext(filename), ".json") == 0) {
     auto js = json_from_file(filename);
@@ -641,13 +642,17 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       } else if (json_get_int(i, "random-termination-start", int_value)) {
         _private->scene.random_path_termination = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_int(i, "max-path-length", int_value)) {
-        _private->scene.max_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->scene.max_camera_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+      } else if (json_get_int(i, "max-light-path-length", int_value)) {
+        _private->scene.max_light_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_string(i, "geometry", str_value)) {
         _private->geometry_file_name = std::string(base_folder) + str_value;
       } else if (json_get_string(i, "materials", str_value)) {
         _private->mtl_file_name = std::string(base_folder) + str_value;
       } else if (json_get_bool(i, "spectral", bool_value)) {
         _private->scene.spectral = bool_value;
+      } else if (json_get_bool(i, "force-tangents", bool_value)) {
+        force_tangents = bool_value;
       } else if ((key == "camera") && obj.is_object()) {
         for (auto ci = obj.begin(), ce = obj.end(); ci != ce; ++ci) {
           const auto& ckey = ci.key();
@@ -739,7 +744,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
     std::vector<bool> referenced_vertices;
     _private->validate_normals(referenced_vertices);
     _private->build_tangents();
-    _private->validate_tangents(referenced_vertices);
+    _private->validate_tangents(referenced_vertices, force_tangents);
     log::warning("Tangents calculated in %.2f sec\n", m.measure());
   }
 

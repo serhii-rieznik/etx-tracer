@@ -8,6 +8,7 @@ struct BNSampler {
 
   void init(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples, uint32_t current_sample);
   float next();
+  float get(uint32_t dimension) const;
 
  private:
   struct Impl;

@@ -9,6 +9,7 @@ struct ETX_ALIGNED PTOptions {
   uint32_t path_per_iteration ETX_INIT_WITH(1u);
   bool nee ETX_INIT_WITH(true);
   bool mis ETX_INIT_WITH(true);
+  bool blue_noise ETX_INIT_WITH(true);
 };
 
 struct ETX_ALIGNED PTRayPayload {
@@ -24,7 +25,9 @@ struct ETX_ALIGNED PTRayPayload {
   float eta = 1.0f;
   float sampled_bsdf_pdf = 0.0f;
   Sampler smp = {};
+  uint2 pixel = {};
   bool mis_weight = true;
+  bool use_blue_noise = false;
 };
 
 enum PTRayState : uint8_t {
@@ -228,8 +231,10 @@ ETX_GPU_CODE GatherResult gather(SpectralQuery spect, const Scene& scene, const 
 
 }  // namespace subsurface
 
+float2 sample_blue_noise(const uint2& pixel, const uint32_t total_samples, const uint32_t current_sample, uint32_t dimension);
+
 ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Camera& camera, const Film& film, const uint2& px, const uint32_t pixel_index, const uint32_t iteration,
-  const bool spectral) {
+  const bool spectral, const bool use_blue_noise) {
   ETX_FUNCTION_SCOPE();
 
   PTRayPayload payload = {};
@@ -246,6 +251,8 @@ ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Camera& cam
   payload.eta = 1.0f;
   payload.sampled_bsdf_pdf = 0.0f;
   payload.mis_weight = true;
+  payload.pixel = px;
+  payload.use_blue_noise = use_blue_noise;
   return payload;
 }
 
@@ -269,8 +276,8 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-  if ((payload.path_length + 1 <= rt.scene().max_path_length) && medium.enable_explicit_connections) {
-    uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
+  if ((payload.path_length + 1 <= rt.scene().max_camera_path_length) && medium.enable_explicit_connections) {
+    uint32_t emitter_index = sample_emitter_index(scene, payload.smp.next());
     auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp.next_2d(), medium_sample.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
       auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, payload.medium, payload.smp);
@@ -375,7 +382,19 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     payload.view_albedo = bsdf::albedo(bsdf_data, mat, scene, payload.smp);
   }
 
+  float2 rnd_bsdf = payload.smp.next_2d();
+  float2 rnd_em_sample = payload.smp.next_2d();
+  float2 rnd_support = payload.smp.next_2d();
+
+  if (payload.use_blue_noise && (payload.path_length == 1)) {
+    rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 0);
+    rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 2);
+    rnd_support = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 4);
+  }
+
+  payload.smp.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, payload.smp);
+  payload.smp.pop_fixed();
 
   bool subsurface_path = (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled) &&  //
                          (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
@@ -401,29 +420,32 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  if (options.nee && (payload.path_length + 1 <= rt.scene().max_path_length)) {
-    uint32_t emitter_index = sample_emitter_index(scene, payload.smp);
+  if (options.nee && (payload.path_length + 1 <= rt.scene().max_camera_path_length)) {
+    payload.smp.push_fixed(rnd_em_sample.x, rnd_em_sample.y, rnd_support.x);
+
+    uint32_t emitter_index = sample_emitter_index(scene, rnd_support.y);
     SpectralResponse direct_light = {payload.spect, 0.0f};
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-        auto local_sample = sample_emitter(payload.spect, emitter_index, payload.smp.next_2d(), ss_gather.intersections[i].pos, scene);
+        auto local_sample = sample_emitter(payload.spect, emitter_index, rnd_em_sample, ss_gather.intersections[i].pos, scene);
         SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, kSubsurfaceExitMaterial,  //
           payload.medium, payload.spect, local_sample, payload.smp, options.mis);
         direct_light += ss_gather.weights[i] * light_value;
         ETX_VALIDATE(direct_light);
       }
     } else {
-      auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp.next_2d(), intersection.pos, scene);
+      auto emitter_sample = sample_emitter(payload.spect, emitter_index, rnd_em_sample, intersection.pos, scene);
       direct_light += evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, options.mis);
       ETX_VALIDATE(direct_light);
     }
     payload.accumulated += payload.throughput * direct_light;
+    payload.smp.pop_fixed();
     ETX_VALIDATE(payload.accumulated);
   }
 
   if (subsurface_sampled) {
     const auto& out_intersection = ss_gather.intersections[ss_gather.selected_intersection];
-    payload.ray.d = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
+    payload.ray.d = sample_cosine_distribution(rnd_bsdf, out_intersection.nrm, 1.0f);
     payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
     payload.sampled_bsdf_pdf = fabsf(dot(payload.ray.d, out_intersection.nrm)) / kPi;
     payload.mis_weight = true;
@@ -469,7 +491,7 @@ ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
 }
 
 ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
-  if (payload.path_length > rt.scene().max_path_length)
+  if (payload.path_length > rt.scene().max_camera_path_length)
     return false;
 
   ETX_FUNCTION_SCOPE();

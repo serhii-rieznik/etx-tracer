@@ -54,7 +54,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.pdf = kInvPi * local_w_o.z;
     ETX_VALIDATE(result.pdf);
   } else {
-    local_w_o = sample_cosine_distribution(smp.next_2d(), 1.0f);
+    float2 cos_rnd = smp.has_fixed() ? float2{smp.fixed_u, smp.fixed_v} : smp.next_2d();
+    local_w_o = sample_cosine_distribution(cos_rnd, 1.0f);
     auto dl = diffuse_layer(data, local_w_i, local_w_o, mtl, scene, smp);
     result.weight = dl.weight;
     result.pdf = dl.pdf;
