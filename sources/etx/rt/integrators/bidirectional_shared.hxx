@@ -220,35 +220,4 @@ struct PathData {
   PathData& operator=(const PathData&) = delete;
 };
 
-template <class T>
-struct ReplaceInScope {
-  ReplaceInScope(const ReplaceInScope&) = delete;
-  ReplaceInScope& operator=(const ReplaceInScope&) = delete;
-
-  ReplaceInScope() {
-  }
-
-  ReplaceInScope(T* destination, const T& new_value)
-    : ptr(destination)
-    , old_value(*destination) {
-    *destination = new_value;
-  }
-
-  ReplaceInScope& operator=(ReplaceInScope&& r) noexcept {
-    ptr = r.ptr;
-    old_value = r.old_value;
-    r.ptr = nullptr;
-    return *this;
-  }
-
-  ~ReplaceInScope() {
-    if (ptr != nullptr) {
-      *ptr = old_value;
-    }
-  }
-
-  T* ptr = nullptr;
-  T old_value = {};
-};
-
 }  // namespace etx
