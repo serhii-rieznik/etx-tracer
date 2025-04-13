@@ -147,6 +147,7 @@ struct CPUBidirectionalImpl : public Task {
     float eta = 1.0f;
     uint32_t max_path_len = mode == PathSource::Camera ? scene.max_camera_path_length : scene.max_light_path_length;
 
+    path_data.camera_mis = 0.0f;
     for (uint32_t path_length = 0; running() && (path_length < max_path_len);) {
       Intersection intersection = {};
       bool found_intersection = rt.trace(scene, ray, intersection, smp);
@@ -368,19 +369,15 @@ struct CPUBidirectionalImpl : public Task {
   void precompute_camera_mis(PathData& path_data) const {
     const uint64_t eye_t = path_data.camera_path.size() - 1u;
 
-    float calculated = 0.0f;
-    {
-      float accum = 1.0f;
-      for (uint64_t ti = eye_t - 2u; ti > 1; --ti) {
-        const bool can_connect = (path_data.camera_path[ti].delta_connection == false) && (path_data.camera_path[ti - 1].delta_connection == false);
-
-        accum *= safe_div(path_data.camera_path[ti].pdf.backward, path_data.camera_path[ti].pdf.forward);
-        ETX_VALIDATE(accum);
-        calculated += float(can_connect) * accum;
-        ETX_VALIDATE(calculated);
-      }
+    float accum = 1.0f;
+    path_data.camera_mis = 0.0f;
+    for (uint64_t ti = eye_t - 2u; ti > 1u; --ti) {
+      const bool can_connect = (path_data.camera_path[ti].delta_connection == false) && (path_data.camera_path[ti - 1].delta_connection == false);
+      accum *= safe_div(path_data.camera_path[ti].pdf.backward, path_data.camera_path[ti].pdf.forward);
+      ETX_VALIDATE(accum);
+      path_data.camera_mis += float(can_connect) * accum;
+      ETX_VALIDATE(path_data.camera_mis);
     }
-    path_data.camera_mis = calculated;
   }
 
   float mis_camera(const PathData& path_data, const float z_curr_backward, const PathVertex& z_curr, const float z_prev_backward, const PathVertex& z_prev) const {
@@ -415,8 +412,6 @@ struct CPUBidirectionalImpl : public Task {
     const PathVertex& z_curr = path_data.camera_path.back();
     const PathVertex& z_prev = path_data.camera_path[path_data.camera_path.size() - 2u];
 
-    y_curr.pdf.backward = z_curr.pdf_area(spect, PathSource::Camera, &z_prev, &y_curr, rt.scene(), smp);
-
     float z_curr_pdf = y_curr.pdf_area(spect, PathSource::Light, nullptr, &z_curr, rt.scene(), smp);
     ETX_VALIDATE(z_curr_pdf);
     float z_prev_pdf = z_curr.pdf_area(spect, PathSource::Camera, &y_curr, &z_prev, rt.scene(), smp);
@@ -425,6 +420,7 @@ struct CPUBidirectionalImpl : public Task {
     float result = mis_camera(path_data, z_curr_pdf, z_curr, z_prev_pdf, z_prev);
 
     if (y_curr.delta_emitter == false) {
+      y_curr.pdf.backward = z_curr.pdf_area(spect, PathSource::Camera, &z_prev, &y_curr, rt.scene(), smp);
       float r = safe_div(y_curr.pdf.backward, y_curr.pdf.forward);
       ETX_VALIDATE(r);
       result += r;
