@@ -48,13 +48,13 @@ Kd 0.0 1.0 0.0
 
 newmtl ball
 material class dielectric
-int_ior sapphire
+int_ior glass
 ext_medium fog
    
 newmtl light
 material class diffuse
 emitter nblackbody 2700 scale 8.0
-int_medium fog
+ext_medium fog
 Ke 1 1 1
 
 newmtl plane

@@ -1,7 +1,7 @@
 {
   "geometry": "light-types.obj",
   "materials": "materials.mtl",
-  "samples": 65536,
+  "samples": 32,
   "max-path-length": 65536,
   "camera": {
     "viewport": [ 1280.0, 720.0 ],
