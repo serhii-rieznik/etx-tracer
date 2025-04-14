@@ -94,12 +94,12 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse connect_to_light_path(Sampler& smp, SpectralQuery spect, PathData& path_data) const {
-    if ((conn_connect_vertices == false) || (path_data.camera_path.size() <= 2))
+    if ((conn_connect_vertices == false) || (path_data.camera_path_size <= 2))
       return {spect, 0.0f};
 
     SpectralResponse result = {spect, 0.0f};
 
-    const uint64_t eye_t = path_data.camera_path.size() - 1u;
+    const uint64_t eye_t = path_data.camera_path_size - 1u;
     const auto& z_i = path_data.camera_path.back();
 
     const uint32_t max_connect_len = 65536u;  // scene.max_camera_path_length + scene.max_light_path_length + 2u;
@@ -166,6 +166,8 @@ struct CPUBidirectionalImpl : public Task {
         float3 w_o = medium.sample_phase_function(spect, smp, w_i);
 
         auto& v = path.emplace_back(medium_sample, w_i);
+        path_data.camera_path_size += uint32_t(mode == PathSource::Camera);
+
         auto& w = path[path.size() - 2];
         v.medium_index = medium_index;
         v.throughput = throughput;
@@ -212,6 +214,8 @@ struct CPUBidirectionalImpl : public Task {
         }
 
         auto& v = path.emplace_back(PathVertex::Class::Surface, intersection);
+        path_data.camera_path_size += uint32_t(mode == PathSource::Camera);
+
         auto& w = path[path.size() - 2];
         v.emitter_index = intersection.emitter_index;
         v.throughput = throughput;
@@ -319,6 +323,8 @@ struct CPUBidirectionalImpl : public Task {
 
   SpectralResponse build_camera_path(Sampler& smp, SpectralQuery spect, const float2& uv, PathData& path_data, float3& surface_normal, SpectralResponse& surface_albedo) {
     path_data.camera_path.clear();
+    path_data.camera_path_size = 2u;
+
     auto& z0 = path_data.camera_path.emplace_back(PathVertex::Class::Camera);
     z0.throughput = {spect, 1.0f};
 
@@ -367,8 +373,9 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void precompute_camera_mis(PathData& path_data) const {
-    const uint64_t eye_t = path_data.camera_path.size() - 1u;
+    const uint64_t eye_t = path_data.camera_path_size - 1u;
 
+    /*
     float accum = 1.0f;
     path_data.camera_mis = 0.0f;
     for (uint64_t ti = eye_t - 2u; ti > 1u; --ti) {
@@ -377,6 +384,13 @@ struct CPUBidirectionalImpl : public Task {
       ETX_VALIDATE(accum);
       path_data.camera_mis += float(can_connect) * accum;
       ETX_VALIDATE(path_data.camera_mis);
+    }
+    */
+    {
+      const bool can_connect = (path_data.camera_path[eye_t - 2u].delta_connection == false) && (path_data.camera_path[eye_t - 3u].delta_connection == false);
+      float current = safe_div(path_data.camera_path[eye_t - 2u].pdf.backward, path_data.camera_path[eye_t - 2u].pdf.forward);
+      float current_mis = float(can_connect) * current;
+      path_data.camera_mis = current_mis + current * path_data.camera_mis;
     }
   }
 
@@ -390,7 +404,7 @@ struct CPUBidirectionalImpl : public Task {
       ETX_VALIDATE(result);
     }
 
-    const uint64_t eye_t = path_data.camera_path.size() - 1u;
+    const uint64_t eye_t = path_data.camera_path_size - 1u;
     if (eye_t <= 2)
       return result;
 
@@ -410,7 +424,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     const PathVertex& z_curr = path_data.camera_path.back();
-    const PathVertex& z_prev = path_data.camera_path[path_data.camera_path.size() - 2u];
+    const PathVertex& z_prev = path_data.camera_path[path_data.camera_path_size - 2u];
 
     float z_curr_pdf = y_curr.pdf_area(spect, PathSource::Light, nullptr, &z_curr, rt.scene(), smp);
     ETX_VALIDATE(z_curr_pdf);
@@ -435,12 +449,12 @@ struct CPUBidirectionalImpl : public Task {
       return 1.0f;
     }
 
-    if (path_data.camera_path.size() == 3u) {
+    if (path_data.camera_path_size == 3u) {
       return 1.0f;
     }
 
     const PathVertex& z_curr = path_data.camera_path.back();
-    const PathVertex& z_prev = path_data.camera_path[path_data.camera_path.size() - 2u];
+    const PathVertex& z_prev = path_data.camera_path[path_data.camera_path_size - 2u];
 
     float z_curr_pdf = z_curr.pdf_to_light_in(spect, &z_prev, rt.scene());
     ETX_VALIDATE(z_curr_pdf);
@@ -515,7 +529,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     const PathVertex& z_curr = c.camera_path.back();
-    const PathVertex& z_prev = c.camera_path[c.camera_path.size() - 2u];
+    const PathVertex& z_prev = c.camera_path[c.camera_path_size - 2u];
     const PathVertex& y_curr = c.emitter_path[light_s];
     const PathVertex& y_prev = c.emitter_path[light_s - 1];
 
@@ -551,7 +565,7 @@ struct CPUBidirectionalImpl : public Task {
       return {spect, 0.0f};
     }
 
-    uint64_t eye_t = path_data.camera_path.size() - 1u;
+    uint64_t eye_t = path_data.camera_path_size - 1u;
     const auto& z_prev = path_data.camera_path[eye_t - 1];
 
     float pdf_area = 0.0f;
