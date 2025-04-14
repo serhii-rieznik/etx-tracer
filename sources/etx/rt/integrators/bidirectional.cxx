@@ -385,8 +385,6 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void precompute_camera_mis(const PathVertex& z_curr, const PathVertex& z_prev, PathData& path_data) const {
-    const uint64_t eye_t = path_data.camera_path_size - 1u;
-
     path_data.history[3] = path_data.history[2];
     path_data.history[2] = path_data.history[1];
     path_data.history[1] = {
@@ -400,7 +398,7 @@ struct CPUBidirectionalImpl : public Task {
       .delta = z_curr.delta_connection,
     };
 
-    if (eye_t > 2) {
+    if (path_data.camera_path_size > 3) {
       const bool can_connect = (path_data.history[2u].delta == false) && (path_data.history[3u].delta == false);
       float current = safe_div(path_data.history[2u].pdf_backward, path_data.history[2u].pdf_forward);
       float current_mis = float(can_connect) * current;
@@ -418,8 +416,7 @@ struct CPUBidirectionalImpl : public Task {
       ETX_VALIDATE(result);
     }
 
-    const uint64_t eye_t = path_data.camera_path_size - 1u;
-    if (eye_t <= 2)
+    if (path_data.camera_path_size <= 3)
       return result;
 
     r *= safe_div(z_prev_backward, z_prev.pdf.forward);
@@ -676,9 +673,6 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     return splat;
-  }
-
-  SpectralResponse connect_vertices(Sampler& smp, PathData& c, SpectralQuery spect, uint64_t eye_t, uint64_t light_s) const {
   }
 
   SpectralResponse local_transmittance(SpectralQuery spect, Sampler& smp, const PathVertex& p0, const PathVertex& p1) const {

@@ -217,7 +217,6 @@ struct PathData {
     bool delta = false;
   } history[4] = {};
 
-  // std::vector<PathVertex> camera_path;
   std::vector<PathVertex> emitter_path;
   float camera_mis = 0.0f;
   uint32_t camera_path_size = 0u;
