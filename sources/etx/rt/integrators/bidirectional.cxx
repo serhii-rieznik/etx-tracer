@@ -298,6 +298,7 @@ struct CPUBidirectionalImpl : public Task {
 
       } else if (mode == PathSource::Camera) {
         auto& v = path.emplace_back(PathVertex::Class::Emitter);
+        path_data.camera_path_size += 1u;
         v.medium_index = medium_index;
         v.throughput = throughput;
         v.pdf.forward = pdf_dir;
@@ -306,6 +307,7 @@ struct CPUBidirectionalImpl : public Task {
         v.nrm = -v.w_i;
         result += direct_hit(path_data, spect, smp);
         path.pop_back();
+        path_data.camera_path_size -= 1u;
         break;
       } else {
         break;
