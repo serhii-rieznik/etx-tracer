@@ -45,9 +45,10 @@ ETX_GPU_CODE float3 sample_phase_function(const float3& w_i, const float g, Samp
   }
 
   float sin_theta = sqrtf(max(0.0f, 1.0f - cos_theta * cos_theta));
+  float phi = kDoublePi * xi.y;
 
   auto basis = orthonormal_basis(w_i);
-  return (basis.u * cosf(xi.y * kDoublePi) + basis.v * sinf(xi.y * kDoublePi)) * sin_theta + w_i * cos_theta;
+  return (basis.u * cosf(phi) + basis.v * sinf(phi)) * sin_theta - w_i * cos_theta;
 }
 
 }  // namespace medium

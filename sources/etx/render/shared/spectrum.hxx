@@ -300,7 +300,7 @@ struct SpectralResponse : public SpectralQuery {
   }
 
   ETX_GPU_CODE float monochromatic() const {
-    return spectral() ? value : integrated.y;
+    return spectral() ? value : luminance(integrated);
   }
 
   ETX_GPU_CODE float sum() const {

@@ -282,10 +282,23 @@ struct SceneRepresentationImpl {
     triangles.clear();
     materials.clear();
     emitters.clear();
-    material_mapping.clear();
     triangle_to_material.clear();
     triangle_to_emitter.clear();
+
     scene_spectrums.clear();
+    add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
+    add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+
+    material_mapping.clear();
+    uint32_t sss_exit_material_id = add_material("etx::subsurface-exit");
+    materials[sss_exit_material_id].reflectance = {.spectrum_index = 1};
+    materials[sss_exit_material_id].transmittance = {.spectrum_index = 1};
+    materials[sss_exit_material_id].cls = Material::Class::Diffuse;
+
+    uint32_t sss_enter_material_id = add_material("etx::subsurface-enter");
+    materials[sss_enter_material_id].reflectance = {.spectrum_index = 0};
+    materials[sss_enter_material_id].transmittance = {.spectrum_index = 1};
+    materials[sss_enter_material_id].cls = Material::Class::Translucent;
 
     images.remove_all();
     mediums.remove_all();
@@ -317,13 +330,13 @@ struct SceneRepresentationImpl {
   void validate_materials() {
     for (auto& mtl : materials) {
       if (mtl.reflectance.spectrum_index == kInvalidIndex) {
-        mtl.reflectance.spectrum_index = {add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}))};
+        mtl.reflectance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
       }
       if (mtl.transmittance.spectrum_index == kInvalidIndex) {
         mtl.transmittance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
       }
       if (mtl.subsurface.spectrum_index == kInvalidIndex) {
-        mtl.subsurface.spectrum_index = {add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}))};
+        mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
       }
 
       if ((mtl.roughness.value.x > 0.0f) || (mtl.roughness.value.y > 0.0f)) {
@@ -1572,7 +1585,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     auto params = split_params(data_buffer);
     for (uint64_t i = 0, e = params.size(); i < e; ++i) {
       if ((strcmp(params[i], "path") == 0) && (i + 1 < e)) {
-        bool is_refraction = (strcmp(params[i + 1], "refracted") == 0) || (strcmp(params[i + 1], "refraction") == 0);
+        bool is_refraction = (strcmp(params[i + 1], "refracted") == 0) || (strcmp(params[i + 1], "refraction") == 0) || (strcmp(params[i + 1], "refract") == 0);
         mtl.subsurface.path = is_refraction ? SubsurfaceMaterial::Path::Refracted : SubsurfaceMaterial::Path::Diffuse;
       }
 

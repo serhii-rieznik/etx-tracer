@@ -1,0 +1,13 @@
+{
+    "geometry" : "furnace-env.obj",
+    "materials" : "furnace-env.materials",
+    "samples" : 32,
+    "camera" : {
+        "viewport" : [512.0, 512.0],
+        "exposure" : 1.0,
+        "origin" : [0.0, 0.0, 2.0],
+        "target" : [0.0, 0.0, 0.0],
+        "up" : [0.0, 1.0, 0.0],
+        "fov" : 90.0
+    }
+}

@@ -76,9 +76,9 @@ struct Image {
     auto g = gather(in_uv);
 
     if (pdf) {
-      float s_t = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : sinf(kPi * saturate(in_uv.y + 0.0f / fsize.y)));
+      float s_t = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : max(0.0f, sinf(kPi * saturate(in_uv.y + 0.0f / fsize.y))));
       auto t = luminance(to_float3(g.p00 + g.p01)) * s_t;
-      float s_b = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : sinf(kPi * saturate(in_uv.y + 1.0f / fsize.y)));
+      float s_b = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : max(0.0f, sinf(kPi * saturate(in_uv.y + 1.0f / fsize.y))));
       auto b = luminance(to_float3(g.p10 + g.p11)) * s_b;
       *pdf = (t + b) / normalization;
       ETX_VALIDATE(*pdf);

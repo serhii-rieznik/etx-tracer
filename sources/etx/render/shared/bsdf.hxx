@@ -45,13 +45,12 @@ struct BSDFEval {
   BSDFEval() = default;
 
   ETX_GPU_CODE BSDFEval(const SpectralQuery q, float power)
-    : bsdf(q, power)
-    , weight(q, power) {
+    : func(q, power)
+    , bsdf(q, power) {
   }
 
   SpectralResponse func = {};
   SpectralResponse bsdf = {};
-  SpectralResponse weight = {};
   float pdf = 0.0f;
   float eta = 1.0f;
 
@@ -90,15 +89,6 @@ struct BSDFSample {
     , w_o(a_w_o)
     , pdf(a_pdf)
     , eta(a_eta)
-    , properties(props)
-    , medium_index(medium) {
-  }
-
-  ETX_GPU_CODE BSDFSample(const float3& w, const BSDFEval& eval, uint32_t props, uint32_t medium)
-    : weight(eval.weight)
-    , w_o(w)
-    , pdf(eval.pdf)
-    , eta(eval.eta)
     , properties(props)
     , medium_index(medium) {
   }

@@ -87,6 +87,8 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   ray.o = shading_pos(scene.vertices, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d);
   ray.max_t = kMaxFloat;
 
+  float total_pdf = 1.0f;
+
   SpectralResponse throughput = {spect, 1.0f};
   for (uint32_t i = 0; i < kMaxIterations; ++i) {
     SpectralResponse pdf = {};
@@ -134,12 +136,19 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
       result.selected_intersection = 0;
       result.selected_sample_weight = 1.0f;
       result.total_weight = 1.0f;
+      result.total_pdf = total_pdf;
       return GatherResult::Succeedded;
     }
 
+    auto prev_dir = ray.d;
     ray.o = ray.o + ray.d * ray.max_t;
-    ray.d = medium::sample_phase_function(ray.d, anisotropy, smp);
+    ray.d = medium::sample_phase_function(prev_dir, anisotropy, smp);
+
+    float pdf_phase = medium::phase_function(prev_dir, ray.d, anisotropy);
+    float pdf_dist = scattering_distance * expf(-scattering_distance * ray.max_t);
+    total_pdf += pdf_phase;  // * pdf_dist;
   }
+
   return GatherResult::Failed;
 }
 
@@ -359,11 +368,6 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
 ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
   ETX_FUNCTION_SCOPE();
 
-  static const Material kSubsurfaceExitMaterial = {
-    .transmittance = {.spectrum_index = 1u},
-    .cls = Material::Class::Diffuse,
-  };
-
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
 
@@ -428,7 +432,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
         auto local_sample = sample_emitter(payload.spect, emitter_index, rnd_em_sample, ss_gather.intersections[i].pos, scene);
-        SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, kSubsurfaceExitMaterial,  //
+        SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, scene.materials[0],  //
           payload.medium, payload.spect, local_sample, payload.smp, options.mis);
         direct_light += ss_gather.weights[i] * light_value;
         ETX_VALIDATE(direct_light);

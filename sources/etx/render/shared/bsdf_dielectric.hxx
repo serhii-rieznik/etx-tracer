@@ -174,8 +174,6 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
   eval.pdf = pdf(data, in_w_o, mtl, scene, smp);
-  eval.weight = eval.bsdf / eval.pdf;
-  ETX_VALIDATE(eval.weight);
   return eval;
 }
 

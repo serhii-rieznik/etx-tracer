@@ -270,16 +270,16 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
   switch (em.cls) {
     case Emitter::Class::Area: {
       const auto& tri = scene.triangles[em.triangle_index];
+
       result.triangle_index = em.triangle_index;
       result.barycentric = random_barycentric(smp.next_2d());
-      result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
-      result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
+      auto vertex = lerp_vertex(scene.vertices, tri, result.barycentric);
+
+      result.origin = vertex.pos;
+      result.normal = vertex.nrm;
       switch (em.emission_direction) {
         case Emitter::Direction::Single: {
-          auto basis = orthonormal_basis(result.normal);
-          do {
-            result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, basis.u, basis.v, em.collimation);
-          } while (dot(result.direction, result.normal) <= 0.0f);
+          result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, em.collimation);
           break;
         }
         case Emitter::Direction::TwoSided: {
@@ -301,8 +301,8 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
         default:
           ETX_FAIL("Invalid direction");
       }
-      result.value = emitter_evaluate_out_local(em, spect, lerp_uv(scene.vertices, tri, result.barycentric), result.normal, result.direction,  //
-        result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);                                                                           //
+      result.value = emitter_evaluate_out_local(em, spect, vertex.tex, result.normal, result.direction,  //
+        result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);                                     //
       break;
     }
 

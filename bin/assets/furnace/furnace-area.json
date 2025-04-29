@@ -1,6 +1,7 @@
 {
-    "geometry" : "furnace.obj",
-    "materials" : "furnace.materials",
+    "geometry" : "furnace-area.obj",
+    "materials" : "furnace-area.materials",
+    "samples" : 32,
     "camera" : {
         "viewport" : [512.0, 512.0],
         "exposure" : 1.0,

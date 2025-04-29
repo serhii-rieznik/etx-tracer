@@ -31,9 +31,6 @@ ETX_GPU_CODE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_
   eval.pdf = kInvPi * local_w_o.z;
   ETX_VALIDATE(eval.pdf);
 
-  eval.weight = eval.pdf > 0.0f ? eval.bsdf / eval.pdf : SpectralResponse{data.spectrum_sample, 0.0f};
-  ETX_VALIDATE(eval.weight);
-
   return eval;
 }
 
@@ -57,7 +54,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     float2 cos_rnd = smp.has_fixed() ? float2{smp.fixed_u, smp.fixed_v} : smp.next_2d();
     local_w_o = sample_cosine_distribution(cos_rnd, 1.0f);
     auto dl = diffuse_layer(data, local_w_i, local_w_o, mtl, scene, smp);
-    result.weight = dl.weight;
+    result.weight = dl.bsdf / dl.pdf;
     result.pdf = dl.pdf;
   }
 
@@ -100,60 +97,77 @@ namespace TranslucentBSDF {
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
+  auto tr = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+  auto rf = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
 
-  float t = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr).average();
-  bool transmittance = (smp.next() < t);
+  float tr_value = tr.monochromatic();
+  float rf_value = rf.monochromatic();
+  float total = tr_value + rf_value;
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+  if (total == 0.0f)
+    return {data.spectrum_sample};
 
-  BSDFSample result;
-  result.weight = diffuse;
-  result.eta = 1.0f;
+  auto w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
+  float n_dot_o = fabsf(dot(w_o, frame.nrm));
 
-  if (transmittance) {
-    result.w_o = -sample_cosine_distribution(smp.next_2d(), data.front_fracing_normal(), 1.0f);
+  BSDFSample result = {};
+
+  if (smp.next() < tr_value / total) {
+    result.eta = 1.0f;
+    result.w_o = -w_o;
+    result.pdf = n_dot_o * kInvPi * (tr_value / total);
     result.properties = BSDFSample::Diffuse | BSDFSample::Transmission | BSDFSample::MediumChanged;
     result.medium_index = frame.entering_material() ? mtl.int_medium : mtl.ext_medium;
+    result.weight = tr;
   } else {
-    result.w_o = sample_cosine_distribution(smp.next_2d(), data.front_fracing_normal(), 1.0f);
+    result.eta = 1.0f;
+    result.w_o = w_o;
+    result.pdf = n_dot_o * kInvPi * (rf_value / total);
     result.properties = BSDFSample::Diffuse | BSDFSample::Reflection;
     result.medium_index = data.medium_index;
+    result.weight = rf;
   }
-
-  result.pdf = kInvPi * fabsf(dot(result.w_o, data.nrm));
 
   return result;
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  float n_dot_i = -dot(data.nrm, data.w_i);
-  float n_dot_o = dot(data.nrm, w_o);
+  auto frame = data.get_normal_frame();
+  float n_dot_i = -dot(frame.nrm, data.w_i);
+  float n_dot_o = dot(frame.nrm, w_o);
 
-  float t = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr).average();
-  bool transmittance = (smp.next() < t);
   bool reflection = n_dot_o * n_dot_i > 0.0f;
 
-  if ((reflection && transmittance) || ((reflection == false) && (transmittance == false))) {
-    return {data.spectrum_sample, 0.0f};
-  }
+  auto tr = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+  auto rf = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+  float tr_value = tr.monochromatic();
+  float rf_value = rf.monochromatic();
+  float total = tr_value + rf_value;
+
+  if (total == 0.0f)
+    return {data.spectrum_sample, 0.0f};
+
+  float scale = (total > 1.0f) ? 1.0f / total : 1.0f;
 
   n_dot_o = fabsf(n_dot_o);
 
   BSDFEval result;
-  result.func = diffuse * kInvPi;
-  result.bsdf = diffuse * (kInvPi * n_dot_o);
-  result.weight = diffuse;
-  result.pdf = kInvPi * n_dot_o;
+  result.func = (reflection ? rf : tr) * (scale * kInvPi);
+  result.bsdf = result.func * n_dot_o;
+  result.pdf = kInvPi * n_dot_o * (reflection ? rf_value / total : tr_value / total);
   return result;
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  float n_dot_o = fabsf(dot(data.front_fracing_normal(), w_o));
-  float result = kInvPi * n_dot_o;
-  ETX_VALIDATE(result);
-  return result;
+  auto frame = data.get_normal_frame();
+  float n_dot_i = -dot(frame.nrm, data.w_i);
+  float n_dot_o = dot(frame.nrm, w_o);
+  float tr_value = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr).monochromatic();
+  float rf_value = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr).monochromatic();
+  float total = tr_value + rf_value;
+  bool reflection = n_dot_o * n_dot_i > 0.0f;
+  return (total == 0.0f) ? 0.0f : kInvPi * fabsf(n_dot_o) * (reflection ? rf_value / total : tr_value / total);
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {

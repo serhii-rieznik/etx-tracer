@@ -86,7 +86,7 @@ struct RaytracingImpl {
   }
 
   template <class T>
-  inline static uint64_t array_size(const ArrayView<T>& a) {
+  constexpr static uint64_t array_size(const ArrayView<T>& a) {
     return align_up(a.count * sizeof(T), 16llu);
   }
 
@@ -523,7 +523,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
   t_max = sqrtf(t_max);
   context.direction /= t_max;
-  t_max -= kRayEpsilon;
+  t_max -= fmaxf(kRayEpsilon, t_max * kRayEpsilon);
   ETX_VALIDATE(t_max);
 
   _private->trace_with_function({p0, context.direction, kRayEpsilon, t_max}, &context.context, filter_function);
