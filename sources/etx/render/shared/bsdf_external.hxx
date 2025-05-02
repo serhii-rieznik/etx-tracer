@@ -349,9 +349,7 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
       return {spect, 0.0f};
   }
 
-  // 0.5f = MIS weight of singleScattering
-  // multipleScattering already weighted by MIS
-  return 0.5f * singleScattering + multipleScattering;
+  return singleScattering + multipleScattering;
 }
 
 ETX_GPU_CODE float abgam(float x) {
@@ -553,9 +551,7 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
       return {spect, 0.0f};
   }
 
-  // 0.5f = MIS weight of singleScattering
-  // multipleScattering already weighted by MIS
-  return 0.5f * singleScattering + multipleScattering;
+  return singleScattering + multipleScattering;
 }
 
 ETX_GPU_CODE float3 samplePhaseFunction_diffuse(Sampler& smp, const float3& wm) {

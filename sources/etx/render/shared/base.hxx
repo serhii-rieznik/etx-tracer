@@ -124,6 +124,11 @@ template <class T>
 ETX_GPU_CODE void print_invalid_value(const char* name, const T& v, const char* filename, uint32_t line);
 
 template <>
+ETX_GPU_CODE void print_invalid_value<bool>(const char* name, const bool& v, const char* filename, uint32_t line) {
+  printf("Validation failed: %s (%s) at %s [%u]\n", name, v ? "true" : "false", filename, line);
+}
+
+template <>
 ETX_GPU_CODE void print_invalid_value<float>(const char* name, const float& v, const char* filename, uint32_t line) {
   printf("Validation failed: %s (%f) at %s [%u]\n", name, v, filename, line);
 }

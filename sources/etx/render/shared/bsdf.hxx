@@ -94,7 +94,7 @@ struct BSDFSample {
   }
 
   ETX_GPU_CODE bool valid() const {
-    return (pdf > 0.0f);
+    return (pdf > 0.0f) && (weight.maximum() > 0.0f);
   }
 
   ETX_GPU_CODE bool invalid() const {
@@ -354,7 +354,7 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
       values.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
       values.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
       if (int_ior.cls == SpectralDistribution::Class::Conductor) {
-        values = spectrum::xyz_to_rgb(values);
+        values = spectrum::xyz_to_rgb(values) * SpectralDistribution::kRGBLuminanceScale;
       }
     } else {
       values.x = fresnel_thinfilm(thinfilm.rgb_wavelengths.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);

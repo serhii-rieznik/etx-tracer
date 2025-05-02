@@ -99,7 +99,7 @@ struct CPUBidirectionalImpl : public Task {
     return state->load() != Integrator::State::Stopped;
   }
 
-  void update_emitter_path_pdfs(PathVertex& curr, PathVertex& prev, const EmitterSample& em) const {
+  void update_emitter_path_pdfs(PathVertex& curr, float& prev_pdf_forward, const EmitterSample& em) const {
     const auto& scene = rt.scene();
 
     float total_pdf = 0.0f;
@@ -110,8 +110,8 @@ struct CPUBidirectionalImpl : public Task {
       float pdf = emitter_pdf_in_dist(scene.emitters[em.emitter_index], em.direction, scene);
       total_pdf += pdf * weight;
     }
-    prev.pdf.forward = total_pdf / (total_weight * float(scene.environment_emitters.count));
-    ETX_VALIDATE(prev.pdf.forward);
+    prev_pdf_forward = total_pdf / (total_weight * float(scene.environment_emitters.count));
+    ETX_VALIDATE(prev_pdf_forward);
 
     curr.pdf.forward = em.pdf_area;
     if (curr.is_surface_interaction()) {
@@ -122,7 +122,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse connect_to_light_path(const PathVertex& z_i, const PathVertex& z_prev, Sampler& smp, SpectralQuery spect, PathData& path_data) const {
-    if ((conn_connect_vertices == false) || (path_data.camera_path_size <= 2) || z_i.is_subsurface)
+    if ((conn_connect_vertices == false) || (path_data.camera_path_size <= 2) || z_i.is_subsurface_interaction())
       return {spect, 0.0f};
 
     SpectralResponse result = {spect, 0.0f};
@@ -134,7 +134,7 @@ struct CPUBidirectionalImpl : public Task {
         break;
 
       const auto& y_i = path_data.emitter_path[light_s];
-      if (y_i.is_subsurface)
+      if (y_i.is_subsurface_interaction())
         continue;
 
       auto dw = z_i.intersection.pos - y_i.intersection.pos;
@@ -184,7 +184,7 @@ struct CPUBidirectionalImpl : public Task {
     ray.d = w_o;
 
     if ((payload.mode == PathSource::Light) && emitter_sample.is_distant && (path_length == 0)) {
-      update_emitter_path_pdfs(curr, prev, emitter_sample);
+      update_emitter_path_pdfs(curr, prev.pdf.forward, emitter_sample);
     }
 
     if (payload.mode == PathSource::Light) {
@@ -217,7 +217,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   InteractionResult handle_surface(const Intersection& a_intersection, const EmitterSample& emitter_sample, const uint32_t path_length, Payload& payload, Ray& ray, Sampler& smp,
-    PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer, bool allow_subsurface, bool is_sss_path) const {
+    PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer, bool subsurface_interaction) const {
     const auto& scene = rt.scene();
     const auto& in_base_mat = scene.materials[a_intersection.material_index];
 
@@ -231,7 +231,7 @@ struct CPUBidirectionalImpl : public Task {
     auto bsdf_sample = bsdf::sample(bsdf_data, in_base_mat, scene, smp);
     ETX_VALIDATE(bsdf_sample.weight);
 
-    bool subsurface_path = allow_subsurface && (in_base_mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled) &&  //
+    bool subsurface_path = (subsurface_interaction == false) && (in_base_mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled) &&  //
                            (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
 
     const auto& in_mat = subsurface_path ? scene.materials[1] : in_base_mat;
@@ -250,20 +250,28 @@ struct CPUBidirectionalImpl : public Task {
     path_data.camera_path_size += uint32_t(payload.mode == PathSource::Camera);
 
     curr = PathVertex{PathVertex::Class::Surface, a_intersection};
-    curr.intersection.material_index = subsurface_path ? 1 : curr.intersection.material_index;
     curr.throughput = payload.throughput;
-    curr.is_subsurface = subsurface_path || is_sss_path;
     curr.delta_connection = bsdf_sample.is_delta();
     curr.medium_index = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium_index;
-    curr.pdf.forward = is_sss_path ? payload.pdf_dir : prev.pdf_solid_angle_to_area(payload.pdf_dir, curr);
+    curr.pdf.forward = subsurface_interaction ? payload.pdf_dir : prev.pdf_solid_angle_to_area(payload.pdf_dir, curr);
     ETX_VALIDATE(curr.pdf.forward);
+
+    if (subsurface_path) {
+      curr.sss_pdf = payload.pdf_dir;
+      curr.sss_cls = PathVertex::SubsurfaceClass::Enter;
+      curr.intersection.material_index = 1;
+    } else if (subsurface_interaction) {
+      curr.sss_pdf = payload.pdf_dir;
+      curr.sss_cls = PathVertex::SubsurfaceClass::Exit;
+      curr.intersection.material_index = 0;
+    }
 
     payload.medium_index = curr.medium_index;
 
     bool terminate_path = false;
     if (bsdf_sample.valid()) {
       float rev_bsdf_pdf = bsdf::reverse_pdf(bsdf_data, bsdf_sample.w_o, in_mat, scene, smp);
-      prev.pdf.backward = curr.pdf_solid_angle_to_area(rev_bsdf_pdf, prev);
+      prev.pdf.backward = subsurface_interaction ? payload.pdf_dir : curr.pdf_solid_angle_to_area(rev_bsdf_pdf, prev);
       ETX_VALIDATE(prev.pdf.backward);
 
       payload.eta *= (payload.mode == PathSource::Camera) ? bsdf_sample.eta : 1.0f;
@@ -293,7 +301,7 @@ struct CPUBidirectionalImpl : public Task {
 
     if (payload.mode == PathSource::Light) {
       if (emitter_sample.is_distant && (path_length == 0)) {
-        update_emitter_path_pdfs(curr, prev, emitter_sample);
+        update_emitter_path_pdfs(curr, prev.pdf.forward, emitter_sample);
       }
       path_data.emitter_path.back() = prev;
       path_data.emitter_path.emplace_back(curr);
@@ -322,35 +330,22 @@ struct CPUBidirectionalImpl : public Task {
   InteractionResult sample_subsurface(const Intersection& in_intersection, const EmitterSample& emitter_sample, const uint32_t path_length, Payload& payload, Ray& ray,
     Sampler& smp, PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer) const {
     const auto& scene = rt.scene();
-    /*
-    Intersection intersection = {};
-    bool found_intersection = rt.trace(scene, ray, intersection, smp);
-    if (found_intersection == false)
-      return InteractionResult::Break;
-
-    intersection.material_index = 1;
-    return handle_surface(intersection, emitter_sample, path_length, payload, ray, smp, path_data, curr, prev, gbuffer, false, true);
-    // */
-    //*
 
     subsurface::Gather ss_gather;
     auto ss_gather_result = subsurface::gather(payload.spect, scene, in_intersection, rt, smp, ss_gather);
     if (ss_gather_result != subsurface::GatherResult::Succeedded)
       return InteractionResult::Break;
 
-    // ray = {in_intersection.pos, normalize(ss_gather.intersections[0].pos - in_intersection.pos)};
-    // payload.pdf_dir = ss_gather.total_pdf * fabsf(dot(ray.d, in_intersection.nrm)) / kPi;
     ss_gather.intersections[0].material_index = 0;
-    ray.d = ss_gather.intersections[0].w_i;
-    // normalize(ss_gather.intersections[0].pos - in_intersection.pos);
-    // normalize(ss_gather.intersections[0].pos - ray.o);
-    // prev.throughput *= ss_gather.weights[0] * ss_gather.selected_sample_weight;
-    payload.throughput *= ss_gather.weights[0] * ss_gather.selected_sample_weight;
+    ray.d = ss_gather.intersections[ss_gather.selected_intersection].w_i;
+
+    payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
+    ETX_VALIDATE(payload.throughput.maximum() > 0);
+
     payload.pdf_dir = ss_gather.total_pdf;
-    // payload.pdf_dir = ss_gather.total_pdf * fabsf(dot(in_intersection.nrm, ss_gather.intersections[0].w_i));
-    // payload.pdf_dir = ss_gather.total_pdf * area_to_solid_angle_probability(ss_gather.intersections[0].pos - ray.d, ss_gather.intersections[0].nrm, 1.0f);
-    return handle_surface(ss_gather.intersections[0], emitter_sample, path_length, payload, ray, smp, path_data, curr, prev, gbuffer, false, true);
-    // */
+    ETX_VALIDATE(payload.pdf_dir);
+
+    return handle_surface(ss_gather.intersections[0], emitter_sample, path_length, payload, ray, smp, path_data, curr, prev, gbuffer, true);
   }
 
   SpectralResponse build_path(Sampler& smp, Ray ray, PathData& path_data, Payload& payload, const EmitterSample& emitter_sample, GBuffer& gbuffer, PathVertex& curr,
@@ -384,7 +379,7 @@ struct CPUBidirectionalImpl : public Task {
           break;
         }
       } else if (found_intersection) {
-        auto result = handle_surface(intersection, emitter_sample, path_length, payload, ray, smp, path_data, curr, prev, gbuffer, true, false);
+        auto result = handle_surface(intersection, emitter_sample, path_length, payload, ray, smp, path_data, curr, prev, gbuffer, false);
 
         if (result == InteractionResult::SampleSubsurface) {
           prev = curr;
@@ -508,12 +503,18 @@ struct CPUBidirectionalImpl : public Task {
 
   float mis_camera(const PathData& path_data, const float z_curr_backward, const PathVertex& z_curr, const float z_prev_backward, const PathVertex& z_prev) const {
     float r1 = safe_div(z_prev_backward, z_prev.pdf.forward);
+    ETX_VALIDATE(r1);
+
     bool can_connect1 = (path_data.camera_path_size > 3) && (z_prev.delta_connection == false) && (path_data.history[2].delta == false);
     float result_accumulated = r1 * (float(can_connect1) + path_data.camera_mis_value);
+    ETX_VALIDATE(result_accumulated);
 
     float r0 = safe_div(z_curr_backward, z_curr.pdf.forward);
+    ETX_VALIDATE(r0);
+
     bool can_connect0 = z_prev.delta_connection == false;
     result_accumulated = r0 * (float(can_connect0) + result_accumulated);
+    ETX_VALIDATE(result_accumulated);
 
     return result_accumulated;
   }
@@ -635,7 +636,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse direct_hit(const PathVertex& z_curr, const PathVertex& z_prev, const PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
-    if ((force == false) && (conn_direct_hit == false))
+    if ((force == false) && ((conn_direct_hit == false) || (z_curr.sss_connectible() == false)))
       return {spect, 0.0f};
 
     if (z_curr.is_emitter() == false) {
@@ -682,7 +683,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse connect_to_light(const PathVertex& z_curr, const PathVertex& z_prev, Sampler& smp, PathData& path_data, SpectralQuery spect) const {
-    if (conn_connect_to_light == false)
+    if ((conn_connect_to_light == false) || (z_curr.sss_connectible() == false))
       return {spect, 0.0f};
 
     uint32_t emitter_index = sample_emitter_index(rt.scene(), smp.next());
@@ -720,7 +721,7 @@ struct CPUBidirectionalImpl : public Task {
 
   SpectralResponse connect_to_camera(Sampler& smp, PathData& path_data, const PathVertex& y_curr, const PathVertex& y_prev, SpectralQuery spect,
     CameraSample& camera_sample) const {
-    if (conn_connect_to_camera == false)
+    if ((conn_connect_to_camera == false) || (y_curr.sss_connectible() == false))
       return {spect, 0.0f};
 
     camera_sample = sample_film(smp, rt.scene(), rt.camera(), y_curr.intersection.pos);

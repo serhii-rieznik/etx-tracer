@@ -11,17 +11,24 @@ struct PathVertex {
     Medium,
   };
 
+  enum class SubsurfaceClass : uint16_t {
+    None,
+    Enter,
+    Exit,
+  };
+
   Intersection intersection = {};
   SpectralResponse throughput = {};
-  uint32_t medium_index = kInvalidIndex;
   struct {
     float forward = 0.0f;
     float backward = 0.0f;
   } pdf;
   Class cls = Class::Invalid;
+  SubsurfaceClass sss_cls = SubsurfaceClass::None;
+  uint32_t medium_index = kInvalidIndex;
+  float sss_pdf = 0.0f;
   bool delta_connection = false;
   bool delta_emitter = false;
-  bool is_subsurface = false;
 
   PathVertex() = default;
 
@@ -60,6 +67,20 @@ struct PathVertex {
     return (cls == Class::Medium) && (medium_index != kInvalidIndex);
   }
 
+  bool is_subsurface_interaction() const {
+    return sss_cls != SubsurfaceClass::None;
+  }
+
+  bool sss_connectible() const {
+    return sss_cls != SubsurfaceClass::Enter;
+  }
+
+  bool valid_material() const {
+    return (sss_cls == SubsurfaceClass::None) ||                                           //
+           ((sss_cls == SubsurfaceClass::Enter) && (intersection.material_index == 1)) ||  //
+           ((sss_cls == SubsurfaceClass::Exit) && (intersection.material_index == 0));
+  }
+
   static bool safe_normalize(const float3& a, const float3& b, float3& n) {
     n = a - b;
     float len = dot(n, n);
@@ -89,7 +110,11 @@ struct PathVertex {
 
     float eval_pdf = 0.0f;
     if (is_surface_interaction()) {
-      ETX_ASSERT((is_subsurface == false) || (is_subsurface && (intersection.material_index == 0)));
+      if (sss_cls == SubsurfaceClass::Exit) {
+        return sss_pdf;
+      }
+
+      ETX_ASSERT(valid_material());
       const auto& mat = scene.materials[intersection.material_index];
       eval_pdf = bsdf::pdf({spect, medium_index, mode, intersection, w_i}, w_o, mat, scene, smp);
     } else if (is_medium_interaction()) {
@@ -145,8 +170,9 @@ struct PathVertex {
     if (is_specific_emitter()) {
       const auto& emitter = scene.emitters[intersection.emitter_index];
       float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      result =
-        pdf_discrete * (emitter.is_local() ? emitter_pdf_area_local(emitter, scene) : emitter_pdf_in_dist(emitter, normalize(intersection.pos - next->intersection.pos), scene));
+      result = pdf_discrete * (emitter.is_local()                                                                                //
+                                  ? emitter_pdf_area_local(emitter, scene)                                                       //
+                                  : emitter_pdf_in_dist(emitter, normalize(intersection.pos - next->intersection.pos), scene));  //
     } else if (scene.environment_emitters.count > 0) {
       for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
         const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
@@ -184,7 +210,7 @@ struct PathVertex {
 
     if (is_surface_interaction()) {
       const auto& tri = scene.triangles[intersection.triangle_index];
-      ETX_ASSERT((is_subsurface == false) || (is_subsurface && (intersection.material_index == 0)));
+      ETX_ASSERT(valid_material());
       const auto& mat = scene.materials[intersection.material_index];
       BSDFEval eval = bsdf::evaluate({spect, medium_index, mode, intersection, intersection.w_i}, w_o, mat, scene, smp);
       ETX_VALIDATE(eval.bsdf);

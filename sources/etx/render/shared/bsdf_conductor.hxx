@@ -79,26 +79,18 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
-  BSDFEval result;
-  if (smp.next() > 0.5f) {
-    result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, roughness, ext_ior, int_ior, thinfilm);
-  ETX_VALIDATE(result.bsdf);
-  } else {
-    result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_o, w_i, roughness, ext_ior, int_ior, thinfilm) / w_i.z * w_o.z;
-    ETX_VALIDATE(result.bsdf);
-  }
-  result.bsdf *= apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
-  ETX_VALIDATE(result.bsdf);
+  auto value = external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, roughness, ext_ior, int_ior, thinfilm);
 
+  BSDFEval result = {};
+  result.bsdf = value * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  ETX_VALIDATE(result.bsdf);
   result.func = result.bsdf / w_o.z;
   ETX_VALIDATE(result.func);
-
   {
     external::RayInfo ray = {w_i, roughness};
     result.pdf = external::D_ggx(normalize(w_o + w_i), roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
     ETX_VALIDATE(result.pdf);
   }
-
   return result;
 }
 
