@@ -2,6 +2,7 @@
     "geometry" : "furnace-area.obj",
     "materials" : "furnace-area.materials",
     "samples" : 32,
+    "spectral" : false,
     "camera" : {
         "viewport" : [512.0, 512.0],
         "exposure" : 1.0,
