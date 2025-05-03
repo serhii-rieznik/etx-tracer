@@ -19,10 +19,13 @@ struct PathVertex {
 
   Intersection intersection = {};
   SpectralResponse throughput = {};
+
   struct {
     float forward = 0.0f;
     float backward = 0.0f;
+    float accumulated = 0.0f;
   } pdf;
+
   Class cls = Class::Invalid;
   SubsurfaceClass sss_cls = SubsurfaceClass::None;
   uint32_t medium_index = kInvalidIndex;
@@ -233,12 +236,17 @@ struct PathVertex {
 struct PathData {
   std::vector<PathVertex> emitter_path;
 
-  struct {
+  struct History {
+    float pdf_forward = 0.0f;
     float pdf_ratio = 0.0f;
+    float mis_accumulated = 0.0f;
     uint32_t delta = false;
-  } history[3] = {};
-  float camera_mis_value = 0.0f;
+  };
+
+  History camera_history[3] = {};
+  History emitter_history[3] = {};
   uint32_t camera_path_size = 0u;
+  uint32_t emitter_path_size = 0u;
 
   PathData() = default;
   PathData(const PathData&) = delete;
