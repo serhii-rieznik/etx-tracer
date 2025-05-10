@@ -34,13 +34,16 @@ struct ETX_ALIGNED Scene {
   float3 bounding_sphere_center ETX_EMPTY_INIT;
   float bounding_sphere_radius ETX_EMPTY_INIT;
   PixelFilter pixel_sampler ETX_EMPTY_INIT;
-  uint32_t max_camera_path_length ETX_INIT_WITH(65535u);
-  uint32_t max_light_path_length ETX_INIT_WITH(65535u);
+  uint32_t max_path_length ETX_INIT_WITH(65535u);
   uint32_t samples ETX_INIT_WITH(256u);
   uint32_t random_path_termination ETX_INIT_WITH(6u);
   float noise_threshold ETX_INIT_WITH(0.1f);
   float radiance_clamp ETX_INIT_WITH(0.0f);
   uint8_t spectral ETX_INIT_WITH(0);
+  uint32_t black_spectrum = kInvalidIndex;
+  uint32_t white_spectrum = kInvalidIndex;
+  uint32_t subsurface_scatter_material = kInvalidIndex;
+  uint32_t subsurface_exit_material = kInvalidIndex;
 };
 
 struct ContinousTraceOptions {

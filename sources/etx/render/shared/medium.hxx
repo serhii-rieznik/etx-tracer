@@ -27,6 +27,14 @@ ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const
   return 2u - uint32_t(rnd < pdf.integrated.x + pdf.integrated.y) - uint32_t(rnd < pdf.integrated.x);
 }
 
+ETX_GPU_CODE SpectralResponse calculate_albedo(const SpectralQuery spect, const SpectralResponse& scattering, const SpectralResponse& extinction) {
+  SpectralResponse albedo = {spect, extinction.value > 0.0f ? (scattering.value / extinction.value) : 0.0f};
+  albedo.integrated.x = extinction.integrated.x > 0.0f ? (scattering.integrated.x / extinction.integrated.x) : 0.0f;
+  albedo.integrated.y = extinction.integrated.y > 0.0f ? (scattering.integrated.y / extinction.integrated.y) : 0.0f;
+  albedo.integrated.z = extinction.integrated.z > 0.0f ? (scattering.integrated.z / extinction.integrated.z) : 0.0f;
+  return albedo;
+}
+
 ETX_GPU_CODE float phase_function(const float3& w_i, const float3& w_o, const float g) {
   float cos_t = dot(w_i, w_o);
   float d = 1.0f + g * g - 2.0f * g * cos_t;
@@ -158,20 +166,12 @@ struct ETX_ALIGNED Medium {
     }
   }
 
-  static SpectralResponse calculate_albedo(const SpectralQuery spect, const SpectralResponse& scattering, const SpectralResponse& extinction) {
-    SpectralResponse albedo = {spect, extinction.value > 0.0f ? (scattering.value / extinction.value) : 0.0f};
-    albedo.integrated.x = extinction.integrated.x > 0.0f ? (scattering.integrated.x / extinction.integrated.x) : 0.0f;
-    albedo.integrated.y = extinction.integrated.y > 0.0f ? (scattering.integrated.y / extinction.integrated.y) : 0.0f;
-    albedo.integrated.z = extinction.integrated.z > 0.0f ? (scattering.integrated.z / extinction.integrated.z) : 0.0f;
-    return albedo;
-  }
-
   ETX_GPU_CODE Sample sample_homogeneous(const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos, const float3& w_i, float max_t) const {
     SpectralResponse scattering = s_scattering(spect);
     SpectralResponse absorption = s_absorption(spect);
     SpectralResponse extinction = scattering + absorption;
 
-    SpectralResponse albedo = calculate_albedo(spect, scattering, extinction);
+    SpectralResponse albedo = medium::calculate_albedo(spect, scattering, extinction);
 
     SpectralResponse pdf = {};
     uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp, pdf);
@@ -228,11 +228,11 @@ struct ETX_ALIGNED Medium {
     return {{spect, 1.0f}};
   }
 
-  ETX_GPU_CODE float phase_function(const SpectralQuery spect, const float3& pos, const float3& w_i, const float3& w_o) const {
+  ETX_GPU_CODE float phase_function(const float3& w_i, const float3& w_o) const {
     return (cls == Class::Vacuum) ? 1.0f : medium::phase_function(w_i, w_o, phase_function_g);
   }
 
-  ETX_GPU_CODE float3 sample_phase_function(const SpectralQuery spect, Sampler& smp, const float3& w_i) const {
+  ETX_GPU_CODE float3 sample_phase_function(Sampler& smp, const float3& w_i) const {
     return (cls == Class::Vacuum) ? w_i : medium::sample_phase_function(w_i, phase_function_g, smp);
   }
 

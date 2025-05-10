@@ -12,7 +12,6 @@ struct Gather {
   uint32_t selected_intersection;
   float selected_sample_weight;
   float total_weight;
-  float total_pdf;
 };
 
 ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, float& albedo, float& extinction, float& scattering) {

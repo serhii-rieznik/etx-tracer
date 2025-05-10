@@ -336,13 +336,21 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
 
     const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
     const uint32_t material_index = ctx->scene->triangle_to_material[triangle_index];
-    if (material_index != ctx->m_id) {
+    if ((ctx->m_id != kInvalidIndex) && (material_index != ctx->m_id)) {
       *args->valid = 0;
       return;
     }
 
+    const auto& tri = ctx->scene->triangles[triangle_index];
+    const auto& mat = ctx->scene->materials[material_index];
+    const auto& scene = *ctx->scene;
     float u = RTCHitN_u(args->hit, args->N, 0);
     float v = RTCHitN_v(args->hit, args->N, 0);
+    if (alpha_test_pass(mat, tri, barycentrics({u, v}), scene, *ctx->smp)) {
+      *args->valid = 0;
+      return;
+    }
+
     ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0)};
   };
 

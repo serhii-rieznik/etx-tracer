@@ -27,11 +27,10 @@ struct PathVertex {
   } pdf;
 
   Class cls = Class::Invalid;
-  SubsurfaceClass sss_cls = SubsurfaceClass::None;
   uint32_t medium_index = kInvalidIndex;
-  float sss_pdf = 0.0f;
   bool delta_connection = false;
   bool delta_emitter = false;
+  bool connectible = true;
 
   PathVertex() = default;
 
@@ -40,9 +39,10 @@ struct PathVertex {
     , cls(c) {
   }
 
-  PathVertex(const Medium::Sample& i, const float3& a_w_i)
-    : cls(Class::Medium) {
-    intersection.pos = i.pos;
+  PathVertex(const float3& medium_sample_pos, const float3& a_w_i, const uint32_t a_medium_index)
+    : cls(Class::Medium)
+    , medium_index(a_medium_index) {
+    intersection.pos = medium_sample_pos;
     intersection.w_i = a_w_i;
   }
 
@@ -68,20 +68,6 @@ struct PathVertex {
 
   bool is_medium_interaction() const {
     return (cls == Class::Medium) && (medium_index != kInvalidIndex);
-  }
-
-  bool is_subsurface_interaction() const {
-    return sss_cls != SubsurfaceClass::None;
-  }
-
-  bool sss_connectible() const {
-    return sss_cls != SubsurfaceClass::Enter;
-  }
-
-  bool valid_material() const {
-    return (sss_cls == SubsurfaceClass::None) ||                                           //
-           ((sss_cls == SubsurfaceClass::Enter) && (intersection.material_index == 1)) ||  //
-           ((sss_cls == SubsurfaceClass::Exit) && (intersection.material_index == 0));
   }
 
   static bool safe_normalize(const float3& a, const float3& b, float3& n) {
@@ -113,15 +99,10 @@ struct PathVertex {
 
     float eval_pdf = 0.0f;
     if (is_surface_interaction()) {
-      if (sss_cls == SubsurfaceClass::Exit) {
-        return sss_pdf;
-      }
-
-      ETX_ASSERT(valid_material());
       const auto& mat = scene.materials[intersection.material_index];
       eval_pdf = bsdf::pdf({spect, medium_index, mode, intersection, w_i}, w_o, mat, scene, smp);
     } else if (is_medium_interaction()) {
-      eval_pdf = scene.mediums[medium_index].phase_function(spect, intersection.pos, w_i, w_o);
+      eval_pdf = scene.mediums[medium_index].phase_function(w_i, w_o);
     } else {
       ETX_FAIL("Invalid vertex class");
     }
@@ -212,20 +193,21 @@ struct PathVertex {
     ETX_ASSERT(is_surface_interaction() || is_medium_interaction());
 
     if (is_surface_interaction()) {
-      const auto& tri = scene.triangles[intersection.triangle_index];
-      ETX_ASSERT(valid_material());
       const auto& mat = scene.materials[intersection.material_index];
       BSDFEval eval = bsdf::evaluate({spect, medium_index, mode, intersection, intersection.w_i}, w_o, mat, scene, smp);
       ETX_VALIDATE(eval.bsdf);
+
       if (mode == PathSource::Light) {
+        const auto& tri = scene.triangles[intersection.triangle_index];
         eval.bsdf *= fix_shading_normal(tri.geo_n, intersection.nrm, intersection.w_i, w_o);
         ETX_VALIDATE(eval.bsdf);
       }
+
       return eval.bsdf;
     }
 
     if (is_medium_interaction()) {
-      return {spect, scene.mediums[medium_index].phase_function(spect, intersection.pos, intersection.w_i, w_o)};
+      return {spect, scene.mediums[medium_index].phase_function(intersection.w_i, w_o)};
     }
 
     ETX_FAIL("Invalid path vertex");
@@ -251,6 +233,14 @@ struct PathData {
   PathData() = default;
   PathData(const PathData&) = delete;
   PathData& operator=(const PathData&) = delete;
+
+  uint32_t camera_path_length() const {
+    return camera_path_size >= 2 ? camera_path_size - 2u : 0;
+  }
+
+  uint32_t emitter_path_length() const {
+    return emitter_path_size >= 2 ? emitter_path_size - 2u : 0;
+  }
 };
 
 }  // namespace etx

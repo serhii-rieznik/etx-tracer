@@ -286,20 +286,7 @@ struct SceneRepresentationImpl {
     triangle_to_emitter.clear();
 
     scene_spectrums.clear();
-    add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
-    add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
-
     material_mapping.clear();
-    uint32_t sss_exit_material_id = add_material("etx::subsurface-exit");
-    materials[sss_exit_material_id].reflectance = {.spectrum_index = 1};
-    materials[sss_exit_material_id].transmittance = {.spectrum_index = 1};
-    materials[sss_exit_material_id].cls = Material::Class::Diffuse;
-
-    uint32_t sss_enter_material_id = add_material("etx::subsurface-enter");
-    materials[sss_enter_material_id].reflectance = {.spectrum_index = 0};
-    materials[sss_enter_material_id].transmittance = {.spectrum_index = 1};
-    materials[sss_enter_material_id].cls = Material::Class::Translucent;
-
     images.remove_all();
     mediums.remove_all();
     materials.reserve(1024);  // TODO : fix, images when reallocated are destroyed releasing memory
@@ -308,6 +295,20 @@ struct SceneRepresentationImpl {
     scene.emitters_distribution = {};
 
     scene = {};
+
+    scene.black_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
+    scene.white_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+
+    scene.subsurface_scatter_material = add_material("etx::subsurface-enter");
+    materials[scene.subsurface_scatter_material].reflectance = {.spectrum_index = scene.black_spectrum};
+    materials[scene.subsurface_scatter_material].transmittance = {.spectrum_index = scene.white_spectrum};
+    materials[scene.subsurface_scatter_material].cls = Material::Class::Translucent;
+
+    scene.subsurface_exit_material = add_material("etx::subsurface-exit");
+    materials[scene.subsurface_exit_material].reflectance = {.spectrum_index = scene.white_spectrum};
+    materials[scene.subsurface_exit_material].transmittance = {.spectrum_index = scene.white_spectrum};
+    materials[scene.subsurface_exit_material].cls = Material::Class::Diffuse;
+
     camera.lens_image = kInvalidIndex;
 
     loaded = false;
@@ -655,9 +656,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       } else if (json_get_int(i, "random-termination-start", int_value)) {
         _private->scene.random_path_termination = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_int(i, "max-path-length", int_value)) {
-        _private->scene.max_camera_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
-      } else if (json_get_int(i, "max-light-path-length", int_value)) {
-        _private->scene.max_light_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->scene.max_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_string(i, "geometry", str_value)) {
         _private->geometry_file_name = std::string(base_folder) + str_value;
       } else if (json_get_string(i, "materials", str_value)) {
@@ -1582,6 +1581,8 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   if (get_param(material, "subsurface")) {
     mtl.subsurface.cls = SubsurfaceMaterial::Class::RandomWalk;
 
+    float3 scattering_distances = {1.0f, 0.2f, 0.04f};
+
     auto params = split_params(data_buffer);
     for (uint64_t i = 0, e = params.size(); i < e; ++i) {
       if ((strcmp(params[i], "path") == 0) && (i + 1 < e)) {
@@ -1590,10 +1591,9 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       }
 
       if ((strcmp(params[i], "distances") == 0) && (i + 3 < e)) {
-        float dr = static_cast<float>(atof(params[i + 1]));
-        float dg = static_cast<float>(atof(params[i + 2]));
-        float db = static_cast<float>(atof(params[i + 3]));
-        mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({dr, dg, db}));
+        scattering_distances.x = static_cast<float>(atof(params[i + 1]));
+        scattering_distances.y = static_cast<float>(atof(params[i + 2]));
+        scattering_distances.z = static_cast<float>(atof(params[i + 3]));
         i += 3;
       }
 
@@ -1609,6 +1609,28 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
         i += 1;
       }
     }
+
+    mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance(scattering_distances));
+
+    float3 color = {1.0f, 1.0f, 1.0f};
+    if (mtl.transmittance.spectrum_index != kInvalidIndex) {
+      color = scene_spectrums[mtl.transmittance.spectrum_index].spectrum.integrated();
+    }
+
+    float3 albedo = {};
+    float3 extinction = {};
+    float3 scattering = {};
+    subsurface::remap(color, mtl.subsurface.scale * scattering_distances, albedo, extinction, scattering);
+
+    float3 absorption = max({}, extinction - scattering);
+    ETX_VALIDATE(absorption);
+
+    auto s_t = SpectralDistribution::rgb_reflectance(scattering);
+    auto s_a = SpectralDistribution::rgb_reflectance(absorption);
+
+    char name[64] = {};
+    snprintf(name, sizeof(name), "etx::sss::%d", material_index);
+    mtl.int_medium = add_medium(Medium::Class::Homogeneous, name, nullptr, s_a, s_t, 0.0f, false);
   }
 
   SpectralDistribution emission_spd = SpectralDistribution::null();
