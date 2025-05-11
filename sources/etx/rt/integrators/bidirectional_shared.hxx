@@ -8,7 +8,8 @@ struct PathVertex {
     Camera,
     Emitter,
     Surface,
-    Medium,
+    SceneMedium,
+    RuntimeMedium,
   };
 
   enum class SubsurfaceClass : uint16_t {
@@ -27,7 +28,8 @@ struct PathVertex {
   } pdf;
 
   Class cls = Class::Invalid;
-  uint32_t medium_index = kInvalidIndex;
+  uint32_t scene_medium_index = kInvalidIndex;
+  float medium_anisotropy = 0.0f;
   bool delta_connection = false;
   bool delta_emitter = false;
   bool connectible = true;
@@ -39,9 +41,10 @@ struct PathVertex {
     , cls(c) {
   }
 
-  PathVertex(const float3& medium_sample_pos, const float3& a_w_i, const uint32_t a_medium_index)
-    : cls(Class::Medium)
-    , medium_index(a_medium_index) {
+  PathVertex(const float3& medium_sample_pos, const float3& a_w_i, const uint32_t medium_index, const float anisotropy)
+    : cls(medium_index == kInvalidIndex ? Class::RuntimeMedium : Class::SceneMedium)
+    , scene_medium_index(medium_index)
+    , medium_anisotropy(anisotropy) {
     intersection.pos = medium_sample_pos;
     intersection.w_i = a_w_i;
   }
@@ -67,7 +70,7 @@ struct PathVertex {
   }
 
   bool is_medium_interaction() const {
-    return (cls == Class::Medium) && (medium_index != kInvalidIndex);
+    return ((cls == Class::SceneMedium) && (scene_medium_index != kInvalidIndex)) || (cls == Class::RuntimeMedium);
   }
 
   static bool safe_normalize(const float3& a, const float3& b, float3& n) {
@@ -100,9 +103,9 @@ struct PathVertex {
     float eval_pdf = 0.0f;
     if (is_surface_interaction()) {
       const auto& mat = scene.materials[intersection.material_index];
-      eval_pdf = bsdf::pdf({spect, medium_index, mode, intersection, w_i}, w_o, mat, scene, smp);
+      eval_pdf = bsdf::pdf({spect, kInvalidIndex, mode, intersection, w_i}, w_o, mat, scene, smp);
     } else if (is_medium_interaction()) {
-      eval_pdf = scene.mediums[medium_index].phase_function(w_i, w_o);
+      eval_pdf = medium::phase_function(w_i, w_o, medium_anisotropy);
     } else {
       ETX_FAIL("Invalid vertex class");
     }
@@ -194,7 +197,7 @@ struct PathVertex {
 
     if (is_surface_interaction()) {
       const auto& mat = scene.materials[intersection.material_index];
-      BSDFEval eval = bsdf::evaluate({spect, medium_index, mode, intersection, intersection.w_i}, w_o, mat, scene, smp);
+      BSDFEval eval = bsdf::evaluate({spect, kInvalidIndex, mode, intersection, intersection.w_i}, w_o, mat, scene, smp);
       ETX_VALIDATE(eval.bsdf);
 
       if (mode == PathSource::Light) {
@@ -207,7 +210,7 @@ struct PathVertex {
     }
 
     if (is_medium_interaction()) {
-      return {spect, scene.mediums[medium_index].phase_function(intersection.w_i, w_o)};
+      return {spect, medium::phase_function(intersection.w_i, w_o, medium_anisotropy)};
     }
 
     ETX_FAIL("Invalid path vertex");

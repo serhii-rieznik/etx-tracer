@@ -175,7 +175,7 @@ struct CPUBidirectionalImpl : public Task {
     float pdf_fwd = medium::phase_function(ray.d, w_o, anisotropy);
     float pdf_bck = medium::phase_function(w_o, ray.d, anisotropy);
 
-    curr = PathVertex{medium_sample_pos, ray.d, payload.medium_index};
+    curr = PathVertex{medium_sample_pos, ray.d, payload.medium_index, anisotropy};
 
     path_data.camera_path_size += uint32_t(payload.mode == PathSource::Camera);
     path_data.emitter_path_size += uint32_t(payload.mode == PathSource::Light);
@@ -271,11 +271,11 @@ struct CPUBidirectionalImpl : public Task {
     curr.intersection.material_index = material_index;
     curr.delta_emitter = prev.delta_emitter;
     curr.delta_connection = bsdf_sample.is_delta();
-    curr.medium_index = medium_index;
+    curr.scene_medium_index = medium_index;
     curr.pdf.forward = prev.pdf_solid_angle_to_area(payload.pdf_dir, curr);
     ETX_VALIDATE(curr.pdf.forward);
 
-    payload.medium_index = curr.medium_index;
+    payload.medium_index = medium_index;
 
     bool terminate_path = false;
     if (bsdf_sample.valid()) {
@@ -483,7 +483,7 @@ struct CPUBidirectionalImpl : public Task {
         should_break = result == InteractionResult::Break;
       } else if (payload.mode == PathSource::Camera) {
         curr = PathVertex{PathVertex::Class::Emitter};
-        curr.medium_index = payload.medium_index;
+        curr.scene_medium_index = payload.medium_index;
         curr.throughput = payload.throughput;
         curr.pdf.forward = payload.pdf_dir;
         curr.intersection.w_i = ray.d;
@@ -512,7 +512,7 @@ struct CPUBidirectionalImpl : public Task {
     prev.throughput = {spect, 1.0f};
 
     PathVertex curr = {PathVertex::Class::Camera};
-    curr.medium_index = rt.camera().medium_index;
+    curr.scene_medium_index = rt.camera().medium_index;
     curr.throughput = {spect, 1.0f};
     curr.intersection.pos = ray.o;
     curr.intersection.nrm = eval.normal;
@@ -526,7 +526,7 @@ struct CPUBidirectionalImpl : public Task {
       .throughput = curr.throughput,
       .eta = 1.0f,
       .pdf_dir = eval.pdf_dir,
-      .medium_index = curr.medium_index,
+      .medium_index = curr.scene_medium_index,
       .mode = PathSource::Camera,
     };
 
@@ -552,7 +552,7 @@ struct CPUBidirectionalImpl : public Task {
     curr.intersection.nrm = emitter_sample.normal;
     curr.intersection.w_i = emitter_sample.direction;
     curr.intersection.emitter_index = emitter_sample.emitter_index;
-    curr.medium_index = emitter_sample.medium_index;
+    curr.scene_medium_index = emitter_sample.medium_index;
     curr.throughput = emitter_sample.value;
     curr.pdf.forward = emitter_sample.pdf_area * emitter_sample.pdf_sample;
     curr.delta_emitter = emitter_sample.is_delta;
@@ -569,7 +569,7 @@ struct CPUBidirectionalImpl : public Task {
       .throughput = curr.throughput * dot(emitter_sample.direction, curr.intersection.nrm) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample),
       .eta = 1.0f,
       .pdf_dir = emitter_sample.pdf_dir,
-      .medium_index = curr.medium_index,
+      .medium_index = curr.scene_medium_index,
       .mode = PathSource::Light,
     };
 
@@ -604,6 +604,8 @@ struct CPUBidirectionalImpl : public Task {
       .mis_accumulated = float(enough_length) * history[1].pdf_ratio * (float(can_connect) + history[1].mis_accumulated),
       .delta = prev.delta_connection,
     };
+    ETX_VALIDATE(history[0].pdf_ratio);
+    ETX_VALIDATE(history[0].mis_accumulated);
     prev.pdf.accumulated = history[0].mis_accumulated;
   }
 
@@ -856,7 +858,8 @@ struct CPUBidirectionalImpl : public Task {
       const auto& tri = scene.triangles[p0.intersection.triangle_index];
       origin = shading_pos(scene.vertices, tri, p0.intersection.barycentric, normalize(p1.intersection.pos - p0.intersection.pos));
     }
-    return rt.trace_transmittance(spect, scene, origin, p1.intersection.pos, p0.medium_index, smp);
+
+    return rt.trace_transmittance(spect, scene, origin, p1.intersection.pos, p0.scene_medium_index, smp);
   }
 
   void start(const Options& opt) {
