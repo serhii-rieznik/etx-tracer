@@ -397,7 +397,7 @@ struct CPUBidirectionalImpl : public Task {
       albedo = medium::calculate_albedo(payload.spect, scattering, extinction);
     }
 
-    for (uint32_t counter = 0; counter < 1024 * 4; ++counter) {
+    for (uint32_t counter = 0; counter < 1024u; ++counter) {
       prev = curr;
 
       SpectralResponse pdf = {};
