@@ -23,11 +23,12 @@ ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, f
   constexpr float f = 2.406029994080f;
   constexpr float kMinScattering = 1.0f / 1024.0f;
 
-  color = max(color, 0.0f);
+  color = fmaxf(0.0f, color);
 
   float blend = powf(color, 0.25f);
-  albedo = saturate((1.0f - blend) * a * powf(atanf(b * color), c) + blend * d * powf(atanf(e * color), f));
+  albedo = (1.0f - blend) * a * powf(atanf(b * color), c) + blend * d * powf(atanf(e * color), f);
   ETX_VALIDATE(albedo);
+  albedo = clamp(albedo, 0.0f, 1.0f - kEpsilon);
 
   extinction = 1.0f / fmaxf(scattering_distances, kMinScattering);
   ETX_VALIDATE(extinction);
