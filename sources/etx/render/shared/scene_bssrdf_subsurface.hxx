@@ -26,7 +26,7 @@ ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, f
   color = max(color, 0.0f);
 
   float blend = powf(color, 0.25f);
-  albedo = (1.0f - blend) * a * powf(atanf(b * color), c) + blend * d * powf(atanf(e * color), f);
+  albedo = saturate((1.0f - blend) * a * powf(atanf(b * color), c) + blend * d * powf(atanf(e * color), f));
   ETX_VALIDATE(albedo);
 
   extinction = 1.0f / fmaxf(scattering_distances, kMinScattering);

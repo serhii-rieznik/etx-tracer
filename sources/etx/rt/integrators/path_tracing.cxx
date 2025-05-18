@@ -35,6 +35,7 @@ struct CPUPathTracingImpl : public Task {
   void start(const Options& opt) {
     ETX_PROFILER_RESET_COUNTERS();
 
+    options.direct = opt.get("direct", options.direct).to_bool();
     options.nee = opt.get("nee", options.nee).to_bool();
     options.mis = opt.get("mis", options.mis).to_bool();
     options.blue_noise = opt.get("bn", options.blue_noise).to_bool();
@@ -158,7 +159,8 @@ void CPUPathTracing::stop(Stop st) {
 
 Options CPUPathTracing::options() const {
   Options result = {};
-  result.add(_private->options.nee, "nee", "Next Event Estimation");
+  result.add(_private->options.direct, "direct", "Direct Hits");
+  result.add(_private->options.nee, "nee", "Light Sampling");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
   result.add(_private->options.blue_noise, "bn", "Use Blue Noise");
   return result;

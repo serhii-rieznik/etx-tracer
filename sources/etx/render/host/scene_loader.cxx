@@ -391,6 +391,18 @@ struct SceneRepresentationImpl {
   void build_tangents() {
     static std::map<uint32_t, uint32_t> a = {};
 
+    float2 min_uv = {kMaxFloat, kMaxFloat};
+    float2 max_uv = {-kMaxFloat, -kMaxFloat};
+    for (const auto& v : vertices) {
+      min_uv = min(min_uv, v.tex);
+      max_uv = max(max_uv, v.tex);
+    }
+    auto uv_span = max_uv - min_uv;
+    if (dot(uv_span, uv_span) <= kEpsilon) {
+      log::warning("No texture coordinates: tangents will be computed automatically");
+      return;
+    }
+
     SMikkTSpaceInterface contextInterface = {};
     contextInterface.m_getNumFaces = [](const SMikkTSpaceContext* pContext) -> int {
       auto data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData);
@@ -1004,6 +1016,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     float3 color = {1.0f, 1.0f, 1.0f};
     float3 scattering_distances = {0.25f, 0.25f, 0.25f};
 
+    float scale = 1.0f;
     auto params = split_params(data_buffer);
     for (uint64_t i = 0, e = params.size(); i < e; ++i) {
       if ((strcmp(params[i], "color") == 0) && (i + 3 < e)) {
@@ -1027,12 +1040,16 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
         };
         i += 3;
       }
+      if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+        scale = static_cast<float>(atof(params[i + 1]));
+        i += 1;
+      }
     }
 
     float3 albedo = {};
     float3 extinction = {};
     float3 scattering = {};
-    subsurface::remap(color, scattering_distances, albedo, extinction, scattering);
+    subsurface::remap(color, scale * scattering_distances, albedo, extinction, scattering);
 
     float3 absorption = max({}, extinction - scattering);
     ETX_VALIDATE(absorption);
@@ -1611,26 +1628,6 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     }
 
     mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance(scattering_distances));
-
-    float3 color = {1.0f, 1.0f, 1.0f};
-    if (mtl.transmittance.spectrum_index != kInvalidIndex) {
-      color = scene_spectrums[mtl.transmittance.spectrum_index].spectrum.integrated();
-    }
-
-    float3 albedo = {};
-    float3 extinction = {};
-    float3 scattering = {};
-    subsurface::remap(color, mtl.subsurface.scale * scattering_distances, albedo, extinction, scattering);
-
-    float3 absorption = max({}, extinction - scattering);
-    ETX_VALIDATE(absorption);
-
-    auto s_t = SpectralDistribution::rgb_reflectance(scattering);
-    auto s_a = SpectralDistribution::rgb_reflectance(absorption);
-
-    char name[64] = {};
-    snprintf(name, sizeof(name), "etx::sss::%d", material_index);
-    mtl.int_medium = add_medium(Medium::Class::Homogeneous, name, nullptr, s_a, s_t, 0.0f, false);
   }
 
   SpectralDistribution emission_spd = SpectralDistribution::null();

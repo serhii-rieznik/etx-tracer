@@ -990,7 +990,9 @@ bool UI::build_material(Material& material) {
       int32_t medium_index = static_cast<int32_t>(medium);
       if (medium_index == -1)
         medium_index = 0;
-      changed |= ImGui::SliderInt("##medium_index", &medium_index, 0, int32_t(medium_count - 1u), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
+      char buffer[64] = {};
+      snprintf(buffer, sizeof(buffer), "##%s_slider", name);
+      changed |= ImGui::SliderInt(buffer, &medium_index, 0, int32_t(medium_count - 1u), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
       medium = uint32_t(medium_index);
     } else {
       medium = kInvalidIndex;

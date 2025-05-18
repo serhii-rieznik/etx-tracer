@@ -7,7 +7,7 @@ namespace etx {
 
 namespace medium {
 
-ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, Sampler& smp,
+ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, const float rnd,
   SpectralResponse& pdf) {
   if (spect.spectral()) {
     pdf = {spect, 1.0f};
@@ -15,8 +15,6 @@ ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const
   }
 
   SpectralResponse at = albedo * throughput;
-
-  float rnd = smp.next();
 
   if (at.is_zero()) {
     pdf = {spect, 1.0f / at.component_count()};
@@ -174,7 +172,7 @@ struct ETX_ALIGNED Medium {
     SpectralResponse albedo = medium::calculate_albedo(spect, scattering, extinction);
 
     SpectralResponse pdf = {};
-    uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp, pdf);
+    uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp.next(), pdf);
     float sample_t = extinction.component(channel);
 
     float t = (sample_t > 0.0f) ? -logf(1.0f - smp.next()) / sample_t : max_t;
