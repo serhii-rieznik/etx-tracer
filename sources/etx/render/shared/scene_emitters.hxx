@@ -7,17 +7,17 @@ ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene)
   return 1.0f / em.triangle_area;
 }
 
-ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
+ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& adirection,
   float& pdf_area, float& pdf_dir, float& pdf_dir_out, const Scene& scene) {
   ETX_ASSERT(em.is_local());
 
   switch (em.emission_direction) {
     case Emitter::Direction::Single: {
-      pdf_dir = max(0.0f, dot(emitter_normal, direction)) * kInvPi;
+      pdf_dir = max(0.0f, dot(emitter_normal, adirection)) * kInvPi;
       break;
     }
     case Emitter::Direction::TwoSided: {
-      pdf_dir = 0.5f * fabsf(dot(emitter_normal, direction)) * kInvPi;
+      pdf_dir = 0.5f * fabsf(dot(emitter_normal, adirection)) * kInvPi;
       break;
     }
     case Emitter::Direction::Omni: {
@@ -108,18 +108,16 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
 }
 
 ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
-  float& pdf_dir_out, const Scene& scene) {
+  const Scene& scene) {
   ETX_ASSERT(em.is_distant());
 
   pdf_dir = 0.0f;
   pdf_area = 0.0f;
-  pdf_dir_out = 0.0f;
 
   switch (em.cls) {
     case Emitter::Class::Directional: {
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = 1.0f;
-      pdf_dir_out = pdf_dir * pdf_area;
       float2 uv = disk_uv(em.direction, in_direction, em.equivalent_disk_size, em.angular_size_cosine);
       return apply_image(spect, em.emission, uv, scene, nullptr);
     }
@@ -138,7 +136,6 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = image_pdf / (2.0f * kPi * kPi * sin_t);
       ETX_VALIDATE(pdf_dir);
-      pdf_dir_out = pdf_dir * pdf_area;
       return eval;
     }
 

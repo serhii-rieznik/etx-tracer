@@ -84,92 +84,101 @@ struct PathVertex {
     return true;
   }
 
-  float pdf_area(SpectralQuery spect, const PathVertex& prev, const PathVertex& next, const Scene& scene, Sampler& smp) const {
-    ETX_CRITICAL(is_surface_interaction() || is_medium_interaction());
+  static float pdf_area(SpectralQuery spect, PathSource path_source, const PathVertex& prev, const PathVertex& curr, const PathVertex& next, const Scene& scene, Sampler& smp) {
+    ETX_CRITICAL(curr.is_surface_interaction() || curr.is_medium_interaction());
 
     float3 w_i = {};
     float3 w_o = {};
-    if (safe_normalize(intersection.pos, prev.intersection.pos, w_i) == false)
+    if (safe_normalize(curr.intersection.pos, prev.intersection.pos, w_i) == false)
       return 0.0f;
-    if (safe_normalize(next.intersection.pos, intersection.pos, w_o) == false)
+
+    if (safe_normalize(next.intersection.pos, curr.intersection.pos, w_o) == false)
       return 0.0f;
 
     float eval_pdf = 0.0f;
-    if (is_surface_interaction()) {
-      const auto& mat = scene.materials[intersection.material_index];
-      eval_pdf = bsdf::pdf({spect, kInvalidIndex, PathSource::Undefined, intersection, w_i}, w_o, mat, scene, smp);
-    } else if (is_medium_interaction()) {
-      eval_pdf = medium::phase_function(w_i, w_o, medium_anisotropy);
-    } else {
-      ETX_FAIL("Invalid vertex class");
+    if (curr.is_surface_interaction()) {
+      const auto& mat = scene.materials[curr.intersection.material_index];
+      eval_pdf = bsdf::pdf({spect, kInvalidIndex, path_source, curr.intersection, w_i}, w_o, mat, scene, smp);
+      ETX_VALIDATE(eval_pdf);
+    } else if (curr.is_medium_interaction()) {
+      eval_pdf = medium::phase_function(w_i, w_o, curr.medium_anisotropy);
+      ETX_VALIDATE(eval_pdf);
     }
-    ETX_VALIDATE(eval_pdf);
 
-    return pdf_solid_angle_to_area(eval_pdf, next);
+    return convert_solid_angle_pdf_to_area(eval_pdf, curr, next);
   }
 
-  float pdf_to_light_out(SpectralQuery spect, const PathVertex& next, const Scene& scene) const {
-    ETX_ASSERT(is_emitter());
+  static float pdf_from_emitter(SpectralQuery spect, const PathVertex& emitter_vertex, const PathVertex& target_vertex, const Scene& scene) {
+    ETX_ASSERT(emitter_vertex.is_emitter());
 
     float pdf_area = 0.0f;
-    float pdf_dir = 0.0f;
-    float pdf_dir_out = 0.0f;
 
-    if (is_specific_emitter()) {
-      const auto& emitter = scene.emitters[intersection.emitter_index];
+    if (emitter_vertex.is_specific_emitter()) {
+      const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
       if (emitter.is_local()) {
-        auto w_o = normalize(next.intersection.pos - intersection.pos);
-        emitter_evaluate_out_local(emitter, spect, intersection.tex, intersection.nrm, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
-        pdf_area = pdf_solid_angle_to_area(pdf_dir, next);
+        float pdf_dir_out = 0.0f;
+        float pdf_dir = 0.0f;
+        auto w_o = normalize(target_vertex.intersection.pos - emitter_vertex.intersection.pos);
+        emitter_evaluate_out_local(emitter, spect, emitter_vertex.intersection.tex, emitter_vertex.intersection.nrm, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
+        pdf_area = convert_solid_angle_pdf_to_area(pdf_dir, emitter_vertex, target_vertex);
       } else if (emitter.is_distant()) {
-        auto w_o = normalize(intersection.pos - next.intersection.pos);
-        emitter_evaluate_out_dist(emitter, spect, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
-        if (next.is_surface_interaction()) {
-          pdf_area *= fabsf(dot(scene.triangles[next.intersection.triangle_index].geo_n, w_o));
+        float pdf_dir = 0.0f;
+        auto w_o = normalize(emitter_vertex.intersection.pos - target_vertex.intersection.pos);
+        emitter_evaluate_out_dist(emitter, spect, w_o, pdf_area, pdf_dir, scene);
+        if (target_vertex.is_surface_interaction()) {
+          pdf_area *= fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o));
         }
       }
-    } else if (scene.environment_emitters.count > 0) {
-      auto w_o = normalize(intersection.pos - next.intersection.pos);
-      for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-        const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
-        float local_pdf_area = 0.0f;
-        emitter_evaluate_out_dist(emitter, spect, w_o, local_pdf_area, pdf_dir, pdf_dir_out, scene);
-        pdf_area += local_pdf_area;
-      }
-      float w_o_dot_n = next.is_surface_interaction() ? fabsf(dot(scene.triangles[next.intersection.triangle_index].geo_n, w_o)) : 1.0f;
-      pdf_area = w_o_dot_n * pdf_area / float(scene.environment_emitters.count);
+
+      return pdf_area;
     }
 
+    if (scene.environment_emitters.count == 0)
+      return 0.0f;
+
+    auto w_o = normalize(emitter_vertex.intersection.pos - target_vertex.intersection.pos);
+    for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
+      const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
+      float local_pdf_dir = 0.0f;
+      float local_pdf_area = 0.0f;
+      emitter_evaluate_out_dist(emitter, spect, w_o, local_pdf_area, local_pdf_dir, scene);
+      pdf_area += local_pdf_area;
+    }
+    float w_o_dot_n = target_vertex.is_surface_interaction() ? fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o)) : 1.0f;
+    pdf_area = w_o_dot_n * pdf_area / float(scene.environment_emitters.count);
     return pdf_area;
   }
 
-  static float pdf_to_light(SpectralQuery spect, const PathVertex& interaction, const PathVertex& light, const Scene& scene) {
-    ETX_ASSERT(light.is_emitter());
+  static float pdf_to_emitter(SpectralQuery spect, const PathVertex& interaction, const PathVertex& emitter_vertex, const Scene& scene) {
+    ETX_ASSERT(emitter_vertex.is_emitter());
+
+    if (emitter_vertex.is_specific_emitter()) {
+      const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
+      float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+      return pdf_discrete * (emitter.is_local()                                                                                                     //
+                                ? emitter_pdf_area_local(emitter, scene)                                                                            //
+                                : emitter_pdf_in_dist(emitter, normalize(emitter_vertex.intersection.pos - interaction.intersection.pos), scene));  //
+    }
+
+    if (scene.environment_emitters.count == 0)
+      return 0.0f;
 
     float result = 0.0f;
-    if (light.is_specific_emitter()) {
-      const auto& emitter = scene.emitters[light.intersection.emitter_index];
+    for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
+      const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
       float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      result = pdf_discrete * (emitter.is_local()                                                                                            //
-                                  ? emitter_pdf_area_local(emitter, scene)                                                                   //
-                                  : emitter_pdf_in_dist(emitter, normalize(light.intersection.pos - interaction.intersection.pos), scene));  //
-    } else if (scene.environment_emitters.count > 0) {
-      for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-        const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
-        float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-        result += pdf_discrete * emitter_pdf_in_dist(emitter, normalize(light.intersection.pos - interaction.intersection.pos), scene);
-      }
-      result = result / float(scene.environment_emitters.count);
+      result += pdf_discrete * emitter_pdf_in_dist(emitter, normalize(emitter_vertex.intersection.pos - interaction.intersection.pos), scene);
     }
-    return result;
+
+    return result / float(scene.environment_emitters.count);
   }
 
-  float pdf_solid_angle_to_area(float pdf_dir, const PathVertex& to_vertex) const {
+  static float convert_solid_angle_pdf_to_area(float pdf_dir, const PathVertex& from_vertex, const PathVertex& to_vertex) {
     if ((pdf_dir == 0.0f) || to_vertex.is_environment_emitter()) {
       return pdf_dir;
     }
 
-    auto w_o = to_vertex.intersection.pos - intersection.pos;
+    auto w_o = to_vertex.intersection.pos - from_vertex.intersection.pos;
     float d_squared = dot(w_o, w_o);
     if (d_squared < kRayEpsilon) {
       return 0.0f;

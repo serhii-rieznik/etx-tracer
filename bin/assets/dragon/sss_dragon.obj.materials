@@ -1,6 +1,6 @@
 newmtl et::atmosphere
 direction 1.0 0.5 1.0
-#quality 1
+quality 0.25
 #angular_diameter 0.5422
 #anisotropy 0.825
 #altitude 1000.0

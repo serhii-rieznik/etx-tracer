@@ -349,7 +349,7 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
       return {spect, 0.0f};
   }
 
-  return singleScattering + multipleScattering;
+  return 0.5f * singleScattering + multipleScattering;
 }
 
 ETX_GPU_CODE float abgam(float x) {
@@ -515,7 +515,7 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
     // multiple scattering
     if (current_scatteringOrder > 1) {
       SpectralResponse phasefunction = {};
-      float MIS = {};
+      float MIS = 0.0f;
       if (outside) {
         phasefunction = evalPhaseFunction_dielectric(spect, ray, wo, wo_outside, ext_ior, int_ior, thinfilm, alpha);
         MIS = wi_MISweight / (wi_MISweight + MISweight_dielectric(-ray.w, wo, wo_outside, eta, alpha));
@@ -551,7 +551,7 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
       return {spect, 0.0f};
   }
 
-  return singleScattering + multipleScattering;
+  return 0.5f * singleScattering + multipleScattering;
 }
 
 ETX_GPU_CODE float3 samplePhaseFunction_diffuse(Sampler& smp, const float3& wm) {

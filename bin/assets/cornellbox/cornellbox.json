@@ -3,7 +3,7 @@
     "materials" : "cornellbox.materials",
     "spectral" : false,
     "max-path-length" : 65536,
-    "samples" : 65536,
+    "samples" : 32,
     "camera" : {
         "viewport" : [1080.0, 1080.0],
         "origin" : [0.0, 1.0, 5.15],
