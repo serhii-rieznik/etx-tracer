@@ -13,7 +13,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   BSDFSample result;
   result.properties = BSDFSample::Reflection;
-  result.medium_index = data.medium_index;
+  result.medium_index = data.current_medium;
   result.eta = 1.0f;
 
   result.weight = {data.spectrum_sample, 1.0f};

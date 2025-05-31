@@ -17,7 +17,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.weight = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
     result.weight *= (fr / f);
     result.properties = BSDFSample::Delta | BSDFSample::Reflection;
-    result.medium_index = frame.entering_material() ? mtl.ext_medium : mtl.int_medium;
+    result.medium_index = data.current_medium;
   } else {
     result.w_o = data.w_i;
     result.pdf = 1.0f - f;
@@ -107,7 +107,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.eta = 1.0f;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
     result.properties = BSDFSample::Reflection;
-    result.medium_index = in_outside ? mtl.ext_medium : mtl.int_medium;
+    result.medium_index = data.current_medium;
   } else {
     float eta = (int_ior.eta / ext_ior.eta).monochromatic();
     float factor = (data.path_source == PathSource::Camera) ? sqr(1.0f / eta) : 1.0f;

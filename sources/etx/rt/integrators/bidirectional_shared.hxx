@@ -8,8 +8,7 @@ struct PathVertex {
     Camera,
     Emitter,
     Surface,
-    SceneMedium,
-    RuntimeMedium,
+    Medium,
   };
 
   enum class SubsurfaceClass : uint16_t {
@@ -29,11 +28,9 @@ struct PathVertex {
   } pdf;
 
   Class cls = Class::Invalid;
-  uint32_t scene_medium_index = kInvalidIndex;
-  float medium_anisotropy = 0.0f;
+  Medium::Instance medium = {};
   bool delta_connection = false;
   bool delta_emitter = false;
-  bool connectible = true;
 
   PathVertex() = default;
 
@@ -42,10 +39,9 @@ struct PathVertex {
     , cls(c) {
   }
 
-  PathVertex(const float3& medium_sample_pos, const float3& a_w_i, const uint32_t medium_index, const float anisotropy)
-    : cls(medium_index == kInvalidIndex ? Class::RuntimeMedium : Class::SceneMedium)
-    , scene_medium_index(medium_index)
-    , medium_anisotropy(anisotropy) {
+  PathVertex(const float3& medium_sample_pos, const float3& a_w_i, const Medium::Instance m)
+    : cls(Class::Medium)
+    , medium(m) {
     intersection.pos = medium_sample_pos;
     intersection.w_i = a_w_i;
   }
@@ -71,7 +67,7 @@ struct PathVertex {
   }
 
   bool is_medium_interaction() const {
-    return ((cls == Class::SceneMedium) && (scene_medium_index != kInvalidIndex)) || (cls == Class::RuntimeMedium);
+    return (cls == Class::Medium) && medium.valid();
   }
 
   static bool safe_normalize(const float3& a, const float3& b, float3& n) {
@@ -101,7 +97,7 @@ struct PathVertex {
       eval_pdf = bsdf::pdf({spect, kInvalidIndex, path_source, curr.intersection, w_i}, w_o, mat, scene, smp);
       ETX_VALIDATE(eval_pdf);
     } else if (curr.is_medium_interaction()) {
-      eval_pdf = medium::phase_function(w_i, w_o, curr.medium_anisotropy);
+      eval_pdf = medium::phase_function(w_i, w_o, curr.medium.anisotropy);
       ETX_VALIDATE(eval_pdf);
     }
 
@@ -116,8 +112,8 @@ struct PathVertex {
     if (emitter_vertex.is_specific_emitter()) {
       const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
       if (emitter.is_local()) {
-        float pdf_dir_out = 0.0f;
         float pdf_dir = 0.0f;
+        float pdf_dir_out = 0.0f;
         auto w_o = normalize(target_vertex.intersection.pos - emitter_vertex.intersection.pos);
         emitter_evaluate_out_local(emitter, spect, emitter_vertex.intersection.tex, emitter_vertex.intersection.nrm, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
         pdf_area = convert_solid_angle_pdf_to_area(pdf_dir, emitter_vertex, target_vertex);
@@ -216,7 +212,7 @@ struct PathVertex {
     }
 
     if (is_medium_interaction()) {
-      float eval_pdf = medium::phase_function(intersection.w_i, w_o, medium_anisotropy);
+      float eval_pdf = medium::phase_function(intersection.w_i, w_o, medium.anisotropy);
       return Result{{spect, eval_pdf}, eval_pdf};
     }
 

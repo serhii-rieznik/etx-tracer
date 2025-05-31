@@ -23,7 +23,7 @@ struct BSDFData : public Vertex {
     , w_i(awi)
     , spectrum_sample(spect)
     , path_source(ps)
-    , medium_index(medium) {
+    , current_medium(medium) {
   }
 
   ETX_GPU_CODE float3 front_fracing_normal() const {
@@ -38,7 +38,7 @@ struct BSDFData : public Vertex {
   float3 w_i = {};
   SpectralQuery spectrum_sample = {};
   PathSource path_source = PathSource::Undefined;
-  uint32_t medium_index = kInvalidIndex;
+  uint32_t current_medium = kInvalidIndex;
 };
 
 struct BSDFEval {

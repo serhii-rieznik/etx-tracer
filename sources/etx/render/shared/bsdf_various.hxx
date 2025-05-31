@@ -131,7 +131,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.w_o = w_o;
     result.pdf = n_dot_o * kInvPi * (rf_value / total);
     result.properties = BSDFSample::Diffuse | BSDFSample::Reflection;
-    result.medium_index = data.medium_index;
+    result.medium_index = data.current_medium;
     result.weight = rf;
   }
 

@@ -524,6 +524,9 @@ ETX_GPU_CODE float length(const float3& v) {
   return sqrtf(dot(v, v));
 }
 
+ETX_GPU_CODE float2 normalize(const float2& v) {
+  return v / length(v);
+}
 ETX_GPU_CODE float3 normalize(const float3& v) {
   return v / length(v);
 }

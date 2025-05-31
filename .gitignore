@@ -1,9 +1,9 @@
 *.exe
 *.pdb
 *.dll
-bin/options.json
 *.ptx
 *.fatbin
+bin/options.json
 bin/ui.ini
 bin/raytracer
-
+bin/tmp/

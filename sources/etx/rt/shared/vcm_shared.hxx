@@ -411,7 +411,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, w_o);
-  auto tr = rt.trace_transmittance(state.spect, scene, p0, camera_sample.position, state.medium_index, state.sampler);
+  auto tr = rt.trace_transmittance(state.spect, scene, p0, camera_sample.position, {.index = state.medium_index}, state.sampler);
   if (tr.is_zero()) {
     return {};
   }
@@ -478,7 +478,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
     return {state.spect, 0.0f};
 
   float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
-  auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, state.medium_index, state.sampler);
+  auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, {.index = state.medium_index}, state.sampler);
   if (tr.is_zero())
     return {state.spect, 0.0f};
 
@@ -579,7 +579,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
 
     if (connected) {
       float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
-      auto tr = rt.trace_transmittance(state.spect, scene, p0, target_position, state.medium_index, state.sampler);
+      auto tr = rt.trace_transmittance(state.spect, scene, p0, target_position, {.index = state.medium_index}, state.sampler);
       if (tr.is_zero() == false) {
         result += tr * value;
         ETX_VALIDATE(result);

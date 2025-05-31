@@ -456,21 +456,21 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
   return true;
 }
 
-SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const uint32_t medium, Sampler& smp) const {
+SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const Medium::Instance& medium,
+  Sampler& smp) const {
   ETX_FUNCTION_SCOPE();
   ETX_ASSERT(_private != nullptr);
 
-  struct IntersectionContextExt {
-    RTCRayQueryContext context;
-    const Scene* scene;
-    Sampler* smp;
-    SpectralQuery spect;
+  struct IntersectionContextExt : public RTCRayQueryContext {
+    float t;
+    float pad;
+    Medium::Instance medium;
+    const Scene& scene;
+    Sampler& smp;
     SpectralResponse value;
-    uint32_t medium;
     float3 origin;
     float3 direction;
-    float t;
-  } context = {{}, &scene, &smp, spect, {spect, 1.0f}, medium, p0};
+  } context = {{}, 0.0f, 0.0f, medium, scene, smp, {spect, 1.0f}, p0};
 
   auto filter_function = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
@@ -479,12 +479,12 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     float v = RTCHitN_v(args->hit, args->N, 0);
     float t = RTCRayN_tfar(args->ray, args->N, 0);
     float3 bc = barycentrics({u, v});
-    const auto& scene = *ctx->scene;
-    const auto& tri = ctx->scene->triangles[triangle_index];
-    auto material_index = ctx->scene->triangle_to_material[triangle_index];
-    const auto& mat = ctx->scene->materials[material_index];
+    const auto& scene = ctx->scene;
+    const auto& tri = scene.triangles[triangle_index];
+    auto material_index = scene.triangle_to_material[triangle_index];
+    const auto& mat = scene.materials[material_index];
 
-    if (alpha_test_pass(mat, tri, bc, scene, *ctx->smp)) {
+    if (alpha_test_pass(mat, tri, bc, scene, ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -494,12 +494,14 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
     bool stop_tracing = mat.cls != Material::Class::Boundary;
 
+    const auto spect = ctx->value.query();
+
     if (mat.cls == Material::Class::Thinfilm) {
-      auto thinfilm = evaluate_thinfilm(ctx->spect, mat.thinfilm, uv, scene, *ctx->smp);
+      auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, uv, scene, ctx->smp);
       float n_dot_t = dot(nrm, ctx->direction);
-      SpectralResponse fr = fresnel::calculate(ctx->spect, n_dot_t, mat.ext_ior(ctx->spect), mat.int_ior(ctx->spect), thinfilm);
+      SpectralResponse fr = fresnel::calculate(spect, n_dot_t, mat.ext_ior(spect), mat.int_ior(spect), thinfilm);
       ctx->value *= 1.0f - fr;
-      stop_tracing = ctx->smp->next() < fr.monochromatic();
+      stop_tracing = ctx->smp.next() < fr.monochromatic();
     }
 
     if (stop_tracing) {
@@ -508,13 +510,22 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       return;
     }
 
-    if (ctx->medium != kInvalidIndex) {
+    if (ctx->medium.valid()) {
       float dt = fmaxf(0.0f, t - ctx->t);
-      ctx->value *= scene.mediums[ctx->medium].transmittance(ctx->spect, *ctx->smp, ctx->origin, ctx->direction, dt);
-      ETX_VALIDATE(ctx->value);
+
+      if (ctx->medium.index != kInvalidIndex) {
+        const auto& m = scene.mediums[ctx->medium.index];
+        ctx->value *= m.transmittance(spect, ctx->smp, ctx->origin, ctx->direction, dt);
+        ETX_VALIDATE(ctx->value);
+      } else {
+        ctx->value *= Medium::transmittance(ctx->medium, dt);
+        ETX_VALIDATE(ctx->value);
+      }
     }
 
-    ctx->medium = (dot(nrm, ctx->direction) < 0.0f) ? mat.int_medium : mat.ext_medium;
+    ctx->medium = {
+      .index = (dot(nrm, ctx->direction) < 0.0f) ? mat.int_medium : mat.ext_medium,
+    };
     ctx->origin = lerp_pos(scene.vertices, tri, bc);
     ctx->t = t;
 
@@ -534,11 +545,19 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
   t_max -= fmaxf(kRayEpsilon, t_max * kRayEpsilon);
   ETX_VALIDATE(t_max);
 
-  _private->trace_with_function({p0, context.direction, kRayEpsilon, t_max}, &context.context, filter_function);
+  _private->trace_with_function({p0, context.direction, kRayEpsilon, t_max}, &context, filter_function);
 
-  if (context.medium != kInvalidIndex) {
-    context.value *= scene.mediums[context.medium].transmittance(spect, smp, context.origin, context.direction, t_max - context.t);
-    ETX_VALIDATE(context.value);
+  if (context.medium.valid()) {
+    float dt = fmaxf(0.0f, t_max - context.t);
+
+    if (context.medium.index != kInvalidIndex) {
+      const auto& m = scene.mediums[context.medium.index];
+      context.value *= m.transmittance(spect, smp, context.origin, context.direction, dt);
+      ETX_VALIDATE(context.value);
+    } else {
+      context.value *= Medium::transmittance(context.medium, dt);
+      ETX_VALIDATE(context.value);
+    }
   }
 
   return context.value;

@@ -123,8 +123,8 @@ struct CPUBidirectionalImpl : public Task {
     float total_weight = 0.0f;
     for (uint32_t ei = 0, ee = scene.environment_emitters.count; ei < ee; ++ei) {
       float weight = scene.emitters_distribution.values[ei].value;
-      total_weight += weight;
       float pdf = emitter_pdf_in_dist(scene.emitters[em.emitter_index], em.direction, scene);
+      total_weight += weight;
       total_pdf += pdf * weight;
     }
     prev_pdf_forward = total_pdf / (total_weight * float(scene.environment_emitters.count));
@@ -142,20 +142,15 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     SpectralResponse result = {spect, 0.0f};
-    if ((mode != Mode::BDPTFull) || (enable_connect_vertices == false) || (z_i.connectible == false) || (path_data.camera_path_length() + 1u >= scene.max_path_length)) {
+    if ((mode != Mode::BDPTFull) || (enable_connect_vertices == false) || (path_data.camera_path_length() + 1u >= scene.max_path_length)) {
       return result;
     }
-
-    bool is_medium = z_i.is_medium_interaction();
 
     for (uint64_t light_s = 2, light_s_e = path_data.emitter_path.size(); running() && (light_s < light_s_e); ++light_s) {
       if (path_data.camera_path_length() + light_s > scene.max_path_length + 1u)
         break;
 
       const auto& y_i = path_data.emitter_path[light_s];
-      if (y_i.connectible == false) {
-        continue;
-      }
 
       auto dw = z_i.intersection.pos - y_i.intersection.pos;
       float dwl = dot(dw, dw);
@@ -165,8 +160,13 @@ struct CPUBidirectionalImpl : public Task {
 
       // G term = abs(cos(dw, y_i.nrm) * cos(dw, z_i.nrm)) / dwl;
       // cosines already accounted in "bsdf", 1.0 / dwl multiplied below
-      SpectralResponse connect_result = y_i.throughput * y_i.bsdf_in_direction(spect, PathSource::Light, dw, rt.scene(), smp).bsdf *   //
-                                        z_i.throughput * z_i.bsdf_in_direction(spect, PathSource::Camera, -dw, rt.scene(), smp).bsdf;  //
+      auto bsdf_y = y_i.bsdf_in_direction(spect, PathSource::Light, dw, rt.scene(), smp).bsdf;
+      ETX_VALIDATE(bsdf_y);
+
+      auto bsdf_z = z_i.bsdf_in_direction(spect, PathSource::Camera, -dw, rt.scene(), smp).bsdf;
+      ETX_VALIDATE(bsdf_z);
+
+      SpectralResponse connect_result = y_i.throughput * bsdf_y * z_i.throughput * bsdf_z;
       ETX_VALIDATE(connect_result);
 
       if (connect_result.is_zero())
@@ -175,7 +175,7 @@ struct CPUBidirectionalImpl : public Task {
       SpectralResponse tr = local_transmittance(spect, smp, y_i, z_i);
       ETX_VALIDATE(connect_result);
 
-      float weight = mis_weight_connect(z_i, z_prev, path_data, spect, light_s, smp);
+      float weight = mis_weight_camera_to_light_path(z_i, z_prev, path_data, spect, light_s, smp);
       ETX_VALIDATE(weight);
 
       result += connect_result * tr * (weight * g_term);
@@ -185,56 +185,49 @@ struct CPUBidirectionalImpl : public Task {
     return result;
   }
 
-  void update_and_connect(const bool explicit_connections, const EmitterSample& emitter_sample, const uint32_t path_length, Payload& payload, Sampler& smp, PathData& path_data,
-    PathVertex& curr, PathVertex& prev) const {
+  void update_mis(const EmitterSample& emitter_sample, const uint32_t path_length, Payload& payload, Sampler& smp, PathData& path_data, PathVertex& curr, PathVertex& prev) const {
     if (payload.mode == PathSource::Light) {
       if (emitter_sample.is_distant && (path_length == 0)) {
         update_emitter_path_pdfs(curr, prev.pdf.forward, emitter_sample);
       }
       precompute_light_mis(prev, path_data.emitter_path_size, path_data.emitter_history);
-
-      if (explicit_connections) {
-        path_data.emitter_path.back() = prev;
-        path_data.emitter_path.emplace_back(curr);
-        CameraSample camera_sample = {};
-        auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);
-        if (splat.is_zero() == false) {
-          rt.film().atomic_add(Film::LightIteration, splat.to_rgb(), camera_sample.uv);
-        }
-      }
+      path_data.emitter_path.back() = prev;
+      path_data.emitter_path.emplace_back(curr);
     } else if (payload.mode == PathSource::Camera) {
       precompute_camera_mis(prev, path_data.camera_path_size, path_data.camera_history);
-      if (explicit_connections) {
-        path_data.camera_path.back() = prev;
-        path_data.camera_path.emplace_back(curr);
-      }
-
-      payload.result += area_emitter_hit(curr, prev, path_data, payload.spect, smp, false);
-
-      if (explicit_connections) {
-        payload.result += connect_camera_to_light(curr, prev, smp, path_data, payload.spect);
-        payload.result += connect_camera_to_light_path(curr, prev, smp, payload.spect, path_data);
-      }
+      path_data.camera_path.back() = prev;
+      path_data.camera_path.emplace_back(curr);
     }
   }
 
-  void handle_medium(const EmitterSample& emitter_sample, const uint32_t path_length, const bool explicit_connections, const float anisotropy,  //
-    const float3& medium_sample_pos, Payload& payload, Ray& ray, Sampler& smp, PathData& path_data, PathVertex& curr, PathVertex& prev) const {
+  void connect(Payload& payload, Sampler& smp, PathData& path_data, PathVertex& curr, PathVertex& prev) const {
+    if (payload.mode == PathSource::Light) {
+      CameraSample camera_sample = {};
+      auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);
+      rt.film().atomic_add(Film::LightIteration, splat.to_rgb(), camera_sample.uv);
+    } else if (payload.mode == PathSource::Camera) {
+      payload.result += direct_hit_area_emitter(curr, prev, path_data, payload.spect, smp, false);
+      payload.result += connect_camera_to_light(curr, prev, smp, path_data, payload.spect);
+      payload.result += connect_camera_to_light_path(curr, prev, smp, payload.spect, path_data);
+    }
+  }
+
+  void handle_medium(const EmitterSample& emitter_sample, const uint32_t path_length, const uint32_t connections, const float3& medium_sample_pos,
+    const Medium::Instance& medium_instance, Payload& payload, Ray& ray, Sampler& smp, PathData& path_data, PathVertex& curr, PathVertex& prev) const {
     const auto& scene = rt.scene();
 
-    float3 w_o = medium::sample_phase_function(ray.d, anisotropy, smp);
-    float pdf_fwd = medium::phase_function(ray.d, w_o, anisotropy);
-    float pdf_bck = medium::phase_function(w_o, ray.d, anisotropy);
+    ETX_ASSERT(medium_instance.valid());
 
-    curr = PathVertex{medium_sample_pos, ray.d, payload.medium_index, anisotropy};
+    float3 w_o = medium::sample_phase_function(ray.d, medium_instance.anisotropy, smp);
+    float pdf_fwd = medium::phase_function(ray.d, w_o, medium_instance.anisotropy);
+    float pdf_bck = medium::phase_function(w_o, ray.d, medium_instance.anisotropy);
 
     path_data.camera_path_size += uint32_t(payload.mode == PathSource::Camera);
     path_data.emitter_path_size += uint32_t(payload.mode == PathSource::Light);
 
+    curr = PathVertex{medium_sample_pos, ray.d, medium_instance};
     curr.delta_emitter = prev.delta_emitter;
     curr.throughput = payload.throughput;
-    curr.connectible = explicit_connections;
-
     curr.pdf.next = pdf_fwd;
     curr.pdf.forward = PathVertex::convert_solid_angle_pdf_to_area(payload.pdf_dir, prev, curr);
     prev.pdf.backward = PathVertex::convert_solid_angle_pdf_to_area(pdf_bck, curr, prev);
@@ -246,11 +239,14 @@ struct CPUBidirectionalImpl : public Task {
 
     payload.pdf_dir = pdf_fwd;
 
-    update_and_connect(explicit_connections, emitter_sample, path_length, payload, smp, path_data, curr, prev);
+    update_mis(emitter_sample, path_length, payload, smp, path_data, curr, prev);
+    if (connections) {
+      connect(payload, smp, path_data, curr, prev);
+    }
   }
 
   InteractionResult handle_surface(const Intersection& a_intersection, const EmitterSample& emitter_sample, const uint32_t path_length, Payload& payload, Ray& ray, Sampler& smp,
-    PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer, bool is_subsurface_interaction) const {
+    PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer, bool subsurface_exit) const {
     const auto& scene = rt.scene();
 
     if (scene.materials[a_intersection.material_index].cls == Material::Class::Boundary) {
@@ -273,17 +269,24 @@ struct CPUBidirectionalImpl : public Task {
     auto bsdf_sample = bsdf::sample(bsdf_data, scene.materials[a_intersection.material_index], scene, smp);
     ETX_VALIDATE(bsdf_sample.weight);
 
-    bool subsurface_path = (is_subsurface_interaction == false) &&                                                                    //
+    bool subsurface_path = (subsurface_exit == false) &&                                                                              //
                            (scene.materials[a_intersection.material_index].subsurface.cls != SubsurfaceMaterial::Class::Disabled) &&  //
                            (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
 
     uint32_t material_index = a_intersection.material_index;
-    uint32_t medium_index = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium_index;
+
+    Medium::Instance medium_instance = {
+      .index = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium_index,
+    };
 
     if (subsurface_path) {
       const auto& sss_material = scene.materials[a_intersection.material_index];
-      medium_index = sss_material.int_medium;
       material_index = scene.subsurface_scatter_material;
+      medium_instance.index = sss_material.int_medium;
+
+      if (medium_instance.index == kInvalidIndex) {
+        medium_instance = subsurface_to_medium_instance(material_index, payload, a_intersection);
+      }
 
       const bool diffuse_transmission = sss_material.subsurface.path == SubsurfaceMaterial::Path::Diffuse;
       auto w_o = diffuse_transmission ? sample_cosine_distribution(smp.next_2d(), -a_intersection.nrm, 1.0f) : a_intersection.w_i;
@@ -292,7 +295,7 @@ struct CPUBidirectionalImpl : public Task {
       bsdf_sample.weight = {payload.spect, 1.0f};
       bsdf_sample.pdf = fabsf(dot(w_o, a_intersection.nrm)) / kPi;
       bsdf_sample.eta = 1.0f;
-      bsdf_sample.medium_index = medium_index;
+      bsdf_sample.medium_index = medium_instance.index;
       bsdf_sample.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
     }
 
@@ -304,14 +307,12 @@ struct CPUBidirectionalImpl : public Task {
     curr.intersection.material_index = material_index;
     curr.delta_emitter = prev.delta_emitter;
     curr.delta_connection = bsdf_sample.is_delta();
-    curr.scene_medium_index = medium_index;
+    curr.medium = medium_instance;
     curr.pdf.next = bsdf_sample.pdf;
-    curr.connectible = (subsurface_path == false) || (subsurface_path && (medium_index != kInvalidIndex));
-
     curr.pdf.forward = PathVertex::convert_solid_angle_pdf_to_area(payload.pdf_dir, prev, curr);
     ETX_VALIDATE(curr.pdf.forward);
 
-    payload.medium_index = medium_index;
+    payload.medium_index = medium_instance.index;
 
     bool terminate_path = false;
     if (bsdf_sample.valid()) {
@@ -343,7 +344,8 @@ struct CPUBidirectionalImpl : public Task {
       terminate_path = true;
     }
 
-    update_and_connect(true, emitter_sample, path_length, payload, smp, path_data, curr, prev);
+    update_mis(emitter_sample, path_length, payload, smp, path_data, curr, prev);
+    connect(payload, smp, path_data, curr, prev);
 
     return terminate_path ? InteractionResult::Break : (subsurface_path ? InteractionResult::SampleSubsurface : InteractionResult::NextIteration);
   }
@@ -373,25 +375,46 @@ struct CPUBidirectionalImpl : public Task {
     return found_intersection ? StepResult::IntersectionFound : StepResult::Nothing;
   }
 
+  Medium::Instance subsurface_to_medium_instance(const uint32_t subsurface_material, const Payload& payload, const Intersection& intersection) const {
+    const auto& scene = rt.scene();
+    const auto& mat = scene.materials[subsurface_material];
+    auto color = apply_image(payload.spect, mat.transmittance, intersection.tex, scene, nullptr);
+    auto distances = mat.subsurface.scale * apply_image(payload.spect, mat.subsurface, intersection.tex, scene, nullptr);
+
+    SpectralResponse extinction = {payload.spect};
+    SpectralResponse scattering = {payload.spect};
+    SpectralResponse albedo = {payload.spect};
+    subsurface::remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
+    subsurface::remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
+
+    return {
+      .extinction = extinction,
+      .index = kInvalidIndex,
+    };
+  }
+
   StepResult subsurface_step(const uint32_t subsurface_material, Ray& ray, Sampler& smp, Intersection& intersection, Payload& payload, PathData& path_data, PathVertex& curr,
     PathVertex& prev) const {
     const auto& scene = rt.scene();
 
-    float anisotropy = 0.0f;
     SpectralResponse extinction = {payload.spect};
     SpectralResponse scattering = {payload.spect};
     SpectralResponse albedo = {payload.spect};
 
     const auto& mat = scene.materials[subsurface_material];
 
+    Medium::Instance medium_instance = {
+      .index = mat.int_medium,
+    };
+
     if (mat.int_medium == kInvalidIndex) {
       auto color = apply_image(payload.spect, mat.transmittance, intersection.tex, scene, nullptr);
       auto distances = mat.subsurface.scale * apply_image(payload.spect, mat.subsurface, intersection.tex, scene, nullptr);
       subsurface::remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
       subsurface::remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
+      medium_instance = {.extinction = extinction, .index = kInvalidIndex};
     } else {
-      const Medium& medium = scene.mediums[payload.medium_index];
-      anisotropy = medium.phase_function_g;
+      const Medium& medium = scene.mediums[mat.int_medium];
       scattering = medium.s_scattering(payload.spect);
       extinction = scattering + medium.s_absorption(payload.spect);
       albedo = medium::calculate_albedo(payload.spect, scattering, extinction);
@@ -436,7 +459,8 @@ struct CPUBidirectionalImpl : public Task {
       }
 
       const float3 medium_sample_pos = ray.o + ray.d * ray.max_t;
-      handle_medium({}, kInvalidIndex, false, anisotropy, medium_sample_pos, payload, ray, smp, path_data, curr, prev);
+      handle_medium({}, kInvalidIndex, false, medium_sample_pos, medium_instance, payload, ray, smp, path_data, curr, prev);
+
       if ((payload.mode == PathSource::Light) && (counter == 0)) {
         path_data.emitter_path.back() = prev;
       }
@@ -477,7 +501,8 @@ struct CPUBidirectionalImpl : public Task {
       if (step == StepResult::SampledMedium) {
         ETX_CRITICAL(payload.medium_index != kInvalidIndex);
         const auto& medium = scene.mediums[payload.medium_index];
-        handle_medium(emitter_sample, path_length, medium.enable_explicit_connections, medium.phase_function_g, medium_sample.pos, payload, ray, smp, path_data, curr, prev);
+        const auto medium_instance = medium.instance(payload.spect, payload.medium_index);
+        handle_medium(emitter_sample, path_length, medium.enable_explicit_connections, medium_sample.pos, medium_instance, payload, ray, smp, path_data, curr, prev);
         should_break = false;
       } else if (step == StepResult::IntersectionFound) {
         bool from_subsurface = subsurface_material != kInvalidIndex;
@@ -499,7 +524,7 @@ struct CPUBidirectionalImpl : public Task {
         should_break = result == InteractionResult::Break;
       } else if (enable_direct_hit && (mode != Mode::LightTracing) && (payload.mode == PathSource::Camera)) {
         curr = PathVertex{PathVertex::Class::Emitter};
-        curr.scene_medium_index = payload.medium_index;
+        curr.medium = {.index = payload.medium_index};
         curr.throughput = payload.throughput;
         curr.pdf.forward = payload.pdf_dir;
         curr.intersection.w_i = ray.d;
@@ -507,7 +532,7 @@ struct CPUBidirectionalImpl : public Task {
         curr.intersection.nrm = -curr.intersection.w_i;
         path_data.camera_path_size += 1u;
         precompute_camera_mis(prev, path_data.camera_path_size, path_data.camera_history);
-        payload.result += environment_emitter_hit(curr, prev, path_data, payload.spect, smp, path_length == 0);
+        payload.result += direct_hit_environment_emitter(curr, prev, path_data, payload.spect, smp, path_length == 0);
       }
 
       if (should_break || random_continue(path_length, scene.random_path_termination, payload.eta, smp, payload.throughput) == false) {
@@ -531,7 +556,7 @@ struct CPUBidirectionalImpl : public Task {
     path_data.camera_path.emplace_back(prev);
 
     PathVertex curr = {PathVertex::Class::Camera};
-    curr.scene_medium_index = rt.camera().medium_index;
+    curr.medium = {.index = rt.camera().medium_index};
     curr.throughput = {spect, 1.0f};
     curr.intersection.pos = ray.o;
     curr.intersection.nrm = eval.normal;
@@ -546,7 +571,7 @@ struct CPUBidirectionalImpl : public Task {
       .throughput = curr.throughput,
       .eta = 1.0f,
       .pdf_dir = eval.pdf_dir,
-      .medium_index = curr.scene_medium_index,
+      .medium_index = curr.medium.index,
       .mode = PathSource::Camera,
     };
 
@@ -572,7 +597,7 @@ struct CPUBidirectionalImpl : public Task {
     curr.intersection.nrm = emitter_sample.normal;
     curr.intersection.w_i = emitter_sample.direction;
     curr.intersection.emitter_index = emitter_sample.emitter_index;
-    curr.scene_medium_index = emitter_sample.medium_index;
+    curr.medium = {.index = emitter_sample.medium_index};
     curr.throughput = emitter_sample.value;
     curr.pdf.next = emitter_sample.pdf_dir;
     curr.pdf.forward = emitter_sample.pdf_area * emitter_sample.pdf_sample;
@@ -590,7 +615,7 @@ struct CPUBidirectionalImpl : public Task {
       .throughput = curr.throughput * dot(emitter_sample.direction, curr.intersection.nrm) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample),
       .eta = 1.0f,
       .pdf_dir = emitter_sample.pdf_dir,
-      .medium_index = curr.scene_medium_index,
+      .medium_index = curr.medium.index,
       .mode = PathSource::Light,
     };
 
@@ -706,14 +731,14 @@ struct CPUBidirectionalImpl : public Task {
 
       float p_fwd = 1.0f;
       float p_bck = 1.0f;
-      for (uint64_t i = 1; i + 1 < path_data.camera_path.size(); ++i) {
+      for (uint64_t i = 1; i < path_data.camera_path.size(); ++i) {
         p_fwd *= map0(path_data.camera_path[i].pdf.forward);
         p_bck *= map0(path_data.camera_path[i].pdf.backward);
       }
 
-      float p_direct = p_fwd * PathVertex::pdf_area(spect, PathSource::Camera, z_prev, z_curr, sampled_light_vertex, scene, smp);
-      float p_connect = p_fwd * PathVertex::convert_solid_angle_pdf_to_area(sampled_light_vertex.pdf.next, z_curr, sampled_light_vertex);
-      float p_from_light = p_bck * PathVertex::pdf_area(spect, PathSource::Light, z_prev, z_curr, sampled_light_vertex, scene, smp);
+      float p_direct = p_fwd * PathVertex::convert_solid_angle_pdf_to_area(z_curr.pdf.next, z_curr, sampled_light_vertex);
+      float p_connect = p_fwd * PathVertex::pdf_area(spect, PathSource::Camera, z_prev, z_curr, sampled_light_vertex, scene, smp);
+      float p_from_light = p_bck * PathVertex::pdf_from_emitter(spect, sampled_light_vertex, z_curr, scene);
 
       return p_connect / (p_direct + p_connect + p_from_light);
     }
@@ -750,24 +775,36 @@ struct CPUBidirectionalImpl : public Task {
 
       float p_fwd = 1.0f;
       float p_bck = 1.0f;
-      for (uint64_t i = 1u; i + 1u < path_data.emitter_path.size(); ++i) {
+      for (uint64_t i = path_data.emitter_path.size() - 1llu; i > 2; --i) {
         p_fwd *= map0(path_data.emitter_path[i].pdf.forward);
         p_bck *= map0(path_data.emitter_path[i].pdf.backward);
       }
 
-      float p_direct = p_fwd * PathVertex::pdf_area(spect, PathSource::Light, y_prev, y_curr, sampled_camera_vertex, scene, smp);
-      float p_connect = p_fwd * PathVertex::convert_solid_angle_pdf_to_area(sampled_camera_vertex.pdf.next, y_curr, sampled_camera_vertex);
+      float p_connect = p_fwd * y_curr.pdf.forward * PathVertex::pdf_area(spect, PathSource::Light, y_prev, y_curr, sampled_camera_vertex, scene, smp);
 
       float pdf_dir = film_pdf_out(rt.camera(), y_curr.intersection.pos);
-      float p_from_camera = p_bck * PathVertex::convert_solid_angle_pdf_to_area(pdf_dir, sampled_camera_vertex, y_curr);
+      float pdf_camera = PathVertex::convert_solid_angle_pdf_to_area(pdf_dir, sampled_camera_vertex, y_curr);
+      /*
+      float p_from_camera_direct = pdf_camera * p_bck * map0(path_data.emitter_path[1].pdf.backward);
+      float pdf_sample = PathVertex::pdf_to_emitter(spect, path_data.emitter_path[2], path_data.emitter_path[1], scene);
+      float p_from_camera_sample = pdf_camera * p_bck * pdf_sample;
+      */
 
-      return p_connect / (p_direct + p_connect + p_from_camera);
+      float p_from_camera_direct = pdf_camera * p_bck;
+
+      p_connect = path_data.emitter_path.size() > 3
+                    ? PathVertex::pdf_area(spect, PathSource::Camera, path_data.emitter_path[3], path_data.emitter_path[2], path_data.emitter_path[1], scene, smp)
+                    : 1.0f;
+
+      float p_from_camera_sample = pdf_camera * p_bck * p_connect;
+
+      return p_connect / (1.0f + p_connect);  // p_from_camera_direct + p_from_camera_sample + p_connect);
     }
 
     return 0.0f;
   }
 
-  float mis_weight_connect(const PathVertex& z_curr, const PathVertex& z_prev, PathData& c, SpectralQuery spect, uint64_t light_s, Sampler& smp) const {
+  float mis_weight_camera_to_light_path(const PathVertex& z_curr, const PathVertex& z_prev, PathData& c, SpectralQuery spect, uint64_t light_s, Sampler& smp) const {
     if (enable_mis == false) {
       return 1.0f;
     }
@@ -794,7 +831,7 @@ struct CPUBidirectionalImpl : public Task {
     return 1.0f / (1.0f + w_camera + w_light);
   }
 
-  SpectralResponse area_emitter_hit(const PathVertex& z_curr, const PathVertex& z_prev, const PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
+  SpectralResponse direct_hit_area_emitter(const PathVertex& z_curr, const PathVertex& z_prev, const PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
     if ((force == false) && (enable_direct_hit == false))
       return {spect, 0.0f};
 
@@ -802,72 +839,83 @@ struct CPUBidirectionalImpl : public Task {
       return {spect, 0.0f};
     }
 
-    float pdf_dir = 0.0f;
-    float pdf_sample = 0.0f;
+    ETX_ASSERT(z_curr.is_specific_emitter());
 
     const auto& scene = rt.scene();
-    SpectralResponse emitter_value = {spect, 0.0f};
 
-    ETX_ASSERT(z_curr.is_specific_emitter());
-    {
-      const auto& emitter = scene.emitters[z_curr.intersection.emitter_index];
-      ETX_ASSERT(emitter.is_local());
-      EmitterRadianceQuery q = {
-        .source_position = z_prev.intersection.pos,
-        .target_position = z_curr.intersection.pos,
-        .uv = z_curr.intersection.tex,
-        .directly_visible = path_data.camera_path_size <= 3,
-      };
-      float pdf_area = 0.0f;
-      float pdf_dir_out = 0.0f;
-      emitter_value = emitter_get_radiance(emitter, spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
-      pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-    }
+    const auto& emitter = scene.emitters[z_curr.intersection.emitter_index];
+    ETX_ASSERT(emitter.is_local());
+    EmitterRadianceQuery q = {
+      .source_position = z_prev.intersection.pos,
+      .target_position = z_curr.intersection.pos,
+      .uv = z_curr.intersection.tex,
+      .directly_visible = path_data.camera_path_size <= 3,
+    };
 
-    if (pdf_dir * pdf_sample == 0.0f) {
+    float pdf_dir = 0.0f;
+    float pdf_area = 0.0f;
+    float pdf_dir_out = 0.0f;
+    auto emitter_value = emitter_get_radiance(emitter, spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
+
+    if (pdf_dir == 0.0f) {
       return {spect, 0.0f};
     }
+
+    pdf_dir *= emitter_discrete_pdf(emitter, scene.emitters_distribution);
 
     float mis_weight = 1.0f;
 
     if (enable_mis && (path_data.camera_path_size > 3u)) {
-      if (mode == Mode::BDPTFull) {
-        float z_curr_pdf = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
-        ETX_VALIDATE(z_curr_pdf);
-        float z_prev_pdf = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
-        ETX_VALIDATE(z_prev_pdf);
-        float result = mis_camera(path_data, z_curr_pdf, z_curr, z_prev_pdf);
-        mis_weight = 1.0f / (1.0f + result);
-      } else if (mode == Mode::PathTracing) {
-        float p_connect = pdf_dir * pdf_sample;
-        ETX_VALIDATE(p_connect);
-        float result = sqr(z_prev.pdf.next) / (sqr(z_prev.pdf.next) + sqr(p_connect));
-        ETX_VALIDATE(result);
-        mis_weight = result;
-      } else if (mode == Mode::BDPTFast) {
-        const auto map0 = [](float t) {
-          return t == 0.0f ? 1.0f : t;
-        };
-
-        float p_fwd = 1.0f;
-        float p_bck = 1.0f;
-        for (uint32_t i = 1; i + 1 < path_data.camera_path.size(); ++i) {
-          p_fwd *= map0(path_data.camera_path[i].pdf.forward);
-          p_bck *= map0(path_data.camera_path[i].pdf.backward);
+      switch (mode) {
+        case Mode::PathTracing: {
+          float p_connect = pdf_dir;
+          ETX_VALIDATE(p_connect);
+          float result = sqr(z_prev.pdf.next) / (sqr(z_prev.pdf.next) + sqr(p_connect));
+          ETX_VALIDATE(result);
+          mis_weight = result;
+          break;
         }
 
-        float p_direct = p_fwd * z_curr.pdf.forward;
-        float p_connect = p_fwd * PathVertex::convert_solid_angle_pdf_to_area(pdf_dir, z_prev, z_curr) * pdf_sample;
-        float p_from_light = p_bck * PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
+        case Mode::BDPTFull: {
+          float z_curr_pdf = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
+          ETX_VALIDATE(z_curr_pdf);
+          float z_prev_pdf = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
+          ETX_VALIDATE(z_prev_pdf);
+          float result = mis_camera(path_data, z_curr_pdf, z_curr, z_prev_pdf);
+          mis_weight = 1.0f / (1.0f + result);
+          break;
+        }
 
-        mis_weight = p_direct / (p_direct + p_connect + p_from_light);
+        case Mode::BDPTFast: {
+          const auto map0 = [](float t) {
+            return t == 0.0f ? 1.0f : t;
+          };
+
+          float p_fwd = 1.0f;
+          float p_bck = 1.0f;
+          for (uint64_t i = 1; i + 1 < path_data.camera_path.size(); ++i) {
+            p_fwd *= map0(path_data.camera_path[i].pdf.forward);
+            p_bck *= map0(path_data.camera_path[i].pdf.backward);
+          }
+
+          float p_direct = p_fwd * z_curr.pdf.forward;
+          float p_connect = p_fwd * PathVertex::convert_solid_angle_pdf_to_area(pdf_dir, z_prev, z_curr);
+          float p_from_light = p_bck * PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
+
+          mis_weight = p_direct / (p_direct + p_connect + p_from_light);
+          break;
+        }
+
+        default:
+          mis_weight = 0.0f;
       }
     }
 
     return emitter_value * z_curr.throughput * mis_weight;
   }
 
-  SpectralResponse environment_emitter_hit(const PathVertex& z_curr, const PathVertex& z_prev, const PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
+  SpectralResponse direct_hit_environment_emitter(const PathVertex& z_curr, const PathVertex& z_prev, const PathData& path_data, SpectralQuery spect, Sampler& smp,
+    bool force) const {
     if ((force == false) && (enable_direct_hit == false))
       return {spect, 0.0f};
 
@@ -881,32 +929,30 @@ struct CPUBidirectionalImpl : public Task {
 
     ETX_ASSERT(z_curr.is_specific_emitter() == false);
 
+    EmitterRadianceQuery q = {
+      .direction = normalize(z_curr.intersection.pos - z_prev.intersection.pos),
+      .directly_visible = path_data.camera_path_size <= 3,
+    };
+
     SpectralResponse accumulated_emitter_value = {spect, 0.0f};
-    {
-      EmitterRadianceQuery q = {
-        .direction = normalize(z_curr.intersection.pos - z_prev.intersection.pos),
-        .directly_visible = path_data.camera_path_size <= 3,
-      };
+    for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
+      const auto& emitter = scene.emitters[rt.scene().environment_emitters.emitters[ie]];
 
-      for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-        const auto& emitter = scene.emitters[rt.scene().environment_emitters.emitters[ie]];
+      float local_pdf_area = 0.0f;
+      float local_pdf_dir = 0.0f;
+      float local_pdf_dir_out = 0.0f;
+      auto value = emitter_get_radiance(emitter, spect, q, local_pdf_area, local_pdf_dir, local_pdf_dir_out, scene);
 
-        float local_pdf_area = 0.0f;
-        float local_pdf_dir = 0.0f;
-        float local_pdf_dir_out = 0.0f;
-        auto value = emitter_get_radiance(emitter, spect, q, local_pdf_area, local_pdf_dir, local_pdf_dir_out, scene);
-
-        float this_weight = 1.0f;
-        if ((mode == Mode::PathTracing) && (path_data.camera_path_size > 3u)) {
-          float local_pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-          float this_p_connect = local_pdf_dir * local_pdf_sample;
-          ETX_VALIDATE(this_p_connect);
-          this_weight = sqr(z_prev.pdf.next) / (sqr(z_prev.pdf.next) + sqr(this_p_connect));
-          ETX_VALIDATE(this_weight);
-        }
-        accumulated_emitter_value += value * this_weight;
-        ETX_VALIDATE(accumulated_emitter_value);
+      float this_weight = 1.0f;
+      if ((mode == Mode::PathTracing) && (path_data.camera_path_size > 3u)) {
+        float local_pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+        float this_p_connect = local_pdf_dir * local_pdf_sample;
+        ETX_VALIDATE(this_p_connect);
+        this_weight = sqr(z_prev.pdf.next) / (sqr(z_prev.pdf.next) + sqr(this_p_connect));
+        ETX_VALIDATE(this_weight);
       }
+      accumulated_emitter_value += value * this_weight;
+      ETX_VALIDATE(accumulated_emitter_value);
     }
 
     float mis_weight = 1.0f;
@@ -1015,8 +1061,7 @@ struct CPUBidirectionalImpl : public Task {
       const auto& tri = scene.triangles[p0.intersection.triangle_index];
       origin = shading_pos(scene.vertices, tri, p0.intersection.barycentric, normalize(p1.intersection.pos - p0.intersection.pos));
     }
-
-    return rt.trace_transmittance(spect, scene, origin, p1.intersection.pos, p0.scene_medium_index, smp);
+    return rt.trace_transmittance(spect, scene, origin, p1.intersection.pos, p0.medium, smp);
   }
 
   void start(const Options& opt) {
@@ -1103,7 +1148,7 @@ Options CPUBidirectional::options() const {
         case CPUBidirectionalImpl::Mode::LightTracing:
           return "Light Tracing";
         case CPUBidirectionalImpl::Mode::BDPTFast:
-          return "BDPT Fast";
+          return "BDPT Fast (WIP)";
         case CPUBidirectionalImpl::Mode::BDPTFull:
           return "BDPT Full";
         default:

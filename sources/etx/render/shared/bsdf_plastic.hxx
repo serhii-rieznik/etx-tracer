@@ -100,7 +100,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   result.w_o = in_w_o;
   result.weight = eval.bsdf / eval.pdf;
   result.properties = BSDFSample::Reflection | (sample_diffuse ? BSDFSample::Diffuse : 0u);
-  result.medium_index = data.medium_index;
+  result.medium_index = data.current_medium;
   result.pdf = eval.pdf;
   return result;
 }

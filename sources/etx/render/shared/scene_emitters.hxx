@@ -41,8 +41,8 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
 
 ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
   float& pdf_dir_out, const Scene& scene) {
-  pdf_area = 0.0f;
   pdf_dir = 0.0f;
+  pdf_area = 0.0f;
   pdf_dir_out = 0.0f;
 
   switch (em.cls) {
@@ -51,9 +51,9 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
         return {spect, 0.0f};
       }
 
-      pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = 1.0f;
-      pdf_dir_out = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+      pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+      pdf_dir_out = pdf_dir * pdf_area;
       float2 uv = disk_uv(em.direction, query.direction, em.equivalent_disk_size, em.angular_size_cosine);
       SpectralResponse direct_scale = 1.0f / (scene.spectrums[em.emission.spectrum_index](spect) * kDoublePi * (1.0f - em.angular_size_cosine));
       return apply_image(spect, em.emission, uv, scene, nullptr) * direct_scale;
@@ -85,16 +85,22 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       if ((em.emission_direction == Emitter::Direction::Single) && (dot(tri.geo_n, query.target_position - query.source_position) >= 0.0f)) {
         return {spect, 0.0f};
       }
+      pdf_area = emitter_pdf_area_local(em, scene);
 
       float3 dp = query.source_position - query.target_position;
-
-      pdf_area = emitter_pdf_area_local(em, scene);
-      if (em.emission_direction == Emitter::Direction::Omni) {
-        pdf_dir = pdf_area * dot(dp, dp);
-        pdf_dir_out = pdf_area;
-      } else {
-        pdf_dir = pdf_area * area_to_solid_angle_probability(dp, tri.geo_n, query.directly_visible ? 1.0f : em.collimation);
-        pdf_dir_out = pdf_area * fabsf(dot(tri.geo_n, normalize(dp))) * kInvPi;
+      float distance_squared = dot(dp, dp);
+      if (distance_squared > 0.0f) {
+        if (em.emission_direction == Emitter::Direction::Omni) {
+          pdf_dir = pdf_area * distance_squared;
+          pdf_dir_out = pdf_area;
+        } else {
+          float cos_t = fabsf(dot(dp, tri.geo_n)) / sqrtf(distance_squared);
+          float cos_tx = powf(cos_t, em.collimation);
+          if (cos_tx > kEpsilon) {
+            pdf_dir = pdf_area * distance_squared / cos_tx;
+            pdf_dir_out = pdf_area * cos_tx * kInvPi;
+          }
+        }
       }
 
       return apply_image(spect, em.emission, query.uv, scene, nullptr);

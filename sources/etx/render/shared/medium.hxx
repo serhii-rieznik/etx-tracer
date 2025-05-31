@@ -66,6 +66,16 @@ struct ETX_ALIGNED Medium {
     Heterogeneous,
   };
 
+  struct ETX_ALIGNED Instance {
+    SpectralResponse extinction;
+    float anisotropy = 0.0f;
+    uint32_t index = kInvalidIndex;
+
+    bool valid() const {
+      return (index != kInvalidIndex) || (extinction.maximum() > 0.0f);
+    }
+  };
+
   struct ETX_ALIGNED Sample {
     SpectralResponse weight = {};
     float3 pos = {};
@@ -91,6 +101,14 @@ struct ETX_ALIGNED Medium {
 
   bool enable_explicit_connections = true;
 
+  Instance instance(const SpectralQuery spect, uint32_t index) const {
+    return Instance{
+      .extinction = s_absorption(spect) + s_scattering(spect),
+      .anisotropy = phase_function_g,
+      .index = index,
+    };
+  }
+
   ETX_GPU_CODE SpectralResponse transmittance(const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction, float distance) const {
     switch (cls) {
       case Class::Vacuum:
@@ -106,6 +124,10 @@ struct ETX_ALIGNED Medium {
         ETX_FAIL_FMT("Invalid medium: %u\n", uint32_t(cls));
         return {};
     }
+  }
+
+  static ETX_GPU_CODE SpectralResponse transmittance(const Instance& instance, float distance) {
+    return exp(instance.extinction * (-distance));
   }
 
   ETX_GPU_CODE SpectralResponse transmittance_homogeneous(const SpectralQuery spect, float distance) const {

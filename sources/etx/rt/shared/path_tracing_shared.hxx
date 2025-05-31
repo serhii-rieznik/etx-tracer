@@ -288,7 +288,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
     uint32_t emitter_index = sample_emitter_index(scene, payload.smp.next());
     auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp.next_2d(), medium_sample.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
-      auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, payload.medium, payload.smp);
+      auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, {.index = payload.medium}, payload.smp);
       float phase_function = medium.phase_function(payload.ray.d, emitter_sample.direction);
       auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, phase_function);
       payload.accumulated += payload.throughput * emitter_sample.value * tr * (phase_function * weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
@@ -322,7 +322,7 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
-  auto tr = rt.trace_transmittance(spect, scene, pos, emitter_sample.origin, medium, smp);
+  auto tr = rt.trace_transmittance(spect, scene, pos, emitter_sample.origin, {.index = medium}, smp);
   ETX_VALIDATE(tr);
 
   bool no_weight = (mis == false) || emitter_sample.is_delta;
@@ -356,7 +356,7 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
   auto e = emitter_get_radiance(emitter, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
 
   if (pdf_emitter_dir > 0.0f) {
-    auto tr = rt.trace_transmittance(payload.spect, scene, payload.ray.o, intersection.pos, payload.medium, payload.smp);
+    auto tr = rt.trace_transmittance(payload.spect, scene, payload.ray.o, intersection.pos, {.index = payload.medium}, payload.smp);
     float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
     bool no_weight = (options.mis == false) || q.directly_visible || (payload.mis_weight == false);
     auto weight = no_weight ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);

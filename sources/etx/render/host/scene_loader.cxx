@@ -299,7 +299,7 @@ struct SceneRepresentationImpl {
     scene.black_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
     scene.white_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
 
-    scene.subsurface_scatter_material = add_material("etx::subsurface-enter");
+    scene.subsurface_scatter_material = add_material("etx::subsurface-scatter");
     materials[scene.subsurface_scatter_material].reflectance = {.spectrum_index = scene.black_spectrum};
     materials[scene.subsurface_scatter_material].transmittance = {.spectrum_index = scene.white_spectrum};
     materials[scene.subsurface_scatter_material].cls = Material::Class::Translucent;
