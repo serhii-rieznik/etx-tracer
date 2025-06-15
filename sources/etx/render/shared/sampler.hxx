@@ -6,6 +6,9 @@ namespace etx {
 
 struct Sampler {
   uint32_t seed = 0;
+  float fixed_u = 0.0f;
+  float fixed_v = 0.0f;
+  float fixed_w = 0.0f;
 
   ETX_SHARED_CODE Sampler() {
   }
@@ -30,6 +33,22 @@ struct Sampler {
     float a = next();
     float b = next();
     return {a, b};
+  }
+
+  ETX_SHARED_CODE void push_fixed(float u, float v, float w) {
+    fixed_u = u;
+    fixed_v = v;
+    fixed_w = w;
+  }
+
+  ETX_SHARED_CODE void pop_fixed() {
+    fixed_u = 0.0f;
+    fixed_v = 0.0f;
+    fixed_w = 0.0f;
+  }
+
+  ETX_SHARED_CODE bool has_fixed() const {
+    return (sqr(fixed_u) + sqr(fixed_v) + sqr(fixed_w)) > kEpsilon;
   }
 
   static ETX_SHARED_CODE uint32_t random_seed(const uint32_t val0, const uint32_t val1) {

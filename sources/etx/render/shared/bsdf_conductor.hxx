@@ -13,7 +13,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   BSDFSample result;
   result.properties = BSDFSample::Reflection;
-  result.medium_index = data.medium_index;
+  result.medium_index = data.current_medium;
   result.eta = 1.0f;
 
   result.weight = {data.spectrum_sample, 1.0f};
@@ -29,8 +29,10 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     if (ray.h == kMaxFloat)
       break;
 
+    float2 slope_rnd = (scattering_order == 0) && smp.has_fixed() ? float2{smp.fixed_u, smp.fixed_v} : smp.next_2d();
+
     SpectralResponse weight = {data.spectrum_sample, 1.0f};
-    ray.updateDirection(external::samplePhaseFunction_conductor(data.spectrum_sample, smp, -ray.w, roughness, ext_ior, int_ior, thinfilm, weight), roughness);
+    ray.updateDirection(external::samplePhaseFunction_conductor(data.spectrum_sample, slope_rnd, -ray.w, roughness, ext_ior, int_ior, thinfilm, weight), roughness);
     ray.updateHeight(ray.h);
 
     result.weight *= weight;
@@ -77,29 +79,18 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
-  BSDFEval result;
-  if (smp.next() > 0.5f) {
-    result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, roughness, ext_ior, int_ior, thinfilm);
-    ETX_VALIDATE(result.bsdf);
-  } else {
-    result.bsdf = 2.0f * external::eval_conductor(data.spectrum_sample, smp, w_o, w_i, roughness, ext_ior, int_ior, thinfilm) / w_i.z * w_o.z;
-    ETX_VALIDATE(result.bsdf);
-  }
-  result.bsdf *= apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
-  ETX_VALIDATE(result.bsdf);
+  auto value = external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, roughness, ext_ior, int_ior, thinfilm);
 
+  BSDFEval result = {};
+  result.bsdf = value * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  ETX_VALIDATE(result.bsdf);
   result.func = result.bsdf / w_o.z;
   ETX_VALIDATE(result.func);
-
   {
     external::RayInfo ray = {w_i, roughness};
     result.pdf = external::D_ggx(normalize(w_o + w_i), roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
     ETX_VALIDATE(result.pdf);
   }
-
-  result.weight = result.bsdf / result.pdf;
-  ETX_VALIDATE(result.weight);
-
   return result;
 }
 

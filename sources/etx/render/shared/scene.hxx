@@ -40,7 +40,10 @@ struct ETX_ALIGNED Scene {
   float noise_threshold ETX_INIT_WITH(0.1f);
   float radiance_clamp ETX_INIT_WITH(0.0f);
   uint8_t spectral ETX_INIT_WITH(0);
-  uint8_t pad[3] ETX_INIT_WITH({});
+  uint32_t black_spectrum = kInvalidIndex;
+  uint32_t white_spectrum = kInvalidIndex;
+  uint32_t subsurface_scatter_material = kInvalidIndex;
+  uint32_t subsurface_exit_material = kInvalidIndex;
 };
 
 struct ContinousTraceOptions {
@@ -59,6 +62,18 @@ ETX_GPU_CODE float3 lerp_normal(const ArrayView<Vertex>& vertices, const Triangl
   return normalize(vertices[t.i[0]].nrm * bc.x +  //
                    vertices[t.i[1]].nrm * bc.y +  //
                    vertices[t.i[2]].nrm * bc.z);  //
+}
+
+ETX_GPU_CODE float3 lerp_tangent(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
+  return normalize(vertices[t.i[0]].tan * bc.x +  //
+                   vertices[t.i[1]].tan * bc.y +  //
+                   vertices[t.i[2]].tan * bc.z);  //
+}
+
+ETX_GPU_CODE float3 lerp_bitangent(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
+  return normalize(vertices[t.i[0]].tan * bc.x +  //
+                   vertices[t.i[1]].tan * bc.y +  //
+                   vertices[t.i[2]].tan * bc.z);  //
 }
 
 ETX_GPU_CODE float2 lerp_uv(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& b) {
@@ -170,10 +185,14 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
 ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
   ETX_FUNCTION_SCOPE();
 
+  float max_t = throughput.maximum();
+  if (max_t == 0.0f)
+    return false;
+
   if (path_length < start_path_length)
     return true;
 
-  float max_t = throughput.maximum() * (eta_scale * eta_scale);
+  max_t *= sqr(eta_scale);
   if (valid_value(max_t) == false) {
     return false;
   }

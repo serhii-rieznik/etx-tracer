@@ -23,11 +23,12 @@ ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, f
   constexpr float f = 2.406029994080f;
   constexpr float kMinScattering = 1.0f / 1024.0f;
 
-  color = max(color, 0.0f);
+  color = fmaxf(0.0f, color);
 
   float blend = powf(color, 0.25f);
   albedo = (1.0f - blend) * a * powf(atanf(b * color), c) + blend * d * powf(atanf(e * color), f);
   ETX_VALIDATE(albedo);
+  albedo = clamp(albedo, 0.0f, 1.0f - kEpsilon);
 
   extinction = 1.0f / fmaxf(scattering_distances, kMinScattering);
   ETX_VALIDATE(extinction);
@@ -52,8 +53,8 @@ ETX_GPU_CODE float sample_s_r(float rnd) {
   return 3.0f * logf(1.0f / (1.0f - rnd));
 }
 
-ETX_GPU_CODE SpectralResponse evaluate(const SpectralQuery spect, const Scene& scene, const SubsurfaceMaterial& m, float radius) {
-  auto sd = scene.spectrums[m.scattering_distance_spectrum](spect) * m.scale;
+ETX_GPU_CODE SpectralResponse evaluate(const SpectralQuery spect, const Scene& scene, const Intersection& data, const SubsurfaceMaterial& m, float radius) {
+  auto sd = apply_image(spect, m, data.tex, scene, nullptr) * m.scale;
   ETX_VALIDATE(sd);
 
   radius = fmaxf(radius, kEpsilon);
@@ -86,7 +87,7 @@ struct Sample {
 };
 
 ETX_GPU_CODE Sample sample(SpectralQuery spect, const Scene& scene, const Vertex& data, const SubsurfaceMaterial& mtl, const uint32_t direction, Sampler& smp) {
-  SpectralResponse sampled_distance = scene.spectrums[mtl.scattering_distance_spectrum](spect);
+  SpectralResponse sampled_distance = apply_image(spect, mtl, data.tex, scene, nullptr);
   uint32_t channel = uint32_t(sampled_distance.component_count() * smp.next());
   float scattering_distance = mtl.scale * sampled_distance.component(channel);
   if (scattering_distance == 0.0f)

@@ -35,8 +35,10 @@ struct CPUPathTracingImpl : public Task {
   void start(const Options& opt) {
     ETX_PROFILER_RESET_COUNTERS();
 
+    options.direct = opt.get("direct", options.direct).to_bool();
     options.nee = opt.get("nee", options.nee).to_bool();
     options.mis = opt.get("mis", options.mis).to_bool();
+    options.blue_noise = opt.get("bn", options.blue_noise).to_bool();
 
     status = {};
     total_time = {};
@@ -59,7 +61,7 @@ struct CPUPathTracingImpl : public Task {
       }
 
       pixels_processed++;
-      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, i, status.current_iteration, scene.spectral);
+      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, i, status.current_iteration, scene.spectral, options.blue_noise);
 
       while ((state->load() != Integrator::State::Stopped) && run_path_iteration(scene, options, rt, payload)) {
         ETX_VALIDATE(payload.accumulated);
@@ -98,7 +100,7 @@ struct CPUPathTracingImpl : public Task {
     scheduler.wait(current_task);
     film.estimate_noise_levels(status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
 
-    if ((current_state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1 > rt.scene().samples)) {
+    if ((current_state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1 >= rt.scene().samples)) {
       current_task = {};
       current_state = Integrator::State::Stopped;
     } else {
@@ -157,8 +159,10 @@ void CPUPathTracing::stop(Stop st) {
 
 Options CPUPathTracing::options() const {
   Options result = {};
-  result.add(_private->options.nee, "nee", "Next Event Estimation");
+  result.add(_private->options.direct, "direct", "Direct Hits");
+  result.add(_private->options.nee, "nee", "Light Sampling");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
+  result.add(_private->options.blue_noise, "bn", "Use Blue Noise");
   return result;
 }
 
@@ -166,6 +170,13 @@ void CPUPathTracing::update_options(const Options& opt) {
   if (current_state == State::Running) {
     run(opt);
   }
+}
+
+float2 sample_blue_noise(const uint2& pixel, const uint32_t total_samples, const uint32_t current_sample, uint32_t dimension) {
+  auto smp = BNSampler(pixel.x, pixel.y, total_samples, current_sample);
+  float u = smp.get(dimension + 0u);
+  float v = smp.get(dimension + 1u);
+  return {u, v};
 }
 
 }  // namespace etx

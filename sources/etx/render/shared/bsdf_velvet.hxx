@@ -5,7 +5,17 @@ namespace VelvetBSDF {
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   float3 w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);
-  return {w_o, evaluate(data, w_o, mtl, scene, smp), BSDFSample::Reflection, mtl.ext_medium};
+
+  auto eval = evaluate(data, w_o, mtl, scene, smp);
+
+  BSDFSample result = {};
+  result.w_o = w_o;
+  result.properties = BSDFSample::Reflection;
+  result.medium_index = data.current_medium;
+  result.eta = 1.0f;
+  result.weight = eval.bsdf / eval.pdf;
+  ETX_VALIDATE(result.weight);
+  return result;
 }
 
 ETX_GPU_CODE float lambda_velvet_l(float r, float x) {
@@ -79,17 +89,13 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
 
   float diffuse_scale = diffuse_burley(alpha, n_dot_i, n_dot_o, m_dot_o);
 
-  BSDFEval eval;
+  BSDFEval eval = {};
   eval.func = diffuse * diffuse_scale + specular * specular_scale_base / n_dot_o;
   ETX_VALIDATE(eval.func);
-
   eval.bsdf = diffuse * diffuse_scale * n_dot_o + specular * specular_scale_base;
   ETX_VALIDATE(eval.bsdf);
-
   eval.pdf = 1.0f / kDoublePi;
-
-  eval.weight = eval.bsdf / eval.pdf;
-  ETX_VALIDATE(eval.weight);
+  ETX_VALIDATE(eval.pdf);
   return eval;
 }
 

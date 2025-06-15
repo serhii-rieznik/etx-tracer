@@ -29,13 +29,12 @@ struct ETX_ALIGNED Camera {
   float image_plane ETX_EMPTY_INIT;
 
   uint2 film_size ETX_EMPTY_INIT;
-  uint32_t apixel_size ETX_EMPTY_INIT;
-  uint32_t pad ETX_EMPTY_INIT;
-
-  uint32_t lens_image ETX_EMPTY_INIT;
   float lens_radius ETX_EMPTY_INIT;
   float focal_distance ETX_EMPTY_INIT;
+
+  uint32_t lens_image ETX_EMPTY_INIT;
   uint32_t medium_index ETX_EMPTY_INIT;
+  uint32_t pad[2] ETX_EMPTY_INIT;
 };
 
 struct ETX_ALIGNED CameraSample {

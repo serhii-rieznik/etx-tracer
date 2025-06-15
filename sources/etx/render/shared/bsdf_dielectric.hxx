@@ -17,7 +17,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.weight = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
     result.weight *= (fr / f);
     result.properties = BSDFSample::Delta | BSDFSample::Reflection;
-    result.medium_index = frame.entering_material() ? mtl.ext_medium : mtl.int_medium;
+    result.medium_index = data.current_medium;
   } else {
     result.w_o = data.w_i;
     result.pdf = 1.0f - f;
@@ -80,7 +80,9 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     ray.updateHeight(sampled_height);
 
     // next direction
-    auto sample = external::samplePhaseFunction_dielectric(data.spectrum_sample, smp, -ray.w, roughness,  //
+    float2 rnd_slope = (scattering_order == 0) && smp.has_fixed() ? float2{smp.fixed_u, smp.fixed_v} : smp.next_2d();
+    float rnd_reflection = (scattering_order == 0) && smp.has_fixed() ? smp.fixed_w : smp.next();
+    auto sample = external::samplePhaseFunction_dielectric(data.spectrum_sample, rnd_slope, rnd_reflection, -ray.w, roughness,  //
       (ray_outside ? ext_ior : int_ior), (ray_outside ? int_ior : ext_ior), thinfilm);
 
     result.weight *= sample.weight;
@@ -105,7 +107,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.eta = 1.0f;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
     result.properties = BSDFSample::Reflection;
-    result.medium_index = in_outside ? mtl.ext_medium : mtl.int_medium;
+    result.medium_index = data.current_medium;
   } else {
     float eta = (int_ior.eta / ext_ior.eta).monochromatic();
     float factor = (data.path_source == PathSource::Camera) ? sqr(1.0f / eta) : 1.0f;
@@ -138,9 +140,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
   const float m_eta = (int_ior.eta / ext_ior.eta).monochromatic();
 
-  bool forward_path = smp.next() > 0.5f;
-
-  float factor = (data.path_source == PathSource::Camera) ? sqr(LocalFrame::cos_theta(w_i) < 0.0f ? 1.0f / m_eta : m_eta) : 1.0f;
+  bool forward_path = data.path_source == PathSource::Camera;
+  float factor = forward_path ? sqr(LocalFrame::cos_theta(w_i) < 0.0f ? 1.0f / m_eta : m_eta) : 1.0f;
   float backward_scale = fabsf(1.0f / LocalFrame::cos_theta(w_i));
 
   SpectralResponse value = {};
@@ -150,7 +151,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
                            : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, true, roughness, ext_ior, int_ior, thinfilm) * backward_scale;
     } else {
       value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, false, roughness, ext_ior, int_ior, thinfilm)
-                           : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, roughness, int_ior, ext_ior, thinfilm) * backward_scale * factor;
+                           : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, roughness, int_ior, ext_ior, thinfilm) * backward_scale;
       value *= factor;
     }
   } else if (LocalFrame::cos_theta(w_o) <= 0) {
@@ -158,7 +159,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
                          : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, true, roughness, int_ior, ext_ior, thinfilm) * backward_scale;
   } else {
     value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, false, roughness, int_ior, ext_ior, thinfilm)
-                         : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, roughness, ext_ior, int_ior, thinfilm) * backward_scale * factor;
+                         : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, roughness, ext_ior, int_ior, thinfilm) * backward_scale;
     value *= factor;
   }
 
@@ -172,8 +173,6 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
   eval.pdf = pdf(data, in_w_o, mtl, scene, smp);
-  eval.weight = eval.bsdf / eval.pdf;
-  ETX_VALIDATE(eval.weight);
   return eval;
 }
 

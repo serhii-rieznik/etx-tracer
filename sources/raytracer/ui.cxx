@@ -734,7 +734,7 @@ void UI::build(double dt) {
       ImGui::Text("Max samples per pixel / iterations:");
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##samples", reinterpret_cast<int*>(&_current_scene->samples));
       ImGui::Text("Maximum path length:");
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxcampathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
       ImGui::Text("Path length w/o random termination:");
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
       ImGui::Text("Noise Threshold:");
@@ -745,6 +745,7 @@ void UI::build(double dt) {
       scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", reinterpret_cast<bool*>(&_current_scene->spectral));
 
       if (scene_settings_changed) {
+        _current_scene->max_path_length = std::min(_current_scene->max_path_length, 65536u);
         callbacks.scene_settings_changed();
       }
     } else {
@@ -754,7 +755,7 @@ void UI::build(double dt) {
     ImGui::End();
   }
 
-  if (has_integrator && (_current_integrator->status().debug_info_count > 0)) {
+  if (has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr)) {
     if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
       auto debug_info = _current_integrator->status().debug_info;
       for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
@@ -967,7 +968,7 @@ bool UI::build_material(Material& material) {
   ImGui::Text("%s", "Subsurface Scattering");
   changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
   changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
-  changed |= spectrum_picker("Subsurface Distance", material.subsurface.scattering_distance_spectrum, true);
+  changed |= spectrum_picker("Subsurface Distance", material.subsurface.spectrum_index, true);
   ImGui::Text("%s", "Subsurface Distance Scale");
   changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
   ImGui::Separator();
@@ -989,7 +990,9 @@ bool UI::build_material(Material& material) {
       int32_t medium_index = static_cast<int32_t>(medium);
       if (medium_index == -1)
         medium_index = 0;
-      changed |= ImGui::SliderInt("##medium_index", &medium_index, 0, int32_t(medium_count - 1u), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
+      char buffer[64] = {};
+      snprintf(buffer, sizeof(buffer), "##%s_slider", name);
+      changed |= ImGui::SliderInt(buffer, &medium_index, 0, int32_t(medium_count - 1u), "Index: %d", ImGuiSliderFlags_AlwaysClamp);
       medium = uint32_t(medium_index);
     } else {
       medium = kInvalidIndex;

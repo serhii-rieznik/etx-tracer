@@ -358,7 +358,7 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
 
   const auto& medium = scene.mediums[state.medium_index];
   state.ray.o = medium_sample.pos;
-  state.ray.d = medium.sample_phase_function(state.spect, state.sampler, state.ray.d);
+  state.ray.d = medium.sample_phase_function(state.sampler, state.ray.d);
 
   if (state.total_path_depth + 1 > scene.max_path_length)
     return false;
@@ -411,7 +411,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, w_o);
-  auto tr = rt.trace_transmittance(state.spect, scene, p0, camera_sample.position, state.medium_index, state.sampler);
+  auto tr = rt.trace_transmittance(state.spect, scene, p0, camera_sample.position, {.index = state.medium_index}, state.sampler);
   if (tr.is_zero()) {
     return {};
   }
@@ -466,7 +466,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
-  uint32_t emitter_index = sample_emitter_index(scene, state.sampler);
+  uint32_t emitter_index = sample_emitter_index(scene, state.sampler.next());
   auto emitter_sample = sample_emitter(state.spect, emitter_index, state.sampler.next_2d(), intersection.pos, scene);
 
   if (emitter_sample.pdf_dir <= 0)
@@ -478,7 +478,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
     return {state.spect, 0.0f};
 
   float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
-  auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, state.medium_index, state.sampler);
+  auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, {.index = state.medium_index}, state.sampler);
   if (tr.is_zero())
     return {state.spect, 0.0f};
 
@@ -579,7 +579,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
 
     if (connected) {
       float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
-      auto tr = rt.trace_transmittance(state.spect, scene, p0, target_position, state.medium_index, state.sampler);
+      auto tr = rt.trace_transmittance(state.spect, scene, p0, target_position, {.index = state.medium_index}, state.sampler);
       if (tr.is_zero() == false) {
         result += tr * value;
         ETX_VALIDATE(result);
@@ -745,7 +745,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     bsdf_sample.w_o = sample_cosine_distribution(state.sampler.next_2d(), intersection.nrm, 1.0f);
     bsdf_sample.pdf = fabsf(dot(bsdf_sample.w_o, intersection.nrm)) / kPi;
     bsdf_sample.eta = 1.0f;
-    bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Light, intersection, intersection.w_i};
+    bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
   }
 
   if (options.merge_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
@@ -808,8 +808,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
     if (options.connect_to_camera() && (state.total_path_depth + 1 <= scene.max_path_length)) {
       if (subsurface_sampled) {
         for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-          auto value = vcm_connect_to_camera(rt, scene, camera, mat, iteration, options,  //
-            ss_gather.intersections[i], state, result.splat_uvs[result.splat_count]);
+          auto value = vcm_connect_to_camera(rt, scene, camera, mat, iteration, options, ss_gather.intersections[i], state, result.splat_uvs[result.splat_count]);
           ETX_VALIDATE(value);
           if (value.maximum() > kEpsilon) {
             float ss_scale = ss_gather.weights[i].average() / ss_gather.total_weight;

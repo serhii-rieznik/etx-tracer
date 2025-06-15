@@ -117,6 +117,9 @@ float2 Film::sample(const Scene& scene, const PixelFilter& sampler, const uint2&
 }
 
 void Film::atomic_add(uint32_t layer, const float3& value, const float2& ndc_coord) {
+  if (dot(value, value) == 0.0f)
+    return;
+
   float2 uv = ndc_coord * 0.5f + 0.5f;
   uint32_t ax = static_cast<uint32_t>(uv.x * dimensions().x) * _private->pixel_size;
   uint32_t ay = static_cast<uint32_t>(uv.y * dimensions().y) * _private->pixel_size;

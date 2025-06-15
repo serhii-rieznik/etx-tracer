@@ -8,14 +8,12 @@ namespace etx {
 struct ETX_ALIGNED SpectralImage {
   uint32_t spectrum_index = kInvalidIndex;
   uint32_t image_index = kInvalidIndex;
-  uint32_t pad[2] = {};
 };
 
 struct ETX_ALIGNED SampledImage {
   float4 value = {};
   uint32_t image_index = kInvalidIndex;
   uint32_t channel = kInvalidIndex;
-  uint32_t pad[2] = {};
 };
 
 struct ETX_ALIGNED Thinfilm {
@@ -35,7 +33,7 @@ struct ETX_ALIGNED Thinfilm {
   float pad;
 };
 
-struct SubsurfaceMaterial {
+struct ETX_ALIGNED SubsurfaceMaterial : public SpectralImage {
   enum class Class : uint32_t {
     Disabled,
     RandomWalk,
@@ -49,7 +47,6 @@ struct SubsurfaceMaterial {
 
   Class cls = Class::Disabled;
   Path path = Path::Diffuse;
-  uint32_t scattering_distance_spectrum = kInvalidIndex;
   float scale = 1.0f;
 };
 
@@ -70,25 +67,27 @@ struct ETX_ALIGNED Material {
     Undefined = kInvalidIndex,
   };
 
-  Class cls = Class::Undefined;
   SpectralImage reflectance;
   SpectralImage transmittance;
   SpectralImage emission;
+  SampledImage roughness;
+  SampledImage metalness;
+  SampledImage transmission;
+  SubsurfaceMaterial subsurface;
 
-  uint32_t int_medium = kInvalidIndex;
-  uint32_t ext_medium = kInvalidIndex;
   RefractiveIndex ext_ior = {};
   RefractiveIndex int_ior = {};
   Thinfilm thinfilm = {};
-  SubsurfaceMaterial subsurface = {};
 
-  SampledImage roughness = {};
-  SampledImage metalness = {};
-
+  Class cls = Class::Undefined;
+  uint32_t int_medium = kInvalidIndex;
+  uint32_t ext_medium = kInvalidIndex;
   uint32_t normal_image_index = kInvalidIndex;
-  float normal_scale = 1.0f;
 
-  uint32_t diffuse_variation = 0;
+  uint32_t diffuse_variation = 0u;
+  float normal_scale = 1.0f;
+  float emission_collimation = 1.0f;
+  uint32_t emission_direction = 0u;
 
   bool has_diffuse() const {
     return (cls == Class::Diffuse) || (cls == Class::Plastic);

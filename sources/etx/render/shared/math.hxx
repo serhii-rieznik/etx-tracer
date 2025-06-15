@@ -524,6 +524,9 @@ ETX_GPU_CODE float length(const float3& v) {
   return sqrtf(dot(v, v));
 }
 
+ETX_GPU_CODE float2 normalize(const float2& v) {
+  return v / length(v);
+}
 ETX_GPU_CODE float3 normalize(const float3& v) {
   return v / length(v);
 }
@@ -662,11 +665,11 @@ struct ETX_ALIGNED IntersectionBase {
 
 struct ETX_ALIGNED Intersection : public Vertex {
   float3 barycentric = {};
-  uint32_t triangle_index = ~0u;
+  uint32_t triangle_index = kInvalidIndex;
   float3 w_i = {};
   float t = 0.0f;
-  uint32_t material_index = ~0u;
-  uint32_t emitter_index = ~0u;
+  uint32_t material_index = kInvalidIndex;
+  uint32_t emitter_index = kInvalidIndex;
 
   Intersection() = default;
 

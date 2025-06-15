@@ -78,9 +78,9 @@ struct CPUDebugIntegratorImpl : public Task {
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     const auto& film = rt.film();
-    RNDSampler smp = {};
+
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-      smp.init(i, status.current_iteration);
+      auto smp = Sampler(i, status.current_iteration);
       uint2 pixel = {};
       if (film.active_pixel(i, pixel)) {
         float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());

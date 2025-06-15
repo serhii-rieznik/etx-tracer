@@ -23,7 +23,7 @@ struct BSDFData : public Vertex {
     , w_i(awi)
     , spectrum_sample(spect)
     , path_source(ps)
-    , medium_index(medium) {
+    , current_medium(medium) {
   }
 
   ETX_GPU_CODE float3 front_fracing_normal() const {
@@ -38,20 +38,19 @@ struct BSDFData : public Vertex {
   float3 w_i = {};
   SpectralQuery spectrum_sample = {};
   PathSource path_source = PathSource::Undefined;
-  uint32_t medium_index = kInvalidIndex;
+  uint32_t current_medium = kInvalidIndex;
 };
 
 struct BSDFEval {
   BSDFEval() = default;
 
   ETX_GPU_CODE BSDFEval(const SpectralQuery q, float power)
-    : bsdf(q, power)
-    , weight(q, power) {
+    : func(q, power)
+    , bsdf(q, power) {
   }
 
   SpectralResponse func = {};
   SpectralResponse bsdf = {};
-  SpectralResponse weight = {};
   float pdf = 0.0f;
   float eta = 1.0f;
 
@@ -94,17 +93,8 @@ struct BSDFSample {
     , medium_index(medium) {
   }
 
-  ETX_GPU_CODE BSDFSample(const float3& w, const BSDFEval& eval, uint32_t props, uint32_t medium)
-    : weight(eval.weight)
-    , w_o(w)
-    , pdf(eval.pdf)
-    , eta(eval.eta)
-    , properties(props)
-    , medium_index(medium) {
-  }
-
   ETX_GPU_CODE bool valid() const {
-    return (pdf > 0.0f);
+    return (pdf > 0.0f) && (weight.maximum() > 0.0f);
   }
 
   ETX_GPU_CODE bool invalid() const {
@@ -364,7 +354,7 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
       values.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
       values.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
       if (int_ior.cls == SpectralDistribution::Class::Conductor) {
-        values = spectrum::xyz_to_rgb(values);
+        values = spectrum::xyz_to_rgb(values) * SpectralDistribution::kRGBLuminanceScale;
       }
     } else {
       values.x = fresnel_thinfilm(thinfilm.rgb_wavelengths.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);

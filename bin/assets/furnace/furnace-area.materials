@@ -1,0 +1,15 @@
+# Blender MTL File: 'furnace.blend'
+# Material Count: 2
+
+newmtl et::medium
+id interior
+parametric distances 1 0.1 0.01 scale 0.1
+
+newmtl object
+material class dielectric
+int_ior plastic
+Pr 0.9
+
+newmtl light
+Ke 0.5 0.5 0.5
+Kd 0.0 0.0 0.0

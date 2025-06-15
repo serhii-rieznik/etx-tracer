@@ -36,7 +36,7 @@ struct MediumPoolImpl {
     medium.phase_function_g = g;
     medium.enable_explicit_connections = explicit_connections;
 
-    if (strlen(volume_file) > 0) {
+    if ((volume_file != nullptr) && (strlen(volume_file) > 0)) {
       float max_density = 0.0f;
       auto density = load_density_grid(volume_file, medium.dimensions);
       for (auto f : density) {
