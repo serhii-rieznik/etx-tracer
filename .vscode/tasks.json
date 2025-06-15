@@ -4,20 +4,32 @@
         {
             "label": "build",
             "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/build --config Debug",
+            "command": "cmake --build ${workspaceFolder}/build --config Debug --parallel",
             "group": {
                 "kind": "build",
                 "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
             }
         },
         {
             "label": "build-release",
             "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/build --config Release",
+            "command": "cmake --build ${workspaceFolder}/build --config Release --parallel",
             "group": {
                 "kind": "build",
                 "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
             }
         }
     ]
-} 
+}
