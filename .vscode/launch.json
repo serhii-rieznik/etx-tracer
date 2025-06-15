@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Raytracer",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/raytracer",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/bin",
+            "environment": [
+                {
+                    "name": "DYLD_LIBRARY_PATH",
+                    "value": "${workspaceFolder}/bin"
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "lldb",
+            "preLaunchTask": "build"
+        },
+    {
+        "name": "Release Raytracer",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/bin/raytracer",
+        "args": [],
+        "stopAtEntry": false,
+        "cwd": "${workspaceFolder}/bin",
+        "environment": [
+            {
+                "name": "DYLD_LIBRARY_PATH",
+                "value": "${workspaceFolder}/bin"
+            }
+        ],
+        "externalConsole": false,
+        "MIMode": "lldb",
+        "preLaunchTask": "build-release"
+    },
+    ]
+} 

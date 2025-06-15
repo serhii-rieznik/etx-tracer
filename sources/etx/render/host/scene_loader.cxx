@@ -196,7 +196,7 @@ struct SceneRepresentationImpl {
 
   uint32_t add_spectrum() {
     char buffer[64] = {};
-    snprintf(buffer, sizeof(buffer), "##spectrum_%llu", scene_spectrums.size());
+    snprintf(buffer, sizeof(buffer), "##spectrum_%u", uint32_t(scene_spectrums.size()));
     return add_spectrum(buffer);
   }
 
@@ -964,7 +964,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
       s_a = SpectralDistribution::rgb_reflectance({val[0], val[0], val[0]});
     }
   }
-  
+
   if (get_param(material, "absorbtion")) {
     log::warning("absorBtion used in medium: %s", name.c_str());
     float val[3] = {};

@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "cmake --build ${workspaceFolder}/build --config Debug",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "build-release",
+            "type": "shell",
+            "command": "cmake --build ${workspaceFolder}/build --config Release",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        }
+    ]
+} 
