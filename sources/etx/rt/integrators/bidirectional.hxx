@@ -22,7 +22,7 @@ struct CPUBidirectional : public Integrator {
   const Status& status() const override;
 
  private:
-  ETX_DECLARE_PIMPL(CPUBidirectional, 4096);
+  ETX_DECLARE_PIMPL(CPUBidirectional, 128);
 };
 
 }  // namespace etx

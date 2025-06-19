@@ -34,7 +34,7 @@ struct Raytracing {
   SpectralResponse trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const Medium::Instance& medium, Sampler& smp) const;
 
  private:
-  ETX_DECLARE_PIMPL(Raytracing, 2048);
+  ETX_DECLARE_PIMPL(Raytracing, 1024);
 };
 
 }  // namespace etx

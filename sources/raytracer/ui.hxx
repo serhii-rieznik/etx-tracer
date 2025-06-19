@@ -22,7 +22,7 @@ struct UI {
   void initialize();
   void cleanup();
 
-  void build(double dt);
+  void build(double dt, const std::vector<std::string>& recent_files);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};

@@ -8,6 +8,8 @@
 #include <tinyexr.hxx>
 #include <stb_image_write.hxx>
 
+#include <algorithm>
+
 #if defined(ETX_PLATFORM_WINDOWS)
 
 // TODO : fix hacks
@@ -23,6 +25,10 @@ RTApplication::RTApplication()
   , scene(raytracing.scheduler())
   , camera_controller(scene.camera())
   , integrator_thread(raytracing.scheduler(), IntegratorThread::Mode::ExternalControl) {
+}
+
+RTApplication::~RTApplication() {
+  save_options();
 }
 
 void RTApplication::init() {
@@ -63,6 +69,13 @@ void RTApplication::init() {
     _options.add("ref", "none");
   }
 
+  for (uint32_t i = 0; i < 7; ++i) {
+    const auto name = "recent-" + std::to_string(i);
+    if (_options.has(name)) {
+      _recent_files.emplace_back(_options.get(name, std::string()).name);
+    }
+  }
+
 #if defined(ETX_PLATFORM_WINDOWS)
   if (GetAsyncKeyState(VK_ESCAPE)) {
     _options.set("integrator", std::string());
@@ -100,6 +113,10 @@ void RTApplication::init() {
 }
 
 void RTApplication::save_options() {
+  uint32_t i = 0;
+  for (const auto& recent : _recent_files) {
+    _options.add("recent-" + std::to_string(i++), recent);
+  }
   _options.save_to_file(env().file_in_data("options.json"));
 }
 
@@ -134,7 +151,7 @@ void RTApplication::frame() {
 
   render.start_frame(integrator_thread.status().current_iteration, options);
   render.update_image(raytracing.film().layer(options.layer));
-  ui.build(dt);
+  ui.build(dt, _recent_files);
   render.end_frame();
 }
 
@@ -175,6 +192,18 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return;
   }
 
+  auto existing = std::find(_recent_files.begin(), _recent_files.end(), file_name);
+  if (existing != _recent_files.end()) {
+    _recent_files.erase(existing);
+  }
+
+  _recent_files.emplace_back(file_name);
+
+  if (_recent_files.size() > 8) {
+    _recent_files.erase(_recent_files.begin());
+  }
+
+  raytracing.film().clear();
   integrator_thread.run(ui.integrator_options());
 }
 

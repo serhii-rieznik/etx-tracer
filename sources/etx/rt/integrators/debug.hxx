@@ -44,7 +44,7 @@ struct CPUDebugIntegrator : public Integrator {
   void stop(Stop) override;
 
  private:
-  ETX_DECLARE_PIMPL(CPUDebugIntegrator, 1024u * 32u);
+  ETX_DECLARE_PIMPL(CPUDebugIntegrator, 192);
 };
 
 }  // namespace etx

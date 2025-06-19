@@ -22,6 +22,7 @@ namespace etx {
 
 struct RTApplication {
   RTApplication();
+  ~RTApplication();
 
   void init();
   void frame();
@@ -57,7 +58,6 @@ struct RTApplication {
 
  private:
   UI ui;
-  TimeMeasure time_measure;
   Raytracing raytracing;
   RenderContext render;
   SceneRepresentation scene;
@@ -69,8 +69,6 @@ struct RTApplication {
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
 
-  bool last_camera_controller_state = false;
-
   Integrator* _integrator_array[4] = {
     &_debug,
     &_cpu_pt,
@@ -78,8 +76,11 @@ struct RTApplication {
     &_cpu_vcm,
   };
 
-  std::string _current_scene_file = {};
   Options _options;
+  std::vector<std::string> _recent_files = {};
+  std::string _current_scene_file = {};
+  TimeMeasure time_measure = {};
+  bool last_camera_controller_state = false;
 };
 
 }  // namespace etx

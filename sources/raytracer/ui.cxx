@@ -309,7 +309,7 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, bool linea
   return changed;
 }
 
-void UI::build(double dt) {
+void UI::build(double dt, const std::vector<std::string>& recent_files) {
   ETX_FUNCTION_SCOPE();
 
   constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
@@ -336,6 +336,21 @@ void UI::build(double dt) {
       if (ImGui::MenuItem("Reload Geometry and Materials", "Ctrl+G", false, true)) {
         reload_geometry();
       }
+
+      if (recent_files.empty() == false) {
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Recent Files")) {
+          for (const auto& recent : recent_files) {
+            if (ImGui::MenuItem(recent.c_str(), nullptr, nullptr)) {
+              if (callbacks.scene_file_selected) {
+                callbacks.scene_file_selected(recent);
+              }
+            }
+          }
+          ImGui::EndMenu();
+        }
+      }
+
       ImGui::Separator();
       if (ImGui::MenuItem("Save...", nullptr, false, true)) {
         save_scene_file();

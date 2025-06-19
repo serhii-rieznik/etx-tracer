@@ -11,6 +11,10 @@
 
 namespace etx {
 
+static RefractiveIndex spd_base = {};
+static RefractiveIndex spd_air = {};
+static Thinfilm thinfilm = {};
+
 struct CPUDebugIntegratorImpl : public Task {
   Integrator::Status status = {};
 
@@ -21,9 +25,6 @@ struct CPUDebugIntegratorImpl : public Task {
   Task::Handle current_task = {};
   uint32_t current_scale = 1u;
   CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Random;
-  RefractiveIndex spd_base;
-  RefractiveIndex spd_air;
-  Thinfilm thinfilm;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
   float th_factor = 1.0f;
   float th_min = 0.0f;

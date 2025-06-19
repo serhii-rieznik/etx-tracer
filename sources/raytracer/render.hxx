@@ -22,7 +22,7 @@ struct RenderContext {
   void set_reference_image(const char*);
   void set_reference_image(const float4 data[], const uint2 dimensions);
 
-  ETX_DECLARE_PIMPL(RenderContext, 512);
+  ETX_DECLARE_PIMPL(RenderContext, 384);
 
  private:
   void apply_reference_image(uint32_t);

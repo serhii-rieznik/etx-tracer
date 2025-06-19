@@ -36,7 +36,7 @@ struct SceneRepresentation {
 
   bool valid() const;
 
-  ETX_DECLARE_PIMPL(SceneRepresentation, 24u * 1024u);
+  ETX_DECLARE_PIMPL(SceneRepresentation, 4096);
 };
 
 void build_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, const float fov);
