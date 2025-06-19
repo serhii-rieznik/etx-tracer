@@ -1,5 +1,5 @@
 {
-  "integrator": "Path Tracing (CPU)",
+  "integrator": "Bidirectional (CPU)",
   "ref": "",
-  "scene": "assets/cornellbox/cornellbox.json"
+  "scene": "/Users/serhii/Development/etx-tracer/bin/assets/cornellbox/cornellbox.json"
 }

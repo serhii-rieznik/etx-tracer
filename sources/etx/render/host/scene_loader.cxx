@@ -197,7 +197,7 @@ struct SceneRepresentationImpl {
 
   uint32_t add_spectrum() {
     char buffer[64] = {};
-    snprintf(buffer, sizeof(buffer), "##spectrum_%llu", scene_spectrums.size());
+    snprintf(buffer, sizeof(buffer), "##spectrum_%u", uint32_t(scene_spectrums.size()));
     return add_spectrum(buffer);
   }
 

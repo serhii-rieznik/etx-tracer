@@ -7,3 +7,5 @@ bin/options.json
 bin/ui.ini
 bin/raytracer
 bin/tmp/
+build
+_build

@@ -1,0 +1,5 @@
+{
+    "cmake.configureSettings": {
+        "EMBREE_LOCATION" : "${workspaceFolder}/../SDK/Embree"
+    }
+}

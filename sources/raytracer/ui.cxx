@@ -774,7 +774,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files) {
     if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
       auto debug_info = _current_integrator->status().debug_info;
       for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
-        char buffer[8] = {};
+        char buffer[64] = {};
         snprintf(buffer, sizeof(buffer), "%.3f     .", debug_info[i].value);
         ImGui::LabelText(buffer, "%s", debug_info[i].title);
       }
