@@ -1,7 +1,6 @@
 #include <etx/core/core.hxx>
 #include <etx/render/host/film.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
-#include <etx/rt/integrators/bidirectional_shared.hxx>
 #include <atomic>
 
 #include <etx/rt/shared/path_tracing_shared.hxx>
