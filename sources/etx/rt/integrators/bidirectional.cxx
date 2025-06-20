@@ -288,10 +288,10 @@ struct CPUBidirectionalImpl : public Task {
 
   Mode mode = Mode::BDPTFast;
 
-  bool enable_direct_hit = false;
+  bool enable_direct_hit = true;
   bool enable_connect_to_light = true;
-  bool enable_connect_to_camera = false;
-  bool enable_connect_vertices = false;
+  bool enable_connect_to_camera = true;
+  bool enable_connect_vertices = true;
   bool enable_mis = true;
 
   struct GBuffer {
@@ -994,7 +994,7 @@ struct CPUBidirectionalImpl : public Task {
       for (uint64_t i = 2; i < path_data.camera_path.size(); ++i) {
         p_direct *= map0(path_data.camera_path[i].pdf.forward);
       }
-      float p_direct_connection = PathVertex::convert_solid_angle_pdf_to_area(sampled_light_vertex.pdf.next, z_curr, sampled_light_vertex);
+      float p_direct_connection = PathVertex::convert_solid_angle_pdf_to_area(sampled_light_vertex.pdf.accumulated, z_curr, sampled_light_vertex);
       p_direct *= map0(p_direct_connection);
 
       // Strategy 3: Light path to camera connection
@@ -1202,15 +1202,11 @@ struct CPUBidirectionalImpl : public Task {
     if ((force == false) && (enable_direct_hit == false))
       return {spect, 0.0f};
 
-    if (z_curr.is_emitter() == false) {
-      return {spect, 0.0f};
-    }
+    ETX_ASSERT(z_curr.is_emitter() && (z_curr.is_specific_emitter() == false));
 
     const auto& scene = rt.scene();
     if (scene.environment_emitters.count == 0)
       return {spect, 0.0f};
-
-    ETX_ASSERT(z_curr.is_specific_emitter() == false);
 
     EmitterRadianceQuery q = {
       .direction = normalize(z_curr.intersection.pos - z_prev.intersection.pos),
@@ -1252,20 +1248,26 @@ struct CPUBidirectionalImpl : public Task {
           return t == 0.0f ? 1.0f : t;
         };
 
+        // Strategy 1: Direct hit via camera path (all BSDF sampling)
         float p_direct = 1.0f;
         for (uint64_t i = 1; i < path_data.camera_path.size(); ++i) {
           p_direct *= map0(path_data.camera_path[i].pdf.forward);
         }
+        p_direct *= map0(z_curr.pdf.forward);
 
+        // Strategy 2: Camera path + explicit light connection
         float p_camera_to_light = 1.0f;
-        for (uint64_t i = 1; i < path_data.camera_path.size() - 1u; ++i) {
+        for (uint64_t i = 1; i < path_data.camera_path.size(); ++i) {
           p_camera_to_light *= map0(path_data.camera_path[i].pdf.forward);
         }
         float p_connect = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
         p_camera_to_light *= map0(p_connect);
 
-        float p_light_to_camera = map0(PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene));
-        for (uint64_t i = path_data.camera_path.size() - 1u; i > 1; --i) {
+        // Strategy 3: Light path + camera connection
+        float pdf_from_emitter = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
+        float p_light_to_camera = map0(pdf_from_emitter);
+
+        for (uint64_t i = path_data.camera_path.size() - 1u; i > 0; --i) {
           p_light_to_camera *= map0(path_data.camera_path[i].pdf.backward);
         }
 
