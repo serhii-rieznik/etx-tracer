@@ -94,7 +94,7 @@ struct BSDFSample {
   }
 
   ETX_GPU_CODE bool valid() const {
-    return (pdf > 0.0f) && (weight.maximum() > 0.0f);
+    return pdf > 0.0f;
   }
 
   ETX_GPU_CODE bool invalid() const {

@@ -95,7 +95,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
           pdf_dir_out = pdf_area;
         } else {
           float cos_t = fabsf(dot(dp, tri.geo_n)) / sqrtf(distance_squared);
-          float cos_tx = powf(cos_t, em.collimation);
+          float cos_tx = query.directly_visible ? cos_t : powf(cos_t, em.collimation);
           if (cos_tx > kEpsilon) {
             pdf_dir = pdf_area * distance_squared / cos_tx;
             pdf_dir_out = pdf_area * cos_tx * kInvPi;

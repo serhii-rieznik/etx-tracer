@@ -87,8 +87,6 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   ray.o = shading_pos(scene.vertices, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d);
   ray.max_t = kMaxFloat;
 
-  float total_pdf = 1.0f;
-
   SpectralResponse throughput = {spect, 1.0f};
   for (uint32_t i = 0; i < kMaxIterations; ++i) {
     SpectralResponse pdf = {};
@@ -142,10 +140,6 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
     auto prev_dir = ray.d;
     ray.o = ray.o + ray.d * ray.max_t;
     ray.d = medium::sample_phase_function(prev_dir, anisotropy, smp);
-
-    float pdf_phase = medium::phase_function(prev_dir, ray.d, anisotropy);
-    float pdf_dist = scattering_distance * expf(-scattering_distance * ray.max_t);
-    total_pdf += pdf_phase;  // * pdf_dist;
   }
 
   return GatherResult::Failed;

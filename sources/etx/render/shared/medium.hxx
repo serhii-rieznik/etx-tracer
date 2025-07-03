@@ -190,15 +190,18 @@ struct ETX_ALIGNED Medium {
     SpectralResponse scattering = s_scattering(spect);
     SpectralResponse absorption = s_absorption(spect);
     SpectralResponse extinction = scattering + absorption;
-
     SpectralResponse albedo = medium::calculate_albedo(spect, scattering, extinction);
 
-    SpectralResponse pdf = {};
-    uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp.next(), pdf);
-    float sample_t = extinction.component(channel);
+    ETX_CRITICAL(max_t > 0.0f);
 
-    float t = (sample_t > 0.0f) ? -logf(1.0f - smp.next()) / sample_t : max_t;
-    ETX_VALIDATE(t);
+    float t = 0.0f;
+    SpectralResponse pdf = {};
+    while (t < kRayEpsilon) {
+      uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp.next(), pdf);
+      float sample_t = extinction.component(channel);
+      t = (sample_t > 0.0f) ? -logf(1.0f - smp.next()) / sample_t : max_t;
+      ETX_VALIDATE(t);
+    }
 
     t = min(t, max_t);
     ETX_VALIDATE(t);

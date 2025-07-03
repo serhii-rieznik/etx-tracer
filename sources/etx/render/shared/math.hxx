@@ -107,7 +107,7 @@ constexpr float kSqrtPI = 1.7724538509055160272981674833411f;
 constexpr float kEpsilon = 1.192092896e-07f;
 constexpr float kMaxFloat = 3.402823466e+38f;
 constexpr float kMaxHalf = 65504.0f;
-constexpr float kRayEpsilon = 1.0f / 65535.0f;
+constexpr float kRayEpsilon = 7.0f / (kMaxHalf - 1.0f);
 constexpr float kDeltaAlphaTreshold = 1.0e-4f;
 
 constexpr uint32_t kInvalidIndex = ~0u;
