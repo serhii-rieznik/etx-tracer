@@ -220,7 +220,6 @@ struct PathVertex {
 
 struct PathData {
   std::vector<PathVertex> emitter_path;
-  std::vector<PathVertex> camera_path;
 
   struct History {
     float pdf_forward = 0.0f;
@@ -357,7 +356,7 @@ struct CPUBidirectionalImpl : public Task {
     return state->load() != Integrator::State::Stopped;
   }
 
-  void update_emitter_path_pdfs(PathVertex& curr, float& prev_pdf_forward, const EmitterSample& em) const {
+  void update_emitter_path_pdfs(PathVertex& curr, PathVertex& prev, const EmitterSample& em) const {
     const auto& scene = rt.scene();
 
     float total_pdf = 0.0f;
@@ -368,8 +367,11 @@ struct CPUBidirectionalImpl : public Task {
       total_weight += weight;
       total_pdf += pdf * weight;
     }
-    prev_pdf_forward = total_pdf / (total_weight * float(scene.environment_emitters.count));
-    ETX_VALIDATE(prev_pdf_forward);
+    prev.pdf.forward = total_pdf / (total_weight * float(scene.environment_emitters.count));
+    ETX_VALIDATE(prev.pdf.forward);
+    if (mode == Mode::BDPTFast) {
+      prev.pdf.accumulated = safe_div(1.0f, prev.pdf.forward);
+    }
 
     curr.pdf.forward = em.pdf_area;
     if (curr.is_surface_interaction()) {
@@ -430,15 +432,13 @@ struct CPUBidirectionalImpl : public Task {
     PathVertex& prev) const {
     if (payload.mode == PathSource::Light) {
       if (first_interaction && emitter_sample.is_distant) {
-        update_emitter_path_pdfs(curr, prev.pdf.forward, emitter_sample);
+        update_emitter_path_pdfs(curr, prev, emitter_sample);
       }
-      precompute_light_mis(prev, path_data.emitter_path_size, path_data.emitter_history);
+      precompute_light_mis(curr, prev, path_data);
       path_data.emitter_path.back() = prev;
       path_data.emitter_path.emplace_back(curr);
     } else if (payload.mode == PathSource::Camera) {
-      precompute_camera_mis(prev, path_data.camera_path_size, path_data.camera_history);
-      path_data.camera_path.back() = prev;
-      path_data.camera_path.emplace_back(curr);
+      precompute_camera_mis(curr, prev, path_data);
     }
   }
 
@@ -771,8 +771,7 @@ struct CPUBidirectionalImpl : public Task {
         curr.intersection.w_i = ray.d;
         curr.intersection.pos = ray.o + ray.d * scene.bounding_sphere_radius;
         path_data.camera_path_size += 1u;
-        path_data.camera_path.emplace_back(curr);
-        precompute_camera_mis(prev, path_data.camera_path_size, path_data.camera_history);
+        precompute_camera_mis(curr, prev, path_data);
         payload.result += direct_hit_environment_emitter(curr, prev, path_data, payload.spect, smp, path_length == 0);
       }
 
@@ -787,14 +786,11 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse build_camera_path(Sampler& smp, SpectralQuery spect, const float2& uv, PathData& path_data, GBuffer& gbuffer) const {
-    path_data.camera_path.clear();
-
     auto ray = generate_ray(rt.scene(), rt.camera(), uv, smp.next_2d());
     auto eval = film_evaluate_out(spect, rt.camera(), ray);
 
     PathVertex prev = {PathVertex::Class::Camera};
     prev.throughput = {spect, 1.0f};
-    path_data.camera_path.emplace_back(prev);
 
     PathVertex curr = {PathVertex::Class::Camera};
     curr.medium = {.index = rt.camera().medium_index};
@@ -804,8 +800,9 @@ struct CPUBidirectionalImpl : public Task {
     curr.intersection.w_i = ray.d;
     curr.pdf.next = eval.pdf_dir;
     curr.pdf.forward = 1.0f;
-    path_data.camera_path.emplace_back(curr);
-
+    if (mode == Mode::BDPTFast) {
+      curr.pdf.accumulated = 1.0f;
+    }
     path_data.camera_path_size = 2u;
 
     Payload payload = {
@@ -845,6 +842,9 @@ struct CPUBidirectionalImpl : public Task {
     curr.pdf.next = emitter_sample.pdf_dir;
     curr.pdf.forward = emitter_sample.pdf_area * emitter_sample.pdf_sample;
     curr.delta_emitter = emitter_sample.is_delta;
+    if (mode == Mode::BDPTFast) {
+      curr.pdf.accumulated = safe_div(1.0f, curr.pdf.forward);
+    }
     path_data.emitter_path.emplace_back(curr);
 
     path_data.emitter_path_size = 2u;
@@ -865,8 +865,15 @@ struct CPUBidirectionalImpl : public Task {
     return build_path(smp, o, emitter_sample.direction, path_data, payload, emitter_sample, gbuffer, curr, prev);
   }
 
-  void precompute_camera_mis(PathVertex& prev, const uint32_t path_size, PathData::History* history) const {
-    const bool enough_length = path_size > 4;
+  void precompute_camera_mis(PathVertex& curr, PathVertex& prev, PathData& path_data) const {
+    auto& history = path_data.camera_history;
+    const bool enough_length = path_data.camera_path_size > (mode == Mode::BDPTFast ? 3u : 4u);
+
+    if (mode == Mode::BDPTFast) {
+      curr.pdf.accumulated = prev.pdf.accumulated * (enough_length ? safe_div(prev.pdf.backward, prev.pdf.forward) : 1.0f);
+      return;
+    }
+
     const bool can_connect = (history[1].delta == false) && (history[2].delta == false);
 
     history[2] = history[1];
@@ -887,11 +894,19 @@ struct CPUBidirectionalImpl : public Task {
     prev.pdf.accumulated = history[0].mis_accumulated;
   }
 
-  void precompute_light_mis(PathVertex& prev, const uint32_t path_size, PathData::History* history) const {
+  void precompute_light_mis(PathVertex& curr, PathVertex& prev, PathData& path_data) const {
+    auto& history = path_data.emitter_history;
+    const auto path_size = path_data.emitter_path_size;
+
     const bool enough_length = path_size > 3;
+
+    if (mode == Mode::BDPTFast) {
+      curr.pdf.accumulated = prev.pdf.accumulated * (enough_length ? safe_div(prev.pdf.backward, prev.pdf.forward) : 1.0f);
+      return;
+    }
+
     const bool is_delta = (path_size > 4u) ? history[1u].delta : prev.delta_emitter;
     const bool can_connect = (is_delta == false) * (prev.delta_connection == false);
-
     history[2] = history[1];
     history[1] = history[0];
     history[0] = {
@@ -978,20 +993,12 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     if (mode == Mode::BDPTFast) {
-      float p_ratio = 1.0f;
-      for (uint64_t i = 2; i < path_data.camera_path.size(); ++i) {
-        p_ratio *= safe_div(path_data.camera_path[i].pdf.backward, path_data.camera_path[i].pdf.forward);
-      }
-
+      float p_ratio = z_curr.pdf.accumulated * safe_div(1.0f, z_curr.pdf.forward);
       float p_connection = map0(sampled_light_vertex.pdf.forward);
-
       float p_direct_connection = PathVertex::convert_solid_angle_pdf_to_area(sampled_light_vertex.pdf.accumulated, z_curr, sampled_light_vertex);
       float p_direct = sampled_light_vertex.delta_emitter ? 0.0f : map0(p_direct_connection);
-
-      float p_light_path = map0(sampled_light_vertex.pdf.forward);
       float camera_connection_pdf = PathVertex::pdf_from_emitter(spect, sampled_light_vertex, z_curr, scene);
-      p_light_path *= map0(camera_connection_pdf);
-
+      float p_light_path = map0(camera_connection_pdf) * map0(sampled_light_vertex.pdf.forward);
       float result = p_connection / (p_connection + p_direct + p_ratio * p_light_path);
       ETX_VALIDATE(result);
       return result;
@@ -1023,10 +1030,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     if (mode == Mode::BDPTFast) {
-      float p_ratio = 1.0f / map0(path_data.emitter_path[1].pdf.forward);
-      for (uint64_t i = 2; i < path_data.emitter_path.size(); ++i) {
-        p_ratio *= safe_div(path_data.emitter_path[i].pdf.backward, path_data.emitter_path[i].pdf.forward);
-      }
+      float p_ratio = y_curr.pdf.accumulated * safe_div(1.0f, y_curr.pdf.forward);
 
       float p_connection = 1.0f;
 
@@ -1130,20 +1134,13 @@ struct CPUBidirectionalImpl : public Task {
         }
 
         case Mode::BDPTFast: {
-          float p_ratio = 1.0f;
-          for (uint64_t i = 2; i + 1u < path_data.camera_path.size(); ++i) {
-            p_ratio *= safe_div(path_data.camera_path[i].pdf.backward, path_data.camera_path[i].pdf.forward);
-          }
-
+          float p_ratio = z_curr.pdf.accumulated;
           float p_direct = map0(z_curr.pdf.forward);
-
           float p_em = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
           float p_connection = map0(p_em);
-
           float p_sample = emitter_discrete_pdf(scene.emitters[z_curr.intersection.emitter_index], scene.emitters_distribution);
           float camera_connection_pdf = p_sample * emitter_pdf_area_local(scene.emitters[z_curr.intersection.emitter_index], scene);
           float p_light_path = map0(camera_connection_pdf);
-
           mis_weight = p_direct / (p_connection + p_direct + p_ratio * p_light_path);
           ETX_VALIDATE(mis_weight);
           break;
@@ -1205,28 +1202,14 @@ struct CPUBidirectionalImpl : public Task {
         float result = mis_camera(path_data, z_curr_pdf, z_curr, z_prev_pdf);
         mis_weight = 1.0f / (1.0f + result);
       } else if (mode == Mode::BDPTFast) {
-        if (z_curr.delta_emitter) {
-          mis_weight = 0.0f;
-
-        } else {
-          float p_ratio = 1.0f;
-          for (uint64_t i = 2; i + 1u < path_data.camera_path.size(); ++i) {
-            p_ratio *= safe_div(path_data.camera_path[i].pdf.backward, path_data.camera_path[i].pdf.forward);
-          }
-
-          float p_direct = map0(z_curr.pdf.forward);
-
-          float p_em = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
-          p_em = map0(p_em);
-
-          float p_connection = p_em;
-
-          float camera_connection_pdf = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
-          float p_light_path = p_em * map0(camera_connection_pdf);
-
-          mis_weight = p_direct / (p_direct + p_connection + p_ratio * p_light_path);
-          ETX_VALIDATE(mis_weight);
-        }
+        float p_ratio = z_curr.pdf.accumulated;
+        float p_direct = map0(z_curr.pdf.forward) * float(z_curr.delta_emitter == false);
+        float p_em = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
+        float p_connection = map0(p_em);
+        float camera_connection_pdf = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
+        float p_light_path = map0(p_em) * map0(camera_connection_pdf);
+        mis_weight = p_direct / (p_direct + p_connection + p_ratio * p_light_path);
+        ETX_VALIDATE(mis_weight);
       }
     }
 
@@ -1408,7 +1391,7 @@ Options CPUBidirectional::options() const {
         case CPUBidirectionalImpl::Mode::LightTracing:
           return "Light Tracing";
         case CPUBidirectionalImpl::Mode::BDPTFast:
-          return "BDPT Fast (WIP)";
+          return "BDPT Fast";
         case CPUBidirectionalImpl::Mode::BDPTFull:
           return "BDPT Full";
         default:
