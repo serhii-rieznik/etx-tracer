@@ -465,6 +465,10 @@ struct SceneRepresentationImpl {
         v.btn = b;
       }
     }
+
+    for (uint64_t vertex_index = 0, e = vertices.size(); vertex_index < e; ++vertex_index) {
+      orthogonalize(vertices[vertex_index]);
+    }
   }
 
   void commit() {

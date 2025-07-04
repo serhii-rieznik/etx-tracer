@@ -12,12 +12,24 @@ nblackbody 6500.0 scale 5.0
 illuminant
 
 newmtl et::spectrum
-id white
+id white1
 rgb 1 1 1
 
-newmtl frontwall
-material class diffuse
-Kd white
+newmtl et::spectrum
+id white2
+rgb 1 1 1
+
+newmtl et::spectrum
+id white3
+rgb 1 1 1
+
+newmtl et::spectrum
+id white4
+rgb 1 1 1
+
+newmtl et::spectrum
+id white5
+rgb 1 1 1
 
 newmtl leftwall
 material class diffuse
@@ -26,22 +38,27 @@ Kd red
 newmtl rightwall
 material class diffuse
 Kd green
+         
+newmtl frontwall
+material class diffuse
+Kd white1
 
 newmtl floor
 material class diffuse
-Kd white
+Kd white2
 
 newmtl ceiling
 material class diffuse
-Kd white
+Kd white3
 
 newmtl shortbox
 material class diffuse
-Kd white
+Kd white4
 
 newmtl tallbox
 material class diffuse
-Kd white
+Kd white5
 
 newmtl light
 Ke light
+

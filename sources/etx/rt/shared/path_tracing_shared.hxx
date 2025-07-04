@@ -495,10 +495,10 @@ ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& option
   ETX_FUNCTION_SCOPE();
   ETX_CHECK_FINITE(payload.ray.d);
 
-  Intersection intersection;
+  Intersection intersection = {};
   bool found_intersection = rt.trace(scene, payload.ray, intersection, payload.smp);
 
-  Medium::Sample medium_sample = try_sampling_medium(scene, payload, intersection.t);
+  Medium::Sample medium_sample = try_sampling_medium(scene, payload, found_intersection ? intersection.t : kMaxFloat);
 
   if (medium_sample.sampled_medium()) {
     handle_sampled_medium(scene, medium_sample, rt, options, payload);

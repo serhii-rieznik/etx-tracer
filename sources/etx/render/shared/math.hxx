@@ -107,6 +107,7 @@ constexpr float kSqrtPI = 1.7724538509055160272981674833411f;
 constexpr float kEpsilon = 1.192092896e-07f;
 constexpr float kMaxFloat = 3.402823466e+38f;
 constexpr float kMaxHalf = 65504.0f;
+constexpr float kInvMaxHalf = 1.0f / kMaxHalf;
 constexpr float kRayEpsilon = 7.0f / (kMaxHalf - 1.0f);
 constexpr float kDeltaAlphaTreshold = 1.0e-4f;
 
@@ -826,6 +827,10 @@ ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& b, const float3
 
 ETX_GPU_CODE bool isfinite(float t) {
   return ::isfinite(t);
+}
+
+ETX_GPU_CODE bool valid_value(bool t) {
+  return t;
 }
 
 ETX_GPU_CODE bool valid_value(float t) {

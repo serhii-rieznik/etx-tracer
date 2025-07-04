@@ -701,7 +701,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
-  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, intersection.t);
+  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
   if (medium_sample.sampled_medium()) {
     return vcm_handle_sampled_medium(scene, medium_sample, options, state);
   }
@@ -774,7 +774,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
   LightStepResult result = {};
-  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, intersection.t);
+  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
   if (medium_sample.sampled_medium()) {
     result.continue_tracing = vcm_handle_sampled_medium(scene, medium_sample, options, state);
     return result;

@@ -234,7 +234,8 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
   float w_i_s = dot(w_i, n_s);
   float w_o_g = dot(w_o, n_g);
   float w_o_s = dot(w_o, n_s);
-  return (fabsf(w_o_s * w_i_g) < kRayEpsilon) ? 0.0f : fabsf((w_o_g * w_i_s) / (w_o_s * w_i_g));
+  float den = fmaxf(kInvMaxHalf, fabsf(w_o_s * w_i_g));
+  return fabsf(w_o_g * w_i_s) / den;
 }
 
 namespace fresnel {

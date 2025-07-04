@@ -86,13 +86,28 @@ ETX_GPU_CODE Vertex lerp_vertex(const ArrayView<Vertex>& vertices, const Triangl
   const auto& v0 = vertices[t.i[0]];
   const auto& v1 = vertices[t.i[1]];
   const auto& v2 = vertices[t.i[2]];
-  return {
+  Vertex v = {
     v0.pos * bc.x + v1.pos * bc.y + v2.pos * bc.z,
     v0.nrm * bc.x + v1.nrm * bc.y + v2.nrm * bc.z,
     v0.tan * bc.x + v1.tan * bc.y + v2.tan * bc.z,
     v0.btn * bc.x + v1.btn * bc.y + v2.btn * bc.z,
     v0.tex * bc.x + v1.tex * bc.y + v2.tex * bc.z,
   };
+  v.nrm = normalize(v.nrm);
+  v.tan = normalize(v.tan - dot(v.tan, v.nrm) * v.nrm);
+
+  auto btn = cross(v.nrm, v.tan);
+  v.btn = normalize(btn * (dot(btn, v.btn) > 0.0f ? 1.0f : -1.0f));
+
+  return v;
+}
+
+ETX_GPU_CODE void orthogonalize(Vertex& v) {
+  auto b = v.btn;
+  v.nrm = normalize(v.nrm);
+  v.tan = normalize(v.tan - dot(v.tan, v.nrm) * v.nrm);
+  v.btn = normalize(cross(v.nrm, v.tan));
+  v.btn = v.btn * (dot(b, v.btn) > 0.0f ? 1.0f : -1.0f);
 }
 
 ETX_GPU_CODE float3 barycentrics(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& p) {

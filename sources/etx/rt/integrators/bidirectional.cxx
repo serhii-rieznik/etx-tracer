@@ -886,11 +886,10 @@ struct CPUBidirectionalImpl : public Task {
     history[0] = {
       .pdf_forward = prev.pdf.forward,
       .pdf_ratio = ratio,
-      .mis_accumulated = float(enough_length) * history[1].pdf_ratio * (float(can_connect) + history[1].mis_accumulated),
+      .mis_accumulated = enough_length ? history[1].pdf_ratio * (float(can_connect) + history[1].mis_accumulated) : 0.0f,
       .delta = prev.delta_connection,
     };
     ETX_VALIDATE(history[0].mis_accumulated);
-
     prev.pdf.accumulated = history[0].mis_accumulated;
   }
 
@@ -912,7 +911,7 @@ struct CPUBidirectionalImpl : public Task {
     history[0] = {
       .pdf_forward = prev.pdf.forward,
       .pdf_ratio = safe_div(prev.pdf.backward, prev.pdf.forward),
-      .mis_accumulated = float(enough_length) * history[1].pdf_ratio * (float(can_connect) + history[1].mis_accumulated),
+      .mis_accumulated = enough_length ? history[1].pdf_ratio * (float(can_connect) + history[1].mis_accumulated) : 0.0f,
       .delta = prev.delta_connection,
     };
     ETX_VALIDATE(history[0].pdf_ratio);
@@ -978,8 +977,9 @@ struct CPUBidirectionalImpl : public Task {
         w_light = safe_div(y_curr_pdf_backward, sampled_light_vertex.pdf.forward);
         ETX_VALIDATE(w_light);
       }
-
-      return 1.0f / (w_camera + 1.0f + w_light);
+      float result = 1.0f / (w_camera + 1.0f + w_light);
+      ETX_VALIDATE(result);
+      return result;
     }
 
     if (mode == Mode::PathTracing) {
