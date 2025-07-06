@@ -870,7 +870,7 @@ struct CPUBidirectionalImpl : public Task {
     const bool enough_length = path_data.camera_path_size > (mode == Mode::BDPTFast ? 3u : 4u);
 
     if (mode == Mode::BDPTFast) {
-      curr.pdf.accumulated = prev.pdf.accumulated * (enough_length ? safe_div(prev.pdf.backward, prev.pdf.forward) : 1.0f);
+      curr.pdf.accumulated = prev.delta_connection ? 0.0f : prev.pdf.accumulated * (enough_length ? safe_div(prev.pdf.backward, prev.pdf.forward) : 1.0f);
       return;
     }
 
@@ -900,7 +900,7 @@ struct CPUBidirectionalImpl : public Task {
     const bool enough_length = path_size > 3;
 
     if (mode == Mode::BDPTFast) {
-      curr.pdf.accumulated = prev.pdf.accumulated * (enough_length ? safe_div(prev.pdf.backward, prev.pdf.forward) : 1.0f);
+      curr.pdf.accumulated = prev.delta_connection ? 0.0f : prev.pdf.accumulated * (enough_length ? safe_div(prev.pdf.backward, prev.pdf.forward) : 1.0f);
       return;
     }
 
@@ -1403,17 +1403,17 @@ Options CPUBidirectional::options() const {
   Options result = {};
   result.add(mode);
   if (_private->mode != CPUBidirectionalImpl::Mode::LightTracing) {
-    result.add("conn", "Connections:");
-    result.add(_private->enable_direct_hit, "conn_direct_hit", "Direct Hits");
+    result.add("bdpt-conn", "Connections:");
+    result.add(_private->enable_direct_hit, "bdpt-conn_direct_hit", "Direct Hits");
     if (_private->mode != CPUBidirectionalImpl::Mode::PathTracing) {
-      result.add(_private->enable_connect_to_camera, "conn_connect_to_camera", "Light Path to Camera");
+      result.add(_private->enable_connect_to_camera, "bdpt-conn_connect_to_camera", "Light Path to Camera");
     }
-    result.add(_private->enable_connect_to_light, "conn_connect_to_light", "Camera Path to Light");
+    result.add(_private->enable_connect_to_light, "bdpt-conn_connect_to_light", "Camera Path to Light");
     if (_private->mode == CPUBidirectionalImpl::Mode::BDPTFull) {
-      result.add(_private->enable_connect_vertices, "conn_connect_vertices", "Camera Path to Light Path");
+      result.add(_private->enable_connect_vertices, "bdpt-conn_connect_vertices", "Camera Path to Light Path");
     }
     result.add("mis", "Multiple Importance Sampling");
-    result.add(_private->enable_mis, "conn_mis", "Enabled");
+    result.add(_private->enable_mis, "bdpt-conn_mis", "Enabled");
   }
   return result;
 }

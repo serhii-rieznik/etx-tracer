@@ -65,9 +65,6 @@ void RTApplication::init() {
   if (_options.has("scene") == false) {
     _options.add("scene", "none");
   }
-  if (_options.has("ref") == false) {
-    _options.add("ref", "none");
-  }
 
   for (uint32_t i = 0; i < 7; ++i) {
     const auto name = "recent-" + std::to_string(i);

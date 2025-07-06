@@ -9,3 +9,6 @@ bin/raytracer
 bin/tmp/
 build
 _build
+bin/lib
+thirdparty/oidn/lib
+thirdparty/oidn/include

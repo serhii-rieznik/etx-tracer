@@ -1,8 +1,28 @@
-set(oidn_version .)
+set(include_path "${CMAKE_CURRENT_LIST_DIR}/include")
+set(library_path "${CMAKE_CURRENT_LIST_DIR}/lib")
+set(binary_path "${CMAKE_CURRENT_LIST_DIR}/bin")
+set(local_library_path "${root_folder}/bin/lib/")
 
-set(include_path "${CMAKE_CURRENT_LIST_DIR}/${oidn_version}/include")
-set(library_path "${CMAKE_CURRENT_LIST_DIR}/${oidn_version}/lib")
-set(binary_path "${CMAKE_CURRENT_LIST_DIR}/${oidn_version}/bin")
+set(oidn_version_high "2")
+set(oidn_version_low "3")
+set(oidn_version_patch "3")
+set(oidn_version "${oidn_version_high}.${oidn_version_low}.${oidn_version_patch}")
+
+if(NOT EXISTS "${library_path}")
+  message(FATAL_ERROR "OIDN library folder not found at ${library_path}.\n*********\nPlease download and unpack OIDN here: https://www.openimagedenoise.org/\n*********")
+endif()
+
+if(NOT EXISTS "${include_path}")
+  message(FATAL_ERROR "OIDN include folder not found at ${include_path}.\n*********\nPlease download and unpack OIDN here: https://www.openimagedenoise.org/\n*********")
+endif()
+
+if(APPLE) 
+  message(STATUS "Copying OIDN libraries to ${local_library_path}")
+  configure_file("${library_path}/libOpenImageDenoise.${oidn_version_high}.dylib" "${local_library_path}" COPYONLY)
+  configure_file("${library_path}/libOpenImageDenoise.${oidn_version}.dylib" "${local_library_path}" COPYONLY)
+  configure_file("${library_path}/libOpenImageDenoise_core.${oidn_version}.dylib" "${local_library_path}" COPYONLY)
+  configure_file("${library_path}/libOpenImageDenoise_device_cpu.${oidn_version}.dylib" "${local_library_path}" COPYONLY)
+endif()
 
 add_library(oidn INTERFACE
   ${include_path}/OpenImageDenoise/config.h
@@ -12,7 +32,7 @@ add_library(oidn INTERFACE
 
 if(APPLE)
   target_link_libraries(oidn INTERFACE
-    "${library_path}/libOpenImageDenoise.dylib"
+    "${local_library_path}/libOpenImageDenoise.${oidn_version}.dylib"
   )
 else()
   target_link_libraries(oidn INTERFACE

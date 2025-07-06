@@ -1,5 +1,5 @@
 {
   "integrator": "Bidirectional (CPU)",
-  "ref": "",
-  "scene": "/Users/serhii/Development/etx-tracer/bin/assets/cornellbox/cornellbox.json"
+  "recent-0": "./assets/cornellbox/cornellbox.json",
+  "scene": "./assets/cornellbox/cornellbox.json"
 }

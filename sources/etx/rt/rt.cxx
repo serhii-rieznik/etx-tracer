@@ -26,6 +26,10 @@ struct RaytracingImpl {
   RaytracingImpl()
     : film(scheduler) {
     rt_device = rtcNewDevice(nullptr);
+    const auto version_major = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_MAJOR);
+    const auto version_minor = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_MINOR);
+    const auto version_patch = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_PATCH);
+    log::warning("Embree version: %u.%u.%u", version_major, version_minor, version_patch);
     // gpu_device = GPUDevice::create_optix_device();
   }
 

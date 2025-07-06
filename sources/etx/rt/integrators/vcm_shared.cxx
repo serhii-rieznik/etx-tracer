@@ -24,16 +24,16 @@ void VCMOptions::load(const Options& opt) {
 }
 
 void VCMOptions::store(Options& opt) const {
-  opt.add(0.0f, initial_radius, 10.0f, "initial_radius", "Initial Radius");
-  opt.add(1u, uint32_t(radius_decay), 65536u, "radius_decay", "Radius Decay");
+  opt.add(0.0f, initial_radius, 10.0f, "vcm-initial_radius", "Initial Radius");
+  opt.add(1u, uint32_t(radius_decay), 65536u, "vcm-radius_decay", "Radius Decay");
   opt.add("debug", "Compute:");
-  opt.add(direct_hit(), "direct_hit", "Direct Hits");
-  opt.add(connect_to_light(), "connect_to_light", "Connect to Lights");
-  opt.add(connect_to_camera(), "connect_to_camera", "Connect to Camera");
-  opt.add(connect_vertices(), "connect_vertices", "Connect Vertices");
-  opt.add(merge_vertices(), "merge_vertices", "Merge Vertices");
-  opt.add(enable_mis(), "mis", "Multiple Importance Sampling");
-  opt.add(enable_merging(), "merging", "Enable Merging");
+  opt.add(direct_hit(), "vcm-direct_hit", "Direct Hits");
+  opt.add(connect_to_light(), "vcm-connect_to_light", "Connect to Lights");
+  opt.add(connect_to_camera(), "vcm-connect_to_camera", "Connect to Camera");
+  opt.add(connect_vertices(), "vcm-connect_vertices", "Connect Vertices");
+  opt.add(merge_vertices(), "vcm-merge_vertices", "Merge Vertices");
+  opt.add(enable_mis(), "vcm-mis", "Multiple Importance Sampling");
+  opt.add(enable_merging(), "vcm-merging", "Enable Merging");
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {

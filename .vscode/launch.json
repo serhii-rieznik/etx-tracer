@@ -15,7 +15,7 @@
                     "value": "${workspaceFolder}/bin"
                 }
             ],
-            "externalConsole": false,
+            "externalConsole": true,
             "MIMode": "lldb",
             "preLaunchTask": "build"
         },
@@ -33,7 +33,7 @@
                 "value": "${workspaceFolder}/bin"
             }
         ],
-        "externalConsole": false,
+        "externalConsole": true,
         "MIMode": "lldb",
         "preLaunchTask": "build-release"
     },
