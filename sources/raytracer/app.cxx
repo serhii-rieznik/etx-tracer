@@ -1,4 +1,5 @@
 ﻿#include <etx/core/environment.hxx>
+#include <etx/core/environment.hxx>
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/host/scene_saver.hxx>
@@ -25,6 +26,8 @@ RTApplication::RTApplication()
   , scene(raytracing.scheduler())
   , camera_controller(scene.camera())
   , integrator_thread(raytracing.scheduler(), IntegratorThread::Mode::ExternalControl) {
+  raytracing.link_scene(scene.scene());
+  raytracing.link_camera(scene.camera());
 }
 
 RTApplication::~RTApplication() {
@@ -53,7 +56,7 @@ void RTApplication::init() {
   ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
   ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
-  ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this);
+  ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1);
   ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
   ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
   ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
@@ -121,12 +124,7 @@ void RTApplication::frame() {
   ETX_FUNCTION_SCOPE();
   auto dt = time_measure.lap();
 
-  // if (_current_integrator != nullptr) {
-  //   _current_integrator->update();
-  //   // TODO : lock
-  // }
-
-  bool can_change_camera = true;  // _current_integrator->state() == Integrator::State::Preview;
+  bool can_change_camera = scene.valid();
   if (can_change_camera) {
     bool camera_controller_state = camera_controller.update(dt);
     if (camera_controller_state) {
@@ -148,7 +146,7 @@ void RTApplication::frame() {
 
   render.start_frame(integrator_thread.status().current_iteration, options);
   render.update_image(raytracing.film().layer(options.layer));
-  ui.build(dt, _recent_files);
+  ui.build(dt, _recent_files, scene.mutable_scene_pointer(), scene.mutable_camera_pointer(), scene.material_mapping(), scene.medium_mapping());
   render.end_frame();
 }
 
@@ -158,32 +156,25 @@ void RTApplication::cleanup() {
 }
 
 void RTApplication::process_event(const sapp_event* e) {
-  if (ui.handle_event(e) || (raytracing.has_scene() == false)) {
-    return;
+  if (ui.handle_event(e) == false) {
+    camera_controller.handle_event(e);
   }
-  camera_controller.handle_event(e);
 }
 
 void RTApplication::load_scene_file(const std::string& file_name, uint32_t options, bool start_rendering) {
   _current_scene_file = file_name;
 
-  log::warning("Loading scene %s...", _current_scene_file.c_str());
-
   integrator_thread.stop(Integrator::Stop::Immediate);
-
   _options.set("scene", _current_scene_file);
   save_options();
 
+  log::warning("Loading scene %s...", _current_scene_file.c_str());
   if (scene.load_from_file(_current_scene_file.c_str(), options) == false) {
-    ui.set_scene(nullptr, {}, {});
     log::error("Failed to load scene from file: %s", _current_scene_file.c_str());
-    return;
   }
-
-  raytracing.set_scene(scene.scene());
-  raytracing.set_camera(scene.camera());
-  ui.set_scene(scene.mutable_scene_pointer(), scene.material_mapping(), scene.medium_mapping());
-  render.set_output_dimensions(scene.camera().film_size);
+  log::warning("Committing changes...");
+  raytracing.commit_changes();
+  render.set_output_dimensions(raytracing.film().dimensions());
 
   if (scene.valid() == false) {
     return;
@@ -337,8 +328,15 @@ void RTApplication::on_emitter_changed(uint32_t index) {
   integrator_thread.run(ui.integrator_options());
 }
 
-void RTApplication::on_camera_changed() {
-  integrator_thread.restart();
+void RTApplication::on_camera_changed(bool film_changed) {
+  if (film_changed) {
+    integrator_thread.stop(Integrator::Stop::Immediate);
+    raytracing.commit_changes();
+    render.set_output_dimensions(raytracing.film().dimensions());
+    integrator_thread.restart();
+  } else {
+    integrator_thread.restart();
+  }
 }
 
 void RTApplication::on_scene_settings_changed() {

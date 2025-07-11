@@ -31,6 +31,10 @@ newmtl et::spectrum
 id white5
 rgb 1 1 1
 
+newmtl et::spectrum
+id white6
+rgb 1 1 1
+
 newmtl leftwall
 material class diffuse
 Kd red
@@ -58,6 +62,10 @@ Kd white4
 newmtl tallbox
 material class diffuse
 Kd white5
+
+newmtl lamp
+material class diffuse
+Kd white6
 
 newmtl light
 Ke light

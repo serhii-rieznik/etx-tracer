@@ -16,6 +16,7 @@
 # include <unistd.h>
 #endif
 
+#include <map>
 #include <algorithm>
 #include <filesystem>
 
@@ -33,21 +34,36 @@ inline void increase_exposure(ViewOptions& o) {
 
 }  // namespace
 
-void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint32_t>& mapping) {
-  constexpr uint64_t kMaterialNameMaxSize = 1024llu;
+void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint32_t>& in_mapping) {
+  size_t max_len = 32u;
+  std::vector<std::pair<std::string, uint32_t>> unfold;
+  unfold.reserve(in_mapping.size());
+  for (const auto& m : in_mapping) {
+    if (m.first.starts_with("etx::") == false) {
+      unfold.emplace_back(m.first, m.second);
+      max_len = std::max(max_len, m.first.size() + 1u);
+    }
+  }
+
+  std::sort(unfold.begin(), unfold.end(), [](const auto& a, const auto& b) {
+    return a.first < b.first;
+  });
 
   indices.clear();
-  indices.reserve(mapping.size());
+  indices.reserve(unfold.size());
+
   names.clear();
-  names.reserve(mapping.size());
-  data.resize(mapping.size() * kMaterialNameMaxSize);
+  names.reserve(unfold.size());
+
+  data.resize(unfold.size() * max_len);
   std::fill(data.begin(), data.end(), 0);
-  char* ptr = data.data();
+
   int32_t pp = 0;
-  for (auto& m : mapping) {
+  char* ptr = data.data();
+  for (auto& m : unfold) {
     indices.emplace_back(m.second);
     names.emplace_back(ptr + pp);
-    pp += snprintf(ptr + pp, kMaterialNameMaxSize, "%s", m.first.c_str()) + 1;
+    pp += snprintf(ptr + pp, max_len, "%s", m.first.c_str()) + 1;
   }
 }
 
@@ -272,8 +288,8 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior) {
   return changed;
 }
 
-bool UI::spectrum_picker(const char* name, uint32_t spd_index, bool linear) {
-  auto& spd = _current_scene->spectrums[spd_index];
+bool UI::spectrum_picker(Scene* scene, const char* name, uint32_t spd_index, bool linear) {
+  auto& spd = scene->spectrums[spd_index];
   return spectrum_picker(name, spd, linear);
 }
 
@@ -309,12 +325,26 @@ bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, bool linea
   return changed;
 }
 
-void UI::build(double dt, const std::vector<std::string>& recent_files) {
+constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
+
+template <class F>
+void ui_window(uint32_t _ui_setup, uint32_t opt, const char* title, F func) {
+  if ((_ui_setup & opt) == 0)
+    return;
+
+  if (ImGui::Begin(title, nullptr, kWindowFlags)) {
+    func();
+  }
+
+  ImGui::End();
+}
+
+void UI::build(double dt, const std::vector<std::string>& recent_files, Scene* scene, Camera* camera, const SceneRepresentation::MaterialMapping& materials,
+  const SceneRepresentation::MediumMapping& mediums) {
   ETX_FUNCTION_SCOPE();
 
-  constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
   bool has_integrator = (_current_integrator != nullptr);
-  bool has_scene = (_current_scene != nullptr);
+  bool has_scene = scene != nullptr;
 
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
 
@@ -591,7 +621,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files) {
     ImGui::End();
   }
 
-  if ((_ui_setup & UIIntegrator) && ImGui::Begin("Integrator options", nullptr, kWindowFlags)) {
+  ui_window(_ui_setup, UIIntegrator, "Integrator options", [&]() {
     if (has_integrator) {
       ImGui::Text("%s", _current_integrator->name());
       _integrator_options = _current_integrator->options();
@@ -601,10 +631,10 @@ void UI::build(double dt, const std::vector<std::string>& recent_files) {
     } else {
       ImGui::Text("No integrator selected");
     }
-    ImGui::End();
-  }
+  });
 
-  if ((_ui_setup & UIMaterial) && ImGui::Begin("Materials", nullptr, kWindowFlags)) {
+  ui_window(_ui_setup, UIMaterial, "Materials", [&]() {
+    _material_mapping.build(materials);
     ImGui::Text("Materials");
     int32_t previous_selected = _selected_material;
     ImGui::ListBox("##materials", &_selected_material, _material_mapping.names.data(), static_cast<int32_t>(_material_mapping.size()), 6);
@@ -613,16 +643,16 @@ void UI::build(double dt, const std::vector<std::string>& recent_files) {
         _editor_values.clear();
       }
       uint32_t material_index = _material_mapping.at(_selected_material);
-      Material& material = _current_scene->materials[material_index];
-      bool changed = build_material(material);
+      Material& material = scene->materials[material_index];
+      bool changed = build_material(scene, material);
       if (changed && callbacks.material_changed) {
         callbacks.material_changed(material_index);
       }
     }
-    ImGui::End();
-  }
+  });
 
-  if ((_ui_setup & UIMedium) && ImGui::Begin("Mediums", nullptr, kWindowFlags)) {
+  ui_window(_ui_setup, UIMedium, "Mediums", [&]() {
+    _medium_mapping.build(mediums);
     ImGui::Text("Mediums");
     int32_t previous_selected = _selected_medium;
     ImGui::ListBox("##mediums", &_selected_medium, _medium_mapping.names.data(), static_cast<int32_t>(_medium_mapping.size()), 6);
@@ -631,20 +661,19 @@ void UI::build(double dt, const std::vector<std::string>& recent_files) {
         _editor_values.clear();
       }
       uint32_t medium_index = _medium_mapping.at(_selected_medium);
-      Medium& m = _current_scene->mediums[medium_index];
+      Medium& m = scene->mediums[medium_index];
       bool changed = build_medium(m);
       if (changed && callbacks.material_changed) {
         callbacks.medium_changed(medium_index);
       }
     }
-    ImGui::End();
-  }
+  });
 
-  if ((_ui_setup & UIEmitters) && ImGui::Begin("Emitters", nullptr, kWindowFlags)) {
+  ui_window(_ui_setup, UIEmitters, "Emitters", [&]() {
     ImGui::Text("Emitters");
     if (ImGui::BeginListBox("##emitters", {})) {
-      for (uint32_t index = 0; has_scene && (index < _current_scene->emitters.count); ++index) {
-        auto& emitter = _current_scene->emitters[index];
+      for (uint32_t index = 0; has_scene && (index < scene->emitters.count); ++index) {
+        auto& emitter = scene->emitters[index];
         if (emitter.cls == Emitter::Class::Area)
           continue;
 
@@ -668,10 +697,10 @@ void UI::build(double dt, const std::vector<std::string>& recent_files) {
       ImGui::EndListBox();
     }
 
-    if (scene_editable && (_selected_emitter >= 0) && (_selected_emitter < _current_scene->emitters.count)) {
-      auto& emitter = _current_scene->emitters[_selected_emitter];
+    if (scene_editable && (_selected_emitter >= 0) && (_selected_emitter < scene->emitters.count)) {
+      auto& emitter = scene->emitters[_selected_emitter];
 
-      bool changed = spectrum_picker("Emission", emitter.emission.spectrum_index, true);
+      bool changed = spectrum_picker(scene, "Emission", emitter.emission.spectrum_index, true);
 
       if (emitter.cls == Emitter::Class::Directional) {
         ImGui::Text("Angular Size");
@@ -700,25 +729,31 @@ void UI::build(double dt, const std::vector<std::string>& recent_files) {
         callbacks.emitter_changed(_selected_emitter);
       }
     }
+  });
 
-    ImGui::End();
-  }
-
-  if ((_ui_setup & UICamera) && ImGui::Begin("Camera and Film", nullptr, kWindowFlags)) {
-    if (scene_editable && (_current_camera != nullptr)) {
-      bool camera_changed = false;
+  ui_window(_ui_setup, UICamera, "Camera and Film", [&]() {
+    if (scene_editable && (camera != nullptr)) {
       bool film_changed = false;
-      float3 pos = _current_camera->position;
-      float3 target = _current_camera->position + _current_camera->direction;
-      float focal_len = get_camera_focal_length(*_current_camera);
+      bool camera_changed = false;
+
+      ImGui::Text("Output Image Size:");
+      int2 viewport = {int32_t(camera->film_size.x), int32_t(camera->film_size.y)};
+      if (ImGui::InputInt2("##outimgsize", &viewport.x)) {
+        film_changed = true;
+        camera_changed = true;
+      }
+
+      float3 pos = camera->position;
+      float3 target = camera->position + camera->direction;
+      float focal_len = get_camera_focal_length(*camera);
       ImGui::Text("Lens Radius");
-      camera_changed = camera_changed || ImGui::DragFloat("##lens", &_current_camera->lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
+      camera_changed = camera_changed || ImGui::DragFloat("##lens", &camera->lens_radius, 0.01f, 0.0f, 2.0, "%.3f", ImGuiSliderFlags_None);
       ImGui::Text("Focal Distance");
-      camera_changed = camera_changed || ImGui::DragFloat("##focaldist", &_current_camera->focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
+      camera_changed = camera_changed || ImGui::DragFloat("##focaldist", &camera->focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
       ImGui::Text("Focal Length");
-      camera_changed = camera_changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 90.0f, "%.3fmm", ImGuiSliderFlags_None);
+      camera_changed = camera_changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 5000.0f, "%.1fmm", ImGuiSliderFlags_None);
       ImGui::Text("Pixel Filter Radius");
-      camera_changed = camera_changed || ImGui::DragFloat("##pixelfiler", &_current_scene->pixel_sampler.radius, 0.05f, 0.0f, 32.0f, "%.3fpx", ImGuiSliderFlags_None);
+      camera_changed = camera_changed || ImGui::DragFloat("##pixelfiler", &scene->pixel_sampler.radius, 0.05f, 0.0f, 32.0f, "%.3fpx", ImGuiSliderFlags_None);
 
       ImGui::Text("Pixel Size");
       int32_t pixel_size = std::countr_zero(_film->pixel_size());
@@ -727,48 +762,51 @@ void UI::build(double dt, const std::vector<std::string>& recent_files) {
       if (camera_changed && callbacks.camera_changed) {
         _film->set_pixel_size(1u << pixel_size);
 
-        _current_camera->lens_radius = fmaxf(_current_camera->lens_radius, 0.0f);
-        _current_camera->focal_distance = fmaxf(_current_camera->focal_distance, 0.0f);
-        _current_scene->pixel_sampler.radius = clamp(_current_scene->pixel_sampler.radius, 0.0f, 32.0f);
+        viewport.x = clamp(viewport.x, 1, 1024 * 16);
+        viewport.y = clamp(viewport.y, 1, 1024 * 16);
+        camera->film_size = {uint32_t(viewport.x), uint32_t(viewport.y)};
+        camera->lens_radius = fmaxf(camera->lens_radius, 0.0f);
+        camera->focal_distance = fmaxf(camera->focal_distance, 0.0f);
+        scene->pixel_sampler.radius = clamp(scene->pixel_sampler.radius, 0.0f, 32.0f);
 
         auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
-        build_camera(*_current_camera, pos, target, float3{0.0f, 1.0f, 0.0f}, _current_camera->film_size, fov);
+        build_camera(*camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera->film_size, fov);
 
-        callbacks.camera_changed();
+        callbacks.camera_changed(film_changed);
       }
     } else {
       ImGui::Text("No options available");
     }
-    ImGui::End();
-  }
+  });
 
-  if ((_ui_setup & UIScene) && ImGui::Begin("Scene", nullptr, kWindowFlags)) {
+  ui_window(_ui_setup, UIScene, "Scene", [&]() {
     if (scene_editable) {
       bool scene_settings_changed = false;
 
       ImGui::Text("Max samples per pixel / iterations:");
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##samples", reinterpret_cast<int*>(&_current_scene->samples));
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##samples", reinterpret_cast<int*>(&scene->samples));
       ImGui::Text("Maximum path length:");
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxcampathlLength", reinterpret_cast<int*>(&_current_scene->max_path_length));
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxcampathlLength", reinterpret_cast<int*>(&scene->max_path_length));
       ImGui::Text("Path length w/o random termination:");
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&_current_scene->random_path_termination));
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&scene->random_path_termination));
       ImGui::Text("Noise Threshold:");
-      scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##noiseth", &_current_scene->noise_threshold, 0.0001f, 0.01f, "%0.5f");
+      scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##noiseth", &scene->noise_threshold, 0.0001f, 0.01f, "%0.5f");
       ImGui::Text("Radiance Clamp:");
-      scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##radclmp", &_current_scene->radiance_clamp, 0.1f, 1.f, "%0.2f");
+      scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##radclmp", &scene->radiance_clamp, 0.1f, 1.f, "%0.2f");
       ImGui::Text("Active pixels: %0.2f%%", double(_film->active_pixel_count()) / double(_film->pixel_count()) * 100.0);
-      scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", reinterpret_cast<bool*>(&_current_scene->spectral));
+
+      bool is_spectral = scene->spectral();
+      scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", &is_spectral);
+      scene->flags = (scene->flags & (~Scene::Spectral)) | (is_spectral ? Scene::Spectral : 0u);
 
       if (scene_settings_changed) {
-        _current_scene->max_path_length = std::min(_current_scene->max_path_length, 65536u);
+        scene->max_path_length = std::min(scene->max_path_length, 65536u);
         callbacks.scene_settings_changed();
       }
     } else {
       ImGui::Text("No options available");
     }
-
-    ImGui::End();
-  }
+  });
 
   if (has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr)) {
     if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
@@ -926,20 +964,21 @@ void UI::set_film(Film* film) {
 }
 
 void UI::set_camera(Camera* camera) {
-  _current_camera = camera;
+  camera = camera;
 }
 
-void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums) {
-  _current_scene = scene;
+/*
+ void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums) {
+   scene = scene;
 
-  _selected_material = -1;
-  _material_mapping.build(materials);
+   _selected_material = -1;
+   _material_mapping.build(materials);
 
-  _selected_medium = -1;
-  _medium_mapping.build(mediums);
-}
-
-bool UI::build_material(Material& material) {
+   _selected_medium = -1;
+   _medium_mapping.build(mediums);
+ }
+ */
+bool UI::build_material(Scene* scene, Material& material) {
   static uint32_t buffer_i = 0;
 
   bool changed = false;
@@ -976,14 +1015,14 @@ bool UI::build_material(Material& material) {
   changed |= ior_picker("Index Of Refraction", material.int_ior);
   changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior);
   ImGui::Separator();
-  changed |= spectrum_picker("Reflectance", material.reflectance.spectrum_index, false);
-  changed |= spectrum_picker("Transmittance", material.transmittance.spectrum_index, false);
+  changed |= spectrum_picker(scene, "Reflectance", material.reflectance.spectrum_index, false);
+  changed |= spectrum_picker(scene, "Transmittance", material.transmittance.spectrum_index, false);
   ImGui::Separator();
 
   ImGui::Text("%s", "Subsurface Scattering");
   changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
   changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
-  changed |= spectrum_picker("Subsurface Distance", material.subsurface.spectrum_index, true);
+  changed |= spectrum_picker(scene, "Subsurface Distance", material.subsurface.spectrum_index, true);
   ImGui::Text("%s", "Subsurface Distance Scale");
   changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
   ImGui::Separator();
@@ -1016,8 +1055,8 @@ bool UI::build_material(Material& material) {
   };
 
   if (_medium_mapping.empty() == false) {
-    changed |= medium_editor("Internal medium", material.int_medium, _current_scene->mediums.count);
-    changed |= medium_editor("Extenral medium", material.ext_medium, _current_scene->mediums.count);
+    changed |= medium_editor("Internal medium", material.int_medium, scene->mediums.count);
+    changed |= medium_editor("Extenral medium", material.ext_medium, scene->mediums.count);
   }
 
   return changed;

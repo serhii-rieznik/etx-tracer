@@ -9,11 +9,11 @@ set(oidn_version_patch "3")
 set(oidn_version "${oidn_version_high}.${oidn_version_low}.${oidn_version_patch}")
 
 if(NOT EXISTS "${library_path}")
-  message(FATAL_ERROR "OIDN library folder not found at ${library_path}.\n*********\nPlease download and unpack OIDN here: https://www.openimagedenoise.org/\n*********")
+  message(FATAL_ERROR "OIDN library folder not found at ${library_path}.\n*********\n1. download OIDN: https://www.openimagedenoise.org/)\n2. unpack it completely to: ${CMAKE_CURRENT_LIST_DIR}\n*********")
 endif()
 
 if(NOT EXISTS "${include_path}")
-  message(FATAL_ERROR "OIDN include folder not found at ${include_path}.\n*********\nPlease download and unpack OIDN here: https://www.openimagedenoise.org/\n*********")
+  message(FATAL_ERROR "OIDN library folder not found at ${library_path}.\n*********\n1. download OIDN: https://www.openimagedenoise.org/)\n2. unpack it completely to: ${CMAKE_CURRENT_LIST_DIR}\n*********")
 endif()
 
 if(APPLE) 

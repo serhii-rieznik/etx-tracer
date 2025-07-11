@@ -109,6 +109,12 @@ target_include_directories(etx-rt PUBLIC ${EMBREE_INCLUDE_DIR})
 target_compile_definitions(etx-rt PUBLIC -DETX_HAVE_GPU_RENDER=${ETX_GPU_RENDER})
 target_link_libraries(etx-rt PRIVATE ${EMBREE_LIBRARY} etx-core etx-render bluenoise)
 
+if (WIN32) 
+  message("Copying ${EMBREE_LIBRARY} ... to ${root_folder}/bin/")
+  configure_file("${EMBREE_LOCATION}/bin/embree4.dll" "${root_folder}/bin/" COPYONLY)
+  configure_file("${EMBREE_LOCATION}/bin/tbb12.dll" "${root_folder}/bin/" COPYONLY)
+endif()
+
 if(HAS_OPTIX)
   set(ETX_GPU_RENDER 1 PARENT_SCOPE)
   target_link_libraries(etx-rt PUBLIC etx-gpu)

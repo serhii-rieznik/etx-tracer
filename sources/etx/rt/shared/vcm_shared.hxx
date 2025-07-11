@@ -283,7 +283,7 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
 ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
   VCMPathState state = {};
   state.sampler.init(index, it.iteration);
-  state.spect = scene.spectral ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
+  state.spect = scene.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.global_index = index;
 
   auto emitter_sample = sample_emission(scene, state.spect, state.sampler);

@@ -157,8 +157,8 @@ struct SceneRepresentationImpl {
   Scene scene;
   Camera camera;
 
-  bool camera_loaded = false;
-  bool loaded = false;
+  // bool camera_loaded = false;
+  // bool loaded = false;
 
   char data_buffer[2048] = {};
 
@@ -310,8 +310,6 @@ struct SceneRepresentationImpl {
     materials[scene.subsurface_exit_material].cls = Material::Class::Diffuse;
 
     camera.lens_image = kInvalidIndex;
-
-    loaded = false;
   }
 
   float triangle_area(const Triangle& t) {
@@ -471,9 +469,8 @@ struct SceneRepresentationImpl {
     }
   }
 
-  void commit() {
-    log::info("Building pixel sampler...");
-
+  void commit(bool spectral) {
+    log::warning("Building pixel sampler...");
     std::vector<float4> sampler_image;
     Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
     uint32_t image = images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, Image::BuildSamplingTable | Image::UniformSamplingTable, {});
@@ -508,11 +505,10 @@ struct SceneRepresentationImpl {
     scene.mediums = {mediums.as_array(), mediums.array_size()};
     scene.spectrums = {scene_spectrum_array.data(), scene_spectrum_array.size()};
     scene.environment_emitters.count = 0;
+    scene.flags = Scene::Committed | (spectral ? Scene::Spectral : 0u);
 
-    log::info("Building emitters distribution for %llu emitters...", scene.emitters.count);
+    log::warning("Building emitters distribution for %llu emitters...", scene.emitters.count);
     build_emitters_distribution(scene);
-
-    loaded = true;
   }
 
   enum : uint32_t {
@@ -601,6 +597,10 @@ Scene* SceneRepresentation::mutable_scene_pointer() {
   return &_private->scene;
 }
 
+Camera* SceneRepresentation::mutable_camera_pointer() {
+  return &_private->camera;
+}
+
 const Scene& SceneRepresentation::scene() const {
   return _private->scene;
 }
@@ -622,7 +622,7 @@ const Camera& SceneRepresentation::camera() const {
 }
 
 bool SceneRepresentation::valid() const {
-  return _private->loaded;
+  return _private->scene.committed();
 }
 
 template <class T>
@@ -633,11 +633,6 @@ inline void get_values(const std::vector<T>& a, T* ptr, uint64_t count) {
 }
 
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
-  auto s = SpectralDistribution::from_black_body(5800.0f, 1.0f);
-  auto q = s.integrated();
-  q /= fmaxf(q.x, fmaxf(q.y, q.z));
-  log::info("%.5f, %.5f, %.5f", q.x, q.y, q.z);
-
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
 
@@ -657,6 +652,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   float camera_focal_len = fov_to_focal_length(camera_fov);
   bool use_focal_len = false;
   bool force_tangents = false;
+  bool spectral_scene = false;
 
   if (strcmp(get_file_ext(filename), ".json") == 0) {
     auto js = json_from_file(filename);
@@ -678,7 +674,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
       } else if (json_get_string(i, "materials", str_value)) {
         _private->mtl_file_name = std::string(base_folder) + str_value;
       } else if (json_get_bool(i, "spectral", bool_value)) {
-        _private->scene.spectral = bool_value;
+        spectral_scene = bool_value;
       } else if (json_get_bool(i, "force-tangents", bool_value)) {
         force_tangents = bool_value;
       } else if ((key == "camera") && obj.is_object()) {
@@ -773,10 +769,10 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
     _private->validate_normals(referenced_vertices);
     _private->build_tangents();
     _private->validate_tangents(referenced_vertices, force_tangents);
-    log::warning("Tangents calculated in %.2f sec\n", m.measure());
+    log::warning("Normals and tangents validated in %.2f sec", m.measure());
   }
 
-  _private->commit();
+  _private->commit(spectral_scene);
 
   return true;
 }
@@ -1745,7 +1741,6 @@ void SceneRepresentationImpl::load_gltf_camera(const tinygltf::Node& node, const
   auto direction = to_float3(transform.col[2]);
   auto up = to_float3(transform.col[1]);
   build_camera(camera, position, position - direction, up, camera.film_size, float(cam.yfov) * 180.0f / kPi);
-  camera_loaded = true;
 }
 
 void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node, const float4x4& parent_transform) {
@@ -1819,7 +1814,7 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
 
   load_gltf_materials(model);
 
-  camera_loaded = false;
+  bool camera_loaded = false;
   for (const auto& scene : model.scenes) {
     for (int32_t node_index : scene.nodes) {
       if ((node_index < 0) || (node_index >= model.nodes.size()))

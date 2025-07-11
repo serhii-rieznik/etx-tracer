@@ -78,7 +78,7 @@ Film::~Film() {
 
 void Film::allocate(const uint2& dim) {
   if (_private->dimensions != dim) {
-    _private->dimensions = dim;
+    _private->dimensions = {max(1u, dim.x), max(1u, dim.y)};
     for (auto& buffer : _private->buffers) {
       buffer.clear();
       buffer.resize(1llu * _private->dimensions.x * _private->dimensions.y);

@@ -20,6 +20,10 @@ struct ETX_ALIGNED EnvironmentEmitters {
 };
 
 struct ETX_ALIGNED Scene {
+  enum : uint32_t {
+    Committed = 1u << 0u,
+    Spectral = 1u << 1u,
+  };
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<uint32_t> triangle_to_material ETX_EMPTY_INIT;
@@ -39,11 +43,18 @@ struct ETX_ALIGNED Scene {
   uint32_t random_path_termination ETX_INIT_WITH(6u);
   float noise_threshold ETX_INIT_WITH(0.1f);
   float radiance_clamp ETX_INIT_WITH(0.0f);
-  uint8_t spectral ETX_INIT_WITH(0);
   uint32_t black_spectrum = kInvalidIndex;
   uint32_t white_spectrum = kInvalidIndex;
   uint32_t subsurface_scatter_material = kInvalidIndex;
   uint32_t subsurface_exit_material = kInvalidIndex;
+  uint32_t flags ETX_INIT_WITH(0);
+
+  bool committed() const {
+    return flags & Committed;
+  }
+  bool spectral() const {
+    return flags & Spectral;
+  }
 };
 
 struct ContinousTraceOptions {

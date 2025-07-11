@@ -258,7 +258,7 @@ Options CPUVCM::options() const {
 void CPUVCM::run(const Options& opt) {
   stop(Stop::Immediate);
 
-  if (rt.has_scene()) {
+  if (can_run()) {
     current_state = State::Running;
     _private->start(opt);
   }

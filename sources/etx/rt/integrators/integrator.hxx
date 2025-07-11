@@ -84,8 +84,9 @@ struct Integrator {
 
  public:
   bool can_run() const {
-    return rt.has_scene();
+    return rt.scene().committed();
   }
+
   State state() const {
     return current_state.load();
   }

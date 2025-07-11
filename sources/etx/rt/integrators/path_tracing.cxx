@@ -61,7 +61,7 @@ struct CPUPathTracingImpl : public Task {
       }
 
       pixels_processed++;
-      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, i, status.current_iteration, scene.spectral, options.blue_noise);
+      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, i, status.current_iteration, scene.spectral(), options.blue_noise);
 
       while ((state->load() != Integrator::State::Stopped) && run_path_iteration(scene, options, rt, payload)) {
         ETX_VALIDATE(payload.accumulated);
@@ -132,7 +132,7 @@ const Integrator::Status& CPUPathTracing::status() const {
 void CPUPathTracing::run(const Options& opt) {
   stop(Stop::Immediate);
 
-  if (rt.has_scene()) {
+  if (can_run()) {
     current_state = State::Running;
     _private->start(opt);
   }

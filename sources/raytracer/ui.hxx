@@ -1,15 +1,13 @@
 #pragma once
 
 #include <etx/util/options.hxx>
-
 #include <etx/render/shared/base.hxx>
 #include <etx/rt/integrators/integrator.hxx>
-
 #include <etx/render/host/scene_loader.hxx>
 
-#include <functional>
-
 #include "options.hxx"
+
+#include <functional>
 
 struct sapp_event;
 
@@ -22,14 +20,15 @@ struct UI {
   void initialize();
   void cleanup();
 
-  void build(double dt, const std::vector<std::string>& recent_files);
+  void build(double dt, const std::vector<std::string>& recent_files, Scene* scene, Camera* camera, const SceneRepresentation::MaterialMapping& materials,
+    const SceneRepresentation::MediumMapping& mediums);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
   }
 
   void set_current_integrator(Integrator*);
-  void set_scene(Scene* scene, const SceneRepresentation::MaterialMapping&, const SceneRepresentation::MediumMapping&);
+  // void set_scene(Scene* scene, const SceneRepresentation::MaterialMapping&, const SceneRepresentation::MediumMapping&);
   void set_film(Film* film);
   void set_camera(Camera* camera);
 
@@ -58,7 +57,7 @@ struct UI {
     std::function<void(uint32_t)> material_changed;
     std::function<void(uint32_t)> medium_changed;
     std::function<void(uint32_t)> emitter_changed;
-    std::function<void()> camera_changed;
+    std::function<void(bool)> camera_changed;
     std::function<void()> scene_settings_changed;
     std::function<void()> denoise_selected;
     std::function<void(uint32_t)> view_scene;
@@ -71,10 +70,10 @@ struct UI {
   void save_scene_file() const;
   void save_image(SaveImageMode mode) const;
   void load_image() const;
-  bool build_material(Material&);
+  bool build_material(Scene* scene, Material&);
   bool build_medium(Medium&);
   bool spectrum_picker(const char* name, SpectralDistribution& spd, bool linear);
-  bool spectrum_picker(const char* name, uint32_t spd_index, bool linear);
+  bool spectrum_picker(Scene* scene, const char* name, uint32_t spd_index, bool linear);
   bool ior_picker(const char* name, RefractiveIndex& ior);
 
   void reset_selection();
@@ -83,8 +82,8 @@ struct UI {
 
  private:
   Integrator* _current_integrator = nullptr;
-  Scene* _current_scene = nullptr;
-  Camera* _current_camera = nullptr;
+  // Scene* _current_scene = nullptr;
+  // Camera* _current_camera = nullptr;
   Film* _film = nullptr;
 
   ArrayView<Integrator*> _integrators = {};
@@ -134,6 +133,7 @@ struct UI {
   int32_t _selected_material = -1;
   int32_t _selected_medium = -1;
   int32_t _selected_emitter = -1;
+  int32_t _viewport_size = {};
   uint32_t _ui_setup = UIDefaults;
   uint32_t _font_image = 0u;
   std::unordered_map<const char*, float3> _editor_values;

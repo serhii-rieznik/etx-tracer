@@ -11,16 +11,16 @@ VCMOptions VCMOptions::default_values() {
 }
 
 void VCMOptions::load(const Options& opt) {
-  initial_radius = opt.get("initial_radius", initial_radius).to_float();
-  radius_decay = opt.get("radius_decay", radius_decay).to_integer();
+  initial_radius = opt.get("vcm-initial_radius", initial_radius).to_float();
+  radius_decay = opt.get("vcm-radius_decay", radius_decay).to_integer();
 
-  options = opt.get("direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
-  options = opt.get("connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
-  options = opt.get("connect_to_camera", connect_to_camera()).to_bool() ? (options | ConnectToCamera) : (options & ~ConnectToCamera);
-  options = opt.get("connect_vertices", connect_vertices()).to_bool() ? (options | ConnectVertices) : (options & ~ConnectVertices);
-  options = opt.get("merge_vertices", merge_vertices()).to_bool() ? (options | MergeVertices) : (options & ~MergeVertices);
-  options = opt.get("mis", enable_mis()).to_bool() ? (options | EnableMis) : (options & ~EnableMis);
-  options = opt.get("merging", enable_merging()).to_bool() ? (options | EnableMerging) : (options & ~EnableMerging);
+  options = opt.get("vcm-direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
+  options = opt.get("vcm-connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
+  options = opt.get("vcm-connect_to_camera", connect_to_camera()).to_bool() ? (options | ConnectToCamera) : (options & ~ConnectToCamera);
+  options = opt.get("vcm-connect_vertices", connect_vertices()).to_bool() ? (options | ConnectVertices) : (options & ~ConnectVertices);
+  options = opt.get("vcm-merge_vertices", merge_vertices()).to_bool() ? (options | MergeVertices) : (options & ~MergeVertices);
+  options = opt.get("vcm-mis", enable_mis()).to_bool() ? (options | EnableMis) : (options & ~EnableMis);
+  options = opt.get("vcm-merging", enable_merging()).to_bool() ? (options | EnableMerging) : (options & ~EnableMerging);
 }
 
 void VCMOptions::store(Options& opt) const {

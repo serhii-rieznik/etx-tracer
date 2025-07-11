@@ -47,15 +47,18 @@ struct RaytracingImpl {
 
   void set_scene(const Scene& s) {
     source_scene = &s;
-    release_host_scene();
-    build_host_scene(s);
-    // release_device_scene();
-    // build_device_scene();
   }
 
   void set_camera(const Camera& c) {
     source_camera = &c;
-    film.allocate(c.film_size);
+  }
+
+  void commit() {
+    release_host_scene();
+    film.allocate(source_camera->film_size);
+    build_host_scene(*source_scene);
+    // release_device_scene();
+    // build_device_scene();
   }
 
   void build_host_scene(const Scene& s) {
@@ -299,29 +302,24 @@ const Scene& Raytracing::gpu_scene() const {
 }
 // */
 
-void Raytracing::set_scene(const Scene& scene) {
+void Raytracing::link_scene(const Scene& scene) {
   _private->set_scene(scene);
 }
 
-void Raytracing::set_camera(const Camera& camera) {
+void Raytracing::link_camera(const Camera& camera) {
   _private->set_camera(camera);
-}
-
-bool Raytracing::has_camera() const {
-  return _private->source_camera != nullptr;
 }
 
 const Camera& Raytracing::camera() const {
   return *_private->source_camera;
 }
 
-bool Raytracing::has_scene() const {
-  return (_private->source_scene != nullptr);
+const Scene& Raytracing::scene() const {
+  return *_private->source_scene;
 }
 
-const Scene& Raytracing::scene() const {
-  ETX_ASSERT(has_scene());
-  return *(_private->source_scene);
+void Raytracing::commit_changes() {
+  _private->commit();
 }
 
 bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t material_id, Intersection& result_intersection, Sampler& smp) const {

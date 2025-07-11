@@ -26,6 +26,7 @@ struct SceneRepresentation {
 
   Scene& mutable_scene();
   Scene* mutable_scene_pointer();
+  Camera* mutable_camera_pointer();
 
   const Scene& scene() const;
   const MaterialMapping& material_mapping() const;

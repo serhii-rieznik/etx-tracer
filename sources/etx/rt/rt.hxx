@@ -19,14 +19,13 @@ struct Raytracing {
   const Film& film() const;
   Film& film();
 
-  void set_camera(const Camera& camera);
-  bool has_camera() const;
+  void link_camera(const Camera& camera);
   const Camera& camera() const;
-  // Camera& camera();
 
-  void set_scene(const Scene&);
-  bool has_scene() const;
+  void link_scene(const Scene&);
   const Scene& scene() const;
+
+  void commit_changes();
 
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
   bool trace_material(const Scene& scene, const Ray&, const uint32_t material_id, Intersection&, Sampler& smp) const;

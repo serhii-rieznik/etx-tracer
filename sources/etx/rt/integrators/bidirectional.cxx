@@ -324,7 +324,7 @@ struct CPUBidirectionalImpl : public Task {
       if (film.active_pixel(i, pixel) == false)
         return;
 
-      auto spect = scene.spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
+      auto spect = scene.spectral() ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
       if (mode != Mode::PathTracing) {
         build_emitter_path(smp, spect, path_data);
@@ -356,7 +356,7 @@ struct CPUBidirectionalImpl : public Task {
     return state->load() != Integrator::State::Stopped;
   }
 
-  void update_emitter_path_pdfs(PathVertex& curr, PathVertex& prev, const EmitterSample& em) const {
+  void update_distant_emitter_path_pdfs(PathVertex& curr, PathVertex& prev, const EmitterSample& em) const {
     const auto& scene = rt.scene();
 
     float total_pdf = 0.0f;
@@ -432,7 +432,7 @@ struct CPUBidirectionalImpl : public Task {
     PathVertex& prev) const {
     if (payload.mode == PathSource::Light) {
       if (first_interaction && emitter_sample.is_distant) {
-        update_emitter_path_pdfs(curr, prev, emitter_sample);
+        update_distant_emitter_path_pdfs(curr, prev, emitter_sample);
       }
       precompute_light_mis(curr, prev, path_data);
       path_data.emitter_path.back() = prev;
@@ -1308,13 +1308,13 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void start(const Options& opt) {
-    mode = opt.get("mode", uint32_t(mode)).to_enum<Mode>();
+    mode = opt.get("bdpt-mode", uint32_t(mode)).to_enum<Mode>();
 
-    enable_direct_hit = opt.get("conn_direct_hit", enable_direct_hit).to_bool();
-    enable_connect_to_camera = opt.get("conn_connect_to_camera", enable_connect_to_camera).to_bool();
-    enable_connect_to_light = opt.get("conn_connect_to_light", enable_connect_to_light).to_bool();
-    enable_connect_vertices = opt.get("conn_connect_vertices", enable_connect_vertices).to_bool();
-    enable_mis = opt.get("conn_mis", enable_mis).to_bool();
+    enable_direct_hit = opt.get("bdpt-conn_direct_hit", enable_direct_hit).to_bool();
+    enable_connect_to_camera = opt.get("bdpt-conn_connect_to_camera", enable_connect_to_camera).to_bool();
+    enable_connect_to_light = opt.get("bdpt-conn_connect_to_light", enable_connect_to_light).to_bool();
+    enable_connect_vertices = opt.get("bdpt-conn_connect_vertices", enable_connect_vertices).to_bool();
+    enable_mis = opt.get("bdpt-conn_mis", enable_mis).to_bool();
 
     for (auto& path_data : per_thread_path_data) {
       path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
@@ -1342,7 +1342,7 @@ CPUBidirectional::~CPUBidirectional() {
 void CPUBidirectional::run(const Options& opt) {
   stop(Stop::Immediate);
 
-  if (rt.has_scene()) {
+  if (can_run()) {
     current_state = State::Running;
     _private->start(opt);
   }
@@ -1398,7 +1398,7 @@ Options CPUBidirectional::options() const {
           return "Unknown";
       }
     },
-    "mode", "Mode");
+    "bdpt-mode", "Mode");
 
   Options result = {};
   result.add(mode);

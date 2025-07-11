@@ -48,7 +48,7 @@ struct RTApplication {
   void on_material_changed(uint32_t index);
   void on_medium_changed(uint32_t index);
   void on_emitter_changed(uint32_t index);
-  void on_camera_changed();
+  void on_camera_changed(bool film_changed);
   void on_scene_settings_changed();
   void on_denoise_selected();
   void on_view_scene(uint32_t direction);

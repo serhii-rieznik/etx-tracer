@@ -283,7 +283,7 @@ struct CPUDebugIntegratorImpl : public Task {
     const auto& scene = rt.scene();
     const auto& camera = rt.camera();
     auto& film = rt.film();
-    auto spect = scene.spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
+    auto spect = scene.spectral() ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
     float3 output = {};
     const float t = uv.x * 0.5f + 0.5f;
@@ -545,7 +545,7 @@ const Integrator::Status& CPUDebugIntegrator::status() const {
 void CPUDebugIntegrator::run(const Options& opt) {
   stop(Stop::Immediate);
 
-  if (rt.has_scene()) {
+  if (can_run()) {
     current_state = State::Running;
     _private->start(opt);
   }

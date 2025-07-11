@@ -2371,7 +2371,7 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   std::string linebuf;
   linebuf.reserve(256);
 
-  auto t1 = std::chrono::steady_clock::now();
+  // auto t1 = std::chrono::steady_clock::now();
 
   while (inStream->peek() != -1) {
     std::getline(*inStream, linebuf);
@@ -2833,7 +2833,7 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
     // Ignore unknown command.
   }
 
-  auto t2 = std::chrono::steady_clock::now();
+  // auto t2 = std::chrono::steady_clock::now();
 
   // not all vertices have colors, no default colors desired? -> clear colors
   if (!found_all_colors && !default_vcols_fallback) {
@@ -2883,15 +2883,11 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   attrib->texcoord_ws.swap(vt);
   attrib->colors.swap(vc);
   attrib->skin_weights.swap(vw);
-
-  auto t3 = std::chrono::steady_clock::now();
-  auto d1 = (t1 - t0).count() / 1.0e+6;
-  auto d2 = (t2 - t1).count() / 1.0e+6;
-  auto d3 = (t3 - t2).count() / 1.0e+6;
-  auto d4 = (t3 - t0).count() / 1.0e+6;
-
-  printf(">> %.3f - %.3f - %.3f -> %.3f\n", d1, d2, d3, d4);
-
+  // auto t3 = std::chrono::steady_clock::now();
+  // auto d1 = (t1 - t0).count() / 1.0e+6;
+  // auto d2 = (t2 - t1).count() / 1.0e+6;
+  // auto d3 = (t3 - t2).count() / 1.0e+6;
+  // auto d4 = (t3 - t0).count() / 1.0e+6;
   return true;
 }
 
