@@ -359,15 +359,9 @@ struct CPUBidirectionalImpl : public Task {
   void update_distant_emitter_path_pdfs(PathVertex& curr, PathVertex& prev, const EmitterSample& em) const {
     const auto& scene = rt.scene();
 
-    float total_pdf = 0.0f;
-    float total_weight = 0.0f;
-    for (uint32_t ei = 0, ee = scene.environment_emitters.count; ei < ee; ++ei) {
-      float weight = scene.emitters_distribution.values[ei].value;
-      float pdf = emitter_pdf_in_dist(scene.emitters[em.emitter_index], em.direction, scene);
-      total_weight += weight;
-      total_pdf += pdf * weight;
-    }
-    prev.pdf.forward = total_pdf / (total_weight * float(scene.environment_emitters.count));
+    const float pdf = emitter_pdf_in_dist(scene.emitters[em.emitter_index], -em.direction, scene);
+    prev.pdf.forward = pdf / float(scene.environment_emitters.count);
+
     ETX_VALIDATE(prev.pdf.forward);
     if (mode == Mode::BDPTFast) {
       prev.pdf.accumulated = safe_div(1.0f, prev.pdf.forward);
