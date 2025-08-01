@@ -256,6 +256,11 @@ inline float safe_div(float a, float b) {
   return result;
 }
 
+inline float balance_heuristic(float a, float b, float c) {
+  float denom = a + b + c;
+  return denom == 0.0f ? 0.0f : a / denom;
+}
+
 }  // namespace
 
 struct CPUBidirectionalImpl : public Task {
@@ -993,7 +998,7 @@ struct CPUBidirectionalImpl : public Task {
       float p_direct = sampled_light_vertex.delta_emitter ? 0.0f : map0(p_direct_connection);
       float camera_connection_pdf = PathVertex::pdf_from_emitter(spect, sampled_light_vertex, z_curr, scene);
       float p_light_path = map0(camera_connection_pdf) * map0(sampled_light_vertex.pdf.forward);
-      float result = p_connection / (p_connection + p_direct + p_ratio * p_light_path);
+      float result = balance_heuristic(p_connection, p_direct, p_ratio * p_light_path);
       ETX_VALIDATE(result);
       return result;
     }
@@ -1037,7 +1042,7 @@ struct CPUBidirectionalImpl : public Task {
       float p_emitter_connect = PathVertex::pdf_to_emitter(spect, path_data.emitter_path[2], path_data.emitter_path[1], scene);
       float p_from_camera_connect = map0(p_camera) * map0(p_emitter_connect);
 
-      float result = p_connection / (p_connection + p_ratio * p_from_camera_connect + p_ratio * p_from_camera_direct);
+      float result = balance_heuristic(p_connection, p_ratio * p_from_camera_connect, p_ratio * p_from_camera_direct);
       ETX_VALIDATE(result);
       return result;
     }
@@ -1135,7 +1140,7 @@ struct CPUBidirectionalImpl : public Task {
           float p_sample = emitter_discrete_pdf(scene.emitters[z_curr.intersection.emitter_index], scene.emitters_distribution);
           float camera_connection_pdf = p_sample * emitter_pdf_area_local(scene.emitters[z_curr.intersection.emitter_index], scene);
           float p_light_path = map0(camera_connection_pdf);
-          mis_weight = p_direct / (p_connection + p_direct + p_ratio * p_light_path);
+          mis_weight = balance_heuristic(p_direct, p_connection, p_ratio * p_light_path);
           ETX_VALIDATE(mis_weight);
           break;
         }
@@ -1202,7 +1207,7 @@ struct CPUBidirectionalImpl : public Task {
         float p_connection = map0(p_em);
         float camera_connection_pdf = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
         float p_light_path = map0(p_em) * map0(camera_connection_pdf);
-        mis_weight = p_direct / (p_direct + p_connection + p_ratio * p_light_path);
+        mis_weight = balance_heuristic(p_direct, p_connection, p_ratio * p_light_path);
         ETX_VALIDATE(mis_weight);
       }
     }
