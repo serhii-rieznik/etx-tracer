@@ -963,10 +963,6 @@ void UI::set_film(Film* film) {
   _film = film;
 }
 
-void UI::set_camera(Camera* camera) {
-  camera = camera;
-}
-
 /*
  void UI::set_scene(Scene* scene, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums) {
    scene = scene;

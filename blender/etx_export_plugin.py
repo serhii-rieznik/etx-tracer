@@ -59,17 +59,17 @@ class ExportETXTracer(Operator, ExportHelper):
     max_path_length: IntProperty(
         name="Max Path Length",
         description="Maximum path length for path tracing",
-        default=16,
+        default=65536,
         min=1,
-        max=100,
+        max=65536,
     )
 
     random_termination_start: IntProperty(
         name="Random Termination Start",
         description="Depth at which Russian roulette termination begins",
-        default=8,
+        default=6,
         min=1,
-        max=50,
+        max=65536,
     )
 
     spectral_rendering: BoolProperty(
@@ -204,6 +204,13 @@ class ExportETXTracer(Operator, ExportHelper):
             mat_data = self._convert_material_to_etx(mat)
             materials_data.append(mat_data)
 
+        light_materials = self._get_lights_as_materials()
+        materials_data.extend(light_materials)
+
+        env_light = self._get_environment_light_material()
+        if env_light:
+            materials_data.append(env_light)
+			
         # Write ETX materials format
         def write_materials_file(file_path):
             with open(file_path, "w", encoding="utf-8") as f:
@@ -376,6 +383,114 @@ class ExportETXTracer(Operator, ExportHelper):
             "focal-distance": self.focal_distance,
         }
 
+    def _get_environment_light_material(self):
+        """Checks for a world background and exports it as an ETX environment light."""
+        world = bpy.context.scene.world
+        if not (world and world.use_nodes and world.node_tree):
+            return None
+
+        node_tree = world.node_tree
+        output_node = None
+        for node in node_tree.nodes:
+            if node.type == "OUTPUT_WORLD" and node.is_active_output:
+                output_node = node
+                break
+
+        if not output_node or not output_node.inputs["Surface"].is_linked:
+            return None
+
+        background_node = output_node.inputs["Surface"].links[0].from_node
+        if background_node.type != "BACKGROUND":
+            return None
+
+        strength = background_node.inputs["Strength"].default_value
+        color_socket = background_node.inputs["Color"]
+        base_color = color_socket.default_value
+
+        env_material = {"name": "et::env", "properties": {}}
+
+        texture_node = None
+        if color_socket.is_linked:
+            link_node = color_socket.links[0].from_node
+            if link_node.type == "TEX_ENVIRONMENT":
+                texture_node = link_node
+
+        if texture_node and texture_node.image:
+            # Textured background: check tint color (base_color * strength)
+            tint_color = [c * strength for c in base_color[:3]]
+            if sum(tint_color) < 1e-6:
+                return None  # Don't export if tint is black
+
+            env_material["properties"]["image"] = texture_node.image.name
+            env_material["properties"]["color"] = f"{tint_color[0]:.4f} {tint_color[1]:.4f} {tint_color[2]:.4f}"
+
+            # Find mapping node for rotation
+            mapping_node = None
+            if texture_node.inputs["Vector"].is_linked:
+                prev_node = texture_node.inputs["Vector"].links[0].from_node
+                if prev_node.type == "MAPPING":
+                    mapping_node = prev_node
+
+            if mapping_node:
+                rotation_z_rad = mapping_node.inputs["Rotation"].default_value[2]
+                rotation_z_deg = math.degrees(rotation_z_rad)
+                env_material["properties"]["rotation"] = f"{rotation_z_deg:.2f}"
+
+            if texture_node.image.source != 'FILE':
+                self.report({'WARNING'}, f"Environment image '{texture_node.image.name}' is not saved to a file and may not be found by the renderer.")
+
+        else:
+            # Solid color background: check final color
+            final_color = [c * strength for c in base_color[:3]]
+            if sum(final_color) < 1e-6:
+                return None  # Don't export if color is black
+
+            env_material["properties"]["color"] = f"{final_color[0]:.4f} {final_color[1]:.4f} {final_color[2]:.4f}"
+
+        return env_material
+
+    def _get_lights_as_materials(self):
+        """Finds all sun lights and converts them to ETX directional light materials"""
+        light_materials = []
+
+        for light_obj in bpy.context.scene.objects:
+            if light_obj.type == "LIGHT" and light_obj.data.type == "SUN":
+                if self.export_selected and not light_obj.select_get():
+                    continue
+
+                light_data = light_obj.data
+
+                # Direction from object's rotation (local -Z is direction)
+                matrix_world = light_obj.matrix_world
+                direction_blender = (
+                    matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))
+                ).normalized()
+
+                # Convert from Blender Z-up to renderer's Y-up and reverse direction
+                # to point towards the light source
+                direction = -Vector(
+                    (direction_blender.x, direction_blender.z, -direction_blender.y)
+                )
+
+                # Color and intensity
+                color = light_data.color
+                energy = light_data.energy
+                emission_color = [c * energy for c in color]
+
+                # Angular diameter (convert from radians to degrees)
+                angular_diameter_deg = math.degrees(light_data.angle)
+
+                mat_data = {
+                    "name": "et::dir",  # Reserved name for directional light
+                    "properties": {
+                        "direction": f"{direction.x:.4f} {direction.y:.4f} {direction.z:.4f}",
+                        "color": f"{emission_color[0]:.4f} {emission_color[1]:.4f} {emission_color[2]:.4f}",
+                        "angular_diameter": f"{angular_diameter_deg:.4f}",
+                    },
+                }
+                light_materials.append(mat_data)
+
+        return light_materials
     def _get_materials_to_export(self):
         """Get list of materials to export based on selection"""
         materials = set()
@@ -427,6 +542,7 @@ class ExportETXTracer(Operator, ExportHelper):
                     "Emission": ["Emission Color"],
                     "Emission Strength": ["Emission Weight"],
                     "Base Color": ["Albedo", "Diffuse Color"],
+                    "Subsurface Weight": ["Subsurface"],
                 }
 
                 if input_name in alt_names:
@@ -438,104 +554,132 @@ class ExportETXTracer(Operator, ExportHelper):
         except (KeyError, AttributeError):
             return default_value
 
+    def _find_shader_node(self, node_tree):
+        """Finds the shader node connected to the material output."""
+        output_node = None
+        for node in node_tree.nodes:
+            if node.type == "OUTPUT_MATERIAL" and node.is_active_output:
+                output_node = node
+                break
+        
+        if not (output_node and output_node.inputs["Surface"].is_linked):
+            return None
+
+        return output_node.inputs["Surface"].links[0].from_node
+
     def _get_etx_material_class(self, blender_mat):
-        """Determine ETX material class from Blender material"""
-        # Check custom property first
+        """Determine ETX material class from Blender material node graph."""
         if "etx_class" in blender_mat:
             return blender_mat["etx_class"]
 
-        # Infer from material properties
         if blender_mat.use_nodes and blender_mat.node_tree:
-            principled = None
-            for node in blender_mat.node_tree.nodes:
-                if node.type == "BSDF_PRINCIPLED":
-                    principled = node
-                    break
+            shader_node = self._find_shader_node(blender_mat.node_tree)
+            
+            if shader_node:
+                node_type_to_class = {
+                    "BSDF_PRINCIPLED": "plastic",
+                    "BSDF_GLASS": "dielectric",
+                    "BSDF_GLOSSY": "conductor",
+                    "BSDF_TRANSLUCENT": "translucent",
+                    "BSDF_DIFFUSE": "diffuse",
+                }
+                return node_type_to_class.get(shader_node.type, "diffuse")
 
-            if principled:
-                # Check metallic value safely
-                metallic = self._get_node_input_value(principled, "Metallic", 0.0)
-                transmission = self._get_node_input_value(
-                    principled, "Transmission", 0.0
-                )
-
-                if metallic > 0.8:
-                    return "conductor"
-                elif transmission > 0.1:
-                    return "dielectric"
-                else:
-                    return "plastic"
-
-        return "diffuse"  # Default fallback
-
-    def _extract_node_properties(self, node_tree, properties):
-        """Extract properties from Blender shader nodes"""
-        principled = None
-        for node in node_tree.nodes:
-            if node.type == "BSDF_PRINCIPLED":
-                principled = node
-                break
-
-        if not principled:
-            return
-
-        # Base color - safely get color value
-        base_color = self._get_node_input_value(
-            principled, "Base Color", [1.0, 1.0, 1.0, 1.0]
-        )
+        return "diffuse"
+    
+    def _extract_principled_properties(self, principled, properties):
+        base_color = self._get_node_input_value(principled, "Base Color", [1.0, 1.0, 1.0, 1.0])
         if hasattr(base_color, "__len__") and len(base_color) >= 3:
-            properties["Kd"] = (
-                f"{base_color[0]:.3f} {base_color[1]:.3f} {base_color[2]:.3f}"
-            )
+            properties["Kd"] = f"{base_color[0]:.3f} {base_color[1]:.3f} {base_color[2]:.3f}"
         else:
-            properties["Kd"] = "0.800 0.800 0.800"  # Fallback
+            properties["Kd"] = "0.800 0.800 0.800"
 
-        # Roughness
         roughness = self._get_node_input_value(principled, "Roughness", 0.5)
         properties["Pr"] = f"{roughness:.3f}"
 
-        # Metallic
-        metallic = self._get_node_input_value(principled, "Metallic", 0.0)
-        if metallic > 0.0:
-            if hasattr(base_color, "__len__") and len(base_color) >= 3:
-                properties["Ks"] = (
-                    f"{base_color[0]:.3f} {base_color[1]:.3f} {base_color[2]:.3f}"
-                )
+        specular_tint = self._get_node_input_value(principled, "Specular Tint", [1.0, 1.0, 1.0, 1.0])
+        if hasattr(specular_tint, "__len__") and len(specular_tint) >= 3:
+            properties["Ks"] = f"{specular_tint[0]:.3f} {specular_tint[1]:.3f} {specular_tint[2]:.3f}"
         else:
-            properties["Ks"] = f"{metallic:.3f} {metallic:.3f} {metallic:.3f}"
+            properties["Ks"] = "1.000 1.000 1.000"
 
-        # IOR
         ior = self._get_node_input_value(principled, "IOR", 1.45)
         properties["int_ior"] = f"{ior:.3f}"
 
-        # Transmission
         transmission = self._get_node_input_value(principled, "Transmission", 0.0)
         if transmission > 0.0:
-            properties["Kt"] = (
-                f"{transmission:.3f} {transmission:.3f} {transmission:.3f}"
-            )
+            if hasattr(base_color, "__len__") and len(base_color) >= 3:
+                trans_color = [c * transmission for c in base_color[:3]]
+                properties["Kt"] = f"{trans_color[0]:.3f} {trans_color[1]:.3f} {trans_color[2]:.3f}"
+            else:
+                properties["Kt"] = f"{transmission:.3f} {transmission:.3f} {transmission:.3f}"
 
-        # Emission
-        emission = self._get_node_input_value(
-            principled, "Emission", [0.0, 0.0, 0.0, 1.0]
-        )
-        emission_strength = self._get_node_input_value(
-            principled, "Emission Strength", 1.0
-        )
+        emission_socket = principled.inputs.get("Emission Color")
+        emission_strength = self._get_node_input_value(principled, "Emission Strength", 0.0)
+        if emission_strength > 0.0 and emission_socket:
+            use_color_emission = True
+            if emission_socket.is_linked:
+                linked_node = emission_socket.links[0].from_node
+                if linked_node.type == "BLACKBODY":
+                    temperature = linked_node.inputs["Temperature"].default_value
+                    properties["emitter"] = f"nblackbody {temperature:.0f} scale {emission_strength:.4f}"
+                    use_color_emission = False
+            if use_color_emission:
+                emission_color = self._get_node_input_value(principled, "Emission Color", [0.0, 0.0, 0.0, 1.0])
+                if any(c > 0.0 for c in emission_color[:3]):
+                    final_emission = [c * emission_strength for c in emission_color[:3]]
+                    properties["Ke"] = f"{final_emission[0]:.4f} {final_emission[1]:.4f} {final_emission[2]:.4f}"
 
-        if (
-            emission_strength > 0.0
-            and hasattr(emission, "__len__")
-            and len(emission) >= 3
-        ):
-            # Check if emission color has meaningful values
-            if emission[0] > 0.0 or emission[1] > 0.0 or emission[2] > 0.0:
-                properties["Ke"] = (
-                    f"{emission[0] * emission_strength:.3f} {emission[1] * emission_strength:.3f} {emission[2] * emission_strength:.3f}"
-                )
-
-        # Check for connected texture nodes
         self._extract_texture_connections(principled, properties)
+
+    def _extract_glass_properties(self, glass_node, properties):
+        color = self._get_node_input_value(glass_node, "Color", [1.0, 1.0, 1.0, 1.0])
+        if hasattr(color, "__len__") and len(color) >= 3:
+            properties["Kt"] = f"{color[0]:.3f} {color[1]:.3f} {color[2]:.3f}"
+        
+        properties["Ks"] = "1.000 1.000 1.000"
+        roughness = self._get_node_input_value(glass_node, "Roughness", 0.0)
+        properties["Pr"] = f"{roughness:.3f}"
+        ior = self._get_node_input_value(glass_node, "IOR", 1.45)
+        properties["int_ior"] = f"{ior:.3f}"
+
+    def _extract_glossy_properties(self, glossy_node, properties):
+        color = self._get_node_input_value(glossy_node, "Color", [1.0, 1.0, 1.0, 1.0])
+        if hasattr(color, "__len__") and len(color) >= 3:
+            properties["Ks"] = f"{color[0]:.3f} {color[1]:.3f} {color[2]:.3f}"
+        roughness = self._get_node_input_value(glossy_node, "Roughness", 0.0)
+        properties["Pr"] = f"{roughness:.3f}"
+
+    def _extract_translucent_properties(self, translucent_node, properties):
+        color = self._get_node_input_value(translucent_node, "Color", [1.0, 1.0, 1.0, 1.0])
+        if hasattr(color, "__len__") and len(color) >= 3:
+            properties["Kd"] = f"{color[0]:.3f} {color[1]:.3f} {color[2]:.3f}"
+
+    def _extract_diffuse_properties(self, diffuse_node, properties):
+        color = self._get_node_input_value(diffuse_node, "Color", [1.0, 1.0, 1.0, 1.0])
+        if hasattr(color, "__len__") and len(color) >= 3:
+            properties["Kd"] = f"{color[0]:.3f} {color[1]:.3f} {color[2]:.3f}"
+        roughness = self._get_node_input_value(diffuse_node, "Roughness", 0.0)
+        properties["Pr"] = f"{roughness:.3f}"
+
+    def _extract_node_properties(self, node_tree, properties):
+        shader_node = self._find_shader_node(node_tree)
+        if not shader_node:
+            return
+
+        extractors = {
+            "BSDF_PRINCIPLED": self._extract_principled_properties,
+            "BSDF_GLASS": self._extract_glass_properties,
+            "BSDF_GLOSSY": self._extract_glossy_properties,
+            "BSDF_TRANSLUCENT": self._extract_translucent_properties,
+            "BSDF_DIFFUSE": self._extract_diffuse_properties,
+        }
+        
+        extractor = extractors.get(shader_node.type)
+        if extractor:
+            extractor(shader_node, properties)
+
+
 
     def _extract_texture_connections(self, principled_node, properties):
         """Extract texture file connections from Principled BSDF"""
