@@ -358,7 +358,7 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
 
   const auto& medium = scene.mediums[state.medium_index];
   state.ray.o = medium_sample.pos;
-  state.ray.d = medium.sample_phase_function(state.sampler, state.ray.d);
+  state.ray.d = medium.sample_phase_function(state.sampler.next_2d(), state.ray.d);
 
   if (state.total_path_depth + 1 > scene.max_path_length)
     return false;

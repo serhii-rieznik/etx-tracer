@@ -139,7 +139,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
 
     auto prev_dir = ray.d;
     ray.o = ray.o + ray.d * ray.max_t;
-    ray.d = medium::sample_phase_function(prev_dir, anisotropy, smp);
+    ray.d = medium::sample_phase_function(prev_dir, anisotropy, smp.next_2d());
   }
 
   return GatherResult::Failed;
@@ -290,7 +290,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
     }
   }
 
-  float3 w_o = medium.sample_phase_function(payload.smp, payload.ray.d);
+  float3 w_o = medium.sample_phase_function(payload.smp.next_2d(), payload.ray.d);
   payload.sampled_bsdf_pdf = medium.phase_function(payload.ray.d, w_o);
   payload.mis_weight = true;
   payload.ray.o = medium_sample.pos;

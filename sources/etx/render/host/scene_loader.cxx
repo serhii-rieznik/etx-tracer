@@ -552,12 +552,12 @@ void build_camera(Camera& camera, const float3& origin, const float3& target, co
   camera.side = {view.col[0].x, view.col[1].x, view.col[2].x};
   camera.up = {view.col[0].y, view.col[1].y, view.col[2].y};
   camera.direction = {-view.col[0].z, -view.col[1].z, -view.col[2].z};
-  camera.tan_half_fov = 1.0f / std::abs(proj.col[1].y);
+  camera.tan_half_fov = 1.0f / std::abs(proj.col[0].x);
   camera.aspect = proj.col[1].y / proj.col[0].x;
   camera.view_proj = proj * view;
 
-  float plane_w = 2.0f * camera.tan_half_fov * camera.aspect;
-  float plane_h = 2.0f * camera.tan_half_fov;
+  float plane_w = 2.0f * camera.tan_half_fov;
+  float plane_h = 2.0f * camera.tan_half_fov / camera.aspect;
   camera.area = plane_w * plane_h;
   camera.film_size = viewport;
   camera.image_plane = float(camera.film_size.x) / (2.0f * camera.tan_half_fov);

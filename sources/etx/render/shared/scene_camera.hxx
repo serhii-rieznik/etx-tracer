@@ -33,9 +33,9 @@ ETX_GPU_CODE Ray generate_ray(const Scene& scene, const Camera& camera, const fl
   float3 origin = camera.position;
   float3 direction = camera.direction;
   ETX_CHECK_FINITE(direction);
-  float3 s = (uv.x * camera.aspect) * camera.side;
+  float3 s = uv.x * camera.side;
   ETX_CHECK_FINITE(s);
-  float3 u = uv.y * camera.up;
+  float3 u = uv.y * camera.up / camera.aspect;
   ETX_CHECK_FINITE(u);
   float3 w_o = normalize(camera.tan_half_fov * (s + u) + direction);
   ETX_CHECK_FINITE(w_o);

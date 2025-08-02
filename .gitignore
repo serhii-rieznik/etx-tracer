@@ -14,3 +14,4 @@ thirdparty/oidn/lib
 thirdparty/oidn/include
 bin/_tmp/
 thirdparty/oidn/
+blender/etx_tracer_exporter/__pycache__/

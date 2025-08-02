@@ -161,6 +161,7 @@ Options CPUPathTracing::options() const {
   Options result = {};
   result.add(_private->options.direct, "direct", "Direct Hits");
   result.add(_private->options.nee, "nee", "Light Sampling");
+  result.add("pt-opt", "Path Tracing Options");
   result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
   result.add(_private->options.blue_noise, "bn", "Use Blue Noise");
   return result;

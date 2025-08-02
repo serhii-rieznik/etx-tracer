@@ -287,6 +287,7 @@ struct CPUBidirectionalImpl : public Task {
   bool enable_connect_to_camera = true;
   bool enable_connect_vertices = true;
   bool enable_mis = true;
+  bool enable_blue_noise = true;
 
   struct GBuffer {
     SpectralResponse albedo = {};
@@ -309,6 +310,9 @@ struct CPUBidirectionalImpl : public Task {
     float pdf_dir = 0.0f;
     uint32_t medium_index = kInvalidIndex;
     PathSource mode = PathSource::Undefined;
+    uint2 pixel = {};
+    uint32_t iteration = 0;
+    bool use_blue_noise = false;
   };
 
   CPUBidirectionalImpl(Raytracing& r, std::atomic<Integrator::State>* st)
@@ -340,7 +344,7 @@ struct CPUBidirectionalImpl : public Task {
       SpectralResponse result = {spect, 0.0f};
 
       if (mode != Mode::LightTracing) {
-        result = build_camera_path(smp, spect, uv, path_data, gbuffer);
+        result = build_camera_path(smp, spect, uv, path_data, gbuffer, pixel, status.current_iteration);
       }
 
       auto xyz = (result / spect.sampling_pdf()).to_rgb();
@@ -441,14 +445,15 @@ struct CPUBidirectionalImpl : public Task {
     }
   }
 
-  void connect(Payload& payload, Sampler& smp, PathData& path_data, PathVertex& curr, PathVertex& prev) const {
+  void connect(Payload& payload, Sampler& smp, const float3& smp_fixed, PathData& path_data, PathVertex& curr, PathVertex& prev) const {
     if (payload.mode == PathSource::Light) {
       CameraSample camera_sample = {};
       auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);
       rt.film().atomic_add(Film::LightIteration, splat.to_rgb(), camera_sample.uv);
     } else if (payload.mode == PathSource::Camera) {
-      payload.result += direct_hit_area_emitter(curr, prev, path_data, payload.spect, smp, false);
+      smp.push_fixed(smp_fixed.x, smp_fixed.y, smp_fixed.z);
       payload.result += connect_camera_to_light(curr, prev, smp, path_data, payload.spect);
+      payload.result += direct_hit_area_emitter(curr, prev, path_data, payload.spect, smp, false);
       payload.result += connect_camera_to_light_path(curr, prev, smp, payload.spect, path_data);
     }
   }
@@ -459,7 +464,16 @@ struct CPUBidirectionalImpl : public Task {
 
     ETX_ASSERT(medium_instance.valid());
 
-    float3 w_o = medium::sample_phase_function(ray.d, medium_instance.anisotropy, smp);
+    float2 rnd_bsdf = smp.next_2d();
+    float2 rnd_em_sample = smp.next_2d();
+    float2 rnd_support = smp.next_2d();
+    if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 0);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 2);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 4);
+    }
+
+    float3 w_o = medium::sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
     float pdf_fwd = medium::phase_function(ray.d, w_o, medium_instance.anisotropy);
     float pdf_bck = medium::phase_function(w_o, ray.d, medium_instance.anisotropy);
 
@@ -483,13 +497,22 @@ struct CPUBidirectionalImpl : public Task {
     update_mis(emitter_sample, first_interaction, payload, smp, path_data, curr, prev);
 
     if (explicit_connections) {
-      connect(payload, smp, path_data, curr, prev);
+      connect(payload, smp, {rnd_em_sample.x, rnd_em_sample.y, rnd_support.y}, path_data, curr, prev);
     }
   }
 
   InteractionResult handle_surface(const Intersection& a_intersection, const EmitterSample& emitter_sample, const bool first_interaction, Payload& payload, Ray& ray, Sampler& smp,
     PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer, bool subsurface_exit) const {
     const auto& scene = rt.scene();
+
+    float2 rnd_bsdf = smp.next_2d();
+    float2 rnd_em_sample = smp.next_2d();
+    float2 rnd_support = smp.next_2d();
+    if ((payload.mode == PathSource::Camera) && first_interaction && enable_blue_noise) {
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 0);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 2);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 4);
+    }
 
     if (scene.materials[a_intersection.material_index].cls == Material::Class::Boundary) {
       const auto& m = scene.materials[a_intersection.material_index];
@@ -508,7 +531,10 @@ struct CPUBidirectionalImpl : public Task {
       gbuffer.recorded = true;
     }
 
+    smp.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
     auto bsdf_sample = bsdf::sample(bsdf_data, scene.materials[a_intersection.material_index], scene, smp);
+    smp.pop_fixed();
+
     ETX_VALIDATE(bsdf_sample.weight);
 
     bool subsurface_path = (subsurface_exit == false) &&                                                                              //
@@ -587,7 +613,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     update_mis(emitter_sample, first_interaction, payload, smp, path_data, curr, prev);
-    connect(payload, smp, path_data, curr, prev);
+    connect(payload, smp, {rnd_em_sample.x, rnd_em_sample.y, rnd_support.y}, path_data, curr, prev);
 
     return terminate_path ? InteractionResult::Break : (subsurface_path ? InteractionResult::SampleSubsurface : InteractionResult::NextIteration);
   }
@@ -784,7 +810,7 @@ struct CPUBidirectionalImpl : public Task {
     return payload.result;
   }
 
-  SpectralResponse build_camera_path(Sampler& smp, SpectralQuery spect, const float2& uv, PathData& path_data, GBuffer& gbuffer) const {
+  SpectralResponse build_camera_path(Sampler& smp, SpectralQuery spect, const float2& uv, PathData& path_data, GBuffer& gbuffer, const uint2& pixel, uint32_t iteration) const {
     auto ray = generate_ray(rt.scene(), rt.camera(), uv, smp.next_2d());
     auto eval = film_evaluate_out(spect, rt.camera(), ray);
 
@@ -812,6 +838,9 @@ struct CPUBidirectionalImpl : public Task {
       .pdf_dir = eval.pdf_dir,
       .medium_index = curr.medium.index,
       .mode = PathSource::Camera,
+      .pixel = pixel,
+      .iteration = iteration,
+      .use_blue_noise = enable_blue_noise,
     };
 
     return build_path(smp, ray.o, ray.d, path_data, payload, {}, gbuffer, curr, prev);
@@ -1221,8 +1250,8 @@ struct CPUBidirectionalImpl : public Task {
     if ((enable_connect_to_light == false) || (path_data.camera_path_length() + 1u > scene.max_path_length) || (mode == Mode::LightTracing))
       return {spect, 0.0f};
 
-    uint32_t emitter_index = sample_emitter_index(scene, smp.next());
-    auto emitter_sample = sample_emitter(spect, emitter_index, smp.next_2d(), z_curr.intersection.pos, rt.scene());
+    uint32_t emitter_index = sample_emitter_index(scene, smp.fixed_w);
+    auto emitter_sample = sample_emitter(spect, emitter_index, {smp.fixed_u, smp.fixed_v}, z_curr.intersection.pos, rt.scene());
     if (emitter_sample.value.is_zero() || (emitter_sample.pdf_dir == 0.0f)) {
       return {spect, 0.0f};
     }
@@ -1314,6 +1343,7 @@ struct CPUBidirectionalImpl : public Task {
     enable_connect_to_light = opt.get("bdpt-conn_connect_to_light", enable_connect_to_light).to_bool();
     enable_connect_vertices = opt.get("bdpt-conn_connect_vertices", enable_connect_vertices).to_bool();
     enable_mis = opt.get("bdpt-conn_mis", enable_mis).to_bool();
+    enable_blue_noise = opt.get("bdpt-blue_noise", enable_blue_noise).to_bool();
 
     for (auto& path_data : per_thread_path_data) {
       path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
@@ -1411,8 +1441,9 @@ Options CPUBidirectional::options() const {
     if (_private->mode == CPUBidirectionalImpl::Mode::BDPTFull) {
       result.add(_private->enable_connect_vertices, "bdpt-conn_connect_vertices", "Camera Path to Light Path");
     }
-    result.add("mis", "Multiple Importance Sampling");
-    result.add(_private->enable_mis, "bdpt-conn_mis", "Enabled");
+    result.add("bdpt-opt", "Bidirectional Path Tracing Options");
+    result.add(_private->enable_mis, "bdpt-conn_mis", "Multiple Importance Sampling");
+    result.add(_private->enable_blue_noise, "bdpt-blue_noise", "Enable Blue Noise");
   }
   return result;
 }

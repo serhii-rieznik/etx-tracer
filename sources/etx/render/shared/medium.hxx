@@ -39,19 +39,17 @@ ETX_GPU_CODE float phase_function(const float3& w_i, const float3& w_o, const fl
   return (1.0f / (4.0f * kPi)) * (1.0f - g * g) / (d * sqrtf(d));
 }
 
-ETX_GPU_CODE float3 sample_phase_function(const float3& w_i, const float g, Sampler& smp) {
-  float2 xi = smp.next_2d();
-
+ETX_GPU_CODE float3 sample_phase_function(const float3& w_i, const float g, const float2& smp_rnd) {
   float cos_theta = 0.0f;
   if (fabsf(g) < 1e-3f) {
-    cos_theta = 1.0f - 2.0f * xi.x;
+    cos_theta = 1.0f - 2.0f * smp_rnd.x;
   } else {
-    float sqr_term = (1.0f - g * g) / (1.0f + g * (2.0f * xi.x - 1.0f));
+    float sqr_term = (1.0f - g * g) / (1.0f + g * (2.0f * smp_rnd.x - 1.0f));
     cos_theta = (1.0f + g * g - sqr_term * sqr_term) / (2.0f * g);
   }
 
   float sin_theta = sqrtf(max(0.0f, 1.0f - cos_theta * cos_theta));
-  float phi = kDoublePi * xi.y;
+  float phi = kDoublePi * smp_rnd.y;
 
   auto basis = orthonormal_basis(w_i);
   return (basis.u * cosf(phi) + basis.v * sinf(phi)) * sin_theta - w_i * cos_theta;
@@ -255,8 +253,8 @@ struct ETX_ALIGNED Medium {
     return (cls == Class::Vacuum) ? 1.0f : medium::phase_function(w_i, w_o, phase_function_g);
   }
 
-  ETX_GPU_CODE float3 sample_phase_function(Sampler& smp, const float3& w_i) const {
-    return (cls == Class::Vacuum) ? w_i : medium::sample_phase_function(w_i, phase_function_g, smp);
+  ETX_GPU_CODE float3 sample_phase_function(const float2& smp_rnd, const float3& w_i) const {
+    return (cls == Class::Vacuum) ? w_i : medium::sample_phase_function(w_i, phase_function_g, smp_rnd);
   }
 
   ETX_GPU_CODE float sample_density(const float3& coord) const {
