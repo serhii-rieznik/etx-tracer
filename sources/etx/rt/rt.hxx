@@ -30,7 +30,21 @@ struct Raytracing {
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
   bool trace_material(const Scene& scene, const Ray&, const uint32_t material_id, Intersection&, Sampler& smp) const;
   uint32_t continuous_trace(const Scene& scene, const Ray&, const ContinousTraceOptions& options, Sampler& smp) const;
-  SpectralResponse trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const Medium::Instance& medium, Sampler& smp) const;
+
+  struct TraceTransmittanceResult {
+    enum : uint32_t {
+      DeltaSurface = 1u << 0u,
+    };
+    SpectralResponse throughput = {};
+    uint32_t flags = 0;
+
+    bool delta_surface_intersected() const {
+      return flags & DeltaSurface;
+    }
+  };
+
+  TraceTransmittanceResult trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const Medium::Instance& medium,
+    Sampler& smp) const;
 
  private:
   ETX_DECLARE_PIMPL(Raytracing, 1024);

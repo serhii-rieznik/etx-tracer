@@ -458,21 +458,21 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
   return true;
 }
 
-SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const Medium::Instance& medium,
-  Sampler& smp) const {
+Raytracing::TraceTransmittanceResult Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1,
+  const Medium::Instance& medium, Sampler& smp) const {
   ETX_FUNCTION_SCOPE();
   ETX_ASSERT(_private != nullptr);
 
   struct IntersectionContextExt : public RTCRayQueryContext {
     float t;
-    float pad;
+    uint32_t flags;
     Medium::Instance medium;
     const Scene& scene;
     Sampler& smp;
     SpectralResponse value;
     float3 origin;
     float3 direction;
-  } context = {{}, 0.0f, 0.0f, medium, scene, smp, {spect, 1.0f}, p0};
+  } context = {{}, 0.0f, 0u, medium, scene, smp, {spect, 1.0f}, p0};
 
   auto filter_function = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
@@ -507,6 +507,8 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     }
 
     if (stop_tracing) {
+      bool delta_material = bsdf::is_delta(mat, uv, scene);
+      ctx->flags = delta_material ? TraceTransmittanceResult::DeltaSurface : 0u;
       ctx->value = {ctx->value, 0.0f};
       *args->valid = -1;
       return;
@@ -537,9 +539,11 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
   context.direction = p1 - p0;
   ETX_CHECK_FINITE(context.direction);
 
+  Raytracing::TraceTransmittanceResult result = {{spect, 0.0f}, 0u};
+
   float t_max = dot(context.direction, context.direction);
   if (t_max <= kRayEpsilon) {
-    return {spect, 1.0f};
+    return result;
   }
 
   t_max = sqrtf(t_max);
@@ -562,7 +566,9 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     }
   }
 
-  return context.value;
+  result.flags = context.flags;
+  result.throughput = context.value;
+  return result;
 }
 
 const Film& Raytracing::film() const {

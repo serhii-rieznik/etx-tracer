@@ -1,0 +1,35 @@
+{
+  "geometry": "bdpt.obj",
+  "materials": "bdpt.mtl",
+  "samples": 1024,
+  "max-path-length": 65536,
+  "random-termination-start": 6,
+  "spectral": false,
+  "force-tangents": false,
+  "camera": {
+    "class": "perspective",
+    "viewport": [
+      1280,
+      720
+    ],
+    "origin": [
+      5.239412784576416,
+      7.538035869598389,
+      2.9106271266937256
+    ],
+    "target": [
+      -3.2936606407165527,
+      3.5665717124938965,
+      -0.4678535461425781
+    ],
+    "up": [
+      -0.36925768852233887,
+      0.9177552461624146,
+      -0.14619854092597961
+    ],
+    "fov": 39.597755335771296,
+    "focal-length": 50.0,
+    "lens-radius": 0.0,
+    "focal-distance": 0.0
+  }
+}

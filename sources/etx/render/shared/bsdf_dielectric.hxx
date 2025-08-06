@@ -38,7 +38,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   return 0.0f;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene) {
   return true;
 }
 
@@ -60,6 +60,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto ext_ior = in_outside ? mtl.ext_ior(data.spectrum_sample) : mtl.int_ior(data.spectrum_sample);
   auto int_ior = in_outside ? mtl.int_ior(data.spectrum_sample) : mtl.ext_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+
+  uint32_t delta_sample = is_delta(mtl, data.tex, scene) ? BSDFSample::Delta : 0u;
 
   BSDFSample result = {};
   result.weight = {data.spectrum_sample, 1.0f};
@@ -106,14 +108,14 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   if (LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(result.w_o) > 0.0f) {
     result.eta = 1.0f;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
-    result.properties = BSDFSample::Reflection;
+    result.properties = BSDFSample::Reflection | delta_sample;
     result.medium_index = data.current_medium;
   } else {
     float eta = (int_ior.eta / ext_ior.eta).monochromatic();
     float factor = (data.path_source == PathSource::Camera) ? sqr(1.0f / eta) : 1.0f;
     result.eta = eta;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr) * factor;
-    result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged;
+    result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged | delta_sample;
     result.medium_index = in_outside ? mtl.int_medium : mtl.ext_medium;
   }
 
@@ -229,7 +231,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   return result;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene) {
   auto roughness = evaluate_roughness(mtl, tex, scene);
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }

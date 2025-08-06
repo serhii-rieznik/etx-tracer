@@ -90,7 +90,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   return result;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene) {
   return false;
 }
 
@@ -177,7 +177,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   return (total == 0.0f) ? 0.0f : kInvPi * fabsf(n_dot_o) * (reflection ? rf_value / total : tr_value / total);
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene) {
   return false;
 }
 
@@ -208,7 +208,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   return 0.0f;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene) {
   return true;
 }
 
@@ -240,7 +240,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   return 0.0f;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene) {
   return false;
 }
 

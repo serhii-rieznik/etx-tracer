@@ -1,0 +1,14 @@
+{
+  "geometry": "veach-bdpt.obj",
+  "materials": "materials.mtl",
+  "samples": 32,
+  "max-path-length": 65536,
+  "force-tangents": true,
+  "camera": {
+    "viewport": [ 800.0, 800.0 ],
+    "origin": [ 16.0, 4.0, 0.0 ],
+    "target": [ 0.0, 4.0, 0.0 ],
+    "fov": 26.99,
+    "lens-radius": 0.0
+  }
+}

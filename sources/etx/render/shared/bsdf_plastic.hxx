@@ -166,7 +166,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   return result;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene) {
   return false;
 }
 

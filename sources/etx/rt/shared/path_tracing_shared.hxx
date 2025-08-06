@@ -285,7 +285,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
       auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, {.index = payload.medium}, payload.smp);
       float phase_function = medium.phase_function(payload.ray.d, emitter_sample.direction);
       auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, phase_function);
-      payload.accumulated += payload.throughput * emitter_sample.value * tr * (phase_function * weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
+      payload.accumulated += payload.throughput * emitter_sample.value * tr.throughput * (phase_function * weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
       ETX_VALIDATE(payload.accumulated);
     }
   }
@@ -317,7 +317,7 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
   const auto& tri = scene.triangles[intersection.triangle_index];
   auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
   auto tr = rt.trace_transmittance(spect, scene, pos, emitter_sample.origin, {.index = medium}, smp);
-  ETX_VALIDATE(tr);
+  ETX_VALIDATE(tr.throughput);
 
   bool no_weight = (mis == false) || emitter_sample.is_delta;
   auto weight = no_weight ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
@@ -325,7 +325,7 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
 
   float wscale = weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
   ETX_VALIDATE(wscale);
-  return bsdf_eval.bsdf * emitter_sample.value * tr * wscale;
+  return bsdf_eval.bsdf * emitter_sample.value * tr.throughput * wscale;
 }
 
 ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, const PTOptions& options,
@@ -354,7 +354,7 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
     float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
     bool no_weight = (options.mis == false) || q.directly_visible || (payload.mis_weight == false);
     auto weight = no_weight ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
-    payload.accumulated += payload.throughput * e * tr * weight;
+    payload.accumulated += payload.throughput * e * tr.throughput * weight;
     ETX_VALIDATE(payload.accumulated);
   }
 }

@@ -1,0 +1,63 @@
+newmtl stand_01
+material class diffuse
+
+newmtl leg
+material class diffuse
+
+newmtl large_light_emitter
+material class diffuse
+Kd 0.800 0.800 0.800
+Pr 1.000
+Ks 1.000 1.000 1.000
+int_ior 1.500
+Ke 523.2580 523.2580 523.2580
+
+newmtl small_light
+material class diffuse
+Kd 0.500 0.500 0.500
+Pr 1.000
+Ks 1.000 1.000 1.000
+int_ior 1.500
+
+newmtl stand_02
+material class diffuse
+
+newmtl glass
+material class diffuse
+Kt 1.000 1.000 1.000
+Ks 1.000 1.000 1.000
+Pr 0.000
+int_ior 1.500
+
+newmtl room
+material class diffuse
+Kd 0.500 0.500 0.500
+Pr 1.000
+Ks 1.000 1.000 1.000
+int_ior 1.500
+
+newmtl small_light_emitter
+material class diffuse
+Kd 0.800 0.800 0.800
+Pr 1.000
+Ks 1.000 1.000 1.000
+int_ior 1.500
+Ke 12048.2002 9036.1501 6024.1001
+
+newmtl table
+material class diffuse
+Kd 0.330 0.258 0.150
+Pr 1.000
+Ks 1.000 1.000 1.000
+int_ior 1.500
+
+newmtl large_light
+material class diffuse
+Kd 1.000 1.000 1.000
+Pr 0.500
+Ks 1.000 1.000 1.000
+int_ior 1.500
+
+newmtl et::env
+color 0.0509 0.0509 0.0509
+

@@ -412,7 +412,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
   const auto& tri = scene.triangles[intersection.triangle_index];
   float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, w_o);
   auto tr = rt.trace_transmittance(state.spect, scene, p0, camera_sample.position, {.index = state.medium_index}, state.sampler);
-  if (tr.is_zero()) {
+  if (tr.throughput.is_zero()) {
     return {};
   }
 
@@ -430,7 +430,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
 
   weight *= fix_shading_normal(tri.geo_n, intersection.nrm, intersection.w_i, w_o);
 
-  return tr * eval.bsdf * state.throughput * camera_sample.weight * weight;
+  return tr.throughput * eval.bsdf * state.throughput * camera_sample.weight * weight;
 }
 
 ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
@@ -479,7 +479,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
 
   float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(emitter_sample.origin - intersection.pos));
   auto tr = rt.trace_transmittance(state.spect, scene, p0, emitter_sample.origin, {.index = state.medium_index}, state.sampler);
-  if (tr.is_zero())
+  if (tr.throughput.is_zero())
     return {state.spect, 0.0f};
 
   float l_dot_n = fabsf(dot(emitter_sample.direction, intersection.nrm));
@@ -488,7 +488,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
   float w_light = emitter_sample.is_delta ? 0.0f : (connection_eval.pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
   float w_camera = (emitter_sample.pdf_dir_out * l_dot_n) / (emitter_sample.pdf_dir * l_dot_e) * (vcm_iteration.vm_weight + state.d_vcm + state.d_vc * reverse_pdf);
   float weight = options.enable_mis() ? 1.0f / (1.0f + w_light + w_camera) : 1.0f;
-  return tr * state.throughput * connection_eval.bsdf * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
+  return tr.throughput * state.throughput * connection_eval.bsdf * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 }
 
 ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
@@ -580,10 +580,8 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
     if (connected) {
       float3 p0 = shading_pos(scene.vertices, tri, intersection.barycentric, normalize(target_position - intersection.pos));
       auto tr = rt.trace_transmittance(state.spect, scene, p0, target_position, {.index = state.medium_index}, state.sampler);
-      if (tr.is_zero() == false) {
-        result += tr * value;
-        ETX_VALIDATE(result);
-      }
+      result += tr.throughput * value;
+      ETX_VALIDATE(result);
     }
   }
   return result;
@@ -612,10 +610,11 @@ struct ETX_ALIGNED VCMSpatialGridData {
     uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
 
     float3 merged = {};
+
     for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
       const auto& light_vertex = samples[indices[j]];
 
-      auto d = light_vertex.position(scene) - intersection.pos;
+      float3 d = light_vertex.position(scene) - intersection.pos;
       float distance_squared = dot(d, d);
       if ((distance_squared > radius_squared) || (light_vertex.path_length + state.total_path_depth + 1 > scene.max_path_length)) {
         continue;
@@ -628,7 +627,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
       const auto& mat = scene.materials[intersection.material_index];
       auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
       auto camera_bsdf = bsdf::evaluate(camera_data, -light_vertex.w_i, mat, scene, state.sampler);
-      if (camera_bsdf.valid() == false) {
+      if (!camera_bsdf.valid()) {
         continue;
       }
 
@@ -637,6 +636,9 @@ struct ETX_ALIGNED VCMSpatialGridData {
       float w_light = light_vertex.d_vcm * vc_weight + light_vertex.d_vm * camera_bsdf.pdf;
       float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;
       float weight = 1.0f / (1.0f + w_light + w_camera);
+
+      float r2_norm = distance_squared / radius_squared;
+      float kernel_falloff = 2.0f * (1.0f - r2_norm);  // No extra normalization
 
       auto c_value = (camera_bsdf.func * state.throughput / state.spect.sampling_pdf()).to_rgb();
       ETX_VALIDATE(c_value);
@@ -648,9 +650,10 @@ struct ETX_ALIGNED VCMSpatialGridData {
         l_value *= SpectralDistribution::kRGBLuminanceScale;
       }
 
-      merged += (c_value * l_value) * weight;
+      merged += (c_value * l_value) * (weight * kernel_falloff);
       ETX_VALIDATE(merged);
     }
+
     return merged;
   }
 
@@ -727,7 +730,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
   bool subsurface_sampled = subsurface_path && (subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather) == subsurface::GatherResult::Succeedded);
 
-  if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
+  if (bsdf::is_delta(mat, intersection.tex, scene) == false) {
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
         state.gathered += ss_gather.weights[i] * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, ss_gather.intersections[i], rt, state);
@@ -800,7 +803,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
   bool subsurface_sampled = subsurface_path && (subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather) == subsurface::GatherResult::Succeedded);
 
-  if (bsdf::is_delta(mat, intersection.tex, scene, state.sampler) == false) {
+  if (bsdf::is_delta(mat, intersection.tex, scene) == false) {
     result.add_vertex = true;
     result.vertex_to_add = {state, intersection, path_index};
     result.splat_count = 0;

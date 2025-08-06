@@ -1,0 +1,35 @@
+{
+  "geometry": "mnee.obj",
+  "materials": "mnee.mtl",
+  "samples": 32,
+  "max-path-length": 65536,
+  "random-termination-start": 6,
+  "spectral": false,
+  "force-tangents": false,
+  "camera": {
+    "class": "perspective",
+    "viewport": [
+      1280,
+      720
+    ],
+    "origin": [
+      8.02845287322998,
+      9.967255592346191,
+      -6.715025424957275
+    ],
+    "target": [
+      1.8811116218566895,
+      3.4541611671447754,
+      -2.266451835632324
+    ],
+    "up": [
+      -0.5276426672935486,
+      0.7588123083114624,
+      0.38183391094207764
+    ],
+    "fov": 39.597755335771296,
+    "focal-length": 50.0,
+    "lens-radius": 0.0,
+    "focal-distance": 0.0
+  }
+}

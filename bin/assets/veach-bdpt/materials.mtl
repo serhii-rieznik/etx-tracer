@@ -1,0 +1,53 @@
+# Blender MTL File: 'None'
+# Material Count: 13
+
+newmtl et::medium
+id smoke
+scattering 0.05 0.05 0.05
+absorption 0.025 0.025 0.025
+
+newmtl glass
+material class dielectric
+ext_medium smoke
+int_ior sapphire
+
+newmtl separator
+material class boundary
+int_medium smoke
+
+newmtl leg
+material class conductor
+Pr 0.0
+int_ior silver
+
+newmtl room
+Kd 0.5 0.5 0.5
+
+newmtl small_light
+Kd 0.5 0.5 0.5
+
+newmtl stand_01
+material class conductor
+Pr 0.0
+int_ior silver
+
+newmtl stand_02
+material class conductor
+Pr 0.0
+int_ior silver
+
+newmtl large_light
+material class conductor
+Pr 0.0
+int_ior copper
+
+newmtl table
+Kd 0.32963 0.257976 0.150292
+
+newmtl large_light_emitter
+ext_medium smoke
+emitter nblackbody 2700 scale 1024.0
+
+newmtl small_light_emitter
+ext_medium smoke
+emitter nblackbody 20000 scale 8192.0

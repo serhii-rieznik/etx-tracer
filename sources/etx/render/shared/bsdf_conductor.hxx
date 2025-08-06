@@ -11,8 +11,10 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
+  uint32_t delta_sample = is_delta(mtl, data.tex, scene) ? BSDFSample::Delta : 0u;
+
   BSDFSample result;
-  result.properties = BSDFSample::Reflection;
+  result.properties = BSDFSample::Reflection | delta_sample;
   result.medium_index = data.current_medium;
   result.eta = 1.0f;
 
@@ -116,7 +118,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   return result;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene) {
   float2 roughness = evaluate_roughness(mtl, tex, scene);
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }

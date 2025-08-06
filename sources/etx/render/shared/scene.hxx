@@ -82,9 +82,9 @@ ETX_GPU_CODE float3 lerp_tangent(const ArrayView<Vertex>& vertices, const Triang
 }
 
 ETX_GPU_CODE float3 lerp_bitangent(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
-  return normalize(vertices[t.i[0]].tan * bc.x +  //
-                   vertices[t.i[1]].tan * bc.y +  //
-                   vertices[t.i[2]].tan * bc.z);  //
+  return normalize(vertices[t.i[0]].btn * bc.x +  //
+                   vertices[t.i[1]].btn * bc.y +  //
+                   vertices[t.i[2]].btn * bc.z);  //
 }
 
 ETX_GPU_CODE float2 lerp_uv(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& b) {

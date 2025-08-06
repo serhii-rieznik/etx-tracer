@@ -1050,7 +1050,7 @@ ETX_GPU_CODE float3 slerp(const float3& start, const float3& end, float t) {
   float sinThetaInv = 1.0f / sinTheta;
   float a = sinf((1.0f - t) * theta) * sinThetaInv;
   float b = sinf(t * theta) * sinThetaInv;
-  return float3(start.x * a + end.x * b, start.y * a + end.y * b, start.z * a + end.z * b);
+  return {start.x * a + end.x * b, start.y * a + end.y * b, start.z * a + end.z * b};
 }
 
 ETX_GPU_CODE float3 project_point_plane(const float3& v, const float3& plane_n, const float3& plane_o) {
