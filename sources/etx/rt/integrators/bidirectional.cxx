@@ -1266,7 +1266,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     auto bsdf_eval = z_curr.bsdf_in_direction(spect, PathSource::Camera, emitter_sample.direction, rt.scene(), smp);
-    if (bsdf_eval.bsdf.maximum() <= kEpsilon) {
+    if (bsdf_eval.bsdf.is_zero()) {
       return {spect, 0.0f};
     }
 
@@ -1282,6 +1282,7 @@ struct CPUBidirectionalImpl : public Task {
     sampled_vertex.pdf.forward = PathVertex::pdf_to_emitter(spect, z_curr, sampled_vertex, rt.scene());
     sampled_vertex.pdf.next = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
     sampled_vertex.delta_emitter = emitter_sample.is_delta;
+
     SpectralResponse emitter_throughput = emitter_sample.value / sampled_vertex.pdf.next;
     ETX_VALIDATE(emitter_throughput);
     float weight = mis_weight_camera_to_light(z_curr, z_prev, path_data, spect, sampled_vertex, smp);

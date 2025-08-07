@@ -539,11 +539,9 @@ Raytracing::TraceTransmittanceResult Raytracing::trace_transmittance(const Spect
   context.direction = p1 - p0;
   ETX_CHECK_FINITE(context.direction);
 
-  Raytracing::TraceTransmittanceResult result = {{spect, 0.0f}, 0u};
-
   float t_max = dot(context.direction, context.direction);
   if (t_max <= kRayEpsilon) {
-    return result;
+    return {{spect, 1.0f}, 0u};
   }
 
   t_max = sqrtf(t_max);
@@ -566,9 +564,7 @@ Raytracing::TraceTransmittanceResult Raytracing::trace_transmittance(const Spect
     }
   }
 
-  result.flags = context.flags;
-  result.throughput = context.value;
-  return result;
+  return {context.value, context.flags};
 }
 
 const Film& Raytracing::film() const {
