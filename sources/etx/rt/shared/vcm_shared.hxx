@@ -637,8 +637,8 @@ struct ETX_ALIGNED VCMSpatialGridData {
       float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;
       float weight = 1.0f / (1.0f + w_light + w_camera);
 
-      float r2_norm = distance_squared / radius_squared;
-      float kernel_falloff = 2.0f * (1.0f - r2_norm);  // No extra normalization
+      // float r2_norm = distance_squared / radius_squared;
+      // float kernel_falloff = 2.0f * (1.0f - r2_norm);  // No extra normalization
 
       auto c_value = (camera_bsdf.func * state.throughput / state.spect.sampling_pdf()).to_rgb();
       ETX_VALIDATE(c_value);
@@ -650,7 +650,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
         l_value *= SpectralDistribution::kRGBLuminanceScale;
       }
 
-      merged += (c_value * l_value) * (weight * kernel_falloff);
+      merged += (c_value * l_value) * weight;
       ETX_VALIDATE(merged);
     }
 

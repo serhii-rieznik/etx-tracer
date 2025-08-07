@@ -4,7 +4,6 @@
 #include <atomic>
 
 #include <etx/rt/shared/path_tracing_shared.hxx>
-#include <etx/rt/mnee.hxx>
 
 #define LOG if (false)
 
@@ -224,8 +223,6 @@ struct PathVertex {
 struct PathData {
   std::vector<PathVertex> emitter_path;
 
-  std::vector<Intersection> spec_chain;
-
   struct History {
     float pdf_forward = 0.0f;
     float pdf_ratio = 0.0f;
@@ -293,7 +290,6 @@ struct CPUBidirectionalImpl : public Task {
   bool enable_connect_vertices = true;
   bool enable_mis = true;
   bool enable_blue_noise = true;
-  bool enable_mnee = true;
 
   struct GBuffer {
     SpectralResponse albedo = {};
@@ -582,15 +578,6 @@ struct CPUBidirectionalImpl : public Task {
     curr.delta_emitter = prev.delta_emitter;
     curr.delta_connection = bsdf_sample.is_delta();
 
-    // Collect consecutive specular (delta) surface interactions for Manifold NEE
-    if (payload.mode == PathSource::Camera) {
-      if (curr.delta_connection) {
-        path_data.spec_chain.emplace_back(curr.intersection);
-      } else {
-        // Clear chain when hitting non-delta surface (proper termination point for MNEE)
-        path_data.spec_chain.clear();
-      }
-    }
     curr.medium = medium_instance;
     curr.pdf.next = bsdf_sample.pdf;
     curr.pdf.forward = PathVertex::convert_solid_angle_pdf_to_area(payload.pdf_dir, prev, curr);
@@ -1277,141 +1264,8 @@ struct CPUBidirectionalImpl : public Task {
 
     auto tr = local_transmittance(spect, smp, z_curr, emitter_sample.origin);
 
-    float mnee_pdf = 0.0f;
-    SpectralResponse mnee_result = {spect, 0.0f};
     float nee_pdf = 0.0f;
     SpectralResponse nee_result = {spect, 0.0f};
-
-    // MNEE should trigger when:
-    // 1. We have accumulated specular surfaces, OR
-    // 2. Traditional condition: non-delta surface with delta encountered in transmittance
-    if (enable_mnee && (z_curr.delta_connection == false) && (path_data.spec_chain.empty() == false || tr.delta_surface_intersected())) {
-      LOG log::info("MNEE----------------------------------------------------------------");
-      mnee::Result mnee_res = {};
-      mnee::LightEndpoint le = {};
-
-      bool targeted = false;
-      bool using_reverse_chain = false;  // Track if we're using a reverse chain
-
-      // Handle case where spec_chain is empty but transmittance ray hits specular surfaces
-      // This happens when we're inside glass and need to trace exit path
-      bool should_skip_mnee = false;
-      if (path_data.spec_chain.empty() && tr.delta_surface_intersected()) {
-        // DEBUG: Check if we're in the glass interior caustics case
-        LOG log::info("MNEE Debug: Glass interior case detected - trying reverse chain building");
-
-        // Build reverse specular chain from current position to light
-        std::vector<Intersection> reverse_chain;
-        if (mnee::build_reverse_specular_chain(scene, z_curr.intersection.pos, emitter_sample.origin, reverse_chain, rt, smp)) {
-          // DEBUG: Successfully built reverse chain
-          LOG log::info("MNEE Debug: Successfully built reverse chain with %zu surfaces", reverse_chain.size());
-
-          // Use the reverse chain as our spec_chain for MNEE processing
-          path_data.spec_chain = std::move(reverse_chain);
-          using_reverse_chain = true;
-        } else {
-          // DEBUG: Failed to build reverse chain
-          LOG log::info("MNEE Debug: Failed to build reverse chain - skipping MNEE");
-
-          // Failed to build reverse chain, skip MNEE
-          should_skip_mnee = true;
-        }
-      }
-
-      if (should_skip_mnee) {
-        // Skip MNEE processing, fall through to regular NEE
-      } else {
-        // For single surfaces, try to sample emitter in the expected specular direction
-        // CRITICAL FIX: Disable targeted sampling for reverse chains to avoid direction confusion
-        if (path_data.spec_chain.size() == 1 && using_reverse_chain == false) {
-          const auto& first_surface = path_data.spec_chain[0];
-          const Material& mat = scene.materials[first_surface.material_index];
-
-          float3 specular_dir;
-          bool valid_specular = false;
-
-          // Handle different material types correctly
-          switch (mat.cls) {
-            case Material::Class::Mirror:
-            case Material::Class::Conductor: {
-              float3 dir_to_first_surface = normalize(path_data.spec_chain[0].pos - z_curr.intersection.pos);
-              specular_dir = reflect(dir_to_first_surface, first_surface.nrm);
-              valid_specular = true;
-              break;
-            }
-
-            case Material::Class::Dielectric: {
-              if (bsdf::is_delta(mat, first_surface.tex, scene)) {
-                float3 dir_to_first_surface = normalize(path_data.spec_chain[0].pos - z_curr.intersection.pos);
-                auto eta_i = mat.ext_ior.at(spect).eta.monochromatic();
-                auto eta_t = mat.int_ior.at(spect).eta.monochromatic();
-                float eta = (dot(dir_to_first_surface, first_surface.nrm) < 0.0f) ? (eta_i / eta_t) : (eta_t / eta_i);
-
-                bool tir = false;
-                specular_dir = mnee::refract(dir_to_first_surface, first_surface.nrm, eta, tir);
-                valid_specular = !tir;
-
-                // For dielectrics, don't use targeted sampling for single surfaces
-                // as we may need the exit refraction which requires the full MNEE solver
-                valid_specular = false;  // Force general MNEE path for proper glass handling
-              }
-              break;
-            }
-
-            default:
-              break;
-          }
-
-          if (valid_specular) {
-            targeted = mnee::sample_area_emitter_for_direction(spect, scene, emitter_index, first_surface.pos, specular_dir, le, rt, smp);
-          }
-        }
-
-        if (targeted == false) {
-          le.position = emitter_sample.origin;
-          le.normal = emitter_sample.normal;
-          le.emitter_index = emitter_sample.emitter_index;
-          le.pdf_area = emitter_sample.pdf_area;
-          le.radiance = emitter_sample.value;
-        }
-
-        // Choose appropriate MNEE solver based on chain type
-        bool mnee_success = false;
-        if (using_reverse_chain) {
-          // Use reverse MNEE solver for glass exit chains
-          LOG log::info("MNEE Debug: Using reverse MNEE solver with %zu surfaces", path_data.spec_chain.size());
-          mnee_success = mnee::solve_reverse_camera_to_light(scene, spect, z_curr.intersection, path_data.spec_chain, le, z_curr.throughput, mnee_res, rt, smp);
-          LOG log::info("MNEE Debug: Reverse MNEE solver result: %s", mnee_success ? "success" : "failed");
-        } else {
-          // Use regular MNEE solver for entry chains
-          LOG log::info("MNEE Debug: Using regular MNEE solver with %zu surfaces", path_data.spec_chain.size());
-          mnee_success = mnee::solve_camera_to_light(scene, spect, z_curr.intersection, path_data.spec_chain, le, z_curr.throughput, mnee_res, rt, smp);
-          LOG log::info("MNEE Debug: Regular MNEE solver result: %s", mnee_success ? "success" : "failed");
-        }
-
-        if (mnee_success) {
-          // Evaluate BSDF in the direction toward the first specular surface (returned by MNEE solver)
-          // CRITICAL FIX: Remove debug override of MNEE weight
-          auto bsdf_mnee_eval = z_curr.bsdf_in_direction(spect, PathSource::Camera, mnee_res.camera_to_first_surface, scene, smp);
-
-          PathVertex mnee_vertex = {PathVertex::Class::Emitter};
-          mnee_vertex.intersection.pos = le.position;
-          mnee_vertex.intersection.nrm = le.normal;
-          mnee_vertex.intersection.w_i = normalize(le.position - z_curr.intersection.pos);
-          mnee_vertex.intersection.emitter_index = le.emitter_index;
-          mnee_vertex.pdf.accumulated = bsdf_mnee_eval.pdf;  // anchor BSDF pdf
-          mnee_vertex.pdf.forward = mnee_res.pdf_area;       // area pdf of MNEE path
-          mnee_vertex.pdf.backward = mnee_vertex.pdf.forward;
-          mnee_vertex.pdf.next = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
-          float weight = mis_weight_camera_to_light(z_curr, z_prev, path_data, spect, mnee_vertex, smp);
-          mnee_result = bsdf_mnee_eval.bsdf * mnee_res.weight * weight;
-          mnee_pdf = mnee_res.pdf_area;
-        }
-
-      }  // End of MNEE processing else block
-
-      // Note: spec_chain is now cleared only when hitting non-delta surfaces (see surface interaction handler)
-    }
 
     auto dp = emitter_sample.origin - z_curr.intersection.pos;
     if (dot(dp, dp) > kEpsilon) {
@@ -1435,14 +1289,7 @@ struct CPUBidirectionalImpl : public Task {
       }
     }
 
-    float nee_weight = nee_pdf / (nee_pdf + mnee_pdf + kEpsilon);
-    float mnee_weight = mnee_pdf / (nee_pdf + mnee_pdf + kEpsilon);
-
-    // TEST - color it red
-    mnee_result.integrated *= float3(100.0f, 0.0f, 0.0f);
-    //
-
-    return nee_result * nee_weight + mnee_result * mnee_weight;
+    return nee_result;
   }
 
   SpectralResponse connect_light_to_camera(Sampler& smp, PathData& path_data, const PathVertex& y_curr, const PathVertex& y_prev, SpectralQuery spect,
@@ -1501,7 +1348,6 @@ struct CPUBidirectionalImpl : public Task {
     enable_connect_vertices = opt.get("bdpt-conn_connect_vertices", enable_connect_vertices).to_bool();
     enable_mis = opt.get("bdpt-conn_mis", enable_mis).to_bool();
     enable_blue_noise = opt.get("bdpt-blue_noise", enable_blue_noise).to_bool();
-    enable_mnee = opt.get("bdpt-mnee", enable_mnee).to_bool();
 
     for (auto& path_data : per_thread_path_data) {
       path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
@@ -1602,7 +1448,6 @@ Options CPUBidirectional::options() const {
     result.add("bdpt-opt", "Bidirectional Path Tracing Options");
     result.add(_private->enable_mis, "bdpt-conn_mis", "Multiple Importance Sampling");
     result.add(_private->enable_blue_noise, "bdpt-blue_noise", "Enable Blue Noise");
-    result.add(_private->enable_mnee, "bdpt-mnee", "Enable Manifold NEE");
   }
   return result;
 }
