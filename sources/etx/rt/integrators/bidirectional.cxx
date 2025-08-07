@@ -5,8 +5,6 @@
 
 #include <etx/rt/shared/path_tracing_shared.hxx>
 
-#define LOG if (false)
-
 namespace etx {
 
 namespace {
@@ -282,7 +280,7 @@ struct CPUBidirectionalImpl : public Task {
     Count,
   };
 
-  Mode mode = Mode::PathTracing;
+  Mode mode = Mode::BDPTFast;
 
   bool enable_direct_hit = true;
   bool enable_connect_to_light = true;
@@ -1262,34 +1260,32 @@ struct CPUBidirectionalImpl : public Task {
       return {spect, 0.0f};
     }
 
-    auto tr = local_transmittance(spect, smp, z_curr, emitter_sample.origin);
-
-    float nee_pdf = 0.0f;
-    SpectralResponse nee_result = {spect, 0.0f};
-
     auto dp = emitter_sample.origin - z_curr.intersection.pos;
-    if (dot(dp, dp) > kEpsilon) {
-      auto bsdf_eval = z_curr.bsdf_in_direction(spect, PathSource::Camera, emitter_sample.direction, rt.scene(), smp);
-      if (bsdf_eval.bsdf.maximum() > kEpsilon) {
-        PathVertex sampled_vertex = {PathVertex::Class::Emitter};
-        sampled_vertex.intersection.w_i = normalize(dp);
-        sampled_vertex.intersection.pos = emitter_sample.origin;
-        sampled_vertex.intersection.nrm = emitter_sample.normal;
-        sampled_vertex.intersection.triangle_index = emitter_sample.triangle_index;
-        sampled_vertex.intersection.emitter_index = emitter_sample.emitter_index;
-        sampled_vertex.pdf.accumulated = bsdf_eval.pdf;
-        sampled_vertex.pdf.forward = PathVertex::pdf_to_emitter(spect, z_curr, sampled_vertex, rt.scene());
-        sampled_vertex.pdf.next = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
-        sampled_vertex.delta_emitter = emitter_sample.is_delta;
-        SpectralResponse emitter_throughput = emitter_sample.value / sampled_vertex.pdf.next;
-        ETX_VALIDATE(emitter_throughput);
-        float weight = mis_weight_camera_to_light(z_curr, z_prev, path_data, spect, sampled_vertex, smp);
-        nee_result = z_curr.throughput * bsdf_eval.bsdf * emitter_throughput * tr.throughput * weight;
-        nee_pdf = sampled_vertex.pdf.forward;
-      }
+    if (dot(dp, dp) <= kEpsilon) {
+      return {spect, 0.0f};
     }
 
-    return nee_result;
+    auto bsdf_eval = z_curr.bsdf_in_direction(spect, PathSource::Camera, emitter_sample.direction, rt.scene(), smp);
+    if (bsdf_eval.bsdf.maximum() <= kEpsilon) {
+      return {spect, 0.0f};
+    }
+
+    auto tr = local_transmittance(spect, smp, z_curr, emitter_sample.origin);
+
+    PathVertex sampled_vertex = {PathVertex::Class::Emitter};
+    sampled_vertex.intersection.w_i = normalize(dp);
+    sampled_vertex.intersection.pos = emitter_sample.origin;
+    sampled_vertex.intersection.nrm = emitter_sample.normal;
+    sampled_vertex.intersection.triangle_index = emitter_sample.triangle_index;
+    sampled_vertex.intersection.emitter_index = emitter_sample.emitter_index;
+    sampled_vertex.pdf.accumulated = bsdf_eval.pdf;
+    sampled_vertex.pdf.forward = PathVertex::pdf_to_emitter(spect, z_curr, sampled_vertex, rt.scene());
+    sampled_vertex.pdf.next = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
+    sampled_vertex.delta_emitter = emitter_sample.is_delta;
+    SpectralResponse emitter_throughput = emitter_sample.value / sampled_vertex.pdf.next;
+    ETX_VALIDATE(emitter_throughput);
+    float weight = mis_weight_camera_to_light(z_curr, z_prev, path_data, spect, sampled_vertex, smp);
+    return z_curr.throughput * bsdf_eval.bsdf * emitter_throughput * tr.throughput * weight;
   }
 
   SpectralResponse connect_light_to_camera(Sampler& smp, PathData& path_data, const PathVertex& y_curr, const PathVertex& y_prev, SpectralQuery spect,
