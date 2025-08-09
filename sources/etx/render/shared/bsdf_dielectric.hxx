@@ -15,7 +15,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.w_o = normalize(reflect(data.w_i, frame.nrm));
     result.pdf = f;
     result.weight = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
-    result.weight *= (fr / f);
+    result.weight *= fr / f;
     result.properties = BSDFSample::Delta | BSDFSample::Reflection;
     result.medium_index = data.current_medium;
   } else {
@@ -103,17 +103,19 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 
   result.w_o = direction_scale * (ray_outside ? ray.w : -ray.w);
 
+  uint32_t delta_sample = is_delta(mtl, data.tex, scene, smp) ? BSDFSample::Delta : 0u;
+
   if (LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(result.w_o) > 0.0f) {
     result.eta = 1.0f;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
-    result.properties = BSDFSample::Reflection;
+    result.properties = BSDFSample::Reflection | delta_sample;
     result.medium_index = data.current_medium;
   } else {
     float eta = (int_ior.eta / ext_ior.eta).monochromatic();
     float factor = (data.path_source == PathSource::Camera) ? sqr(1.0f / eta) : 1.0f;
     result.eta = eta;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr) * factor;
-    result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged;
+    result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged | delta_sample;
     result.medium_index = in_outside ? mtl.int_medium : mtl.ext_medium;
   }
 

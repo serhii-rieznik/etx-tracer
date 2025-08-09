@@ -1,0 +1,26 @@
+newmtl metal
+material class conductor
+int_ior silver
+Ks 1.000 1.000 1.000
+Pr 0.000
+
+newmtl glass
+material class dielectric
+Kt 1.000 1.000 1.000
+Ks 1.000 1.000 1.000
+Pr 0.000
+int_ior 1.500
+
+newmtl em
+material class plastic
+Kd 0.800 0.800 0.800
+Pr 0.500
+Ks 1.000 1.000 1.000
+int_ior 1.500
+emitter nblackbody 5800 scale 500.0000
+
+newmtl plane
+material class diffuse
+Kd 1.000 1.000 1.000
+Pr 0.500
+

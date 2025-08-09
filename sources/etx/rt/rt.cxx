@@ -1,6 +1,8 @@
 #include <etx/core/core.hxx>
 #include <etx/rt/rt.hxx>
 
+#include <etx/render/host/film.hxx>
+
 #include <embree4/rtcore.h>
 
 namespace etx {
@@ -491,23 +493,10 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       return;
     }
 
-    auto uv = lerp_uv(scene.vertices, tri, bc);
-    auto nrm = lerp_normal(scene.vertices, tri, bc);
-
-    bool stop_tracing = mat.cls != Material::Class::Boundary;
-
     const auto spect = ctx->value.query();
 
-    if (mat.cls == Material::Class::Thinfilm) {
-      auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, uv, scene, ctx->smp);
-      float n_dot_t = dot(nrm, ctx->direction);
-      SpectralResponse fr = fresnel::calculate(spect, n_dot_t, mat.ext_ior(spect), mat.int_ior(spect), thinfilm);
-      ctx->value *= 1.0f - fr;
-      stop_tracing = ctx->smp.next() < fr.monochromatic();
-    }
-
-    if (stop_tracing) {
-      ctx->value = {ctx->value, 0.0f};
+    if (mat.cls != Material::Class::Boundary) {
+      ctx->value = {spect, 0.0f};
       *args->valid = -1;
       return;
     }
@@ -525,6 +514,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       }
     }
 
+    const auto nrm = lerp_normal(scene.vertices, tri, bc);
     ctx->medium = {
       .index = (dot(nrm, ctx->direction) < 0.0f) ? mat.int_medium : mat.ext_medium,
     };

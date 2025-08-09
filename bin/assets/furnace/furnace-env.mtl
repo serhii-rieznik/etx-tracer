@@ -1,0 +1,9 @@
+newmtl et::env
+color 0.5000 0.5000 0.5000
+
+newmtl main
+material class velvet
+Kd 1.000 1.000 1.000
+Ks 1.000 1.000 1.000
+Pr 0.500
+
