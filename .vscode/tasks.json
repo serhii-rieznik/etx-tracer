@@ -4,7 +4,7 @@
         {
             "label": "build",
             "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/build --config Debug --parallel",
+            "command": "cmake --build ${workspaceFolder}/build --config Debug --parallel --target raytracer",
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -19,7 +19,7 @@
         {
             "label": "build-release",
             "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/build --config Release --parallel",
+            "command": "cmake --build ${workspaceFolder}/build --config Release --parallel --target raytracer",
             "group": {
                 "kind": "build",
                 "isDefault": false
@@ -29,6 +29,141 @@
                 "reveal": "always",
                 "focus": false,
                 "panel": "shared"
+            }
+        },
+        {
+            "label": "build-fast",
+            "type": "shell",
+            "command": "cmake --build ${workspaceFolder}/build --config RelWithDebInfo --parallel --target raytracer",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "clean-build",
+            "type": "shell",
+            "command": "cmake --build ${workspaceFolder}/build --target clean && cmake --build ${workspaceFolder}/build --config Debug --parallel --target raytracer",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run",
+            "type": "shell",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "build"
+            ],
+            "command": "${workspaceFolder}/bin/raytracer.exe",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new"
+            },
+            "options": {
+                "cwd": "${workspaceFolder}/bin"
+            }
+        },
+        {
+            "label": "build-and-run",
+            "type": "shell",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "build",
+                "run"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "build-fast-and-run",
+            "type": "shell",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "build-fast",
+                "run"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run-with-args",
+            "type": "shell",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "build"
+            ],
+            "command": "${workspaceFolder}/bin/raytracer.exe",
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new"
+            },
+            "options": {
+                "cwd": "${workspaceFolder}/bin"
+            },
+            "promptForArgs": true
+        },
+        {
+            "label": "run-fast",
+            "type": "shell",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "build-fast"
+            ],
+            "command": "${workspaceFolder}/bin/raytracer.exe",
+            "group": {
+                "kind": "test",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new"
+            },
+            "options": {
+                "cwd": "${workspaceFolder}/bin"
             }
         }
     ]

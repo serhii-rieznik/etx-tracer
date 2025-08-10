@@ -1,5 +1,10 @@
 {
     "cmake.configureSettings": {
-        "EMBREE_LOCATION" : "${workspaceFolder}/../SDK/Embree"
-    }
+        "CMAKE_ASM_COMPILER_WORKS": "FALSE"
+    },
+    "cmake.generator": "Visual Studio 17 2022",
+    "cmake.preferredGenerators": [
+        "Visual Studio 17 2022"
+    ],
+    "cmake.buildBeforeRun": true
 }

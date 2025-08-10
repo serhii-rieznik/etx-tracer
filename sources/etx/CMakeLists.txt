@@ -111,8 +111,13 @@ target_link_libraries(etx-rt PRIVATE ${EMBREE_LIBRARY} etx-core etx-render bluen
 
 if (WIN32) 
   message("Copying ${EMBREE_LIBRARY} ... to ${root_folder}/bin/")
-  configure_file("${EMBREE_LOCATION}/bin/embree4.dll" "${root_folder}/bin/" COPYONLY)
-  configure_file("${EMBREE_LOCATION}/bin/tbb12.dll" "${root_folder}/bin/" COPYONLY)
+  # Derive bin directory from the found library path
+  get_filename_component(EMBREE_LIB_DIR "${EMBREE_LIBRARY}" DIRECTORY)
+  get_filename_component(EMBREE_ROOT_DIR "${EMBREE_LIB_DIR}" DIRECTORY)
+  set(EMBREE_BIN_DIR "${EMBREE_ROOT_DIR}/bin")
+  
+  configure_file("${EMBREE_BIN_DIR}/embree4.dll" "${root_folder}/bin/" COPYONLY)
+  configure_file("${EMBREE_BIN_DIR}/tbb12.dll" "${root_folder}/bin/" COPYONLY)
 endif()
 
 if(HAS_OPTIX)
