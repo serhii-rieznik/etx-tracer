@@ -334,7 +334,7 @@ struct CPUBidirectionalImpl : public Task {
 
       uint2 pixel = {};
       if (film.active_pixel(i, pixel) == false)
-        return;
+        continue;
 
       auto spect = scene.spectral() ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
 
@@ -342,11 +342,11 @@ struct CPUBidirectionalImpl : public Task {
         build_emitter_path(smp, spect, path_data);
       }
 
-      float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
       GBuffer gbuffer = {};
       SpectralResponse result = {spect, 0.0f};
 
       if (mode != Mode::LightTracing) {
+        float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
         result = build_camera_path(smp, spect, uv, path_data, gbuffer, pixel, status.current_iteration);
       }
 
@@ -428,7 +428,7 @@ struct CPUBidirectionalImpl : public Task {
       if (connect_result.is_zero())
         continue;
 
-      SpectralResponse tr = local_transmittance(spect, smp, y_i, z_i);
+      SpectralResponse tr = local_transmittance(spect, smp, y_i, z_i.intersection.pos);
       ETX_VALIDATE(connect_result);
 
       float weight = mis_weight_camera_to_light_path(z_i, z_prev, path_data, spect, light_s, smp);
@@ -1212,7 +1212,8 @@ struct CPUBidirectionalImpl : public Task {
           float p_ratio = z_curr.pdf.accumulated;
           float p_direct = map0(z_curr.pdf.forward);
           float p_em = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
-          float p_connection = map0(p_em);
+          bool can_connect = (z_prev.delta_connection == false);
+          float p_connection = can_connect ? map0(p_em) : 0.0f;
           float p_sample = emitter_discrete_pdf(scene.emitters[z_curr.intersection.emitter_index], scene.emitters_distribution);
           float camera_connection_pdf = p_sample * emitter_pdf_area_local(scene.emitters[z_curr.intersection.emitter_index], scene);
           float p_light_path = map0(camera_connection_pdf);
@@ -1280,7 +1281,8 @@ struct CPUBidirectionalImpl : public Task {
         float p_ratio = z_curr.pdf.accumulated;
         float p_direct = map0(z_curr.pdf.forward) * float(z_curr.delta_emitter == false);
         float p_em = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
-        float p_connection = map0(p_em);
+        bool can_connect = (z_prev.delta_connection == false);
+        float p_connection = can_connect ? map0(p_em) : 0.0f;
         float camera_connection_pdf = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
         float p_light_path = map0(p_em) * map0(camera_connection_pdf);
         mis_weight = balance_heuristic(p_direct, p_connection, p_ratio * p_light_path);
@@ -1288,7 +1290,8 @@ struct CPUBidirectionalImpl : public Task {
       }
     }
 
-    return accumulated_emitter_value * z_curr.throughput * mis_weight;
+    SpectralResponse tr_env = local_transmittance(spect, smp, z_prev, z_curr.intersection.pos);
+    return accumulated_emitter_value * z_curr.throughput * tr_env * mis_weight;
   }
 
   SpectralResponse connect_camera_to_light(const PathVertex& z_curr, const PathVertex& z_prev, Sampler& smp, PathData& path_data, SpectralQuery spect) const {
@@ -1333,7 +1336,7 @@ struct CPUBidirectionalImpl : public Task {
     SpectralResponse emitter_throughput = emitter_sample.value / sampled_vertex.pdf.next;
     ETX_VALIDATE(emitter_throughput);
 
-    SpectralResponse tr = local_transmittance(spect, smp, z_curr, sampled_vertex);
+    SpectralResponse tr = local_transmittance(spect, smp, z_curr, sampled_vertex.intersection.pos);
     float weight = mis_weight_camera_to_light(z_curr, z_prev, path_data, spect, sampled_vertex, smp);
 
     return z_curr.throughput * bsdf_eval.bsdf * emitter_throughput * tr * weight;
@@ -1374,20 +1377,20 @@ struct CPUBidirectionalImpl : public Task {
     ETX_VALIDATE(splat);
 
     if (splat.is_zero() == false) {
-      splat *= local_transmittance(spect, smp, y_curr, sampled_vertex);
+      splat *= local_transmittance(spect, smp, y_curr, sampled_vertex.intersection.pos);
     }
 
     return splat;
   }
 
-  SpectralResponse local_transmittance(SpectralQuery spect, Sampler& smp, const PathVertex& p0, const PathVertex& p1) const {
+  SpectralResponse local_transmittance(SpectralQuery spect, Sampler& smp, const PathVertex& p0, const float3& p1) const {
     auto& scene = rt.scene();
     float3 origin = p0.intersection.pos;
     if (p0.is_surface_interaction()) {
       const auto& tri = scene.triangles[p0.intersection.triangle_index];
-      origin = shading_pos(scene.vertices, tri, p0.intersection.barycentric, normalize(p1.intersection.pos - p0.intersection.pos));
+      origin = shading_pos(scene.vertices, tri, p0.intersection.barycentric, normalize(p1 - p0.intersection.pos));
     }
-    return rt.trace_transmittance(spect, scene, origin, p1.intersection.pos, p0.medium, smp);
+    return rt.trace_transmittance(spect, scene, origin, p1, p0.medium, smp);
   }
 
   void start(const Options& opt) {
