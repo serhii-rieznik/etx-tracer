@@ -2,9 +2,12 @@
     "cmake.configureSettings": {
         "CMAKE_ASM_COMPILER_WORKS": "FALSE"
     },
-    "cmake.generator": "Visual Studio 17 2022",
     "cmake.preferredGenerators": [
-        "Visual Studio 17 2022"
+        "Visual Studio 17 2022",
+        "Ninja Multi-Config",
+        "Ninja",
+        "Unix Makefiles",
+        "Xcode"
     ],
     "cmake.buildBeforeRun": true
 }
