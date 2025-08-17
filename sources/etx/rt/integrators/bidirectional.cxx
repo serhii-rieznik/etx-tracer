@@ -284,7 +284,7 @@ struct CPUBidirectionalImpl : public Task {
     Count,
   };
 
-  Mode mode = Mode::BDPTFast;
+  Mode mode = Mode::BDPTFull;
 
   bool enable_direct_hit = true;
   bool enable_connect_to_light = true;

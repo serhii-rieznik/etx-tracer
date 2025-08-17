@@ -53,9 +53,8 @@ ext_medium fog
    
 newmtl light
 material class diffuse
-emitter nblackbody 2700 scale 8.0
 ext_medium fog
-Ke 1 1 1
+emitter nblackbody 2700 scale 8.0
 
 newmtl plane
 material class diffuse
