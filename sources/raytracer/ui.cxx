@@ -621,9 +621,8 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene* s
     ImGui::End();
   }
 
-  ui_window(_ui_setup, UIIntegrator, "Integrator options", [&]() {
+  ui_window(_ui_setup, UIIntegrator, has_integrator ? _current_integrator->name() : "Integrator options", [&]() {
     if (has_integrator) {
-      ImGui::Text("%s", _current_integrator->name());
       _integrator_options = _current_integrator->options();
       if (build_options(_integrator_options) && callbacks.options_changed) {
         callbacks.options_changed();

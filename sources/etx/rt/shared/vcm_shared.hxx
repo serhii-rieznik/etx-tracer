@@ -513,35 +513,47 @@ ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& opti
   if (options.direct_hit() == false)
     return;
 
-  // If in a medium and explicit connections enabled, use medium-direction environment evaluation
-  if ((state.medium_index != kInvalidIndex) && scene.mediums[state.medium_index].enable_explicit_connections) {
-    for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-      const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
-      EmitterRadianceQuery q = {
-        .direction = state.ray.d,
-        .directly_visible = state.total_path_depth <= 1,
-      };
-      float pdf_area = 0.0f, pdf_dir = 0.0f, pdf_dir_out = 0.0f;
-      auto value = emitter_get_radiance(emitter, state.spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
-      ETX_VALIDATE(value);
-      if (pdf_dir > kEpsilon) {
-        float emitter_sample_pdf = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-        float w_camera = state.d_vcm * pdf_area * emitter_sample_pdf + state.d_vc * (pdf_dir_out * emitter_sample_pdf);
-        float weight = options.enable_mis() && (state.total_path_depth > 1) ? (1.0f / (1.0f + w_camera)) : 1.0f;
-        ETX_VALIDATE(weight);
-        SpectralResponse add = weight * (state.throughput * value);
-        ETX_VALIDATE(add);
-        state.gathered += add;
-        ETX_VALIDATE(state.gathered);
-      }
-    }
-    return;
+  // Aggregate environment contributions and apply a single MIS weight (aligns with BDPT behavior)
+  // Fold pending boundary segment (if any) before using MIS recurrences at miss
+  if (state.path_distance > 0.0f) {
+    state.d_vcm *= sqr(state.path_distance);
+    ETX_VALIDATE(state.d_vcm);
+    state.path_distance = 0.0f;
   }
 
-  // Otherwise, use surface-like environment accumulation
+  SpectralResponse accumulated_value = {state.spect, 0.0f};
+  float sum_pdf_area = 0.0f;
+  float sum_pdf_dir_out = 0.0f;
+
   for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
     const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
-    SpectralResponse add = vcm_get_radiance(scene, emitter, state, options, intersection);
+
+    EmitterRadianceQuery q = {
+      .direction = state.ray.d,
+      .directly_visible = state.total_path_depth <= 1,
+    };
+
+    float pdf_area = 0.0f;
+    float pdf_dir = 0.0f;
+    float pdf_dir_out = 0.0f;
+    SpectralResponse value = emitter_get_radiance(emitter, state.spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
+    ETX_VALIDATE(value);
+
+    if (pdf_dir > kEpsilon) {
+      float emitter_sample_pdf = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+      sum_pdf_area += emitter_sample_pdf * pdf_area;
+      sum_pdf_dir_out += emitter_sample_pdf * pdf_dir_out;
+      accumulated_value += value;
+      ETX_VALIDATE(accumulated_value);
+    }
+  }
+
+  if (accumulated_value.maximum() > kEpsilon) {
+    float w_camera_sum = state.d_vcm * sum_pdf_area + state.d_vc * sum_pdf_dir_out;
+    ETX_VALIDATE(w_camera_sum);
+    float weight = options.enable_mis() && (state.total_path_depth > 1) ? (1.0f / (1.0f + w_camera_sum)) : 1.0f;
+    ETX_VALIDATE(weight);
+    SpectralResponse add = state.throughput * accumulated_value * weight;
     ETX_VALIDATE(add);
     state.gathered += add;
     ETX_VALIDATE(state.gathered);
@@ -600,7 +612,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_common(const Scene& scene, co
     reverse_pdf = bsdf::reverse_pdf(connection_data, w_o, mat, scene, state.sampler);
     const auto& tri = scene.triangles[isect->triangle_index];
     origin = shading_pos(scene.vertices, tri, isect->barycentric, normalize(emitter_sample.origin - isect->pos));
-    camera_factor = fabsf(dot(w_o, isect->nrm));
+    camera_factor = fabsf(dot(w_o, tri.geo_n));
   }
 
   auto tr = vcm_transmittance(rt, scene, state, origin, emitter_sample.origin);
@@ -610,21 +622,15 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_common(const Scene& scene, co
   float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
   float w_light = 0.0f;
   if (emitter_sample.is_delta == false) {
-    float connection_pdf = camera_at_medium ? scatter.value : 0.0f;  // for medium scatter.value holds p
-    if (camera_at_medium == false) {
-      // Need BSDF pdf; recompute via evaluate above already done
-      // For surfaces, we didn't retain the pdf; approximate via reverse? Keep medium path here only
+    if (camera_at_medium) {
+      w_light = (scatter.value) / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
+    } else {
+      const auto& mat = scene.materials[isect->material_index];
+      BSDFData data = {state.spect, state.medium_index, PathSource::Camera, *isect, isect->w_i};
+      float conn_pdf = bsdf::pdf(data, w_o, mat, scene, state.sampler);
+      ETX_VALIDATE(conn_pdf);
+      w_light = conn_pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
     }
-  }
-  // Compute w_light correctly for both cases
-  if (camera_at_medium) {
-    w_light = (scatter.value) / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
-  } else {
-    const auto& mat = scene.materials[isect->material_index];
-    BSDFData data = {state.spect, state.medium_index, PathSource::Camera, *isect, isect->w_i};
-    float conn_pdf = bsdf::pdf(data, w_o, mat, scene, state.sampler);
-    ETX_VALIDATE(conn_pdf);
-    w_light = conn_pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
   }
 
   float vmW_nee = camera_at_medium ? 0.0f : vcm_iteration.vm_weight;

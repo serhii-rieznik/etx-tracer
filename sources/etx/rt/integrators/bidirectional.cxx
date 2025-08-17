@@ -1488,7 +1488,6 @@ Options CPUBidirectional::options() const {
     "bdpt-mode", "Mode");
 
   Options result = {};
-  result.add(mode);
   if (_private->mode != CPUBidirectionalImpl::Mode::LightTracing) {
     result.add("bdpt-conn", "Connections:");
     result.add(_private->enable_direct_hit, "bdpt-conn_direct_hit", "Direct Hits");
@@ -1503,6 +1502,7 @@ Options CPUBidirectional::options() const {
     result.add(_private->enable_mis, "bdpt-conn_mis", "Multiple Importance Sampling");
     result.add(_private->enable_blue_noise, "bdpt-blue_noise", "Enable Blue Noise");
   }
+  result.add(mode);
   return result;
 }
 
