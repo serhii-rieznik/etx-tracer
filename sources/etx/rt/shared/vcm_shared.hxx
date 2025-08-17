@@ -2,10 +2,12 @@
 
 #include <etx/render/shared/scene.hxx>
 #include <etx/rt/shared/path_tracing_shared.hxx>
+#include <etx/rt/rt.hxx>
 
 namespace etx {
 
 struct Options;
+struct Raytracing;
 
 struct ETX_ALIGNED VCMOptions {
   uint32_t options ETX_EMPTY_INIT;

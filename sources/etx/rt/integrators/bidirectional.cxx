@@ -133,7 +133,7 @@ struct PathVertex {
     if (scene.environment_emitters.count == 0)
       return 0.0f;
 
-    auto w_o = normalize(emitter_vertex.intersection.pos - target_vertex.intersection.pos);
+    auto w_o = -emitter_vertex.intersection.w_i;  // Negate since w_i points towards surface
     for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
       const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
       float local_pdf_dir = 0.0f;
@@ -161,10 +161,11 @@ struct PathVertex {
       return 0.0f;
 
     float result = 0.0f;
+    auto direction = -emitter_vertex.intersection.w_i;  // Negate since w_i points towards surface
     for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
       const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
       float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      result += pdf_discrete * emitter_pdf_in_dist(emitter, normalize(emitter_vertex.intersection.pos - interaction.intersection.pos), scene);
+      result += pdf_discrete * emitter_pdf_in_dist(emitter, direction, scene);
     }
 
     return result / float(scene.environment_emitters.count);
@@ -808,7 +809,7 @@ struct CPUBidirectionalImpl : public Task {
         curr.throughput = payload.throughput;
         curr.pdf.forward = payload.pdf_dir;
         curr.intersection.w_i = ray.d;
-        curr.intersection.pos = ray.o + ray.d * scene.bounding_sphere_radius;
+        curr.intersection.pos = ray.o;  // Store ray origin, direction is in w_i
         path_data.camera_path_size += 1u;
         precompute_camera_mis(curr, prev, path_data);
         payload.result += direct_hit_environment_emitter(curr, prev, path_data, payload.spect, smp, path_length == 0);
@@ -1243,7 +1244,7 @@ struct CPUBidirectionalImpl : public Task {
       return {spect, 0.0f};
 
     EmitterRadianceQuery q = {
-      .direction = normalize(z_curr.intersection.pos - z_prev.intersection.pos),
+      .direction = z_curr.intersection.w_i,  // Use stored ray direction for environment emitters
       .directly_visible = path_data.camera_path_size <= 3,
     };
 
@@ -1290,8 +1291,7 @@ struct CPUBidirectionalImpl : public Task {
       }
     }
 
-    SpectralResponse tr_env = local_transmittance(spect, smp, z_prev, z_curr.intersection.pos);
-    return accumulated_emitter_value * z_curr.throughput * tr_env * mis_weight;
+    return accumulated_emitter_value * z_curr.throughput * mis_weight;
   }
 
   SpectralResponse connect_camera_to_light(const PathVertex& z_curr, const PathVertex& z_prev, Sampler& smp, PathData& path_data, SpectralQuery spect) const {
