@@ -23,7 +23,10 @@ struct ETX_ALIGNED VCMOptions {
     EnableMis = 1u << 5u,
     EnableMerging = 1u << 6u,
 
-    DefaultOptions = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices | EnableMis | EnableMerging,
+    ConnectOnlyOptions = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | EnableMis,
+    FullOptions = ConnectOnlyOptions | EnableMerging | MergeVertices,
+
+    DefaultOptions = EnableMis | ConnectOnlyOptions,
   };
 
   void set_option(uint32_t option, bool enabled) {
@@ -369,7 +372,7 @@ ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathS
 ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const VCMIteration& it, const VCMOptions& /*options*/,
   const PathSource path_source, VCMPathState& state) {
   // Fold pending boundary segment (if any) plus medium segment (no cosine) before recurrences
-  bool apply_fold = (path_source == PathSource::Camera) || ((state.total_path_depth > 0) || state.local_emitter());
+  bool apply_fold = true;
   if (apply_fold) {
     float seg = state.path_distance + medium_sample.t;
     state.d_vcm *= sqr(seg);
@@ -417,15 +420,8 @@ ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource 
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   uint32_t new_medium = (dot(intersection.nrm, state.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
-  if (new_medium == state.medium_index) {
-    state.path_distance += intersection.t;
-  } else {
-    float seg = state.path_distance + intersection.t;
-    state.d_vcm *= sqr(seg);
-    ETX_VALIDATE(state.d_vcm);
-    state.path_distance = 0.0f;
-    state.medium_index = new_medium;
-  }
+  state.path_distance += intersection.t;
+  state.medium_index = new_medium;
   state.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, state.ray.d);
   return true;
 }
