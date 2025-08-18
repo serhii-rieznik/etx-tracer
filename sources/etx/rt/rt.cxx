@@ -386,7 +386,7 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
 
     auto material_index = ctx->scene->triangle_to_material[triangle_index];
-    if ((material_index != kInvalidIndex) && (ctx->mat_id != material_index)) {
+    if ((ctx->mat_id != kInvalidIndex) && (ctx->mat_id != material_index)) {
       *args->valid = 0;
       return;
     }
