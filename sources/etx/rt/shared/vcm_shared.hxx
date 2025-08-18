@@ -353,6 +353,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const ui
   state.d_vm = 0.0f;
   state.medium_index = camera.medium_index;
   state.eta = 1.0f;
+  state.path_distance = 0.0f;
 
   state.total_path_depth = 1;
   return state;
@@ -438,8 +439,8 @@ ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPath
   state.path_distance = 0.0f;
 }
 
-ETX_GPU_CODE SpectralResponse vcm_connect_to_camera_common(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration,
-  const VCMOptions& options, bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
+ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration, const VCMOptions& options,
+  bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
   if ((options.connect_to_camera() == false) || (state.total_path_depth + 1 >= scene.max_path_length)) {
     return {};
   }
@@ -576,7 +577,7 @@ ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& op
   state.gathered += vcm_get_radiance(scene, emitter, state, options, intersection);
 }
 
-ETX_GPU_CODE SpectralResponse vcm_connect_to_light_common(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
+ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
   const Intersection* isect, const float3& medium_pos, const Raytracing& rt, VCMPathState& state) {
   if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.max_path_length))
     return {state.spect, 0.0f};
@@ -641,9 +642,8 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_common(const Scene& scene, co
   return tr * state.throughput * scatter * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 }
 
-ETX_GPU_CODE bool vcm_connect_to_light_vertex_common(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex,
-  const VCMOptions& options, bool camera_at_medium, const Intersection* camera_isect, const float3& medium_pos, float vm_weight, uint32_t state_medium, float3& target_position,
-  SpectralResponse& value) {
+ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
+  bool camera_at_medium, const Intersection* camera_isect, const float3& medium_pos, float vm_weight, uint32_t state_medium, float3& target_position, SpectralResponse& value) {
   auto light_v = light_vertex.vertex(scene);
   target_position = light_v.pos;
 
@@ -726,10 +726,10 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex_common(const Scene& scene, const S
 
 ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
   const Intersection& intersection, float vm_weight, uint32_t state_medium, float3& target_position, SpectralResponse& value) {
-  return vcm_connect_to_light_vertex_common(scene, spect, state, light_vertex, options, false, &intersection, {}, vm_weight, state_medium, target_position, value);
+  return vcm_connect_to_light_vertex(scene, spect, state, light_vertex, options, false, &intersection, {}, vm_weight, state_medium, target_position, value);
 }
 
-ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path_common(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightPath>& light_paths,
+ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightPath>& light_paths,
   const ArrayView<VCMLightVertex>& light_vertices, const VCMOptions& options, bool camera_at_medium, const Intersection* isect, const float3& medium_pos, const Raytracing& rt,
   VCMPathState& state) {
   if (options.connect_vertices() == false)
@@ -740,8 +740,8 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path_common(const Scene& scen
   for (uint64_t i = 0; (i < light_path.count) && (state.total_path_depth + i + 2 <= scene.max_path_length); ++i) {
     float3 target_position = {};
     SpectralResponse value = {};
-    bool connected = vcm_connect_to_light_vertex_common(scene, state.spect, state, light_vertices[light_path.index + i], options, camera_at_medium, isect, medium_pos,
-      iteration.vm_weight, state.medium_index, target_position, value);
+    bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertices[light_path.index + i], options, camera_at_medium, isect, medium_pos, iteration.vm_weight,
+      state.medium_index, target_position, value);
     if (connected) {
       if (camera_at_medium) {
         auto tr = vcm_transmittance(rt, scene, state, medium_pos, light_vertices[light_path.index + i].position(scene));
@@ -880,10 +880,10 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     const auto& med = scene.mediums[state.medium_index];
     if (med.enable_explicit_connections && (state.total_path_depth + 1 <= scene.max_path_length)) {
       if (options.connect_vertices()) {
-        state.gathered += vcm_connect_to_light_path_common(scene, iteration, light_paths, light_vertices, options, true, nullptr, medium_sample.pos, rt, state);
+        state.gathered += vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, true, nullptr, medium_sample.pos, rt, state);
       }
       if (options.connect_to_light()) {
-        state.gathered += vcm_connect_to_light_common(scene, iteration, options, true, nullptr, medium_sample.pos, rt, state);
+        state.gathered += vcm_connect_to_light(scene, iteration, options, true, nullptr, medium_sample.pos, rt, state);
       }
     }
 
@@ -915,12 +915,12 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
         state.gathered +=
-          ss_gather.weights[i] * vcm_connect_to_light_path_common(scene, iteration, light_paths, light_vertices, options, false, &ss_gather.intersections[i], {}, rt, state);
-        state.gathered += ss_gather.weights[i] * vcm_connect_to_light_common(scene, iteration, options, false, &ss_gather.intersections[i], {}, rt, state);
+          ss_gather.weights[i] * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &ss_gather.intersections[i], {}, rt, state);
+        state.gathered += ss_gather.weights[i] * vcm_connect_to_light(scene, iteration, options, false, &ss_gather.intersections[i], {}, rt, state);
       }
     } else {
-      state.gathered += vcm_connect_to_light_path_common(scene, iteration, light_paths, light_vertices, options, false, &intersection, {}, rt, state);
-      state.gathered += vcm_connect_to_light_common(scene, iteration, options, false, &intersection, {}, rt, state);
+      state.gathered += vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &intersection, {}, rt, state);
+      state.gathered += vcm_connect_to_light(scene, iteration, options, false, &intersection, {}, rt, state);
     }
   }
 
@@ -964,7 +964,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
     const auto& med = scene.mediums[state.medium_index];
     if (options.connect_to_camera() && med.enable_explicit_connections && (state.total_path_depth + 1 <= scene.max_path_length)) {
       float2 uv = {};
-      auto value = vcm_connect_to_camera_common(rt, scene, camera, iteration, options, true, nullptr, medium_sample.pos, state, uv);
+      auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, true, nullptr, medium_sample.pos, state, uv);
       ETX_VALIDATE(value);
       if (value.maximum() > kEpsilon) {
         result.values_to_splat[0] = value;
@@ -1004,7 +1004,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
     if (options.connect_to_camera() && (state.total_path_depth + 1 <= scene.max_path_length)) {
       if (subsurface_sampled) {
         for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-          auto value = vcm_connect_to_camera_common(rt, scene, camera, iteration, options, false, &ss_gather.intersections[i], {}, state, result.splat_uvs[result.splat_count]);
+          auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &ss_gather.intersections[i], {}, state, result.splat_uvs[result.splat_count]);
           ETX_VALIDATE(value);
           if (value.maximum() > kEpsilon) {
             float ss_scale = ss_gather.weights[i].average() / ss_gather.total_weight;
@@ -1013,7 +1013,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
           }
         }
       } else {
-        auto value = vcm_connect_to_camera_common(rt, scene, camera, iteration, options, false, &intersection, {}, state, result.splat_uvs[0]);
+        auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &intersection, {}, state, result.splat_uvs[0]);
         ETX_VALIDATE(value);
         if (value.maximum() > kEpsilon) {
           result.values_to_splat[0] = value;
