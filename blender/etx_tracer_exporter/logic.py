@@ -446,6 +446,7 @@ def _get_etx_material_class(operator, blender_mat):
                 "BSDF_GLOSSY": "conductor",
                 "BSDF_TRANSLUCENT": "translucent",
                 "BSDF_DIFFUSE": "diffuse",
+                "EMISSION": "diffuse",
             }
             return node_type_to_class.get(shader_node.type, "diffuse")
 
@@ -545,6 +546,19 @@ def _extract_metallic_properties(
     properties["Pr"] = f"{roughness:.3f}"
 
 
+def _extract_emission_properties(operator, emission_node, properties):
+    color = _get_node_input_value(emission_node, "Color", [0.0, 0.0, 0.0, 1.0])
+    strength = _get_node_input_value(emission_node, "Strength", 0.0)
+    # Make the surface purely emissive by default
+    properties["Kd"] = "0.000 0.000 0.000"
+    if hasattr(color, "__len__") and len(color) >= 3 and strength > 0.0:
+        final_emission = [color[0] * strength, color[1] * strength, color[2] * strength]
+        if any(c > 0.0 for c in final_emission):
+            properties["Ke"] = (
+                f"{final_emission[0]:.4f} {final_emission[1]:.4f} {final_emission[2]:.4f}"
+            )
+
+
 def _extract_translucent_properties(operator, translucent_node, properties):
     color = _get_node_input_value(translucent_node, "Color", [1.0, 1.0, 1.0, 1.0])
     if hasattr(color, "__len__") and len(color) >= 3:
@@ -571,6 +585,7 @@ def _extract_node_properties(operator, node_tree, properties):
         "BSDF_GLOSSY": _extract_glossy_properties,
         "BSDF_TRANSLUCENT": _extract_translucent_properties,
         "BSDF_DIFFUSE": _extract_diffuse_properties,
+        "EMISSION": _extract_emission_properties,
     }
 
     extractor = extractors.get(shader_node.type)
