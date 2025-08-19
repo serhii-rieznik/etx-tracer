@@ -29,7 +29,9 @@ void VCMOptions::store(Options& opt) const {
   opt.add(connect_to_camera(), "vcm-connect_to_camera", "Light Path to Camera");
   opt.add(connect_to_light(), "vcm-connect_to_light", "Camera Path to Light");
   opt.add(connect_vertices(), "vcm-connect_vertices", "Camera Path to Light Path");
-  opt.add(merge_vertices(), "vcm-merge_vertices", "Merge Light Vertices");
+  if (enable_merging()) {
+    opt.add(merge_vertices(), "vcm-merge_vertices", "Merge Light Vertices");
+  }
   opt.add("vcm-opt", "VCM Options");
   opt.add(enable_merging(), "vcm-merging", "Enable Merging");
   opt.add(enable_mis(), "vcm-mis", "Multiple Importance Sampling");

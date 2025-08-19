@@ -118,11 +118,10 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
   ETX_ASSERT(em.is_distant());
 
   pdf_dir = 0.0f;
-  pdf_area = 0.0f;
+  pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
 
   switch (em.cls) {
     case Emitter::Class::Directional: {
-      pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = 1.0f;
       float2 uv = disk_uv(em.direction, in_direction, em.equivalent_disk_size, em.angular_size_cosine);
       return apply_image(spect, em.emission, uv, scene, nullptr);
@@ -139,7 +138,6 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
       const auto& img = scene.images[em.emission.image_index];
       float image_pdf = 0.0f;
       auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
-      pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir = image_pdf / (2.0f * kPi * kPi * sin_t);
       ETX_VALIDATE(pdf_dir);
       return eval;

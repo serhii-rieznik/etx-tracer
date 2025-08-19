@@ -308,6 +308,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
 
   float cos_t = dot(emitter_sample.direction, emitter_sample.normal);
   state.throughput = emitter_sample.value * (cos_t / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample));
+  ETX_VALIDATE(state.throughput);
 
   state.ray = {emitter_sample.origin, emitter_sample.direction};
   if (emitter_sample.triangle_index != kInvalidIndex) {
@@ -523,8 +524,8 @@ ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& opti
   }
 
   SpectralResponse accumulated_value = {state.spect, 0.0f};
-  float sum_pdf_area = 0.0f;
   float sum_pdf_dir_out = 0.0f;
+  float sum_pdf_dir = 0.0f;
 
   for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
     const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
@@ -541,16 +542,19 @@ ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& opti
     ETX_VALIDATE(value);
 
     if (pdf_dir > kEpsilon) {
-      float emitter_sample_pdf = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      sum_pdf_area += emitter_sample_pdf * pdf_area;
-      sum_pdf_dir_out += emitter_sample_pdf * pdf_dir_out;
+      float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+      sum_pdf_dir_out += pdf_dir_out * pdf_discrete;
+      sum_pdf_dir += pdf_dir * pdf_discrete;
       accumulated_value += value;
       ETX_VALIDATE(accumulated_value);
     }
   }
 
   if (accumulated_value.maximum() > kEpsilon) {
-    float w_camera_sum = state.d_vcm * sum_pdf_area + state.d_vc * sum_pdf_dir_out;
+    float inv_count = (scene.environment_emitters.count > 0u) ? (1.0f / float(scene.environment_emitters.count)) : 0.0f;
+    sum_pdf_dir *= inv_count;
+    sum_pdf_dir_out *= inv_count;
+    float w_camera_sum = state.d_vcm * sum_pdf_dir + state.d_vc * sum_pdf_dir_out;
     ETX_VALIDATE(w_camera_sum);
     float weight = options.enable_mis() && (state.total_path_depth > 1) ? (1.0f / (1.0f + w_camera_sum)) : 1.0f;
     ETX_VALIDATE(weight);

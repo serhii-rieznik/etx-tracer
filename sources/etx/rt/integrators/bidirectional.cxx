@@ -107,68 +107,59 @@ struct PathVertex {
 
   static float pdf_from_emitter(SpectralQuery spect, const PathVertex& emitter_vertex, const PathVertex& target_vertex, const Scene& scene) {
     ETX_ASSERT(emitter_vertex.is_emitter());
+    ETX_CRITICAL(emitter_vertex.is_specific_emitter());
 
     float pdf_area = 0.0f;
-
-    if (emitter_vertex.is_specific_emitter()) {
-      const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
-      if (emitter.is_local()) {
-        float pdf_dir = 0.0f;
-        float pdf_dir_out = 0.0f;
-        auto w_o = normalize(target_vertex.intersection.pos - emitter_vertex.intersection.pos);
-        emitter_evaluate_out_local(emitter, spect, emitter_vertex.intersection.tex, emitter_vertex.intersection.nrm, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
-        pdf_area = convert_solid_angle_pdf_to_area(pdf_dir, emitter_vertex, target_vertex);
-      } else if (emitter.is_distant()) {
-        float pdf_dir = 0.0f;
-        auto w_o = normalize(emitter_vertex.intersection.pos - target_vertex.intersection.pos);
-        emitter_evaluate_out_dist(emitter, spect, w_o, pdf_area, pdf_dir, scene);
-        if (target_vertex.is_surface_interaction()) {
-          pdf_area *= fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o));
-        }
+    const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
+    if (emitter.is_local()) {
+      float pdf_dir = 0.0f;
+      float pdf_dir_out = 0.0f;
+      auto w_o = normalize(target_vertex.intersection.pos - emitter_vertex.intersection.pos);
+      emitter_evaluate_out_local(emitter, spect, emitter_vertex.intersection.tex, emitter_vertex.intersection.nrm, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
+      pdf_area = convert_solid_angle_pdf_to_area(pdf_dir, emitter_vertex, target_vertex);
+    } else if (emitter.is_distant()) {
+      float pdf_dir = 0.0f;
+      auto w_o = normalize(emitter_vertex.intersection.pos - target_vertex.intersection.pos);
+      emitter_evaluate_out_dist(emitter, spect, w_o, pdf_area, pdf_dir, scene);
+      if (target_vertex.is_surface_interaction()) {
+        pdf_area *= fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o));
       }
-
-      return pdf_area;
     }
 
-    if (scene.environment_emitters.count == 0)
-      return 0.0f;
-
-    auto w_o = -emitter_vertex.intersection.w_i;  // Negate since w_i points towards surface
-    for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-      const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
-      float local_pdf_dir = 0.0f;
-      float local_pdf_area = 0.0f;
-      emitter_evaluate_out_dist(emitter, spect, w_o, local_pdf_area, local_pdf_dir, scene);
-      pdf_area += local_pdf_area;
-    }
-    float w_o_dot_n = target_vertex.is_surface_interaction() ? fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o)) : 1.0f;
-    pdf_area = w_o_dot_n * pdf_area / float(scene.environment_emitters.count);
     return pdf_area;
   }
 
   static float pdf_to_emitter(SpectralQuery spect, const PathVertex& interaction, const PathVertex& emitter_vertex, const Scene& scene) {
     ETX_ASSERT(emitter_vertex.is_emitter());
+    ETX_CRITICAL(emitter_vertex.is_specific_emitter());
 
-    if (emitter_vertex.is_specific_emitter()) {
-      const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
-      float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      return pdf_discrete * (emitter.is_local()                                                                                                     //
-                                ? emitter_pdf_area_local(emitter, scene)                                                                            //
-                                : emitter_pdf_in_dist(emitter, normalize(emitter_vertex.intersection.pos - interaction.intersection.pos), scene));  //
-    }
+    const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
+    float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+    return pdf_discrete * (emitter.is_local()                                                                                                     //
+                              ? emitter_pdf_area_local(emitter, scene)                                                                            //
+                              : emitter_pdf_in_dist(emitter, normalize(emitter_vertex.intersection.pos - interaction.intersection.pos), scene));  //
+  }
+
+  static float2 pdf_for_environment_emitter(SpectralQuery spect, const PathVertex& emitter_vertex, const PathVertex& target_vertex, const Scene& scene) {
+    ETX_ASSERT(emitter_vertex.is_emitter());
+    ETX_CRITICAL(emitter_vertex.is_environment_emitter());
 
     if (scene.environment_emitters.count == 0)
-      return 0.0f;
+      return {};
 
-    float result = 0.0f;
-    auto direction = -emitter_vertex.intersection.w_i;  // Negate since w_i points towards surface
+    float pdf_dir = 0.0f;
+    const auto w_o = -emitter_vertex.intersection.w_i;
     for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
       const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
-      float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      result += pdf_discrete * emitter_pdf_in_dist(emitter, direction, scene);
+      const float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+      const float pdf_emitter_dir = emitter_pdf_in_dist(emitter, w_o, scene);
+      pdf_dir += pdf_discrete * pdf_emitter_dir;
     }
 
-    return result / float(scene.environment_emitters.count);
+    float w_o_dot_n = target_vertex.is_surface_interaction() ? fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o)) : 1.0f;
+    float pdf_area = w_o_dot_n / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+    pdf_dir = pdf_dir / float(scene.environment_emitters.count);
+    return {pdf_area, pdf_dir};
   }
 
   static float convert_solid_angle_pdf_to_area(float pdf_dir, const PathVertex& from_vertex, const PathVertex& to_vertex) {
@@ -1271,20 +1262,22 @@ struct CPUBidirectionalImpl : public Task {
 
     float mis_weight = 1.0f;
     if (enable_mis && (path_data.camera_path_size > 3u)) {
+      auto [pdf_from, pdf_to] = PathVertex::pdf_for_environment_emitter(spect, z_curr, z_prev, scene);
+
       if (mode == Mode::BDPTFull) {
-        float z_curr_pdf = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
+        float z_curr_pdf = pdf_to;
         ETX_VALIDATE(z_curr_pdf);
-        float z_prev_pdf = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
+        float z_prev_pdf = pdf_from;
         ETX_VALIDATE(z_prev_pdf);
         float result = mis_camera(path_data, z_curr_pdf, z_curr, z_prev_pdf);
         mis_weight = 1.0f / (1.0f + result);
       } else if (mode == Mode::BDPTFast) {
         float p_ratio = z_curr.pdf.accumulated;
         float p_direct = map0(z_curr.pdf.forward) * float(z_curr.delta_emitter == false);
-        float p_em = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
+        float p_em = pdf_to;
         bool can_connect = (z_prev.delta_connection == false);
         float p_connection = can_connect ? map0(p_em) : 0.0f;
-        float camera_connection_pdf = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
+        float camera_connection_pdf = pdf_from;
         float p_light_path = map0(p_em) * map0(camera_connection_pdf);
         mis_weight = balance_heuristic(p_direct, p_connection, p_ratio * p_light_path);
         ETX_VALIDATE(mis_weight);
@@ -1501,6 +1494,8 @@ Options CPUBidirectional::options() const {
     result.add("bdpt-opt", "Bidirectional Path Tracing Options");
     result.add(_private->enable_mis, "bdpt-conn_mis", "Multiple Importance Sampling");
     result.add(_private->enable_blue_noise, "bdpt-blue_noise", "Enable Blue Noise");
+  } else {
+    result.add("bdpt-opt", "Light Tracing Mode Has No Options");
   }
   result.add(mode);
   return result;
