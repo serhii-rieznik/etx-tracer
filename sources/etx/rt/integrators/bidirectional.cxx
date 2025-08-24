@@ -912,19 +912,6 @@ struct CPUBidirectionalImpl : public Task {
 
     auto& history = path_data.camera_history;
 
-    if (prev.delta_connection) {
-      history[2] = history[1];
-      history[1] = history[0];
-      history[0] = {
-        .pdf_forward = prev.pdf.forward,
-        .pdf_ratio = 1.0f,
-        .mis_accumulated = 0.0f,
-        .delta = true,
-      };
-      prev.pdf.accumulated = 0.0f;
-      return;
-    }
-
     const bool can_connect = (history[1].delta == false) && (history[2].delta == false);
 
     history[2] = history[1];
@@ -958,18 +945,6 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     auto& history = path_data.emitter_history;
-    if (prev.delta_connection) {
-      history[2] = history[1];
-      history[1] = history[0];
-      history[0] = {
-        .pdf_forward = prev.pdf.forward,
-        .pdf_ratio = 1.0f,
-        .mis_accumulated = 0.0f,
-        .delta = true,
-      };
-      prev.pdf.accumulated = 0.0f;
-      return;
-    }
 
     const bool is_delta = (path_size > 4u) ? history[1u].delta : prev.delta_emitter;
     const bool can_connect = (is_delta == false) * (prev.delta_connection == false);
