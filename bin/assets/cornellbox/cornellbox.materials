@@ -1,3 +1,8 @@
+newmtl et::medium
+id fog
+absorbtion 0.5 1.0 2.0
+scattering 0.2 0.2 0.2
+
 newmtl et::spectrum
 id green
 rgb 0 1 0
@@ -56,7 +61,8 @@ material class diffuse
 Kd white3
 
 newmtl shortbox
-material class diffuse
+material class boundary
+int_medium fog
 Kd white4
 
 newmtl tallbox

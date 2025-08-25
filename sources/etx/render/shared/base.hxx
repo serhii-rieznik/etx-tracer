@@ -27,7 +27,7 @@
 
 # define ETX_CHECK_FINITE(VALUE)                                 \
    do {                                                          \
-     if (isfinite((VALUE)) == false) {                           \
+     if (value_is_correct(VALUE) == false) {                     \
        if (ETX_ASSERT_ATOMIC_CHECK()) {                          \
          print_invalid_value(#VALUE, VALUE, __FILE__, __LINE__); \
          ETX_DEBUG_BREAK();                                      \

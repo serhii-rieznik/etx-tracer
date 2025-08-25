@@ -215,54 +215,50 @@ struct Options {
 
   void set(const std::string& id, const std::string& value) {
     for (auto& option : values) {
-      if (option.id == id) {
-        ETX_ASSERT(option.cls == OptionalValue::Class::InfoString);
-        option.name = value;
-        break;
-      }
+      if (option.id != id)
+        continue;
+
+      ETX_ASSERT(option.cls == OptionalValue::Class::InfoString);
+      option.name = value;
+      return;
     }
+
+    OptionalValue& val = values.emplace_back();
+    val.cls = OptionalValue::Class::InfoString;
+    val.id = id;
+    val.name = value;
   }
 
   void set(const std::string& id, uint32_t value) {
     for (auto& option : values) {
-      if (option.id == id) {
-        ETX_ASSERT((option.cls == OptionalValue::Class::Integer) || (option.cls == OptionalValue::Class::Enum));
-        option.value.integer = value < option.min_value.integer ? option.min_value.integer : (value > option.max_value.integer ? option.max_value.integer : value);
-        break;
-      }
-    }
-  }
+      if (option.id != id)
+        continue;
 
-  template <class T>
-  void set_enum(const std::string& id, T value) {
-    for (auto& option : values) {
-      if (option.id == id) {
-        ETX_ASSERT(option.cls == OptionalValue::Class::Enum);
-        uint32_t i = static_cast<uint32_t>(value);
-        option.value.integer = i < option.min_value.integer ? option.min_value.integer : (i > option.max_value.integer ? option.max_value.integer : i);
-        break;
-      }
+      ETX_ASSERT((option.cls == OptionalValue::Class::Integer) || (option.cls == OptionalValue::Class::Enum));
+      option.value.integer = value < option.min_value.integer ? option.min_value.integer : (value > option.max_value.integer ? option.max_value.integer : value);
+      return;
     }
+
+    OptionalValue& val = values.emplace_back();
+    val.cls = OptionalValue::Class::Integer;
+    val.id = id;
+    val.value.integer = value;
   }
 
   void set(const std::string& id, float value) {
     for (auto& option : values) {
-      if (option.id == id) {
-        ETX_ASSERT(option.cls == OptionalValue::Class::Float);
-        option.value.flt = value < option.min_value.flt ? option.min_value.flt : (value > option.max_value.flt ? option.max_value.flt : value);
-        break;
-      }
-    }
-  }
+      if (option.id != id)
+        continue;
 
-  void set_bool(const std::string& id, bool value) {
-    for (auto& option : values) {
-      if (option.id == id) {
-        ETX_ASSERT(option.cls == OptionalValue::Class::Boolean);
-        option.value.boolean = value;
-        break;
-      }
+      ETX_ASSERT(option.cls == OptionalValue::Class::Float);
+      option.value.flt = value < option.min_value.flt ? option.min_value.flt : (value > option.max_value.flt ? option.max_value.flt : value);
+      return;
     }
+
+    OptionalValue& val = values.emplace_back();
+    val.cls = OptionalValue::Class::Float;
+    val.id = id;
+    val.value.flt = value;
   }
 
   bool has(const std::string& id) const {

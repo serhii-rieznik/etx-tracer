@@ -307,6 +307,8 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   ETX_ASSERT(emitter_sample.pdf_dir > 0.0f);
 
   float cos_t = dot(emitter_sample.direction, emitter_sample.normal);
+  ETX_ASSERT(cos_t > 0.0f);
+
   state.throughput = emitter_sample.value * (cos_t / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample));
   ETX_VALIDATE(state.throughput);
 

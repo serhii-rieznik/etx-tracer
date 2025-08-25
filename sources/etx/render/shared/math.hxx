@@ -741,7 +741,7 @@ ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
 }
 
 ETX_GPU_CODE float3 sample_cosine_distribution(const float2 rnd, float exponent) {
-  float cos_theta = powf(rnd.x, 1.0f / (exponent + 1.0f));
+  float cos_theta = powf(fmaxf(rnd.x, kEpsilon), 1.0f / (exponent + 1.0f));
   float sin_theta = sqrtf(1.0f - cos_theta * cos_theta);
   return {cosf(rnd.y * kDoublePi) * sin_theta, sinf(rnd.y * kDoublePi) * sin_theta, cos_theta};
 }
@@ -853,8 +853,20 @@ ETX_GPU_CODE bool value_is_correct(float t) {
   return !std::isnan(t) && !std::isinf(t);
 }
 
+ETX_GPU_CODE bool value_is_correct(const float2& v) {
+  return value_is_correct(v.x) && value_is_correct(v.y);
+}
+
 ETX_GPU_CODE bool value_is_correct(const float3& v) {
   return value_is_correct(v.x) && value_is_correct(v.y) && value_is_correct(v.z);
+}
+
+ETX_GPU_CODE bool value_is_correct(const float4& v) {
+  return value_is_correct(v.x) && value_is_correct(v.y) && value_is_correct(v.z) && value_is_correct(v.w);
+}
+
+ETX_GPU_CODE bool value_is_correct(const complex& v) {
+  return value_is_correct(v.real()) && value_is_correct(v.imag());
 }
 
 ETX_GPU_CODE bool is_valid_vector(const float3& v) {
