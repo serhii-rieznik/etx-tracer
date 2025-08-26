@@ -1,13 +1,35 @@
 {
   "geometry": "light-types.obj",
-  "materials": "materials.mtl",
+  "materials": "light-types.mtl",
   "samples": 32,
   "max-path-length": 65536,
+  "random-termination-start": 6,
+  "spectral": false,
+  "force-tangents": false,
   "camera": {
-    "viewport": [ 1280.0, 720.0 ],
-    "origin": [ 0.0, 15.0, 25.0 ],
-    "target": [ 0.0, 6.0, 0.0 ],
-    "up": [ 0.0, 1.0, 0.0 ],
-    "fov": 50.0
+    "class": "perspective",
+    "viewport": [
+      1280,
+      720
+    ],
+    "origin": [
+      0.0,
+      20.809999465942383,
+      177.1300048828125
+    ],
+    "target": [
+      0.0,
+      20.809999465942383,
+      167.1300048828125
+    ],
+    "up": [
+      0.0,
+      0.9999999403953552,
+      -0.0
+    ],
+    "fov": 25.360765595824144,
+    "focal-length": 80.0,
+    "lens-radius": 0.0,
+    "focal-distance": 0.0
   }
 }

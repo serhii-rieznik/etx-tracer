@@ -784,8 +784,13 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene* s
 
       ImGui::Text("Max samples per pixel / iterations:");
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##samples", reinterpret_cast<int*>(&scene->samples));
-      ImGui::Text("Maximum path length:");
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxcampathlLength", reinterpret_cast<int*>(&scene->max_path_length));
+
+      ImGui::Text("Path length (min/max):");
+      int32_t values[] = {int32_t(scene->min_path_length), int32_t(scene->max_path_length)};
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt2("##pathlLength", values);
+      scene->min_path_length = clamp(values[0], 0, 65536);
+      scene->max_path_length = clamp(values[1], 0, 65536);
+
       ImGui::Text("Path length w/o random termination:");
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&scene->random_path_termination));
       ImGui::Text("Noise Threshold:");

@@ -38,6 +38,7 @@ struct ETX_ALIGNED Scene {
   float3 bounding_sphere_center ETX_EMPTY_INIT;
   float bounding_sphere_radius ETX_EMPTY_INIT;
   PixelFilter pixel_sampler ETX_EMPTY_INIT;
+  uint32_t min_path_length ETX_INIT_WITH(0u);
   uint32_t max_path_length ETX_INIT_WITH(65535u);
   uint32_t samples ETX_INIT_WITH(256u);
   uint32_t random_path_termination ETX_INIT_WITH(6u);

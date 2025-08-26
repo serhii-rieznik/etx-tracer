@@ -444,7 +444,7 @@ ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPath
 
 ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration, const VCMOptions& options,
   bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
-  if ((options.connect_to_camera() == false) || (state.total_path_depth + 1 >= scene.max_path_length)) {
+  if ((options.connect_to_camera() == false) || (state.total_path_depth + 2 > scene.max_path_length) || (state.total_path_depth + 2 < scene.min_path_length)) {
     return {};
   }
 
@@ -579,13 +579,16 @@ ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& op
   if ((options.direct_hit() == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
+  if ((state.total_path_depth > scene.max_path_length) || (state.total_path_depth < scene.min_path_length))
+    return;
+
   const auto& emitter = scene.emitters[intersection.emitter_index];
   state.gathered += vcm_get_radiance(scene, emitter, state, options, intersection);
 }
 
 ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
   const Intersection* isect, const float3& medium_pos, const Raytracing& rt, VCMPathState& state) {
-  if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.max_path_length))
+  if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.max_path_length) || (state.total_path_depth + 1 < scene.min_path_length))
     return {state.spect, 0.0f};
 
   float3 sample_pos = camera_at_medium ? medium_pos : isect->pos;
@@ -743,7 +746,13 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
 
   const auto& light_path = light_paths[state.global_index];
   SpectralResponse result = {state.spect, 0.0f};
-  for (uint64_t i = 0; (i < light_path.count) && (state.total_path_depth + i + 2 <= scene.max_path_length); ++i) {
+  for (uint64_t i = 0; (i < light_path.count); ++i) {
+    const uint64_t target_path_length = state.total_path_depth + i + 2u;
+    if (target_path_length < scene.min_path_length)
+      continue;
+    if (target_path_length > scene.max_path_length)
+      break;
+
     float3 target_position = {};
     SpectralResponse value = {};
     bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertices[light_path.index + i], options, camera_at_medium, isect, medium_pos, iteration.vm_weight,
