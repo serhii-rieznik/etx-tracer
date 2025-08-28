@@ -30,6 +30,7 @@ struct PathVertex {
 
   Class cls = Class::Invalid;
   Medium::Instance medium = {};
+  bool delta_emitter = false;
   bool connectible = true;
 
   PathVertex() = default;
@@ -891,6 +892,7 @@ struct CPUBidirectionalImpl : public Task {
     PathVertex prev = {PathVertex::Class::Emitter};
     prev.throughput = {spect, 1.0f};
     prev.connectible = true;
+    prev.delta_emitter = emitter_sample.is_delta;
     path_data.emitter_path.emplace_back(prev);
 
     PathVertex curr = {PathVertex::Class::Emitter};
@@ -905,11 +907,11 @@ struct CPUBidirectionalImpl : public Task {
     curr.pdf.next = emitter_sample.pdf_dir;
     curr.pdf.from_prev = emitter_sample.pdf_area * emitter_sample.pdf_sample;
     curr.connectible = true;  // directional/local emission connection handled via MIS; vertex itself is connectible if subsequent BSDF is
+    curr.delta_emitter = emitter_sample.is_delta;
     if (mode == Mode::BDPTFast) {
       curr.pdf.accumulated = safe_div(1.0f, curr.pdf.from_prev);
     }
     path_data.emitter_path.emplace_back(curr);
-
     path_data.emitter_path_size = 2u;
 
     float3 o = offset_ray(emitter_sample.origin, curr.intersection.nrm);
@@ -1092,18 +1094,13 @@ struct CPUBidirectionalImpl : public Task {
 
     if (mode == Mode::BDPTFast) {
       float p_ratio = y_curr.pdf.accumulated * safe_div(1.0f, y_curr.pdf.from_prev);
-
       float p_connection = 1.0f;
-
       float p_camera = film_pdf_out(rt.camera(), y_curr.intersection.pos);
       p_camera = PathVertex::convert_solid_angle_pdf_to_area(p_camera, sampled_camera_vertex, y_curr);
-
       float p_emitter_direct = map0(path_data.emitter_path[1].pdf.from_next);
-      float p_from_camera_direct = map0(p_camera) * p_emitter_direct;
-
+      float p_from_camera_direct = path_data.emitter_path[1].delta_emitter ? 0.0f : map0(p_camera) * p_emitter_direct;
       float p_emitter_connect = PathVertex::pdf_to_emitter(spect, path_data.emitter_path[2], path_data.emitter_path[1], scene);
       float p_from_camera_connect = map0(p_camera) * map0(p_emitter_connect);
-
       float result = balance_heuristic(p_connection, p_ratio * p_from_camera_connect, p_ratio * p_from_camera_direct);
       ETX_VALIDATE(result);
       return result;
@@ -1201,7 +1198,7 @@ struct CPUBidirectionalImpl : public Task {
           float p_ratio = z_curr.pdf.accumulated;
           float p_direct = map0(z_curr.pdf.from_prev);
           float p_em = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
-          float p_connection = map0(p_em);
+          float p_connection = z_prev.connectible ? map0(p_em) : 0.0f;
           float p_sample = emitter_discrete_pdf(scene.emitters[z_curr.intersection.emitter_index], scene.emitters_distribution);
           float camera_connection_pdf = p_sample * emitter_pdf_area_local(scene.emitters[z_curr.intersection.emitter_index], scene);
           float p_light_path = map0(camera_connection_pdf);
@@ -1275,7 +1272,7 @@ struct CPUBidirectionalImpl : public Task {
         float p_ratio = z_curr.pdf.accumulated;
         float p_direct = map0(z_curr.pdf.from_prev);
         float p_em = pdf_to;
-        float p_connection = map0(p_em);
+        float p_connection = z_prev.connectible ? map0(p_em) : 0.0f;
         float camera_connection_pdf = pdf_from;
         float p_light_path = map0(p_em) * map0(camera_connection_pdf);
         mis_weight = balance_heuristic(p_direct, p_connection, p_ratio * p_light_path);
