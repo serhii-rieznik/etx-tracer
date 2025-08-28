@@ -112,7 +112,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.medium_index = data.current_medium;
   } else {
     float eta = (int_ior.eta / ext_ior.eta).monochromatic();
-    float factor = (data.path_source == PathSource::Camera) ? sqr(1.0f / eta) : 1.0f;
+    float factor = sqr(1.0f / eta);
     result.eta = eta;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr) * factor;
     result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged | delta_sample;
@@ -140,10 +140,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   auto ext_ior = mtl.ext_ior(data.spectrum_sample);
   auto int_ior = mtl.int_ior(data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
-  const float m_eta = (int_ior.eta / ext_ior.eta).monochromatic();
 
   bool forward_path = data.path_source == PathSource::Camera;
-  float factor = forward_path ? sqr(LocalFrame::cos_theta(w_i) < 0.0f ? 1.0f / m_eta : m_eta) : 1.0f;
   float backward_scale = fabsf(1.0f / LocalFrame::cos_theta(w_i));
 
   SpectralResponse value = {};
@@ -154,7 +152,6 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
     } else {
       value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, false, roughness, ext_ior, int_ior, thinfilm)
                            : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, roughness, int_ior, ext_ior, thinfilm) * backward_scale;
-      value *= factor;
     }
   } else if (LocalFrame::cos_theta(w_o) <= 0) {
     value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, true, roughness, int_ior, ext_ior, thinfilm)
@@ -162,7 +159,6 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   } else {
     value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, false, roughness, int_ior, ext_ior, thinfilm)
                          : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, roughness, ext_ior, int_ior, thinfilm) * backward_scale;
-    value *= factor;
   }
 
   if (value.is_zero())
