@@ -115,6 +115,8 @@ struct CPUVCMImpl {
     status.current_iteration = vcm_iteration.iteration;
 
     _light_paths.clear();
+    _light_paths.resize(rt.film().pixel_count());
+
     _light_vertices.clear();
     rt.film().clear({Film::LightIteration});
 
@@ -157,17 +159,19 @@ struct CPUVCMImpl {
       }
 
       auto& lp = local_paths.emplace_back();
+      lp.spect = state.spect;
       lp.index = path_begin;
       lp.count = static_cast<uint32_t>(local_vertices.size() - path_begin);
-      lp.spect = state.spect;
+      lp.pixel_index = static_cast<uint32_t>(i);  // Store original index for correct placement
     }
 
     {
       std::scoped_lock lock(_light_vertices_lock);
+      uint32_t vertex_base_index = static_cast<uint32_t>(_light_vertices.size());
       for (auto& path : local_paths) {
-        path.index += static_cast<uint32_t>(_light_vertices.size());
+        path.index += vertex_base_index;
+        _light_paths[path.pixel_index] = path;  // Store at correct index!
       }
-      _light_paths.insert(_light_paths.end(), local_paths.begin(), local_paths.end());
       _light_vertices.insert(_light_vertices.end(), local_vertices.begin(), local_vertices.end());
     }
   }

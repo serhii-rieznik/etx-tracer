@@ -13,6 +13,7 @@ VCMOptions VCMOptions::default_values() {
 void VCMOptions::load(const Options& opt) {
   initial_radius = opt.get("vcm-initial_radius", initial_radius).to_float();
   radius_decay = opt.get("vcm-radius_decay", radius_decay).to_integer();
+  blue_noise = opt.get("vcm-blue_noise", blue_noise).to_bool();
 
   options = opt.get("vcm-direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
   options = opt.get("vcm-connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
@@ -35,6 +36,7 @@ void VCMOptions::store(Options& opt) const {
   opt.add("vcm-opt", "VCM Options");
   opt.add(enable_merging(), "vcm-merging", "Enable Merging");
   opt.add(enable_mis(), "vcm-mis", "Multiple Importance Sampling");
+  opt.add(blue_noise, "vcm-blue_noise", "Blue Noise");
   opt.add(0.0f, initial_radius, 10.0f, "vcm-initial_radius", "Initial Radius");
   opt.add(1u, uint32_t(radius_decay), 65536u, "vcm-radius_decay", "Radius Decay");
 }

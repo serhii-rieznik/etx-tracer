@@ -87,11 +87,28 @@ def _export_materials(operator, obj_path):
             if mat and mat.name in exported_material_names
         ]
 
+    # === Gather mediums for materials that have volume ===
+    used_medium_ids = set()
+    material_to_medium_id = {}
+
+    for mat in materials_to_export:
+        if mat is None:
+            continue
+        medium_entry, medium_id = _extract_medium_from_material(
+            operator, mat, used_medium_ids
+        )
+        if medium_entry is not None and medium_id is not None:
+            materials_data.append(medium_entry)
+            material_to_medium_id[mat.name] = medium_id
+
+    # === Export mesh materials ===
     for mat in materials_to_export:
         if mat is None:
             continue
 
         mat_data = _convert_material_to_etx(operator, mat)
+        if mat.name in material_to_medium_id:
+            mat_data["properties"]["int_medium"] = material_to_medium_id[mat.name]
         materials_data.append(mat_data)
 
     # Write ETX materials format
@@ -446,6 +463,7 @@ def _get_etx_material_class(operator, blender_mat):
                 "BSDF_GLOSSY": "conductor",
                 "BSDF_TRANSLUCENT": "translucent",
                 "BSDF_DIFFUSE": "diffuse",
+                "BSDF_TRANSPARENT": "boundary",
                 "EMISSION": "diffuse",
             }
             return node_type_to_class.get(shader_node.type, "diffuse")
@@ -675,3 +693,93 @@ def _extract_basic_properties(operator, blender_mat, properties):
         metallic = blender_mat.metallic
         if metallic > 0.0:
             properties["Ks"] = f"{metallic:.3f} {metallic:.3f} {metallic:.3f}"
+
+
+def _extract_medium_from_material(operator, blender_mat, used_ids):
+    """Detect Blender volume nodes and build an et::medium entry.
+
+    Returns (medium_entry_dict_or_None, medium_id_or_None).
+    """
+    if not (blender_mat and blender_mat.use_nodes and blender_mat.node_tree):
+        return None, None
+
+    node_tree = blender_mat.node_tree
+
+    # Find active output and inspect its Volume input
+    output_node = None
+    for node in node_tree.nodes:
+        if node.type == "OUTPUT_MATERIAL" and node.is_active_output:
+            output_node = node
+            break
+
+    if output_node is None or ("Volume" not in output_node.inputs):
+        return None, None
+
+    if output_node.inputs["Volume"].is_linked == False:
+        return None, None
+
+    # Resolve upstream BSDF nodes connected into Volume
+    from_node = output_node.inputs["Volume"].links[0].from_node
+
+    # Helper to generate a unique ID
+    def make_unique_id(base):
+        base_clean = base if base else "medium"
+        candidate = f"{base_clean}__vol"
+        i = 1
+        while candidate in used_ids:
+            candidate = f"{base_clean}__vol_{i}"
+            i += 1
+        used_ids.add(candidate)
+        return candidate
+
+    # Accumulate absorption/scattering
+    absorption_rgb = None
+    scattering_rgb = None
+
+    def get_color(node, socket_name, default_value):
+        if socket_name in node.inputs:
+            val = node.inputs[socket_name].default_value
+            if hasattr(val, "__len__") and len(val) >= 3:
+                return [float(val[0]), float(val[1]), float(val[2])]
+        return list(default_value)
+
+    # Transparent handling: for Volume input, relevant nodes are Volume Absorption and Volume Scatter
+    # - Volume Absorption: output type "Shader", node.type == 'VOLUME_ABSORPTION', Color socket
+    # - Volume Scatter: node.type == 'VOLUME_SCATTER', Color socket; (Anisotropy available but optional here)
+    def traverse(node):
+        nonlocal absorption_rgb, scattering_rgb
+        if node is None:
+            return
+        if node.type == "VOLUME_ABSORPTION":
+            absorption_rgb = get_color(node, "Color", [0.0, 0.0, 0.0])
+            return
+        if node.type == "VOLUME_SCATTER":
+            scattering_rgb = get_color(node, "Color", [0.0, 0.0, 0.0])
+            return
+        # If a Mix Shader or similar is used, traverse any linked inputs to find volume nodes
+        for inp in node.inputs:
+            if getattr(inp, "is_linked", False):
+                try:
+                    src = inp.links[0].from_node
+                except Exception:
+                    src = None
+                traverse(src)
+
+    traverse(from_node)
+
+    if (absorption_rgb is None) and (scattering_rgb is None):
+        return None, None
+
+    medium_id = make_unique_id(blender_mat.name)
+    medium_entry = {"name": "et::medium", "properties": {}}
+    medium_entry["properties"]["id"] = medium_id
+    if absorption_rgb is not None:
+        medium_entry["properties"][
+            "absorption"
+        ] = f"{absorption_rgb[0]:.4f} {absorption_rgb[1]:.4f} {absorption_rgb[2]:.4f}"
+    if scattering_rgb is not None:
+        medium_entry["properties"][
+            "scattering"
+        ] = f"{scattering_rgb[0]:.4f} {scattering_rgb[1]:.4f} {scattering_rgb[2]:.4f}"
+
+    return medium_entry, medium_id

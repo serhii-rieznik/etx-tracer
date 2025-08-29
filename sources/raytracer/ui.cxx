@@ -370,10 +370,10 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene* s
       if (recent_files.empty() == false) {
         ImGui::Separator();
         if (ImGui::BeginMenu("Recent Files")) {
-          for (const auto& recent : recent_files) {
-            if (ImGui::MenuItem(recent.c_str(), nullptr, nullptr)) {
+          for (uint64_t i = recent_files.size(); i > 0; --i) {
+            if (ImGui::MenuItem(recent_files[i - 1u].c_str(), nullptr, nullptr)) {
               if (callbacks.scene_file_selected) {
-                callbacks.scene_file_selected(recent);
+                callbacks.scene_file_selected(recent_files[i - 1u]);
               }
             }
           }
