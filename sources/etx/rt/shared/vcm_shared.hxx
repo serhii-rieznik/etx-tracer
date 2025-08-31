@@ -27,7 +27,7 @@ struct ETX_ALIGNED VCMOptions {
     ConnectOnlyOptions = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | EnableMis,
     FullOptions = ConnectOnlyOptions | EnableMerging | MergeVertices,
 
-    DefaultOptions = EnableMis | ConnectOnlyOptions,
+    DefaultOptions = FullOptions,
   };
 
   void set_option(uint32_t option, bool enabled) {
@@ -155,6 +155,8 @@ struct ETX_ALIGNED VCMLightVertex {
     , nrm(i.nrm)
     , triangle_index(i.triangle_index)
     , material_index(i.material_index)
+    , medium_index(s.medium_index)
+    , is_medium(false)
     , path_length(s.total_path_depth)
     , path_index(index) {
   }
@@ -173,6 +175,8 @@ struct ETX_ALIGNED VCMLightVertex {
   float3 nrm = {};
   uint32_t triangle_index = kInvalidIndex;
   uint32_t material_index = kInvalidIndex;
+  uint32_t medium_index = kInvalidIndex;
+  bool is_medium = false;
 
   uint32_t path_length = 0;
   uint32_t path_index = 0;
@@ -402,10 +406,10 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
   ETX_VALIDATE(pdf_rev);
 
   // Update MIS recurrence for non-delta event with cos_theta = 1 for media
-  // Medium vertices must not rely on merging, so vm terms are excluded
+  // Medium vertices are not mergeable: exclude merging competitors in d_vm
   state.d_vc = (1.0f / pdf_fwd) * (state.d_vc * pdf_rev + state.d_vcm);
   ETX_VALIDATE(state.d_vc);
-  state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 1.0f);
+  state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 0.0f);
   ETX_VALIDATE(state.d_vm);
   state.d_vcm = 1.0f / pdf_fwd;
   ETX_VALIDATE(state.d_vcm);
@@ -498,7 +502,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
 
   uv = camera_sample.uv;
 
-  float camera_pdf = camera_at_medium ? (camera_sample.pdf_dir_out / dist2) : (camera_sample.pdf_dir_out * fabsf(dot(isect->nrm, w_o)) / dist2);
+  float camera_pdf = camera_sample.pdf_dir_out * (camera_at_medium ? 1.0f : fabsf(dot(isect->nrm, w_o))) / dist2;
   ETX_VALIDATE(camera_pdf);
 
   float vmW_cam = camera_at_medium ? 0.0f : vcm_iteration.vm_weight;
@@ -656,18 +660,19 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
 
 ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
   bool camera_at_medium, const Intersection* camera_isect, const float3& medium_pos, float vm_weight, uint32_t state_medium, float3& target_position, SpectralResponse& value) {
-  auto light_v = light_vertex.vertex(scene);
-  target_position = light_v.pos;
+  Vertex light_v = light_vertex.is_medium ? Vertex{} : light_vertex.vertex(scene);
+  target_position = light_vertex.is_medium ? light_vertex.pos : light_v.pos;
 
-  float3 w_o = light_v.pos - (camera_at_medium ? medium_pos : camera_isect->pos);
+  float3 w_o = target_position - (camera_at_medium ? medium_pos : camera_isect->pos);
   float distance_squared = dot(w_o, w_o);
   if (distance_squared <= kEpsilon)
     return false;
   w_o /= sqrtf(distance_squared);
 
-  float w_dot_l = -dot(light_v.nrm, w_o);
-  if (w_dot_l < 0.0f)
-    return false;
+  float w_dot_l = 1.0f;
+  if (light_vertex.is_medium == false) {
+    w_dot_l = -dot(light_v.nrm, w_o);
+  }
 
   float camera_area_pdf = 0.0f;
   float camera_rev_pdf = 0.0f;
@@ -680,59 +685,68 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
       return false;
     float p_rev = medium.phase_function(w_o, state.ray.d);
     ETX_VALIDATE(p_rev);
-    camera_area_pdf = p * w_dot_l / distance_squared;
+    camera_area_pdf = p * fabsf(w_dot_l) / distance_squared;
     ETX_VALIDATE(camera_area_pdf);
     camera_rev_pdf = p_rev;
     camera_scatter = {spect, p};
   } else {
     float w_dot_c = dot(camera_isect->nrm, w_o);
-    if (w_dot_c < 0.0f)
-      return false;
     const auto& mat = scene.materials[camera_isect->material_index];
     auto camera_data = BSDFData{spect, state_medium, PathSource::Camera, *camera_isect, camera_isect->w_i};
     auto camera_bsdf = bsdf::evaluate(camera_data, w_o, mat, scene, state.sampler);
     if (camera_bsdf.valid() == false)
       return false;
-    camera_area_pdf = camera_bsdf.pdf * w_dot_l / distance_squared;
+    camera_area_pdf = camera_bsdf.pdf * fabsf(w_dot_l) / distance_squared;
     ETX_VALIDATE(camera_area_pdf);
     camera_rev_pdf = bsdf::reverse_pdf(camera_data, w_o, mat, scene, state.sampler);
     ETX_VALIDATE(camera_rev_pdf);
-    if (camera_rev_pdf <= kEpsilon)
-      return false;
     camera_scatter = camera_bsdf.bsdf;
   }
 
-  const auto& light_mat = scene.materials[light_vertex.material_index];
-  const auto& light_tri = scene.triangles[light_vertex.triangle_index];
-  auto light_data = BSDFData{spect, state_medium, PathSource::Light, light_v, light_vertex.w_i};
-  auto light_bsdf = bsdf::evaluate(light_data, -w_o, light_mat, scene, state.sampler);
-  if (light_bsdf.valid() == false)
-    return false;
-
+  // Light side: surface or medium
   float light_area_pdf = 0.0f;
-  if (camera_at_medium) {
-    light_area_pdf = light_bsdf.pdf / distance_squared;
+  float light_rev_pdf = 0.0f;
+  SpectralResponse light_scatter = {spect, 0.0f};
+
+  if (light_vertex.is_medium) {
+    const auto& med = scene.mediums[light_vertex.medium_index];
+    float p = med.phase_function(light_vertex.w_i, -w_o);
+    if (p <= 0.0f)
+      return false;
+    float p_rev = med.phase_function(-w_o, light_vertex.w_i);
+    ETX_VALIDATE(p_rev);
+    light_area_pdf = p * (camera_at_medium ? 1.0f : fabsf(dot(camera_isect->nrm, w_o))) / distance_squared;
+    ETX_VALIDATE(light_area_pdf);
+    light_rev_pdf = p_rev;
+    light_scatter = {spect, p};
   } else {
-    float w_dot_c = dot(camera_isect->nrm, w_o);
-    light_area_pdf = light_bsdf.pdf * w_dot_c / distance_squared;
+    const auto& light_mat = scene.materials[light_vertex.material_index];
+    const auto& light_tri = scene.triangles[light_vertex.triangle_index];
+    auto light_data = BSDFData{spect, camera_at_medium ? light_vertex.medium_index : state_medium, PathSource::Light, light_v, light_vertex.w_i};
+    auto light_bsdf = bsdf::evaluate(light_data, -w_o, light_mat, scene, state.sampler);
+    if (light_bsdf.valid() == false)
+      return false;
+    if (camera_at_medium) {
+      light_area_pdf = light_bsdf.pdf / distance_squared;
+    } else {
+      float w_dot_c = dot(camera_isect->nrm, w_o);
+      light_area_pdf = light_bsdf.pdf * fabsf(w_dot_c) / distance_squared;
+    }
+    ETX_VALIDATE(light_area_pdf);
+    light_rev_pdf = bsdf::reverse_pdf(light_data, -w_o, light_mat, scene, state.sampler);
+    ETX_VALIDATE(light_rev_pdf);
+    light_scatter = light_bsdf.bsdf * fix_shading_normal(light_tri.geo_n, light_data.nrm, light_data.w_i, -w_o);
   }
-  ETX_VALIDATE(light_area_pdf);
 
-  auto light_rev_pdf = bsdf::reverse_pdf(light_data, -w_o, light_mat, scene, state.sampler);
-  ETX_VALIDATE(light_rev_pdf);
-  if (light_rev_pdf <= kEpsilon)
-    return false;
-
-  float vmW_vc = camera_at_medium ? 0.0f : vm_weight;
-  float w_light = camera_area_pdf * (vmW_vc + light_vertex.d_vcm + light_vertex.d_vc * light_rev_pdf);
+  float vmW_pair = (camera_at_medium || light_vertex.is_medium) ? 0.0f : vm_weight;
+  float w_light = camera_area_pdf * (vmW_pair + light_vertex.d_vcm + light_vertex.d_vc * light_rev_pdf);
   ETX_VALIDATE(w_light);
-  float w_camera = light_area_pdf * (vmW_vc + state.d_vcm + state.d_vc * camera_rev_pdf);
+  float w_camera = light_area_pdf * (vmW_pair + state.d_vcm + state.d_vc * camera_rev_pdf);
   ETX_VALIDATE(w_camera);
   float weight = options.enable_mis() ? 1.0f / (1.0f + w_light + w_camera) : 1.0f;
   ETX_VALIDATE(weight);
 
-  light_bsdf.bsdf *= fix_shading_normal(light_tri.geo_n, light_data.nrm, light_data.w_i, -w_o);
-  value = (camera_scatter * state.throughput) * (light_bsdf.bsdf * light_vertex.throughput) * (weight / distance_squared);
+  value = (camera_scatter * state.throughput) * (light_scatter * light_vertex.throughput) * (weight / distance_squared);
   return true;
 }
 
@@ -888,33 +902,67 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
-  // Allocate samples AFTER ray tracing (like BDPT) to sync alpha test consumption
-  float2 rnd_bsdf = state.sampler.next_2d();        // BSDF/phase function sampling
-  float2 rnd_connection = state.sampler.next_2d();  // Light/camera connections
-  float2 rnd_support = state.sampler.next_2d();     // Support operations
-
-  // Override with blue noise for first camera interaction
-  if (options.blue_noise && (state.total_path_depth == 1)) {
-    rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 0);
-    rnd_connection = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 2);
-    rnd_support = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 4);
-  }
-
+  // Try sampling medium BEFORE allocating per-event samples to match BDPT ordering
   Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
   if (medium_sample.sampled_medium()) {
+    // Allocate samples AFTER medium sampling to match BDPT
+    float2 rnd_bsdf = state.sampler.next_2d();        // BSDF/phase function sampling
+    float2 rnd_connection = state.sampler.next_2d();  // Light/camera connections
+    float2 rnd_support = state.sampler.next_2d();     // Support operations
+
+    // Override with blue noise for first camera interaction (limit early iterations for parity with BDPT)
+    if (options.blue_noise && (state.total_path_depth == 1) && (iteration.iteration < 256u)) {
+      rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 0);
+      rnd_connection = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 2);
+      rnd_support = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 4);
+    }
+    // Fold pending boundary + medium segment before connections
+    float seg = state.path_distance + medium_sample.t;
+    state.d_vcm *= sqr(seg);
+    ETX_VALIDATE(state.d_vcm);
+    state.path_distance = 0.0f;
+
     const auto& med = scene.mediums[state.medium_index];
+
+    // Sample phase function BEFORE explicit connections to match BDPT RNG order
+    float3 w_o_smp = med.sample_phase_function(rnd_bsdf, state.ray.d);
+    float pdf_fwd = med.phase_function(state.ray.d, w_o_smp);
+    ETX_VALIDATE(pdf_fwd);
+    float pdf_rev = med.phase_function(w_o_smp, state.ray.d);
+    ETX_VALIDATE(pdf_rev);
+
+    // Explicit connections from medium BEFORE sampling continuation (match surface ordering)
     if (med.enable_explicit_connections && (state.total_path_depth + 1 <= scene.max_path_length)) {
-      if (options.connect_vertices()) {
-        state.gathered += vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, true, nullptr, medium_sample.pos, rt, state);
-      }
       if (options.connect_to_light()) {
         state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
         state.gathered += vcm_connect_to_light(scene, iteration, options, true, nullptr, medium_sample.pos, rt, state);
         state.sampler.pop_fixed();
       }
+      if (options.connect_vertices()) {
+        state.gathered += vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, true, nullptr, medium_sample.pos, rt, state);
+      }
     }
 
-    return vcm_handle_sampled_medium(scene, medium_sample, iteration, options, PathSource::Camera, state, rnd_bsdf);
+    // Update MIS recurrences for continuation
+
+    state.d_vc = (1.0f / pdf_fwd) * (state.d_vc * pdf_rev + state.d_vcm);
+    ETX_VALIDATE(state.d_vc);
+    state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 0.0f);
+    ETX_VALIDATE(state.d_vm);
+    state.d_vcm = 1.0f / pdf_fwd;
+    ETX_VALIDATE(state.d_vcm);
+
+    // Advance ray to the sampled medium position/direction
+    state.ray.o = medium_sample.pos;
+    state.ray.d = w_o_smp;
+
+    // Medium scattering increases path length
+    state.total_path_depth += 1;
+
+    if (state.total_path_depth + 1 > scene.max_path_length)
+      return false;
+
+    return random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput);
   }
 
   if (found_intersection == false) {
@@ -929,6 +977,18 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
 
   const auto& mat = scene.materials[intersection.material_index];
   auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
+
+  // Allocate samples AFTER confirming no medium event to match BDPT
+  float2 rnd_bsdf = state.sampler.next_2d();        // BSDF sampling
+  float2 rnd_connection = state.sampler.next_2d();  // Connections
+  float2 rnd_support = state.sampler.next_2d();     // Support
+
+  // Override with blue noise for first camera interaction (limit early iterations for parity with BDPT)
+  if (options.blue_noise && (state.total_path_depth == 1) && (iteration.iteration < 256u)) {
+    rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 0);
+    rnd_connection = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 2);
+    rnd_support = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 4);
+  }
 
   // Use fixed sample allocation for BSDF sampling
   state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
@@ -999,18 +1059,43 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
-  // Allocate samples AFTER ray tracing (like BDPT) to sync alpha test consumption
-  float2 rnd_bsdf = state.sampler.next_2d();        // BSDF/phase function sampling
-  float2 rnd_connection = state.sampler.next_2d();  // Light/camera connections
-  float2 rnd_support = state.sampler.next_2d();     // Support operations
-
   LightStepResult result = {};
   Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
   if (medium_sample.sampled_medium()) {
+    // Allocate samples AFTER medium sampling to match BDPT
+    float2 rnd_bsdf = state.sampler.next_2d();        // Phase function sampling
+    float2 rnd_connection = state.sampler.next_2d();  // Camera connection
+    float2 rnd_support = state.sampler.next_2d();     // Support operations
+    // Fold pending boundary + medium segment before connection/MIS
+    float seg = state.path_distance + medium_sample.t;
+    state.d_vcm *= sqr(seg);
+    ETX_VALIDATE(state.d_vcm);
+    state.path_distance = 0.0f;
+
     const auto& med = scene.mediums[state.medium_index];
+    // Register medium light vertex for camera connections BEFORE sampling continuation
+    if (options.connect_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
+      VCMLightVertex v = {};
+      v.throughput = state.throughput;
+      v.w_i = state.ray.d;  // incoming direction before scattering
+      v.d_vcm = state.d_vcm;
+      v.d_vc = state.d_vc;
+      v.d_vm = state.d_vm;
+      v.pos = medium_sample.pos;
+      v.nrm = {0.0f, 0.0f, 0.0f};
+      v.triangle_index = kInvalidIndex;
+      v.material_index = kInvalidIndex;
+      v.medium_index = state.medium_index;
+      v.is_medium = true;
+      v.path_length = state.total_path_depth;
+      v.path_index = path_index;
+      result.add_vertex = true;
+      result.vertex_to_add = v;
+    }
+
+    // Connect to camera from medium BEFORE sampling continuation (align with BDPT)
     if (options.connect_to_camera() && med.enable_explicit_connections && (state.total_path_depth + 1 <= scene.max_path_length)) {
       float2 uv = {};
-      // Use fixed samples for camera connection
       state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
       auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, true, nullptr, medium_sample.pos, state, uv);
       state.sampler.pop_fixed();
@@ -1021,7 +1106,31 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
         result.splat_count = 1;
       }
     }
-    result.continue_tracing = vcm_handle_sampled_medium(scene, medium_sample, iteration, options, PathSource::Light, state, rnd_bsdf);
+
+    // Now sample phase and update MIS recurrences for continuation
+    float3 w_i = state.ray.d;
+    float3 w_o_smp = med.sample_phase_function(rnd_bsdf, w_i);
+    float pdf_fwd = med.phase_function(w_i, w_o_smp);
+    ETX_VALIDATE(pdf_fwd);
+    float pdf_rev = med.phase_function(w_o_smp, w_i);
+    ETX_VALIDATE(pdf_rev);
+
+    state.d_vc = (1.0f / pdf_fwd) * (state.d_vc * pdf_rev + state.d_vcm);
+    ETX_VALIDATE(state.d_vc);
+    state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 1.0f);
+    ETX_VALIDATE(state.d_vm);
+    state.d_vcm = 1.0f / pdf_fwd;
+    ETX_VALIDATE(state.d_vcm);
+
+    // Advance ray
+    state.ray.o = medium_sample.pos;
+    state.ray.d = w_o_smp;
+
+    // Medium scattering increases path length after connections
+    state.total_path_depth += 1;
+
+    result.continue_tracing =
+      (state.total_path_depth + 1 <= scene.max_path_length) && random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput);
     return result;
   }
 
@@ -1036,6 +1145,11 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
 
   const auto& mat = scene.materials[intersection.material_index];
   auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Light, intersection, intersection.w_i};
+
+  // Allocate samples when no medium event (post medium test) to match BDPT
+  float2 rnd_bsdf = state.sampler.next_2d();        // BSDF sampling
+  float2 rnd_connection = state.sampler.next_2d();  // Camera connection
+  float2 rnd_support = state.sampler.next_2d();     // Support operations
 
   // Use fixed sample allocation for BSDF sampling
   state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
