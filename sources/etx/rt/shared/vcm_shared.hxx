@@ -10,8 +10,14 @@ struct Options;
 struct Raytracing;
 
 struct ETX_ALIGNED VCMOptions {
+  enum Kernel : uint32_t {
+    Tophat = 0u,
+    Epanechnikov = 1u,
+  };
+
   uint32_t options ETX_EMPTY_INIT;
   uint32_t radius_decay ETX_EMPTY_INIT;
+  uint32_t kernel ETX_INIT_WITH(Epanechnikov);
   float initial_radius ETX_EMPTY_INIT;
   bool blue_noise ETX_INIT_WITH(true);
 
@@ -54,6 +60,9 @@ struct ETX_ALIGNED VCMOptions {
   }
   ETX_GPU_CODE bool enable_merging() const {
     return options & EnableMerging;
+  }
+  ETX_GPU_CODE bool smooth_kernel() const {
+    return kernel == Epanechnikov;
   }
 
   static VCMOptions default_values();
@@ -183,14 +192,6 @@ struct ETX_ALIGNED VCMLightVertex {
 
   ETX_GPU_CODE Vertex vertex(const Scene& s) const {
     return lerp_vertex(s.vertices, s.triangles[triangle_index], bc);
-  }
-
-  ETX_GPU_CODE const float3& position(const Scene& s) const {
-    return pos;
-  }
-
-  ETX_GPU_CODE const float3& normal(const Scene& s) const {
-    return nrm;
   }
 };
 
@@ -771,7 +772,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
       state.medium_index, target_position, value);
     if (connected) {
       if (camera_at_medium) {
-        auto tr = vcm_transmittance(rt, scene, state, medium_pos, light_vertices[light_path.index + i].position(scene));
+        auto tr = vcm_transmittance(rt, scene, state, medium_pos, light_vertices[light_path.index + i].pos);
         if (tr.is_zero() == false) {
           result += tr * value;
           ETX_VALIDATE(result);
@@ -791,13 +792,19 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
 }
 
 struct ETX_ALIGNED VCMSpatialGridData {
-  ArrayView<uint32_t> indices ETX_EMPTY_INIT;
   ArrayView<uint32_t> cell_ends ETX_EMPTY_INIT;
+  ArrayView<float3> positions ETX_EMPTY_INIT;
+  ArrayView<float3> normals ETX_EMPTY_INIT;
+  ArrayView<float3> w_in ETX_EMPTY_INIT;
+  ArrayView<float> d_vcm ETX_EMPTY_INIT;
+  ArrayView<float> d_vm ETX_EMPTY_INIT;
+  ArrayView<uint32_t> path_lengths ETX_EMPTY_INIT;
+  ArrayView<float3> throughput_rgb_div_pdf ETX_EMPTY_INIT;
   BoundingBox bounding_box ETX_EMPTY_INIT;
   uint32_t hash_table_mask ETX_EMPTY_INIT;
   float cell_size ETX_EMPTY_INIT;
   float radius_squared ETX_EMPTY_INIT;
-  float pad ETX_EMPTY_INIT;
+  float inv_radius_squared ETX_EMPTY_INIT;
 
   ETX_GPU_CODE uint32_t cell_index(int32_t x, int32_t y, int32_t z) const {
     return ((x * 73856093u) ^ (y * 19349663) ^ (z * 83492791)) & hash_table_mask;
@@ -808,56 +815,65 @@ struct ETX_ALIGNED VCMSpatialGridData {
     return cell_index(static_cast<int32_t>(m.x), static_cast<int32_t>(m.y), static_cast<int32_t>(m.z));
   }
 
-  ETX_GPU_CODE float3 gather_index(const Scene& scene, const Intersection& intersection, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, float vc_weight,
-    uint32_t index, VCMPathState& state) const {
-    uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
+  ETX_GPU_CODE float3 gather_index(const Scene& scene, const Intersection& intersection, const VCMOptions& options, float vc_weight, uint32_t index, VCMPathState& state) const {
+    const auto& mat = scene.materials[intersection.material_index];
+
+    const auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
+    const auto t_camera = state.throughput / state.spect.sampling_pdf();
+    const float w_camera_base = state.d_vcm * vc_weight;
+    const bool use_mis = options.enable_mis();
+    const bool is_spectral = state.spect.spectral();
+    const bool use_epan = (options.kernel == VCMOptions::Epanechnikov);
+    const uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
 
     float3 merged = {};
     for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
-      const auto& light_vertex = samples[indices[j]];
-
-      auto d = light_vertex.position(scene) - intersection.pos;
+      auto d = positions[j] - intersection.pos;
       float distance_squared = dot(d, d);
-      if ((distance_squared > radius_squared) || (light_vertex.path_length + state.total_path_depth + 1 > scene.max_path_length)) {
+      if ((distance_squared > radius_squared) || (path_lengths[j] + state.total_path_depth + 1 > scene.max_path_length)) {
+        continue;
+      }
+      if (dot(intersection.nrm, normals[j]) <= kEpsilon) {
         continue;
       }
 
-      if (dot(intersection.nrm, light_vertex.normal(scene)) <= kEpsilon) {
-        continue;
-      }
-
-      const auto& mat = scene.materials[intersection.material_index];
-      auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
-      auto camera_bsdf = bsdf::evaluate(camera_data, -light_vertex.w_i, mat, scene, state.sampler);
+      const float3 wi = w_in[j];
+      auto camera_bsdf = bsdf::evaluate(camera_data, -wi, mat, scene, state.sampler);
       if (camera_bsdf.valid() == false) {
         continue;
       }
 
-      auto camera_rev_pdf = bsdf::reverse_pdf(camera_data, -light_vertex.w_i, mat, scene, state.sampler);
+      auto camera_rev_pdf = bsdf::reverse_pdf(camera_data, -wi, mat, scene, state.sampler);
 
-      float w_light = light_vertex.d_vcm * vc_weight + light_vertex.d_vm * camera_bsdf.pdf;
-      float w_camera = state.d_vcm * vc_weight + state.d_vm * camera_rev_pdf;
-      float weight = 1.0f / (1.0f + w_light + w_camera);
+      float w_light = d_vcm[j] * vc_weight + d_vm[j] * camera_bsdf.pdf;
+      float w_camera = w_camera_base + state.d_vm * camera_rev_pdf;
+      float weight = use_mis ? (1.0f / (1.0f + w_light + w_camera)) : 1.0f;
 
-      auto c_value = (camera_bsdf.func * state.throughput / state.spect.sampling_pdf()).to_rgb();
+      float kernel_weight = 1.0f;
+      float u2 = distance_squared * inv_radius_squared;
+      if (use_epan) {
+        float one_minus = 1.0f - u2;
+        kernel_weight = fmaxf(2.0f * one_minus, 0.0f);
+      }
+
+      auto c_value = (camera_bsdf.func * t_camera).to_rgb();
       ETX_VALIDATE(c_value);
 
-      auto l_value = (light_vertex.throughput / state.spect.sampling_pdf()).to_rgb();
+      auto l_value = throughput_rgb_div_pdf[j];
       ETX_VALIDATE(l_value);
 
-      if (state.spect.spectral()) {
+      if (is_spectral) {
         l_value *= SpectralDistribution::kRGBLuminanceScale;
       }
 
-      merged += (c_value * l_value) * weight;
+      merged += (c_value * l_value) * (kernel_weight * weight);
       ETX_VALIDATE(merged);
     }
     return merged;
   }
 
-  ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const ArrayView<VCMLightVertex>& samples, const VCMOptions& options, const Intersection& intersection,
-    float vc_weight) const {
-    if (indices.count == 0) {
+  ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const VCMOptions& options, const Intersection& intersection, float vc_weight) const {
+    if (positions.count == 0) {
       return {};
     }
 
@@ -890,7 +906,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
     float3 merged = {};
     for (uint32_t i = 0; i < 8; ++i) {
-      merged += gather_index(scene, intersection, samples, options, vc_weight, cell_indices[i], state);
+      merged += gather_index(scene, intersection, options, vc_weight, cell_indices[i], state);
     }
 
     return merged;
@@ -1006,11 +1022,12 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-        state.gathered +=
-          ss_gather.weights[i] * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &ss_gather.intersections[i], {}, rt, state);
+        Intersection out_isect = ss_gather.intersections[i];
+        out_isect.material_index = scene.subsurface_exit_material;
+        state.gathered += ss_gather.weights[i] * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &out_isect, {}, rt, state);
         // Use fixed samples for each subsurface connection
         state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
-        state.gathered += ss_gather.weights[i] * vcm_connect_to_light(scene, iteration, options, false, &ss_gather.intersections[i], {}, rt, state);
+        state.gathered += ss_gather.weights[i] * vcm_connect_to_light(scene, iteration, options, false, &out_isect, {}, rt, state);
         state.sampler.pop_fixed();
       }
     } else {
@@ -1025,6 +1042,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   if (subsurface_sampled) {
     state.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
     intersection = ss_gather.intersections[ss_gather.selected_intersection];
+    intersection.material_index = scene.subsurface_exit_material;
     // Use the already allocated samples for subsurface cosine distribution
     state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, 0.0f);
     bsdf_sample.w_o = sample_cosine_distribution(state.sampler.next_2d(), intersection.nrm, 1.0f);
@@ -1034,8 +1052,8 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
   }
 
-  if (options.merge_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
-    state.merged += spatial_grid.gather(scene, state, light_vertices, options, intersection, iteration.vc_weight);
+  if (is_connectible && options.merge_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
+    state.merged += spatial_grid.gather(scene, state, options, intersection, iteration.vc_weight);
   }
 
   if (subsurface_path && (subsurface_sampled == false)) {
@@ -1117,7 +1135,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
 
     state.d_vc = (1.0f / pdf_fwd) * (state.d_vc * pdf_rev + state.d_vcm);
     ETX_VALIDATE(state.d_vc);
-    state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 1.0f);
+    state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 0.0f);
     ETX_VALIDATE(state.d_vm);
     state.d_vcm = 1.0f / pdf_fwd;
     ETX_VALIDATE(state.d_vcm);
@@ -1174,7 +1192,9 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
         for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
           // Use fixed samples for each subsurface camera connection
           state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
-          auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &ss_gather.intersections[i], {}, state, result.splat_uvs[result.splat_count]);
+          Intersection out_isect = ss_gather.intersections[i];
+          out_isect.material_index = scene.subsurface_exit_material;
+          auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &out_isect, {}, state, result.splat_uvs[result.splat_count]);
           state.sampler.pop_fixed();
           ETX_VALIDATE(value);
           if (value.maximum() > kEpsilon) {

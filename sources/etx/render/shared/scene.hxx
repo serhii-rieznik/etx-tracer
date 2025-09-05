@@ -26,7 +26,6 @@ struct ETX_ALIGNED Scene {
   };
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
-  ArrayView<uint32_t> triangle_to_material ETX_EMPTY_INIT;
   ArrayView<uint32_t> triangle_to_emitter ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
   ArrayView<Emitter> emitters ETX_EMPTY_INIT;
@@ -188,10 +187,10 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
   const auto& tri = scene.triangles[base.triangle_index];
   Intersection result_intersection = lerp_vertex(scene.vertices, tri, bc);
   result_intersection.barycentric = bc;
-  result_intersection.triangle_index = static_cast<uint32_t>(base.triangle_index);
+  result_intersection.triangle_index = base.triangle_index;
   result_intersection.w_i = w_i;
   result_intersection.t = base.t;
-  result_intersection.material_index = scene.triangle_to_material[result_intersection.triangle_index];
+  result_intersection.material_index = scene.triangles[base.triangle_index].material_index;
   result_intersection.emitter_index = scene.triangle_to_emitter[result_intersection.triangle_index];
 
   const auto& mat = scene.materials[result_intersection.material_index];

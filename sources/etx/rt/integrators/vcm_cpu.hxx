@@ -24,7 +24,7 @@ struct CPUVCM : public Integrator {
   const Status& status() const override;
 
  private:
-  ETX_DECLARE_PIMPL(CPUVCM, 512);
+  ETX_DECLARE_PIMPL(CPUVCM, 768);
 };
 
 }  // namespace etx

@@ -136,7 +136,6 @@ struct SceneRepresentationImpl {
   TaskScheduler& scheduler;
   std::vector<Vertex> vertices;
   std::vector<Triangle> triangles;
-  std::vector<uint32_t> triangle_to_material;
   std::vector<uint32_t> triangle_to_emitter;
   std::vector<Material> materials;
   std::vector<Emitter> emitters;
@@ -282,7 +281,6 @@ struct SceneRepresentationImpl {
     triangles.clear();
     materials.clear();
     emitters.clear();
-    triangle_to_material.clear();
     triangle_to_emitter.clear();
 
     scene_spectrums.clear();
@@ -497,7 +495,6 @@ struct SceneRepresentationImpl {
     scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
-    scene.triangle_to_material = {triangle_to_material.data(), triangle_to_material.size()};
     scene.triangle_to_emitter = {triangle_to_emitter.data(), triangle_to_emitter.size()};
     scene.materials = {materials.data(), materials.size()};
     scene.emitters = {emitters.data(), emitters.size()};
@@ -861,7 +858,6 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
   }
 
   triangles.reserve(total_triangles);
-  triangle_to_material.reserve(total_triangles);
   triangle_to_emitter.reserve(total_triangles);
   vertices.reserve(total_triangles * 3);
 
@@ -880,13 +876,11 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       uint64_t face_size = shape.mesh.num_face_vertices[face];
       ETX_ASSERT(face_size == 3);
 
-      uint32_t material_index = material_mapping.at(source_material.name);
-
       triangle_to_emitter.emplace_back(kInvalidIndex);
-      triangle_to_material.emplace_back(material_index);
       auto& tri = triangles.emplace_back();
-      auto& mtl = materials[material_index];
+      tri.material_index = material_mapping.at(source_material.name);
 
+      auto& mtl = materials[tri.material_index];
       for (uint64_t vertex_index = 0; vertex_index < face_size; ++vertex_index) {
         const auto& index = shape.mesh.indices[index_offset + vertex_index];
         tri.i[vertex_index] = static_cast<uint32_t>(vertices.size());
@@ -929,6 +923,13 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
     char tmp_buffer[2048] = {};
     snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
     camera.lens_image = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
+  }
+  if (get_param(material, "ext_medium")) {
+    auto m = mediums.find(data_buffer);
+    if (m == kInvalidIndex) {
+      log::warning("Medium %s was not declared, but used in material %s as external medium\n", data_buffer, material.name.c_str());
+    }
+    camera.medium_index = m;
   }
 }
 
@@ -1076,11 +1077,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
     }
   }
 
-  uint32_t medium_index = add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
-
-  if (name == "camera") {
-    camera.medium_index = medium_index;
-  }
+  add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
 }
 
 void SceneRepresentationImpl::parse_directional_light(const char* base_dir, const tinyobj::material_t& material) {
@@ -1991,7 +1988,6 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
 
     uint32_t linear_index = 0;
     for (uint32_t tri_index = 0; tri_index < triangle_count; ++tri_index) {
-      triangle_to_material.emplace_back(material_index);
       triangle_to_emitter.emplace_back(kInvalidIndex);
 
       uint32_t base_index = static_cast<uint32_t>(vertices.size());
@@ -1999,6 +1995,7 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
       tri.i[0] = base_index + 0;
       tri.i[1] = base_index + 1;
       tri.i[2] = base_index + 2;
+      tri.material_index = material_index;
 
       for (uint32_t j = 0; j < 3; ++j, ++linear_index) {
         auto index = has_indices ? gltf_read_buffer_as_uint(*idx_buffer, *idx_accessor, *idx_buffer_view, 3u * tri_index + j) : linear_index;
@@ -2029,7 +2026,6 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
 
       if (validate_triangle(tri) == false) {
         triangles.pop_back();
-        triangle_to_material.pop_back();
         continue;
       }
 

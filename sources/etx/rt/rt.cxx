@@ -339,14 +339,14 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
 
     const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
-    const uint32_t material_index = ctx->scene->triangle_to_material[triangle_index];
-    if ((ctx->m_id != kInvalidIndex) && (material_index != ctx->m_id)) {
+    const auto& tri = ctx->scene->triangles[triangle_index];
+
+    if ((ctx->m_id != kInvalidIndex) && (tri.material_index != ctx->m_id)) {
       *args->valid = 0;
       return;
     }
 
-    const auto& tri = ctx->scene->triangles[triangle_index];
-    const auto& mat = ctx->scene->materials[material_index];
+    const auto& mat = ctx->scene->materials[tri.material_index];
     const auto& scene = *ctx->scene;
     float u = RTCHitN_u(args->hit, args->N, 0);
     float v = RTCHitN_v(args->hit, args->N, 0);
@@ -384,9 +384,9 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
   auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
     uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    const auto& tri = ctx->scene->triangles[triangle_index];
 
-    auto material_index = ctx->scene->triangle_to_material[triangle_index];
-    if ((ctx->mat_id != kInvalidIndex) && (ctx->mat_id != material_index)) {
+    if ((ctx->mat_id != kInvalidIndex) && (ctx->mat_id != tri.material_index)) {
       *args->valid = 0;
       return;
     }
@@ -395,8 +395,7 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     float v = RTCHitN_v(args->hit, args->N, 0);
     float3 bc = barycentrics({u, v});
     const auto& scene = *ctx->scene;
-    const auto& tri = ctx->scene->triangles[triangle_index];
-    const auto& mat = ctx->scene->materials[material_index];
+    const auto& mat = ctx->scene->materials[tri.material_index];
 
     if (alpha_test_pass(mat, tri, bc, scene, *ctx->smp)) {
       *args->valid = 0;
@@ -435,9 +434,8 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
 
     const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
-    const uint32_t material_index = ctx->scene->triangle_to_material[triangle_index];
     const auto& tri = ctx->scene->triangles[triangle_index];
-    const auto& mat = ctx->scene->materials[material_index];
+    const auto& mat = ctx->scene->materials[tri.material_index];
     const auto& scene = *ctx->scene;
 
     float u = RTCHitN_u(args->hit, args->N, 0);
@@ -465,94 +463,109 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
   ETX_FUNCTION_SCOPE();
   ETX_ASSERT(_private != nullptr);
 
-  struct IntersectionContextExt : public RTCRayQueryContext {
+  constexpr uint32_t kIntersectionBufferSize = 63;
+  struct IntermediateIntersection {
+    uint32_t primitive_id;
+    float u;
+    float v;
     float t;
-    float pad;
-    Medium::Instance medium;
+  };
+
+  struct IntersectionContextExt : public RTCRayQueryContext {
+    uint32_t intersection_count;
+    uint32_t occlusion_found;
     const Scene& scene;
     Sampler& smp;
-    SpectralResponse value;
-    float3 origin;
-    float3 direction;
-  } context = {{}, 0.0f, 0.0f, medium, scene, smp, {spect, 1.0f}, p0};
+    IntermediateIntersection intersections[kIntersectionBufferSize + 1u];
+  } context = {{}, 0u, 0u, scene, smp};
 
   auto filter_function = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
     uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
-    float u = RTCHitN_u(args->hit, args->N, 0);
-    float v = RTCHitN_v(args->hit, args->N, 0);
-    float t = RTCRayN_tfar(args->ray, args->N, 0);
-    float3 bc = barycentrics({u, v});
-    const auto& scene = ctx->scene;
-    const auto& tri = scene.triangles[triangle_index];
-    auto material_index = scene.triangle_to_material[triangle_index];
-    const auto& mat = scene.materials[material_index];
-
-    if (alpha_test_pass(mat, tri, bc, scene, ctx->smp)) {
+    const auto u = RTCHitN_u(args->hit, args->N, 0);
+    const auto v = RTCHitN_v(args->hit, args->N, 0);
+    const auto& tri = ctx->scene.triangles[triangle_index];
+    const auto& mat = ctx->scene.materials[tri.material_index];
+    if (alpha_test_pass(mat, tri, barycentrics({u, v}), ctx->scene, ctx->smp)) {
       *args->valid = 0;
       return;
     }
-
-    const auto spect = ctx->value.query();
-
-    if (mat.cls != Material::Class::Boundary) {
-      ctx->value = {spect, 0.0f};
+    if ((mat.cls != Material::Class::Boundary) || (ctx->intersection_count + 1u >= kIntersectionBufferSize)) {
+      ctx->occlusion_found = 1u;
       *args->valid = -1;
       return;
     }
 
-    if (ctx->medium.valid()) {
-      float dt = fmaxf(0.0f, t - ctx->t);
-
-      if (ctx->medium.index != kInvalidIndex) {
-        const auto& m = scene.mediums[ctx->medium.index];
-        ctx->value *= m.transmittance(spect, ctx->smp, ctx->origin, ctx->direction, dt);
-        ETX_VALIDATE(ctx->value);
-      } else {
-        ctx->value *= Medium::transmittance(ctx->medium, dt);
-        ETX_VALIDATE(ctx->value);
-      }
-    }
-
-    const auto nrm = lerp_normal(scene.vertices, tri, bc);
-    ctx->medium = {
-      .index = (dot(nrm, ctx->direction) < 0.0f) ? mat.int_medium : mat.ext_medium,
+    ctx->intersections[ctx->intersection_count++] = {
+      .primitive_id = triangle_index,
+      .u = u,
+      .v = v,
+      .t = RTCRayN_tfar(args->ray, args->N, 0),
     };
-    ctx->origin = lerp_pos(scene.vertices, tri, bc);
-    ctx->t = t;
-
     *args->valid = 0;
   };
 
-  context.direction = p1 - p0;
-  ETX_CHECK_FINITE(context.direction);
+  auto direction = p1 - p0;
+  ETX_CHECK_FINITE(direction);
 
-  float t_max = dot(context.direction, context.direction);
+  float t_max = dot(direction, direction);
   if (t_max <= kRayEpsilon) {
     return {spect, 1.0f};
   }
 
   t_max = sqrtf(t_max);
-  context.direction /= t_max;
+  direction /= t_max;
   t_max -= fmaxf(kRayEpsilon, t_max * kRayEpsilon);
   ETX_VALIDATE(t_max);
 
-  _private->trace_with_function({p0, context.direction, kRayEpsilon, t_max}, &context, filter_function);
+  _private->trace_with_function({p0, direction, kRayEpsilon, t_max}, &context, filter_function);
 
-  if (context.medium.valid()) {
-    float dt = fmaxf(0.0f, t_max - context.t);
-
-    if (context.medium.index != kInvalidIndex) {
-      const auto& m = scene.mediums[context.medium.index];
-      context.value *= m.transmittance(spect, smp, context.origin, context.direction, dt);
-      ETX_VALIDATE(context.value);
-    } else {
-      context.value *= Medium::transmittance(context.medium, dt);
-      ETX_VALIDATE(context.value);
-    }
+  if (context.occlusion_found) {
+    return {spect, 0.0f};
   }
 
-  return context.value;
+  for (uint32_t i = 0; i < context.intersection_count; ++i) {
+    for (uint32_t j = i + 1; j < context.intersection_count; ++j) {
+      if (context.intersections[i].t > context.intersections[j].t) {
+        std::swap(context.intersections[i], context.intersections[j]);
+      }
+    }
+  }
+  context.intersections[context.intersection_count++] = {kInvalidIndex, 0.0f, 0.0f, t_max};
+
+  float current_t = 0.0f;
+  float3 origin = p0;
+  SpectralResponse result = {spect, 1.0f};
+  Medium::Instance current_medium = medium;
+  for (uint32_t i = 0; i < context.intersection_count; ++i) {
+    const auto& intersection = context.intersections[i];
+    if (current_medium.valid()) {
+      float dt = fmaxf(0.0f, intersection.t - current_t);
+
+      if (current_medium.index != kInvalidIndex) {
+        const auto& m = scene.mediums[current_medium.index];
+        result *= m.transmittance(spect, smp, origin, direction, dt);
+        ETX_VALIDATE(result);
+      } else {
+        result *= Medium::transmittance(current_medium, dt);
+        ETX_VALIDATE(result);
+      }
+    }
+
+    if (intersection.primitive_id == kInvalidIndex)
+      break;
+
+    const auto& tri = scene.triangles[intersection.primitive_id];
+    const auto& mat = scene.materials[tri.material_index];
+    const bool entering_surface = dot(tri.geo_n, direction) < 0.0f;
+    current_medium = {
+      .index = entering_surface ? mat.int_medium : mat.ext_medium,
+    };
+    current_t = intersection.t;
+    origin = lerp_pos(scene.vertices, tri, barycentrics({intersection.u, intersection.v}));
+  }
+
+  return result;
 }
 
 const Film& Raytracing::film() const {

@@ -547,8 +547,9 @@ struct CPUBidirectionalImpl : public Task {
 
     if (scene.materials[a_intersection.material_index].cls == Material::Class::Boundary) {
       const auto& m = scene.materials[a_intersection.material_index];
-      payload.medium_index = (dot(a_intersection.nrm, ray.d) < 0.0f) ? m.int_medium : m.ext_medium;
-      ray.o = shading_pos(scene.vertices, scene.triangles[a_intersection.triangle_index], a_intersection.barycentric, ray.d);
+      const auto& tri = scene.triangles[a_intersection.triangle_index];
+      payload.medium_index = (dot(tri.geo_n, ray.d) < 0.0f) ? m.int_medium : m.ext_medium;
+      ray.o = shading_pos(scene.vertices, tri, a_intersection.barycentric, ray.d);
       ray.min_t = kRayEpsilon;
       ray.max_t = kMaxFloat;
       return InteractionResult::Continue;
@@ -1172,7 +1173,7 @@ struct CPUBidirectionalImpl : public Task {
         case Mode::PathTracing: {
           float p_connect = pdf_dir;
           ETX_VALIDATE(p_connect);
-          float result = power_heuristic(z_prev.pdf.next, p_connect);
+          float result = z_prev.connectible ? power_heuristic(z_prev.pdf.next, p_connect) : 1.0f;
           ETX_VALIDATE(result);
           mis_weight = result;
           break;
@@ -1240,7 +1241,7 @@ struct CPUBidirectionalImpl : public Task {
       auto value = emitter_get_radiance(emitter, spect, q, local_pdf_area, local_pdf_dir, local_pdf_dir_out, scene);
 
       float this_weight = 1.0f;
-      if ((mode == Mode::PathTracing) && (path_data.camera_path_length() > 1u)) {
+      if ((mode == Mode::PathTracing) && z_prev.connectible && (path_data.camera_path_length() > 1u)) {
         float local_pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
         float this_p_connect = local_pdf_dir * local_pdf_sample;
         ETX_VALIDATE(this_p_connect);

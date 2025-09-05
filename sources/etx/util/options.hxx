@@ -137,8 +137,8 @@ struct OptionalValue {
   }
 
   uint32_t to_integer() const {
-    ETX_ASSERT((cls == Class::Integer) || (cls == Class::Enum));
-    return clamp_to(value.integer, min_value.integer, max_value.integer);
+    ETX_ASSERT((cls == Class::Integer) || (cls == Class::Enum) || (cls == Class::Boolean));
+    return (cls == Class::Boolean) ? value.boolean : clamp_to(value.integer, min_value.integer, max_value.integer);
   }
 
   float to_float() const {

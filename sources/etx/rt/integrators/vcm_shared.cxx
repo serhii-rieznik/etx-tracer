@@ -1,4 +1,5 @@
 #include <etx/rt/integrators/vcm_spatial_grid.hxx>
+#include <etx/util/options.hxx>
 
 namespace etx {
 
@@ -7,6 +8,7 @@ VCMOptions VCMOptions::default_values() {
   options.options = DefaultOptions;
   options.radius_decay = 256u;
   options.initial_radius = 0.0f;
+  options.kernel = VCMOptions::Epanechnikov;
   return options;
 }
 
@@ -14,6 +16,7 @@ void VCMOptions::load(const Options& opt) {
   initial_radius = opt.get("vcm-initial_radius", initial_radius).to_float();
   radius_decay = opt.get("vcm-radius_decay", radius_decay).to_integer();
   blue_noise = opt.get("vcm-blue_noise", blue_noise).to_bool();
+  kernel = opt.get("vcm-kernel", kernel).to_integer();
 
   options = opt.get("vcm-direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
   options = opt.get("vcm-connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
@@ -37,6 +40,7 @@ void VCMOptions::store(Options& opt) const {
   opt.add(enable_merging(), "vcm-merging", "Enable Merging");
   opt.add(enable_mis(), "vcm-mis", "Multiple Importance Sampling");
   opt.add(blue_noise, "vcm-blue_noise", "Blue Noise");
+  opt.add(smooth_kernel(), "vcm-kernel", "Smooth Merging Kernel");
   opt.add(0.0f, initial_radius, 10.0f, "vcm-initial_radius", "Initial Radius");
   opt.add(1u, uint32_t(radius_decay), 65536u, "vcm-radius_decay", "Radius Decay");
 }
@@ -50,6 +54,11 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   TimeMeasure time_measure = {};
 
   data.radius_squared = radius * radius;
+  if (data.radius_squared > 0.0f) {
+    data.inv_radius_squared = 1.0f / data.radius_squared;
+  } else {
+    data.inv_radius_squared = 0.0f;
+  }
   data.cell_size = 2.0f * radius;
   data.bounding_box = {{kMaxFloat, kMaxFloat, kMaxFloat}, {-kMaxFloat, -kMaxFloat, -kMaxFloat}};
 
@@ -57,8 +66,11 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   scheduler.execute(uint32_t(sample_count), [&scene, &thread_boxes, samples](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       const auto& p = samples[i];
-      thread_boxes[thread_id].p_min = min(thread_boxes[thread_id].p_min, p.position(scene));
-      thread_boxes[thread_id].p_max = max(thread_boxes[thread_id].p_max, p.position(scene));
+      if (p.is_medium) {
+        continue;
+      }
+      thread_boxes[thread_id].p_min = min(thread_boxes[thread_id].p_min, p.pos);
+      thread_boxes[thread_id].p_max = max(thread_boxes[thread_id].p_max, p.pos);
     }
   });
   for (const auto& bbox : thread_boxes) {
@@ -69,19 +81,26 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   uint32_t hash_table_size = static_cast<uint32_t>(next_power_of_two(sample_count));
   data.hash_table_mask = hash_table_size - 1u;
 
-  _position_to_index.resize(sample_count);
-  _indices.resize(sample_count + 1llu);
-
+  _positions.clear();
+  _normals.clear();
+  _w_in.clear();
+  _d_vcm.clear();
+  _d_vm.clear();
+  _path_lengths.clear();
+  _throughput_rgb_div_pdf.clear();
   _cell_ends.resize(hash_table_size);
   memset(_cell_ends.data(), 0, sizeof(uint32_t) * hash_table_size);
 
   static_assert(sizeof(std::atomic_int) == sizeof(uint32_t));
 
   auto ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
-  scheduler.execute(uint32_t(sample_count), [&scene, &samples, this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
+  scheduler.execute(uint32_t(sample_count), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
-      uint32_t index = data.position_to_index(samples[i].position(scene));
-      _position_to_index[i] = index;
+      const auto& s = samples[i];
+      if (s.is_medium) {
+        continue;
+      }
+      uint32_t index = data.position_to_index(s.pos);
       atomic_inc(ptr + index);
     }
   });
@@ -93,17 +112,42 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     sum += t;
   }
 
+  uint32_t total = _cell_ends.back();
+  _positions.resize(total);
+  _normals.resize(total);
+  _w_in.resize(total);
+  _d_vcm.resize(total);
+  _d_vm.resize(total);
+  _path_lengths.resize(total);
+  _throughput_rgb_div_pdf.resize(total);
+
   ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
-  scheduler.execute(uint32_t(sample_count), [this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
+  scheduler.execute(uint32_t(sample_count), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
-      uint32_t index = _position_to_index[i];
-      uint32_t target_cell = atomic_inc(ptr + index);
-      _indices[target_cell - 1u] = i;
+      const auto& s = samples[i];
+      if (s.is_medium) {
+        continue;
+      }
+      uint32_t cell = data.position_to_index(s.pos);
+      uint32_t dst = atomic_inc(ptr + cell) - 1u;
+      _positions[dst] = s.pos;
+      _normals[dst] = s.nrm;
+      _w_in[dst] = s.w_i;
+      _d_vcm[dst] = s.d_vcm;
+      _d_vm[dst] = s.d_vm;
+      _path_lengths[dst] = s.path_length;
+      _throughput_rgb_div_pdf[dst] = (s.throughput / s.throughput.sampling_pdf()).to_rgb();
     }
   });
 
-  data.indices = make_array_view<uint32_t>(_indices.data(), _indices.size());
   data.cell_ends = make_array_view<uint32_t>(_cell_ends.data(), _cell_ends.size());
+  data.positions = make_array_view<float3>(_positions.data(), _positions.size());
+  data.normals = make_array_view<float3>(_normals.data(), _normals.size());
+  data.w_in = make_array_view<float3>(_w_in.data(), _w_in.size());
+  data.d_vcm = make_array_view<float>(_d_vcm.data(), _d_vcm.size());
+  data.d_vm = make_array_view<float>(_d_vm.data(), _d_vm.size());
+  data.path_lengths = make_array_view<uint32_t>(_path_lengths.data(), _path_lengths.size());
+  data.throughput_rgb_div_pdf = make_array_view<float3>(_throughput_rgb_div_pdf.data(), _throughput_rgb_div_pdf.size());
 }
 
 }  // namespace etx
