@@ -126,9 +126,8 @@ def _export_materials(operator, obj_path):
 
                 f.write("\n")  # Blank line between materials
 
-    # Replace the standard MTL file with ETX format
-    if os.path.exists(mtl_path):
-        write_materials_file(mtl_path)
+    # Write (or create) the ETX materials file unconditionally
+    write_materials_file(mtl_path)
 
 
 def _export_scene_json(operator, json_path, obj_path):
@@ -296,6 +295,14 @@ def _get_environment_light_material(operator):
         if link_node.type == "TEX_ENVIRONMENT":
             texture_node = link_node
 
+    # Blackbody color on background (supports simple chains)
+    temp = _find_blackbody_temperature_from_socket(color_socket)
+    if temp is not None:
+        env_material["properties"][
+            "color"
+        ] = f"nblackbody {temp:.0f} scale {strength:.4f}"
+        return env_material
+
     if texture_node and texture_node.image:
         tint_color = [c * strength for c in base_color[:3]]
         if sum(tint_color) < 1e-6:
@@ -355,9 +362,54 @@ def _get_lights_as_materials(operator):
                 (direction_blender.x, direction_blender.z, -direction_blender.y)
             )
 
-            color = light_data.color
-            energy = light_data.energy
-            emission_color = [c * energy for c in color]
+            color_value = None
+
+            # If the sun light uses nodes, and the Emission color is driven by a Blackbody, export it as nblackbody
+            try:
+                if getattr(light_data, "use_nodes", False) and getattr(
+                    light_data, "node_tree", None
+                ):
+                    ltree = light_data.node_tree
+                    output_node = None
+                    for n in ltree.nodes:
+                        if n.type == "OUTPUT_LIGHT" and getattr(
+                            n, "is_active_output", True
+                        ):
+                            output_node = n
+                            break
+                    if (
+                        output_node
+                        and output_node.inputs.get("Surface")
+                        and output_node.inputs["Surface"].is_linked
+                    ):
+                        surf_from = output_node.inputs["Surface"].links[0].from_node
+                        if surf_from.type == "EMISSION":
+                            strength = _get_node_input_value(surf_from, "Strength", 1.0)
+                            col_sock = surf_from.inputs.get("Color")
+                            if col_sock:
+                                temperature = _find_blackbody_temperature_from_socket(
+                                    col_sock
+                                )
+                                if temperature is not None:
+                                    color_value = f"nblackbody {temperature:.0f} scale {float(strength):.4f}"
+            except Exception:
+                color_value = None
+
+            if color_value is None:
+                # Prefer built-in temperature if present, regardless of enable flag
+                try:
+                    temperature = _get_light_temperature(light_data)
+                    if (temperature is not None) and (temperature > 0.0):
+                        energy = float(getattr(light_data, "energy", 1.0))
+                        color_value = f"nblackbody {temperature:.0f} scale {energy:.4f}"
+                except Exception:
+                    color_value = None
+
+            if color_value is None:
+                color = light_data.color
+                energy = light_data.energy
+                emission_color = [c * energy for c in color]
+                color_value = f"{emission_color[0]:.4f} {emission_color[1]:.4f} {emission_color[2]:.4f}"
 
             angular_diameter_deg = math.degrees(light_data.angle)
 
@@ -365,7 +417,7 @@ def _get_lights_as_materials(operator):
                 "name": "et::dir",
                 "properties": {
                     "direction": f"{direction.x:.4f} {direction.y:.4f} {direction.z:.4f}",
-                    "color": f"{emission_color[0]:.4f} {emission_color[1]:.4f} {emission_color[2]:.4f}",
+                    "color": color_value,
                     "angular_diameter": f"{angular_diameter_deg:.4f}",
                 },
             }
@@ -569,6 +621,16 @@ def _extract_emission_properties(operator, emission_node, properties):
     strength = _get_node_input_value(emission_node, "Strength", 0.0)
     # Make the surface purely emissive by default
     properties["Kd"] = "0.000 0.000 0.000"
+    # If color is (directly or indirectly) driven by a Blackbody node, export as nblackbody emitter
+    try:
+        color_input = emission_node.inputs.get("Color")
+        if color_input and strength > 0.0:
+            temp = _find_blackbody_temperature_from_socket(color_input)
+            if temp is not None:
+                properties["emitter"] = f"nblackbody {temp:.0f} scale {strength:.4f}"
+                return
+    except Exception:
+        pass
     if hasattr(color, "__len__") and len(color) >= 3 and strength > 0.0:
         final_emission = [color[0] * strength, color[1] * strength, color[2] * strength]
         if any(c > 0.0 for c in final_emission):
@@ -674,6 +736,64 @@ def _find_normal_map_node(socket):
             if texture_node.type == "TEX_IMAGE":
                 return texture_node
 
+    return None
+
+
+def _find_blackbody_temperature_from_socket(socket, _visited=None):
+    """Traverse upstream from a socket to find a Blackbody node temperature.
+    Returns temperature in Kelvin as float if found, otherwise None.
+    """
+    try:
+        if socket is None or getattr(socket, "is_linked", False) == False:
+            return None
+        if _visited is None:
+            _visited = set()
+        node = socket.links[0].from_node
+        if node in _visited:
+            return None
+        _visited.add(node)
+        if getattr(node, "type", None) == "BLACKBODY":
+            return float(node.inputs["Temperature"].default_value)
+        # DFS through all inputs of this node
+        for inp in getattr(node, "inputs", []):
+            if getattr(inp, "is_linked", False):
+                t = _find_blackbody_temperature_from_socket(inp, _visited)
+                if t is not None:
+                    return t
+    except Exception:
+        return None
+    return None
+
+
+def _light_uses_temperature(light_data):
+    """Return True if the light is configured to use color temperature.
+
+    Blender versions differ: `use_temperature` (common) or `use_color_temperature`.
+    """
+    try:
+        if hasattr(light_data, "use_temperature") and bool(light_data.use_temperature):
+            return True
+        if hasattr(light_data, "use_color_temperature") and bool(
+            light_data.use_color_temperature
+        ):
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _get_light_temperature(light_data):
+    """Return temperature in Kelvin from light data, or None if unavailable."""
+    try:
+        if hasattr(light_data, "temperature") and light_data.temperature is not None:
+            return float(light_data.temperature)
+        if (
+            hasattr(light_data, "color_temperature")
+            and light_data.color_temperature is not None
+        ):
+            return float(light_data.color_temperature)
+    except Exception:
+        return None
     return None
 
 

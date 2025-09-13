@@ -276,7 +276,7 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
   state.eta *= bsdf_sample.eta;
   state.total_path_depth += 1u;
 
-  return state.total_path_depth < scene.max_path_length;
+  return true;
 }
 
 ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const Intersection& intersection) {
