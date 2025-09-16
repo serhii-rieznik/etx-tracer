@@ -942,7 +942,8 @@ ETX_GPU_CODE float3 offset_ray(const float3& p, const float3& n) {
 ETX_GPU_CODE float power_heuristic(float f, float g) {
   float f2 = f * f;
   float g2 = g * g;
-  return saturate(f2 / (f2 + g2));
+  float denom = f2 + g2;
+  return denom > 0.0f ? saturate(f2 / denom) : 0.0f;
 }
 
 ETX_GPU_CODE float area_to_solid_angle_probability(const float3& dp, const float3& n, float collimation) {

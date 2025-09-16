@@ -1009,6 +1009,7 @@ bool UI::build_material(Scene* scene, Material& material) {
   changed |= ImGui::SliderFloat("##r_v", &material.roughness.value.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
   if (ImGui::Button("Sync Roughness")) {
     material.roughness.value.y = material.roughness.value.x;
+    changed = true;
   }
   ImGui::Separator();
 

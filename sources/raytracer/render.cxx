@@ -350,7 +350,7 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
   float r_lum = dot(r_image.xyz, lum);
 
   float c_lum = dot(c_image.xyz, lum);
-  float c_treshold = 1.0f / 65536.0f;
+  const float c_treshold = 1.0f / 8192.0f;
 
   float4 result = float4(0.0f, 0.0f, 0.0f, 0.0f);
   switch (image_view) {
@@ -403,7 +403,7 @@ struct VSOutput {
 
 constant constexpr uint ToneMapping = 1u << 0u;
 constant constexpr uint sRGB = 1u << 1u;
-constant constexpr float c_treshold = 1.0f / 65536.0f;
+constant constexpr float c_treshold = 1.0f / 8192.0f;
 constant constexpr float3 lum = {0.2627, 0.6780, 0.0593};
 
 constant constexpr uint kViewResult = 0;
