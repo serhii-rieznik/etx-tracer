@@ -1,28 +1,35 @@
 {
   "geometry": "balls.obj",
-  "materials": "balls.materials",
+  "materials": "balls.mtl",
+  "samples": 32,
+  "max-path-length": 65536,
+  "random-termination-start": 6,
+  "spectral": false,
+  "force-tangents": false,
   "camera": {
+    "class": "perspective",
     "viewport": [
       1280,
       720
     ],
     "origin": [
-      2.0,
-      30.0,
-      -30.0
+      0.0,
+      48.0,
+      -48.0
     ],
     "target": [
-      2.0,
-      1.0,
-      0.0
+      6.181724643283815e-07,
+      40.928932189941406,
+      -40.928932189941406
     ],
     "up": [
-      0.0,
-      1.0,
-      0.0
+      6.181723932741079e-08,
+      0.7071068286895752,
+      0.7071068286895752
     ],
+    "fov": 39.597755335771296,
+    "focal-length": 50.0,
     "lens-radius": 0.0,
-    "focal-distance": 0.0,
-    "focal-length": 55.0
+    "focal-distance": 0.0
   }
 }
