@@ -12,10 +12,8 @@ struct ITMessage {
   enum class Cls : uint32_t {
     Run,
     Stop,
-    Options,
   } cls;
   Integrator::Stop stop_option = Integrator::Stop::Immediate;
-  Options options = {};
 };
 
 struct IntegratorThreadImpl {
@@ -29,7 +27,6 @@ struct IntegratorThreadImpl {
   Integrator* integrator = nullptr;
   Integrator::State latest_state = Integrator::State::Stopped;
   Integrator::Status latest_status = {};
-  Options options = {};
 
   bool async = false;
 
@@ -54,6 +51,13 @@ struct IntegratorThreadImpl {
     messages.push_back(msg);
   }
 
+  void post_messages(const std::initializer_list<ITMessage>& msgs) {
+    std::unique_lock l(lock);
+    for (const auto& msg : msgs) {
+      messages.push_back(msg);
+    }
+  }
+
   bool fetch_message(ITMessage& msg) {
     std::unique_lock l(lock);
     if (messages.empty())
@@ -75,7 +79,7 @@ struct IntegratorThreadImpl {
       switch (msg.cls) {
         case ITMessage::Cls::Run: {
           if (integrator) {
-            integrator->run(options);
+            integrator->run();
           }
           break;
         }
@@ -85,10 +89,6 @@ struct IntegratorThreadImpl {
           }
           break;
         }
-        case ITMessage::Cls::Options: {
-          options = msg.options;
-          break;
-        }
         default:
           break;
       }
@@ -96,15 +96,20 @@ struct IntegratorThreadImpl {
   }
 
   void thread_function() {
+    ETX_PROFILER_REGISTER_THREAD("integrator");
     scheduler.register_thread();
 
     while (running) {
-      i->update();
+      {
+        ETX_PROFILER_NAMED_SCOPE("integrator::update");
+        i->update();
+      }
 
       if (latest_state == Integrator::State::Stopped) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
+    ETX_PROFILER_EXIT_THREAD();
   }
 };
 
@@ -141,21 +146,12 @@ const Integrator::Status& IntegratorThread::status() const {
   return _private->latest_status;
 }
 
-void IntegratorThread::run(const Options& opt) {
-  _private->post_message({
-    .cls = ITMessage::Cls::Options,
-    .options = opt,
-  });
-  _private->post_message({
-    .cls = ITMessage::Cls::Run,
-  });
+void IntegratorThread::run() {
+  _private->post_message({.cls = ITMessage::Cls::Run});
 }
 
 void IntegratorThread::stop(Integrator::Stop st) {
-  _private->post_message({
-    .cls = ITMessage::Cls::Stop,
-    .stop_option = st,
-  });
+  _private->post_message({.cls = ITMessage::Cls::Stop, .stop_option = st});
 
   if (st == Integrator::Stop::Immediate) {
     while (_private->latest_state != Integrator::State::Stopped) {
@@ -169,30 +165,14 @@ void IntegratorThread::stop(Integrator::Stop st) {
 }
 
 void IntegratorThread::restart() {
-  _private->post_message({
-    .cls = ITMessage::Cls::Stop,
-    .stop_option = Integrator::Stop::Immediate,
-  });
-  _private->post_message({
-    .cls = ITMessage::Cls::Run,
-  });
-}
-
-void IntegratorThread::restart(const Options& opt) {
-  _private->post_message({
-    .cls = ITMessage::Cls::Stop,
-    .stop_option = Integrator::Stop::Immediate,
-  });
-  _private->post_message({
-    .cls = ITMessage::Cls::Options,
-    .options = opt,
-  });
-  _private->post_message({
-    .cls = ITMessage::Cls::Run,
+  _private->post_messages({
+    {.cls = ITMessage::Cls::Stop, .stop_option = Integrator::Stop::Immediate},
+    {.cls = ITMessage::Cls::Run},
   });
 }
 
 void IntegratorThread::update() {
+  ETX_PROFILER_SCOPE();
   _private->process_messages();
 
   if (_private->integrator == nullptr)

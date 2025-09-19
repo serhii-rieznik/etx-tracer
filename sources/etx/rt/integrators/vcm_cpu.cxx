@@ -137,24 +137,20 @@ struct CPUVCMImpl {
 
     for (uint64_t i = range_begin; running() && (i < range_end); ++i) {
       VCMPathState state = vcm_generate_emitter_state(static_cast<uint32_t>(i), scene, vcm_iteration);
+      LightStepResult step_result = {};
+      step_result.continue_tracing = (state.flags & VCMPathState::Valid) == VCMPathState::Valid;
 
       uint32_t path_begin = static_cast<uint32_t>(local_vertices.size());
-      while (running()) {
-        auto step_result = vcm_light_step(scene, camera, vcm_iteration, vcm_options, static_cast<uint32_t>(i), state, rt);
-
+      while (step_result.continue_tracing && running()) {
+        step_result = vcm_light_step(scene, camera, vcm_iteration, vcm_options, static_cast<uint32_t>(i), state, rt);
         if (step_result.add_vertex) {
           local_vertices.emplace_back(step_result.vertex_to_add);
         }
-
         for (uint32_t i = 0; i < step_result.splat_count; ++i) {
           const float3& val = step_result.values_to_splat[i].to_rgb() / step_result.values_to_splat[i].sampling_pdf();
           if (dot(val, val) > kEpsilon) {
             film.atomic_add(Film::LightIteration, val, step_result.splat_uvs[i]);
           }
-        }
-
-        if (step_result.continue_tracing == false) {
-          break;
         }
       }
 
@@ -246,6 +242,7 @@ struct CPUVCMImpl {
 CPUVCM::CPUVCM(Raytracing& rt)
   : Integrator(rt) {
   ETX_PIMPL_INIT(CPUVCM, rt, &current_state);
+  _private->vcm_options.store(integrator_options);
 }
 
 CPUVCM::~CPUVCM() {
@@ -253,18 +250,12 @@ CPUVCM::~CPUVCM() {
   ETX_PIMPL_CLEANUP(CPUVCM);
 }
 
-Options CPUVCM::options() const {
-  Options result = {};
-  _private->vcm_options.store(result);
-  return result;
-}
-
-void CPUVCM::run(const Options& opt) {
+void CPUVCM::run() {
   stop(Stop::Immediate);
 
   if (can_run()) {
     current_state = State::Running;
-    _private->start(opt);
+    _private->start(integrator_options);
   }
 }
 
@@ -297,9 +288,9 @@ void CPUVCM::stop(Stop st) {
   }
 }
 
-void CPUVCM::update_options(const Options& opt) {
+void CPUVCM::update_options() {
   if (current_state == State::Running) {
-    run(opt);
+    run();
   }
 }
 

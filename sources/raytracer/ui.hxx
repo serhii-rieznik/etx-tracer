@@ -30,10 +30,6 @@ struct UI {
   void set_current_integrator(Integrator*);
   void set_film(Film* film);
 
-  const Options& integrator_options() const {
-    return _integrator_options;
-  }
-
   bool handle_event(const sapp_event*);
 
   ViewOptions view_options() const;
@@ -84,7 +80,6 @@ struct UI {
 
   ArrayView<Integrator*> _integrators = {};
   ViewOptions _view_options = {};
-  Options _integrator_options = {};
 
   struct MappingRepresentation {
     std::vector<uint32_t> indices;

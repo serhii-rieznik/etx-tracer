@@ -13,18 +13,16 @@ struct CPUPathTracing : public Integrator {
     return "Path Tracing (CPU)";
   }
 
-  Options options() const override;
-
   bool have_updated_light_image() const override {
     return false;
   }
 
   const Status& status() const override;
 
-  void run(const Options&) override;
+  void run() override;
   void update() override;
   void stop(Stop) override;
-  void update_options(const Options&) override;
+  void update_options() override;
 
   ETX_DECLARE_PIMPL(CPUPathTracing, 160);
 };

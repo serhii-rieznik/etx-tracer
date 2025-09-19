@@ -3,6 +3,7 @@
 #include <etx/core/platform.hxx>
 #include <etx/core/debug.hxx>
 #include <etx/core/log.hxx>
+#include <etx/core/profiler.hxx>
 
 #include <vector>
 #include <string>

@@ -315,15 +315,16 @@ const float4* Film::combined_result() const {
 }
 
 float4* Film::mutable_combined_result() const {
-  _private->tasks.execute(_private->total_pixel_count(), [this](uint32_t begin, uint32_t end, uint32_t) {
+  ETX_PROFILER_SCOPE();
+  auto c_buf = _private->buffers[CameraImage].data();
+  auto l_buf = _private->buffers[LightImage].data();
+  auto r_buf = _private->buffers[Result].data();
+  _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
-      float4 c = _private->buffers[CameraImage][i];
-      float4 l = _private->buffers[LightImage][i];
-      _private->buffers[Result][i] = max({}, c + l);
-      _private->buffers[Result][i] = max({}, c + l);
+      r_buf[i] = _private->buffers[Result][i] = max({}, c_buf[i] + l_buf[i]);
     }
   });
-  return _private->buffers[Result].data();
+  return r_buf;
 }
 
 void Film::clear(const Layers& layers) {
@@ -360,6 +361,7 @@ uint2 Film::dimensions() const {
 }
 
 const float4* Film::layer(uint32_t layer) const {
+  ETX_PROFILER_SCOPE();
   if (layer == Debug) {
     const auto int_data = reinterpret_cast<InternalData*>(_private->layer(Internal));
     float4* dbg_data = _private->layer(Debug);

@@ -38,6 +38,7 @@ struct Integrator {
 
   Integrator(Raytracing& r)
     : rt(r) {
+    integrator_options.set_string("desc", "No options available", "general-options");
   }
 
   virtual ~Integrator() = default;
@@ -54,13 +55,7 @@ struct Integrator {
     return "Basic Integrator (not able to render anything)";
   }
 
-  virtual Options options() const {
-    Options result = {};
-    result.set("desc", "No options available");
-    return result;
-  }
-
-  virtual void run(const Options&) {
+  virtual void run() {
   }
 
   virtual void update() {
@@ -69,7 +64,7 @@ struct Integrator {
   virtual void stop(Stop) {
   }
 
-  virtual void update_options(const Options&) {
+  virtual void update_options() {
   }
 
   virtual bool have_updated_camera_image() const {
@@ -83,6 +78,10 @@ struct Integrator {
   virtual const Status& status() const = 0;
 
  public:
+  Options& options() {
+    return integrator_options;
+  }
+
   bool can_run() const {
     return rt.scene().committed();
   }
@@ -93,6 +92,7 @@ struct Integrator {
 
  protected:
   Raytracing& rt;
+  Options integrator_options = {};
   std::atomic<State> current_state = {State::Stopped};
   uint32_t pad = 0;
 };
@@ -119,9 +119,8 @@ struct IntegratorThread {
   bool running();
   const Integrator::Status& status() const;
 
-  void run(const Options&);
+  void run();
   void stop(Integrator::Stop);
-  void restart(const Options&);
   void restart();
 
  private:

@@ -221,7 +221,6 @@ ETX_GPU_CODE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, con
 template <class RT>
 ETX_GPU_CODE GatherResult gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
   const auto& mtl = scene.materials[in_intersection.material_index].subsurface;
-  ETX_FUNCTION_SCOPE();
 
   switch (mtl.cls) {
     case SubsurfaceMaterial::Class::ChristensenBurley:
@@ -237,8 +236,6 @@ float2 sample_blue_noise(const uint2& pixel, const uint32_t total_samples, const
 
 ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Camera& camera, const Film& film, const uint2& px, const uint32_t pixel_index, const uint32_t iteration,
   const bool spectral, const bool use_blue_noise) {
-  ETX_FUNCTION_SCOPE();
-
   PTRayPayload payload = {};
   payload.iteration = iteration;
   payload.smp.init(pixel_index, payload.iteration);
@@ -259,8 +256,6 @@ ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Camera& cam
 }
 
 ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload& payload, float max_t) {
-  ETX_FUNCTION_SCOPE();
-
   if (payload.medium == kInvalidIndex) {
     return {};
   }
@@ -272,8 +267,6 @@ ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload
 }
 
 ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const Raytracing& rt, const PTOptions& options, PTRayPayload& payload) {
-  ETX_FUNCTION_SCOPE();
-
   const auto& medium = scene.mediums[payload.medium];
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
@@ -301,8 +294,6 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
 
 ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersection& intersection, const Raytracing& rt, const Material& mat, const uint32_t medium,
   const SpectralQuery spect, const EmitterSample& emitter_sample, Sampler& smp, bool mis) {
-  ETX_FUNCTION_SCOPE();
-
   if (emitter_sample.pdf_dir == 0.0f) {
     return {spect, 0.0f};
   }
@@ -330,8 +321,6 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
 
 ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, const PTOptions& options,
   PTRayPayload& payload) {
-  ETX_FUNCTION_SCOPE();
-
   if ((options.direct == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
@@ -360,8 +349,6 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
 }
 
 ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
-  ETX_FUNCTION_SCOPE();
-
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
 
@@ -466,8 +453,6 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 }  // namespace etx
 
 ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
-  ETX_FUNCTION_SCOPE();
-
   for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
     const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
     float pdf_emitter_area = 0.0f;
@@ -492,7 +477,6 @@ ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& option
   if (payload.path_length > rt.scene().max_path_length)
     return false;
 
-  ETX_FUNCTION_SCOPE();
   ETX_CHECK_FINITE(payload.ray.d);
 
   Intersection intersection = {};

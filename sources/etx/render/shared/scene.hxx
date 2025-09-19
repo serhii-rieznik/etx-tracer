@@ -209,8 +209,6 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
 }
 
 ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
-  ETX_FUNCTION_SCOPE();
-
   float max_t = throughput.maximum();
   if (max_t == 0.0f)
     return false;

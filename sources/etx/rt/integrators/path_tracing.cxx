@@ -33,12 +33,10 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void start(const Options& opt) {
-    ETX_PROFILER_RESET_COUNTERS();
-
-    options.direct = opt.get("direct", options.direct).to_bool();
-    options.nee = opt.get("nee", options.nee).to_bool();
-    options.mis = opt.get("mis", options.mis).to_bool();
-    options.blue_noise = opt.get("bn", options.blue_noise).to_bool();
+    options.direct = opt.get_bool("direct", options.direct);
+    options.nee = opt.get_bool("nee", options.nee);
+    options.mis = opt.get_bool("mis", options.mis);
+    options.blue_noise = opt.get_bool("bn", options.blue_noise);
 
     status = {};
     total_time = {};
@@ -50,7 +48,6 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
-    ETX_FUNCTION_SCOPE();
     const auto& scene = rt.scene();
     const auto& camera = rt.camera();
 
@@ -110,11 +107,20 @@ struct CPUPathTracingImpl : public Task {
       current_task = scheduler.schedule(film.pixel_count(), this);
     }
   }
+
+  void build_options(Options& integrator_options) {
+    integrator_options.set_bool("direct", options.direct, "Direct Hits");
+    integrator_options.set_bool("nee", options.nee, "Light Sampling");
+    integrator_options.set_string("pt-opt", "Path Tracing Options", "Options");
+    integrator_options.set_bool("mis", options.mis, "Multiple Importance Sampling");
+    integrator_options.set_bool("bn", options.blue_noise, "Use Blue Noise");
+  }
 };
 
 CPUPathTracing::CPUPathTracing(Raytracing& rt)
   : Integrator(rt) {
   ETX_PIMPL_INIT(CPUPathTracing, rt, &current_state);
+  _private->build_options(integrator_options);
 }
 
 CPUPathTracing::~CPUPathTracing() {
@@ -129,17 +135,16 @@ const Integrator::Status& CPUPathTracing::status() const {
   return _private->status;
 }
 
-void CPUPathTracing::run(const Options& opt) {
+void CPUPathTracing::run() {
   stop(Stop::Immediate);
 
   if (can_run()) {
     current_state = State::Running;
-    _private->start(opt);
+    _private->start(integrator_options);
   }
 }
 
 void CPUPathTracing::update() {
-  ETX_FUNCTION_SCOPE();
   _private->update(current_state);
 }
 
@@ -157,19 +162,9 @@ void CPUPathTracing::stop(Stop st) {
   }
 }
 
-Options CPUPathTracing::options() const {
-  Options result = {};
-  result.add(_private->options.direct, "direct", "Direct Hits");
-  result.add(_private->options.nee, "nee", "Light Sampling");
-  result.add("pt-opt", "Path Tracing Options");
-  result.add(_private->options.mis, "mis", "Multiple Importance Sampling");
-  result.add(_private->options.blue_noise, "bn", "Use Blue Noise");
-  return result;
-}
-
-void CPUPathTracing::update_options(const Options& opt) {
+void CPUPathTracing::update_options() {
   if (current_state == State::Running) {
-    run(opt);
+    run();
   }
 }
 

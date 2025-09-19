@@ -144,80 +144,70 @@ void UI::cleanup() {
 }
 
 bool UI::build_options(Options& options) {
-  bool changed = false;
-
-  for (auto& option : options.values) {
+  bool global_changed = false;
+  for (auto& option : options.options) {
+    bool changed = false;
     switch (option.cls) {
-      case OptionalValue::Class::InfoString: {
-        ImGui::TextColored({1.0f, 0.5f, 0.25f, 1.0f}, "%s", option.name.c_str());
+      case Option::Class::String: {
+        auto& data = option.as<Option::Class::String>();
+        ImGui::TextColored({1.0f, 0.5f, 0.25f, 1.0f}, "%s", data.value.c_str());
         break;
       };
-
-      case OptionalValue::Class::Boolean: {
-        bool value = option.to_bool();
-        if (ImGui::Checkbox(option.name.c_str(), &value)) {
-          option.set(value);
-          changed = true;
+      case Option::Class::Boolean: {
+        auto& data = option.as<Option::Class::Boolean>();
+        changed = ImGui::Checkbox(option.description.c_str(), &data.value);
+        break;
+      }
+      case Option::Class::Float: {
+        auto& data = option.as<Option::Class::Float>();
+        if (data.bounds.maximum > data.bounds.minimum) {
+          changed = ImGui::DragFloat(option.description.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        } else {
+          changed = ImGui::InputFloat(option.description.c_str(), &data.value);
         }
         break;
       }
-
-      case OptionalValue::Class::Float: {
-        float value = option.to_float();
-        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
-        if (ImGui::DragFloat(option.name.c_str(), &value, 0.1f, option.min_value.flt, option.max_value.flt, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
-          option.set(value);
-          changed = true;
-        }
-        break;
-      }
-
-      case OptionalValue::Class::Float3: {
-        float3 value = option.to_float3();
-        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
-        ImGui::Text("%s", option.name.c_str());
-        char buffer_name[128] = {};
-        snprintf(buffer_name, sizeof(buffer_name), "##%s", option.name.c_str());
-        if (ImGui::DragFloat3(buffer_name, &value.x, 0.1f, option.min_value.f3.x, option.max_value.f3.x, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
-          option.set(value);
-          changed = true;
-        }
-        break;
-      }
-
-      case OptionalValue::Class::Integer: {
-        int value = option.to_integer();
-        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
-        if (ImGui::DragInt(option.name.c_str(), &value, 1.0f, option.min_value.integer, option.max_value.integer, "%u", ImGuiSliderFlags_AlwaysClamp)) {
-          option.set(uint32_t(value));
-          changed = true;
-        }
-        break;
-      }
-
-      case OptionalValue::Class::Enum: {
-        int value = option.to_integer();
-        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
-        if (ImGui::TreeNodeEx(option.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
-          for (uint32_t i = 0; i <= option.max_value.integer; ++i) {
-            if (ImGui::RadioButton(option.name_func(i).c_str(), &value, i)) {
-              value = i;
+      case Option::Class::Integral: {
+        auto& data = option.as<Option::Class::Integral>();
+        if (option.meta & Option::Meta::EnumValue) {
+          ETX_CRITICAL(data.bounds.maximum > data.bounds.minimum);
+          ETX_CRITICAL(option.name_getter);
+          ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
+          int32_t original = data.value;
+          if (ImGui::TreeNodeEx(option.description.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
+            for (int32_t i = data.bounds.minimum; i <= data.bounds.maximum; ++i) {
+              if (ImGui::RadioButton(option.name_getter(i).c_str(), &data.value, i)) {
+                data.value = i;
+              }
             }
+            ImGui::TreePop();
           }
-          if (value != option.to_integer()) {
-            option.set(uint32_t(value));
-            changed = true;
+          changed = data.value != original;
+        } else {
+          if (data.bounds.maximum > data.bounds.minimum) {
+            changed = ImGui::DragInt(option.description.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, "%d", ImGuiSliderFlags_AlwaysClamp);
+          } else {
+            changed = ImGui::DragInt(option.description.c_str(), &data.value);
           }
-          ImGui::TreePop();
         }
         break;
       }
-
+      case Option::Class::Float3: {
+        auto& data = option.as<Option::Class::Float3>();
+        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
+        ImGui::Text("%s", option.description.c_str());
+        char buffer_name[128] = {};
+        snprintf(buffer_name, sizeof(buffer_name), "##%s", option.description.c_str());
+        changed = ImGui::DragFloat3(buffer_name, &data.value.x, 0.1f, data.bounds.minimum.x, data.bounds.maximum.x, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        break;
+      }
       default:
         ETX_FAIL("Invalid option");
     }
+    global_changed = global_changed || changed;
   }
-  return changed;
+
+  return global_changed;
 }
 
 bool UI::ior_picker(const char* name, RefractiveIndex& ior) {
@@ -341,7 +331,7 @@ void ui_window(uint32_t _ui_setup, uint32_t opt, const char* title, F func) {
 
 void UI::build(double dt, const std::vector<std::string>& recent_files, Scene* scene, Camera* camera, const SceneRepresentation::MaterialMapping& materials,
   const SceneRepresentation::MediumMapping& mediums) {
-  ETX_FUNCTION_SCOPE();
+  ETX_PROFILER_SCOPE();
 
   bool has_integrator = (_current_integrator != nullptr);
   bool has_scene = scene != nullptr;
@@ -623,8 +613,8 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene* s
 
   ui_window(_ui_setup, UIIntegrator, has_integrator ? _current_integrator->name() : "Integrator options", [&]() {
     if (has_integrator) {
-      _integrator_options = _current_integrator->options();
-      if (build_options(_integrator_options) && callbacks.options_changed) {
+      bool options_changed = build_options(_current_integrator->options());
+      if (options_changed && callbacks.options_changed) {
         callbacks.options_changed();
       }
     } else {

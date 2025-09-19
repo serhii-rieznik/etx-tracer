@@ -152,14 +152,14 @@ struct PathVertex {
       return {};
 
     float pdf_dir = 0.0f;
-    const auto w_o = -emitter_vertex.intersection.w_i;
     for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
       const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
       const float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      const float pdf_emitter_dir = emitter_pdf_in_dist(emitter, w_o, scene);
+      const float pdf_emitter_dir = emitter_pdf_in_dist(emitter, emitter_vertex.intersection.w_i, scene);
       pdf_dir += pdf_discrete * pdf_emitter_dir;
     }
 
+    const auto w_o = -emitter_vertex.intersection.w_i;
     float w_o_dot_n = target_vertex.is_surface_interaction() ? fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o)) : 1.0f;
     float pdf_area = w_o_dot_n / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
     pdf_dir = pdf_dir / float(scene.environment_emitters.count);
@@ -272,8 +272,8 @@ struct CPUBidirectionalImpl : public Task {
   std::vector<PathData> per_thread_path_data;
   std::atomic<Integrator::State>* state = {};
   TimeMeasure iteration_time = {};
-  Handle current_task = {};
   Integrator::Status status = {};
+  Handle current_task = {};
 
   enum class Mode : uint32_t {
     PathTracing,
@@ -326,6 +326,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) {
+    ETX_PROFILER_SCOPE();
     auto& path_data = per_thread_path_data[thread_id];
     auto& film = rt.film();
     auto& scene = rt.scene();
@@ -1256,8 +1257,11 @@ struct CPUBidirectionalImpl : public Task {
       ETX_VALIDATE(accumulated_emitter_value);
     }
 
+    if (accumulated_emitter_value.is_zero())
+      return accumulated_emitter_value;
+
     float mis_weight = 1.0f;
-    if (enable_mis && (path_data.camera_path_length() > 1u)) {
+    if (enable_mis && (path_data.camera_path_length() > 1u) && (mode != Mode::PathTracing)) {
       auto [pdf_from, pdf_to] = PathVertex::pdf_for_environment_emitter(spect, z_curr, z_prev, scene);
 
       if (mode == Mode::BDPTFull) {
@@ -1373,15 +1377,44 @@ struct CPUBidirectionalImpl : public Task {
     return rt.trace_transmittance(spect, scene, origin, p1, p0.medium, smp);
   }
 
-  void start(const Options& opt) {
-    mode = opt.get("bdpt-mode", uint32_t(mode)).to_enum<Mode>();
+  void build_options(Options& options) {
+    options.options.clear();
 
-    enable_direct_hit = opt.get("bdpt-conn_direct_hit", enable_direct_hit).to_bool();
-    enable_connect_to_camera = opt.get("bdpt-conn_connect_to_camera", enable_connect_to_camera).to_bool();
-    enable_connect_to_light = opt.get("bdpt-conn_connect_to_light", enable_connect_to_light).to_bool();
-    enable_connect_vertices = opt.get("bdpt-conn_connect_vertices", enable_connect_vertices).to_bool();
-    enable_mis = opt.get("bdpt-conn_mis", enable_mis).to_bool();
-    enable_blue_noise = opt.get("bdpt-blue_noise", enable_blue_noise).to_bool();
+    options.set_string("bdpt-conn", "Connections:", "connections-label");
+    options.set_bool("bdpt-conn_direct_hit", enable_direct_hit, "Direct Hits");
+    options.set_bool("bdpt-conn_connect_to_camera", enable_connect_to_camera, "Light Path to Camera");
+    options.set_bool("bdpt-conn_connect_to_light", enable_connect_to_light, "Camera Path to Light");
+    options.set_bool("bdpt-conn_connect_vertices", enable_connect_vertices, "Camera Path to Light Path");
+    options.set_string("bdpt-opt", "Bidirectional Path Tracing Options", "bdpt-options");
+    options.set_bool("bdpt-conn_mis", enable_mis, "Multiple Importance Sampling");
+    options.set_bool("bdpt-blue_noise", enable_blue_noise, "Enable Blue Noise");
+
+    options.set_integral("bdpt-mode", mode, "Mode", Option::Meta::EnumValue, {CPUBidirectionalImpl::Mode::PathTracing, CPUBidirectionalImpl::Mode::BDPTFull}).name_getter =
+      [](uint32_t index) -> std::string {
+      switch (CPUBidirectionalImpl::Mode(index)) {
+        case CPUBidirectionalImpl::Mode::PathTracing:
+          return "Path Tracing";
+        case CPUBidirectionalImpl::Mode::LightTracing:
+          return "Light Tracing";
+        case CPUBidirectionalImpl::Mode::BDPTFast:
+          return "BDPT Fast";
+        case CPUBidirectionalImpl::Mode::BDPTFull:
+          return "BDPT Full";
+        default:
+          return "Unknown";
+      }
+    };
+  }
+
+  void start(const Options& opt) {
+    mode = opt.get_integral("bdpt-mode", mode);
+
+    enable_direct_hit = opt.get_bool("bdpt-conn_direct_hit", enable_direct_hit);
+    enable_connect_to_camera = opt.get_bool("bdpt-conn_connect_to_camera", enable_connect_to_camera);
+    enable_connect_to_light = opt.get_bool("bdpt-conn_connect_to_light", enable_connect_to_light);
+    enable_connect_vertices = opt.get_bool("bdpt-conn_connect_vertices", enable_connect_vertices);
+    enable_mis = opt.get_bool("bdpt-conn_mis", enable_mis);
+    enable_blue_noise = opt.get_bool("bdpt-blue_noise", enable_blue_noise);
 
     for (auto& path_data : per_thread_path_data) {
       path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
@@ -1397,6 +1430,7 @@ struct CPUBidirectionalImpl : public Task {
 CPUBidirectional::CPUBidirectional(Raytracing& rt)
   : Integrator(rt) {
   ETX_PIMPL_INIT(CPUBidirectional, rt, &current_state);
+  _private->build_options(integrator_options);
 }
 
 CPUBidirectional::~CPUBidirectional() {
@@ -1406,16 +1440,17 @@ CPUBidirectional::~CPUBidirectional() {
   ETX_PIMPL_CLEANUP(CPUBidirectional);
 }
 
-void CPUBidirectional::run(const Options& opt) {
+void CPUBidirectional::run() {
   stop(Stop::Immediate);
 
   if (can_run()) {
     current_state = State::Running;
-    _private->start(opt);
+    _private->start(integrator_options);
   }
 }
 
 void CPUBidirectional::update() {
+  ETX_PROFILER_SCOPE();
   if ((current_state == State::Stopped) || (rt.scheduler().completed(_private->current_task) == false)) {
     return;
   }
@@ -1449,49 +1484,9 @@ void CPUBidirectional::stop(Stop st) {
   }
 }
 
-Options CPUBidirectional::options() const {
-  auto mode = OptionalValue(
-    _private->mode, CPUBidirectionalImpl::Mode::Count,
-    [](uint32_t index) -> std::string {
-      switch (CPUBidirectionalImpl::Mode(index)) {
-        case CPUBidirectionalImpl::Mode::PathTracing:
-          return "Path Tracing";
-        case CPUBidirectionalImpl::Mode::LightTracing:
-          return "Light Tracing";
-        case CPUBidirectionalImpl::Mode::BDPTFast:
-          return "BDPT Fast";
-        case CPUBidirectionalImpl::Mode::BDPTFull:
-          return "BDPT Full";
-        default:
-          return "Unknown";
-      }
-    },
-    "bdpt-mode", "Mode");
-
-  Options result = {};
-  if (_private->mode != CPUBidirectionalImpl::Mode::LightTracing) {
-    result.add("bdpt-conn", "Connections:");
-    result.add(_private->enable_direct_hit, "bdpt-conn_direct_hit", "Direct Hits");
-    if (_private->mode != CPUBidirectionalImpl::Mode::PathTracing) {
-      result.add(_private->enable_connect_to_camera, "bdpt-conn_connect_to_camera", "Light Path to Camera");
-    }
-    result.add(_private->enable_connect_to_light, "bdpt-conn_connect_to_light", "Camera Path to Light");
-    if (_private->mode == CPUBidirectionalImpl::Mode::BDPTFull) {
-      result.add(_private->enable_connect_vertices, "bdpt-conn_connect_vertices", "Camera Path to Light Path");
-    }
-    result.add("bdpt-opt", "Bidirectional Path Tracing Options");
-    result.add(_private->enable_mis, "bdpt-conn_mis", "Multiple Importance Sampling");
-    result.add(_private->enable_blue_noise, "bdpt-blue_noise", "Enable Blue Noise");
-  } else {
-    result.add("bdpt-opt", "Light Tracing Mode Has No Options");
-  }
-  result.add(mode);
-  return result;
-}
-
-void CPUBidirectional::update_options(const Options& opt) {
+void CPUBidirectional::update_options() {
   if (current_state == State::Running) {
-    run(opt);
+    run();
   }
 }
 

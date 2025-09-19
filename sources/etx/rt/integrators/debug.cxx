@@ -16,6 +16,27 @@ static RefractiveIndex spd_air = {};
 static Thinfilm thinfilm = {};
 
 struct CPUDebugIntegratorImpl : public Task {
+  enum class Mode : uint32_t {
+    Geometry,
+    Barycentrics,
+    Normals,
+    Tangents,
+    Bitangents,
+    TexCoords,
+    FaceOrientation,
+    TransmittanceColor,
+    ReflectanceColor,
+    Fresnel,
+    Thickness,
+    Thinfilm,
+    Spectrums,
+    IOR,
+    Random,
+
+    Count,
+  };
+  static std::string mode_to_string(uint32_t);
+
   Integrator::Status status = {};
 
   Raytracing& rt;
@@ -24,7 +45,7 @@ struct CPUDebugIntegratorImpl : public Task {
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   uint32_t current_scale = 1u;
-  CPUDebugIntegrator::Mode mode = CPUDebugIntegrator::Mode::Random;
+  Mode mode = Mode::Random;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
   float th_factor = 1.0f;
   float th_min = 0.0f;
@@ -46,28 +67,53 @@ struct CPUDebugIntegratorImpl : public Task {
     thinfilm.max_thickness = 850.0f;
   }
 
+  void build_options(Options& result) const {
+    result.options.clear();
+    result.set_integral("mode", mode, "Visualize", Option::Meta::EnumValue, {Mode(0), Mode(uint32_t(Mode::Count) - 1u)}).name_getter = mode_to_string;
+
+    if (mode == Mode::Thickness) {
+      result.set_float("t-factor", th_factor, "Thickness cone factor", {0.0f, 1024.0f});
+      result.set_float("t-min", th_min, "Min Thickness", {0.0f, 1024.0f});
+      result.set_float("t-max", th_max, "Max Thickness", {0.0f, 1024.0f});
+    } else if (mode == Mode::Thinfilm) {
+      result.set_bool("thinfilm_spectral", thinfilm_spectral, "Spectral");
+      float3 kMin = {spectrum::kShortestWavelength, spectrum::kShortestWavelength, spectrum::kShortestWavelength};
+      float3 kMax = {spectrum::kLongestWavelength, spectrum::kLongestWavelength, spectrum::kLongestWavelength};
+      float3 kMinSpan = {0.5f, 0.5f, 0.5f};
+      float3 kMaxSpan = {spectrum::kWavelengthCount, spectrum::kWavelengthCount, spectrum::kWavelengthCount};
+      result.set_float3("thinfilm_rgb", thinfilm_rgb, "Wavelengths", {kMin, kMax});
+      result.set_float3("thinfilm_span", thinfilm_span, "Wavelengths Span", {kMinSpan, kMaxSpan});
+      // result.add(0.0f, _private->thinfilm.max_thickness, 10000.0f, "test_th", "Thickness");
+    }
+
+    if (mode == Mode::Random) {
+      result.set_bool("rnd_smp", random_iteration, "Sample");
+      result.set_bool("rnd_dim", random_dimension, "Dimension");
+    }
+  }
+
   void start(const Options& opt) {
-    mode = opt.get("mode", uint32_t(mode)).to_enum<CPUDebugIntegrator::Mode>();
-    th_factor = opt.get("t-factor", th_factor).to_float();
-    th_min = opt.get("t-min", th_min).to_float();
-    th_max = opt.get("t-max", th_max).to_float();
+    mode = opt.get_integral("mode", mode);
+    th_factor = opt.get_float("t-factor", th_factor);
+    th_min = opt.get_float("t-min", th_min);
+    th_max = opt.get_float("t-max", th_max);
 
-    thinfilm.max_thickness = opt.get("test_th", thinfilm.max_thickness).to_float();
-    thinfilm_rgb = opt.get("thinfilm_rgb", thinfilm_rgb).to_float3();
-    thinfilm_span = opt.get("thinfilm_span", thinfilm_span).to_float3();
-    thinfilm_spectral = opt.get("thinfilm_spectral", thinfilm_spectral).to_bool();
+    thinfilm.max_thickness = opt.get_float("test_th", thinfilm.max_thickness);
+    thinfilm_rgb = opt.get_float3("thinfilm_rgb", thinfilm_rgb);
+    thinfilm_span = opt.get_float3("thinfilm_span", thinfilm_span);
+    thinfilm_spectral = opt.get_bool("thinfilm_spectral", thinfilm_spectral);
 
-    random_iteration = opt.get("rnd_smp", random_iteration).to_integer();
-    random_dimension = opt.get("rnd_dim", random_dimension).to_integer();
+    random_iteration = opt.get_integral("rnd_smp", random_iteration);
+    random_dimension = opt.get_integral("rnd_dim", random_dimension);
 
-    voxel_data[0] = opt.get("v000", voxel_data[0]).to_float();
-    voxel_data[1] = opt.get("v001", voxel_data[1]).to_float();
-    voxel_data[2] = opt.get("v100", voxel_data[2]).to_float();
-    voxel_data[3] = opt.get("v101", voxel_data[3]).to_float();
-    voxel_data[4] = opt.get("v010", voxel_data[4]).to_float();
-    voxel_data[5] = opt.get("v011", voxel_data[5]).to_float();
-    voxel_data[6] = opt.get("v110", voxel_data[6]).to_float();
-    voxel_data[7] = opt.get("v111", voxel_data[7]).to_float();
+    voxel_data[0] = opt.get_float("v000", voxel_data[0]);
+    voxel_data[1] = opt.get_float("v001", voxel_data[1]);
+    voxel_data[2] = opt.get_float("v100", voxel_data[2]);
+    voxel_data[3] = opt.get_float("v101", voxel_data[3]);
+    voxel_data[4] = opt.get_float("v010", voxel_data[4]);
+    voxel_data[5] = opt.get_float("v011", voxel_data[5]);
+    voxel_data[6] = opt.get_float("v110", voxel_data[6]);
+    voxel_data[7] = opt.get_float("v111", voxel_data[7]);
 
     status = {};
     total_time = {};
@@ -291,7 +337,7 @@ struct CPUDebugIntegratorImpl : public Task {
 
     Intersection intersection;
 
-    if (mode == CPUDebugIntegrator::Mode::Random) {
+    if (mode == Mode::Random) {
       if ((random_iteration == ~0u) && (random_dimension == ~0u)) {
         float t = smp.next();
         output = {t, t, t};
@@ -309,7 +355,7 @@ struct CPUDebugIntegratorImpl : public Task {
         } while (k < dim);
         output = {t, t, t};
       }
-    } else if (mode == CPUDebugIntegrator::Mode::Thinfilm) {
+    } else if (mode == Mode::Thinfilm) {
       float cos_theta = 1.0f - t;
       float thickness = s * 2500.0f;
 
@@ -326,7 +372,7 @@ struct CPUDebugIntegratorImpl : public Task {
       auto f_s = fresnel::calculate(q_s, cos_theta, spd_air(q_s), spd_base(q_s), thinfilm_eval_s);
       float3 xyz_s = (thinfilm_spectral ? SpectralDistribution::kRGBLuminanceScale : float3{1.0f, 1.0f, 1.0f}) * f_s.to_rgb() / q_s.sampling_pdf();
       output = xyz_s;
-    } else if (mode == CPUDebugIntegrator::Mode::Spectrums) {
+    } else if (mode == Mode::Spectrums) {
       constexpr float kBandCount = 9.0f;
       uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
 
@@ -369,7 +415,7 @@ struct CPUDebugIntegratorImpl : public Task {
       }
 
       output = (t < 0.5f ? value_spectrum : value_rgb);
-    } else if (mode == CPUDebugIntegrator::Mode::IOR) {
+    } else if (mode == Mode::IOR) {
       constexpr float kBandCount = 20.0f;
       uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
 
@@ -407,42 +453,42 @@ struct CPUDebugIntegratorImpl : public Task {
         bool entering_material = dot(ray.d, intersection.nrm) < 0.0f;
 
         switch (mode) {
-          case CPUDebugIntegrator::Mode::Barycentrics: {
+          case Mode::Barycentrics: {
             output = intersection.barycentric;
             break;
           }
-          case CPUDebugIntegrator::Mode::Normals: {
+          case Mode::Normals: {
             output = saturate(intersection.nrm * 0.5f + 0.5f);
             break;
           }
-          case CPUDebugIntegrator::Mode::Tangents: {
+          case Mode::Tangents: {
             output = saturate(intersection.tan * 0.5f + 0.5f);
             break;
           }
-          case CPUDebugIntegrator::Mode::Bitangents: {
+          case Mode::Bitangents: {
             output = saturate(intersection.btn * 0.5f + 0.5f);
             break;
           }
-          case CPUDebugIntegrator::Mode::TexCoords: {
+          case Mode::TexCoords: {
             output = {intersection.tex.x, intersection.tex.y, 0.0f};
             break;
           }
-          case CPUDebugIntegrator::Mode::FaceOrientation: {
+          case Mode::FaceOrientation: {
             float d = fabsf(dot(intersection.nrm, ray.d));
             output = d * (entering_material ? float3{0.2f, 0.2f, 1.0f} : float3{1.0f, 0.2f, 0.2f});
             break;
           };
-          case CPUDebugIntegrator::Mode::TransmittanceColor: {
+          case Mode::TransmittanceColor: {
             const auto& mat = scene.materials[intersection.material_index];
             output = apply_image(spect, mat.transmittance, intersection.tex, rt.scene(), nullptr).to_rgb();
             break;
           };
-          case CPUDebugIntegrator::Mode::ReflectanceColor: {
+          case Mode::ReflectanceColor: {
             const auto& mat = scene.materials[intersection.material_index];
             output = apply_image(spect, mat.reflectance, intersection.tex, rt.scene(), nullptr).to_rgb();
             break;
           };
-          case CPUDebugIntegrator::Mode::Fresnel: {
+          case Mode::Fresnel: {
             const auto& mat = scene.materials[intersection.material_index];
             auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, intersection.tex, scene, smp);
             auto eta_i = (entering_material ? mat.ext_ior : mat.int_ior)(spect);
@@ -452,7 +498,7 @@ struct CPUDebugIntegratorImpl : public Task {
             break;
           };
 
-          case CPUDebugIntegrator::Mode::Thickness: {
+          case Mode::Thickness: {
             auto remap_color = [this](float t) -> float3 {
               t = saturate((t - th_min) / (th_max - th_min));
               float3 result = {
@@ -529,6 +575,7 @@ struct CPUDebugIntegratorImpl : public Task {
 CPUDebugIntegrator::CPUDebugIntegrator(Raytracing& rt)
   : Integrator(rt) {
   ETX_PIMPL_INIT(CPUDebugIntegrator, rt, &current_state);
+  _private->build_options(integrator_options);
 }
 
 CPUDebugIntegrator::~CPUDebugIntegrator() {
@@ -542,12 +589,12 @@ const Integrator::Status& CPUDebugIntegrator::status() const {
   return _private->status;
 }
 
-void CPUDebugIntegrator::run(const Options& opt) {
+void CPUDebugIntegrator::run() {
   stop(Stop::Immediate);
 
   if (can_run()) {
     current_state = State::Running;
-    _private->start(opt);
+    _private->start(integrator_options);
   }
 }
 
@@ -582,34 +629,7 @@ void CPUDebugIntegrator::stop(Stop st) {
   }
 }
 
-Options CPUDebugIntegrator::options() const {
-  Options result = {};
-  result.add(_private->mode, Mode::Count, &CPUDebugIntegrator::mode_to_string, "mode", "Visualize");
-
-  if (_private->mode == Mode::Thickness) {
-    result.add(0.0f, _private->th_factor, 1024.0f, "t-factor", "Thickness cone factor");
-    result.add(0.0f, _private->th_min, 1024.0f, "t-min", "Min Thickness");
-    result.add(0.0f, _private->th_max, 1024.0f, "t-max", "Max Thickness");
-  } else if (_private->mode == Mode::Thinfilm) {
-    result.add(_private->thinfilm_spectral, "thinfilm_spectral", "Spectral");
-    float3 kMin = {spectrum::kShortestWavelength, spectrum::kShortestWavelength, spectrum::kShortestWavelength};
-    float3 kMax = {spectrum::kLongestWavelength, spectrum::kLongestWavelength, spectrum::kLongestWavelength};
-    float3 kMinSpan = {0.5f, 0.5f, 0.5f};
-    float3 kMaxSpan = {spectrum::kWavelengthCount, spectrum::kWavelengthCount, spectrum::kWavelengthCount};
-    result.add(kMin, _private->thinfilm_rgb, kMax, "thinfilm_rgb", "Wavelengths");
-    result.add(kMinSpan, _private->thinfilm_span, kMaxSpan, "thinfilm_span", "Wavelengths Span");
-    // result.add(0.0f, _private->thinfilm.max_thickness, 10000.0f, "test_th", "Thickness");
-  }
-
-  if (_private->mode == Mode::Random) {
-    result.add(_private->random_iteration, "rnd_smp", "Sample");
-    result.add(_private->random_dimension, "rnd_dim", "Dimension");
-  }
-
-  return result;
-}
-
-std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
+std::string CPUDebugIntegratorImpl::mode_to_string(uint32_t i) {
   switch (Mode(i)) {
     case Mode::Geometry:
       return "Geometry";
@@ -646,9 +666,11 @@ std::string CPUDebugIntegrator::mode_to_string(uint32_t i) {
   }
 }
 
-void CPUDebugIntegrator::update_options(const Options& opt) {
+void CPUDebugIntegrator::update_options() {
   if (current_state == State::Running) {
-    run(opt);
+    stop(Stop::Immediate);
+    _private->build_options(integrator_options);
+    run();
   }
 }
 

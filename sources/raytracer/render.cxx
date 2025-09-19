@@ -126,7 +126,8 @@ void RenderContext::cleanup() {
 }
 
 void RenderContext::start_frame(uint32_t sample_count, const ViewOptions& view_options) {
-  ETX_FUNCTION_SCOPE();
+  ETX_PROFILER_SCOPE();
+
   sg_pass_action pass_action = {};
   pass_action.colors[0].load_action = SG_LOADACTION_CLEAR;
   pass_action.colors[0].store_action = SG_STOREACTION_STORE;
@@ -164,9 +165,12 @@ void RenderContext::start_frame(uint32_t sample_count, const ViewOptions& view_o
 }
 
 void RenderContext::end_frame() {
-  ETX_FUNCTION_SCOPE();
+  ETX_PROFILER_SCOPE();
   sg_end_pass();
-  sg_commit();
+  {
+    ETX_PROFILER_NAMED_SCOPE("commit");
+    sg_commit();
+  }
 }
 
 void RenderContext::apply_reference_image(uint32_t handle) {
@@ -236,8 +240,8 @@ void RenderContext::set_output_dimensions(const uint2& dim) {
 }
 
 void RenderContext::update_image(const float4* camera) {
+  ETX_PROFILER_SCOPE();
   ETX_ASSERT(_private->sample_image.id != 0);
-  ETX_FUNCTION_SCOPE();
 
   sg_image_data data = {};
   data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;

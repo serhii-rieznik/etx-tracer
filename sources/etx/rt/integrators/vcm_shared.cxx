@@ -13,36 +13,36 @@ VCMOptions VCMOptions::default_values() {
 }
 
 void VCMOptions::load(const Options& opt) {
-  initial_radius = opt.get("vcm-initial_radius", initial_radius).to_float();
-  radius_decay = opt.get("vcm-radius_decay", radius_decay).to_integer();
-  blue_noise = opt.get("vcm-blue_noise", blue_noise).to_bool();
-  kernel = opt.get("vcm-kernel", kernel).to_integer();
+  initial_radius = opt.get_float("vcm-initial_radius", initial_radius);
+  radius_decay = opt.get_integral("vcm-radius_decay", radius_decay);
+  blue_noise = opt.get_bool("vcm-blue_noise", blue_noise);
+  kernel = opt.get_integral("vcm-kernel", kernel);
 
-  options = opt.get("vcm-direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
-  options = opt.get("vcm-connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
-  options = opt.get("vcm-connect_to_camera", connect_to_camera()).to_bool() ? (options | ConnectToCamera) : (options & ~ConnectToCamera);
-  options = opt.get("vcm-connect_vertices", connect_vertices()).to_bool() ? (options | ConnectVertices) : (options & ~ConnectVertices);
-  options = opt.get("vcm-merge_vertices", merge_vertices()).to_bool() ? (options | MergeVertices) : (options & ~MergeVertices);
-  options = opt.get("vcm-mis", enable_mis()).to_bool() ? (options | EnableMis) : (options & ~EnableMis);
-  options = opt.get("vcm-merging", enable_merging()).to_bool() ? (options | EnableMerging) : (options & ~EnableMerging);
+  options = opt.get_bool("vcm-direct_hit", direct_hit()) ? (options | DirectHit) : (options & ~DirectHit);
+  options = opt.get_bool("vcm-connect_to_light", connect_to_light()) ? (options | ConnectToLight) : (options & ~ConnectToLight);
+  options = opt.get_bool("vcm-connect_to_camera", connect_to_camera()) ? (options | ConnectToCamera) : (options & ~ConnectToCamera);
+  options = opt.get_bool("vcm-connect_vertices", connect_vertices()) ? (options | ConnectVertices) : (options & ~ConnectVertices);
+  options = opt.get_bool("vcm-merge_vertices", merge_vertices()) ? (options | MergeVertices) : (options & ~MergeVertices);
+  options = opt.get_bool("vcm-mis", enable_mis()) ? (options | EnableMis) : (options & ~EnableMis);
+  options = opt.get_bool("vcm-merging", enable_merging()) ? (options | EnableMerging) : (options & ~EnableMerging);
 }
 
 void VCMOptions::store(Options& opt) const {
-  opt.add("compute", "Connections:");
-  opt.add(direct_hit(), "vcm-direct_hit", "Direct Hits");
-  opt.add(connect_to_camera(), "vcm-connect_to_camera", "Light Path to Camera");
-  opt.add(connect_to_light(), "vcm-connect_to_light", "Camera Path to Light");
-  opt.add(connect_vertices(), "vcm-connect_vertices", "Camera Path to Light Path");
+  opt.set_string("compute", "Connections:", "Connections");
+  opt.set_bool("vcm-direct_hit", direct_hit(), "Direct Hits");
+  opt.set_bool("vcm-connect_to_camera", connect_to_camera(), "Light Path to Camera");
+  opt.set_bool("vcm-connect_to_light", connect_to_light(), "Camera Path to Light");
+  opt.set_bool("vcm-connect_vertices", connect_vertices(), "Camera Path to Light Path");
   if (enable_merging()) {
-    opt.add(merge_vertices(), "vcm-merge_vertices", "Merge Light Vertices");
+    opt.set_bool("vcm-merge_vertices", merge_vertices(), "Merge Light Vertices");
   }
-  opt.add("vcm-opt", "VCM Options");
-  opt.add(enable_merging(), "vcm-merging", "Enable Merging");
-  opt.add(enable_mis(), "vcm-mis", "Multiple Importance Sampling");
-  opt.add(blue_noise, "vcm-blue_noise", "Blue Noise");
-  opt.add(smooth_kernel(), "vcm-kernel", "Smooth Merging Kernel");
-  opt.add(0.0f, initial_radius, 10.0f, "vcm-initial_radius", "Initial Radius");
-  opt.add(1u, uint32_t(radius_decay), 65536u, "vcm-radius_decay", "Radius Decay");
+  opt.set_string("vcm-opt", "VCM Options", "VCM Options");
+  opt.set_bool("vcm-merging", enable_merging(), "Enable Merging");
+  opt.set_bool("vcm-mis", enable_mis(), "Multiple Importance Sampling");
+  opt.set_bool("vcm-kernel", smooth_kernel(), "Smooth Merging Kernel");
+  opt.set_bool("vcm-blue_noise", blue_noise, "Blue Noise");
+  opt.set_float("vcm-initial_radius", initial_radius, "Initial Radius", {0.0f, 10.0f});
+  opt.set_integral("vcm-radius_decay", radius_decay, "Radius Decay", 0, {1u, 65536u});
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {

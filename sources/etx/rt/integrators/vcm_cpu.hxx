@@ -12,11 +12,10 @@ struct CPUVCM : public Integrator {
     return "VCM (CPU)";
   }
 
-  Options options() const override;
-  void run(const Options&) override;
+  void run() override;
   void update() override;
   void stop(Stop) override;
-  void update_options(const Options&) override;
+  void update_options() override;
 
   bool have_updated_camera_image() const override;
   bool have_updated_light_image() const override;

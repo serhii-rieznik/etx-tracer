@@ -61,32 +61,26 @@ void RTApplication::init() {
   ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
 
   _options.load_from_file(env().file_in_data("options.json"));
-  if (_options.has("integrator") == false) {
-    _options.add("integrator", "none");
-  }
-  if (_options.has("scene") == false) {
-    _options.add("scene", "none");
-  }
 
   for (uint32_t i = 0; i < 7; ++i) {
     const auto name = "recent-" + std::to_string(i);
-    if (_options.has(name)) {
-      _recent_files.emplace_back(_options.get(name, std::string()).name);
+    if (_options.has(name, Option::Class::String)) {
+      _recent_files.emplace_back(_options.get_string(name, {}));
     }
   }
 
 #if defined(ETX_PLATFORM_WINDOWS)
   if (GetAsyncKeyState(VK_ESCAPE)) {
-    _options.set("integrator", std::string());
+    _options.set_string("integrator", {}, "Integrator");
   }
   if (GetAsyncKeyState(VK_ESCAPE) && GetAsyncKeyState(VK_SHIFT)) {
-    _options.set("scene", std::string());
+    _options.set_string("scene", {}, "Scene");
   }
 #endif
 
   Integrator* integrator = nullptr;
 
-  auto selected_integrator = _options.get("integrator", std::string{}).name;
+  auto selected_integrator = _options.get_string("integrator", std::string{});
   for (uint64_t i = 0; (selected_integrator.empty() == false) && (i < std::size(_integrator_array)); ++i) {
     ETX_ASSERT(_integrator_array[i] != nullptr);
     if (selected_integrator == _integrator_array[i]->name()) {
@@ -97,30 +91,30 @@ void RTApplication::init() {
   integrator_thread.start(integrator);
   ui.set_current_integrator(integrator);
 
-  _current_scene_file = _options.get("scene", std::string{}).name;
+  _current_scene_file = _options.get_string("scene", std::string{});
   if (_current_scene_file.empty() == false) {
     on_scene_file_selected(_current_scene_file);
   }
 
-  auto ref = _options.get("ref", std::string{}).name;
+  auto ref = _options.get_string("ref", std::string{});
   if (ref.empty() == false) {
     on_referenece_image_selected(ref);
   }
 
   save_options();
-  ETX_PROFILER_RESET_COUNTERS();
 }
 
 void RTApplication::save_options() {
   uint32_t i = 0;
   for (const auto& recent : _recent_files) {
-    _options.add("recent-" + std::to_string(i++), recent);
+    _options.set_string("recent-" + std::to_string(i++), recent, "Recent File");
   }
   _options.save_to_file(env().file_in_data("options.json"));
 }
 
 void RTApplication::frame() {
-  ETX_FUNCTION_SCOPE();
+  ETX_PROFILER_SCOPE();
+
   auto dt = time_measure.lap();
 
   bool can_change_camera = scene.valid();
@@ -141,10 +135,14 @@ void RTApplication::frame() {
     options.options = ViewOptions::SkipColorConversion;
   }
 
+  ETX_PROFILER_NAMED_SCOPE("process");
   integrator_thread.update();
 
   render.start_frame(integrator_thread.status().current_iteration, options);
-  render.update_image(raytracing.film().layer(options.layer));
+
+  const auto frame_data = raytracing.film().layer(options.layer);
+  render.update_image(frame_data);
+
   ui.build(dt, _recent_files, scene.mutable_scene_pointer(), scene.mutable_camera_pointer(), scene.material_mapping(), scene.medium_mapping());
   render.end_frame();
 }
@@ -155,6 +153,7 @@ void RTApplication::cleanup() {
 }
 
 void RTApplication::process_event(const sapp_event* e) {
+  ETX_PROFILER_SCOPE();
   if (ui.handle_event(e) == false) {
     camera_controller.handle_event(e);
   }
@@ -164,7 +163,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   _current_scene_file = file_name;
 
   integrator_thread.stop(Integrator::Stop::Immediate);
-  _options.set("scene", _current_scene_file);
+  _options.set_string("scene", _current_scene_file, "Scene");
   save_options();
 
   log::warning("Loading scene %s...", _current_scene_file.c_str());
@@ -191,7 +190,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   }
 
   raytracing.film().clear();
-  integrator_thread.run(ui.integrator_options());
+  integrator_thread.run();
 }
 
 void RTApplication::save_scene_file(const std::string& file_name) const {
@@ -202,14 +201,14 @@ void RTApplication::save_scene_file(const std::string& file_name) const {
 void RTApplication::on_referenece_image_selected(std::string file_name) {
   log::warning("Loading reference image %s...", file_name.c_str());
 
-  _options.set("ref", file_name);
+  _options.set_string("ref", file_name, "Reference");
   save_options();
 
   render.set_reference_image(file_name.c_str());
 }
 
 void RTApplication::on_use_image_as_reference() {
-  _options.set("ref", std::string());
+  _options.set_string("ref", {}, "Reference");
   save_options();
 
   const float4* data = raytracing.film().combined_result();
@@ -265,14 +264,14 @@ void RTApplication::on_save_scene_file_selected(std::string file_name) {
 }
 
 void RTApplication::on_integrator_selected(Integrator* i) {
-  _options.set("integrator", i->name());
+  _options.set_string("integrator", i->name(), "Integrator");
   save_options();
 
   integrator_thread.set_integrator(i);
   raytracing.film().clear();
 
   if (scene.valid()) {
-    integrator_thread.run(ui.integrator_options());
+    integrator_thread.run();
   }
 }
 
@@ -281,7 +280,7 @@ void RTApplication::on_run_selected() {
     ui.mutable_view_options().layer = Film::Result;
   }
   raytracing.film().clear();
-  integrator_thread.run(ui.integrator_options());
+  integrator_thread.run();
 }
 
 void RTApplication::on_stop_selected(bool wait_for_completion) {
@@ -306,7 +305,7 @@ void RTApplication::on_reload_geometry_selected() {
 }
 
 void RTApplication::on_options_changed() {
-  integrator_thread.restart(ui.integrator_options());
+  integrator_thread.restart();
 }
 
 void RTApplication::on_material_changed(uint32_t index) {
@@ -324,7 +323,7 @@ void RTApplication::on_emitter_changed(uint32_t index) {
   integrator_thread.stop(Integrator::Stop::Immediate);
 
   build_emitters_distribution(scene.mutable_scene());
-  integrator_thread.run(ui.integrator_options());
+  integrator_thread.run();
 }
 
 void RTApplication::on_camera_changed(bool film_changed) {

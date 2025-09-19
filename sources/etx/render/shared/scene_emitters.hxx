@@ -197,7 +197,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       if (em.angular_size > 0.0f) {
         auto basis = orthonormal_basis(em.direction);
         disk_sample = sample_disk(smp);
-        result.direction = normalize(em.direction + basis.u * disk_sample.x * em.equivalent_disk_size + basis.v * disk_sample.y * em.equivalent_disk_size);
+        result.direction = normalize(em.direction + basis.u * disk_sample.x * (0.5f * em.equivalent_disk_size) + basis.v * disk_sample.y * (0.5f * em.equivalent_disk_size));
       } else {
         result.direction = em.direction;
       }
@@ -312,7 +312,7 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       auto basis = orthonormal_basis(direction_to_scene);
       auto pos_sample = sample_disk(smp.next_2d());
       auto dir_sample = sample_disk(smp.next_2d());
-      result.direction = normalize(direction_to_scene + basis.u * dir_sample.x * em.equivalent_disk_size + basis.v * dir_sample.y * em.equivalent_disk_size);
+      result.direction = normalize(direction_to_scene + basis.u * dir_sample.x * (0.5f * em.equivalent_disk_size) + basis.v * dir_sample.y * (0.5f * em.equivalent_disk_size));
       result.triangle_index = kInvalidIndex;
       result.pdf_dir = 1.0f;
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);

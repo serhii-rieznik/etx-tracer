@@ -7,7 +7,7 @@
 namespace etx {
 
 extern "C" int main(int argc, char* argv[]) {
-  ETX_PROFILER_REGISTER_THREAD;
+  ETX_PROFILER_MAIN_THREAD();
 
   init_platform();
   env().setup(argv[0]);
@@ -20,6 +20,7 @@ extern "C" int main(int argc, char* argv[]) {
     };
     desc.frame_userdata_cb = [](void* data) {
       reinterpret_cast<RTApplication*>(data)->frame();
+      ETX_END_PROFILER_FRAME();
     };
     desc.cleanup_userdata_cb = [](void* data) {
       reinterpret_cast<RTApplication*>(data)->cleanup();

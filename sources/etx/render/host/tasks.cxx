@@ -58,7 +58,10 @@ struct TaskSchedulerImpl {
     config.numExternalTaskThreads = 1u;
     config.numTaskThreadsToCreate = ETX_SINGLE_THREAD ? 1 : (enki::GetNumHardwareThreads() + 1u + config.numExternalTaskThreads);
     config.profilerCallbacks.threadStart = [](uint32_t thread_id) {
-      ETX_PROFILER_REGISTER_THREAD;
+      ETX_PROFILER_REGISTER_THREAD(nullptr);
+    };
+    config.profilerCallbacks.threadStop = [](uint32_t thread_id) {
+      ETX_PROFILER_EXIT_THREAD();
     };
     scheduler.Initialize(config);
   }

@@ -325,8 +325,6 @@ void Raytracing::commit_changes() {
 }
 
 bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t material_id, Intersection& result_intersection, Sampler& smp) const {
-  ETX_FUNCTION_SCOPE();
-
   struct IntersectionContextExt {
     RTCRayQueryContext context;
     IntersectionBase i;
@@ -369,8 +367,6 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
 }
 
 uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const ContinousTraceOptions& options, Sampler& smp) const {
-  ETX_FUNCTION_SCOPE();
-
   struct IntersectionContextExt {
     RTCRayQueryContext context;
     const Scene* scene;
@@ -421,8 +417,6 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
 }
 
 bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_intersection, Sampler& smp) const {
-  ETX_FUNCTION_SCOPE();
-
   struct IntersectionContextExt {
     RTCRayQueryContext context;
     IntersectionBase i;
@@ -460,7 +454,6 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
 
 SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const Medium::Instance& medium,
   Sampler& smp) const {
-  ETX_FUNCTION_SCOPE();
   ETX_ASSERT(_private != nullptr);
 
   constexpr uint32_t kIntersectionBufferSize = 63;

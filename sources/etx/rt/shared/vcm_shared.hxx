@@ -94,6 +94,7 @@ struct ETX_ALIGNED VCMPathState {
     ContinueRay = 1u << 1u,
     RayActionSet = 1u << 2u,
     LocalEmitter = 1u << 3u,
+    Valid = 1u << 4u,
   };
 
   SpectralResponse throughput = {};
@@ -311,7 +312,9 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   state.global_index = index;
 
   auto emitter_sample = sample_emission(scene, state.spect, state.sampler);
-  ETX_ASSERT(emitter_sample.pdf_dir > 0.0f);
+  if (emitter_sample.pdf_dir <= 0.0f) {
+    return state;
+  }
 
   float cos_t = dot(emitter_sample.direction, emitter_sample.normal);
   ETX_ASSERT(cos_t > 0.0f);
@@ -339,6 +342,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   state.medium_index = emitter_sample.medium_index;
   state.set_flags(VCMPathState::DeltaEmitter, emitter_sample.is_delta);
   state.set_flags(VCMPathState::LocalEmitter, emitter_sample.is_distant == false);
+  state.set_flags(VCMPathState::Valid, true);
   return state;
 }
 
@@ -525,8 +529,6 @@ ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& opti
   if (options.direct_hit() == false)
     return;
 
-  // Aggregate environment contributions and apply a single MIS weight (aligns with BDPT behavior)
-  // Fold pending boundary segment (if any) before using MIS recurrences at miss
   if (state.path_distance > 0.0f) {
     state.d_vcm *= sqr(state.path_distance);
     ETX_VALIDATE(state.d_vcm);
