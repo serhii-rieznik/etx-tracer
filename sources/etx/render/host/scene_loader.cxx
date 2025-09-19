@@ -299,12 +299,12 @@ struct SceneRepresentationImpl {
 
     scene.subsurface_scatter_material = add_material("etx::subsurface-scatter");
     materials[scene.subsurface_scatter_material].reflectance = {.spectrum_index = scene.black_spectrum};
-    materials[scene.subsurface_scatter_material].transmittance = {.spectrum_index = scene.white_spectrum};
+    materials[scene.subsurface_scatter_material].scattering = {.spectrum_index = scene.white_spectrum};
     materials[scene.subsurface_scatter_material].cls = Material::Class::Translucent;
 
     scene.subsurface_exit_material = add_material("etx::subsurface-exit");
     materials[scene.subsurface_exit_material].reflectance = {.spectrum_index = scene.white_spectrum};
-    materials[scene.subsurface_exit_material].transmittance = {.spectrum_index = scene.white_spectrum};
+    materials[scene.subsurface_exit_material].scattering = {.spectrum_index = scene.white_spectrum};
     materials[scene.subsurface_exit_material].cls = Material::Class::Diffuse;
 
     camera.lens_image = kInvalidIndex;
@@ -329,8 +329,8 @@ struct SceneRepresentationImpl {
       if (mtl.reflectance.spectrum_index == kInvalidIndex) {
         mtl.reflectance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
       }
-      if (mtl.transmittance.spectrum_index == kInvalidIndex) {
-        mtl.transmittance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+      if (mtl.scattering.spectrum_index == kInvalidIndex) {
+        mtl.scattering.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
       }
       if (mtl.subsurface.spectrum_index == kInvalidIndex) {
         mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
@@ -1449,7 +1449,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   }
 
   if (get_param(material, "Kd")) {
-    mtl.transmittance.spectrum_index = load_reflectance_spectrum(data_buffer);
+    mtl.scattering.spectrum_index = load_reflectance_spectrum(data_buffer);
   }
 
   if (get_param(material, "Ks")) {
@@ -1457,7 +1457,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   }
 
   if (get_param(material, "Kt")) {
-    mtl.transmittance.spectrum_index = load_reflectance_spectrum(data_buffer);
+    mtl.scattering.spectrum_index = load_reflectance_spectrum(data_buffer);
   }
 
   if (get_param(material, "Pr")) {
@@ -1470,7 +1470,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   }
 
   if (get_file(base_dir, material.diffuse_texname)) {
-    mtl.transmittance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+    mtl.scattering.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
   }
 
   if (get_file(base_dir, material.specular_texname)) {
@@ -1478,7 +1478,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   }
 
   if (get_file(base_dir, material.transmittance_texname)) {
-    mtl.transmittance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+    mtl.scattering.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
   }
 
   if (get_param(material, "material")) {
@@ -1860,11 +1860,11 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
     if (base_color.size() >= 3) {
       rgb = {float(base_color[0]), float(base_color[1]), float(base_color[2])};
     }
-    mtl.transmittance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance(rgb));
+    mtl.scattering.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance(rgb));
 
     if ((pbr.baseColorTexture.index != -1) && (gltf_image_mapping.count(pbr.baseColorTexture.index) > 0)) {
-      mtl.transmittance.image_index = gltf_image_mapping.at(pbr.baseColorTexture.index);
-      mtl.reflectance.image_index = mtl.transmittance.image_index;
+      mtl.scattering.image_index = gltf_image_mapping.at(pbr.baseColorTexture.index);
+      mtl.reflectance.image_index = mtl.scattering.image_index;
     }
 
     if ((pbr.metallicRoughnessTexture.index != -1) && (gltf_image_mapping.count(pbr.metallicRoughnessTexture.index) > 0)) {
@@ -1921,7 +1921,7 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
     uint32_t material_index = add_material("default");
     auto& mtl = materials[material_index];
     mtl.cls = Material::Class::Diffuse;
-    mtl.transmittance.spectrum_index = add_spectrum(SpectralDistribution::constant(1.0f));
+    mtl.scattering.spectrum_index = add_spectrum(SpectralDistribution::constant(1.0f));
     mtl.reflectance.spectrum_index = add_spectrum(SpectralDistribution::constant(1.0f));
   }
 

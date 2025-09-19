@@ -1007,7 +1007,7 @@ bool UI::build_material(Scene* scene, Material& material) {
   changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior);
   ImGui::Separator();
   changed |= spectrum_picker(scene, "Reflectance", material.reflectance.spectrum_index, false);
-  changed |= spectrum_picker(scene, "Transmittance", material.transmittance.spectrum_index, false);
+  changed |= spectrum_picker(scene, "Scattering", material.scattering.spectrum_index, false);
   ImGui::Separator();
 
   ImGui::Text("%s", "Subsurface Scattering");

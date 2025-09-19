@@ -21,7 +21,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   } else {
     result.w_o = data.w_i;
     result.pdf = 1.0f - f;
-    result.weight = apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+    result.weight = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
     result.weight *= (1.0f - fr) / (1.0f - f);
     result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
     result.medium_index = frame.entering_material() ? mtl.int_medium : mtl.ext_medium;
@@ -43,7 +43,7 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 
 }  // namespace ThinfilmBSDF
@@ -114,7 +114,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     float eta = (int_ior.eta / ext_ior.eta).monochromatic();
     float factor = sqr(1.0f / eta);
     result.eta = eta;
-    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr) * factor;
+    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr) * factor;
     result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged | delta_sample;
     result.medium_index = in_outside ? mtl.int_medium : mtl.ext_medium;
   }
@@ -167,7 +167,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
 
   BSDFEval eval;
-  eval.func = (2.0f * value) * apply_image(data.spectrum_sample, reflection ? mtl.reflectance : mtl.transmittance, data.tex, scene, nullptr);
+  eval.func = (2.0f * value) * apply_image(data.spectrum_sample, reflection ? mtl.reflectance : mtl.scattering, data.tex, scene, nullptr);
   ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
   eval.pdf = pdf(data, in_w_o, mtl, scene, smp);
@@ -233,7 +233,7 @@ ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& 
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 
 }  // namespace DielectricBSDF

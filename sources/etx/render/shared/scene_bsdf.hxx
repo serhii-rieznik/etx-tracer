@@ -124,11 +124,11 @@ ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfil
 }
 
 ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
-  if (mat.transmittance.image_index == kInvalidIndex)
+  if (mat.scattering.image_index == kInvalidIndex)
     return false;
 
   auto uv = lerp_uv(scene.vertices, t, bc);
-  const auto& img = scene.images[mat.transmittance.image_index];
+  const auto& img = scene.images[mat.scattering.image_index];
   return (img.options & Image::HasAlphaChannel) && (img.evaluate_alpha(uv) <= smp.next());
 }
 

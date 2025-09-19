@@ -480,7 +480,7 @@ struct CPUDebugIntegratorImpl : public Task {
           };
           case Mode::TransmittanceColor: {
             const auto& mat = scene.materials[intersection.material_index];
-            output = apply_image(spect, mat.transmittance, intersection.tex, rt.scene(), nullptr).to_rgb();
+            output = apply_image(spect, mat.scattering, intersection.tex, rt.scene(), nullptr).to_rgb();
             break;
           };
           case Mode::ReflectanceColor: {

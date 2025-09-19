@@ -171,7 +171,7 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 
 }  // namespace PlasticBSDF

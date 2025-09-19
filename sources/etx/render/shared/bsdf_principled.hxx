@@ -26,7 +26,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& in_mtl, con
 
   if (smp.next() < metalness) {
     m_local.int_ior = spectrum::shared()->conductor;
-    m_local.transmittance.image_index = kInvalidIndex;
+    m_local.scattering.image_index = kInvalidIndex;
     return ConductorBSDF::sample(data, m_local, scene, smp);
   } else {
     m_local.int_ior = spectrum::shared()->dielectric;
@@ -58,7 +58,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
 
   if (smp.next() < metalness) {
     m_local.int_ior = spectrum::shared()->conductor;
-    m_local.transmittance.image_index = kInvalidIndex;
+    m_local.scattering.image_index = kInvalidIndex;
     return ConductorBSDF::evaluate(data, w_o, m_local, scene, smp);
   } else {
     m_local.int_ior = spectrum::shared()->dielectric;
@@ -80,7 +80,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   auto metalness = evaluate_metalness(m_local, data.tex, scene);
   if (smp.next() < metalness) {
     m_local.int_ior = spectrum::shared()->conductor;
-    m_local.transmittance.image_index = kInvalidIndex;
+    m_local.scattering.image_index = kInvalidIndex;
     return ConductorBSDF::pdf(data, w_o, m_local, scene, smp);
   } else {
     m_local.int_ior = spectrum::shared()->dielectric;
@@ -98,7 +98,7 @@ ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Sc
 }
 
 ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.transmittance, data.tex, scene, nullptr);
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 
 }  // namespace PrincipledBSDF

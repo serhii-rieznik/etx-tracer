@@ -69,7 +69,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   SpectralResponse albedo = {spect};
 
   if (mat.int_medium == kInvalidIndex) {
-    auto color = apply_image(spect, mat.transmittance, in_intersection.tex, scene, nullptr);
+    auto color = apply_image(spect, mat.scattering, in_intersection.tex, scene, nullptr);
     auto distances = mat.subsurface.scale * apply_image(spect, mat.subsurface, in_intersection.tex, scene, nullptr);
     remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
     remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
@@ -169,7 +169,7 @@ ETX_GPU_CODE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, con
     return GatherResult::Failed;
   }
 
-  SpectralResponse base_weight = apply_image(spect, mat.transmittance, in_intersection.tex, scene, nullptr);
+  SpectralResponse base_weight = apply_image(spect, mat.scattering, in_intersection.tex, scene, nullptr);
 
   result = {};
   for (uint32_t i = 0; i < intersection_count; ++i) {

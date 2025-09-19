@@ -68,7 +68,7 @@ struct ETX_ALIGNED Material {
   };
 
   SpectralImage reflectance;
-  SpectralImage transmittance;
+  SpectralImage scattering;
   SpectralImage emission;
   SampledImage roughness;
   SampledImage metalness;

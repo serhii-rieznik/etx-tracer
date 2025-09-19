@@ -46,7 +46,7 @@ void write_materials(const SceneRepresentation& scene_rep, const char* filename)
       fprintf(fout, "Ks %.3f %.3f %.3f\n", ks.x, ks.y, ks.z);
     }
     {
-      float3 kt = spectrum::xyz_to_rgb(scene.spectrums[material.transmittance.spectrum_index].integrate_to_xyz());
+      float3 kt = spectrum::xyz_to_rgb(scene.spectrums[material.scattering.spectrum_index].integrate_to_xyz());
       fprintf(fout, "Kt %.3f %.3f %.3f\n", kt.x, kt.y, kt.z);
     }
 
