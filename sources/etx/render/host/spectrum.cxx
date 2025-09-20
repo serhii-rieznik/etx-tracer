@@ -1,3 +1,4 @@
+#include <etx/core/log.hxx>
 #include <etx/render/shared/spectrum.hxx>
 
 #include <vector>
@@ -272,19 +273,16 @@ const float3& SpectralDistribution::integrated() const {
   return integrated_value;
 }
 
-RefractiveIndex RefractiveIndex::load_from_file(const char* file_name) {
-  RefractiveIndex result = {};
-  result.cls = SpectralDistribution::load_from_file(file_name, result.eta, &result.k, true);
-
-  if (result.cls != SpectralDistribution::Class::Invalid) {
-    result.eta.integrated_value = spectrum::rgb_to_xyz(result.eta.integrated_value);
-    result.k.integrated_value = spectrum::rgb_to_xyz(result.k.integrated_value);
+SpectralDistribution::Class RefractiveIndex::load_from_file(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k) {
+  SpectralDistribution::Class cls = SpectralDistribution::load_from_file(file_name, out_eta, &out_k, true);
+  if (cls != SpectralDistribution::Class::Invalid) {
+    out_eta.integrated_value = spectrum::rgb_to_xyz(out_eta.integrated_value);
+    out_k.integrated_value = spectrum::rgb_to_xyz(out_k.integrated_value);
   } else {
-    result.eta = SpectralDistribution::constant(1.0f);
-    result.k = SpectralDistribution::constant(0.0f);
+    out_eta = SpectralDistribution::constant(1.0f);
+    out_k = SpectralDistribution::constant(0.0f);
   }
-
-  return result;
+  return cls;
 }
 
 SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb) {

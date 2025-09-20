@@ -89,27 +89,6 @@ struct ETX_ALIGNED ArrayView {
 };
 
 template <class T>
-struct Pointer {
-  T* ptr ETX_EMPTY_INIT;
-
-  Pointer() = default;
-
-  ETX_GPU_CODE Pointer(T* p)
-    : ptr(p) {
-  }
-
-  ETX_GPU_CODE T* operator->() {
-    ETX_ASSERT(ptr != nullptr);
-    return ptr;
-  }
-
-  ETX_GPU_CODE T* operator->() const {
-    ETX_ASSERT(ptr != nullptr);
-    return ptr;
-  }
-};
-
-template <class T>
 ETX_GPU_CODE ArrayView<T> make_array_view(void* p, uint64_t count) {
   return {reinterpret_cast<T*>(p), count};
 }

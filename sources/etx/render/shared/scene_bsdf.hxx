@@ -120,7 +120,7 @@ ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfil
     wavelengths.z = Thinfilm::kRGBWavelengths.z + Thinfilm::kRGBWavelengthsSpan.z * (2.0f * smp.next() - 1.0f);
   }
 
-  return {film.ior(spect), wavelengths, thickness};
+  return {evaluate_refractive_index(scene, film.ior, spect), wavelengths, thickness};
 }
 
 ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {

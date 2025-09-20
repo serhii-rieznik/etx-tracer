@@ -114,12 +114,16 @@ void UI::initialize() {
     if (ext != L".spd")
       continue;
 
-    auto cls = RefractiveIndex::load_from_file(entry.path().string().c_str()).cls;
+    SpectralDistribution eta = {};
+    SpectralDistribution k = {};
+    auto cls = RefractiveIndex::load_from_file(entry.path().string().c_str(), eta, k);
     if (cls == SpectralDistribution::Class::Invalid)
       continue;
 
     auto& e = _ior_files.emplace_back();
     e.cls = cls;
+    e.eta = eta;
+    e.k = k;
     e.filename = entry.path().string();
     e.title = filename.string();
     e.title.resize(e.title.size() - 4u);
@@ -135,7 +139,7 @@ void UI::initialize() {
   }
 
   std::sort(_ior_files.begin(), _ior_files.end(), [](const IORFile& a, const IORFile& b) {
-    return a.cls < b.cls;
+    return (a.cls == b.cls) ? a.title < b.title : a.cls < b.cls;
   });
 }
 
@@ -210,7 +214,7 @@ bool UI::build_options(Options& options) {
   return global_changed;
 }
 
-bool UI::ior_picker(const char* name, RefractiveIndex& ior) {
+bool UI::ior_picker(Scene* scene, const char* name, RefractiveIndex& ior) {
   bool changed = false;
   bool selected = false;
   bool load_from_file = false;
@@ -253,7 +257,11 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior) {
 
       ImGui::PushStyleColor(ImGuiCol_Text, colors[cls]);
       if (ImGui::Selectable(i.title.c_str(), &selected)) {
-        ior = RefractiveIndex::load_from_file(i.filename.c_str());
+        ior.cls = i.cls;
+        ETX_CRITICAL(ior.eta_index != kInvalidIndex);
+        scene->spectrums[ior.eta_index] = i.eta;
+        ETX_CRITICAL(ior.k_index != kInvalidIndex);
+        scene->spectrums[ior.k_index] = i.k;
         changed = true;
       }
       ImGui::PopStyleColor();
@@ -268,9 +276,15 @@ bool UI::ior_picker(const char* name, RefractiveIndex& ior) {
 
   if (load_from_file) {
     auto filename = open_file("spd");
-    RefractiveIndex tmp_ior = RefractiveIndex::load_from_file(filename.c_str());
-    if (tmp_ior.cls != SpectralDistribution::Class::Invalid) {
-      ior = tmp_ior;
+    SpectralDistribution t_eta = {};
+    SpectralDistribution t_k = {};
+    auto cls = RefractiveIndex::load_from_file(filename.c_str(), t_eta, t_k);
+    if (cls != SpectralDistribution::Class::Invalid) {
+      ior.cls = cls;
+      ETX_CRITICAL(ior.eta_index != kInvalidIndex);
+      scene->spectrums[ior.eta_index] = t_eta;
+      ETX_CRITICAL(ior.k_index != kInvalidIndex);
+      scene->spectrums[ior.k_index] = t_k;
       changed = true;
     }
   }
@@ -1003,8 +1017,8 @@ bool UI::build_material(Scene* scene, Material& material) {
   }
   ImGui::Separator();
 
-  changed |= ior_picker("Index Of Refraction", material.int_ior);
-  changed |= ior_picker("Index Of Refraction (outside)", material.ext_ior);
+  changed |= ior_picker(scene, "Index Of Refraction", material.int_ior);
+  changed |= ior_picker(scene, "Index Of Refraction (outside)", material.ext_ior);
   ImGui::Separator();
   changed |= spectrum_picker(scene, "Reflectance", material.reflectance.spectrum_index, false);
   changed |= spectrum_picker(scene, "Scattering", material.scattering.spectrum_index, false);
@@ -1025,7 +1039,7 @@ bool UI::build_material(Scene* scene, Material& material) {
   ImGui::SameLine();
   ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
   changed |= ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
-  changed |= ior_picker("Thinfilm IoR", material.thinfilm.ior);
+  changed |= ior_picker(scene, "Thinfilm IoR", material.thinfilm.ior);
   ImGui::Separator();
 
   auto medium_editor = [](const char* name, uint32_t& medium, uint64_t medium_count) -> bool {

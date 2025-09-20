@@ -2,6 +2,15 @@ namespace etx {
 
 namespace PlasticBSDF {
 
+struct PlasticMaterial {
+  SpectralImage scattering;
+  SpectralImage reflectance;
+  SampledImage roughness;
+  Thinfilm thinfilm;
+  RefractiveIndex ext_ior;
+  RefractiveIndex int_ior;
+};
+
 ETX_GPU_CODE SpectralResponse specular_func(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
 
@@ -14,8 +23,8 @@ ETX_GPU_CODE SpectralResponse specular_func(const BSDFData& data, const float3& 
     return {data.spectrum_sample, 0.0f};
 
   auto roughness = evaluate_roughness(mtl, data.tex, scene);
-  auto ext_ior = mtl.ext_ior(data.spectrum_sample);
-  auto int_ior = mtl.int_ior(data.spectrum_sample);
+  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto m_eta = (int_ior.eta / ext_ior.eta).monochromatic();
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
@@ -36,8 +45,8 @@ ETX_GPU_CODE float specular_pdf(const BSDFData& data, const float3& in_w_o, cons
   if (LocalFrame::cos_theta(w_o) <= kEpsilon)
     return 0.0f;
 
-  auto ext_ior = mtl.ext_ior(data.spectrum_sample);
-  auto int_ior = mtl.int_ior(data.spectrum_sample);
+  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto roughness = evaluate_roughness(mtl, data.tex, scene);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
@@ -71,8 +80,8 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   auto ggx = NormalDistribution(frame, roughness);
   auto m = ggx.sample(smp, data.w_i);
 
-  auto ext_ior = mtl.ext_ior(data.spectrum_sample);
-  auto int_ior = mtl.int_ior(data.spectrum_sample);
+  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
   auto f = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), ext_ior, int_ior, thinfilm);
   auto fr = f.monochromatic();
@@ -116,8 +125,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
     return {data.spectrum_sample, 0.0f};
   }
 
-  auto eta_e = mtl.ext_ior(data.spectrum_sample);
-  auto eta_i = mtl.int_ior(data.spectrum_sample);
+  auto eta_e = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto eta_i = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
   auto fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 
@@ -153,8 +162,8 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
     return 0.0f;
   }
 
-  auto eta_e = mtl.ext_ior(data.spectrum_sample);
-  auto eta_i = mtl.int_ior(data.spectrum_sample);
+  auto eta_e = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto eta_i = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
   auto fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 

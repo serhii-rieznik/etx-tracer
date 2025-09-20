@@ -68,7 +68,7 @@ struct UI {
   bool build_medium(Medium&);
   bool spectrum_picker(const char* name, SpectralDistribution& spd, bool linear);
   bool spectrum_picker(Scene* scene, const char* name, uint32_t spd_index, bool linear);
-  bool ior_picker(const char* name, RefractiveIndex& ior);
+  bool ior_picker(Scene* scene, const char* name, RefractiveIndex& ior);
 
   void reset_selection();
   void reload_geometry();
@@ -105,6 +105,8 @@ struct UI {
     std::string filename;
     std::string title;
     SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
+    SpectralDistribution eta = {};
+    SpectralDistribution k = {};
   };
 
   enum UISetup : uint32_t {

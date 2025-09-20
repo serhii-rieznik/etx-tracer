@@ -4,6 +4,8 @@
 #include <etx/render/host/rnd_sampler.hxx>
 #include <etx/render/host/film.hxx>
 #include <etx/render/shared/base.hxx>
+#include <etx/render/shared/spectrum.hxx>
+#include <etx/render/shared/scene_bsdf.hxx>
 
 #include <etx/rt/integrators/debug.hxx>
 
@@ -14,6 +16,13 @@ namespace etx {
 static RefractiveIndex spd_base = {};
 static RefractiveIndex spd_air = {};
 static Thinfilm thinfilm = {};
+
+static SpectralDistribution spd_air_eta = {};
+static SpectralDistribution spd_air_k = {};
+static SpectralDistribution spd_base_eta = {};
+static SpectralDistribution spd_base_k = {};
+static SpectralDistribution spd_film_eta = {};
+static SpectralDistribution spd_film_k = {};
 
 struct CPUDebugIntegratorImpl : public Task {
   enum class Mode : uint32_t {
@@ -60,9 +69,27 @@ struct CPUDebugIntegratorImpl : public Task {
   CPUDebugIntegratorImpl(Raytracing& a_rt, std::atomic<Integrator::State>* st)
     : rt(a_rt)
     , state(st) {
-    spd_air = RefractiveIndex::load_from_file(env().file_in_data("spectrum/air.spd"));
-    spd_base = RefractiveIndex::load_from_file(env().file_in_data("spectrum/water.spd"));
-    thinfilm.ior = RefractiveIndex::load_from_file(env().file_in_data("spectrum/glycerol.spd"));
+    {
+      SpectralDistribution eta = {};
+      SpectralDistribution k = {};
+      spd_air.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/air.spd"), eta, k);
+      spd_air_eta = eta;
+      spd_air_k = k;
+    }
+    {
+      SpectralDistribution eta = {};
+      SpectralDistribution k = {};
+      spd_base.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/water.spd"), eta, k);
+      spd_base_eta = eta;
+      spd_base_k = k;
+    }
+    {
+      SpectralDistribution eta = {};
+      SpectralDistribution k = {};
+      thinfilm.ior.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/glycerol.spd"), eta, k);
+      spd_film_eta = eta;
+      spd_film_k = k;
+    }
     thinfilm.min_thickness = 100.0f;
     thinfilm.max_thickness = 850.0f;
   }
@@ -169,6 +196,15 @@ struct CPUDebugIntegratorImpl : public Task {
     float a1 = -b + d;
     result_t = (a0 < 0.0f) ? ((a1 < 0.0f) ? 0.0f : a1) : a0;
     return true;
+  }
+
+  static ETX_GPU_CODE RefractiveIndex::Sample make_ior_sample(const SpectralQuery q, SpectralDistribution::Class cls, const SpectralDistribution& eta,
+    const SpectralDistribution& k) {
+    RefractiveIndex::Sample s = {q};
+    s.cls = cls;
+    s.eta = eta(q);
+    s.k = k(q);
+    return s;
   }
 
   float cube_root(float t) {
@@ -366,10 +402,12 @@ struct CPUDebugIntegratorImpl : public Task {
       };
 
       SpectralQuery q_s = thinfilm_spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
-      auto thinfilm_eval_s = evaluate_thinfilm(q_s, thinfilm, {}, scene, smp);
-      thinfilm_eval_s.thickness = thickness;
+      Thinfilm::Eval thinfilm_eval_s = {};
+      thinfilm_eval_s.ior = make_ior_sample(q_s, thinfilm.ior.cls, spd_film_eta, spd_film_k);
       thinfilm_eval_s.rgb_wavelengths = local_wl;
-      auto f_s = fresnel::calculate(q_s, cos_theta, spd_air(q_s), spd_base(q_s), thinfilm_eval_s);
+      thinfilm_eval_s.thickness = thickness;
+      auto f_s = fresnel::calculate(q_s, cos_theta, make_ior_sample(q_s, spd_air.cls, spd_air_eta, spd_air_k), make_ior_sample(q_s, spd_base.cls, spd_base_eta, spd_base_k),
+        thinfilm_eval_s);
       float3 xyz_s = (thinfilm_spectral ? SpectralDistribution::kRGBLuminanceScale : float3{1.0f, 1.0f, 1.0f}) * f_s.to_rgb() / q_s.sampling_pdf();
       output = xyz_s;
     } else if (mode == Mode::Spectrums) {
@@ -419,31 +457,43 @@ struct CPUDebugIntegratorImpl : public Task {
       constexpr float kBandCount = 20.0f;
       uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
 
-      static RefractiveIndex spds[uint32_t(kBandCount) / 2u];
+      struct IORSPD {
+        SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
+        SpectralDistribution eta = {};
+        SpectralDistribution k = {};
+      };
+      static IORSPD spds[uint32_t(kBandCount) / 2u];
 
       static bool init_spectrums = ([&](const Scene& scene) -> bool {
         uint32_t i = 0;
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/water.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/plastic.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/sapphire.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/diamond.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/gold.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/osmium.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/copper.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/chrome.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/nickel.spd"));
-        spds[i++] = RefractiveIndex::load_from_file(env().file_in_data("spectrum/silver.spd"));
+        auto load_ior = [](const char* path) {
+          IORSPD ri = {};
+          ri.cls = RefractiveIndex::load_from_file(path, ri.eta, ri.k);
+          return ri;
+        };
+        spds[i++] = load_ior(env().file_in_data("spectrum/water.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/plastic.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/sapphire.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/diamond.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/gold.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/osmium.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/copper.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/chrome.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/nickel.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/silver.spd"));
         return true;
       })(scene);
 
       float cos_t = cosf(t * kHalfPi);
 
       SpectralQuery s_s = SpectralQuery::spectral_sample(smp.next());
-      auto f_s = fresnel::calculate(s_s, cos_t, spds[0](s_s), spds[band / 2u](s_s), {});
+      auto f_s = fresnel::calculate(s_s, cos_t, make_ior_sample(s_s, spds[0].cls, spds[0].eta, spds[0].k),
+        make_ior_sample(s_s, spds[band / 2u].cls, spds[band / 2u].eta, spds[band / 2u].k), {});
       float3 value_spectrum = f_s.to_rgb() / s_s.sampling_pdf();
 
       SpectralQuery s_rgb = SpectralQuery::sample();
-      auto f_rgb = fresnel::calculate(s_rgb, cos_t, spds[0](s_rgb), spds[band / 2u](s_rgb), {});
+      auto f_rgb = fresnel::calculate(s_rgb, cos_t, make_ior_sample(s_rgb, spds[0].cls, spds[0].eta, spds[0].k),
+        make_ior_sample(s_rgb, spds[band / 2u].cls, spds[band / 2u].eta, spds[band / 2u].k), {});
       float3 value_rgb = f_rgb.to_rgb() / s_rgb.sampling_pdf();
 
       output = (band % 2 == 0 ? value_spectrum : value_rgb);
@@ -491,8 +541,8 @@ struct CPUDebugIntegratorImpl : public Task {
           case Mode::Fresnel: {
             const auto& mat = scene.materials[intersection.material_index];
             auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, intersection.tex, scene, smp);
-            auto eta_i = (entering_material ? mat.ext_ior : mat.int_ior)(spect);
-            auto eta_o = (entering_material ? mat.int_ior : mat.ext_ior)(spect);
+            auto eta_i = evaluate_refractive_index(scene, entering_material ? mat.ext_ior : mat.int_ior, spect);
+            auto eta_o = evaluate_refractive_index(scene, entering_material ? mat.int_ior : mat.ext_ior, spect);
             SpectralResponse fr = fresnel::calculate(spect, dot(ray.d, intersection.nrm), eta_i, eta_o, thinfilm);
             output = fr.to_rgb();
             break;

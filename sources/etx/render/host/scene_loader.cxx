@@ -21,13 +21,19 @@
 
 namespace etx {
 
-static Spectrums shared_spectrums;
+struct DefaultSpectrums {
+  SpectralDistribution thinfilm_eta = {};
+  SpectralDistribution dielectric_eta = {};
+  SpectralDistribution conductor_eta = {};
+  SpectralDistribution conductor_k = {};
+} shared_spectrums;
+
+static scattering::ScatteringSpectrums shared_scattering_spectrums;
 
 namespace {
 
 inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
-  using SPD = SpectralDistribution;
-  scattering::init(scheduler, &shared_spectrums, extinction);
+  scattering::init(scheduler, shared_scattering_spectrums, extinction);
   {
     static const float2 chrome_samples_eta[] = {{0.354f, 1.84f}, {0.368f, 1.87f}, {0.381f, 1.92f}, {0.397f, 2.00f}, {0.413f, 2.08f}, {0.431f, 2.19f}, {0.451f, 2.33f},
       {0.471f, 2.51f}, {0.496f, 2.75f}, {0.521f, 2.94f}, {0.549f, 3.18f}, {0.582f, 3.22f}, {0.617f, 3.17f}, {0.659f, 3.09f}, {0.704f, 3.05f}, {0.756f, 3.08f}, {0.821f, 3.20f},
@@ -37,17 +43,10 @@ inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
       {0.471f, 3.24f}, {0.496f, 3.30f}, {0.521f, 3.33f}, {0.549f, 3.33f}, {0.582f, 3.30f}, {0.617f, 3.30f}, {0.659f, 3.34f}, {0.704f, 3.39f}, {0.756f, 3.42f}, {0.821f, 3.48f},
       {0.892f, 3.52f}};
 
-    shared_spectrums.thinfilm.cls = SpectralDistribution::Class::Dielectric;
-    shared_spectrums.thinfilm.eta = SPD::constant(1.73f);
-    shared_spectrums.thinfilm.k = SPD::null();
-
-    shared_spectrums.conductor.cls = SpectralDistribution::Class::Conductor;
-    shared_spectrums.conductor.eta = SPD::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)));
-    shared_spectrums.conductor.k = SPD::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)));
-
-    shared_spectrums.dielectric.cls = SpectralDistribution::Class::Dielectric;
-    shared_spectrums.dielectric.eta = SPD::constant(1.521f);
-    shared_spectrums.dielectric.k = SPD::null();
+    shared_spectrums.thinfilm_eta = SpectralDistribution::constant(1.73f);
+    shared_spectrums.conductor_eta = SpectralDistribution::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)));
+    shared_spectrums.conductor_k = SpectralDistribution::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)));
+    shared_spectrums.dielectric_eta = SpectralDistribution::constant(1.521f);
   }
 }
 
@@ -276,6 +275,26 @@ struct SceneRepresentationImpl {
     mediums.cleanup();
   }
 
+  void init_default_values() {
+    scene.black_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
+    scene.white_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+    scene.rayleigh_spectrum = add_spectrum(shared_scattering_spectrums.rayleigh);
+    scene.mie_spectrum = add_spectrum(shared_scattering_spectrums.mie);
+    scene.ozone_spectrum = add_spectrum(shared_scattering_spectrums.ozone);
+    scene.default_dielectric_eta = add_spectrum(shared_spectrums.dielectric_eta);
+    scene.default_conductor_eta = add_spectrum(shared_spectrums.conductor_eta);
+    scene.default_conductor_k = add_spectrum(shared_spectrums.conductor_k);
+
+    scene.subsurface_scatter_material = add_material("etx::subsurface-scatter");
+    materials[scene.subsurface_scatter_material].reflectance = {.spectrum_index = scene.black_spectrum};
+    materials[scene.subsurface_scatter_material].scattering = {.spectrum_index = scene.white_spectrum};
+    materials[scene.subsurface_scatter_material].cls = Material::Class::Translucent;
+    scene.subsurface_exit_material = add_material("etx::subsurface-exit");
+    materials[scene.subsurface_exit_material].reflectance = {.spectrum_index = scene.white_spectrum};
+    materials[scene.subsurface_exit_material].scattering = {.spectrum_index = scene.white_spectrum};
+    materials[scene.subsurface_exit_material].cls = Material::Class::Diffuse;
+  }
+
   void cleanup() {
     vertices.clear();
     triangles.clear();
@@ -293,21 +312,9 @@ struct SceneRepresentationImpl {
     scene.emitters_distribution = {};
 
     scene = {};
-
-    scene.black_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
-    scene.white_spectrum = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
-
-    scene.subsurface_scatter_material = add_material("etx::subsurface-scatter");
-    materials[scene.subsurface_scatter_material].reflectance = {.spectrum_index = scene.black_spectrum};
-    materials[scene.subsurface_scatter_material].scattering = {.spectrum_index = scene.white_spectrum};
-    materials[scene.subsurface_scatter_material].cls = Material::Class::Translucent;
-
-    scene.subsurface_exit_material = add_material("etx::subsurface-exit");
-    materials[scene.subsurface_exit_material].reflectance = {.spectrum_index = scene.white_spectrum};
-    materials[scene.subsurface_exit_material].scattering = {.spectrum_index = scene.white_spectrum};
-    materials[scene.subsurface_exit_material].cls = Material::Class::Diffuse;
-
     camera.lens_image = kInvalidIndex;
+
+    init_default_values();
   }
 
   float triangle_area(const Triangle& t) {
@@ -335,17 +342,23 @@ struct SceneRepresentationImpl {
       if (mtl.subsurface.spectrum_index == kInvalidIndex) {
         mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
       }
-
       if ((mtl.roughness.value.x > 0.0f) || (mtl.roughness.value.y > 0.0f)) {
+        constexpr float kEpsilon = 1e-6f;
         mtl.roughness.value.x = max(kEpsilon, mtl.roughness.value.x);
         mtl.roughness.value.y = max(kEpsilon, mtl.roughness.value.y);
       }
-
-      if (mtl.int_ior.eta.empty() && mtl.int_ior.k.empty()) {
+      if (mtl.int_ior.eta_index == kInvalidIndex) {
         if (mtl.cls == Material::Class::Conductor) {
-          mtl.int_ior = shared_spectrums.conductor;
+          mtl.int_ior.eta_index = scene.default_conductor_eta;
         } else {
-          mtl.int_ior = shared_spectrums.dielectric;
+          mtl.int_ior.eta_index = scene.default_dielectric_eta;
+        }
+      }
+      if (mtl.int_ior.k_index == kInvalidIndex) {
+        if (mtl.cls == Material::Class::Conductor) {
+          mtl.int_ior.k_index = scene.default_conductor_k;
+        } else {
+          mtl.int_ior.k_index = add_spectrum(SpectralDistribution::constant(0.0f));
         }
       }
     }
@@ -990,7 +1003,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
   }
 
   if (get_param(material, "rayleigh")) {
-    s_t = shared_spectrums.rayleigh;
+    s_t = shared_scattering_spectrums.rayleigh;
 
     float scale = 1.0f;
     auto params = split_params(data_buffer);
@@ -1003,7 +1016,7 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
   }
 
   if (get_param(material, "mie")) {
-    s_t = shared_spectrums.mie;
+    s_t = shared_scattering_spectrums.mie;
 
     float scale = 1.0f;
     auto params = split_params(data_buffer);
@@ -1232,7 +1245,7 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
     if (angular_size > 0.0f) {
       d.emission.image_index = add_image(nullptr, kSunImageDimensions, Image::Delay);
       auto& img = images.get(d.emission.image_index);
-      scattering::generate_sun_image(scattering_parameters, kSunImageDimensions, direction, angular_size, img.pixels.f32.a, scheduler);
+      scattering::generate_sun_image(scattering_parameters, kSunImageDimensions, direction, angular_size, img.pixels.f32.a, shared_scattering_spectrums, scheduler);
     }
   }
 
@@ -1244,7 +1257,7 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
     e.direction = direction;
 
     auto& img = images.get(e.emission.image_index);
-    scattering::generate_sky_image(scattering_parameters, sky_image_dimensions, direction, extinction, img.pixels.f32.a, scheduler);
+    scattering::generate_sky_image(scattering_parameters, sky_image_dimensions, direction, extinction, img.pixels.f32.a, shared_scattering_spectrums, scheduler);
   }
 }
 
@@ -1501,35 +1514,46 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   if (get_param(material, "int_ior")) {
     float2 values = {};
     int values_read = sscanf(data_buffer, "%f %f", &values.x, &values.y);
+    mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
     if (values_read == 1) {
-      // interpret as eta
-      mtl.int_ior.eta = SpectralDistribution::constant(values.x);
-      mtl.int_ior.k = SpectralDistribution::null();
+      mtl.int_ior.eta_index = add_spectrum(SpectralDistribution::constant(values.x));
+      mtl.int_ior.k_index = kInvalidIndex;
     } else if (values_read == 2) {
-      // interpret as eta / k
-      mtl.int_ior.eta = SpectralDistribution::constant(values.x);
-      mtl.int_ior.k = SpectralDistribution::constant(values.y);
+      mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
+      mtl.int_ior.eta_index = add_spectrum(SpectralDistribution::constant(values.x));
+      mtl.int_ior.k_index = add_spectrum(SpectralDistribution::constant(values.y));
     } else {
       char buffer[1024] = {};
       snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-      mtl.int_ior = RefractiveIndex::load_from_file(buffer);
+      SpectralDistribution eta_spd = {};
+      SpectralDistribution k_spd = {};
+      auto cls = SpectralDistribution::load_from_file(buffer, eta_spd, &k_spd, true);
+      mtl.int_ior.cls = cls;
+      mtl.int_ior.eta_index = add_spectrum(eta_spd);
+      mtl.int_ior.k_index = (k_spd.empty() ? kInvalidIndex : add_spectrum(k_spd));
     }
   }
 
   if (get_param(material, "ext_ior")) {
     float2 values = {};
     if (sscanf(data_buffer, "%f %f", &values.x, &values.y) == 2) {
-      // interpret as eta/k
-      mtl.ext_ior.eta = SpectralDistribution::constant(values.x);
-      mtl.ext_ior.k = SpectralDistribution::constant(values.y);
+      mtl.ext_ior.cls = SpectralDistribution::Class::Conductor;
+      mtl.ext_ior.eta_index = add_spectrum(SpectralDistribution::constant(values.x));
+      mtl.ext_ior.k_index = add_spectrum(SpectralDistribution::constant(values.y));
     } else {
       char buffer[256] = {};
       snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
-      mtl.ext_ior = RefractiveIndex::load_from_file(buffer);
+      SpectralDistribution eta_spd = {};
+      SpectralDistribution k_spd = {};
+      auto cls = SpectralDistribution::load_from_file(buffer, eta_spd, &k_spd, true);
+      mtl.ext_ior.cls = cls;
+      mtl.ext_ior.eta_index = add_spectrum(eta_spd);
+      mtl.ext_ior.k_index = k_spd.empty() ? add_spectrum(SpectralDistribution::constant(0.0f)) : add_spectrum(k_spd);
     }
   } else {
-    mtl.ext_ior.eta = SpectralDistribution::constant(1.0f);
-    mtl.ext_ior.k = SpectralDistribution::null();
+    mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
+    mtl.ext_ior.eta_index = add_spectrum(SpectralDistribution::constant(1.0f));
+    mtl.ext_ior.k_index = add_spectrum(SpectralDistribution::constant(0.0f));
   }
 
   if (get_param(material, "int_medium")) {
@@ -1584,11 +1608,18 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       if ((strcmp(params[i], "ior") == 0) && (i + 1 < e)) {
         float value = 0.0f;
         if (sscanf(params[i + 1], "%f", &value) == 1) {
-          mtl.thinfilm.ior.eta = SpectralDistribution::constant(value);
+          mtl.thinfilm.ior.cls = SpectralDistribution::Class::Dielectric;
+          mtl.thinfilm.ior.eta_index = add_spectrum(SpectralDistribution::constant(value));
+          mtl.thinfilm.ior.k_index = kInvalidIndex;
         } else {
           char buffer[256] = {};
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
-          mtl.thinfilm.ior = RefractiveIndex::load_from_file(buffer);
+          SpectralDistribution eta_spd = {};
+          SpectralDistribution k_spd = {};
+          auto cls = SpectralDistribution::load_from_file(buffer, eta_spd, &k_spd, true);
+          mtl.thinfilm.ior.cls = cls;
+          mtl.thinfilm.ior.eta_index = add_spectrum(eta_spd);
+          mtl.thinfilm.ior.k_index = (k_spd.empty() ? kInvalidIndex : add_spectrum(k_spd));
         }
       }
     }
@@ -1848,11 +1879,11 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
     mtl.roughness.value = {float(pbr.roughnessFactor), float(pbr.roughnessFactor)};
     mtl.metalness.value = {float(pbr.metallicFactor), float(pbr.metallicFactor)};
     mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
-    mtl.ext_ior.eta = SpectralDistribution::constant(1.0f);
-    mtl.ext_ior.k = SpectralDistribution::null();
+    mtl.ext_ior.eta_index = add_spectrum(SpectralDistribution::constant(1.0f));
+    mtl.ext_ior.k_index = kInvalidIndex;
     mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
-    mtl.int_ior.eta = SpectralDistribution::constant(1.5f);
-    mtl.int_ior.k = SpectralDistribution::null();
+    mtl.int_ior.eta_index = add_spectrum(SpectralDistribution::constant(1.5f));
+    mtl.int_ior.k_index = kInvalidIndex;
     mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
 
     float3 rgb = {1.0f, 1.0f, 1.0f};
@@ -2064,13 +2095,5 @@ void build_emitters_distribution(Scene& scene) {
   }
   emitters_distribution.finalize();
 }
-
-namespace spectrum {
-
-Pointer<Spectrums> shared() {
-  return &shared_spectrums;
-}
-
-}  // namespace spectrum
 
 }  // namespace etx

@@ -45,8 +45,14 @@ struct ETX_ALIGNED Scene {
   float radiance_clamp ETX_INIT_WITH(0.0f);
   uint32_t black_spectrum = kInvalidIndex;
   uint32_t white_spectrum = kInvalidIndex;
+  uint32_t rayleigh_spectrum = kInvalidIndex;
+  uint32_t mie_spectrum = kInvalidIndex;
+  uint32_t ozone_spectrum = kInvalidIndex;
   uint32_t subsurface_scatter_material = kInvalidIndex;
   uint32_t subsurface_exit_material = kInvalidIndex;
+  uint32_t default_dielectric_eta = kInvalidIndex;
+  uint32_t default_conductor_eta = kInvalidIndex;
+  uint32_t default_conductor_k = kInvalidIndex;
   uint32_t flags ETX_INIT_WITH(0);
 
   bool committed() const {
@@ -285,6 +291,14 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralIma
   float4 eval = scene.images[img.image_index].evaluate(uv, image_pdf);
   ETX_VALIDATE(eval);
   return apply_rgb(spect, result, eval, scene);
+}
+
+ETX_GPU_CODE RefractiveIndex::Sample evaluate_refractive_index(const Scene& scene, const RefractiveIndex& ri, const SpectralQuery q) {
+  RefractiveIndex::Sample result = {q};
+  result.cls = ri.cls;
+  result.eta = (ri.eta_index == kInvalidIndex) ? SpectralResponse(q, 1.0f) : scene.spectrums[ri.eta_index](q);
+  result.k = (ri.k_index == kInvalidIndex) ? SpectralResponse(q, 0.0f) : scene.spectrums[ri.k_index](q);
+  return result;
 }
 
 }  // namespace etx

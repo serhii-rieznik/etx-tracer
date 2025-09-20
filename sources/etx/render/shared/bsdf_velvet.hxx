@@ -2,6 +2,12 @@
 
 namespace VelvetBSDF {
 
+struct VelvetMaterial {
+  SpectralImage scattering;
+  SpectralImage reflectance;
+  SampledImage roughness;
+};
+
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   float3 w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);

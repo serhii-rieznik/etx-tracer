@@ -1,4 +1,5 @@
 #include <etx/core/log.hxx>
+#include <etx/core/environment.hxx>
 #include <etx/render/shared/scattering.hxx>
 
 #include <atomic>
@@ -121,7 +122,7 @@ float3 optical_length(const float3& origin, const float3& direction, float total
   return result;
 }
 
-void radiance_spectrum_at_direction(Pointer<Spectrums> spectrums, const Image& extinction, const float3& view_direction, const float3& light_direction,
+void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const Image& extinction, const float3& view_direction, const float3& light_direction,
   const Parameters& parameters, SpectralDistribution& result) {
   const float3 origin = {0.0f, kPlanetRadius + parameters.altitude, 0.0f};
   const float l_dot_v = dot(light_direction, view_direction);
@@ -165,9 +166,9 @@ void radiance_spectrum_at_direction(Pointer<Spectrums> spectrums, const Image& e
     float3 total_optical_path = view_optical_path + light_optical_path;
 
     for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
-      float r = spectrums->rayleigh.spectral_entries[i].power;
-      float m = spectrums->mie.spectral_entries[i].power;
-      float o = spectrums->ozone.spectral_entries[i].power;
+      float r = spectrums.rayleigh.spectral_entries[i].power;
+      float m = spectrums.mie.spectral_entries[i].power;
+      float o = spectrums.ozone.spectral_entries[i].power;
       float tr = r * total_optical_path.x + m * total_optical_path.y + o * total_optical_path.z;
       float value = expf(-tr) * dt * (phase_r * r * density_scale.x * current_density.x + phase_m * m * density_scale.y * current_density.y);
       result.spectral_entries[i].power += value;
@@ -175,13 +176,13 @@ void radiance_spectrum_at_direction(Pointer<Spectrums> spectrums, const Image& e
   }
 }
 
-void extinction_spectrum_at_direction(Pointer<Spectrums> spectrums, const float3& view_direction, const float3& next_direction, const Parameters& parameters,
+void extinction_spectrum_at_direction(const ScatteringSpectrums& spectrums, const float3& view_direction, const float3& next_direction, const Parameters& parameters,
   SpectralDistribution& result) {
   const float3 origin = {0.0f, kPlanetRadius + parameters.altitude, 0.0f};
   float to_space = distance_to_sphere(origin, view_direction, {}, kOuterSphereSize);
 
   if (distance_to_sphere(origin, next_direction, {}, kPlanetRadius) > 0.0f) {
-    result = spectrums->black;
+    result = spectrums.black;
     return;
   }
 
@@ -206,9 +207,9 @@ void extinction_spectrum_at_direction(Pointer<Spectrums> spectrums, const float3
   }
 
   for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
-    float r = spectrums->rayleigh.spectral_entries[i].power;
-    float m = spectrums->mie.spectral_entries[i].power;
-    float o = spectrums->ozone.spectral_entries[i].power;
+    float r = spectrums.rayleigh.spectral_entries[i].power;
+    float m = spectrums.mie.spectral_entries[i].power;
+    float o = spectrums.ozone.spectral_entries[i].power;
     float tr = r * view_optical_path.x + m * view_optical_path.y + o * view_optical_path.z;
     result.spectral_entries[i].power = expf(-tr);
   }
@@ -216,7 +217,7 @@ void extinction_spectrum_at_direction(Pointer<Spectrums> spectrums, const float3
 
 }  // namespace
 
-void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinction) {
+void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, Image& extinction) {
   constexpr uint32_t kSpectrumStepSize = 5u;
 
   log::info("Precomputing atmosphere spectrums and extinction image %u x %u...", kExtinctionImageWidth, kExtinctionImageHeight);
@@ -254,15 +255,16 @@ void init(TaskScheduler& scheduler, Pointer<Spectrums> spectrums, Image& extinct
   }
 
   using SPD = SpectralDistribution;
-  spectrums->rayleigh = SPD::from_samples(r_samples.data(), r_samples.size());
-  spectrums->mie = SPD::from_samples(m_samples.data(), m_samples.size());
-  spectrums->ozone = SPD::from_samples(o_samples.data(), o_samples.size());
-  spectrums->black = SPD::from_samples(b_samples.data(), b_samples.size());
+  spectrums.rayleigh = SPD::from_samples(r_samples.data(), r_samples.size());
+  spectrums.mie = SPD::from_samples(m_samples.data(), m_samples.size());
+  spectrums.ozone = SPD::from_samples(o_samples.data(), o_samples.size());
+  spectrums.black = SPD::from_samples(b_samples.data(), b_samples.size());
 
   extinction = {};
 }
 
-void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, Image& extinction, float4* buffer, TaskScheduler& scheduler) {
+void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, Image& extinction, float4* buffer,
+  const ScatteringSpectrums& spectrums, TaskScheduler& scheduler) {
   if (extinction.data_size == 0) {
     auto t1 = std::chrono::steady_clock::now();
     log::info("Precomputing extinction image...");
@@ -301,17 +303,17 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
   std::atomic<float> az = {};
   std::atomic<float> aw = {};
   scheduler.execute(dimensions.x * dimensions.y,
-    [&parameters, &dimensions, light_direction, &extinction, buffer, &ax, &ay, &az, &aw](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    [&parameters, &dimensions, light_direction, &extinction, buffer, &spectrums, &ax, &ay, &az, &aw](uint32_t begin, uint32_t end, uint32_t thread_id) {
       float3 avg = {};
       float w = 0.0f;
-      SpectralDistribution radiance = spectrum::shared()->black;
+      SpectralDistribution radiance = spectrums.black;
       for (uint32_t i = begin; i < end; ++i) {
         uint32_t x = i % dimensions.x;
         uint32_t y = i / dimensions.x;
         float u = float(x + 0.5f) / float(dimensions.x) * 2.0f - 1.0f;
         float v = float(y + 0.5f) / float(dimensions.y) * 2.0f - 1.0f;
         float3 direction = from_spherical(u * kPi, v * kHalfPi);
-        radiance_spectrum_at_direction(spectrum::shared(), extinction, direction, light_direction, parameters, radiance);
+        radiance_spectrum_at_direction(spectrums, extinction, direction, light_direction, parameters, radiance);
         float3 xyz = radiance.integrate_to_xyz();
         float3 rgb = max({}, spectrum::xyz_to_rgb(xyz));
         if (v > 0.0f) {
@@ -347,7 +349,8 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
   stbi_write_hdr(env().file_in_data("sky.hdr"), dimensions.x, dimensions.y, 4, &buffer->x);
 }
 
-void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer, TaskScheduler& scheduler) {
+void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer,
+  const ScatteringSpectrums& spectrums, TaskScheduler& scheduler) {
   auto t0 = std::chrono::steady_clock::now();
 
   log::info("Generating Sun image %u x %u...", dimensions.x, dimensions.y);
@@ -357,8 +360,8 @@ void generate_sun_image(const Parameters& parameters, const uint2& dimensions, c
   float solid_angle = kDoublePi * (1.0f - cosf(0.5f * angular_size));
 
   scheduler.execute(dimensions.x * dimensions.y,
-    [&parameters, &dimensions, &basis, light_direction, solid_angle, tan_half_fov, buffer](uint32_t begin, uint32_t end, uint32_t thread_id) {
-      SpectralDistribution radiance = spectrum::shared()->black;
+    [&parameters, &dimensions, &basis, light_direction, solid_angle, tan_half_fov, buffer, &spectrums](uint32_t begin, uint32_t end, uint32_t thread_id) {
+      SpectralDistribution radiance = spectrums.black;
       for (uint32_t i = begin; i < end; ++i) {
         uint32_t x = i % dimensions.x;
         uint32_t y = i / dimensions.x;
@@ -367,7 +370,7 @@ void generate_sun_image(const Parameters& parameters, const uint2& dimensions, c
         float v1 = float(y + 1.5f) / float(dimensions.y) * 2.0f - 1.0f;
         float3 d0 = normalize(tan_half_fov * (u * basis.u + v0 * basis.v) + light_direction);
         float3 d1 = normalize(tan_half_fov * (u * basis.u + v1 * basis.v) + light_direction);
-        extinction_spectrum_at_direction(spectrum::shared(), d0, d1, parameters, radiance);
+        extinction_spectrum_at_direction(spectrums, d0, d1, parameters, radiance);
         float darkening = (1.0f - 0.6f * (1.0f - fmaxf(0.0f, 1.0f - (u * u + v0 * v0))));
         float3 xyz = darkening * radiance.integrate_to_xyz();
         float3 rgb = max({}, spectrum::xyz_to_rgb(xyz));

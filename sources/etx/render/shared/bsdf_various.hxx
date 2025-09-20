@@ -2,6 +2,12 @@
 
 namespace DiffuseBSDF {
 
+struct DiffuseMaterial {
+  SpectralImage scattering;
+  SampledImage roughness;
+  uint32_t diffuse_variation = 0u;
+};
+
 ETX_GPU_CODE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_i, const float3& local_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (local_w_o.z <= 0.0f)
     return {data.spectrum_sample, 0.0f};
@@ -47,7 +53,6 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   BSDFSample result = {};
   result.eta = 1.0f;
   result.properties = BSDFSample::Reflection | BSDFSample::Diffuse;
-  result.medium_index = mtl.ext_medium;
 
   float3 local_w_o = {};
   if (mtl.diffuse_variation == 1) {
@@ -101,6 +106,13 @@ ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, 
 }  // namespace DiffuseBSDF
 
 namespace TranslucentBSDF {
+
+struct TranslucentMaterial {
+  SpectralImage scattering;
+  SpectralImage reflectance;
+  uint32_t int_medium = kInvalidIndex;
+  uint32_t ext_medium = kInvalidIndex;
+};
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
@@ -189,6 +201,10 @@ ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, 
 
 namespace MirrorBSDF {
 
+struct MirrorMaterial {
+  SpectralImage scattering;
+};
+
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
@@ -219,6 +235,11 @@ ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, 
 }  // namespace MirrorBSDF
 
 namespace BoundaryBSDF {
+
+struct BoundaryMaterial {
+  uint32_t int_medium = kInvalidIndex;
+  uint32_t ext_medium = kInvalidIndex;
+};
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;

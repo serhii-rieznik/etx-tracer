@@ -554,10 +554,10 @@ struct ETX_ALIGNED SpectralDistribution {
 
 struct RefractiveIndex {
   SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
-  SpectralDistribution eta;
-  SpectralDistribution k;
+  uint32_t eta_index = kInvalidIndex;
+  uint32_t k_index = kInvalidIndex;
 
-  static RefractiveIndex load_from_file(const char* file_name);
+  static SpectralDistribution::Class load_from_file(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k);
 
   struct Sample : public SpectralQuery {
     SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
@@ -588,38 +588,10 @@ struct RefractiveIndex {
       return {eta.monochromatic(), k.monochromatic()};
     }
   };
-
-  ETX_GPU_CODE Sample at(SpectralQuery q) const {
-    Sample result = {q};
-    result.cls = cls;
-    result.eta = eta.empty() ? SpectralResponse(q, 1.0f) : eta(q);
-    result.k = k.empty() ? SpectralResponse(q, 0.0f) : k(q);
-    return result;
-  }
-
-  ETX_GPU_CODE Sample operator()(const SpectralQuery q) const {
-    return at(q);
-  }
-};
-
-struct ETX_ALIGNED Spectrums {
-  RefractiveIndex thinfilm = {};
-  RefractiveIndex conductor = {};
-  RefractiveIndex dielectric = {};
-  SpectralDistribution rayleigh = {};
-  SpectralDistribution mie = {};
-  SpectralDistribution ozone = {};
-  SpectralDistribution black = {};
 };
 
 SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb);
 
-namespace spectrum {
-
-Pointer<Spectrums> shared();
-
 void init(Spectrums&);
-
-}  // namespace spectrum
 
 }  // namespace etx

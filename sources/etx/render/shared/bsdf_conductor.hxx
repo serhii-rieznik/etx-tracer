@@ -2,13 +2,21 @@
 
 namespace ConductorBSDF {
 
+struct ConductorMaterial {
+  SpectralImage reflectance;
+  SampledImage roughness;
+  Thinfilm thinfilm;
+  RefractiveIndex ext_ior;
+  RefractiveIndex int_ior;
+};
+
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
   LocalFrame local_frame(frame);
   auto w_i = local_frame.to_local(-data.w_i);
-  auto ext_ior = mtl.ext_ior(data.spectrum_sample);
-  auto int_ior = mtl.int_ior(data.spectrum_sample);
+  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
   uint32_t delta_sample = is_delta(mtl, data.tex, scene, smp) ? BSDFSample::Delta : 0u;
@@ -76,8 +84,8 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   float2 roughness = evaluate_roughness(mtl, data.tex, scene);
   auto alpha_x = roughness.x;
   auto alpha_y = roughness.y;
-  auto ext_ior = mtl.ext_ior(data.spectrum_sample);
-  auto int_ior = mtl.int_ior(data.spectrum_sample);
+  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
   auto value = external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, roughness, ext_ior, int_ior, thinfilm);

@@ -1,5 +1,4 @@
 #include <etx/core/core.hxx>
-#include <etx/core/core.hxx>
 #include <etx/render/host/film.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <atomic>
@@ -477,7 +476,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   void connect(Payload& payload, Sampler& smp, const float3& smp_fixed, PathData& path_data, PathVertex& curr, PathVertex& prev) const {
-    if ((payload.mode == PathSource::Light)) {
+    if (payload.mode == PathSource::Light) {
       if (curr.connectible) {
         CameraSample camera_sample = {};
         auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);

@@ -9,5 +9,9 @@
         "Unix Makefiles",
         "Xcode"
     ],
-    "cmake.buildBeforeRun": true
+    "cmake.buildBeforeRun": true,
+    "C_Cpp.errorSquiggles": "disabled",
+    "files.associations": {
+        "string": "cpp"
+    }
 }
