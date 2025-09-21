@@ -21,34 +21,9 @@
 
 namespace etx {
 
-struct DefaultSpectrums {
-  SpectralDistribution thinfilm_eta = {};
-  SpectralDistribution dielectric_eta = {};
-  SpectralDistribution conductor_eta = {};
-  SpectralDistribution conductor_k = {};
-} shared_spectrums;
-
 static scattering::ScatteringSpectrums shared_scattering_spectrums;
 
 namespace {
-
-inline void init_spectrums(TaskScheduler& scheduler, Image& extinction) {
-  scattering::init(scheduler, shared_scattering_spectrums, extinction);
-  {
-    static const float2 chrome_samples_eta[] = {{0.354f, 1.84f}, {0.368f, 1.87f}, {0.381f, 1.92f}, {0.397f, 2.00f}, {0.413f, 2.08f}, {0.431f, 2.19f}, {0.451f, 2.33f},
-      {0.471f, 2.51f}, {0.496f, 2.75f}, {0.521f, 2.94f}, {0.549f, 3.18f}, {0.582f, 3.22f}, {0.617f, 3.17f}, {0.659f, 3.09f}, {0.704f, 3.05f}, {0.756f, 3.08f}, {0.821f, 3.20f},
-      {0.892f, 3.30f}};
-
-    static const float2 chrome_samples_k[] = {{0.354f, 2.64f}, {0.368f, 2.69f}, {0.381f, 2.74f}, {0.397f, 2.83f}, {0.413f, 2.93f}, {0.431f, 3.04f}, {0.451f, 3.14f},
-      {0.471f, 3.24f}, {0.496f, 3.30f}, {0.521f, 3.33f}, {0.549f, 3.33f}, {0.582f, 3.30f}, {0.617f, 3.30f}, {0.659f, 3.34f}, {0.704f, 3.39f}, {0.756f, 3.42f}, {0.821f, 3.48f},
-      {0.892f, 3.52f}};
-
-    shared_spectrums.thinfilm_eta = SpectralDistribution::constant(1.73f);
-    shared_spectrums.conductor_eta = SpectralDistribution::from_samples(chrome_samples_eta, uint32_t(std::size(chrome_samples_eta)));
-    shared_spectrums.conductor_k = SpectralDistribution::from_samples(chrome_samples_k, uint32_t(std::size(chrome_samples_k)));
-    shared_spectrums.dielectric_eta = SpectralDistribution::constant(1.521f);
-  }
-}
 
 inline auto to_float2(const float values[]) -> float2 {
   return {values[0], values[1]};
@@ -263,7 +238,7 @@ struct SceneRepresentationImpl {
     , images(s) {
     images.init(1024u);
     mediums.init(1024u);
-    init_spectrums(s, extinction);
+    scattering::init(scheduler, shared_scattering_spectrums, extinction);
     build_camera(camera, {5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280u, 720u}, 26.99f);
   }
 
@@ -280,10 +255,9 @@ struct SceneRepresentationImpl {
     scene.rayleigh_spectrum = add_spectrum(shared_scattering_spectrums.rayleigh);
     scene.mie_spectrum = add_spectrum(shared_scattering_spectrums.mie);
     scene.ozone_spectrum = add_spectrum(shared_scattering_spectrums.ozone);
-    scene.default_dielectric_eta = add_spectrum(shared_spectrums.dielectric_eta);
-    scene.default_conductor_eta = add_spectrum(shared_spectrums.conductor_eta);
-    scene.default_conductor_k = add_spectrum(shared_spectrums.conductor_k);
-
+    scene.default_dielectric_eta = add_spectrum(SpectralDistribution::constant(1.5f));
+    scene.default_conductor_eta = add_spectrum(SpectralDistribution::constant(0.0f));
+    scene.default_conductor_k = add_spectrum(SpectralDistribution::constant(1000000.0f));
     scene.subsurface_scatter_material = add_material("etx::subsurface-scatter");
     materials[scene.subsurface_scatter_material].reflectance = {.spectrum_index = scene.black_spectrum};
     materials[scene.subsurface_scatter_material].scattering = {.spectrum_index = scene.white_spectrum};

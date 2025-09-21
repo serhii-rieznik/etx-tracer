@@ -912,50 +912,88 @@ def _get_lights_as_materials(operator):
 
             color_value = None
 
-            # If the sun light uses nodes, and the Emission color is driven by a Blackbody, export it as nblackbody
+            # Analyze node tree first (supports Blackbody + Exposure chain)
             try:
-                if getattr(light_data, "use_nodes", False) and getattr(
-                    light_data, "node_tree", None
-                ):
+                if getattr(light_data, "use_nodes", False) and getattr(light_data, "node_tree", None):
                     ltree = light_data.node_tree
                     output_node = None
                     for n in ltree.nodes:
-                        if n.type == "OUTPUT_LIGHT" and getattr(
-                            n, "is_active_output", True
-                        ):
+                        if n.type == "OUTPUT_LIGHT" and getattr(n, "is_active_output", True):
                             output_node = n
                             break
-                    if (
-                        output_node
-                        and output_node.inputs.get("Surface")
-                        and output_node.inputs["Surface"].is_linked
-                    ):
+                    if output_node and output_node.inputs.get("Surface") and output_node.inputs["Surface"].is_linked:
                         surf_from = output_node.inputs["Surface"].links[0].from_node
                         if surf_from.type == "EMISSION":
-                            strength = _get_node_input_value(surf_from, "Strength", 1.0)
+                            base_strength = float(_get_node_input_value(surf_from, "Strength", 1.0))
                             col_sock = surf_from.inputs.get("Color")
-                            if col_sock:
-                                temperature = _find_blackbody_temperature_from_socket(
-                                    col_sock
-                                )
-                                if temperature is not None:
-                                    color_value = f"nblackbody {temperature:.0f} scale {float(strength):.4f}"
+                            exposure_sum = 0.0
+                            normalize_bb = True
+                            temperature = None
+
+                            # Walk upstream to find Exposure and Blackbody
+                            def _walk_color_socket(sock, _visited=None):
+                                nonlocal exposure_sum, temperature, normalize_bb
+                                try:
+                                    if sock is None or getattr(sock, "is_linked", False) == False:
+                                        return
+                                    if _visited is None:
+                                        _visited = set()
+                                    node = sock.links[0].from_node
+                                    if node in _visited:
+                                        return
+                                    _visited.add(node)
+                                    t = getattr(node, "type", None)
+                                    if t == "EXPOSURE":
+                                        exp_val = node.inputs.get("Exposure")
+                                        if exp_val is not None:
+                                            try:
+                                                exposure_sum += float(exp_val.default_value)
+                                            except Exception:
+                                                pass
+                                        _walk_color_socket(node.inputs.get("Color"), _visited)
+                                        return
+                                    if t == "BLACKBODY":
+                                        try:
+                                            temperature = float(node.inputs["Temperature"].default_value)
+                                        except Exception:
+                                            temperature = None
+                                        normalize_bb = bool(getattr(node, "normalize", getattr(node, "use_normalize", True)))
+                                        return
+                                    # Continue walking a simple chain
+                                    for inp in getattr(node, "inputs", []):
+                                        if getattr(inp, "is_linked", False):
+                                            _walk_color_socket(inp, _visited)
+                                            break
+                                except Exception:
+                                    return
+
+                            _walk_color_socket(col_sock)
+
+                            # Build color from findings
+                            energy = float(getattr(light_data, "energy", 1.0))
+                            exposure_scale = pow(2.0, exposure_sum) if exposure_sum != 0.0 else 1.0
+                            total_scale = base_strength * energy * exposure_scale
+                            if (temperature is not None) and _light_uses_temperature(light_data):
+                                token = "nblackbody" if normalize_bb else "blackbody"
+                                color_value = f"{token} {temperature:.0f} scale {total_scale:.4f}"
             except Exception:
                 color_value = None
 
             if color_value is None:
-                # Prefer built-in temperature if present, regardless of enable flag
+                # If light UI uses temperature and the checkbox is enabled, export as blackbody
                 try:
-                    temperature = _get_light_temperature(light_data)
-                    if (temperature is not None) and (temperature > 0.0):
-                        energy = float(getattr(light_data, "energy", 1.0))
-                        color_value = f"nblackbody {temperature:.0f} scale {energy:.4f}"
+                    if _light_uses_temperature(light_data):
+                        temperature = _get_light_temperature(light_data)
+                        if (temperature is not None) and (temperature > 0.0):
+                            energy = float(getattr(light_data, "energy", 1.0))
+                            color_value = f"nblackbody {temperature:.0f} scale {energy:.4f}"
                 except Exception:
                     color_value = None
 
             if color_value is None:
+                # Fallback to raw RGB color scaled by energy
                 color = light_data.color
-                energy = light_data.energy
+                energy = float(getattr(light_data, "energy", 1.0))
                 emission_color = [c * energy for c in color]
                 color_value = f"{emission_color[0]:.4f} {emission_color[1]:.4f} {emission_color[2]:.4f}"
 
@@ -1121,16 +1159,6 @@ def _extract_principled_properties(operator, principled, properties):
 
     transmission = _get_node_input_value(principled, "Transmission", 0.0)
     properties["transmission"] = f"{float(transmission):.3f}"
-    if transmission > 0.0:
-        if hasattr(base_color, "__len__") and len(base_color) >= 3:
-            trans_color = [c * transmission for c in base_color[:3]]
-            properties["Kt"] = (
-                f"{trans_color[0]:.3f} {trans_color[1]:.3f} {trans_color[2]:.3f}"
-            )
-        else:
-            properties["Kt"] = (
-                f"{transmission:.3f} {transmission:.3f} {transmission:.3f}"
-            )
 
     emission_socket = principled.inputs.get("Emission Color")
     emission_strength = _get_node_input_value(principled, "Emission Strength", 0.0)

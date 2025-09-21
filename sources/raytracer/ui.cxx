@@ -1091,6 +1091,29 @@ bool UI::build_material(Scene* scene, Material& material) {
     }
   }
 
+  // Principled-specific parameters
+  if (material.cls == Material::Class::Principled) {
+    ImGui::PushStyleColor(ImGuiCol_Header, sec_col[1]);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[1], 0.04f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[1], 0.08f));
+    bool open_principled = ImGui::CollapsingHeader("Metalness / Transmission", ImGuiTreeNodeFlags_DefaultOpen);
+    ImGui::PopStyleColor(3);
+    if (open_principled) {
+      float metal = material.metalness.value.x;
+      float trans = material.transmission.value.x;
+      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
+      if (ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, "Metalness %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat)) {
+        material.metalness.value = {metal, metal, metal, metal};
+        changed = true;
+      }
+      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
+      if (ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, "Transmission %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat)) {
+        material.transmission.value = {trans, trans, trans, trans};
+        changed = true;
+      }
+    }
+  }
+
   ImGui::PushStyleColor(ImGuiCol_Header, sec_col[1]);
   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[1], 0.04f));
   ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[1], 0.08f));
