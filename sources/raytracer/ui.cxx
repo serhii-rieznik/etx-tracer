@@ -1147,6 +1147,17 @@ bool UI::build_material(Scene* scene, Material& material) {
     changed |= spectrum_picker(scene, "Scattering", material.scattering.spectrum_index, false);
   }
 
+  // Opacity
+  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[0]);
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[0], 0.04f));
+  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[0], 0.08f));
+  bool open_opacity = ImGui::CollapsingHeader("Opacity", ImGuiTreeNodeFlags_DefaultOpen);
+  ImGui::PopStyleColor(3);
+  if (open_opacity) {
+    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
+    changed |= ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, "Opacity %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  }
+
   ImGui::PushStyleColor(ImGuiCol_Header, sec_col[3]);
   ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[3], 0.04f));
   ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[3], 0.08f));
