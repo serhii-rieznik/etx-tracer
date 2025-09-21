@@ -361,6 +361,12 @@ struct SceneRepresentationImpl {
           mtl.int_ior.k_index = add_spectrum(SpectralDistribution::constant(0.0f));
         }
       }
+      if (mtl.thinfilm.ior.k_index == kInvalidIndex) {
+        mtl.thinfilm.ior.k_index = add_spectrum(SpectralDistribution::constant(0.0f));
+      }
+      if (mtl.thinfilm.ior.eta_index == kInvalidIndex) {
+        mtl.thinfilm.ior.eta_index = add_spectrum(SpectralDistribution::constant(1.0f));
+      }
     }
   }
 
@@ -1527,10 +1533,10 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
       SpectralDistribution eta_spd = {};
       SpectralDistribution k_spd = {};
-      auto cls = SpectralDistribution::load_from_file(buffer, eta_spd, &k_spd, true);
+      auto cls = RefractiveIndex::load_from_file(buffer, eta_spd, k_spd);
       mtl.int_ior.cls = cls;
       mtl.int_ior.eta_index = add_spectrum(eta_spd);
-      mtl.int_ior.k_index = (k_spd.empty() ? kInvalidIndex : add_spectrum(k_spd));
+      mtl.int_ior.k_index = k_spd.empty() ? add_spectrum(SpectralDistribution::constant(0.0f)) : add_spectrum(k_spd);
     }
   }
 
@@ -1545,7 +1551,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
       SpectralDistribution eta_spd = {};
       SpectralDistribution k_spd = {};
-      auto cls = SpectralDistribution::load_from_file(buffer, eta_spd, &k_spd, true);
+      auto cls = RefractiveIndex::load_from_file(buffer, eta_spd, k_spd);
       mtl.ext_ior.cls = cls;
       mtl.ext_ior.eta_index = add_spectrum(eta_spd);
       mtl.ext_ior.k_index = k_spd.empty() ? add_spectrum(SpectralDistribution::constant(0.0f)) : add_spectrum(k_spd);
@@ -1616,7 +1622,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
           snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
           SpectralDistribution eta_spd = {};
           SpectralDistribution k_spd = {};
-          auto cls = SpectralDistribution::load_from_file(buffer, eta_spd, &k_spd, true);
+          auto cls = RefractiveIndex::load_from_file(buffer, eta_spd, k_spd);
           mtl.thinfilm.ior.cls = cls;
           mtl.thinfilm.ior.eta_index = add_spectrum(eta_spd);
           mtl.thinfilm.ior.k_index = (k_spd.empty() ? kInvalidIndex : add_spectrum(k_spd));
@@ -1880,10 +1886,10 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
     mtl.metalness.value = {float(pbr.metallicFactor), float(pbr.metallicFactor)};
     mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
     mtl.ext_ior.eta_index = add_spectrum(SpectralDistribution::constant(1.0f));
-    mtl.ext_ior.k_index = kInvalidIndex;
+    mtl.ext_ior.k_index = add_spectrum(SpectralDistribution::constant(0.0f));
     mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
     mtl.int_ior.eta_index = add_spectrum(SpectralDistribution::constant(1.5f));
-    mtl.int_ior.k_index = kInvalidIndex;
+    mtl.int_ior.k_index = add_spectrum(SpectralDistribution::constant(0.0f));
     mtl.subsurface.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
 
     float3 rgb = {1.0f, 1.0f, 1.0f};

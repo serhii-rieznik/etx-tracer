@@ -8,6 +8,7 @@
 #include "options.hxx"
 
 #include <functional>
+#include <string>
 
 struct sapp_event;
 
@@ -126,10 +127,11 @@ struct UI {
   int32_t _selected_material = -1;
   int32_t _selected_medium = -1;
   int32_t _selected_emitter = -1;
-  int32_t _viewport_size = {};
   uint32_t _ui_setup = UIDefaults;
   uint32_t _font_image = 0u;
-  std::unordered_map<const char*, float3> _editor_values;
+  std::unordered_map<std::string, float3> _editor_values;
+  uint64_t _material_mapping_hash = 0ull;
+  uint64_t _medium_mapping_hash = 0ull;
 };
 
 }  // namespace etx
