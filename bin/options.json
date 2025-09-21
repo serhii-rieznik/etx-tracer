@@ -1,5 +1,81 @@
 {
-  "integrator": "Bidirectional (CPU)",
-  "recent-0": "./assets/cornellbox/cornellbox.json",
-  "scene": "./assets/cornellbox/cornellbox.json"
+  "values": [
+    {
+      "class": 5,
+      "description": "Integrator",
+      "id": "integrator",
+      "meta": 0,
+      "value": "Path Tracing (CPU)"
+    },
+    {
+      "class": 5,
+      "description": "Scene",
+      "id": "scene",
+      "meta": 0,
+      "value": "E:\\Projects\\etx-tracer\\bin\\assets\\bedroom\\bedroom.json"
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-0",
+      "meta": 0,
+      "value": "E:\\Projects\\etx-tracer\\bin\\assets\\sds\\sds-test-monkey.json"
+    },
+    {
+      "class": 5,
+      "description": "Reference",
+      "id": "ref",
+      "meta": 0,
+      "value": ""
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-1",
+      "meta": 0,
+      "value": "E:\\Projects\\etx-tracer\\bin\\assets\\soap\\bubbles.json"
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-2",
+      "meta": 0,
+      "value": "E:\\Projects\\etx-tracer\\bin\\assets\\spoons\\spoons.json"
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-3",
+      "meta": 0,
+      "value": "E:\\Projects\\etx-tracer\\bin\\assets\\sppm\\sppm.json"
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-4",
+      "meta": 0,
+      "value": "E:\\Projects\\etx-tracer\\bin\\assets\\veach-bdpt\\bdpt.json"
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-5",
+      "meta": 0,
+      "value": "E:\\Projects\\etx-tracer\\bin\\assets\\subsurface-test\\subsurface-test.json"
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-6",
+      "meta": 0,
+      "value": "E:\\Media\\Assets\\pica-pica\\pica-pica.json"
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-7",
+      "meta": 0,
+      "value": "E:\\Projects\\etx-tracer\\bin\\assets\\bedroom\\bedroom.json"
+    }
+  ]
 }
