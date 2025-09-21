@@ -1004,6 +1004,15 @@ def _convert_material_to_etx(operator, blender_mat):
     else:
         _extract_basic_properties(operator, blender_mat, mat_data["properties"])
 
+    # Two-sided toggle (only for opaque non-transmitting classes)
+    try:
+        etx_cls = mat_data["properties"].get("material", "class diffuse").split(" ")[-1]
+        if getattr(operator, "two_sided_materials", False):
+            if etx_cls in ("diffuse", "plastic", "conductor", "velvet", "principled"):
+                mat_data["properties"]["two_sided"] = "1"
+    except Exception:
+        pass
+
     for key, value in blender_mat.items():
         if not key.startswith("_"):
             mat_data["properties"][f"# ETXProperty {key}"] = str(value)

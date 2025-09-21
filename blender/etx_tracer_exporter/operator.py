@@ -111,6 +111,12 @@ class ExportETXTracer(Operator, ExportHelper):
         default=False,
     )
 
+    two_sided_materials: BoolProperty(
+        name="Two-Sided Surfaces",
+        description="Make opaque surfaces (diffuse/plastic/conductor/velvet) two-sided",
+        default=True,
+    )
+
     # === Camera Settings ===
     camera_class: EnumProperty(
         name="Camera Type",

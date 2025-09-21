@@ -89,6 +89,7 @@ struct ETX_ALIGNED Material {
   float emission_collimation = 1.0f;
   uint32_t emission_direction = 0u;
   float opacity = 1.0f;
+  uint32_t two_sided = 0u;
 
   bool has_diffuse() const {
     return (cls == Class::Diffuse) || (cls == Class::Plastic);

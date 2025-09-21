@@ -96,6 +96,8 @@ inline Material::Class material_string_to_class(const char* s) {
     return Material::Class::Boundary;
   else if (strcmp(s, "velvet") == 0)
     return Material::Class::Velvet;
+  else if (strcmp(s, "principled") == 0)
+    return Material::Class::Principled;
   else {
     log::error("Undefined BSDF: `%s`", s);
     return Material::Class::Diffuse;
@@ -1485,6 +1487,16 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
 
   if (get_param(material, "Kt")) {
     mtl.scattering.spectrum_index = load_reflectance_spectrum(data_buffer);
+  }
+
+  if (get_param(material, "two_sided")) {
+    int val = 0;
+    if (sscanf(data_buffer, "%d", &val) == 1) {
+      mtl.two_sided = (val != 0) ? 1u : 0u;
+    } else {
+      // accept tokens like "true"/"false"
+      mtl.two_sided = ((strcmp(data_buffer, "true") == 0) || (strcmp(data_buffer, "on") == 0)) ? 1u : 0u;
+    }
   }
 
   if (get_param(material, "opacity")) {
