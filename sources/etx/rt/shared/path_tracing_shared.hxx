@@ -288,6 +288,8 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
   payload.mis_weight = true;
   payload.ray.o = medium_sample.pos;
   payload.ray.d = w_o;
+  payload.ray.max_t = kMaxFloat;
+  payload.ray.min_t = kRayEpsilon;
   payload.path_length += 1;
   ETX_CHECK_FINITE(payload.ray.d);
 }
@@ -355,6 +357,8 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   if (mat.cls == Material::Class::Boundary) {
     payload.medium = (dot(intersection.nrm, payload.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
     payload.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, payload.ray.d);
+    payload.ray.max_t = kMaxFloat;
+    payload.ray.min_t = kRayEpsilon;
     return true;
   }
 
@@ -447,7 +451,10 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   if (payload.throughput.is_zero())
     return false;
 
+  payload.ray.max_t = kMaxFloat;
+  payload.ray.min_t = kRayEpsilon;
   payload.path_length += 1;
+
   ETX_CHECK_FINITE(payload.ray.d);
   return random_continue(payload.path_length, scene.random_path_termination, payload.eta, payload.smp, payload.throughput);
 }  // namespace etx

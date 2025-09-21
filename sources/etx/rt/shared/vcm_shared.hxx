@@ -274,6 +274,8 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
 
   state.ray.d = bsdf_sample.w_o;
   state.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, bsdf_sample.w_o);
+  state.ray.max_t = kMaxFloat;
+  state.ray.min_t = kRayEpsilon;
   state.eta *= bsdf_sample.eta;
   state.total_path_depth += 1u;
 
@@ -422,6 +424,8 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
   // Advance ray to medium position and set new direction
   state.ray.o = medium_sample.pos;
   state.ray.d = w_o;
+  state.ray.max_t = kMaxFloat;
+  state.ray.min_t = kRayEpsilon;
 
   if (state.total_path_depth + 1 > scene.max_path_length)
     return false;
@@ -973,6 +977,8 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     // Advance ray to the sampled medium position/direction
     state.ray.o = medium_sample.pos;
     state.ray.d = w_o_smp;
+    state.ray.max_t = kMaxFloat;
+    state.ray.min_t = kRayEpsilon;
 
     // Medium scattering increases path length
     state.total_path_depth += 1;
@@ -1145,12 +1151,14 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
     // Advance ray
     state.ray.o = medium_sample.pos;
     state.ray.d = w_o_smp;
+    state.ray.max_t = kMaxFloat;
+    state.ray.min_t = kRayEpsilon;
 
-    // Medium scattering increases path length after connections
     state.total_path_depth += 1;
 
     result.continue_tracing =
       (state.total_path_depth + 1 <= scene.max_path_length) && random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput);
+
     return result;
   }
 

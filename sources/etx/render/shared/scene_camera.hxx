@@ -30,7 +30,7 @@ ETX_GPU_CODE Ray generate_ray(const Scene& scene, const Camera& camera, const fl
     return {camera.position, from_spherical(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat};
   }
 
-  float3 origin = camera.position;
+  float3 origin = camera.position + camera.direction * camera.clip_near;
   float3 direction = camera.direction;
   ETX_CHECK_FINITE(direction);
   float3 s = uv.x * camera.side;
