@@ -30,7 +30,7 @@ ETX_GPU_CODE Ray generate_ray(const Scene& scene, const Camera& camera, const fl
     return {camera.position, from_spherical(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat};
   }
 
-  float3 origin = camera.position + camera.direction * camera.clip_near;
+  float3 origin = camera.position;
   float3 direction = camera.direction;
   ETX_CHECK_FINITE(direction);
   float3 s = uv.x * camera.side;
@@ -55,7 +55,10 @@ ETX_GPU_CODE Ray generate_ray(const Scene& scene, const Camera& camera, const fl
     ETX_CHECK_FINITE(w_o);
   }
 
-  return {origin, w_o, kRayEpsilon, kMaxFloat};
+  float cos_t = dot(w_o, direction);
+  float t_near = camera.clip_near > 0.0f ? camera.clip_near / cos_t : kRayEpsilon;
+  float t_far = camera.clip_far > 0.0f ? camera.clip_far / cos_t : kMaxFloat;
+  return {origin, w_o, fmaxf(t_near, kRayEpsilon), t_far};
 }
 
 ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const Camera& camera, const float3& from_point) {
