@@ -61,7 +61,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
 
     case Emitter::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
-      float2 uv = direction_to_uv(query.direction, img.offset);
+      float2 uv = direction_to_uv(query.direction, img.offset, img.scale.x);
       float sin_t = sinf(uv.y * kPi);
       if (sin_t <= kEpsilon) {
         return {spect, 0.0f};
@@ -128,14 +128,13 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
     }
 
     case Emitter::Class::Environment: {
-      float2 offset = scene.images[em.emission.image_index].offset;
-      float2 uv = direction_to_uv(in_direction, offset);
+      const auto& img = scene.images[em.emission.image_index];
+      float2 uv = direction_to_uv(in_direction, img.offset, 1.0f);
       float sin_t = sinf(uv.y * kPi);
       if (sin_t <= kEpsilon) {
         return {spect, 0.0f};
       }
 
-      const auto& img = scene.images[em.emission.image_index];
       float image_pdf = 0.0f;
       auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
       pdf_dir = image_pdf / (2.0f * kPi * kPi * sin_t);
@@ -159,7 +158,7 @@ ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em, const float3& in_direc
 
     case Emitter::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
-      float2 uv = direction_to_uv(in_direction, img.offset);
+      float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x);
       float sin_t = sinf(uv.y * kPi);
       float image_pdf = 0.0f;
       img.evaluate(uv, &image_pdf);
@@ -223,7 +222,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       }
 
       result.image_uv = uv;
-      result.direction = uv_to_direction(result.image_uv, img.offset);
+      result.direction = uv_to_direction(result.image_uv, img.offset, img.scale.x);
       result.normal = -result.direction;
       result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
@@ -335,7 +334,7 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
         return {};
       }
 
-      auto d = -uv_to_direction(uv, img.offset);
+      auto d = -uv_to_direction(uv, img.offset, img.scale.x);
       auto basis = orthonormal_basis(d);
       auto disk_sample = sample_disk(smp.next_2d());
 

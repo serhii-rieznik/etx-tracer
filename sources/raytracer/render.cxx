@@ -51,7 +51,7 @@ RenderContext::~RenderContext() {
 
 void RenderContext::init() {
   _private->image_pool.init(1024u);
-  _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV, {});
+  _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
 
   sg_desc context = {};
   context.context.d3d11.device = sapp_d3d11_get_device();
@@ -206,13 +206,13 @@ void RenderContext::apply_reference_image(uint32_t handle) {
 
 void RenderContext::set_reference_image(const char* file_name) {
   _private->image_pool.remove(_private->ref_image_handle);
-  _private->ref_image_handle = _private->image_pool.add_from_file(file_name, 0, {});
+  _private->ref_image_handle = _private->image_pool.add_from_file(file_name, 0, {}, {1.0f, 1.0f});
   apply_reference_image(_private->ref_image_handle);
 }
 
 void RenderContext::set_reference_image(const float4 data[], const uint2 dimensions) {
   _private->image_pool.remove(_private->ref_image_handle);
-  _private->ref_image_handle = _private->image_pool.add_from_data(data, dimensions, 0u, {});
+  _private->ref_image_handle = _private->image_pool.add_from_data(data, dimensions, 0u, {}, {1.0f, 1.0f});
   apply_reference_image(_private->ref_image_handle);
 }
 

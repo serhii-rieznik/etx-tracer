@@ -42,6 +42,47 @@ class ExportETXTracer(Operator, ExportHelper):
         max=65536,
     )
 
+    # === Texture Export ===
+    export_textures: BoolProperty(
+        name="Export Textures",
+        description="Copy/save used images (including packed) next to OBJ",
+        default=True,
+    )
+
+    texture_subdir: StringProperty(
+        name="Texture Subfolder",
+        description="Relative subfolder for textures (empty = alongside OBJ)",
+        default="textures",
+        maxlen=255,
+    )
+
+    # === Procedural Baking ===
+    bake_procedural: BoolProperty(
+        name="Bake Procedural Materials",
+        description="Bake node-based materials to textures (Base Color, Normal)",
+        default=False,
+    )
+
+    bake_resolution: EnumProperty(
+        name="Bake Resolution",
+        description="Output resolution for baked textures",
+        items=[
+            ("512", "512", "512x512"),
+            ("1024", "1024", "1024x1024"),
+            ("2048", "2048", "2048x2048"),
+            ("4096", "4096", "4096x4096"),
+        ],
+        default="2048",
+    )
+
+    bake_margin: IntProperty(
+        name="Bake Margin (px)",
+        description="Bake dilation margin in pixels",
+        default=4,
+        min=0,
+        max=64,
+    )
+
     max_path_length: IntProperty(
         name="Max Path Length",
         description="Maximum path length for path tracing",

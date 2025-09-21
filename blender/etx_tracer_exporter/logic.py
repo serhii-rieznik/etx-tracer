@@ -2,6 +2,7 @@ import bpy
 import os
 import json
 import math
+import shutil
 from mathutils import Vector
 
 
@@ -17,7 +18,7 @@ def main_export(operator, context):
         # === Export geometry to OBJ ===
         _export_obj(operator, obj_path)
 
-        # === Export materials to ETX format ===
+        # === Export materials to ETX format (handles textures/baking) ===
         _export_materials(operator, obj_path)
 
         # === Export scene settings to JSON ===
@@ -51,6 +52,47 @@ def _export_obj(operator, obj_path):
 
     bpy.ops.wm.obj_export(**export_args)
 
+    # Sanitize material names in OBJ to ensure readability and valid characters
+    try:
+        mtl_path = os.path.splitext(obj_path)[0] + ".mtl"
+        # Collect names from MTL if exists, else from OBJ usemtl
+        names = set()
+        if os.path.exists(mtl_path):
+            with open(mtl_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("newmtl "):
+                        names.add(line.strip().split(" ", 1)[1])
+        else:
+            with open(obj_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("usemtl "):
+                        names.add(line.strip().split(" ", 1)[1])
+
+        name_map = _uniquify_material_names(list(names))
+
+        # Rewrite MTL newmtl lines
+        if os.path.exists(mtl_path):
+            with open(mtl_path, "r", encoding="utf-8") as f:
+                mtl_lines = f.readlines()
+            changed = False
+            out_lines = []
+            for line in mtl_lines:
+                if line.startswith("newmtl "):
+                    orig = line.strip().split(" ", 1)[1]
+                    if orig in name_map and name_map[orig] != orig:
+                        line = f"newmtl {name_map[orig]}\n"
+                        changed = True
+                out_lines.append(line)
+            if changed:
+                with open(mtl_path, "w", encoding="utf-8") as f:
+                    f.writelines(out_lines)
+
+        # Rewrite OBJ usemtl occurrences
+        if len(name_map) > 0:
+            _rewrite_obj_material_names(obj_path, name_map)
+    except Exception:
+        pass
+
 
 def _export_materials(operator, obj_path):
     """Export materials in ETX format, replacing the standard MTL file"""
@@ -59,57 +101,85 @@ def _export_materials(operator, obj_path):
     materials_data = []
 
     # Get light materials first to ensure they are at the top of the file
-    env_light = _get_environment_light_material(operator)
+    env_light = _get_environment_light_material(operator, obj_path)
     if env_light:
         materials_data.append(env_light)
 
     light_materials = _get_lights_as_materials(operator)
     materials_data.extend(light_materials)
 
-    # Get mesh materials that were actually used in the OBJ export
+    # Get mesh materials present in Blender
     materials_to_export = _get_materials_to_export(operator)
 
-    # If standard MTL exists, read it to get the material names that were actually exported
-    # This ensures we only export materials assigned to the exported geometry
-    exported_material_names = set()
+    # If standard MTL exists, read exact material names that OBJ references
+    exported_material_names = []
     if os.path.exists(mtl_path):
         with open(mtl_path, "r", encoding="utf-8") as f:
             for line in f:
                 if line.startswith("newmtl "):
                     mat_name = line.strip().split(" ", 1)[1]
-                    exported_material_names.add(mat_name)
+                    exported_material_names.append(mat_name)
 
-    # Filter materials to only those that were actually exported
-    if exported_material_names:
-        materials_to_export = [
-            mat
-            for mat in materials_to_export
-            if mat and mat.name in exported_material_names
-        ]
+    # === Optional: bake procedural textures before material conversion ===
+    if getattr(operator, "bake_procedural", False):
+        try:
+            _bake_procedural_textures(operator, materials_to_export, obj_path)
+        except Exception as bake_err:
+            operator.report({"WARNING"}, f"Bake failed: {str(bake_err)}")
 
-    # === Gather mediums for materials that have volume ===
+    # Build quick lookup by name (also allow sanitized lookup)
+    name_to_mat = {mat.name: mat for mat in materials_to_export if mat}
+    sanitized_to_mat = {_sanitize_material_name(mat.name): mat for mat in materials_to_export if mat}
+
+    # === Gather mediums for materials that have volume (only for mats we can resolve) ===
     used_medium_ids = set()
     material_to_medium_id = {}
-
-    for mat in materials_to_export:
-        if mat is None:
-            continue
-        medium_entry, medium_id = _extract_medium_from_material(
-            operator, mat, used_medium_ids
-        )
+    for name, mat in name_to_mat.items():
+        medium_entry, medium_id = _extract_medium_from_material(operator, mat, used_medium_ids)
         if medium_entry is not None and medium_id is not None:
             materials_data.append(medium_entry)
-            material_to_medium_id[mat.name] = medium_id
+            material_to_medium_id[name] = medium_id
 
     # === Export mesh materials ===
-    for mat in materials_to_export:
-        if mat is None:
-            continue
+    if exported_material_names:
+        # Honor the exact names OBJ references to avoid missing materials
+        # Sanitize names to be valid and ensure consistency across OBJ/MTL/export
+        name_map = _uniquify_material_names(exported_material_names)
+        _rewrite_obj_material_names(obj_path, name_map)
 
-        mat_data = _convert_material_to_etx(operator, mat)
-        if mat.name in material_to_medium_id:
-            mat_data["properties"]["int_medium"] = material_to_medium_id[mat.name]
-        materials_data.append(mat_data)
+        for raw_name in exported_material_names:
+            name = name_map.get(raw_name, raw_name)
+            mat = name_to_mat.get(raw_name, None)
+            if mat is None:
+                # Try sanitized lookup (Blender material with invalid chars)
+                mat = sanitized_to_mat.get(_sanitize_material_name(raw_name), None)
+            if mat is not None:
+                mat_data = _convert_material_to_etx(operator, mat)
+                # Force the material name to match OBJ/MTL exactly
+                mat_data["name"] = name
+                try:
+                    _finalize_material_textures(operator, obj_path, mat, mat_data["properties"])
+                except Exception as tex_err:
+                    operator.report({"WARNING"}, f"Material '{name}' textures warning: {str(tex_err)}")
+                if name in material_to_medium_id:
+                    mat_data["properties"]["int_medium"] = material_to_medium_id[name]
+            else:
+                # Fallback default for unknown names referenced by OBJ
+                mat_data = {"name": name, "properties": {"material": "class diffuse", "Kd": "1.000 1.000 1.000"}}
+            materials_data.append(mat_data)
+    else:
+        # No reference MTL; export all Blender materials
+        for mat in materials_to_export:
+            if mat is None:
+                continue
+            mat_data = _convert_material_to_etx(operator, mat)
+            try:
+                _finalize_material_textures(operator, obj_path, mat, mat_data["properties"])
+            except Exception as tex_err:
+                operator.report({"WARNING"}, f"Material '{mat.name}' textures warning: {str(tex_err)}")
+            if mat.name in material_to_medium_id:
+                mat_data["properties"]["int_medium"] = material_to_medium_id[mat.name]
+            materials_data.append(mat_data)
 
     # Write ETX materials format
     def write_materials_file(file_path):
@@ -128,6 +198,240 @@ def _export_materials(operator, obj_path):
 
     # Write (or create) the ETX materials file unconditionally
     write_materials_file(mtl_path)
+
+
+# =========================
+# Texture export utilities
+# =========================
+
+def _get_textures_dir(operator, obj_path):
+    base_dir = os.path.dirname(obj_path)
+    sub = getattr(operator, "texture_subdir", "").strip() if getattr(operator, "export_textures", False) else ""
+    out_dir = os.path.join(base_dir, sub) if len(sub) > 0 else base_dir
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def _mtl_relpath(obj_path, file_path):
+    mtl_dir = os.path.dirname(os.path.splitext(obj_path)[0] + ".mtl")
+    rel = os.path.relpath(file_path, mtl_dir)
+    return rel.replace("\\", "/")
+
+
+def _sanitize_filename(name):
+    import re
+    import unicodedata
+    # Normalize to ASCII (strip diacritics), allow [A-Za-z0-9._-]
+    ascii_name = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode("ascii")
+    safe = "".join(ch if (("A" <= ch <= "Z") or ("a" <= ch <= "z") or ("0" <= ch <= "9") or (ch in ("_", "-", "."))) else "_" for ch in ascii_name)
+    safe = re.sub(r"_+", "_", safe).strip("._")
+    if len(safe) == 0:
+        safe = "image"
+    return safe
+
+
+def _sanitize_material_name(name):
+    # Normalize to ASCII: remove diacritics and non-ASCII, allow [A-Za-z0-9_-]
+    # Collapse multiple underscores and strip leading/trailing underscores
+    import re
+    import unicodedata
+    if name.startswith("et::"):
+        return name  # keep engine special names untouched
+    # decompose accents and drop non-ascii
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    tmp = "".join(ch if (('A' <= ch <= 'Z') or ('a' <= ch <= 'z') or ('0' <= ch <= '9') or (ch in ("_", "-"))) else "_" for ch in ascii_name)
+    tmp = re.sub(r"_+", "_", tmp).strip("_")
+    if len(tmp) == 0:
+        tmp = "material"
+    return tmp
+
+
+def _linear_to_srgb_component(x: float) -> float:
+    try:
+        if x <= 0.0031308:
+            return 12.92 * x
+        return 1.055 * (max(0.0, x)) ** (1.0 / 2.4) - 0.055
+    except Exception:
+        return x
+
+
+def _format_rgb_linear_to_srgb(rgb) -> str:
+    try:
+        r = _linear_to_srgb_component(float(rgb[0]))
+        g = _linear_to_srgb_component(float(rgb[1]))
+        b = _linear_to_srgb_component(float(rgb[2]))
+        r = max(0.0, min(1.0, r))
+        g = max(0.0, min(1.0, g))
+        b = max(0.0, min(1.0, b))
+        return f"{r:.3f} {g:.3f} {b:.3f}"
+    except Exception:
+        return "0.800 0.800 0.800"
+
+
+def _uniquify_material_names(names):
+    mapping = {}
+    used = set()
+    for orig in names:
+        if orig.startswith("et::"):
+            mapping[orig] = orig
+            continue
+        base = _sanitize_material_name(orig)
+        cand = base
+        idx = 1
+        while cand in used:
+            cand = f"{base}_{idx}"
+            idx += 1
+        mapping[orig] = cand
+        used.add(cand)
+    return mapping
+
+
+def _rewrite_obj_material_names(obj_path, name_map):
+    try:
+        with open(obj_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        changed = False
+        out_lines = []
+        for line in lines:
+            if line.startswith("usemtl "):
+                orig = line.strip()[7:]
+                if orig in name_map:
+                    new_name = name_map[orig]
+                    if new_name != orig:
+                        line = f"usemtl {new_name}\n"
+                        changed = True
+            out_lines.append(line)
+        if changed:
+            with open(obj_path, "w", encoding="utf-8") as f:
+                f.writelines(out_lines)
+    except Exception:
+        pass
+
+
+def _unique_name(operator, base_name):
+    used = getattr(operator, "_etx_used_texture_names", None)
+    if used is None:
+        used = set()
+        operator._etx_used_texture_names = used
+    name = base_name
+    idx = 1
+    while name in used:
+        root, ext = os.path.splitext(base_name)
+        name = f"{root}_{idx}{ext}"
+        idx += 1
+    used.add(name)
+    return name
+
+
+def _abspath_image(image):
+    try:
+        fp = image.filepath
+        if fp is None or len(fp) == 0:
+            return None
+        return bpy.path.abspath(fp, library=image.library)
+    except Exception:
+        return None
+
+
+def _save_image_copy(image, target_path, prefer_format=None):
+    # prefer_format: e.g., 'PNG', 'OPEN_EXR'
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+        # If source is a file and we are not forcing re-encode, copy
+        src = _abspath_image(image)
+        if src and os.path.isfile(src) and prefer_format is None:
+            shutil.copy2(src, target_path)
+            return True
+
+        # Otherwise, save via Blender with chosen format
+        old_path = image.filepath_raw
+        old_fmt = image.file_format
+        try:
+            ext = os.path.splitext(target_path)[1].lower()
+            if prefer_format is not None:
+                image.file_format = prefer_format
+            else:
+                if ext in (".png", ".jpg", ".jpeg"):
+                    image.file_format = "PNG" if ext == ".png" else "JPEG"
+                elif ext in (".exr", ".hdr"):
+                    image.file_format = "OPEN_EXR" if ext == ".exr" else old_fmt
+                else:
+                    image.file_format = "PNG"
+                    target_path = os.path.splitext(target_path)[0] + ".png"
+
+            image.filepath_raw = target_path
+            image.save()
+            return True
+        finally:
+            image.filepath_raw = old_path
+            image.file_format = old_fmt
+    except Exception:
+        return False
+
+
+def _ensure_image_export(operator, obj_path, image, *, is_environment=False, suggested_name=None):
+    if image is None:
+        return None
+    mapping = getattr(operator, "_etx_exported_images", None)
+    if mapping is None:
+        mapping = {}
+        operator._etx_exported_images = mapping
+    if image in mapping:
+        return mapping[image]
+
+    textures_dir = _get_textures_dir(operator, obj_path)
+
+    # Decide filename and format
+    src_path = _abspath_image(image)
+    src_ext = os.path.splitext(src_path)[1].lower() if src_path else ""
+    # If image is already a file, just reference it relatively
+    try:
+        if getattr(image, "source", None) == "FILE" and src_path and os.path.isfile(src_path):
+            rel = _mtl_relpath(obj_path, src_path)
+            mapping[image] = rel
+            return rel
+    except Exception:
+        pass
+
+    # For environment maps preserve EXR/HDR when possible
+    if is_environment and src_ext in (".exr", ".hdr"):
+        ext = src_ext
+        prefer_fmt = None  # we'll copy if possible
+    else:
+        # Default to PNG for regular textures; EXR if float env or float image and env
+        if is_environment and getattr(image, "is_float", False):
+            ext = ".exr"
+            prefer_fmt = "OPEN_EXR"
+        else:
+            ext = ".png"
+            prefer_fmt = "PNG"
+
+    # Build sanitized base filename
+    if suggested_name and len(suggested_name) > 0:
+        root, sug_ext = os.path.splitext(suggested_name)
+        base_name = _sanitize_filename(root) + (sug_ext if len(sug_ext) > 0 else ext)
+    else:
+        base_name = _sanitize_filename(os.path.splitext(image.name)[0]) + ext
+    base_name = _unique_name(operator, base_name)
+    out_path = os.path.join(textures_dir, base_name)
+
+    # If source exists and ext matches and we don't need re-encode, copy
+    copied = False
+    if src_path and os.path.isfile(src_path) and os.path.splitext(src_path)[1].lower() == ext and prefer_fmt is None:
+        try:
+            shutil.copy2(src_path, out_path)
+            copied = True
+        except Exception:
+            copied = False
+
+    if copied == False:
+        _save_image_copy(image, out_path, prefer_format=prefer_fmt)
+
+    rel = _mtl_relpath(obj_path, out_path)
+    mapping[image] = rel
+    return rel
 
 
 def _export_scene_json(operator, json_path, obj_path):
@@ -158,6 +462,234 @@ def _export_scene_json(operator, json_path, obj_path):
         json.dump(scene_data, f, indent=2)
 
 
+def _finalize_material_textures(operator, obj_path, blender_mat, properties):
+    """Resolve texture properties to relative file paths and ensure files exist.
+
+    Accepts temporary values placed by _extract_texture_connections:
+      - map_Kd: bpy.types.Image or string
+      - map_Pr: bpy.types.Image or string
+      - normalmap: tuple(Image, scale) or string
+    """
+    if getattr(operator, "export_textures", False) == False:
+        # Convert any Image objects to relative file paths if source is FILE
+        kd = properties.get("map_Kd")
+        if isinstance(kd, bpy.types.Image):
+            sp = _abspath_image(kd)
+            properties["map_Kd"] = _mtl_relpath(obj_path, sp) if (sp and os.path.isfile(sp)) else kd.name
+        # If base color is textured, drop constant Kd to avoid double-application
+        if properties.get("map_Kd"):
+            if "Kd" in properties:
+                properties.pop("Kd", None)
+
+        pr = properties.get("map_Pr")
+        if isinstance(pr, bpy.types.Image):
+            sp = _abspath_image(pr)
+            properties["map_Pr"] = _mtl_relpath(obj_path, sp) if (sp and os.path.isfile(sp)) else pr.name
+
+        nm = properties.get("normalmap")
+        if isinstance(nm, tuple) and isinstance(nm[0], bpy.types.Image):
+            img, scale = nm[0], nm[1]
+            sp = _abspath_image(img)
+            rel = _mtl_relpath(obj_path, sp) if (sp and os.path.isfile(sp)) else img.name
+            properties["normalmap"] = f"image {rel} scale {float(scale):.4f}"
+        return
+
+    # Export each referenced image and update to relative paths
+    def resolve_image(img_or_str, *, suggested):
+        if isinstance(img_or_str, bpy.types.Image):
+            rel = _ensure_image_export(operator, obj_path, img_or_str, suggested_name=suggested)
+            return rel
+        return img_or_str
+
+    if "map_Kd" in properties and properties["map_Kd"] is not None:
+        rel = resolve_image(properties["map_Kd"], suggested=f"{blender_mat.name}_Kd.png")
+        if rel:
+            properties["map_Kd"] = rel
+            # If base color is textured, drop constant Kd to avoid double-application
+            if "Kd" in properties:
+                properties.pop("Kd", None)
+
+    if "map_Pr" in properties and properties["map_Pr"] is not None:
+        rel = resolve_image(properties["map_Pr"], suggested=f"{blender_mat.name}_Pr.png")
+        if rel:
+            properties["map_Pr"] = rel
+
+    # metallic texture
+    if "map_Ml" in properties and properties["map_Ml"] is not None:
+        rel = resolve_image(properties["map_Ml"], suggested=f"{blender_mat.name}_Ml.png")
+        if rel:
+            properties["map_Ml"] = rel
+
+    # transmission texture
+    if "map_Tm" in properties and properties["map_Tm"] is not None:
+        rel = resolve_image(properties["map_Tm"], suggested=f"{blender_mat.name}_Tm.png")
+        if rel:
+            properties["map_Tm"] = rel
+
+    nm = properties.get("normalmap")
+    if isinstance(nm, tuple) and len(nm) >= 2:
+        img, scale = nm[0], nm[1]
+        rel = resolve_image(img, suggested=f"{blender_mat.name}_N.png")
+        if rel:
+            properties["normalmap"] = f"image {rel} scale {float(scale):.4f}"
+
+    # Override with baked results if present
+    baked = getattr(operator, '_etx_baked', None)
+    if isinstance(baked, dict) and blender_mat.name in baked:
+        info = baked[blender_mat.name]
+        if 'Kd' in info:
+            properties['map_Kd'] = info['Kd']
+        if 'N' in info:
+            properties['normalmap'] = f"image {info['N']} scale 1.0"
+
+
+def _bake_procedural_textures(operator, materials, obj_path):
+    """Bake base color and normals for node-based materials to images.
+
+    Creates temporary images per material, assigns to a temporary image node,
+    performs cycles bake for selected objects that use the material.
+    """
+    # Ensure Cycles is available
+    scene = bpy.context.scene
+    prev_engine = scene.render.engine
+    try:
+        # Switch to Cycles if available
+        if bpy.app.build_options.cycles:
+            scene.render.engine = 'CYCLES'
+        else:
+            return  # skip baking if no cycles
+
+        # Common bake settings
+        scene.cycles.bake_type = 'DIFFUSE'
+        scene.render.bake.use_selected_to_active = False
+        scene.render.bake.use_clear = True
+        scene.render.bake.margin = int(getattr(operator, 'bake_margin', 4))
+        res = int(getattr(operator, 'bake_resolution', '2048'))
+
+        # Collect objects by material
+        mat_to_objs = {}
+        for obj in bpy.context.scene.objects:
+            if obj.type != 'MESH' or obj.data is None:
+                continue
+            for slot in obj.material_slots:
+                if slot and slot.material in materials:
+                    mat_to_objs.setdefault(slot.material, []).append(obj)
+
+        # Prepare export dir
+        textures_dir = _get_textures_dir(operator, obj_path)
+
+        for mat, objs in mat_to_objs.items():
+            if mat is None or (not mat.use_nodes) or mat.node_tree is None:
+                continue
+
+            nt = mat.node_tree
+            # Ensure active output/material
+            out = None
+            for n in nt.nodes:
+                if n.type == 'OUTPUT_MATERIAL' and n.is_active_output:
+                    out = n
+                    break
+            if out is None:
+                continue
+
+            # Create image node
+            img_node = nt.nodes.new('ShaderNodeTexImage')
+            img_node.interpolation = 'Smart'
+            img_node.label = 'ETX_BAKE_TARGET'
+
+            # Set bake targets we want
+            bake_targets = [
+                ('DIFFUSE', f"{_sanitize_filename(mat.name)}_baked_Kd.png"),
+            ]
+
+            # Try normal bake if there is a normal linkage
+            has_normal = False
+            try:
+                shader = _find_shader_node(nt)
+                if shader and _input_is_linked(shader, 'Normal'):
+                    has_normal = True
+            except Exception:
+                has_normal = False
+            if has_normal:
+                bake_targets.append(('NORMAL', f"{_sanitize_filename(mat.name)}_baked_N.png"))
+
+            # Ensure objects are selected for baking
+            prev_selection = [o for o in bpy.context.selected_objects]
+            prev_active = bpy.context.view_layer.objects.active
+            try:
+                for o in bpy.context.selected_objects:
+                    o.select_set(False)
+                for o in objs:
+                    o.select_set(True)
+                if len(objs) > 0:
+                    bpy.context.view_layer.objects.active = objs[0]
+
+                baked_paths = {}
+                for bake_type, filename in bake_targets:
+                    # Create/replace image
+                    img = bpy.data.images.new(name=filename, width=res, height=res, alpha=True, float_buffer=False)
+                    img.file_format = 'PNG'
+                    img_node.image = img
+                    nt.nodes.active = img_node
+
+                    if bake_type == 'DIFFUSE':
+                        scene.cycles.bake_type = 'DIFFUSE'
+                        scene.render.bake.use_pass_direct = False
+                        scene.render.bake.use_pass_indirect = False
+                        scene.render.bake.use_pass_color = True
+                    elif bake_type == 'NORMAL':
+                        scene.cycles.bake_type = 'NORMAL'
+
+                    # Perform bake
+                    bpy.ops.object.bake(type=scene.cycles.bake_type)
+
+                    # Save baked image
+                    out_path = os.path.join(textures_dir, filename)
+                    img.filepath_raw = out_path
+                    img.file_format = 'PNG'
+                    img.save()
+
+                    rel = _mtl_relpath(obj_path, out_path)
+                    # Register export mapping so later property resolution can use it
+                    if getattr(operator, '_etx_exported_images', None) is None:
+                        operator._etx_exported_images = {}
+                    operator._etx_exported_images[img] = rel
+                    if bake_type == 'DIFFUSE':
+                        baked_paths['Kd'] = rel
+                    elif bake_type == 'NORMAL':
+                        baked_paths['N'] = rel
+
+                # Store per-material baked results for later override
+                if baked_paths:
+                    if getattr(operator, '_etx_baked', None) is None:
+                        operator._etx_baked = {}
+                    operator._etx_baked[mat.name] = baked_paths
+
+            finally:
+                # Cleanup image node
+                try:
+                    nt.nodes.remove(img_node)
+                except Exception:
+                    pass
+                # Restore selection
+                for o in bpy.context.selected_objects:
+                    o.select_set(False)
+                for o in prev_selection:
+                    try:
+                        o.select_set(True)
+                    except Exception:
+                        pass
+                try:
+                    bpy.context.view_layer.objects.active = prev_active
+                except Exception:
+                    pass
+    finally:
+        try:
+            scene.render.engine = prev_engine
+        except Exception:
+            pass
+
+
 def _get_camera_data(operator):
     """Extract camera data from Blender scene"""
     context = bpy.context
@@ -186,9 +718,14 @@ def _get_camera_data(operator):
         target = Vector((target_blender.x, target_blender.z, -target_blender.y))
         up = Vector((up_blender.x, up_blender.z, -up_blender.y))
 
-        # Get viewport from render settings
+        # Get viewport from render settings taking percentage into account
         render = scene.render
-        viewport = [render.resolution_x, render.resolution_y]
+        try:
+            percent = float(getattr(render, "resolution_percentage", 100))
+        except Exception:
+            percent = 100.0
+        scale = max(1.0, percent) / 100.0
+        viewport = [int(max(1, render.resolution_x * scale)), int(max(1, render.resolution_y * scale))]
 
         # Get field of view
         if camera_data.type == "PERSP":
@@ -229,7 +766,14 @@ def _get_camera_data(operator):
             target = Vector((target_blender.x, target_blender.z, -target_blender.y))
             up = Vector((up_blender.x, up_blender.z, -up_blender.y))
 
-            viewport = [1920, 1080]  # Default viewport
+            # Use render settings with percentage if available, fallback to default
+            try:
+                render = scene.render
+                percent = float(getattr(render, "resolution_percentage", 100))
+                scale = max(1.0, percent) / 100.0
+                viewport = [int(max(1, render.resolution_x * scale)), int(max(1, render.resolution_y * scale))]
+            except Exception:
+                viewport = [1920, 1080]
             estimated_vertical_fov = math.degrees(
                 rv3d.view_camera_zoom * 0.02
             )  # Approximate
@@ -245,7 +789,13 @@ def _get_camera_data(operator):
             location = Vector((7.4, 5.3, 6.5))  # Adjusted for Y-up: (x, y_up, z_back)
             target = Vector((0.0, 0.0, 0.0))
             up = Vector((0.0, 1.0, 0.0))  # Y is up
-            viewport = [1920, 1080]
+            try:
+                render = scene.render
+                percent = float(getattr(render, "resolution_percentage", 100))
+                scale = max(1.0, percent) / 100.0
+                viewport = [int(max(1, render.resolution_x * scale)), int(max(1, render.resolution_y * scale))]
+            except Exception:
+                viewport = [1920, 1080]
             # Default FOV based on user choice
             fov = 50.0  # Always horizontal
             focal_length = 50.0
@@ -263,7 +813,7 @@ def _get_camera_data(operator):
     }
 
 
-def _get_environment_light_material(operator):
+def _get_environment_light_material(operator, obj_path):
     """Checks for a world background and exports it as an ETX environment light."""
     world = bpy.context.scene.world
     if not (world and world.use_nodes and world.node_tree):
@@ -304,14 +854,14 @@ def _get_environment_light_material(operator):
         return env_material
 
     if texture_node and texture_node.image:
-        tint_color = [c * strength for c in base_color[:3]]
-        if sum(tint_color) < 1e-6:
-            return None
-
-        env_material["properties"]["image"] = texture_node.image.name
-        env_material["properties"][
-            "color"
-        ] = f"{tint_color[0]:.4f} {tint_color[1]:.4f} {tint_color[2]:.4f}"
+        # Export environment texture to disk and reference relatively
+        if getattr(operator, "export_textures", False):
+            rel = _ensure_image_export(operator, obj_path, texture_node.image, is_environment=True)
+        else:
+            rel = texture_node.image.name
+        env_material["properties"]["image"] = rel
+        # With a texture, use Background Strength as scalar (ignore base color)
+        env_material["properties"]["color"] = f"{strength:.4f} {strength:.4f} {strength:.4f}"
 
         mapping_node = None
         if texture_node.inputs["Vector"].is_linked:
@@ -325,10 +875,8 @@ def _get_environment_light_material(operator):
             env_material["properties"]["rotation"] = f"{rotation_z_deg:.2f}"
 
         if texture_node.image.source != "FILE":
-            operator.report(
-                {"WARNING"},
-                f"Environment image '{texture_node.image.name}' is not saved to a file and may not be found by the renderer.",
-            )
+            # Will be saved via _ensure_image_export
+            pass
 
     else:
         final_color = [c * strength for c in base_color[:3]]
@@ -509,7 +1057,7 @@ def _get_etx_material_class(operator, blender_mat):
 
         if shader_node:
             node_type_to_class = {
-                "BSDF_PRINCIPLED": "plastic",
+                "BSDF_PRINCIPLED": "principled",
                 "BSDF_METALLIC": "conductor",
                 "BSDF_GLASS": "dielectric",
                 "BSDF_GLOSSY": "conductor",
@@ -526,11 +1074,21 @@ def _get_etx_material_class(operator, blender_mat):
 def _extract_principled_properties(operator, principled, properties):
     base_color = _get_node_input_value(principled, "Base Color", [1.0, 1.0, 1.0, 1.0])
     if hasattr(base_color, "__len__") and len(base_color) >= 3:
-        properties["Kd"] = (
-            f"{base_color[0]:.3f} {base_color[1]:.3f} {base_color[2]:.3f}"
-        )
+        properties["Kd"] = _format_rgb_linear_to_srgb(base_color)
     else:
         properties["Kd"] = "0.800 0.800 0.800"
+
+    # Opacity: product of Base Color alpha and Principled 'Alpha' input
+    try:
+        base_alpha = float(base_color[3]) if (hasattr(base_color, "__len__") and len(base_color) >= 4) else 1.0
+    except Exception:
+        base_alpha = 1.0
+    try:
+        principled_alpha = float(_get_node_input_value(principled, "Alpha", 1.0))
+    except Exception:
+        principled_alpha = 1.0
+    opacity_value = max(0.0, min(1.0, base_alpha * principled_alpha))
+    properties["opacity"] = f"{opacity_value:.4f}"
 
     roughness = _get_node_input_value(principled, "Roughness", 0.5)
     properties["Pr"] = f"{roughness:.3f}"
@@ -548,7 +1106,12 @@ def _extract_principled_properties(operator, principled, properties):
     ior = _get_node_input_value(principled, "IOR", 1.45)
     properties["int_ior"] = f"{ior:.3f}"
 
+    # Metallic and Transmission scalars for Principled BSDF
+    metallic = _get_node_input_value(principled, "Metallic", 0.0)
+    properties["metalness"] = f"{float(metallic):.3f}"
+
     transmission = _get_node_input_value(principled, "Transmission", 0.0)
+    properties["transmission"] = f"{float(transmission):.3f}"
     if transmission > 0.0:
         if hasattr(base_color, "__len__") and len(base_color) >= 3:
             trans_color = [c * transmission for c in base_color[:3]]
@@ -642,13 +1205,13 @@ def _extract_emission_properties(operator, emission_node, properties):
 def _extract_translucent_properties(operator, translucent_node, properties):
     color = _get_node_input_value(translucent_node, "Color", [1.0, 1.0, 1.0, 1.0])
     if hasattr(color, "__len__") and len(color) >= 3:
-        properties["Kd"] = f"{color[0]:.3f} {color[1]:.3f} {color[2]:.3f}"
+        properties["Kd"] = _format_rgb_linear_to_srgb(color)
 
 
 def _extract_diffuse_properties(operator, diffuse_node, properties):
     color = _get_node_input_value(diffuse_node, "Color", [1.0, 1.0, 1.0, 1.0])
     if hasattr(color, "__len__") and len(color) >= 3:
-        properties["Kd"] = f"{color[0]:.3f} {color[1]:.3f} {color[2]:.3f}"
+        properties["Kd"] = _format_rgb_linear_to_srgb(color)
     roughness = _get_node_input_value(diffuse_node, "Roughness", 0.0)
     properties["Pr"] = f"{roughness:.3f}"
 
@@ -679,19 +1242,31 @@ def _extract_texture_connections(operator, principled_node, properties):
     if _input_is_linked(principled_node, "Base Color"):
         texture_node = _find_texture_node(principled_node.inputs["Base Color"])
         if texture_node and texture_node.image:
-            properties["map_Kd"] = texture_node.image.name
+            properties["map_Kd"] = texture_node.image
 
     # Normal map
     if _input_is_linked(principled_node, "Normal"):
         normal_map = _find_normal_map_node(principled_node.inputs["Normal"])
         if normal_map and normal_map.image:
-            properties["normalmap"] = f"image {normal_map.image.name} scale 1.0"
+            properties["normalmap"] = (normal_map.image, 1.0)
 
     # Roughness texture
     if _input_is_linked(principled_node, "Roughness"):
         texture_node = _find_texture_node(principled_node.inputs["Roughness"])
         if texture_node and texture_node.image:
-            properties["map_Pr"] = texture_node.image.name
+            properties["map_Pr"] = texture_node.image
+
+    # Metallic texture
+    if _input_is_linked(principled_node, "Metallic"):
+        texture_node = _find_texture_node(principled_node.inputs["Metallic"])
+        if texture_node and texture_node.image:
+            properties["map_Ml"] = texture_node.image
+
+    # Transmission texture
+    if _input_is_linked(principled_node, "Transmission"):
+        texture_node = _find_texture_node(principled_node.inputs["Transmission"])
+        if texture_node and texture_node.image:
+            properties["map_Tm"] = texture_node.image
 
 
 def _input_is_linked(node, input_name):

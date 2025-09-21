@@ -28,6 +28,7 @@ void VCMOptions::load(const Options& opt) {
 }
 
 void VCMOptions::store(Options& opt) const {
+  opt.options.clear();
   opt.set_string("compute", "Connections:", "Connections");
   opt.set_bool("vcm-direct_hit", direct_hit(), "Direct Hits");
   opt.set_bool("vcm-connect_to_camera", connect_to_camera(), "Light Path to Camera");

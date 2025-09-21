@@ -980,15 +980,26 @@ ETX_GPU_CODE float3 from_spherical(float phi, float theta) {
   return from_spherical({phi, theta, 1.0f});
 }
 
-ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset) {
-  float phi = (uv.x * 2.0f - 1.0f) * kPi;
+ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset, float u_scale) {
+  float u = uv.x;
+  if (u_scale < 0.0f) {
+    u = 1.0f - u;
+  }
+  u = u - offset.x;
+  u = u - floorf(u);
+  float phi = (u * 2.0f - 1.0f) * kPi;
   float theta = (0.5f - uv.y) * kPi;
   return from_spherical(phi, theta);
 }
 
-ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset) {
+ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset, float u_scale) {
   auto s = to_spherical(dir);
   float u = (s.phi / kPi + 1.0f) / 2.0f;
+  if (u_scale < 0.0f) {
+    u = 1.0f - u;
+  }
+  u = u + offset.x;
+  u = u - floorf(u);
   float v = 0.5f - s.theta / kPi;
   return {u, v};
 }

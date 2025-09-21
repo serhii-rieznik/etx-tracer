@@ -172,7 +172,6 @@ bool UI::build_options(Options& options) {
         if (option.meta & Option::Meta::EnumValue) {
           ETX_CRITICAL(data.bounds.maximum > data.bounds.minimum);
           ETX_CRITICAL(option.name_getter);
-          ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
           int32_t original = data.value;
           if (ImGui::TreeNodeEx(option.description.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
             for (int32_t i = data.bounds.minimum; i <= data.bounds.maximum; ++i) {

@@ -155,9 +155,6 @@ struct SceneRepresentationImpl {
   Scene scene;
   Camera camera;
 
-  // bool camera_loaded = false;
-  // bool loaded = false;
-
   char data_buffer[2048] = {};
 
   bool get_param(const tinyobj::material_t& m, const char* param) {
@@ -216,9 +213,9 @@ struct SceneRepresentationImpl {
     return uint32_t(std::distance(scene_spectrums.begin(), i));
   }
 
-  uint32_t add_image(const char* path, uint32_t options, const float2& offset) {
+  uint32_t add_image(const char* path, uint32_t options, const float2& offset, const float2& scale) {
     std::string id = path ? path : ("image-" + std::to_string(images.array_size()));
-    return images.add_from_file(id, options | Image::Delay, offset);
+    return images.add_from_file(id, options | Image::Delay, offset, scale);
   }
 
   uint32_t add_image(const Image& img) {
@@ -226,11 +223,11 @@ struct SceneRepresentationImpl {
   }
 
   uint32_t add_image(const char* path, uint32_t options) {
-    return add_image(path, options, {});
+    return add_image(path, options, {}, {1.0f, 1.0f});
   }
 
-  uint32_t add_image(const float4* data, const uint2& dim, uint32_t options) {
-    return images.add_from_data(data, dim, options, {});
+  uint32_t add_image(const float4* data, const uint2& dim, uint32_t options, const float2& offset, const float2& scale) {
+    return images.add_from_data(data, dim, options, offset, scale);
   }
 
   void add_image_options(uint32_t index, uint32_t options) {
@@ -490,7 +487,8 @@ struct SceneRepresentationImpl {
     log::warning("Building pixel sampler...");
     std::vector<float4> sampler_image;
     Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
-    uint32_t image = images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, Image::BuildSamplingTable | Image::UniformSamplingTable, {});
+    uint32_t image_options = Image::BuildSamplingTable | Image::UniformSamplingTable;
+    uint32_t image = images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, image_options, {}, {1.0f, 1.0f});
     scene.pixel_sampler = {image, 1.5f};
 
     scene_spectrum_array.resize(scene_spectrums.size());
@@ -941,7 +939,7 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
   if (get_param(material, "shape")) {
     char tmp_buffer[2048] = {};
     snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
-    camera.lens_image = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable);
+    camera.lens_image = add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable, {}, {1.0f, 1.0f});
   }
   if (get_param(material, "ext_medium")) {
     auto m = mediums.find(data_buffer);
@@ -1120,7 +1118,7 @@ void SceneRepresentationImpl::parse_directional_light(const char* base_dir, cons
   if (get_param(material, "image")) {
     char tmp_buffer[2048] = {};
     snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, data_buffer);
-    e.emission.image_index = add_image(tmp_buffer, Image::Regular);
+    e.emission.image_index = add_image(tmp_buffer, Image::Regular, {}, {1.0f, 1.0f});
   }
 
   if (get_param(material, "angular_diameter")) {
@@ -1141,9 +1139,18 @@ void SceneRepresentationImpl::parse_env_light(const char* base_dir, const tinyob
 
   float rotation = 0.0f;
   if (get_param(material, "rotation")) {
-    rotation = static_cast<float>(atof(data_buffer)) / 360.0f;
+    // minus to align with Blender
+    rotation = -static_cast<float>(atof(data_buffer)) / 360.0f;
   }
-  e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f});
+
+  float u_scale = 1.0f;
+  if (get_param(material, "scale")) {
+    float val = {};
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      u_scale = val;
+    }
+  }
+  e.emission.image_index = add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f}, {u_scale, 1.0f});
 
   if (get_param(material, "color")) {
     e.emission.spectrum_index = add_spectrum(load_illuminant_spectrum(data_buffer));
@@ -1249,7 +1256,7 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
     d.direction = direction;
 
     if (angular_size > 0.0f) {
-      d.emission.image_index = add_image(nullptr, kSunImageDimensions, Image::Delay);
+      d.emission.image_index = add_image(nullptr, kSunImageDimensions, Image::Delay, {}, {1.0f, 1.0f});
       auto& img = images.get(d.emission.image_index);
       scattering::generate_sun_image(scattering_parameters, kSunImageDimensions, direction, angular_size, img.pixels.f32.a, shared_scattering_spectrums, scheduler);
     }
@@ -1259,7 +1266,8 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
     auto& e = emitters.emplace_back(Emitter::Class::Environment);
     e.emission.spectrum_index = add_spectrum(sun_spectrum);
     scene_spectrums[e.emission.spectrum_index].spectrum.scale(sky_scale);
-    e.emission.image_index = add_image(nullptr, sky_image_dimensions, Image::BuildSamplingTable | Image::Delay);
+    uint32_t image_options = Image::BuildSamplingTable | Image::Delay;
+    e.emission.image_index = add_image(nullptr, sky_image_dimensions, image_options, {}, {1.0f, 1.0f});
     e.direction = direction;
 
     auto& img = images.get(e.emission.image_index);
@@ -1479,6 +1487,13 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     mtl.scattering.spectrum_index = load_reflectance_spectrum(data_buffer);
   }
 
+  if (get_param(material, "opacity")) {
+    float val = 1.0f;
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      mtl.opacity = clamp(val, 0.0f, 1.0f);
+    }
+  }
+
   if (get_param(material, "Pr")) {
     float4 value = {};
     if (sscanf(data_buffer, "%f %f", &value.x, &value.y) == 2) {
@@ -1488,16 +1503,79 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     }
   }
 
+  // Principled extras: metalness / transmission / roughness texture maps
+  if (get_param(material, "metalness")) {
+    float val = 0.0f;
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      mtl.metalness.value = {val, val, val, val};
+    }
+  }
+
+  if (get_param(material, "transmission")) {
+    float val = 0.0f;
+    if (sscanf(data_buffer, "%f", &val) == 1) {
+      mtl.transmission.value = {val, val, val, val};
+    }
+  }
+
+  if (get_param(material, "map_Pr")) {
+    auto params = split_params(data_buffer);
+    const char* path = (params.empty() == false) ? params[0] : nullptr;
+    int channel = 0;
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "channel") == 0) && (i + 1 < e)) {
+        channel = std::max(0, atoi(params[i + 1]));
+        ++i;
+      }
+    }
+    if (path && get_file(base_dir, path)) {
+      mtl.roughness.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+      mtl.roughness.channel = static_cast<uint32_t>(channel);
+    }
+  }
+
+  if (get_param(material, "map_Ml")) {
+    auto params = split_params(data_buffer);
+    const char* path = (params.empty() == false) ? params[0] : nullptr;
+    int channel = 0;
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "channel") == 0) && (i + 1 < e)) {
+        channel = std::max(0, atoi(params[i + 1]));
+        ++i;
+      }
+    }
+    if (path && get_file(base_dir, path)) {
+      mtl.metalness.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+      mtl.metalness.channel = static_cast<uint32_t>(channel);
+    }
+  }
+
+  if (get_param(material, "map_Tm")) {
+    auto params = split_params(data_buffer);
+    const char* path = (params.empty() == false) ? params[0] : nullptr;
+    int channel = 0;
+    for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+      if ((strcmp(params[i], "channel") == 0) && (i + 1 < e)) {
+        channel = std::max(0, atoi(params[i + 1]));
+        ++i;
+      }
+    }
+    if (path && get_file(base_dir, path)) {
+      mtl.transmission.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+      mtl.transmission.channel = static_cast<uint32_t>(channel);
+    }
+  }
+
   if (get_file(base_dir, material.diffuse_texname)) {
-    mtl.scattering.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+    mtl.scattering.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
   }
 
   if (get_file(base_dir, material.specular_texname)) {
-    mtl.reflectance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+    mtl.reflectance.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
   }
 
   if (get_file(base_dir, material.transmittance_texname)) {
-    mtl.scattering.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV);
+    mtl.scattering.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
   }
 
   if (get_param(material, "material")) {
@@ -1584,7 +1662,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-        mtl.normal_image_index = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
+        mtl.normal_image_index = add_image(buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
         i += 1;
       }
       if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
@@ -1601,7 +1679,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
         char buffer[1024] = {};
         snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-        mtl.thinfilm.thinkness_image = add_image(buffer, Image::RepeatU | Image::RepeatV);
+        mtl.thinfilm.thinkness_image = add_image(buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         i += 1;
       }
 
@@ -1677,7 +1755,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     is_emitter = true;
     emission_spd = load_illuminant_spectrum(data_buffer);
     if (get_file(base_dir, material.emissive_texname)) {
-      mtl.emission.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable);
+      mtl.emission.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
     }
   }
 
@@ -1686,7 +1764,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     auto params = split_params(data_buffer);
     for (uint64_t i = 0, end = params.size(); i < end; ++i) {
       if ((strcmp(params[i], "image") == 0) && (i + 1 < end) && get_file(base_dir, params[i + 1])) {
-        mtl.emission.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable);
+        mtl.emission.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       } else if (strcmp(params[i], "twosided") == 0) {
         mtl.emission_direction = uint32_t(Emitter::Direction::TwoSided);
       } else if (strcmp(params[i], "omni") == 0) {
@@ -1817,7 +1895,7 @@ uint32_t SceneRepresentationImpl::load_from_gltf(const char* file_name, bool bin
         snprintf(buffer, sizeof(buffer), "./tmp/img-%x.png", hash);
         if (auto fout = fopen(buffer, "wb")) {
           if (fwrite(data, 1, data_size, fout) == data_size) {
-            self->gltf_image_mapping[image_index] = self->add_image(buffer, Image::RepeatU | Image::RepeatV, {});
+            self->gltf_image_mapping[image_index] = self->add_image(buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
           }
           fclose(fout);
         }

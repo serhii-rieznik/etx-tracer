@@ -42,6 +42,7 @@ struct Image {
   Distribution y_distribution = {};
   float2 fsize = {};
   float2 offset = {};
+  float2 scale = {1.0f, 1.0f};
   uint2 isize = {};
   float normalization = 0.0f;
   uint32_t options = 0;

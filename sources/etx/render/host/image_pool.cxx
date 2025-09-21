@@ -50,7 +50,7 @@ struct ImagePoolImpl {
     return handle;
   }
 
-  uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset) {
+  uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
     auto i = mapping.find(path);
     if (i != mapping.end()) {
       return i->second;
@@ -61,6 +61,7 @@ struct ImagePoolImpl {
 
     auto& image = image_pool.get(handle);
     image.offset = offset;
+    image.scale = scale;
     image.options = Image::PerformLoading | image_options;
     if ((image.options & Image::Delay) == 0) {
       perform_loading(handle, image);
@@ -69,13 +70,14 @@ struct ImagePoolImpl {
     return handle;
   }
 
-  uint32_t add_from_data(const float4 data[], const uint2& dimensions, uint32_t image_options, const float2& offset) {
+  uint32_t add_from_data(const float4 data[], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
     std::string path = "~mem" + std::to_string(1u + counter++);
     auto handle = image_pool.alloc();
     mapping[path] = handle;
 
     auto& image = image_pool.get(handle);
     image.offset = offset;
+    image.scale = scale;
     image.format = Image::Format::RGBA32F;
     image.data_size = static_cast<uint32_t>(dimensions.x * dimensions.y * sizeof(float4));
     image.pixels.f32 = make_array_view<float4>(calloc(image.data_size, 1u), dimensions.x * dimensions.y);
@@ -401,12 +403,12 @@ uint32_t ImagePool::add_copy(const Image& img) {
   return _private->add_copy(img);
 }
 
-uint32_t ImagePool::add_from_file(const std::string& path, uint32_t image_options, const float2& offset) {
-  return _private->add_from_file(path, image_options, offset);
+uint32_t ImagePool::add_from_file(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
+  return _private->add_from_file(path, image_options, offset, scale);
 }
 
-uint32_t ImagePool::add_from_data(const float4* data, const uint2& dimensions, uint32_t image_options, const float2& offset) {
-  return _private->add_from_data(data, dimensions, image_options, offset);
+uint32_t ImagePool::add_from_data(const float4* data, const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
+  return _private->add_from_data(data, dimensions, image_options, offset, scale);
 }
 
 const Image& ImagePool::get(uint32_t handle) {

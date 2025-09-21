@@ -124,12 +124,17 @@ ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfil
 }
 
 ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
-  if (mat.scattering.image_index == kInvalidIndex)
-    return false;
-
-  auto uv = lerp_uv(scene.vertices, t, bc);
-  const auto& img = scene.images[mat.scattering.image_index];
-  return (img.options & Image::HasAlphaChannel) && (img.evaluate_alpha(uv) <= smp.next());
+  float material_alpha = mat.opacity;
+  float alpha_diffuse = 1.0f;
+  if (mat.scattering.image_index != kInvalidIndex) {
+    auto uv = lerp_uv(scene.vertices, t, bc);
+    const auto& img = scene.images[mat.scattering.image_index];
+    if (img.options & Image::HasAlphaChannel) {
+      alpha_diffuse = img.evaluate_alpha(uv);
+    }
+  }
+  float alpha_test_value = alpha_diffuse * material_alpha;
+  return (alpha_test_value <= smp.next());
 }
 
 }  // namespace etx

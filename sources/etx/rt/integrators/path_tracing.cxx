@@ -109,6 +109,7 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void build_options(Options& integrator_options) {
+    integrator_options.options.clear();
     integrator_options.set_bool("direct", options.direct, "Direct Hits");
     integrator_options.set_bool("nee", options.nee, "Light Sampling");
     integrator_options.set_string("pt-opt", "Path Tracing Options", "Options");
