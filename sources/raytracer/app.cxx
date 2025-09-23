@@ -189,7 +189,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     _recent_files.erase(_recent_files.begin());
   }
 
-  raytracing.film().clear();
+  raytracing.film().clear(Film::ClearEverything);
   integrator_thread.run();
 }
 
@@ -211,7 +211,7 @@ void RTApplication::on_use_image_as_reference() {
   _options.set_string("ref", {}, "Reference");
   save_options();
 
-  const float4* data = raytracing.film().combined_result();
+  const float4* data = raytracing.film().layer(Film::Result);
   uint2 size = raytracing.film().dimensions();
   render.set_reference_image(data, size);
 }
@@ -268,7 +268,7 @@ void RTApplication::on_integrator_selected(Integrator* i) {
   save_options();
 
   integrator_thread.set_integrator(i);
-  raytracing.film().clear();
+  raytracing.film().clear(Film::ClearEverything);
 
   if (scene.valid()) {
     integrator_thread.run();
@@ -279,7 +279,7 @@ void RTApplication::on_run_selected() {
   if (ui.view_options().layer == Film::Denoised) {
     ui.mutable_view_options().layer = Film::Result;
   }
-  raytracing.film().clear();
+  raytracing.film().clear(Film::ClearEverything);
   integrator_thread.run();
 }
 
@@ -342,11 +342,8 @@ void RTApplication::on_scene_settings_changed() {
 }
 
 void RTApplication::on_denoise_selected() {
-  raytracing.film().denoise();
-
-  if (ui.view_options().layer == Film::Result) {
-    ui.mutable_view_options().layer = Film::Denoised;
-  }
+  raytracing.film().denoise(ui.view_options().layer);
+  ui.mutable_view_options().layer = Film::Denoised;
 }
 
 void RTApplication::on_view_scene(uint32_t direction) {

@@ -224,8 +224,6 @@ bool UI::ior_picker(Scene* scene, const char* name, RefractiveIndex& ior) {
   // Determine current selection title for preview
   const float3& a0 = scene->spectrums[ior.eta_index].integrated();
   const float3& a1 = scene->spectrums[ior.k_index].integrated();
-  log::info("A0: %.4f, %.4f, %.4f", a0.x, a0.y, a0.z);
-  log::info("A1: %.4f, %.4f, %.4f", a1.x, a1.y, a1.z);
 
   const char* preview = name;
   for (const auto& i : _ior_files) {
@@ -233,9 +231,6 @@ bool UI::ior_picker(Scene* scene, const char* name, RefractiveIndex& ior) {
       continue;
     const float3& b0 = i.eta.integrated();
     const float3& b1 = i.k.integrated();
-    log::info("%s:", i.title.c_str());
-    log::info("B0: %.4f, %.4f, %.4f", b0.x, b0.y, b0.z);
-    log::info("B1: %.4f, %.4f, %.4f", b1.x, b1.y, b1.z);
     float diff = fabsf(a0.x - b0.x) + fabsf(a0.y - b0.y) + fabsf(a0.z - b0.z) + fabsf(a1.x - b1.x) + fabsf(a1.y - b1.y) + fabsf(a1.z - b1.z);
     if (diff < 1e-4f) {
       preview = i.title.c_str();

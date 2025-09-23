@@ -365,7 +365,7 @@ struct CPUBidirectionalImpl : public Task {
 
       auto xyz = (result / spect.sampling_pdf()).to_rgb();
       auto albedo = (gbuffer.albedo / spect.sampling_pdf()).to_rgb();
-      film.accumulate(pixel, {{xyz, Film::CameraImage}, {gbuffer.normal, Film::Normals}, {albedo, Film::Albedo}});
+      film.accumulate_camera_image(pixel, xyz, gbuffer.normal, albedo);
     }
   }
 
@@ -480,7 +480,7 @@ struct CPUBidirectionalImpl : public Task {
       if (curr.connectible) {
         CameraSample camera_sample = {};
         auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);
-        rt.film().atomic_add(Film::LightIteration, splat.to_rgb(), camera_sample.uv);
+        rt.film().atomic_add_light_iteration(splat.to_rgb(), camera_sample.uv);
       }
     } else if (payload.mode == PathSource::Camera) {
       smp.push_fixed(smp_fixed.x, smp_fixed.y, smp_fixed.z);
@@ -774,15 +774,13 @@ struct CPUBidirectionalImpl : public Task {
     return StepResult::Nothing;
   }
 
-  SpectralResponse build_path(Sampler& smp, const float3& ray_o, const float3& ray_d, PathData& path_data, Payload& payload, const EmitterSample& emitter_sample, GBuffer& gbuffer,
-    PathVertex& curr, PathVertex& prev) const {
+  SpectralResponse build_path(Sampler& smp, Ray ray, PathData& path_data, Payload& payload, const EmitterSample& emitter_sample, GBuffer& gbuffer, PathVertex& curr,
+    PathVertex& prev) const {
     ETX_VALIDATE(payload.throughput);
 
     const auto& scene = rt.scene();
 
     uint32_t subsurface_material = kInvalidIndex;
-
-    Ray ray = {ray_o, ray_d, kRayEpsilon, kMaxFloat};
 
     Intersection intersection = {};
     Medium::Sample medium_sample = {};
@@ -894,7 +892,7 @@ struct CPUBidirectionalImpl : public Task {
       .use_blue_noise = enable_blue_noise,
     };
 
-    return build_path(smp, ray.o, ray.d, path_data, payload, {}, gbuffer, curr, prev);
+    return build_path(smp, ray, path_data, payload, {}, gbuffer, curr, prev);
   }
 
   SpectralResponse build_emitter_path(Sampler& smp, SpectralQuery spect, PathData& path_data) const {
@@ -930,7 +928,6 @@ struct CPUBidirectionalImpl : public Task {
     path_data.from_delta = emitter_sample.is_delta;
     path_data.emitter_mis_history = 0.0f;
 
-    float3 o = offset_ray(emitter_sample.origin, curr.intersection.nrm);
     GBuffer gbuffer = {};
 
     Payload payload = {
@@ -943,7 +940,13 @@ struct CPUBidirectionalImpl : public Task {
       .mode = PathSource::Light,
     };
 
-    return build_path(smp, o, emitter_sample.direction, path_data, payload, emitter_sample, gbuffer, curr, prev);
+    Ray ray = {
+      offset_ray(emitter_sample.origin, curr.intersection.nrm),
+      emitter_sample.direction,
+      kRayEpsilon,
+      kMaxFloat,
+    };
+    return build_path(smp, ray, path_data, payload, emitter_sample, gbuffer, curr, prev);
   }
 
   void precompute_camera_mis(PathVertex& curr, PathVertex& prev, PathData& path_data) const {
@@ -1336,7 +1339,8 @@ struct CPUBidirectionalImpl : public Task {
     if ((mode == Mode::PathTracing) || (enable_connect_to_camera == false) || (target_path_length > scene.max_path_length) || (target_path_length < scene.min_path_length))
       return {spect, 0.0f};
 
-    camera_sample = sample_film(smp, scene, rt.camera(), y_curr.intersection.pos);
+    const auto& camera = rt.camera();
+    camera_sample = sample_film(smp, scene, camera, y_curr.intersection.pos);
     if (camera_sample.valid() == false) {
       return {spect, 0.0f};
     }
@@ -1360,7 +1364,10 @@ struct CPUBidirectionalImpl : public Task {
     ETX_VALIDATE(splat);
 
     if (splat.is_zero() == false) {
-      splat *= local_transmittance(spect, smp, y_curr, sampled_vertex.intersection.pos);
+      float len = length(sampled_vertex.intersection.pos - y_curr.intersection.pos);
+      float cos_t = fabsf(dot(camera_sample.direction, camera.direction));
+      float3 clip_pos = y_curr.intersection.pos + camera_sample.direction * fmaxf(0.0f, len - camera.clip_near / cos_t);
+      splat *= local_transmittance(spect, smp, y_curr, clip_pos);
     }
 
     return splat;
@@ -1421,7 +1428,7 @@ struct CPUBidirectionalImpl : public Task {
 
     status = {};
     iteration_time = {};
-    rt.film().clear({Film::Internal, Film::LightImage, Film::LightIteration});
+    rt.film().clear(Film::ClearCameraData | Film::ClearLightData);
     current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
   }
 };
@@ -1455,6 +1462,7 @@ void CPUBidirectional::update() {
   }
 
   rt.film().commit_light_iteration(_private->status.current_iteration);
+  rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
 
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);

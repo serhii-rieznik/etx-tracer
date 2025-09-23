@@ -43,11 +43,12 @@ struct CPUPathTracingImpl : public Task {
     iteration_time = {};
     pixels_processed = 0;
 
-    film.clear({Film::Internal});
+    film.clear(Film::ClearCameraData);
     current_task = scheduler.schedule(film.pixel_count(), this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
+    ETX_PROFILER_SCOPE();
     const auto& scene = rt.scene();
     const auto& camera = rt.camera();
 
@@ -77,7 +78,7 @@ struct CPUPathTracingImpl : public Task {
         }
       }
 
-      film.accumulate(pixel, {{color, Film::CameraImage}, {normal, Film::Normals}, {albedo, Film::Albedo}});
+      film.accumulate_camera_image(pixel, color, normal, albedo);
     }
   }
 

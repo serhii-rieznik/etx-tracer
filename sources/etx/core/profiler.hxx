@@ -6,7 +6,7 @@
 
 namespace etx {
 
-#define ETX_PROFILER_ENABLED 1
+#define ETX_PROFILER_ENABLED 0
 
 #if (ETX_PROFILER_ENABLED)
 
@@ -44,11 +44,13 @@ namespace etx {
    do {                      \
    } while (0)
 
+# define ETX_PROFILER_MAIN_THREAD(...)     ETX_EMPTY_STATEMENT
 # define ETX_PROFILER_REGISTER_THREAD(...) ETX_EMPTY_STATEMENT
-# define ETX_PROFILER_UNREGISTER_THREAD()  ETX_EMPTY_STATEMENT
+# define ETX_PROFILER_EXIT_THREAD(...)     ETX_EMPTY_STATEMENT
 # define ETX_PROFILER_SCOPE(...)           ETX_EMPTY_STATEMENT
 # define ETX_PROFILER_NAMED_SCOPE(...)     ETX_EMPTY_STATEMENT
 # define ETX_PROFILER_FRAME(...)           ETX_EMPTY_STATEMENT
+# define ETX_END_PROFILER_FRAME(...)       ETX_EMPTY_STATEMENT
 
 #endif
 

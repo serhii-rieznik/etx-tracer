@@ -83,7 +83,7 @@ struct CPUVCMImpl {
 
     status = {};
 
-    rt.film().clear({Film::Internal, Film::LightImage, Film::LightIteration});
+    rt.film().clear(Film::ClearCameraData | Film::ClearLightData);
     have_camera_image = true;
     have_light_image = true;
 
@@ -118,7 +118,6 @@ struct CPUVCMImpl {
     _light_paths.resize(rt.film().pixel_count());
 
     _light_vertices.clear();
-    rt.film().clear({Film::LightIteration});
 
     mode = Mode::Light;
     task_handle = rt.scheduler().schedule(rt.film().pixel_count(), &light_gather);
@@ -149,7 +148,7 @@ struct CPUVCMImpl {
         for (uint32_t i = 0; i < step_result.splat_count; ++i) {
           const float3& val = step_result.values_to_splat[i].to_rgb() / step_result.values_to_splat[i].sampling_pdf();
           if (dot(val, val) > kEpsilon) {
-            film.atomic_add(Film::LightIteration, val, step_result.splat_uvs[i]);
+            film.atomic_add_light_iteration(val, step_result.splat_uvs[i]);
           }
         }
       }
@@ -196,7 +195,7 @@ struct CPUVCMImpl {
         state.merged *= vcm_iteration.vm_normalization;
         state.merged += (state.gathered / state.spect.sampling_pdf()).to_rgb();
 
-        film.accumulate(pixel, {{state.merged, Film::CameraImage}});
+        film.accumulate_camera_image(pixel, state.merged, {}, {});
 
         if (pi % 256 == 0) {
           have_camera_image = true;

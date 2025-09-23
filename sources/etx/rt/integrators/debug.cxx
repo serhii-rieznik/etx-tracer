@@ -146,7 +146,7 @@ struct CPUDebugIntegratorImpl : public Task {
     total_time = {};
     iteration_time = {};
 
-    rt.film().clear({Film::Internal});
+    rt.film().clear({});
     current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
   }
 
@@ -159,7 +159,7 @@ struct CPUDebugIntegratorImpl : public Task {
       if (film.active_pixel(i, pixel)) {
         float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
         float3 xyz = preview_pixel(smp, uv, pixel, i);
-        rt.film().accumulate(pixel, {{xyz, Film::CameraImage}});
+        rt.film().accumulate_camera_image(pixel, xyz, {}, {});
       }
     }
   }

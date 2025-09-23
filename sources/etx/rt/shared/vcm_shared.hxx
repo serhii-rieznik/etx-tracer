@@ -504,7 +504,10 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
     ETX_VALIDATE(reverse_pdf);
   }
 
-  auto tr = vcm_transmittance(rt, scene, state, origin, camera_sample.position);
+  float len = length(camera_sample.position - origin);
+  float cos_t = fabsf(dot(camera_sample.direction, camera.direction));
+  float3 clip_pos = origin + camera_sample.direction * fmaxf(0.0f, len - camera.clip_near / cos_t);
+  auto tr = vcm_transmittance(rt, scene, state, origin, clip_pos);
   if (tr.is_zero()) {
     return {};
   }
