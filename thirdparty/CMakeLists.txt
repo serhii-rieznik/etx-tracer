@@ -13,4 +13,6 @@ add_subdirectory(oidn)
 add_subdirectory(bluenoise)
 add_subdirectory(microprofile)
 
+set_property(TARGET microprofile PROPERTY FOLDER "thirdparty")
+
 

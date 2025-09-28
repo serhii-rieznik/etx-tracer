@@ -1058,7 +1058,7 @@ struct CPUBidirectionalImpl : public Task {
       float p_direct = sampled_light_vertex_is_delta ? 0.0f : map0(p_direct_connection);
 
       float camera_connection_pdf = map0(from_emitter);
-      float p_light_path = z_prev.connectible ? map0(camera_connection_pdf) * map0(to_emitter) : 0.0f;
+      float p_light_path = map0(camera_connection_pdf) * map0(to_emitter);
 
       float result = balance_heuristic(p_connection, p_direct, p_ratio * p_light_path);
       ETX_VALIDATE(result);
@@ -1462,7 +1462,7 @@ void CPUBidirectional::update() {
   }
 
   rt.film().commit_light_iteration(_private->status.current_iteration);
-  rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
+  // rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
 
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);
