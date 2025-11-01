@@ -831,10 +831,12 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene* s
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##samples", reinterpret_cast<int*>(&scene->samples));
 
       ImGui::Text("Path length (min/max):");
-      int32_t values[] = {int32_t(scene->min_path_length), int32_t(scene->max_path_length)};
-      scene_settings_changed = scene_settings_changed || ImGui::InputInt2("##pathlLength", values);
-      scene->min_path_length = clamp(values[0], 0, 65536);
-      scene->max_path_length = clamp(values[1], 0, 65536);
+      int32_t min_value = int32_t(scene->min_path_length);
+      int32_t max_value = int32_t(scene->max_path_length);
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##minpathlength", &min_value, 1, 10);
+      scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlength", &max_value, 1, 10);
+      scene->min_path_length = clamp(min_value, 0, 65536);
+      scene->max_path_length = clamp(max_value, 0, 65536);
 
       ImGui::Text("Path length w/o random termination:");
       scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&scene->random_path_termination));

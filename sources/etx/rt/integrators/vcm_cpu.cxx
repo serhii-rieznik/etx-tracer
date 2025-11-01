@@ -219,6 +219,9 @@ struct CPUVCMImpl {
     if (vcm_options.merge_vertices()) {
       _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius, rt.scheduler());
     }
+
+    mode = CPUVCMImpl::Mode::Camera;
+    task_handle = rt.scheduler().schedule(rt.film().pixel_count(), &camera_gather);
   }
 
   void complete_camera_vertices() {
@@ -267,11 +270,8 @@ void CPUVCM::update() {
 
   if (_private->mode == CPUVCMImpl::Mode::Light) {
     _private->complete_light_vertices();
-    _private->mode = CPUVCMImpl::Mode::Camera;
-    _private->task_handle = rt.scheduler().schedule(rt.film().pixel_count(), &_private->camera_gather);
   } else {
     _private->complete_camera_vertices();
-    _private->start_next_iteration();
   }
 }
 

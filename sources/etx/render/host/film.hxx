@@ -29,6 +29,7 @@ struct Film {
     ClearCameraData = 1u << 0u,
     ClearLightData = 1u << 1u,
     ClearEverything = 1u << 2u,
+    ClearLightIteration = 1u << 3u,
   };
 
   enum : uint32_t {

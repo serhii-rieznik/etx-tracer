@@ -344,19 +344,22 @@ void Film::commit_light_iteration(uint32_t i) {
 
 void Film::clear(uint32_t options) {
   if ((options & ClearCameraData) || (options & ClearEverything)) {
-    memset(_private->internal_data.data(), 0, _private->internal_data.size() * sizeof(InternalData));
+    memset(_private->internal_data.data(), 0, _private->internal_data.size() * sizeof(_private->internal_data[0]));
+  }
+
+  bool clear[StorageLayerCount] = {};
+  clear[StorageLightImage] = options & ClearLightData;
+  clear[StorageLightIteration] = clear[StorageLightImage] || (options & ClearLightIteration);
+  for (auto id = 0; (options & ClearEverything) && (id < StorageLayerCount); ++id) {
+    clear[id] = true;
   }
 
   auto& buffers = _private->storage_buffers;
-  if ((options & ClearLightData) && ((options & ClearEverything) == 0)) {
-    auto id = StorageLightIteration;
-    memset(buffers[id].data(), 0, buffers[id].size() * sizeof(buffers[id][0]));
-    id = StorageLightImage;
-    memset(buffers[id].data(), 0, buffers[id].size() * sizeof(buffers[id][0]));
-  }
-
-  for (auto id = 0; (options & ClearEverything) && (id < StorageLayerCount); ++id) {
-    memset(buffers[id].data(), 0, buffers[id].size() * sizeof(buffers[id][0]));
+  for (auto id = 0; id < StorageLayerCount; ++id) {
+    if (clear[id]) {
+      auto& buffer = buffers[id];
+      memset(buffer.data(), 0, buffer.size() * sizeof(buffer[0]));
+    }
   }
 
   _private->pixel_size = _private->target_pixel_size;
