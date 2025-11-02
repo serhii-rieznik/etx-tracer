@@ -245,7 +245,7 @@ struct SceneRepresentationImpl {
     images.init(1024u);
     mediums.init(1024u);
     scattering::init(scheduler, shared_scattering_spectrums, extinction);
-    build_camera(active_camera, {5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1280u, 720u}, 26.99f);
+    build_camera(active_camera, {5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, kWorldUp, {1280u, 720u}, 26.99f);
   }
 
   ~SceneRepresentationImpl() {
@@ -286,6 +286,7 @@ struct SceneRepresentationImpl {
     material_mapping.clear();
     images.remove_all();
     mediums.remove_all();
+    gltf_image_mapping.clear();
     materials.reserve(1024);  // TODO : fix, images when reallocated are destroyed releasing memory
 
     free(scene.emitters_distribution.values.a);
@@ -641,7 +642,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   _private->active_camera.focal_distance = 0.0f;
   _private->active_camera.lens_image = kInvalidIndex;
   _private->active_camera.medium_index = kInvalidIndex;
-  _private->active_camera.up = {0.0f, 1.0f, 0.0f};
+  _private->active_camera.up = kWorldUp;
 
   auto& camera = _private->active_camera;
   float3 camera_target = camera.position + camera.direction;
@@ -953,7 +954,7 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
     }
   }
 
-  float3 target = entry.cam.position + float3{0.0f, 0.0f, -1.0f};
+  float3 target = entry.cam.position + kWorldForward;
   if (get_param(material, "target")) {
     float val[3] = {};
     if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {
@@ -961,7 +962,7 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
     }
   }
 
-  entry.cam.up = {0.0f, 1.0f, 0.0f};
+  entry.cam.up = kWorldUp;
   if (get_param(material, "up")) {
     float val[3] = {};
     if (sscanf(data_buffer, "%f %f %f", val + 0, val + 1, val + 2) == 3) {

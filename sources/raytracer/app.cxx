@@ -3,6 +3,7 @@
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/host/scene_saver.hxx>
+#include <etx/render/shared/camera.hxx>
 
 #include "app.hxx"
 
@@ -349,12 +350,12 @@ void RTApplication::on_denoise_selected() {
 void RTApplication::on_view_scene(uint32_t direction) {
   constexpr float3 directions[] = {
     {1.0f, 1.0f, 1.0f},
-    {+1.0f, 0.0f, 0.0f},
-    {-1.0f, 0.0f, 0.0f},
-    {0.0f, +1.0f, 0.0f},
-    {0.0f, -1.0f, 0.0f},
-    {0.0f, 0.0f, +1.0f},
-    {0.0f, 0.0f, -1.0f},
+    kWorldRight,
+    -kWorldRight,
+    kWorldUp,
+    -kWorldUp,
+    -kWorldForward,
+    kWorldForward,
   };
   direction = clamp(direction, 0u, uint32_t(sizeof(directions) / sizeof(directions[0])));
 

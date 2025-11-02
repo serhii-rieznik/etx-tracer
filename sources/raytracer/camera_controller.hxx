@@ -7,8 +7,6 @@
 namespace etx {
 
 struct CameraController {
-  constexpr static const float3 kUpVector = {0.0f, 1.0f, 0.0f};
-
   CameraController(Camera& cam)
     : _camera(cam) {
   }
@@ -30,7 +28,7 @@ struct CameraController {
       } else if (mouse_buttons & MouseMiddle) {
         if (_keys.count(SAPP_KEYCODE_LEFT_SHIFT)) {
           float3 direction = _camera.target - _camera.position;
-          float3 side = normalize(cross(kUpVector, direction));
+          float3 side = normalize(cross(kWorldUp, direction));
           float3 up = normalize(cross(direction, side));
           _camera.position += (_mouse_delta.y * up + _mouse_delta.x * side) * _move_speed * (1.0f + length(direction));
           _camera.target = _camera.position + direction;
@@ -58,7 +56,7 @@ struct CameraController {
 
     if (movement) {
       float3 direction = _camera.target - _camera.position;
-      float3 side = cross(direction, kUpVector);
+      float3 side = cross(direction, kWorldUp);
       _camera.position += (move_fwd * direction + move_side * side) * _move_speed;
       _camera.target = _camera.position + direction;
     }
@@ -71,7 +69,7 @@ struct CameraController {
     }
 
     if (movement || rotation || zoom) {
-      build_camera(_camera, _camera.position, _camera.target, kUpVector, _camera.film_size, get_camera_fov(_camera));
+      build_camera(_camera, _camera.position, _camera.target, kWorldUp, _camera.film_size, get_camera_fov(_camera));
       return true;
     }
 

@@ -2,6 +2,7 @@
 #include <etx/core/environment.hxx>
 
 #include <etx/render/host/film.hxx>
+#include <etx/render/shared/camera.hxx>
 
 #include "ui.hxx"
 
@@ -814,7 +815,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene* s
         scene->pixel_sampler.radius = clamp(scene->pixel_sampler.radius, 0.0f, 32.0f);
 
         auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
-        build_camera(*camera, pos, target, float3{0.0f, 1.0f, 0.0f}, camera->film_size, fov);
+        build_camera(*camera, pos, target, kWorldUp, camera->film_size, fov);
 
         callbacks.camera_changed(film_changed);
       }

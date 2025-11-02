@@ -38,6 +38,10 @@ struct ETX_ALIGNED Camera {
   uint32_t medium_index ETX_INIT_WITH(kInvalidIndex);
 };
 
+inline constexpr float3 kWorldRight = {1.0f, 0.0f, 0.0f};
+inline constexpr float3 kWorldUp = {0.0f, 1.0f, 0.0f};
+inline constexpr float3 kWorldForward = {0.0f, 0.0f, -1.0f};
+
 struct ETX_ALIGNED CameraSample {
   float3 position ETX_EMPTY_INIT;
   float3 normal ETX_EMPTY_INIT;
