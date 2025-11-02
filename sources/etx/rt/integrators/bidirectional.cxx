@@ -182,7 +182,7 @@ struct PathVertex {
     float pdf_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
     return pdf_discrete * (emitter_instance.is_local()  //
                               ? emitter_pdf_area_local(emitter_instance, scene)
-                              : emitter_pdf_in_dist(emitter_instance, emitter_vertex.intersection.w_i, scene));
+                              : emitter_pdf_in_dist(emitter_instance, normalize(emitter_vertex.intersection.pos - interaction.intersection.pos), scene));
   }
 
   static float2 pdf_for_environment_emitter(SpectralQuery spect, const float3& w_i, const PathVertex& target_vertex, const Scene& scene) {
@@ -1004,24 +1004,6 @@ struct CPUBidirectionalImpl : public Task {
     return build_path(smp, ray, path_data, payload, emitter_sample, gbuffer, curr, prev);
   }
 
-  /*
-  float compute_camera_path_ratio_fast(const PathData& path_data) const {
-    float ratio = 1.0f;
-    if (path_data.camera_path_size < 3) {
-      return ratio;
-    }
-
-    for (uint32_t i = 1; i + 2 < path_data.camera_path_size; ++i) {
-      const auto& v = path_data.camera_path[i];
-      if (v.connectible) {
-        ratio *= safe_div(v.pdf.from_next, v.pdf.from_prev);
-      }
-    }
-
-    return ratio;
-  }
-  // */
-
   void precompute_camera_mis(PathVertex& curr, PathVertex& prev, PathData& path_data) const {
     if ((mode == Mode::PathTracing) || (mode == Mode::LightTracing)) {
       return;
@@ -1039,28 +1021,6 @@ struct CPUBidirectionalImpl : public Task {
     prev.pdf.history = path_data.camera_mis_history;
     path_data.camera_mis_history = prev.pdf.accumulated;
   }
-
-  /*
-  float compute_light_path_ratio_fast(const PathData& path_data) const {
-    float ratio = 1.0f;
-    if (path_data.emitter_path_size < 2) {
-      return ratio;
-    }
-
-    const auto& e0 = path_data.emitter_path[0];
-    float t0 = e0.mis_connectible ? map0(e0.pdf.from_prev) : 1.0f;
-    ratio = safe_div(1.0f, t0);
-
-    for (uint32_t i = 1; i + 2 < path_data.emitter_path_size; ++i) {
-      const auto& v = path_data.emitter_path[i];
-      if (v.connectible) {
-        ratio *= safe_div(v.pdf.from_next, v.pdf.from_prev);
-      }
-    }
-
-    return ratio;
-  }
-  // */
 
   void precompute_light_mis(PathVertex& curr, PathVertex& prev, PathData& path_data) const {
     if ((mode == Mode::PathTracing) || (mode == Mode::LightTracing)) {
@@ -1142,7 +1102,7 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     if (mode == Mode::BDPTFast) {
-      float ratio = z_prev.pdf.history;  // compute_camera_path_ratio_fast(path_data);
+      float ratio = z_prev.pdf.history;
       if (z_prev.connectible && (path_data.camera_path_size > 2)) {
         float p_back = PathVertex::pdf_area(spect, PathSource::Camera, sampled_light_vertex, z_curr, z_prev, scene, smp);
         ratio *= safe_div(p_back, z_prev.pdf.from_prev);
@@ -1152,7 +1112,7 @@ struct CPUBidirectionalImpl : public Task {
       float p_connection = map0(to_emitter);
       float p_direct_connection = PathVertex::convert_solid_angle_pdf_to_area(bsdf_eval_pdf, z_curr, sampled_light_vertex);
       float p_direct = sampled_light_vertex_is_delta ? 0.0f : map0(p_direct_connection);
-      float p_light_path = z_prev.connectible ? map0(from_emitter) * map0(to_emitter) : 0.0f;
+      float p_light_path = map0(from_emitter) * map0(to_emitter);
 
       float result = balance_heuristic(p_connection, p_direct, ratio * p_light_path);
       ETX_VALIDATE(result);
@@ -1176,7 +1136,7 @@ struct CPUBidirectionalImpl : public Task {
     if (mode == Mode::BDPTFull) {
       float y_curr_pdf = p_camera;
       ETX_VALIDATE(y_curr_pdf);
-      float y_prev_pdf = PathVertex::pdf_area(spect, PathSource::Light, sampled_camera_vertex, y_curr, y_prev, scene, smp);
+      float y_prev_pdf = PathVertex::pdf_area(spect, PathSource::Camera, sampled_camera_vertex, y_curr, y_prev, scene, smp);
       ETX_VALIDATE(y_prev_pdf);
       float w_light = mis_light(path_data, y_curr_pdf, y_curr, y_prev_pdf, y_prev);
       return 1.0f / (1.0f + w_light);
@@ -1187,7 +1147,7 @@ struct CPUBidirectionalImpl : public Task {
       const auto& e1 = path_data.emitter_path[1];
       const auto& e2 = path_data.emitter_path_size > 2 ? path_data.emitter_path[2] : sampled_camera_vertex;
 
-      float ratio = y_prev.pdf.history;  // compute_light_path_ratio_fast(path_data);
+      float ratio = y_prev.pdf.history;
 
       float p_bck = p_camera;
       float p_fwd = 1.0f;
@@ -1300,14 +1260,11 @@ struct CPUBidirectionalImpl : public Task {
         }
 
         case Mode::BDPTFast: {
-          float ratio = z_prev.pdf.history;  // compute_camera_path_ratio_fast(path_data);
-          if (z_prev.connectible) {
-            ratio *= safe_div(1.0f, z_prev.pdf.from_prev);
-          }
+          float ratio = z_prev.pdf.history;
 
-          float to_emitter_direct = map0(z_curr.pdf.from_prev);
+          float to_emitter_direct = map0(z_prev.pdf.from_prev) * map0(z_curr.pdf.from_prev);
           float p_sample = PathVertex::pdf_to_emitter(spect, z_prev, z_curr, scene);
-          float to_emitter_connect = z_prev.connectible ? p_sample : 0.0f;
+          float to_emitter_connect = z_prev.connectible ? map0(z_prev.pdf.from_prev) * p_sample : 0.0f;
           float p_from = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
           float p_from_light = map0(p_from) * map0(p_sample);
           mis_weight = balance_heuristic(to_emitter_direct, to_emitter_connect, ratio * p_from_light);
@@ -1378,14 +1335,10 @@ struct CPUBidirectionalImpl : public Task {
         float result = mis_camera(path_data, z_curr_pdf, z_curr, z_prev_pdf, z_prev);
         mis_weight = 1.0f / (1.0f + result);
       } else if (mode == Mode::BDPTFast) {
-        float ratio = z_prev.pdf.history;  // compute_camera_path_ratio_fast(path_data);
-        if (z_prev.connectible) {
-          ratio *= safe_div(1.0f, z_prev.pdf.from_prev);
-        }
-
-        float to_emitter_direct = map0(z_curr.pdf.from_prev);
+        float ratio = z_prev.pdf.history;
+        float to_emitter_direct = map0(z_prev.pdf.from_prev) * map0(z_curr.pdf.from_prev);
         float p_sample = pdf_to;
-        float to_emitter_connect = z_prev.connectible ? p_sample : 0.0f;
+        float to_emitter_connect = z_prev.connectible ? map0(z_prev.pdf.from_prev) * p_sample : 0.0f;
         float p_from = pdf_from;
         float p_from_light = map0(p_from) * map0(p_sample);
         mis_weight = balance_heuristic(to_emitter_direct, to_emitter_connect, ratio * p_from_light);

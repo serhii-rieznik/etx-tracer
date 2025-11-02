@@ -793,15 +793,22 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     ImGui::Spacing();
     ImGui::Separator();
 
+    const ImVec4 scene_color = ImVec4(0.30f, 0.45f, 0.90f, 1.0f);
+    const ImVec4 camera_color = ImVec4(0.90f, 0.80f, 0.35f, 1.0f);
+
+    ImGui::PushStyleColor(ImGuiCol_Text, scene_color);
     bool scene_selected = (_selection.kind == SelectionKind::Scene);
     if (ImGui::Selectable("Scene", scene_selected)) {
       set_selection(SelectionKind::Scene, 0);
     }
+    ImGui::PopStyleColor();
 
+    ImGui::PushStyleColor(ImGuiCol_Text, camera_color);
     bool camera_selected = (_selection.kind == SelectionKind::Camera);
     if (ImGui::Selectable("Camera", camera_selected)) {
       set_selection(SelectionKind::Camera, 0);
     }
+    ImGui::PopStyleColor();
 
     ImGui::Separator();
 
