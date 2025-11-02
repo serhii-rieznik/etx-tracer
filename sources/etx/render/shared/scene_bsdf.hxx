@@ -21,6 +21,7 @@ ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
 ETX_DECLARE_BSDF(Velvet);
 ETX_DECLARE_BSDF(Principled)
+ETX_DECLARE_BSDF(Void);
 
 #define CASE_IMPL(CLS, FUNC, ...) \
   case Material::Class::CLS:      \
@@ -44,6 +45,7 @@ ETX_DECLARE_BSDF(Principled)
     MACRO(Boundary);                        \
     MACRO(Velvet);                          \
     MACRO(Principled);                      \
+    MACRO(Void);                            \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
       return {};                            \
@@ -124,6 +126,10 @@ ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfil
 }
 
 ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
+  if (mat.cls == Material::Class::Void) {
+    return true;
+  }
+
   float material_alpha = mat.opacity;
   float alpha_diffuse = 1.0f;
   if (mat.scattering.image_index != kInvalidIndex) {

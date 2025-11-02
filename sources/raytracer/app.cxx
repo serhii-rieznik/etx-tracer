@@ -37,9 +37,8 @@ RTApplication::~RTApplication() {
 
 void RTApplication::init() {
   render.init();
-  ui.initialize();
+  ui.initialize(&raytracing.film());
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
-  ui.set_film(&raytracing.film());
 
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
@@ -144,7 +143,7 @@ void RTApplication::frame() {
   const auto frame_data = raytracing.film().layer(options.layer);
   render.update_image(frame_data);
 
-  ui.build(dt, _recent_files, scene.mutable_scene_pointer(), scene.mutable_camera_pointer(), scene.material_mapping(), scene.medium_mapping());
+  ui.build(dt, _recent_files, scene.mutable_scene(), scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping());
   render.end_frame();
 }
 

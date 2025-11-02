@@ -18,10 +18,10 @@ struct UI {
   UI() = default;
   ~UI() = default;
 
-  void initialize();
+  void initialize(Film* film);
   void cleanup();
 
-  void build(double dt, const std::vector<std::string>& recent_files, Scene* scene, Camera* camera, const SceneRepresentation::MaterialMapping& materials,
+  void build(double dt, const std::vector<std::string>& recent_files, Scene& scene, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
     const SceneRepresentation::MediumMapping& mediums);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
@@ -29,7 +29,6 @@ struct UI {
   }
 
   void set_current_integrator(Integrator*);
-  void set_film(Film* film);
 
   bool handle_event(const sapp_event*);
 
@@ -59,21 +58,34 @@ struct UI {
   } callbacks;
 
  private:
+  enum class SelectionKind : uint32_t {
+    None,
+    Material,
+    Medium,
+    Emitter,
+    Camera,
+    Scene,
+  };
+
   bool build_options(Options&);
   void quit();
   void select_scene_file() const;
   void save_scene_file() const;
   void save_image(SaveImageMode mode) const;
   void load_image() const;
-  bool build_material(Scene* scene, Material&);
+  bool build_material(Scene& scene, Material&);
   bool build_medium(Medium&);
   bool spectrum_picker(const char* name, SpectralDistribution& spd, bool linear);
-  bool spectrum_picker(Scene* scene, const char* name, uint32_t spd_index, bool linear);
-  bool ior_picker(Scene* scene, const char* name, RefractiveIndex& ior);
+  bool spectrum_picker(Scene& scene, const char* name, uint32_t spd_index, bool linear);
+  bool ior_picker(Scene& scene, const char* name, RefractiveIndex& ior);
 
   void reset_selection();
   void reload_geometry();
   void reload_scene();
+  void set_selection(SelectionKind kind, int32_t index, bool track_history = true);
+  void navigate_history(int32_t step);
+  bool can_navigate_back() const;
+  bool can_navigate_forward() const;
 
  private:
   Integrator* _current_integrator = nullptr;
@@ -112,21 +124,24 @@ struct UI {
 
   enum UISetup : uint32_t {
     UIIntegrator = 1u << 0u,
-    UIMaterial = 1u << 1u,
-    UIMedium = 1u << 2u,
-    UIEmitters = 1u << 3u,
-    UICamera = 1u << 4u,
-    UIScene = 1u << 5u,
+    UIObjects = 1u << 1u,
+    UIProperties = 1u << 2u,
 
-    UIDefaults = UIScene | UIIntegrator,
+    UIDefaults = UIIntegrator | UIObjects | UIProperties,
+  };
+
+  struct SelectionState {
+    SelectionKind kind = SelectionKind::None;
+    int32_t index = -1;
   };
 
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
   std::vector<IORFile> _ior_files;
-  int32_t _selected_material = -1;
-  int32_t _selected_medium = -1;
-  int32_t _selected_emitter = -1;
+  SelectionState _selection;
+  std::vector<SelectionState> _selection_history;
+  int32_t _selection_history_cursor = -1;
+  float _panel_width = 0.0f;
   uint32_t _ui_setup = UIDefaults;
   uint32_t _font_image = 0u;
   std::unordered_map<std::string, float3> _editor_values;

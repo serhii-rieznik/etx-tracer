@@ -544,12 +544,15 @@ def _export_scene_json(operator, json_path, obj_path):
     mtl_path = os.path.splitext(obj_path)[0] + ".mtl"
     rel_mtl_path = os.path.relpath(mtl_path, base_dir)
 
+    samples = resolve_scene_samples(operator)
+    max_path_length = resolve_scene_max_path_length(operator)
+
     # Build scene data
     scene_data = {
         "geometry": rel_obj_path.replace("\\", "/"),  # Use forward slashes
         "materials": rel_mtl_path.replace("\\", "/"),  # Reference MTL file
-        "samples": operator.samples,
-        "max-path-length": operator.max_path_length,
+        "samples": samples,
+        "max-path-length": max_path_length,
         "random-termination-start": operator.random_termination_start,
         "spectral": operator.spectral_rendering,
         "force-tangents": operator.force_tangents,
@@ -656,6 +659,57 @@ def _finalize_material_textures(operator, obj_path, blender_mat, properties):
             properties["map_Kd"] = info["Kd"]
         if "N" in info:
             properties["normalmap"] = f"image {info['N']} scale 1.0"
+
+
+def resolve_scene_samples(operator):
+    default = getattr(operator, "samples", 32)
+    scene = bpy.context.scene
+    if scene is None:
+        return default
+    try:
+        engine = scene.render.engine
+    except Exception:
+        engine = ""
+    try:
+        if engine == "CYCLES":
+            value = getattr(scene.cycles, "samples", None)
+            if value is not None:
+                value_int = int(value)
+                if value_int >= 1:
+                    return value_int
+        elif engine in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
+            eevee = getattr(scene, "eevee", None)
+            if eevee is not None:
+                value = getattr(eevee, "taa_render_samples", None)
+                if value is not None:
+                    value_int = int(value)
+                    if value_int >= 1:
+                        return value_int
+    except Exception:
+        return default
+    return default
+
+
+def resolve_scene_max_path_length(operator):
+    default = getattr(operator, "max_path_length", 65536)
+    scene = bpy.context.scene
+    if scene is None:
+        return default
+    cycles_settings = getattr(scene, "cycles", None)
+    if cycles_settings is None:
+        return default
+    try:
+        value = getattr(cycles_settings, "max_bounces", None)
+        if value is not None:
+            value_int = int(value)
+            if value_int >= 1:
+                converted = value_int - 1
+                if converted < 1:
+                    converted = 1
+                return converted
+    except Exception:
+        return default
+    return default
 
 
 def _bake_procedural_textures(operator, materials, obj_path):

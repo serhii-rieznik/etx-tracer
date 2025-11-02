@@ -25,8 +25,7 @@ struct SceneRepresentation {
   bool load_from_file(const char* filename, uint32_t options);
 
   Scene& mutable_scene();
-  Scene* mutable_scene_pointer();
-  Camera* mutable_camera_pointer();
+  Camera& mutable_camera();
 
   const Scene& scene() const;
   const MaterialMapping& material_mapping() const;

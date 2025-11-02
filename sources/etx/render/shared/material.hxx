@@ -62,6 +62,7 @@ struct ETX_ALIGNED Material {
     Boundary,
     Velvet,
     Principled,
+    Void,
 
     Count,
     Undefined = kInvalidIndex,

@@ -153,6 +153,17 @@ class ExportETXTracer(Operator, ExportHelper):
         precision=3,
     )
 
+    def invoke(self, context, event):
+        try:
+            self.samples = logic.resolve_scene_samples(self)
+        except Exception:
+            pass
+        try:
+            self.max_path_length = logic.resolve_scene_max_path_length(self)
+        except Exception:
+            pass
+        return super().invoke(context, event)
+
     def execute(self, context):
         """
         This is the main execution function.

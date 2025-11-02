@@ -73,6 +73,8 @@ inline Material::Class material_string_to_class(const char* s) {
     return Material::Class::Velvet;
   else if (strcmp(s, "principled") == 0)
     return Material::Class::Principled;
+  else if (strcmp(s, "void") == 0)
+    return Material::Class::Void;
   else {
     log::error("Undefined BSDF: `%s`", s);
     return Material::Class::Diffuse;
@@ -91,6 +93,7 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "boundary",
     "velvet",
     "principled",
+    "void",
     "undefined",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);
@@ -314,6 +317,9 @@ struct SceneRepresentationImpl {
 
   void validate_materials() {
     for (auto& mtl : materials) {
+      if (mtl.cls == Material::Class::Void) {
+        continue;
+      }
       if (mtl.reflectance.spectrum_index == kInvalidIndex) {
         mtl.reflectance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
       }
@@ -591,12 +597,8 @@ Scene& SceneRepresentation::mutable_scene() {
   return _private->scene;
 }
 
-Scene* SceneRepresentation::mutable_scene_pointer() {
-  return &_private->scene;
-}
-
-Camera* SceneRepresentation::mutable_camera_pointer() {
-  return &_private->active_camera;
+Camera& SceneRepresentation::mutable_camera() {
+  return _private->active_camera;
 }
 
 const Scene& SceneRepresentation::scene() const {

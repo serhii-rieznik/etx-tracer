@@ -1,5 +1,36 @@
 ﻿namespace etx {
 
+namespace VoidBSDF {
+
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material&, const Scene&, Sampler&) {
+  BSDFSample result;
+  result.w_o = data.w_i;
+  result.weight = {data.spectrum_sample, 0.0f};
+  result.pdf = 0.0f;
+  result.properties = BSDFSample::Delta;
+  result.medium_index = data.current_medium;
+  result.eta = 1.0f;
+  return result;
+}
+
+ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3&, const Material&, const Scene&, Sampler&) {
+  return {data.spectrum_sample, 0.0f};
+}
+
+ETX_GPU_CODE float pdf(const BSDFData&, const float3&, const Material&, const Scene&, Sampler&) {
+  return 0.0f;
+}
+
+ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&) {
+  return true;
+}
+
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material&, const Scene&, Sampler&) {
+  return {data.spectrum_sample, 0.0f};
+}
+
+}  // namespace VoidBSDF
+
 namespace DiffuseBSDF {
 
 struct DiffuseMaterial {
