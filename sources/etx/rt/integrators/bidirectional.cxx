@@ -156,17 +156,17 @@ struct PathVertex {
     ETX_CRITICAL(emitter_vertex.is_specific_emitter());
 
     float pdf_area = 0.0f;
-    const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
-    if (emitter.is_local()) {
+    const auto& emitter_instance = scene.emitter_instances[emitter_vertex.intersection.emitter_index];
+    if (emitter_instance.is_local()) {
       float pdf_dir = 0.0f;
       float pdf_dir_out = 0.0f;
       auto w_o = normalize(target_vertex.intersection.pos - emitter_vertex.intersection.pos);
-      emitter_evaluate_out_local(emitter, spect, emitter_vertex.intersection.tex, emitter_vertex.intersection.nrm, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
+      emitter_evaluate_out_local(emitter_instance, spect, emitter_vertex.intersection.tex, emitter_vertex.intersection.nrm, w_o, pdf_area, pdf_dir, pdf_dir_out, scene);
       pdf_area = convert_solid_angle_pdf_to_area(pdf_dir, emitter_vertex, target_vertex);
-    } else if (emitter.is_distant()) {
+    } else if (emitter_instance.is_distant()) {
       float pdf_dir = 0.0f;
       auto w_o = normalize(emitter_vertex.intersection.pos - target_vertex.intersection.pos);
-      emitter_evaluate_out_dist(emitter, spect, w_o, pdf_area, pdf_dir, scene);
+      emitter_evaluate_out_dist(emitter_instance, spect, w_o, pdf_area, pdf_dir, scene);
       if (target_vertex.is_surface_interaction()) {
         pdf_area *= fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o));
       }
@@ -178,28 +178,26 @@ struct PathVertex {
   static float pdf_to_emitter(SpectralQuery spect, const PathVertex& interaction, const PathVertex& emitter_vertex, const Scene& scene) {
     ETX_ASSERT(emitter_vertex.is_emitter());
     ETX_CRITICAL(emitter_vertex.is_specific_emitter());
-    const auto& emitter = scene.emitters[emitter_vertex.intersection.emitter_index];
-    float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-    return pdf_discrete * (emitter.is_local() ? emitter_pdf_area_local(emitter, scene) : emitter_pdf_in_dist(emitter, emitter_vertex.intersection.w_i, scene));
+    const auto& emitter_instance = scene.emitter_instances[emitter_vertex.intersection.emitter_index];
+    float pdf_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
+    return pdf_discrete * (emitter_instance.is_local()  //
+                              ? emitter_pdf_area_local(emitter_instance, scene)
+                              : emitter_pdf_in_dist(emitter_instance, emitter_vertex.intersection.w_i, scene));
   }
 
-  static float2 pdf_for_environment_emitter(SpectralQuery spect, const PathVertex& emitter_vertex, const PathVertex& target_vertex, const Scene& scene) {
-    ETX_ASSERT(emitter_vertex.is_emitter());
-    ETX_CRITICAL(emitter_vertex.is_environment_emitter());
-
+  static float2 pdf_for_environment_emitter(SpectralQuery spect, const float3& w_i, const PathVertex& target_vertex, const Scene& scene) {
     if (scene.environment_emitters.count == 0)
       return {};
 
     float pdf_dir = 0.0f;
     for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-      const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
-      const float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
-      const float pdf_emitter_dir = emitter_pdf_in_dist(emitter, emitter_vertex.intersection.w_i, scene);
+      const auto& emitter_instance = scene.emitter_instances[scene.environment_emitters.emitters[ie]];
+      const float pdf_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
+      const float pdf_emitter_dir = emitter_pdf_in_dist(emitter_instance, w_i, scene);
       pdf_dir += pdf_discrete * pdf_emitter_dir;
     }
 
-    const auto w_o = -emitter_vertex.intersection.w_i;
-    float w_o_dot_n = target_vertex.is_surface_interaction() ? fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_o)) : 1.0f;
+    float w_o_dot_n = target_vertex.is_surface_interaction() ? fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_i)) : 1.0f;
     float pdf_area = w_o_dot_n / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
     pdf_dir = pdf_dir / float(scene.environment_emitters.count);
 
@@ -420,8 +418,9 @@ struct CPUBidirectionalImpl : public Task {
   void update_distant_emitter_path_pdfs(PathData& path_data, PathVertex& curr, PathVertex& prev, const EmitterSample& em) const {
     const auto& scene = rt.scene();
 
-    const float pdf = emitter_pdf_in_dist(scene.emitters[em.emitter_index], -em.direction, scene);
-    const float p_discrete = emitter_discrete_pdf(scene.emitters[em.emitter_index], scene.emitters_distribution);
+    const auto& emitter_instance = scene.emitter_instances[em.emitter_index];
+    const float pdf = emitter_pdf_in_dist(emitter_instance, -em.direction, scene);
+    const float p_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
 
     prev.pdf.from_prev = p_discrete * pdf;
     ETX_VALIDATE(prev.pdf.from_prev);
@@ -1258,8 +1257,8 @@ struct CPUBidirectionalImpl : public Task {
     if ((target_path_length > scene.max_path_length) || (target_path_length < scene.min_path_length))
       return {spect, 0.0f};
 
-    const auto& emitter = scene.emitters[z_curr.intersection.emitter_index];
-    ETX_ASSERT(emitter.is_local());
+    const auto& emitter_instance = scene.emitter_instances[z_curr.intersection.emitter_index];
+    ETX_ASSERT(emitter_instance.is_local());
     EmitterRadianceQuery q = {
       .source_position = z_prev.intersection.pos,
       .target_position = z_curr.intersection.pos,
@@ -1270,7 +1269,7 @@ struct CPUBidirectionalImpl : public Task {
     float pdf_dir = 0.0f;
     float pdf_area = 0.0f;
     float pdf_dir_out = 0.0f;
-    auto emitter_value = emitter_get_radiance(emitter, spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
+    auto emitter_value = emitter_get_radiance(emitter_instance, spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
 
     if (pdf_dir == 0.0f) {
       return {spect, 0.0f};
@@ -1281,7 +1280,7 @@ struct CPUBidirectionalImpl : public Task {
     if (enable_mis && (path_data.camera_path_size > 2u)) {
       switch (mode) {
         case Mode::PathTracing: {
-          float p_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+          float p_sample = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
           float p_connect = pdf_dir * p_sample;
           ETX_VALIDATE(p_connect);
           float result = z_prev.connectible ? power_heuristic(z_prev.pdf.next, p_connect) : 1.0f;
@@ -1342,18 +1341,19 @@ struct CPUBidirectionalImpl : public Task {
       .directly_visible = path_data.camera_path_length() <= 1,
     };
 
+    auto env_emitters = rt.scene().environment_emitters.emitters;
     SpectralResponse accumulated_emitter_value = {spect, 0.0f};
     for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-      const auto& emitter = scene.emitters[rt.scene().environment_emitters.emitters[ie]];
+      const auto& emitter_instance = scene.emitter_instances[env_emitters[ie]];
 
       float local_pdf_area = 0.0f;
       float local_pdf_dir = 0.0f;
       float local_pdf_dir_out = 0.0f;
-      auto value = emitter_get_radiance(emitter, spect, q, local_pdf_area, local_pdf_dir, local_pdf_dir_out, scene);
+      auto value = emitter_get_radiance(emitter_instance, spect, q, local_pdf_area, local_pdf_dir, local_pdf_dir_out, scene);
 
       float this_weight = 1.0f;
       if ((mode == Mode::PathTracing) && z_prev.connectible && (path_data.camera_path_length() > 1u)) {
-        float local_pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+        float local_pdf_sample = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
         float this_p_connect = local_pdf_dir * local_pdf_sample;
         ETX_VALIDATE(this_p_connect);
         this_weight = power_heuristic(z_prev.pdf.next, this_p_connect);
@@ -1368,7 +1368,7 @@ struct CPUBidirectionalImpl : public Task {
 
     float mis_weight = 1.0f;
     if (enable_mis && (path_data.camera_path_length() > 1u) && (mode != Mode::PathTracing)) {
-      auto [pdf_from, pdf_to] = PathVertex::pdf_for_environment_emitter(spect, z_curr, z_prev, scene);
+      auto [pdf_from, pdf_to] = PathVertex::pdf_for_environment_emitter(spect, z_curr.intersection.w_i, z_prev, scene);
 
       if (mode == Mode::BDPTFull) {
         float z_curr_pdf = pdf_to;
@@ -1450,6 +1450,14 @@ struct CPUBidirectionalImpl : public Task {
       return {spect, 0.0f};
     }
 
+    float len = length(camera_sample.position - y_curr.intersection.pos);
+    float cos_t = fabsf(dot(camera_sample.direction, camera.direction));
+    float near_extent = (camera.clip_near > 0.0f) ? camera.clip_near / cos_t : 0.0f;
+    float far_extent = (camera.clip_far > 0.0f) ? camera.clip_far / cos_t : kMaxFloat;
+    if ((len < near_extent) || (len > far_extent)) {
+      return {spect, 0.0f};
+    }
+
     ETX_VALIDATE(camera_sample.weight);
 
     PathVertex sampled_vertex = {PathVertex::Class::Camera};
@@ -1469,9 +1477,7 @@ struct CPUBidirectionalImpl : public Task {
     ETX_VALIDATE(splat);
 
     if (splat.is_zero() == false) {
-      float len = length(sampled_vertex.intersection.pos - y_curr.intersection.pos);
-      float cos_t = fabsf(dot(camera_sample.direction, camera.direction));
-      float3 clip_pos = y_curr.intersection.pos + camera_sample.direction * fmaxf(0.0f, len - camera.clip_near / cos_t);
+      float3 clip_pos = y_curr.intersection.pos + camera_sample.direction * fmaxf(0.0f, len - near_extent);
       splat *= local_transmittance(spect, smp, y_curr, clip_pos);
     }
 

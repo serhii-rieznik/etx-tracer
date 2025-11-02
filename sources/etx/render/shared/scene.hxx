@@ -28,7 +28,8 @@ struct ETX_ALIGNED Scene {
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<uint32_t> triangle_to_emitter ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
-  ArrayView<Emitter> emitters ETX_EMPTY_INIT;
+  ArrayView<EmitterProfile> emitter_profiles ETX_EMPTY_INIT;
+  ArrayView<Emitter> emitter_instances ETX_EMPTY_INIT;
   ArrayView<Image> images ETX_EMPTY_INIT;
   ArrayView<Medium> mediums ETX_EMPTY_INIT;
   ArrayView<SpectralDistribution> spectrums ETX_EMPTY_INIT;

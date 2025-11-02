@@ -7,20 +7,21 @@ ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene)
   return 1.0f / em.triangle_area;
 }
 
-ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& adirection,
-  float& pdf_area, float& pdf_dir, float& pdf_dir_out, const Scene& scene) {
-  ETX_ASSERT(em.is_local());
+ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal,
+  const float3& adirection, float& pdf_area, float& pdf_dir, float& pdf_dir_out, const Scene& scene) {
+  const auto& em = scene.emitter_profiles[em_inst.profile];
+  ETX_ASSERT(em_inst.is_local());
 
   switch (em.emission_direction) {
-    case Emitter::Direction::Single: {
+    case EmitterProfile::Direction::Single: {
       pdf_dir = max(0.0f, dot(emitter_normal, adirection)) * kInvPi;
       break;
     }
-    case Emitter::Direction::TwoSided: {
+    case EmitterProfile::Direction::TwoSided: {
       pdf_dir = 0.5f * fabsf(dot(emitter_normal, adirection)) * kInvPi;
       break;
     }
-    case Emitter::Direction::Omni: {
+    case EmitterProfile::Direction::Omni: {
       pdf_dir = kInvPi;
       break;
     }
@@ -30,7 +31,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
     return {spect, 0.0f};
   }
 
-  pdf_area = emitter_pdf_area_local(em, scene);
+  pdf_area = emitter_pdf_area_local(em_inst, scene);
   ETX_ASSERT(pdf_area > 0.0f);
 
   pdf_dir_out = pdf_dir * pdf_area;
@@ -39,14 +40,15 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em, cons
   return apply_image(spect, em.emission, uv, scene, nullptr);
 }
 
-ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
+ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
   float& pdf_dir_out, const Scene& scene) {
+  const auto& em = scene.emitter_profiles[em_inst.profile];
   pdf_dir = 0.0f;
   pdf_area = 0.0f;
   pdf_dir_out = 0.0f;
 
-  switch (em.cls) {
-    case Emitter::Class::Directional: {
+  switch (em_inst.cls) {
+    case EmitterProfile::Class::Directional: {
       if ((query.directly_visible == false) || (em.angular_size <= 0.0f) || (dot(query.direction, em.direction) < em.angular_size_cosine)) {
         return {spect, 0.0f};
       }
@@ -59,7 +61,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       return apply_image(spect, em.emission, uv, scene, nullptr) * direct_scale;
     }
 
-    case Emitter::Class::Environment: {
+    case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       float2 uv = direction_to_uv(query.direction, img.offset, img.scale.x);
       float sin_t = sinf(uv.y * kPi);
@@ -80,17 +82,17 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
       return eval;
     }
 
-    case Emitter::Class::Area: {
-      const auto& tri = scene.triangles[em.triangle_index];
-      if ((em.emission_direction == Emitter::Direction::Single) && (dot(tri.geo_n, query.target_position - query.source_position) >= 0.0f)) {
+    case EmitterProfile::Class::Area: {
+      const auto& tri = scene.triangles[em_inst.triangle_index];
+      if ((em.emission_direction == EmitterProfile::Direction::Single) && (dot(tri.geo_n, query.target_position - query.source_position) >= 0.0f)) {
         return {spect, 0.0f};
       }
-      pdf_area = emitter_pdf_area_local(em, scene);
+      pdf_area = emitter_pdf_area_local(em_inst, scene);
 
       float3 dp = query.source_position - query.target_position;
       float distance_squared = dot(dp, dp);
       if (distance_squared > 0.0f) {
-        if (em.emission_direction == Emitter::Direction::Omni) {
+        if (em.emission_direction == EmitterProfile::Direction::Omni) {
           pdf_dir = pdf_area * distance_squared;
           pdf_dir_out = pdf_area;
         } else {
@@ -113,21 +115,22 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em, const Spec
   }
 }
 
-ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
+ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
   const Scene& scene) {
-  ETX_ASSERT(em.is_distant());
+  const auto& em = scene.emitter_profiles[em_inst.profile];
+  ETX_ASSERT(em_inst.is_distant());
 
   pdf_dir = 0.0f;
   pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
 
-  switch (em.cls) {
-    case Emitter::Class::Directional: {
+  switch (em_inst.cls) {
+    case EmitterProfile::Class::Directional: {
       pdf_dir = 1.0f;
       float2 uv = disk_uv(em.direction, in_direction, em.equivalent_disk_size, em.angular_size_cosine);
       return apply_image(spect, em.emission, uv, scene, nullptr);
     }
 
-    case Emitter::Class::Environment: {
+    case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       float2 uv = direction_to_uv(in_direction, img.offset, 1.0f);
       float sin_t = sinf(uv.y * kPi);
@@ -148,15 +151,16 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em, const
   }
 }
 
-ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em, const float3& in_direction, const Scene& scene) {
-  ETX_ASSERT(em.is_distant());
+ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em_inst, const float3& in_direction, const Scene& scene) {
+  const auto& em = scene.emitter_profiles[em_inst.profile];
+  ETX_ASSERT(em_inst.is_distant());
 
-  switch (em.cls) {
-    case Emitter::Class::Directional: {
+  switch (em_inst.cls) {
+    case EmitterProfile::Class::Directional: {
       return 0.0f;
     }
 
-    case Emitter::Class::Environment: {
+    case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x);
       float sin_t = sinf(uv.y * kPi);
@@ -171,11 +175,12 @@ ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em, const float3& in_direc
   }
 }
 
-ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQuery spect, const float3& from_point, const Scene& scene, const float2& smp) {
+ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spect, const float3& from_point, const Scene& scene, const float2& smp) {
+  const auto& em = scene.emitter_profiles[em_inst.profile];
   EmitterSample result;
-  switch (em.cls) {
-    case Emitter::Class::Area: {
-      const auto& tri = scene.triangles[em.triangle_index];
+  switch (em_inst.cls) {
+    case EmitterProfile::Class::Area: {
+      const auto& tri = scene.triangles[em_inst.triangle_index];
       result.barycentric = random_barycentric(smp);
       result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
       result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
@@ -187,11 +192,11 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
         .uv = lerp_uv(scene.vertices, tri, result.barycentric),
       };
 
-      result.value = emitter_get_radiance(em, spect, q, result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);
+      result.value = emitter_get_radiance(em_inst, spect, q, result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);
       break;
     }
 
-    case Emitter::Class::Directional: {
+    case EmitterProfile::Class::Directional: {
       float2 disk_sample = {};
       if (em.angular_size > 0.0f) {
         auto basis = orthonormal_basis(em.direction);
@@ -209,7 +214,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
       break;
     }
 
-    case Emitter::Class::Environment: {
+    case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       float pdf_image = 0.0f;
       uint2 image_location = {};
@@ -241,7 +246,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em, const SpectralQu
 }
 
 ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distribution& dist) {
-  return emitter.weight / dist.total_weight;
+  return (emitter.spectrum_weight * emitter.additional_weight) / dist.total_weight;
 }
 
 ETX_GPU_CODE uint32_t sample_emitter_index(const Scene& scene, float rnd) {
@@ -252,7 +257,7 @@ ETX_GPU_CODE uint32_t sample_emitter_index(const Scene& scene, float rnd) {
 }
 
 ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_index, const float2& smp, const float3& from_point, const Scene& scene) {
-  const auto& emitter = scene.emitters[emitter_index];
+  const auto& emitter = scene.emitter_instances[emitter_index];
   EmitterSample sample = emitter_sample_in(emitter, spect, from_point, scene, smp);
   sample.pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
   sample.emitter_index = emitter_index;
@@ -264,30 +269,31 @@ ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_
 ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQuery spect, Sampler& smp) {
   EmitterSample result = {};
   result.emitter_index = scene.emitters_distribution.sample(smp.next(), result.pdf_sample);
-  ETX_ASSERT(result.emitter_index < scene.emitters.count);
+  ETX_ASSERT(result.emitter_index < scene.emitter_instances.count);
 
-  const auto& em = scene.emitters[result.emitter_index];
-  switch (em.cls) {
-    case Emitter::Class::Area: {
-      const auto& tri = scene.triangles[em.triangle_index];
+  const auto& em_inst = scene.emitter_instances[result.emitter_index];
+  const auto& em = scene.emitter_profiles[em_inst.profile];
+  switch (em_inst.cls) {
+    case EmitterProfile::Class::Area: {
+      const auto& tri = scene.triangles[em_inst.triangle_index];
 
-      result.triangle_index = em.triangle_index;
+      result.triangle_index = em_inst.triangle_index;
       result.barycentric = random_barycentric(smp.next_2d());
       auto vertex = lerp_vertex(scene.vertices, tri, result.barycentric);
 
       result.origin = vertex.pos;
       result.normal = vertex.nrm;
       switch (em.emission_direction) {
-        case Emitter::Direction::Single: {
+        case EmitterProfile::Direction::Single: {
           result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, em.collimation);
           break;
         }
-        case Emitter::Direction::TwoSided: {
+        case EmitterProfile::Direction::TwoSided: {
           result.normal = (smp.next() > 0.5f) ? float3{-result.normal.x, -result.normal.y, -result.normal.z} : result.normal;
           result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, em.collimation);
           break;
         }
-        case Emitter::Direction::Omni: {
+        case EmitterProfile::Direction::Omni: {
           float theta = acosf(2.0f * smp.next() - 1.0f) - kHalfPi;
           float phi = kDoublePi * smp.next();
           float cos_theta = cosf(theta);
@@ -301,12 +307,12 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
         default:
           ETX_FAIL("Invalid direction");
       }
-      result.value = emitter_evaluate_out_local(em, spect, vertex.tex, result.normal, result.direction,  //
-        result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);                                     //
+      result.value = emitter_evaluate_out_local(em_inst, spect, vertex.tex, result.normal, result.direction,  //
+        result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);                                          //
       break;
     }
 
-    case Emitter::Class::Directional: {
+    case EmitterProfile::Class::Directional: {
       auto direction_to_scene = em.direction * (-1.0f);
       auto basis = orthonormal_basis(direction_to_scene);
       auto pos_sample = sample_disk(smp.next_2d());
@@ -323,7 +329,7 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       break;
     }
 
-    case Emitter::Class::Environment: {
+    case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       float pdf_image = 0.0f;
       uint2 image_location = {};
@@ -358,10 +364,10 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       ETX_FAIL("Unknown emitter class");
     }
   }
-  result.triangle_index = em.triangle_index;
+  result.triangle_index = em_inst.triangle_index;
   result.medium_index = em.medium_index;
-  result.is_delta = em.is_delta();
-  result.is_distant = em.is_distant();
+  result.is_delta = em_inst.is_delta();
+  result.is_distant = em_inst.is_distant();
   return result;
 }
 

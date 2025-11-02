@@ -547,7 +547,7 @@ ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& opti
   float sum_pdf_dir = 0.0f;
 
   for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-    const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
+    const auto& emitter_instance = scene.emitter_instances[scene.environment_emitters.emitters[ie]];
 
     EmitterRadianceQuery q = {
       .direction = state.ray.d,
@@ -557,11 +557,11 @@ ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& opti
     float pdf_area = 0.0f;
     float pdf_dir = 0.0f;
     float pdf_dir_out = 0.0f;
-    SpectralResponse value = emitter_get_radiance(emitter, state.spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
+    SpectralResponse value = emitter_get_radiance(emitter_instance, state.spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
     ETX_VALIDATE(value);
 
     if (pdf_dir > kEpsilon) {
-      float pdf_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+      float pdf_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
       sum_pdf_dir_out += pdf_dir_out * pdf_discrete;
       sum_pdf_dir += pdf_dir * pdf_discrete;
       accumulated_value += value;
@@ -599,8 +599,8 @@ ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& op
   if ((state.total_path_depth > scene.max_path_length) || (state.total_path_depth < scene.min_path_length))
     return;
 
-  const auto& emitter = scene.emitters[intersection.emitter_index];
-  state.gathered += vcm_get_radiance(scene, emitter, state, options, intersection);
+  const auto& emitter_instance = scene.emitter_instances[intersection.emitter_index];
+  state.gathered += vcm_get_radiance(scene, emitter_instance, state, options, intersection);
 }
 
 ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,

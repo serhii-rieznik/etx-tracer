@@ -417,6 +417,26 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     set_selection(SelectionKind::Scene, 0);
   }
 
+  std::vector<int32_t> emitter_primary_instance;
+  if (scene.emitter_profiles.count > 0) {
+    emitter_primary_instance.assign(scene.emitter_profiles.count, -1);
+    for (uint32_t instance_index = 0; instance_index < scene.emitter_instances.count; ++instance_index) {
+      uint32_t profile = scene.emitter_instances[instance_index].profile;
+      if ((profile < emitter_primary_instance.size()) && (emitter_primary_instance[profile] == -1)) {
+        emitter_primary_instance[profile] = static_cast<int32_t>(instance_index);
+      }
+    }
+  }
+
+  auto material_name_from_index = [&](uint32_t material_index) -> const char* {
+    for (uint64_t i = 0; i < _material_mapping.size(); ++i) {
+      if (_material_mapping.indices[i] == material_index) {
+        return _material_mapping.names[i];
+      }
+    }
+    return nullptr;
+  };
+
   auto with_window = [&](uint32_t flag, const char* title, auto&& body, float min_chars = 30.0f) {
     if ((_ui_setup & flag) == 0)
       return;
@@ -820,24 +840,40 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     ImGui::Separator();
 
     ImGui::Text("Emitters");
-    std::vector<uint32_t> emitter_indices;
-    emitter_indices.reserve(scene.emitters.count);
-    for (uint32_t idx = 0; idx < scene.emitters.count; ++idx) {
-      if (scene.emitters[idx].cls == Emitter::Class::Area)
-        continue;
-      emitter_indices.push_back(idx);
-    }
-    if (emitter_indices.empty()) {
+    if (scene.emitter_profiles.count == 0) {
       ImGui::TextDisabled("None");
     } else if (ImGui::BeginListBox("##emitters_list", ImVec2(-FLT_MIN, 4.0f * ImGui::GetTextLineHeightWithSpacing()))) {
-      for (uint32_t emitter_index : emitter_indices) {
-        const auto& emitter = scene.emitters[emitter_index];
+      for (uint32_t emitter_index = 0; emitter_index < scene.emitter_profiles.count; ++emitter_index) {
+        const auto& emitter = scene.emitter_profiles[emitter_index];
         char label[64] = {};
         switch (emitter.cls) {
-          case Emitter::Class::Directional:
+          case EmitterProfile::Class::Area: {
+            const char* material_name = nullptr;
+            if (emitter_index < emitter_primary_instance.size()) {
+              int32_t instance_index = emitter_primary_instance[emitter_index];
+              if ((instance_index >= 0) && (static_cast<uint32_t>(instance_index) < scene.emitter_instances.count)) {
+                const auto& instance = scene.emitter_instances[instance_index];
+                if (instance.triangle_index < scene.triangles.count) {
+                  uint32_t material_index = scene.triangles[instance.triangle_index].material_index;
+                  material_name = material_name_from_index(material_index);
+                  if (material_name == nullptr) {
+                    snprintf(label, sizeof(label), "%05u : area (material %u)", emitter_index, material_index);
+                    break;
+                  }
+                }
+              }
+            }
+            if (material_name != nullptr) {
+              snprintf(label, sizeof(label), "%05u : area (%s)", emitter_index, material_name);
+            } else {
+              snprintf(label, sizeof(label), "%05u : area", emitter_index);
+            }
+            break;
+          }
+          case EmitterProfile::Class::Directional:
             snprintf(label, sizeof(label), "%05u : directional", emitter_index);
             break;
-          case Emitter::Class::Environment:
+          case EmitterProfile::Class::Environment:
             snprintf(label, sizeof(label), "%05u : environment", emitter_index);
             break;
           default:
@@ -877,15 +913,15 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           }
           break;
         case SelectionKind::Emitter: {
-          if ((_selection.index >= 0) && has_scene && (static_cast<uint32_t>(_selection.index) < scene.emitters.count)) {
-            const auto& emitter = scene.emitters[_selection.index];
+          if ((_selection.index >= 0) && has_scene && (static_cast<uint32_t>(_selection.index) < scene.emitter_profiles.count)) {
+            const auto& emitter = scene.emitter_profiles[_selection.index];
             char label[64] = {};
             const char* type = "Emitter";
             switch (emitter.cls) {
-              case Emitter::Class::Directional:
+              case EmitterProfile::Class::Directional:
                 snprintf(label, sizeof(label), "%05u (Directional)", static_cast<uint32_t>(_selection.index));
                 break;
-              case Emitter::Class::Environment:
+              case EmitterProfile::Class::Environment:
                 snprintf(label, sizeof(label), "%05u (Environment)", static_cast<uint32_t>(_selection.index));
                 break;
               default:
@@ -964,24 +1000,49 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
         }
 
         case SelectionKind::Emitter: {
-          if ((_selection.index < 0) || (!has_scene) || (static_cast<uint32_t>(_selection.index) >= scene.emitters.count)) {
+          if ((_selection.index < 0) || (!has_scene) || (static_cast<uint32_t>(_selection.index) >= scene.emitter_profiles.count)) {
             ImGui::Text("Invalid emitter selection");
             break;
           }
           uint32_t emitter_index = static_cast<uint32_t>(_selection.index);
-          auto& emitter = scene.emitters[emitter_index];
-          if (emitter.cls == Emitter::Class::Area) {
-            ImGui::Text("Area emitters are not editable");
-            break;
-          }
+          auto& emitter = scene.emitter_profiles[emitter_index];
           if (!scene_editable)
             ImGui::BeginDisabled();
           bool changed = false;
+          if (emitter.cls == EmitterProfile::Class::Area) {
+            uint32_t triangle_count = 0;
+            float total_area = 0.0f;
+            float total_power = 0.0f;
+            const char* material_name = nullptr;
+            uint32_t material_index = kInvalidIndex;
+            for (uint32_t instance_index = 0; instance_index < scene.emitter_instances.count; ++instance_index) {
+              const auto& instance = scene.emitter_instances[instance_index];
+              if (instance.profile != emitter_index)
+                continue;
+              ++triangle_count;
+              total_area += instance.triangle_area;
+              total_power += instance.spectrum_weight * instance.additional_weight;
+              if (material_name == nullptr) {
+                if (instance.triangle_index < scene.triangles.count) {
+                  material_index = scene.triangles[instance.triangle_index].material_index;
+                  material_name = material_name_from_index(material_index);
+                }
+              }
+            }
+            if (material_name != nullptr) {
+              ImGui::Text("Material: %s", material_name);
+            } else if (material_index != kInvalidIndex) {
+              ImGui::Text("Material index: %u", material_index);
+            }
+            ImGui::Text("Triangles: %u", triangle_count);
+            ImGui::Text("Total Area: %.3f", total_area);
+            ImGui::Text("Current Power: %.3f", total_power);
+            ImGui::Separator();
+          }
+
           ImGui::Text("Emission Spectrum");
-          ImGui::Indent();
           changed |= spectrum_picker(scene, "Emission", emitter.emission.spectrum_index, true);
-          ImGui::Unindent();
-          if (emitter.cls == Emitter::Class::Directional) {
+          if (emitter.cls == EmitterProfile::Class::Directional) {
             ImGui::Text("Angular Size");
             if (ImGui::DragFloat("##angularsize", &emitter.angular_size, 0.01f, 0.0f, kHalfPi, "%.3f", ImGuiSliderFlags_NoRoundToFormat)) {
               emitter.angular_size_cosine = cosf(emitter.angular_size / 2.0f);
@@ -1036,6 +1097,13 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           camera_changed = camera_changed || ImGui::DragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
           ImGui::Text("Focal Length");
           camera_changed = camera_changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 5000.0f, "%.1fmm", ImGuiSliderFlags_None);
+          ImGui::Text("Clip Planes (near/far)");
+          float clip_values[2] = {camera.clip_near, camera.clip_far};
+          if (ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 5000.0f, "%.3f")) {
+            camera.clip_near = std::max(0.0f, clip_values[0]);
+            camera.clip_far = std::max(camera.clip_near + 0.001f, clip_values[1]);
+            camera_changed = true;
+          }
 
           ImGui::Text("Pixel Filter Radius");
           camera_changed = camera_changed || ImGui::DragFloat("##pixelfiler", &scene.pixel_sampler.radius, 0.05f, 0.0f, 32.0f, "%.3fpx", ImGuiSliderFlags_None);
@@ -1053,6 +1121,8 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
             camera.film_size = {uint32_t(viewport.x), uint32_t(viewport.y)};
             camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
             camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
+            camera.clip_near = std::max(camera.clip_near, 0.0f);
+            camera.clip_far = std::max(camera.clip_far, camera.clip_near + 0.001f);
             scene.pixel_sampler.radius = clamp(scene.pixel_sampler.radius, 0.0f, 32.0f);
 
             auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;

@@ -326,7 +326,8 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
   if ((options.direct == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
-  const auto& emitter = scene.emitters[intersection.emitter_index];
+  const auto& emitter_instance = scene.emitter_instances[intersection.emitter_index];
+
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;
@@ -338,11 +339,11 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
     .directly_visible = payload.path_length == 1,
   };
 
-  auto e = emitter_get_radiance(emitter, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
+  auto e = emitter_get_radiance(emitter_instance, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
 
   if (pdf_emitter_dir > 0.0f) {
     auto tr = rt.trace_transmittance(payload.spect, scene, payload.ray.o, intersection.pos, {.index = payload.medium}, payload.smp);
-    float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+    float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
     bool no_weight = (options.mis == false) || q.directly_visible || (payload.mis_weight == false);
     auto weight = no_weight ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
     payload.accumulated += payload.throughput * e * tr * weight;
@@ -461,7 +462,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
 ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
   for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-    const auto& emitter = scene.emitters[scene.environment_emitters.emitters[ie]];
+    const auto& emitter_instance = scene.emitter_instances[scene.environment_emitters.emitters[ie]];
     float pdf_emitter_area = 0.0f;
     float pdf_emitter_dir = 0.0f;
     float pdf_emitter_dir_out = 0.0f;
@@ -469,10 +470,10 @@ ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
       .direction = payload.ray.d,
       .directly_visible = payload.path_length == 1,
     };
-    auto e = emitter_get_radiance(emitter, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
+    auto e = emitter_get_radiance(emitter_instance, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
     ETX_VALIDATE(e);
     if ((pdf_emitter_dir > 0) && (e.is_zero() == false)) {
-      float pdf_emitter_discrete = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+      float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
       auto weight = ((payload.mis_weight == false) || q.directly_visible) ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
       payload.accumulated += payload.throughput * e * weight;
       ETX_VALIDATE(payload.accumulated);

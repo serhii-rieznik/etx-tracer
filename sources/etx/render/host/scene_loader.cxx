@@ -111,6 +111,7 @@ struct SceneRepresentationImpl {
     SpectralDistribution spectrum;
     std::string id;
   };
+
   struct CameraID {
     Camera cam;
     std::string id;
@@ -122,7 +123,8 @@ struct SceneRepresentationImpl {
   std::vector<Triangle> triangles;
   std::vector<uint32_t> triangle_to_emitter;
   std::vector<Material> materials;
-  std::vector<Emitter> emitters;
+  std::vector<EmitterProfile> emitter_profiles;
+  std::vector<Emitter> emitter_instances;
   std::vector<SpectrumID> scene_spectrums;
   std::vector<SpectralDistribution> scene_spectrum_array;
   std::vector<CameraID> cameras;
@@ -136,6 +138,7 @@ struct SceneRepresentationImpl {
   MediumPool mediums;
 
   SceneRepresentation::MaterialMapping material_mapping;
+  std::unordered_map<uint32_t, uint32_t> material_to_emitter_profile;
   std::unordered_map<uint32_t, uint32_t> gltf_image_mapping;
 
   Scene scene;
@@ -281,7 +284,8 @@ struct SceneRepresentationImpl {
     vertices.clear();
     triangles.clear();
     materials.clear();
-    emitters.clear();
+    emitter_profiles.clear();
+    emitter_instances.clear();
     triangle_to_emitter.clear();
     cameras.clear();
 
@@ -290,6 +294,7 @@ struct SceneRepresentationImpl {
     images.remove_all();
     mediums.remove_all();
     gltf_image_mapping.clear();
+    material_to_emitter_profile.clear();
     materials.reserve(1024);  // TODO : fix, images when reallocated are destroyed releasing memory
 
     free(scene.emitters_distribution.values.a);
@@ -317,9 +322,6 @@ struct SceneRepresentationImpl {
 
   void validate_materials() {
     for (auto& mtl : materials) {
-      if (mtl.cls == Material::Class::Void) {
-        continue;
-      }
       if (mtl.reflectance.spectrum_index == kInvalidIndex) {
         mtl.reflectance.spectrum_index = add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
       }
@@ -483,7 +485,6 @@ struct SceneRepresentationImpl {
 
     scene_spectrum_array.resize(scene_spectrums.size());
     scene_spectrum_array.clear();
-
     for (const auto& spd : scene_spectrums) {
       scene_spectrum_array.emplace_back(spd.spectrum);
     }
@@ -498,20 +499,21 @@ struct SceneRepresentationImpl {
       bbox_max = max(bbox_max, vertices[tri.i[1]].pos);
       bbox_max = max(bbox_max, vertices[tri.i[2]].pos);
     }
+
     scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
     scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
     scene.vertices = {vertices.data(), vertices.size()};
     scene.triangles = {triangles.data(), triangles.size()};
     scene.triangle_to_emitter = {triangle_to_emitter.data(), triangle_to_emitter.size()};
     scene.materials = {materials.data(), materials.size()};
-    scene.emitters = {emitters.data(), emitters.size()};
+    scene.emitter_profiles = {emitter_profiles.data(), emitter_profiles.size()};
+    scene.emitter_instances = {emitter_instances.data(), emitter_instances.size()};
     scene.images = {images.as_array(), images.array_size()};
     scene.mediums = {mediums.as_array(), mediums.array_size()};
     scene.spectrums = {scene_spectrum_array.data(), scene_spectrum_array.size()};
     scene.environment_emitters.count = 0;
     scene.flags = Scene::Committed | (spectral ? Scene::Spectral : 0u);
 
-    log::warning("Building emitters distribution for %llu emitters...", scene.emitters.count);
     build_emitters_distribution(scene);
   }
 
@@ -521,7 +523,7 @@ struct SceneRepresentationImpl {
     LoadCameraInfo = 1u << 1u,
   };
 
-  void add_area_emitter(const Material& mtl, const Triangle& tri);
+  void add_area_emitter(const Triangle& tri);
 
   uint32_t load_from_obj(const char* file_name, const char* mtl_file);
 
@@ -759,8 +761,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
     }
   }
 
-  if (_private->emitters.empty()) {
-    tinyobj::material_t mtl;
+  if (_private->emitter_profiles.empty()) {
+    tinyobj::material_t mtl = {};
     mtl.unknown_parameter.emplace_back("direction", "0.0 2.0 1.0");
     mtl.unknown_parameter.emplace_back("quality", ETX_DEBUG ? "0.0625" : "0.125");
     mtl.unknown_parameter.emplace_back("angular_diameter", "0.5422");
@@ -793,19 +795,19 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   return true;
 }
 
-void SceneRepresentationImpl::add_area_emitter(const Material& mtl, const Triangle& tri) {
+void SceneRepresentationImpl::add_area_emitter(const Triangle& tri) {
+  auto& mtl = materials[tri.material_index];
+
   if (mtl.emission.spectrum_index == kInvalidIndex)
     return;
 
-  auto lum = scene_spectrums[mtl.emission.spectrum_index].spectrum.luminance();
-
   float power_scale = 1.0f;
-  switch (Emitter::Direction(mtl.emission_direction)) {
-    case Emitter::Direction::TwoSided: {
+  switch (EmitterProfile::Direction(mtl.emission_direction)) {
+    case EmitterProfile::Direction::TwoSided: {
       power_scale = 2.0f;
       break;
     }
-    case Emitter::Direction::Omni: {
+    case EmitterProfile::Direction::Omni: {
       power_scale = 4.0f * kPi;
       break;
     }
@@ -833,19 +835,25 @@ void SceneRepresentationImpl::add_area_emitter(const Material& mtl, const Triang
   }
 
   float tri_area = triangle_area(tri);
-  float weight = power_scale * (tri_area * kPi) * (lum * texture_emission);
-  if (weight <= 0.0f)
+  float spectrum_weight = scene_spectrums[mtl.emission.spectrum_index].spectrum.luminance();
+  float additional_weight = power_scale * (tri_area * kPi) * texture_emission;
+  if ((additional_weight <= 0.0f) || (spectrum_weight <= 0.0f))
     return;
 
-  auto& e = emitters.emplace_back();
-  e.cls = Emitter::Class::Area;
-  e.emission_direction = Emitter::Direction(mtl.emission_direction);
-  e.collimation = mtl.emission_collimation;
-  e.emission = mtl.emission;
-  e.medium_index = mtl.ext_medium;
+  if (material_to_emitter_profile.find(tri.material_index) == material_to_emitter_profile.end()) {
+    material_to_emitter_profile[tri.material_index] = uint32_t(emitter_profiles.size());
+    auto& emitter_profile = emitter_profiles.emplace_back(EmitterProfile::Class::Area);
+    emitter_profile.emission_direction = EmitterProfile::Direction(mtl.emission_direction);
+    emitter_profile.collimation = mtl.emission_collimation;
+    emitter_profile.emission = mtl.emission;
+    emitter_profile.medium_index = mtl.ext_medium;
+  }
+
+  auto& e = emitter_instances.emplace_back(EmitterProfile::Class::Area);
+  e.profile = material_to_emitter_profile[tri.material_index];
+  e.additional_weight = additional_weight;
   e.triangle_index = static_cast<uint32_t>(triangles.size() - 1llu);
   e.triangle_area = tri_area;
-  e.weight = weight;
 }
 
 uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const char* mtl_file) {
@@ -897,7 +905,6 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       auto& tri = triangles.emplace_back();
       tri.material_index = material_mapping.at(source_material.name);
 
-      auto& mtl = materials[tri.material_index];
       for (uint64_t vertex_index = 0; vertex_index < face_size; ++vertex_index) {
         const auto& index = shape.mesh.indices[index_offset + vertex_index];
         tri.i[vertex_index] = static_cast<uint32_t>(vertices.size());
@@ -916,7 +923,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
         triangles.pop_back();
       }
 
-      add_area_emitter(mtl, tri);
+      add_area_emitter(tri);
 
       // TODO : deal with bounds!
       shape_bbox_max = max(shape_bbox_max, vertices[tri.i[0]].pos);
@@ -926,6 +933,7 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       shape_bbox_min = min(shape_bbox_min, vertices[tri.i[1]].pos);
       shape_bbox_min = min(shape_bbox_min, vertices[tri.i[2]].pos);
 
+      auto& mtl = materials[tri.material_index];
       if (mtl.int_medium != kInvalidIndex) {
         mediums.get(mtl.int_medium).bounds = {shape_bbox_min, shape_bbox_max};
       }
@@ -1191,8 +1199,10 @@ void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::
 }
 
 void SceneRepresentationImpl::parse_directional_light(const char* base_dir, const tinyobj::material_t& material) {
-  auto& e = emitters.emplace_back(Emitter::Class::Directional);
+  auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Directional);
+  instance.profile = uint32_t(emitter_profiles.size());
 
+  auto& e = emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
   if (get_param(material, "color")) {
     e.emission.spectrum_index = add_spectrum(load_illuminant_spectrum(data_buffer));
   } else {
@@ -1223,7 +1233,10 @@ void SceneRepresentationImpl::parse_directional_light(const char* base_dir, cons
 }
 
 void SceneRepresentationImpl::parse_env_light(const char* base_dir, const tinyobj::material_t& material) {
-  auto& e = emitters.emplace_back(Emitter::Class::Environment);
+  auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Environment);
+  instance.profile = uint32_t(emitter_profiles.size());
+
+  auto& e = emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
 
   char tmp_buffer[2048] = {};
   if (get_param(material, "image")) {
@@ -1342,7 +1355,10 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
   sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * quality));
 
   {
-    auto& d = emitters.emplace_back(Emitter::Class::Directional);
+    auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Directional);
+    instance.profile = uint32_t(emitter_profiles.size());
+
+    auto& d = emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
     d.emission.spectrum_index = add_spectrum(sun_spectrum);
     scene_spectrums[d.emission.spectrum_index].spectrum.scale(sun_scale);
     d.angular_size = angular_size;
@@ -1356,7 +1372,10 @@ void SceneRepresentationImpl::parse_atmosphere_light(const char* base_dir, const
   }
 
   {
-    auto& e = emitters.emplace_back(Emitter::Class::Environment);
+    auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Environment);
+    instance.profile = uint32_t(emitter_profiles.size());
+
+    auto& e = emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
     e.emission.spectrum_index = add_spectrum(sun_spectrum);
     scene_spectrums[e.emission.spectrum_index].spectrum.scale(sky_scale);
     uint32_t image_options = Image::BuildSamplingTable | Image::Delay;
@@ -1869,9 +1888,9 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       if ((strcmp(params[i], "image") == 0) && (i + 1 < end) && get_file(base_dir, params[i + 1])) {
         mtl.emission.image_index = add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       } else if (strcmp(params[i], "twosided") == 0) {
-        mtl.emission_direction = uint32_t(Emitter::Direction::TwoSided);
+        mtl.emission_direction = uint32_t(EmitterProfile::Direction::TwoSided);
       } else if (strcmp(params[i], "omni") == 0) {
-        mtl.emission_direction = uint32_t(Emitter::Direction::Omni);
+        mtl.emission_direction = uint32_t(EmitterProfile::Direction::Omni);
       } else if ((strcmp(params[i], "collimated") == 0) && (i + 1 < end)) {
         mtl.emission_collimation = static_cast<float>(atof(params[i + 1]));
         i += 1;
@@ -2254,29 +2273,48 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
       }
 
       if (valid_material) {
-        add_area_emitter(materials[material_index], tri);
+        add_area_emitter(tri);
       }
     }
   }
 }
 
 void build_emitters_distribution(Scene& scene) {
-  DistributionBuilder emitters_distribution(scene.emitters_distribution, static_cast<uint32_t>(scene.emitters.count));
-  scene.environment_emitters.count = 0;
-  for (uint32_t i = 0; i < scene.emitters.count; ++i) {
-    auto& emitter = scene.emitters[i];
+  for (uint32_t i = 0; i < scene.emitter_profiles.count; ++i) {
+    auto& emitter = scene.emitter_profiles[i];
     if (emitter.is_distant()) {
-      uint32_t spectrum_index = emitter.emission.spectrum_index;
-      ETX_CRITICAL(spectrum_index != kInvalidIndex);
-      emitter.weight = scene.spectrums[spectrum_index].luminance() * kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
+      emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
+      emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);
+      float additional_weight = kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
+      for (uint32_t j = 0; j < scene.emitter_instances.count; ++j) {
+        if (scene.emitter_instances[j].profile == i) {
+          scene.emitter_instances[j].additional_weight = additional_weight;
+        }
+      }
     }
-    emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
-    emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);
-    emitters_distribution.add(emitter.weight);
+  }
 
+  log::warning("Building emitters distribution for %llu emitters...", scene.emitter_instances.count);
+
+  scene.environment_emitters.count = 0;
+
+  DistributionBuilder emitters_distribution(scene.emitters_distribution, static_cast<uint32_t>(scene.emitter_instances.count));
+  for (uint32_t i = 0; i < scene.emitter_instances.count; ++i) {
+    auto& emitter = scene.emitter_instances[i];
+
+    float spectrum_weight = 0.0f;
+
+    const auto& profile = scene.emitter_profiles[emitter.profile];
+    if (profile.emission.spectrum_index != kInvalidIndex) {
+      spectrum_weight = scene.spectrums[profile.emission.spectrum_index].luminance();
+    }
+    emitter.spectrum_weight = spectrum_weight;
+
+    float total_weight = emitter.spectrum_weight * emitter.additional_weight;
+    emitters_distribution.add(total_weight);
     if (emitter.is_local()) {
       scene.triangle_to_emitter[emitter.triangle_index] = i;
-    } else if (emitter.is_distant() && (emitter.weight > 0.0f)) {
+    } else if (emitter.is_distant() && (total_weight > 0.0f)) {
       scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
     }
   }
