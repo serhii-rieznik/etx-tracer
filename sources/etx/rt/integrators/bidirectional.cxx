@@ -1132,13 +1132,15 @@ struct CPUBidirectionalImpl : public Task {
 
     const auto& scene = rt.scene();
 
-    float p_camera = film_pdf_out(rt.camera(), y_curr.intersection.pos);
-    p_camera = PathVertex::convert_solid_angle_pdf_to_area(p_camera, sampled_camera_vertex, y_curr);
+    float curr_from_camera = film_pdf_out(rt.camera(), y_curr.intersection.pos);
+    curr_from_camera = PathVertex::convert_solid_angle_pdf_to_area(curr_from_camera, sampled_camera_vertex, y_curr);
+
+    float prev_from_curr = PathVertex::pdf_area(spect, PathSource::Camera, sampled_camera_vertex, y_curr, y_prev, scene, smp);
 
     if (mode == Mode::BDPTFull) {
-      float y_curr_pdf = p_camera;
+      float y_curr_pdf = curr_from_camera;
       ETX_VALIDATE(y_curr_pdf);
-      float y_prev_pdf = PathVertex::pdf_area(spect, PathSource::Camera, sampled_camera_vertex, y_curr, y_prev, scene, smp);
+      float y_prev_pdf = prev_from_curr;
       ETX_VALIDATE(y_prev_pdf);
       float w_light = mis_light(path_data, y_curr_pdf, y_curr, y_prev_pdf, y_prev);
       return 1.0f / (1.0f + w_light);
@@ -1147,24 +1149,20 @@ struct CPUBidirectionalImpl : public Task {
     if (mode == Mode::BDPTFast) {
       const auto& e0 = path_data.emitter_path[0];
       const auto& e1 = path_data.emitter_path[1];
-      const auto& e2 = path_data.emitter_path_size > 2 ? path_data.emitter_path[2] : sampled_camera_vertex;
 
       float ratio = y_prev.pdf.history;
-
-      float p_bck = p_camera;
-      float p_fwd = 1.0f;
-      if (y_prev.connectible && (path_data.emitter_path_size > 2)) {
-        float prev_from_camera = PathVertex::pdf_area(spect, PathSource::Camera, sampled_camera_vertex, y_curr, y_prev, scene, smp);
-        p_bck *= map0(prev_from_camera);
-        p_fwd *= map0(y_prev.pdf.from_prev);
+      float p_fwd = y_prev.connectible ? y_curr.pdf.from_prev : 1.0f;
+      float p_bck = y_prev.connectible ? curr_from_camera : 0.0f;
+      if (path_data.emitter_path_size > 2) {
+        p_bck *= prev_from_curr;
+        p_fwd *= y_prev.pdf.from_prev;
       }
 
-      p_fwd *= map0(y_curr.pdf.from_prev);
+      const float to_emitter_direct = e0.mis_connectible ? (path_data.emitter_path_size > 2 ? e0.pdf.from_next : prev_from_curr) : 0.0f;
+      const float to_emitter_connect = e0.mis_connectible ? PathVertex::pdf_to_emitter(spect, e1, e0, scene) : 1.0f;
 
-      constexpr float to_camera_connect = 1.0f;
-      const float to_emitter_direct = e0.mis_connectible && e1.connectible ? PathVertex::pdf_area(spect, PathSource::Camera, e2, e1, e0, scene, smp) : 0.0f;
-      const float to_emitter_connect = map0(PathVertex::pdf_to_emitter(spect, e1, e0, scene));
-      return balance_heuristic(p_fwd * to_camera_connect, ratio * p_bck * to_emitter_connect, ratio * p_bck * to_emitter_direct);
+      // constexpr float to_camera_connect = 1.0f;
+      return balance_heuristic(p_fwd /* to_camera_connect */, ratio * p_bck * to_emitter_connect, ratio * p_bck * to_emitter_direct);
     }
 
     return 0.0f;
@@ -1195,13 +1193,6 @@ struct CPUBidirectionalImpl : public Task {
     float w_light = mis_light(c, y_curr_pdf, y_curr, y_prev_pdf, y_prev);
 
     return 1.0f / (1.0f + w_camera + w_light);
-  }
-
-  inline bool nearly_equal(float a, float b) const {
-    float max_term = fmaxf(0.0001f, 0.005f * std::max(std::fabs(a), std::fabs(b)));
-    bool cmp = fabsf(a / b - 1.0f) <= max_term;
-    ETX_ASSERT(cmp);
-    return cmp;
   }
 
   SpectralResponse direct_hit_area_emitter(const PathVertex& z_curr, const PathVertex& z_prev, PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
@@ -1342,7 +1333,7 @@ struct CPUBidirectionalImpl : public Task {
         float p_sample = pdf_to;
         float to_emitter_connect = z_prev.connectible ? map0(z_prev.pdf.from_prev) * p_sample : 0.0f;
         float p_from = pdf_from;
-        float p_from_light = map0(p_from) * map0(p_sample);
+        float p_from_light = z_prev.connectible ? map0(p_from) * map0(p_sample) : 0.0f;
         mis_weight = balance_heuristic(to_emitter_direct, to_emitter_connect, ratio * p_from_light);
       }
     }

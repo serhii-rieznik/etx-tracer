@@ -41,7 +41,7 @@ void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint
   std::vector<std::pair<std::string, uint32_t>> unfold;
   unfold.reserve(in_mapping.size());
   for (const auto& m : in_mapping) {
-    if (m.first.starts_with("et::") == false) {
+    if ((m.first.starts_with("etx::") == false) && (m.first.starts_with("et::") == false)) {
       unfold.emplace_back(m.first, m.second);
       max_len = std::max(max_len, m.first.size() + 1u);
     }
@@ -1448,9 +1448,9 @@ bool UI::build_material(Scene& scene, Material& material) {
   ImGui::PopStyleColor(3);
   if (open_rough) {
     ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
-    changed |= ImGui::SliderFloat("##r_u", &material.roughness.value.x, 0.0f, 1.0f, "Roughness U %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+    changed |= ImGui::SliderFloat("##r_u", &material.roughness.value.x, 0.0f, 1.0f, "Roughness U %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
     ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
-    changed |= ImGui::SliderFloat("##r_v", &material.roughness.value.y, 0.0f, 1.0f, "Roughness V %.2f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+    changed |= ImGui::SliderFloat("##r_v", &material.roughness.value.y, 0.0f, 1.0f, "Roughness V %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.25f);
     if (ImGui::Button("Sync")) {
