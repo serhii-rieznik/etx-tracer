@@ -443,6 +443,8 @@ ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource 
   state.path_distance += intersection.t;
   state.medium_index = new_medium;
   state.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, state.ray.d);
+  state.ray.max_t = kMaxFloat;
+  state.ray.min_t = kRayEpsilon;
   return true;
 }
 
@@ -997,9 +999,11 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     return false;
   }
 
-  if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, intersection, state)) {
-    // TODO : infinite loop
-    return true;
+  if (scene.materials[intersection.material_index].cls == Material::Class::Boundary) {
+    if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, intersection, state)) {
+      // TODO : infinite loop
+      return true;
+    }
   }
 
   const auto& mat = scene.materials[intersection.material_index];
