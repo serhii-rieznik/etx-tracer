@@ -70,7 +70,6 @@ struct ETX_ALIGNED Material {
 
   SpectralImage reflectance;
   SpectralImage scattering;
-  SpectralImage emission;
   SampledImage roughness;
   SampledImage metalness;
   SampledImage transmission;
@@ -87,8 +86,6 @@ struct ETX_ALIGNED Material {
 
   uint32_t diffuse_variation = 0u;
   float normal_scale = 1.0f;
-  float emission_collimation = 1.0f;
-  uint32_t emission_direction = 0u;
   float opacity = 1.0f;
   uint32_t two_sided = 0u;
 

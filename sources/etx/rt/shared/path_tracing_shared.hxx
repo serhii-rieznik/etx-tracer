@@ -76,9 +76,10 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   } else {
     const Medium& medium = scene.mediums[mat.int_medium];
     anisotropy = medium.phase_function_g;
-    scattering = medium.s_scattering(spect);
-    extinction = scattering + medium.s_absorption(spect);
-    albedo = medium::calculate_albedo(spect, scattering, extinction);
+    scattering = medium_scattering(scene, medium, spect);
+    auto absorption = medium_absorption(scene, medium, spect);
+    extinction = scattering + absorption;
+    albedo = calculate_albedo(spect, scattering, extinction);
   }
 
   Ray ray = {};
@@ -90,7 +91,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   SpectralResponse throughput = {spect, 1.0f};
   for (uint32_t i = 0; i < kMaxIterations; ++i) {
     SpectralResponse pdf = {};
-    uint32_t channel = medium::sample_spectrum_component(spect, albedo, throughput, smp.next(), pdf);
+    uint32_t channel = sample_spectrum_component(spect, albedo, throughput, smp.next(), pdf);
     float scattering_distance = extinction.component(channel);
 
     ray.max_t = scattering_distance > 0.0f ? (-logf(1.0f - smp.next()) / scattering_distance) : kMaxFloat;
@@ -139,7 +140,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
 
     auto prev_dir = ray.d;
     ray.o = ray.o + ray.d * ray.max_t;
-    ray.d = medium::sample_phase_function(prev_dir, anisotropy, smp.next_2d());
+    ray.d = sample_phase_function(prev_dir, anisotropy, smp.next_2d());
   }
 
   return GatherResult::Failed;
@@ -260,7 +261,7 @@ ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload
     return {};
   }
 
-  auto medium_sample = scene.mediums[payload.medium].sample(payload.spect, payload.throughput, payload.smp, payload.ray.o, payload.ray.d, max_t);
+  auto medium_sample = sample_medium(scene, scene.mediums[payload.medium], payload.spect, payload.throughput, payload.smp, payload.ray.o, payload.ray.d, max_t);
   payload.throughput *= medium_sample.weight;
   ETX_VALIDATE(payload.throughput);
   return medium_sample;
@@ -276,15 +277,15 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
     auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp.next_2d(), medium_sample.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
       auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, {.index = payload.medium}, payload.smp);
-      float phase_function = medium.phase_function(payload.ray.d, emitter_sample.direction);
+      float phase_function = medium_phase_function(medium, payload.ray.d, emitter_sample.direction);
       auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, phase_function);
       payload.accumulated += payload.throughput * emitter_sample.value * tr * (phase_function * weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
       ETX_VALIDATE(payload.accumulated);
     }
   }
 
-  float3 w_o = medium.sample_phase_function(payload.smp.next_2d(), payload.ray.d);
-  payload.sampled_bsdf_pdf = medium.phase_function(payload.ray.d, w_o);
+  float3 w_o = medium_sample_phase_function(medium, payload.smp.next_2d(), payload.ray.d);
+  payload.sampled_bsdf_pdf = medium_phase_function(medium, payload.ray.d, w_o);
   payload.mis_weight = true;
   payload.ray.o = medium_sample.pos;
   payload.ray.d = w_o;

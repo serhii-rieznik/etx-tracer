@@ -143,6 +143,13 @@ def _export_materials(operator, obj_path):
         if medium_entry is not None and medium_id is not None:
             materials_data.append(medium_entry)
             material_to_medium_id[name] = medium_id
+            sanitized_key = None
+            try:
+                sanitized_key = _sanitize_material_name(name)
+            except Exception:
+                sanitized_key = None
+            if sanitized_key and sanitized_key != name:
+                material_to_medium_id.setdefault(sanitized_key, medium_id)
 
     # === Export mesh materials ===
     if exported_material_names:
@@ -170,8 +177,20 @@ def _export_materials(operator, obj_path):
                         {"WARNING"},
                         f"Material '{name}' textures warning: {str(tex_err)}",
                     )
-                if name in material_to_medium_id:
-                    mat_data["properties"]["int_medium"] = material_to_medium_id[name]
+                medium_id = material_to_medium_id.get(mat.name)
+                if medium_id is None:
+                    try:
+                        medium_id = material_to_medium_id.get(
+                            _sanitize_material_name(mat.name)
+                        )
+                    except Exception:
+                        medium_id = None
+                if medium_id is None:
+                    medium_id = material_to_medium_id.get(raw_name)
+                if medium_id is None and name != raw_name:
+                    medium_id = material_to_medium_id.get(name)
+                if medium_id is not None:
+                    mat_data["properties"]["int_medium"] = medium_id
             else:
                 # Fallback default for unknown names referenced by OBJ
                 mat_data = {
@@ -226,7 +245,12 @@ def _export_materials(operator, obj_path):
 
     # Write ETX materials format
     def write_materials_file(file_path):
-        with open(file_path, "w", encoding="utf-8") as f:
+        directory = os.path.dirname(file_path)
+        if len(directory) > 0:
+            os.makedirs(directory, exist_ok=True)
+
+        temp_path = file_path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
 
             def _etx_first(entry):
                 try:
@@ -246,6 +270,8 @@ def _export_materials(operator, obj_path):
                         f.write(f"{key} {value}\n")
 
                 f.write("\n")  # Blank line between materials
+
+        os.replace(temp_path, file_path)
 
     # Write (or create) the ETX materials file unconditionally
     write_materials_file(mtl_path)
@@ -592,6 +618,20 @@ def _finalize_material_textures(operator, obj_path, blender_mat, properties):
                 _mtl_relpath(obj_path, sp) if (sp and os.path.isfile(sp)) else pr.name
             )
 
+        ml = properties.get("map_Ml")
+        if isinstance(ml, bpy.types.Image):
+            sp = _abspath_image(ml)
+            properties["map_Ml"] = (
+                _mtl_relpath(obj_path, sp) if (sp and os.path.isfile(sp)) else ml.name
+            )
+
+        tm = properties.get("map_Tm")
+        if isinstance(tm, bpy.types.Image):
+            sp = _abspath_image(tm)
+            properties["map_Tm"] = (
+                _mtl_relpath(obj_path, sp) if (sp and os.path.isfile(sp)) else tm.name
+            )
+
         nm = properties.get("normalmap")
         if isinstance(nm, tuple) and isinstance(nm[0], bpy.types.Image):
             img, scale = nm[0], nm[1]
@@ -870,121 +910,118 @@ def _bake_procedural_textures(operator, materials, obj_path):
 def _get_camera_data(operator):
     """Extract camera data from Blender scene"""
     context = bpy.context
-    scene = context.scene
+    scene = getattr(context, "scene", None)
 
-    if operator.use_active_camera and scene.camera:
-        camera_obj = scene.camera
-        camera_data = camera_obj.data
+    # Defaults that work even in headless/background sessions
+    location = Vector((7.4, 5.3, 6.5))
+    target = Vector((0.0, 0.0, 0.0))
+    up = Vector((0.0, 1.0, 0.0))
+    viewport = [1920, 1080]
+    fov = 50.0
+    focal_length = 50.0
+    clip_near = 0.1
+    clip_far = 1000.0
 
-        # Get camera transform in Blender's coordinate system (Z-up)
-        matrix_world = camera_obj.matrix_world
-        location_blender = matrix_world.translation
-
-        # Calculate target point (camera forward direction) in Blender coordinates
-        forward_blender = matrix_world.to_quaternion() @ Vector((0.0, 0.0, -1.0))
-        target_blender = location_blender + forward_blender * 10.0  # 10 unit distance
-
-        # Get up vector in Blender coordinates
-        up_blender = matrix_world.to_quaternion() @ Vector((0.0, 1.0, 0.0))
-
-        # Convert from Blender's Z-up to Y-up coordinate system (matching OBJ export)
-        # Blender: X=right, Y=forward, Z=up
-        # Y-up:    X=right, Y=up,      Z=back
-        # Transformation: (x, y, z) -> (x, z, -y)
-        location = Vector((location_blender.x, location_blender.z, -location_blender.y))
-        target = Vector((target_blender.x, target_blender.z, -target_blender.y))
-        up = Vector((up_blender.x, up_blender.z, -up_blender.y))
-
-        # Get viewport from render settings taking percentage into account
-        render = scene.render
+    render = getattr(scene, "render", None)
+    if render:
         try:
             percent = float(getattr(render, "resolution_percentage", 100))
         except Exception:
             percent = 100.0
         scale = max(1.0, percent) / 100.0
-        viewport = [
-            int(max(1, render.resolution_x * scale)),
-            int(max(1, render.resolution_y * scale)),
-        ]
+        try:
+            width = int(max(1, render.resolution_x * scale))
+            height = int(max(1, render.resolution_y * scale))
+            viewport = [width, height]
+        except Exception:
+            pass
 
-        # Get field of view
-        if camera_data.type == "PERSP":
-            horizontal_fov = math.degrees(camera_data.angle_x)
-            fov = horizontal_fov
-            focal_length = camera_data.lens
-        else:
-            # For orthographic cameras, default FOV
-            fov = 50.0  # Default horizontal FOV
-            focal_length = 50.0
+    active_camera_used = False
 
-    else:
-        # Use viewport camera
+    if operator.use_active_camera and scene and getattr(scene, "camera", None):
+        camera_obj = scene.camera
+        camera_data = getattr(camera_obj, "data", None)
+        if camera_obj and camera_data:
+            try:
+                matrix_world = camera_obj.matrix_world
+                location_blender = matrix_world.translation
+                forward_blender = matrix_world.to_quaternion() @ Vector(
+                    (0.0, 0.0, -1.0)
+                )
+                target_blender = location_blender + forward_blender * 10.0
+                up_blender = matrix_world.to_quaternion() @ Vector((0.0, 1.0, 0.0))
+
+                location = Vector(
+                    (location_blender.x, location_blender.z, -location_blender.y)
+                )
+                target = Vector((target_blender.x, target_blender.z, -target_blender.y))
+                up = Vector((up_blender.x, up_blender.z, -up_blender.y))
+            except Exception:
+                pass
+
+            try:
+                if getattr(camera_data, "type", "PERSP") == "PERSP":
+                    fov = math.degrees(camera_data.angle_x)
+                    focal_length = getattr(camera_data, "lens", focal_length)
+                else:
+                    fov = 50.0
+                    focal_length = 50.0
+            except Exception:
+                pass
+
+            clip_near = float(getattr(camera_data, "clip_start", clip_near))
+            clip_far = float(getattr(camera_data, "clip_end", clip_far))
+            active_camera_used = True
+
+    if active_camera_used == False:
+        screen = getattr(context, "screen", None)
         area = None
-        for area in context.screen.areas:
-            if area.type == "VIEW_3D":
-                break
-
-        if area and area.spaces[0].region_3d:
-            rv3d = area.spaces[0].region_3d
-            view_matrix = rv3d.view_matrix
-
-            # Extract camera data from viewport (in Blender Z-up coordinates)
-            location_blender = view_matrix.inverted().translation
-            target_blender = (
-                location_blender
-                + (view_matrix.inverted().to_quaternion() @ Vector((0.0, 0.0, -1.0)))
-                * 10.0
-            )
-            up_blender = view_matrix.inverted().to_quaternion() @ Vector(
-                (0.0, 1.0, 0.0)
-            )
-
-            # Convert to Y-up coordinate system
-            location = Vector(
-                (location_blender.x, location_blender.z, -location_blender.y)
-            )
-            target = Vector((target_blender.x, target_blender.z, -target_blender.y))
-            up = Vector((up_blender.x, up_blender.z, -up_blender.y))
-
-            # Use render settings with percentage if available, fallback to default
+        if screen and getattr(screen, "areas", None):
             try:
-                render = scene.render
-                percent = float(getattr(render, "resolution_percentage", 100))
-                scale = max(1.0, percent) / 100.0
-                viewport = [
-                    int(max(1, render.resolution_x * scale)),
-                    int(max(1, render.resolution_y * scale)),
-                ]
+                for candidate in screen.areas:
+                    if getattr(candidate, "type", None) == "VIEW_3D":
+                        area = candidate
+                        break
             except Exception:
-                viewport = [1920, 1080]
-            estimated_vertical_fov = math.degrees(
-                rv3d.view_camera_zoom * 0.02
-            )  # Approximate
-            aspect_ratio = viewport[0] / viewport[1]
-            estimated_horizontal_fov_rad = 2.0 * math.atan(
-                math.tan(math.radians(estimated_vertical_fov) / 2.0) * aspect_ratio
-            )
-            fov = math.degrees(estimated_horizontal_fov_rad)
+                area = None
 
-            focal_length = 50.0
-        else:
-            # Fallback default camera (already in Y-up coordinates)
-            location = Vector((7.4, 5.3, 6.5))  # Adjusted for Y-up: (x, y_up, z_back)
-            target = Vector((0.0, 0.0, 0.0))
-            up = Vector((0.0, 1.0, 0.0))  # Y is up
+        rv3d = None
+        if area and getattr(area, "spaces", None):
             try:
-                render = scene.render
-                percent = float(getattr(render, "resolution_percentage", 100))
-                scale = max(1.0, percent) / 100.0
-                viewport = [
-                    int(max(1, render.resolution_x * scale)),
-                    int(max(1, render.resolution_y * scale)),
-                ]
+                for space in area.spaces:
+                    if getattr(space, "type", None) == "VIEW_3D":
+                        rv3d = getattr(space, "region_3d", None)
+                        if rv3d:
+                            break
             except Exception:
-                viewport = [1920, 1080]
-            # Default FOV based on user choice
-            fov = 50.0  # Always horizontal
-            focal_length = 50.0
+                rv3d = None
+
+        if rv3d:
+            try:
+                view_matrix = rv3d.view_matrix
+                inv = view_matrix.inverted()
+                location_blender = inv.translation
+                forward_blender = inv.to_quaternion() @ Vector((0.0, 0.0, -1.0))
+                target_blender = location_blender + forward_blender * 10.0
+                up_blender = inv.to_quaternion() @ Vector((0.0, 1.0, 0.0))
+
+                location = Vector(
+                    (location_blender.x, location_blender.z, -location_blender.y)
+                )
+                target = Vector((target_blender.x, target_blender.z, -target_blender.y))
+                up = Vector((up_blender.x, up_blender.z, -up_blender.y))
+
+                aspect_ratio = viewport[0] / viewport[1] if viewport[1] != 0 else 1.0
+                vertical_factor = getattr(rv3d, "view_camera_zoom", None)
+                if vertical_factor is not None:
+                    estimated_vertical_fov = math.degrees(vertical_factor * 0.02)
+                    estimated_horizontal_fov_rad = 2.0 * math.atan(
+                        math.tan(math.radians(estimated_vertical_fov) / 2.0)
+                        * aspect_ratio
+                    )
+                    fov = math.degrees(estimated_horizontal_fov_rad)
+            except Exception:
+                pass
 
     return {
         "class": operator.camera_class,
@@ -996,8 +1033,8 @@ def _get_camera_data(operator):
         "focal-length": focal_length,
         "lens-radius": operator.lens_radius,
         "focal-distance": operator.focal_distance,
-        "clip-near": float(getattr(camera_data, "clip_start", 0.1)),
-        "clip-far": float(getattr(camera_data, "clip_end", 1000.0)),
+        "clip-near": clip_near,
+        "clip-far": clip_far,
     }
 
 
@@ -1311,14 +1348,72 @@ def _get_materials_to_export(operator):
     """Get list of materials to export based on selection"""
     materials = set()
 
+    def _object_is_visible(obj):
+        if obj is None:
+            return False
+        try:
+            if getattr(obj, "hide_render", False):
+                return False
+        except Exception:
+            pass
+        try:
+            if getattr(obj, "hide_viewport", False):
+                return False
+        except Exception:
+            pass
+        try:
+            hide_get = getattr(obj, "hide_get", None)
+            if hide_get and hide_get():
+                return False
+        except Exception:
+            pass
+        try:
+            view_layer = getattr(bpy.context, "view_layer", None)
+            if view_layer is not None:
+                if obj.visible_get(view_layer=view_layer) == False:
+                    return False
+            else:
+                if obj.visible_get() == False:
+                    return False
+        except Exception:
+            pass
+        try:
+            depsgraph = bpy.context.evaluated_depsgraph_get()
+            if depsgraph is not None:
+                eval_obj = obj.evaluated_get(depsgraph)
+                if getattr(eval_obj, "hide_viewport", False):
+                    return False
+        except Exception:
+            pass
+        return True
+
+    def _collect_from_object(obj):
+        if obj is None:
+            return
+        if obj.type != "MESH" or obj.data is None:
+            return
+        if _object_is_visible(obj) == False:
+            return
+        for slot in getattr(obj, "material_slots", []) or []:
+            mat = getattr(slot, "material", None)
+            if mat is not None:
+                materials.add(mat)
+
     if operator.export_selected:
-        for obj in bpy.context.selected_objects:
-            if obj.type == "MESH" and obj.data.materials:
-                for mat in obj.data.materials:
-                    if mat is not None:
-                        materials.add(mat)
+        try:
+            selected = list(getattr(bpy.context, "selected_objects", []) or [])
+        except Exception:
+            selected = []
+        for obj in selected:
+            _collect_from_object(obj)
     else:
-        materials = set(bpy.data.materials)
+        scene = getattr(bpy.context, "scene", None)
+        if scene and getattr(scene, "objects", None):
+            objs = scene.objects
+        else:
+            objs = getattr(bpy.data, "objects", [])
+        for obj in objs:
+            _collect_from_object(obj)
 
     return list(materials)
 
@@ -1409,6 +1504,21 @@ def _get_etx_material_class(operator, blender_mat):
                 "EMISSION": "diffuse",
             }
             return node_type_to_class.get(shader_node.type, "diffuse")
+
+        # No surface shader was found – check if a volume is connected instead.
+        output_node = None
+        for node in blender_mat.node_tree.nodes:
+            if node.type == "OUTPUT_MATERIAL" and node.is_active_output:
+                output_node = node
+                break
+
+        if output_node is not None:
+            volume_input = output_node.inputs.get("Volume")
+            surface_input = output_node.inputs.get("Surface")
+            has_volume = bool(volume_input and volume_input.is_linked)
+            has_surface = bool(surface_input and surface_input.is_linked)
+            if has_volume and (has_surface is False):
+                return "boundary"
 
     return "diffuse"
 

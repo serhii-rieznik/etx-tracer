@@ -554,10 +554,10 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
       if (current_medium.index != kInvalidIndex) {
         const auto& m = scene.mediums[current_medium.index];
-        result *= m.transmittance(spect, smp, origin, direction, dt);
+        result *= medium_transmittance(scene, m, spect, smp, origin, direction, dt);
         ETX_VALIDATE(result);
       } else {
-        result *= Medium::transmittance(current_medium, dt);
+        result *= medium_transmittance(current_medium, dt);
         ETX_VALIDATE(result);
       }
     }

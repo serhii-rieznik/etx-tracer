@@ -64,11 +64,21 @@ struct ETX_ALIGNED Scene {
   }
 };
 
-struct ContinousTraceOptions {
-  IntersectionBase* intersection_buffer = nullptr;
-  uint32_t max_intersections = 0;
-  uint32_t material_id = kInvalidIndex;
-};
+ETX_GPU_CODE float collimation_to_exponent(float normalized) {
+  float t = saturate(normalized);
+  float denom = sqr(sqr(1.0f - t));
+  return 1.0f / fmaxf(kEpsilon, denom);
+}
+
+ETX_GPU_CODE float area_to_solid_angle_probability(const float3& dp, const float3& n, float collimation) {
+  float distance_squared = dot(dp, dp);
+  if (distance_squared <= kEpsilon)
+    return 0.0f;
+
+  float exponent = collimation_to_exponent(collimation);
+  float cos_t = powf(fabsf(dot(dp, n) / sqrtf(distance_squared)), exponent);
+  return (cos_t > kEpsilon) ? (distance_squared / cos_t) : 0.0f;
+}
 
 ETX_GPU_CODE float3 lerp_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
   return vertices[t.i[0]].pos * bc.x +  //
@@ -308,3 +318,4 @@ ETX_GPU_CODE RefractiveIndex::Sample evaluate_refractive_index(const Scene& scen
 #include <etx/render/shared/scene_bssrdf_subsurface.hxx>
 #include <etx/render/shared/scene_camera.hxx>
 #include <etx/render/shared/scene_emitters.hxx>
+#include <etx/render/shared/scene_medium.hxx>

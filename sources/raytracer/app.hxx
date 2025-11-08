@@ -3,7 +3,8 @@
 #include <etx/core/core.hxx>
 #include <etx/core/handle.hxx>
 
-#include <etx/render/host/scene_loader.hxx>
+#include <etx/render/host/scene_representation.hxx>
+#include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/film.hxx>
 
 #include <etx/rt/integrators/debug.hxx>
@@ -31,7 +32,7 @@ struct RTApplication {
 
  private:
   void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
-  void save_scene_file(const std::string&) const;
+  std::string save_scene_file(const std::string&);
 
   void on_referenece_image_selected(std::string);
   void on_save_image_selected(std::string, SaveImageMode);
@@ -46,6 +47,7 @@ struct RTApplication {
   void on_options_changed();
   void on_use_image_as_reference();
   void on_material_changed(uint32_t index);
+  void on_medium_added();
   void on_medium_changed(uint32_t index);
   void on_emitter_changed(uint32_t index);
   void on_camera_changed(bool film_changed);
@@ -60,6 +62,7 @@ struct RTApplication {
   UI ui;
   Raytracing raytracing;
   RenderContext render;
+  IORDatabase _ior_database;
   SceneRepresentation scene;
   CameraController camera_controller;
   IntegratorThread integrator_thread;

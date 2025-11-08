@@ -3,6 +3,7 @@
 
 #include <etx/render/host/film.hxx>
 #include <etx/render/shared/camera.hxx>
+#include <etx/render/shared/ior_database.hxx>
 
 #include "ui.hxx"
 
@@ -20,7 +21,6 @@
 #include <map>
 #include <vector>
 #include <algorithm>
-#include <filesystem>
 
 namespace etx {
 
@@ -41,7 +41,7 @@ void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint
   std::vector<std::pair<std::string, uint32_t>> unfold;
   unfold.reserve(in_mapping.size());
   for (const auto& m : in_mapping) {
-    if (m.first.starts_with("etx::") == false) {
+    if (m.first.starts_with("et::") == false) {
       unfold.emplace_back(m.first, m.second);
       max_len = std::max(max_len, m.first.size() + 1u);
     }
@@ -65,8 +65,9 @@ void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint
   }
 }
 
-void UI::initialize(Film* film) {
+void UI::initialize(Film* film, const IORDatabase* db) {
   _film = film;
+  _ior_database = db;
 
   simgui_desc_t imggui_desc = {};
   imggui_desc.depth_format = SG_PIXELFORMAT_NONE;
@@ -104,43 +105,6 @@ void UI::initialize(Film* film) {
     io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_image;
   }
   ImGui::LoadIniSettingsFromDisk(env().file_in_data("ui.ini"));
-
-  _ior_files.clear();
-
-  std::string path = env().file_in_data("spectrum/");
-  for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
-    auto filename = entry.path().filename();
-    const auto& ext = entry.path().extension();
-    if (ext != L".spd")
-      continue;
-
-    SpectralDistribution eta = {};
-    SpectralDistribution k = {};
-    auto cls = RefractiveIndex::load_from_file(entry.path().string().c_str(), eta, k);
-    if (cls == SpectralDistribution::Class::Invalid)
-      continue;
-
-    auto& e = _ior_files.emplace_back();
-    e.cls = cls;
-    e.eta = eta;
-    e.k = k;
-    e.filename = entry.path().string();
-    e.title = filename.string();
-    e.title.resize(e.title.size() - 4u);
-    e.title[0] = std::toupper(e.title[0]);
-    for (uint32_t i = 0; i < e.title.size(); ++i) {
-      if (e.title[i] == '_') {
-        e.title[i] = ' ';
-        if (i + 1llu < e.title.size()) {
-          e.title[i + 1llu] = std::toupper(e.title[i + 1llu]);
-        }
-      }
-    }
-  }
-
-  std::sort(_ior_files.begin(), _ior_files.end(), [](const IORFile& a, const IORFile& b) {
-    return (a.cls == b.cls) ? a.title < b.title : a.cls < b.cls;
-  });
 }
 
 void UI::cleanup() {
@@ -270,26 +234,21 @@ bool UI::ior_picker(Scene& scene, const char* name, RefractiveIndex& ior) {
     {1.0f, 0.75f, 1.0f, 1.0f},
   };
 
-  // Determine current selection title for preview
-  const float3& a0 = scene.spectrums[ior.eta_index].integrated();
-  const float3& a1 = scene.spectrums[ior.k_index].integrated();
-
-  const char* preview = name;
-  for (const auto& i : _ior_files) {
-    if (i.cls != ior.cls)
-      continue;
-    const float3& b0 = i.eta.integrated();
-    const float3& b1 = i.k.integrated();
-    float diff = fabsf(a0.x - b0.x) + fabsf(a0.y - b0.y) + fabsf(a0.z - b0.z) + fabsf(a1.x - b1.x) + fabsf(a1.y - b1.y) + fabsf(a1.z - b1.z);
-    if (diff < 1e-4f) {
-      preview = i.title.c_str();
-      break;
-    }
+  const IORDatabase* database = _ior_database;
+  int matched_index = -1;
+  static const SpectralDistribution null_spectrum = SpectralDistribution::null();
+  if ((database != nullptr) && (ior.cls != SpectralDistribution::Class::Invalid)) {
+    const SpectralDistribution& current_eta = scene.spectrums[ior.eta_index];
+    const SpectralDistribution& current_k = (ior.k_index != kInvalidIndex) ? scene.spectrums[ior.k_index] : null_spectrum;
+    matched_index = database->find_matching_index(current_eta, current_k, ior.cls);
   }
 
-  char button_id[256] = {};
-  snprintf(button_id, sizeof(button_id), "%s##ior_%s", preview, name);
-  if (ImGui::Button(button_id, ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+  const char* preview_text = name;
+  if ((database != nullptr) && (matched_index >= 0) && (matched_index < static_cast<int>(database->definitions.size()))) {
+    preview_text = database->definitions[static_cast<size_t>(matched_index)].title.c_str();
+  }
+  std::string button_label = std::string(preview_text) + "##ior_" + name;
+  if (ImGui::Button(button_label.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
     char popup_id[64] = {};
     snprintf(popup_id, sizeof(popup_id), "ior_popup_##%s", name);
     ImGui::OpenPopup(popup_id);
@@ -299,45 +258,44 @@ bool UI::ior_picker(Scene& scene, const char* name, RefractiveIndex& ior) {
   snprintf(popup_id, sizeof(popup_id), "ior_popup_##%s", name);
   ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 32.0f, 0.0f), ImGuiCond_Always);
   if (ImGui::BeginPopup(popup_id)) {
-    ImGui::Columns(3, nullptr, true);
+    if ((database != nullptr) && (database->definitions.empty() == false)) {
+      ImGui::Columns(3, nullptr, true);
 
-    auto draw_column = [&](SpectralDistribution::Class cls, const char* title) {
-      ImGui::PushStyleColor(ImGuiCol_Text, colors[uint32_t(cls)]);
-      ImGui::Text("%s", title);
-      ImGui::PopStyleColor();
-      for (const auto& e : _ior_files) {
-        if (e.cls != cls)
-          continue;
+      auto draw_column = [&](SpectralDistribution::Class cls, const char* title) {
+        ImGui::PushStyleColor(ImGuiCol_Text, colors[uint32_t(cls)]);
+        ImGui::Text("%s", title);
+        ImGui::PopStyleColor();
+        for (int index = 0; index < static_cast<int>(database->definitions.size()); ++index) {
+          const IORDefinition& def = database->definitions[static_cast<size_t>(index)];
+          if (def.cls != cls)
+            continue;
 
-        bool is_current = false;
-        {
-          const float3 a0 = scene.spectrums[ior.eta_index].integrated();
-          const float3 b0 = e.eta.integrated();
-          const float3 a1 = scene.spectrums[ior.k_index].integrated();
-          const float3 b1 = e.k.integrated();
-          float diff = fabsf(a0.x - b0.x) + fabsf(a0.y - b0.y) + fabsf(a0.z - b0.z) + fabsf(a1.x - b1.x) + fabsf(a1.y - b1.y) + fabsf(a1.z - b1.z);
-          is_current = (ior.cls == e.cls) && (diff < 1e-4f);
+          bool is_current = (matched_index == index);
+          if (ImGui::Selectable(def.title.c_str(), is_current)) {
+            matched_index = index;
+            ior.cls = def.cls;
+            ETX_CRITICAL(ior.eta_index != kInvalidIndex);
+            scene.spectrums[ior.eta_index] = def.eta;
+            ETX_CRITICAL(ior.k_index != kInvalidIndex);
+            scene.spectrums[ior.k_index] = def.k;
+            changed = true;
+            ImGui::CloseCurrentPopup();
+          }
         }
-        if (ImGui::Selectable(e.title.c_str(), is_current)) {
-          ior.cls = e.cls;
-          ETX_CRITICAL(ior.eta_index != kInvalidIndex);
-          scene.spectrums[ior.eta_index] = e.eta;
-          ETX_CRITICAL(ior.k_index != kInvalidIndex);
-          scene.spectrums[ior.k_index] = e.k;
-          changed = true;
-          ImGui::CloseCurrentPopup();
-        }
-      }
-    };
+      };
 
-    draw_column(SpectralDistribution::Class::Conductor, "Conductors");
-    ImGui::NextColumn();
-    draw_column(SpectralDistribution::Class::Dielectric, "Dielectrics");
-    ImGui::NextColumn();
-    draw_column(SpectralDistribution::Class::Illuminant, "Illuminants");
+      draw_column(SpectralDistribution::Class::Conductor, "Conductors");
+      ImGui::NextColumn();
+      draw_column(SpectralDistribution::Class::Dielectric, "Dielectrics");
+      ImGui::NextColumn();
+      draw_column(SpectralDistribution::Class::Illuminant, "Illuminants");
 
-    ImGui::Columns(1);
-    ImGui::Separator();
+      ImGui::Columns(1);
+      ImGui::Separator();
+    } else {
+      ImGui::TextDisabled("No predefined IORs available");
+      ImGui::Separator();
+    }
     if (ImGui::Selectable("Load from file...", false)) {
       load_from_file = true;
       ImGui::CloseCurrentPopup();
@@ -358,6 +316,43 @@ bool UI::ior_picker(Scene& scene, const char* name, RefractiveIndex& ior) {
       scene.spectrums[ior.k_index] = t_k;
       changed = true;
     }
+  }
+
+  return changed;
+}
+
+bool UI::medium_dropdown(const char* label, uint32_t& medium) {
+  if (_medium_mapping.empty()) {
+    return false;
+  }
+
+  bool changed = false;
+  const char* current = "None";
+  for (uint64_t i = 0, e = _medium_mapping.size(); i < e; ++i) {
+    if (_medium_mapping.indices[i] == medium) {
+      current = _medium_mapping.names[i];
+      break;
+    }
+  }
+
+  if (ImGui::BeginCombo(label, current)) {
+    bool is_none = (medium == kInvalidIndex);
+    if (ImGui::Selectable("None", is_none)) {
+      medium = kInvalidIndex;
+      changed = true;
+    }
+    ImGui::Separator();
+    for (uint64_t i = 0, e = _medium_mapping.size(); i < e; ++i) {
+      bool is_selected = (medium == _medium_mapping.indices[i]);
+      if (ImGui::Selectable(_medium_mapping.names[i], is_selected)) {
+        medium = _medium_mapping.indices[i];
+        changed = true;
+      }
+      if (is_selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+    ImGui::EndCombo();
   }
 
   return changed;
@@ -466,17 +461,17 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     }
     return h;
   };
-  {
-    uint64_t mmh = hash_mapping(materials);
-    if (mmh != _material_mapping_hash) {
-      _material_mapping.build(materials);
-      _material_mapping_hash = mmh;
-    }
-    uint64_t medh = hash_mapping(mediums);
-    if (medh != _medium_mapping_hash) {
-      _medium_mapping.build(mediums);
-      _medium_mapping_hash = medh;
-    }
+
+  uint64_t mmh = hash_mapping(materials);
+  if (mmh != _material_mapping_hash) {
+    _material_mapping.build(materials);
+    _material_mapping_hash = mmh;
+  }
+
+  uint64_t medh = hash_mapping(mediums);
+  if (medh != _medium_mapping_hash) {
+    _medium_mapping.build(mediums);
+    _medium_mapping_hash = medh;
   }
 
   if (ImGui::BeginMainMenuBar()) {
@@ -513,7 +508,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
       }
 
       ImGui::Separator();
-      if (ImGui::MenuItem("Save...", nullptr, false, true)) {
+      if (ImGui::MenuItem("Save", nullptr, false, true)) {
         save_scene_file();
       }
       ImGui::EndMenu();
@@ -830,6 +825,18 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     ImGui::Separator();
 
     ImGui::Text("Mediums");
+    if (!scene_editable)
+      ImGui::BeginDisabled();
+    if (ImGui::Button("Add Medium", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+      if (callbacks.medium_added) {
+        callbacks.medium_added();
+        _medium_mapping.build(mediums);
+        _medium_mapping_hash = hash_mapping(mediums);
+      }
+    }
+    if (!scene_editable)
+      ImGui::EndDisabled();
+    ImGui::Spacing();
     if (_medium_mapping.empty()) {
       ImGui::TextDisabled("None");
     } else if (ImGui::BeginListBox("##mediums_list", ImVec2(-FLT_MIN, 4.0f * ImGui::GetTextLineHeightWithSpacing()))) {
@@ -997,7 +1004,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           Medium& medium = scene.mediums[medium_index];
           if (!scene_editable)
             ImGui::BeginDisabled();
-          bool changed = build_medium(medium);
+          bool changed = build_medium(scene, medium);
           if (!scene_editable)
             ImGui::EndDisabled();
           if (scene_editable && changed && callbacks.medium_changed) {
@@ -1016,34 +1023,44 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           if (!scene_editable)
             ImGui::BeginDisabled();
           bool changed = false;
+          bool material_changed = false;
+          uint32_t material_index = kInvalidIndex;
           if (emitter.cls == EmitterProfile::Class::Area) {
-            uint32_t triangle_count = 0;
-            float total_area = 0.0f;
-            float total_power = 0.0f;
-            const char* material_name = nullptr;
-            uint32_t material_index = kInvalidIndex;
             for (uint32_t instance_index = 0; instance_index < scene.emitter_instances.count; ++instance_index) {
               const auto& instance = scene.emitter_instances[instance_index];
-              if (instance.profile != emitter_index)
+              if (instance.profile != emitter_index) {
                 continue;
-              ++triangle_count;
-              total_area += instance.triangle_area;
-              total_power += instance.spectrum_weight * instance.additional_weight;
-              if (material_name == nullptr) {
-                if (instance.triangle_index < scene.triangles.count) {
-                  material_index = scene.triangles[instance.triangle_index].material_index;
-                  material_name = material_name_from_index(material_index);
-                }
               }
+              if (instance.triangle_index < scene.triangles.count) {
+                material_index = scene.triangles[instance.triangle_index].material_index;
+              }
+              break;
             }
-            if (material_name != nullptr) {
-              ImGui::Text("Material: %s", material_name);
-            } else if (material_index != kInvalidIndex) {
-              ImGui::Text("Material index: %u", material_index);
+            if (material_index < scene.materials.count) {
+              auto& material = scene.materials[material_index];
+              if (_medium_mapping.empty() == false) {
+                const char* mat_name = material_name_from_index(material_index);
+                if (mat_name != nullptr) {
+                  ImGui::Text("Material: %s", mat_name);
+                } else {
+                  ImGui::Text("Material index: %u", material_index);
+                }
+                ImGui::Text("External Medium");
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (medium_dropdown("##area_external_medium", material.ext_medium)) {
+                  material_changed = true;
+                }
+              } else {
+                ImGui::TextDisabled("No mediums available");
+              }
+              ImGui::Separator();
             }
-            ImGui::Text("Triangles: %u", triangle_count);
-            ImGui::Text("Total Area: %.3f", total_area);
-            ImGui::Text("Current Power: %.3f", total_power);
+            ImGui::Text("Collimation");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::SliderFloat("##area_collimation", &emitter.collimation, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+              emitter.collimation = saturate(emitter.collimation);
+              changed = true;
+            }
             ImGui::Separator();
           }
 
@@ -1070,6 +1087,9 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           }
           if (!scene_editable)
             ImGui::EndDisabled();
+          if (scene_editable && material_changed && callbacks.material_changed && (material_index < scene.materials.count)) {
+            callbacks.material_changed(material_index);
+          }
           if (scene_editable && changed && callbacks.emitter_changed) {
             callbacks.emitter_changed(emitter_index);
           }
@@ -1314,9 +1334,8 @@ void UI::select_scene_file() const {
 }
 
 void UI::save_scene_file() const {
-  auto selected_file = save_file("json");
-  if ((selected_file.empty() == false) && callbacks.save_scene_file_selected) {
-    callbacks.save_scene_file_selected(selected_file);
+  if (callbacks.save_scene_file_selected) {
+    callbacks.save_scene_file_selected({});
   }
 }
 
@@ -1547,39 +1566,6 @@ bool UI::build_material(Scene& scene, Material& material) {
     ImGui::Text("nm");
   }
 
-  auto medium_dropdown = [this](const char* label, uint32_t& medium) -> bool {
-    bool changed = false;
-    const char* current = "None";
-    for (uint64_t i = 0, e = _medium_mapping.size(); i < e; ++i) {
-      if (_medium_mapping.indices[i] == medium) {
-        current = _medium_mapping.names[i];
-        break;
-      }
-    }
-    char buffer[256] = {};
-    snprintf(buffer, sizeof(buffer), "##%s", label);
-    ImGui::PushItemWidth(-FLT_MIN);
-    bool opened = ImGui::BeginCombo(buffer, current);
-    if (opened) {
-      bool is_none = medium == kInvalidIndex;
-      if (ImGui::Selectable("None", is_none)) {
-        medium = kInvalidIndex;
-        changed = true;
-      }
-      ImGui::Separator();
-      for (uint64_t i = 0, e = _medium_mapping.size(); i < e; ++i) {
-        bool is_selected = medium == _medium_mapping.indices[i];
-        if (ImGui::Selectable(_medium_mapping.names[i], is_selected)) {
-          medium = _medium_mapping.indices[i];
-          changed = true;
-        }
-      }
-      ImGui::EndCombo();
-    }
-    ImGui::PopItemWidth();
-    return changed;
-  };
-
   if (_medium_mapping.empty() == false) {
     ImGui::PushStyleColor(ImGuiCol_Header, sec_col[5]);
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[5], 0.04f));
@@ -1592,9 +1578,11 @@ bool UI::build_material(Scene& scene, Material& material) {
       if (ImGui::BeginTable("medium_inout", 2, ImGuiTableFlags_SizingStretchSame)) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        changed |= medium_dropdown("Internal medium", material.int_medium);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        changed |= medium_dropdown("##internal_medium", material.int_medium);
         ImGui::TableSetColumnIndex(1);
-        changed |= medium_dropdown("External medium", material.ext_medium);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        changed |= medium_dropdown("##external_medium", material.ext_medium);
         ImGui::EndTable();
       }
       ImGui::PopStyleVar();
@@ -1604,12 +1592,80 @@ bool UI::build_material(Scene& scene, Material& material) {
   return changed;
 }
 
-bool UI::build_medium(Medium& m) {
+bool UI::build_medium(Scene& scene, Medium& m) {
   bool changed = false;
-  changed |= spectrum_picker("Absorption", m.s_absorption, true);
-  changed |= spectrum_picker("Scattering", m.s_scattering, true);
-  changed |= ImGui::SliderFloat("##g", &m.phase_function_g, -0.999f, 0.999f, "Asymmetry %.2f", ImGuiSliderFlags_AlwaysClamp);
-  changed |= ImGui::Checkbox("Connections to light / camera", &m.enable_explicit_connections);
+
+  if (scene.spectrums.count == 0) {
+    return changed;
+  }
+
+  auto ensure_index = [&](uint32_t& index, uint32_t fallback) {
+    if ((index == kInvalidIndex) || (index >= scene.spectrums.count)) {
+      index = fallback;
+    }
+  };
+
+  ensure_index(m.absorption_index, scene.black_spectrum);
+  ensure_index(m.scattering_index, scene.black_spectrum);
+
+  constexpr const char* kMediumClassNames[] = {"Homogeneous Medium", "Density Grid Medium"};
+  const int32_t class_count = static_cast<int32_t>(sizeof(kMediumClassNames) / sizeof(kMediumClassNames[0]));
+  int32_t class_index = static_cast<int32_t>(m.cls);
+  class_index = clamp(class_index, 0, class_count - 1);
+
+  bool has_density_grid = m.density.count != 0;
+  bool recompute_extinction = false;
+  float updated_max_sigma = m.max_sigma;
+
+  ImGui::Text("%s", kMediumClassNames[class_index]);
+
+  ImGui::Text("Absorption");
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  if (spectrum_picker(scene, "Absorption", m.absorption_index, true)) {
+    changed = true;
+    recompute_extinction = true;
+  }
+
+  ImGui::Text("Scattering");
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  if (spectrum_picker(scene, "Scattering", m.scattering_index, true)) {
+    changed = true;
+    recompute_extinction = true;
+  }
+
+  if (recompute_extinction) {
+    updated_max_sigma = 0.0f;
+    if (m.absorption_index < scene.spectrums.count) {
+      updated_max_sigma += scene.spectrums[m.absorption_index].maximum_spectral_power();
+    }
+    if (m.scattering_index < scene.spectrums.count) {
+      updated_max_sigma += scene.spectrums[m.scattering_index].maximum_spectral_power();
+    }
+  }
+
+  ImGui::Text("Anisotropy");
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  if (ImGui::SliderFloat("##medium_phase_g", &m.phase_function_g, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+    changed = true;
+  }
+
+  bool explicit_connections = (m.enable_explicit_connections != 0u);
+  if (ImGui::Checkbox("Explicit connections##medium_explicit_connections", &explicit_connections)) {
+    m.enable_explicit_connections = explicit_connections ? 1u : 0u;
+    changed = true;
+  }
+
+  if (has_density_grid) {
+    ImGui::Text("Density grid");
+    ImGui::Text("%u x %u x %u", m.dimensions.x, m.dimensions.y, m.dimensions.z);
+    ImGui::Text("Bounds");
+    ImGui::Text("min (%.3f, %.3f, %.3f)  max (%.3f, %.3f, %.3f)", m.bounds.p_min.x, m.bounds.p_min.y, m.bounds.p_min.z, m.bounds.p_max.x, m.bounds.p_max.y, m.bounds.p_max.z);
+  }
+
+  if (changed) {
+    m.max_sigma = updated_max_sigma;
+  }
+
   return changed;
 }
 

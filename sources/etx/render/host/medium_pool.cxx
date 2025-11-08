@@ -1,38 +1,40 @@
 #include <etx/core/environment.hxx>
 
 #include <etx/render/host/medium_pool.hxx>
-#include <etx/render/host/pool.hxx>
 
 #include <nanovdb/util/IO.h>
 
-#include <functional>
+#include <algorithm>
+#include <vector>
 
 namespace etx {
 
 struct MediumPoolImpl {
   void init(uint32_t capacity) {
-    medium_pool.init(capacity);
+    mediums.reserve(capacity);
+    mapping.reserve(capacity);
   }
 
   void cleanup() {
-    ETX_ASSERT(medium_pool.alive_objects_count() == 0);
-    medium_pool.cleanup();
+    remove_all();
+    mapping.clear();
   }
 
-  uint32_t add(Medium::Class cls, const std::string& id, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
+  uint32_t add(Medium::Class cls, const std::string& id, const char* volume_file, uint32_t absorption_index, uint32_t scattering_index, float max_sigma, float g,
     bool explicit_connections) {
-    auto i = mapping.find(id);
-    if (i != mapping.end()) {
-      return i->second;
+    auto existing = mapping.find(id);
+    if (existing != mapping.end()) {
+      return existing->second;
     }
 
-    auto handle = medium_pool.alloc();
+    uint32_t handle = static_cast<uint32_t>(mediums.size());
+    mediums.emplace_back();
 
-    auto& medium = medium_pool.get(handle);
+    Medium& medium = mediums[handle];
     medium.cls = cls;
-    medium.s_absorption = s_a;
-    medium.s_scattering = s_o;
-    medium.max_sigma = s_a.maximum_spectral_power() + s_o.maximum_spectral_power();
+    medium.absorption_index = absorption_index;
+    medium.scattering_index = scattering_index;
+    medium.max_sigma = max_sigma;
     medium.phase_function_g = g;
     medium.enable_explicit_connections = explicit_connections;
 
@@ -55,36 +57,25 @@ struct MediumPoolImpl {
       }
     }
 
-    if (s_a.is_zero() && s_o.is_zero()) {
-      medium.cls = Medium::Class::Vacuum;
-    }
-
     mapping[id] = handle;
     return handle;
   }
 
-  Medium& get(uint32_t handle) {
-    return medium_pool.get(handle);
+  Medium& get_mutable(uint32_t handle) {
+    ETX_CRITICAL(handle < mediums.size());
+    return mediums[handle];
   }
 
-  void remove(uint32_t handle) {
-    if (handle == kInvalidIndex) {
-      return;
-    }
-
-    free_medium(medium_pool.get(handle));
-    medium_pool.free(handle);
-
-    for (auto i = mapping.begin(), e = mapping.end(); i != e; ++i) {
-      if (i->second == handle) {
-        mapping.erase(i);
-        break;
-      }
-    }
+  const Medium& get(uint32_t handle) const {
+    ETX_CRITICAL(handle < mediums.size());
+    return mediums[handle];
   }
 
   void remove_all() {
-    medium_pool.free_all(std::bind(&MediumPoolImpl::free_medium, this, std::placeholders::_1));
+    for (auto& medium : mediums) {
+      free_medium(medium);
+    }
+    mediums.clear();
     mapping.clear();
   }
 
@@ -167,7 +158,7 @@ struct MediumPoolImpl {
     }
   }
 
-  ObjectIndexPool<Medium> medium_pool;
+  std::vector<Medium> mediums;
   MediumPool::Mapping mapping;
 };
 
@@ -181,21 +172,17 @@ void MediumPool::cleanup() {
   _private->cleanup();
 }
 
-uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g,
+uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* volume, uint32_t absorption_index, uint32_t scattering_index, float max_sigma, float g,
   bool explicit_connections) {
-  return _private->add(cls, id, volume, s_a, s_o, g, explicit_connections);
+  return _private->add(cls, id, volume, absorption_index, scattering_index, max_sigma, g, explicit_connections);
 }
 
 Medium& MediumPool::get(uint32_t handle) {
-  return _private->get(handle);
+  return _private->get_mutable(handle);
 }
 
 const Medium& MediumPool::get(uint32_t handle) const {
   return _private->get(handle);
-}
-
-void MediumPool::remove(uint32_t handle) {
-  _private->remove(handle);
 }
 
 void MediumPool::remove_all() {
@@ -203,11 +190,11 @@ void MediumPool::remove_all() {
 }
 
 Medium* MediumPool::as_array() {
-  return _private->medium_pool.alive_objects_count() > 0 ? _private->medium_pool.data() : nullptr;
+  return _private->mediums.empty() ? nullptr : _private->mediums.data();
 }
 
 uint64_t MediumPool::array_size() {
-  return _private->medium_pool.alive_objects_count() > 0 ? 1llu + _private->medium_pool.latest_alive_index() : 0;
+  return _private->mediums.size();
 }
 
 uint32_t MediumPool::find(const char* id) {

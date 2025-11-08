@@ -131,6 +131,7 @@ ETX_GPU_CODE constexpr t clamp(t val, t min_val, t max_val) {
 ETX_GPU_CODE constexpr float saturate(float val) {
   return clamp(val, 0.0f, 1.0f);
 }
+
 ETX_GPU_CODE constexpr float sign(float val) {
   return val >= 0.0f ? 1.0f : -1.0f;
 }
@@ -573,7 +574,9 @@ ETX_GPU_CODE float4 lerp(const float4& a, const float4& b, float t) {
 
 struct ETX_ALIGNED BoundingBox {
   float3 p_min ETX_EMPTY_INIT;
+  float pad0 ETX_EMPTY_INIT;
   float3 p_max ETX_EMPTY_INIT;
+  float pad1 ETX_EMPTY_INIT;
 
   ETX_GPU_CODE float3 to_local(const float3& p) const {
     return (p - p_min) / (p_max - p_min);
@@ -944,15 +947,6 @@ ETX_GPU_CODE float power_heuristic(float f, float g) {
   float g2 = g * g;
   float denom = f2 + g2;
   return denom > 0.0f ? saturate(f2 / denom) : 0.0f;
-}
-
-ETX_GPU_CODE float area_to_solid_angle_probability(const float3& dp, const float3& n, float collimation) {
-  float distance_squared = dot(dp, dp);
-  if (distance_squared <= kEpsilon)
-    return 0.0f;
-
-  float cos_t = powf(fabsf(dot(dp, n) / sqrtf(distance_squared)), collimation);
-  return (cos_t > kEpsilon) ? (distance_squared / cos_t) : 0.0f;
 }
 
 ETX_GPU_CODE SphericalCoordinates to_spherical(const float3& dir) {

@@ -61,9 +61,9 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     data.inv_radius_squared = 0.0f;
   }
   data.cell_size = 2.0f * radius;
-  data.bounding_box = {{kMaxFloat, kMaxFloat, kMaxFloat}, {-kMaxFloat, -kMaxFloat, -kMaxFloat}};
+  data.bounding_box = {{kMaxFloat, kMaxFloat, kMaxFloat}, 0.0f, {-kMaxFloat, -kMaxFloat, -kMaxFloat}, 0.0f};
 
-  std::vector<BoundingBox> thread_boxes(scheduler.max_thread_count(), {{kMaxFloat, kMaxFloat, kMaxFloat}, {-kMaxFloat, -kMaxFloat, -kMaxFloat}});
+  std::vector<BoundingBox> thread_boxes(scheduler.max_thread_count(), data.bounding_box);
   scheduler.execute(uint32_t(sample_count), [&scene, &thread_boxes, samples](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       const auto& p = samples[i];

@@ -1,7 +1,7 @@
 {
   "geometry": "cornellbox.obj",
   "materials": "cornellbox.mtl",
-  "samples": 256,
+  "samples": 32,
   "max-path-length": 1023,
   "random-termination-start": 6,
   "spectral": false,
@@ -14,13 +14,13 @@
     ],
     "origin": [
       0.0,
-      1.0,
-      3.9000000953674316
+      1.000000238418579,
+      3.819999933242798
     ],
     "target": [
       0.0,
-      1.0,
-      -6.099998950958252
+      1.000000238418579,
+      -6.179999351501465
     ],
     "up": [
       0.0,

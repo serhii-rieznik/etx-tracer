@@ -27,13 +27,14 @@ struct ImagePool {
   void load_images();
 
   const Image& get(uint32_t);
+  std::string path(uint32_t) const;
 
   void free_image(Image&);
 
   Image* as_array();
   uint64_t array_size();
 
-  ETX_DECLARE_PIMPL(ImagePool, 256);
+  ETX_DECLARE_PIMPL(ImagePool, 384);
 };
 
 }  // namespace etx

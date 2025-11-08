@@ -3,7 +3,7 @@
 #include <etx/util/options.hxx>
 #include <etx/render/shared/base.hxx>
 #include <etx/rt/integrators/integrator.hxx>
-#include <etx/render/host/scene_loader.hxx>
+#include <etx/render/host/scene_representation.hxx>
 
 #include "options.hxx"
 
@@ -14,11 +14,13 @@ struct sapp_event;
 
 namespace etx {
 
+struct IORDatabase;
+
 struct UI {
   UI() = default;
   ~UI() = default;
 
-  void initialize(Film* film);
+  void initialize(Film* film, const IORDatabase*);
   void cleanup();
 
   void build(double dt, const std::vector<std::string>& recent_files, Scene& scene, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
@@ -49,6 +51,7 @@ struct UI {
     std::function<void()> options_changed;
     std::function<void()> use_image_as_reference;
     std::function<void(uint32_t)> material_changed;
+    std::function<void()> medium_added;
     std::function<void(uint32_t)> medium_changed;
     std::function<void(uint32_t)> emitter_changed;
     std::function<void(bool)> camera_changed;
@@ -74,10 +77,11 @@ struct UI {
   void save_image(SaveImageMode mode) const;
   void load_image() const;
   bool build_material(Scene& scene, Material&);
-  bool build_medium(Medium&);
+  bool build_medium(Scene& scene, Medium&);
   bool spectrum_picker(const char* name, SpectralDistribution& spd, bool linear);
   bool spectrum_picker(Scene& scene, const char* name, uint32_t spd_index, bool linear);
   bool ior_picker(Scene& scene, const char* name, RefractiveIndex& ior);
+  bool medium_dropdown(const char* label, uint32_t& medium);
 
   void reset_selection();
   void reload_geometry();
@@ -114,14 +118,6 @@ struct UI {
     void build(const std::unordered_map<std::string, uint32_t>&);
   };
 
-  struct IORFile {
-    std::string filename;
-    std::string title;
-    SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
-    SpectralDistribution eta = {};
-    SpectralDistribution k = {};
-  };
-
   enum UISetup : uint32_t {
     UIIntegrator = 1u << 0u,
     UIObjects = 1u << 1u,
@@ -137,7 +133,6 @@ struct UI {
 
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
-  std::vector<IORFile> _ior_files;
   SelectionState _selection;
   std::vector<SelectionState> _selection_history;
   int32_t _selection_history_cursor = -1;
@@ -147,6 +142,7 @@ struct UI {
   std::unordered_map<std::string, float3> _editor_values;
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
+  const IORDatabase* _ior_database = nullptr;
 };
 
 }  // namespace etx

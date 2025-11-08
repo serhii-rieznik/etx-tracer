@@ -240,6 +240,12 @@ ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, cons
 
 namespace fresnel {
 
+inline complex complex_div_conj(const complex& a, const complex& b) {
+  const auto num = a * std::conj(b);
+  const auto denom = std::norm(b);
+  return complex(num.real() / denom, num.imag() / denom);
+}
+
 ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
   struct result {
     complex rs, rp;
@@ -254,9 +260,9 @@ ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i
   if (ni == nj)
     return result{0.0f, 0.0f};
 
-  complex rs = (ni * cos_theta_i - nj * cos_theta_j) / (ni * cos_theta_i + nj * cos_theta_j);
+  complex rs = complex_div_conj(ni * cos_theta_i - nj * cos_theta_j, ni * cos_theta_i + nj * cos_theta_j);
   ETX_CHECK_FINITE(rs);
-  complex rp = (nj * cos_theta_i - ni * cos_theta_j) / (nj * cos_theta_i + ni * cos_theta_j);
+  complex rp = complex_div_conj(nj * cos_theta_i - ni * cos_theta_j, nj * cos_theta_i + ni * cos_theta_j);
   ETX_CHECK_FINITE(rp);
   return result{rs, rp};
 }
@@ -275,9 +281,9 @@ ETX_GPU_CODE auto transmittance(const complex& ext_ior, const complex& cos_theta
   if (ni == nj)
     return result{1.0f, 1.0f};
 
-  complex ts = (2.0f * ni * cos_theta_i) / (ni * cos_theta_i + nj * cos_theta_j);
+  complex ts = complex_div_conj(2.0f * ni * cos_theta_i, ni * cos_theta_i + nj * cos_theta_j);
   ETX_CHECK_FINITE(ts);
-  complex tp = (2.0f * ni * cos_theta_i) / (ni * cos_theta_j + nj * cos_theta_i);
+  complex tp = complex_div_conj(2.0f * ni * cos_theta_i, ni * cos_theta_j + nj * cos_theta_i);
   ETX_CHECK_FINITE(tp);
   return result{ts, tp};
 }

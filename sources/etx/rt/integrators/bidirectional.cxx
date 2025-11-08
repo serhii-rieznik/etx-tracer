@@ -116,7 +116,7 @@ struct PathVertex {
       eval_pdf = bsdf::pdf({spect, kInvalidIndex, path_source, curr.intersection, w_i}, w_o, mat, scene, smp);
       ETX_VALIDATE(eval_pdf);
     } else if (curr.is_medium_interaction()) {
-      eval_pdf = medium::phase_function(w_i, w_o, curr.medium.anisotropy);
+      eval_pdf = phase_function(w_i, w_o, curr.medium.anisotropy);
       ETX_VALIDATE(eval_pdf);
     }
 
@@ -144,7 +144,7 @@ struct PathVertex {
       eval_pdf = bsdf::pdf({spect, kInvalidIndex, path_source, curr.intersection, w_i}, w_o, mat, scene, smp);
       ETX_VALIDATE(eval_pdf);
     } else if (curr.is_medium_interaction()) {
-      eval_pdf = medium::phase_function(w_i, w_o, curr.medium.anisotropy);
+      eval_pdf = phase_function(w_i, w_o, curr.medium.anisotropy);
       ETX_VALIDATE(eval_pdf);
     }
 
@@ -246,7 +246,7 @@ struct PathVertex {
     }
 
     if (is_medium_interaction()) {
-      float eval_pdf = medium::phase_function(intersection.w_i, w_o, medium.anisotropy);
+      float eval_pdf = phase_function(intersection.w_i, w_o, medium.anisotropy);
       return Result{{spect, eval_pdf}, eval_pdf};
     }
 
@@ -547,9 +547,9 @@ struct CPUBidirectionalImpl : public Task {
       rnd_support = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 4);
     }
 
-    float3 w_o = medium::sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
-    float pdf_fwd = medium::phase_function(ray.d, w_o, medium_instance.anisotropy);
-    float pdf_bck = medium::phase_function(w_o, ray.d, medium_instance.anisotropy);
+    float3 w_o = sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
+    float pdf_fwd = phase_function(ray.d, w_o, medium_instance.anisotropy);
+    float pdf_bck = phase_function(w_o, ray.d, medium_instance.anisotropy);
 
     path_data.camera_path_size += uint32_t(payload.mode == PathSource::Camera);
     path_data.emitter_path_size += uint32_t(payload.mode == PathSource::Light);
@@ -712,7 +712,7 @@ struct CPUBidirectionalImpl : public Task {
 
     if (payload.medium_index != kInvalidIndex) {
       const auto& m = scene.mediums[payload.medium_index];
-      medium_sample = m.sample(payload.spect, payload.throughput, smp, ray.o, ray.d, found_intersection ? intersection.t : kMaxFloat);
+      medium_sample = sample_medium(scene, m, payload.spect, payload.throughput, smp, ray.o, ray.d, found_intersection ? intersection.t : kMaxFloat);
       payload.throughput *= medium_sample.weight;
       ETX_VALIDATE(payload.throughput);
     }
@@ -763,9 +763,11 @@ struct CPUBidirectionalImpl : public Task {
       medium_instance = {.extinction = extinction, .index = kInvalidIndex};
     } else {
       const Medium& medium = scene.mediums[mat.int_medium];
-      scattering = medium.s_scattering(payload.spect);
-      extinction = scattering + medium.s_absorption(payload.spect);
-      albedo = medium::calculate_albedo(payload.spect, scattering, extinction);
+      medium_instance = make_medium_instance(scene, medium, payload.spect, mat.int_medium);
+      scattering = medium_scattering(scene, medium, payload.spect);
+      auto absorption = medium_absorption(scene, medium, payload.spect);
+      extinction = scattering + absorption;
+      albedo = calculate_albedo(payload.spect, scattering, extinction);
     }
 
     for (uint32_t counter = 0; counter < 1024u; ++counter) {
@@ -775,7 +777,7 @@ struct CPUBidirectionalImpl : public Task {
 
       ray.max_t = 0.0f;
       while (ray.max_t < kRayEpsilon) {
-        uint32_t channel = medium::sample_spectrum_component(payload.spect, albedo, payload.throughput, smp.next(), pdf);
+        uint32_t channel = sample_spectrum_component(payload.spect, albedo, payload.throughput, smp.next(), pdf);
         float sample_t = extinction.component(channel);
         ray.max_t = (sample_t > 0.0f) ? -logf(1.0f - smp.next()) / sample_t : kMaxFloat;
         ETX_VALIDATE(ray.max_t);
@@ -845,8 +847,8 @@ struct CPUBidirectionalImpl : public Task {
       if (step == StepResult::SampledMedium) {
         ETX_CRITICAL(payload.medium_index != kInvalidIndex);
         const auto& medium = scene.mediums[payload.medium_index];
-        const auto medium_instance = medium.instance(payload.spect, payload.medium_index);
-        handle_medium(emitter_sample, first_interaction, medium.enable_explicit_connections, medium_sample.pos, medium_instance, payload, ray, smp, path_data, curr, prev);
+        const Medium::Instance medium_inst = make_medium_instance(scene, medium, payload.spect, payload.medium_index);
+        handle_medium(emitter_sample, first_interaction, medium.enable_explicit_connections, medium_sample.pos, medium_inst, payload, ray, smp, path_data, curr, prev);
         should_break = false;
       } else if (step == StepResult::IntersectionFound) {
         bool from_subsurface = subsurface_material != kInvalidIndex;
@@ -1012,7 +1014,7 @@ struct CPUBidirectionalImpl : public Task {
     prev.pdf.ratio = safe_div(prev.pdf.from_next, prev.pdf.from_prev);
 
     if (mode == Mode::BDPTFast) {
-      bool scale = prev.connectible && (path_data.camera_path_size > 2);
+      bool scale = prev.mis_connectible && (path_data.camera_path_size > 2);
       prev.pdf.accumulated = path_data.camera_mis_history * (scale ? prev.pdf.ratio : 1.0f);
     } else if (path_data.camera_path_length() > 1) {
       prev.pdf.accumulated = prev.pdf.ratio * (float(prev.mis_connectible) + path_data.camera_mis_history);
@@ -1030,7 +1032,7 @@ struct CPUBidirectionalImpl : public Task {
     prev.pdf.ratio = safe_div(prev.pdf.from_next, prev.pdf.from_prev);
 
     if (mode == Mode::BDPTFast) {
-      bool scale = prev.connectible && (path_data.emitter_path_size > 2);
+      bool scale = prev.mis_connectible && (path_data.emitter_path_size > 2);
       prev.pdf.accumulated = path_data.emitter_mis_history * (scale ? prev.pdf.ratio : 1.0f);
     } else {
       prev.pdf.accumulated = prev.pdf.ratio * (float(prev.mis_connectible) + path_data.emitter_mis_history);

@@ -2,7 +2,6 @@
 #include <etx/core/environment.hxx>
 #include <etx/core/profiler.hxx>
 
-#include <etx/render/host/scene_saver.hxx>
 #include <etx/render/shared/camera.hxx>
 
 #include "app.hxx"
@@ -11,6 +10,7 @@
 #include <stb_image_write.hxx>
 
 #include <algorithm>
+#include <cstring>
 
 #if defined(ETX_PLATFORM_WINDOWS)
 
@@ -24,7 +24,8 @@ namespace etx {
 
 RTApplication::RTApplication()
   : render(raytracing.scheduler())
-  , scene(raytracing.scheduler())
+  , _ior_database()
+  , scene(raytracing.scheduler(), _ior_database)
   , camera_controller(scene.camera())
   , integrator_thread(raytracing.scheduler(), IntegratorThread::Mode::ExternalControl) {
   raytracing.link_scene(scene.scene());
@@ -37,7 +38,10 @@ RTApplication::~RTApplication() {
 
 void RTApplication::init() {
   render.init();
-  ui.initialize(&raytracing.film());
+  std::string ior_folder = env().file_in_data("spectrum/");
+  _ior_database.load(ior_folder.c_str());
+
+  ui.initialize(&raytracing.film(), &_ior_database);
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
 
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
@@ -53,6 +57,7 @@ void RTApplication::init() {
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
   ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
   ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
+  ui.callbacks.medium_added = std::bind(&RTApplication::on_medium_added, this);
   ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
   ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1);
@@ -193,9 +198,29 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   integrator_thread.run();
 }
 
-void RTApplication::save_scene_file(const std::string& file_name) const {
+std::string RTApplication::save_scene_file(const std::string& file_name) {
   log::info("Saving %s..", file_name.c_str());
-  save_scene_to_file(scene, file_name.c_str());
+  std::string saved_path = scene.save_to_file(file_name.c_str());
+  if (saved_path.empty()) {
+    log::error("Failed to save scene to %s", file_name.c_str());
+    return {};
+  }
+
+  _current_scene_file = saved_path;
+
+  auto existing = std::find(_recent_files.begin(), _recent_files.end(), saved_path);
+  if (existing != _recent_files.end()) {
+    _recent_files.erase(existing);
+  }
+  _recent_files.emplace_back(saved_path);
+  if (_recent_files.size() > 8) {
+    _recent_files.erase(_recent_files.begin());
+  }
+
+  _options.set_string("scene", _current_scene_file, "Scene");
+  save_options();
+
+  return saved_path;
 }
 
 void RTApplication::on_referenece_image_selected(std::string file_name) {
@@ -257,10 +282,24 @@ void RTApplication::on_scene_file_selected(std::string file_name) {
 }
 
 void RTApplication::on_save_scene_file_selected(std::string file_name) {
-  if (strlen(get_file_ext(file_name.c_str())) == 0) {
-    file_name += ".json";
+  std::string base = file_name;
+  if (base.empty()) {
+    base = _current_scene_file;
   }
-  save_scene_file(file_name);
+
+  if (base.empty()) {
+    log::warning("No scene file available for saving");
+    return;
+  }
+
+  if (std::strlen(get_file_ext(base.c_str())) == 0) {
+    base += ".json";
+  }
+
+  std::string saved_path = save_scene_file(base);
+  if (saved_path.empty() == false) {
+    log::info("Scene saved to %s", saved_path.c_str());
+  }
 }
 
 void RTApplication::on_integrator_selected(Integrator* i) {
@@ -310,6 +349,11 @@ void RTApplication::on_options_changed() {
 
 void RTApplication::on_material_changed(uint32_t index) {
   // TODO : re-upload to GPU
+  integrator_thread.restart();
+}
+
+void RTApplication::on_medium_added() {
+  scene.add_medium(nullptr);
   integrator_thread.restart();
 }
 

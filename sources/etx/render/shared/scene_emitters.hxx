@@ -7,6 +7,17 @@ ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene)
   return 1.0f / em.triangle_area;
 }
 
+ETX_GPU_CODE uint32_t emitter_external_medium_index(const Scene& scene, const Emitter& em_inst) {
+  if ((em_inst.cls != EmitterProfile::Class::Area) || (em_inst.triangle_index >= scene.triangles.count)) {
+    return kInvalidIndex;
+  }
+  const auto& tri = scene.triangles[em_inst.triangle_index];
+  if (tri.material_index >= scene.materials.count) {
+    return kInvalidIndex;
+  }
+  return scene.materials[tri.material_index].ext_medium;
+}
+
 ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal,
   const float3& adirection, float& pdf_area, float& pdf_dir, float& pdf_dir_out, const Scene& scene) {
   const auto& em = scene.emitter_profiles[em_inst.profile];
@@ -97,7 +108,8 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const
           pdf_dir_out = pdf_area;
         } else {
           float cos_t = fabsf(dot(dp, tri.geo_n)) / sqrtf(distance_squared);
-          float cos_tx = query.directly_visible ? cos_t : powf(cos_t, em.collimation);
+          float exponent = collimation_to_exponent(em.collimation);
+          float cos_tx = query.directly_visible ? cos_t : powf(cos_t, exponent);
           if (cos_tx > kEpsilon) {
             pdf_dir = pdf_area * distance_squared / cos_tx;
             pdf_dir_out = pdf_area * cos_tx * kInvPi;
@@ -242,6 +254,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em_inst, const Spect
     }
   }
 
+  result.medium_index = emitter_external_medium_index(scene, em_inst);
   return result;
 }
 
@@ -285,12 +298,12 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       result.normal = vertex.nrm;
       switch (em.emission_direction) {
         case EmitterProfile::Direction::Single: {
-          result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, em.collimation);
+          result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, collimation_to_exponent(em.collimation));
           break;
         }
         case EmitterProfile::Direction::TwoSided: {
           result.normal = (smp.next() > 0.5f) ? float3{-result.normal.x, -result.normal.y, -result.normal.z} : result.normal;
-          result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, em.collimation);
+          result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, collimation_to_exponent(em.collimation));
           break;
         }
         case EmitterProfile::Direction::Omni: {
@@ -365,7 +378,7 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
     }
   }
   result.triangle_index = em_inst.triangle_index;
-  result.medium_index = em.medium_index;
+  result.medium_index = emitter_external_medium_index(scene, em_inst);
   result.is_delta = em_inst.is_delta();
   result.is_distant = em_inst.is_distant();
   return result;

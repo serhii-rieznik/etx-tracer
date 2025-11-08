@@ -2,7 +2,6 @@
 
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/distribution_builder.hxx>
-#include <etx/render/host/pool.hxx>
 
 #include <tinyexr.hxx>
 #include <stb_image.hxx>
@@ -22,12 +21,12 @@ struct ImagePoolImpl {
   }
 
   void init(uint32_t capacity) {
-    image_pool.init(capacity);
+    images.reserve(capacity);
+    paths.reserve(capacity);
   }
 
   void cleanup() {
-    ETX_ASSERT(image_pool.alive_objects_count() == 0);
-    image_pool.cleanup();
+    remove_all();
   }
 
   uint32_t add_copy(const Image& img) {
@@ -36,14 +35,13 @@ struct ImagePoolImpl {
     ETX_ASSERT(img.x_distributions.count == 0);
 
     std::string path = "~mem" + std::to_string(1u + counter++);
-    auto handle = image_pool.alloc();
-    mapping[path] = handle;
+    uint32_t handle = create_entry(path);
 
     auto ptr_pixels = reinterpret_cast<ubyte4*>(malloc(img.data_size));
     ETX_CRITICAL(ptr_pixels != nullptr);
     memcpy(ptr_pixels, img.pixels.u8.a, img.data_size);
 
-    auto& image = image_pool.get(handle);
+    auto& image = images[handle];
     image = img;
     image.pixels.u8.a = ptr_pixels;
 
@@ -56,10 +54,8 @@ struct ImagePoolImpl {
       return i->second;
     }
 
-    auto handle = image_pool.alloc();
-    mapping[path] = handle;
-
-    auto& image = image_pool.get(handle);
+    uint32_t handle = create_entry(path);
+    auto& image = images[handle];
     image.offset = offset;
     image.scale = scale;
     image.options = Image::PerformLoading | image_options;
@@ -72,10 +68,8 @@ struct ImagePoolImpl {
 
   uint32_t add_from_data(const float4 data[], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
     std::string path = "~mem" + std::to_string(1u + counter++);
-    auto handle = image_pool.alloc();
-    mapping[path] = handle;
-
-    auto& image = image_pool.get(handle);
+    uint32_t handle = create_entry(path);
+    auto& image = images[handle];
     image.offset = offset;
     image.scale = scale;
     image.format = Image::Format::RGBA32F;
@@ -97,37 +91,45 @@ struct ImagePoolImpl {
   }
 
   void perform_loading(uint32_t handle, Image& image) {
-    for (auto& cache : mapping) {
-      if (cache.second != handle)
-        continue;
+    if (handle >= paths.size())
+      return;
 
-      if (image.options & Image::PerformLoading) {
-        load_image(image, cache.first.c_str());
-      }
-
-      if (image.options & Image::BuildSamplingTable) {
-        build_image_sampling_table(image, scheduler);
-      }
-
-      image.options &= ~Image::Delay;
-      break;
+    const std::string& path = paths[handle];
+    if ((image.options & Image::PerformLoading) && (path.empty() == false)) {
+      load_image(image, path.c_str());
     }
+
+    if (image.options & Image::BuildSamplingTable) {
+      build_image_sampling_table(image, scheduler);
+    }
+
+    image.options &= ~Image::Delay;
   }
 
   void delay_load() {
-    auto objects = image_pool.data();
-    uint32_t object_count = image_pool.latest_alive_index() + 1u;
-    scheduler.execute(object_count, [this, objects](uint32_t begin, uint32_t end, uint32_t) {
+    if (images.empty())
+      return;
+
+    scheduler.execute(static_cast<uint32_t>(images.size()), [this](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
-        if (image_pool.alive(i) && (objects[i].options & Image::Delay)) {
-          perform_loading(i, objects[i]);
+        if (i >= images.size())
+          break;
+
+        Image& image = images[i];
+        if (image.options & Image::Delay) {
+          perform_loading(i, image);
         }
       }
     });
   }
 
   const Image& get(uint32_t handle) const {
-    return image_pool.get(handle);
+    ETX_CRITICAL(handle < images.size());
+    return images[handle];
+  }
+
+  std::string path(uint32_t handle) const {
+    return (handle < paths.size()) ? paths[handle] : std::string{};
   }
 
   void remove(uint32_t handle) {
@@ -135,20 +137,28 @@ struct ImagePoolImpl {
       return;
     }
 
-    free_image(image_pool.get(handle));
-    image_pool.free(handle);
+    if (handle >= images.size())
+      return;
 
-    for (auto i = mapping.begin(), e = mapping.end(); i != e; ++i) {
-      if (i->second == handle) {
-        mapping.erase(i);
-        break;
-      }
+    free_image(images[handle]);
+
+    const std::string& path = paths[handle];
+    auto it = mapping.find(path);
+    if ((it != mapping.end()) && (it->second == handle)) {
+      mapping.erase(it);
     }
+
+    paths[handle].clear();
   }
 
   void remove_all() {
-    image_pool.free_all(std::bind(&ImagePoolImpl::free_image, this, std::placeholders::_1));
+    for (auto& image : images) {
+      free_image(image);
+    }
+    images.clear();
+    paths.clear();
     mapping.clear();
+    counter = 0;
   }
 
   void load_image(Image& img, const char* file_name) {
@@ -375,10 +385,18 @@ struct ImagePoolImpl {
   }
 
   TaskScheduler& scheduler;
-  ObjectIndexPool<Image> image_pool;
+  uint64_t counter = 0;
+  std::vector<Image> images;
+  std::vector<std::string> paths;
   std::unordered_map<std::string, uint32_t> mapping;
-  Image empty;
-  uint32_t counter = 0;
+
+  uint32_t create_entry(const std::string& path) {
+    uint32_t index = static_cast<uint32_t>(images.size());
+    images.emplace_back();
+    paths.emplace_back(path);
+    mapping[path] = index;
+    return index;
+  }
 };
 
 ETX_PIMPL_IMPLEMENT(ImagePool, Impl);
@@ -415,6 +433,13 @@ const Image& ImagePool::get(uint32_t handle) {
   return _private->get(handle);
 }
 
+std::string ImagePool::path(uint32_t handle) const {
+  if (handle == kInvalidIndex) {
+    return {};
+  }
+  return _private->path(handle);
+}
+
 void ImagePool::free_image(Image& img) {
   _private->free_image(img);
 }
@@ -428,11 +453,11 @@ void ImagePool::remove_all() {
 }
 
 Image* ImagePool::as_array() {
-  return _private->image_pool.alive_objects_count() > 0 ? _private->image_pool.data() : nullptr;
+  return _private->images.empty() ? nullptr : _private->images.data();
 }
 
 uint64_t ImagePool::array_size() {
-  return _private->image_pool.alive_objects_count() > 0 ? 1llu + _private->image_pool.latest_alive_index() : 0;
+  return _private->images.size();
 }
 
 bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
@@ -517,7 +542,8 @@ bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
 }
 
 void ImagePool::add_options(uint32_t index, uint32_t options) {
-  _private->image_pool.get(index).options |= options;
+  ETX_CRITICAL(index < _private->images.size());
+  _private->images[index].options |= options;
 }
 
 void ImagePool::load_images() {

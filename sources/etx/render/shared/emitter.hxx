@@ -23,8 +23,7 @@ struct ETX_ALIGNED EmitterProfile {
   float3 direction = {};
   Class cls = Class::Undefined;
   Direction emission_direction = Direction::Single;
-  uint32_t medium_index = kInvalidIndex;
-  float collimation = 1.0f;
+  float collimation = 0.0f;
   float angular_size = 0.0f;
   float equivalent_disk_size = 0.0f;
   float angular_size_cosine = 1.0f;

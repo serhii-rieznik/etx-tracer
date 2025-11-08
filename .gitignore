@@ -17,3 +17,5 @@ thirdparty/oidn/
 blender/etx_tracer_exporter/__pycache__/
 build-debug
 build-release
+bin/assets_testing/
+*.blend1

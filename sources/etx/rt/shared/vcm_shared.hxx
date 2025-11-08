@@ -380,7 +380,7 @@ ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathS
   if (state.medium_index == kInvalidIndex)
     return {};
 
-  auto medium_sample = scene.mediums[state.medium_index].sample(state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
+  auto medium_sample = sample_medium(scene, scene.mediums[state.medium_index], state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
   state.throughput *= medium_sample.weight;
 
   ETX_VALIDATE(state.throughput);
@@ -392,7 +392,7 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
   // Fold pending boundary segment (if any) plus medium segment (no cosine) before recurrences
   bool apply_fold = true;
   if (apply_fold) {
-    float seg = state.path_distance + medium_sample.t;
+    float seg = state.path_distance + medium_sample.sampled_medium_t;
     state.d_vcm *= sqr(seg);
     ETX_VALIDATE(state.d_vcm);
     state.path_distance = 0.0f;
@@ -405,11 +405,11 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
 
   // Sample new direction using phase function with pre-allocated samples
   float3 w_i = state.ray.d;
-  float3 w_o = medium.sample_phase_function(rnd_phase, w_i);
+  float3 w_o = medium_sample_phase_function(medium, rnd_phase, w_i);
 
-  float pdf_fwd = medium.phase_function(w_i, w_o);
+  float pdf_fwd = medium_phase_function(medium, w_i, w_o);
   ETX_VALIDATE(pdf_fwd);
-  float pdf_rev = medium.phase_function(w_o, w_i);
+  float pdf_rev = medium_phase_function(medium, w_o, w_i);
   ETX_VALIDATE(pdf_rev);
 
   // Update MIS recurrence for non-delta event with cos_theta = 1 for media
@@ -439,7 +439,7 @@ ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource 
     return false;
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  uint32_t new_medium = (dot(intersection.nrm, state.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
+  uint32_t new_medium = (dot(tri.geo_n, state.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
   state.path_distance += intersection.t;
   state.medium_index = new_medium;
   state.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, state.ray.d);
@@ -495,12 +495,12 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
     origin = shading_pos(scene.vertices, tri, isect->barycentric, w_o);
   } else {
     const auto& medium = scene.mediums[state.medium_index];
-    float p = medium.phase_function(state.ray.d, w_o);
+    float p = medium_phase_function(medium, state.ray.d, w_o);
     if (p <= 0.0f) {
       return {};
     }
     scatter = {state.spect, p};
-    reverse_pdf = medium.phase_function(w_o, state.ray.d);
+    reverse_pdf = medium_phase_function(medium, w_o, state.ray.d);
     ETX_VALIDATE(reverse_pdf);
   }
 
@@ -623,11 +623,11 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
 
   if (camera_at_medium) {
     const auto& medium = scene.mediums[state.medium_index];
-    float p = medium.phase_function(state.ray.d, w_o);
+    float p = medium_phase_function(medium, state.ray.d, w_o);
     if (p <= 0.0f)
       return {state.spect, 0.0f};
     scatter = {state.spect, p};
-    reverse_pdf = medium.phase_function(w_o, state.ray.d);
+    reverse_pdf = medium_phase_function(medium, w_o, state.ray.d);
     ETX_VALIDATE(reverse_pdf);
   } else {
     const auto& mat = scene.materials[isect->material_index];
@@ -690,10 +690,10 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
 
   if (camera_at_medium) {
     const auto& medium = scene.mediums[state_medium];
-    float p = medium.phase_function(state.ray.d, w_o);
+    float p = medium_phase_function(medium, state.ray.d, w_o);
     if (p <= 0.0f)
       return false;
-    float p_rev = medium.phase_function(w_o, state.ray.d);
+    float p_rev = medium_phase_function(medium, w_o, state.ray.d);
     ETX_VALIDATE(p_rev);
     camera_area_pdf = p * fabsf(w_dot_l) / distance_squared;
     ETX_VALIDATE(camera_area_pdf);
@@ -720,10 +720,10 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
 
   if (light_vertex.is_medium) {
     const auto& med = scene.mediums[light_vertex.medium_index];
-    float p = med.phase_function(light_vertex.w_i, -w_o);
+    float p = medium_phase_function(med, light_vertex.w_i, -w_o);
     if (p <= 0.0f)
       return false;
-    float p_rev = med.phase_function(-w_o, light_vertex.w_i);
+    float p_rev = medium_phase_function(med, -w_o, light_vertex.w_i);
     ETX_VALIDATE(p_rev);
     light_area_pdf = p * (camera_at_medium ? 1.0f : fabsf(dot(camera_isect->nrm, w_o))) / distance_squared;
     ETX_VALIDATE(light_area_pdf);
@@ -942,7 +942,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
       rnd_support = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 4);
     }
     // Fold pending boundary + medium segment before connections
-    float seg = state.path_distance + medium_sample.t;
+    float seg = state.path_distance + medium_sample.sampled_medium_t;
     state.d_vcm *= sqr(seg);
     ETX_VALIDATE(state.d_vcm);
     state.path_distance = 0.0f;
@@ -950,10 +950,10 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     const auto& med = scene.mediums[state.medium_index];
 
     // Sample phase function BEFORE explicit connections to match BDPT RNG order
-    float3 w_o_smp = med.sample_phase_function(rnd_bsdf, state.ray.d);
-    float pdf_fwd = med.phase_function(state.ray.d, w_o_smp);
+    float3 w_o_smp = medium_sample_phase_function(med, rnd_bsdf, state.ray.d);
+    float pdf_fwd = medium_phase_function(med, state.ray.d, w_o_smp);
     ETX_VALIDATE(pdf_fwd);
-    float pdf_rev = med.phase_function(w_o_smp, state.ray.d);
+    float pdf_rev = medium_phase_function(med, w_o_smp, state.ray.d);
     ETX_VALIDATE(pdf_rev);
 
     // Explicit connections from medium BEFORE sampling continuation (match surface ordering)
@@ -1096,7 +1096,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
     float2 rnd_connection = state.sampler.next_2d();  // Camera connection
     float2 rnd_support = state.sampler.next_2d();     // Support operations
     // Fold pending boundary + medium segment before connection/MIS
-    float seg = state.path_distance + medium_sample.t;
+    float seg = state.path_distance + medium_sample.sampled_medium_t;
     state.d_vcm *= sqr(seg);
     ETX_VALIDATE(state.d_vcm);
     state.path_distance = 0.0f;
@@ -1138,10 +1138,10 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
 
     // Now sample phase and update MIS recurrences for continuation
     float3 w_i = state.ray.d;
-    float3 w_o_smp = med.sample_phase_function(rnd_bsdf, w_i);
-    float pdf_fwd = med.phase_function(w_i, w_o_smp);
+    float3 w_o_smp = medium_sample_phase_function(med, rnd_bsdf, w_i);
+    float pdf_fwd = medium_phase_function(med, w_i, w_o_smp);
     ETX_VALIDATE(pdf_fwd);
-    float pdf_rev = med.phase_function(w_o_smp, w_i);
+    float pdf_rev = medium_phase_function(med, w_o_smp, w_i);
     ETX_VALIDATE(pdf_rev);
 
     state.d_vc = (1.0f / pdf_fwd) * (state.d_vc * pdf_rev + state.d_vcm);

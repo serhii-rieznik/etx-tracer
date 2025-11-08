@@ -54,7 +54,7 @@ struct CPUDebugIntegratorImpl : public Task {
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   uint32_t current_scale = 1u;
-  Mode mode = Mode::Random;
+  Mode mode = Mode::Geometry;
   float voxel_data[8] = {-0.1f, -0.1f, -0.1f, -0.1f, +0.1f, +0.1f, +0.1f, +0.1f};
   float th_factor = 1.0f;
   float th_min = 0.0f;
@@ -146,7 +146,7 @@ struct CPUDebugIntegratorImpl : public Task {
     total_time = {};
     iteration_time = {};
 
-    rt.film().clear({});
+    rt.film().clear(Film::ClearCameraData);
     current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
   }
 

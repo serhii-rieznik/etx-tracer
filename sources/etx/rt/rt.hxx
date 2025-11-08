@@ -10,6 +10,12 @@ namespace etx {
 
 struct Film;
 
+struct ContinousTraceOptions {
+  IntersectionBase* intersection_buffer = nullptr;
+  uint32_t max_intersections = 0;
+  uint32_t material_id = kInvalidIndex;
+};
+
 struct Raytracing {
   Raytracing();
   ~Raytracing();
