@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 
 #if defined(ETX_PLATFORM_WINDOWS)
 
@@ -64,6 +65,7 @@ void RTApplication::init() {
   ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
   ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
   ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
+  ui.callbacks.clear_recent_files = std::bind(&RTApplication::on_clear_recent_files, this);
 
   _options.load_from_file(env().file_in_data("options.json"));
 
@@ -110,9 +112,14 @@ void RTApplication::init() {
 }
 
 void RTApplication::save_options() {
+  constexpr uint32_t kRecentLimit = 8u;
+  for (uint32_t idx = 0; idx < kRecentLimit; ++idx) {
+    _options.remove("recent-" + std::to_string(idx));
+  }
+
   uint32_t i = 0;
   for (const auto& recent : _recent_files) {
-    _options.set_string("recent-" + std::to_string(i++), recent, "Recent File");
+    _options.set_string("recent-" + std::to_string(i++), env().to_project_relative(recent), "Recent File");
   }
   _options.save_to_file(env().file_in_data("options.json"));
 }
@@ -165,10 +172,10 @@ void RTApplication::process_event(const sapp_event* e) {
 }
 
 void RTApplication::load_scene_file(const std::string& file_name, uint32_t options, bool start_rendering) {
-  _current_scene_file = file_name;
+  _current_scene_file = env().resolve_to_absolute(file_name);
 
   integrator_thread.stop(Integrator::Stop::Immediate);
-  _options.set_string("scene", _current_scene_file, "Scene");
+  _options.set_string("scene", env().to_project_relative(_current_scene_file), "Scene");
   save_options();
 
   log::warning("Loading scene %s...", _current_scene_file.c_str());
@@ -183,12 +190,16 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return;
   }
 
-  auto existing = std::find(_recent_files.begin(), _recent_files.end(), file_name);
+  auto display_path = env().to_project_relative(_current_scene_file);
+
+  auto existing = std::find_if(_recent_files.begin(), _recent_files.end(), [&](const std::string& entry) {
+    return env().resolve_to_absolute(entry) == _current_scene_file;
+  });
   if (existing != _recent_files.end()) {
     _recent_files.erase(existing);
   }
 
-  _recent_files.emplace_back(file_name);
+  _recent_files.emplace_back(display_path);
 
   if (_recent_files.size() > 8) {
     _recent_files.erase(_recent_files.begin());
@@ -296,6 +307,7 @@ void RTApplication::on_save_scene_file_selected(std::string file_name) {
     base += ".json";
   }
 
+  base = env().to_project_relative(base);
   std::string saved_path = save_scene_file(base);
   if (saved_path.empty() == false) {
     log::info("Scene saved to %s", saved_path.c_str());
@@ -404,6 +416,14 @@ void RTApplication::on_view_scene(uint32_t direction) {
   const float3 position = 3.0f * scene.scene().bounding_sphere_radius * normalize(directions[direction]);
   const auto view_center = scene.scene().bounding_sphere_center;
   camera_controller.schedule(position, view_center);
+}
+
+void RTApplication::on_clear_recent_files() {
+  _recent_files.clear();
+  if (_current_scene_file.empty() == false) {
+    _recent_files.emplace_back(env().to_project_relative(_current_scene_file));
+  }
+  save_options();
 }
 
 }  // namespace etx

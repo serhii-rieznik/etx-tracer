@@ -54,6 +54,7 @@ struct RTApplication {
   void on_scene_settings_changed();
   void on_denoise_selected();
   void on_view_scene(uint32_t direction);
+  void on_clear_recent_files();
 
  private:
   void save_options();

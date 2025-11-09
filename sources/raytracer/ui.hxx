@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <string>
+#include <unordered_map>
 
 struct sapp_event;
 
@@ -58,6 +59,7 @@ struct UI {
     std::function<void()> scene_settings_changed;
     std::function<void()> denoise_selected;
     std::function<void(uint32_t)> view_scene;
+    std::function<void()> clear_recent_files;
   } callbacks;
 
  private:
@@ -100,20 +102,37 @@ struct UI {
   ViewOptions _view_options = {};
 
   struct MappingRepresentation {
-    std::vector<uint32_t> indices;
+    struct Entry {
+      uint32_t index = kInvalidIndex;
+      const char* name = nullptr;
+    };
+    std::vector<Entry> entries;
     std::vector<char> data;
-    std::vector<const char*> names;
+    std::unordered_map<uint32_t, uint32_t> reverse;
 
     uint64_t size() const {
-      return indices.size();
+      return entries.size();
     }
 
     bool empty() const {
-      return indices.empty();
+      return entries.empty();
     }
 
     uint32_t at(const int32_t i) const {
-      return indices.at(i);
+      return entries.at(i).index;
+    }
+
+    const char* name(int32_t i) const {
+      return entries.at(i).name;
+    }
+
+    const Entry& entry(int32_t i) const {
+      return entries.at(i);
+    }
+
+    const char* name_for(uint32_t index) const {
+      auto it = reverse.find(index);
+      return (it != reverse.end()) ? entries[it->second].name : nullptr;
     }
 
     void build(const std::unordered_map<std::string, uint32_t>&);
@@ -148,10 +167,10 @@ struct UI {
   SelectionState _selection;
   std::vector<SelectionState> _selection_history;
   int32_t _selection_history_cursor = -1;
-  float _panel_width = 0.0f;
   uint32_t _ui_setup = UIDefaults;
   uint32_t _font_image = 0u;
   std::unordered_map<std::string, SpectrumEditorState> _spectrum_editors;
+  std::unordered_map<std::string, bool> _material_anisotropy;
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
   const IORDatabase* _ior_database = nullptr;

@@ -20,13 +20,42 @@
 #endif
 
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace etx {
 
 namespace {
+
+const ImVec4 kOptionStringColor(1.0f, 0.5f, 0.25f, 1.0f);
+
+const ImVec4 kIorPickerColors[] = {
+  ImVec4(0.3333f, 0.3333f, 0.3333f, 1.0f),
+  ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
+  ImVec4(0.5f, 0.75f, 1.0f, 1.0f),
+  ImVec4(1.0f, 0.75f, 0.5f, 1.0f),
+  ImVec4(1.0f, 0.75f, 1.0f, 1.0f),
+};
+
+const ImVec4 kToolbarLaunchColor(0.11f, 0.44f, 0.11f, 1.0f);
+const ImVec4 kToolbarFinishColor(0.44f, 0.33f, 0.11f, 1.0f);
+const ImVec4 kToolbarTerminateColor(0.44f, 0.11f, 0.11f, 1.0f);
+const ImVec4 kToolbarRestartColor(0.11f, 0.22f, 0.44f, 1.0f);
+const ImVec4 kToolbarDisabledColor(0.25f, 0.25f, 0.25f, 1.0f);
+
+const ImVec4 kHistoryButtonBaseColor(0.2f, 0.6f, 0.2f, 1.0f);
+const ImVec4 kHistoryButtonHoverColor(0.25f, 0.75f, 0.25f, 1.0f);
+const ImVec4 kHistoryButtonActiveColor(0.15f, 0.5f, 0.15f, 1.0f);
+
+const ImVec4 kSceneTextColor(0.30f, 0.45f, 0.90f, 1.0f);
+const ImVec4 kCameraTextColor(0.90f, 0.80f, 0.35f, 1.0f);
+
+const ImVec4 kMaterialHeaderPrimaryColor(0.96f, 0.79f, 0.45f, 1.0f);
+const ImVec4 kMaterialHeaderSpecializedColor(0.54f, 0.80f, 0.98f, 1.0f);
+const ImVec4 kMaterialHeaderInterfacesColor(0.88f, 0.68f, 0.97f, 1.0f);
 
 inline void decrease_exposure(ViewOptions& o) {
   o.exposure = fmaxf(1.0f / 1024.0f, 0.5f * o.exposure);
@@ -39,31 +68,38 @@ inline void increase_exposure(ViewOptions& o) {
 }  // namespace
 
 void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint32_t>& in_mapping) {
-  size_t max_len = 32u;
   std::vector<std::pair<std::string, uint32_t>> unfold;
   unfold.reserve(in_mapping.size());
   for (const auto& m : in_mapping) {
     if ((m.first.starts_with("etx::") == false) && (m.first.starts_with("et::") == false)) {
       unfold.emplace_back(m.first, m.second);
-      max_len = std::max(max_len, m.first.size() + 1u);
     }
   }
   std::sort(unfold.begin(), unfold.end(), [](const auto& a, const auto& b) {
     return a.first < b.first;
   });
 
-  indices.clear();
-  indices.reserve(unfold.size());
-  names.clear();
-  names.reserve(unfold.size());
-  data.resize(unfold.size() * max_len);
-  std::fill(data.begin(), data.end(), 0);
-  int32_t pp = 0;
+  entries.clear();
+  entries.reserve(unfold.size());
+  reverse.clear();
+  reverse.reserve(unfold.size());
+
+  size_t total_length = 0;
+  for (const auto& entry : unfold) {
+    total_length += entry.first.size() + 1u;
+  }
+  data.resize(total_length);
+
   char* ptr = data.data();
+  size_t offset = 0;
   for (auto& m : unfold) {
-    indices.emplace_back(m.second);
-    names.emplace_back(ptr + pp);
-    pp += snprintf(ptr + pp, max_len, "%s", m.first.c_str()) + 1;
+    const char* name_ptr = ptr + offset;
+    uint32_t entry_index = static_cast<uint32_t>(entries.size());
+    entries.push_back(Entry{m.second, name_ptr});
+    reverse.emplace(m.second, entry_index);
+    size_t len = m.first.size();
+    std::memcpy(ptr + offset, m.first.c_str(), len + 1u);
+    offset += len + 1u;
   }
 }
 
@@ -87,8 +123,8 @@ void UI::initialize(Film* film, const IORDatabase* db) {
     int bytes_per_pixel = 0;
 
     char font_file[1024] = {};
-    env().file_in_data("fonts/roboto.ttf", font_file, sizeof(font_file));
-    auto font = io.Fonts->AddFontFromFileTTF(font_file, 15.0f * sapp_dpi_scale(), &font_config, nullptr);
+    env().file_in_data("fonts/ubuntu.ttf", font_file, sizeof(font_file));
+    auto font = io.Fonts->AddFontFromFileTTF(font_file, 14.0f * sapp_dpi_scale(), &font_config, nullptr);
     font->Scale = 1.0f / sapp_dpi_scale();
     io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width, &font_height, &bytes_per_pixel);
 
@@ -165,7 +201,7 @@ bool UI::build_options(Options& options) {
     switch (option.cls) {
       case Option::Class::String: {
         auto& data = option.as<Option::Class::String>();
-        ImGui::TextColored({1.0f, 0.5f, 0.25f, 1.0f}, "%s", data.value.c_str());
+        ImGui::TextColored(kOptionStringColor, "%s", data.value.c_str());
         break;
       };
       case Option::Class::Boolean: {
@@ -175,10 +211,14 @@ bool UI::build_options(Options& options) {
       }
       case Option::Class::Float: {
         auto& data = option.as<Option::Class::Float>();
+        const std::string& id_source = option.id.empty() ? option.description : option.id;
+        std::string label = "##" + id_source;
+        std::string fmt = option.description.empty() ? "%.3f" : option.description + " %.3f";
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         if (data.bounds.maximum > data.bounds.minimum) {
-          changed = ImGui::DragFloat(option.description.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+          changed = ImGui::DragFloat(label.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
         } else {
-          changed = ImGui::InputFloat(option.description.c_str(), &data.value);
+          changed = ImGui::InputFloat(label.c_str(), &data.value, 0.0f, 0.0f, fmt.c_str());
         }
         break;
       }
@@ -198,18 +238,22 @@ bool UI::build_options(Options& options) {
           }
           changed = data.value != original;
         } else {
+          const std::string& id_source = option.id.empty() ? option.description : option.id;
+          std::string label = "##" + id_source;
+          std::string fmt = option.description.empty() ? "%d" : option.description + " %d";
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           if (data.bounds.maximum > data.bounds.minimum) {
-            changed = ImGui::DragInt(option.description.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, "%d", ImGuiSliderFlags_AlwaysClamp);
+            changed = ImGui::DragInt(label.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
           } else {
-            changed = ImGui::DragInt(option.description.c_str(), &data.value);
+            changed = ImGui::InputInt(label.c_str(), &data.value, 0, 0);
           }
         }
         break;
       }
       case Option::Class::Float3: {
         auto& data = option.as<Option::Class::Float3>();
-        ImGui::SetNextItemWidth(4.0f * ImGui::GetFontSize());
         ImGui::Text("%s", option.description.c_str());
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         char buffer_name[128] = {};
         snprintf(buffer_name, sizeof(buffer_name), "##%s", option.description.c_str());
         changed = ImGui::DragFloat3(buffer_name, &data.value.x, 0.1f, data.bounds.minimum.x, data.bounds.maximum.x, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -227,14 +271,6 @@ bool UI::build_options(Options& options) {
 bool UI::ior_picker(Scene& scene, const char* name, RefractiveIndex& ior) {
   bool changed = false;
   bool load_from_file = false;
-
-  const ImVec4 colors[5] = {
-    {0.3333f, 0.3333f, 0.3333f, 1.0f},
-    {1.0f, 1.0f, 1.0f, 1.0f},
-    {0.5f, 0.75f, 1.0f, 1.0f},
-    {1.0f, 0.75f, 0.5f, 1.0f},
-    {1.0f, 0.75f, 1.0f, 1.0f},
-  };
 
   const IORDatabase* database = _ior_database;
   int matched_index = -1;
@@ -283,7 +319,7 @@ bool UI::ior_picker(Scene& scene, const char* name, RefractiveIndex& ior) {
         ImGui::Columns(static_cast<int>(columns.size()), nullptr, true);
 
         auto draw_column = [&](SpectralDistribution::Class cls, const char* title) {
-          ImGui::PushStyleColor(ImGuiCol_Text, colors[uint32_t(cls)]);
+          ImGui::PushStyleColor(ImGuiCol_Text, kIorPickerColors[uint32_t(cls)]);
           ImGui::Text("%s", title);
           ImGui::PopStyleColor();
           const auto& entries = database->class_entries(cls);
@@ -384,7 +420,7 @@ bool UI::emission_picker(Scene& scene, const char* label, const char* id_suffix,
   };
 
   ImGui::Text("Emission Input");
-  ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (ImGui::BeginCombo("##emission_mode", kModeLabels[static_cast<uint32_t>(editor_state.mode)])) {
     for (uint32_t i = 0; i < 3; ++i) {
       bool selected = (editor_state.mode == static_cast<SpectrumEditorState::Mode>(i));
@@ -398,7 +434,7 @@ bool UI::emission_picker(Scene& scene, const char* label, const char* id_suffix,
     ImGui::EndCombo();
   }
 
-  ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (editor_state.mode == SpectrumEditorState::Mode::Temperature) {
     char temperature_label[128] = {};
     snprintf(temperature_label, sizeof(temperature_label), "##emission_temp_%s", unique_id);
@@ -524,12 +560,9 @@ bool UI::medium_dropdown(const char* label, uint32_t& medium) {
   }
 
   bool changed = false;
-  const char* current = "None";
-  for (uint64_t i = 0, e = _medium_mapping.size(); i < e; ++i) {
-    if (_medium_mapping.indices[i] == medium) {
-      current = _medium_mapping.names[i];
-      break;
-    }
+  const char* current = _medium_mapping.name_for(medium);
+  if (current == nullptr) {
+    current = "None";
   }
 
   if (ImGui::BeginCombo(label, current)) {
@@ -540,9 +573,10 @@ bool UI::medium_dropdown(const char* label, uint32_t& medium) {
     }
     ImGui::Separator();
     for (uint64_t i = 0, e = _medium_mapping.size(); i < e; ++i) {
-      bool is_selected = (medium == _medium_mapping.indices[i]);
-      if (ImGui::Selectable(_medium_mapping.names[i], is_selected)) {
-        medium = _medium_mapping.indices[i];
+      const auto& entry = _medium_mapping.entry(static_cast<int32_t>(i));
+      bool is_selected = (medium == entry.index);
+      if (ImGui::Selectable(entry.name, is_selected)) {
+        medium = entry.index;
         changed = true;
       }
       if (is_selected) {
@@ -563,7 +597,10 @@ bool UI::spectrum_picker(Scene& scene, const char* widget_id, uint32_t spd_index
     return false;
   }
   SpectralDistribution& spd = scene.spectrums[spd_index];
-  return spectrum_picker(widget_id, spd, linear, scale, show_color, show_scale);
+  ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+  bool result = spectrum_picker(widget_id, spd, linear, scale, show_color, show_scale);
+  ImGui::PopItemWidth();
+  return result;
 }
 
 bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color, bool show_scale) {
@@ -687,7 +724,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
   bool scale_active = false;
   bool scale_deactivated_after_edit = false;
   if (scale && show_scale) {
-    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     float drag_speed = std::max(0.01f, std::max(editor_state.scale, 1.0f) * 0.01f);
     float scale_value = editor_state.scale;
     scale_changed = ImGui::DragFloat(scale_label, &scale_value, drag_speed, show_color ? 1.0f : 0.01f, 1000.0f, "Scale: %.2f", ImGuiSliderFlags_NoRoundToFormat);
@@ -723,8 +760,6 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
   bool has_integrator = (_current_integrator != nullptr);
   bool has_scene = true;
 
-  _panel_width = 0.0f;
-
   if (_selection.kind == SelectionKind::None) {
     set_selection(SelectionKind::Scene, 0);
   }
@@ -741,12 +776,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
   }
 
   auto material_name_from_index = [&](uint32_t material_index) -> const char* {
-    for (uint64_t i = 0; i < _material_mapping.size(); ++i) {
-      if (_material_mapping.indices[i] == material_index) {
-        return _material_mapping.names[i];
-      }
-    }
-    return nullptr;
+    return _material_mapping.name_for(material_index);
   };
 
   auto with_window = [&](uint32_t flag, const char* title, auto&& body, float min_chars = 30.0f) {
@@ -754,15 +784,12 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
       return;
 
     float char_width = ImGui::CalcTextSize("W").x;
-    float fallback_width = char_width * min_chars + ImGui::GetStyle().WindowPadding.x * 2.0f;
-    float target_width = (_panel_width > 0.0f) ? std::max(_panel_width, fallback_width) : fallback_width;
+    float target_width = char_width * min_chars + ImGui::GetStyle().WindowPadding.x * 2.0f;
 
-    ImGui::SetNextWindowSizeConstraints(ImVec2(target_width, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::SetNextWindowSize(ImVec2(target_width, 0.0f), ImGuiCond_Always);
 
-    if (ImGui::Begin(title, nullptr, kWindowFlags)) {
+    if (ImGui::Begin(title, nullptr, kWindowFlags | ImGuiWindowFlags_NoResize)) {
       body();
-      float current_width = ImGui::GetWindowSize().x;
-      _panel_width = std::max(_panel_width, current_width);
     }
 
     ImGui::End();
@@ -812,15 +839,25 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
 
       if (recent_files.empty() == false) {
         ImGui::Separator();
+        bool clear_recent_requested = false;
         if (ImGui::BeginMenu("Recent Files")) {
           for (uint64_t i = recent_files.size(); i > 0; --i) {
-            if (ImGui::MenuItem(recent_files[i - 1u].c_str(), nullptr, nullptr)) {
+            const std::string& entry = recent_files[i - 1u];
+            std::string label = entry + "##recent_" + std::to_string(i - 1u);
+            if (ImGui::MenuItem(label.c_str(), nullptr, nullptr)) {
               if (callbacks.scene_file_selected) {
-                callbacks.scene_file_selected(recent_files[i - 1u]);
+                callbacks.scene_file_selected(entry);
               }
             }
           }
+          ImGui::Separator();
+          if (ImGui::MenuItem("Clear Recent Files")) {
+            clear_recent_requested = true;
+          }
           ImGui::EndMenu();
+        }
+        if (clear_recent_requested && callbacks.clear_recent_files) {
+          callbacks.clear_recent_files();
         }
       }
 
@@ -939,13 +976,6 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
       can_run && (state == Integrator::State::Running),
     };
 
-    ImVec4 colors[4] = {
-      state_available[0] ? ImVec4{0.11f, 0.44f, 0.11f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
-      state_available[1] ? ImVec4{0.44f, 0.33f, 0.11f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
-      state_available[2] ? ImVec4{0.44f, 0.11f, 0.11f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
-      state_available[3] ? ImVec4{0.11f, 0.22f, 0.44f, 1.0f} : ImVec4{0.25f, 0.25f, 0.25f, 1.0f},
-    };
-
     std::string labels[4] = {
       (state == Integrator::State::Running) ? "> Running <" : "  Launch  ",
       (state == Integrator::State::WaitingForCompletion) ? "> Finishing <" : "  Finish  ",
@@ -954,27 +984,51 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     };
 
     ImGui::SameLine(0.0f, wpadding.x);
-    ImGui::PushStyleColor(ImGuiCol_Button, colors[0]);
-    if (ImGui::Button(labels[0].c_str(), {0.0f, button_size})) {
+    ImGui::PushStyleColor(ImGuiCol_Button, state_available[0] ? kToolbarLaunchColor : kToolbarDisabledColor);
+    if (state_available[0] == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button(labels[0].c_str(), {0.0f, button_size}) && (state_available[0] == true)) {
       callbacks.run_selected();
     }
+    if (state_available[0] == false) {
+      ImGui::EndDisabled();
+    }
 
     ImGui::SameLine(0.0f, wpadding.x);
-    ImGui::PushStyleColor(ImGuiCol_Button, colors[1]);
-    if (ImGui::Button(labels[1].c_str(), {0.0f, button_size})) {
+    ImGui::PushStyleColor(ImGuiCol_Button, state_available[1] ? kToolbarFinishColor : kToolbarDisabledColor);
+    if (state_available[1] == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button(labels[1].c_str(), {0.0f, button_size}) && (state_available[1] == true)) {
       callbacks.stop_selected(true);
     }
-
-    ImGui::SameLine(0.0f, wpadding.x);
-    ImGui::PushStyleColor(ImGuiCol_Button, colors[2]);
-    if (ImGui::Button(labels[2].c_str(), {0.0f, button_size})) {
-      callbacks.stop_selected(false);
+    if (state_available[1] == false) {
+      ImGui::EndDisabled();
     }
 
     ImGui::SameLine(0.0f, wpadding.x);
-    ImGui::PushStyleColor(ImGuiCol_Button, colors[3]);
-    if (ImGui::Button(labels[3].c_str(), {0.0f, button_size})) {
+    ImGui::PushStyleColor(ImGuiCol_Button, state_available[2] ? kToolbarTerminateColor : kToolbarDisabledColor);
+    if (state_available[2] == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button(labels[2].c_str(), {0.0f, button_size}) && (state_available[2] == true)) {
+      callbacks.stop_selected(false);
+    }
+    if (state_available[2] == false) {
+      ImGui::EndDisabled();
+    }
+
+    ImGui::SameLine(0.0f, wpadding.x);
+    ImGui::PushStyleColor(ImGuiCol_Button, state_available[3] ? kToolbarRestartColor : kToolbarDisabledColor);
+    if (state_available[3] == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button(labels[3].c_str(), {0.0f, button_size}) && (state_available[3] == true)) {
       callbacks.restart_selected();
+    }
+    if (state_available[3] == false) {
+      ImGui::EndDisabled();
     }
     ImGui::PopStyleColor(4);
 
@@ -1082,12 +1136,9 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     }
 
     auto draw_history_button = [&](const char* label, bool enabled, int32_t step) {
-      const ImVec4 base_color = ImVec4(0.2f, 0.6f, 0.2f, 1.0f);
-      const ImVec4 hover_color = ImVec4(0.25f, 0.75f, 0.25f, 1.0f);
-      const ImVec4 active_color = ImVec4(0.15f, 0.5f, 0.15f, 1.0f);
-      ImGui::PushStyleColor(ImGuiCol_Button, base_color);
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover_color);
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive, active_color);
+      ImGui::PushStyleColor(ImGuiCol_Button, kHistoryButtonBaseColor);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kHistoryButtonHoverColor);
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, kHistoryButtonActiveColor);
       if (enabled == false)
         ImGui::BeginDisabled();
       if (ImGui::Button(label)) {
@@ -1105,17 +1156,14 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     ImGui::Spacing();
     ImGui::Separator();
 
-    const ImVec4 scene_color = ImVec4(0.30f, 0.45f, 0.90f, 1.0f);
-    const ImVec4 camera_color = ImVec4(0.90f, 0.80f, 0.35f, 1.0f);
-
-    ImGui::PushStyleColor(ImGuiCol_Text, scene_color);
+    ImGui::PushStyleColor(ImGuiCol_Text, kSceneTextColor);
     bool scene_selected = (_selection.kind == SelectionKind::Scene);
     if (ImGui::Selectable("Scene", scene_selected)) {
       set_selection(SelectionKind::Scene, 0);
     }
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_Text, camera_color);
+    ImGui::PushStyleColor(ImGuiCol_Text, kCameraTextColor);
     bool camera_selected = (_selection.kind == SelectionKind::Camera);
     if (ImGui::Selectable("Camera", camera_selected)) {
       set_selection(SelectionKind::Camera, 0);
@@ -1131,7 +1179,8 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
       for (uint64_t i = 0; i < _material_mapping.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
         bool material_selected = (_selection.kind == SelectionKind::Material) && (_selection.index == static_cast<int32_t>(i));
-        if (ImGui::Selectable(_material_mapping.names[i], material_selected)) {
+        const auto& entry = _material_mapping.entry(static_cast<int32_t>(i));
+        if (ImGui::Selectable(entry.name, material_selected)) {
           set_selection(SelectionKind::Material, static_cast<int32_t>(i));
         }
         ImGui::PopID();
@@ -1160,7 +1209,8 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
       for (uint64_t i = 0; i < _medium_mapping.size(); ++i) {
         ImGui::PushID(static_cast<int>(i + 1024));
         bool medium_selected = (_selection.kind == SelectionKind::Medium) && (_selection.index == static_cast<int32_t>(i));
-        if (ImGui::Selectable(_medium_mapping.names[i], medium_selected)) {
+        const auto& entry = _medium_mapping.entry(static_cast<int32_t>(i));
+        if (ImGui::Selectable(entry.name, medium_selected)) {
           set_selection(SelectionKind::Medium, static_cast<int32_t>(i));
         }
         ImGui::PopID();
@@ -1235,12 +1285,12 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
       switch (_selection.kind) {
         case SelectionKind::Material:
           if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _material_mapping.size())) {
-            title_suffix("Material", _material_mapping.names[_selection.index]);
+            title_suffix("Material", _material_mapping.name(_selection.index));
           }
           break;
         case SelectionKind::Medium:
           if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _medium_mapping.size())) {
-            title_suffix("Medium", _medium_mapping.names[_selection.index]);
+            title_suffix("Medium", _medium_mapping.name(_selection.index));
           }
           break;
         case SelectionKind::Emitter: {
@@ -1364,7 +1414,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
                   ImGui::Text("Material index: %u", material_index);
                 }
                 ImGui::Text("External Medium");
-                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
                 if (medium_dropdown("##area_external_medium", material.ext_medium)) {
                   area_material_changed = true;
                 }
@@ -1373,10 +1423,9 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
               }
               ImGui::Separator();
 
-              ImGui::Text("Collimation");
-              ImGui::SetNextItemWidth(-FLT_MIN);
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
               float collimation = material.emission_collimation;
-              if (ImGui::SliderFloat("##area_collimation", &collimation, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+              if (ImGui::SliderFloat("##area_collimation", &collimation, 0.0f, 1.0f, "Collimation %.2f", ImGuiSliderFlags_AlwaysClamp)) {
                 material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
                 area_material_changed = true;
               }
@@ -1442,29 +1491,42 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           if (!scene_editable)
             ImGui::BeginDisabled();
           ImGui::Text("Output Image Size:");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           if (ImGui::InputInt2("##outimgsize", &viewport.x)) {
             film_changed = true;
             camera_changed = true;
           }
+          ImGui::Spacing();
 
           ImGui::Text("Lens Radius");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           camera_changed = camera_changed || ImGui::DragFloat("##lens", &camera.lens_radius, 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_None);
+          ImGui::Spacing();
           ImGui::Text("Focal Distance");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           camera_changed = camera_changed || ImGui::DragFloat("##focaldist", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_None);
+          ImGui::Spacing();
           ImGui::Text("Focal Length");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           camera_changed = camera_changed || ImGui::DragFloat("##focal", &focal_len, 0.1f, 1.0f, 5000.0f, "%.1fmm", ImGuiSliderFlags_None);
+          ImGui::Spacing();
           ImGui::Text("Clip Planes (near/far)");
           float clip_values[2] = {camera.clip_near, camera.clip_far};
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           if (ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 5000.0f, "%.3f")) {
             camera.clip_near = std::max(0.0f, clip_values[0]);
             camera.clip_far = std::max(camera.clip_near + 0.001f, clip_values[1]);
             camera_changed = true;
           }
+          ImGui::Spacing();
 
           ImGui::Text("Pixel Filter Radius");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           camera_changed = camera_changed || ImGui::DragFloat("##pixelfiler", &scene.pixel_sampler.radius, 0.05f, 0.0f, 32.0f, "%.3fpx", ImGuiSliderFlags_None);
+          ImGui::Spacing();
 
           ImGui::Text("Pixel Size");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           camera_changed = camera_changed || ImGui::Combo("##pixelsize", &pixel_size, "Default\0Scaled 2x\0Scaled 4x\0Scaled 8x\0Scaled 16x\0");
           if (!scene_editable)
             ImGui::EndDisabled();
@@ -1495,21 +1557,27 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           bool scene_settings_changed = false;
 
           ImGui::Text("Samples Per Pixel (Iterations):");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           scene_settings_changed = scene_settings_changed || ImGui::InputInt("##samples", reinterpret_cast<int*>(&scene.samples));
 
           ImGui::Text("Path Length (min/max):");
           int32_t min_value = int32_t(scene.min_path_length);
           int32_t max_value = int32_t(scene.max_path_length);
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           scene_settings_changed = scene_settings_changed || ImGui::InputInt("##minpathlength", &min_value, 1, 10);
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           scene_settings_changed = scene_settings_changed || ImGui::InputInt("##maxpathlength", &max_value, 1, 10);
           scene.min_path_length = clamp(min_value, 0, 65536);
           scene.max_path_length = clamp(max_value, 0, 65536);
 
           ImGui::Text("Min Path Length:");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           scene_settings_changed = scene_settings_changed || ImGui::InputInt("##bounces", reinterpret_cast<int*>(&scene.random_path_termination));
           ImGui::Text("Noise Threshold:");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##noiseth", &scene.noise_threshold, 0.0001f, 0.01f, "%0.5f");
           ImGui::Text("Radiance Clamp:");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##radclmp", &scene.radiance_clamp, 0.1f, 1.f, "%0.2f");
           ImGui::Text("Active pixels: %0.2f%%", double(_film->active_pixel_count()) / double(_film->pixel_count()) * 100.0);
 
@@ -1698,9 +1766,9 @@ bool UI::build_material(Scene& scene, Material& material) {
   ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 28.0f, 0.0f), ImGuiCond_Always);
   if (ImGui::BeginPopup("material_class_popup")) {
     const ImVec4 header_colors[] = {
-      {0.96f, 0.79f, 0.45f, 1.0f},
-      {0.54f, 0.80f, 0.98f, 1.0f},
-      {0.88f, 0.68f, 0.97f, 1.0f},
+      kMaterialHeaderPrimaryColor,
+      kMaterialHeaderSpecializedColor,
+      kMaterialHeaderInterfacesColor,
     };
 
     ImGui::Columns(3, "material_class_columns", true);
@@ -1737,22 +1805,6 @@ bool UI::build_material(Scene& scene, Material& material) {
     ImGui::EndPopup();
   }
 
-  if (material.has_diffuse()) {
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Diffuse Type:");
-    ImGui::SameLine();
-    int dv = static_cast<int>(material.diffuse_variation);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::Combo("##diff_var", &dv, "Lambert\0Microfacet\0vMF\0")) {
-      dv = clamp(dv, 0, 2);
-      if (material.diffuse_variation != static_cast<uint32_t>(dv)) {
-        material.diffuse_variation = static_cast<uint32_t>(dv);
-        changed = true;
-      }
-    }
-  }
-
-  // section background colors (slight tints from window bg)
   ImVec4 base_bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
   auto clamp01 = [](float v) {
     return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
@@ -1766,169 +1818,174 @@ bool UI::build_material(Scene& scene, Material& material) {
     {clamp01(base_bg.x + 0.000f), clamp01(base_bg.y + 0.010f), clamp01(base_bg.z + 0.010f), base_bg.w},
   };
 
-  // Roughness section
   auto brighten = [&](const ImVec4& c, float d) {
     return ImVec4{clamp01(c.x + d), clamp01(c.y + d), clamp01(c.z + d), c.w};
   };
-  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[0]);
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[0], 0.04f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[0], 0.08f));
-  bool open_rough = ImGui::CollapsingHeader("Roughness", ImGuiTreeNodeFlags_DefaultOpen);
-  ImGui::PopStyleColor(3);
-  if (open_rough) {
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
-    changed |= ImGui::SliderFloat("##r_u", &material.roughness.value.x, 0.0f, 1.0f, "Roughness U %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
-    changed |= ImGui::SliderFloat("##r_v", &material.roughness.value.y, 0.0f, 1.0f, "Roughness V %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.25f);
-    if (ImGui::Button("Sync")) {
-      material.roughness.value.y = material.roughness.value.x;
+  auto with_section = [&](int color_index, const char* title, auto&& body) {
+    ImGui::PushStyleColor(ImGuiCol_Header, sec_col[color_index]);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[color_index], 0.04f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[color_index], 0.08f));
+    bool open = ImGui::CollapsingHeader(title, ImGuiTreeNodeFlags_Framed);
+    ImGui::PopStyleColor(3);
+    if (open) {
+      body();
+    }
+  };
+
+  with_section(0, "Surface Basics", [&]() {
+    if (material.has_diffuse()) {
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+      int dv = static_cast<int>(material.diffuse_variation);
+      if (ImGui::Combo("##diff_var", &dv, "Diffuse: Lambert\0Diffuse: Microfacet\0Diffuse: vMF\0")) {
+        dv = clamp(dv, 0, 2);
+        if (material.diffuse_variation != static_cast<uint32_t>(dv)) {
+          material.diffuse_variation = static_cast<uint32_t>(dv);
+          changed = true;
+        }
+      }
+      ImGui::Spacing();
+    }
+
+    ImGui::Text("Reflectance Spectrum");
+    changed |= spectrum_picker(scene, "Reflectance", material.reflectance.spectrum_index, false, false);
+    ImGui::Spacing();
+    ImGui::Text("Scattering Spectrum");
+    changed |= spectrum_picker(scene, "Scattering", material.scattering.spectrum_index, false, false);
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    changed |= ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, "Opacity %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+  });
+
+  with_section(1, "Microstructure", [&]() {
+    float& rough_u = material.roughness.value.x;
+    float& rough_v = material.roughness.value.y;
+
+    char material_key_buf[32] = {};
+    snprintf(material_key_buf, sizeof(material_key_buf), "%p", (void*)&material);
+    std::string material_key(material_key_buf);
+
+    auto [aniso_entry, inserted] = _material_anisotropy.emplace(material_key, std::fabs(rough_u - rough_v) > 1.0e-4f);
+    bool anisotropic = aniso_entry->second;
+
+    if (ImGui::Checkbox("Anisotropic##rough_aniso", &anisotropic)) {
+      aniso_entry->second = anisotropic;
+      if (anisotropic == false) {
+        rough_v = rough_u;
+        changed = true;
+      }
+    }
+    ImGui::Spacing();
+
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    if (ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, anisotropic ? "Roughness U %.3f" : "Roughness %.3f",
+          ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat)) {
+      if (anisotropic == false) {
+        rough_v = rough_u;
+        aniso_entry->second = false;
+      }
       changed = true;
     }
-  }
 
-  // Principled-specific parameters
-  if (material.cls == Material::Class::Principled) {
-    ImGui::PushStyleColor(ImGuiCol_Header, sec_col[1]);
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[1], 0.04f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[1], 0.08f));
-    bool open_principled = ImGui::CollapsingHeader("Metalness / Transmission", ImGuiTreeNodeFlags_DefaultOpen);
-    ImGui::PopStyleColor(3);
-    if (open_principled) {
+    if (anisotropic) {
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+      if (ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, "Roughness V %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat)) {
+        changed = true;
+      }
+    }
+
+    if (material.cls == Material::Class::Principled) {
+      ImGui::Spacing();
       float metal = material.metalness.value.x;
-      float trans = material.transmission.value.x;
-      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       if (ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, "Metalness %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat)) {
         material.metalness.value = {metal, metal, metal, metal};
         changed = true;
       }
-      ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
+      float trans = material.transmission.value.x;
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       if (ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, "Transmission %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat)) {
         material.transmission.value = {trans, trans, trans, trans};
         changed = true;
       }
     }
-  }
+  });
 
-  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[1]);
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[1], 0.04f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[1], 0.08f));
-  bool open_ior = ImGui::CollapsingHeader("Index Of Refraction (in/out)", ImGuiTreeNodeFlags_DefaultOpen);
-  ImGui::PopStyleColor(3);
-  if (open_ior) {
+  with_section(2, "Interfaces", [&]() {
     ImVec2 old_cell_padding = ImGui::GetStyle().CellPadding;
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1.0f, old_cell_padding.y));
     if (ImGui::BeginTable("ior_inout", 2, ImGuiTableFlags_SizingStretchSame)) {
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
-      ImGui::PushItemWidth(-FLT_MIN);
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       changed |= ior_picker(scene, "Inside", material.int_ior);
-      ImGui::PopItemWidth();
       ImGui::TableSetColumnIndex(1);
-      ImGui::PushItemWidth(-FLT_MIN);
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       changed |= ior_picker(scene, "Outside", material.ext_ior);
-      ImGui::PopItemWidth();
       ImGui::EndTable();
     }
     ImGui::PopStyleVar();
-  }
 
-  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[2]);
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[2], 0.04f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[2], 0.08f));
-  bool open_refl = ImGui::CollapsingHeader("Reflectance / Scattering", ImGuiTreeNodeFlags_DefaultOpen);
-  ImGui::PopStyleColor(3);
-  if (open_refl) {
-    changed |= spectrum_picker(scene, "Reflectance", material.reflectance.spectrum_index, false, false);
-    changed |= spectrum_picker(scene, "Scattering", material.scattering.spectrum_index, false, false);
-  }
+    ImGui::Spacing();
+    ImGui::Text("Thin-film IoR");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    changed |= ior_picker(scene, "Thinfilm IoR", material.thinfilm.ior);
 
-  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[4]);
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[4], 0.04f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[4], 0.08f));
-  bool open_emission = ImGui::CollapsingHeader("Emission", ImGuiTreeNodeFlags_DefaultOpen);
-  ImGui::PopStyleColor(3);
-  if (open_emission) {
-    ImGui::Text("Collimation");
-    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::Spacing();
+    ImGui::Text("Thin-film Thickness (nm)");
+    float avail = ImGui::GetContentRegionAvail().x;
+    float spacing = ImGui::GetStyle().ItemSpacing.x;
+    float dash_width = ImGui::CalcTextSize(" - ").x;
+    float field_width = std::max((avail - dash_width - spacing * 2.0f) * 0.5f, 0.0f);
+    ImGui::SetNextItemWidth(field_width);
+    changed |= ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
+    ImGui::SameLine();
+    ImGui::Text(" - ");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(field_width);
+    changed |= ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
+  });
+
+  with_section(4, "Emission", [&]() {
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     float collimation = material.emission_collimation;
-    if (ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+    if (ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, "Collimation %.2f", ImGuiSliderFlags_AlwaysClamp)) {
       material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
       changed = true;
     }
 
     std::string preset_id = "material_emission_" + std::to_string(material.emission.spectrum_index);
     changed |= emission_picker(scene, "Emission", preset_id.c_str(), material.emission.spectrum_index);
-  }
+  });
 
-  // Opacity
-  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[0]);
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[0], 0.04f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[0], 0.08f));
-  bool open_opacity = ImGui::CollapsingHeader("Opacity", ImGuiTreeNodeFlags_DefaultOpen);
-  ImGui::PopStyleColor(3);
-  if (open_opacity) {
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() * 0.75f);
-    changed |= ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, "Opacity %.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-  }
-
-  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[3]);
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[3], 0.04f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[3], 0.08f));
-  bool open_sss = ImGui::CollapsingHeader("Subsurface Scattering", ImGuiTreeNodeFlags_DefaultOpen);
-  ImGui::PopStyleColor(3);
-  if (open_sss) {
+  with_section(3, "Scattering & Media", [&]() {
+    ImGui::TextDisabled("Subsurface Scattering");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
     changed |= spectrum_picker(scene, "Subsurface Distance", material.subsurface.spectrum_index, true, true);
-  }
 
-  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[4]);
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[4], 0.04f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[4], 0.08f));
-  bool open_thin = ImGui::CollapsingHeader("Thinfilm", ImGuiTreeNodeFlags_DefaultOpen);
-  ImGui::PopStyleColor(3);
-  if (open_thin) {
-    ImGui::AlignTextToFramePadding();
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 2.0f);
-    ImGui::Text("%s", "IoR:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 2.0f);
-    changed |= ior_picker(scene, "Thinfilm IoR", material.thinfilm.ior);
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
-    changed |= ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
-    ImGui::SameLine();
-    ImGui::Text(" - ");
-    ImGui::SetNextItemWidth(ImGui::GetWindowWidth() / 3.0f);
-    ImGui::SameLine();
-    changed |= ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
-    ImGui::SameLine();
-    ImGui::Text("nm");
-  }
+    ImGui::Spacing();
+    if (_medium_mapping.empty()) {
+      ImGui::TextDisabled("No mediums available");
+    } else {
+      float avail = ImGui::GetContentRegionAvail().x;
+      float spacing = ImGui::GetStyle().ItemSpacing.x;
+      float combo_width = (avail - spacing) * 0.5f;
+      combo_width = std::max(combo_width, 0.0f);
 
-  if (_medium_mapping.empty() == false) {
-    ImGui::PushStyleColor(ImGuiCol_Header, sec_col[5]);
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[5], 0.04f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[5], 0.08f));
-    bool open_med = ImGui::CollapsingHeader("Medium (internal/external)", ImGuiTreeNodeFlags_DefaultOpen);
-    ImGui::PopStyleColor(3);
-    if (open_med) {
-      ImVec2 old_cell_padding = ImGui::GetStyle().CellPadding;
-      ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1.0f, old_cell_padding.y));
-      if (ImGui::BeginTable("medium_inout", 2, ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= medium_dropdown("##internal_medium", material.int_medium);
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        changed |= medium_dropdown("##external_medium", material.ext_medium);
-        ImGui::EndTable();
+      ImGui::TextDisabled("Internal / External");
+      ImGui::SetNextItemWidth(combo_width);
+      if (medium_dropdown("##internal_medium", material.int_medium)) {
+        changed = true;
       }
-      ImGui::PopStyleVar();
+      ImGui::SameLine(0.0f, spacing);
+      ImGui::SetNextItemWidth(combo_width);
+      if (medium_dropdown("##external_medium", material.ext_medium)) {
+        changed = true;
+      }
     }
-  }
+  });
 
   return changed;
 }
@@ -1961,14 +2018,14 @@ bool UI::build_medium(Scene& scene, Medium& m) {
   ImGui::Text("%s", kMediumClassNames[class_index]);
 
   ImGui::Text("Absorption");
-  ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (spectrum_picker(scene, "Absorption", m.absorption_index, true, true)) {
     changed = true;
     recompute_extinction = true;
   }
 
   ImGui::Text("Scattering");
-  ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (spectrum_picker(scene, "Scattering", m.scattering_index, true, true)) {
     changed = true;
     recompute_extinction = true;
@@ -1984,9 +2041,8 @@ bool UI::build_medium(Scene& scene, Medium& m) {
     }
   }
 
-  ImGui::Text("Anisotropy");
-  ImGui::SetNextItemWidth(-FLT_MIN);
-  if (ImGui::SliderFloat("##medium_phase_g", &m.phase_function_g, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  if (ImGui::SliderFloat("##medium_phase_g", &m.phase_function_g, -0.999f, 0.999f, "Anisotropy %.3f", ImGuiSliderFlags_AlwaysClamp)) {
     changed = true;
   }
 
@@ -2015,6 +2071,7 @@ void UI::reset_selection() {
   _selection_history.clear();
   _selection_history_cursor = -1;
   _spectrum_editors.clear();
+  _material_anisotropy.clear();
 }
 
 void UI::reload_geometry() {

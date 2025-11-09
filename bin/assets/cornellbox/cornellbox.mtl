@@ -12,7 +12,7 @@ scattering 0.8000 0.8000 0.8000
 
 newmtl et::camera
 class perspective
-id Camera
+id camera
 active 1
 viewport 640 640
 origin 0.0 1.000000238418579 3.819999933242798
@@ -26,6 +26,12 @@ clip-near 0.10000000149011612
 clip-far 100.0
 
 newmtl ceiling
+material class diffuse
+Kd 1.000 1.000 1.000
+Pr 0.000
+two_sided 1
+
+newmtl floor
 material class diffuse
 Kd 1.000 1.000 1.000
 Pr 0.000

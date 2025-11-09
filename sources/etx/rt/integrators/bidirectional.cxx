@@ -1443,15 +1443,6 @@ struct CPUBidirectionalImpl : public Task {
   void build_options(Options& options) {
     options.options.clear();
 
-    options.set_string("bdpt-conn", "Connections:", "connections-label");
-    options.set_bool("bdpt-conn_direct_hit", enable_direct_hit, "Direct Hits");
-    options.set_bool("bdpt-conn_connect_to_camera", enable_connect_to_camera, "Light Path to Camera");
-    options.set_bool("bdpt-conn_connect_to_light", enable_connect_to_light, "Camera Path to Light");
-    options.set_bool("bdpt-conn_connect_vertices", enable_connect_vertices, "Camera Path to Light Path");
-    options.set_string("bdpt-opt", "Bidirectional Path Tracing Options", "bdpt-options");
-    options.set_bool("bdpt-conn_mis", enable_mis, "Multiple Importance Sampling");
-    options.set_bool("bdpt-blue_noise", enable_blue_noise, "Enable Blue Noise");
-
     options.set_integral("bdpt-mode", mode, "Mode", Option::Meta::EnumValue, {CPUBidirectionalImpl::Mode::PathTracing, CPUBidirectionalImpl::Mode::BDPTFull}).name_getter =
       [](uint32_t index) -> std::string {
       switch (CPUBidirectionalImpl::Mode(index)) {
@@ -1460,13 +1451,22 @@ struct CPUBidirectionalImpl : public Task {
         case CPUBidirectionalImpl::Mode::LightTracing:
           return "Light Tracing";
         case CPUBidirectionalImpl::Mode::BDPTFast:
-          return "BDPT Fast";
+          return "BDPT Fast (Experimental)";
         case CPUBidirectionalImpl::Mode::BDPTFull:
           return "BDPT Full";
         default:
           return "Unknown";
       }
     };
+
+    options.set_string("bdpt-conn", "Connections:", "connections-label");
+    options.set_bool("bdpt-conn_direct_hit", enable_direct_hit, "Direct Hits");
+    options.set_bool("bdpt-conn_connect_to_camera", enable_connect_to_camera, "Light Path to Camera");
+    options.set_bool("bdpt-conn_connect_to_light", enable_connect_to_light, "Camera Path to Light");
+    options.set_bool("bdpt-conn_connect_vertices", enable_connect_vertices, "Camera Path to Light Path");
+    options.set_string("bdpt-opt", "Options:", "bdpt-options");
+    options.set_bool("bdpt-conn_mis", enable_mis, "Multiple Importance Sampling");
+    options.set_bool("bdpt-blue_noise", enable_blue_noise, "Enable Blue Noise");
   }
 
   void start(const Options& opt) {

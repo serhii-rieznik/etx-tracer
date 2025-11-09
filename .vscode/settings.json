@@ -12,6 +12,9 @@
     "cmake.buildBeforeRun": true,
     "C_Cpp.errorSquiggles": "disabled",
     "files.associations": {
-        "string": "cpp"
+        "string": "cpp",
+        "xmemory": "cpp",
+        "filesystem": "cpp",
+        "vector": "cpp"
     }
 }
