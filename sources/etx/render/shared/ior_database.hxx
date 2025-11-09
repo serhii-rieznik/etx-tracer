@@ -5,7 +5,9 @@
 
 #include <filesystem>
 #include <vector>
+#include <array>
 #include <string>
+#include <unordered_map>
 #include <cctype>
 #include <algorithm>
 #include <system_error>
@@ -45,8 +47,37 @@ inline std::string make_ior_title(const std::string& base_name) {
 struct IORDatabase {
   std::vector<IORDefinition> definitions;
 
+  const std::vector<size_t>& class_entries(SpectralDistribution::Class cls) const {
+    static const std::vector<size_t> kEmpty;
+    size_t index = class_to_index(cls);
+    if (index >= _class_indices.size())
+      return kEmpty;
+    return _class_indices[index];
+  }
+
+  const IORDefinition* find_by_name(const char* name, SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid) const {
+    if ((name == nullptr) || (name[0] == 0))
+      return nullptr;
+
+    std::string key = normalize_key(std::filesystem::path(name).stem().string());
+    if (key.empty())
+      key = normalize_key(name);
+
+    auto range = _definitions_by_name.equal_range(key);
+    for (auto it = range.first; it != range.second; ++it) {
+      const IORDefinition& def = definitions[it->second];
+      if ((cls == SpectralDistribution::Class::Invalid) || (def.cls == cls))
+        return &def;
+    }
+    return nullptr;
+  }
+
   void load(const char* folder) {
     definitions.clear();
+    _definitions_by_name.clear();
+    for (auto& v : _class_indices) {
+      v.clear();
+    }
     if ((folder == nullptr) || (folder[0] == 0))
       return;
 
@@ -68,12 +99,13 @@ struct IORDatabase {
       } else if (is_file && current_path.extension() == ".spd") {
         SpectralDistribution eta = {};
         SpectralDistribution k = {};
-        auto cls = RefractiveIndex::load_from_file(current_path.string().c_str(), eta, k);
+        std::string file_title;
+        auto cls = RefractiveIndex::load_from_file(current_path.string().c_str(), eta, k, &file_title);
         if (cls != SpectralDistribution::Class::Invalid) {
           IORDefinition def = {};
           def.filename = current_path.string();
           def.name = current_path.stem().string();
-          def.title = make_ior_title(def.name);
+          def.title = file_title.empty() ? make_ior_title(def.name) : file_title;
           def.cls = cls;
           def.eta = eta;
           def.k = k;
@@ -94,6 +126,8 @@ struct IORDatabase {
         return a.cls < b.cls;
       return a.title < b.title;
     });
+
+    rebuild_lookup();
   }
 
   int find_matching_index(const SpectralDistribution& eta, const SpectralDistribution& k, SpectralDistribution::Class cls) const {
@@ -117,6 +151,41 @@ struct IORDatabase {
 
     return -1;
   }
+
+ private:
+  static constexpr size_t kClassCount = static_cast<size_t>(SpectralDistribution::Class::Illuminant) + 1u;
+
+  static size_t class_to_index(SpectralDistribution::Class cls) {
+    return static_cast<size_t>(cls);
+  }
+
+  static std::string normalize_key(std::string name) {
+    if (name.empty())
+      return name;
+    for (char& c : name) {
+      c = char(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return name;
+  }
+
+  void rebuild_lookup() {
+    _definitions_by_name.clear();
+    for (auto& v : _class_indices) {
+      v.clear();
+    }
+
+    for (size_t i = 0; i < definitions.size(); ++i) {
+      const IORDefinition& def = definitions[i];
+      size_t idx = class_to_index(def.cls);
+      if (idx < _class_indices.size()) {
+        _class_indices[idx].push_back(i);
+      }
+      _definitions_by_name.emplace(normalize_key(def.name), i);
+    }
+  }
+
+  std::array<std::vector<size_t>, kClassCount> _class_indices = {};
+  std::unordered_multimap<std::string, size_t> _definitions_by_name;
 };
 
 }  // namespace etx

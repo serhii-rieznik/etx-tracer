@@ -3,38 +3,90 @@
 
 #include <vector>
 #include <algorithm>
+#include <cmath>
+#include <string>
 
 namespace etx {
 
 SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count) {
-  float value = (count > 0) ? wavelengths_power[0].x : 100.0f;
-  float wavelength_scale = 1.0f;
-  while (value < 100.0f) {
-    wavelength_scale *= 10.0f;
-    value *= 10.0f;
+  if (count > spectrum::WavelengthCount) {
+    count *= 1u;
   }
 
   SpectralDistribution result;
-  result.spectral_entry_count = static_cast<uint32_t>(count);
-  for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
-    result.spectral_entries[i] = {wavelengths_power[i].x * wavelength_scale, wavelengths_power[i].y};
+
+  if ((wavelengths_power == nullptr) || (count == 0)) {
+    result.spectral_entry_count = 0u;
+    result.integrated_value = {};
+    return result;
   }
 
-  if (count == 1) {
-    result.spectral_entries[1] = result.spectral_entries[0];
-    result.spectral_entries[0].wavelength -= 0.5f;
-    result.spectral_entries[1].wavelength += 0.5f;
-    result.spectral_entry_count = 2;
+  float value = wavelengths_power[0].x;
+  float wavelength_scale = 1.0f;
+  while ((value * wavelength_scale) < 100.0f) {
+    wavelength_scale *= 10.0f;
   }
 
-  for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
-    for (uint32_t j = i + 1; j < result.spectral_entry_count; ++j) {
-      if (result.spectral_entries[i].wavelength > result.spectral_entries[j].wavelength) {
-        auto t = result.spectral_entries[i];
-        result.spectral_entries[i] = result.spectral_entries[j];
-        result.spectral_entries[j] = t;
-      }
+  std::vector<float2> samples;
+  samples.reserve(static_cast<size_t>(count));
+  for (uint64_t i = 0; i < count; ++i) {
+    float wavelength = wavelengths_power[i].x * wavelength_scale;
+    float power = wavelengths_power[i].y;
+    if (std::isfinite(wavelength) == false)
+      continue;
+    if (std::isfinite(power) == false)
+      continue;
+    wavelength = std::clamp(wavelength, spectrum::kShortestWavelength, spectrum::kLongestWavelength);
+    samples.emplace_back(float2{wavelength, power});
+  }
+
+  if (samples.empty()) {
+    result.spectral_entry_count = 0u;
+    result.integrated_value = {};
+    return result;
+  }
+
+  std::sort(samples.begin(), samples.end(), [](const float2& a, const float2& b) {
+    return a.x < b.x;
+  });
+
+  std::vector<float2> unique_samples;
+  unique_samples.reserve(samples.size());
+  for (const auto& s : samples) {
+    if (unique_samples.empty() || fabsf(s.x - unique_samples.back().x) > 1.0e-4f) {
+      unique_samples.emplace_back(s);
+    } else {
+      unique_samples.back().y = s.y;
     }
+  }
+
+  if (unique_samples.size() == 1u) {
+    unique_samples.emplace_back(float2{unique_samples.front().x, unique_samples.front().y});
+  }
+
+  result.spectral_entry_count = spectrum::WavelengthCount;
+
+  size_t segment = 0u;
+  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
+    float wavelength = float(spectrum::ShortestWavelength + i);
+
+    float power = 0.0f;
+    if (wavelength <= unique_samples.front().x) {
+      power = unique_samples.front().y;
+    } else if (wavelength >= unique_samples.back().x) {
+      power = unique_samples.back().y;
+    } else {
+      while ((segment + 1u < unique_samples.size()) && (unique_samples[segment + 1u].x < wavelength)) {
+        ++segment;
+      }
+      const float2& s0 = unique_samples[segment];
+      const float2& s1 = unique_samples[segment + 1u];
+      float denom = s1.x - s0.x;
+      float t = (denom > 0.0f) ? (wavelength - s0.x) / denom : 0.0f;
+      power = lerp(s0.y, s1.y, saturate(t));
+    }
+
+    result.spectral_entries[i] = {wavelength, power};
   }
 
   float3 xyz = result.integrate_to_xyz();
@@ -101,7 +153,8 @@ SpectralDistribution SpectralDistribution::rgb_luminance(const float3& rgb) {
   return result;
 }
 
-SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range) {
+SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range,
+  std::string* out_title) {
   auto file = fopen(file_name, "r");
   if (file == nullptr) {
     log::error("Failed to load SpectralDistribution from file: %s\n", file_name);
@@ -125,6 +178,7 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
   };
 
   Class cls = Class::Invalid;
+  std::string file_title;
   std::vector<Sample> samples;
   samples.reserve(spectrum::WavelengthCount);
 
@@ -138,16 +192,42 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     *line_end = 0;
 
     if (begin[0] == '#') {
-      if (strstr(begin, "#class:") == begin) {
-        const char* cls_name = begin + 7;
-        if (strcmp(cls_name, "conductor") == 0) {
-          cls = Class::Conductor;
-        } else if (strcmp(cls_name, "dielectric") == 0) {
-          cls = Class::Dielectric;
-        } else if (strcmp(cls_name, "illuminant") == 0) {
-          cls = Class::Illuminant;
-        } else {
-          cls = Class::Reflectance;
+      if (strstr(begin, "#class") == begin) {
+        const char* colon = strchr(begin, ':');
+        if (colon != nullptr) {
+          ++colon;
+          while ((*colon == ' ') || (*colon == '\t')) {
+            ++colon;
+          }
+          const char* cls_begin = colon;
+          while ((*colon != 0) && (*colon != ' ') && (*colon != '\t')) {
+            ++colon;
+          }
+          std::string cls_name(cls_begin, colon - cls_begin);
+          if (cls_name == "conductor") {
+            cls = Class::Conductor;
+          } else if (cls_name == "dielectric") {
+            cls = Class::Dielectric;
+          } else if (cls_name == "illuminant") {
+            cls = Class::Illuminant;
+          } else if (cls_name.empty() == false) {
+            cls = Class::Reflectance;
+          }
+        }
+      } else if (strstr(begin, "#title") == begin) {
+        const char* title_begin = strchr(begin, ':');
+        if (title_begin != nullptr) {
+          ++title_begin;
+          while ((*title_begin == ' ') || (*title_begin == '\t')) {
+            ++title_begin;
+          }
+          std::string title = title_begin;
+          while (!title.empty() && ((title.back() == '\r') || (title.back() == '\n') || (title.back() == ' ') || (title.back() == '\t'))) {
+            title.pop_back();
+          }
+          if (title.empty() == false) {
+            file_title = title;
+          }
         }
       }
     } else {
@@ -190,6 +270,18 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     }
   }
 
+  if (samples0.empty()) {
+    float fallback = samples.front().values[0];
+    samples0.emplace_back(float2{spectrum::kShortestWavelength, fallback});
+    samples0.emplace_back(float2{spectrum::kLongestWavelength, fallback});
+  }
+
+  if ((values1 != nullptr) && samples1.empty() && (cls == Class::Conductor)) {
+    float fallback = samples.front().values[1];
+    samples1.emplace_back(float2{spectrum::kShortestWavelength, fallback});
+    samples1.emplace_back(float2{spectrum::kLongestWavelength, fallback});
+  }
+
   if (extend_range) {
     if ((samples0.size() < spectrum::WavelengthCount) && (samples0.front().x > spectrum::kShortestWavelength)) {
       samples0.insert(samples0.begin(), samples0.front())->x = spectrum::kShortestWavelength;
@@ -211,7 +303,26 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
   values0 = from_samples(samples0.data(), samples0.size());
 
   if (values1) {
-    *values1 = from_samples(samples1.data(), samples1.size());
+    if (samples1.empty()) {
+      float2 zero_samples[2] = {
+        {spectrum::kShortestWavelength, 0.0f},
+        {spectrum::kLongestWavelength, 0.0f},
+      };
+      *values1 = from_samples(zero_samples, 2);
+    } else {
+      *values1 = from_samples(samples1.data(), samples1.size());
+    }
+  }
+
+  if (out_title != nullptr) {
+    *out_title = file_title;
+  }
+
+  if (cls == Class::Illuminant) {
+    float lum = values0.luminance();
+    if (lum > 0.0f) {
+      values0.scale(1.0f / lum);
+    }
   }
 
   return cls;
@@ -273,8 +384,8 @@ const float3& SpectralDistribution::integrated() const {
   return integrated_value;
 }
 
-SpectralDistribution::Class RefractiveIndex::load_from_file(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k) {
-  SpectralDistribution::Class cls = SpectralDistribution::load_from_file(file_name, out_eta, &out_k, true);
+SpectralDistribution::Class RefractiveIndex::load_from_file(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k, std::string* out_title) {
+  SpectralDistribution::Class cls = SpectralDistribution::load_from_file(file_name, out_eta, &out_k, true, out_title);
   if (cls != SpectralDistribution::Class::Invalid) {
     out_eta.integrated_value = spectrum::rgb_to_xyz(out_eta.integrated_value);
     out_k.integrated_value = spectrum::rgb_to_xyz(out_k.integrated_value);

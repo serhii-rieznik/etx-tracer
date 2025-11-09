@@ -78,9 +78,10 @@ struct UI {
   void load_image() const;
   bool build_material(Scene& scene, Material&);
   bool build_medium(Scene& scene, Medium&);
-  bool spectrum_picker(const char* name, SpectralDistribution& spd, bool linear);
-  bool spectrum_picker(Scene& scene, const char* name, uint32_t spd_index, bool linear);
+  bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
+  bool spectrum_picker(Scene& scene, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool ior_picker(Scene& scene, const char* name, RefractiveIndex& ior);
+  bool emission_picker(Scene& scene, const char* label, const char* id_suffix, uint32_t& spectrum_index);
   bool medium_dropdown(const char* label, uint32_t& medium);
 
   void reset_selection();
@@ -131,6 +132,17 @@ struct UI {
     int32_t index = -1;
   };
 
+  struct SpectrumEditorState {
+    float3 color = {};
+    float scale = 1.0f;
+    float temperature = 6500.0f;
+    enum class Mode : uint32_t {
+      Color,
+      Temperature,
+      Preset,
+    } mode = Mode::Color;
+  };
+
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
   SelectionState _selection;
@@ -139,7 +151,7 @@ struct UI {
   float _panel_width = 0.0f;
   uint32_t _ui_setup = UIDefaults;
   uint32_t _font_image = 0u;
-  std::unordered_map<std::string, float3> _editor_values;
+  std::unordered_map<std::string, SpectrumEditorState> _spectrum_editors;
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
   const IORDatabase* _ior_database = nullptr;

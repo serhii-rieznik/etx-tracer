@@ -72,21 +72,21 @@ struct CPUDebugIntegratorImpl : public Task {
     {
       SpectralDistribution eta = {};
       SpectralDistribution k = {};
-      spd_air.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/air.spd"), eta, k);
+      spd_air.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/dielectric/air.spd"), eta, k);
       spd_air_eta = eta;
       spd_air_k = k;
     }
     {
       SpectralDistribution eta = {};
       SpectralDistribution k = {};
-      spd_base.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/water.spd"), eta, k);
+      spd_base.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/dielectric/water.spd"), eta, k);
       spd_base_eta = eta;
       spd_base_k = k;
     }
     {
       SpectralDistribution eta = {};
       SpectralDistribution k = {};
-      thinfilm.ior.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/glycerol.spd"), eta, k);
+      thinfilm.ior.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/dielectric/glycerol.spd"), eta, k);
       spd_film_eta = eta;
       spd_film_k = k;
     }
@@ -423,7 +423,7 @@ struct CPUDebugIntegratorImpl : public Task {
         spds[3] = SpectralDistribution::from_normalized_black_body(12000.0f, 1.0f);
         spds[4] = SpectralDistribution::from_normalized_black_body(20000.0f, 1.0f);
 
-        SpectralDistribution::load_from_file(env().file_in_data("spectrum/d65.spd"), spds[5], nullptr, false);
+        SpectralDistribution::load_from_file(env().file_in_data("spectrum/emission/d65.spd"), spds[5], nullptr, false);
 
         spds[6] = SpectralDistribution::constant(0.5f);
         spds[7] = SpectralDistribution::rgb_reflectance({0.5, 0.5f, 0.5f});
@@ -471,16 +471,16 @@ struct CPUDebugIntegratorImpl : public Task {
           ri.cls = RefractiveIndex::load_from_file(path, ri.eta, ri.k);
           return ri;
         };
-        spds[i++] = load_ior(env().file_in_data("spectrum/water.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/plastic.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/sapphire.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/diamond.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/gold.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/osmium.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/copper.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/chrome.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/nickel.spd"));
-        spds[i++] = load_ior(env().file_in_data("spectrum/silver.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/dielectric/water.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/dielectric/plastic.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/dielectric/sapphire.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/dielectric/diamond.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/conductor/gold.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/conductor/osmium.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/conductor/copper.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/conductor/chrome.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/conductor/nickel.spd"));
+        spds[i++] = load_ior(env().file_in_data("spectrum/conductor/silver.spd"));
         return true;
       })(scene);
 

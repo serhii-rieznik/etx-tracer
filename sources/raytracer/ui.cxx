@@ -1,5 +1,6 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
+#include <etx/core/log.hxx>
 
 #include <etx/render/host/film.hxx>
 #include <etx/render/shared/camera.hxx>
@@ -21,6 +22,7 @@
 #include <map>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 namespace etx {
 
@@ -117,7 +119,7 @@ void UI::set_selection(SelectionKind kind, int32_t index, bool track_history) {
     return;
 
   _selection = next;
-  _editor_values.clear();
+  // _spectrum_editors.clear();
 
   if (!track_history)
     return;
@@ -259,39 +261,64 @@ bool UI::ior_picker(Scene& scene, const char* name, RefractiveIndex& ior) {
   ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 32.0f, 0.0f), ImGuiCond_Always);
   if (ImGui::BeginPopup(popup_id)) {
     if ((database != nullptr) && (database->definitions.empty() == false)) {
-      ImGui::Columns(3, nullptr, true);
-
-      auto draw_column = [&](SpectralDistribution::Class cls, const char* title) {
-        ImGui::PushStyleColor(ImGuiCol_Text, colors[uint32_t(cls)]);
-        ImGui::Text("%s", title);
-        ImGui::PopStyleColor();
-        for (int index = 0; index < static_cast<int>(database->definitions.size()); ++index) {
-          const IORDefinition& def = database->definitions[static_cast<size_t>(index)];
-          if (def.cls != cls)
-            continue;
-
-          bool is_current = (matched_index == index);
-          if (ImGui::Selectable(def.title.c_str(), is_current)) {
-            matched_index = index;
-            ior.cls = def.cls;
-            ETX_CRITICAL(ior.eta_index != kInvalidIndex);
-            scene.spectrums[ior.eta_index] = def.eta;
-            ETX_CRITICAL(ior.k_index != kInvalidIndex);
-            scene.spectrums[ior.k_index] = def.k;
-            changed = true;
-            ImGui::CloseCurrentPopup();
-          }
-        }
+      struct ColumnInfo {
+        SpectralDistribution::Class cls;
+        const char* title;
       };
 
-      draw_column(SpectralDistribution::Class::Conductor, "Conductors");
-      ImGui::NextColumn();
-      draw_column(SpectralDistribution::Class::Dielectric, "Dielectrics");
-      ImGui::NextColumn();
-      draw_column(SpectralDistribution::Class::Illuminant, "Illuminants");
+      std::vector<ColumnInfo> columns;
+      const auto& conductors = database->class_entries(SpectralDistribution::Class::Conductor);
+      if (conductors.empty() == false) {
+        columns.push_back({SpectralDistribution::Class::Conductor, "Conductors"});
+      }
+      const auto& dielectrics = database->class_entries(SpectralDistribution::Class::Dielectric);
+      if (dielectrics.empty() == false) {
+        columns.push_back({SpectralDistribution::Class::Dielectric, "Dielectrics"});
+      }
 
-      ImGui::Columns(1);
-      ImGui::Separator();
+      if (columns.empty()) {
+        ImGui::TextDisabled("No predefined IORs available");
+        ImGui::Separator();
+      } else {
+        ImGui::Columns(static_cast<int>(columns.size()), nullptr, true);
+
+        auto draw_column = [&](SpectralDistribution::Class cls, const char* title) {
+          ImGui::PushStyleColor(ImGuiCol_Text, colors[uint32_t(cls)]);
+          ImGui::Text("%s", title);
+          ImGui::PopStyleColor();
+          const auto& entries = database->class_entries(cls);
+          for (size_t idx : entries) {
+            if (idx >= database->definitions.size())
+              continue;
+            const IORDefinition& def = database->definitions[idx];
+            int def_index = static_cast<int>(idx);
+            bool is_current = (matched_index == def_index);
+            if (ImGui::Selectable(def.title.c_str(), is_current)) {
+              matched_index = def_index;
+              ior.cls = def.cls;
+              ETX_CRITICAL(ior.eta_index != kInvalidIndex);
+              scene.spectrums[ior.eta_index] = def.eta;
+              ETX_CRITICAL(ior.k_index != kInvalidIndex);
+              scene.spectrums[ior.k_index] = def.k;
+              changed = true;
+              ImGui::CloseCurrentPopup();
+            }
+            if (is_current) {
+              ImGui::SetItemDefaultFocus();
+            }
+          }
+        };
+
+        for (size_t c = 0; c < columns.size(); ++c) {
+          draw_column(columns[c].cls, columns[c].title);
+          if (c + 1 < columns.size()) {
+            ImGui::NextColumn();
+          }
+        }
+
+        ImGui::Columns(1);
+        ImGui::Separator();
+      }
     } else {
       ImGui::TextDisabled("No predefined IORs available");
       ImGui::Separator();
@@ -315,6 +342,176 @@ bool UI::ior_picker(Scene& scene, const char* name, RefractiveIndex& ior) {
       ETX_CRITICAL(ior.k_index != kInvalidIndex);
       scene.spectrums[ior.k_index] = t_k;
       changed = true;
+    }
+  }
+
+  return changed;
+}
+
+bool UI::emission_picker(Scene& scene, const char* label, const char* id_suffix, uint32_t& spectrum_index) {
+  if (scene.spectrums.count == 0)
+    return false;
+
+  auto ensure_index = [&](uint32_t& index) {
+    if ((index == kInvalidIndex) || (index >= scene.spectrums.count)) {
+      uint32_t fallback = scene.black_spectrum;
+      if ((fallback == kInvalidIndex) || (fallback >= scene.spectrums.count)) {
+        fallback = 0u;
+      }
+      index = fallback;
+    }
+  };
+
+  ensure_index(spectrum_index);
+
+  bool changed = false;
+  bool load_from_file = false;
+
+  const char* base_label = (label != nullptr) ? label : "Emission";
+  const char* unique_id = (id_suffix != nullptr) ? id_suffix : base_label;
+
+  std::string color_name = std::string(base_label) + "_Color_" + unique_id;
+  char editor_key_buf[32] = {};
+  snprintf(editor_key_buf, sizeof(editor_key_buf), "%p", (void*)&scene.spectrums[spectrum_index]);
+  std::string editor_key = std::string(editor_key_buf);
+  auto [state_it, inserted] = _spectrum_editors.emplace(editor_key, SpectrumEditorState{});
+  SpectrumEditorState& editor_state = state_it->second;
+
+  static const char* kModeLabels[] = {
+    "Color",
+    "Temperature",
+    "Preset",
+  };
+
+  ImGui::Text("Emission Input");
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  if (ImGui::BeginCombo("##emission_mode", kModeLabels[static_cast<uint32_t>(editor_state.mode)])) {
+    for (uint32_t i = 0; i < 3; ++i) {
+      bool selected = (editor_state.mode == static_cast<SpectrumEditorState::Mode>(i));
+      if (ImGui::Selectable(kModeLabels[i], selected)) {
+        editor_state.mode = static_cast<SpectrumEditorState::Mode>(i);
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+    ImGui::EndCombo();
+  }
+
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  if (editor_state.mode == SpectrumEditorState::Mode::Temperature) {
+    char temperature_label[128] = {};
+    snprintf(temperature_label, sizeof(temperature_label), "##emission_temp_%s", unique_id);
+    float temperature = editor_state.temperature;
+    if (ImGui::InputFloat(temperature_label, &temperature, 100.0f, 1000.0f, "%.0f")) {
+      temperature = std::clamp(temperature, 1000.0f, 40000.0f);
+      editor_state.temperature = temperature;
+      SpectralDistribution temp_spd = SpectralDistribution::from_normalized_black_body(temperature, editor_state.scale);
+      scene.spectrums[spectrum_index] = temp_spd;
+      editor_state.color = {};
+      changed = true;
+    }
+  }
+  changed |= spectrum_picker(scene, color_name.c_str(), spectrum_index, true, true, editor_state.mode == SpectrumEditorState::Mode::Color, true);
+
+  const IORDatabase* database = _ior_database;
+  int matched_index = -1;
+  if ((database != nullptr) && (spectrum_index < scene.spectrums.count)) {
+    static const SpectralDistribution null_spectrum = SpectralDistribution::null();
+    matched_index = database->find_matching_index(scene.spectrums[spectrum_index], null_spectrum, SpectralDistribution::Class::Illuminant);
+  }
+
+  const char* preview_text = base_label;
+  std::string preview_storage;
+  if ((database != nullptr) && (matched_index >= 0) && (matched_index < static_cast<int>(database->definitions.size()))) {
+    preview_storage = database->definitions[static_cast<size_t>(matched_index)].title;
+    preview_text = preview_storage.c_str();
+  }
+
+  if (editor_state.mode == SpectrumEditorState::Mode::Preset) {
+    std::string button_label = std::string(preview_text) + "##emission_" + unique_id;
+    if (ImGui::Button(button_label.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+      char popup_id[64] = {};
+      snprintf(popup_id, sizeof(popup_id), "emission_popup_##%s", unique_id);
+      ImGui::OpenPopup(popup_id);
+    }
+  }
+
+  char popup_id[64] = {};
+  snprintf(popup_id, sizeof(popup_id), "emission_popup_##%s", unique_id);
+  ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 28.0f, 0.0f), ImGuiCond_Always);
+  if (ImGui::BeginPopup(popup_id)) {
+    if (ImGui::Selectable("None", false)) {
+      scene.spectrums[spectrum_index] = SpectralDistribution::null();
+      matched_index = -1;
+      changed = true;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::Separator();
+
+    bool has_presets = false;
+    if ((database != nullptr) && (database->definitions.empty() == false)) {
+      const auto& entries = database->class_entries(SpectralDistribution::Class::Illuminant);
+      has_presets = entries.empty() == false;
+
+      if (has_presets) {
+        size_t column_count = std::min<size_t>(2, std::max<size_t>(1, entries.size()));
+        size_t per_column = (entries.size() + column_count - 1u) / column_count;
+
+        std::string table_id = std::string("emission_presets_##") + unique_id;
+        if (ImGui::BeginTable(table_id.c_str(), static_cast<int>(column_count), ImGuiTableFlags_SizingStretchSame)) {
+          for (size_t col = 0; col < column_count; ++col) {
+            ImGui::TableNextColumn();
+            size_t start = col * per_column;
+            size_t end = std::min(start + per_column, entries.size());
+            for (size_t idx = start; idx < end; ++idx) {
+              size_t def_index = entries[idx];
+              if (def_index >= database->definitions.size())
+                continue;
+              const IORDefinition& def = database->definitions[def_index];
+              bool is_current = (matched_index == static_cast<int>(def_index));
+              if (ImGui::Selectable(def.title.c_str(), is_current)) {
+                scene.spectrums[spectrum_index] = def.eta;
+                scene.spectrums[spectrum_index].scale(editor_state.scale);
+                matched_index = static_cast<int>(def_index);
+                changed = true;
+                ImGui::CloseCurrentPopup();
+              }
+              if (is_current) {
+                ImGui::SetItemDefaultFocus();
+              }
+            }
+          }
+          ImGui::EndTable();
+        }
+      }
+    }
+
+    if (has_presets == false) {
+      ImGui::TextDisabled("No emission presets available");
+    }
+
+    if (ImGui::Selectable("Load from file...", false)) {
+      load_from_file = true;
+      ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+  }
+
+  if (load_from_file) {
+    auto filename = open_file("spd");
+    if (filename.empty() == false) {
+      SpectralDistribution loaded = {};
+      auto cls = SpectralDistribution::load_from_file(filename.c_str(), loaded, nullptr, false);
+      if (cls != SpectralDistribution::Class::Invalid) {
+        scene.spectrums[spectrum_index] = loaded;
+        scene.spectrums[spectrum_index].scale(editor_state.scale);
+        matched_index = -1;
+        changed = true;
+      } else {
+        log::warning("Failed to load emission spectrum from `%s`", filename.c_str());
+      }
     }
   }
 
@@ -358,40 +555,160 @@ bool UI::medium_dropdown(const char* label, uint32_t& medium) {
   return changed;
 }
 
-bool UI::spectrum_picker(Scene& scene, const char* name, uint32_t spd_index, bool linear) {
-  auto& spd = scene.spectrums[spd_index];
-  return spectrum_picker(name, spd, linear);
+bool UI::spectrum_picker(Scene& scene, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color, bool show_scale) {
+  if (scene.spectrums.count == 0) {
+    return false;
+  }
+  if (spd_index >= scene.spectrums.count) {
+    return false;
+  }
+  SpectralDistribution& spd = scene.spectrums[spd_index];
+  return spectrum_picker(widget_id, spd, linear, scale, show_color, show_scale);
 }
 
-bool UI::spectrum_picker(const char* name, SpectralDistribution& spd, bool linear) {
-  float3 rgb = {};
+bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color, bool show_scale) {
+  scale = scale && linear;
 
-  char unique_key_buf[128] = {};
-  snprintf(unique_key_buf, sizeof(unique_key_buf), "%s@%p", name, (void*)&spd);
-  auto it = _editor_values.find(unique_key_buf);
-  if (it == _editor_values.end()) {
-    rgb = spd.integrated();
-    if (linear == false) {
-      rgb = linear_to_gamma(rgb);
+  char unique_key_buf[32] = {};
+  snprintf(unique_key_buf, sizeof(unique_key_buf), "%p", (void*)&spd);
+  std::string editor_key = std::string(unique_key_buf);
+  auto [state_it, state_inserted] = _spectrum_editors.emplace(editor_key, SpectrumEditorState{});
+  SpectrumEditorState& editor_state = state_it->second;
+
+  float3 linear_rgb = spd.integrated();
+  float default_scale = 1.0f;
+  float max_component = std::max(std::max(linear_rgb.x, linear_rgb.y), linear_rgb.z);
+  if (scale) {
+    constexpr float kScaleUnityThreshold = 1.0001f;
+    if (max_component > kScaleUnityThreshold) {
+      default_scale = max_component;
+      if (default_scale > 0.0f) {
+        linear_rgb /= default_scale;
+      }
     }
-    _editor_values.emplace(std::string(unique_key_buf), rgb);
-  } else {
-    rgb = it->second;
+  }
+
+  float3 default_display = linear ? linear_rgb : linear_to_gamma(linear_rgb);
+  if (state_inserted) {
+    editor_state.color = default_display;
+    editor_state.scale = default_scale;
+  }
+
+  char name_buffer[128] = {};
+  snprintf(name_buffer, sizeof(name_buffer), "##color_%s", widget_id);
+
+  char scale_label[128] = {};
+  if (scale && show_scale) {
+    snprintf(scale_label, sizeof(scale_label), "##scale_%s", widget_id);
+  }
+
+  auto sync_from_spd = [&](bool update_color, bool update_scale) {
+    if ((update_color == false) && (update_scale == false))
+      return;
+
+    float3 refreshed_linear = spd.integrated();
+    float refreshed_scale = editor_state.scale;
+    float3 refreshed_display = editor_state.color;
+
+    constexpr float kScaleUnityThreshold = 1.0001f;
+    if (scale && (update_color || update_scale)) {
+      float refreshed_max = std::max(std::max(refreshed_linear.x, refreshed_linear.y), refreshed_linear.z);
+      if (refreshed_max > kScaleUnityThreshold) {
+        refreshed_scale = refreshed_max;
+        if (refreshed_scale > 0.0f) {
+          refreshed_linear /= refreshed_scale;
+        }
+      } else {
+        refreshed_scale = 1.0f;
+      }
+    }
+
+    if (update_color) {
+      refreshed_display = linear ? refreshed_linear : linear_to_gamma(refreshed_linear);
+      if (scale) {
+        refreshed_display.x = std::clamp(refreshed_display.x, 0.0f, 1.0f);
+        refreshed_display.y = std::clamp(refreshed_display.y, 0.0f, 1.0f);
+        refreshed_display.z = std::clamp(refreshed_display.z, 0.0f, 1.0f);
+      }
+      editor_state.color = refreshed_display;
+    }
+
+    if (update_scale) {
+      editor_state.scale = refreshed_scale;
+    }
+  };
+
+  auto rebuild_spectrum = [&](float applied_scale, bool from_color) {
+    float3 value = editor_state.color;
+    if ((linear == false) && from_color) {
+      value = gamma_to_linear(value);
+    }
+    applied_scale = from_color ? std::max(applied_scale, 1.0f) : std::max(applied_scale, 0.0f);
+
+    if (from_color) {
+      value *= applied_scale;
+      spd = SpectralDistribution::rgb_reflectance(value);
+      editor_state.scale = applied_scale;
+    } else if (scale) {
+      spd.scale(applied_scale / std::max(editor_state.scale, 1.0e-6f));
+      editor_state.scale = applied_scale;
+    }
+  };
+
+  ImGuiColorEditFlags color_flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB;
+  if (linear && (scale == false)) {
+    color_flags |= ImGuiColorEditFlags_HDR;
+  }
+
+  bool color_active = false;
+  bool color_edited = false;
+  bool color_deactivated_after_edit = false;
+  if (show_color) {
+    ImGui::ColorEdit3(name_buffer, &editor_state.color.x, color_flags);
+    color_active = ImGui::IsItemActive();
+    color_edited = ImGui::IsItemEdited();
+    color_deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
+
+    if (scale) {
+      editor_state.color.x = std::clamp(editor_state.color.x, 0.0f, 1.0f);
+      editor_state.color.y = std::clamp(editor_state.color.y, 0.0f, 1.0f);
+      editor_state.color.z = std::clamp(editor_state.color.z, 0.0f, 1.0f);
+    }
   }
 
   bool changed = false;
-  char name_buffer[128] = {};
-  snprintf(name_buffer, sizeof(name_buffer), "##%s##%p", name, (void*)&spd);
-  if (ImGui::ColorEdit3(name_buffer, &rgb.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB | (linear ? ImGuiColorEditFlags_HDR : 0))) {
-    _editor_values[std::string(unique_key_buf)] = rgb;
-  }
-  if (ImGui::IsItemDeactivatedAfterEdit()) {
-    float3 to_apply = rgb;
-    if (linear == false) {
-      to_apply = gamma_to_linear(to_apply);
-    }
-    spd = SpectralDistribution::rgb_reflectance(to_apply);
+  if (show_color && color_deactivated_after_edit) {
+    editor_state.scale = 1.0f;
+    rebuild_spectrum(editor_state.scale, true);
     changed = true;
+  }
+
+  bool scale_changed = false;
+  bool scale_active = false;
+  bool scale_deactivated_after_edit = false;
+  if (scale && show_scale) {
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    float drag_speed = std::max(0.01f, std::max(editor_state.scale, 1.0f) * 0.01f);
+    float scale_value = editor_state.scale;
+    scale_changed = ImGui::DragFloat(scale_label, &scale_value, drag_speed, show_color ? 1.0f : 0.01f, 1000.0f, "Scale: %.2f", ImGuiSliderFlags_NoRoundToFormat);
+    scale_active = ImGui::IsItemActive();
+    scale_deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
+    if (scale_changed) {
+      if (show_color) {
+        scale_value = std::max(scale_value, 1.0f);
+      } else {
+        scale_value = std::max(scale_value, 0.0f);
+      }
+      rebuild_spectrum(scale_value, show_color);
+      editor_state.scale = scale_value;
+      changed = true;
+    }
+  }
+
+  bool skip_sync =
+    (show_color && (color_active || color_edited || color_deactivated_after_edit)) || (show_scale && (scale_active || scale_changed || scale_deactivated_after_edit));
+  if (skip_sync == false) {
+    sync_from_spd(show_color, show_color);
   }
 
   return changed;
@@ -1038,6 +1355,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
             }
             if (material_index < scene.materials.count) {
               auto& material = scene.materials[material_index];
+              bool area_material_changed = false;
               if (_medium_mapping.empty() == false) {
                 const char* mat_name = material_name_from_index(material_index);
                 if (mat_name != nullptr) {
@@ -1048,41 +1366,52 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
                 ImGui::Text("External Medium");
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 if (medium_dropdown("##area_external_medium", material.ext_medium)) {
-                  material_changed = true;
+                  area_material_changed = true;
                 }
               } else {
                 ImGui::TextDisabled("No mediums available");
               }
               ImGui::Separator();
+
+              ImGui::Text("Collimation");
+              ImGui::SetNextItemWidth(-FLT_MIN);
+              float collimation = material.emission_collimation;
+              if (ImGui::SliderFloat("##area_collimation", &collimation, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+                material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
+                area_material_changed = true;
+              }
+              ImGui::Separator();
+
+              std::string area_preset_id = "area_material_emission_" + std::to_string(material_index);
+              area_material_changed |= emission_picker(scene, "Emission", area_preset_id.c_str(), material.emission.spectrum_index);
+              if (area_material_changed) {
+                material_changed = true;
+                changed = true;
+              }
             }
-            ImGui::Text("Collimation");
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (ImGui::SliderFloat("##area_collimation", &emitter.collimation, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
-              emitter.collimation = saturate(emitter.collimation);
-              changed = true;
-            }
-            ImGui::Separator();
           }
 
-          ImGui::Text("Emission Spectrum");
-          changed |= spectrum_picker(scene, "Emission", emitter.emission.spectrum_index, true);
-          if (emitter.cls == EmitterProfile::Class::Directional) {
-            ImGui::Text("Angular Size");
-            if (ImGui::DragFloat("##angularsize", &emitter.angular_size, 0.01f, 0.0f, kHalfPi, "%.3f", ImGuiSliderFlags_NoRoundToFormat)) {
-              emitter.angular_size_cosine = cosf(emitter.angular_size / 2.0f);
-              emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
-              changed = true;
-            }
+          if (emitter.cls != EmitterProfile::Class::Area) {
+            std::string emitter_preset_id = "emitter_emission_" + std::to_string(emitter_index);
+            changed |= emission_picker(scene, "Emission", emitter_preset_id.c_str(), emitter.emission.spectrum_index);
+            if (emitter.cls == EmitterProfile::Class::Directional) {
+              ImGui::Text("Angular Size");
+              if (ImGui::DragFloat("##angularsize", &emitter.angular_size, 0.01f, 0.0f, kHalfPi, "%.3f", ImGuiSliderFlags_NoRoundToFormat)) {
+                emitter.angular_size_cosine = cosf(emitter.angular_size / 2.0f);
+                emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
+                changed = true;
+              }
 
-            bool direction_changed = false;
-            auto s = to_spherical(emitter.direction);
-            ImGui::Text("Rotation:");
-            direction_changed = direction_changed || ImGui::DragFloat("##rotation", &s.phi, kPi / 360.0f, -kPi, kPi);
-            ImGui::Text("Elevation:");
-            direction_changed = direction_changed || ImGui::DragFloat("##elevation", &s.theta, kPi / 180.0f, -kHalfPi, kHalfPi);
-            if (direction_changed) {
-              emitter.direction = from_spherical(s);
-              changed = true;
+              bool direction_changed = false;
+              auto s = to_spherical(emitter.direction);
+              ImGui::Text("Rotation:");
+              direction_changed = direction_changed || ImGui::DragFloat("##rotation", &s.phi, kPi / 360.0f, -kPi, kPi);
+              ImGui::Text("Elevation:");
+              direction_changed = direction_changed || ImGui::DragFloat("##elevation", &s.theta, kPi / 180.0f, -kHalfPi, kHalfPi);
+              if (direction_changed) {
+                emitter.direction = from_spherical(s);
+                changed = true;
+              }
             }
           }
           if (!scene_editable)
@@ -1511,8 +1840,26 @@ bool UI::build_material(Scene& scene, Material& material) {
   bool open_refl = ImGui::CollapsingHeader("Reflectance / Scattering", ImGuiTreeNodeFlags_DefaultOpen);
   ImGui::PopStyleColor(3);
   if (open_refl) {
-    changed |= spectrum_picker(scene, "Reflectance", material.reflectance.spectrum_index, false);
-    changed |= spectrum_picker(scene, "Scattering", material.scattering.spectrum_index, false);
+    changed |= spectrum_picker(scene, "Reflectance", material.reflectance.spectrum_index, false, false);
+    changed |= spectrum_picker(scene, "Scattering", material.scattering.spectrum_index, false, false);
+  }
+
+  ImGui::PushStyleColor(ImGuiCol_Header, sec_col[4]);
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[4], 0.04f));
+  ImGui::PushStyleColor(ImGuiCol_HeaderActive, brighten(sec_col[4], 0.08f));
+  bool open_emission = ImGui::CollapsingHeader("Emission", ImGuiTreeNodeFlags_DefaultOpen);
+  ImGui::PopStyleColor(3);
+  if (open_emission) {
+    ImGui::Text("Collimation");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    float collimation = material.emission_collimation;
+    if (ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
+      changed = true;
+    }
+
+    std::string preset_id = "material_emission_" + std::to_string(material.emission.spectrum_index);
+    changed |= emission_picker(scene, "Emission", preset_id.c_str(), material.emission.spectrum_index);
   }
 
   // Opacity
@@ -1534,13 +1881,7 @@ bool UI::build_material(Scene& scene, Material& material) {
   if (open_sss) {
     changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
     changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
-    changed |= spectrum_picker(scene, "Subsurface Distance", material.subsurface.spectrum_index, true);
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("%s", "Distance Scale:");
-    ImGui::SameLine();
-    ImGui::PushItemWidth(-FLT_MIN);
-    changed |= ImGui::InputFloat("##sssdist", &material.subsurface.scale);
-    ImGui::PopItemWidth();
+    changed |= spectrum_picker(scene, "Subsurface Distance", material.subsurface.spectrum_index, true, true);
   }
 
   ImGui::PushStyleColor(ImGuiCol_Header, sec_col[4]);
@@ -1621,14 +1962,14 @@ bool UI::build_medium(Scene& scene, Medium& m) {
 
   ImGui::Text("Absorption");
   ImGui::SetNextItemWidth(-FLT_MIN);
-  if (spectrum_picker(scene, "Absorption", m.absorption_index, true)) {
+  if (spectrum_picker(scene, "Absorption", m.absorption_index, true, true)) {
     changed = true;
     recompute_extinction = true;
   }
 
   ImGui::Text("Scattering");
   ImGui::SetNextItemWidth(-FLT_MIN);
-  if (spectrum_picker(scene, "Scattering", m.scattering_index, true)) {
+  if (spectrum_picker(scene, "Scattering", m.scattering_index, true, true)) {
     changed = true;
     recompute_extinction = true;
   }
@@ -1673,7 +2014,7 @@ void UI::reset_selection() {
   _selection = {};
   _selection_history.clear();
   _selection_history_cursor = -1;
-  _editor_values.clear();
+  _spectrum_editors.clear();
 }
 
 void UI::reload_geometry() {

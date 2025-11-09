@@ -36,6 +36,7 @@ struct SceneRepresentation {
   const MediumMapping& medium_mapping() const;
 
   uint32_t add_medium(const char* name = nullptr);
+  void rebuild_area_emitters();
 
   Camera& camera();
   const Camera& camera() const;

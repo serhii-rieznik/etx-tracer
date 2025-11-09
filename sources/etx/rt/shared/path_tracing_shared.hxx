@@ -70,7 +70,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
 
   if (mat.int_medium == kInvalidIndex) {
     auto color = apply_image(spect, mat.scattering, in_intersection.tex, scene, nullptr);
-    auto distances = mat.subsurface.scale * apply_image(spect, mat.subsurface, in_intersection.tex, scene, nullptr);
+    auto distances = apply_image(spect, mat.subsurface, in_intersection.tex, scene, nullptr);
     remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
     remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
   } else {

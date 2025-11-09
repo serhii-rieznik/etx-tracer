@@ -23,21 +23,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst,
   const auto& em = scene.emitter_profiles[em_inst.profile];
   ETX_ASSERT(em_inst.is_local());
 
-  switch (em.emission_direction) {
-    case EmitterProfile::Direction::Single: {
-      pdf_dir = max(0.0f, dot(emitter_normal, adirection)) * kInvPi;
-      break;
-    }
-    case EmitterProfile::Direction::TwoSided: {
-      pdf_dir = 0.5f * fabsf(dot(emitter_normal, adirection)) * kInvPi;
-      break;
-    }
-    case EmitterProfile::Direction::Omni: {
-      pdf_dir = kInvPi;
-      break;
-    }
-  }
-
+  pdf_dir = max(0.0f, dot(emitter_normal, adirection)) * kInvPi;
   if (pdf_dir <= 0.0f) {
     return {spect, 0.0f};
   }
@@ -95,7 +81,9 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const
 
     case EmitterProfile::Class::Area: {
       const auto& tri = scene.triangles[em_inst.triangle_index];
-      if ((em.emission_direction == EmitterProfile::Direction::Single) && (dot(tri.geo_n, query.target_position - query.source_position) >= 0.0f)) {
+      const Material& material = scene.materials[tri.material_index];
+
+      if (dot(tri.geo_n, query.target_position - query.source_position) >= 0.0f) {
         return {spect, 0.0f};
       }
       pdf_area = emitter_pdf_area_local(em_inst, scene);
@@ -103,17 +91,12 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const
       float3 dp = query.source_position - query.target_position;
       float distance_squared = dot(dp, dp);
       if (distance_squared > 0.0f) {
-        if (em.emission_direction == EmitterProfile::Direction::Omni) {
-          pdf_dir = pdf_area * distance_squared;
-          pdf_dir_out = pdf_area;
-        } else {
-          float cos_t = fabsf(dot(dp, tri.geo_n)) / sqrtf(distance_squared);
-          float exponent = collimation_to_exponent(em.collimation);
-          float cos_tx = query.directly_visible ? cos_t : powf(cos_t, exponent);
-          if (cos_tx > kEpsilon) {
-            pdf_dir = pdf_area * distance_squared / cos_tx;
-            pdf_dir_out = pdf_area * cos_tx * kInvPi;
-          }
+        float cos_t = fabsf(dot(dp, tri.geo_n)) / sqrtf(distance_squared);
+        float exponent = collimation_to_exponent(material.emission_collimation);
+        float cos_tx = query.directly_visible ? cos_t : powf(cos_t, exponent);
+        if (cos_tx > kEpsilon) {
+          pdf_dir = pdf_area * distance_squared / cos_tx;
+          pdf_dir_out = pdf_area * cos_tx * kInvPi;
         }
       }
 
@@ -289,39 +272,16 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
   switch (em_inst.cls) {
     case EmitterProfile::Class::Area: {
       const auto& tri = scene.triangles[em_inst.triangle_index];
+      const Material& material = scene.materials[tri.material_index];
 
       result.triangle_index = em_inst.triangle_index;
       result.barycentric = random_barycentric(smp.next_2d());
-      auto vertex = lerp_vertex(scene.vertices, tri, result.barycentric);
 
+      auto vertex = lerp_vertex(scene.vertices, tri, result.barycentric);
       result.origin = vertex.pos;
       result.normal = vertex.nrm;
-      switch (em.emission_direction) {
-        case EmitterProfile::Direction::Single: {
-          result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, collimation_to_exponent(em.collimation));
-          break;
-        }
-        case EmitterProfile::Direction::TwoSided: {
-          result.normal = (smp.next() > 0.5f) ? float3{-result.normal.x, -result.normal.y, -result.normal.z} : result.normal;
-          result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, collimation_to_exponent(em.collimation));
-          break;
-        }
-        case EmitterProfile::Direction::Omni: {
-          float theta = acosf(2.0f * smp.next() - 1.0f) - kHalfPi;
-          float phi = kDoublePi * smp.next();
-          float cos_theta = cosf(theta);
-          float sin_theta = sinf(theta);
-          float cos_phi = cosf(phi);
-          float sin_phi = sinf(phi);
-          result.normal = {cos_theta * cos_phi, sin_theta, cos_theta * sin_phi};
-          result.direction = result.normal;
-          break;
-        }
-        default:
-          ETX_FAIL("Invalid direction");
-      }
-      result.value = emitter_evaluate_out_local(em_inst, spect, vertex.tex, result.normal, result.direction,  //
-        result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);                                          //
+      result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, collimation_to_exponent(material.emission_collimation));
+      result.value = emitter_evaluate_out_local(em_inst, spect, vertex.tex, result.normal, result.direction, result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);
       break;
     }
 

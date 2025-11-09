@@ -1,6 +1,7 @@
 #pragma once
 
 #include <etx/render/shared/base.hxx>
+#include <string>
 
 namespace etx {
 
@@ -545,7 +546,8 @@ struct ETX_ALIGNED SpectralDistribution {
   static SpectralDistribution rgb_reflectance(const float3& rgb);
   static SpectralDistribution rgb_luminance(const float3& rgb);
 
-  static Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range);
+  static SpectralDistribution::Class load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range,
+    std::string* out_title = nullptr);
 
  private:
   friend struct RefractiveIndex;
@@ -557,7 +559,7 @@ struct RefractiveIndex {
   uint32_t eta_index = kInvalidIndex;
   uint32_t k_index = kInvalidIndex;
 
-  static SpectralDistribution::Class load_from_file(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k);
+  static SpectralDistribution::Class load_from_file(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k, std::string* out_title = nullptr);
 
   struct Sample : public SpectralQuery {
     SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;

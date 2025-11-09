@@ -25,6 +25,7 @@
 #include <set>
 #include <algorithm>
 #include <cstring>
+#include <initializer_list>
 
 #include <mikktspace.h>
 #include <tiny_obj_loader.hxx>
@@ -119,6 +120,72 @@ struct SceneRepresentationImpl {
     return false;
   }
 
+  std::filesystem::path locate_spectrum_file(const char* identifier, std::initializer_list<const char*> fallback_folders) const {
+    if ((identifier == nullptr) || (identifier[0] == 0))
+      return {};
+
+    std::filesystem::path requested(identifier);
+    if (requested.has_extension() == false)
+      requested.replace_extension(".spd");
+
+    std::error_code ec;
+    if (requested.is_absolute()) {
+      if (std::filesystem::exists(requested, ec))
+        return requested;
+      return {};
+    }
+
+    std::filesystem::path data_root = std::filesystem::path(env().data_folder()) / "spectrum";
+
+    std::filesystem::path combined = data_root / requested;
+    if (std::filesystem::exists(combined, ec))
+      return combined;
+
+    for (const char* folder : fallback_folders) {
+      std::filesystem::path candidate = data_root / folder / requested.filename();
+      if (std::filesystem::exists(candidate, ec))
+        return candidate;
+    }
+
+    return {};
+  }
+
+  bool load_ior_from_identifier(const char* identifier, SpectralDistribution& eta, SpectralDistribution& k, SpectralDistribution::Class& cls) const {
+    if ((identifier == nullptr) || (identifier[0] == 0))
+      return false;
+
+    if (const IORDefinition* def = ior_database.find_by_name(identifier)) {
+      cls = def->cls;
+      eta = def->eta;
+      k = def->k;
+      return true;
+    }
+
+    std::filesystem::path candidate = locate_spectrum_file(identifier, {"conductor", "dielectric"});
+    if (candidate.empty())
+      return false;
+
+    cls = RefractiveIndex::load_from_file(candidate.string().c_str(), eta, k);
+    return cls != SpectralDistribution::Class::Invalid;
+  }
+
+  bool load_illuminant_from_identifier(const char* identifier, SpectralDistribution& spd) const {
+    if ((identifier == nullptr) || (identifier[0] == 0))
+      return false;
+
+    if (const IORDefinition* def = ior_database.find_by_name(identifier, SpectralDistribution::Class::Illuminant)) {
+      spd = def->eta;
+      return true;
+    }
+
+    std::filesystem::path candidate = locate_spectrum_file(identifier, {"emission"});
+    if (candidate.empty())
+      return false;
+
+    auto cls = SpectralDistribution::load_from_file(candidate.string().c_str(), spd, nullptr, false);
+    return cls != SpectralDistribution::Class::Invalid;
+  }
+
   SceneRepresentationImpl(TaskScheduler& s, const IORDatabase& db)
     : scheduler(s)
     , context(s)
@@ -202,6 +269,9 @@ struct SceneRepresentationImpl {
       }
       if (mtl.subsurface.spectrum_index == kInvalidIndex) {
         mtl.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
+      }
+      if (mtl.emission.spectrum_index == kInvalidIndex) {
+        mtl.emission.spectrum_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
       }
       if ((mtl.roughness.value.x > 0.0f) || (mtl.roughness.value.y > 0.0f)) {
         constexpr float kEpsilon = 1e-6f;
@@ -348,6 +418,8 @@ struct SceneRepresentationImpl {
   }
 
   void commit(bool spectral) {
+    log::warning("Instancing area emitters...");
+
     log::warning("Building pixel sampler...");
     std::vector<float4> sampler_image;
     Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
@@ -370,17 +442,14 @@ struct SceneRepresentationImpl {
     scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
     scene.vertices = {data.vertices.data(), data.vertices.size()};
     scene.triangles = {data.triangles.data(), data.triangles.size()};
-    scene.triangle_to_emitter = {data.triangle_to_emitter.data(), data.triangle_to_emitter.size()};
     scene.materials = {data.materials.data(), data.materials.size()};
-    scene.emitter_profiles = {data.emitter_profiles.data(), data.emitter_profiles.size()};
-    scene.emitter_instances = {data.emitter_instances.data(), data.emitter_instances.size()};
     scene.spectrums = {data.spectrum_values.data(), data.spectrum_values.size()};
     scene.images = {context.images.as_array(), context.images.array_size()};
     scene.mediums = {context.mediums.as_array(), context.mediums.array_size()};
-    scene.environment_emitters.count = 0;
-    scene.flags = Scene::Committed | (spectral ? Scene::Spectral : 0u);
 
-    build_emitters_distribution(scene);
+    rebuild_area_emitters();
+
+    scene.flags = Scene::Committed | (spectral ? Scene::Spectral : 0u);
   }
 
   float2 make_float2(const float values[]) {
@@ -433,14 +502,14 @@ struct SceneRepresentationImpl {
     auto params = split_params(values);
 
     if (params.size() == 1) {
-      float parsed_value = 0.0f;
-      if (sscanf(params[0], "%f", &parsed_value) == 1) {
-        return SpectralDistribution::rgb_luminance({parsed_value, parsed_value, parsed_value});
+      float value = 0.0f;
+      if (sscanf(params[0], "%f", &value) == 1) {
+        return SpectralDistribution::rgb_luminance({value, value, value});
       }
 
-      uint32_t index = data.find_spectrum(params[0]);
-      if (index != kInvalidIndex)
-        return data.spectrum_values[index];
+      auto i = data.find_spectrum(params[0]);
+      if (i != kInvalidIndex)
+        return data.spectrum_values[i];
     }
 
     if (params.size() == 3) {
@@ -480,7 +549,9 @@ struct SceneRepresentationImpl {
     LoadCameraInfo = 1u << 1u,
   };
 
-  void add_area_emitter(const Triangle& tri);
+  void add_area_emitters_for_triangle(uint32_t triangle_index);
+  void populate_area_emitters();
+  void rebuild_area_emitters();
 
   uint32_t load_from_obj(const char* file_name, const char* mtl_file);
 
@@ -577,6 +648,10 @@ uint32_t SceneRepresentation::add_medium(const char* name) {
   uint32_t handle = _private->context.add_medium(_private->scene, _private->data, Medium::Class::Homogeneous, name, nullptr, null_spectrum, null_spectrum, 0.0f, true);
   _private->scene.mediums = {_private->context.mediums.as_array(), _private->context.mediums.array_size()};
   return handle;
+}
+
+void SceneRepresentation::rebuild_area_emitters() {
+  _private->rebuild_area_emitters();
 }
 
 Camera& SceneRepresentation::camera() {
@@ -762,49 +837,24 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
   return true;
 }
 
-void SceneRepresentationImpl::add_area_emitter(const Triangle& tri) {
+void SceneRepresentationImpl::add_area_emitters_for_triangle(uint32_t triangle_index) {
+  if (triangle_index >= data.triangles.size())
+    return;
+
+  const auto& tri = data.triangles[triangle_index];
   uint32_t material_index = tri.material_index;
-  auto& mtl = data.materials[material_index];
-
-  SceneData::EmitterDefinition emitter_def = {};
-  const SceneData::EmitterDefinition* pending_definition = nullptr;
-  const EmitterProfile* profile = nullptr;
-
-  auto pending_it = data.material_emission_data.find(material_index);
-  if (pending_it != data.material_emission_data.end()) {
-    emitter_def = pending_it->second;
-    pending_definition = &emitter_def;
-  }
-
-  auto profile_it = data.material_to_emitter_profile.find(material_index);
-  if (profile_it != data.material_to_emitter_profile.end()) {
-    profile = &data.emitter_profiles[profile_it->second];
-  }
-
-  const SpectralImage& emission_data = pending_definition ? pending_definition->emission : (profile ? profile->emission : SpectralImage{});
-  if (emission_data.spectrum_index == kInvalidIndex)
-    return;
-  if (emission_data.spectrum_index >= data.spectrum_values.size())
+  if (material_index >= data.materials.size())
     return;
 
-  EmitterProfile::Direction direction = pending_definition ? pending_definition->direction : (profile ? profile->emission_direction : EmitterProfile::Direction::Single);
-  float collimation = pending_definition ? pending_definition->collimation : (profile ? profile->collimation : 0.0f);
-
-  float power_scale = 1.0f;
-  switch (direction) {
-    case EmitterProfile::Direction::TwoSided:
-      power_scale = 2.0f;
-      break;
-    case EmitterProfile::Direction::Omni:
-      power_scale = 4.0f * kPi;
-      break;
-    default:
-      break;
-  }
+  const auto& mtl = data.materials[material_index];
+  if (mtl.emission.spectrum_index == kInvalidIndex)
+    return;
+  if (mtl.emission.spectrum_index >= data.spectrum_values.size())
+    return;
 
   float texture_emission = 1.0f;
-  if (emission_data.image_index != kInvalidIndex) {
-    const auto& img = context.images.get(emission_data.image_index);
+  if (mtl.emission.image_index != kInvalidIndex) {
+    const auto& img = context.images.get(mtl.emission.image_index);
     constexpr float kBCScale = 4.0f;
     auto min_uv = min(data.vertices[tri.i[0]].tex, min(data.vertices[tri.i[1]].tex, data.vertices[tri.i[2]].tex));
     auto max_uv = max(data.vertices[tri.i[0]].tex, max(data.vertices[tri.i[1]].tex, data.vertices[tri.i[2]].tex));
@@ -822,27 +872,93 @@ void SceneRepresentationImpl::add_area_emitter(const Triangle& tri) {
   }
 
   float tri_area = triangle_area(tri);
-  float spectrum_weight = data.spectrum_values[emission_data.spectrum_index].luminance();
-  float additional_weight = power_scale * (tri_area * kPi) * texture_emission;
+  float spectrum_weight = data.spectrum_values[mtl.emission.spectrum_index].luminance();
+  float additional_weight = (mtl.two_sided ? 2.0f : 1.0f) * (tri_area * kPi) * texture_emission;
   if ((additional_weight <= 0.0f) || (spectrum_weight <= 0.0f))
     return;
 
-  if (profile == nullptr) {
-    uint32_t new_profile_index = uint32_t(data.emitter_profiles.size());
-    auto& new_profile = data.emitter_profiles.emplace_back(EmitterProfile::Class::Area);
-    new_profile.emission = emission_data;
-    new_profile.emission_direction = direction;
-    new_profile.collimation = collimation;
-    data.material_to_emitter_profile[material_index] = new_profile_index;
-    profile = &new_profile;
-    data.material_emission_data.erase(material_index);
+  uint32_t profile_index = kInvalidIndex;
+  auto mapping_it = data.material_to_emitter_profile.find(material_index);
+  if (mapping_it != data.material_to_emitter_profile.end()) {
+    profile_index = mapping_it->second;
+  } else {
+    profile_index = static_cast<uint32_t>(data.emitter_profiles.size());
+    data.material_to_emitter_profile[material_index] = profile_index;
+    data.emitter_profiles.emplace_back(EmitterProfile::Class::Area);
   }
 
-  auto& e = data.emitter_instances.emplace_back(EmitterProfile::Class::Area);
-  e.profile = data.material_to_emitter_profile[material_index];
-  e.additional_weight = additional_weight;
-  e.triangle_index = static_cast<uint32_t>(data.triangles.size() - 1llu);
-  e.triangle_area = tri_area;
+  ETX_ASSERT(profile_index < data.emitter_profiles.size());
+  auto& profile = data.emitter_profiles[profile_index];
+  profile.emission = mtl.emission;
+
+  uint32_t emitter_index = static_cast<uint32_t>(data.emitter_instances.size());
+  auto& emitter = data.emitter_instances.emplace_back(EmitterProfile::Class::Area);
+  emitter.profile = profile_index;
+  emitter.triangle_index = triangle_index;
+  emitter.triangle_area = tri_area;
+  emitter.additional_weight = additional_weight;
+  emitter.spectrum_weight = spectrum_weight;
+
+  if (triangle_index < data.triangle_to_emitter.size()) {
+    data.triangle_to_emitter[triangle_index] = emitter_index;
+  }
+}
+
+void SceneRepresentationImpl::populate_area_emitters() {
+  std::unordered_map<uint32_t, uint32_t> profile_remap;
+  std::vector<EmitterProfile> preserved_profiles;
+  preserved_profiles.reserve(data.emitter_profiles.size());
+  for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
+    const auto& profile = data.emitter_profiles[i];
+    if (profile.cls != EmitterProfile::Class::Area) {
+      uint32_t new_index = static_cast<uint32_t>(preserved_profiles.size());
+      profile_remap[i] = new_index;
+      preserved_profiles.emplace_back(profile);
+    }
+  }
+
+  std::vector<Emitter> preserved_instances;
+  preserved_instances.reserve(data.emitter_instances.size());
+  for (const auto& emitter : data.emitter_instances) {
+    if (emitter.cls != EmitterProfile::Class::Area) {
+      auto remap = profile_remap.find(emitter.profile);
+      ETX_CRITICAL(remap != profile_remap.end());
+      auto copy = emitter;
+      copy.profile = remap->second;
+      preserved_instances.emplace_back(copy);
+    }
+  }
+
+  data.emitter_profiles = std::move(preserved_profiles);
+  data.emitter_instances = std::move(preserved_instances);
+
+  data.triangle_to_emitter.resize(data.triangles.size(), kInvalidIndex);
+  std::fill(data.triangle_to_emitter.begin(), data.triangle_to_emitter.end(), kInvalidIndex);
+
+  for (auto it = data.material_to_emitter_profile.begin(); it != data.material_to_emitter_profile.end();) {
+    uint32_t profile_index = it->second;
+    auto remap_it = profile_remap.find(profile_index);
+    if (remap_it == profile_remap.end()) {
+      it = data.material_to_emitter_profile.erase(it);
+    } else {
+      it->second = remap_it->second;
+      ++it;
+    }
+  }
+
+  context.images.load_images();
+
+  for (uint32_t tri_index = 0; tri_index < data.triangles.size(); ++tri_index) {
+    add_area_emitters_for_triangle(tri_index);
+  }
+}
+
+void SceneRepresentationImpl::rebuild_area_emitters() {
+  populate_area_emitters();
+  scene.triangle_to_emitter = {data.triangle_to_emitter.data(), data.triangle_to_emitter.size()};
+  scene.emitter_profiles = {data.emitter_profiles.data(), data.emitter_profiles.size()};
+  scene.emitter_instances = {data.emitter_instances.data(), data.emitter_instances.size()};
+  build_emitters_distribution(scene);
 }
 
 uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const char* mtl_file) {
@@ -916,8 +1032,6 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       if (validate_triangle(tri) == false) {
         triangles.pop_back();
       }
-
-      add_area_emitter(tri);
 
       // TODO : deal with bounds!
       shape_bbox_max = max(shape_bbox_max, vertices[tri.i[0]].pos);
@@ -1574,37 +1688,14 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
 
   auto& mtl = data.materials[material_index];
 
-  SceneData::EmitterDefinition emitter_def = {};
-  bool emitter_def_valid = false;
-
-  auto copy_emitter_from_material = [&](uint32_t source_index) {
-    auto pending_it = data.material_emission_data.find(source_index);
-    if (pending_it != data.material_emission_data.end()) {
-      emitter_def = pending_it->second;
-      emitter_def_valid = true;
-      return;
-    }
-    auto profile_it = data.material_to_emitter_profile.find(source_index);
-    if (profile_it != data.material_to_emitter_profile.end()) {
-      const auto& profile = data.emitter_profiles[profile_it->second];
-      emitter_def.emission = profile.emission;
-      emitter_def.direction = profile.emission_direction;
-      emitter_def.collimation = profile.collimation;
-      emitter_def_valid = true;
-    }
-  };
-
-  copy_emitter_from_material(material_index);
-
   mtl.cls = Material::Class::Diffuse;
+  mtl.emission = {};
+  mtl.emission_collimation = 0.0f;
 
   if (get_param(material, "base")) {
     auto i = material_mapping.find(data_buffer);
     if (i != material_mapping.end()) {
       mtl = data.materials[i->second];
-      emitter_def = {};
-      emitter_def_valid = false;
-      copy_emitter_from_material(i->second);
     }
   }
 
@@ -1750,14 +1841,30 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       target.eta_index = data.add_spectrum(SpectralDistribution::constant(values.x));
       target.k_index = data.add_spectrum(SpectralDistribution::constant(values.y));
     } else {
-      char buffer[1024] = {};
-      snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), data_buffer);
       SpectralDistribution eta_spd = {};
       SpectralDistribution k_spd = {};
-      auto cls = RefractiveIndex::load_from_file(buffer, eta_spd, k_spd);
+      SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
+      if (load_ior_from_identifier(data_buffer, eta_spd, k_spd, cls) == false) {
+        std::filesystem::path fallback = locate_spectrum_file(data_buffer, {});
+        if (fallback.empty() == false) {
+          cls = RefractiveIndex::load_from_file(fallback.string().c_str(), eta_spd, k_spd);
+        }
+      }
+
+      if (cls == SpectralDistribution::Class::Invalid) {
+        log::warning("Unable to load IOR spectrum `%s`, falling back to 1.5 dielectric", data_buffer);
+        cls = SpectralDistribution::Class::Dielectric;
+        eta_spd = SpectralDistribution::constant(1.5f);
+        k_spd = SpectralDistribution::constant(0.0f);
+      }
+
       target.cls = cls;
       target.eta_index = data.add_spectrum(eta_spd);
-      target.k_index = k_spd.empty() ? data.add_spectrum(SpectralDistribution::constant(0.0f)) : data.add_spectrum(k_spd);
+      if (cls == SpectralDistribution::Class::Conductor) {
+        target.k_index = data.add_spectrum(k_spd);
+      } else {
+        target.k_index = k_spd.empty() ? data.add_spectrum(SpectralDistribution::constant(0.0f)) : data.add_spectrum(k_spd);
+      }
     }
   };
 
@@ -1833,14 +1940,30 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
           mtl.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(value));
           mtl.thinfilm.ior.k_index = kInvalidIndex;
         } else {
-          char buffer[256] = {};
-          snprintf(buffer, sizeof(buffer), "%sspectrum/%s.spd", env().data_folder(), params[i + 1]);
           SpectralDistribution eta_spd = {};
           SpectralDistribution k_spd = {};
-          auto cls = RefractiveIndex::load_from_file(buffer, eta_spd, k_spd);
+          SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
+          if (load_ior_from_identifier(params[i + 1], eta_spd, k_spd, cls) == false) {
+            std::filesystem::path fallback = locate_spectrum_file(params[i + 1], {});
+            if (fallback.empty() == false) {
+              cls = RefractiveIndex::load_from_file(fallback.string().c_str(), eta_spd, k_spd);
+            }
+          }
+
+          if (cls == SpectralDistribution::Class::Invalid) {
+            log::warning("Unable to load thinfilm IOR `%s`, using dielectric 1.5", params[i + 1]);
+            cls = SpectralDistribution::Class::Dielectric;
+            eta_spd = SpectralDistribution::constant(1.5f);
+            k_spd = SpectralDistribution::constant(0.0f);
+          }
+
           mtl.thinfilm.ior.cls = cls;
           mtl.thinfilm.ior.eta_index = data.add_spectrum(eta_spd);
-          mtl.thinfilm.ior.k_index = (k_spd.empty() ? kInvalidIndex : data.add_spectrum(k_spd));
+          if (cls == SpectralDistribution::Class::Conductor) {
+            mtl.thinfilm.ior.k_index = data.add_spectrum(k_spd);
+          } else {
+            mtl.thinfilm.ior.k_index = k_spd.empty() ? kInvalidIndex : data.add_spectrum(k_spd);
+          }
         }
       }
     }
@@ -1849,6 +1972,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
   if (get_param(material, "subsurface")) {
     mtl.subsurface.cls = SubsurfaceMaterial::Class::RandomWalk;
 
+    float subsurface_scale = 1.0f;
     float3 scattering_distances = {1.0f, 0.2f, 0.04f};
 
     auto params = split_params(data_buffer);
@@ -1866,7 +1990,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       }
 
       if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
-        mtl.subsurface.scale = static_cast<float>(atof(params[i + 1]));
+        subsurface_scale = static_cast<float>(atof(params[i + 1]));
         i += 1;
       }
 
@@ -1879,18 +2003,22 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     }
 
     mtl.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance(scattering_distances));
+    data.spectrum_values[mtl.subsurface.spectrum_index].scale(subsurface_scale);
   }
 
   SpectralDistribution emission_spd = SpectralDistribution::null();
   float pending_scale = 1.0f;
   bool is_emitter = false;
 
+  bool emission_spd_defined = false;
+  float collimation = mtl.emission_collimation;
+
   if (get_param(material, "Ke")) {
     is_emitter = true;
     emission_spd = load_illuminant_spectrum(data_buffer);
+    emission_spd_defined = true;
     if (get_file(base_dir, material.emissive_texname)) {
-      emitter_def.emission.image_index = context.add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
-      emitter_def_valid = true;
+      mtl.emission.image_index = context.add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
     }
   }
 
@@ -1899,14 +2027,11 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     auto params = split_params(data_buffer);
     for (uint64_t i = 0, end = params.size(); i < end; ++i) {
       if ((strcmp(params[i], "image") == 0) && (i + 1 < end) && get_file(base_dir, params[i + 1])) {
-        emitter_def.emission.image_index = context.add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
-        emitter_def_valid = true;
+        mtl.emission.image_index = context.add_image(data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       } else if (strcmp(params[i], "twosided") == 0) {
-        emitter_def.direction = EmitterProfile::Direction::TwoSided;
-      } else if (strcmp(params[i], "omni") == 0) {
-        emitter_def.direction = EmitterProfile::Direction::Omni;
+        mtl.two_sided = 1u;
       } else if ((strcmp(params[i], "collimated") == 0) && (i + 1 < end)) {
-        emitter_def.collimation = static_cast<float>(atof(params[i + 1]));
+        collimation = static_cast<float>(atof(params[i + 1]));
         i += 1;
       } else if ((strcmp(params[i], "color") == 0) && (i + 3 < end)) {
         float3 value = {
@@ -1915,12 +2040,15 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
           static_cast<float>(atof(params[i + 3])),
         };
         emission_spd = SpectralDistribution::rgb_luminance(value);
+        emission_spd_defined = true;
         i += 3;
       } else if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < end)) {
         emission_spd = SpectralDistribution::from_black_body(static_cast<float>(atof(params[i + 1])), 1.0f);
+        emission_spd_defined = true;
         i += 1;
       } else if ((strcmp(params[i], "nblackbody") == 0) && (i + 1 < end)) {
         emission_spd = SpectralDistribution::from_normalized_black_body(static_cast<float>(atof(params[i + 1])), 1.0f);
+        emission_spd_defined = true;
         i += 1;
       } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < end)) {
         pending_scale *= static_cast<float>(atof(params[i + 1]));
@@ -1932,24 +2060,28 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
         if (cls != SpectralDistribution::Class::Illuminant) {
           log::warning("Spectrum %s is not illuminant", buffer);
         }
+        emission_spd_defined = true;
       }
     }
-    emitter_def.collimation = saturate(emitter_def.collimation);
-    emitter_def_valid = true;
+    collimation = saturate(collimation);
   }
 
   if (is_emitter) {
     emission_spd.scale(pending_scale);
-    if (emission_spd.luminance() > 0.0f) {
-      emitter_def.emission.spectrum_index = data.add_spectrum(emission_spd);
-      emitter_def_valid = true;
+    mtl.emission_collimation = collimation;
+    if (emission_spd_defined && (emission_spd.luminance() > 0.0f)) {
+      mtl.emission.spectrum_index = data.add_spectrum(emission_spd);
+    } else if (emission_spd_defined == false && mtl.emission.spectrum_index != kInvalidIndex) {
+      // keep existing spectrum (e.g. inherited from base)
+    } else {
+      mtl.emission.spectrum_index = kInvalidIndex;
     }
-  }
-
-  if (emitter_def_valid && (emitter_def.emission.spectrum_index != kInvalidIndex)) {
-    data.material_emission_data[material_index] = emitter_def;
-  } else {
-    data.material_emission_data.erase(material_index);
+    if (mtl.emission.spectrum_index == kInvalidIndex) {
+      mtl.emission.image_index = kInvalidIndex;
+    }
+  } else if (mtl.emission.spectrum_index == kInvalidIndex) {
+    mtl.emission.image_index = kInvalidIndex;
+    mtl.emission_collimation = 0.0f;
   }
 }
 
@@ -2126,6 +2258,8 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
     mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.5f));
     mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
     mtl.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
+    mtl.emission = {};
+    mtl.emission_collimation = 0.0f;
 
     float3 rgb = {1.0f, 1.0f, 1.0f};
     const auto& base_color = material.pbrMetallicRoughness.baseColorFactor;
@@ -2170,13 +2304,14 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
           }
         }
 
-        SceneData::EmitterDefinition& emitter_entry = data.material_emission_data[material_index];
-        emitter_entry.emission.spectrum_index = data.add_spectrum(spd);
-        emitter_entry.direction = EmitterProfile::Direction::Single;
-        emitter_entry.collimation = 0.0f;
+        mtl.emission.spectrum_index = data.add_spectrum(spd);
+        mtl.emission_collimation = 0.0f;
         if ((material.emissiveTexture.index != -1) && (data.gltf_image_mapping.count(material.emissiveTexture.index) > 0)) {
-          emitter_entry.emission.image_index = data.gltf_image_mapping.at(material.emissiveTexture.index);
+          mtl.emission.image_index = data.gltf_image_mapping.at(material.emissiveTexture.index);
         }
+      } else {
+        mtl.emission.spectrum_index = kInvalidIndex;
+        mtl.emission.image_index = kInvalidIndex;
       }
 
       for (const auto& ext : material.extensions) {
@@ -2223,8 +2358,7 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
     if (has_positions == false)
       continue;
 
-    bool valid_material = (primitive.material >= 0) && (primitive.material < model.materials.size());
-    uint32_t material_index = valid_material ? static_cast<uint32_t>(primitive.material) : 0;
+    uint32_t material_index = (primitive.material >= 0) && (primitive.material < static_cast<int>(model.materials.size())) ? static_cast<uint32_t>(primitive.material) : 0;
 
     const tinygltf::Accessor& pos_accessor = model.accessors[primitive.attributes.find("POSITION")->second];
     const tinygltf::BufferView& pos_buffer_view = model.bufferViews[pos_accessor.bufferView];
@@ -2318,10 +2452,6 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
         vertices[vertices.size() - 1u].nrm = tri.geo_n;
         vertices[vertices.size() - 2u].nrm = tri.geo_n;
         vertices[vertices.size() - 3u].nrm = tri.geo_n;
-      }
-
-      if (valid_material) {
-        add_area_emitter(tri);
       }
     }
   }
@@ -2538,23 +2668,6 @@ std::string SceneRepresentation::save_to_file(const char* filename) {
       value = linear_to_gamma(value);
     }
     stream << label << " " << value.x << " " << value.y << " " << value.z << "\n";
-  };
-
-  auto resolve_emitter_definition = [&](uint32_t material_index, SceneData::EmitterDefinition& out) -> bool {
-    auto profile_it = impl->data.material_to_emitter_profile.find(material_index);
-    if (profile_it != impl->data.material_to_emitter_profile.end()) {
-      const auto& profile = impl->data.emitter_profiles[profile_it->second];
-      out.emission = profile.emission;
-      out.direction = profile.emission_direction;
-      out.collimation = profile.collimation;
-      return true;
-    }
-    auto pending_it = impl->data.material_emission_data.find(material_index);
-    if (pending_it != impl->data.material_emission_data.end()) {
-      out = pending_it->second;
-      return true;
-    }
-    return false;
   };
 
   std::ostringstream materials_stream;
@@ -2789,29 +2902,25 @@ std::string SceneRepresentation::save_to_file(const char* filename) {
       materials_stream << "diffuse " << material.diffuse_variation << "\n";
     }
 
-    SceneData::EmitterDefinition emitter_info = {};
-    bool has_emitter = resolve_emitter_definition(index, emitter_info);
-    bool has_emission_texture = (has_emitter && (emitter_info.emission.image_index != kInvalidIndex));
-    bool has_emission_spectrum = (has_emitter && (emitter_info.emission.spectrum_index != kInvalidIndex));
+    bool has_emission_texture = (material.emission.image_index != kInvalidIndex);
+    bool has_emission_spectrum = (material.emission.spectrum_index != kInvalidIndex) && (material.emission.spectrum_index < impl->data.spectrum_values.size());
     if (has_emission_texture || has_emission_spectrum) {
       materials_stream << "emitter";
       if (has_emission_texture) {
-        std::string emission_path = texture_path(emitter_info.emission.image_index);
+        std::string emission_path = texture_path(material.emission.image_index);
         if (emission_path.empty() == false) {
           materials_stream << " image " << emission_path;
         }
       }
       if (has_emission_spectrum) {
-        float3 emission_value = spectrum_rgb(emitter_info.emission.spectrum_index);
+        float3 emission_value = spectrum_rgb(material.emission.spectrum_index);
         materials_stream << " color " << emission_value.x << " " << emission_value.y << " " << emission_value.z;
       }
-      if (emitter_info.direction == EmitterProfile::Direction::TwoSided) {
+      if (material.two_sided != 0u) {
         materials_stream << " twosided";
-      } else if (emitter_info.direction == EmitterProfile::Direction::Omni) {
-        materials_stream << " omni";
       }
-      if (emitter_info.collimation >= kEpsilon) {
-        materials_stream << " collimated " << emitter_info.collimation;
+      if (material.emission_collimation >= kEpsilon) {
+        materials_stream << " collimated " << material.emission_collimation;
       }
       materials_stream << "\n";
     }
@@ -2826,9 +2935,6 @@ std::string SceneRepresentation::save_to_file(const char* filename) {
       }
       float3 subsurface_color = spectrum_rgb(material.subsurface.spectrum_index);
       materials_stream << " distances " << subsurface_color.x << " " << subsurface_color.y << " " << subsurface_color.z;
-      if (std::fabs(material.subsurface.scale - 1.0f) >= kEpsilon) {
-        materials_stream << " scale " << material.subsurface.scale;
-      }
       materials_stream << "\n";
     }
 

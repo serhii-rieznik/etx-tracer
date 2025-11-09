@@ -13,17 +13,9 @@ struct ETX_ALIGNED EmitterProfile {
     Undefined = kInvalidIndex,
   };
 
-  enum class Direction : uint32_t {
-    Single,
-    TwoSided,
-    Omni,
-  };
-
   SpectralImage emission = {};
   float3 direction = {};
   Class cls = Class::Undefined;
-  Direction emission_direction = Direction::Single;
-  float collimation = 0.0f;
   float angular_size = 0.0f;
   float equivalent_disk_size = 0.0f;
   float angular_size_cosine = 1.0f;

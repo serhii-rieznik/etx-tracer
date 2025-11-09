@@ -20,12 +20,6 @@ struct SceneData {
 
   using MaterialMapping = std::unordered_map<std::string, uint32_t>;
 
-  struct EmitterDefinition {
-    SpectralImage emission;
-    EmitterProfile::Direction direction = EmitterProfile::Direction::Single;
-    float collimation = 0.0f;
-  };
-
   std::vector<Vertex> vertices;
   std::vector<Triangle> triangles;
   std::vector<uint32_t> triangle_to_emitter;
@@ -43,7 +37,6 @@ struct SceneData {
   Image atmosphere_extinction;
 
   MaterialMapping material_mapping;
-  std::unordered_map<uint32_t, EmitterDefinition> material_emission_data;
   std::unordered_map<uint32_t, uint32_t> material_to_emitter_profile;
   std::unordered_map<uint32_t, uint32_t> gltf_image_mapping;
 

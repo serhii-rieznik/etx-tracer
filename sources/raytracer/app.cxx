@@ -348,26 +348,25 @@ void RTApplication::on_options_changed() {
 }
 
 void RTApplication::on_material_changed(uint32_t index) {
-  // TODO : re-upload to GPU
+  integrator_thread.stop(Integrator::Stop::Immediate);
+  scene.rebuild_area_emitters();
   integrator_thread.restart();
 }
 
 void RTApplication::on_medium_added() {
+  integrator_thread.stop(Integrator::Stop::Immediate);
   scene.add_medium(nullptr);
   integrator_thread.restart();
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
-  // TODO : re-upload to GPU
   integrator_thread.restart();
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
-  // TODO : re-upload to GPU
   integrator_thread.stop(Integrator::Stop::Immediate);
-
-  build_emitters_distribution(scene.mutable_scene());
-  integrator_thread.run();
+  scene.rebuild_area_emitters();
+  integrator_thread.restart();
 }
 
 void RTApplication::on_camera_changed(bool film_changed) {

@@ -54,7 +54,7 @@ ETX_GPU_CODE float sample_s_r(float rnd) {
 }
 
 ETX_GPU_CODE SpectralResponse evaluate(const SpectralQuery spect, const Scene& scene, const Intersection& data, const SubsurfaceMaterial& m, float radius) {
-  auto sd = apply_image(spect, m, data.tex, scene, nullptr) * m.scale;
+  auto sd = apply_image(spect, m, data.tex, scene, nullptr);
   ETX_VALIDATE(sd);
 
   radius = fmaxf(radius, kEpsilon);
@@ -89,7 +89,7 @@ struct Sample {
 ETX_GPU_CODE Sample sample(SpectralQuery spect, const Scene& scene, const Vertex& data, const SubsurfaceMaterial& mtl, const uint32_t direction, Sampler& smp) {
   SpectralResponse sampled_distance = apply_image(spect, mtl, data.tex, scene, nullptr);
   uint32_t channel = uint32_t(sampled_distance.component_count() * smp.next());
-  float scattering_distance = mtl.scale * sampled_distance.component(channel);
+  float scattering_distance = sampled_distance.component(channel);
   if (scattering_distance == 0.0f)
     return {};
 

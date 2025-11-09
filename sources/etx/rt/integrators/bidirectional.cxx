@@ -727,7 +727,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
     const auto& mat = scene.materials[subsurface_material];
     auto color = apply_image(payload.spect, mat.scattering, intersection.tex, scene, nullptr);
-    auto distances = mat.subsurface.scale * apply_image(payload.spect, mat.subsurface, intersection.tex, scene, nullptr);
+    auto distances = apply_image(payload.spect, mat.subsurface, intersection.tex, scene, nullptr);
 
     SpectralResponse extinction = {payload.spect};
     SpectralResponse scattering = {payload.spect};
@@ -757,7 +757,7 @@ struct CPUBidirectionalImpl : public Task {
 
     if (mat.int_medium == kInvalidIndex) {
       auto color = apply_image(payload.spect, mat.scattering, intersection.tex, scene, nullptr);
-      auto distances = mat.subsurface.scale * apply_image(payload.spect, mat.subsurface, intersection.tex, scene, nullptr);
+      auto distances = apply_image(payload.spect, mat.subsurface, intersection.tex, scene, nullptr);
       subsurface::remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
       subsurface::remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
       medium_instance = {.extinction = extinction, .index = kInvalidIndex};
