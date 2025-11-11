@@ -12,7 +12,7 @@
       "description": "Scene",
       "id": "scene",
       "meta": 0,
-      "value": "assets/cornellbox/cornellbox.etx.json"
+      "value": "./assets/cornellbox/cornellbox.etx.json"
     },
     {
       "class": 5,
@@ -33,7 +33,7 @@
       "description": "Recent File",
       "id": "recent-1",
       "meta": 0,
-      "value": "assets/cornellbox/cornellbox.etx.json"
+      "value": "./assets/cornellbox/cornellbox.etx.json"
     }
   ]
 }
