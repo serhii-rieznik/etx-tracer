@@ -14,12 +14,12 @@ struct ETX_ALIGNED Distribution {
   float total_weight ETX_EMPTY_INIT;
 
   ETX_GPU_CODE uint32_t sample(float rnd, float& pdf) const {
-    auto index = find(rnd);
+    auto index = sample(rnd);
     pdf = values[index].pdf;
     return index;
   }
 
-  ETX_GPU_CODE uint32_t find(float rnd) const {
+  ETX_GPU_CODE uint32_t sample(float rnd) const {
     uint32_t b = 0;
     uint32_t e = static_cast<uint32_t>(values.count);
     do {

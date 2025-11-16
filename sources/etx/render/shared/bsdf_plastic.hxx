@@ -1,167 +1,157 @@
-﻿namespace etx {
-
-namespace DeltaPlasticBSDF {
-
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame();
-
-  auto eta_e = mtl.ext_ior(data.spectrum_sample);
-  auto eta_i = mtl.int_ior(data.spectrum_sample);
-
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  auto fr = fresnel::dielectric(data.spectrum_sample, data.w_i, frame.nrm, eta_e, eta_i, thinfilm);
-  auto f = fr.monochromatic();
-
-  bool reflection = smp.next() <= f;
-
-  BSDFSample result;
-  if (reflection) {
-    result.w_o = normalize(reflect(data.w_i, frame.nrm));
-    result.properties = BSDFSample::Reflection;
-  } else {
-    result.w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
-    result.properties = BSDFSample::Diffuse | BSDFSample::Reflection;
-  }
-
-  float n_dot_o = dot(frame.nrm, result.w_o);
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
-
-  auto bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr));
-  result.pdf = kInvPi * n_dot_o * (1.0f - f);
-
-  if (reflection) {
-    bsdf += fr * specular;
-    result.pdf += f;
-  }
-
-  result.weight = bsdf / result.pdf;
-
-  return result;
-}
-
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame();
-
-  float n_dot_o = dot(frame.nrm, w_o);
-  if (n_dot_o <= kEpsilon) {
-    return {data.spectrum_sample.wavelength, 0.0f};
-  }
-
-  float3 m = normalize(w_o - data.w_i);
-  auto eta_e = mtl.ext_ior(data.spectrum_sample);
-  auto eta_i = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  auto inv_fr = 1.0f - fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
-
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
-
-  BSDFEval result;
-  result.func = diffuse * (kInvPi * inv_fr);
-  ETX_VALIDATE(result.func);
-  result.bsdf = diffuse * (kInvPi * n_dot_o * inv_fr);
-  ETX_VALIDATE(result.bsdf);
-  result.weight = diffuse;
-  ETX_VALIDATE(result.weight);
-  result.pdf = kInvPi * n_dot_o * inv_fr.monochromatic();
-  ETX_VALIDATE(result.pdf);
-  return result;
-}
-
-ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  auto frame = data.get_normal_frame();
-
-  float n_dot_o = dot(frame.nrm, w_o);
-  if (n_dot_o <= kEpsilon) {
-    return 0.0f;
-  }
-
-  float3 m = normalize(w_o - data.w_i);
-  auto eta_e = mtl.ext_ior(data.spectrum_sample);
-  auto eta_i = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  auto fr = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
-  return kInvPi * n_dot_o * (1.0f - fr.monochromatic());
-}
-}  // namespace DeltaPlasticBSDF
+namespace etx {
 
 namespace PlasticBSDF {
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::sample(data, mtl, scene, smp);
-  }
+struct PlasticMaterial {
+  SpectralImage scattering;
+  SpectralImage reflectance;
+  SampledImage roughness;
+  Thinfilm thinfilm;
+  RefractiveIndex ext_ior;
+  RefractiveIndex int_ior;
+};
 
+ETX_GPU_CODE SpectralResponse specular_func(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+  LocalFrame local_frame = {data.tan, data.btn, data.nrm};
+
+  auto w_i = local_frame.to_local(-data.w_i);
+  if (LocalFrame::cos_theta(w_i) <= kEpsilon)
+    return {data.spectrum_sample, 0.0f};
+
+  auto w_o = local_frame.to_local(in_w_o);
+  if (LocalFrame::cos_theta(w_o) <= kEpsilon)
+    return {data.spectrum_sample, 0.0f};
+
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
+  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
+  auto m_eta = (int_ior.eta / ext_ior.eta).monochromatic();
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+
+  SpectralResponse value = external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, true, roughness, ext_ior, int_ior, thinfilm);
+  auto func = 2.0f * value * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  ETX_VALIDATE(func);
+  return func;
+}
+
+ETX_GPU_CODE float specular_pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+  LocalFrame local_frame = {data.tan, data.btn, data.nrm};
+
+  auto w_i = local_frame.to_local(-data.w_i);
+  if (LocalFrame::cos_theta(w_i) <= kEpsilon)
+    return 0.0f;
+
+  auto w_o = local_frame.to_local(in_w_o);
+  if (LocalFrame::cos_theta(w_o) <= kEpsilon)
+    return 0.0f;
+
+  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+
+  float3 wh = normalize(w_o + w_i);
+  float dwh_dwo = 1.0f / (4.0f * dot(w_o, wh));
+
+  external::RayInfo ray = {w_i, roughness};
+
+  auto d_ggx = external::D_ggx(wh, roughness);
+  ETX_VALIDATE(d_ggx);
+
+  float prob = max(0.0f, dot(wh, ray.w) * d_ggx / ((1.0f + ray.Lambda) * LocalFrame::cos_theta(ray.w)));
+  ETX_VALIDATE(prob);
+
+  auto fr = fresnel::calculate(data.spectrum_sample, dot(w_i, wh), ext_ior, int_ior, thinfilm);
+  float f = fr.monochromatic();
+  ETX_VALIDATE(f);
+
+  prob *= f;
+
+  float result = fabsf(prob * dwh_dwo);
+  ETX_VALIDATE(result);
+
+  return result;
+}
+
+ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
-  auto ggx = NormalDistribution(frame, mtl.roughness);
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
+  auto ggx = NormalDistribution(frame, roughness);
   auto m = ggx.sample(smp, data.w_i);
 
-  auto eta_e = mtl.ext_ior(data.spectrum_sample);
-  auto eta_i = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  auto f = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
+  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto f = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), ext_ior, int_ior, thinfilm);
+  auto fr = f.monochromatic();
 
-  uint32_t properties = 0u;
-  float3 w_o = {};
-  if (smp.next() <= f.monochromatic()) {
-    w_o = normalize(reflect(data.w_i, m));
-    properties = BSDFSample::Reflection;
-  } else {
-    w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 1.0f);
-    properties = BSDFSample::Reflection | BSDFSample::Diffuse;
+  auto w_i = frame.to_local(-data.w_i);
+  if (w_i.z <= kEpsilon)
+    return {data.spectrum_sample};
+
+  float3 in_w_o = {};
+
+  bool sample_diffuse = smp.next() > f.monochromatic();
+
+  if (sample_diffuse == false) {
+    in_w_o = reflect(data.w_i, m);
+    sample_diffuse = dot(frame.nrm, in_w_o) <= kEpsilon;
   }
 
-  return {w_o, evaluate(data, w_o, mtl, scene, smp), properties};
+  if (sample_diffuse) {
+    in_w_o = frame.from_local(sample_cosine_distribution(smp.next_2d(), 1.0f));
+  }
+
+  auto eval = evaluate(data, in_w_o, mtl, scene, smp);
+
+  BSDFSample result = {};
+  result.w_o = in_w_o;
+  result.weight = eval.bsdf / eval.pdf;
+  result.properties = BSDFSample::Reflection | (sample_diffuse ? BSDFSample::Diffuse : 0u);
+  result.medium_index = data.current_medium;
+  result.pdf = eval.pdf;
+  return result;
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::evaluate(data, w_o, mtl, scene, smp);
-  }
-
   auto frame = data.get_normal_frame();
+  float3 m = normalize(w_o - data.w_i);
 
   float n_dot_o = dot(frame.nrm, w_o);
-  float n_dot_i = -dot(frame.nrm, data.w_i);
-
-  float3 m = normalize(w_o - data.w_i);
   float m_dot_o = dot(m, w_o);
 
-  if ((n_dot_o <= kEpsilon) || (n_dot_i <= kEpsilon) || (m_dot_o <= kEpsilon)) {
-    return {data.spectrum_sample.wavelength, 0.0f};
+  if ((n_dot_o <= kEpsilon) || (m_dot_o <= kEpsilon)) {
+    return {data.spectrum_sample, 0.0f};
   }
 
-  auto eta_e = mtl.ext_ior(data.spectrum_sample);
-  auto eta_i = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  auto fr = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
-  auto f = fr.monochromatic();
+  auto eta_e = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto eta_i = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 
-  auto ggx = NormalDistribution(frame, mtl.roughness);
-  auto eval = ggx.evaluate(m, data.w_i, w_o);
-  float j = 1.0f / (4.0f * m_dot_o);
+  auto local_w_i = frame.to_local(-data.w_i);
+  auto local_w_o = frame.to_local(w_o);
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
+  auto diff_layer = DiffuseBSDF::diffuse_layer(data, local_w_i, local_w_o, mtl, scene, smp);
+  auto spec_layer = specular_func(data, w_o, mtl, scene, smp);
+  auto spec_pdf = specular_pdf(data, w_o, mtl, scene, smp);
 
-  BSDFEval result;
-  result.func = diffuse * (kInvPi * (1.0f - fr)) + specular * (fr * eval.ndf * eval.visibility / (4.0f * n_dot_i * n_dot_o));
+  BSDFEval result = {};
+
+  result.func = diff_layer.func * (1.0f - fr) + spec_layer / n_dot_o;
   ETX_VALIDATE(result.func);
-  result.bsdf = diffuse * (kInvPi * n_dot_o * (1.0f - fr)) + specular * (fr * eval.ndf * eval.visibility / (4.0f * n_dot_i));
+
+  result.bsdf = diff_layer.func * (1.0f - fr) * n_dot_o + spec_layer;
   ETX_VALIDATE(result.bsdf);
-  result.pdf = kInvPi * n_dot_o * (1.0f - f) + eval.pdf * j * f;
+
+  result.pdf = diff_layer.pdf * (1.0 - fr).monochromatic() + spec_pdf;
   ETX_VALIDATE(result.pdf);
-  result.weight = result.bsdf / result.pdf;
-  ETX_VALIDATE(result.weight);
+
   return result;
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  if (dot(mtl.roughness, float2{0.5f, 0.5f}) <= kDeltaAlphaTreshold) {
-    return DeltaPlasticBSDF::pdf(data, w_o, mtl, scene, smp);
-  }
-
   auto frame = data.get_normal_frame();
 
   float3 m = normalize(w_o - data.w_i);
@@ -172,22 +162,25 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
     return 0.0f;
   }
 
-  auto eta_e = mtl.ext_ior(data.spectrum_sample);
-  auto eta_i = mtl.int_ior(data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene);
-  auto fr = fresnel::dielectric(data.spectrum_sample, data.w_i, m, eta_e, eta_i, thinfilm);
-  auto f = fr.monochromatic();
+  auto eta_e = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
+  auto eta_i = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 
-  auto ggx = NormalDistribution(frame, mtl.roughness);
+  float diff_pdf = kInvPi * n_dot_o;
+  float spec_pdf = specular_pdf(data, w_o, mtl, scene, smp);
 
-  float j = 1.0f / (4.0f * m_dot_o);
-  float result = kInvPi * n_dot_o * (1.0f - f) + ggx.pdf(m, data.w_i, w_o) * j * f;
+  float result = diff_pdf * (1.0f - fr).monochromatic() + spec_pdf;
   ETX_VALIDATE(result);
   return result;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
+}
+
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 
 }  // namespace PlasticBSDF

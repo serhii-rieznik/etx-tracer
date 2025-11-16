@@ -55,4 +55,20 @@ inline bool json_get_float(const nlohmann::json::const_iterator& js, const std::
   return false;
 }
 
+inline bool json_get_int(const nlohmann::json::const_iterator& js, const std::string& id, int64_t& value) {
+  if ((js.key() == id) && (js.value().is_number_float() || js.value().is_number_integer())) {
+    value = js.value().get<int64_t>();
+    return true;
+  }
+  return false;
+}
+
+inline bool json_get_bool(const nlohmann::json::const_iterator& js, const std::string& id, bool& value) {
+  if ((js.key() == id) && js.value().is_boolean()) {
+    value = js.value().get<bool>();
+    return true;
+  }
+  return false;
+}
+
 }  // namespace etx

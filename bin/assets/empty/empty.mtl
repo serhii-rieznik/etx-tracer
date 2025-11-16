@@ -1,8 +1,0 @@
-# Blender 3.1.0 MTL File: 'None'
-# www.blender.org
-
-newmtl et::dir
-color nblackbody 5778.0 scale 16.0
-direction 1.0 0.1 1.0
-angular_diameter 0.52
-

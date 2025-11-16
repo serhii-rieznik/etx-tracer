@@ -1,0 +1,124 @@
+newmtl et::camera
+class perspective
+viewport 640 640
+origin -0.000000 1.000000 3.820000
+target 0.000000 1.000000 -6.179999
+up -0.000000 1.000000 0.000000
+fov 39.597755
+focal-length 49.999992
+lens-radius 0.000000
+focal-distance 0.000000
+clip-near 0.100000
+clip-far 100.000000
+id camera
+active 1
+
+newmtl et::env
+image image-0
+color 0.078768 0.100887 0.153783
+
+newmtl et::dir
+color 1.115123 0.974694 0.911526
+direction -0.000000 0.866019 0.500011
+
+newmtl et::medium
+id fog__vol
+scattering 0.800000 0.800000 0.800000
+
+newmtl ceiling
+material class diffuse
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+two_sided 1
+emitter color 0.000000 0.000000 0.000000 twosided
+
+newmtl etx::subsurface-exit
+material class diffuse
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl etx::subsurface-scatter
+material class translucent
+Kd 1.000000 1.000000 1.000000
+Kt 1.000000 1.000000 1.000000
+Ks 0.000000 0.000000 0.000000
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl floor
+material class diffuse
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+two_sided 1
+emitter color 0.000000 0.000000 0.000000 twosided
+
+newmtl fog
+material class boundary
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+int_medium fog__vol
+emitter color 0.000000 0.000000 0.000000
+
+newmtl frontwall
+material class diffuse
+Kd 0.906000 0.906000 0.906000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+two_sided 1
+emitter color 0.000000 0.000000 0.000000 twosided
+
+newmtl leftwall
+material class diffuse
+Kd 1.000000 0.000000 0.000000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+two_sided 1
+emitter color 0.000000 0.000000 0.000000 twosided
+
+newmtl light
+material class diffuse
+Kd 0.000000 0.000000 0.000000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+ext_medium fog__vol
+two_sided 1
+emitter color 10.018112 3.918244 0.932069 twosided
+
+newmtl rightwall
+material class diffuse
+Kd 0.000000 1.000000 0.000000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+two_sided 1
+emitter color 0.000000 0.000000 0.000000 twosided
+
+newmtl shortbox
+material class diffuse
+Kd 0.906000 0.906000 0.906000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+two_sided 1
+emitter color 0.000000 0.000000 0.000000 twosided
+
+newmtl tallbox
+material class conductor
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+int_ior silver
+ext_ior 1.0
+two_sided 1
+emitter color 0.000000 0.000000 0.000000 twosided
+

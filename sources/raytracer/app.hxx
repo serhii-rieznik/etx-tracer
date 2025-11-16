@@ -3,12 +3,14 @@
 #include <etx/core/core.hxx>
 #include <etx/core/handle.hxx>
 
-#include <etx/render/host/scene_loader.hxx>
+#include <etx/render/host/scene_representation.hxx>
+#include <etx/render/shared/ior_database.hxx>
+#include <etx/render/host/film.hxx>
+
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
-#include <etx/rt/integrators/atmosphere.hxx>
 #include <etx/rt/rt.hxx>
 
 #include <etx/gpu/gpu.hxx>
@@ -21,6 +23,7 @@ namespace etx {
 
 struct RTApplication {
   RTApplication();
+  ~RTApplication();
 
   void init();
   void frame();
@@ -29,58 +32,60 @@ struct RTApplication {
 
  private:
   void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
-  void save_scene_file(const std::string&);
+  std::string save_scene_file(const std::string&);
 
   void on_referenece_image_selected(std::string);
   void on_save_image_selected(std::string, SaveImageMode);
   void on_scene_file_selected(std::string);
   void on_save_scene_file_selected(std::string);
   void on_integrator_selected(Integrator*);
-  void on_preview_selected();
   void on_run_selected();
   void on_stop_selected(bool wait_for_completion);
+  void on_restart_selected();
   void on_reload_scene_selected();
   void on_reload_geometry_selected();
   void on_options_changed();
   void on_use_image_as_reference();
   void on_material_changed(uint32_t index);
+  void on_medium_added();
   void on_medium_changed(uint32_t index);
   void on_emitter_changed(uint32_t index);
-  void on_camera_changed();
+  void on_camera_changed(bool film_changed);
   void on_scene_settings_changed();
+  void on_denoise_selected();
+  void on_view_scene(uint32_t direction);
+  void on_clear_recent_files();
 
  private:
-  std::vector<float4> get_current_image(bool convert_to_rgb);
+  void add_to_recent(const std::string&);
   void save_options();
 
  private:
   UI ui;
-  TimeMeasure time_measure;
   Raytracing raytracing;
-
   RenderContext render;
+  IORDatabase _ior_database;
   SceneRepresentation scene;
   CameraController camera_controller;
+  IntegratorThread integrator_thread;
 
-  CPUDebugIntegrator _preview = {raytracing};
+  CPUDebugIntegrator _debug = {raytracing};
   CPUPathTracing _cpu_pt = {raytracing};
   CPUBidirectional _cpu_bidir = {raytracing};
   CPUVCM _cpu_vcm = {raytracing};
-  CPUAtmosphere _cpu_atmosphere = {raytracing};
 
-  Integrator* _integrator_array[5] = {
-    &_preview,
+  Integrator* _integrator_array[4] = {
+    &_debug,
     &_cpu_pt,
     &_cpu_bidir,
     &_cpu_vcm,
-    &_cpu_atmosphere,
   };
 
-  Integrator* _current_integrator = nullptr;
-  std::string _current_scene_file = {};
   Options _options;
-
-  bool _reset_images = true;
+  std::vector<std::string> _recent_files = {};
+  std::string _current_scene_file = {};
+  TimeMeasure time_measure = {};
+  bool last_camera_controller_state = false;
 };
 
 }  // namespace etx

@@ -64,12 +64,18 @@
 #    DEV: static includes blosc.a and blosc.h
 
 
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 3.5)
 if(NOT CMAKE_VERSION VERSION_LESS 3.3)
     cmake_policy(SET CMP0063 NEW)
 endif()
 # The project can have ASM (zstd 1.5.2 is starting to use it)
 project(blosc LANGUAGES C ASM)
+
+# Add macOS-specific definitions early
+if(APPLE)
+    # Prevent zlib from redefining fdopen by defining it as itself
+    add_definitions(-Dfdopen=fdopen)
+endif()
 
 # parse the full version numbers from blosc.h
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/blosc/blosc.h _blosc_h_contents)
@@ -193,6 +199,7 @@ endif()
 # by this (the host) system, because we want to be able to support compiling
 # for newer hardware on older machines as well as cross-compilation.
 message(STATUS "Building for system processor ${CMAKE_SYSTEM_PROCESSOR}")
+# Check for x86/x64 processors
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL i386 OR
     CMAKE_SYSTEM_PROCESSOR STREQUAL i686 OR
     CMAKE_SYSTEM_PROCESSOR STREQUAL x86_64 OR
@@ -234,6 +241,15 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL i386 OR
         # Unrecognized compiler. Emit a warning message to let the user know hardware-acceleration won't be available.
         message(WARNING "Unable to determine which ${CMAKE_SYSTEM_PROCESSOR} hardware features are supported by the C compiler (${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}).")
     endif()
+# Check for ARM processors
+elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL arm64 OR CMAKE_SYSTEM_PROCESSOR STREQUAL aarch64)
+    # ARM processors don't support SSE2/AVX2 instructions
+    set(COMPILER_SUPPORT_SSE2 FALSE)
+    set(COMPILER_SUPPORT_AVX2 FALSE)
+    if(CMAKE_C_COMPILER_ID STREQUAL Clang OR CMAKE_C_COMPILER_ID STREQUAL GNU)
+        # Enable ARM-specific optimizations
+        add_compile_options(-march=native)
+    endif()
 else()
     # If the target system processor isn't recognized, emit a warning message to alert the user
     # that hardware-acceleration support won't be available but allow configuration to proceed.
@@ -253,7 +269,7 @@ endif()
 # flags
 # Set -Wall and other useful warning flags.
 if(CMAKE_C_COMPILER_ID STREQUAL GNU OR CMAKE_C_COMPILER_ID STREQUAL Clang OR CMAKE_C_COMPILER_ID STREQUAL Intel)
-    add_compile_options(-Wmost -Wwrite-strings 
+    add_compile_options(-Wwrite-strings 
       -Wno-unused-function -Wno-comma -Wno-disabled-macro-expansion -Wno-extra-semi-stmt -Wno-cast-qual -Wno-documentation 
       -Wno-sign-conversion -Wno-cast-align -Wno-sign-compare -Wno-sign-conversion -Wno-implicit-fallthrough -Wno-deprecated-non-prototype
       -Wno-language-extension-token -Wno-reserved-identifier -Wno-declaration-after-statement -Wno-missing-prototypes

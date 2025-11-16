@@ -1,21 +1,10 @@
-#include <etx/core/core.hxx>
-
-#include <atomic>
-
 #if (ETX_PLATFORM_APPLE)
 # include <libkern/OSAtomic.h>
 #endif
 
-namespace etx {
+#include <nfd.h>
 
-uint32_t atomic_compare_exchange(int32_t* ptr, int32_t old_value, int32_t new_value) {
-#if (ETX_PLATFORM_APPLE)
-  return OSAtomicCompareAndSwap32(old_value, new_value, ptr);
-#elif (ETX_PLATFORM_WINDOWS)
-  static_assert(sizeof(long) == sizeof(int32_t));
-  return _InterlockedCompareExchange(reinterpret_cast<volatile long*>(ptr), new_value, old_value);
-#endif
-}
+namespace etx {
 
 uint32_t atomic_inc(int32_t* ptr) {
 #if (ETX_PLATFORM_APPLE)
@@ -45,13 +34,33 @@ int64_t atomic_add_int64(int64_t* ptr, int64_t value) {
 }
 
 void atomic_add_float(float* ptr, float value) {
-  auto iptr = std::bit_cast<int32_t*>(ptr);
-  int32_t old_value = 0u;
-  int32_t new_value = 0u;
+#if (ETX_PLATFORM_WINDOWS)
+  volatile long* iptr = std::bit_cast<volatile long*>(ptr);
+  long old_value, new_value;
+  do {
+    old_value = std::bit_cast<long>(*ptr);
+    new_value = std::bit_cast<long>(*ptr + value);
+  } while (_InterlockedCompareExchange(iptr, new_value, old_value) != old_value);
+#elif (ETX_PLATFORM_APPLE)
+  volatile int32_t* iptr = std::bit_cast<volatile int32_t*>(ptr);
+  int32_t old_value, new_value;
   do {
     old_value = std::bit_cast<int32_t>(*ptr);
     new_value = std::bit_cast<int32_t>(*ptr + value);
-  } while (atomic_compare_exchange(iptr, new_value, old_value) != old_value);
+  } while (!OSAtomicCompareAndSwap32(old_value, new_value, iptr));
+#endif
+}
+
+std::string open_file(const char* filters) {
+  nfdchar_t* selected_path = nullptr;
+  nfdresult_t result = NFD_OpenDialog(filters, nullptr, &selected_path);
+  return (result == NFD_OKAY) ? selected_path : std::string{};
+}
+
+std::string save_file(const char* filters) {
+  nfdchar_t* selected_path = nullptr;
+  nfdresult_t result = NFD_SaveDialog(filters, nullptr, &selected_path);
+  return (result == NFD_OKAY) ? selected_path : std::string{};
 }
 
 }  // namespace etx

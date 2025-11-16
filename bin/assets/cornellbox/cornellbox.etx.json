@@ -1,0 +1,9 @@
+{
+  "geometry": "cornellbox.obj",
+  "materials": "cornellbox.etx.materials",
+  "max-path-length": 1023,
+  "min-path-length": 0,
+  "random-termination-start": 6,
+  "samples": 32,
+  "spectral": false
+}

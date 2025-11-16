@@ -4,6 +4,7 @@
 #include <etx/render/shared/medium.hxx>
 
 #include <string>
+#include <unordered_map>
 
 namespace etx {
 
@@ -16,11 +17,11 @@ struct MediumPool {
   void init(uint32_t capacity);
   void cleanup();
 
-  uint32_t add(Medium::Class cls, const std::string&, const char* volume, const SpectralDistribution& s_a, const SpectralDistribution& s_o, float g, const Pointer<Spectrums>);
+  uint32_t add(Medium::Class cls, const std::string&, const char* volume, uint32_t absorption_index, uint32_t scattering_index, float max_sigma, float anisotropy,
+    bool explicit_connections);
 
   uint32_t find(const char* id);
 
-  void remove(uint32_t handle);
   void remove_all();
 
   Medium& get(uint32_t);

@@ -1,30 +1,163 @@
-﻿#include <etx/render/shared/spectrum.hxx>
+#include <etx/core/log.hxx>
+#include <etx/render/shared/spectrum.hxx>
 
 #include <vector>
 #include <algorithm>
+#include <cmath>
+#include <string>
 
 namespace etx {
 
-SpectralDistribution SpectralDistribution::from_black_body(float temperature, Pointer<Spectrums> spectrums) {
-  SpectralDistribution result;
-  result.count = spectrum::WavelengthCount;
-  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
-    float wl = float(i + spectrum::ShortestWavelength);
-    result.entries[i] = {wl, spectrum::black_body_radiation(wl, temperature)};
+SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count) {
+  if (count > spectrum::WavelengthCount) {
+    count *= 1u;
   }
 
-  if constexpr (spectrum::kSpectralRendering == false) {
-    float3 xyz = result.integrate_to_xyz();
-    result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), spectrums->rgb_illuminant);
+  SpectralDistribution result;
+
+  if ((wavelengths_power == nullptr) || (count == 0)) {
+    result.spectral_entry_count = 0u;
+    result.integrated_value = {};
+    return result;
   }
+
+  float value = wavelengths_power[0].x;
+  float wavelength_scale = 1.0f;
+  while ((value * wavelength_scale) < 100.0f) {
+    wavelength_scale *= 10.0f;
+  }
+
+  std::vector<float2> samples;
+  samples.reserve(static_cast<size_t>(count));
+  for (uint64_t i = 0; i < count; ++i) {
+    float wavelength = wavelengths_power[i].x * wavelength_scale;
+    float power = wavelengths_power[i].y;
+    if (std::isfinite(wavelength) == false)
+      continue;
+    if (std::isfinite(power) == false)
+      continue;
+    wavelength = std::clamp(wavelength, spectrum::kShortestWavelength, spectrum::kLongestWavelength);
+    samples.emplace_back(float2{wavelength, power});
+  }
+
+  if (samples.empty()) {
+    result.spectral_entry_count = 0u;
+    result.integrated_value = {};
+    return result;
+  }
+
+  std::sort(samples.begin(), samples.end(), [](const float2& a, const float2& b) {
+    return a.x < b.x;
+  });
+
+  std::vector<float2> unique_samples;
+  unique_samples.reserve(samples.size());
+  for (const auto& s : samples) {
+    if (unique_samples.empty() || fabsf(s.x - unique_samples.back().x) > 1.0e-4f) {
+      unique_samples.emplace_back(s);
+    } else {
+      unique_samples.back().y = s.y;
+    }
+  }
+
+  if (unique_samples.size() == 1u) {
+    unique_samples.emplace_back(float2{unique_samples.front().x, unique_samples.front().y});
+  }
+
+  result.spectral_entry_count = spectrum::WavelengthCount;
+
+  size_t segment = 0u;
+  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
+    float wavelength = float(spectrum::ShortestWavelength + i);
+
+    float power = 0.0f;
+    if (wavelength <= unique_samples.front().x) {
+      power = unique_samples.front().y;
+    } else if (wavelength >= unique_samples.back().x) {
+      power = unique_samples.back().y;
+    } else {
+      while ((segment + 1u < unique_samples.size()) && (unique_samples[segment + 1u].x < wavelength)) {
+        ++segment;
+      }
+      const float2& s0 = unique_samples[segment];
+      const float2& s1 = unique_samples[segment + 1u];
+      float denom = s1.x - s0.x;
+      float t = (denom > 0.0f) ? (wavelength - s0.x) / denom : 0.0f;
+      power = lerp(s0.y, s1.y, saturate(t));
+    }
+
+    result.spectral_entries[i] = {wavelength, power};
+  }
+
+  float3 xyz = result.integrate_to_xyz();
+  result.integrated_value = spectrum::xyz_to_rgb(xyz);
   return result;
 }
 
-SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1,
-  Pointer<Spectrums> spectrums) {
+void SpectralDistribution::scale(float factor) {
+  for (uint32_t i = 0; i < spectral_entry_count; ++i) {
+    spectral_entries[i].power *= factor;
+  }
+  integrated_value *= factor;
+}
+
+SpectralDistribution SpectralDistribution::null() {
+  return constant(0.0f);
+}
+
+SpectralDistribution SpectralDistribution::constant(float value) {
+  float2 samples[2] = {
+    {spectrum::kShortestWavelength, value},
+    {spectrum::kLongestWavelength, value},
+  };
+  SpectralDistribution spd = from_samples(samples, 2);
+  spd.integrated_value = {value, value, value};
+  return spd;
+}
+
+SpectralDistribution SpectralDistribution::from_black_body(float temperature, float scale) {
+  float2 samples[spectrum::WavelengthCount] = {};
+  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
+    float wl = float(i + spectrum::ShortestWavelength);
+    samples[i] = {wl, spectrum::black_body_radiation(wl, temperature) * scale};
+  }
+  return from_samples(samples, spectrum::WavelengthCount);
+}
+
+SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, float scale) {
+  float w = spectrum::black_body_radiation_maximum_wavelength(t);
+  float r = spectrum::black_body_radiation(w, t);
+  auto spd = SpectralDistribution::from_black_body(t, 1.0f / r);
+  spd.scale(scale / spd.luminance());
+  return spd;
+}
+
+SpectralDistribution SpectralDistribution::rgb_reflectance(const float3& rgb) {
+  if (etx::luminance(rgb) == 0.0f)
+    return SpectralDistribution::null();
+
+  float2 samples[spectrum::RGBResponseWavelengthCount] = {};
+  for (uint32_t i = spectrum::RGBResponseShortestWavelength; i <= spectrum::RGBResponseLongestWavelength; ++i) {
+    auto p = rgb_response({float(i), SpectralQuery::Spectral}, rgb);
+    samples[i - spectrum::RGBResponseShortestWavelength] = {float(i), p.value};
+  }
+
+  SpectralDistribution spd = from_samples(samples, spectrum::RGBResponseWavelengthCount);
+  spd.integrated_value = rgb;
+  return spd;
+}
+
+SpectralDistribution SpectralDistribution::rgb_luminance(const float3& rgb) {
+  SpectralDistribution result = rgb_reflectance(rgb * kRGBLuminanceScale);
+  result.integrated_value = rgb;
+  return result;
+}
+
+SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range,
+  std::string* out_title) {
   auto file = fopen(file_name, "r");
   if (file == nullptr) {
-    printf("Failed to load SpectralDistribution from file: %s\n", file_name);
+    log::error("Failed to load SpectralDistribution from file: %s\n", file_name);
     return SpectralDistribution::Class::Invalid;
   }
 
@@ -45,6 +178,7 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
   };
 
   Class cls = Class::Invalid;
+  std::string file_title;
   std::vector<Sample> samples;
   samples.reserve(spectrum::WavelengthCount);
 
@@ -58,16 +192,42 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     *line_end = 0;
 
     if (begin[0] == '#') {
-      if (strstr(begin, "#class:") == begin) {
-        const char* cls_name = begin + 7;
-        if (strcmp(cls_name, "conductor") == 0) {
-          cls = Class::Conductor;
-        } else if (strcmp(cls_name, "dielectric") == 0) {
-          cls = Class::Dielectric;
-        } else if (strcmp(cls_name, "illuminant") == 0) {
-          cls = Class::Illuminant;
-        } else {
-          cls = Class::Reflectance;
+      if (strstr(begin, "#class") == begin) {
+        const char* colon = strchr(begin, ':');
+        if (colon != nullptr) {
+          ++colon;
+          while ((*colon == ' ') || (*colon == '\t')) {
+            ++colon;
+          }
+          const char* cls_begin = colon;
+          while ((*colon != 0) && (*colon != ' ') && (*colon != '\t')) {
+            ++colon;
+          }
+          std::string cls_name(cls_begin, colon - cls_begin);
+          if (cls_name == "conductor") {
+            cls = Class::Conductor;
+          } else if (cls_name == "dielectric") {
+            cls = Class::Dielectric;
+          } else if (cls_name == "illuminant") {
+            cls = Class::Illuminant;
+          } else if (cls_name.empty() == false) {
+            cls = Class::Reflectance;
+          }
+        }
+      } else if (strstr(begin, "#title") == begin) {
+        const char* title_begin = strchr(begin, ':');
+        if (title_begin != nullptr) {
+          ++title_begin;
+          while ((*title_begin == ' ') || (*title_begin == '\t')) {
+            ++title_begin;
+          }
+          std::string title = title_begin;
+          while (!title.empty() && ((title.back() == '\r') || (title.back() == '\n') || (title.back() == ' ') || (title.back() == '\t'))) {
+            title.pop_back();
+          }
+          if (title.empty() == false) {
+            file_title = title;
+          }
         }
       }
     } else {
@@ -84,6 +244,11 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     begin = line_end + 1;
   }
 
+  if (samples.empty()) {
+    log::error("Failed to load SpectralDistribution from file: %s\n", file_name);
+    return SpectralDistribution::Class::Invalid;
+  }
+
   std::sort(samples.begin(), samples.end());
 
   float scale = 1.0f;
@@ -93,43 +258,70 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     scale *= 10.0f;
   }
 
+  std::vector<float2> samples0;
+  samples0.reserve(spectrum::WavelengthCount);
+  std::vector<float2> samples1;
+  samples1.reserve(spectrum::WavelengthCount);
   for (auto& sample : samples) {
-    sample.wavelength *= scale;
+    float w = sample.wavelength * scale;
+    if ((w >= spectrum::kShortestWavelength) && (w <= spectrum::kLongestWavelength)) {
+      samples0.emplace_back(float2{w, sample.values[0]});
+      samples1.emplace_back(float2{w, sample.values[1]});
+    }
   }
 
-  values0.count = 0;
+  if (samples0.empty()) {
+    float fallback = samples.front().values[0];
+    samples0.emplace_back(float2{spectrum::kShortestWavelength, fallback});
+    samples0.emplace_back(float2{spectrum::kLongestWavelength, fallback});
+  }
 
-  for (const auto& sample : samples) {
-    if ((sample.wavelength >= spectrum::kShortestWavelength) && (sample.wavelength <= spectrum::kLongestWavelength)) {
-      values0.entries[values0.count++] = {sample.wavelength, sample.values[0]};
-      if (values0.count >= spectrum::kWavelengthCount) {
-        break;
+  if ((values1 != nullptr) && samples1.empty() && (cls == Class::Conductor)) {
+    float fallback = samples.front().values[1];
+    samples1.emplace_back(float2{spectrum::kShortestWavelength, fallback});
+    samples1.emplace_back(float2{spectrum::kLongestWavelength, fallback});
+  }
+
+  if (extend_range) {
+    if ((samples0.size() < spectrum::WavelengthCount) && (samples0.front().x > spectrum::kShortestWavelength)) {
+      samples0.insert(samples0.begin(), samples0.front())->x = spectrum::kShortestWavelength;
+    }
+    if ((samples0.size() < spectrum::WavelengthCount) && (samples0.back().x < spectrum::kLongestWavelength)) {
+      samples0.emplace_back(samples0.back()).x = spectrum::kLongestWavelength;
+    }
+
+    if (samples1.empty() == false) {
+      if ((samples1.size() < spectrum::WavelengthCount) && (samples1.front().x > spectrum::kShortestWavelength)) {
+        samples1.insert(samples1.begin(), samples1.front())->x = spectrum::kShortestWavelength;
+      }
+      if ((samples1.size() < spectrum::WavelengthCount) && (samples1.back().x < spectrum::kLongestWavelength)) {
+        samples1.emplace_back(samples1.back()).x = spectrum::kLongestWavelength;
       }
     }
   }
 
-  if (values0.count == 0)
-    return Class::Invalid;
+  values0 = from_samples(samples0.data(), samples0.size());
 
-  if constexpr (spectrum::kSpectralRendering == false) {
-    float3 xyz = values0.integrate_to_xyz();
-    values0 = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
+  if (values1) {
+    if (samples1.empty()) {
+      float2 zero_samples[2] = {
+        {spectrum::kShortestWavelength, 0.0f},
+        {spectrum::kLongestWavelength, 0.0f},
+      };
+      *values1 = from_samples(zero_samples, 2);
+    } else {
+      *values1 = from_samples(samples1.data(), samples1.size());
+    }
   }
 
-  if (values1 != nullptr) {
-    values1->count = 0;
-    for (const auto& sample : samples) {
-      if ((sample.wavelength >= spectrum::kShortestWavelength) && (sample.wavelength <= spectrum::kLongestWavelength)) {
-        values1->entries[values1->count++] = {sample.wavelength, sample.values[1]};
-        if (values1->count >= spectrum::kWavelengthCount) {
-          break;
-        }
-      }
-    }
+  if (out_title != nullptr) {
+    *out_title = file_title;
+  }
 
-    if constexpr (spectrum::kSpectralRendering == false) {
-      float3 xyz = values1->integrate_to_xyz();
-      *values1 = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Illuminant) ? spectrums->rgb_illuminant : spectrums->rgb_reflection);
+  if (cls == Class::Illuminant) {
+    float lum = values0.luminance();
+    if (lum > 0.0f) {
+      values0.scale(1.0f / lum);
     }
   }
 
@@ -137,257 +329,286 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
 }
 
 bool SpectralDistribution::valid() const {
-  for (uint32_t i = 0; i < count; ++i) {
-    if (valid_value(entries[i].power) == false) {
+  for (uint32_t i = 0; i < spectral_entry_count; ++i) {
+    if (valid_value(spectral_entries[i].power) == false) {
       return false;
     }
   }
   return true;
 }
 
-float3 SpectralDistribution::to_xyz() const {
-  if constexpr (spectrum::kSpectralRendering) {
-    return integrate_to_xyz();
-  } else {
-    return spectrum::rgb_to_xyz({entries[0].power, entries[1].power, entries[2].power});
-  }
-}
-
-float SpectralDistribution::maximum_power() const {
-  float result = entries[0].power;
-  for (uint32_t i = 0; i < count; ++i) {
-    result = max(result, entries[i].power);
+float SpectralDistribution::maximum_spectral_power() const {
+  float result = spectral_entries[0].power;
+  for (uint32_t i = 0; i < spectral_entry_count; ++i) {
+    result = max(result, spectral_entries[i].power);
   }
   return result;
 }
 
 float3 SpectralDistribution::integrate_to_xyz() const {
-  auto xyz_at = [](float wl) -> float3 {
-    uint32_t i = static_cast<uint32_t>(clamp(wl, spectrum::kShortestWavelength, spectrum::kLongestWavelength) - spectrum::ShortestWavelength);
-    uint32_t j = min(i + 1u, spectrum::WavelengthCount - 1);
-    auto v0 = spectrum::spectral_xyz(i);
-    auto v1 = spectrum::spectral_xyz(j);
-    float dw = wl - floorf(wl);
-    return lerp(v0, v1, dw);
-  };
-
-  auto integrate = [entries = entries, xyz_at](uint32_t index) -> float3 {
-    float3 result = {};
-
-    float l0 = entries[index + 0].wavelength;
-    float l1 = entries[index + 1].wavelength;
-    float p0 = entries[index + 0].power;
-    float p1 = entries[index + 1].power;
-    float begin = l0;
-    for (;;) {
-      float end = min(l1, begin + 1.0f);
-      float t0 = (begin - l0) / (l1 - l0);
-      float t1 = (end - l0) / (l1 - l0);
-      float p_begin = lerp(p0, p1, t0);
-      float p_end = lerp(p0, p1, t1);
-
-      auto v0 = xyz_at(begin) * p_begin;
-      auto v1 = xyz_at(end) * p_end;
-
-      result += (end - begin) * (v0 + 0.5f * (v1 - v0));
-      if (end == l1) {
-        break;
-      }
-      begin = end;
-    }
-    return result / spectrum::kYIntegral;
-  };
-
   float3 result = {};
-  for (uint32_t i = 0; i + 1 < count; ++i) {
-    result += integrate(i);
+  SpectralResponse s_begin = {{0.0f, SpectralQuery::Spectral}};
+  SpectralResponse s_end = {{0.0f, SpectralQuery::Spectral}};
+
+  for (uint32_t index = 0; index + 1 < spectral_entry_count; ++index) {
+    float l0 = spectral_entries[index + 0].wavelength;
+    float l1 = spectral_entries[index + 1].wavelength;
+    float p0 = spectral_entries[index + 0].power;
+    float p1 = spectral_entries[index + 1].power;
+    s_begin.wavelength = l0;
+    while (s_end.wavelength < l1) {
+      float t0 = (s_begin.wavelength - l0) / (l1 - l0);
+      s_begin.value = lerp(p0, p1, t0);
+
+      s_end.wavelength = min(l1, s_begin.wavelength + 1.0f);
+      float t1 = (s_end.wavelength - l0) / (l1 - l0);
+      s_end.value = lerp(p0, p1, t1);
+
+      auto v_begin = s_begin.to_xyz();
+      auto v_end = s_end.to_xyz();
+
+      result += (s_end.wavelength - s_begin.wavelength) * (v_begin + 0.5f * (v_end - v_begin));
+
+      s_begin.wavelength = s_end.wavelength;
+    }
   }
+
   return result;
 }
 
-float SpectralDistribution::total_power() const {
-  if constexpr (spectrum::kSpectralRendering) {
-    return integrate_to_xyz().y;
+float SpectralDistribution::luminance() const {
+  return etx::luminance(integrated_value);
+}
+
+const float3& SpectralDistribution::integrated() const {
+  return integrated_value;
+}
+
+SpectralDistribution::Class RefractiveIndex::load_from_file(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k, std::string* out_title) {
+  SpectralDistribution::Class cls = SpectralDistribution::load_from_file(file_name, out_eta, &out_k, true, out_title);
+  if (cls != SpectralDistribution::Class::Invalid) {
+    out_eta.integrated_value = spectrum::rgb_to_xyz(out_eta.integrated_value);
+    out_k.integrated_value = spectrum::rgb_to_xyz(out_k.integrated_value);
   } else {
-    return entries[0].power * 0.2627f + entries[1].power * 0.678f + entries[2].power * 0.0593f;
+    out_eta = SpectralDistribution::constant(1.0f);
+    out_k = SpectralDistribution::constant(0.0f);
   }
+  return cls;
 }
 
-SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count) {
-  float value = (count > 0) ? wavelengths[0] : 100.0f;
-  float wavelength_scale = 1.0f;
-  while (value < 100.0f) {
-    wavelength_scale *= 10.0f;
-    value *= 10.0f;
-  }
+SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb) {
+  ETX_ASSERT(spect.spectral());
 
-  SpectralDistribution result;
-  result.count = count;
-  for (uint32_t i = 0; i < count; ++i) {
-    result.entries[i] = {wavelengths[i] * wavelength_scale, power ? power[i] : 0.0f};
-  }
+  if (luminance(rgb) == 0.0f)
+    return {spect, 0.0f};
 
-  for (uint32_t i = 0; i < count; ++i) {
-    for (uint32_t j = i + 1; j < count; ++j) {
-      if (result.entries[i].wavelength > result.entries[j].wavelength) {
-        auto t = result.entries[i];
-        result.entries[i] = result.entries[j];
-        result.entries[j] = t;
-      }
-    }
-  }
+  constexpr float3 response[spectrum::RGBResponseWavelengthCount] = {{0.361396471056708f, 0.252275705864828f, 0.386327749991032f},
+    {0.366205305492837f, 0.235416148479571f, 0.398378488359465f}, {0.371266544491276f, 0.21551362909132f, 0.413219780889496f},
+    {0.375826682752906f, 0.193361838306436f, 0.430811443451517f}, {0.378931281646137f, 0.170213950722939f, 0.450854739893322f},
+    {0.379486367262762f, 0.146935008502323f, 0.473578602657459f}, {0.376593730760743f, 0.124520895668156f, 0.498885356527868f},
+    {0.369558349313344f, 0.104513543161356f, 0.525928094462577f}, {0.358873584245906f, 0.0873768593817381f, 0.553749546116267f},
+    {0.345130566986974f, 0.072963535226373f, 0.581905889627497f}, {0.328251563088163f, 0.0610398371212503f, 0.610708593091079f},
+    {0.308552505415631f, 0.0513190921255156f, 0.640128397106951f}, {0.287174624808842f, 0.0433949906128264f, 0.669430380270105f},
+    {0.265201641787191f, 0.0368826097572261f, 0.6979157450652f}, {0.243045727135127f, 0.0314748187061981f, 0.725479451241526f},
+    {0.220937878555078f, 0.0269368109732676f, 0.752125308174961f}, {0.199346669367302f, 0.023102088919068f, 0.777551239751982f},
+    {0.178921019256518f, 0.0198804141079897f, 0.801198565198056f}, {0.160082581682908f, 0.0171951627504054f, 0.822722254635495f},
+    {0.143043624509629f, 0.0149725918056479f, 0.8419837825555f}, {0.127647149539569f, 0.0131454383663785f, 0.859207411299804f},
+    {0.114788573984292f, 0.0116487280786844f, 0.873562697296838f}, {0.103316260235184f, 0.0104086932344483f, 0.886275046348654f},
+    {0.0932518666479813f, 0.00936480867269029f, 0.897383323885414f}, {0.0843664327916331f, 0.00847145272002132f, 0.907162114032132f},
+    {0.0764577020390705f, 0.00769379991480418f, 0.915848497678197f}, {0.0693845001234432f, 0.00700864335902012f, 0.923606856599652f},
+    {0.0631104736138383f, 0.00641054210726977f, 0.930478984200588f}, {0.0576046106519274f, 0.00589653172568395f, 0.936498857804f},
+    {0.0528265500146353f, 0.00546274898698706f, 0.941710700798877f}, {0.0487277455283648f, 0.00510516507487266f, 0.946167089538723f},
+    {0.0452464572772848f, 0.00481770982409582f, 0.949935832819348f}, {0.0422725820425418f, 0.00458608307901361f, 0.953141334919228f},
+    {0.039703262373669f, 0.00439668646497515f, 0.955900051146983f}, {0.037455139058216f, 0.0042384011939596f, 0.95830645982211f},
+    {0.0354600372812668f, 0.00410184676768847f, 0.960438115944202f}, {0.0336564467190598f, 0.00397915803696281f, 0.962364395327574f},
+    {0.0319714709061577f, 0.00386435524834813f, 0.964164173954034f}, {0.0303366881445415f, 0.00375206176074797f, 0.965911250170638f},
+    {0.0286933099515374f, 0.00363728832521505f, 0.967669401788626f}, {0.0269947205432021f, 0.00351577644591095f, 0.969489502991052f},
+    {0.0252282217111559f, 0.00338580522402117f, 0.971385973151492f}, {0.0234580083647742f, 0.00325171858372909f, 0.973290273119263f},
+    {0.0217527228115435f, 0.00311853091617314f, 0.975128746288891f}, {0.0201631925905153f, 0.00299005839993127f, 0.976846749143154f},
+    {0.0187234576407893f, 0.00286884779294434f, 0.978407694612511f}, {0.0174488994506994f, 0.00275663952405543f, 0.979794461148403f},
+    {0.0163280904902336f, 0.00265565645819332f, 0.981016253259442f}, {0.0153452468886244f, 0.00256813127759055f, 0.982086621981104f},
+    {0.0144861780559633f, 0.00249614943952171f, 0.983017672674219f}, {0.0137381956551172f, 0.00244178408164589f, 0.983820020431351f},
+    {0.0130867474600425f, 0.00240592043900152f, 0.984507332309904f}, {0.0125066008328427f, 0.00238445312895018f, 0.985108946336329f},
+    {0.011974039235965f, 0.00237241835583257f, 0.985653542707892f}, {0.0114695448056021f, 0.00236512543691745f, 0.986165330037658f},
+    {0.0109771084042056f, 0.00235800437504581f, 0.986664887523997f}, {0.0104892403205561f, 0.00234831284715694f, 0.987162447120292f},
+    {0.0100203951870777f, 0.00234037259593541f, 0.9876392324978f}, {0.00958680322480087f, 0.00234017145989162f, 0.988073025622264f},
+    {0.00920042585973419f, 0.00235367021686863f, 0.98844590421961f}, {0.00887973072081534f, 0.00238786516006445f, 0.988732404442236f},
+    {0.00860520827065324f, 0.00244643706709479f, 0.988948354934752f}, {0.00836732063173359f, 0.00252780336726841f, 0.989104876266163f},
+    {0.00817777671420739f, 0.00263166056927542f, 0.98919056298573f}, {0.00797728196919423f, 0.00275031422799895f, 0.989272404046558f},
+    {0.00776280756773801f, 0.00288050327073746f, 0.98935668943516f}, {0.00752322480656702f, 0.00301827558713578f, 0.989458499794256f},
+    {0.00738176284055312f, 0.00320753131923758f, 0.989410706072419f}, {0.00717964596439533f, 0.00336752685268753f, 0.989452827341526f},
+    {0.00696721407329869f, 0.00356965698692528f, 0.989463129090929f}, {0.00716956338982263f, 0.00393592724088271f, 0.988894509503006f},
+    {0.00648723991847956f, 0.00404960604105882f, 0.989463154193344f}, {0.00621620145572442f, 0.00432111336519908f, 0.989462685306371f},
+    {0.0061703417349609f, 0.00479375415814202f, 0.989035904178019f}, {0.00563348899865069f, 0.00495835307356082f, 0.989408158002329f},
+    {0.00523483096796861f, 0.00531690945791252f, 0.989448259605118f}, {0.00498377479547626f, 0.0058246166160886f, 0.989191608599878f},
+    {0.004760911210281f, 0.00647607419329812f, 0.98876301457901f}, {0.00454208151498636f, 0.00727757698303369f, 0.988180341484035f},
+    {0.00432748461853859f, 0.00827234652401926f, 0.987400168773758f}, {0.00411781951832206f, 0.00952326464963346f, 0.986358915732748f},
+    {0.00391410266312994f, 0.01112695996682f, 0.984958937279945f}, {0.00371757718278664f, 0.0132432651492109f, 0.983039157613706f},
+    {0.00352930218980754f, 0.0161528616582408f, 0.980317836116817f}, {0.00334999643313325f, 0.0203955708927266f, 0.976254432608402f},
+    {0.00317999229993085f, 0.0271578607388973f, 0.969662146952061f}, {0.00301966868590795f, 0.0396332002480259f, 0.957347131162118f},
+    {0.0028705041211961f, 0.070325853543585f, 0.926803642017144f}, {0.00273363515083904f, 0.24992097853778f, 0.747345386062212f},
+    {0.00260950322849179f, 0.879787924982616f, 0.117602571707971f}, {0.00249856306030856f, 0.942808059071281f, 0.0546933780587161f},
+    {0.00240066290421108f, 0.961783902277145f, 0.0358154347561766f}, {0.00231441511884631f, 0.970867923905408f, 0.0268176608120465f},
+    {0.002238381861103f, 0.976185165981655f, 0.0215764518969246f}, {0.00217134831811772f, 0.979669430483185f, 0.0181592209856099f},
+    {0.00211227274835322f, 0.982122997849185f, 0.0157647290494959f}, {0.0020599209693597f, 0.983940230816847f, 0.0139998478832392f},
+    {0.00201189235285397f, 0.985344314099166f, 0.0126437931961052f}, {0.00196564633691464f, 0.986472843092402f, 0.0115615102294631f},
+    {0.0019188261125259f, 0.987415571260503f, 0.0106656022184081f}, {0.00186926818990606f, 0.988233933976807f, 0.00989679742413786f},
+    {0.00181574188025131f, 0.988967351292169f, 0.00921690639569143f}, {0.00175994912822348f, 0.989628436356831f, 0.00861161406580099f},
+    {0.00170413548536508f, 0.99022167636531f, 0.00807418769585527f}, {0.00165032161433526f, 0.990749529062014f, 0.00760014882948853f},
+    {0.00160029995498627f, 0.991213264076789f, 0.00718643549381231f}, {0.00155523718724574f, 0.9916158354081f, 0.00682892692078097f},
+    {0.00151452891335767f, 0.991968465695081f, 0.00651700491485177f}, {0.00147724647237568f, 0.992282013932627f, 0.0062407391000766f},
+    {0.00144256240580218f, 0.992565087190795f, 0.00599234991916047f}, {0.00140973348628126f, 0.992824627795095f, 0.00576563823354133f},
+    {0.00137819444959272f, 0.993065715524064f, 0.00555608953555029f}, {0.00134785214360529f, 0.993290265822737f, 0.0053618815464683f},
+    {0.00131872380811099f, 0.993499408376993f, 0.00518186733421665f}, {0.00129082419404661f, 0.993694174648865f, 0.0050150006772275f},
+    {0.00126416553960866f, 0.993875508465271f, 0.00486032552149924f}, {0.00123879678964318f, 0.994043994807604f, 0.00471720794432022f},
+    {0.00121490507172813f, 0.994199227128935f, 0.00458586734744344f}, {0.00119268748968416f, 0.99434082146648f, 0.00446649061921878f},
+    {0.00117231872567021f, 0.9944685990092f, 0.00435908185244806f}, {0.00115395914029295f, 0.99458250229289f, 0.00426353773101575f},
+    {0.00113765908123584f, 0.994682942820404f, 0.00417939769621543f}, {0.00112308682297844f, 0.994772367251123f, 0.00410454554247749f},
+    {0.00110983780104095f, 0.994853284357552f, 0.00403687747816938f}, {0.00109753225709246f, 0.994927910792738f, 0.00397455660214574f},
+    {0.0010858089015939f, 0.994998227701555f, 0.00391596305004663f}, {0.00107438975803964f, 0.995065715237115f, 0.00385989467364532f},
+    {0.00106327904468655f, 0.99513049133726f, 0.00380622930570586f}, {0.00105254847301566f, 0.995192376992653f, 0.00375507423229327f},
+    {0.00104226962376743f, 0.995251212297542f, 0.00370651779073142f}, {0.00103251630213132f, 0.995306839002218f, 0.00366064442174718f},
+    {0.00102336575919332f, 0.99535908122064f, 0.00361755276006225f}, {0.0010148875099738f, 0.995407755600887f, 0.00357735664476775f},
+    {0.00100714743087891f, 0.995452664088211f, 0.00354018824601941f}, {0.00100020772645907f, 0.995493605880918f, 0.00350618616349645f},
+    {0.000994125554320192f, 0.995530387771965f, 0.00347548646268983f}, {0.000989926960592362f, 0.99554321506467f, 0.0034668577747009f},
+    {0.000991948494702743f, 0.995497510348077f, 0.00351054096262953f}, {0.00098671008139981f, 0.995531526937004f, 0.00348176278783334f},
+    {0.000987616131106955f, 0.99554321497737f, 0.00346916872609295f}, {0.000990739109245901f, 0.995520046419803f, 0.00348921429895365f},
+    {0.00100095814751352f, 0.995423737690503f, 0.00357530400801253f}, {0.000997854413296231f, 0.995513566484496f, 0.00348857893771747f},
+    {0.00100025563925044f, 0.995543214534084f, 0.00345652968956841f}, {0.00100582960564373f, 0.995537358480228f, 0.00345681178555054f},
+    {0.00101103444907204f, 0.995543214885874f, 0.00344575053416357f}, {0.00101836470571876f, 0.995520638106343f, 0.00346099706992487f},
+    {0.00102583697481177f, 0.995497471616308f, 0.00347669129489027f}, {0.00103360186414059f, 0.995473442631189f, 0.00349295540560879f},
+    {0.0010418518712566f, 0.995447704444406f, 0.00351044358909034f}, {0.00105077832995165f, 0.995419417709551f, 0.00352980387571236f},
+    {0.00106057016705192f, 0.995387766205211f, 0.00355166354883467f}, {0.00107140538599571f, 0.995352029022475f, 0.0035765655161336f},
+    {0.00108346861367711f, 0.995311476680984f, 0.00360505463528331f}, {0.00109695575857428f, 0.995265341928867f, 0.00363770225523469f},
+    {0.00111207603877874f, 0.995212813053082f, 0.00367511085173541f}, {0.00112899571787142f, 0.995153277871117f, 0.00371772635416002f},
+    {0.00114766180235258f, 0.995087080512621f, 0.00376525764227259f}, {0.00116797249435672f, 0.995014784310207f, 0.0038172431573299f},
+    {0.0011898337199143f, 0.994936929361246f, 0.00387323688317441f}, {0.00121316308520745f, 0.994854019433739f, 0.00393281745719606f},
+    {0.00123798089476159f, 0.994766155185609f, 0.00399586391102516f}, {0.00126468492671321f, 0.994672035539955f, 0.00406327952871428f},
+    {0.00129386318953173f, 0.994569245303462f, 0.0041368915146827f}, {0.00132607312406012f, 0.99445616654204f, 0.00421776035325079f},
+    {0.00136199274322546f, 0.994330383860827f, 0.00430762342964648f}, {0.00140218827558767f, 0.994190097607497f, 0.00440771416843773f},
+    {0.00144657027980234f, 0.994036044265193f, 0.00451738551819895f}, {0.0014948414463994f, 0.993869748034934f, 0.00463541058975732f},
+    {0.00154664697157499f, 0.993692933166304f, 0.00476041994827885f}, {0.00160155611031673f, 0.99350757585286f, 0.00489086813480547f},
+    {0.00165934351590016f, 0.99331488522358f, 0.0050257713662265f}, {0.00172098970224122f, 0.993111819487787f, 0.00516719092074947f},
+    {0.00178799311734439f, 0.992893717152543f, 0.00531828984558922f}, {0.00186215733594893f, 0.992655160595531f, 0.0054826822156781f},
+    {0.00194567722982058f, 0.992389796604603f, 0.00566452632394037f}, {0.00204086187457851f, 0.992091428392607f, 0.00586770989006352f},
+    {0.00214886544504434f, 0.991758320093876f, 0.00609281463710752f}, {0.00227060126556373f, 0.991389991655376f, 0.00633940725496502f},
+    {0.00240710194018797f, 0.990986049346417f, 0.00660684890039683f}, {0.00255951308567156f, 0.990546281797964f, 0.00689420534461247f},
+    {0.00272961003173243f, 0.990069109916685f, 0.00720128027028609f}, {0.00292172449778344f, 0.98954595110701f, 0.00753232463362984f},
+    {0.00314209112563573f, 0.988964336016287f, 0.00789357309271495f}, {0.00339901430740703f, 0.988308532045919f, 0.00829245388040288f},
+    {0.0037036775131452f, 0.987559367177946f, 0.00873695559222785f}, {0.00407200203530361f, 0.986688050028538f, 0.00923994823615614f},
+    {0.00452541495588699f, 0.985665328561487f, 0.00980925675224465f}, {0.00509650009960986f, 0.984445619212887f, 0.0104578809719572f},
+    {0.00583624568025899f, 0.982963667419555f, 0.0112000872332953f}, {0.00682876239517714f, 0.981120811222337f, 0.0120504266988633f},
+    {0.00822405389000236f, 0.978747717078863f, 0.0130282292907272f}, {0.0102850220872316f, 0.975586251520629f, 0.0141287269296979f},
+    {0.013574328845884f, 0.971070041435139f, 0.0153556301518601f}, {0.0193066305447665f, 0.96414625633196f, 0.0165471134285413f},
+    {0.031289649321998f, 0.951109697178212f, 0.0176006555471729f}, {0.0668370590231314f, 0.914977989973778f, 0.0181849523033105f},
+    {0.47055821975157f, 0.511444995583411f, 0.0179967968958568f}, {0.910322527198126f, 0.0726668485313894f, 0.0170106249605477f},
+    {0.948080455313271f, 0.0361923080770627f, 0.0157272385852104f}, {0.961821356060462f, 0.0237477481751048f, 0.0144308959859631f},
+    {0.969199115942889f, 0.0175698872533994f, 0.0132309972432555f}, {0.973908662984669f, 0.0139226460381375f, 0.0121686912671749f},
+    {0.977209973244265f, 0.0115405563250229f, 0.0112494709794463f}, {0.979656739520468f, 0.00987936539339772f, 0.0104638955435151f},
+    {0.981533157171168f, 0.00866834659880336f, 0.00979849656878104f}, {0.98300459261219f, 0.00775698136505557f, 0.00923842640607187f},
+    {0.984186034298509f, 0.0070497600039875f, 0.00876420604257239f}, {0.985154144725996f, 0.00648659344310688f, 0.00835926216828412f},
+    {0.985960394124136f, 0.00602876059685385f, 0.00801084569654375f}, {0.986640780839053f, 0.00565019506385772f, 0.00770902447378607f},
+    {0.987219960775549f, 0.00533339573118596f, 0.00744664385732223f}, {0.987712462684063f, 0.00506760323360109f, 0.00721993441762183f},
+    {0.98812922337855f, 0.00484481984619499f, 0.00702595719156639f}, {0.988479466505093f, 0.00465858261733583f, 0.00686195128437309f},
+    {0.988771011112271f, 0.00450363052254957f, 0.00672535880950215f}, {0.989010580213688f, 0.00437559807374124f, 0.00661382217947227f},
+    {0.9892042685635f, 0.00427064636886897f, 0.00652508545411795f}, {0.989267381249336f, 0.00421399837222459f, 0.0065186207014573f},
+    {0.98926740534975f, 0.0041821610608368f, 0.00655043395806412f}, {0.989234375147028f, 0.00415983508196995f, 0.00660579020001557f},
+    {0.988677031131798f, 0.00429505524467431f, 0.00702791405273997f}, {0.989261896340495f, 0.00411521650646233f, 0.00662288754111876f},
+    {0.989216667360449f, 0.00410703662046563f, 0.00667629645389074f}, {0.98908381615834f, 0.00413798119759596f, 0.00677820303410443f},
+    {0.989159735413925f, 0.00410561424141076f, 0.00673465078490153f}, {0.989149438069669f, 0.00410210406035243f, 0.00674845823809849f},
+    {0.989267414017139f, 0.00407205376923983f, 0.00666053260312171f}, {0.989267347297893f, 0.00406867675841742f, 0.0066639763143222f},
+    {0.989149465414196f, 0.00410374302842169f, 0.00674679197440041f}, {0.989010741739061f, 0.00414689990776415f, 0.00684235874466237f},
+    {0.988851556765261f, 0.00419805577549299f, 0.00695038786462158f}, {0.988666611701783f, 0.0042592412800962f, 0.00707414740744478f},
+    {0.988449830921947f, 0.00433277711218761f, 0.00721739228664503f}, {0.988195045723736f, 0.00442099331156629f, 0.00738396127962477f},
+    {0.987895790071809f, 0.00452631586678535f, 0.00757789432283689f}, {0.987547682812115f, 0.00465035300600109f, 0.00780196443975241f},
+    {0.987156395994108f, 0.00479084335761819f, 0.00805276096208005f}, {0.986730687865098f, 0.00494437506976931f, 0.00832493739352415f},
+    {0.986280206086251f, 0.0051072340743429f, 0.00861256011031588f}, {0.985815725823163f, 0.00527530812606157f, 0.00890896633417709f},
+    {0.985346439308458f, 0.00544510677638383f, 0.00920845415055283f}, {0.984870899926437f, 0.00561716707756873f, 0.00951193322145867f},
+    {0.984384353309599f, 0.0057932674062179f, 0.00982237946648336f}, {0.983881364727288f, 0.00597543537475818f, 0.0101432000722108f},
+    {0.983355832537928f, 0.00616594246133098f, 0.0104782251474164f}, {0.982801681826561f, 0.00636703393642332f, 0.0108312843643075f},
+    {0.982214944276448f, 0.0065801254183601f, 0.0112049304064262f}, {0.981591725416592f, 0.00680659697277952f, 0.0116016776831345f},
+    {0.98092754126865f, 0.00704804585665008f, 0.0120244129683026f}, {0.980217090262774f, 0.00730637615403068f, 0.0124765336152861f},
+    {0.979453267798003f, 0.00758420524152908f, 0.0129625269257405f}, {0.978624519621515f, 0.0078859723879099f, 0.0134895079454178f},
+    {0.977717527383843f, 0.00821680986648768f, 0.01406566272648f}, {0.976717975770224f, 0.00858221875205089f, 0.0146998053590432f},
+    {0.975610130314012f, 0.00898824321526453f, 0.0154016262328342f}, {0.974380955661223f, 0.00943989050166923f, 0.016179153503124f},
+    {0.97303407501227f, 0.00993577225357135f, 0.0170301523769722f}, {0.971579295046055f, 0.0104721558632539f, 0.0179485487499031f},
+    {0.970029137485527f, 0.0110442972001875f, 0.0189265649081134f}, {0.968399706730058f, 0.0116460953881084f, 0.0199541973030008f},
+    {0.966705025849687f, 0.0122722369902735f, 0.021022736604104f}, {0.964937629361706f, 0.0129255280066701f, 0.0221368420177389f},
+    {0.963082130442705f, 0.0136117759302372f, 0.0233060928289402f}, {0.961120546417721f, 0.0143377754175333f, 0.0245416773622041f},
+    {0.9590319139876f, 0.0151114621734259f, 0.0258566227866761f}, {0.956796175514438f, 0.0159404740186431f, 0.027263349512981f},
+    {0.954407851284952f, 0.016827045662572f, 0.0287651018742996f}, {0.951866676073972f, 0.0177714865078491f, 0.0303618362319376f},
+    {0.949173892094391f, 0.0187735660724978f, 0.0320525403474783f}, {0.946332511974346f, 0.0198324130524218f, 0.0338350735352774f},
+    {0.943345001728747f, 0.0209473786587602f, 0.0357076179263381f}, {0.940203648515703f, 0.0221216857161372f, 0.0376746637708886f},
+    {0.936897409987339f, 0.0233598532330812f, 0.0397427346744222f}, {0.933414159950306f, 0.0246668596885005f, 0.0419189783494429f},
+    {0.929740524243158f, 0.0260482124393599f, 0.0442112610380524f}, {0.925855987461467f, 0.027512146274089f, 0.0466318636851517f},
+    {0.921711471921493f, 0.0290777114165444f, 0.0492108139101391f}, {0.917243538045007f, 0.0307695668950082f, 0.0519868921571845f},
+    {0.912378106804082f, 0.032616739271856f, 0.0550051506612125f}, {0.907028952197872f, 0.0346533860677326f, 0.0583176583842104f},
+    {0.901115003869107f, 0.0369124928322675f, 0.061972499429983f}, {0.894627709019822f, 0.0394004375408431f, 0.0659718493328085f},
+    {0.887588778616097f, 0.0421129926205522f, 0.0702982242094708f}, {0.880035520058126f, 0.045040602520688f, 0.0749238723495664f},
+    {0.872022572079822f, 0.0481669710569523f, 0.0798104513613239f}, {0.863596414980893f, 0.0514780312477339f, 0.0849255479810375f},
+    {0.854704135853001f, 0.0549973448052305f, 0.0902985129470983f}, {0.845263865037901f, 0.0587615126664724f, 0.0959746151561844f},
+    {0.835164234228834f, 0.0628159425352819f, 0.102019815549722f}, {0.824272187898797f, 0.0672139629653747f, 0.108513841066305f},
+    {0.81243615811694f, 0.0720139577867945f, 0.115549875361241f}, {0.799554520195097f, 0.077255705344938f, 0.1231897643896f},
+    {0.785585551400888f, 0.0829687581926738f, 0.131445679085806f}, {0.77059797235583f, 0.0891658605651413f, 0.140236154887926f},
+    {0.754760688368665f, 0.0958388811531214f, 0.149400416994105f}, {0.738236975719522f, 0.102963396129037f, 0.158799613480885f},
+    {0.721183518780123f, 0.110470201598867f, 0.168346263538835f}, {0.703725364167222f, 0.11828312573515f, 0.177991492572075f},
+    {0.686168541918471f, 0.126264025632914f, 0.187567413274633f}, {0.6691014235548f, 0.134160995220305f, 0.196737560163804f},
+    {0.653109491273661f, 0.141709675782503f, 0.205180810262307f}, {0.638215526478275f, 0.148883288878905f, 0.212901160346387f},
+    {0.624181645705891f, 0.155766976057149f, 0.220051352305384f}, {0.610690212568645f, 0.162488299800432f, 0.226821459767806f},
+    {0.597407438389556f, 0.169196694433434f, 0.233395837485818f}, {0.584083552723607f, 0.176016114608081f, 0.239900300561521f},
+    {0.570748939335397f, 0.182939507363671f, 0.246311519008544f}, {0.557518389511387f, 0.189919996534704f, 0.252561577091982f},
+    {0.544522552139376f, 0.196899404662466f, 0.258578003504021f}, {0.531898809916482f, 0.203808267712451f, 0.264292879711033f},
+    {0.519754395007152f, 0.210577676294061f, 0.269667882798696f}, {0.50774930822063f, 0.21713871300938f, 0.275111929440529f},
+    {0.49724655471009f, 0.223498311608695f, 0.279255080763256f}, {0.486917069519072f, 0.2295842389745f, 0.283498634632749f},
+    {0.47720566645071f, 0.235392602481688f, 0.287401670206982f}, {0.468109700074472f, 0.240926940143867f, 0.290963294594973f},
+    {0.459397412658735f, 0.246290143370965f, 0.294312374095256f}, {0.450946008343407f, 0.251568634559499f, 0.297485282122744f},
+    {0.442614488798001f, 0.256839992043789f, 0.300545438238409f}, {0.434311955978638f, 0.262161160974956f, 0.303526795380919f},
+    {0.426023875819186f, 0.267542374864477f, 0.306433653803779f}, {0.417917421815236f, 0.27287378975905f, 0.309208683825244f},
+    {0.410169845563115f, 0.278031834508319f, 0.31179820459365f}, {0.402850283906071f, 0.282970590100404f, 0.314178998856179f},
+    {0.396077350690941f, 0.287593834369213f, 0.316328674249106f}, {0.389957444122094f, 0.291811256524333f, 0.318231143498422f},
+    {0.384417756099057f, 0.295673660400157f, 0.319908411332678f}, {0.37958956788575f, 0.299066827112916f, 0.321343415092933f},
+    {0.375505813949727f, 0.301955363715723f, 0.322538614543891f}, {0.372054455444386f, 0.304416721465106f, 0.323528597323951f},
+    {0.369258422307495f, 0.306422085971136f, 0.324319249151433f}, {0.366974936529127f, 0.308066808807225f, 0.324957996229284f},
+    {0.365027410765379f, 0.309475417494957f, 0.325496897646785f}, {0.363270582875766f, 0.310752243609656f, 0.325976883780891f},
+    {0.361611551321096f, 0.311963649081228f, 0.32642449345612f}, {0.360006491185019f, 0.313140149590384f, 0.326853035168552f},
+    {0.358455027259584f, 0.314281405449835f, 0.327263223798044f}, {0.356957753201009f, 0.315386941585728f, 0.327654940204382f},
+    {0.355516113074104f, 0.316455309958497f, 0.328028188565432f}, {0.354131597457431f, 0.317485010349718f, 0.328382978629746f},
+    {0.352812618332759f, 0.318468978632809f, 0.328717961510659f}, {0.351570767660263f, 0.319398012508374f, 0.329030748002959f},
+    {0.350406978974473f, 0.320271228184325f, 0.329321288886345f}, {0.349323662444366f, 0.321086111685236f, 0.329589688055097f},
+    {0.3483254723968f, 0.321838652231916f, 0.329835302322305f}, {0.347409953666681f, 0.322530302812563f, 0.330059133618807f},
+    {0.346551839316617f, 0.323179779309591f, 0.330267732556819f}, {0.345725463931662f, 0.323806292905732f, 0.330467551681723f},
+    {0.344911242176026f, 0.324424632544639f, 0.330663385721125f}, {0.344094923178749f, 0.325045635561157f, 0.330858646184776f},
+    {0.343272617544637f, 0.325672286215913f, 0.331054235605566f}, {0.34246463381076f, 0.326289100289123f, 0.331245329679247f},
+    {0.341691657933856f, 0.326880178250347f, 0.331427141747785f}, {0.340978992446758f, 0.327423294574038f, 0.331596594724302f},
+    {0.340308546669854f, 0.327940178493338f, 0.331750050921398f}, {0.339714434145185f, 0.328396403734122f, 0.331887825172607f},
+    {0.339178020313029f, 0.328808778307809f, 0.332011741956555f}, {0.338688989226496f, 0.329185095822886f, 0.332124322764153f},
+    {0.338238793819259f, 0.32953183146608f, 0.332227636907457f}, {0.337820387223979f, 0.329854341379531f, 0.332323372176796f},
+    {0.337428358803245f, 0.33015673938345f, 0.33241282155364f}, {0.337059593960997f, 0.330441382144034f, 0.332496738385965f},
+    {0.336711799297235f, 0.330710003016331f, 0.332575677698766f}, {0.336393489134285f, 0.330953530738308f, 0.33265018939778f},
+    {0.336071726615592f, 0.331204759553083f, 0.332720407186174f}, {0.335778961551176f, 0.331431209900532f, 0.332786351701114f},
+    {0.335514753467587f, 0.331635640205613f, 0.332845710523242f}, {0.335288428531529f, 0.331810798234289f, 0.332896429223342f},
+    {0.335106400805813f, 0.331951691503971f, 0.332937121502569f}, {0.334982830237101f, 0.332045015184259f, 0.332966982226614f},
+    {0.33488622718803f, 0.33212213939852f, 0.332986177196332f}, {0.334833532894243f, 0.332162955473576f, 0.332997867533508f},
+    {0.334800885693187f, 0.332188262946562f, 0.333005085140322f}, {0.334777409959641f, 0.332206475043291f, 0.333010258369814f},
+    {0.334754648816851f, 0.332224131172513f, 0.333015272788072f}, {0.334726747562834f, 0.3322457566078f, 0.3330214331626f},
+    {0.334691498889229f, 0.332273056920239f, 0.333029228124995f}, {0.334647849086408f, 0.332306842183399f, 0.333038890806484f},
+    {0.334595164551481f, 0.332347598898901f, 0.333050556332937f}, {0.334533170699357f, 0.332395532233052f, 0.333064278543963f},
+    {0.334462673481989f, 0.332450009776818f, 0.333079868893349f}, {0.334387428202622f, 0.332508119588588f, 0.333096484008189f},
+    {0.334321057590764f, 0.332557055569046f, 0.333113311257929f}, {0.334236779489025f, 0.332624321950136f, 0.333129634721204f},
+    {0.334176374645139f, 0.332668565221611f, 0.333145037096858f}, {0.334102053304267f, 0.332728017392087f, 0.33315909121194f},
+    {0.334044269237699f, 0.332772397765162f, 0.333171643842437f}, {0.334003485294713f, 0.332811116613815f, 0.333172848857627f},
+    {0.333960612549575f, 0.332834225679941f, 0.33319177783655f}, {0.333915928070901f, 0.332870662692583f, 0.333199256746151f}};
 
-  return result;
+  if ((spect.wavelength < spectrum::kRGBResponseShortestWavelength) || (spect.wavelength > spectrum::kRGBResponseLongestWavelength))
+    return {spect, 0.0f};
+
+  uint32_t wi = uint32_t(spect.wavelength - spectrum::kRGBResponseShortestWavelength);
+  uint32_t wj = min(wi + 1u, spectrum::RGBResponseWavelengthCount - 1u);
+
+  float dw = spect.wavelength - floorf(spect.wavelength);
+  float3 w = lerp(response[wi], response[wj], dw);
+
+  return {spect, rgb.x * w.x + rgb.y * w.y + rgb.z * w.z};
 }
-
-SpectralDistribution SpectralDistribution::from_samples(const float wavelengths[], const float power[], uint32_t count, Class cls, Pointer<Spectrums> spectrums) {
-  auto result = from_samples(wavelengths, power, count);
-  if constexpr (spectrum::kSpectralRendering == false) {
-    float3 xyz = result.integrate_to_xyz();
-    result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
-  }
-  return result;
-}
-
-SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint32_t count, Class cls, Pointer<Spectrums> spectrums) {
-  float value = (count > 0) ? wavelengths_power[0].x : 100.0f;
-  float wavelength_scale = 1.0f;
-  while (value < 100.0f) {
-    wavelength_scale *= 10.0f;
-    value *= 10.0f;
-  }
-
-  SpectralDistribution result;
-  result.count = count;
-  for (uint32_t i = 0; i < count; ++i) {
-    result.entries[i] = {wavelengths_power[i].x * wavelength_scale, wavelengths_power[i].y};
-  }
-
-  for (uint32_t i = 0; i < count; ++i) {
-    for (uint32_t j = i + 1; j < count; ++j) {
-      if (result.entries[i].wavelength > result.entries[j].wavelength) {
-        auto t = result.entries[i];
-        result.entries[i] = result.entries[j];
-        result.entries[j] = t;
-      }
-    }
-  }
-
-  if constexpr (spectrum::kSpectralRendering == false) {
-    float3 xyz = result.integrate_to_xyz();
-    result = rgb::make_spd(spectrum::xyz_to_rgb(xyz), (cls == Class::Reflectance) ? spectrums->rgb_reflection : spectrums->rgb_illuminant);
-  }
-
-  return result;
-}
-
-namespace rgb {
-
-constexpr float kRGBLambda[SampleCount] = {380.000000f, 390.967743f, 401.935486f, 412.903229f, 423.870972f, 434.838715f, 445.806458f, 456.774200f, 467.741943f, 478.709686f,
-  489.677429f, 500.645172f, 511.612915f, 522.580627f, 533.548340f, 544.516052f, 555.483765f, 566.451477f, 577.419189f, 588.386902f, 599.354614f, 610.322327f, 621.290039f,
-  632.257751f, 643.225464f, 654.193176f, 665.160889f, 676.128601f, 687.096313f, 698.064026f, 709.031738f, 720.000000f};
-
-constexpr float kRGBRefectionWhite[SampleCount] = {1.0618958571272863e+00f, 1.0615019980348779e+00f, 1.0614335379927147e+00f, 1.0622711654692485e+00f, 1.0622036218416742e+00f,
-  1.0625059965187085e+00f, 1.0623938486985884e+00f, 1.0624706448043137e+00f, 1.0625048144827762e+00f, 1.0624366131308856e+00f, 1.0620694238892607e+00f, 1.0613167586932164e+00f,
-  1.0610334029377020e+00f, 1.0613868564828413e+00f, 1.0614215366116762e+00f, 1.0620336151299086e+00f, 1.0625497454805051e+00f, 1.0624317487992085e+00f, 1.0625249140554480e+00f,
-  1.0624277664486914e+00f, 1.0624749854090769e+00f, 1.0625538581025402e+00f, 1.0625326910104864e+00f, 1.0623922312225325e+00f, 1.0623650980354129e+00f, 1.0625256476715284e+00f,
-  1.0612277619533155e+00f, 1.0594262608698046e+00f, 1.0599810758292072e+00f, 1.0602547314449409e+00f, 1.0601263046243634e+00f, 1.0606565756823634e+00f};
-
-constexpr float kRGBRefectionCyan[SampleCount] = {1.0414628021426751e+00f, 1.0328661533771188e+00f, 1.0126146228964314e+00f, 1.0350460524836209e+00f, 1.0078661447098567e+00f,
-  1.0422280385081280e+00f, 1.0442596738499825e+00f, 1.0535238290294409e+00f, 1.0180776226938120e+00f, 1.0442729908727713e+00f, 1.0529362541920750e+00f, 1.0537034271160244e+00f,
-  1.0533901869215969e+00f, 1.0537782700979574e+00f, 1.0527093770467102e+00f, 1.0530449040446797e+00f, 1.0550554640191208e+00f, 1.0553673610724821e+00f, 1.0454306634683976e+00f,
-  6.2348950639230805e-01f, 1.8038071613188977e-01f, -7.6303759201984539e-03f, -1.5217847035781367e-04f, -7.5102257347258311e-03f, -2.1708639328491472e-03f, 6.5919466602369636e-04f,
-  1.2278815318539780e-02f, -4.4669775637208031e-03f, 1.7119799082865147e-02f, 4.9211089759759801e-03f, 5.8762925143334985e-03f, 2.5259399415550079e-02f};
-
-constexpr float kRGBRefectionMagenta[SampleCount] = {9.9422138151236850e-01f, 9.8986937122975682e-01f, 9.8293658286116958e-01f, 9.9627868399859310e-01f, 1.0198955019000133e+00f,
-  1.0166395501210359e+00f, 1.0220913178757398e+00f, 9.9651666040682441e-01f, 1.0097766178917882e+00f, 1.0215422470827016e+00f, 6.4031953387790963e-01f, 2.5012379477078184e-03f,
-  6.5339939555769944e-03f, 2.8334080462675826e-03f, -5.1209675389074505e-11, -9.0592291646646381e-03f, 3.3936718323331200e-03f, -3.0638741121828406e-03f, 2.2203936168286292e-01f,
-  6.3141140024811970e-01f, 9.7480985576500956e-01f, 9.7209562333590571e-01f, 1.0173770302868150e+00f, 9.9875194322734129e-01f, 9.4701725739602238e-01f, 8.5258623154354796e-01f,
-  9.4897798581660842e-01f, 9.4751876096521492e-01f, 9.9598944191059791e-01f, 8.6301351503809076e-01f, 8.9150987853523145e-01f, 8.4866492652845082e-01f};
-
-constexpr float kRGBRefectionYellow[SampleCount] = {5.5740622924920873e-03f, -4.7982831631446787e-03f, -5.2536564298613798e-03f, -6.4571480044499710e-03f, -5.9693514658007013e-03f,
-  -2.1836716037686721e-03f, 1.6781120601055327e-02f, 9.6096355429062641e-02f, 2.1217357081986446e-01f, 3.6169133290685068e-01f, 5.3961011543232529e-01f, 7.4408810492171507e-01f,
-  9.2209571148394054e-01f, 1.0460304298411225e+00f, 1.0513824989063714e+00f, 1.0511991822135085e+00f, 1.0510530911991052e+00f, 1.0517397230360510e+00f, 1.0516043086790485e+00f,
-  1.0511944032061460e+00f, 1.0511590325868068e+00f, 1.0516612465483031e+00f, 1.0514038526836869e+00f, 1.0515941029228475e+00f, 1.0511460436960840e+00f, 1.0515123758830476e+00f,
-  1.0508871369510702e+00f, 1.0508923708102380e+00f, 1.0477492815668303e+00f, 1.0493272144017338e+00f, 1.0435963333422726e+00f, 1.0392280772051465e+00f};
-
-constexpr float kRGBRefectionRed[SampleCount] = {1.6575604867086180e-01f, 1.1846442802747797e-01f, 1.2408293329637447e-01f, 1.1371272058349924e-01f, 7.8992434518899132e-02f,
-  3.2205603593106549e-02f, -1.0798365407877875e-02f, 1.8051975516730392e-02f, 5.3407196598730527e-03f, 1.3654918729501336e-02f, -5.9564213545642841e-03f, -1.8444365067353252e-03f,
-  -1.0571884361529504e-02f, -2.9375521078000011e-03f, -1.0790476271835936e-02f, -8.0224306697503633e-03f, -2.2669167702495940e-03f, 7.0200240494706634e-03f,
-  -8.1528469000299308e-03f, 6.0772866969252792e-01f, 9.8831560865432400e-01f, 9.9391691044078823e-01f, 1.0039338994753197e+00f, 9.9234499861167125e-01f, 9.9926530858855522e-01f,
-  1.0084621557617270e+00f, 9.8358296827441216e-01f, 1.0085023660099048e+00f, 9.7451138326568698e-01f, 9.8543269570059944e-01f, 9.3495763980962043e-01f, 9.8713907792319400e-01f};
-
-constexpr float kRGBRefectionGreen[SampleCount] = {2.6494153587602255e-03f, -5.0175013429732242e-03f, -1.2547236272489583e-02f, -9.4554964308388671e-03f, -1.2526086181600525e-02f,
-  -7.9170697760437767e-03f, -7.9955735204175690e-03f, -9.3559433444469070e-03f, 6.5468611982999303e-02f, 3.9572875517634137e-01f, 7.5244022299886659e-01f, 9.6376478690218559e-01f,
-  9.9854433855162328e-01f, 9.9992977025287921e-01f, 9.9939086751140449e-01f, 9.9994372267071396e-01f, 9.9939121813418674e-01f, 9.9911237310424483e-01f, 9.6019584878271580e-01f,
-  6.3186279338432438e-01f, 2.5797401028763473e-01f, 9.4014888527335638e-03f, -3.0798345608649747e-03f, -4.5230367033685034e-03f, -6.8933410388274038e-03f, -9.0352195539015398e-03f,
-  -8.5913667165340209e-03f, -8.3690869120289398e-03f, -7.8685832338754313e-03f, -8.3657578711085132e-06f, 5.4301225442817177e-03f, -2.7745589759259194e-03f};
-
-constexpr float kRGBRefectionBlue[SampleCount] = {9.9209771469720676e-01f, 9.8876426059369127e-01f, 9.9539040744505636e-01f, 9.9529317353008218e-01f, 9.9181447411633950e-01f,
-  1.0002584039673432e+00f, 9.9968478437342512e-01f, 9.9988120766657174e-01f, 9.8504012146370434e-01f, 7.9029849053031276e-01f, 5.6082198617463974e-01f, 3.3133458513996528e-01f,
-  1.3692410840839175e-01f, 1.8914906559664151e-02f, -5.1129770932550889e-06f, -4.2395493167891873e-04f, -4.1934593101534273e-04f, 1.7473028136486615e-03f, 3.7999160177631316e-03f,
-  -5.5101474906588642e-04f, -4.3716662898480967e-05f, 7.5874501748732798e-03f, 2.5795650780554021e-02f, 3.8168376532500548e-02f, 4.9489586408030833e-02f, 4.9595992290102905e-02f,
-  4.9814819505812249e-02f, 3.9840911064978023e-02f, 3.0501024937233868e-02f, 2.1243054765241080e-02f, 6.9596532104356399e-03f, 4.1733649330980525e-03f};
-
-constexpr float kRGBIlluminantWhite[SampleCount] = {1.1565232050369776e+00f, 1.1567225000119139e+00f, 1.1566203150243823e+00f, 1.1555782088080084e+00f, 1.1562175509215700e+00f,
-  1.1567674012207332e+00f, 1.1568023194808630e+00f, 1.1567677445485520e+00f, 1.1563563182952830e+00f, 1.1567054702510189e+00f, 1.1565134139372772e+00f, 1.1564336176499312e+00f,
-  1.1568023181530034e+00f, 1.1473147688514642e+00f, 1.1339317140561065e+00f, 1.1293876490671435e+00f, 1.1290515328639648e+00f, 1.0504864823782283e+00f, 1.0459696042230884e+00f,
-  9.9366687168595691e-01f, 9.5601669265393940e-01f, 9.2467482033511805e-01f, 9.1499944702051761e-01f, 8.9939467658453465e-01f, 8.9542520751331112e-01f, 8.8870566693814745e-01f,
-  8.8222843814228114e-01f, 8.7998311373826676e-01f, 8.7635244612244578e-01f, 8.8000368331709111e-01f, 8.8065665428441120e-01f, 8.8304706460276905e-01f};
-
-constexpr float kRGBIlluminantCyan[SampleCount] = {1.1334479663682135e+00f, 1.1266762330194116e+00f, 1.1346827504710164e+00f, 1.1357395805744794e+00f, 1.1356371830149636e+00f,
-  1.1361152989346193e+00f, 1.1362179057706772e+00f, 1.1364819652587022e+00f, 1.1355107110714324e+00f, 1.1364060941199556e+00f, 1.1360363621722465e+00f, 1.1360122641141395e+00f,
-  1.1354266882467030e+00f, 1.1363099407179136e+00f, 1.1355450412632506e+00f, 1.1353732327376378e+00f, 1.1349496420726002e+00f, 1.1111113947168556e+00f, 9.0598740429727143e-01f,
-  6.1160780787465330e-01f, 2.9539752170999634e-01f, 9.5954200671150097e-02f, -1.1650792030826267e-02f, -1.2144633073395025e-02f, -1.1148167569748318e-02f, -1.1997606668458151e-02f,
-  -5.0506855475394852e-03f, -7.9982745819542154e-03f, -9.4722817708236418e-03f, -5.5329541006658815e-03f, -4.5428914028274488e-03f, -1.2541015360921132e-02f};
-
-constexpr float kRGBIlluminantMagenta[SampleCount] = {1.0371892935878366e+00f, 1.0587542891035364e+00f, 1.0767271213688903e+00f, 1.0762706844110288e+00f, 1.0795289105258212e+00f,
-  1.0743644742950074e+00f, 1.0727028691194342e+00f, 1.0732447452056488e+00f, 1.0823760816041414e+00f, 1.0840545681409282e+00f, 9.5607567526306658e-01f, 5.5197896855064665e-01f,
-  8.4191094887247575e-02f, 8.7940070557041006e-05f, -2.3086408335071251e-03f, -1.1248136628651192e-03f, -7.7297612754989586e-11, -2.7270769006770834e-04f, 1.4466473094035592e-02f,
-  2.5883116027169478e-01f, 5.2907999827566732e-01f, 9.0966624097105164e-01f, 1.0690571327307956e+00f, 1.0887326064796272e+00f, 1.0637622289511852e+00f, 1.0201812918094260e+00f,
-  1.0262196688979945e+00f, 1.0783085560613190e+00f, 9.8333849623218872e-01f, 1.0707246342802621e+00f, 1.0634247770423768e+00f, 1.0150875475729566e+00f};
-
-constexpr float kRGBIlluminantYellow[SampleCount] = {2.7756958965811972e-03f, 3.9673820990646612e-03f, -1.4606936788606750e-04f, 3.6198394557748065e-04f, -2.5819258699309733e-04f,
-  -5.0133191628082274e-05f, -2.4437242866157116e-04f, -7.8061419948038946e-05f, 4.9690301207540921e-02f, 4.8515973574763166e-01f, 1.0295725854360589e+00f, 1.0333210878457741e+00f,
-  1.0368102644026933e+00f, 1.0364884018886333e+00f, 1.0365427939411784e+00f, 1.0368595402854539e+00f, 1.0365645405660555e+00f, 1.0363938240707142e+00f, 1.0367205578770746e+00f,
-  1.0365239329446050e+00f, 1.0361531226427443e+00f, 1.0348785007827348e+00f, 1.0042729660717318e+00f, 8.4218486432354278e-01f, 7.3759394894801567e-01f, 6.5853154500294642e-01f,
-  6.0531682444066282e-01f, 5.9549794132420741e-01f, 5.9419261278443136e-01f, 5.6517682326634266e-01f, 5.6061186014968556e-01f, 5.8228610381018719e-01f};
-
-constexpr float kRGBIlluminantRed[SampleCount] = {5.4711187157291841e-02f, 5.5609066498303397e-02f, 6.0755873790918236e-02f, 5.6232948615962369e-02f, 4.6169940535708678e-02f,
-  3.8012808167818095e-02f, 2.4424225756670338e-02f, 3.8983580581592181e-03f, -5.6082252172734437e-04f, 9.6493871255194652e-04f, 3.7341198051510371e-04f, -4.3367389093135200e-04f,
-  -9.3533962256892034e-05f, -1.2354967412842033e-04f, -1.4524548081687461e-04f, -2.0047691915543731e-04f, -4.9938587694693670e-04f, 2.7255083540032476e-02f,
-  1.6067405906297061e-01f, 3.5069788873150953e-01f, 5.7357465538418961e-01f, 7.6392091890718949e-01f, 8.9144466740381523e-01f, 9.6394609909574891e-01f, 9.8879464276016282e-01f,
-  9.9897449966227203e-01f, 9.8605140403564162e-01f, 9.9532502805345202e-01f, 9.7433478377305371e-01f, 9.9134364616871407e-01f, 9.8866287772174755e-01f, 9.9713856089735531e-01f};
-
-constexpr float kRGBIlluminantGreen[SampleCount] = {2.5168388755514630e-02f, 3.9427438169423720e-02f, 6.2059571596425793e-03f, 7.1120859807429554e-03f, 2.1760044649139429e-04f,
-  7.3271839984290210e-12, -2.1623066217181700e-02f, 1.5670209409407512e-02f, 2.8019603188636222e-03f, 3.2494773799897647e-01f, 1.0164917292316602e+00f, 1.0329476657890369e+00f,
-  1.0321586962991549e+00f, 1.0358667411948619e+00f, 1.0151235476834941e+00f, 1.0338076690093119e+00f, 1.0371372378155013e+00f, 1.0361377027692558e+00f, 1.0229822432557210e+00f,
-  9.6910327335652324e-01f, -5.1785923899878572e-03f, 1.1131261971061429e-03f, 6.6675503033011771e-03f, 7.4024315686001957e-04f, 2.1591567633473925e-02f, 5.1481620056217231e-03f,
-  1.4561928645728216e-03f, 1.6414511045291513e-04f, -6.4630764968453287e-03f, 1.0250854718507939e-02f, 4.2387394733956134e-02f, 2.1252716926861620e-02f};
-
-constexpr float kRGBIlluminantBlue[SampleCount] = {1.0570490759328752e+00f, 1.0538466912851301e+00f, 1.0550494258140670e+00f, 1.0530407754701832e+00f, 1.0579930596460185e+00f,
-  1.0578439494812371e+00f, 1.0583132387180239e+00f, 1.0579712943137616e+00f, 1.0561884233578465e+00f, 1.0571399285426490e+00f, 1.0425795187752152e+00f, 3.2603084374056102e-01f,
-  -1.9255628442412243e-03f, -1.2959221137046478e-03f, -1.4357356276938696e-03f, -1.2963697250337886e-03f, -1.9227081162373899e-03f, 1.2621152526221778e-03f,
-  -1.6095249003578276e-03f, -1.3029983817879568e-03f, -1.7666600873954916e-03f, -1.2325281140280050e-03f, 1.0316809673254932e-02f, 3.1284512648354357e-02f, 8.8773879881746481e-02f,
-  1.3873621740236541e-01f, 1.5535067531939065e-01f, 1.4878477178237029e-01f, 1.6624255403475907e-01f, 1.6997613960634927e-01f, 1.5769743995852967e-01f, 1.9069090525482305e-01f};
-
-inline const float* power(uint32_t cls, uint32_t clr) {
-  constexpr const float* ptr[2][7] = {
-    {kRGBRefectionRed, kRGBRefectionGreen, kRGBRefectionBlue, kRGBRefectionYellow, kRGBRefectionMagenta, kRGBRefectionCyan, kRGBRefectionWhite},
-    {kRGBIlluminantRed, kRGBIlluminantGreen, kRGBIlluminantBlue, kRGBIlluminantYellow, kRGBIlluminantMagenta, kRGBIlluminantCyan, kRGBIlluminantWhite},
-  };
-  return ptr[cls][clr];
-}
-
-void init_spectrums(Spectrums& spectrums) {
-  for (uint32_t i = 0; i < SampleCount; ++i) {
-    for (uint32_t c = 0; c < Color::Count; ++c) {
-      spectrums.rgb_reflection.values[c][i] = 0.941f * power(0u, c)[i];
-      spectrums.rgb_illuminant.values[c][i] = 0.86445f * power(1u, c)[i];
-    }
-  }
-}
-
-}  // namespace rgb
 
 }  // namespace etx

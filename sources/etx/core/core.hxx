@@ -3,6 +3,7 @@
 #include <etx/core/platform.hxx>
 #include <etx/core/debug.hxx>
 #include <etx/core/log.hxx>
+#include <etx/core/profiler.hxx>
 
 #include <vector>
 #include <string>
@@ -35,7 +36,6 @@ void atomic_add_float(float* ptr, float value);
 int64_t atomic_add_int64(int64_t* ptr, int64_t value);
 
 bool load_binary_file(const char* filename, std::vector<uint8_t>& data);
-float get_cpu_load();
 
 template <class T>
 constexpr inline T align_up(T sz, T al) {
@@ -57,6 +57,23 @@ constexpr inline uint32_t fnv1a32(const uint8_t* ptr, uint64_t size, const uint3
   uint32_t hsh = hash;
   for (uint64_t i = 0; i < size; ++i) {
     hsh = (hsh ^ uint32_t(ptr[i])) * kFnv1a32Prime;
+  }
+  return hsh;
+}
+
+enum : uint64_t {
+  kFnv1a64Prime = 1099511628211ull,
+  kFnv1a64Begin = 1469598103934665603ull,
+};
+
+constexpr inline uint64_t fnv1a64(const char* str, const uint64_t hash = kFnv1a64Begin) {
+  return (str && (*str)) ? fnv1a64(str + 1, (hash ^ uint64_t(*str)) * kFnv1a64Prime) : hash;
+}
+
+constexpr inline uint64_t fnv1a64(const uint8_t* ptr, uint64_t size, const uint64_t hash = kFnv1a64Begin) {
+  uint64_t hsh = hash;
+  for (uint64_t i = 0; i < size; ++i) {
+    hsh = (hsh ^ uint64_t(ptr[i])) * kFnv1a64Prime;
   }
   return hsh;
 }

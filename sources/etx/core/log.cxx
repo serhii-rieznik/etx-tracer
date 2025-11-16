@@ -9,7 +9,6 @@ namespace etx {
 #if !defined(ETX_PLATFORM_WINDOWS)
 # define _vscprintf(fmt, list) vsnprintf(nullptr, 0, fmt, list)
 # define _malloca              alloca
-# define set_console_color(...)
 #endif
 
 void log::output(Color clr, const char* fmt, ...) {

@@ -8,6 +8,7 @@ namespace etx {
     ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&); \
     ETX_GPU_CODE float pdf(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&);         \
     ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);                          \
+    ETX_GPU_CODE SpectralResponse albedo(const BSDFData&, const Material&, const Scene&, Sampler&);              \
   }
 
 ETX_DECLARE_BSDF(Diffuse);
@@ -19,6 +20,8 @@ ETX_DECLARE_BSDF(Thinfilm);
 ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
 ETX_DECLARE_BSDF(Velvet);
+ETX_DECLARE_BSDF(Principled)
+ETX_DECLARE_BSDF(Void);
 
 #define CASE_IMPL(CLS, FUNC, ...) \
   case Material::Class::CLS:      \
@@ -28,6 +31,7 @@ ETX_DECLARE_BSDF(Velvet);
 #define CASE_IMPL_EVALUATE(A) CASE_IMPL(A, evaluate, data, w_o, mtl, scene, smp)
 #define CASE_IMPL_PDF(A)      CASE_IMPL(A, pdf, data, w_o, mtl, scene, smp)
 #define CASE_IMPL_IS_DELTA(A) CASE_IMPL(A, is_delta, mtl, tex, scene, smp)
+#define CASE_IMPL_ALBEDO(A)   CASE_IMPL(A, albedo, data, mtl, scene, smp)
 
 #define ALL_CASES(MACRO)                    \
   switch (mtl.cls) {                        \
@@ -40,6 +44,8 @@ ETX_DECLARE_BSDF(Velvet);
     MACRO(Mirror);                          \
     MACRO(Boundary);                        \
     MACRO(Velvet);                          \
+    MACRO(Principled);                      \
+    MACRO(Void);                            \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
       return {};                            \
@@ -90,48 +96,59 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_IS_DELTA);
 }
 
+[[nodiscard]] ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+#if defined(ETX_FORCED_BSDF)
+  return ETX_FORCED_BSDF::albedo(data, mtl, scene, smp);
+#endif
+
+  ALL_CASES(CASE_IMPL_ALBEDO);
+}
+
 #undef CASE_IMPL
 }  // namespace bsdf
 
-ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene) {
+ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene, Sampler& smp) {
   if (film.max_thickness * film.min_thickness <= 0.0f) {
     return {{}, 0.0f};
   }
 
-  float t = (film.thinkness_image == kInvalidIndex) ? 1.0f : scene.images[film.thinkness_image].evaluate(uv).x;
+  float t = (film.thinkness_image == kInvalidIndex) ? 1.0f : scene.images[film.thinkness_image].evaluate(uv, nullptr).x;
   float thickness = lerp(film.min_thickness, film.max_thickness, t);
-  return {film.ior(spect), thickness};
-}
 
-ETX_GPU_CODE SpectralResponse apply_emitter_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene) {
-  auto result = img.spectrum(spect);
-  ETX_VALIDATE(result);
-
-  if (img.image_index != kInvalidIndex) {
-    float4 eval = scene.images[img.image_index].evaluate(uv);
-    ETX_VALIDATE(eval);
-    auto scale = rgb::query_spd(spect, {eval.x, eval.y, eval.z}, scene.spectrums->rgb_illuminant);
-    ETX_VALIDATE(result);
-    result *= scale;
-    ETX_VALIDATE(result);
+  float3 wavelengths = {spect.wavelength, spect.wavelength, spect.wavelength};
+  if (spect.spectral() == false) {
+    wavelengths.x = Thinfilm::kRGBWavelengths.x + Thinfilm::kRGBWavelengthsSpan.x * (2.0f * smp.next() - 1.0f);
+    wavelengths.y = Thinfilm::kRGBWavelengths.y + Thinfilm::kRGBWavelengthsSpan.y * (2.0f * smp.next() - 1.0f);
+    wavelengths.z = Thinfilm::kRGBWavelengths.z + Thinfilm::kRGBWavelengthsSpan.z * (2.0f * smp.next() - 1.0f);
   }
-  return result;
+
+  return {evaluate_refractive_index(scene, film.ior, spect), wavelengths, thickness};
 }
 
 ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
-  if (mat.diffuse.image_index == kInvalidIndex)
-    return false;
+  if (mat.cls == Material::Class::Void) {
+    return true;
+  }
 
-  auto uv = lerp_uv(scene.vertices, t, bc);
-  const auto& img = scene.images[mat.diffuse.image_index];
-  return (img.options & Image::HasAlphaChannel) && (img.evaluate(uv).w <= smp.next());
+  float material_alpha = mat.opacity;
+  float alpha_diffuse = 1.0f;
+  if (mat.scattering.image_index != kInvalidIndex) {
+    auto uv = lerp_uv(scene.vertices, t, bc);
+    const auto& img = scene.images[mat.scattering.image_index];
+    if (img.options & Image::HasAlphaChannel) {
+      alpha_diffuse = img.evaluate_alpha(uv);
+    }
+  }
+  float alpha_test_value = alpha_diffuse * material_alpha;
+  return (alpha_test_value <= smp.next());
 }
 
 }  // namespace etx
 
 #include <etx/render/shared/bsdf_external.hxx>
+#include <etx/render/shared/bsdf_various.hxx>
+#include <etx/render/shared/bsdf_plastic.hxx>
 #include <etx/render/shared/bsdf_conductor.hxx>
 #include <etx/render/shared/bsdf_dielectric.hxx>
-#include <etx/render/shared/bsdf_plastic.hxx>
-#include <etx/render/shared/bsdf_various.hxx>
 #include <etx/render/shared/bsdf_velvet.hxx>
+#include <etx/render/shared/bsdf_principled.hxx>

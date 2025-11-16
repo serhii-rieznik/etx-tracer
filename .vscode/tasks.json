@@ -1,0 +1,72 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "cmake --build ${workspaceFolder}/build --config Debug --parallel --target raytracer",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "build-release",
+            "type": "shell",
+            "command": "cmake --build ${workspaceFolder}/build --config Release --parallel --target raytracer",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run-debug",
+            "type": "shell",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "build"
+            ],
+            "command": "${workspaceFolder}/bin/raytracer.exe",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new"
+            },
+            "options": {
+                "cwd": "${workspaceFolder}/bin"
+            }
+        },
+        {
+            "label": "run-release",
+            "type": "shell",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "build-release"
+            ],
+            "command": "${workspaceFolder}/bin/raytracer.exe",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new"
+            },
+            "options": {
+                "cwd": "${workspaceFolder}/bin"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

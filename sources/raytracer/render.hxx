@@ -14,13 +14,11 @@ struct RenderContext {
   void init();
   void cleanup();
 
-  void start_frame();
+  void start_frame(uint32_t sample_count, const ViewOptions&);
   void end_frame();
 
   void set_output_dimensions(const uint2&);
-  void update_camera_image(const float4* camera);
-  void update_light_image(const float4* ligth);
-  void set_view_options(const ViewOptions&);
+  void update_image(const float4* camera);
   void set_reference_image(const char*);
   void set_reference_image(const float4 data[], const uint2 dimensions);
 

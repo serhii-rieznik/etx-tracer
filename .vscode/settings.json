@@ -1,0 +1,20 @@
+{
+    "cmake.configureSettings": {
+        "CMAKE_ASM_COMPILER_WORKS": "FALSE"
+    },
+    "cmake.preferredGenerators": [
+        "Visual Studio 17 2022",
+        "Ninja Multi-Config",
+        "Ninja",
+        "Unix Makefiles",
+        "Xcode"
+    ],
+    "cmake.buildBeforeRun": true,
+    "C_Cpp.errorSquiggles": "disabled",
+    "files.associations": {
+        "string": "cpp",
+        "xmemory": "cpp",
+        "filesystem": "cpp",
+        "vector": "cpp"
+    }
+}

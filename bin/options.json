@@ -1,5 +1,39 @@
 {
-  "integrator": "Path Tracing (CPU)",
-  "ref": "",
-  "scene": "assets/cornellbox/cornellbox.json"
+  "values": [
+    {
+      "class": 5,
+      "description": "Integrator",
+      "id": "integrator",
+      "meta": 0,
+      "value": "Bidirectional (CPU)"
+    },
+    {
+      "class": 5,
+      "description": "Scene",
+      "id": "scene",
+      "meta": 0,
+      "value": "./assets/cornellbox/cornellbox.etx.json"
+    },
+    {
+      "class": 5,
+      "description": "Reference",
+      "id": "ref",
+      "meta": 0,
+      "value": ""
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-0",
+      "meta": 0,
+      "value": "./assets/cornellbox/cornellbox.json"
+    },
+    {
+      "class": 5,
+      "description": "Recent File",
+      "id": "recent-1",
+      "meta": 0,
+      "value": "./assets/cornellbox/cornellbox.etx.json"
+    }
+  ]
 }

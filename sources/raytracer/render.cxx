@@ -15,10 +15,10 @@ extern const char* shader_source_metal;
 
 struct ShaderConstants {
   float4 dimensions = {};
+  float exposure = 1.0f;
   uint32_t image_view = 0;
   uint32_t options = ViewOptions::ToneMapping;
-  float exposure = 1.0f;
-  float pad = 0.0f;
+  uint32_t sample_count = 0;
 };
 
 struct RenderContextImpl {
@@ -29,12 +29,10 @@ struct RenderContextImpl {
   sg_shader output_shader = {};
   sg_pipeline output_pipeline = {};
   sg_image sample_image = {};
-  sg_image light_image = {};
   sg_image reference_image = {};
   ShaderConstants constants;
   uint32_t def_image_handle = kInvalidIndex;
   uint32_t ref_image_handle = kInvalidIndex;
-  ViewOptions view_options = {};
   uint2 output_dimensions = {};
   ImagePool image_pool;
 
@@ -53,7 +51,7 @@ RenderContext::~RenderContext() {
 
 void RenderContext::init() {
   _private->image_pool.init(1024u);
-  _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV);
+  _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
 
   sg_desc context = {};
   context.context.d3d11.device = sapp_d3d11_get_device();
@@ -81,11 +79,8 @@ void RenderContext::init() {
   shader_desc.fs.images[0].name = "sample_image";
   shader_desc.fs.images[0].sampler_type = SG_SAMPLERTYPE_FLOAT;
   shader_desc.fs.images[1].image_type = SG_IMAGETYPE_2D;
-  shader_desc.fs.images[1].name = "light_image";
+  shader_desc.fs.images[1].name = "reference_image";
   shader_desc.fs.images[1].sampler_type = SG_SAMPLERTYPE_FLOAT;
-  shader_desc.fs.images[2].image_type = SG_IMAGETYPE_2D;
-  shader_desc.fs.images[2].name = "reference_image";
-  shader_desc.fs.images[2].sampler_type = SG_SAMPLERTYPE_FLOAT;
   shader_desc.fs.uniform_blocks[0].size = sizeof(ShaderConstants);
 
 #if (ETX_PLATFORM_WINDOWS)
@@ -107,16 +102,13 @@ void RenderContext::init() {
 #if (ETX_PLATFORM_WINDOWS)
   set_output_dimensions({16, 16});
   float4 c_image[256] = {};
-  float4 l_image[256] = {};
   for (uint32_t y = 0; y < 16u; ++y) {
     for (uint32_t x = 0; x < 16u; ++x) {
       uint32_t i = x + y * 16u;
       c_image[i] = {1.0f, 0.5f, 0.25f, 1.0f};
-      l_image[i] = {0.0f, 0.5f, 0.75f, 1.0f};
     }
   }
-  update_camera_image(c_image);
-  update_light_image(l_image);
+  update_image(c_image);
   sg_commit();
 #endif
 }
@@ -125,7 +117,6 @@ void RenderContext::cleanup() {
   sg_destroy_pipeline(_private->output_pipeline);
   sg_destroy_shader(_private->output_shader);
   sg_destroy_image(_private->sample_image);
-  sg_destroy_image(_private->light_image);
   sg_destroy_image(_private->reference_image);
   sg_shutdown();
 
@@ -134,20 +125,27 @@ void RenderContext::cleanup() {
   _private->image_pool.cleanup();
 }
 
-void RenderContext::start_frame() {
-  ETX_FUNCTION_SCOPE();
+void RenderContext::start_frame(uint32_t sample_count, const ViewOptions& view_options) {
+  ETX_PROFILER_SCOPE();
+
   sg_pass_action pass_action = {};
   pass_action.colors[0].load_action = SG_LOADACTION_CLEAR;
   pass_action.colors[0].store_action = SG_STOREACTION_STORE;
-  pass_action.colors[0].clear_value = {0.05f, 0.07f, 0.1f, 1.0f};
+  pass_action.colors[0].clear_value = {0.07f, 0.07f, 0.07f, 1.0f};
   sg_apply_viewport(0, 0, sapp_width(), sapp_height(), sg_features().origin_top_left);
   sg_begin_default_pass(&pass_action, sapp_width(), sapp_height());
 
   _private->constants = {
-    {sapp_widthf(), sapp_heightf(), float(_private->output_dimensions.x), float(_private->output_dimensions.y)},
-    uint32_t(_private->view_options.view),
-    _private->view_options.options,
-    _private->view_options.exposure,
+    {
+      sapp_widthf(),
+      sapp_heightf(),
+      float(_private->output_dimensions.x),
+      float(_private->output_dimensions.y),
+    },
+    view_options.exposure,
+    uint32_t(view_options.view),
+    view_options.options,
+    sample_count,
   };
 
   sg_range uniform_data = {
@@ -157,8 +155,7 @@ void RenderContext::start_frame() {
 
   sg_bindings bindings = {};
   bindings.fs_images[0] = _private->sample_image;
-  bindings.fs_images[1] = _private->light_image;
-  bindings.fs_images[2] = _private->reference_image;
+  bindings.fs_images[1] = _private->reference_image;
 
   sg_apply_pipeline(_private->output_pipeline);
   sg_apply_bindings(bindings);
@@ -168,13 +165,16 @@ void RenderContext::start_frame() {
 }
 
 void RenderContext::end_frame() {
-  ETX_FUNCTION_SCOPE();
+  ETX_PROFILER_SCOPE();
   sg_end_pass();
-  sg_commit();
+  {
+    ETX_PROFILER_NAMED_SCOPE("commit");
+    sg_commit();
+  }
 }
 
 void RenderContext::apply_reference_image(uint32_t handle) {
-  auto img = _private->image_pool.get(handle);
+  const auto& img = _private->image_pool.get(handle);
 
   sg_destroy_image(_private->reference_image);
 
@@ -206,28 +206,23 @@ void RenderContext::apply_reference_image(uint32_t handle) {
 
 void RenderContext::set_reference_image(const char* file_name) {
   _private->image_pool.remove(_private->ref_image_handle);
-  _private->ref_image_handle = _private->image_pool.add_from_file(file_name, 0);
+  _private->ref_image_handle = _private->image_pool.add_from_file(file_name, 0, {}, {1.0f, 1.0f});
   apply_reference_image(_private->ref_image_handle);
 }
 
 void RenderContext::set_reference_image(const float4 data[], const uint2 dimensions) {
   _private->image_pool.remove(_private->ref_image_handle);
-  _private->ref_image_handle = _private->image_pool.add_from_data(data, dimensions);
+  _private->ref_image_handle = _private->image_pool.add_from_data(data, dimensions, 0u, {}, {1.0f, 1.0f});
   apply_reference_image(_private->ref_image_handle);
 }
 
-void RenderContext::set_view_options(const ViewOptions& o) {
-  _private->view_options = o;
-}
-
 void RenderContext::set_output_dimensions(const uint2& dim) {
-  if ((_private->sample_image.id != 0) && (_private->light_image.id != 0) && (_private->output_dimensions == dim)) {
+  if ((_private->sample_image.id != 0) && (_private->output_dimensions == dim)) {
     return;
   }
 
   _private->output_dimensions = dim;
   sg_destroy_image(_private->sample_image);
-  sg_destroy_image(_private->light_image);
 
   sg_image_desc desc = {};
   desc.type = SG_IMAGETYPE_2D;
@@ -239,15 +234,14 @@ void RenderContext::set_output_dimensions(const uint2& dim) {
   desc.num_mipmaps = 1;
   desc.usage = SG_USAGE_STREAM;
   _private->sample_image = sg_make_image(desc);
-  _private->light_image = sg_make_image(desc);
 
   _private->black_image.resize(dim.x * dim.y);
   std::fill(_private->black_image.begin(), _private->black_image.end(), float4{});
 }
 
-void RenderContext::update_camera_image(const float4* camera) {
+void RenderContext::update_image(const float4* camera) {
+  ETX_PROFILER_SCOPE();
   ETX_ASSERT(_private->sample_image.id != 0);
-  ETX_FUNCTION_SCOPE();
 
   sg_image_data data = {};
   data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
@@ -255,29 +249,18 @@ void RenderContext::update_camera_image(const float4* camera) {
   sg_update_image(_private->sample_image, data);
 }
 
-void RenderContext::update_light_image(const float4* light) {
-  ETX_ASSERT(_private->light_image.id != 0);
-  ETX_FUNCTION_SCOPE();
-
-  sg_image_data data = {};
-  data.subimage[0][0].size = sizeof(float4) * _private->output_dimensions.x * _private->output_dimensions.y;
-  data.subimage[0][0].ptr = light ? light : _private->black_image.data();
-  sg_update_image(_private->light_image, data);
-}
-
 const char* shader_source_hlsl = R"(
 
 cbuffer Constants : register(b0) {
   float4 dimensions;
+  float exposure;
   uint image_view;
   uint options;
-  float exposure;
-  float pad;
+  uint sample_count;
 }
 
 Texture2D<float4> sample_image : register(t0);
-Texture2D<float4> light_image : register(t1);
-Texture2D<float4> reference_image : register(t2);
+Texture2D<float4> reference_image : register(t1);
 
 struct VSOutput {
   float4 pos : SV_Position;
@@ -295,24 +278,20 @@ VSOutput vertex_main(uint vertexIndex : SV_VertexID) {
 }
 
 static const uint kViewResult = 0;
-static const uint kViewCameraImage = 1;
-static const uint kViewLightImage = 2;
+static const uint kViewAlpha = 1;
+static const uint kViewOriginal = 2;
 static const uint kViewReferenceImage = 3;
 static const uint kViewRelativeDifference = 4;
 static const uint kViewAbsoluteDifference = 5;
 
 static const uint ToneMapping = 1u << 0u;
 static const uint sRGB = 1u << 1u;
+static const uint SkipColorConversion = 1u << 2u;
 
 static const float3 lum = float3(0.2627, 0.6780, 0.0593);
 
-float4 to_rgb(in float4 xyz) {
-  float4 rgb;
-  rgb[0] = max(0.0, 3.240479f * xyz[0] - 1.537150f * xyz[1] - 0.498535f * xyz[2]);
-  rgb[1] = max(0.0, -0.969256f * xyz[0] + 1.875991f * xyz[1] + 0.041556f * xyz[2]);
-  rgb[2] = max(0.0, 0.055648f * xyz[0] - 0.204043f * xyz[1] + 1.057311f * xyz[2]);
-  rgb[3] = 1.0f;
-  return rgb;
+float sqr(float t) { 
+  return t * t; 
 }
 
 float4 validate(in float4 xyz) {
@@ -322,14 +301,11 @@ float4 validate(in float4 xyz) {
   if (any(isinf(xyz))) {
     return float4(0.0, 123456.0, 123456.0, 1.0);
   }
-  if (any(xyz < 0.0)) {
-    return float4(0.0, 0.0, 123456.0, 1.0);
-  }
-  return xyz;
+  return max(0.0f, xyz);
 }
 
 float linear_to_gamma(float value) {
-  return value <= 0.0031308f ? 12.92f * value : 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
+  return value <= 0.0031308f ? (12.92f * value) : (1.055f * pow(abs(value), 1.0f / 2.4f) - 0.055f);
 }
 
 float4 tonemap(float4 value) {
@@ -360,38 +336,34 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
   int3 load_coord = int3(clamped, 0);
 
   float4 c_image = sample_image.Load(load_coord);
-  float c_lum = dot(c_image.xyz, lum);
 
-  float4 l_image = light_image.Load(load_coord);
-  float l_lum = dot(l_image.xyz, lum);
+  if (image_view == kViewAlpha)
+    return exposure * c_image.w;
+
+  if (options & SkipColorConversion)
+    return exposure * c_image;
+
+  {
+    float4 v_image = validate(c_image);
+    if (any(v_image != c_image)) {
+      return v_image;
+    }
+  }
 
   float4 r_image = reference_image.Load(load_coord);
   float r_lum = dot(r_image.xyz, lum);
 
-  float4 t_image = c_image + l_image;
-  float4 v_image = validate(t_image);
-  if (any(v_image != t_image)) {
-    return v_image;
-  }
-
-  c_image = to_rgb(c_image);
-  l_image = to_rgb(l_image);
-  v_image = to_rgb(v_image);
-  float v_lum = dot(v_image.xyz, lum);
-  float c_treshold = 1.0f / 65536.0f;
+  float c_lum = dot(c_image.xyz, lum);
+  const float c_treshold = 1.0f / 8192.0f;
 
   float4 result = float4(0.0f, 0.0f, 0.0f, 0.0f);
   switch (image_view) {
     case kViewResult: {
-      result = tonemap(v_image);
-      break;
-    }
-    case kViewCameraImage: {
       result = tonemap(c_image);
       break;
     }
-    case kViewLightImage: {
-      result = tonemap(l_image);
+    case kViewOriginal: {
+      result = exposure * c_image;
       break;
     }
     case kViewReferenceImage: {
@@ -399,13 +371,13 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
       break;
     }
     case kViewRelativeDifference: {
-      result.x = exposure * max(0.0f, r_lum - v_lum);
-      result.y = exposure * max(0.0f, v_lum - r_lum);
+      result.x = exposure * max(0.0f, r_lum - c_lum);
+      result.y = exposure * max(0.0f, c_lum - r_lum);
       break;
     }
     case kViewAbsoluteDifference: {
-      result.x = float(max(0.0f, r_lum - v_lum) > c_treshold);
-      result.y = float(max(0.0f, v_lum - r_lum) > c_treshold);
+      result.x = float(max(0.0f, r_lum - c_lum) > c_treshold);
+      result.y = float(max(0.0f, c_lum - r_lum) > c_treshold);
       break;
     }
     default:
@@ -422,10 +394,10 @@ using namespace metal;
 
 struct Constants {
   float4 dimensions;
+  float exposure;
   uint image_view;
   uint options;
-  float exposure;
-  float pad;
+  uint sample_count;
 };
 
 struct VSOutput {
@@ -435,26 +407,26 @@ struct VSOutput {
 
 constant constexpr uint ToneMapping = 1u << 0u;
 constant constexpr uint sRGB = 1u << 1u;
+constant constexpr float c_treshold = 1.0f / 8192.0f;
+constant constexpr float3 lum = {0.2627, 0.6780, 0.0593};
 
-float4 to_rgb(float4 xyz) {
-  float4 rgb;
-  rgb[0] = max(0.0, 3.240479f * xyz[0] - 1.537150f * xyz[1] - 0.498535f * xyz[2]);
-  rgb[1] = max(0.0, -0.969256f * xyz[0] + 1.875991f * xyz[1] + 0.041556f * xyz[2]);
-  rgb[2] = max(0.0, 0.055648f * xyz[0] - 0.204043f * xyz[1] + 1.057311f * xyz[2]);
-  rgb[3] = 1.0f;
-  return rgb;
-}
+constant constexpr uint kViewResult = 0;
+constant constexpr uint kViewCameraImage = 1;
+constant constexpr uint kViewLightImage = 2;
+constant constexpr uint kViewReferenceImage = 3;
+constant constexpr uint kViewRelativeDifference = 4;
+constant constexpr uint kViewAbsoluteDifference = 5;
 
 float linear_to_gamma(float value) {
   return value <= 0.0031308f ? 12.92f * value : 1.055f * pow(value, 1.0f / 2.4f) - 0.055f;
 }
 
-float4 tonemap(float4 value, float exposure, uint options) {
-  if (options & ToneMapping) {
-    value = 1.0f - exp(-exposure * value);
+float4 tonemap(float4 value, constant const Constants& params) {
+  if (params.options & ToneMapping) {
+    value = 1.0f - exp(-params.exposure * value);
   }
 
-  if (options & sRGB) {
+  if (params.options & sRGB) {
     value.x = linear_to_gamma(value.x);
     value.y = linear_to_gamma(value.y);
     value.z = linear_to_gamma(value.z);
@@ -474,7 +446,10 @@ vertex VSOutput vertex_main(constant Constants& params [[buffer(0)]], uint verte
 }
 
 fragment float4 fragment_main(VSOutput input [[stage_in]],
-  constant Constants& params [[buffer(0)]], texture2d<float> color [[texture(0)]]) {
+  constant Constants& params [[buffer(0)]],
+  texture2d<float> sample_image [[texture(0)]],
+  texture2d<float> reference_image [[texture(1)]]
+) {
   constexpr sampler linear_sampler(coord::normalized, address::clamp_to_edge, filter::linear);
 
   float2 offset = 0.5f * (params.dimensions.xy - params.dimensions.zw);
@@ -485,9 +460,45 @@ fragment float4 fragment_main(VSOutput input [[stage_in]],
     discard_fragment();
   }
 
-  float4 sampled_color_xyz = color.sample(linear_sampler, input.uv);
-  float4 sampled_color_rgb = to_rgb(sampled_color_xyz);
-  return tonemap(sampled_color_rgb, params.exposure, params.options);
+  float4 sampled_color_xyz = sample_image.sample(linear_sampler, input.uv);
+
+  float4 r_image = reference_image.sample(linear_sampler, input.uv);
+  float r_lum = dot(r_image.xyz, lum);
+
+  float4 c_image = sampled_color_xyz;
+  float4 v_image = c_image;
+  float v_lum = dot(v_image.xyz, lum);
+
+  float4 result = {};
+
+  switch (params.image_view) {
+    case kViewResult: {
+      result = tonemap(v_image, params);
+      break;
+    }
+    case kViewCameraImage: {
+      result = tonemap(c_image, params);
+      break;
+    }
+    case kViewReferenceImage: {
+      result = tonemap(r_image, params);
+      break;
+    }
+    case kViewRelativeDifference: {
+      result.x = params.exposure * max(0.0f, r_lum - v_lum);
+      result.y = params.exposure * max(0.0f, v_lum - r_lum);
+      break;
+    }
+    case kViewAbsoluteDifference: {
+      result.x = float(max(0.0f, r_lum - v_lum) > c_treshold);
+      result.y = float(max(0.0f, v_lum - r_lum) > c_treshold);
+      break;
+    }
+    default:
+      break;
+  };
+
+  return result;
 }
 
 )";

@@ -4,27 +4,26 @@ Physically-based ray-tracer.
 
 ## Features
  * Vertex Connection and Merging algorithm
+ * Volumetric Bidirectional Path Tracing integrator (based on PBRT v3)
  * Full-spectral rendering (by sampling single wavelength per ray)
- * Mdium rendering
- * Volumetric Bidirectional Path Tracing integrator
+    - spectral representation of material's properties (colors, index of refractions, etc)
+    - switching between spectral and RGB rendering in runtime
+ * Medium rendering, including subsurface scattering:
+    - random walk subsurface scattering
+    - Christensen-Burley approximation
+    - subsurface scattering could be applied to any material containing diffuse layer (diffuse, plastic, velvet)
  * Variety of BSDFs:
-    - basic materials - diffuse, plastic, conductor, dielectric
-    - additionaal materials - thinfilm, coating, mirror, velvet
- * Variety of emitters
-    - area;
-    - environment map;
+    - basic materials - diffuse, plastic, conductor, dielectric, mirror
+    - additional materials - thinfilm, coating, mirror, velvet
+ * Variety of emitters:
+    - area (including collimated area lights - lasers)
+    - environment map
     - directional emitter with finite angluar size
-    - collimated area lights (lasers)
- * Spectral representation of material's properties (colors, index of refractions, etc)
- * Subsurface scattering:
-    - random walk;
-    - Christensen-Burley approximation;
-    - could be applied to any material containing diffuse layer (diffuse, plastic, velvet)
+    - atmospheric scattering (generating directional Sun emitter and environment sky emitter)
  * Thin-film rendering over all materials (including conductors)
  * Normal mapping
- * Atmosphere integrator;
 
-## Samples
+## Examples
 Several renderings from the ray-tracer. Samples contains showcase for materials, volumetric data rendering, spectral rendering, participating media rendering, subsurface scattering and SDS (specular-diffuse-specular paths), which are usually tricky thing to render. As well as thin film rendering, collimated emitters, depth of field, and other effects.
 
 More renderings could be found in my [Twitter](https://twitter.com/serhii_rieznik):
@@ -32,7 +31,10 @@ More renderings could be found in my [Twitter](https://twitter.com/serhii_riezni
 [![Bubbles in Cornell Box](./docs/preview/bubble.png)](./docs/images/bubble.png)[![Volumetric cloud](./docs/preview/volumetric-cloud.png)](./docs/images/volumetric-cloud.png)[![Room](./docs/preview/room.png)](./docs/images/room.png)
 [![Refractions](./docs/preview/volumetric-refractions.png)](./docs/images/volumetric-refractions.png)[![Laser](./docs/preview/laser-2.png)](./docs/images/laser-2.png)[![Ring](./docs/preview/ring.png)](./docs/images/ring.png)
 [![Soap Bubbles](./docs/preview/soapbubbles.png)](./docs/images/soapbubbles.png)[![Diamonds](./docs/preview/diamonds.png)](./docs/images/diamonds.png)[![SDS](./docs/preview/sds.png)](./docs/images/sds.png)
-[![SDS](./docs/preview/spoons.png)](./docs/images/spoons.png)[![subsurface](./docs/preview/subsurface.png)](./docs/images/subsurface.png)[![Sky](./docs/preview/sky.png)](./docs/images/sky.png)
+[![SDS](./docs/preview/spoons.png)](./docs/images/spoons.png)[![subsurface](./docs/preview/subsurface.png)](./docs/images/subsurface.png)
+
+## Platforms
+Windows and macOS
 
 #### Story behind this project
 
@@ -51,7 +53,7 @@ Order is a subject to change, but here are main things to do:
 - [ ] GPU path tracing;
 - [x] VCM integrators (CPU and GPU);
 - [x] Subsurface scattering;
-- [ ] cross-platform, cross-API support;
+- [x] cross-platform, cross-API support;
   ... maintaining code, adding new features.
 
 ## Building

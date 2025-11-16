@@ -64,27 +64,28 @@ THE SOFTWARE.
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <chrono>
 
 #if !defined(_MSC_VER)
-#define _strnicmp strncasecmp
+# define _strnicmp strncasecmp
 #endif
 
 namespace tinyobj {
 
 // TODO(syoyo): Better C++11 detection for older compiler
 #if __cplusplus > 199711L
-#define TINYOBJ_OVERRIDE override
+# define TINYOBJ_OVERRIDE override
 #else
-#define TINYOBJ_OVERRIDE
+# define TINYOBJ_OVERRIDE
 #endif
 
 #ifdef __clang__
-#pragma clang diagnostic push
-#if __has_warning("-Wzero-as-null-pointer-constant")
-#pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant"
-#endif
+# pragma clang diagnostic push
+# if __has_warning("-Wzero-as-null-pointer-constant")
+#  pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant"
+# endif
 
-#pragma clang diagnostic ignored "-Wpadded"
+# pragma clang diagnostic ignored "-Wpadded"
 
 #endif
 
@@ -186,18 +187,10 @@ struct texture_option_t {
 struct material_t {
   std::string name;
 
-  real_t ambient[3];
-  real_t diffuse[3] = {1.0f, 1.0f, 1.0f};
-  real_t specular[3] = {1.0f, 1.0f, 1.0f};
-  real_t transmittance[3] = {1.0f, 1.0f, 1.0f};
-  real_t emission[3] = {0.0f, 0.0f, 0.0f};
   real_t shininess;
   real_t ior;       // index of refraction
   real_t dissolve;  // 1 == opaque; 0 == fully transparent
-  // illumination model (see http://www.fileformat.info/format/material/)
   int illum;
-
-  int dummy;  // Suppress padding warning.
 
   std::string ambient_texname;             // map_Ka
   std::string diffuse_texname;             // map_Kd
@@ -221,14 +214,13 @@ struct material_t {
 
   // PBR extension
   // http://exocortex.com/blog/extending_wavefront_mtl_to_support_pbr
-  real_t roughness;            // [0, 1] default 0
   real_t metallic;             // [0, 1] default 0
   real_t sheen;                // [0, 1] default 0
   real_t clearcoat_thickness;  // [0, 1] default 0
   real_t clearcoat_roughness;  // [0, 1] default 0
   real_t anisotropy;           // aniso. [0, 1] default 0
   real_t anisotropy_rotation;  // anisor. [0, 1] default 0
-  real_t pad0;
+
   std::string roughness_texname;  // map_Pr
   std::string metallic_texname;   // map_Pm
   std::string sheen_texname;      // map_Ps
@@ -243,7 +235,7 @@ struct material_t {
 
   int pad2;
 
-  std::map<std::string, std::string> unknown_parameter;
+  std::vector<std::pair<std::string, std::string>> unknown_parameter;
 
 #ifdef TINY_OBJ_LOADER_PYTHON_BINDING
   // For pybind11
@@ -680,23 +672,23 @@ bool ParseTextureNameAndOption(std::string* texname, texture_option_t* texopt, c
 
 #ifdef TINYOBJLOADER_USE_MAPBOX_EARCUT
 
-#ifdef TINYOBJLOADER_DONOT_INCLUDE_MAPBOX_EARCUT
+# ifdef TINYOBJLOADER_DONOT_INCLUDE_MAPBOX_EARCUT
 // Assume earcut.hpp is included outside of tiny_obj_loader.h
-#else
+# else
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Weverything"
-#endif
+#  ifdef __clang__
+#   pragma clang diagnostic push
+#   pragma clang diagnostic ignored "-Weverything"
+#  endif
 
-#include <array>
-#include "mapbox/earcut.hpp"
+#  include <array>
+#  include "mapbox/earcut.hpp"
 
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
+#  ifdef __clang__
+#   pragma clang diagnostic pop
+#  endif
 
-#endif
+# endif
 
 #endif  // TINYOBJLOADER_USE_MAPBOX_EARCUT
 
@@ -829,8 +821,8 @@ static std::istream& safeGetline(std::istream& is, std::string& t) {
   return is;
 }
 
-#define IS_SPACE(x) (((x) == ' ') || ((x) == '\t'))
-#define IS_DIGIT(x) (static_cast<unsigned int>((x) - '0') < static_cast<unsigned int>(10))
+#define IS_SPACE(x)    (((x) == ' ') || ((x) == '\t'))
+#define IS_DIGIT(x)    (static_cast<unsigned int>((x) - '0') < static_cast<unsigned int>(10))
 #define IS_NEW_LINE(x) (((x) == '\r') || ((x) == '\n') || ((x) == '\0'))
 
 // Make index zero-base, and also support relative index.
@@ -1380,19 +1372,10 @@ static void InitMaterial(material_t* material) {
   material->displacement_texname = "";
   material->reflection_texname = "";
   material->alpha_texname = "";
-  for (int i = 0; i < 3; i++) {
-    material->ambient[i] = static_cast<real_t>(0.0);
-    material->diffuse[i] = static_cast<real_t>(1.0);
-    material->specular[i] = static_cast<real_t>(1.0);
-    material->transmittance[i] = static_cast<real_t>(1.0);
-    material->emission[i] = static_cast<real_t>(0.0);
-  }
   material->illum = 0;
   material->dissolve = static_cast<real_t>(1.0);
   material->shininess = static_cast<real_t>(1.0);
   material->ior = static_cast<real_t>(1.0);
-
-  material->roughness = static_cast<real_t>(0.0);
   material->metallic = static_cast<real_t>(0.0);
   material->sheen = static_cast<real_t>(0.0);
   material->clearcoat_thickness = static_cast<real_t>(0.0);
@@ -1614,7 +1597,7 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, con
 
           // first polyline define the main polygon.
           // following polylines define holes(not used in tinyobj).
-          std::vector<std::vector<Point> > polygon;
+          std::vector<std::vector<Point>> polygon;
 
           std::vector<Point> polyline;
 
@@ -1938,7 +1921,8 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
   size_t line_no = 0;
   std::string linebuf;
   while (inStream->peek() != -1) {
-    safeGetline(*inStream, linebuf);
+    std::getline(*inStream, linebuf);
+    // safeGetline(*inStream, linebuf);
     line_no++;
 
     // Trim trailing whitespace.
@@ -1997,73 +1981,10 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
       continue;
     }
 
-    // ambient
-    if (token[0] == 'K' && token[1] == 'a' && IS_SPACE((token[2]))) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.ambient[0] = r;
-      material.ambient[1] = g;
-      material.ambient[2] = b;
-      continue;
-    }
-
-    // diffuse
-    if (token[0] == 'K' && token[1] == 'd' && IS_SPACE((token[2]))) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.diffuse[0] = r;
-      material.diffuse[1] = g;
-      material.diffuse[2] = b;
-      has_kd = true;
-      continue;
-    }
-
-    // specular
-    if (token[0] == 'K' && token[1] == 's' && IS_SPACE((token[2]))) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.specular[0] = r;
-      material.specular[1] = g;
-      material.specular[2] = b;
-      continue;
-    }
-
-    // transmittance
-    if ((token[0] == 'K' && token[1] == 't' && IS_SPACE((token[2]))) || (token[0] == 'T' && token[1] == 'f' && IS_SPACE((token[2])))) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.transmittance[0] = r;
-      material.transmittance[1] = g;
-      material.transmittance[2] = b;
-      continue;
-    }
-
     // ior(index of refraction)
     if (token[0] == 'N' && token[1] == 'i' && IS_SPACE((token[2]))) {
       token += 2;
       material.ior = parseReal(&token);
-      continue;
-    }
-
-    // emission
-    if (token[0] == 'K' && token[1] == 'e' && IS_SPACE(token[2])) {
-      token += 2;
-      real_t r, g, b;
-      parseReal3(&r, &g, &b, &token);
-      material.emission[0] = r;
-      material.emission[1] = g;
-      material.emission[2] = b;
-      continue;
-    }
-
-    // shininess
-    if (token[0] == 'N' && token[1] == 's' && IS_SPACE(token[2])) {
-      token += 2;
-      material.shininess = parseReal(&token);
       continue;
     }
 
@@ -2097,13 +2018,6 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
         material.dissolve = static_cast<real_t>(1.0) - parseReal(&token);
       }
       has_tr = true;
-      continue;
-    }
-
-    // PBR: roughness
-    if (token[0] == 'P' && token[1] == 'r' && IS_SPACE(token[2])) {
-      token += 2;
-      material.roughness = parseReal(&token);
       continue;
     }
 
@@ -2160,15 +2074,6 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
     if ((0 == _strnicmp(token, "map_Kd", 6)) && IS_SPACE(token[6])) {
       token += 7;
       ParseTextureNameAndOption(&(material.diffuse_texname), &(material.diffuse_texopt), token);
-
-      // Set a decent diffuse default value if a diffuse texture is specified
-      // without a matching Kd value.
-      if (!has_kd) {
-        material.diffuse[0] = static_cast<real_t>(0.6);
-        material.diffuse[1] = static_cast<real_t>(0.6);
-        material.diffuse[2] = static_cast<real_t>(0.6);
-      }
-
       continue;
     }
 
@@ -2269,13 +2174,13 @@ void LoadMtl(std::map<std::string, int>* material_map, std::vector<material_t>* 
     if (!_space) {
       _space = strchr(token, '\t');
     }
-    if (_space) {
-      std::ptrdiff_t len = _space - token;
-      std::string key(token, static_cast<size_t>(len));
-      std::string value = _space + 1;
-      material.unknown_parameter.insert(std::pair<std::string, std::string>(key, value));
-    }
+
+    std::ptrdiff_t len = _space ? _space - token : strlen(token);
+    std::string key(token, static_cast<size_t>(len));
+    std::string value = _space ? _space + 1 : "";
+    material.unknown_parameter.emplace_back(std::pair<std::string, std::string>(key, value));
   }
+
   // flush last material.
   std::transform(material.name.begin(), material.name.end(), material.name.begin(), tolower);
   material_map->insert(std::pair<std::string, int>(material.name, static_cast<int>(materials->size())));
@@ -2429,6 +2334,7 @@ bool LoadObjMaterials(std::vector<material_t>* materials, std::string* warn, std
 
 bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<material_t>* materials, std::string* warn, std::string* err, std::istream* inStream,
   MaterialReader* readMatFn, const std::string& customMaterials, bool triangulate, bool default_vcols_fallback) {
+  auto t0 = std::chrono::steady_clock::now();
   std::stringstream errss;
 
   std::vector<real_t> v;
@@ -2463,8 +2369,13 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
 
   size_t line_num = 0;
   std::string linebuf;
+  linebuf.reserve(256);
+
+  // auto t1 = std::chrono::steady_clock::now();
+
   while (inStream->peek() != -1) {
-    safeGetline(*inStream, linebuf);
+    std::getline(*inStream, linebuf);
+    // safeGetline(*inStream, linebuf);
 
     line_num++;
 
@@ -2922,6 +2833,8 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
     // Ignore unknown command.
   }
 
+  // auto t2 = std::chrono::steady_clock::now();
+
   // not all vertices have colors, no default colors desired? -> clear colors
   if (!found_all_colors && !default_vcols_fallback) {
     vc.clear();
@@ -2970,7 +2883,11 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   attrib->texcoord_ws.swap(vt);
   attrib->colors.swap(vc);
   attrib->skin_weights.swap(vw);
-
+  // auto t3 = std::chrono::steady_clock::now();
+  // auto d1 = (t1 - t0).count() / 1.0e+6;
+  // auto d2 = (t2 - t1).count() / 1.0e+6;
+  // auto d3 = (t3 - t2).count() / 1.0e+6;
+  // auto d4 = (t3 - t0).count() / 1.0e+6;
   return true;
 }
 
@@ -3379,7 +3296,7 @@ bool ObjReader::ParseFromString(const std::string& obj_text, const std::string& 
 }
 
 #ifdef __clang__
-#pragma clang diagnostic pop
+# pragma clang diagnostic pop
 #endif
 }  // namespace tinyobj
 

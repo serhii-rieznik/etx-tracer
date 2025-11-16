@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include <etx/core/debug.hxx>
+
+#include <functional>
 #include <stdint.h>
 
 namespace etx {

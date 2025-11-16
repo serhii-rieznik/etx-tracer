@@ -1,9 +1,8 @@
 #include <etx/core/windows.hxx>
-#include <etx/core/log.hxx>
-
-#include <nfd.h>
 
 #if (ETX_PLATFORM_WINDOWS)
+
+# include <etx/core/log.hxx>
 
 # pragma comment(lib, "dbghelp.lib")
 
@@ -56,7 +55,6 @@ LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
   WORD framesCaptured = RtlCaptureStackBackTrace(0, 64u, backtrace, &backtraceHash);
 
   std::string excCode = exception_code_to_string(info->ExceptionRecord->ExceptionCode);
-
   printf("Unhandled exception:\n code: %s\n address: 0x%016llX\n", excCode.c_str(), reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
   fflush(stdout);
 
@@ -70,35 +68,18 @@ LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
     }
   }
 
+  MessageBoxA(nullptr,
+    "raytracer has crashed.\n"
+    "Crash information was logged to console.\n"
+    "Please send this info to the developer.",
+    "Crash", MB_OK | MB_ICONERROR);
+
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
 void init_platform() {
   SetUnhandledExceptionFilter(unhandled_exception_filter);
   SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
-}
-
-float get_cpu_load() {
-  auto CalculateCPULoad = [](unsigned long long idleTicks, unsigned long long totalTicks) {
-    static unsigned long long _previousTotalTicks = 0;
-    static unsigned long long _previousIdleTicks = 0;
-
-    unsigned long long totalTicksSinceLastTime = totalTicks - _previousTotalTicks;
-    unsigned long long idleTicksSinceLastTime = idleTicks - _previousIdleTicks;
-
-    float ret = 1.0f - ((totalTicksSinceLastTime > 0) ? ((float)idleTicksSinceLastTime) / totalTicksSinceLastTime : 0);
-
-    _previousTotalTicks = totalTicks;
-    _previousIdleTicks = idleTicks;
-    return ret;
-  };
-
-  auto FileTimeToInt64 = [](const FILETIME& ft) {
-    return (((unsigned long long)(ft.dwHighDateTime)) << 32) | ((unsigned long long)ft.dwLowDateTime);
-  };
-
-  FILETIME idleTime = {}, kernelTime = {}, userTime = {};
-  return GetSystemTimes(&idleTime, &kernelTime, &userTime) ? CalculateCPULoad(FileTimeToInt64(idleTime), FileTimeToInt64(kernelTime) + FileTimeToInt64(userTime)) : -1.0f;
 }
 
 inline void log::set_console_color(log::Color clr) {
@@ -127,35 +108,4 @@ inline void log::set_console_color(log::Color clr) {
 
 }  // namespace etx
 
-#else
-
-# warning TODO : move to the proper place
-
-namespace etx {
-
-void init_platform() {
-}
-
-float get_cpu_load() {
-  return 0.0f;
-}
-
-}  // namespace etx
-
 #endif
-
-namespace etx {
-
-std::string open_file(const char* filters) {
-  nfdchar_t* selected_path = nullptr;
-  nfdresult_t result = NFD_OpenDialog(filters, nullptr, &selected_path);
-  return (result == NFD_OKAY) ? selected_path : std::string{};
-}
-
-std::string save_file(const char* filters) {
-  nfdchar_t* selected_path = nullptr;
-  nfdresult_t result = NFD_SaveDialog(filters, nullptr, &selected_path);
-  return (result == NFD_OKAY) ? selected_path : std::string{};
-}
-
-}  // namespace etx

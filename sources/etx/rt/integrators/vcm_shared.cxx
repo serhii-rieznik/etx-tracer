@@ -1,4 +1,5 @@
 #include <etx/rt/integrators/vcm_spatial_grid.hxx>
+#include <etx/util/options.hxx>
 
 namespace etx {
 
@@ -7,33 +8,42 @@ VCMOptions VCMOptions::default_values() {
   options.options = DefaultOptions;
   options.radius_decay = 256u;
   options.initial_radius = 0.0f;
+  options.kernel = VCMOptions::Epanechnikov;
   return options;
 }
 
 void VCMOptions::load(const Options& opt) {
-  initial_radius = opt.get("initial_radius", initial_radius).to_float();
-  radius_decay = opt.get("radius_decay", radius_decay).to_integer();
+  initial_radius = opt.get_float("vcm-initial_radius", initial_radius);
+  radius_decay = opt.get_integral("vcm-radius_decay", radius_decay);
+  blue_noise = opt.get_bool("vcm-blue_noise", blue_noise);
+  kernel = opt.get_integral("vcm-kernel", kernel);
 
-  options = opt.get("direct_hit", direct_hit()).to_bool() ? (options | DirectHit) : (options & ~DirectHit);
-  options = opt.get("connect_to_light", connect_to_light()).to_bool() ? (options | ConnectToLight) : (options & ~ConnectToLight);
-  options = opt.get("connect_to_camera", connect_to_camera()).to_bool() ? (options | ConnectToCamera) : (options & ~ConnectToCamera);
-  options = opt.get("connect_vertices", connect_vertices()).to_bool() ? (options | ConnectVertices) : (options & ~ConnectVertices);
-  options = opt.get("merge_vertices", merge_vertices()).to_bool() ? (options | MergeVertices) : (options & ~MergeVertices);
-  options = opt.get("mis", enable_mis()).to_bool() ? (options | EnableMis) : (options & ~EnableMis);
-  options = opt.get("merging", enable_merging()).to_bool() ? (options | EnableMerging) : (options & ~EnableMerging);
+  options = opt.get_bool("vcm-direct_hit", direct_hit()) ? (options | DirectHit) : (options & ~DirectHit);
+  options = opt.get_bool("vcm-connect_to_light", connect_to_light()) ? (options | ConnectToLight) : (options & ~ConnectToLight);
+  options = opt.get_bool("vcm-connect_to_camera", connect_to_camera()) ? (options | ConnectToCamera) : (options & ~ConnectToCamera);
+  options = opt.get_bool("vcm-connect_vertices", connect_vertices()) ? (options | ConnectVertices) : (options & ~ConnectVertices);
+  options = opt.get_bool("vcm-merge_vertices", merge_vertices()) ? (options | MergeVertices) : (options & ~MergeVertices);
+  options = opt.get_bool("vcm-mis", enable_mis()) ? (options | EnableMis) : (options & ~EnableMis);
+  options = opt.get_bool("vcm-merging", enable_merging()) ? (options | EnableMerging) : (options & ~EnableMerging);
 }
 
-void VCMOptions::store(Options& opt) {
-  opt.add(0.0f, initial_radius, 10.0f, "initial_radius", "Initial Radius");
-  opt.add(1u, uint32_t(radius_decay), 65536u, "radius_decay", "Radius Decay");
-  opt.add("debug", "Compute:");
-  opt.add(direct_hit(), "direct_hit", "Direct Hits");
-  opt.add(connect_to_light(), "connect_to_light", "Connect to Lights");
-  opt.add(connect_to_camera(), "connect_to_camera", "Connect to Camera");
-  opt.add(connect_vertices(), "connect_vertices", "Connect Vertices");
-  opt.add(merge_vertices(), "merge_vertices", "Merge Vertices");
-  opt.add(enable_mis(), "mis", "Multiple Importance Sampling");
-  opt.add(enable_merging(), "merging", "Enable Merging");
+void VCMOptions::store(Options& opt) const {
+  opt.options.clear();
+  opt.set_string("compute", "Connections:", "Connections");
+  opt.set_bool("vcm-direct_hit", direct_hit(), "Direct Hits");
+  opt.set_bool("vcm-connect_to_camera", connect_to_camera(), "Light Path to Camera");
+  opt.set_bool("vcm-connect_to_light", connect_to_light(), "Camera Path to Light");
+  opt.set_bool("vcm-connect_vertices", connect_vertices(), "Camera Path to Light Path");
+  if (enable_merging()) {
+    opt.set_bool("vcm-merge_vertices", merge_vertices(), "Merge Light Vertices");
+  }
+  opt.set_string("vcm-opt", "VCM Options", "VCM Options");
+  opt.set_bool("vcm-merging", enable_merging(), "Enable Merging");
+  opt.set_bool("vcm-mis", enable_mis(), "Multiple Importance Sampling");
+  opt.set_bool("vcm-kernel", smooth_kernel(), "Smooth Merging Kernel");
+  opt.set_bool("vcm-blue_noise", blue_noise, "Blue Noise");
+  opt.set_float("vcm-initial_radius", initial_radius, "Initial Radius", {0.0f, 10.0f});
+  opt.set_integral("vcm-radius_decay", radius_decay, "Radius Decay", 0, {1u, 65536u});
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {
@@ -45,15 +55,23 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   TimeMeasure time_measure = {};
 
   data.radius_squared = radius * radius;
+  if (data.radius_squared > 0.0f) {
+    data.inv_radius_squared = 1.0f / data.radius_squared;
+  } else {
+    data.inv_radius_squared = 0.0f;
+  }
   data.cell_size = 2.0f * radius;
-  data.bounding_box = {{kMaxFloat, kMaxFloat, kMaxFloat}, {-kMaxFloat, -kMaxFloat, -kMaxFloat}};
+  data.bounding_box = {{kMaxFloat, kMaxFloat, kMaxFloat}, 0.0f, {-kMaxFloat, -kMaxFloat, -kMaxFloat}, 0.0f};
 
-  std::vector<BoundingBox> thread_boxes(scheduler.max_thread_count(), {{kMaxFloat, kMaxFloat, kMaxFloat}, {-kMaxFloat, -kMaxFloat, -kMaxFloat}});
+  std::vector<BoundingBox> thread_boxes(scheduler.max_thread_count(), data.bounding_box);
   scheduler.execute(uint32_t(sample_count), [&scene, &thread_boxes, samples](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
       const auto& p = samples[i];
-      thread_boxes[thread_id].p_min = min(thread_boxes[thread_id].p_min, p.position(scene));
-      thread_boxes[thread_id].p_max = max(thread_boxes[thread_id].p_max, p.position(scene));
+      if (p.is_medium) {
+        continue;
+      }
+      thread_boxes[thread_id].p_min = min(thread_boxes[thread_id].p_min, p.pos);
+      thread_boxes[thread_id].p_max = max(thread_boxes[thread_id].p_max, p.pos);
     }
   });
   for (const auto& bbox : thread_boxes) {
@@ -64,19 +82,26 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   uint32_t hash_table_size = static_cast<uint32_t>(next_power_of_two(sample_count));
   data.hash_table_mask = hash_table_size - 1u;
 
-  _position_to_index.resize(sample_count);
-  _indices.resize(sample_count);
-
+  _positions.clear();
+  _normals.clear();
+  _w_in.clear();
+  _d_vcm.clear();
+  _d_vm.clear();
+  _path_lengths.clear();
+  _throughput_rgb_div_pdf.clear();
   _cell_ends.resize(hash_table_size);
   memset(_cell_ends.data(), 0, sizeof(uint32_t) * hash_table_size);
 
   static_assert(sizeof(std::atomic_int) == sizeof(uint32_t));
 
   auto ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
-  scheduler.execute(uint32_t(sample_count), [&scene, &samples, this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
+  scheduler.execute(uint32_t(sample_count), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
-      uint32_t index = data.position_to_index(samples[i].position(scene));
-      _position_to_index[i] = index;
+      const auto& s = samples[i];
+      if (s.is_medium) {
+        continue;
+      }
+      uint32_t index = data.position_to_index(s.pos);
       atomic_inc(ptr + index);
     }
   });
@@ -88,17 +113,42 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     sum += t;
   }
 
+  uint32_t total = _cell_ends.back();
+  _positions.resize(total);
+  _normals.resize(total);
+  _w_in.resize(total);
+  _d_vcm.resize(total);
+  _d_vm.resize(total);
+  _path_lengths.resize(total);
+  _throughput_rgb_div_pdf.resize(total);
+
   ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
-  scheduler.execute(uint32_t(sample_count), [this, ptr](uint32_t begin, uint32_t end, uint32_t thread_id) {
+  scheduler.execute(uint32_t(sample_count), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
     for (uint32_t i = begin; i < end; ++i) {
-      uint32_t index = _position_to_index[i];
-      uint32_t target_cell = atomic_inc(ptr + index);
-      _indices[target_cell] = i;
+      const auto& s = samples[i];
+      if (s.is_medium) {
+        continue;
+      }
+      uint32_t cell = data.position_to_index(s.pos);
+      uint32_t dst = atomic_inc(ptr + cell) - 1u;
+      _positions[dst] = s.pos;
+      _normals[dst] = s.nrm;
+      _w_in[dst] = s.w_i;
+      _d_vcm[dst] = s.d_vcm;
+      _d_vm[dst] = s.d_vm;
+      _path_lengths[dst] = s.path_length;
+      _throughput_rgb_div_pdf[dst] = (s.throughput / s.throughput.sampling_pdf()).to_rgb();
     }
   });
 
-  data.indices = make_array_view<uint32_t>(_indices.data(), _indices.size());
   data.cell_ends = make_array_view<uint32_t>(_cell_ends.data(), _cell_ends.size());
+  data.positions = make_array_view<float3>(_positions.data(), _positions.size());
+  data.normals = make_array_view<float3>(_normals.data(), _normals.size());
+  data.w_in = make_array_view<float3>(_w_in.data(), _w_in.size());
+  data.d_vcm = make_array_view<float>(_d_vcm.data(), _d_vcm.size());
+  data.d_vm = make_array_view<float>(_d_vm.data(), _d_vm.size());
+  data.path_lengths = make_array_view<uint32_t>(_path_lengths.data(), _path_lengths.size());
+  data.throughput_rgb_div_pdf = make_array_view<float3>(_throughput_rgb_div_pdf.data(), _throughput_rgb_div_pdf.size());
 }
 
 }  // namespace etx

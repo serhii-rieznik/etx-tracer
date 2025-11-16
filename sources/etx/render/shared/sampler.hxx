@@ -6,6 +6,9 @@ namespace etx {
 
 struct Sampler {
   uint32_t seed = 0;
+  float fixed_u = 0.0f;
+  float fixed_v = 0.0f;
+  float fixed_w = 0.0f;
 
   ETX_SHARED_CODE Sampler() {
   }
@@ -32,24 +35,44 @@ struct Sampler {
     return {a, b};
   }
 
+  ETX_SHARED_CODE void push_fixed(float u, float v, float w) {
+    fixed_u = u;
+    fixed_v = v;
+    fixed_w = w;
+  }
+
+  ETX_SHARED_CODE void pop_fixed() {
+    fixed_u = 0.0f;
+    fixed_v = 0.0f;
+    fixed_w = 0.0f;
+  }
+
+  ETX_SHARED_CODE bool has_fixed() const {
+    return (sqr(fixed_u) + sqr(fixed_v) + sqr(fixed_w)) > kEpsilon;
+  }
+
   static ETX_SHARED_CODE uint32_t random_seed(const uint32_t val0, const uint32_t val1) {
     uint32_t v0 = val0;
     uint32_t v1 = val1;
-    uint32_t s0 = 0;
-    for (uint32_t n = 0; n < 16; ++n) {
-      s0 += 0x9e3779b9;
-      v0 += ((v1 << 4) + 0xa341316c) ^ (v1 + s0) ^ ((v1 >> 5) + 0xc8013ea4);
-      v1 += ((v0 << 4) + 0xad90777d) ^ (v0 + s0) ^ ((v0 >> 5) + 0x7e95761e);
+    uint32_t s0 = 0u;
+    for (uint32_t n = 0u; n < 16u; ++n) {
+      s0 += 0x9e3779b9u;
+      v0 += ((v1 << 4u) + 0xa341316cu) ^ (v1 + s0) ^ ((v1 >> 5u) + 0xc8013ea4u);
+      v1 += ((v0 << 4u) + 0xad90777du) ^ (v0 + s0) ^ ((v0 >> 5u) + 0x7e95761eu);
     }
     return v0;
   }
 
-  static ETX_SHARED_CODE float next_random(uint32_t& previous) {
-    previous = previous * 1664525u + 1013904223u;
+  static ETX_SHARED_CODE float next_random(uint32_t& seed) {
+    seed = (seed ^ 61u) ^ (seed >> 16u);
+    seed *= 9u;
+    seed = seed ^ (seed >> 4u);
+    seed *= 0x27d4eb2du;
+    seed = seed ^ (seed >> 15u);
     union {
       uint32_t i;
       float f;
-    } wrap = {(previous >> 9) | 0x3f800000};
+    } wrap = {(seed >> 9) | 0x3f800000u};
     return wrap.f - 1.0f;
   }
 };

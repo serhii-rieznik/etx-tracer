@@ -1,13 +1,37 @@
 {
-    "geometry" : "cornellbox.obj",
-    "materials" : "cornellbox.materials",
-    "camera" : {
-        "viewport" : [1080.0, 1080.0],
-        "origin" : [0.0, 1.0, 5.15],
-        "target" : [0.0, 1.0, 0.0],
-        "up" : [0.0, 1.0, 0.0],
-        "fov" : 26.99,
-        "lens-radius" : 0.125,
-        "focal-distance" : 4.6
-    }
+  "geometry": "cornellbox.obj",
+  "materials": "cornellbox.mtl",
+  "samples": 32,
+  "max-path-length": 1023,
+  "random-termination-start": 6,
+  "spectral": false,
+  "force-tangents": false,
+  "camera": {
+    "class": "perspective",
+    "viewport": [
+      640,
+      640
+    ],
+    "origin": [
+      0.0,
+      1.000000238418579,
+      3.819999933242798
+    ],
+    "target": [
+      0.0,
+      1.000000238418579,
+      -6.179999351501465
+    ],
+    "up": [
+      0.0,
+      0.9999999403953552,
+      -0.0
+    ],
+    "fov": 39.597755335771296,
+    "focal-length": 50.0,
+    "lens-radius": 0.0,
+    "focal-distance": 0.0,
+    "clip-near": 0.10000000149011612,
+    "clip-far": 100.0
+  }
 }

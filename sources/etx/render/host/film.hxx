@@ -1,53 +1,94 @@
 ﻿#pragma once
 
-#include <etx/render/shared/base.hxx>
-#include <vector>
+#include <etx/core/pimpl.hxx>
+#include <etx/render/shared/camera.hxx>
 
 namespace etx {
 
+struct TaskScheduler;
+struct Scene;
+
+struct FilmImpl;
 struct Film {
-  Film() = default;
-  ~Film() = default;
+  enum : uint32_t {
+    Result,
+    Denoised,
+    Albedo,
+    Normals,
+    CameraImage,
+    LightImage,
+    LightIteration,
+    CameraAdaptive,
+    LightAdaptive,
+    Debug,
 
-  void resize(const uint2& dim, uint32_t threads);
+    LayerCount,
+  };
 
-  void atomic_add(const float4& value, const float2& ndc_coord, uint32_t thread_id);
-  void atomic_add(const float4& value, uint32_t x, uint32_t y, uint32_t thread_id);
+  enum ClearOptions : uint32_t {
+    ClearCameraData = 1u << 0u,
+    ClearLightData = 1u << 1u,
+    ClearEverything = 1u << 2u,
+    ClearLightIteration = 1u << 3u,
+  };
 
-  void accumulate(const float4& value, const float2& ndc_coord, float t);
-  void accumulate(const float4& value, uint32_t x, uint32_t y, float t);
+  enum : uint32_t {
+    PixelFilterBlackmanHarris,
+    PixelFilterCount,
 
-  void flush_to(Film& other, float t);
+    PixelFilterSize = 128u,
+  };
 
-  void clear();
+  static constexpr float kFilmHorizontalSize = 36.0f;
+  static constexpr float kFilmVerticalSize = 24.0f;
 
-  const uint2& dimensions() const {
-    return _dimensions;
+  struct LayerValue {
+    float3 value = {};
+    uint32_t layer = 0;
+  };
+
+  Film(TaskScheduler&);
+  ~Film();
+
+  void allocate(const uint2& dim);
+
+  float2 sample(const Scene& scene, const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const;
+
+  void accumulate_camera_image(const uint2& pixel, const float3& color, const float3& normal, const float3& albedo);
+  void atomic_add_light_iteration(const float3& value, const float2& ndc_coord);
+  void commit_light_iteration(uint32_t i);
+
+  void clear(uint32_t clear_options);
+
+  const uint2& size() const;  // total size of the film in pixels
+  uint2 dimensions() const;   // current size of the film in pixels, accounting for pixel size
+
+  float4* layer(uint32_t layer) const;
+  void denoise(uint32_t layer_to_denoise);
+
+  uint32_t pixel_size() const;
+  void set_pixel_size(uint32_t size);
+
+  /*
+   * Adaptive sampling
+   */
+  uint32_t pixel_count() const;
+  uint32_t active_pixel_count() const;
+
+  bool active_pixel(uint32_t linear_index, uint2& location) const;
+  void estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, float threshold);
+  float noise_level() const;
+
+  static void generate_filter_image(uint32_t filter, std::vector<float4>&);
+
+  static float calculate_ev(float f, float s) {
+    return log2f(f * f / s);
   }
 
-  const uint32_t count() const {
-    return _dimensions.x * _dimensions.y;
-  }
-
-  const float4* data() const {
-    return _buffer.data();
-  }
-
-  uint32_t pixel_at(uint32_t i) const {
-    return _sequence[i];
-  }
+  static const char* layer_name(uint32_t layer);
 
  private:
-  Film(const Film&) = delete;
-  Film& operator=(const Film&) = delete;
-  Film(Film&&) = delete;
-  Film& operator=(Film&&) = delete;
-
- private:
-  uint2 _dimensions = {};
-  uint32_t _thread_count = 0;
-  std::vector<float4> _buffer = {};
-  std::vector<uint32_t> _sequence = {};
+  ETX_DECLARE_PIMPL(Film, 640);
 };
 
 }  // namespace etx

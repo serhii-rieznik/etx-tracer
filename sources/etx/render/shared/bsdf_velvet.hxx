@@ -2,10 +2,28 @@
 
 namespace VelvetBSDF {
 
+struct VelvetMaterial {
+  SpectralImage scattering;
+  SpectralImage reflectance;
+  SampledImage roughness;
+};
+
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   float3 w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);
-  return {w_o, evaluate(data, w_o, mtl, scene, smp), BSDFSample::Diffuse | BSDFSample::Reflection};
+
+  auto eval = evaluate(data, w_o, mtl, scene, smp);
+
+  BSDFSample result = {};
+  result.w_o = w_o;
+  result.properties = BSDFSample::Reflection | BSDFSample::Diffuse;
+  result.medium_index = data.current_medium;
+  result.eta = 1.0f;
+  result.pdf = eval.pdf;
+  ETX_VALIDATE(result.pdf);
+  result.weight = eval.bsdf / eval.pdf;
+  ETX_VALIDATE(result.weight);
+  return result;
 }
 
 ETX_GPU_CODE float lambda_velvet_l(float r, float x) {
@@ -47,16 +65,17 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   float n_dot_o = fmaxf(0.0f, dot(w_o, frame.nrm));
   float n_dot_i = fmaxf(0.0f, -dot(data.w_i, frame.nrm));
   if ((n_dot_o <= kEpsilon) || (n_dot_i <= kEpsilon))
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
 
   float3 m = normalize(w_o - data.w_i);
   float m_dot_o = fmaxf(0.0f, dot(w_o, m));
   float m_dot_i = fmaxf(0.0f, -dot(data.w_i, m));
   if ((m_dot_o <= kEpsilon) || (m_dot_i <= kEpsilon))
-    return {data.spectrum_sample.wavelength, 0.0f};
+    return {data.spectrum_sample, 0.0f};
 
+  auto roughness = evaluate_roughness(mtl, data.tex, scene);
   float specular_scale_base = 0.0f;
-  float alpha = 0.5f * (mtl.roughness.x + mtl.roughness.y);
+  float alpha = 0.5f * (roughness.x + roughness.y);
   if (alpha > kEpsilon) {
     float inv_alpha = 1.0f / (kEpsilon + alpha);
     float m_dot_n = dot(m, frame.nrm);
@@ -73,22 +92,18 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
     ETX_VALIDATE(specular_scale_base);
   }
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.diffuse, data.tex, scene);
-  auto specular = apply_image(data.spectrum_sample, mtl.specular, data.tex, scene);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+  auto specular = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
 
   float diffuse_scale = diffuse_burley(alpha, n_dot_i, n_dot_o, m_dot_o);
 
-  BSDFEval eval;
+  BSDFEval eval = {};
   eval.func = diffuse * diffuse_scale + specular * specular_scale_base / n_dot_o;
   ETX_VALIDATE(eval.func);
-
   eval.bsdf = diffuse * diffuse_scale * n_dot_o + specular * specular_scale_base;
   ETX_VALIDATE(eval.bsdf);
-
   eval.pdf = 1.0f / kDoublePi;
-
-  eval.weight = eval.bsdf / eval.pdf;
-  ETX_VALIDATE(eval.weight);
+  ETX_VALIDATE(eval.pdf);
   return eval;
 }
 
@@ -102,6 +117,10 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
+}
+
+ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 
 }  // namespace VelvetBSDF

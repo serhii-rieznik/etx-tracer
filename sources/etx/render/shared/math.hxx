@@ -1,12 +1,13 @@
-﻿#pragma once
+#pragma once
 
 #if (ETX_RENDER_BASE_INCLUDED)
 #else
 # error This file should not be included separately. Use etx/render/shared/base.hxx instead
 #endif
 
-#include <cmath>
-#include <complex>
+#include <math.h>
+#include <complex.h>
+#include <string.h>
 
 template <class t>
 struct vector2 {
@@ -21,6 +22,12 @@ struct vector3 {
 template <class t>
 struct vector4 {
   t x, y, z, w;
+};
+
+struct SphericalCoordinates {
+  float phi;
+  float theta;
+  float r;
 };
 
 #if (ETX_NVCC_COMPILER)
@@ -41,6 +48,24 @@ using int4 = vector4<int32_t>;
 using uint2 = vector2<uint32_t>;
 using uint3 = vector3<uint32_t>;
 using uint4 = vector4<uint32_t>;
+using short2 = vector2<int16_t>;
+using short3 = vector3<int16_t>;
+using short4 = vector4<int16_t>;
+using ushort2 = vector2<uint16_t>;
+using ushort3 = vector3<uint16_t>;
+using ushort4 = vector4<uint16_t>;
+using byte2 = vector2<int8_t>;
+using byte3 = vector3<int8_t>;
+using byte4 = vector4<int8_t>;
+using ubyte2 = vector2<uint8_t>;
+using ubyte3 = vector3<uint8_t>;
+using ubyte4 = vector4<uint8_t>;
+using char2 = byte2;
+using char3 = byte3;
+using char4 = byte4;
+using uchar2 = ubyte2;
+using uchar3 = ubyte3;
+using uchar4 = ubyte4;
 #endif
 
 using complex = STD_NS::complex<float>;
@@ -51,6 +76,9 @@ ETX_GPU_CODE complex complex_sqrt(complex c) {
 ETX_GPU_CODE complex complex_cos(complex c) {
   return STD_NS::cos(c);
 }
+ETX_GPU_CODE complex complex_exp(complex c) {
+  return STD_NS::exp(c);
+}
 ETX_GPU_CODE float complex_abs(complex c) {
   return STD_NS::abs(c);
 }
@@ -58,19 +86,14 @@ ETX_GPU_CODE float complex_norm(complex c) {
   return STD_NS::norm(c);
 }
 
-using ubyte2 = vector2<uint8_t>;
-using ubyte3 = vector3<uint8_t>;
-using ubyte4 = vector4<uint8_t>;
-
 struct float3x3 {
   float3 col[3] ETX_EMPTY_INIT;
 };
 
-struct float4x4 {
+union float4x4 {
   float4 col[4] ETX_EMPTY_INIT;
+  float val[16];
 };
-
-#include <etx/render/shared/vector_math.hxx>
 
 namespace etx {
 
@@ -80,19 +103,480 @@ constexpr float kPi = 3.1415926535897932384626433832795f;
 constexpr float kDoublePi = 6.283185307179586476925286766559f;
 constexpr float kSqrt2 = 1.4142135623730950488016887242097f;
 constexpr float kInvPi = 0.31830988618379067153776752674503f;
+constexpr float kSqrtPI = 1.7724538509055160272981674833411f;
 constexpr float kEpsilon = 1.192092896e-07f;
 constexpr float kMaxFloat = 3.402823466e+38f;
-constexpr float kRayEpsilon = 1.0f / 65535.0f;
+constexpr float kMaxHalf = 65504.0f;
+constexpr float kInvMaxHalf = 1.0f / kMaxHalf;
+constexpr float kRayEpsilon = 15.0f / (kMaxHalf - 1.0f);
 constexpr float kDeltaAlphaTreshold = 1.0e-4f;
-
-constexpr float kPlanetRadius = 6371e+3f;
-constexpr float kAtmosphereRadius = 120e+3f;
 
 constexpr uint32_t kInvalidIndex = ~0u;
 
+template <class t>
+ETX_GPU_CODE constexpr t min(t a, t b) {
+  return a < b ? a : b;
+}
+
+template <class t>
+ETX_GPU_CODE constexpr t max(t a, t b) {
+  return a > b ? a : b;
+}
+
+template <class t>
+ETX_GPU_CODE constexpr t clamp(t val, t min_val, t max_val) {
+  return (val < min_val) ? min_val : (val > max_val ? max_val : val);
+}
+
+ETX_GPU_CODE constexpr float saturate(float val) {
+  return clamp(val, 0.0f, 1.0f);
+}
+
+ETX_GPU_CODE constexpr float sign(float val) {
+  return val >= 0.0f ? 1.0f : -1.0f;
+}
+
+/*
+ * Float2
+ */
+#define ETX_V2(V, C)                                               \
+  constexpr ETX_GPU_CODE V operator+(const V& a, C b) {            \
+    return {a.x + b, a.y + b};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator+(C b, const V& a) {            \
+    return {a.x + b, a.y + b};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator+(const V& a, const V& b) {     \
+    return {a.x + b.x, a.y + b.y};                                 \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator+=(V& a, const V& b) {         \
+    a.x += b.x;                                                    \
+    a.y += b.y;                                                    \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator-(const V& a) {                 \
+    return {-a.x, -a.y};                                           \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator-(const V& a, C b) {            \
+    return {a.x - b, a.y - b};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator-(C b, const V& a) {            \
+    return {b - a.x, b - a.y};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator-(const V& a, const V& b) {     \
+    return {a.x - b.x, a.y - b.y};                                 \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator-=(V& a, const V& b) {         \
+    a.x -= b.x;                                                    \
+    a.y -= b.y;                                                    \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator*(const V& a, C b) {            \
+    return {a.x * b, a.y * b};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator*(C b, const V& a) {            \
+    return {a.x * b, a.y * b};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator*(const V& a, const V& b) {     \
+    return {a.x * b.x, a.y * b.y};                                 \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator*=(V& a, const V& b) {         \
+    a.x *= b.x;                                                    \
+    a.y *= b.y;                                                    \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator*=(V& a, C b) {                \
+    a.x *= b;                                                      \
+    a.y *= b;                                                      \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator/(const V& a, C b) {            \
+    return {a.x / b, a.y / b};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator/(C b, const V& a) {            \
+    return {a.x / b, a.y / b};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator/(const V& a, const V& b) {     \
+    return {a.x / b.x, a.y / b.y};                                 \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator/=(V& a, const V& b) {         \
+    a.x /= b.x;                                                    \
+    a.y /= b.y;                                                    \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator/=(V& a, const C b) {          \
+    a.x /= b;                                                      \
+    a.y /= b;                                                      \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE bool operator==(const V& a, const V& b) { \
+    return (a.x == b.x) && (a.y == b.y);                           \
+  }
+
+/*
+ * Float3
+ */
+#define ETX_V3(V, C)                                               \
+  constexpr ETX_GPU_CODE V operator+(const V& a, C b) {            \
+    return {a.x + b, a.y + b, a.z + b};                            \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator+(C b, const V& a) {            \
+    return {a.x + b, a.y + b, a.z + b};                            \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator+(const V& a, const V& b) {     \
+    return {a.x + b.x, a.y + b.y, a.z + b.z};                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator+=(V& a, const V& b) {         \
+    a.x += b.x;                                                    \
+    a.y += b.y;                                                    \
+    a.z += b.z;                                                    \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator+=(V& a, const C b) {          \
+    a.x += b;                                                      \
+    a.y += b;                                                      \
+    a.z += b;                                                      \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator-(const V& a) {                 \
+    return {-a.x, -a.y, -a.z};                                     \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator-(const V& a, C b) {            \
+    return {a.x - b, a.y - b, a.z - b};                            \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator-(C b, const V& a) {            \
+    return {b - a.x, b - a.y, b - a.z};                            \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator-(const V& a, const V& b) {     \
+    return {a.x - b.x, a.y - b.y, a.z - b.z};                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator-=(V& a, const V& b) {         \
+    a.x -= b.x;                                                    \
+    a.y -= b.y;                                                    \
+    a.z -= b.z;                                                    \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator-=(V& a, C b) {                \
+    a.x -= b;                                                      \
+    a.y -= b;                                                      \
+    a.z -= b;                                                      \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator*(const V& a, C b) {            \
+    return {a.x * b, a.y * b, a.z * b};                            \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator*(C b, const V& a) {            \
+    return {a.x * b, a.y * b, a.z * b};                            \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator*(const V& a, const V& b) {     \
+    return {a.x * b.x, a.y * b.y, a.z * b.z};                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator*=(V& a, const V& b) {         \
+    return (a = {a.x * b.x, a.y * b.y, a.z * b.z});                \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator*=(V& a, C b) {                \
+    a.x *= b;                                                      \
+    a.y *= b;                                                      \
+    a.z *= b;                                                      \
+    return a;                                                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator/(const V& a, C b) {            \
+    return {a.x / b, a.y / b, a.z / b};                            \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator/(C b, const V& a) {            \
+    return {b / a.x, b / a.y, b / a.z};                            \
+  }                                                                \
+  constexpr ETX_GPU_CODE V operator/(const V& a, const V& b) {     \
+    return {a.x / b.x, a.y / b.y, a.z / b.z};                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator/=(V& a, const V& b) {         \
+    return (a = {a.x / b.x, a.y / b.y, a.z / b.z});                \
+  }                                                                \
+  constexpr ETX_GPU_CODE V& operator/=(V& a, const C b) {          \
+    return (a = {a.x / b, a.y / b, a.z / b});                      \
+  }                                                                \
+  constexpr ETX_GPU_CODE bool operator==(const V& a, const V& b) { \
+    return (a.x == b.x) && (a.y == b.y) && (a.z == b.z);           \
+  }
+
+/*
+ * Float4
+ */
+#define ETX_V4(V, C)                                           \
+  constexpr ETX_GPU_CODE V operator+(const V& a, C b) {        \
+    return {a.x + b, a.y + b, a.z + b, a.w + b};               \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator+(C b, const V& a) {        \
+    return {a.x + b, a.y + b, a.z + b, a.w + b};               \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator+(const V& a, const V& b) { \
+    return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w};       \
+  }                                                            \
+  constexpr V& operator+=(V& a, const V& b) {                  \
+    a.x += b.x;                                                \
+    a.y += b.y;                                                \
+    a.z += b.z;                                                \
+    a.w += b.w;                                                \
+    return a;                                                  \
+  }                                                            \
+  constexpr ETX_GPU_CODE V& operator+=(V& a, C b) {            \
+    a.x += b;                                                  \
+    a.y += b;                                                  \
+    a.z += b;                                                  \
+    a.w += b;                                                  \
+    return a;                                                  \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator-(const V& a) {             \
+    return {-a.x, -a.y, -a.z, -a.w};                           \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator-(const V& a, C b) {        \
+    return {a.x - b, a.y - b, a.z - b, a.w - b};               \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator-(C b, const V& a) {        \
+    return {b - a.x, b - a.y, b - a.z, b - a.w};               \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator-(const V& a, const V& b) { \
+    return {a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w};       \
+  }                                                            \
+  constexpr ETX_GPU_CODE V& operator-=(V& a, const V& b) {     \
+    a.x -= b.x;                                                \
+    a.y -= b.y;                                                \
+    a.z -= b.z;                                                \
+    a.w -= b.w;                                                \
+    return a;                                                  \
+  }                                                            \
+  constexpr ETX_GPU_CODE V& operator-=(V& a, C b) {            \
+    a.x -= b;                                                  \
+    a.y -= b;                                                  \
+    a.z -= b;                                                  \
+    a.w -= b;                                                  \
+    return a;                                                  \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator*(const V& a, C b) {        \
+    return {a.x * b, a.y * b, a.z * b, a.w * b};               \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator*(C b, const V& a) {        \
+    return {a.x * b, a.y * b, a.z * b, a.w * b};               \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator*(const V& a, const V& b) { \
+    return {a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w};       \
+  }                                                            \
+  constexpr ETX_GPU_CODE V& operator*=(V& a, const V& b) {     \
+    a.x *= b.x;                                                \
+    a.y *= b.y;                                                \
+    a.z *= b.z;                                                \
+    a.w *= b.w;                                                \
+    return a;                                                  \
+  }                                                            \
+  constexpr ETX_GPU_CODE V& operator*=(V& a, C b) {            \
+    a.x *= b;                                                  \
+    a.y *= b;                                                  \
+    a.z *= b;                                                  \
+    a.w *= b;                                                  \
+    return a;                                                  \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator/(const V& a, C b) {        \
+    return {a.x / b, a.y / b, a.z / b, a.w / b};               \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator/(C b, const V& a) {        \
+    return {b / a.x, b / a.y, b / a.z, b / a.w};               \
+  }                                                            \
+  constexpr ETX_GPU_CODE V operator/(const V& a, const V& b) { \
+    return {a.x / b.x, a.y / b.y, a.z / b.z, a.w / b.w};       \
+  }                                                            \
+  constexpr ETX_GPU_CODE V& operator/=(V& a, const V& b) {     \
+    a.x /= b.x;                                                \
+    a.y /= b.y;                                                \
+    a.z /= b.z;                                                \
+    a.w /= b.w;                                                \
+    return a;                                                  \
+  }                                                            \
+  constexpr ETX_GPU_CODE V& operator/=(V& a, C b) {            \
+    a.x /= b;                                                  \
+    a.y /= b;                                                  \
+    a.z /= b;                                                  \
+    a.w /= b;                                                  \
+    return a;                                                  \
+  }
+
+ETX_V2(float2, float)
+ETX_V3(float3, float)
+ETX_V4(float4, float)
+
+ETX_V2(int2, int32_t)
+ETX_V3(int3, int32_t)
+ETX_V4(int4, int32_t)
+
+#pragma warning(push)
+#pragma warning(disable : 4146)
+ETX_V2(uint2, uint32_t)
+ETX_V3(uint3, uint32_t)
+ETX_V4(uint4, uint32_t)
+#pragma warning(pop)
+
+#define ETX_FUNC_2(func, cfunc)               \
+  ETX_GPU_CODE float2 func(const float2& a) { \
+    return {cfunc(a.x), cfunc(a.y)};          \
+  }
+#define ETX_FUNC_3(func, cfunc)                  \
+  ETX_GPU_CODE float3 func(const float3& a) {    \
+    return {cfunc(a.x), cfunc(a.y), cfunc(a.z)}; \
+  }
+#define ETX_FUNC_4(func, cfunc)                              \
+  ETX_GPU_CODE float4 func(const float4& a) {                \
+    return {cfunc(a.x), cfunc(a.y), cfunc(a.z), cfunc(a.w)}; \
+  }
+
+#define ETX_UNARY_FUNC(func, cfunc) \
+  ETX_FUNC_2(func, cfunc)           \
+  ETX_FUNC_3(func, cfunc)           \
+  ETX_FUNC_4(func, cfunc)
+
+#define ETX_BINARY_FUNC_2(name, impl)                          \
+  ETX_GPU_CODE float2 name(const float2& a, const float2& b) { \
+    return {                                                   \
+      impl(a.x, b.x),                                          \
+      impl(a.y, b.y),                                          \
+    };                                                         \
+  }                                                            \
+  ETX_GPU_CODE float2 name(const float2& a, const float b) {   \
+    return {                                                   \
+      impl(a.x, b),                                            \
+      impl(a.y, b),                                            \
+    };                                                         \
+  }
+
+#define ETX_BINARY_FUNC_3(name, impl)                          \
+  ETX_GPU_CODE float3 name(const float3& a, const float3& b) { \
+    return {                                                   \
+      impl(a.x, b.x),                                          \
+      impl(a.y, b.y),                                          \
+      impl(a.z, b.z),                                          \
+    };                                                         \
+  }                                                            \
+  ETX_GPU_CODE float3 name(const float3& a, const float b) {   \
+    return {                                                   \
+      impl(a.x, b),                                            \
+      impl(a.y, b),                                            \
+      impl(a.z, b),                                            \
+    };                                                         \
+  }
+
+#define ETX_BINARY_FUNC_4(name, impl)                          \
+  ETX_GPU_CODE float4 name(const float4& a, const float4& b) { \
+    return {                                                   \
+      impl(a.x, b.x),                                          \
+      impl(a.y, b.y),                                          \
+      impl(a.z, b.z),                                          \
+      impl(a.w, b.w),                                          \
+    };                                                         \
+  }                                                            \
+  ETX_GPU_CODE float4 name(const float4& a, const float b) {   \
+    return {                                                   \
+      impl(a.x, b),                                            \
+      impl(a.y, b),                                            \
+      impl(a.z, b),                                            \
+      impl(a.w, b),                                            \
+    };                                                         \
+  }
+
+#define ETX_BINARY_FUNC(name, impl) \
+  ETX_BINARY_FUNC_2(name, impl)     \
+  ETX_BINARY_FUNC_3(name, impl)     \
+  ETX_BINARY_FUNC_4(name, impl)
+
+ETX_UNARY_FUNC(abs, fabsf);
+ETX_UNARY_FUNC(exp, expf);
+ETX_UNARY_FUNC(sqrt, sqrtf);
+ETX_UNARY_FUNC(sin, sinf);
+ETX_UNARY_FUNC(cos, cosf);
+ETX_UNARY_FUNC(floor, floorf);
+ETX_UNARY_FUNC(saturate, saturate);
+ETX_UNARY_FUNC(sign, sign);
+ETX_UNARY_FUNC(atan, atanf);
+
+ETX_BINARY_FUNC(max, fmaxf)
+ETX_BINARY_FUNC(min, fminf)
+ETX_BINARY_FUNC(pow, powf)
+ETX_BINARY_FUNC(mod, fmodf)
+
+ETX_GPU_CODE float dot(const float2& a, const float b) {
+  return a.x * b + a.y * b;
+}
+ETX_GPU_CODE float dot(const float3& a, const float b) {
+  return a.x * b + a.y * b + a.z * b;
+}
+ETX_GPU_CODE float dot(const float4& a, const float b) {
+  return a.x * b + a.y * b + a.z * b + a.w * b;
+}
+ETX_GPU_CODE float dot(const float2& a, const float2& b) {
+  return a.x * b.x + a.y * b.y;
+}
+ETX_GPU_CODE float dot(const float3& a, const float3& b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+ETX_GPU_CODE float dot(const float4& a, const float4& b) {
+  return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+}
+
+ETX_GPU_CODE float length(const float2& v) {
+  return sqrtf(dot(v, v));
+}
+ETX_GPU_CODE float length(const float3& v) {
+  return sqrtf(dot(v, v));
+}
+
+ETX_GPU_CODE float2 normalize(const float2& v) {
+  return v / length(v);
+}
+ETX_GPU_CODE float3 normalize(const float3& v) {
+  return v / length(v);
+}
+
+ETX_GPU_CODE float3 reflect(const float3& v, const float3& n) {
+  return v - (2.0f * dot(v, n)) * n;
+}
+
+ETX_GPU_CODE float3 cross(const float3& a, const float3& b) {
+  return {
+    a.y * b.z - b.y * a.z,
+    a.z * b.x - b.z * a.x,
+    a.x * b.y - b.x * a.y,
+  };
+}
+
+ETX_GPU_CODE float2 lerp(const float2& a, const float2& b, float t) {
+  float inv_t = 1.0f - t;
+  return {
+    a.x * inv_t + b.x * t,
+    a.y * inv_t + b.y * t,
+  };
+}
+
+ETX_GPU_CODE float3 lerp(const float3& a, const float3& b, float t) {
+  float inv_t = 1.0f - t;
+  return {
+    a.x * inv_t + b.x * t,
+    a.y * inv_t + b.y * t,
+    a.z * inv_t + b.z * t,
+  };
+}
+
+ETX_GPU_CODE float4 lerp(const float4& a, const float4& b, float t) {
+  float inv_t = 1.0f - t;
+  return {
+    a.x * inv_t + b.x * t,
+    a.y * inv_t + b.y * t,
+    a.z * inv_t + b.z * t,
+    a.w * inv_t + b.w * t,
+  };
+}
+
 struct ETX_ALIGNED BoundingBox {
   float3 p_min ETX_EMPTY_INIT;
+  float pad0 ETX_EMPTY_INIT;
   float3 p_max ETX_EMPTY_INIT;
+  float pad1 ETX_EMPTY_INIT;
 
   ETX_GPU_CODE float3 to_local(const float3& p) const {
     return (p - p_min) / (p_max - p_min);
@@ -108,17 +592,23 @@ struct ETX_ALIGNED BoundingBox {
   }
 };
 
-struct ETX_ALIGNED Vertex {
-  float3 pos = {};
-  float3 nrm = {};
-  float3 tan = {};
-  float3 btn = {};
-  float2 tex = {};
+#define ETX_MATH_INCLUDES 1
+#include <etx/render/shared/vector_math.hxx>
+#undef ETX_MATH_INCLUDES
+
+struct Vertex {
+  float3 pos;
+  float3 nrm;
+  float3 tan;
+  float3 btn;
+  float2 tex;
 };
 
 struct ETX_ALIGNED Triangle {
   uint32_t i[3] = {kInvalidIndex, kInvalidIndex, kInvalidIndex};
+  uint32_t material_index = kInvalidIndex;
   float3 geo_n = {};
+  float pad = 0.0f;
 };
 
 struct ETX_ALIGNED LocalFrame {
@@ -183,7 +673,7 @@ struct ETX_ALIGNED Intersection : public Vertex {
   float3 barycentric = {};
   uint32_t triangle_index = kInvalidIndex;
   float3 w_i = {};
-  float t = kMaxFloat;
+  float t = 0.0f;
   uint32_t material_index = kInvalidIndex;
   uint32_t emitter_index = kInvalidIndex;
 
@@ -197,87 +687,6 @@ struct ETX_ALIGNED Intersection : public Vertex {
     return t;
   }
 };
-
-constexpr const uint64_t kIntersectionSize = sizeof(Intersection);
-
-template <class t>
-ETX_GPU_CODE constexpr t min(t a, t b) {
-  return a < b ? a : b;
-}
-
-template <class t>
-ETX_GPU_CODE constexpr t max(t a, t b) {
-  return a > b ? a : b;
-}
-
-template <class t>
-ETX_GPU_CODE constexpr t clamp(t val, t min_val, t max_val) {
-  return (val < min_val) ? min_val : (val > max_val ? max_val : val);
-}
-
-ETX_GPU_CODE float2 max(const float2& a, const float2& b) {
-  return {
-    max(a.x, b.x),
-    max(a.y, b.y),
-  };
-}
-
-ETX_GPU_CODE float3 max(const float3& a, const float3& b) {
-  return {
-    max(a.x, b.x),
-    max(a.y, b.y),
-    max(a.z, b.z),
-  };
-}
-
-ETX_GPU_CODE float4 max(const float4& a, const float4& b) {
-  return {
-    max(a.x, b.x),
-    max(a.y, b.y),
-    max(a.z, b.z),
-    max(a.w, b.w),
-  };
-}
-
-ETX_GPU_CODE float2 min(const float2& a, const float2& b) {
-  return {
-    min(a.x, b.x),
-    min(a.y, b.y),
-  };
-}
-
-ETX_GPU_CODE float3 min(const float3& a, const float3& b) {
-  return {
-    min(a.x, b.x),
-    min(a.y, b.y),
-    min(a.z, b.z),
-  };
-}
-
-ETX_GPU_CODE float4 min(const float4& a, const float4& b) {
-  return {
-    min(a.x, b.x),
-    min(a.y, b.y),
-    min(a.z, b.z),
-    max(a.w, b.w),
-  };
-}
-
-ETX_GPU_CODE constexpr float saturate(float val) {
-  return clamp(val, 0.0f, 1.0f);
-}
-
-ETX_GPU_CODE constexpr float2 saturate(float2 val) {
-  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f)};
-}
-
-ETX_GPU_CODE constexpr float3 saturate(float3 val) {
-  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f), clamp(val.z, 0.0f, 1.0f)};
-}
-
-ETX_GPU_CODE constexpr float4 saturate(float4 val) {
-  return {clamp(val.x, 0.0f, 1.0f), clamp(val.y, 0.0f, 1.0f), clamp(val.z, 0.0f, 1.0f), clamp(val.w, 0.0f, 1.0f)};
-}
 
 template <typename T>
 ETX_GPU_CODE constexpr T lerp(T a, T b, float t) {
@@ -301,7 +710,7 @@ ETX_GPU_CODE float4 to_float4(const ubyte4& v) {
   return {v.x / 255.0f, v.y / 255.0f, v.z / 255.0f, v.w / 255.0f};
 }
 
-ETX_GPU_CODE ubyte4 to_ubyte4(const float4& v) {
+ETX_GPU_CODE constexpr ubyte4 to_ubyte4(const float4& v) {
   return {
     static_cast<uint8_t>(saturate(v.x) * 255.0f),
     static_cast<uint8_t>(saturate(v.y) * 255.0f),
@@ -310,8 +719,19 @@ ETX_GPU_CODE ubyte4 to_ubyte4(const float4& v) {
   };
 }
 
+ETX_GPU_CODE float3 hsv_to_rgb(const float3& hsv) {
+  float h = hsv.x;
+  float s = hsv.y;
+  float v = hsv.z;
+  return v * (1.0f - s * saturate(2.0f - abs(mod(h * 6.0f + float3{0.0f, 4.0f, 2.0f}, 6.0f) - 3.0f)));
+}
+
 ETX_GPU_CODE float luminance(const float3& value) {
   return value.x * 0.212671f + value.y * 0.715160f + value.z * 0.072169f;
+}
+
+ETX_GPU_CODE float3 orthonormalize(const float3& nrm, const float3& tan) {
+  return normalize(tan - dot(tan, nrm) * nrm);
 }
 
 ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
@@ -325,10 +745,15 @@ ETX_GPU_CODE auto orthonormal_basis(const float3& n) {
   return basis{a, b};
 }
 
-ETX_GPU_CODE float3 sample_cosine_distribution(const float2 rnd, const float3& n, const float3& u, const float3& v, float exponent) {
-  float cos_theta = powf(rnd.x, 1.0f / (exponent + 1.0f));
+ETX_GPU_CODE float3 sample_cosine_distribution(const float2 rnd, float exponent) {
+  float cos_theta = powf(fmaxf(rnd.x, kEpsilon), 1.0f / (exponent + 1.0f));
   float sin_theta = sqrtf(1.0f - cos_theta * cos_theta);
-  return (u * cosf(rnd.y * kDoublePi) + v * sinf(rnd.y * kDoublePi)) * sin_theta + n * cos_theta;
+  return {cosf(rnd.y * kDoublePi) * sin_theta, sinf(rnd.y * kDoublePi) * sin_theta, cos_theta};
+}
+
+ETX_GPU_CODE float3 sample_cosine_distribution(const float2 rnd, const float3& n, const float3& u, const float3& v, float exponent) {
+  float3 l = sample_cosine_distribution(rnd, exponent);
+  return u * l.x + v * l.y + n * l.z;
 }
 
 ETX_GPU_CODE float3 sample_cosine_distribution(const float2& rnd, const float3& n, float exponent) {
@@ -405,8 +830,12 @@ ETX_GPU_CODE float3 orthogonalize(const float3& t, const float3& b, const float3
   return normalize(t - n * dot(n, t)) * (dot(cross(n, t), b) < 0.0f ? -1.0f : 1.0f);
 }
 
-ETX_GPU_CODE float isfinite(float t) {
+ETX_GPU_CODE bool isfinite(float t) {
   return ::isfinite(t);
+}
+
+ETX_GPU_CODE bool valid_value(bool t) {
+  return t;
 }
 
 ETX_GPU_CODE bool valid_value(float t) {
@@ -423,6 +852,30 @@ ETX_GPU_CODE bool valid_value(const float3& v) {
 
 ETX_GPU_CODE bool valid_value(const float4& v) {
   return valid_value(v.x) && valid_value(v.y) && valid_value(v.z) && valid_value(v.w);
+}
+
+ETX_GPU_CODE bool value_is_correct(float t) {
+  return !std::isnan(t) && !std::isinf(t);
+}
+
+ETX_GPU_CODE bool value_is_correct(const float2& v) {
+  return value_is_correct(v.x) && value_is_correct(v.y);
+}
+
+ETX_GPU_CODE bool value_is_correct(const float3& v) {
+  return value_is_correct(v.x) && value_is_correct(v.y) && value_is_correct(v.z);
+}
+
+ETX_GPU_CODE bool value_is_correct(const float4& v) {
+  return value_is_correct(v.x) && value_is_correct(v.y) && value_is_correct(v.z) && value_is_correct(v.w);
+}
+
+ETX_GPU_CODE bool value_is_correct(const complex& v) {
+  return value_is_correct(v.real()) && value_is_correct(v.imag());
+}
+
+ETX_GPU_CODE bool is_valid_vector(const float3& v) {
+  return value_is_correct(v) && (dot(v, v) > 0.0f);
 }
 
 ETX_GPU_CODE bool isfinite(const float2& v) {
@@ -492,75 +945,82 @@ ETX_GPU_CODE float3 offset_ray(const float3& p, const float3& n) {
 ETX_GPU_CODE float power_heuristic(float f, float g) {
   float f2 = f * f;
   float g2 = g * g;
-  return saturate(f2 / (f2 + g2));
+  float denom = f2 + g2;
+  return denom > 0.0f ? saturate(f2 / denom) : 0.0f;
 }
 
-ETX_GPU_CODE float area_to_solid_angle_probability(float pdf_pos, const float3& source_point, const float3& target_normal, const float3& target_point, float p) {
-  auto w_o = source_point - target_point;
-  float a_distance_squared = dot(w_o, w_o);
-  if (a_distance_squared == 0.0f) {
-    return 0.0f;
-  }
-
-  w_o = w_o / sqrtf(a_distance_squared);
-  float cos_t = fabsf(clamp(dot(w_o, target_normal), -1.0f, 1.0f));
-  if (p != 1.0f) {
-    cos_t = powf(cos_t, p);
-  }
-  return (cos_t > 1.0e-5f) ? (pdf_pos * a_distance_squared / cos_t) : 0.0f;
-}
-
-ETX_GPU_CODE float2 uv_to_phi_theta(float u, float v) {
-  float phi = (u * 2.0f - 1.0f) * kPi;
-  float theta = (0.5f - v) * kPi;
-  return {phi, theta};
-}
-
-ETX_GPU_CODE float2 phi_theta_to_uv(float phi, float theta) {
-  float u = (phi / kPi + 1.0f) / 2.0f;
-  float v = 0.5f - theta / kPi;
-  return {u, v};
-}
-
-ETX_GPU_CODE float2 direction_to_phi_theta(const float3& dir) {
-  return {atan2f(dir.z, dir.x), asinf(dir.y)};
-}
-
-ETX_GPU_CODE float2 direction_to_uv(const float3& dir) {
-  float2 p_t = direction_to_phi_theta(dir);
-  return phi_theta_to_uv(p_t.x, p_t.y);
-}
-
-ETX_GPU_CODE float3 phi_theta_to_direction(float phi, float theta) {
-  float cos_p = cosf(phi);
-  float sin_p = sinf(phi);
-  float cos_t = cosf(theta);
-  float sin_t = sinf(theta);
-  return {
-    cos_p * cos_t,
-    sin_t,
-    sin_p * cos_t,
+ETX_GPU_CODE SphericalCoordinates to_spherical(const float3& dir) {
+  float r = length(dir);
+  return SphericalCoordinates{
+    .phi = atan2f(dir.z, dir.x),
+    .theta = asinf(dir.y / r),
+    .r = r,
   };
 }
 
-ETX_GPU_CODE float3 uv_to_direction(const float2& uv) {
-  float2 p_t = uv_to_phi_theta(uv.x, uv.y);
-  return phi_theta_to_direction(p_t.x, p_t.y);
+ETX_GPU_CODE float3 from_spherical(const SphericalCoordinates& s) {
+  float cos_p = cosf(s.phi);
+  float sin_p = sinf(s.phi);
+  float cos_t = cosf(s.theta);
+  float sin_t = sinf(s.theta);
+  return {
+    s.r * cos_p * cos_t,
+    s.r * sin_t,
+    s.r * sin_p * cos_t,
+  };
+}
+
+ETX_GPU_CODE float3 from_spherical(float phi, float theta) {
+  return from_spherical({phi, theta, 1.0f});
+}
+
+ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset, float u_scale) {
+  float u = uv.x;
+  if (u_scale < 0.0f) {
+    u = 1.0f - u;
+  }
+  u = u - offset.x;
+  u = u - floorf(u);
+  float phi = (u * 2.0f - 1.0f) * kPi;
+  float theta = (0.5f - uv.y) * kPi;
+  return from_spherical(phi, theta);
+}
+
+ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset, float u_scale) {
+  auto s = to_spherical(dir);
+  float u = (s.phi / kPi + 1.0f) / 2.0f;
+  if (u_scale < 0.0f) {
+    u = 1.0f - u;
+  }
+  u = u + offset.x;
+  u = u - floorf(u);
+  float v = 0.5f - s.theta / kPi;
+  return {u, v};
 }
 
 ETX_GPU_CODE uint64_t next_power_of_two(uint64_t v) {
   v--;
-  v |= v >> 1;
-  v |= v >> 2;
-  v |= v >> 4;
-  v |= v >> 8;
-  v |= v >> 16;
+  v |= v >> 1llu;
+  v |= v >> 2llu;
+  v |= v >> 4llu;
+  v |= v >> 8llu;
+  v |= v >> 16llu;
+  v++;
+  return v;
+}
+
+ETX_GPU_CODE uint32_t next_power_of_two(uint32_t v) {
+  v--;
+  v |= v >> 1u;
+  v |= v >> 2u;
+  v |= v >> 4u;
+  v |= v >> 8u;
+  v |= v >> 16u;
   v++;
   return v;
 }
 
 ETX_GPU_CODE float distance_to_sphere(const float3& r_origin, const float3& r_direction, const float3& center, float radius) {
-  //
   float3 e = r_origin - center;
   float b = dot(r_direction, e);
   float d = (b * b) - dot(e, e) + (radius * radius);
@@ -577,6 +1037,10 @@ ETX_GPU_CODE float gamma_to_linear(float value) {
   return value <= 0.04045f ? value / 12.92f : powf((value + 0.055f) / 1.055f, 2.4f);
 }
 
+ETX_GPU_CODE float linear_to_gamma(float value) {
+  return value <= 0.0031308f ? 12.92f * value : 1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
+}
+
 ETX_GPU_CODE float3 gamma_to_linear(const float3& value) {
   return {
     gamma_to_linear(value.x),
@@ -585,16 +1049,45 @@ ETX_GPU_CODE float3 gamma_to_linear(const float3& value) {
   };
 }
 
-ETX_GPU_CODE float linear_to_gamma(float value) {
-  return value <= 0.0031308f ? 12.92f * value : 1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
-}
-
 ETX_GPU_CODE float3 linear_to_gamma(const float3& value) {
   return {
     linear_to_gamma(value.x),
     linear_to_gamma(value.y),
     linear_to_gamma(value.z),
   };
+}
+
+ETX_GPU_CODE float3 slerp(const float3& start, const float3& end, float t) {
+  constexpr float kThreshold = 100.0f * kEpsilon;
+
+  float dot_product = clamp(dot(start, end), -1.0f, 1.0f);
+  float theta = acosf(dot_product);
+  if (fabsf(theta) <= kThreshold) {
+    return lerp(start, end, theta);
+  }
+
+  float sinTheta = sinf(theta);
+  float sinThetaInv = 1.0f / sinTheta;
+  float a = sinf((1.0f - t) * theta) * sinThetaInv;
+  float b = sinf(t * theta) * sinThetaInv;
+  return float3(start.x * a + end.x * b, start.y * a + end.y * b, start.z * a + end.z * b);
+}
+
+ETX_GPU_CODE float3 project_point_plane(const float3& v, const float3& plane_n, const float3& plane_o) {
+  float3 v_to_o = v - plane_o;
+  float distance = dot(v_to_o, plane_n);
+  return v - distance * plane_n;
+}
+
+ETX_GPU_CODE float intersect_ray_plane(const float3& ray_o, const float3& ray_d, const float3& plane_n, const float3& plane_o) {
+  float denom = dot(plane_n, ray_d);
+  return (denom > -kEpsilon) ? -1.0f : (dot(plane_n, plane_o - ray_o)) / denom;
+}
+
+ETX_GPU_CODE bool direction_matches(const float3& ideal, const float3& actual) {
+  const float3 i = normalize(ideal);
+  const float3 a = normalize(actual);
+  return dot(i, a) > 1.0f - kInvMaxHalf;
 }
 
 }  // namespace etx

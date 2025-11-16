@@ -1,0 +1,80 @@
+newmtl et::env
+color nblackbody 12000 scale 0.1000
+
+newmtl et::dir
+direction -0.0000 0.8660 0.5000
+color nblackbody 5800 scale 1.0000
+angular_diameter 0.0000
+
+newmtl et::medium
+id fog__vol
+scattering 0.8000 0.8000 0.8000
+
+newmtl et::camera
+class perspective
+id camera
+active 1
+viewport 640 640
+origin 0.0 1.000000238418579 3.819999933242798
+target 0.0 1.000000238418579 -6.179999351501465
+up 0.0 0.9999999403953552 -0.0
+fov 39.597755335771296
+focal-length 50.0
+lens-radius 0.0
+focal-distance 0.0
+clip-near 0.10000000149011612
+clip-far 100.0
+
+newmtl ceiling
+material class diffuse
+Kd 1.000 1.000 1.000
+Pr 0.000
+two_sided 1
+
+newmtl floor
+material class diffuse
+Kd 1.000 1.000 1.000
+Pr 0.000
+two_sided 1
+
+newmtl fog
+material class boundary
+int_medium fog__vol
+
+newmtl frontWall
+material class diffuse
+Kd 0.906 0.906 0.906
+Pr 0.000
+two_sided 1
+
+newmtl leftWall
+material class diffuse
+Kd 1.000 0.000 0.000
+Pr 0.000
+two_sided 1
+
+newmtl light
+material class diffuse
+Kd 0.000 0.000 0.000
+emitter nblackbody 2700 scale 5.0000
+two_sided 1
+
+newmtl rightWall
+material class diffuse
+Kd 0.000 1.000 0.000
+Pr 0.000
+two_sided 1
+
+newmtl shortBox
+material class diffuse
+Kd 0.906 0.906 0.906
+Pr 0.000
+two_sided 1
+
+newmtl tallBox
+material class conductor
+int_ior silver
+Ks 1.000 1.000 1.000
+Pr 0.000
+two_sided 1
+

@@ -1,4 +1,4 @@
-﻿#include <etx/core/handle.hxx>
+#include <etx/core/handle.hxx>
 #include <etx/core/profiler.hxx>
 #include <etx/render/host/pool.hxx>
 #include <etx/render/host/tasks.hxx>
@@ -18,6 +18,7 @@ namespace etx {
 
 struct TaskWrapper : public enki::ITaskSet {
   Task* task = nullptr;
+  bool executed = false;
 
   TaskWrapper(Task* t, uint32_t range, uint32_t min_size)
     : enki::ITaskSet(range, min_size)
@@ -25,6 +26,7 @@ struct TaskWrapper : public enki::ITaskSet {
   }
 
   void ExecuteRange(enki::TaskSetPartition range_, uint32_t threadnum_) override {
+    executed = true;
     task->execute_range(range_.start, range_.end, threadnum_);
   }
 };
@@ -51,10 +53,17 @@ struct TaskSchedulerImpl {
   TaskSchedulerImpl() {
     task_pool.init(1024u);
     function_task_pool.init(1024u);
-    scheduler.GetProfilerCallbacks()->threadStart = [](uint32_t thread_id) {
-      ETX_PROFILER_REGISTER_THREAD;
+
+    enki::TaskSchedulerConfig config = {};
+    config.numExternalTaskThreads = 1u;
+    config.numTaskThreadsToCreate = ETX_SINGLE_THREAD ? 1 : (enki::GetNumHardwareThreads() + 1u + config.numExternalTaskThreads);
+    config.profilerCallbacks.threadStart = [](uint32_t thread_id) {
+      ETX_PROFILER_REGISTER_THREAD(nullptr);
     };
-    scheduler.Initialize(ETX_SINGLE_THREAD ? 2 : (enki::GetNumHardwareThreads() + 1u));
+    config.profilerCallbacks.threadStop = [](uint32_t thread_id) {
+      ETX_PROFILER_EXIT_THREAD();
+    };
+    scheduler.Initialize(config);
   }
 
   ~TaskSchedulerImpl() {
@@ -72,7 +81,11 @@ TaskScheduler::~TaskScheduler() {
 }
 
 uint32_t TaskScheduler::max_thread_count() {
-  return _private->scheduler.GetConfig().numTaskThreadsToCreate + 1;
+  return _private->scheduler.GetConfig().numTaskThreadsToCreate + 2u;
+}
+
+void TaskScheduler::register_thread() {
+  _private->scheduler.RegisterExternalTaskThread();
 }
 
 Task::Handle TaskScheduler::schedule(uint32_t range, Task* t) {
@@ -96,11 +109,13 @@ Task::Handle TaskScheduler::schedule(uint32_t range, std::function<void(uint32_t
 }
 
 void TaskScheduler::execute(uint32_t range, Task* t) {
-  wait(schedule(range, t));
+  auto handle = schedule(range, t);
+  wait(handle);
 }
 
 void TaskScheduler::execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
-  wait(schedule(range, func));
+  auto handle = schedule(range, func);
+  wait(handle);
 }
 
 void TaskScheduler::execute_linear(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
@@ -113,16 +128,16 @@ bool TaskScheduler::completed(Task::Handle handle) {
   }
 
   auto& task_wrapper = _private->task_pool.get(handle.data);
-  return task_wrapper.GetIsComplete();
+  return task_wrapper.executed && task_wrapper.GetIsComplete();
 }
 
-void TaskScheduler::wait(Task::Handle handle) {
+void TaskScheduler::wait(Task::Handle& handle) {
   if (handle.data == Task::InvalidHandle) {
     return;
   }
 
   auto& task_wrapper = _private->task_pool.get(handle.data);
-  _private->scheduler.WaitforTaskSet(&task_wrapper);
+  _private->scheduler.WaitforTask(&task_wrapper);
   _private->task_pool.free(handle.data);
 
   auto func_task = _private->task_to_function.find(handle.data);
@@ -130,27 +145,18 @@ void TaskScheduler::wait(Task::Handle handle) {
     _private->function_task_pool.free(func_task->second);
     _private->task_to_function.erase(func_task);
   }
-}
 
-void TaskScheduler::restart(Task::Handle handle, uint32_t new_rage) {
-  if (handle.data == Task::InvalidHandle) {
-    return;
-  }
-
-  auto& task_wrapper = _private->task_pool.get(handle.data);
-  if (task_wrapper.GetIsComplete() == false) {
-    _private->scheduler.WaitforTaskSet(&task_wrapper);
-  }
-  task_wrapper.m_SetSize = new_rage;
-  _private->scheduler.AddTaskSetToPipe(&task_wrapper);
+  handle.data = Task::InvalidHandle;
 }
 
 void TaskScheduler::restart(Task::Handle handle) {
   if (handle.data == Task::InvalidHandle) {
     return;
   }
+
   auto& task_wrapper = _private->task_pool.get(handle.data);
-  restart(handle, task_wrapper.m_SetSize);
+  _private->scheduler.WaitforTask(&task_wrapper);
+  _private->scheduler.AddTaskSetToPipe(&task_wrapper);
 }
 
 }  // namespace etx

@@ -2,6 +2,8 @@
 
 #include <etx/core/debug.hxx>
 
+#include <string>
+
 namespace etx {
 
 struct Environment {
@@ -14,6 +16,9 @@ struct Environment {
   const char* file_in_data(const char*);
 
   void setup(const char* executable_path);
+  const char* current_directory() const;
+  std::string to_project_relative(const std::string& path) const;
+  std::string resolve_to_absolute(const std::string& path) const;
 };
 
 uint64_t get_file_folder(const char* file_name, char buffer[], uint64_t buffer_size);
