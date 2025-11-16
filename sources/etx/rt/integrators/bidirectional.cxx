@@ -1096,44 +1096,33 @@ struct CPUBidirectionalImpl : public Task {
 
     const auto& emitter_instance = scene.emitter_instances[sampled_light_vertex.intersection.emitter_index];
     float p_sample = PathVertex::emitter_sample_pdf(emitter_instance, emitter_sample.direction, scene);
+    ETX_VALIDATE(p_sample);
     float from_emitter = PathVertex::pdf_from_emitter(spect, sampled_light_vertex, z_curr, scene);
+    ETX_VALIDATE(from_emitter);
+    float z_prev_backward_pdf = PathVertex::pdf_area(spect, PathSource::Light, sampled_light_vertex, z_curr, z_prev, scene, smp);
+    ETX_VALIDATE(z_prev_backward_pdf);
+    float p_bsdf_sample = PathVertex::pdf_area(spect, PathSource::Camera, z_prev, z_curr, sampled_light_vertex, scene, smp);
+    ETX_VALIDATE(z_prev_backward_pdf);
 
     if (mode == Mode::BDPTFull) {
       float z_curr_backward_pdf = from_emitter;
       ETX_VALIDATE(z_curr_backward_pdf);
-      float z_prev_backward_pdf = PathVertex::pdf_area(spect, PathSource::Camera, sampled_light_vertex, z_curr, z_prev, scene, smp);
-      ETX_VALIDATE(z_prev_backward_pdf);
-
       float w_camera = mis_camera(path_data, z_curr_backward_pdf, z_curr, z_prev_backward_pdf, z_prev);
-
-      float w_light = 0.0f;
-      if (emitter_sample.is_delta == false) {
-        float y_curr_pdf_backward = PathVertex::pdf_area(spect, PathSource::Light, z_prev, z_curr, sampled_light_vertex, scene, smp);
-        w_light = safe_div(y_curr_pdf_backward, p_sample);
-        ETX_VALIDATE(w_light);
-      }
-
+      float w_light = emitter_sample.is_delta ? 0.0f : safe_div(p_bsdf_sample, p_sample);
       float result = 1.0f / (w_camera + 1.0f + w_light);
       ETX_VALIDATE(result);
       return result;
     }
 
     if (mode == Mode::BDPTFast) {
-      float ratio = z_prev.pdf.history;
       float p_fwd = z_prev.pdf.from_prev * z_curr.pdf.from_prev;
-
-      float p_bck = ratio;
-      if (path_data.camera_path_size > 2) {
-        p_bck *= PathVertex ::pdf_area(spect, PathSource::Light, sampled_light_vertex, z_curr, z_prev, scene, smp);
-      }
-
       float p_connection = p_fwd * p_sample;
       ETX_VALIDATE(p_connection);
 
-      float p_bsdf_sample = PathVertex::pdf_area(spect, PathSource::Camera, z_prev, z_curr, sampled_light_vertex, scene, smp);
       float p_direct = emitter_sample.is_delta ? 0.0f : p_fwd * p_bsdf_sample;
       ETX_VALIDATE(p_direct);
 
+      float p_bck = z_prev.pdf.history * (path_data.camera_path_size > 2 ? z_prev_backward_pdf : 1.0f);
       float p_light_path = p_sample * from_emitter * p_bck;
       ETX_VALIDATE(p_light_path);
 
@@ -1170,10 +1159,9 @@ struct CPUBidirectionalImpl : public Task {
     if (mode == Mode::BDPTFast) {
       const auto& e0 = path_data.emitter_path[0];
       const auto& e1 = path_data.emitter_path[1];
-      float ratio = y_prev.pdf.history;
       float p_sample = e0.pdf.from_prev;
       float p_light = y_prev.pdf.from_prev * y_curr.pdf.from_prev;
-      float p_bck = curr_from_camera;
+      float p_bck = curr_from_camera * y_prev.pdf.history;
       float p_direct = 1.0f;
       if (path_data.emitter_path_size > 2) {
         p_direct = e0.pdf.from_next;  // direct conection from 1st vertex to emitter
@@ -1182,11 +1170,9 @@ struct CPUBidirectionalImpl : public Task {
       } else {
         p_direct = prev_from_curr;
       }
-      p_bck *= ratio;
 
       float p_camera_direct = e0.mis_connectible ? p_bck * p_direct : 0.0f;
       float p_camera_connect = e1.connectible ? p_bck * p_sample : 0.0f;
-
       float result = balance_heuristic(p_light, p_camera_direct, p_camera_connect);
       ETX_VALIDATE(result);
       return result;
