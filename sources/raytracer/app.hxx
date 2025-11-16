@@ -57,6 +57,7 @@ struct RTApplication {
   void on_clear_recent_files();
 
  private:
+  void add_to_recent(const std::string&);
   void save_options();
 
  private:

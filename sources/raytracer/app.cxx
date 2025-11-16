@@ -39,7 +39,7 @@ RTApplication::~RTApplication() {
 
 void RTApplication::init() {
   render.init();
-  std::string ior_folder = env().file_in_data("spectrum/");
+  std::string ior_folder = env().file_in_data("./spectrum/");
   _ior_database.load(ior_folder.c_str());
 
   ui.initialize(&raytracing.film(), &_ior_database);
@@ -116,7 +116,6 @@ void RTApplication::save_options() {
   for (uint32_t idx = 0; idx < kRecentLimit; ++idx) {
     _options.remove("recent-" + std::to_string(idx));
   }
-
   uint32_t i = 0;
   for (const auto& recent : _recent_files) {
     _options.set_string("recent-" + std::to_string(i++), env().to_project_relative(recent), "Recent File");
@@ -171,6 +170,26 @@ void RTApplication::process_event(const sapp_event* e) {
   }
 }
 
+void RTApplication::add_to_recent(const std::string&) {
+  constexpr uint32_t kMaxRecentFiles = 8u;
+
+  auto relative_path = env().to_project_relative(_current_scene_file);
+  auto absolute_path = env().resolve_to_absolute(_current_scene_file);
+
+  auto e = std::remove_if(_recent_files.begin(), _recent_files.end(), [&](const std::string& entry) {
+    return env().resolve_to_absolute(entry) == absolute_path;
+  });
+  _recent_files.erase(e, _recent_files.end());
+
+  if (_current_scene_file.empty() == false) {
+    _recent_files.emplace_back(relative_path);
+  }
+
+  if (_recent_files.size() > kMaxRecentFiles) {
+    _recent_files.erase(_recent_files.begin());
+  }
+}
+
 void RTApplication::load_scene_file(const std::string& file_name, uint32_t options, bool start_rendering) {
   _current_scene_file = env().resolve_to_absolute(file_name);
 
@@ -190,20 +209,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return;
   }
 
-  auto display_path = env().to_project_relative(_current_scene_file);
-
-  auto existing = std::find_if(_recent_files.begin(), _recent_files.end(), [&](const std::string& entry) {
-    return env().resolve_to_absolute(entry) == _current_scene_file;
-  });
-  if (existing != _recent_files.end()) {
-    _recent_files.erase(existing);
-  }
-
-  _recent_files.emplace_back(display_path);
-
-  if (_recent_files.size() > 8) {
-    _recent_files.erase(_recent_files.begin());
-  }
+  add_to_recent(_current_scene_file);
 
   raytracing.film().clear(Film::ClearEverything);
   integrator_thread.run();
@@ -420,9 +426,7 @@ void RTApplication::on_view_scene(uint32_t direction) {
 
 void RTApplication::on_clear_recent_files() {
   _recent_files.clear();
-  if (_current_scene_file.empty() == false) {
-    _recent_files.emplace_back(env().to_project_relative(_current_scene_file));
-  }
+  add_to_recent(_current_scene_file);
   save_options();
 }
 

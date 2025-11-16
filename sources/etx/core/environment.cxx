@@ -6,7 +6,33 @@
 #include <string.h>
 #include <stdio.h>
 
+#if (ETX_PLATFORM_WINDOWS)
+# include <windows.h>
+#else
+# include <unistd.h>
+# include <limits.h>
+#endif
+
 namespace etx {
+
+#if (ETX_PLATFORM_WINDOWS)
+constexpr char kDelimiter = '\\';
+#else
+constexpr char kDelimiter = '/';
+#endif
+
+inline static void normalize_path(char buffer[]) {
+  if ((buffer == nullptr) || (buffer[0] == 0))
+    return;
+
+  auto ptr = buffer;
+  while (*ptr) {
+    if ((*ptr == '\\') || (*ptr == '/')) {
+      *ptr = kDelimiter;
+    }
+    ++ptr;
+  }
+}
 
 static struct {
   char data_folder[2048] = {};
@@ -20,6 +46,7 @@ const char* Environment::data_folder() {
 
 const char* Environment::file_in_data(const char* f, char buffer[], uint64_t buffer_size) {
   snprintf(buffer, buffer_size, "%s%s", _env.data_folder, f);
+  normalize_path(buffer);
   return buffer;
 }
 
@@ -29,6 +56,20 @@ const char* Environment::file_in_data(const char* f) {
 }
 
 void Environment::setup(const char* executable_path) {
+#if (ETX_PLATFORM_WINDOWS)
+  char exe_path[MAX_PATH] = {};
+  DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+  if (len > 0 && len < MAX_PATH) {
+    executable_path = exe_path;
+  }
+#else
+  char exe_path[PATH_MAX] = {};
+  ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (len > 0 && len < (ssize_t)sizeof(exe_path)) {
+    exe_path[len] = '\0';
+    executable_path = exe_path;
+  }
+#endif
   get_file_folder(executable_path, _env.data_folder, sizeof(_env.data_folder));
   snprintf(_env.current_directory, sizeof(_env.current_directory), "%s", _env.data_folder);
 }
@@ -100,6 +141,7 @@ uint64_t get_file_folder(const char* file_name, char buffer[], uint64_t buffer_s
   buffer[len] = '/';
   ETX_ASSERT(len + 1 < buffer_size);
   buffer[1llu + len] = 0;
+  normalize_path(buffer);
   return 1ll + len;
 }
 

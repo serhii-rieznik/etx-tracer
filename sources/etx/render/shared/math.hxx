@@ -108,7 +108,7 @@ constexpr float kEpsilon = 1.192092896e-07f;
 constexpr float kMaxFloat = 3.402823466e+38f;
 constexpr float kMaxHalf = 65504.0f;
 constexpr float kInvMaxHalf = 1.0f / kMaxHalf;
-constexpr float kRayEpsilon = 7.0f / (kMaxHalf - 1.0f);
+constexpr float kRayEpsilon = 15.0f / (kMaxHalf - 1.0f);
 constexpr float kDeltaAlphaTreshold = 1.0e-4f;
 
 constexpr uint32_t kInvalidIndex = ~0u;
@@ -1082,6 +1082,12 @@ ETX_GPU_CODE float3 project_point_plane(const float3& v, const float3& plane_n, 
 ETX_GPU_CODE float intersect_ray_plane(const float3& ray_o, const float3& ray_d, const float3& plane_n, const float3& plane_o) {
   float denom = dot(plane_n, ray_d);
   return (denom > -kEpsilon) ? -1.0f : (dot(plane_n, plane_o - ray_o)) / denom;
+}
+
+ETX_GPU_CODE bool direction_matches(const float3& ideal, const float3& actual) {
+  const float3 i = normalize(ideal);
+  const float3 a = normalize(actual);
+  return dot(i, a) > 1.0f - kInvMaxHalf;
 }
 
 }  // namespace etx

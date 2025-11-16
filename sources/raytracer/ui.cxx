@@ -1149,9 +1149,12 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
       ImGui::PopStyleColor(3);
     };
 
-    draw_history_button("Back##selection_history_back", can_navigate_back(), -1);
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("Navigate");
     ImGui::SameLine();
-    draw_history_button("Forward##selection_history_forward", can_navigate_forward(), 1);
+    draw_history_button(" < ##selection_history_back", can_navigate_back(), -1);
+    ImGui::SameLine();
+    draw_history_button(" > ##selection_history_forward", can_navigate_forward(), 1);
 
     ImGui::Spacing();
     ImGui::Separator();

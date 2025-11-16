@@ -61,21 +61,15 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       float2 uv = direction_to_uv(query.direction, img.offset, img.scale.x);
-      float sin_t = sinf(uv.y * kPi);
-      if (sin_t <= kEpsilon) {
-        return {spect, 0.0f};
-      }
-
-      float image_pdf = 0.0f;
+      auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
+      auto image_pdf = 0.0f;
       auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
-
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       ETX_VALIDATE(pdf_area);
       pdf_dir = image_pdf / (2.0f * kPi * kPi * sin_t);
       ETX_VALIDATE(pdf_dir);
       pdf_dir_out = pdf_area * pdf_dir;
       ETX_VALIDATE(pdf_dir_out);
-
       return eval;
     }
 
@@ -128,12 +122,8 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, 
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       float2 uv = direction_to_uv(in_direction, img.offset, 1.0f);
-      float sin_t = sinf(uv.y * kPi);
-      if (sin_t <= kEpsilon) {
-        return {spect, 0.0f};
-      }
-
-      float image_pdf = 0.0f;
+      auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
+      auto image_pdf = 0.0f;
       auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
       pdf_dir = image_pdf / (2.0f * kPi * kPi * sin_t);
       ETX_VALIDATE(pdf_dir);
@@ -143,30 +133,6 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, 
     default:
       ETX_FAIL("Unknown emitter class");
       return {spect, 0.0f};
-  }
-}
-
-ETX_GPU_CODE float emitter_pdf_in_dist(const Emitter& em_inst, const float3& in_direction, const Scene& scene) {
-  const auto& em = scene.emitter_profiles[em_inst.profile];
-  ETX_ASSERT(em_inst.is_distant());
-
-  switch (em_inst.cls) {
-    case EmitterProfile::Class::Directional: {
-      return 0.0f;
-    }
-
-    case EmitterProfile::Class::Environment: {
-      const auto& img = scene.images[em.emission.image_index];
-      float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x);
-      float sin_t = sinf(uv.y * kPi);
-      float image_pdf = 0.0f;
-      img.evaluate(uv, &image_pdf);
-      return (sin_t > kEpsilon) ? image_pdf / (2.0f * kPi * kPi * sin_t) : 0.0f;
-    }
-
-    default:
-      ETX_FAIL("Unknown emitter class");
-      return 0.0f;
   }
 }
 
@@ -215,12 +181,7 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em_inst, const Spect
       uint2 image_location = {};
       float4 image_value = {};
       float2 uv = img.sample(smp, pdf_image, image_location, image_value);
-      float sin_t = sinf(uv.y * kPi);
-      if (sin_t <= kEpsilon) {
-        result = {{spect, 0.0f}};
-        return result;
-      }
-
+      float sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
       result.image_uv = uv;
       result.direction = uv_to_direction(result.image_uv, img.offset, img.scale.x);
       result.normal = -result.direction;
@@ -308,11 +269,11 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       uint2 image_location = {};
       float4 image_value = {};
       float2 uv = img.sample(smp.next_2d(), pdf_image, image_location, image_value);
-      float sin_t = sinf(uv.y * kPi);
-      if ((pdf_image == 0.0f) || (sin_t == 0.0f)) {
+      if (pdf_image == 0.0f) {
         return {};
       }
 
+      auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
       auto d = -uv_to_direction(uv, img.offset, img.scale.x);
       auto basis = orthonormal_basis(d);
       auto disk_sample = sample_disk(smp.next_2d());

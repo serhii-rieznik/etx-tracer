@@ -55,7 +55,6 @@ LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
   WORD framesCaptured = RtlCaptureStackBackTrace(0, 64u, backtrace, &backtraceHash);
 
   std::string excCode = exception_code_to_string(info->ExceptionRecord->ExceptionCode);
-
   printf("Unhandled exception:\n code: %s\n address: 0x%016llX\n", excCode.c_str(), reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress));
   fflush(stdout);
 
@@ -68,6 +67,12 @@ LONG WINAPI unhandled_exception_filter(struct _EXCEPTION_POINTERS* info) {
       fflush(stdout);
     }
   }
+
+  MessageBoxA(nullptr,
+    "raytracer has crashed.\n"
+    "Crash information was logged to console.\n"
+    "Please send this info to the developer.",
+    "Crash", MB_OK | MB_ICONERROR);
 
   return EXCEPTION_EXECUTE_HANDLER;
 }

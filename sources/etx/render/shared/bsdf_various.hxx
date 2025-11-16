@@ -33,12 +33,6 @@ ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material&, cons
 
 namespace DiffuseBSDF {
 
-struct DiffuseMaterial {
-  SpectralImage scattering;
-  SampledImage roughness;
-  uint32_t diffuse_variation = 0u;
-};
-
 ETX_GPU_CODE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_i, const float3& local_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   if (local_w_o.z <= 0.0f)
     return {data.spectrum_sample, 0.0f};
@@ -138,13 +132,6 @@ ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, 
 
 namespace TranslucentBSDF {
 
-struct TranslucentMaterial {
-  SpectralImage scattering;
-  SpectralImage reflectance;
-  uint32_t int_medium = kInvalidIndex;
-  uint32_t ext_medium = kInvalidIndex;
-};
-
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   auto tr = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
@@ -232,10 +219,6 @@ ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, 
 
 namespace MirrorBSDF {
 
-struct MirrorMaterial {
-  SpectralImage scattering;
-};
-
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
@@ -248,11 +231,25 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
 }
 
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return {data.spectrum_sample, 0.0f};
+  BSDFEval result = {data.spectrum_sample, 0.0f};
+
+  auto frame = data.get_normal_frame();
+  const float3 ideal_w_o = normalize(reflect(data.w_i, frame.nrm));
+  const float3 actual_w_o = normalize(w_o);
+  if (direction_matches(ideal_w_o, actual_w_o)) {
+    result.func = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+    result.bsdf = result.func;
+    result.pdf = 1.0f;
+  }
+
+  return result;
 }
 
 ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return 0.0f;
+  auto frame = data.get_normal_frame();
+  const float3 ideal_w_o = normalize(reflect(data.w_i, frame.nrm));
+  const float3 actual_w_o = normalize(w_o);
+  return direction_matches(ideal_w_o, actual_w_o) ? 1.0f : 0.0f;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
@@ -266,11 +263,6 @@ ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, 
 }  // namespace MirrorBSDF
 
 namespace BoundaryBSDF {
-
-struct BoundaryMaterial {
-  uint32_t int_medium = kInvalidIndex;
-  uint32_t ext_medium = kInvalidIndex;
-};
 
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
