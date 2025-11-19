@@ -68,7 +68,7 @@ struct ETX_ALIGNED VCMOptions {
   static VCMOptions default_values();
 
   void store(Options&) const;
-  void load(const Options&);
+  void load(const Options&, const Scene&);
 };
 
 enum class VCMState : uint32_t {

@@ -8,14 +8,19 @@ ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene)
 }
 
 ETX_GPU_CODE uint32_t emitter_external_medium_index(const Scene& scene, const Emitter& em_inst) {
-  if ((em_inst.cls != EmitterProfile::Class::Area) || (em_inst.triangle_index >= scene.triangles.count)) {
-    return kInvalidIndex;
+  if (em_inst.cls == EmitterProfile::Class::Area) {
+    if (em_inst.triangle_index >= scene.triangles.count) {
+      return kInvalidIndex;
+    }
+    const auto& tri = scene.triangles[em_inst.triangle_index];
+    if (tri.material_index >= scene.materials.count) {
+      return kInvalidIndex;
+    }
+    return scene.materials[tri.material_index].ext_medium;
   }
-  const auto& tri = scene.triangles[em_inst.triangle_index];
-  if (tri.material_index >= scene.materials.count) {
-    return kInvalidIndex;
-  }
-  return scene.materials[tri.material_index].ext_medium;
+
+  const auto& profile = scene.emitter_profiles[em_inst.profile];
+  return profile.medium_index;
 }
 
 ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal,

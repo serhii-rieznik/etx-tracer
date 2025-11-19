@@ -12,10 +12,16 @@ struct CPUBidirectional : public Integrator {
     return "Bidirectional (CPU)";
   }
 
+  Integrator::Type type() const override {
+    return Integrator::Type::Bidirectional;
+  }
+
   void run() override;
   void update() override;
   void stop(Stop) override;
   void update_options() override;
+  void sync_from_options(const Options& options) override;
+  uint32_t supported_strategies() const override;
 
   const Status& status() const override;
 

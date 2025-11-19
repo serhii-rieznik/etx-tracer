@@ -4,12 +4,24 @@
 #include <etx/render/shared/scene.hxx>
 #include <etx/util/options.hxx>
 #include <etx/rt/rt.hxx>
+#include <etx/render/shared/math.hxx>
 
 #include <atomic>
+#include <cstring>
 
 namespace etx {
 
 struct Integrator {
+  enum class Type : uint32_t {
+    Debug = 0,
+    PathTracing = 1,
+    Bidirectional = 2,
+    VCM = 3,
+
+    Count,
+    Invalid = kInvalidIndex,
+  };
+
   enum class State : uint32_t {
     Stopped,
     Running,
@@ -67,6 +79,9 @@ struct Integrator {
   virtual void update_options() {
   }
 
+  virtual void sync_from_options(const Options& options) {
+  }
+
   virtual bool have_updated_camera_image() const {
     return state() != State::Stopped;
   }
@@ -76,6 +91,14 @@ struct Integrator {
   }
 
   virtual const Status& status() const = 0;
+
+  virtual Type type() const {
+    return Type::Invalid;
+  }
+
+  virtual uint32_t supported_strategies() const {
+    return Scene::Strategy::Default;
+  }
 
  public:
   Options& options() {
@@ -126,5 +149,48 @@ struct IntegratorThread {
  private:
   ETX_DECLARE_PIMPL(IntegratorThread, 256);
 };
+
+inline const char* integrator_type_to_id(Integrator::Type type) {
+  switch (type) {
+    case Integrator::Type::Debug:
+      return "debug";
+    case Integrator::Type::PathTracing:
+      return "pt";
+    case Integrator::Type::Bidirectional:
+      return "bdpt";
+    case Integrator::Type::VCM:
+      return "vcm";
+    default:
+      return nullptr;
+  }
+}
+
+inline Integrator::Type integrator_id_to_type(const char* id) {
+  if (id == nullptr)
+    return Integrator::Type::PathTracing;
+  if (strcmp(id, "debug") == 0)
+    return Integrator::Type::Debug;
+  if (strcmp(id, "pt") == 0)
+    return Integrator::Type::PathTracing;
+  if (strcmp(id, "bdpt") == 0)
+    return Integrator::Type::Bidirectional;
+  if (strcmp(id, "vcm") == 0)
+    return Integrator::Type::VCM;
+  return Integrator::Type::Invalid;
+}
+
+inline Integrator::Type integrator_to_type(Integrator* integrator) {
+  return (integrator != nullptr) ? integrator->type() : Integrator::Type::Invalid;
+}
+
+inline Integrator* integrator_type_to_instance(Integrator::Type type, Integrator* array[], size_t count) {
+  if (type == Integrator::Type::Invalid || type >= Integrator::Type::Count)
+    return nullptr;
+
+  uint32_t index = static_cast<uint32_t>(type);
+  if (index < count)
+    return array[index];
+  return nullptr;
+}
 
 }  // namespace etx

@@ -1455,26 +1455,18 @@ struct CPUBidirectionalImpl : public Task {
           return "Unknown";
       }
     };
-
-    options.set_string("bdpt-conn", "Connections:", "connections-label");
-    options.set_bool("bdpt-conn_direct_hit", enable_direct_hit, "Direct Hits");
-    options.set_bool("bdpt-conn_connect_to_camera", enable_connect_to_camera, "Light Path to Camera");
-    options.set_bool("bdpt-conn_connect_to_light", enable_connect_to_light, "Camera Path to Light");
-    options.set_bool("bdpt-conn_connect_vertices", enable_connect_vertices, "Camera Path to Light Path");
-    options.set_string("bdpt-opt", "Options:", "bdpt-options");
-    options.set_bool("bdpt-conn_mis", enable_mis, "Multiple Importance Sampling");
-    options.set_bool("bdpt-blue_noise", enable_blue_noise, "Enable Blue Noise");
   }
 
   void start(const Options& opt) {
     mode = opt.get_integral("bdpt-mode", mode);
 
-    enable_direct_hit = opt.get_bool("bdpt-conn_direct_hit", enable_direct_hit);
-    enable_connect_to_camera = opt.get_bool("bdpt-conn_connect_to_camera", enable_connect_to_camera);
-    enable_connect_to_light = opt.get_bool("bdpt-conn_connect_to_light", enable_connect_to_light);
-    enable_connect_vertices = opt.get_bool("bdpt-conn_connect_vertices", enable_connect_vertices);
-    enable_mis = opt.get_bool("bdpt-conn_mis", enable_mis);
-    enable_blue_noise = opt.get_bool("bdpt-blue_noise", enable_blue_noise);
+    const auto& scene = rt.scene();
+    enable_direct_hit = scene.strategy_enabled(Scene::Strategy::DirectHit);
+    enable_connect_to_camera = scene.strategy_enabled(Scene::Strategy::ConnectToCamera);
+    enable_connect_to_light = scene.strategy_enabled(Scene::Strategy::ConnectToLight);
+    enable_connect_vertices = scene.strategy_enabled(Scene::Strategy::ConnectVertices);
+    enable_mis = scene.multiple_importance_sampling();
+    enable_blue_noise = scene.blue_noise();
 
     for (auto& path_data : per_thread_path_data) {
       path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
@@ -1549,6 +1541,15 @@ void CPUBidirectional::update_options() {
   if (current_state == State::Running) {
     run();
   }
+}
+
+void CPUBidirectional::sync_from_options(const Options& options) {
+  _private->mode = options.get_integral("bdpt-mode", _private->mode);
+  _private->build_options(integrator_options);
+}
+
+uint32_t CPUBidirectional::supported_strategies() const {
+  return Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices;
 }
 
 const Integrator::Status& CPUBidirectional::status() const {

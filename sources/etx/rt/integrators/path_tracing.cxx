@@ -33,10 +33,11 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void start(const Options& opt) {
-    options.direct = opt.get_bool("direct", options.direct);
-    options.nee = opt.get_bool("nee", options.nee);
-    options.mis = opt.get_bool("mis", options.mis);
-    options.blue_noise = opt.get_bool("bn", options.blue_noise);
+    const auto& scene = rt.scene();
+    options.direct = scene.strategy_enabled(Scene::Strategy::DirectHit);
+    options.nee = scene.strategy_enabled(Scene::Strategy::ConnectToLight);
+    options.mis = scene.multiple_importance_sampling();
+    options.blue_noise = scene.blue_noise();
 
     status = {};
     total_time = {};
@@ -111,11 +112,6 @@ struct CPUPathTracingImpl : public Task {
 
   void build_options(Options& integrator_options) {
     integrator_options.options.clear();
-    integrator_options.set_bool("direct", options.direct, "Direct Hits");
-    integrator_options.set_bool("nee", options.nee, "Light Sampling");
-    integrator_options.set_string("pt-opt", "Path Tracing Options", "Options");
-    integrator_options.set_bool("mis", options.mis, "Multiple Importance Sampling");
-    integrator_options.set_bool("bn", options.blue_noise, "Use Blue Noise");
   }
 };
 
@@ -168,6 +164,14 @@ void CPUPathTracing::update_options() {
   if (current_state == State::Running) {
     run();
   }
+}
+
+void CPUPathTracing::sync_from_options(const Options& options) {
+  _private->build_options(integrator_options);
+}
+
+uint32_t CPUPathTracing::supported_strategies() const {
+  return Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight;
 }
 
 float2 sample_blue_noise(const uint2& pixel, const uint32_t total_samples, const uint32_t current_sample, uint32_t dimension) {

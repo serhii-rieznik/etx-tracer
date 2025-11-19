@@ -70,6 +70,7 @@ struct UI {
     Emitter,
     Camera,
     Scene,
+    Integrator,
   };
 
   bool build_options(Options&);
@@ -79,7 +80,7 @@ struct UI {
   void save_image(SaveImageMode mode) const;
   void load_image() const;
   bool build_material(Scene& scene, Material&);
-  bool build_medium(Scene& scene, Medium&);
+  bool build_medium(Scene& scene, Medium&, const char* name);
   bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool spectrum_picker(Scene& scene, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool ior_picker(Scene& scene, const char* name, RefractiveIndex& ior);
@@ -139,11 +140,10 @@ struct UI {
   };
 
   enum UISetup : uint32_t {
-    UIIntegrator = 1u << 0u,
-    UIObjects = 1u << 1u,
-    UIProperties = 1u << 2u,
+    UIObjects = 1u << 0u,
+    UIProperties = 1u << 1u,
 
-    UIDefaults = UIIntegrator | UIObjects | UIProperties,
+    UIDefaults = UIObjects | UIProperties,
   };
 
   struct SelectionState {

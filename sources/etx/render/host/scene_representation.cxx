@@ -14,6 +14,7 @@
 #include <etx/render/host/distribution_builder.hxx>
 #include <etx/render/host/gltf_accessor.hxx>
 #include <etx/render/host/scene_data.hxx>
+#include <etx/rt/integrators/integrator.hxx>
 
 #include <filesystem>
 #include <sstream>
@@ -212,6 +213,10 @@ struct SceneRepresentationImpl {
     scene.default_dielectric_eta = data.add_spectrum(SpectralDistribution::constant(1.5f));
     scene.default_conductor_eta = data.add_spectrum(SpectralDistribution::constant(0.0f));
     scene.default_conductor_k = data.add_spectrum(SpectralDistribution::constant(1000000.0f));
+
+    scene.properties[Scene::Properties::Spectral] = false;
+    scene.properties[Scene::Properties::MultipleImportanceSampling] = true;
+    scene.properties[Scene::Properties::BlueNoise] = true;
 
     scene.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
     data.materials[scene.subsurface_scatter_material].reflectance = {.spectrum_index = scene.black_spectrum};
@@ -449,7 +454,8 @@ struct SceneRepresentationImpl {
 
     rebuild_area_emitters();
 
-    scene.flags = Scene::Committed | (spectral ? Scene::Spectral : 0u);
+    scene.properties[Scene::Properties::Committed] = true;
+    scene.properties[Scene::Properties::Spectral] = spectral;
   }
 
   float2 make_float2(const float values[]) {
@@ -676,7 +682,7 @@ inline void get_values(const std::vector<T>& a, T* ptr, uint64_t count) {
 uint32_t load_reflectance_spectrum(SceneData& data, char* values);
 SpectralDistribution load_illuminant_spectrum(SceneData& data, char* values);
 
-bool SceneRepresentation::load_from_file(const char* filename, uint32_t options) {
+bool SceneRepresentation::load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator) {
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
 
@@ -721,6 +727,37 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
         _private->data.materials_file_name = std::string(base_folder) + str_value;
       } else if (json_get_bool(i, "spectral", bool_value)) {
         spectral_scene = bool_value;
+      } else if (json_get_bool(i, "multiple_importance_sampling", bool_value)) {
+        _private->scene.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
+      } else if (json_get_bool(i, "blue_noise", bool_value)) {
+        _private->scene.properties[Scene::Properties::BlueNoise] = bool_value;
+      } else if (key == "strategies" && obj.is_object()) {
+        uint32_t strategy_flags = Scene::Strategy::Default;
+        for (auto strat_it = obj.begin(); strat_it != obj.end(); ++strat_it) {
+          const std::string& strat_key = strat_it.key();
+          if (strat_it.value().is_boolean() == false) {
+            continue;
+          }
+          bool strat_value = strat_it.value().get<bool>();
+          if (strat_key == "direct_hit") {
+            strategy_flags = (strategy_flags & (~Scene::Strategy::DirectHit)) | (strat_value ? Scene::Strategy::DirectHit : 0u);
+          } else if (strat_key == "next_event_estimation") {
+            strategy_flags = (strategy_flags & (~Scene::Strategy::ConnectToLight)) | (strat_value ? Scene::Strategy::ConnectToLight : 0u);
+          } else if (strat_key == "connect_to_light") {
+            strategy_flags = (strategy_flags & (~Scene::Strategy::ConnectToLight)) | (strat_value ? Scene::Strategy::ConnectToLight : 0u);
+          } else if (strat_key == "connect_to_camera") {
+            strategy_flags = (strategy_flags & (~Scene::Strategy::ConnectToCamera)) | (strat_value ? Scene::Strategy::ConnectToCamera : 0u);
+          } else if (strat_key == "connect_vertices") {
+            strategy_flags = (strategy_flags & (~Scene::Strategy::ConnectVertices)) | (strat_value ? Scene::Strategy::ConnectVertices : 0u);
+          } else if (strat_key == "merge_vertices") {
+            strategy_flags = (strategy_flags & (~Scene::Strategy::MergeVertices)) | (strat_value ? Scene::Strategy::MergeVertices : 0u);
+          } else if (strat_key == "multiple_importance_sampling") {
+            _private->scene.properties[Scene::Properties::MultipleImportanceSampling] = strat_value;
+          } else if (strat_key == "blue_noise") {
+            _private->scene.properties[Scene::Properties::BlueNoise] = strat_value;
+          }
+        }
+        _private->scene.strategy_flags = strategy_flags;
       } else if (json_get_bool(i, "force-tangents", bool_value)) {
         force_tangents = bool_value;
       } else if ((key == "camera") && obj.is_object()) {
@@ -757,6 +794,56 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options)
               get_values(values, &camera.film_size.x, 2llu);
             } else {
               log::warning("Unhandled value in camera description : %s", key.c_str());
+            }
+          }
+        }
+      } else if ((key == "integrator") && obj.is_object()) {
+        if (out_integrator != nullptr) {
+          std::string selected_id_str;
+          if (obj.contains("selected") && obj["selected"].is_string()) {
+            selected_id_str = obj["selected"].get<std::string>();
+            out_integrator->selected = integrator_id_to_type(selected_id_str.c_str());
+          }
+          if (out_integrator->selected == Integrator::Type::Invalid) {
+            if (obj.contains("type") && obj["type"].is_string()) {
+              out_integrator->selected = integrator_id_to_type(obj["type"].get<std::string>().c_str());
+            } else if (obj.contains("name") && obj["name"].is_string()) {
+              std::string name = obj["name"].get<std::string>();
+              if (name.find("Path Tracing") != std::string::npos) {
+                out_integrator->selected = Integrator::Type::PathTracing;
+              } else if (name.find("Bidirectional") != std::string::npos) {
+                out_integrator->selected = Integrator::Type::Bidirectional;
+              } else if (name.find("VCM") != std::string::npos) {
+                out_integrator->selected = Integrator::Type::VCM;
+              } else if (name.find("Debug") != std::string::npos) {
+                out_integrator->selected = Integrator::Type::Debug;
+              }
+            }
+          }
+
+          if (obj.contains("settings") && obj["settings"].is_object()) {
+            const auto& settings_obj = obj["settings"];
+            for (auto it = settings_obj.begin(); it != settings_obj.end(); ++it) {
+              const std::string& type_id = it.key();
+              const auto& options_array = it.value();
+
+              Integrator::Type type = integrator_id_to_type(type_id.c_str());
+              if (type == Integrator::Type::Invalid)
+                continue;
+
+              if (options_array.is_array()) {
+                Options options;
+                if (options.deserialize_from_json(options_array)) {
+                  out_integrator->settings[type] = std::move(options);
+                }
+              }
+            }
+          }
+
+          if (out_integrator->selected != Integrator::Type::Invalid && obj.contains("options") && obj["options"].is_array()) {
+            Options options;
+            if (options.deserialize_from_json(obj["options"])) {
+              out_integrator->settings[out_integrator->selected] = std::move(options);
             }
           }
         }
@@ -1338,6 +1425,14 @@ void SceneRepresentationImpl::parse_directional_light(const char* base_dir, cons
       e.angular_size = val * kPi / 180.0f;
     }
   }
+
+  if (get_param(material, "ext_medium")) {
+    auto m = context.mediums.find(data_buffer);
+    if (m == kInvalidIndex) {
+      log::warning("Medium %s was not declared, but used in directional emitter as external medium\n", data_buffer);
+    }
+    e.medium_index = m;
+  }
 }
 
 void SceneRepresentationImpl::parse_env_light(const char* base_dir, const tinyobj::material_t& material) {
@@ -1370,6 +1465,14 @@ void SceneRepresentationImpl::parse_env_light(const char* base_dir, const tinyob
     e.emission.spectrum_index = data.add_spectrum(load_illuminant_spectrum(data_buffer));
   } else {
     e.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f}));
+  }
+
+  if (get_param(material, "ext_medium")) {
+    auto m = context.mediums.find(data_buffer);
+    if (m == kInvalidIndex) {
+      log::warning("Medium %s was not declared, but used in environment emitter as external medium\n", data_buffer);
+    }
+    e.medium_index = m;
   }
 }
 
@@ -2499,7 +2602,7 @@ void build_emitters_distribution(Scene& scene) {
   emitters_distribution.finalize();
 }
 
-std::string SceneRepresentation::save_to_file(const char* filename) {
+std::string SceneRepresentation::save_to_file(const char* filename, Integrator::Type selected_type, Integrator* integrator_array[], size_t integrator_count) {
   auto impl = _private;
 
   std::string base_file = {};
@@ -2584,7 +2687,57 @@ std::string SceneRepresentation::save_to_file(const char* filename) {
   if (materials_ref.empty() == false) {
     js["materials"] = materials_ref;
   }
-  js["spectral"] = ((scene_data.flags & Scene::Spectral) == Scene::Spectral);
+  js["spectral"] = scene_data.properties[Scene::Properties::Spectral];
+  js["multiple_importance_sampling"] = scene_data.properties[Scene::Properties::MultipleImportanceSampling];
+  js["blue_noise"] = scene_data.properties[Scene::Properties::BlueNoise];
+
+  nlohmann::json strategies = nlohmann::json::object();
+  strategies["direct_hit"] = ((scene_data.strategy_flags & Scene::Strategy::DirectHit) == Scene::Strategy::DirectHit);
+  strategies["connect_to_light"] = ((scene_data.strategy_flags & Scene::Strategy::ConnectToLight) == Scene::Strategy::ConnectToLight);
+  strategies["connect_to_camera"] = ((scene_data.strategy_flags & Scene::Strategy::ConnectToCamera) == Scene::Strategy::ConnectToCamera);
+  strategies["connect_vertices"] = ((scene_data.strategy_flags & Scene::Strategy::ConnectVertices) == Scene::Strategy::ConnectVertices);
+  strategies["merge_vertices"] = ((scene_data.strategy_flags & Scene::Strategy::MergeVertices) == Scene::Strategy::MergeVertices);
+  js["strategies"] = strategies;
+
+  if (selected_type != Integrator::Type::Invalid && integrator_array != nullptr && integrator_count > 0) {
+    nlohmann::json integrator_json;
+
+    const char* selected_id = integrator_type_to_id(selected_type);
+    if (selected_id != nullptr) {
+      integrator_json["selected"] = selected_id;
+    }
+
+    nlohmann::json settings_json = nlohmann::json::object();
+
+    for (size_t i = 0; i < integrator_count; ++i) {
+      Integrator* integrator = integrator_array[i];
+      if (integrator == nullptr)
+        continue;
+
+      Integrator::Type type = integrator_to_type(integrator);
+      if (type == Integrator::Type::Invalid)
+        continue;
+
+      const char* type_id = integrator_type_to_id(type);
+      if (type_id == nullptr)
+        continue;
+
+      nlohmann::json options_json;
+      integrator->options().serialize_to_json(options_json);
+
+      if (options_json.is_array() && options_json.size() > 0) {
+        settings_json[type_id] = options_json;
+      }
+    }
+
+    if (settings_json.empty() == false) {
+      integrator_json["settings"] = settings_json;
+    }
+
+    if (integrator_json.empty() == false) {
+      js["integrator"] = integrator_json;
+    }
+  }
 
   json_to_file(js, json_path.string().c_str());
 
@@ -2742,6 +2895,10 @@ std::string SceneRepresentation::save_to_file(const char* filename) {
     if (std::fabs(env_scale_u - 1.0f) >= kEpsilon) {
       materials_stream << "scale " << env_scale_u << "\n";
     }
+    bool env_medium_valid = (environment_profile->medium_index != kInvalidIndex) && (medium_names.count(environment_profile->medium_index) > 0);
+    if (env_medium_valid) {
+      materials_stream << "ext_medium " << medium_names[environment_profile->medium_index] << "\n";
+    }
     materials_stream << "\n";
   }
 
@@ -2756,6 +2913,10 @@ std::string SceneRepresentation::save_to_file(const char* filename) {
     std::string dir_path = texture_path(directional_profile->emission.image_index);
     if (dir_path.empty() == false) {
       materials_stream << "image " << dir_path << "\n";
+    }
+    bool dir_medium_valid = (directional_profile->medium_index != kInvalidIndex) && (medium_names.count(directional_profile->medium_index) > 0);
+    if (dir_medium_valid) {
+      materials_stream << "ext_medium " << medium_names[directional_profile->medium_index] << "\n";
     }
     materials_stream << "\n";
   }

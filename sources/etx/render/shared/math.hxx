@@ -942,11 +942,25 @@ ETX_GPU_CODE float3 offset_ray(const float3& p, const float3& n) {
   };
 }
 
-ETX_GPU_CODE float power_heuristic(float f, float g) {
-  float f2 = f * f;
-  float g2 = g * g;
-  float denom = f2 + g2;
-  return denom > 0.0f ? saturate(f2 / denom) : 0.0f;
+template <class... args>
+ETX_GPU_CODE float balance_heuristic(args&&... a) {
+  static_assert(sizeof...(args) > 0, "Invalid number of parameters provided");
+  constexpr auto count = sizeof...(args);
+  const float values[count] = {a...};
+  const float denom = (a + ...);
+  return (denom == 0.0f) ? 0.0f : values[0] / denom;
+}
+
+template <class... args>
+ETX_GPU_CODE float power_heuristic(args&&... a) {
+  static_assert(sizeof...(args) > 0, "Invalid number of parameters provided");
+  constexpr auto count = sizeof...(args);
+  const float values[count] = {a...};
+  float denom = 0.0f;
+  for (uint32_t i = 0; i < count; ++i) {
+    denom += sqr(values[i]);
+  }
+  return (denom == 0.0f) ? 0.0f : sqr(values[0]) / denom;
 }
 
 ETX_GPU_CODE SphericalCoordinates to_spherical(const float3& dir) {
@@ -1079,9 +1093,21 @@ ETX_GPU_CODE float3 project_point_plane(const float3& v, const float3& plane_n, 
   return v - distance * plane_n;
 }
 
-ETX_GPU_CODE float intersect_ray_plane(const float3& ray_o, const float3& ray_d, const float3& plane_n, const float3& plane_o) {
-  float denom = dot(plane_n, ray_d);
-  return (denom > -kEpsilon) ? -1.0f : (dot(plane_n, plane_o - ray_o)) / denom;
+ETX_GPU_CODE bool intersect_ray_plane(const Ray& ray, const float3& plane_n, const float3& plane_o, float& t) {
+  t = -kMaxFloat;
+
+  float denom = dot(plane_n, ray.d);
+  if (fabsf(denom) < kEpsilon) {
+    return false;
+  }
+
+  float t0 = dot(plane_n, plane_o - ray.o) / denom;
+  if (t0 < ray.min_t || t0 > ray.max_t) {
+    return false;
+  }
+
+  t = t0;
+  return true;
 }
 
 ETX_GPU_CODE bool direction_matches(const float3& ideal, const float3& actual) {

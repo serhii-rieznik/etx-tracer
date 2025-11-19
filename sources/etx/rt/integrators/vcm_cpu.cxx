@@ -87,7 +87,7 @@ struct CPUVCMImpl {
     have_camera_image = true;
     have_light_image = true;
 
-    vcm_options.load(opt);
+    vcm_options.load(opt, rt.scene());
     vcm_iteration.iteration = 0;
     start_next_iteration();
   }
@@ -244,7 +244,6 @@ struct CPUVCMImpl {
 CPUVCM::CPUVCM(Raytracing& rt)
   : Integrator(rt) {
   ETX_PIMPL_INIT(CPUVCM, rt, &current_state);
-  _private->vcm_options.store(integrator_options);
 }
 
 CPUVCM::~CPUVCM() {
@@ -291,6 +290,15 @@ void CPUVCM::update_options() {
   if (current_state == State::Running) {
     run();
   }
+}
+
+void CPUVCM::sync_from_options(const Options& options) {
+  _private->vcm_options.load(options, rt.scene());
+  _private->vcm_options.store(integrator_options);
+}
+
+uint32_t CPUVCM::supported_strategies() const {
+  return Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices | Scene::Strategy::MergeVertices;
 }
 
 bool CPUVCM::have_updated_camera_image() const {

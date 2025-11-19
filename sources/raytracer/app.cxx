@@ -3,6 +3,7 @@
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/shared/camera.hxx>
+#include <etx/rt/integrators/integrator.hxx>
 
 #include "app.hxx"
 
@@ -93,6 +94,10 @@ void RTApplication::init() {
     if (selected_integrator == _integrator_array[i]->name()) {
       integrator = _integrator_array[i];
     }
+  }
+
+  if (integrator == nullptr) {
+    integrator = &_cpu_pt;
   }
 
   integrator_thread.start(integrator);
@@ -198,7 +203,8 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   save_options();
 
   log::warning("Loading scene %s...", _current_scene_file.c_str());
-  if (scene.load_from_file(_current_scene_file.c_str(), options) == false) {
+  SceneRepresentation::IntegratorData integrator_data;
+  if (scene.load_from_file(_current_scene_file.c_str(), options, &integrator_data) == false) {
     log::error("Failed to load scene from file: %s", _current_scene_file.c_str());
   }
   log::warning("Committing changes...");
@@ -209,6 +215,25 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return;
   }
 
+  for (const auto& [type, options] : integrator_data.settings) {
+    Integrator* integrator = integrator_type_to_instance(type, _integrator_array, std::size(_integrator_array));
+
+    if (integrator != nullptr) {
+      integrator->sync_from_options(options);
+      integrator->update_options();
+    }
+  }
+
+  Integrator* integrator = &_cpu_pt;
+  if (integrator_data.selected != Integrator::Type::Invalid) {
+    Integrator* selected = integrator_type_to_instance(integrator_data.selected, _integrator_array, std::size(_integrator_array));
+    if (selected != nullptr) {
+      integrator = selected;
+    }
+  }
+  integrator_thread.set_integrator(integrator);
+  ui.set_current_integrator(integrator);
+
   add_to_recent(_current_scene_file);
 
   raytracing.film().clear(Film::ClearEverything);
@@ -217,7 +242,9 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
 
 std::string RTApplication::save_scene_file(const std::string& file_name) {
   log::info("Saving %s..", file_name.c_str());
-  std::string saved_path = scene.save_to_file(file_name.c_str());
+  Integrator* current = integrator_thread.integrator();
+  Integrator::Type selected_type = integrator_to_type(current);
+  std::string saved_path = scene.save_to_file(file_name.c_str(), selected_type, _integrator_array, std::size(_integrator_array));
   if (saved_path.empty()) {
     log::error("Failed to save scene to %s", file_name.c_str());
     return {};

@@ -61,29 +61,15 @@ ETX_GPU_CODE Ray generate_ray(const Scene& scene, const Camera& camera, const fl
   return {origin, w_o, fmaxf(t_near, kRayEpsilon), t_far};
 }
 
-ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const Camera& camera, const float3& from_point) {
+ETX_GPU_CODE CameraSample evaluate_film(const Scene& scene, const Camera& camera, const float3& world_point, const float3& lens_point) {
   if (camera.cls == Camera::Class::Equirectangular) {
     // TODO : implelemt for Equirectangular camera
     return {};
   }
 
-  float2 sensor_sample = {};
-  if ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
-    if (camera.lens_image == kInvalidIndex) {
-      sensor_sample = sample_disk(smp.next_2d());
-    } else {
-      float pdf = {};
-      uint2 location = {};
-      float4 value = {};
-      sensor_sample = scene.images[camera.lens_image].sample(smp.next_2d(), pdf, location, value);
-      sensor_sample = sensor_sample * 2.0f - 1.0f;
-    }
-    sensor_sample *= camera.lens_radius;
-  }
-
   CameraSample result;
-  result.position = camera.position + sensor_sample.x * camera.side + sensor_sample.y * camera.up;
-  result.direction = result.position - from_point;
+  result.position = lens_point;
+  result.direction = result.position - world_point;
   result.normal = camera.direction;
 
   float cos_t = -dot(result.direction, result.normal);
@@ -115,6 +101,30 @@ ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const Ca
   result.weight = importance / result.pdf_dir;
 
   return result;
+}
+
+ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const Camera& camera, const float3& from_point) {
+  if (camera.cls == Camera::Class::Equirectangular) {
+    // TODO : implelemt for Equirectangular camera
+    return {};
+  }
+
+  float2 sensor_sample = {};
+  if ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
+    if (camera.lens_image == kInvalidIndex) {
+      sensor_sample = sample_disk(smp.next_2d());
+    } else {
+      float pdf = {};
+      uint2 location = {};
+      float4 value = {};
+      sensor_sample = scene.images[camera.lens_image].sample(smp.next_2d(), pdf, location, value);
+      sensor_sample = sensor_sample * 2.0f - 1.0f;
+    }
+    sensor_sample *= camera.lens_radius;
+  }
+
+  float3 lens_point = camera.position + sensor_sample.x * camera.side + sensor_sample.y * camera.up;
+  return evaluate_film(scene, camera, from_point, lens_point);
 }
 
 ETX_GPU_CODE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& camera, const Ray& out_ray) {

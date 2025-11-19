@@ -19,8 +19,8 @@ struct ETX_ALIGNED EmitterProfile {
   float angular_size = 0.0f;
   float equivalent_disk_size = 0.0f;
   float angular_size_cosine = 1.0f;
+  uint32_t medium_index ETX_INIT_WITH(kInvalidIndex);
   float pad0 = 0.0f;
-  float pad1 = {};
 
   EmitterProfile() = default;
 

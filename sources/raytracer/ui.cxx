@@ -419,7 +419,7 @@ bool UI::emission_picker(Scene& scene, const char* label, const char* id_suffix,
     "Preset",
   };
 
-  ImGui::Text("Emission Input");
+  ImGui::Text("%s", base_label);
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (ImGui::BeginCombo("##emission_mode", kModeLabels[static_cast<uint32_t>(editor_state.mode)])) {
     for (uint32_t i = 0; i < 3; ++i) {
@@ -948,7 +948,6 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           _ui_setup = ui_integrator ? (_ui_setup & (~flag)) : (_ui_setup | flag);
         }
       };
-      ui_toggle("Integrator Options", UIIntegrator);
       ui_toggle("Scene Objects", UIObjects);
       ui_toggle("Properties", UIProperties);
       ImGui::EndMenu();
@@ -1114,17 +1113,6 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
     ImGui::End();
   }
 
-  with_window(UIIntegrator, has_integrator ? _current_integrator->name() : "Integrator options", [&]() {
-    if (has_integrator) {
-      bool options_changed = build_options(_current_integrator->options());
-      if (options_changed && callbacks.options_changed) {
-        callbacks.options_changed();
-      }
-    } else {
-      ImGui::Text("No integrator selected");
-    }
-  });
-
   with_window(UIObjects, "Scene Objects", [&]() {
     if (!has_scene) {
       ImGui::Text("No scene loaded");
@@ -1172,6 +1160,11 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
       set_selection(SelectionKind::Camera, 0);
     }
     ImGui::PopStyleColor();
+
+    bool integrator_selected = (_selection.kind == SelectionKind::Integrator);
+    if (ImGui::Selectable("Integrator", integrator_selected)) {
+      set_selection(SelectionKind::Integrator, 0);
+    }
 
     ImGui::Separator();
 
@@ -1293,34 +1286,27 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           break;
         case SelectionKind::Medium:
           if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _medium_mapping.size())) {
-            title_suffix("Medium", _medium_mapping.name(_selection.index));
-          }
-          break;
-        case SelectionKind::Emitter: {
-          if ((_selection.index >= 0) && has_scene && (static_cast<uint32_t>(_selection.index) < scene.emitter_profiles.count)) {
-            const auto& emitter = scene.emitter_profiles[_selection.index];
-            char label[64] = {};
-            const char* type = "Emitter";
-            switch (emitter.cls) {
-              case EmitterProfile::Class::Directional:
-                snprintf(label, sizeof(label), "%05u (Directional)", static_cast<uint32_t>(_selection.index));
-                break;
-              case EmitterProfile::Class::Environment:
-                snprintf(label, sizeof(label), "%05u (Environment)", static_cast<uint32_t>(_selection.index));
-                break;
-              default:
-                snprintf(label, sizeof(label), "%05u", static_cast<uint32_t>(_selection.index));
-                break;
+            uint32_t medium_index = _medium_mapping.at(_selection.index);
+            if (medium_index < scene.mediums.count) {
+              const Medium& medium = scene.mediums[medium_index];
+              constexpr const char* kMediumClassNames[] = {"Homogeneous Medium", "Density Grid Medium"};
+              int32_t class_index = static_cast<int32_t>(medium.cls);
+              class_index = clamp(class_index, 0, static_cast<int32_t>(sizeof(kMediumClassNames) / sizeof(kMediumClassNames[0])) - 1);
+              title_suffix(kMediumClassNames[class_index], nullptr);
             }
-            title_suffix(type, label);
           }
           break;
-        }
+        case SelectionKind::Emitter:
+          title_suffix("Emitter", nullptr);
+          break;
         case SelectionKind::Camera:
           title_suffix("Camera", nullptr);
           break;
         case SelectionKind::Scene:
           title_suffix("Scene", nullptr);
+          break;
+        case SelectionKind::Integrator:
+          title_suffix("Integrator", nullptr);
           break;
         default:
           break;
@@ -1372,9 +1358,10 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           }
           uint32_t medium_index = _medium_mapping.at(_selection.index);
           Medium& medium = scene.mediums[medium_index];
+          const char* medium_name = _medium_mapping.name(_selection.index);
           if (!scene_editable)
             ImGui::BeginDisabled();
-          bool changed = build_medium(scene, medium);
+          bool changed = build_medium(scene, medium, medium_name);
           if (!scene_editable)
             ImGui::EndDisabled();
           if (scene_editable && changed && callbacks.medium_changed) {
@@ -1395,6 +1382,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           bool changed = false;
           bool material_changed = false;
           uint32_t material_index = kInvalidIndex;
+
           if (emitter.cls == EmitterProfile::Class::Area) {
             for (uint32_t instance_index = 0; instance_index < scene.emitter_instances.count; ++instance_index) {
               const auto& instance = scene.emitter_instances[instance_index];
@@ -1406,64 +1394,138 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
               }
               break;
             }
-            if (material_index < scene.materials.count) {
-              auto& material = scene.materials[material_index];
-              bool area_material_changed = false;
-              if (_medium_mapping.empty() == false) {
-                const char* mat_name = material_name_from_index(material_index);
-                if (mat_name != nullptr) {
-                  ImGui::Text("Material: %s", mat_name);
+          }
+
+          char emitter_label[64] = {};
+          switch (emitter.cls) {
+            case EmitterProfile::Class::Directional:
+              snprintf(emitter_label, sizeof(emitter_label), "%05u (Directional)", emitter_index);
+              break;
+            case EmitterProfile::Class::Environment:
+              snprintf(emitter_label, sizeof(emitter_label), "%05u (Environment)", emitter_index);
+              break;
+            case EmitterProfile::Class::Area:
+              if (material_index < scene.materials.count) {
+                const char* material_name = material_name_from_index(material_index);
+                if (material_name != nullptr) {
+                  snprintf(emitter_label, sizeof(emitter_label), "%05u : area (%s)", emitter_index, material_name);
                 } else {
-                  ImGui::Text("Material index: %u", material_index);
-                }
-                ImGui::Text("External Medium");
-                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-                if (medium_dropdown("##area_external_medium", material.ext_medium)) {
-                  area_material_changed = true;
+                  snprintf(emitter_label, sizeof(emitter_label), "%05u : area (material %u)", emitter_index, material_index);
                 }
               } else {
-                ImGui::TextDisabled("No mediums available");
+                snprintf(emitter_label, sizeof(emitter_label), "%05u : area", emitter_index);
               }
-              ImGui::Separator();
+              break;
+            default:
+              snprintf(emitter_label, sizeof(emitter_label), "%05u", emitter_index);
+              break;
+          }
+
+          bool common_changed = false;
+          if (emitter.cls == EmitterProfile::Class::Area && material_index < scene.materials.count) {
+            auto& material = scene.materials[material_index];
+            std::string area_preset_id = "area_material_emission_" + std::to_string(material_index);
+            common_changed |= emission_picker(scene, emitter_label, area_preset_id.c_str(), material.emission.spectrum_index);
+          } else {
+            std::string emitter_preset_id = "emitter_emission_" + std::to_string(emitter_index);
+            common_changed |= emission_picker(scene, emitter_label, emitter_preset_id.c_str(), emitter.emission.spectrum_index);
+          }
+
+          ImGui::Spacing();
+          ImGui::Separator();
+          ImGui::Spacing();
+
+          if (_medium_mapping.empty() == false) {
+            ImGui::Text("External Medium");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            if (emitter.cls == EmitterProfile::Class::Area && material_index < scene.materials.count) {
+              auto& material = scene.materials[material_index];
+              if (medium_dropdown("##area_external_medium", material.ext_medium)) {
+                common_changed = true;
+              }
+            } else {
+              char medium_id[64] = {};
+              snprintf(medium_id, sizeof(medium_id), "##emitter_medium_%u", emitter_index);
+              if (medium_dropdown(medium_id, emitter.medium_index)) {
+                common_changed = true;
+              }
+            }
+          } else {
+            ImGui::TextDisabled("No mediums available");
+          }
+
+          if (common_changed) {
+            if (emitter.cls == EmitterProfile::Class::Area && material_index < scene.materials.count) {
+              material_changed = true;
+            }
+            changed = true;
+          }
+
+          ImGui::Spacing();
+          ImGui::Separator();
+          ImGui::Spacing();
+
+          if (emitter.cls == EmitterProfile::Class::Area) {
+            if (material_index < scene.materials.count) {
+              auto& material = scene.materials[material_index];
+
+              const char* mat_name = material_name_from_index(material_index);
+              if (mat_name != nullptr) {
+                ImGui::Text("Material: %s", mat_name);
+              } else {
+                ImGui::Text("Material index: %u", material_index);
+              }
 
               ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
               float collimation = material.emission_collimation;
               if (ImGui::SliderFloat("##area_collimation", &collimation, 0.0f, 1.0f, "Collimation %.2f", ImGuiSliderFlags_AlwaysClamp)) {
                 material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
-                area_material_changed = true;
-              }
-              ImGui::Separator();
-
-              std::string area_preset_id = "area_material_emission_" + std::to_string(material_index);
-              area_material_changed |= emission_picker(scene, "Emission", area_preset_id.c_str(), material.emission.spectrum_index);
-              if (area_material_changed) {
                 material_changed = true;
                 changed = true;
               }
             }
-          }
+          } else if (emitter.cls == EmitterProfile::Class::Directional) {
+            ImGui::Text("Angular Size");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            float angular_size_deg = emitter.angular_size * 180.0f / kPi;
+            if (ImGui::DragFloat("##angularsize", &angular_size_deg, 0.1f, 0.0f, 90.0f, "%.2f°", ImGuiSliderFlags_NoRoundToFormat)) {
+              emitter.angular_size = angular_size_deg * kPi / 180.0f;
+              emitter.angular_size_cosine = cosf(emitter.angular_size / 2.0f);
+              emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
+              changed = true;
+            }
 
-          if (emitter.cls != EmitterProfile::Class::Area) {
-            std::string emitter_preset_id = "emitter_emission_" + std::to_string(emitter_index);
-            changed |= emission_picker(scene, "Emission", emitter_preset_id.c_str(), emitter.emission.spectrum_index);
-            if (emitter.cls == EmitterProfile::Class::Directional) {
-              ImGui::Text("Angular Size");
-              if (ImGui::DragFloat("##angularsize", &emitter.angular_size, 0.01f, 0.0f, kHalfPi, "%.3f", ImGuiSliderFlags_NoRoundToFormat)) {
-                emitter.angular_size_cosine = cosf(emitter.angular_size / 2.0f);
-                emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
-                changed = true;
-              }
+            auto s = to_spherical(emitter.direction);
+            float rotation_deg = s.phi * 180.0f / kPi;
+            float elevation_deg = s.theta * 180.0f / kPi;
 
-              bool direction_changed = false;
-              auto s = to_spherical(emitter.direction);
-              ImGui::Text("Rotation:");
-              direction_changed = direction_changed || ImGui::DragFloat("##rotation", &s.phi, kPi / 360.0f, -kPi, kPi);
-              ImGui::Text("Elevation:");
-              direction_changed = direction_changed || ImGui::DragFloat("##elevation", &s.theta, kPi / 180.0f, -kHalfPi, kHalfPi);
-              if (direction_changed) {
-                emitter.direction = from_spherical(s);
-                changed = true;
+            constexpr float kPoleThreshold = 89.99f;
+
+            ImGui::Text("Rotation:");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            bool near_pole = (std::abs(elevation_deg) >= kPoleThreshold);
+            if (near_pole) {
+              ImGui::BeginDisabled();
+            }
+            bool rotation_changed = ImGui::DragFloat("##rotation", &rotation_deg, 0.5f, -180.0f, 180.0f, "%.2f°", ImGuiSliderFlags_NoRoundToFormat);
+            if (near_pole) {
+              ImGui::EndDisabled();
+            }
+
+            ImGui::Text("Elevation:");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            bool elevation_changed = ImGui::DragFloat("##elevation", &elevation_deg, 0.5f, -kPoleThreshold, kPoleThreshold, "%.2f°", ImGuiSliderFlags_NoRoundToFormat);
+
+            elevation_deg = std::clamp(elevation_deg, -kPoleThreshold, kPoleThreshold);
+            near_pole = (std::abs(elevation_deg) >= kPoleThreshold);
+
+            if (rotation_changed || elevation_changed) {
+              if (near_pole == false) {
+                s.phi = rotation_deg * kPi / 180.0f;
               }
+              s.theta = elevation_deg * kPi / 180.0f;
+              emitter.direction = from_spherical(s);
+              changed = true;
             }
           }
           if (!scene_editable)
@@ -1522,6 +1584,15 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
             camera_changed = true;
           }
           ImGui::Spacing();
+
+          if (_medium_mapping.empty() == false) {
+            ImGui::Text("External Medium");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            if (medium_dropdown("##camera_external_medium", camera.medium_index)) {
+              camera_changed = true;
+            }
+            ImGui::Spacing();
+          }
 
           ImGui::Text("Pixel Filter Radius");
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -1584,9 +1655,9 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
           scene_settings_changed = scene_settings_changed || ImGui::InputFloat("##radclmp", &scene.radiance_clamp, 0.1f, 1.f, "%0.2f");
           ImGui::Text("Active pixels: %0.2f%%", double(_film->active_pixel_count()) / double(_film->pixel_count()) * 100.0);
 
-          bool is_spectral = scene.spectral();
-          scene_settings_changed = scene_settings_changed || ImGui::Checkbox("Spectral rendering", &is_spectral);
-          scene.flags = (scene.flags & (~Scene::Spectral)) | (is_spectral ? Scene::Spectral : 0u);
+          bool spectral_changed = ImGui::Checkbox("Spectral rendering", scene.properties + Scene::Properties::Spectral);
+          scene_settings_changed = scene_settings_changed || spectral_changed;
+
           if (!scene_editable)
             ImGui::EndDisabled();
 
@@ -1595,6 +1666,103 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
             if (callbacks.scene_settings_changed) {
               callbacks.scene_settings_changed();
             }
+          }
+          break;
+        }
+
+        case SelectionKind::Integrator: {
+          if (!has_integrator) {
+            ImGui::Text("No integrator available");
+            break;
+          }
+
+          if (!scene_editable)
+            ImGui::BeginDisabled();
+
+          ImGui::Text("Integrator Type:");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+
+          if (ImGui::BeginCombo("##integrator_type", _current_integrator->name())) {
+            for (uint64_t i = 0; i < _integrators.count; ++i) {
+              bool is_selected = (_integrators[i] == _current_integrator);
+              if (ImGui::Selectable(_integrators[i]->name(), is_selected)) {
+                if (callbacks.integrator_selected) {
+                  callbacks.integrator_selected(_integrators[i]);
+                  set_current_integrator(_integrators[i]);
+                }
+              }
+              if (is_selected) {
+                ImGui::SetItemDefaultFocus();
+              }
+            }
+            ImGui::EndCombo();
+          }
+
+          bool options_changed = false;
+
+          if (_current_integrator->options().options.empty() == false) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            options_changed = build_options(_current_integrator->options());
+          }
+
+          ImGui::Spacing();
+          ImGui::Separator();
+          ImGui::Spacing();
+
+          if (ImGui::CollapsingHeader("Rendering Strategies", ImGuiTreeNodeFlags_None)) {
+            uint32_t supported = _current_integrator->supported_strategies();
+            bool strategies_changed = false;
+
+            auto draw_strategy_checkbox = [&](const char* label, uint32_t flag) {
+              bool supported_flag = (supported & flag) == flag;
+              bool scene_value = scene.strategy_enabled(flag);
+              bool enabled = supported_flag ? scene_value : false;
+
+              if (supported_flag == false) {
+                ImGui::BeginDisabled();
+              }
+              bool changed = ImGui::Checkbox(label, &enabled);
+              if (supported_flag == false) {
+                ImGui::EndDisabled();
+              }
+              if (changed && scene_editable && supported_flag) {
+                strategies_changed = true;
+                scene.strategy_flags = (scene.strategy_flags & (~flag)) | (enabled ? flag : 0u);
+              }
+            };
+
+            draw_strategy_checkbox("Direct Illumination", Scene::Strategy::DirectHit);
+            draw_strategy_checkbox("Light Sampling", Scene::Strategy::ConnectToLight);
+            draw_strategy_checkbox("Camera Connections", Scene::Strategy::ConnectToCamera);
+            draw_strategy_checkbox("Bidirectional Connections", Scene::Strategy::ConnectVertices);
+            draw_strategy_checkbox("Photon Merging", Scene::Strategy::MergeVertices);
+
+            if (strategies_changed && scene_editable && callbacks.scene_settings_changed) {
+              callbacks.scene_settings_changed();
+            }
+          }
+
+          ImGui::Spacing();
+          ImGui::Separator();
+          ImGui::Spacing();
+
+          bool mis_changed = ImGui::Checkbox("Multiple Importance Sampling", scene.properties + Scene::Properties::MultipleImportanceSampling);
+          if (mis_changed && scene_editable && callbacks.scene_settings_changed) {
+            callbacks.scene_settings_changed();
+          }
+
+          bool blue_noise_changed = ImGui::Checkbox("Blue Noise", scene.properties + Scene::Properties::BlueNoise);
+          if (blue_noise_changed && scene_editable && callbacks.scene_settings_changed) {
+            callbacks.scene_settings_changed();
+          }
+
+          if (!scene_editable)
+            ImGui::EndDisabled();
+
+          if (scene_editable && options_changed && callbacks.options_changed) {
+            callbacks.options_changed();
           }
           break;
         }
@@ -1720,6 +1888,9 @@ ViewOptions& UI::mutable_view_options() {
 
 void UI::set_current_integrator(Integrator* i) {
   _current_integrator = i;
+  if (i != nullptr) {
+    set_selection(SelectionKind::Integrator, 0, false);
+  }
 }
 
 void UI::quit() {
@@ -1993,7 +2164,7 @@ bool UI::build_material(Scene& scene, Material& material) {
   return changed;
 }
 
-bool UI::build_medium(Scene& scene, Medium& m) {
+bool UI::build_medium(Scene& scene, Medium& m, const char* name) {
   bool changed = false;
 
   if (scene.spectrums.count == 0) {
@@ -2009,27 +2180,24 @@ bool UI::build_medium(Scene& scene, Medium& m) {
   ensure_index(m.absorption_index, scene.black_spectrum);
   ensure_index(m.scattering_index, scene.black_spectrum);
 
-  constexpr const char* kMediumClassNames[] = {"Homogeneous Medium", "Density Grid Medium"};
-  const int32_t class_count = static_cast<int32_t>(sizeof(kMediumClassNames) / sizeof(kMediumClassNames[0]));
-  int32_t class_index = static_cast<int32_t>(m.cls);
-  class_index = clamp(class_index, 0, class_count - 1);
-
   bool has_density_grid = m.density.count != 0;
   bool recompute_extinction = false;
   float updated_max_sigma = m.max_sigma;
 
-  ImGui::Text("%s", kMediumClassNames[class_index]);
+  if (name != nullptr) {
+    ImGui::Text("%s", name);
+  }
 
   ImGui::Text("Absorption");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (spectrum_picker(scene, "Absorption", m.absorption_index, true, true)) {
+  if (spectrum_picker(scene, "Absorption##medium", m.absorption_index, true, true)) {
     changed = true;
     recompute_extinction = true;
   }
 
   ImGui::Text("Scattering");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (spectrum_picker(scene, "Scattering", m.scattering_index, true, true)) {
+  if (spectrum_picker(scene, "Scattering##medium", m.scattering_index, true, true)) {
     changed = true;
     recompute_extinction = true;
   }

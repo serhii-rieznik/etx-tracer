@@ -4,6 +4,8 @@
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/film.hxx>
 #include <etx/render/shared/scene.hxx>
+#include <etx/rt/integrators/integrator.hxx>
+#include <etx/util/options.hxx>
 
 #include <unordered_map>
 #include <string>
@@ -25,8 +27,13 @@ struct SceneRepresentation {
   SceneRepresentation(TaskScheduler&, const IORDatabase&);
   ~SceneRepresentation();
 
-  bool load_from_file(const char* filename, uint32_t options);
-  std::string save_to_file(const char* filename);
+  struct IntegratorData {
+    Integrator::Type selected = Integrator::Type::Invalid;
+    std::unordered_map<Integrator::Type, Options> settings;
+  };
+
+  bool load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator = nullptr);
+  std::string save_to_file(const char* filename, Integrator::Type selected_type = Integrator::Type::Invalid, Integrator* integrator_array[] = nullptr, size_t integrator_count = 0);
 
   Scene& mutable_scene();
   Camera& mutable_camera();

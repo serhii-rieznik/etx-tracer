@@ -2,6 +2,7 @@
 
 #include <etx/core/debug.hxx>
 #include <etx/render/shared/base.hxx>
+#include <etx/core/json.hxx>
 
 #include <vector>
 #include <string>
@@ -98,6 +99,9 @@ struct Options {
 
   void save_to_file(const std::string&);
   bool load_from_file(const std::string&);
+
+  void serialize_to_json(nlohmann::json& js) const;
+  bool deserialize_from_json(const nlohmann::json& js);
 
   bool has(const std::string& id, Option::Class cls) const {
     for (const auto& opt : options) {

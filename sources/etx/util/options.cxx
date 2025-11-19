@@ -21,14 +21,14 @@ void Option::serialize(void* wrap) const {
       const auto& data = as<Class::Integral>();
       js["value"] = data.value;
       js["value.min"] = data.bounds.minimum;
-      js["value.max"] = data.bounds.minimum;
+      js["value.max"] = data.bounds.maximum;
       break;
     }
     case Class::Float: {
       const auto& data = as<Class::Float>();
       js["value"] = data.value;
       js["value.min"] = data.bounds.minimum;
-      js["value.max"] = data.bounds.minimum;
+      js["value.max"] = data.bounds.maximum;
       break;
     }
     case Class::Float3: {
@@ -84,14 +84,14 @@ void Option::deserialize(const void* wrap) {
       auto& data = init<Class::Integral>();
       ETX_OPT_GETN("value", data.value);
       ETX_OPT_GETN("value.min", data.bounds.minimum);
-      ETX_OPT_GETN("value.max", data.bounds.minimum);
+      ETX_OPT_GETN("value.max", data.bounds.maximum);
       break;
     }
     case Class::Float: {
       auto& data = init<Class::Float>();
       ETX_OPT_GETN("value", data.value);
       ETX_OPT_GETN("value.min", data.bounds.minimum);
-      ETX_OPT_GETN("value.max", data.bounds.minimum);
+      ETX_OPT_GETN("value.max", data.bounds.maximum);
       break;
     }
     case Class::Float3: {
@@ -159,5 +159,26 @@ bool Options::load_from_file(const std::string& filename) {
   return true;
 }
 // */
+
+void Options::serialize_to_json(nlohmann::json& js) const {
+  js = nlohmann::json::array();
+  for (const auto& option : options) {
+    nlohmann::json option_json;
+    option.serialize(static_cast<void*>(&option_json));
+    js.emplace_back(option_json);
+  }
+}
+
+bool Options::deserialize_from_json(const nlohmann::json& js) {
+  if (js.is_array() == false)
+    return false;
+
+  options.clear();
+  for (const auto& value : js) {
+    auto& option = options.emplace_back();
+    option.deserialize(static_cast<const void*>(&value));
+  }
+  return true;
+}
 
 }  // namespace etx

@@ -119,7 +119,7 @@ struct CPUDebugIntegratorImpl : public Task {
     }
   }
 
-  void start(const Options& opt) {
+  void load_options(const Options& opt) {
     mode = opt.get_integral("mode", mode);
     th_factor = opt.get_float("t-factor", th_factor);
     th_min = opt.get_float("t-min", th_min);
@@ -141,6 +141,10 @@ struct CPUDebugIntegratorImpl : public Task {
     voxel_data[5] = opt.get_float("v011", voxel_data[5]);
     voxel_data[6] = opt.get_float("v110", voxel_data[6]);
     voxel_data[7] = opt.get_float("v111", voxel_data[7]);
+  }
+
+  void start(const Options& opt) {
+    load_options(opt);
 
     status = {};
     total_time = {};
@@ -722,6 +726,15 @@ void CPUDebugIntegrator::update_options() {
     _private->build_options(integrator_options);
     run();
   }
+}
+
+void CPUDebugIntegrator::sync_from_options(const Options& options) {
+  _private->load_options(options);
+  _private->build_options(integrator_options);
+}
+
+uint32_t CPUDebugIntegrator::supported_strategies() const {
+  return Scene::Strategy::Default;
 }
 
 }  // namespace etx

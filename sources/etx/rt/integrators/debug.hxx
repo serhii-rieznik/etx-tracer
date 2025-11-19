@@ -13,7 +13,13 @@ struct CPUDebugIntegrator : public Integrator {
     return "Debug (CPU)";
   }
 
+  Integrator::Type type() const override {
+    return Integrator::Type::Debug;
+  }
+
   void update_options() override;
+  void sync_from_options(const Options& options) override;
+  uint32_t supported_strategies() const override;
 
   const Status& status() const override;
 

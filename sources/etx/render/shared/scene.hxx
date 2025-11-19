@@ -20,10 +20,25 @@ struct ETX_ALIGNED EnvironmentEmitters {
 };
 
 struct ETX_ALIGNED Scene {
-  enum : uint32_t {
-    Committed = 1u << 0u,
-    Spectral = 1u << 1u,
+  struct Properties {
+    enum : uint32_t {
+      Committed = 0u,
+      Spectral = 1u,
+      MultipleImportanceSampling = 2u,
+      BlueNoise = 3u,
+      Count = 4u,
+    };
   };
+
+  struct Strategy {
+    constexpr static uint32_t DirectHit = 1u << 0u;
+    constexpr static uint32_t ConnectToLight = 1u << 1u;
+    constexpr static uint32_t ConnectToCamera = 1u << 2u;
+    constexpr static uint32_t ConnectVertices = 1u << 3u;
+    constexpr static uint32_t MergeVertices = 1u << 4u;
+    constexpr static uint32_t Default = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices;
+  };
+
   ArrayView<Vertex> vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<uint32_t> triangle_to_emitter ETX_EMPTY_INIT;
@@ -54,13 +69,23 @@ struct ETX_ALIGNED Scene {
   uint32_t default_dielectric_eta = kInvalidIndex;
   uint32_t default_conductor_eta = kInvalidIndex;
   uint32_t default_conductor_k = kInvalidIndex;
-  uint32_t flags ETX_INIT_WITH(0);
+  bool properties[Properties::Count] ETX_EMPTY_INIT;
+  uint32_t strategy_flags ETX_INIT_WITH(Strategy::Default);
 
   bool committed() const {
-    return flags & Committed;
+    return properties[Properties::Committed];
   }
   bool spectral() const {
-    return flags & Spectral;
+    return properties[Properties::Spectral];
+  }
+  bool multiple_importance_sampling() const {
+    return properties[Properties::MultipleImportanceSampling];
+  }
+  bool blue_noise() const {
+    return properties[Properties::BlueNoise];
+  }
+  ETX_GPU_CODE bool strategy_enabled(uint32_t flag) const {
+    return (strategy_flags & flag) != 0u;
   }
 };
 
