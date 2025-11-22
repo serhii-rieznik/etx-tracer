@@ -140,10 +140,10 @@ ETX_GPU_CODE constexpr float sign(float val) {
  * Float2
  */
 #define ETX_V2(V, C)                                               \
-  constexpr ETX_GPU_CODE V operator+(const V& a, C b) {            \
+  constexpr ETX_GPU_CODE V operator+(const V& a, const C b) {      \
     return {a.x + b, a.y + b};                                     \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator+(C b, const V& a) {            \
+  constexpr ETX_GPU_CODE V operator+(const C b, const V& a) {      \
     return {a.x + b, a.y + b};                                     \
   }                                                                \
   constexpr ETX_GPU_CODE V operator+(const V& a, const V& b) {     \
@@ -157,10 +157,10 @@ ETX_GPU_CODE constexpr float sign(float val) {
   constexpr ETX_GPU_CODE V operator-(const V& a) {                 \
     return {-a.x, -a.y};                                           \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator-(const V& a, C b) {            \
+  constexpr ETX_GPU_CODE V operator-(const V& a, const C b) {      \
     return {a.x - b, a.y - b};                                     \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator-(C b, const V& a) {            \
+  constexpr ETX_GPU_CODE V operator-(const C b, const V& a) {      \
     return {b - a.x, b - a.y};                                     \
   }                                                                \
   constexpr ETX_GPU_CODE V operator-(const V& a, const V& b) {     \
@@ -171,10 +171,10 @@ ETX_GPU_CODE constexpr float sign(float val) {
     a.y -= b.y;                                                    \
     return a;                                                      \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator*(const V& a, C b) {            \
+  constexpr ETX_GPU_CODE V operator*(const V& a, const C b) {      \
     return {a.x * b, a.y * b};                                     \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator*(C b, const V& a) {            \
+  constexpr ETX_GPU_CODE V operator*(const C b, const V& a) {      \
     return {a.x * b, a.y * b};                                     \
   }                                                                \
   constexpr ETX_GPU_CODE V operator*(const V& a, const V& b) {     \
@@ -185,15 +185,15 @@ ETX_GPU_CODE constexpr float sign(float val) {
     a.y *= b.y;                                                    \
     return a;                                                      \
   }                                                                \
-  constexpr ETX_GPU_CODE V& operator*=(V& a, C b) {                \
+  constexpr ETX_GPU_CODE V& operator*=(V& a, const C b) {          \
     a.x *= b;                                                      \
     a.y *= b;                                                      \
     return a;                                                      \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator/(const V& a, C b) {            \
+  constexpr ETX_GPU_CODE V operator/(const V& a, const C b) {      \
     return {a.x / b, a.y / b};                                     \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator/(C b, const V& a) {            \
+  constexpr ETX_GPU_CODE V operator/(const C b, const V& a) {      \
     return {a.x / b, a.y / b};                                     \
   }                                                                \
   constexpr ETX_GPU_CODE V operator/(const V& a, const V& b) {     \
@@ -217,10 +217,10 @@ ETX_GPU_CODE constexpr float sign(float val) {
  * Float3
  */
 #define ETX_V3(V, C)                                               \
-  constexpr ETX_GPU_CODE V operator+(const V& a, C b) {            \
+  constexpr ETX_GPU_CODE V operator+(const V& a, const C b) {      \
     return {a.x + b, a.y + b, a.z + b};                            \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator+(C b, const V& a) {            \
+  constexpr ETX_GPU_CODE V operator+(const C b, const V& a) {      \
     return {a.x + b, a.y + b, a.z + b};                            \
   }                                                                \
   constexpr ETX_GPU_CODE V operator+(const V& a, const V& b) {     \
@@ -241,7 +241,7 @@ ETX_GPU_CODE constexpr float sign(float val) {
   constexpr ETX_GPU_CODE V operator-(const V& a) {                 \
     return {-a.x, -a.y, -a.z};                                     \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator-(const V& a, C b) {            \
+  constexpr ETX_GPU_CODE V operator-(const V& a, const C b) {      \
     return {a.x - b, a.y - b, a.z - b};                            \
   }                                                                \
   constexpr ETX_GPU_CODE V operator-(C b, const V& a) {            \
@@ -256,16 +256,16 @@ ETX_GPU_CODE constexpr float sign(float val) {
     a.z -= b.z;                                                    \
     return a;                                                      \
   }                                                                \
-  constexpr ETX_GPU_CODE V& operator-=(V& a, C b) {                \
+  constexpr ETX_GPU_CODE V& operator-=(V& a, const C b) {          \
     a.x -= b;                                                      \
     a.y -= b;                                                      \
     a.z -= b;                                                      \
     return a;                                                      \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator*(const V& a, C b) {            \
+  constexpr ETX_GPU_CODE V operator*(const V& a, const C b) {      \
     return {a.x * b, a.y * b, a.z * b};                            \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator*(C b, const V& a) {            \
+  constexpr ETX_GPU_CODE V operator*(const C b, const V& a) {      \
     return {a.x * b, a.y * b, a.z * b};                            \
   }                                                                \
   constexpr ETX_GPU_CODE V operator*(const V& a, const V& b) {     \
@@ -280,10 +280,10 @@ ETX_GPU_CODE constexpr float sign(float val) {
     a.z *= b;                                                      \
     return a;                                                      \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator/(const V& a, C b) {            \
+  constexpr ETX_GPU_CODE V operator/(const V& a, const C b) {      \
     return {a.x / b, a.y / b, a.z / b};                            \
   }                                                                \
-  constexpr ETX_GPU_CODE V operator/(C b, const V& a) {            \
+  constexpr ETX_GPU_CODE V operator/(const C b, const V& a) {      \
     return {b / a.x, b / a.y, b / a.z};                            \
   }                                                                \
   constexpr ETX_GPU_CODE V operator/(const V& a, const V& b) {     \
@@ -303,10 +303,10 @@ ETX_GPU_CODE constexpr float sign(float val) {
  * Float4
  */
 #define ETX_V4(V, C)                                           \
-  constexpr ETX_GPU_CODE V operator+(const V& a, C b) {        \
+  constexpr ETX_GPU_CODE V operator+(const V& a, const C b) {  \
     return {a.x + b, a.y + b, a.z + b, a.w + b};               \
   }                                                            \
-  constexpr ETX_GPU_CODE V operator+(C b, const V& a) {        \
+  constexpr ETX_GPU_CODE V operator+(const C b, const V& a) {  \
     return {a.x + b, a.y + b, a.z + b, a.w + b};               \
   }                                                            \
   constexpr ETX_GPU_CODE V operator+(const V& a, const V& b) { \
@@ -319,7 +319,7 @@ ETX_GPU_CODE constexpr float sign(float val) {
     a.w += b.w;                                                \
     return a;                                                  \
   }                                                            \
-  constexpr ETX_GPU_CODE V& operator+=(V& a, C b) {            \
+  constexpr ETX_GPU_CODE V& operator+=(V& a, const C b) {      \
     a.x += b;                                                  \
     a.y += b;                                                  \
     a.z += b;                                                  \
@@ -329,10 +329,10 @@ ETX_GPU_CODE constexpr float sign(float val) {
   constexpr ETX_GPU_CODE V operator-(const V& a) {             \
     return {-a.x, -a.y, -a.z, -a.w};                           \
   }                                                            \
-  constexpr ETX_GPU_CODE V operator-(const V& a, C b) {        \
+  constexpr ETX_GPU_CODE V operator-(const V& a, const C b) {  \
     return {a.x - b, a.y - b, a.z - b, a.w - b};               \
   }                                                            \
-  constexpr ETX_GPU_CODE V operator-(C b, const V& a) {        \
+  constexpr ETX_GPU_CODE V operator-(const C b, const V& a) {  \
     return {b - a.x, b - a.y, b - a.z, b - a.w};               \
   }                                                            \
   constexpr ETX_GPU_CODE V operator-(const V& a, const V& b) { \
@@ -345,17 +345,17 @@ ETX_GPU_CODE constexpr float sign(float val) {
     a.w -= b.w;                                                \
     return a;                                                  \
   }                                                            \
-  constexpr ETX_GPU_CODE V& operator-=(V& a, C b) {            \
+  constexpr ETX_GPU_CODE V& operator-=(V& a, const C b) {      \
     a.x -= b;                                                  \
     a.y -= b;                                                  \
     a.z -= b;                                                  \
     a.w -= b;                                                  \
     return a;                                                  \
   }                                                            \
-  constexpr ETX_GPU_CODE V operator*(const V& a, C b) {        \
+  constexpr ETX_GPU_CODE V operator*(const V& a, const C b) {  \
     return {a.x * b, a.y * b, a.z * b, a.w * b};               \
   }                                                            \
-  constexpr ETX_GPU_CODE V operator*(C b, const V& a) {        \
+  constexpr ETX_GPU_CODE V operator*(const C b, const V& a) {  \
     return {a.x * b, a.y * b, a.z * b, a.w * b};               \
   }                                                            \
   constexpr ETX_GPU_CODE V operator*(const V& a, const V& b) { \
@@ -368,17 +368,17 @@ ETX_GPU_CODE constexpr float sign(float val) {
     a.w *= b.w;                                                \
     return a;                                                  \
   }                                                            \
-  constexpr ETX_GPU_CODE V& operator*=(V& a, C b) {            \
+  constexpr ETX_GPU_CODE V& operator*=(V& a, const C b) {      \
     a.x *= b;                                                  \
     a.y *= b;                                                  \
     a.z *= b;                                                  \
     a.w *= b;                                                  \
     return a;                                                  \
   }                                                            \
-  constexpr ETX_GPU_CODE V operator/(const V& a, C b) {        \
+  constexpr ETX_GPU_CODE V operator/(const V& a, const C b) {  \
     return {a.x / b, a.y / b, a.z / b, a.w / b};               \
   }                                                            \
-  constexpr ETX_GPU_CODE V operator/(C b, const V& a) {        \
+  constexpr ETX_GPU_CODE V operator/(const C b, const V& a) {  \
     return {b / a.x, b / a.y, b / a.z, b / a.w};               \
   }                                                            \
   constexpr ETX_GPU_CODE V operator/(const V& a, const V& b) { \
@@ -391,7 +391,7 @@ ETX_GPU_CODE constexpr float sign(float val) {
     a.w /= b.w;                                                \
     return a;                                                  \
   }                                                            \
-  constexpr ETX_GPU_CODE V& operator/=(V& a, C b) {            \
+  constexpr ETX_GPU_CODE V& operator/=(V& a, const C b) {      \
     a.x /= b;                                                  \
     a.y /= b;                                                  \
     a.z /= b;                                                  \
@@ -609,6 +609,11 @@ struct ETX_ALIGNED Triangle {
   uint32_t material_index = kInvalidIndex;
   float3 geo_n = {};
   float pad = 0.0f;
+};
+
+struct ETX_ALIGNED Mesh {
+  uint32_t triangle_offset = 0u;
+  uint32_t triangle_count = 0u;
 };
 
 struct ETX_ALIGNED LocalFrame {

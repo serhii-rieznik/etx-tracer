@@ -23,12 +23,22 @@ ETX_GPU_CODE uint32_t emitter_external_medium_index(const Scene& scene, const Em
   return profile.medium_index;
 }
 
-ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal,
-  const float3& adirection, float& pdf_area, float& pdf_dir, float& pdf_dir_out, const Scene& scene) {
+ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
+  float& pdf_area, float& pdf_dir, float& pdf_dir_out, const Scene& scene) {
   const auto& em = scene.emitter_profiles[em_inst.profile];
   ETX_ASSERT(em_inst.is_local());
 
-  pdf_dir = max(0.0f, dot(emitter_normal, adirection)) * kInvPi;
+  // Get collimation from material
+  float collimation = 0.0f;
+  if (em_inst.triangle_index != kInvalidIndex) {
+    const auto& tri = scene.triangles[em_inst.triangle_index];
+    const auto& material = scene.materials[tri.material_index];
+    collimation = material.emission_collimation;
+  }
+
+  float cos_t = max(0.0f, dot(emitter_normal, direction));
+  pdf_dir = powf(cos_t, collimation_to_exponent(collimation)) * kInvPi;
+
   if (pdf_dir <= 0.0f) {
     return {spect, 0.0f};
   }

@@ -32,12 +32,10 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
   for (uint64_t i = 0; i < count; ++i) {
     float wavelength = wavelengths_power[i].x * wavelength_scale;
     float power = wavelengths_power[i].y;
-    if (std::isfinite(wavelength) == false)
-      continue;
-    if (std::isfinite(power) == false)
-      continue;
-    wavelength = std::clamp(wavelength, spectrum::kShortestWavelength, spectrum::kLongestWavelength);
-    samples.emplace_back(float2{wavelength, power});
+    if (valid_value(power)) {
+      wavelength = std::clamp(wavelength, spectrum::kShortestWavelength, spectrum::kLongestWavelength);
+      samples.emplace_back(float2{wavelength, power});
+    }
   }
 
   if (samples.empty()) {
@@ -73,8 +71,10 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
     float power = 0.0f;
     if (wavelength <= unique_samples.front().x) {
       power = unique_samples.front().y;
+      ETX_VALIDATE(power);
     } else if (wavelength >= unique_samples.back().x) {
       power = unique_samples.back().y;
+      ETX_VALIDATE(power);
     } else {
       while ((segment + 1u < unique_samples.size()) && (unique_samples[segment + 1u].x < wavelength)) {
         ++segment;
@@ -84,10 +84,11 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
       float denom = s1.x - s0.x;
       float t = (denom > 0.0f) ? (wavelength - s0.x) / denom : 0.0f;
       power = lerp(s0.y, s1.y, saturate(t));
+      ETX_VALIDATE(power);
     }
-
     result.spectral_entries[i] = {wavelength, power};
   }
+  ETX_ASSERT(result.valid());
 
   float3 xyz = result.integrate_to_xyz();
   result.integrated_value = spectrum::xyz_to_rgb(xyz);
@@ -95,10 +96,12 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
 }
 
 void SpectralDistribution::scale(float factor) {
+  ETX_ASSERT(factor >= 0.0f);
   for (uint32_t i = 0; i < spectral_entry_count; ++i) {
     spectral_entries[i].power *= factor;
   }
   integrated_value *= factor;
+  ETX_ASSERT(valid());
 }
 
 SpectralDistribution SpectralDistribution::null() {
@@ -135,6 +138,8 @@ SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, f
 SpectralDistribution SpectralDistribution::rgb_reflectance(const float3& rgb) {
   if (etx::luminance(rgb) == 0.0f)
     return SpectralDistribution::null();
+
+  ETX_VALIDATE(rgb);
 
   float2 samples[spectrum::RGBResponseWavelengthCount] = {};
   for (uint32_t i = spectrum::RGBResponseShortestWavelength; i <= spectrum::RGBResponseLongestWavelength; ++i) {

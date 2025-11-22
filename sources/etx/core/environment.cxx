@@ -85,7 +85,13 @@ std::string Environment::to_project_relative(const std::string& path) const {
 
   std::filesystem::path in_path(path);
   if (in_path.is_relative()) {
-    return in_path.generic_string();
+    auto str = in_path.generic_string();
+    if (str[0] == '/')
+      str = "." + str;
+    else if (str[0] != '.') {
+      str = "./" + str;
+    }
+    return str;
   }
 
   std::error_code ec;
@@ -101,8 +107,7 @@ std::string Environment::to_project_relative(const std::string& path) const {
     return canonical.generic_string();
   }
 
-  std::filesystem::path dot_relative = std::filesystem::path(".") / relative;
-  return dot_relative.generic_string();
+  return "./" + relative.generic_string();
 }
 
 std::string Environment::resolve_to_absolute(const std::string& path) const {

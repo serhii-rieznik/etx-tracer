@@ -39,10 +39,19 @@ struct ETX_ALIGNED Scene {
     constexpr static uint32_t Default = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices;
   };
 
-  ArrayView<Vertex> vertices ETX_EMPTY_INIT;
+  struct Geometry {
+    ArrayView<float3> pos;
+    ArrayView<float3> nrm;
+    ArrayView<float3> tan;
+    ArrayView<float3> btn;
+    ArrayView<float2> tex;
+  };
+
+  Geometry vertices ETX_EMPTY_INIT;
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<uint32_t> triangle_to_emitter ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
+  ArrayView<Mesh> meshes ETX_EMPTY_INIT;
   ArrayView<EmitterProfile> emitter_profiles ETX_EMPTY_INIT;
   ArrayView<Emitter> emitter_instances ETX_EMPTY_INIT;
   ArrayView<Image> images ETX_EMPTY_INIT;
@@ -95,64 +104,57 @@ ETX_GPU_CODE float collimation_to_exponent(float normalized) {
   return 1.0f / fmaxf(kEpsilon, denom);
 }
 
-ETX_GPU_CODE float area_to_solid_angle_probability(const float3& dp, const float3& n, float collimation) {
-  float distance_squared = dot(dp, dp);
-  if (distance_squared <= kEpsilon)
-    return 0.0f;
-
-  float exponent = collimation_to_exponent(collimation);
-  float cos_t = powf(fabsf(dot(dp, n) / sqrtf(distance_squared)), exponent);
-  return (cos_t > kEpsilon) ? (distance_squared / cos_t) : 0.0f;
+ETX_GPU_CODE float3 lerp_pos(const Scene::Geometry& vertices, const Triangle& t, const float3& bc) {
+  return vertices.pos[t.i[0]] * bc.x +  //
+         vertices.pos[t.i[1]] * bc.y +  //
+         vertices.pos[t.i[2]] * bc.z;   //
 }
 
-ETX_GPU_CODE float3 lerp_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
-  return vertices[t.i[0]].pos * bc.x +  //
-         vertices[t.i[1]].pos * bc.y +  //
-         vertices[t.i[2]].pos * bc.z;   //
+ETX_GPU_CODE float3 lerp_normal(const Scene::Geometry& vertices, const Triangle& t, const float3& bc) {
+  return normalize(vertices.nrm[t.i[0]] * bc.x +  //
+                   vertices.nrm[t.i[1]] * bc.y +  //
+                   vertices.nrm[t.i[2]] * bc.z);  //
 }
 
-ETX_GPU_CODE float3 lerp_normal(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
-  return normalize(vertices[t.i[0]].nrm * bc.x +  //
-                   vertices[t.i[1]].nrm * bc.y +  //
-                   vertices[t.i[2]].nrm * bc.z);  //
+ETX_GPU_CODE float3 lerp_tangent(const Scene::Geometry& vertices, const Triangle& t, const float3& bc) {
+  return normalize(vertices.tan[t.i[0]] * bc.x +  //
+                   vertices.tan[t.i[1]] * bc.y +  //
+                   vertices.tan[t.i[2]] * bc.z);  //
 }
 
-ETX_GPU_CODE float3 lerp_tangent(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
-  return normalize(vertices[t.i[0]].tan * bc.x +  //
-                   vertices[t.i[1]].tan * bc.y +  //
-                   vertices[t.i[2]].tan * bc.z);  //
+ETX_GPU_CODE float3 lerp_bitangent(const Scene::Geometry& vertices, const Triangle& t, const float3& bc) {
+  return normalize(vertices.btn[t.i[0]] * bc.x +  //
+                   vertices.btn[t.i[1]] * bc.y +  //
+                   vertices.btn[t.i[2]] * bc.z);  //
 }
 
-ETX_GPU_CODE float3 lerp_bitangent(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
-  return normalize(vertices[t.i[0]].btn * bc.x +  //
-                   vertices[t.i[1]].btn * bc.y +  //
-                   vertices[t.i[2]].btn * bc.z);  //
+ETX_GPU_CODE float2 lerp_uv(const Scene::Geometry& vertices, const Triangle& t, const float3& b) {
+  return vertices.tex[t.i[0]] * b.x +  //
+         vertices.tex[t.i[1]] * b.y +  //
+         vertices.tex[t.i[2]] * b.z;   //
 }
 
-ETX_GPU_CODE float2 lerp_uv(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& b) {
-  return vertices[t.i[0]].tex * b.x +  //
-         vertices[t.i[1]].tex * b.y +  //
-         vertices[t.i[2]].tex * b.z;   //
+ETX_GPU_CODE void lerp_vertex(const Scene::Geometry& vertices, const Triangle& t, const float3& bc, Vertex& vertex) {
+  const uint32_t i0 = t.i[0];
+  const uint32_t i1 = t.i[1];
+  const uint32_t i2 = t.i[2];
+
+  vertex.pos = vertices.pos[i0] * bc.x + vertices.pos[i1] * bc.y + vertices.pos[i2] * bc.z;
+  vertex.nrm = normalize(vertices.nrm[i0] * bc.x + vertices.nrm[i1] * bc.y + vertices.nrm[i2] * bc.z);
+  vertex.tex = vertices.tex[i0] * bc.x + vertices.tex[i1] * bc.y + vertices.tex[i2] * bc.z;
+
+  const auto t0 = vertices.tan[i0] * bc.x + vertices.tan[i1] * bc.y + vertices.tan[i2] * bc.z;
+  vertex.tan = normalize(t0 - dot(t0, vertex.nrm) * vertex.nrm);
+
+  const auto b0 = vertices.btn[i0] * bc.x + vertices.btn[i1] * bc.y + vertices.btn[i2] * bc.z;
+  auto btn = cross(vertex.nrm, vertex.tan);
+  vertex.btn = normalize(btn * (dot(btn, b0) > 0.0f ? 1.0f : -1.0f));
 }
 
-ETX_GPU_CODE Vertex lerp_vertex(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc) {
-  const auto& v0 = vertices[t.i[0]];
-  const auto& v1 = vertices[t.i[1]];
-  const auto& v2 = vertices[t.i[2]];
-  Vertex v = {
-    v0.pos * bc.x + v1.pos * bc.y + v2.pos * bc.z,
-    v0.nrm * bc.x + v1.nrm * bc.y + v2.nrm * bc.z,
-    v0.tan * bc.x + v1.tan * bc.y + v2.tan * bc.z,
-    v0.btn * bc.x + v1.btn * bc.y + v2.btn * bc.z,
-    v0.tex * bc.x + v1.tex * bc.y + v2.tex * bc.z,
-  };
-  v.nrm = normalize(v.nrm);
-  v.tan = normalize(v.tan - dot(v.tan, v.nrm) * v.nrm);
-
-  auto btn = cross(v.nrm, v.tan);
-  v.btn = normalize(btn * (dot(btn, v.btn) > 0.0f ? 1.0f : -1.0f));
-
-  return v;
+ETX_GPU_CODE Vertex lerp_vertex(const Scene::Geometry& vertices, const Triangle& t, const float3& bc) {
+  Vertex vertex = {};
+  lerp_vertex(vertices, t, bc, vertex);
+  return vertex;
 }
 
 ETX_GPU_CODE void orthogonalize(Vertex& v) {
@@ -163,10 +165,10 @@ ETX_GPU_CODE void orthogonalize(Vertex& v) {
   v.btn = v.btn * (dot(b, v.btn) > 0.0f ? 1.0f : -1.0f);
 }
 
-ETX_GPU_CODE float3 barycentrics(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& p) {
-  const float3& a = vertices[t.i[0]].pos;
-  const float3& b = vertices[t.i[1]].pos;
-  const float3& c = vertices[t.i[2]].pos;
+ETX_GPU_CODE float3 barycentrics(const Scene::Geometry& vertices, const Triangle& t, const float3& p) {
+  const float3& a = vertices.pos[t.i[0]];
+  const float3& b = vertices.pos[t.i[1]];
+  const float3& c = vertices.pos[t.i[2]];
 
   const float3 v0 = b - a;
   const float3 v1 = c - a;
@@ -198,14 +200,20 @@ ETX_GPU_CODE float3 shading_pos_project(const float3& position, const float3& or
   return position - dot(position - origin, normal) * normal;
 }
 
-ETX_GPU_CODE float3 shading_pos(const ArrayView<Vertex>& vertices, const Triangle& t, const float3& bc, const float3& w_o) {
-  float3 geo_pos = lerp_pos(vertices, t, bc);
-  float3 sh_normal = lerp_normal(vertices, t, bc);
-  float direction = (dot(sh_normal, w_o) >= 0.0f) ? +1.0f : -1.0f;
-  float3 p0 = shading_pos_project(geo_pos, vertices[t.i[0]].pos, direction * vertices[t.i[0]].nrm);
-  float3 p1 = shading_pos_project(geo_pos, vertices[t.i[1]].pos, direction * vertices[t.i[1]].nrm);
-  float3 p2 = shading_pos_project(geo_pos, vertices[t.i[2]].pos, direction * vertices[t.i[2]].nrm);
-  float3 sh_pos = p0 * bc.x + p1 * bc.y + p2 * bc.z;
+ETX_GPU_CODE float3 shading_pos(const Scene::Geometry& vertices, const Triangle& t, const float3& bc, const float3& w_o) {
+  const float3& g0 = vertices.pos[t.i[0]];
+  const float3& g1 = vertices.pos[t.i[1]];
+  const float3& g2 = vertices.pos[t.i[2]];
+  const float3& n0 = vertices.nrm[t.i[0]];
+  const float3& n1 = vertices.nrm[t.i[1]];
+  const float3& n2 = vertices.nrm[t.i[2]];
+  const float3 geo_pos = g0 * bc.x + g1 * bc.y + g2 * bc.z;
+  const float3 sh_normal = normalize(n0 * bc.x + n1 * bc.y + n2 * bc.z);
+  const float direction = (dot(sh_normal, w_o) >= 0.0f) ? +1.0f : -1.0f;
+  const float3 p0 = shading_pos_project(geo_pos, g0, direction * n0);
+  const float3 p1 = shading_pos_project(geo_pos, g1, direction * n1);
+  const float3 p2 = shading_pos_project(geo_pos, g2, direction * n2);
+  const float3 sh_pos = p0 * bc.x + p1 * bc.y + p2 * bc.z;
   bool convex = dot(sh_pos - geo_pos, sh_normal) * direction > 0.0f;
   return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
 }
@@ -227,7 +235,8 @@ ETX_GPU_CODE float3 orient_normals_to_hemisphere(float3 n_s, const float3& n_g, 
 ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
   float3 bc = barycentrics(base.barycentric);
   const auto& tri = scene.triangles[base.triangle_index];
-  Intersection result_intersection = lerp_vertex(scene.vertices, tri, bc);
+  Intersection result_intersection = {};
+  lerp_vertex(scene.vertices, tri, bc, result_intersection);
   result_intersection.barycentric = bc;
   result_intersection.triangle_index = base.triangle_index;
   result_intersection.w_i = w_i;

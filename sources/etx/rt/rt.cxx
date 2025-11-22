@@ -76,7 +76,7 @@ struct RaytracingImpl {
     auto geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_TRIANGLE);
 
     rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_VERTEX, 0, RTCFormat::RTC_FORMAT_FLOAT3,  //
-      s.vertices.a, 0, sizeof(Vertex), s.vertices.count);
+      s.vertices.pos.a, 0, sizeof(float3), s.vertices.pos.count);
 
     rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_INDEX, 0, RTCFormat::RTC_FORMAT_UINT3,  //
       s.triangles.a, 0, sizeof(Triangle), s.triangles.count);

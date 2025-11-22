@@ -754,7 +754,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
 constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
 
 void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& scene, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-  const SceneRepresentation::MediumMapping& mediums) {
+  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes) {
   ETX_PROFILER_SCOPE();
 
   bool has_integrator = (_current_integrator != nullptr);
@@ -816,6 +816,12 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
   if (medh != _medium_mapping_hash) {
     _medium_mapping.build(mediums);
     _medium_mapping_hash = medh;
+  }
+
+  uint64_t meshh = hash_mapping(meshes);
+  if (meshh != _mesh_mapping_hash) {
+    _mesh_mapping.build(meshes);
+    _mesh_mapping_hash = meshh;
   }
 
   if (ImGui::BeginMainMenuBar()) {
@@ -1186,6 +1192,24 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
 
     ImGui::Separator();
 
+    ImGui::Text("Meshes");
+    if (_mesh_mapping.empty()) {
+      ImGui::TextDisabled("None");
+    } else if (ImGui::BeginListBox("##meshes_list", ImVec2(-FLT_MIN, 4.0f * ImGui::GetTextLineHeightWithSpacing()))) {
+      for (uint64_t i = 0; i < _mesh_mapping.size(); ++i) {
+        ImGui::PushID(static_cast<int>(i + 512));  // Use different ID range
+        bool mesh_selected = (_selection.kind == SelectionKind::Mesh) && (_selection.index == static_cast<int32_t>(i));
+        const auto& entry = _mesh_mapping.entry(static_cast<int32_t>(i));
+        if (ImGui::Selectable(entry.name, mesh_selected)) {
+          set_selection(SelectionKind::Mesh, static_cast<int32_t>(i));
+        }
+        ImGui::PopID();
+      }
+      ImGui::EndListBox();
+    }
+
+    ImGui::Separator();
+
     ImGui::Text("Mediums");
     if (!scene_editable)
       ImGui::BeginDisabled();
@@ -1299,6 +1323,11 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
         case SelectionKind::Emitter:
           title_suffix("Emitter", nullptr);
           break;
+        case SelectionKind::Mesh:
+          if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _mesh_mapping.size())) {
+            title_suffix("Mesh", _mesh_mapping.name(_selection.index));
+          }
+          break;
         case SelectionKind::Camera:
           title_suffix("Camera", nullptr);
           break;
@@ -1366,6 +1395,55 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
             ImGui::EndDisabled();
           if (scene_editable && changed && callbacks.medium_changed) {
             callbacks.medium_changed(medium_index);
+          }
+          break;
+        }
+
+        case SelectionKind::Mesh: {
+          if (_mesh_mapping.empty()) {
+            ImGui::Text("No meshes available");
+            break;
+          }
+          if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _mesh_mapping.size())) {
+            ImGui::Text("Invalid mesh selection");
+            break;
+          }
+
+          uint32_t mesh_index = _mesh_mapping.at(_selection.index);
+          const Mesh& mesh = scene.meshes[mesh_index];
+
+          ImGui::Text("Triangles: %u", mesh.triangle_count);
+
+          // Material assignment dropdown
+          std::vector<const char*> material_names;
+          for (uint64_t i = 0; i < _material_mapping.size(); ++i) {
+            const auto& entry = _material_mapping.entry(static_cast<int32_t>(i));
+            material_names.push_back(entry.name);
+          }
+
+          // Find current material (all triangles should have same material)
+          uint32_t current_material = kInvalidIndex;
+          if (mesh.triangle_count > 0) {
+            uint32_t first_triangle_index = mesh.triangle_offset;
+            if (first_triangle_index < scene.triangles.count) {
+              current_material = scene.triangles[first_triangle_index].material_index;
+            }
+          }
+
+          int selected_material = -1;
+          for (int i = 0; i < static_cast<int>(material_names.size()); ++i) {
+            if (_material_mapping.at(i) == current_material) {
+              selected_material = i;
+              break;
+            }
+          }
+
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+          if (ImGui::Combo("##mesh_material", &selected_material, material_names.data(), static_cast<int>(material_names.size()))) {
+            uint32_t new_material_index = _material_mapping.at(selected_material);
+            if (callbacks.mesh_material_changed) {
+              callbacks.mesh_material_changed(mesh_index, new_material_index);
+            }
           }
           break;
         }

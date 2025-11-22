@@ -49,6 +49,7 @@ struct RTApplication {
   void on_material_changed(uint32_t index);
   void on_medium_added();
   void on_medium_changed(uint32_t index);
+  void on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index);
   void on_emitter_changed(uint32_t index);
   void on_camera_changed(bool film_changed);
   void on_scene_settings_changed();

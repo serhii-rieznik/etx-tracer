@@ -11,13 +11,6 @@ namespace {
 
 #define ETX_INCLUDE_CAMERA_PATH 0
 
-bool enable_direct_hit = true;
-bool enable_connect_to_camera = true;
-bool enable_connect_to_light = true;
-bool enable_connect_vertices = true;
-bool enable_mis = true;
-bool enable_blue_noise = true;
-
 struct PathVertex {
   enum class Class : uint16_t {
     Invalid,
@@ -64,11 +57,6 @@ struct PathVertex {
     : cls(c) {
   }
 
-  bool operator==(const PathVertex& other) const {
-    bool same_pdf = memcmp(&pdf, &other.pdf, sizeof(pdf)) == 0;
-    return same_pdf && (cls == other.cls) && (material == other.material) && (mis_connectible == other.mis_connectible);
-  }
-
   bool is_specific_emitter() const {
     return (intersection.emitter_index != kInvalidIndex);
   }
@@ -105,34 +93,6 @@ struct PathVertex {
     float3 w_i = {};
     float3 w_o = {};
     if (safe_normalize(curr.intersection.pos, prev.intersection.pos, w_i) == false)
-      return 0.0f;
-
-    if (safe_normalize(next.intersection.pos, curr.intersection.pos, w_o) == false)
-      return 0.0f;
-
-    float eval_pdf = 0.0f;
-    if (curr.is_surface_interaction()) {
-      const auto& mat = scene.materials[curr.intersection.material_index];
-      eval_pdf = bsdf::pdf({spect, kInvalidIndex, path_source, curr.intersection, w_i}, w_o, mat, scene, smp);
-      ETX_VALIDATE(eval_pdf);
-    } else if (curr.is_medium_interaction()) {
-      eval_pdf = phase_function(w_i, w_o, curr.medium.anisotropy);
-      ETX_VALIDATE(eval_pdf);
-    }
-
-    return convert_solid_angle_pdf_to_area(eval_pdf, curr, next);
-  }
-
-  static float pdf_area_test(SpectralQuery spect, PathSource path_source, const PathVertex& unknown, const PathVertex& curr, const PathVertex& next, const Scene& scene,
-    Sampler& smp) {
-    ETX_CRITICAL(curr.is_surface_interaction() || curr.is_medium_interaction());
-
-    float3 aw_i = -curr.w_o;
-    float3 aw_o = next.intersection.w_i;
-
-    float3 w_i = {};
-    float3 w_o = {};
-    if (safe_normalize(curr.intersection.pos, unknown.intersection.pos, w_i) == false)
       return 0.0f;
 
     if (safe_normalize(next.intersection.pos, curr.intersection.pos, w_o) == false)
@@ -319,6 +279,12 @@ struct CPUBidirectionalImpl : public Task {
   TimeMeasure iteration_time = {};
   Integrator::Status status = {};
   Handle current_task = {};
+  bool enable_direct_hit = true;
+  bool enable_connect_to_camera = true;
+  bool enable_connect_to_light = true;
+  bool enable_connect_vertices = true;
+  bool enable_mis = true;
+  bool enable_blue_noise = true;
 
   enum class Mode : uint32_t {
     PathTracing,

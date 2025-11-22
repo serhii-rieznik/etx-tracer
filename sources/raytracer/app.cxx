@@ -61,6 +61,7 @@ void RTApplication::init() {
   ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
   ui.callbacks.medium_added = std::bind(&RTApplication::on_medium_added, this);
   ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
+  ui.callbacks.mesh_material_changed = std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2);
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
   ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1);
   ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
@@ -159,7 +160,7 @@ void RTApplication::frame() {
   const auto frame_data = raytracing.film().layer(options.layer);
   render.update_image(frame_data);
 
-  ui.build(dt, _recent_files, scene.mutable_scene(), scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping());
+  ui.build(dt, _recent_files, scene.mutable_scene(), scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping());
   render.end_frame();
 }
 
@@ -175,18 +176,18 @@ void RTApplication::process_event(const sapp_event* e) {
   }
 }
 
-void RTApplication::add_to_recent(const std::string&) {
+void RTApplication::add_to_recent(const std::string& value) {
   constexpr uint32_t kMaxRecentFiles = 8u;
 
-  auto relative_path = env().to_project_relative(_current_scene_file);
-  auto absolute_path = env().resolve_to_absolute(_current_scene_file);
+  auto relative_path = env().to_project_relative(value);
+  auto absolute_path = env().resolve_to_absolute(value);
 
   auto e = std::remove_if(_recent_files.begin(), _recent_files.end(), [&](const std::string& entry) {
     return env().resolve_to_absolute(entry) == absolute_path;
   });
   _recent_files.erase(e, _recent_files.end());
 
-  if (_current_scene_file.empty() == false) {
+  if (value.empty() == false) {
     _recent_files.emplace_back(relative_path);
   }
 
@@ -251,17 +252,8 @@ std::string RTApplication::save_scene_file(const std::string& file_name) {
   }
 
   _current_scene_file = saved_path;
-
-  auto existing = std::find(_recent_files.begin(), _recent_files.end(), saved_path);
-  if (existing != _recent_files.end()) {
-    _recent_files.erase(existing);
-  }
-  _recent_files.emplace_back(saved_path);
-  if (_recent_files.size() > 8) {
-    _recent_files.erase(_recent_files.begin());
-  }
-
   _options.set_string("scene", _current_scene_file, "Scene");
+  add_to_recent(saved_path);
   save_options();
 
   return saved_path;
@@ -405,6 +397,13 @@ void RTApplication::on_medium_added() {
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
+  integrator_thread.restart();
+}
+
+void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index) {
+  integrator_thread.stop(Integrator::Stop::Immediate);
+  scene.set_mesh_material(mesh_index, material_index);
+  scene.rebuild_area_emitters();
   integrator_thread.restart();
 }
 

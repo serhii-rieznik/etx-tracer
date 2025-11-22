@@ -25,7 +25,7 @@ struct UI {
   void cleanup();
 
   void build(double dt, const std::vector<std::string>& recent_files, Scene& scene, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-    const SceneRepresentation::MediumMapping& mediums);
+    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
@@ -54,6 +54,7 @@ struct UI {
     std::function<void(uint32_t)> material_changed;
     std::function<void()> medium_added;
     std::function<void(uint32_t)> medium_changed;
+    std::function<void(uint32_t, uint32_t)> mesh_material_changed;  // mesh_index, new_material_index
     std::function<void(uint32_t)> emitter_changed;
     std::function<void(bool)> camera_changed;
     std::function<void()> scene_settings_changed;
@@ -67,6 +68,7 @@ struct UI {
     None,
     Material,
     Medium,
+    Mesh,
     Emitter,
     Camera,
     Scene,
@@ -164,6 +166,7 @@ struct UI {
 
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
+  MappingRepresentation _mesh_mapping;
   SelectionState _selection;
   std::vector<SelectionState> _selection_history;
   int32_t _selection_history_cursor = -1;
@@ -173,6 +176,7 @@ struct UI {
   std::unordered_map<std::string, bool> _material_anisotropy;
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
+  uint64_t _mesh_mapping_hash = 0ull;
   const IORDatabase* _ior_database = nullptr;
 };
 

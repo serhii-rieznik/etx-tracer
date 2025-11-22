@@ -20,10 +20,18 @@ struct SceneData {
 
   using MaterialMapping = std::unordered_map<std::string, uint32_t>;
 
-  std::vector<Vertex> vertices;
+  struct {
+    std::vector<float3> pos;
+    std::vector<float3> nrm;
+    std::vector<float3> tan;
+    std::vector<float3> btn;
+    std::vector<float2> tex;
+  } vertices;
+
   std::vector<Triangle> triangles;
   std::vector<uint32_t> triangle_to_emitter;
   std::vector<Material> materials;
+  std::vector<Mesh> meshes;
   std::vector<EmitterProfile> emitter_profiles;
   std::vector<Emitter> emitter_instances;
   std::vector<std::string> spectrum_names;
@@ -37,6 +45,7 @@ struct SceneData {
   Image atmosphere_extinction;
 
   MaterialMapping material_mapping;
+  MaterialMapping mesh_mapping;
   std::unordered_map<uint32_t, uint32_t> material_to_emitter_profile;
   std::unordered_map<uint32_t, uint32_t> gltf_image_mapping;
 

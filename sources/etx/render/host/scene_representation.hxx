@@ -17,6 +17,7 @@ struct IORDatabase;
 struct SceneRepresentation {
   using MaterialMapping = std::unordered_map<std::string, uint32_t>;
   using MediumMapping = std::unordered_map<std::string, uint32_t>;
+  using MeshMapping = std::unordered_map<std::string, uint32_t>;
 
   enum : uint32_t {
     LoadGeometry = 0u,
@@ -41,9 +42,11 @@ struct SceneRepresentation {
   const Scene& scene() const;
   const MaterialMapping& material_mapping() const;
   const MediumMapping& medium_mapping() const;
+  const MeshMapping& mesh_mapping() const;
 
   uint32_t add_medium(const char* name = nullptr);
   void rebuild_area_emitters();
+  void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
 
   Camera& camera();
   const Camera& camera() const;

@@ -7,6 +7,7 @@
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scattering.hxx>
 #include <etx/render/shared/ior_database.hxx>
+#include <etx/render/shared/vertex_utils.hxx>
 
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/host/image_pool.hxx>
@@ -27,6 +28,7 @@
 #include <algorithm>
 #include <cstring>
 #include <initializer_list>
+#include <chrono>
 
 #include <mikktspace.h>
 #include <tiny_obj_loader.hxx>
@@ -98,10 +100,36 @@ struct SceneRepresentationImpl {
 
   const IORDatabase& ior_database;
 
-  char data_buffer[2048] = {};
+  static constexpr uint32_t kDataBufferSize = 2048u;
+  static constexpr float kDefaultDielectricEta = 1.5f;
+  static constexpr float kDefaultConductorK = 1000000.0f;
+
+  char data_buffer[kDataBufferSize] = {};
+
+  // Helper function to extract base directory from file path
+  void get_base_directory(const char* file_path, char* buffer, size_t buffer_size) {
+    memset(buffer, 0, buffer_size);
+    get_file_folder(file_path, buffer, buffer_size);
+  }
+
+  // Simple timing utility
+  struct ScopedTimer {
+    std::chrono::high_resolution_clock::time_point start;
+    const char* label;
+
+    ScopedTimer(const char* lbl)
+      : start(std::chrono::high_resolution_clock::now())
+      , label(lbl) {
+    }
+    ~ScopedTimer() {
+      auto end = std::chrono::high_resolution_clock::now();
+      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+      log::info("%s: %lld ms", label, duration.count());
+    }
+  };
 
   bool get_param(const tinyobj::material_t& m, const char* param) {
-    memset(data_buffer, 0, sizeof(data_buffer));
+    memset(data_buffer, 0, kDataBufferSize);
     for (const auto& p : m.unknown_parameter) {
       if (_stricmp(p.first.c_str(), param) == 0) {
         memcpy(data_buffer, p.second.c_str(), p.second.size());
@@ -210,9 +238,9 @@ struct SceneRepresentationImpl {
     scene.rayleigh_spectrum = data.add_spectrum(shared_scattering_spectrums.rayleigh);
     scene.mie_spectrum = data.add_spectrum(shared_scattering_spectrums.mie);
     scene.ozone_spectrum = data.add_spectrum(shared_scattering_spectrums.ozone);
-    scene.default_dielectric_eta = data.add_spectrum(SpectralDistribution::constant(1.5f));
+    scene.default_dielectric_eta = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
     scene.default_conductor_eta = data.add_spectrum(SpectralDistribution::constant(0.0f));
-    scene.default_conductor_k = data.add_spectrum(SpectralDistribution::constant(1000000.0f));
+    scene.default_conductor_k = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
 
     scene.properties[Scene::Properties::Spectral] = false;
     scene.properties[Scene::Properties::MultipleImportanceSampling] = true;
@@ -251,11 +279,11 @@ struct SceneRepresentationImpl {
   }
 
   float triangle_area(const Triangle& t) {
-    return 0.5f * length(cross(data.vertices[t.i[1]].pos - data.vertices[t.i[0]].pos, data.vertices[t.i[2]].pos - data.vertices[t.i[0]].pos));
+    return 0.5f * length(cross(data.vertices.pos[t.i[1]] - data.vertices.pos[t.i[0]], data.vertices.pos[t.i[2]] - data.vertices.pos[t.i[0]]));
   }
 
   bool validate_triangle(Triangle& t) {
-    t.geo_n = cross(data.vertices[t.i[1]].pos - data.vertices[t.i[0]].pos, data.vertices[t.i[2]].pos - data.vertices[t.i[0]].pos);
+    t.geo_n = cross(data.vertices.pos[t.i[1]] - data.vertices.pos[t.i[0]], data.vertices.pos[t.i[2]] - data.vertices.pos[t.i[0]]);
     float l = length(t.geo_n);
     if (l == 0.0f)
       return false;
@@ -309,7 +337,7 @@ struct SceneRepresentationImpl {
   void validate_normals(std::vector<bool>& referenced_vertices) {
     std::set<uint32_t> reset_normals;
 
-    referenced_vertices.resize(data.vertices.size());
+    referenced_vertices.resize(data.vertices.nrm.size());
     for (const auto& tri : data.triangles) {
       const float tri_area = triangle_area(tri);
       for (uint32_t i = 0; i < 3; ++i) {
@@ -317,14 +345,14 @@ struct SceneRepresentationImpl {
         ETX_CRITICAL(is_valid_vector(tri.geo_n));
         referenced_vertices[index] = true;
 
-        if (is_valid_vector(data.vertices[index].nrm))
+        if (is_valid_vector(data.vertices.nrm[index]))
           continue;
 
         if (reset_normals.count(index) == 0) {
-          data.vertices[index].nrm = tri.geo_n * tri_area;
+          data.vertices.nrm[index] = tri.geo_n * tri_area;
           reset_normals.insert(index);
         } else {
-          data.vertices[index].nrm += tri.geo_n * tri_area;
+          data.vertices.nrm[index] += tri.geo_n * tri_area;
         }
       }
     }
@@ -333,20 +361,26 @@ struct SceneRepresentationImpl {
       return;
 
     for (auto i : reset_normals) {
-      ETX_ASSERT(is_valid_vector(data.vertices[i].nrm));
-      data.vertices[i].nrm = normalize(data.vertices[i].nrm);
-      ETX_ASSERT(is_valid_vector(data.vertices[i].nrm));
+      ETX_ASSERT(is_valid_vector(data.vertices.nrm[i]));
+      data.vertices.nrm[i] = normalize(data.vertices.nrm[i]);
+      ETX_ASSERT(is_valid_vector(data.vertices.nrm[i]));
     }
   }
 
   void build_tangents() {
     static std::map<uint32_t, uint32_t> a = {};
 
+    const uint64_t normal_count = data.vertices.nrm.size();
+    if (data.vertices.tan.size() != normal_count)
+      data.vertices.tan.resize(normal_count);
+    if (data.vertices.btn.size() != normal_count)
+      data.vertices.btn.resize(normal_count);
+
     float2 min_uv = {kMaxFloat, kMaxFloat};
     float2 max_uv = {-kMaxFloat, -kMaxFloat};
-    for (const auto& v : data.vertices) {
-      min_uv = min(min_uv, v.tex);
-      max_uv = max(max_uv, v.tex);
+    for (const auto& v : data.vertices.tex) {
+      min_uv = min(min_uv, v);
+      max_uv = max(max_uv, v);
     }
     auto uv_span = max_uv - min_uv;
     if (dot(uv_span, uv_span) <= kEpsilon) {
@@ -365,33 +399,35 @@ struct SceneRepresentationImpl {
     contextInterface.m_getPosition = [](const SMikkTSpaceContext* pContext, float fvPosOut[], const int iFace, const int iVert) {
       const auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
       const auto& tri = data.triangles[iFace];
-      const auto& vertex = data.vertices[tri.i[iVert]];
-      fvPosOut[0] = vertex.pos.x;
-      fvPosOut[1] = vertex.pos.y;
-      fvPosOut[2] = vertex.pos.z;
+      const auto& vertex = data.vertices.pos[tri.i[iVert]];
+      fvPosOut[0] = vertex.x;
+      fvPosOut[1] = vertex.y;
+      fvPosOut[2] = vertex.z;
     };
     contextInterface.m_getNormal = [](const SMikkTSpaceContext* pContext, float fvNormOut[], const int iFace, const int iVert) {
       const auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
       const auto& tri = data.triangles[iFace];
-      const auto& vertex = data.vertices[tri.i[iVert]];
-      fvNormOut[0] = vertex.nrm.x;
-      fvNormOut[1] = vertex.nrm.y;
-      fvNormOut[2] = vertex.nrm.z;
+      const auto& vertex = data.vertices.nrm[tri.i[iVert]];
+      fvNormOut[0] = vertex.x;
+      fvNormOut[1] = vertex.y;
+      fvNormOut[2] = vertex.z;
     };
     contextInterface.m_getTexCoord = [](const SMikkTSpaceContext* pContext, float fvTexcOut[], const int iFace, const int iVert) {
       const auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
       const auto& tri = data.triangles[iFace];
-      const auto& vertex = data.vertices[tri.i[iVert]];
-      fvTexcOut[0] = vertex.tex.x;
-      fvTexcOut[1] = vertex.tex.y;
+      const auto& vertex = data.vertices.tex[tri.i[iVert]];
+      fvTexcOut[0] = vertex.x;
+      fvTexcOut[1] = vertex.y;
     };
     contextInterface.m_setTSpaceBasic = [](const SMikkTSpaceContext* pContext, const float fvTangent[], const float fSign, const int iFace, const int iVert) {
       auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
       const auto& tri = data.triangles[iFace];
-      auto& vertex = data.vertices[tri.i[iVert]];
-      if (is_valid_vector(vertex.tan) == false) {
-        vertex.tan = normalize(float3{fvTangent[0], fvTangent[1], fvTangent[2]});
-        vertex.btn = normalize(cross(vertex.tan, vertex.nrm) * fSign);
+      auto& nrm = data.vertices.nrm[tri.i[iVert]];
+      auto& tan = data.vertices.tan[tri.i[iVert]];
+      auto& btn = data.vertices.btn[tri.i[iVert]];
+      if (is_valid_vector(tan) == false) {
+        tan = normalize(float3{fvTangent[0], fvTangent[1], fvTangent[2]});
+        btn = normalize(cross(tan, nrm) * fSign);
       }
     };
 
@@ -403,22 +439,20 @@ struct SceneRepresentationImpl {
   }
 
   void validate_tangents(std::vector<bool>& referenced_vertices, bool force) {
-    for (uint64_t vertex_index = 0, e = data.vertices.size(); vertex_index < e; ++vertex_index) {
-      auto& v = data.vertices[vertex_index];
-      if ((force == false) && is_valid_vector(v.tan) && is_valid_vector(v.btn)) {
+    for (uint64_t vertex_index = 0, e = data.vertices.tan.size(); vertex_index < e; ++vertex_index) {
+      auto& v_nrm = data.vertices.nrm[vertex_index];
+      auto& v_tan = data.vertices.tan[vertex_index];
+      auto& v_btn = data.vertices.btn[vertex_index];
+      if ((force == false) && is_valid_vector(v_tan) && is_valid_vector(v_btn)) {
         continue;
       }
 
       if (force || referenced_vertices[vertex_index]) {
-        ETX_ASSERT(is_valid_vector(v.nrm));
-        auto [t, b] = orthonormal_basis(v.nrm);
-        v.tan = t;
-        v.btn = b;
+        ETX_ASSERT(is_valid_vector(v_nrm));
+        auto [t, b] = orthonormal_basis(v_nrm);
+        v_tan = t;
+        v_btn = b;
       }
-    }
-
-    for (uint64_t vertex_index = 0, e = data.vertices.size(); vertex_index < e; ++vertex_index) {
-      orthogonalize(data.vertices[vertex_index]);
     }
   }
 
@@ -435,19 +469,24 @@ struct SceneRepresentationImpl {
     float3 bbox_min = data.triangles.empty() ? float3{-1.0f, -1.0f, -1.0f} : float3{kMaxFloat, kMaxFloat, kMaxFloat};
     float3 bbox_max = data.triangles.empty() ? float3{+1.0f, +1.0f, +1.0f} : float3{-kMaxFloat, -kMaxFloat, -kMaxFloat};
     for (const auto& tri : data.triangles) {
-      bbox_min = min(bbox_min, data.vertices[tri.i[0]].pos);
-      bbox_min = min(bbox_min, data.vertices[tri.i[1]].pos);
-      bbox_min = min(bbox_min, data.vertices[tri.i[2]].pos);
-      bbox_max = max(bbox_max, data.vertices[tri.i[0]].pos);
-      bbox_max = max(bbox_max, data.vertices[tri.i[1]].pos);
-      bbox_max = max(bbox_max, data.vertices[tri.i[2]].pos);
+      bbox_min = min(bbox_min, data.vertices.pos[tri.i[0]]);
+      bbox_min = min(bbox_min, data.vertices.pos[tri.i[1]]);
+      bbox_min = min(bbox_min, data.vertices.pos[tri.i[2]]);
+      bbox_max = max(bbox_max, data.vertices.pos[tri.i[0]]);
+      bbox_max = max(bbox_max, data.vertices.pos[tri.i[1]]);
+      bbox_max = max(bbox_max, data.vertices.pos[tri.i[2]]);
     }
 
     scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
     scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
-    scene.vertices = {data.vertices.data(), data.vertices.size()};
+    scene.vertices.pos = {data.vertices.pos.data(), data.vertices.pos.size()};
+    scene.vertices.nrm = {data.vertices.nrm.data(), data.vertices.nrm.size()};
+    scene.vertices.tan = {data.vertices.tan.data(), data.vertices.tan.size()};
+    scene.vertices.btn = {data.vertices.btn.data(), data.vertices.btn.size()};
+    scene.vertices.tex = {data.vertices.tex.data(), data.vertices.tex.size()};
     scene.triangles = {data.triangles.data(), data.triangles.size()};
     scene.materials = {data.materials.data(), data.materials.size()};
+    scene.meshes = {data.meshes.data(), data.meshes.size()};
     scene.spectrums = {data.spectrum_values.data(), data.spectrum_values.size()};
     scene.images = {context.images.as_array(), context.images.array_size()};
     scene.mediums = {context.mediums.as_array(), context.mediums.array_size()};
@@ -558,6 +597,11 @@ struct SceneRepresentationImpl {
   void add_area_emitters_for_triangle(uint32_t triangle_index);
   void populate_area_emitters();
   void rebuild_area_emitters();
+  void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
+  bool export_to_etx_obj(const std::filesystem::path& path, const Scene& scene, const SceneData& data);
+
+  uint32_t add_mesh(const char* name, uint32_t triangle_offset, uint32_t triangle_count);
+  void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
 
   uint32_t load_from_obj(const char* file_name, const char* mtl_file);
 
@@ -649,6 +693,10 @@ const SceneRepresentation::MediumMapping& SceneRepresentation::medium_mapping() 
   return _private->context.mediums.mapping();
 }
 
+const SceneRepresentation::MeshMapping& SceneRepresentation::mesh_mapping() const {
+  return _private->data.mesh_mapping;
+}
+
 uint32_t SceneRepresentation::add_medium(const char* name) {
   SpectralDistribution null_spectrum = SpectralDistribution::null();
   uint32_t handle = _private->context.add_medium(_private->scene, _private->data, Medium::Class::Homogeneous, name, nullptr, null_spectrum, null_spectrum, 0.0f, true);
@@ -658,6 +706,10 @@ uint32_t SceneRepresentation::add_medium(const char* name) {
 
 void SceneRepresentation::rebuild_area_emitters() {
   _private->rebuild_area_emitters();
+}
+
+void SceneRepresentation::set_mesh_material(uint32_t mesh_index, uint32_t material_index) {
+  _private->set_mesh_material_impl(mesh_index, material_index);
 }
 
 Camera& SceneRepresentation::camera() {
@@ -943,15 +995,16 @@ void SceneRepresentationImpl::add_area_emitters_for_triangle(uint32_t triangle_i
   if (mtl.emission.image_index != kInvalidIndex) {
     const auto& img = context.images.get(mtl.emission.image_index);
     constexpr float kBCScale = 4.0f;
-    auto min_uv = min(data.vertices[tri.i[0]].tex, min(data.vertices[tri.i[1]].tex, data.vertices[tri.i[2]].tex));
-    auto max_uv = max(data.vertices[tri.i[0]].tex, max(data.vertices[tri.i[1]].tex, data.vertices[tri.i[2]].tex));
+    auto min_uv = min(data.vertices.tex[tri.i[0]], min(data.vertices.tex[tri.i[1]], data.vertices.tex[tri.i[2]]));
+    auto max_uv = max(data.vertices.tex[tri.i[0]], max(data.vertices.tex[tri.i[1]], data.vertices.tex[tri.i[2]]));
     float u_size = kBCScale * max(1.0f, ceil((max_uv.x - min_uv.x) * img.fsize.x));
     float du = 1.0f / u_size;
     float v_size = kBCScale * max(1.0f, ceil((max_uv.y - min_uv.y) * img.fsize.y));
     float dv = 1.0f / v_size;
     for (float v = 0.0f; v < 1.0f; v += dv) {
       for (float u = 0.0f; u < 1.0f; u += dv) {
-        float2 uv = lerp_uv({data.vertices.data(), data.vertices.size()}, tri, random_barycentric({u, v}));
+        auto b = random_barycentric({u, v});
+        auto uv = data.vertices.tex[tri.i[0]] * b.x + data.vertices.tex[tri.i[1]] * b.y + data.vertices.tex[tri.i[2]] * b.z;
         float4 val = img.evaluate(uv, nullptr);
         texture_emission += luminance(to_float3(val)) * du * dv * val.w;
       }
@@ -1048,7 +1101,30 @@ void SceneRepresentationImpl::rebuild_area_emitters() {
   build_emitters_distribution(scene);
 }
 
+uint32_t SceneRepresentationImpl::add_mesh(const char* name, uint32_t triangle_offset, uint32_t triangle_count) {
+  uint32_t index = static_cast<uint32_t>(data.meshes.size());
+  data.meshes.emplace_back(Mesh{triangle_offset, triangle_count});
+  std::string mesh_name = name && name[0] ? name : ("mesh-" + std::to_string(index));
+  data.mesh_mapping[mesh_name] = index;
+  return index;
+}
+
+void SceneRepresentationImpl::set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index) {
+  if (mesh_index >= data.meshes.size())
+    return;
+
+  const Mesh& mesh = data.meshes[mesh_index];
+  for (uint32_t i = 0; i < mesh.triangle_count; ++i) {
+    uint32_t triangle_index = mesh.triangle_offset + i;
+    if (triangle_index < data.triangles.size()) {
+      data.triangles[triangle_index].material_index = material_index;
+    }
+  }
+}
+
 uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const char* mtl_file) {
+  auto start_time = std::chrono::high_resolution_clock::now();
+
   auto& triangles = data.triangles;
   auto& triangle_to_emitter = data.triangle_to_emitter;
   auto& vertices = data.vertices;
@@ -1060,19 +1136,29 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
   std::string warnings;
   std::string errors;
 
-  char base_dir[2048] = {};
-  get_file_folder(file_name, base_dir, sizeof(base_dir));
+  char base_dir[kDataBufferSize] = {};
+  get_base_directory(file_name, base_dir, sizeof(base_dir));
 
-  if (tinyobj::LoadObj(&obj_attrib, &obj_shapes, &obj_materials, &warnings, &errors, file_name, base_dir, mtl_file) == false) {
-    log::error("Failed to load OBJ from file: `%s`\n%s", file_name, errors.c_str());
-    return LoadFailed;
+  {
+    ScopedTimer timer("OBJ file parsing");
+    if (tinyobj::LoadObj(&obj_attrib, &obj_shapes, &obj_materials, &warnings, &errors, file_name, base_dir, mtl_file) == false) {
+      log::error("Failed to load OBJ from file: `%s`\n%s", file_name, errors.c_str());
+      return LoadFailed;
+    }
   }
 
   if (warnings.empty() == false) {
     log::warning("Loaded OBJ from file: `%s`\n%s", file_name, warnings.c_str());
   }
 
-  parse_obj_materials(base_dir, obj_materials);
+  {
+    ScopedTimer timer("OBJ materials parsing");
+    parse_obj_materials(base_dir, obj_materials);
+  }
+
+  // Create vertices by deduplicating position/normal/UV values (true geometric deduplication)
+  std::unordered_map<etx::VertexKey, uint32_t, etx::VertexKeyHash> vertex_map;
+  size_t cache_hits = 0;  // Track how many vertices were deduplicated
 
   uint64_t total_triangles = 0;
   for (const auto& shape : obj_shapes) {
@@ -1081,12 +1167,23 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
 
   triangles.reserve(total_triangles);
   triangle_to_emitter.reserve(total_triangles);
-  vertices.reserve(total_triangles * 3);
+
+  const uint64_t total_count = std::min(total_triangles * 3, obj_attrib.vertices.size() / 3);
+  vertices.pos.reserve(total_count);
+  vertices.nrm.reserve(total_count);
+  vertices.tan.reserve(total_count);
+  vertices.btn.reserve(total_count);
+  vertices.tex.reserve(total_count);
+
+  auto processing_start = std::chrono::high_resolution_clock::now();
 
   for (const auto& shape : obj_shapes) {
     uint64_t index_offset = 0;
     float3 shape_bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
     float3 shape_bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
+
+    // Group triangles by material within this shape
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> material_to_triangle_range;
 
     for (uint64_t face = 0, face_e = shape.mesh.num_face_vertices.size(); face < face_e; ++face) {
       int material_id = shape.mesh.material_ids[face];
@@ -1098,42 +1195,88 @@ uint32_t SceneRepresentationImpl::load_from_obj(const char* file_name, const cha
       uint64_t face_size = shape.mesh.num_face_vertices[face];
       ETX_ASSERT(face_size == 3);
 
+      uint32_t triangle_index = static_cast<uint32_t>(triangles.size());
       triangle_to_emitter.emplace_back(kInvalidIndex);
       auto& tri = triangles.emplace_back();
       tri.material_index = material_mapping.at(source_material.name);
 
       for (uint64_t vertex_index = 0; vertex_index < face_size; ++vertex_index) {
         const auto& index = shape.mesh.indices[index_offset + vertex_index];
-        tri.i[vertex_index] = static_cast<uint32_t>(vertices.size());
-        auto& vertex = vertices.emplace_back();
-        vertex.pos = make_float3(obj_attrib.vertices.data() + (3 * index.vertex_index));
-        if (index.normal_index >= 0) {
-          vertex.nrm = make_float3(obj_attrib.normals.data() + (3 * index.normal_index));
-        }
-        if (index.texcoord_index >= 0) {
-          vertex.tex = make_float2(obj_attrib.texcoords.data() + (2 * index.texcoord_index));
+
+        // Get actual vertex data
+        float3 position = make_float3(obj_attrib.vertices.data() + (3 * index.vertex_index));
+        bool has_normal = (index.normal_index >= 0);
+        float3 normal = has_normal ? make_float3(obj_attrib.normals.data() + (3 * index.normal_index)) : float3{0.0f, 1.0f, 0.0f};
+        bool has_uv = (index.texcoord_index >= 0);
+        float2 uv = has_uv ? make_float2(obj_attrib.texcoords.data() + (2 * index.texcoord_index)) : float2{0.0f, 0.0f};
+
+        // Create vertex key for deduplication based on actual values
+        VertexKey key = {position, normal, uv, has_normal, has_uv};
+
+        // Check if we already have this vertex
+        auto it = vertex_map.find(key);
+        if (it != vertex_map.end()) {
+          tri.i[vertex_index] = it->second;
+          cache_hits++;
+        } else {
+          // Create new vertex
+          uint32_t vertex_index_new = static_cast<uint32_t>(vertices.pos.size());
+          tri.i[vertex_index] = vertex_index_new;
+          vertex_map[key] = vertex_index_new;
+
+          vertices.pos.emplace_back(position);
+          vertices.nrm.emplace_back(normal);
+          vertices.tex.emplace_back(uv);
         }
       }
       index_offset += face_size;
 
       if (validate_triangle(tri) == false) {
         triangles.pop_back();
+        triangle_to_emitter.pop_back();
+        continue;
       }
 
+      // Group by material
+      auto& range = material_to_triangle_range[tri.material_index];
+      if (range.second == 0) {         // First triangle for this material
+        range.first = triangle_index;  // offset
+      }
+      range.second++;  // count
+
       // TODO : deal with bounds!
-      shape_bbox_max = max(shape_bbox_max, vertices[tri.i[0]].pos);
-      shape_bbox_max = max(shape_bbox_max, vertices[tri.i[1]].pos);
-      shape_bbox_max = max(shape_bbox_max, vertices[tri.i[2]].pos);
-      shape_bbox_min = min(shape_bbox_min, vertices[tri.i[0]].pos);
-      shape_bbox_min = min(shape_bbox_min, vertices[tri.i[1]].pos);
-      shape_bbox_min = min(shape_bbox_min, vertices[tri.i[2]].pos);
+      shape_bbox_max = max(shape_bbox_max, vertices.pos[tri.i[0]]);
+      shape_bbox_max = max(shape_bbox_max, vertices.pos[tri.i[1]]);
+      shape_bbox_max = max(shape_bbox_max, vertices.pos[tri.i[2]]);
+      shape_bbox_min = min(shape_bbox_min, vertices.pos[tri.i[0]]);
+      shape_bbox_min = min(shape_bbox_min, vertices.pos[tri.i[1]]);
+      shape_bbox_min = min(shape_bbox_min, vertices.pos[tri.i[2]]);
 
       auto& mtl = data.materials[tri.material_index];
       if (mtl.int_medium != kInvalidIndex) {
         context.mediums.get(mtl.int_medium).bounds = {shape_bbox_min, 0.0f, shape_bbox_max, 0.0f};
       }
     }
+
+    // Create meshes for this shape, grouped by material
+    uint32_t material_counter = 0;
+    for (const auto& [material_index, triangle_range] : material_to_triangle_range) {
+      if (triangle_range.second == 0)  // empty range
+        continue;
+
+      // Use shape name, add counter if multiple materials in same shape
+      std::string mesh_name = shape.name;
+      if (material_to_triangle_range.size() > 1) {
+        mesh_name += "_" + std::to_string(material_counter++);
+      }
+
+      add_mesh(mesh_name.c_str(), triangle_range.first, triangle_range.second);
+    }
   }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+  log::info("OBJ loading total: %lld ms", total_duration.count());
 
   return true;
 }
@@ -1957,7 +2100,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
       if (cls == SpectralDistribution::Class::Invalid) {
         log::warning("Unable to load IOR spectrum `%s`, falling back to 1.5 dielectric", data_buffer);
         cls = SpectralDistribution::Class::Dielectric;
-        eta_spd = SpectralDistribution::constant(1.5f);
+        eta_spd = SpectralDistribution::constant(kDefaultDielectricEta);
         k_spd = SpectralDistribution::constant(0.0f);
       }
 
@@ -1975,7 +2118,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
     load_ior(mtl.int_ior, data_buffer);
   } else {
     mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
-    mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.5f));
+    mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
     mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
   }
 
@@ -2056,7 +2199,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
           if (cls == SpectralDistribution::Class::Invalid) {
             log::warning("Unable to load thinfilm IOR `%s`, using dielectric 1.5", params[i + 1]);
             cls = SpectralDistribution::Class::Dielectric;
-            eta_spd = SpectralDistribution::constant(1.5f);
+            eta_spd = SpectralDistribution::constant(kDefaultDielectricEta);
             k_spd = SpectralDistribution::constant(0.0f);
           }
 
@@ -2142,7 +2285,7 @@ void SceneRepresentationImpl::parse_material(const char* base_dir, const tinyobj
           static_cast<float>(atof(params[i + 2])),
           static_cast<float>(atof(params[i + 3])),
         };
-        emission_spd = SpectralDistribution::rgb_luminance(value);
+        emission_spd = SpectralDistribution::rgb_luminance(max({}, value));
         emission_spd_defined = true;
         i += 3;
       } else if ((strcmp(params[i], "blackbody") == 0) && (i + 1 < end)) {
@@ -2358,7 +2501,7 @@ void SceneRepresentationImpl::load_gltf_materials(const tinygltf::Model& model) 
     mtl.ext_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
     mtl.ext_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
     mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
-    mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.5f));
+    mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
     mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
     mtl.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
     mtl.emission = {};
@@ -2452,7 +2595,8 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
   if (mesh.primitives.empty())
     return;
 
-  for (const auto& primitive : mesh.primitives) {
+  for (size_t primitive_index = 0; primitive_index < mesh.primitives.size(); ++primitive_index) {
+    const auto& primitive = mesh.primitives[primitive_index];
     bool has_positions = primitive.attributes.count("POSITION") > 0;
     bool has_normals = primitive.attributes.count("NORMAL") > 0;
     bool has_tex_coords = primitive.attributes.count("TEXCOORD_0") > 0;
@@ -2462,6 +2606,8 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
       continue;
 
     uint32_t material_index = (primitive.material >= 0) && (primitive.material < static_cast<int>(model.materials.size())) ? static_cast<uint32_t>(primitive.material) : 0;
+
+    uint32_t triangle_start = static_cast<uint32_t>(triangles.size());
 
     const tinygltf::Accessor& pos_accessor = model.accessors[primitive.attributes.find("POSITION")->second];
     const tinygltf::BufferView& pos_buffer_view = model.bufferViews[pos_accessor.bufferView];
@@ -2506,13 +2652,13 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
     }
 
     ETX_ASSERT(idx_accessor->count % 3 == 0);
-    uint32_t triangle_count = static_cast<uint32_t>(has_indices ? idx_accessor->count : pos_accessor.count) / 3u;
+    uint32_t expected_triangle_count = static_cast<uint32_t>(has_indices ? idx_accessor->count : pos_accessor.count) / 3u;
 
     uint32_t linear_index = 0;
-    for (uint32_t tri_index = 0; tri_index < triangle_count; ++tri_index) {
+    for (uint32_t tri_index = 0; tri_index < expected_triangle_count; ++tri_index) {
       triangle_to_emitter.emplace_back(kInvalidIndex);
 
-      uint32_t base_index = static_cast<uint32_t>(vertices.size());
+      uint32_t base_index = static_cast<uint32_t>(vertices.pos.size());
       Triangle& tri = triangles.emplace_back();
       tri.i[0] = base_index + 0;
       tri.i[1] = base_index + 1;
@@ -2522,28 +2668,35 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
       for (uint32_t j = 0; j < 3; ++j, ++linear_index) {
         auto index = has_indices ? gltf_read_buffer_as_uint(*idx_buffer, *idx_accessor, *idx_buffer_view, 3u * tri_index + j) : linear_index;
 
-        auto& v0 = vertices.emplace_back();
-
         auto p = gltf_read_buffer<float3>(pos_buffer, pos_accessor, pos_buffer_view, index);
-        auto tp = transform * float4{p.x, p.y, p.z, 1.0f};
-        v0.pos = {tp.x, tp.y, tp.z};
+        auto pos = transform * float4{p.x, p.y, p.z, 1.0f};
 
+        float3 nrm = {0.0f, 1.0f, 0.0f};
         if (has_normals) {
           auto n = gltf_read_buffer<float3>(*nrm_buffer, *nrm_accessor, *nrm_buffer_view, index);
-          auto tn = transform * float4{n.x, n.y, n.z, 0.0f};
-          v0.nrm = {tn.x, tn.y, tn.z};
+          auto t = transform * float4{n.x, n.y, n.z, 0.0f};
+          nrm = {t.x, t.y, t.z};
         }
 
+        float2 tex = {};
         if (has_tex_coords) {
-          v0.tex = gltf_read_buffer<float2>(*tex_buffer, *tex_accessor, *tex_buffer_view, index);
+          tex = gltf_read_buffer<float2>(*tex_buffer, *tex_accessor, *tex_buffer_view, index);
         }
 
+        float3 tan = {1.0f, 0.0, 0.0f};
+        float3 btn = {0.0f, 0.0, 1.0f};
         if (has_tangents) {
           auto t = gltf_read_buffer<float4>(*tan_buffer, *tan_accessor, *tan_buffer_view, index);
           auto tt = transform * float4{t.x, t.y, t.z, 0.0f};
-          v0.tan = normalize(float3{tt.x, tt.y, tt.z});
-          v0.btn = cross(v0.nrm, v0.tan) * t.w;
+          tan = normalize(float3{tt.x, tt.y, tt.z});
+          btn = cross(nrm, tan) * t.w;
         }
+
+        vertices.pos.emplace_back(float3{pos.x, pos.y, pos.z});
+        vertices.nrm.emplace_back(float3{nrm.x, nrm.y, nrm.z});
+        vertices.tan.emplace_back(float3{tan.x, tan.y, tan.z});
+        vertices.btn.emplace_back(float3{btn.x, btn.y, btn.z});
+        vertices.tex.emplace_back(float2{tex.x, tex.y});
       }
 
       if (validate_triangle(tri) == false) {
@@ -2552,12 +2705,194 @@ void SceneRepresentationImpl::load_gltf_mesh(const tinygltf::Node& node, const t
       }
 
       if (has_normals == false) {
-        vertices[vertices.size() - 1u].nrm = tri.geo_n;
-        vertices[vertices.size() - 2u].nrm = tri.geo_n;
-        vertices[vertices.size() - 3u].nrm = tri.geo_n;
+        vertices.nrm[vertices.nrm.size() - 1u] = tri.geo_n;
+        vertices.nrm[vertices.nrm.size() - 2u] = tri.geo_n;
+        vertices.nrm[vertices.nrm.size() - 3u] = tri.geo_n;
+      }
+    }
+
+    // Create mesh for this primitive
+    uint32_t triangle_end = static_cast<uint32_t>(triangles.size());
+    uint32_t triangle_count = triangle_end - triangle_start;
+    if (triangle_count > 0) {
+      std::string mesh_name = mesh.name + "_" + std::to_string(primitive_index);
+      add_mesh(mesh_name.c_str(), triangle_start, triangle_count);
+    }
+  }
+}
+
+bool SceneRepresentationImpl::export_to_etx_obj(const std::filesystem::path& path, const Scene& scene, const SceneData& data) {
+  auto export_start = std::chrono::high_resolution_clock::now();
+
+  // Use binary mode to control line endings (LF instead of CRLF for Unix compatibility)
+  std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
+  if (!file.is_open()) {
+    return false;
+  }
+
+  // Header
+  file << "# etx-tracer native geometry format v1.0\n";
+  auto now = std::chrono::system_clock::now();
+  auto time_t = std::chrono::system_clock::to_time_t(now);
+  file << "# Exported: " << std::ctime(&time_t);
+  file << "\n";
+
+  // Materials reference
+  auto materials_filename = path.filename();
+  materials_filename.replace_extension(".materials");
+  file << "mtllib " << materials_filename.string() << "\n\n";
+
+  // For proper OBJ format, separate positions, normals, and UVs
+
+  // Use vectors to preserve insertion order (OBJ indices must match file order)
+  std::vector<float3> positions;
+  std::vector<float3> normals;
+  std::vector<float2> uvs;
+
+  // Maps from value to index (1-based for OBJ) with epsilon-based comparison
+  auto position_map = etx::create_float3_map();
+  auto normal_map = etx::create_float3_map();
+  auto uv_map = etx::create_float2_map();
+
+  // Collect all unique positions, normals, and UVs used, preserving order
+  for (const auto& mesh : data.meshes) {
+    for (uint32_t i = 0; i < mesh.triangle_count; ++i) {
+      uint32_t triangle_idx = mesh.triangle_offset + i;
+      if (triangle_idx >= data.triangles.size())
+        continue;
+
+      const auto& tri = data.triangles[triangle_idx];
+      for (int j = 0; j < 3; ++j) {
+        if (tri.i[j] >= data.vertices.pos.size())
+          continue;
+        // const auto& vertex = data.vertices[tri.i[j]];
+        const auto& pos = data.vertices.pos[tri.i[j]];
+        const auto& nrm = data.vertices.nrm[tri.i[j]];
+        const auto& tex = data.vertices.tex[tri.i[j]];
+
+        // Add position
+        if (position_map.find(pos) == position_map.end()) {
+          uint32_t idx = static_cast<uint32_t>(positions.size()) + 1;  // 1-based OBJ indices
+          positions.push_back(pos);
+          position_map[pos] = idx;
+        }
+
+        // Add normal
+        if (normal_map.find(nrm) == normal_map.end()) {
+          uint32_t idx = static_cast<uint32_t>(normals.size()) + 1;
+          normals.push_back(nrm);
+          normal_map[nrm] = idx;
+        }
+
+        // Add UV
+        if (uv_map.find(tex) == uv_map.end()) {
+          uint32_t idx = static_cast<uint32_t>(uvs.size()) + 1;
+          uvs.push_back(tex);
+          uv_map[tex] = idx;
+        }
       }
     }
   }
+
+  // Export positions (in order)
+  for (const auto& pos : positions) {
+    file << "v " << pos.x << " " << pos.y << " " << pos.z << "\n";
+  }
+  file << "\n";
+
+  // Export normals (in order)
+  for (const auto& nrm : normals) {
+    file << "vn " << nrm.x << " " << nrm.y << " " << nrm.z << "\n";
+  }
+  file << "\n";
+
+  // Export UVs (in order)
+  for (const auto& uv : uvs) {
+    file << "vt " << uv.x << " " << uv.y << "\n";
+  }
+  file << "\n";
+
+  // Export meshes as separate objects
+  for (uint32_t mesh_idx = 0; mesh_idx < data.meshes.size(); ++mesh_idx) {
+    const auto& mesh = data.meshes[mesh_idx];
+
+    // Find mesh name
+    std::string mesh_name;
+    for (const auto& [name, idx] : data.mesh_mapping) {
+      if (idx == mesh_idx) {
+        mesh_name = name;
+        break;
+      }
+    }
+
+    if (mesh_name.empty()) {
+      mesh_name = "mesh_" + std::to_string(mesh_idx);
+    }
+
+    // Find material used by triangles in this mesh
+    uint32_t material_index = kInvalidIndex;
+    if (mesh.triangle_count > 0) {
+      uint32_t first_triangle = mesh.triangle_offset;
+      if (first_triangle < data.triangles.size()) {
+        material_index = data.triangles[first_triangle].material_index;
+      }
+    }
+
+    // Find material name
+    std::string material_name;
+    for (const auto& [name, idx] : data.material_mapping) {
+      if (idx == material_index) {
+        material_name = name;
+        break;
+      }
+    }
+
+    if (material_name.empty()) {
+      material_name = "material_" + std::to_string(material_index);
+    }
+
+    // Object declaration
+    file << "o " << mesh_name << "\n";
+    file << "usemtl " << material_name << "\n";
+
+    // Export faces with separate position/normal/UV indices
+    for (uint32_t i = 0; i < mesh.triangle_count; ++i) {
+      uint32_t triangle_idx = mesh.triangle_offset + i;
+      if (triangle_idx >= data.triangles.size()) {
+        continue;
+      }
+
+      const auto& tri = data.triangles[triangle_idx];
+
+      // For each vertex in the triangle, find its position/normal/UV indices
+      auto get_indices = [&](uint32_t vertex_idx) -> std::tuple<uint32_t, uint32_t, uint32_t> {
+        if (vertex_idx >= data.vertices.pos.size()) {
+          return {1, 1, 1};  // fallback
+        }
+        uint32_t pos_idx = position_map.at(data.vertices.pos[vertex_idx]);
+        uint32_t nrm_idx = normal_map.at(data.vertices.nrm[vertex_idx]);
+        uint32_t uv_idx = uv_map.at(data.vertices.tex[vertex_idx]);
+        return {pos_idx, uv_idx, nrm_idx};
+      };
+
+      auto [i0_pos, i0_uv, i0_nrm] = get_indices(tri.i[0]);
+      auto [i1_pos, i1_uv, i1_nrm] = get_indices(tri.i[1]);
+      auto [i2_pos, i2_uv, i2_nrm] = get_indices(tri.i[2]);
+
+      file << "f " << i0_pos << "/" << i0_uv << "/" << i0_nrm << " " << i1_pos << "/" << i1_uv << "/" << i1_nrm << " " << i2_pos << "/" << i2_uv << "/" << i2_nrm << "\n";
+    }
+
+    file << "\n";
+  }
+
+  file.close();
+
+  auto export_end = std::chrono::high_resolution_clock::now();
+  auto export_duration = std::chrono::duration_cast<std::chrono::milliseconds>(export_end - export_start);
+  log::info("OBJ export: %lld ms (%zu positions, %zu normals, %zu UVs, %zu triangles, %zu meshes)", export_duration.count(), position_map.size(), normal_map.size(), uv_map.size(),
+    data.triangles.size(), data.meshes.size());
+
+  return true;
 }
 
 void build_emitters_distribution(Scene& scene) {
@@ -2603,6 +2938,8 @@ void build_emitters_distribution(Scene& scene) {
 }
 
 std::string SceneRepresentation::save_to_file(const char* filename, Integrator::Type selected_type, Integrator* integrator_array[], size_t integrator_count) {
+  auto save_start = std::chrono::high_resolution_clock::now();
+
   auto impl = _private;
 
   std::string base_file = {};
@@ -2669,14 +3006,26 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       }
       return result;
     }
+
     return target.generic_string();
   };
 
-  std::filesystem::path geometry_path = impl->data.geometry_file_name.empty() ? base_path : std::filesystem::path(impl->data.geometry_file_name).lexically_normal();
+  // Always save geometry to .etx.obj format
+  std::filesystem::path geometry_path = base_dir / (base_name + ".etx.obj");
   std::string geometry_ref = to_relative(geometry_path, json_path.parent_path());
   std::string materials_ref = to_relative(materials_path, json_path.parent_path());
 
   const Scene& scene_data = impl->scene;
+
+  // Export geometry with mesh information
+  auto geometry_export_start = std::chrono::high_resolution_clock::now();
+  if (!impl->export_to_etx_obj(geometry_path, scene_data, impl->data)) {
+    log::error("Failed to export geometry to %s", geometry_path.string().c_str());
+    return {};
+  }
+  auto geometry_export_end = std::chrono::high_resolution_clock::now();
+  auto geometry_export_duration = std::chrono::duration_cast<std::chrono::milliseconds>(geometry_export_end - geometry_export_start);
+  log::info("Geometry export: %lld ms", geometry_export_duration.count());
 
   nlohmann::json js = nlohmann::json::object();
   js["samples"] = scene_data.samples;
@@ -2739,7 +3088,11 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
   }
 
+  auto json_write_start = std::chrono::high_resolution_clock::now();
   json_to_file(js, json_path.string().c_str());
+  auto json_write_end = std::chrono::high_resolution_clock::now();
+  auto json_write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(json_write_end - json_write_start);
+  log::info("JSON config write: %lld ms", json_write_duration.count());
 
   auto sanitize_name = [](const std::string& value) {
     std::string result = value;
@@ -3125,6 +3478,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   }
 
   std::string materials_string = materials_stream.str();
+
+  auto materials_write_start = std::chrono::high_resolution_clock::now();
   FILE* materials_file = fopen(materials_path.string().c_str(), "wb");
   if (materials_file == nullptr) {
     log::error("Failed to open materials file for writing: %s", materials_path.string().c_str());
@@ -3133,9 +3488,16 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   fwrite(materials_string.data(), 1, materials_string.size(), materials_file);
   fflush(materials_file);
   fclose(materials_file);
+  auto materials_write_end = std::chrono::high_resolution_clock::now();
+  auto materials_write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(materials_write_end - materials_write_start);
+  log::info("Materials file write: %lld ms (%zu bytes)", materials_write_duration.count(), materials_string.size());
 
   impl->data.json_file_name = json_path.generic_string();
   impl->data.materials_file_name = materials_path.generic_string();
+
+  auto save_end = std::chrono::high_resolution_clock::now();
+  auto save_duration = std::chrono::duration_cast<std::chrono::milliseconds>(save_end - save_start);
+  log::info("Scene save total: %lld ms", save_duration.count());
 
   return json_path.generic_string();
 }
