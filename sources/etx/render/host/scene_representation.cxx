@@ -222,7 +222,7 @@ struct SceneRepresentationImpl {
     context.images.init(1024u);
     context.mediums.init(1024u);
     scattering::init(scheduler, shared_scattering_spectrums, data.atmosphere_extinction);
-    build_camera(active_camera, {5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, kWorldUp, {1280u, 720u}, 26.99f);
+    build_camera(active_camera, {5.0f, 5.0f, 5.0f}, normalize(float3{0.0f, 0.0f, 0.0f} - float3{5.0f, 5.0f, 5.0f}), kWorldUp, {1280u, 720u}, 26.99f);
   }
 
   ~SceneRepresentationImpl() {
@@ -273,7 +273,7 @@ struct SceneRepresentationImpl {
     active_camera.up = kWorldUp;
 
     scattering::init(scheduler, shared_scattering_spectrums, data.atmosphere_extinction);
-    build_camera(active_camera, {5.0f, 5.0f, 5.0f}, {0.0f, 0.0f, 0.0f}, kWorldUp, {1280u, 720u}, 26.99f);
+    build_camera(active_camera, {5.0f, 5.0f, 5.0f}, normalize(float3{0.0f, 0.0f, 0.0f} - float3{5.0f, 5.0f, 5.0f}), kWorldUp, {1280u, 720u}, 26.99f);
 
     init_default_values();
   }
@@ -626,16 +626,17 @@ struct SceneRepresentationImpl {
   void parse_obj_materials(const char* base_dir, const std::vector<tinyobj::material_t>& obj_materials);
 };
 
-void build_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, const float fov) {
-  float4x4 view = look_at(origin, target, up);
-  float4x4 proj = perspective(fov * kPi / 180.0f, viewport.x, viewport.y, camera.clip_near, camera.clip_far);
-  float4x4 inv_view = inverse(view);
+void build_camera(Camera& camera, const float3& position, const float3& direction, const float3& up, const uint2& viewport, const float fov) {
+  // Compute target from position + direction for look_at
+  float3 target = position + direction;
 
-  camera.target = target;
-  camera.position = {inv_view.col[3].x, inv_view.col[3].y, inv_view.col[3].z};
+  float4x4 view = look_at(position, target, up);
+  float4x4 proj = perspective(fov * kPi / 180.0f, viewport.x, viewport.y, camera.clip_near, camera.clip_far);
+
+  camera.position = position;
+  camera.direction = normalize(direction);
   camera.side = {view.col[0].x, view.col[1].x, view.col[2].x};
   camera.up = {view.col[0].y, view.col[1].y, view.col[2].y};
-  camera.direction = {-view.col[0].z, -view.col[1].z, -view.col[2].z};
   camera.tan_half_fov = 1.0f / std::abs(proj.col[0].x);
   camera.aspect = proj.col[1].y / proj.col[0].x;
   camera.view_proj = proj * view;
@@ -749,7 +750,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   _private->active_camera.up = kWorldUp;
 
   auto& camera = _private->active_camera;
-  float3 camera_target = camera.position + camera.direction;
+  float3 camera_target = camera.position + camera.direction;  // For backward compatibility
+  bool has_target = false;
+  bool has_direction = false;
   float camera_fov = get_camera_fov(camera);
   float camera_focal_len = fov_to_focal_length(camera_fov);
   bool use_focal_len = false;
@@ -838,6 +841,11 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
             } else if (ckey == "target") {
               auto values = cobj.get<std::vector<float>>();
               get_values(values, &camera_target.x, 3llu);
+              has_target = true;
+            } else if (ckey == "direction") {
+              auto values = cobj.get<std::vector<float>>();
+              get_values(values, &camera.direction.x, 3llu);
+              has_direction = true;
             } else if (ckey == "up") {
               auto values = cobj.get<std::vector<float>>();
               get_values(values, &camera.up.x, 3llu);
@@ -848,6 +856,16 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
               log::warning("Unhandled value in camera description : %s", key.c_str());
             }
           }
+        }
+
+        // Convert legacy target to direction, or ensure direction is normalized
+        if (has_direction) {
+          camera.direction = normalize(camera.direction);
+        } else if (has_target) {
+          camera.direction = normalize(camera_target - camera.position);
+        } else {
+          // Default direction if neither specified
+          camera.direction = kWorldForward;
         }
       } else if ((key == "integrator") && obj.is_object()) {
         if (out_integrator != nullptr) {
@@ -931,7 +949,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         if (use_focal_len) {
           camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
         }
-        build_camera(camera, camera.position, camera_target, camera.up, camera.film_size, camera_fov);
+        build_camera(camera, camera.position, camera.direction, camera.up, camera.film_size, camera_fov);
       }
     } else {
       auto it = std::find_if(_private->data.cameras.begin(), _private->data.cameras.end(), [](const auto& e) {
@@ -1309,6 +1327,8 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
       target = {val[0], val[1], val[2]};
     }
   }
+  // Convert target to direction
+  entry.cam.direction = normalize(target - entry.cam.position);
 
   entry.cam.up = kWorldUp;
   if (get_param(material, "up")) {
@@ -1386,7 +1406,7 @@ void SceneRepresentationImpl::parse_camera(const char* base_dir, const tinyobj::
     }
   }
 
-  build_camera(entry.cam, entry.cam.position, target, entry.cam.up, entry.cam.film_size, fov);
+  build_camera(entry.cam, entry.cam.position, entry.cam.direction, entry.cam.up, entry.cam.film_size, fov);
 }
 
 void SceneRepresentationImpl::parse_medium(const char* base_dir, const tinyobj::material_t& material) {
@@ -2388,7 +2408,7 @@ void SceneRepresentationImpl::load_gltf_camera(const tinygltf::Node& node, const
   auto position = to_float3(transform * float4{0.0f, 0.0f, 0.0f, 1.0f});
   auto direction = to_float3(transform.col[2]);
   auto up = to_float3(transform.col[1]);
-  build_camera(active_camera, position, position - direction, up, active_camera.film_size, float(cam.yfov) * 180.0f / kPi);
+  build_camera(active_camera, position, direction, up, active_camera.film_size, float(cam.yfov) * 180.0f / kPi);
 }
 
 void SceneRepresentationImpl::load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node, const float4x4& parent_transform) {
@@ -3188,7 +3208,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "class " << ((camera.cls == Camera::Class::Equirectangular) ? "eq" : "perspective") << "\n";
     materials_stream << "viewport " << camera.film_size.x << " " << camera.film_size.y << "\n";
     materials_stream << "origin " << camera.position.x << " " << camera.position.y << " " << camera.position.z << "\n";
-    materials_stream << "target " << camera.target.x << " " << camera.target.y << " " << camera.target.z << "\n";
+    materials_stream << "direction " << camera.direction.x << " " << camera.direction.y << " " << camera.direction.z << "\n";
     materials_stream << "up " << camera.up.x << " " << camera.up.y << " " << camera.up.z << "\n";
     materials_stream << "fov " << get_camera_fov(camera) << "\n";
     materials_stream << "focal-length " << get_camera_focal_length(camera) << "\n";

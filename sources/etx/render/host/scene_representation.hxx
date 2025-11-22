@@ -56,7 +56,7 @@ struct SceneRepresentation {
   ETX_DECLARE_PIMPL(SceneRepresentation, 5120);
 };
 
-void build_camera(Camera& camera, const float3& origin, const float3& target, const float3& up, const uint2& viewport, const float fov);
+void build_camera(Camera& camera, const float3& position, const float3& direction, const float3& up, const uint2& viewport, const float fov);
 
 float get_camera_fov(const Camera& camera);
 float get_camera_focal_length(const Camera& camera);

@@ -7,6 +7,8 @@
 namespace etx {
 
 struct CameraController {
+  static constexpr float kMaxCameraDistance = 8192.0f;
+
   CameraController(Camera& cam)
     : _camera(cam) {
   }
@@ -21,26 +23,32 @@ struct CameraController {
 
     if (rotation) {
       if (mouse_buttons & MouseLeft) {
-        auto s = to_spherical(_camera.target - _camera.position);
+        float3 target = _camera.target();
+        auto s = to_spherical(target - _camera.position);
         s.phi += _rotation_speed * (_mouse_delta.x * kPi / 180.0f);
         s.theta = clamp(s.theta - _rotation_speed * (_mouse_delta.y * kDoublePi / 180.0f), -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
-        _camera.target = _camera.position + from_spherical(s);
+        target = _camera.position + from_spherical(s);
+        _camera.direction = normalize(target - _camera.position);
       } else if (mouse_buttons & MouseMiddle) {
         if (_keys.count(SAPP_KEYCODE_LEFT_SHIFT)) {
-          float3 direction = _camera.target - _camera.position;
+          float3 direction = _camera.direction;
           float3 side = normalize(cross(kWorldUp, direction));
           float3 up = normalize(cross(direction, side));
           _camera.position += (_mouse_delta.y * up + _mouse_delta.x * side) * _move_speed * (1.0f + length(direction));
-          _camera.target = _camera.position + direction;
+          // direction unchanged
         } else if (_keys.count(SAPP_KEYCODE_LEFT_CONTROL)) {
-          auto s = to_spherical(_camera.position - _camera.target);
-          s.r = clamp(s.r + _mouse_delta.y / kPi, 1.0f / 255.0f, 8192.0f);
-          _camera.position = _camera.target + from_spherical(s);
+          float3 target = _camera.target();
+          auto s = to_spherical(_camera.position - target);
+          s.r = clamp(s.r + _mouse_delta.y / kPi, 1.0f / 255.0f, kMaxCameraDistance);
+          _camera.position = target + from_spherical(s);
+          _camera.direction = normalize(target - _camera.position);
         } else {
-          auto s = to_spherical(_camera.position - _camera.target);
+          float3 target = _camera.target();
+          auto s = to_spherical(_camera.position - target);
           s.phi += _rotation_speed * (_mouse_delta.x * kPi / 180.0f);
           s.theta = clamp(s.theta + _rotation_speed * (_mouse_delta.y * kPi / 180.0f), -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
-          _camera.position = _camera.target + from_spherical(s);
+          _camera.position = target + from_spherical(s);
+          _camera.direction = normalize(target - _camera.position);
         }
       }
 
@@ -48,28 +56,30 @@ struct CameraController {
     }
 
     if (zoom) {
-      auto s = to_spherical(_camera.position - _camera.target);
-      s.r = clamp(s.r + _mouse_delta.z * (1.0f + s.r), 1.0f / 255.0f, 8192.0f);
-      _camera.position = _camera.target + from_spherical(s);
+      float3 target = _camera.target();
+      auto s = to_spherical(_camera.position - target);
+      s.r = clamp(s.r + _mouse_delta.z * (1.0f + s.r), 1.0f / 255.0f, kMaxCameraDistance);
+      _camera.position = target + from_spherical(s);
+      _camera.direction = normalize(target - _camera.position);
       _mouse_delta.z = 0.0f;
     }
 
     if (movement) {
-      float3 direction = _camera.target - _camera.position;
+      float3 direction = _camera.direction;
       float3 side = cross(direction, kWorldUp);
       _camera.position += (move_fwd * direction + move_side * side) * _move_speed;
-      _camera.target = _camera.position + direction;
+      // direction unchanged, target moves with position
     }
 
     if (scheduled.active) {
       scheduled.active = false;
       _camera.position = scheduled.pos;
-      _camera.target = scheduled.center;
+      _camera.direction = normalize(scheduled.center - scheduled.pos);
       movement = true;
     }
 
     if (movement || rotation || zoom) {
-      build_camera(_camera, _camera.position, _camera.target, kWorldUp, _camera.film_size, get_camera_fov(_camera));
+      build_camera(_camera, _camera.position, _camera.direction, kWorldUp, _camera.film_size, get_camera_fov(_camera));
       return true;
     }
 

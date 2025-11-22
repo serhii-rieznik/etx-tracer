@@ -11,31 +11,34 @@ struct ETX_ALIGNED Camera {
     Equirectangular,
   };
 
-  float4x4 view_proj ETX_EMPTY_INIT;
-
-  float3 position ETX_EMPTY_INIT;
+  // Basic parameters
   Class cls ETX_INIT_WITH(Class::Perspective);
-
-  float3 target ETX_EMPTY_INIT;
-  float tan_half_fov ETX_EMPTY_INIT;
-
-  float3 side ETX_EMPTY_INIT;
-  float aspect ETX_EMPTY_INIT;
-
-  float3 up ETX_EMPTY_INIT;
-  float area ETX_EMPTY_INIT;
-
+  float3 position ETX_EMPTY_INIT;
   float3 direction ETX_EMPTY_INIT;
-  float image_plane ETX_EMPTY_INIT;
 
+  // Physical parameters
   uint2 film_size ETX_EMPTY_INIT;
   float lens_radius ETX_EMPTY_INIT;
   float focal_distance ETX_EMPTY_INIT;
 
+  // Rendering parameters
   float clip_near ETX_INIT_WITH(1.0f / 256.0f);
   float clip_far ETX_INIT_WITH(1024.0f);
   uint32_t lens_image ETX_INIT_WITH(kInvalidIndex);
   uint32_t medium_index ETX_INIT_WITH(kInvalidIndex);
+
+  // Derived parameters
+  float tan_half_fov ETX_EMPTY_INIT;
+  float aspect ETX_EMPTY_INIT;
+  float area ETX_EMPTY_INIT;
+  float image_plane ETX_EMPTY_INIT;
+  float3 side ETX_EMPTY_INIT;
+  float3 up ETX_EMPTY_INIT;
+  float4x4 view_proj ETX_EMPTY_INIT;
+
+  ETX_GPU_CODE float3 target() const {
+    return position + direction;
+  }
 };
 
 inline constexpr float3 kWorldRight = {1.0f, 0.0f, 0.0f};

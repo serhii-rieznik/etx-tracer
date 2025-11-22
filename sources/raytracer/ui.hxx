@@ -35,6 +35,21 @@ struct UI {
 
   bool handle_event(const sapp_event*);
 
+  // Context structure for shared state during UI building
+  struct BuildContext {
+    std::vector<int32_t> emitter_primary_instance;
+    std::function<const char*(uint32_t)> material_name_from_index;
+    std::function<void(uint32_t, const char*, std::function<void()>&&)> with_window;
+    float2 wpadding = {};
+    float2 fpadding = {};
+    float text_size = {};
+    float button_size = {};
+    float input_size = {};
+    bool has_integrator = false;
+    bool has_scene = false;
+    bool scene_editable = false;
+  };
+
   ViewOptions view_options() const;
   ViewOptions& mutable_view_options();
 
@@ -64,6 +79,13 @@ struct UI {
   } callbacks;
 
  private:
+  // UI Helper Functions
+  void full_width_item();
+  bool labeled_control(const char* label, std::function<bool()>&& control_func);
+  bool validated_float_control(const char* label, float& value, float min_val, float max_val, const char* format = "%.3f");
+  bool validated_int_control(const char* label, int32_t& value, int32_t min_val, int32_t max_val);
+  const char* format_string(const char* format, ...);
+
   enum class SelectionKind : uint32_t {
     None,
     Material,
@@ -85,6 +107,7 @@ struct UI {
   bool build_medium(Scene& scene, Medium&, const char* name);
   bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool spectrum_picker(Scene& scene, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
+  bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);
   bool ior_picker(Scene& scene, const char* name, RefractiveIndex& ior);
   bool emission_picker(Scene& scene, const char* label, const char* id_suffix, uint32_t& spectrum_index);
   bool medium_dropdown(const char* label, uint32_t& medium);
@@ -93,9 +116,27 @@ struct UI {
   void reload_geometry();
   void reload_scene();
   void set_selection(SelectionKind kind, int32_t index, bool track_history = true);
+  void validate_selections(const Scene& scene);
   void navigate_history(int32_t step);
   bool can_navigate_back() const;
   bool can_navigate_forward() const;
+
+  void build_main_menu_bar(const std::vector<std::string>& recent_files);
+  void build_toolbar(const BuildContext& ctx);
+  void build_scene_objects_window(Scene& scene, const BuildContext& ctx, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums,
+    const SceneRepresentation::MeshMapping& meshes);
+  void build_properties_window(Scene& scene, Camera& camera, const BuildContext& ctx);
+
+  bool build_material_class_selector(Material& material);
+
+  // Selection-specific property builders
+  void build_material_selection_properties(Scene& scene, const BuildContext& ctx);
+  void build_medium_selection_properties(Scene& scene, const BuildContext& ctx);
+  void build_emitter_selection_properties(Scene& scene, const BuildContext& ctx);
+  void build_mesh_selection_properties(Scene& scene, const BuildContext& ctx);
+  void build_camera_selection_properties(Scene& scene, Camera& camera, const BuildContext& ctx);
+  void build_scene_selection_properties(Scene& scene, const BuildContext& ctx);
+  void build_integrator_selection_properties(Scene& scene, const BuildContext& ctx);
 
  private:
   Integrator* _current_integrator = nullptr;
@@ -178,6 +219,7 @@ struct UI {
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;
   const IORDatabase* _ior_database = nullptr;
+  bool _auto_open_emission_section = false;
 };
 
 }  // namespace etx
