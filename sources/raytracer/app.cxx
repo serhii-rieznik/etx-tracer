@@ -50,6 +50,7 @@ void RTApplication::init() {
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
   ui.callbacks.scene_file_selected = std::bind(&RTApplication::on_scene_file_selected, this, std::placeholders::_1);
   ui.callbacks.save_scene_file_selected = std::bind(&RTApplication::on_save_scene_file_selected, this, std::placeholders::_1);
+  ui.callbacks.save_scene_file_as_selected = std::bind(&RTApplication::on_save_scene_file_as_selected, this);
   ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
   ui.callbacks.run_selected = std::bind(&RTApplication::on_run_selected, this);
   ui.callbacks.stop_selected = std::bind(&RTApplication::on_stop_selected, this, std::placeholders::_1);
@@ -336,6 +337,13 @@ void RTApplication::on_save_scene_file_selected(std::string file_name) {
   std::string saved_path = save_scene_file(base);
   if (saved_path.empty() == false) {
     log::info("Scene saved to %s", saved_path.c_str());
+  }
+}
+
+void RTApplication::on_save_scene_file_as_selected() {
+  std::string selected_file = save_file("json");
+  if (selected_file.empty() == false) {
+    on_save_scene_file_selected(selected_file);
   }
 }
 

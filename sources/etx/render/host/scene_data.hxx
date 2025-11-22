@@ -4,6 +4,10 @@
 #include <etx/render/shared/camera.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/image.hxx>
+#include <etx/render/host/tasks.hxx>
+#include <etx/render/shared/scattering.hxx>
+#include <etx/render/host/image_pool.hxx>
+#include <etx/render/host/medium_pool.hxx>
 
 #include <string>
 #include <unordered_map>
@@ -93,7 +97,11 @@ struct SceneData {
     std::string id = (name != nullptr) && (name[0] != 0) ? name : ("material-" + std::to_string(materials.size()));
     auto i = material_mapping.find(id);
     if (i != material_mapping.end()) {
-      return i->second;
+      uint32_t existing_index = i->second;
+      if (existing_index >= materials.size()) {
+        materials.resize(existing_index + 1);
+      }
+      return existing_index;
     }
     uint32_t index = static_cast<uint32_t>(materials.size());
     materials.emplace_back();
@@ -109,9 +117,10 @@ struct SceneLoaderContext {
 
   ImagePool images;
   MediumPool mediums;
+  scattering::ScatteringSpectrums scattering_spectrums;
 
   uint32_t add_image(const char* path, uint32_t options, const float2& offset, const float2& scale) {
-    std::string id = path && path[0] ? path : ("image-" + std::to_string(images.array_size()));
+    std::string id = path && path[0] ? path : ("##image-" + std::to_string(images.array_size()));
     return images.add_from_file(id, options | Image::Delay, offset, scale);
   }
 

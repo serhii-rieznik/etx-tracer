@@ -92,6 +92,7 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
 
   float3 xyz = result.integrate_to_xyz();
   result.integrated_value = spectrum::xyz_to_rgb(xyz);
+  result.integrated_value = max(result.integrated_value, float3{0.0f, 0.0f, 0.0f});
   return result;
 }
 

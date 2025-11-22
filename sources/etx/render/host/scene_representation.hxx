@@ -53,7 +53,7 @@ struct SceneRepresentation {
 
   bool valid() const;
 
-  ETX_DECLARE_PIMPL(SceneRepresentation, 5120);
+  ETX_DECLARE_PIMPL(SceneRepresentation, 32768);
 };
 
 void build_camera(Camera& camera, const float3& position, const float3& direction, const float3& up, const uint2& viewport, const float fov);
@@ -63,7 +63,6 @@ float get_camera_focal_length(const Camera& camera);
 float fov_to_focal_length(float fov);
 float focal_length_to_fov(float focal_len);
 
-Material::Class material_string_to_class(const char* s);
 const char* material_class_to_string(Material::Class cls);
 void material_class_to_string(Material::Class cls, const char** str);
 

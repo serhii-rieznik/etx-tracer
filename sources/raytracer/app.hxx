@@ -38,6 +38,7 @@ struct RTApplication {
   void on_save_image_selected(std::string, SaveImageMode);
   void on_scene_file_selected(std::string);
   void on_save_scene_file_selected(std::string);
+  void on_save_scene_file_as_selected();
   void on_integrator_selected(Integrator*);
   void on_run_selected();
   void on_stop_selected(bool wait_for_completion);

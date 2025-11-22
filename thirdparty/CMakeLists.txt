@@ -13,6 +13,9 @@ add_subdirectory(oidn)
 add_subdirectory(bluenoise)
 add_subdirectory(microprofile)
 
+set(BCDEC_STATIC_LIB ON)
+add_subdirectory(bcdec)
 set_property(TARGET microprofile PROPERTY FOLDER "thirdparty")
+set_property(TARGET bcdec PROPERTY FOLDER "thirdparty")
 
 

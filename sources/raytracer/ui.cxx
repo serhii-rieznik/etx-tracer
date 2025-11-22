@@ -1115,6 +1115,12 @@ void UI::save_scene_file() const {
   }
 }
 
+void UI::save_scene_file_as() const {
+  if (callbacks.save_scene_file_as_selected) {
+    callbacks.save_scene_file_as_selected();
+  }
+}
+
 void UI::save_image(SaveImageMode mode) const {
   auto selected_file = save_file(mode == SaveImageMode::TonemappedLDR ? "png" : "exr");
   if ((selected_file.empty() == false) && callbacks.save_image_selected) {
@@ -1470,6 +1476,9 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
       ImGui::Separator();
       if (ImGui::MenuItem("Save", nullptr, false, true)) {
         save_scene_file();
+      }
+      if (ImGui::MenuItem("Save as...", nullptr, false, true)) {
+        save_scene_file_as();
       }
       ImGui::EndMenu();
     }
@@ -2165,6 +2174,9 @@ void UI::build_emitter_selection_properties(Scene& scene, const BuildContext& ct
         }
       }
     }
+  } else {
+    std::string emitter_preset_id = "emitter_emission_" + std::to_string(emitter_index);
+    common_changed = emission_picker(scene, emitter_label, emitter_preset_id.c_str(), emitter.emission.spectrum_index);
   }
 
   ImGui::Spacing();
@@ -2220,6 +2232,11 @@ void UI::build_emitter_selection_properties(Scene& scene, const BuildContext& ct
       }
     }
   } else if (emitter.cls == EmitterProfile::Class::Directional) {
+    // Show current emission spectrum info
+    ETX_ASSERT(emitter.emission.spectrum_index < scene.spectrums.count);
+    float3 integrated = scene.spectrums[emitter.emission.spectrum_index].integrated();
+    ImGui::Text("Emission: (%.2f, %.2f, %.2f)", integrated.x, integrated.y, integrated.z);
+
     ImGui::Text("Angular Size");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     float angular_size_deg = emitter.angular_size * 180.0f / kPi;
@@ -2239,6 +2256,11 @@ void UI::build_emitter_selection_properties(Scene& scene, const BuildContext& ct
       emitter.direction = from_spherical(angles.x, angles.y);
       changed = true;
     }
+  } else if (emitter.cls == EmitterProfile::Class::Environment) {
+    // Show current emission spectrum info
+    ETX_ASSERT(emitter.emission.spectrum_index < scene.spectrums.count);
+    float3 integrated = scene.spectrums[emitter.emission.spectrum_index].integrated();
+    ImGui::Text("Emission: (%.2f, %.2f, %.2f)", integrated.x, integrated.y, integrated.z);
   }
   if (!ctx.scene_editable)
     ImGui::EndDisabled();

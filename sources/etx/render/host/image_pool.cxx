@@ -1,19 +1,16 @@
 #include <etx/core/core.hxx>
 
 #include <etx/render/host/image_pool.hxx>
+#include <etx/render/host/image_loaders.hxx>
 #include <etx/render/host/distribution_builder.hxx>
-
-#include <tinyexr.hxx>
-#include <stb_image.hxx>
 
 #include <atomic>
 #include <vector>
 #include <unordered_map>
 #include <functional>
+#include <filesystem>
 
 namespace etx {
-
-bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data);
 
 struct ImagePoolImpl {
   ImagePoolImpl(TaskScheduler& s)
@@ -48,7 +45,7 @@ struct ImagePoolImpl {
     return handle;
   }
 
-  uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
+  uint32_t add_from_file(std::string path, uint32_t image_options, const float2& offset, const float2& scale) {
     auto i = mapping.find(path);
     if (i != mapping.end()) {
       return i->second;
@@ -172,6 +169,7 @@ struct ImagePoolImpl {
     img.format = load_data(file_name, source_data, img.isize);
 
     if ((img.format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
+      log::error("Failed to load image from file: %s", file_name);
       source_data.resize(sizeof(float4));
       *(float4*)(source_data.data()) = {1.0f, 1.0f, 1.0f, 1.0f};
       img.format = Image::Format::RGBA32F;
@@ -268,122 +266,6 @@ struct ImagePoolImpl {
     img = {};
   }
 
-  Image::Format load_data(const char* source, std::vector<uint8_t>& data, uint2& dimensions) {
-    if (source == nullptr)
-      return Image::Format::Undefined;
-
-    const char* ext = nullptr;
-    if (uint64_t l = strlen(source)) {
-      while ((l > 0) && (source[--l] != '.')) {
-      }
-      ext = source + l;
-    } else {
-      return Image::Format::Undefined;
-    }
-
-    if (strcmp(ext, ".exr") == 0) {
-      int w = 0;
-      int h = 0;
-      const char* error = nullptr;
-      float* rgba_data = nullptr;
-      if (LoadEXR(&rgba_data, &w, &h, source, &error) != TINYEXR_SUCCESS) {
-        printf("Failed to load EXR from file: %s\n", error);
-        return Image::Format::Undefined;
-      }
-
-      scheduler.execute(4 * w * h, [&rgba_data](uint32_t begin, uint32_t end, uint32_t) {
-        for (uint32_t i = begin; i < end; ++i) {
-          if (std::isinf(rgba_data[i])) {
-            rgba_data[i] = 65504.0f;  // max value in half-float
-          }
-          if (std::isnan(rgba_data[i]) || (rgba_data[i] < 0.0f)) {
-            rgba_data[i] = 0.0f;
-          }
-        }
-      });
-
-      dimensions = {uint32_t(w), uint32_t(h)};
-      data.resize(sizeof(float4) * w * h);
-      memcpy(data.data(), rgba_data, sizeof(float4) * w * h);
-      free(rgba_data);
-
-      return Image::Format::RGBA32F;
-    }
-
-    if (strcmp(ext, ".hdr") == 0) {
-      int w = 0;
-      int h = 0;
-      int c = 0;
-      stbi_set_flip_vertically_on_load(false);
-      auto image = stbi_loadf(source, &w, &h, &c, 0);
-      if (image == nullptr) {
-        return Image::Format::Undefined;
-      }
-
-      dimensions = {uint32_t(w), uint32_t(h)};
-      data.resize(sizeof(float4) * w * h);
-      auto ptr = reinterpret_cast<float4*>(data.data());
-      if (c == 4) {
-        memcpy(ptr, image, sizeof(float4) * w * h);
-      } else {
-        for (int i = 0; i < w * h; ++i) {
-          ptr[i] = {image[3 * i + 0], image[3 * i + 1], image[3 * i + 2], 1.0f};
-        }
-      }
-      free(image);
-      return Image::Format::RGBA32F;
-    }
-
-    if (strcmp(ext, ".pfm") == 0) {
-      return load_pfm(source, dimensions, data) ? Image::Format::RGBA32F : Image::Format::Undefined;
-    }
-
-    int w = 0;
-    int h = 0;
-    int c = 0;
-    stbi_set_flip_vertically_on_load(true);
-    auto image = stbi_load(source, &w, &h, &c, 0);
-    if (image == nullptr) {
-      return Image::Format::Undefined;
-    }
-
-    dimensions = {uint32_t(w), uint32_t(h)};
-    data.resize(4llu * w * h);
-    uint8_t* ptr = reinterpret_cast<uint8_t*>(data.data());
-    switch (c) {
-      case 4: {
-        memcpy(ptr, image, 4llu * w * h);
-        break;
-      }
-
-      case 3: {
-        for (int i = 0; i < w * h; ++i) {
-          ptr[4 * i + 0] = image[3 * i + 0];
-          ptr[4 * i + 1] = image[3 * i + 1];
-          ptr[4 * i + 2] = image[3 * i + 2];
-          ptr[4 * i + 3] = 255;
-        }
-        break;
-      }
-
-      case 1: {
-        for (int i = 0; i < w * h; ++i) {
-          ptr[4 * i + 0] = image[i];
-          ptr[4 * i + 1] = image[i];
-          ptr[4 * i + 2] = image[i];
-          ptr[4 * i + 3] = 255;
-        }
-        break;
-      }
-
-      default:
-        break;
-    }
-
-    free(image);
-    return Image::Format::RGBA8;
-  }
-
   TaskScheduler& scheduler;
   uint64_t counter = 0;
   std::vector<Image> images;
@@ -458,87 +340,6 @@ Image* ImagePool::as_array() {
 
 uint64_t ImagePool::array_size() {
   return _private->images.size();
-}
-
-bool load_pfm(const char* path, uint2& size, std::vector<uint8_t>& data) {
-  FILE* in_file = fopen(path, "rb");
-  if (in_file == nullptr) {
-    return false;
-  }
-
-  char buffer[16] = {};
-
-  auto read_line = [&]() {
-    memset(buffer, 0, sizeof(buffer));
-    char c = {};
-    int p = 0;
-    while ((p < 16) && (fread(&c, 1, 1, in_file) == 1)) {
-      if (c == '\n') {
-        return;
-      } else {
-        buffer[p++] = c;
-      }
-    }
-  };
-
-  read_line();
-  if ((buffer[0] != 'P') && (buffer[1] != 'f') && (buffer[1] != 'F')) {
-    fclose(in_file);
-    return false;
-  }
-  char format = buffer[1];
-
-  read_line();
-  if (sscanf(buffer, "%d", &size.x) != 1) {
-    fclose(in_file);
-    return false;
-  }
-
-  read_line();
-  if (sscanf(buffer, "%d", &size.y) != 1) {
-    fclose(in_file);
-    return false;
-  }
-
-  read_line();
-  float scale = 0.0f;
-  if (sscanf(buffer, "%f", &scale) != 1) {
-    fclose(in_file);
-    return false;
-  }
-
-  data.resize(sizeof(float4) * size.x * size.y);
-  auto data_ptr = reinterpret_cast<float4*>(data.data());
-
-  if (format == 'f') {
-    for (uint32_t i = 0; i < size.y; ++i) {
-      for (uint32_t j = 0; j < size.x; ++j) {
-        float value = 0.0f;
-        if (fread(&value, sizeof(float), 1, in_file) != 1) {
-          fclose(in_file);
-          return false;
-        }
-        data_ptr[j + i * size.x] = {value, value, value, 1.0f};
-      }
-    }
-  } else if (format == 'F') {
-    for (uint32_t i = 0; i < size.y; ++i) {
-      for (uint32_t j = 0; j < size.x; ++j) {
-        float3 value = {};
-        if (fread(&value, 3 * sizeof(float), 1, in_file) != 1) {
-          fclose(in_file);
-          return false;
-        }
-        data_ptr[j + i * size.x] = {value.x, value.y, value.z, 1.0f};
-      }
-    }
-  } else {
-    fclose(in_file);
-    return false;
-  }
-
-  fclose(in_file);
-  return true;
 }
 
 void ImagePool::add_options(uint32_t index, uint32_t options) {

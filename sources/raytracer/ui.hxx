@@ -58,6 +58,7 @@ struct UI {
     std::function<void(std::string, SaveImageMode)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
     std::function<void(std::string)> save_scene_file_selected;
+    std::function<void()> save_scene_file_as_selected;
     std::function<void(Integrator*)> integrator_selected;
     std::function<void(bool)> stop_selected;
     std::function<void()> run_selected;
@@ -101,6 +102,7 @@ struct UI {
   void quit();
   void select_scene_file() const;
   void save_scene_file() const;
+  void save_scene_file_as() const;
   void save_image(SaveImageMode mode) const;
   void load_image() const;
   bool build_material(Scene& scene, Material&);
