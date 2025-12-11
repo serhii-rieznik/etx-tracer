@@ -1,0 +1,84 @@
+name: Building for Windows
+
+on:
+  workflow_dispatch:
+  
+jobs:
+  build-for-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+  
+      - name: Setup MSVC environment
+        uses: microsoft/setup-msbuild@v1.3.1
+  
+      - name: Remove MinGW from PATH
+        shell: pwsh
+        run: |
+          $env:PATH = ($env:PATH -split ';' | Where-Object {$_ -notlike "*mingw*"})
+          Write-Host "PATH cleaned: $env:PATH"
+    
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@v3.28.1
+        with:
+          cmakeVersion: "3.28.1"
+          ninjaVersion: "1.11.1"
+
+      - name: Download Embree from RenderKit
+        shell: pwsh
+        run: |
+          $version = "4.4.0"
+          $zip = "embree-${version}.x64.windows.zip"
+          $url = "https://github.com/RenderKit/embree/releases/download/v${version}/${zip}"
+          Write-Host "Downloading Embree from: $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          New-Item -ItemType Directory -Path "embree-v4.4.0" -Force
+          Expand-Archive -Path $zip -DestinationPath "embree-v4.4.0" -Force
+     
+      - name: Create bin/ directory and copy Embree DLLs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path bin -Force
+          Copy-Item "embree-v4.4.0\*.dll" -Destination bin\
+
+      - name: Download and extract OIDN (RenderKit)
+        shell: pwsh
+        run: |
+          $version = "2.3.3"
+          $zip = "oidn-${version}.x64.windows.zip"
+          $url = "https://github.com/RenderKit/oidn/releases/download/v${version}/${zip}"
+          Write-Host "Downloading OIDN from: $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+
+          # Extract to current directory (creates oidn-2.3.3.x64.windows/)
+          Expand-Archive -Path $zip -DestinationPath . -Force
+
+          # Create target directory
+          New-Item -ItemType Directory -Path "thirdparty/oidn" -Force
+
+          # Copy contents of the inner folder into thirdparty/oidn/
+          Copy-Item "oidn-${version}.x64.windows/*" -Destination "thirdparty/oidn" -Recurse -Force
+
+          # Optional: cleanup
+          Remove-Item -Recurse -Force "oidn-${version}.x64.windows"
+          Remove-Item $zip
+
+      - name: CPU compilation
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -B build_cpu -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DEMBREE_LOCATION="%CD%/embree-v4.4.0" ^
+            -DDISABLE_GPU=ON
+          cmake --build build_cpu --config Release --parallel
+
+      - name: Upload CPU build binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: etx-tracer-windows
+          path: |
+            bin/
+            bin/*.exe
