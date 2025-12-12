@@ -83,7 +83,6 @@ inline auto hash_mapping(const T& m) -> uint64_t {
 
 }  // namespace
 
-// UI Helper Functions Implementation
 void UI::full_width_item() {
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
 }
@@ -100,9 +99,7 @@ bool UI::validated_float_control(const char* label, float& value, float min_val,
     return ImGui::DragFloat(("##" + std::string(label)).c_str(), &value, 0.1f, min_val, max_val, format);
   });
   if (changed) {
-    // Ensure value stays within bounds
     value = std::clamp(value, min_val, max_val);
-    // Check for NaN/inf and reset to original if invalid
     if (!std::isfinite(value)) {
       value = original_value;
       changed = false;
@@ -140,7 +137,6 @@ void UI::MappingRepresentation::build(const std::unordered_map<std::string, uint
     }
   }
   std::sort(unfold.begin(), unfold.end(), [](const auto& a, const auto& b) {
-    // Case-insensitive comparison
     std::string a_lower = a.first;
     std::string b_lower = b.first;
     std::transform(a_lower.begin(), a_lower.end(), a_lower.begin(), ::tolower);
@@ -248,7 +244,6 @@ void UI::validate_selections(const Scene& scene) {
       }
       break;
     default:
-      // Other selection types don't need validation or are always valid
       break;
   }
 }
@@ -371,7 +366,6 @@ bool UI::build_options(Options& options) {
 }
 
 bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold) {
-  // Parameter validation
   if ((min_azimuth >= max_azimuth) || (min_elevation >= max_elevation) || (pole_threshold <= 0.0f) || (pole_threshold >= 90.0f)) {
     ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Invalid angle editor parameters");
     return false;
@@ -386,7 +380,6 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
   float azimuth_deg = angles.x * 180.0f / kPi;
   float elevation_deg = angles.y * 180.0f / kPi;
 
-  // Check for invalid input angles
   if (!std::isfinite(azimuth_deg) || !std::isfinite(elevation_deg)) {
     ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Invalid angle values detected");
     ImGui::PopID();
@@ -400,7 +393,7 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
   if (ImGui::SliderFloat("##elevation", &elevation_deg, clamped_min_elevation, clamped_max_elevation, "Elevation: %.1f°")) {
     angles.y = std::clamp(elevation_deg * kPi / 180.0f, clamped_min_elevation * kPi / 180.0f, clamped_max_elevation * kPi / 180.0f);
     if (!std::isfinite(angles.y))
-      angles.y = 0.0f;  // Fallback to safe value
+      angles.y = 0.0f;
     changed = true;
   }
 
@@ -414,7 +407,7 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
   if (ImGui::SliderFloat("##azimuth", &azimuth_deg, min_azimuth, max_azimuth, "Azimuth: %.1f°")) {
     angles.x = std::clamp(azimuth_deg * kPi / 180.0f, min_azimuth * kPi / 180.0f, max_azimuth * kPi / 180.0f);
     if (!std::isfinite(angles.x))
-      angles.x = 0.0f;  // Fallback to safe value
+      angles.x = 0.0f;
     changed = true;
   }
   if (near_pole) {
@@ -626,7 +619,6 @@ bool UI::emission_picker(Scene& scene, const char* label, const char* id_suffix,
     preview_storage = database->definitions[static_cast<size_t>(matched_index)].title;
     preview_text = preview_storage.c_str();
   } else {
-    // No preset selected - show clearer text
     preview_text = "Select Preset";
   }
 
@@ -995,7 +987,6 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, Scene& s
   apply_pending_selection(_mesh_mapping, SelectionKind::Mesh);
   _pending_selection = {};
 
-  // Validate selections after mappings are updated
   validate_selections(scene);
 
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
@@ -1320,7 +1311,6 @@ bool UI::build_material(Scene& scene, Material& material) {
     },
     _auto_open_emission_section);
 
-  // Reset the flag after using it
   _auto_open_emission_section = false;
 
   with_section(3, "Scattering & Media", [&]() {

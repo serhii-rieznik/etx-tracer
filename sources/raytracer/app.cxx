@@ -449,15 +449,15 @@ void RTApplication::on_emitter_added(uint32_t type) {
   integrator_thread.stop(Integrator::Stop::Immediate);
 
   switch (type) {
-    case 0: {  // Environment
+    case 0: {
       scene.add_environment_emitter({1.0f, 1.0f, 1.0f}, kInvalidIndex);
       break;
     }
-    case 1: {  // Directional
+    case 1: {
       scene.add_directional_emitter({0.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, 0.5422f, kInvalidIndex);
       break;
     }
-    case 2: {  // Atmosphere
+    case 2: {
       scene.add_atmosphere_emitter({0.825f, 1000.0f, 1.0f, 1.0f, 1.0f, {0.0f, 2.0f, 1.0f}, 0.5422f, 0.125f, kDoublePi, kPi});
       break;
     }

@@ -511,13 +511,11 @@ struct SceneRepresentationImpl {
   void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
   void add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params);
 
-  // Shared post-loading functions
   bool finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len, bool force_tangents,
     bool spectral_scene);
 };
 
 void build_camera(Camera& camera, const float3& position, const float3& direction, const float3& up, const uint2& viewport, const float fov) {
-  // Compute target from position + direction for look_at
   float3 target = position + direction;
 
   float4x4 view = look_at(position, target, up);
@@ -1043,27 +1041,21 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     return false;
   }
 
-  // If camera was parsed from JSON, append it to the cameras list (after geometry cameras)
   if (has_target || has_direction || json_camera.film_size.x > 0 || json_camera.lens_radius > 0.0f) {
     if (use_focal_len) {
       camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
     }
 
-    // Set default film size if not specified
     if (json_camera.film_size.x * json_camera.film_size.y == 0) {
       json_camera.film_size = {1280, 720};
     }
 
-    // Create camera entry
     auto& entry = _private->data.cameras.emplace_back();
     entry.id = "json_camera";
-    // Only mark as active if no geometry cameras exist
     entry.active = _private->data.cameras.size() == 1;
 
-    // Build the camera
     build_camera(entry.cam, json_camera.position, json_camera.direction, json_camera.up, json_camera.film_size, camera_fov);
 
-    // Copy additional camera properties
     entry.cam.cls = json_camera.cls;
     entry.cam.lens_radius = json_camera.lens_radius;
     entry.cam.focal_distance = json_camera.focal_distance;
@@ -1428,14 +1420,12 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     return target.generic_string();
   };
 
-  // Always save geometry to .etx format
   std::filesystem::path geometry_path = base_dir / (base_name + ".etx");
   std::string geometry_ref = to_relative(geometry_path, json_path.parent_path());
   std::string materials_ref = to_relative(materials_path, json_path.parent_path());
 
   const Scene& scene_data = impl->scene;
 
-  // Export geometry with mesh information
   auto geometry_export_start = std::chrono::high_resolution_clock::now();
   SceneSerialization archive;
   if (!archive.save_to_file(impl->data, geometry_path)) {
@@ -1970,7 +1960,6 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     }
   }
 
-  // Check if there are any emissive materials that will create area emitters
   bool has_emissive_materials = false;
   for (const auto& material : data.materials) {
     if ((material.emission.spectrum_index != kInvalidIndex) && (material.emission.spectrum_index < data.spectrum_values.size()) &&
@@ -1981,7 +1970,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
 
   if (data.emitter_profiles.empty() && !has_emissive_materials) {
-    add_atmosphere_emitter({});  // Uses all default parameters
+    add_atmosphere_emitter({});
     context.images.load_images();
   }
 

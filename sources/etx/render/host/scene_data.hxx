@@ -190,7 +190,6 @@ struct SceneLoaderContext {
 
     auto sun_spectrum = SpectralDistribution::from_normalized_black_body(5772.0f, 1.0f);
 
-    // Create sun emitter if sun_scale > 0
     if (params.sun_scale > 0.0f) {
       auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
       instance.profile = uint32_t(data.emitter_profiles.size());
@@ -209,7 +208,6 @@ struct SceneLoaderContext {
       }
     }
 
-    // Create sky emitter if sky_scale > 0
     if (params.sky_scale > 0.0f) {
       uint2 sky_image_dimensions = uint2{kSkyImageBaseDimensions, 2u * kSkyImageBaseDimensions};
       sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * params.quality));

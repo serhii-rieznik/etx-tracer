@@ -26,7 +26,6 @@ namespace etx {
 
 namespace {
 
-// Chunk ID constants
 static constexpr const char* kChunkIdVertexPositions = "Vpos";
 static constexpr const char* kChunkIdVertexNormals = "Vnrm";
 static constexpr const char* kChunkIdVertexTexCoords = "Vtex";
@@ -81,7 +80,6 @@ inline Material::Class material_string_to_class(const char* s) {
   }
 }
 
-// Helper function to compare chunk IDs efficiently
 inline bool chunk_id_equals(const char* chunk_id, const char* expected_id) {
   for (int i = 0; i < sizeof(ChunkHeader::id); ++i) {
     char c1 = chunk_id[i];
@@ -321,7 +319,6 @@ struct SceneSerializationImpl {
     return emitter_spectrum;
   }
 
-  // Writing methods
   bool prepare_data(const SceneData& data) {
     _buffer.clear();
     _string_table.clear();
