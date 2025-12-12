@@ -46,14 +46,22 @@ ETX_GPU_CODE bool medium_intersects_bounds(const Medium& medium, const float3& i
     return false;
   }
 
+  medium_pos = medium.bounds.to_local(in_pos);
+  ETX_CHECK_FINITE(medium_pos);
+
   float3 end_pos = in_pos + in_direction * in_max_t;
   ETX_CHECK_FINITE(end_pos);
   float3 medium_end_pos = medium.bounds.to_local(end_pos);
   ETX_CHECK_FINITE(medium_end_pos);
 
-  medium_pos = medium.bounds.to_local(in_pos);
-  ETX_CHECK_FINITE(medium_pos);
-  medium_dir = normalize(medium_end_pos - medium_pos);
+  medium_dir = medium_end_pos - medium_pos;
+  float d_len = dot(medium_dir, medium_dir);
+  constexpr float kTreshold = kRayEpsilon * kRayEpsilon;
+  if (d_len <= kTreshold) {
+    return false;
+  }
+
+  medium_dir *= 1.0f / sqrtf(d_len);
   ETX_CHECK_FINITE(medium_dir);
 
   world_dir_normalized = normalize(in_direction);
@@ -201,11 +209,11 @@ ETX_GPU_CODE SpectralResponse medium_transmittance(const Scene& scene, const Med
 
         float transmittance_max = transmittance.maximum();
         if (transmittance_max < rr_threshold) {
-          float q = max(0.05f, 0.95f);
-          if (smp.next() < q) {
+          float p = clamp(transmittance_max, 0.01f, 0.95f);
+          if (smp.next() > p) {
             return {spect, 0.0f};
           }
-          transmittance *= (1.0f / (1.0f - q));
+          transmittance *= 1.0f / p;
           ETX_VALIDATE(transmittance);
         }
       }
@@ -222,17 +230,17 @@ ETX_GPU_CODE Medium::Sample sample_medium(const Scene& scene, const Medium& medi
   const float3& w_i, float max_t) {
   ETX_CRITICAL(max_t > 0.0f);
 
+  SpectralResponse scattering_value = medium_scattering(scene, medium, spect);
+  ETX_VALIDATE(scattering_value);
+  SpectralResponse absorption_value = medium_absorption(scene, medium, spect);
+  ETX_VALIDATE(absorption_value);
+  SpectralResponse extinction_value = scattering_value + absorption_value;
+  ETX_VALIDATE(extinction_value);
+  SpectralResponse albedo = calculate_albedo(spect, scattering_value, extinction_value);
+  ETX_VALIDATE(albedo);
+
   switch (medium.cls) {
     case Medium::Class::Homogeneous: {
-      SpectralResponse scattering_value = medium_scattering(scene, medium, spect);
-      ETX_VALIDATE(scattering_value);
-      SpectralResponse absorption_value = medium_absorption(scene, medium, spect);
-      ETX_VALIDATE(absorption_value);
-      SpectralResponse extinction_value = scattering_value + absorption_value;
-      ETX_VALIDATE(extinction_value);
-      SpectralResponse albedo = calculate_albedo(spect, scattering_value, extinction_value);
-      ETX_VALIDATE(albedo);
-
       float t = 0.0f;
       SpectralResponse pdf = {};
       while (t < kRayEpsilon) {
@@ -262,96 +270,85 @@ ETX_GPU_CODE Medium::Sample sample_medium(const Scene& scene, const Medium& medi
     }
 
     case Medium::Class::Heterogeneous: {
-      Medium::Sample result = {};
-
-      SpectralResponse base_extinction = medium_extinction(scene, medium, spect);
-      float max_sigma = base_extinction.maximum();
-      if (max_sigma <= 0.0f) {
+      float max_sigma = extinction_value.maximum();
+      if ((max_sigma <= 0.0f) || (medium.grid.has_data() == false)) {
+        Medium::Sample result = {};
+        result.weight = {spect, 1.0f};
+        result.pos = pos + w_i * max_t;
+        result.sampled_medium_t = 0.0f;
         return result;
       }
 
-      float3 medium_pos = pos;
-      float3 medium_dir = w_i;
+      float3 medium_pos = {};
+      float3 medium_dir = {};
       float t_min = 0.0f;
       float t_max = 0.0f;
       float3 world_dir_normalized = {};
       float3 bbox_size = {};
       if (medium_intersects_bounds(medium, pos, w_i, max_t, medium_pos, medium_dir, t_min, t_max, world_dir_normalized, bbox_size) == false) {
+        Medium::Sample result = {};
+        result.weight = {spect, 1.0f};
+        result.pos = pos + w_i * max_t;
+        result.sampled_medium_t = 0.0f;
         return result;
       }
 
-      SpectralResponse scattering_value = medium_scattering(scene, medium, spect);
+      SpectralResponse pdf = {};
+      uint32_t channel = sample_spectrum_component(spect, albedo, throughput, smp.next(), pdf);
 
+      SpectralResponse transmittance = {spect, 1.0f};
+      const float rr_threshold = 0.1f;
       float t_world = 0.0f;
-      float previous_t_world = 0.0f;
-      SpectralResponse transmittance_exp = {spect, 1.0f};
-      SpectralResponse transmittance_ratio = {spect, 1.0f};
+      float segment_length = t_max - t_min;
 
       while (true) {
         t_world += -logf(1.0f - smp.next()) / max_sigma;
         float3 world_pos_at_t = pos + world_dir_normalized * t_world;
         float3 local_pos = medium.bounds.to_local(world_pos_at_t);
         float t_local_along_dir = dot(local_pos - medium_pos, medium_dir);
-        if (t_local_along_dir >= (t_max - t_min)) {
-          break;
-        }
-
-        float distance_world = max(0.0f, t_world - previous_t_world);
-        float density_value = medium.grid.sample(local_pos, medium.bounds);
-        SpectralResponse extinction_at_point = base_extinction * density_value;
-        transmittance_exp *= exp(-extinction_at_point * distance_world);
-        ETX_VALIDATE(transmittance_exp);
-
-        SpectralResponse weight_ratio = SpectralResponse{spect, 1.0f} - extinction_at_point / max_sigma;
-        weight_ratio = min(max(weight_ratio, 0.0f), 1.0f);
-        transmittance_ratio *= weight_ratio;
-        ETX_VALIDATE(transmittance_ratio);
-
-        const float rr_threshold = 0.1f;
-        float trans_max = transmittance_ratio.maximum();
-        if (trans_max < rr_threshold) {
-          float q = max(0.05f, 0.95f);
-          if (smp.next() < q) {
-            transmittance_exp = {spect, 0.0f};
-            transmittance_ratio = {spect, 0.0f};
-            break;
-          }
-          SpectralResponse scale = SpectralResponse{spect, 1.0f / (1.0f - q)};
-          transmittance_exp *= scale;
-          transmittance_ratio *= scale;
-          ETX_VALIDATE(transmittance_exp);
-          ETX_VALIDATE(transmittance_ratio);
-        }
-
-        previous_t_world = t_world;
-
-        if (density_value * max_sigma == 0.0f) {
-          continue;
-        }
-
-        SpectralResponse scattering_at_point = scattering_value * density_value;
-        SpectralResponse albedo_at_point = calculate_albedo(spect, scattering_at_point, extinction_at_point);
-
-        SpectralResponse pdf = {};
-        uint32_t channel = sample_spectrum_component(spect, albedo_at_point, scattering_at_point, smp.next(), pdf);
-        float sigma_t = extinction_at_point.component(channel);
-        float accept_prob = (max_sigma > 0.0f) ? (sigma_t / max_sigma) : 0.0f;
-        accept_prob = clamp(accept_prob, 0.0f, 1.0f);
-
-        float random = smp.next();
-        if ((sigma_t > 0.0f) && (random < accept_prob)) {
-          SpectralResponse pdf_delta = pdf * (transmittance_exp * extinction_at_point);
-          float pdf_sum = pdf_delta.sum();
-          result.weight = (scattering_at_point * transmittance_exp) / max(kEpsilon, pdf_sum);
+        if (t_local_along_dir >= segment_length) {
+          pdf *= transmittance;
+          Medium::Sample result = {};
+          result.pos = pos + world_dir_normalized * min(t_world, max_t);
+          result.sampled_medium_t = 0.0f;
+          result.weight = pdf.is_zero() ? SpectralResponse{spect, 0.0f} : transmittance / pdf.sum();
           ETX_VALIDATE(result.weight);
-          result.pos = medium.bounds.from_local(local_pos);
-          result.sampled_medium_t = t_world;
           return result;
         }
+
+        float density_value = medium.grid.sample(local_pos, medium.bounds);
+        SpectralResponse extinction_at_point = extinction_value * density_value;
+        float sigma_t_channel = extinction_at_point.component(channel);
+
+        if ((sigma_t_channel > 0.0f) && (smp.next() < sigma_t_channel / max_sigma)) {
+          SpectralResponse scattering_at_point = scattering_value * density_value;
+          pdf *= transmittance * extinction_at_point;
+          if (pdf.is_zero()) {
+            return {{spect, 0.0f}};
+          }
+
+          Medium::Sample result = {};
+          result.pos = world_pos_at_t;
+          result.sampled_medium_t = t_world;
+          result.weight = (transmittance * scattering_at_point) / pdf.sum();
+          ETX_VALIDATE(result.weight);
+          return result;
+        }
+
+        SpectralResponse weight = SpectralResponse{spect, 1.0f} - extinction_at_point / max_sigma;
+        transmittance *= max(0.0f, weight);
+        ETX_VALIDATE(transmittance);
+
+        float transmittance_max = transmittance.maximum();
+        if (transmittance_max < rr_threshold) {
+          float p = fminf(fmaxf(transmittance_max, 0.01f), 0.95f);
+          if (smp.next() > p) {
+            return {{spect, 0.0f}};
+          }
+          transmittance *= 1.0f / p;
+          ETX_VALIDATE(transmittance);
+        }
       }
-      result.weight = transmittance_ratio;
-      result.sampled_medium_t = 0.0f;
-      return result;
     }
 
     default:

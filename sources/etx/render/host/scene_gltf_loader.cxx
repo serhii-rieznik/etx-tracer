@@ -546,18 +546,17 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
     auto self = reinterpret_cast<GltfLoaderState*>(user_pointer);
 
     if (((width == 0) || (height == 0)) && (data_ptr != nullptr)) {
-      bool can_write = std::filesystem::exists("./tmp") || std::filesystem::create_directory("./tmp");
+      uint32_t hash = fnv1a32(data_ptr, data_size, kFnv1a32Begin);
+      char file_name[64] = {};
+      snprintf(file_name, sizeof(file_name), "img-%x.png", hash);
 
-      if (can_write) {
-        char buffer[2048] = {};
-        uint32_t hash = fnv1a32(data_ptr, data_size, kFnv1a32Begin);
-        snprintf(buffer, sizeof(buffer), "./tmp/img-%x.png", hash);
-        if (auto fout = fopen(buffer, "wb")) {
-          if (fwrite(data_ptr, 1, data_size, fout) == data_size) {
-            self->data.gltf_image_mapping[image_index] = self->context.add_image(buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
-          }
-          fclose(fout);
+      char buffer[2048] = {};
+      env().file_in_tmp(file_name, buffer, sizeof(buffer));
+      if (auto fout = fopen(buffer, "wb")) {
+        if (fwrite(data_ptr, 1, data_size, fout) == data_size) {
+          self->data.gltf_image_mapping[image_index] = self->context.add_image(buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         }
+        fclose(fout);
       }
     }
 
@@ -755,10 +754,10 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
                       context.images.add_from_cubemap(cube_face_images, equirect_dimensions, specular_image_options, {rotation_offset, 0.0f}, {1.0f, 1.0f});
 
                     const auto& equirect_image = context.images.get(specular_image_index);
-                    std::filesystem::path tmp_dir = "tmp";
-                    std::filesystem::create_directories(tmp_dir);
                     char exr_filename[512] = {};
-                    snprintf(exr_filename, sizeof(exr_filename), "tmp/specular_env_%zu.exr", light_idx);
+                    char exr_name[64] = {};
+                    snprintf(exr_name, sizeof(exr_name), "specular_env_%zu.exr", light_idx);
+                    env().file_in_tmp(exr_name, exr_filename, sizeof(exr_filename));
                     const char* error = nullptr;
                     if (SaveEXR(reinterpret_cast<const float*>(equirect_image.pixels.f32.a), equirect_dimensions.x, equirect_dimensions.y, 4, false, exr_filename, &error) !=
                         TINYEXR_SUCCESS) {

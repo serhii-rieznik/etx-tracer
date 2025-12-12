@@ -4,6 +4,7 @@
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/film.hxx>
 #include <etx/render/shared/scene.hxx>
+#include <etx/render/shared/scattering.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 #include <etx/util/options.hxx>
 
@@ -52,10 +53,17 @@ struct SceneRepresentation {
   void rebuild_area_emitters();
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
 
+  struct AtmosphereEmitterParameters : public scattering::Parameters {
+    float3 direction = {0.0f, 0.8944f, 0.4472f};  // normalized {0, 2, 1}
+    float angular_diameter_degrees = 0.5422f;
+    float quality = 0.125f;
+    float sun_scale = 6.283185f;  // 2π
+    float sky_scale = 3.141593f;  // π
+  };
+
   uint32_t add_environment_emitter(const float3& color, uint32_t medium_index);
   uint32_t add_directional_emitter(const float3& direction, const float3& color, float angular_diameter_degrees, uint32_t medium_index);
-  void add_atmosphere_emitter(const float3& direction, float angular_diameter_degrees, float quality, float scale, float sun_scale, float sky_scale, float anisotropy,
-    float altitude, float rayleigh, float mie, float ozone);
+  void add_atmosphere_emitter(const AtmosphereEmitterParameters& params);
 
   Camera& camera();
   const Camera& camera() const;

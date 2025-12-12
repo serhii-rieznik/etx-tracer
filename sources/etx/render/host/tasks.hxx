@@ -28,13 +28,13 @@ struct TaskScheduler {
 
   void register_thread();
 
-  Task::Handle schedule(uint32_t range, Task*);
-  Task::Handle schedule(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
+  Task::Handle schedule(uint64_t range, Task*);
+  Task::Handle schedule(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
-  void execute(uint32_t range, Task*);
-  void execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
+  void execute(uint64_t range, Task*);
+  void execute(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
-  void execute_linear(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
+  void execute_linear(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
   bool completed(Task::Handle);
   void wait(Task::Handle&);

@@ -15,6 +15,13 @@ struct Environment {
   // not thread save, uses static data storage, use at your own risk
   const char* file_in_data(const char*);
 
+  const char* tmp_folder();
+
+  const char* file_in_tmp(const char* f, char buffer[], uint64_t buffer_size);
+  const char* file_in_tmp(const char*);
+
+  void clear_tmp_folder();
+
   void setup(const char* executable_path);
   const char* current_directory() const;
   std::string to_project_relative(const std::string& path) const;

@@ -231,8 +231,8 @@ uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* v
   return _private->add(cls, id, volume, absorption_index, scattering_index, g, explicit_connections);
 }
 
-uint32_t MediumPool::add_noise(Medium::Class cls, const std::string& id, DensityGrid::NoiseFunction noise_type, uint32_t absorption_index, uint32_t scattering_index,
-  float anisotropy, bool explicit_connections, float noise_scale, uint32_t noise_octaves, float noise_lacunarity, float noise_persistence, uint32_t noise_seed, float noise_power,
+uint32_t MediumPool::add_noise(Medium::Class cls, const std::string& id, NoiseFunction noise_type, uint32_t absorption_index, uint32_t scattering_index, float anisotropy,
+  bool explicit_connections, float noise_scale, uint32_t noise_octaves, float noise_lacunarity, float noise_persistence, uint32_t noise_seed, float noise_power,
   const float3& noise_offset) {
   auto existing = _private->mapping.find(id);
   if (existing != _private->mapping.end()) {

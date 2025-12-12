@@ -509,6 +509,7 @@ struct SceneRepresentationImpl {
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
 
   void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
+  void add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params);
 
   // Shared post-loading functions
   bool finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len, bool force_tangents,
@@ -746,61 +747,12 @@ uint32_t SceneRepresentation::add_directional_emitter(const float3& direction, c
   return uint32_t(_private->data.emitter_instances.size() - 1);
 }
 
-void SceneRepresentation::add_atmosphere_emitter(const float3& direction, float angular_diameter_degrees, float quality, float scale, float sun_scale, float sky_scale,
-  float anisotropy, float altitude, float rayleigh, float mie, float ozone) {
-  const float3 normalized_direction = normalize(direction);
-  const float angular_size = angular_diameter_degrees * kPi / 180.0f;
+void SceneRepresentation::add_atmosphere_emitter(const AtmosphereEmitterParameters& params) {
+  _private->add_atmosphere_emitter(params);
+}
 
-  scattering::Parameters scattering_parameters = {};
-  scattering_parameters.anisotropy = anisotropy;
-  scattering_parameters.altitude = altitude;
-  scattering_parameters.rayleigh_scale = rayleigh;
-  scattering_parameters.mie_scale = mie;
-  scattering_parameters.ozone_scale = ozone;
-
-  const float radiance_scale = scale * (kDoublePi * (1.0f - cosf(0.5f * angular_size)));
-  auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, radiance_scale);
-
-  constexpr uint2 kSunImageDimensions = uint2{128u, 128u};
-  constexpr uint32_t kSkyImageBaseDimensions = 1024u;
-
-  uint2 sky_image_dimensions = uint2{2u * kSkyImageBaseDimensions, kSkyImageBaseDimensions};
-  sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * quality));
-  sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * quality));
-
-  {
-    auto& instance = _private->data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
-    instance.profile = uint32_t(_private->data.emitter_profiles.size());
-
-    auto& d = _private->data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
-    d.emission.spectrum_index = _private->data.add_spectrum(sun_spectrum);
-    _private->data.spectrum_values[d.emission.spectrum_index].scale(sun_scale);
-    d.angular_size = angular_size;
-    d.direction = normalized_direction;
-
-    if (angular_size > 0.0f) {
-      d.emission.image_index = _private->context.add_image(nullptr, kSunImageDimensions, Image::Delay, {}, {1.0f, 1.0f});
-      auto& img = _private->context.images.get(d.emission.image_index);
-      scattering::generate_sun_image(scattering_parameters, kSunImageDimensions, normalized_direction, angular_size, img.pixels.f32.a, _private->context.scattering_spectrums,
-        _private->scheduler);
-    }
-  }
-
-  {
-    auto& instance = _private->data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-    instance.profile = uint32_t(_private->data.emitter_profiles.size());
-
-    auto& e = _private->data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
-    e.emission.spectrum_index = _private->data.add_spectrum(sun_spectrum);
-    _private->data.spectrum_values[e.emission.spectrum_index].scale(sky_scale);
-    uint32_t image_options = Image::BuildSamplingTable | Image::Delay;
-    e.emission.image_index = _private->context.add_image(nullptr, sky_image_dimensions, image_options, {}, {1.0f, 1.0f});
-    e.direction = normalized_direction;
-
-    auto& img = _private->context.images.get(e.emission.image_index);
-    scattering::generate_sky_image(scattering_parameters, sky_image_dimensions, normalized_direction, _private->data.atmosphere_extinction, img.pixels.f32.a,
-      _private->context.scattering_spectrums, _private->scheduler);
-  }
+void SceneRepresentationImpl::add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params) {
+  context.add_atmosphere_emitter(params, data, scene, scheduler);
 }
 
 template <class T>
@@ -2029,25 +1981,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
 
   if (data.emitter_profiles.empty() && !has_emissive_materials) {
-    MaterialDefinition default_atmosphere{
-      "et::atmosphere",
-      {
-        {"direction", "0.0 2.0 1.0"},
-        {"quality", ETX_DEBUG ? "0.0625" : "0.125"},
-        {"angular_diameter", "0.5422"},
-        {"anisotropy", "0.825"},
-        {"altitude", "1000.0"},
-        {"scale", "1.0"},
-        {"sky_scale", "1.0"},
-        {"sun_scale", "1.0"},
-        {"rayleigh", "1.0"},
-        {"mie", "1.0"},
-        {"ozone", "1.0"},
-      },
-    };
-
-    SceneSerialization serialization;
-    serialization.parse_material_definitions(base_folder, {default_atmosphere}, data, context, scene, ior_database, scheduler);
+    add_atmosphere_emitter({});  // Uses all default parameters
     context.images.load_images();
   }
 

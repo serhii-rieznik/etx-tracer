@@ -19,7 +19,7 @@ struct MediumPool {
 
   uint32_t add(Medium::Class cls, const std::string&, const char* volume, uint32_t absorption_index, uint32_t scattering_index, float anisotropy, bool explicit_connections);
 
-  uint32_t add_noise(Medium::Class cls, const std::string&, DensityGrid::NoiseFunction noise_type, uint32_t absorption_index, uint32_t scattering_index, float anisotropy,
+  uint32_t add_noise(Medium::Class cls, const std::string&, NoiseFunction noise_type, uint32_t absorption_index, uint32_t scattering_index, float anisotropy,
     bool explicit_connections, float noise_scale, uint32_t noise_octaves, float noise_lacunarity, float noise_persistence, uint32_t noise_seed, float noise_power,
     const float3& noise_offset);
 

@@ -2,6 +2,7 @@
 #include <etx/core/debug.hxx>
 
 #include <filesystem>
+#include <cstdlib>
 
 #include <string.h>
 #include <stdio.h>
@@ -36,9 +37,27 @@ inline static void normalize_path(char buffer[]) {
 
 static struct {
   char data_folder[2048] = {};
+  char tmp_folder[2048] = {};
   char current_directory[2048] = {};
   Environment e;
 } _env;
+
+static void ensure_tmp_directory() {
+  if (_env.tmp_folder[0] == 0)
+    return;
+
+  std::error_code ec;
+  std::filesystem::create_directories(_env.tmp_folder, ec);
+}
+
+static void clear_directory(const char* path) {
+  if ((path == nullptr) || (path[0] == 0))
+    return;
+
+  std::error_code ec;
+  std::filesystem::remove_all(path, ec);
+  std::filesystem::create_directories(path, ec);
+}
 
 const char* Environment::data_folder() {
   return _env.data_folder;
@@ -53,6 +72,28 @@ const char* Environment::file_in_data(const char* f, char buffer[], uint64_t buf
 const char* Environment::file_in_data(const char* f) {
   static char buffer[2048] = {};
   return file_in_data(f, buffer, sizeof(buffer));
+}
+
+const char* Environment::tmp_folder() {
+  ensure_tmp_directory();
+  return _env.tmp_folder;
+}
+
+const char* Environment::file_in_tmp(const char* f, char buffer[], uint64_t buffer_size) {
+  ensure_tmp_directory();
+  snprintf(buffer, buffer_size, "%s%s", _env.tmp_folder, f);
+  normalize_path(buffer);
+  return buffer;
+}
+
+const char* Environment::file_in_tmp(const char* f) {
+  static char buffer[2048] = {};
+  return file_in_tmp(f, buffer, sizeof(buffer));
+}
+
+void Environment::clear_tmp_folder() {
+  ensure_tmp_directory();
+  clear_directory(_env.tmp_folder);
 }
 
 void Environment::setup(const char* executable_path) {
@@ -72,6 +113,18 @@ void Environment::setup(const char* executable_path) {
 #endif
   get_file_folder(executable_path, _env.data_folder, sizeof(_env.data_folder));
   snprintf(_env.current_directory, sizeof(_env.current_directory), "%s", _env.data_folder);
+
+  snprintf(_env.tmp_folder, sizeof(_env.tmp_folder), "%stmp%c", _env.data_folder, kDelimiter);
+  normalize_path(_env.tmp_folder);
+  clear_tmp_folder();
+
+  static bool cleanup_registered = false;
+  if (cleanup_registered == false) {
+    cleanup_registered = true;
+    atexit([]() {
+      env().clear_tmp_folder();
+    });
+  }
 }
 
 const char* Environment::current_directory() const {

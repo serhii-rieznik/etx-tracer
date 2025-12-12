@@ -434,12 +434,12 @@ ETX_GPU_CODE bool valid_value(const SpectralResponse& v) {
 
 #if (ETX_DEBUG || ETX_FORCE_VALIDATION)
 template <>
-ETX_GPU_CODE void print_invalid_value<complex>(const char* name, const complex& z, const char* filename, uint32_t line) {
+ETX_GPU_CODE void print_value<complex>(const char* name, const complex& z, const char* filename, uint32_t line) {
   printf("Validation failed: %s (%f + i * %f) at %s [%u]\n", name, z.real(), z.imag(), filename, line);
 }
 
 template <>
-ETX_GPU_CODE void print_invalid_value<SpectralResponse>(const char* name, const SpectralResponse& v, const char* filename, uint32_t line) {
+ETX_GPU_CODE void print_value<SpectralResponse>(const char* name, const SpectralResponse& v, const char* filename, uint32_t line) {
   printf("Validation failed: %s (%f : %f %f %f / %f) at %s [%u]\n", name, v.wavelength, v.integrated.x, v.integrated.y, v.integrated.z, v.value, filename, line);
 }
 #endif

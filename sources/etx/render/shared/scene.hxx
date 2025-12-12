@@ -275,13 +275,12 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
     return false;
   }
 
-  float q = min(0.95f, max_t);
-  if ((q > 0.0f) && (smp.next() < q)) {
-    throughput *= (1.0f / q);
-    return true;
-  }
+  float p = clamp(max_t, 0.01f, 0.95f);
+  if (smp.next() > p)
+    return false;
 
-  return false;
+  throughput *= 1.0f / p;
+  return true;
 }
 
 ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {

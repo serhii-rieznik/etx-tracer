@@ -88,14 +88,14 @@ void TaskScheduler::register_thread() {
   _private->scheduler.RegisterExternalTaskThread();
 }
 
-Task::Handle TaskScheduler::schedule(uint32_t range, Task* t) {
+Task::Handle TaskScheduler::schedule(uint64_t range, Task* t) {
   auto handle = _private->task_pool.alloc(t, range, 1u);
   auto& task_wrapper = _private->task_pool.get(handle);
   _private->scheduler.AddTaskSetToPipe(&task_wrapper);
   return {handle};
 }
 
-Task::Handle TaskScheduler::schedule(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
+Task::Handle TaskScheduler::schedule(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
   auto func_task_handle = _private->function_task_pool.alloc(func);
   auto& func_task = _private->function_task_pool.get(func_task_handle);
 
@@ -108,18 +108,18 @@ Task::Handle TaskScheduler::schedule(uint32_t range, std::function<void(uint32_t
   return {task_handle};
 }
 
-void TaskScheduler::execute(uint32_t range, Task* t) {
+void TaskScheduler::execute(uint64_t range, Task* t) {
   auto handle = schedule(range, t);
   wait(handle);
 }
 
-void TaskScheduler::execute(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
+void TaskScheduler::execute(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
   auto handle = schedule(range, func);
   wait(handle);
 }
 
-void TaskScheduler::execute_linear(uint32_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
-  func(0u, range, 0u);
+void TaskScheduler::execute_linear(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
+  func(0u, static_cast<uint32_t>(range), 0u);
 }
 
 bool TaskScheduler::completed(Task::Handle handle) {

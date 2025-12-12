@@ -16,15 +16,6 @@ struct RaytracingImpl {
   RTCDevice rt_device = {};
   RTCScene rt_scene = {};
 
-  /*
-  GPUDevice* gpu_device = nullptr;
-  struct {
-    Scene scene = {};
-    GPUAccelerationStructure accel = {};
-    std::vector<GPUBuffer> buffers = {};
-  } gpu = {};
-  */
-
   RaytracingImpl()
     : film(scheduler) {
     rt_device = rtcNewDevice(nullptr);

@@ -1358,7 +1358,7 @@ struct SceneSerializationImpl {
       memcpy(buffer, _data_buffer, kDataBufferSize);
       auto params = split_params(buffer);
 
-      DensityGrid::NoiseFunction noise_type = DensityGrid::NoiseFunction::Perlin;
+      NoiseFunction noise_type = NoiseFunction::Perlin;
       float noise_scale = 1.0f;
       uint32_t noise_octaves = 1u;
       float noise_lacunarity = 2.0f;
@@ -1374,8 +1374,8 @@ struct SceneSerializationImpl {
         if ((strcmp(params[i], "type") == 0) && (i + 1 < e)) {
           uint32_t val = 0u;
           if (sscanf(params[i + 1], "%u", &val) == 1) {
-            uint32_t max_noise_type = static_cast<uint32_t>(DensityGrid::NoiseFunction::Lattice);
-            noise_type = static_cast<DensityGrid::NoiseFunction>(min(val, max_noise_type));
+            uint32_t noise_count = static_cast<uint32_t>(NoiseFunction::Count);
+            noise_type = static_cast<NoiseFunction>(min(val, noise_count - 1u));
           }
           i += 1;
         } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
@@ -1526,40 +1526,32 @@ struct SceneSerializationImpl {
   void parse_atmosphere_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database,
     TaskScheduler& scheduler) {
     float quality = 1.0f;
+    float sun_scale = kDoublePi;  // Default: 2π
+    float sky_scale = kPi;        // Default: π
+    float3 direction = normalize(float3{1.0f, 1.0f, 1.0f});
+    float angular_diameter_degrees = 0.5422f;
+
+    scattering::Parameters scattering_params = {};
+
+    // Parse parameters
     if (get_param(material, "quality")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
         quality = val;
       }
     }
-
-    float scale = 1.0f;
-    if (get_param(material, "scale")) {
-      float val = {};
-      if (sscanf(_data_buffer, "%f", &val) == 1) {
-        scale = val;
-      }
-    }
-    float sun_scale = 1.0f;
     if (get_param(material, "sun_scale")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
         sun_scale = val;
       }
     }
-    float sky_scale = 1.0f;
     if (get_param(material, "sky_scale")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
         sky_scale = val;
       }
     }
-
-    float3 direction = normalize(float3{1.0f, 1.0f, 1.0f});
-    float angular_size = 0.5422f * (kPi / 180.0f);
-
-    scattering::Parameters scattering_parameters = {};
-
     if (get_param(material, "direction")) {
       float value[3] = {};
       if (sscanf(_data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
@@ -1569,81 +1561,45 @@ struct SceneSerializationImpl {
     if (get_param(material, "angular_diameter")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
-        angular_size = val * (kPi / 180.0f);
+        angular_diameter_degrees = val;
       }
     }
     if (get_param(material, "anisotropy")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
-        scattering_parameters.anisotropy = val;
+        scattering_params.anisotropy = val;
       }
     }
     if (get_param(material, "altitude")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
-        scattering_parameters.altitude = val;
+        scattering_params.altitude = val;
       }
     }
     if (get_param(material, "rayleigh")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
-        scattering_parameters.rayleigh_scale = val;
+        scattering_params.rayleigh_scale = val;
       }
     }
     if (get_param(material, "mie")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
-        scattering_parameters.mie_scale = val;
+        scattering_params.mie_scale = val;
       }
     }
     if (get_param(material, "ozone")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
-        scattering_parameters.ozone_scale = val;
+        scattering_params.ozone_scale = val;
       }
     }
 
-    float radiance_scale = scale * (kDoublePi * (1.0f - cosf(0.5f * angular_size)));
-    auto sun_spectrum = SpectralDistribution::from_black_body(5900.0f, radiance_scale);
+    // Create atmosphere emitter parameters and call the unified method
+    SceneRepresentation::AtmosphereEmitterParameters params{scattering_params.anisotropy, scattering_params.altitude, scattering_params.rayleigh_scale, scattering_params.mie_scale,
+      scattering_params.ozone_scale, direction, angular_diameter_degrees, quality, sun_scale, sky_scale};
 
-    constexpr uint2 kSunImageDimensions = uint2{128u, 128u};
-    constexpr uint32_t kSkyImageBaseDimensions = 1024u;
-
-    uint2 sky_image_dimensions = uint2{2u * kSkyImageBaseDimensions, kSkyImageBaseDimensions};
-    sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * quality));
-    sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * quality));
-
-    {
-      auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
-      instance.profile = uint32_t(data.emitter_profiles.size());
-
-      auto& d = data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
-      d.emission.spectrum_index = data.add_spectrum(sun_spectrum);
-      data.spectrum_values[d.emission.spectrum_index].scale(sun_scale);
-      d.angular_size = angular_size;
-      d.direction = direction;
-
-      if (angular_size > 0.0f) {
-        d.emission.image_index = context.add_image(nullptr, kSunImageDimensions, Image::Delay, {}, {1.0f, 1.0f});
-        auto& img = context.images.get(d.emission.image_index);
-        scattering::generate_sun_image(scattering_parameters, kSunImageDimensions, direction, angular_size, img.pixels.f32.a, context.scattering_spectrums, scheduler);
-      }
-    }
-
-    {
-      auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-      instance.profile = uint32_t(data.emitter_profiles.size());
-
-      auto& e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
-      e.emission.spectrum_index = data.add_spectrum(sun_spectrum);
-      data.spectrum_values[e.emission.spectrum_index].scale(sky_scale);
-      uint32_t image_options = Image::BuildSamplingTable | Image::Delay;
-      e.emission.image_index = context.add_image(nullptr, sky_image_dimensions, image_options, {}, {1.0f, 1.0f});
-      e.direction = direction;
-
-      auto& img = context.images.get(e.emission.image_index);
-      scattering::generate_sky_image(scattering_parameters, sky_image_dimensions, direction, data.atmosphere_extinction, img.pixels.f32.a, context.scattering_spectrums, scheduler);
-    }
+    context.add_atmosphere_emitter(params, data, scene, scheduler);
   }
 
   void parse_spectrum(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database) {

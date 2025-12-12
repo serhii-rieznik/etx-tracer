@@ -458,7 +458,7 @@ void RTApplication::on_emitter_added(uint32_t type) {
       break;
     }
     case 2: {  // Atmosphere
-      scene.add_atmosphere_emitter({0.0f, 2.0f, 1.0f}, 0.5422f, 0.125f, 1.0f, 1.0f, 1.0f, 0.825f, 1000.0f, 1.0f, 1.0f, 1.0f);
+      scene.add_atmosphere_emitter({0.825f, 1000.0f, 1.0f, 1.0f, 1.0f, {0.0f, 2.0f, 1.0f}, 0.5422f, 0.125f, kDoublePi, kPi});
       break;
     }
   }

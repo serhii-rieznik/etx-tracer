@@ -298,11 +298,10 @@ PrimitiveLoadResult handle_infinite_sphere_cap(const nlohmann::json& prim, Scene
   return r;
 }
 
-PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, SceneLoaderContext& context, TaskScheduler& scheduler) {
-  constexpr uint32_t kSkyImageBaseDimensions = 256u;
-  constexpr uint2 sky_image_dimensions = uint2{kSkyImageBaseDimensions, 2u * kSkyImageBaseDimensions};
-
+PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, SceneLoaderContext& context, Scene& scene, TaskScheduler& scheduler) {
   PrimitiveLoadResult r = {};
+
+  // Parse Tungsten skydome parameters
   float temperature = prim.value("temperature", 5777.0f);
   float intensity = prim.value("intensity", 2.0f);
   float turbidity = prim.value("turbidity", 3.0f);
@@ -315,26 +314,27 @@ PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, 
 
   float3 sun_dir = normalize(rotate_yxz_deg(float3{0.0f, 1.0f, 0.0f}, rotation));
   const float sun_angular_diameter_deg = 0.53f;
-  const float angular_size = sun_angular_diameter_deg * kPi / 180.0f;
 
-  scattering::Parameters scattering_parameters = {};
-  scattering_parameters.mie_scale = turbidity / 3.0f;  // Tungsten default turbidity is 3
+  // Map Tungsten parameters to our unified atmosphere system
+  // Tungsten skydome is simple: only mie_scale based on turbidity
+  scattering::Parameters scattering_params = {};
+  scattering_params.mie_scale = turbidity / 3.0f;  // Tungsten default turbidity is 3
 
-  SpectralDistribution sun_spectrum = SpectralDistribution::from_normalized_black_body(temperature, intensity);
+  // Use reasonable defaults for missing parameters
+  scattering_params.anisotropy = 0.825f;    // Default anisotropy
+  scattering_params.altitude = 1000.0f;     // Default altitude
+  scattering_params.rayleigh_scale = 1.0f;  // Default rayleigh
+  scattering_params.ozone_scale = 1.0f;     // Default ozone
 
-  uint32_t profile_index = static_cast<uint32_t>(data.emitter_profiles.size());
-  auto& e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
-  e.emission.spectrum_index = data.add_spectrum(sun_spectrum);
-  e.emission.image_index = context.add_image(nullptr, sky_image_dimensions, Image::BuildSamplingTable | Image::Delay, {}, {1.0f, 1.0f});
-  e.direction = sun_dir;
-  e.medium_index = kInvalidIndex;
+  // Tungsten skydome only creates sky, not sun emitter
+  float sun_scale = 0.0f;       // No sun emitter for Tungsten skydome
+  float sky_scale = intensity;  // Use intensity for sky brightness
+  float quality = 0.5f;         // Lower quality for Tungsten compatibility
 
-  auto& img = context.images.get(e.emission.image_index);
-  scattering::generate_sky_image(scattering_parameters, sky_image_dimensions, sun_dir, data.atmosphere_extinction, img.pixels.f32.a, context.scattering_spectrums, scheduler);
+  SceneRepresentation::AtmosphereEmitterParameters params{scattering_params.anisotropy, scattering_params.altitude, scattering_params.rayleigh_scale, scattering_params.mie_scale,
+    scattering_params.ozone_scale, sun_dir, sun_angular_diameter_deg, quality, sun_scale, sky_scale};
 
-  auto& inst = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-  inst.profile = profile_index;
-  inst.triangle_index = kInvalidIndex;
+  context.add_atmosphere_emitter(params, data, scene, scheduler);
 
   r.loaded = true;
   return r;
@@ -1402,7 +1402,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
     }
 
     if (type == "skydome") {
-      PrimitiveLoadResult r = handle_skydome(prim, data, context, scheduler);
+      PrimitiveLoadResult r = handle_skydome(prim, data, context, scene, scheduler);
       primitives_loaded = primitives_loaded || r.loaded;
       load_flags |= r.flags;
       continue;

@@ -1382,27 +1382,11 @@ bool UI::build_medium(Scene& scene, Medium& m) {
   if (ImGui::Combo("##medium_type", &medium_type_idx, medium_type_names, 2)) {
     if (medium_type_idx == 0) {
       m.cls = Medium::Class::Homogeneous;
-      m.grid.type = DensityGrid::Type::Texture3D;
-      m.grid.density = {};
-      m.grid.dimensions = {};
       changed = true;
     } else {
       m.cls = Medium::Class::Heterogeneous;
-      if (m.grid.type != DensityGrid::Type::NoiseFunction) {
-        m.grid.type = DensityGrid::Type::NoiseFunction;
-        m.grid.noise_type = DensityGrid::NoiseFunction::Perlin;
-        m.grid.noise.scale = 1.0f;
-        m.grid.noise.octaves = 1u;
-        m.grid.noise.lacunarity = 2.0f;
-        m.grid.noise.persistence = 0.5f;
-        m.grid.noise.seed = 0u;
-        m.grid.noise.power = 1.0f;
-        m.grid.noise.sharpness = 1.0f;
-        m.grid.noise.offset = {};
-        m.grid.noise.enable_border_fade = 0u;
-        m.grid.noise.border_fade_distance = 0.1f;
-        changed = true;
-      }
+      m.grid.type = DensityGrid::Type::NoiseFunction;
+      changed = true;
     }
   }
 
@@ -1440,11 +1424,11 @@ bool UI::build_medium(Scene& scene, Medium& m) {
     } else if (m.grid.type == DensityGrid::Type::NoiseFunction) {
       ImGui::Text("Density grid (Noise Function)");
       ImGui::Text("Noise Type");
-      const char* noise_names[] = {"Perlin", "Worley", "Billow", "Voronoi", "Lattice"};
+      const char* noise_names[] = {"Perlin", "Worley", "Billow", "Voronoi", "Lattice", "Uniform"};
       int32_t noise_idx = static_cast<int32_t>(m.grid.noise_type);
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::Combo("##medium_noise_type", &noise_idx, noise_names, 5)) {
-        m.grid.noise_type = static_cast<DensityGrid::NoiseFunction>(noise_idx);
+      if (ImGui::Combo("##medium_noise_type", &noise_idx, noise_names, static_cast<int32_t>(NoiseFunction::Count))) {
+        m.grid.noise_type = static_cast<NoiseFunction>(noise_idx);
         changed = true;
       }
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);

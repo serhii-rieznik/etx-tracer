@@ -4,6 +4,17 @@
 
 namespace etx {
 
+enum class NoiseFunction : uint32_t {
+  Perlin,
+  Worley,
+  Billow,
+  Voronoi,
+  Lattice,
+  Uniform,
+
+  Count,
+};
+
 namespace {
 
 ETX_GPU_CODE float fade(float t) {
@@ -195,7 +206,7 @@ ETX_GPU_CODE float lattice_noise_3d(const float3& pos, uint32_t seed) {
   return sqrtf(min_dist_sq);
 }
 
-ETX_GPU_CODE float fbm_noise_3d(const float3& pos, uint32_t noise_type, uint32_t seed, float scale, uint32_t octaves, float lacunarity, float persistence, float power) {
+ETX_GPU_CODE float fbm_noise_3d(const float3& pos, NoiseFunction noise_type, uint32_t seed, float scale, uint32_t octaves, float lacunarity, float persistence, float power) {
   float value = 0.0f;
   float amplitude = 1.0f;
   float frequency = scale;
@@ -209,16 +220,27 @@ ETX_GPU_CODE float fbm_noise_3d(const float3& pos, uint32_t noise_type, uint32_t
 
     float3 sample_pos = pos * frequency;
     float n = 0.0f;
-    if (noise_type == 0u) {
-      n = perlin_noise_3d(sample_pos, seed + i);
-    } else if (noise_type == 1u) {
-      n = worley_noise_3d(sample_pos, seed + i);
-    } else if (noise_type == 2u) {
-      n = fabsf(perlin_noise_3d(sample_pos, seed + i));
-    } else if (noise_type == 3u) {
-      n = voronoi_noise_3d(sample_pos, seed + i);
-    } else if (noise_type == 4u) {
-      n = lattice_noise_3d(sample_pos, seed + i);
+    switch (noise_type) {
+      case NoiseFunction::Perlin:
+        n = perlin_noise_3d(sample_pos, seed + i);
+        break;
+      case NoiseFunction::Worley:
+        n = worley_noise_3d(sample_pos, seed + i);
+        break;
+      case NoiseFunction::Billow:
+        n = fabsf(perlin_noise_3d(sample_pos, seed + i));
+        break;
+      case NoiseFunction::Voronoi:
+        n = voronoi_noise_3d(sample_pos, seed + i);
+        break;
+      case NoiseFunction::Lattice:
+        n = lattice_noise_3d(sample_pos, seed + i);
+        break;
+      case NoiseFunction::Uniform:
+        n = 1.0f;
+        break;
+      case NoiseFunction::Count:
+        break;
     }
     value += n * amplitude;
     max_amplitude_sum += amplitude;
@@ -249,14 +271,6 @@ struct ETX_ALIGNED DensityGrid {
   enum class Type : uint16_t {
     Texture3D,
     NoiseFunction,
-  };
-
-  enum class NoiseFunction : uint16_t {
-    Perlin,
-    Worley,
-    Billow,
-    Voronoi,
-    Lattice,
   };
 
   Type type = Type::Texture3D;
@@ -310,7 +324,7 @@ struct ETX_ALIGNED DensityGrid {
       (max_dimension > kEpsilon) ? (world_pos.y / max_dimension) : world_pos.y,
       (max_dimension > kEpsilon) ? (world_pos.z / max_dimension) : world_pos.z,
     };
-    float n = fbm_noise_3d(normalized_world_pos, static_cast<uint32_t>(noise_type), noise.seed, noise.scale, noise.octaves, noise.lacunarity, noise.persistence, 1.0f);
+    float n = fbm_noise_3d(normalized_world_pos, noise_type, noise.seed, noise.scale, noise.octaves, noise.lacunarity, noise.persistence, 1.0f);
 
     if (noise.enable_border_fade != 0u) {
       float dist_to_min_x = local_coord.x;

@@ -292,7 +292,9 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
     });
     auto t2 = std::chrono::steady_clock::now();
     log::info("Precomputed extinction image: %.3f ms", (t2 - t1).count() / 1.0e+6);
-    stbi_write_hdr(env().file_in_data("optical-len.hdr"), kExtinctionImageWidth, kExtinctionImageHeight, 4, &image->x);
+    char path[2048] = {};
+    env().file_in_tmp("optical-len.hdr", path, sizeof(path));
+    stbi_write_hdr(path, kExtinctionImageWidth, kExtinctionImageHeight, 4, &image->x);
   }
 
   log::info("Generating sky image %u x %u...", dimensions.x, dimensions.y);
@@ -346,7 +348,9 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
   auto t1 = std::chrono::steady_clock::now();
   auto duration = (t1 - t0).count() / 1.0e+6;
   log::info("Sky image generated: %.3f ms (%.3f ms/pixel)", duration, duration / double(dimensions.x * dimensions.y));
-  stbi_write_hdr(env().file_in_data("sky.hdr"), dimensions.x, dimensions.y, 4, &buffer->x);
+  char path[2048] = {};
+  env().file_in_tmp("sky.hdr", path, sizeof(path));
+  stbi_write_hdr(path, dimensions.x, dimensions.y, 4, &buffer->x);
 }
 
 void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer,
@@ -380,7 +384,9 @@ void generate_sun_image(const Parameters& parameters, const uint2& dimensions, c
   auto t1 = std::chrono::steady_clock::now();
   auto duration = (t1 - t0).count() / 1.0e+6;
   log::info("Sun image generated: %.3f ms (%.3f ms/pixel)", duration, duration / double(dimensions.x * dimensions.y));
-  stbi_write_hdr(env().file_in_data("sun.hdr"), dimensions.x, dimensions.y, 4, &buffer->x);
+  char path[2048] = {};
+  env().file_in_tmp("sun.hdr", path, sizeof(path));
+  stbi_write_hdr(path, dimensions.x, dimensions.y, 4, &buffer->x);
 }
 
 }  // namespace scattering

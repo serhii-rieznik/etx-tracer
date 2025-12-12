@@ -8,6 +8,7 @@
 #include <etx/render/shared/scattering.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
+#include <etx/render/host/scene_representation.hxx>
 
 #include <cstdint>
 #include <string>
@@ -179,6 +180,54 @@ struct SceneLoaderContext {
 
     std::string id = name && name[0] ? name : ("medium-" + std::to_string(mediums.array_size()));
     return mediums.add(cls, id, volume_file, absorption_index, scattering_index, g, explicit_connections);
+  }
+
+  void add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params, SceneData& data, Scene& scene, TaskScheduler& scheduler) {
+    const float3 normalized_direction = normalize(params.direction);
+
+    constexpr uint2 kSunImageDimensions = uint2{128u, 128u};
+    constexpr uint32_t kSkyImageBaseDimensions = 1024u;
+
+    auto sun_spectrum = SpectralDistribution::from_normalized_black_body(5772.0f, 1.0f);
+
+    // Create sun emitter if sun_scale > 0
+    if (params.sun_scale > 0.0f) {
+      auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
+      instance.profile = uint32_t(data.emitter_profiles.size());
+
+      auto& d = data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
+      d.emission.spectrum_index = data.add_spectrum(sun_spectrum);
+      d.angular_size = params.angular_diameter_degrees * kPi / 180.0f;
+      d.direction = normalized_direction;
+
+      data.spectrum_values[d.emission.spectrum_index].scale(params.sun_scale);
+
+      if (d.angular_size > 0.0f) {
+        d.emission.image_index = add_image(nullptr, kSunImageDimensions, Image::Delay, {}, {1.0f, 1.0f});
+        auto& img = images.get(d.emission.image_index);
+        scattering::generate_sun_image(params, kSunImageDimensions, normalized_direction, d.angular_size, img.pixels.f32.a, scattering_spectrums, scheduler);
+      }
+    }
+
+    // Create sky emitter if sky_scale > 0
+    if (params.sky_scale > 0.0f) {
+      uint2 sky_image_dimensions = uint2{kSkyImageBaseDimensions, 2u * kSkyImageBaseDimensions};
+      sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * params.quality));
+      sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * params.quality));
+
+      auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
+      instance.profile = uint32_t(data.emitter_profiles.size());
+
+      auto& e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
+      e.emission.spectrum_index = data.add_spectrum(sun_spectrum);
+      e.emission.image_index = add_image(nullptr, sky_image_dimensions, Image::BuildSamplingTable | Image::Delay, {}, {1.0f, 1.0f});
+      e.direction = normalized_direction;
+
+      data.spectrum_values[e.emission.spectrum_index].scale(params.sky_scale);
+
+      auto& img = images.get(e.emission.image_index);
+      scattering::generate_sky_image(params, sky_image_dimensions, normalized_direction, data.atmosphere_extinction, img.pixels.f32.a, scattering_spectrums, scheduler);
+    }
   }
 };
 
