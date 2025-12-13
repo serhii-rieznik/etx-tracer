@@ -112,7 +112,6 @@ struct SceneRepresentationImpl {
   TaskScheduler& scheduler;
   Scene scene;
   SceneData data;
-  SceneLoaderContext context;
   Camera active_camera;
   std::mutex mt;
 
@@ -186,27 +185,27 @@ struct SceneRepresentationImpl {
 
   SceneRepresentationImpl(TaskScheduler& s, const IORDatabase& db)
     : scheduler(s)
-    , context(s)
+    , data(s)
     , ior_database(db) {
-    context.images.init(1024u);
-    context.mediums.init(1024u);
-    scattering::init(scheduler, context.scattering_spectrums, data.atmosphere_extinction);
+    data.images.init(1024u);
+    data.mediums.init(1024u);
+    scattering::init(scheduler, data.scattering_spectrums, data.atmosphere_extinction);
     build_camera(active_camera, {5.0f, 5.0f, 5.0f}, normalize(float3{0.0f, 0.0f, 0.0f} - float3{5.0f, 5.0f, 5.0f}), kWorldUp, {1280u, 720u}, 26.99f);
   }
 
   ~SceneRepresentationImpl() {
     cleanup();
-    context.images.free_image(data.atmosphere_extinction);
-    context.images.cleanup();
-    context.mediums.cleanup();
+    data.images.free_image(data.atmosphere_extinction);
+    data.images.cleanup();
+    data.mediums.cleanup();
   }
 
   void init_default_values() {
     scene.black_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
     scene.white_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
-    scene.rayleigh_spectrum = data.add_spectrum(context.scattering_spectrums.rayleigh);
-    scene.mie_spectrum = data.add_spectrum(context.scattering_spectrums.mie);
-    scene.ozone_spectrum = data.add_spectrum(context.scattering_spectrums.ozone);
+    scene.rayleigh_spectrum = data.add_spectrum(data.scattering_spectrums.rayleigh);
+    scene.mie_spectrum = data.add_spectrum(data.scattering_spectrums.mie);
+    scene.ozone_spectrum = data.add_spectrum(data.scattering_spectrums.ozone);
     scene.default_dielectric_eta = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
     scene.default_conductor_eta = data.add_spectrum(SpectralDistribution::constant(0.0f));
     scene.default_conductor_k = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
@@ -232,13 +231,8 @@ struct SceneRepresentationImpl {
   }
 
   void cleanup() {
-    context.images.remove_all();
-    context.mediums.remove_all();
+    data.clear(scheduler);
 
-    free(scene.emitters_distribution.values.a);
-    scene.emitters_distribution = {};
-
-    data = {};
     scene = {};
 
     active_camera = {};
@@ -246,7 +240,6 @@ struct SceneRepresentationImpl {
     active_camera.medium_index = kInvalidIndex;
     active_camera.up = kWorldUp;
 
-    scattering::init(scheduler, context.scattering_spectrums, data.atmosphere_extinction);
     build_camera(active_camera, {5.0f, 5.0f, 5.0f}, normalize(float3{0.0f, 0.0f, 0.0f} - float3{5.0f, 5.0f, 5.0f}), kWorldUp, {1280u, 720u}, 26.99f);
 
     init_default_values();
@@ -310,8 +303,8 @@ struct SceneRepresentationImpl {
 
   void validate_mediums() {
     // Clamp medium densities to prevent extremely small mean free paths
-    for (uint32_t i = 0; i < context.mediums.array_size(); ++i) {
-      const Medium& medium = context.mediums.get(i);
+    for (uint32_t i = 0; i < data.mediums.array_size(); ++i) {
+      const Medium& medium = data.mediums.get(i);
       clamp_medium_density(scene, medium);
     }
   }
@@ -457,7 +450,7 @@ struct SceneRepresentationImpl {
     std::vector<float4> sampler_image;
     Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
     uint32_t image_options = Image::BuildSamplingTable | Image::UniformSamplingTable;
-    uint32_t image = context.images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, image_options, {}, {1.0f, 1.0f});
+    uint32_t image = data.images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, image_options, {}, {1.0f, 1.0f});
     scene.pixel_sampler = {image, 1.5f};
 
     float3 bbox_min = data.triangles.empty() ? float3{-1.0f, -1.0f, -1.0f} : float3{kMaxFloat, kMaxFloat, kMaxFloat};
@@ -485,8 +478,8 @@ struct SceneRepresentationImpl {
     scene.materials = {data.materials.data(), data.materials.size()};
     scene.meshes = {data.meshes.data(), data.meshes.size()};
     scene.spectrums = {data.spectrum_values.data(), data.spectrum_values.size()};
-    scene.images = {context.images.as_array(), context.images.array_size()};
-    scene.mediums = {context.mediums.as_array(), context.mediums.array_size()};
+    scene.images = {data.images.as_array(), data.images.array_size()};
+    scene.mediums = {data.mediums.as_array(), data.mediums.array_size()};
 
     rebuild_area_emitters();
 
@@ -647,7 +640,7 @@ const SceneRepresentation::MaterialMapping& SceneRepresentation::material_mappin
 }
 
 const SceneRepresentation::MediumMapping& SceneRepresentation::medium_mapping() const {
-  return _private->context.mediums.mapping();
+  return _private->data.mediums.mapping();
 }
 
 const SceneRepresentation::MeshMapping& SceneRepresentation::mesh_mapping() const {
@@ -678,14 +671,14 @@ std::string SceneRepresentation::rename_material(uint32_t index, const char* nam
 
 uint32_t SceneRepresentation::add_medium(const char* name) {
   SpectralDistribution null_spectrum = SpectralDistribution::null();
-  uint32_t handle = _private->context.add_medium(_private->scene, _private->data, Medium::Class::Homogeneous, name, nullptr, null_spectrum, null_spectrum, 0.0f, true);
-  _private->scene.mediums = {_private->context.mediums.as_array(), _private->context.mediums.array_size()};
+  uint32_t handle = _private->data.add_medium(_private->scene, _private->data, Medium::Class::Homogeneous, name, nullptr, null_spectrum, null_spectrum, 0.0f, true);
+  _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
   return handle;
 }
 
 std::string SceneRepresentation::rename_medium(uint32_t index, const char* name) {
-  auto result = _private->context.mediums.rename(index, (name != nullptr) ? name : "");
-  _private->scene.mediums = {_private->context.mediums.as_array(), _private->context.mediums.array_size()};
+  auto result = _private->data.mediums.rename(index, (name != nullptr) ? name : "");
+  _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
   return result;
 }
 
@@ -727,7 +720,7 @@ uint32_t SceneRepresentation::add_environment_emitter(const float3& color, uint3
 
   std::vector<float4> uniform_image_data(1, white_color);
   uint32_t image_options = Image::BuildSamplingTable | Image::RepeatU;
-  e.emission.image_index = _private->context.add_image(uniform_image_data.data(), kUniformEnvImageDimensions, image_options, {}, {1.0f, 1.0f});
+  e.emission.image_index = _private->data.add_image(uniform_image_data.data(), kUniformEnvImageDimensions, image_options, {}, {1.0f, 1.0f});
   e.medium_index = medium_index;
   return uint32_t(_private->data.emitter_instances.size() - 1);
 }
@@ -755,11 +748,12 @@ void SceneRepresentation::rebuild_atmosphere_emitter(uint32_t emitter_index) {
 }
 
 void SceneRepresentationImpl::add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params) {
-  context.add_atmosphere_emitter(params, data, scene, scheduler);
+  data.add_atmosphere_emitter(params, scene, scheduler);
+  build_emitters_distribution(data, scene);
 }
 
 void SceneRepresentationImpl::rebuild_atmosphere_emitter(uint32_t emitter_index) {
-  context.rebuild_atmosphere_emitter(emitter_index, data, scene, scheduler);
+  data.rebuild_atmosphere_emitter(emitter_index, scene, scheduler);
 }
 
 template <class T>
@@ -783,16 +777,16 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   _private->active_camera.medium_index = kInvalidIndex;
   _private->active_camera.up = kWorldUp;
 
-  Camera json_camera = {};  // Camera for parsing from JSON
+  Camera json_camera = {};
   json_camera.lens_image = kInvalidIndex;
   json_camera.medium_index = kInvalidIndex;
   json_camera.up = kWorldUp;
   json_camera.cls = Camera::Class::Perspective;
 
-  float3 camera_target = json_camera.position + json_camera.direction;  // For backward compatibility
+  float3 camera_target = json_camera.position + json_camera.direction;
   bool has_target = false;
   bool has_direction = false;
-  float camera_focal_len = 50.0f;  // Default 50mm focal length
+  float camera_focal_len = 50.0f;
   float camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
   bool use_focal_len = false;
   bool force_tangents = false;
@@ -849,8 +843,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         }
       }
 
-      uint32_t load_result =
-        load_from_tungsten_file(filename, _private->data, _private->context, _private->scene, _private->ior_database, _private->scheduler, _private->active_camera);
+      uint32_t load_result = load_from_tungsten_file(filename, _private->data, _private->scene, _private->ior_database, _private->scheduler, _private->active_camera);
       if ((load_result & SceneLoadSucceeded) == 0)
         return false;
       return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
@@ -958,13 +951,11 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
           }
         }
 
-        // Convert legacy target to direction, or ensure direction is normalized
         if (has_direction) {
           json_camera.direction = normalize(json_camera.direction);
         } else if (has_target) {
           json_camera.direction = normalize(camera_target - json_camera.position);
         } else {
-          // Default direction if neither specified
           json_camera.direction = kWorldForward;
         }
       } else if ((key == "integrator") && obj.is_object()) {
@@ -1029,21 +1020,19 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   auto ext = get_file_ext(_private->data.geometry_file_name.c_str());
   if (strcmp(ext, ".etx") == 0) {
     SceneSerialization loader;
-    if (!loader.load_from_file(_private->data.geometry_file_name.c_str(), _private->data, _private->data.materials_file_name.c_str(), _private->context, _private->scene,
-          _private->ior_database, _private->scheduler)) {
+    if (!loader.load_from_file(_private->data.geometry_file_name.c_str(), _private->data, _private->data.materials_file_name.c_str(), _private->scene, _private->ior_database,
+          _private->scheduler)) {
       log::error("Failed to load ETX file from %s", _private->data.geometry_file_name.c_str());
       return false;
     }
     load_result = SceneLoadSucceeded;
   } else if (strcmp(ext, ".obj") == 0) {
-    load_result = load_from_obj_file(_private->data.geometry_file_name.c_str(), _private->data.materials_file_name.c_str(), _private->data, _private->context, _private->scene,
-      _private->ior_database, _private->scheduler);
+    load_result = load_from_obj_file(_private->data.geometry_file_name.c_str(), _private->data.materials_file_name.c_str(), _private->data, _private->scene, _private->ior_database,
+      _private->scheduler);
   } else if (strcmp(ext, ".gltf") == 0) {
-    load_result =
-      load_from_gltf_file(_private->data.geometry_file_name.c_str(), false, _private->data, _private->context, _private->scene, _private->scheduler, _private->active_camera);
+    load_result = load_from_gltf_file(_private->data.geometry_file_name.c_str(), false, _private->data, _private->scene, _private->scheduler, _private->active_camera);
   } else if (strcmp(ext, ".glb") == 0) {
-    load_result =
-      load_from_gltf_file(_private->data.geometry_file_name.c_str(), true, _private->data, _private->context, _private->scene, _private->scheduler, _private->active_camera);
+    load_result = load_from_gltf_file(_private->data.geometry_file_name.c_str(), true, _private->data, _private->scene, _private->scheduler, _private->active_camera);
   }
 
   if ((load_result & SceneLoadSucceeded) == 0) {
@@ -1096,7 +1085,7 @@ SceneRepresentationImpl::TriangleEmitterData SceneRepresentationImpl::compute_tr
 
   float texture_emission = 1.0f;
   if (mtl.emission.image_index != kInvalidIndex) {
-    const auto& img = context.images.get(mtl.emission.image_index);
+    const auto& img = data.images.get(mtl.emission.image_index);
     constexpr float kBCScale = 2.0f;
 
     const float2& tex0 = data.vertices.tex[tri.i[0]];
@@ -1180,7 +1169,7 @@ void SceneRepresentationImpl::populate_area_emitters() {
     }
   }
 
-  context.images.load_images();
+  data.images.load_images(scheduler);
 
   std::mutex emitter_mutex;
   scheduler.execute(data.triangles.size(), [this, &emitter_mutex](uint32_t begin, uint32_t end, uint32_t) {
@@ -1284,8 +1273,8 @@ void SceneRepresentationImpl::update_medium_bounds() {
   }
 
   for (const auto& [medium_index, bounds_pair] : medium_bounds_map) {
-    if (medium_index < context.mediums.array_size()) {
-      Medium& medium = context.mediums.get(medium_index);
+    if (medium_index < data.mediums.array_size()) {
+      Medium& medium = data.mediums.get(medium_index);
       medium.bounds = {bounds_pair.first, 0.0f, bounds_pair.second, 0.0f};
     }
   }
@@ -1297,8 +1286,8 @@ void SceneRepresentationImpl::rebuild_area_emitters() {
   scene.emitter_profiles = {data.emitter_profiles.data(), data.emitter_profiles.size()};
   scene.emitter_instances = {data.emitter_instances.data(), data.emitter_instances.size()};
   scene.spectrums = {data.spectrum_values.data(), data.spectrum_values.size()};
-  scene.images = {context.images.as_array(), context.images.array_size()};
-  build_emitters_distribution(scene);
+  scene.images = {data.images.as_array(), data.images.array_size()};
+  build_emitters_distribution(data, scene);
 }
 
 void SceneRepresentationImpl::set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index) {
@@ -1312,48 +1301,6 @@ void SceneRepresentationImpl::set_mesh_material_impl(uint32_t mesh_index, uint32
       data.triangles[triangle_index].material_index = material_index;
     }
   }
-}
-
-void build_emitters_distribution(Scene& scene) {
-  for (uint32_t i = 0; i < scene.emitter_profiles.count; ++i) {
-    auto& emitter = scene.emitter_profiles[i];
-    if (emitter.is_distant()) {
-      emitter.directional.equivalent_disk_size = 2.0f * std::tan(emitter.directional.angular_size / 2.0f);
-      emitter.directional.angular_size_cosine = std::cos(emitter.directional.angular_size / 2.0f);
-      float additional_weight = kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
-      for (uint32_t j = 0; j < scene.emitter_instances.count; ++j) {
-        if (scene.emitter_instances[j].profile == i) {
-          scene.emitter_instances[j].additional_weight = additional_weight;
-        }
-      }
-    }
-  }
-
-  log::warning("Building emitters distribution for %llu emitters...", scene.emitter_instances.count);
-
-  scene.environment_emitters.count = 0;
-
-  DistributionBuilder emitters_distribution(scene.emitters_distribution, static_cast<uint32_t>(scene.emitter_instances.count));
-  for (uint32_t i = 0; i < scene.emitter_instances.count; ++i) {
-    auto& emitter = scene.emitter_instances[i];
-
-    float spectrum_weight = 0.0f;
-
-    const auto& profile = scene.emitter_profiles[emitter.profile];
-    if (profile.emission.spectrum_index != kInvalidIndex) {
-      spectrum_weight = scene.spectrums[profile.emission.spectrum_index].luminance();
-    }
-    emitter.spectrum_weight = spectrum_weight;
-
-    float total_weight = emitter.spectrum_weight * emitter.additional_weight;
-    emitters_distribution.add(total_weight);
-    if (emitter.is_local()) {
-      scene.triangle_to_emitter[emitter.triangle_index] = i;
-    } else if (emitter.is_distant() && (total_weight > 0.0f)) {
-      scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
-    }
-  }
-  emitters_distribution.finalize();
 }
 
 std::string SceneRepresentation::save_to_file(const char* filename, Integrator::Type selected_type, Integrator* integrator_array[], size_t integrator_count) {
@@ -1523,8 +1470,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   };
 
   std::vector<std::pair<std::string, uint32_t>> medium_entries;
-  medium_entries.reserve(impl->context.mediums.mapping().size());
-  for (const auto& entry : impl->context.mediums.mapping()) {
+  medium_entries.reserve(impl->data.mediums.mapping().size());
+  for (const auto& entry : impl->data.mediums.mapping()) {
     medium_entries.emplace_back(entry.first, entry.second);
   }
   std::sort(medium_entries.begin(), medium_entries.end(), [](const auto& a, const auto& b) {
@@ -1564,7 +1511,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (image_index == kInvalidIndex) {
       return {};
     }
-    std::string stored = impl->context.images.path(image_index);
+    std::string stored = impl->data.images.path(image_index);
     if (stored.empty()) {
       return {};
     }
@@ -1610,7 +1557,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "target " << target.x << " " << target.y << " " << target.z << "\n";
     materials_stream << "up " << camera.up.x << " " << camera.up.y << " " << camera.up.z << "\n";
     materials_stream << "fov " << get_camera_fov(camera) << "\n";
-    // Only save focal-length if it's meaningfully different from fov-derived value
     float fov_from_focal = focal_length_to_fov(get_camera_focal_length(camera)) * 180.0f / kPi;
     if (std::fabs(fov_from_focal - get_camera_fov(camera)) > 0.01f) {
       materials_stream << "focal-length " << get_camera_focal_length(camera) << "\n";
@@ -1621,10 +1567,10 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (camera.focal_distance > 0.0f) {
       materials_stream << "focal-distance " << camera.focal_distance << "\n";
     }
-    if (camera.clip_near != 0.1f) {  // Default near clip
+    if (camera.clip_near != 0.1f) {
       materials_stream << "clip-near " << camera.clip_near << "\n";
     }
-    if (camera.clip_far != 1000.0f) {  // Default far clip
+    if (camera.clip_far != 1000.0f) {
       materials_stream << "clip-far " << camera.clip_far << "\n";
     }
     bool camera_medium_valid = (camera.medium_index != kInvalidIndex) && (medium_names.count(camera.medium_index) > 0);
@@ -1669,7 +1615,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     float env_rotation_offset = 0.0f;
     float env_scale_u = 1.0f;
     if (environment_profile->emission.image_index != kInvalidIndex) {
-      const Image& env_image = impl->context.images.get(environment_profile->emission.image_index);
+      const Image& env_image = impl->data.images.get(environment_profile->emission.image_index);
       env_rotation_offset = env_image.offset.x;
       env_scale_u = env_image.scale.x;
     }
@@ -1708,7 +1654,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
   for (uint64_t medium_index = 0; medium_index < medium_entries.size(); ++medium_index) {
     uint32_t pool_index = medium_entries[medium_index].second;
-    const Medium& medium = impl->context.mediums.get(pool_index);
+    const Medium& medium = impl->data.mediums.get(pool_index);
     materials_stream << "newmtl et::medium\n";
     materials_stream << "id " << medium_entries[medium_index].first << "\n";
     float3 absorption = medium_absorption_rgb(impl->scene, medium);
@@ -1946,7 +1892,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   return json_path.generic_string();
 }
 
-// Shared post-loading finalization function
 bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len,
   bool force_tangents, bool spectral_scene) {
   auto& camera = active_camera;
@@ -1981,7 +1926,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
 
   if (data.emitter_profiles.empty() && !has_emissive_materials) {
     add_atmosphere_emitter({});
-    context.images.load_images();
+    data.images.load_images(scheduler);
   }
 
   validate_materials();

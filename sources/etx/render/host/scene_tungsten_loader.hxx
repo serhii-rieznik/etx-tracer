@@ -6,12 +6,10 @@
 
 namespace etx {
 
-struct SceneLoaderContext;
 struct Scene;
 struct IORDatabase;
 struct TaskScheduler;
 
-uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler,
-  Camera& active_camera);
+uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera);
 
 }  // namespace etx

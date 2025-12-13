@@ -15,22 +15,22 @@ namespace etx {
 
 namespace {
 // Shared material loading function
-bool load_materials(SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& ior_database, TaskScheduler& scheduler, const char* materials_file,
-  const char* base_dir, const std::vector<etx::MaterialDefinition>& embedded_materials) {
+bool load_materials(SceneData& data, Scene& scene, const IORDatabase& ior_database, TaskScheduler& scheduler, const char* materials_file, const char* base_dir,
+  const std::vector<etx::MaterialDefinition>& embedded_materials) {
   SceneSerialization serialization;
 
   if (materials_file && materials_file[0]) {
     // External materials file: use our unified parser (handles both .materials and MTL formats)
-    if (!serialization.parse_materials_file(materials_file, base_dir, data, context, scene, ior_database, scheduler)) {
+    if (!serialization.parse_materials_file(materials_file, base_dir, data, scene, ior_database, scheduler)) {
       log::warning("Failed to parse materials from %s", materials_file);
       return false;
     }
   } else if (embedded_materials.empty() == false) {
     // Embedded materials: convert from format-specific format
-    serialization.parse_material_definitions(base_dir, embedded_materials, data, context, scene, ior_database, scheduler);
+    serialization.parse_material_definitions(base_dir, embedded_materials, data, scene, ior_database, scheduler);
   }
 
-  context.images.load_images();
+  data.images.load_images(scheduler);
   return true;
 }
 
@@ -84,8 +84,7 @@ etx::MaterialDefinition convert_tinyobj_to_material_definition(const tinyobj::ma
 
 struct SceneObjLoaderImpl {};
 
-uint32_t load_from_obj_file(const char* obj_file_name, const char* mtl_file_name, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& ior_database,
-  TaskScheduler& scheduler) {
+uint32_t load_from_obj_file(const char* obj_file_name, const char* mtl_file_name, SceneData& data, Scene& scene, const IORDatabase& ior_database, TaskScheduler& scheduler) {
   auto start_time = std::chrono::high_resolution_clock::now();
 
   auto& triangles = data.triangles;
@@ -138,14 +137,14 @@ uint32_t load_from_obj_file(const char* obj_file_name, const char* mtl_file_name
   }
 
   if (materials_to_load.empty() == false) {
-    load_materials(data, context, scene, ior_database, scheduler, materials_to_load.c_str(), base_dir, {});
+    load_materials(data, scene, ior_database, scheduler, materials_to_load.c_str(), base_dir, {});
   } else {
     std::vector<etx::MaterialDefinition> material_definitions;
     material_definitions.reserve(obj_materials.size());
     for (const auto& material : obj_materials) {
       material_definitions.emplace_back(convert_tinyobj_to_material_definition(material));
     }
-    load_materials(data, context, scene, ior_database, scheduler, nullptr, base_dir, material_definitions);
+    load_materials(data, scene, ior_database, scheduler, nullptr, base_dir, material_definitions);
   }
 
   // Create vertices by deduplicating position/normal/UV values (true geometric deduplication)

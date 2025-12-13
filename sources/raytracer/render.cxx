@@ -23,8 +23,11 @@ struct ShaderConstants {
 
 struct RenderContextImpl {
   RenderContextImpl(TaskScheduler& s)
-    : image_pool(s) {
+    : scheduler(s)
+    , image_pool(images, images_storage) {
   }
+
+  TaskScheduler& scheduler;
 
   sg_shader output_shader = {};
   sg_pipeline output_pipeline = {};
@@ -34,6 +37,9 @@ struct RenderContextImpl {
   uint32_t def_image_handle = kInvalidIndex;
   uint32_t ref_image_handle = kInvalidIndex;
   uint2 output_dimensions = {};
+
+  std::vector<Image> images;
+  std::vector<ImageStorage> images_storage;
   ImagePool image_pool;
 
   std::vector<float4> black_image;
@@ -52,6 +58,7 @@ RenderContext::~RenderContext() {
 void RenderContext::init() {
   _private->image_pool.init(1024u);
   _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+  _private->image_pool.load_images(_private->scheduler);
 
   sg_desc context = {};
   context.context.d3d11.device = sapp_d3d11_get_device();
@@ -207,12 +214,14 @@ void RenderContext::apply_reference_image(uint32_t handle) {
 void RenderContext::set_reference_image(const char* file_name) {
   _private->image_pool.remove(_private->ref_image_handle);
   _private->ref_image_handle = _private->image_pool.add_from_file(file_name, 0, {}, {1.0f, 1.0f});
+  _private->image_pool.load_images(_private->scheduler);
   apply_reference_image(_private->ref_image_handle);
 }
 
 void RenderContext::set_reference_image(const float4 data[], const uint2 dimensions) {
   _private->image_pool.remove(_private->ref_image_handle);
   _private->ref_image_handle = _private->image_pool.add_from_data(data, dimensions, 0u, {}, {1.0f, 1.0f});
+  _private->image_pool.load_images(_private->scheduler);
   apply_reference_image(_private->ref_image_handle);
 }
 

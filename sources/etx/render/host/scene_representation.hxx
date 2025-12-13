@@ -3,7 +3,6 @@
 #include <etx/core/pimpl.hxx>
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/film.hxx>
-#include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scattering.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 #include <etx/util/options.hxx>
@@ -87,7 +86,6 @@ float vertical_fov_to_horizontal_fov(float vertical_fov);
 const char* material_class_to_string(Material::Class cls);
 void material_class_to_string(Material::Class cls, const char** str);
 
-void build_emitters_distribution(Scene& scene);
 float emitter_weight(const Emitter&);
 
 }  // namespace etx

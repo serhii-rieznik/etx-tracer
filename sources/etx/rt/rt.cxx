@@ -23,7 +23,6 @@ struct RaytracingImpl {
     const auto version_minor = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_MINOR);
     const auto version_patch = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_PATCH);
     log::warning("Embree version: %u.%u.%u", version_major, version_minor, version_patch);
-    // gpu_device = GPUDevice::create_optix_device();
   }
 
   ~RaytracingImpl() {
@@ -33,9 +32,6 @@ struct RaytracingImpl {
       rtcReleaseDevice(rt_device);
       rt_device = {};
     }
-
-    // release_device_scene();
-    // GPUDevice::free_device(gpu_device);
   }
 
   void set_scene(const Scene& s) {
@@ -90,158 +86,6 @@ struct RaytracingImpl {
     return align_up(a.count * sizeof(T), 16llu);
   }
 
-  /*
-  template <class T>
-  inline void upload_array_view_to_gpu(ArrayView<T>& a, GPUBuffer* out_buffer) {
-    GPUBuffer buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({array_size(a), a.a}));
-    auto device_ptr = gpu_device->get_buffer_device_pointer(buffer);
-    a.a = reinterpret_cast<T*>(device_ptr);
-    if (out_buffer != nullptr) {
-      *out_buffer = buffer;
-    }
-  }
-
-  template <class T>
-  inline void upload_array_view_to_gpu(ArrayView<T>& a) {
-    upload_array_view_to_gpu(a, nullptr);
-  }
-
-  template <class T>
-  inline T* push_to_generic_buffer(GPUBuffer buffer, T* ptr, uint64_t size_to_copy, uint64_t& copy_offset) {
-    if ((ptr == nullptr) || (size_to_copy == 0)) {
-      return nullptr;
-    }
-
-    auto device_ptr = gpu_device->copy_to_buffer(buffer, ptr, copy_offset, size_to_copy);
-    copy_offset = align_up(copy_offset + size_to_copy, 16llu);
-    return reinterpret_cast<T*>(device_ptr);
-  }
-
-  template <class T>
-  inline void push_to_generic_buffer(GPUBuffer buffer, ArrayView<T>& a, uint64_t& copy_offset) {
-    if ((a.a == nullptr) || (a.count == 0)) {
-      return;
-    }
-
-    auto size_to_copy = array_size(a);
-    auto ptr = gpu_device->copy_to_buffer(buffer, a.a, copy_offset, size_to_copy);
-    copy_offset = align_up(copy_offset + size_to_copy, 16llu);
-    a.a = reinterpret_cast<T*>(ptr);
-  }
-
-  void build_device_scene() {
-    GPUBuffer vertex_buffer = {};
-    GPUBuffer index_buffer = {};
-    GPUBuffer scene_buffer = {};
-
-    gpu.scene = *source_scene;
-    upload_array_view_to_gpu(gpu.scene.vertices, &vertex_buffer);
-    upload_array_view_to_gpu(gpu.scene.triangles, &index_buffer);
-    upload_array_view_to_gpu(gpu.scene.materials);
-    upload_array_view_to_gpu(gpu.scene.emitters);
-
-    uint64_t scene_buffer_size = 0;
-    scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.emitters_distribution.values), 16llu);
-    scene_buffer_size = align_up(size_t(scene_buffer_size) + align_up(sizeof(Spectrums), size_t(16)), size_t(16));
-
-    // images
-    for (uint32_t i = 0; i < gpu.scene.images.count; ++i) {
-      auto& image = gpu.scene.images[i];
-      if (image.format == Image::Format::RGBA32F) {
-        scene_buffer_size = align_up(scene_buffer_size + array_size(image.pixels.f32), 16llu);
-      } else {
-        scene_buffer_size = align_up(scene_buffer_size + array_size(image.pixels.u8), 16llu);
-      }
-      scene_buffer_size = align_up(scene_buffer_size + array_size(image.y_distribution.values), 16llu);
-      scene_buffer_size = align_up(scene_buffer_size + array_size(image.x_distributions), 16llu);
-      for (uint32_t y = 0; y < image.y_distribution.values.count; ++y) {
-        scene_buffer_size = align_up(scene_buffer_size + array_size(image.x_distributions[y].values), 16llu);
-      }
-    }
-    scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.images), 16llu);
-    for (uint32_t i = 0; i < gpu.scene.mediums.count; ++i) {
-      if (gpu.scene.mediums[i].grid.type == DensityGrid::Type::Texture3D) {
-        scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.mediums[i].grid.density), 16llu);
-      }
-    }
-    scene_buffer_size = align_up(scene_buffer_size + array_size(gpu.scene.mediums), 16llu);
-
-    scene_buffer = gpu.buffers.emplace_back(gpu_device->create_buffer({scene_buffer_size, nullptr}));
-
-    uint64_t copy_offset = 0;
-    push_to_generic_buffer(scene_buffer, gpu.scene.emitters_distribution.values, copy_offset);
-    gpu.scene.spectrums = push_to_generic_buffer(scene_buffer, gpu.scene.spectrums.ptr, sizeof(Spectrums), copy_offset);
-
-    if (gpu.scene.images.count > 0) {
-      auto images_ptr = reinterpret_cast<Image*>(calloc(gpu.scene.images.count, sizeof(Image)));
-
-      for (uint32_t i = 0; (images_ptr != nullptr) && (i < gpu.scene.images.count); ++i) {
-        Image image = gpu.scene.images[i];
-        if (image.format == Image::Format::RGBA32F) {
-          push_to_generic_buffer(scene_buffer, image.pixels.f32, copy_offset);
-        } else {
-          push_to_generic_buffer(scene_buffer, image.pixels.u8, copy_offset);
-        }
-        push_to_generic_buffer(scene_buffer, image.y_distribution.values, copy_offset);
-
-        auto x_dist_ptr = calloc(image.y_distribution.values.count, sizeof(Distribution));
-
-        ArrayView<Distribution> x_distributions = {
-          reinterpret_cast<Distribution*>(x_dist_ptr),
-          image.y_distribution.values.count,
-        };
-
-        for (uint32_t y = 0; y < image.y_distribution.values.count; ++y) {
-          x_distributions[y] = image.x_distributions[y];
-          push_to_generic_buffer(scene_buffer, x_distributions[y].values, copy_offset);
-        }
-        push_to_generic_buffer(scene_buffer, x_distributions, copy_offset);
-
-        image.x_distributions = x_distributions;
-        images_ptr[i] = image;
-
-        free(x_dist_ptr);
-      }
-      gpu.scene.images = make_array_view<Image>(images_ptr, gpu.scene.images.count);
-      push_to_generic_buffer(scene_buffer, gpu.scene.images, copy_offset);
-      free(images_ptr);
-    }
-
-    if (gpu.scene.mediums.count > 0) {
-      auto medium_ptr = reinterpret_cast<Medium*>(calloc(sizeof(Medium), gpu.scene.mediums.count));
-      for (uint32_t i = 0; (medium_ptr != nullptr) && (i < gpu.scene.mediums.count); ++i) {
-        auto medium = gpu.scene.mediums[i];
-        if (medium.grid.type == DensityGrid::Type::Texture3D) {
-          push_to_generic_buffer(scene_buffer, medium.grid.density, copy_offset);
-        }
-        medium_ptr[i] = medium;
-      }
-      gpu.scene.mediums = make_array_view<Medium>(medium_ptr, gpu.scene.mediums.count);
-      upload_array_view_to_gpu(gpu.scene.mediums);
-      free(medium_ptr);
-    }
-
-    GPUAccelerationStructure::Descriptor desc = {};
-    desc.vertex_buffer = vertex_buffer;
-    desc.vertex_buffer_stride = sizeof(Vertex);
-    desc.vertex_count = static_cast<uint32_t>(gpu.scene.vertices.count);
-    desc.index_buffer = index_buffer;
-    desc.index_buffer_stride = sizeof(Triangle);
-    desc.triangle_count = static_cast<uint32_t>(gpu.scene.triangles.count);
-    gpu.accel = gpu_device->create_acceleration_structure(desc);
-    gpu.scene.acceleration_structure = gpu_device->get_acceleration_structure_device_pointer(gpu.accel);
-  }
-
-  void release_device_scene() {
-    gpu_device->destroy_acceleration_structure(gpu.accel);
-    for (auto& buffer : gpu.buffers) {
-      gpu_device->destroy_buffer(buffer);
-    }
-    gpu.buffers.clear();
-    gpu = {};
-  }
-  // */
-
   void trace_with_function(const Ray& r, RTCRayQueryContext* context, RTCFilterFunctionN filter_funtion) const {
     ETX_CHECK_FINITE(r.o);
     ETX_CHECK_FINITE(r.d);
@@ -286,18 +130,6 @@ Raytracing::~Raytracing() {
 TaskScheduler& Raytracing::scheduler() {
   return _private->scheduler;
 }
-
-/*
-GPUDevice* Raytracing::gpu() {
-  return _private->gpu_device;
-}
-
-const Scene& Raytracing::gpu_scene() const {
-  ETX_ASSERT(has_scene());
-  _private->gpu.scene.camera = _private->source_scene->camera;
-  return _private->gpu.scene;
-}
-// */
 
 void Raytracing::link_scene(const Scene& scene) {
   _private->set_scene(scene);
@@ -567,7 +399,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       .index = entering_surface ? mat.int_medium : mat.ext_medium,
     };
     current_t = intersection.t;
-    origin = lerp_pos(scene.vertices, tri, barycentrics({intersection.u, intersection.v}));
+    origin = lerp_pos(scene, tri, barycentrics({intersection.u, intersection.v}));
   }
 
   return result;

@@ -546,9 +546,9 @@ struct CPUDebugIntegratorImpl : public Task {
           };
           case Mode::NormalMapApplied: {
             const auto& tri = scene.triangles[intersection.triangle_index];
-            float3 base_nrm = lerp_normal(scene.vertices, tri, intersection.barycentric);
-            float3 base_tan = lerp_tangent(scene.vertices, tri, intersection.barycentric);
-            float3 base_btn = lerp_bitangent(scene.vertices, tri, intersection.barycentric);
+            float3 base_nrm = lerp_normal(scene, tri, intersection.barycentric);
+            float3 base_tan = lerp_tangent(scene, tri, intersection.barycentric);
+            float3 base_btn = lerp_bitangent(scene, tri, intersection.barycentric);
             const auto& mat = scene.materials[intersection.material_index];
             if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > kEpsilon)) {
               auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(intersection.tex, mat.normal_scale);

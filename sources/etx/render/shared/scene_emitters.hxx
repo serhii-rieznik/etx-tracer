@@ -158,14 +158,14 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em_inst, const Spect
     case EmitterProfile::Class::Area: {
       const auto& tri = scene.triangles[em_inst.triangle_index];
       result.barycentric = random_barycentric(smp);
-      result.origin = lerp_pos(scene.vertices, tri, result.barycentric);
-      result.normal = lerp_normal(scene.vertices, tri, result.barycentric);
+      result.origin = lerp_pos(scene, tri, result.barycentric);
+      result.normal = lerp_normal(scene, tri, result.barycentric);
       result.direction = normalize(result.origin - from_point);
 
       EmitterRadianceQuery q = {
         .source_position = from_point,
         .target_position = result.origin,
-        .uv = lerp_uv(scene.vertices, tri, result.barycentric),
+        .uv = lerp_uv(scene, tri, result.barycentric),
       };
 
       result.value = emitter_get_radiance(em_inst, spect, q, result.pdf_area, result.pdf_dir, result.pdf_dir_out, scene);
@@ -268,7 +268,7 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       result.triangle_index = em_inst.triangle_index;
       result.barycentric = random_barycentric(smp.next_2d());
 
-      auto vertex = lerp_vertex(scene.vertices, tri, result.barycentric);
+      auto vertex = lerp_vertex(scene, tri, result.barycentric);
       result.origin = vertex.pos;
       result.normal = vertex.nrm;
       result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, collimation_to_exponent(material.emission_collimation));

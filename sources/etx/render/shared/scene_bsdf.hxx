@@ -133,7 +133,7 @@ ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const 
   float material_alpha = mat.opacity;
   float alpha_diffuse = 1.0f;
   if (mat.scattering.image_index != kInvalidIndex) {
-    auto uv = lerp_uv(scene.vertices, t, bc);
+    auto uv = lerp_uv(scene, t, bc);
     const auto& img = scene.images[mat.scattering.image_index];
     if (img.options & Image::HasAlphaChannel) {
       alpha_diffuse = img.evaluate_alpha(uv);

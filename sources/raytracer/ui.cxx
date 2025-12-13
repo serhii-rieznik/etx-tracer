@@ -376,7 +376,6 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
   ImGui::Text("%s", label);
   ImGui::PushID(label);
 
-  // Convert angles to degrees for display with NaN/inf protection
   float azimuth_deg = angles.x * 180.0f / kPi;
   float elevation_deg = angles.y * 180.0f / kPi;
 
@@ -386,7 +385,6 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
     return false;
   }
 
-  // Elevation (vertical angle) - clamped to prevent gimbal lock
   float clamped_min_elevation = std::max(min_elevation, -pole_threshold);
   float clamped_max_elevation = std::min(max_elevation, pole_threshold);
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -397,7 +395,6 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
     changed = true;
   }
 
-  // Gimbal lock protection - recalculate after elevation slider to handle immediate updates
   bool near_pole = (std::abs(elevation_deg) >= pole_threshold);
 
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);

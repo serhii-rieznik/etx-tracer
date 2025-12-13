@@ -85,7 +85,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   Ray ray = {};
   ray.d = mat.subsurface.path == SubsurfaceMaterial::Path::Diffuse ? sample_cosine_distribution(smp.next_2d(), -in_intersection.nrm, 1.0f) : in_intersection.w_i;
   ray.min_t = kRayEpsilon;
-  ray.o = shading_pos(scene.vertices, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d);
+  ray.o = shading_pos(scene, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d);
   ray.max_t = kMaxFloat;
 
   SpectralResponse throughput = {spect, 1.0f};
@@ -309,7 +309,7 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
   ETX_VALIDATE(bsdf_eval.bsdf);
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  auto pos = shading_pos(scene.vertices, tri, intersection.barycentric, emitter_sample.direction);
+  auto pos = shading_pos(scene, tri, intersection.barycentric, emitter_sample.direction);
   auto tr = rt.trace_transmittance(spect, scene, pos, emitter_sample.origin, {.index = medium}, smp);
   ETX_VALIDATE(tr);
 
@@ -358,7 +358,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
 
   if (mat.cls == Material::Class::Boundary) {
     payload.medium = (dot(intersection.nrm, payload.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
-    payload.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, payload.ray.d);
+    payload.ray.o = shading_pos(scene, tri, intersection.barycentric, payload.ray.d);
     payload.ray.max_t = kMaxFloat;
     payload.ray.min_t = kRayEpsilon;
     return true;
@@ -440,14 +440,14 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
     payload.sampled_bsdf_pdf = fabsf(dot(payload.ray.d, out_intersection.nrm)) / kPi;
     payload.mis_weight = true;
-    payload.ray.o = shading_pos(scene.vertices, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, payload.ray.d);
+    payload.ray.o = shading_pos(scene, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, payload.ray.d);
   } else {
     payload.throughput *= bsdf_sample.weight;
     payload.sampled_bsdf_pdf = bsdf_sample.pdf;
     payload.mis_weight = bsdf_sample.is_delta() == false;
     payload.eta *= bsdf_sample.eta;
     payload.ray.d = bsdf_sample.w_o;
-    payload.ray.o = shading_pos(scene.vertices, scene.triangles[intersection.triangle_index], intersection.barycentric, payload.ray.d);
+    payload.ray.o = shading_pos(scene, scene.triangles[intersection.triangle_index], intersection.barycentric, payload.ray.d);
   }
 
   if (payload.throughput.is_zero())

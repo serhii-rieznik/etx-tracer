@@ -5,6 +5,24 @@
 
 namespace etx {
 
+struct ImageStorage {
+  // Raw pixel data storage
+  std::vector<uint8_t> data;
+
+  // Distribution data storage
+  std::vector<Distribution::Entry> x_distributions_storage;
+  std::vector<Distribution::Entry> y_distribution_storage;
+  std::vector<Distribution> x_distributions;
+
+  // Clear all storage
+  void clear() {
+    data.clear();
+    x_distributions_storage.clear();
+    y_distribution_storage.clear();
+    x_distributions.clear();
+  }
+};
+
 struct Image {
   enum class Format : uint32_t {
     Undefined,
@@ -20,8 +38,8 @@ struct Image {
     SkipSRGBConversion = 1u << 3u,
     HasAlphaChannel = 1u << 4u,
     UniformSamplingTable = 1u << 5u,
-    PerformLoading = 1u << 6u,
-    Delay = 1u << 7u,
+
+    Committed = 1u << 6u,
   };
 
   struct Gather {
@@ -33,12 +51,16 @@ struct Image {
     uint32_t row_1 = 0;
   };
 
+  // Runtime pixel access (f32/u8 views into external storage) - RENDERING
   union {
     ArrayView<float4> f32;
     ArrayView<ubyte4> u8;
   } pixels = {};
 
-  ArrayView<Distribution> x_distributions = {};
+  // View to x distribution data (points to external storage)
+  ArrayView<Distribution> x_distributions;
+
+  // View to y distribution data (points to external storage)
   Distribution y_distribution = {};
   float2 fsize = {};
   float2 offset = {};
@@ -77,9 +99,9 @@ struct Image {
     auto g = gather(in_uv);
 
     if (pdf) {
-      float s_t = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : max(0.0f, sinf(kPi * saturate(in_uv.y + 0.0f / fsize.y))));
+      float s_t = ((options & UniformSamplingTable) || (isize.y == 1u) ? 1.0f : max(0.0f, sinf(kPi * saturate(in_uv.y + 0.0f / fsize.y))));
       auto t = luminance(to_float3(g.p00 + g.p01)) * s_t;
-      float s_b = ((options & UniformSamplingTable) || (fsize.y == 1.0f) ? 1.0f : max(0.0f, sinf(kPi * saturate(in_uv.y + 1.0f / fsize.y))));
+      float s_b = ((options & UniformSamplingTable) || (isize.y == 1u) ? 1.0f : max(0.0f, sinf(kPi * saturate(in_uv.y + 1.0f / fsize.y))));
       auto b = luminance(to_float3(g.p10 + g.p11)) * s_b;
       *pdf = (t + b) / normalization;
       ETX_VALIDATE(*pdf);

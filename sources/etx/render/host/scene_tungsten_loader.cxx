@@ -75,22 +75,22 @@ float3 rotate_yxz_deg(const float3& v, const float3& rot_deg) {
   return out;
 }
 
-uint32_t resolve_tungsten_texture(const nlohmann::json& v, SceneLoaderContext& context, const char* base_dir) {
+uint32_t resolve_tungsten_texture(const nlohmann::json& v, SceneData& data, const char* base_dir) {
   if (v.is_string() == false)
     return kInvalidIndex;
   std::string p = resolve_path(base_dir, v.get<std::string>());
   if (p.empty())
     return kInvalidIndex;
-  return context.add_image(p.c_str(), Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+  return data.add_image(p.c_str(), Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
 }
 
 nlohmann::json tungsten_albedo_json(const nlohmann::json& src) {
   return src.contains("albedo") ? src["albedo"] : nlohmann::json();
 }
 
-void tungsten_set_albedo(Material& mtl, const nlohmann::json& val, SceneData& data, SceneLoaderContext& context, const char* base_dir) {
+void tungsten_set_albedo(Material& mtl, const nlohmann::json& val, SceneData& data, const char* base_dir) {
   if (val.is_string()) {
-    uint32_t tex_idx = resolve_tungsten_texture(val, context, base_dir);
+    uint32_t tex_idx = resolve_tungsten_texture(val, data, base_dir);
     if (tex_idx != kInvalidIndex) {
       mtl.scattering.image_index = tex_idx;
       mtl.reflectance.image_index = tex_idx;
@@ -125,9 +125,9 @@ void tungsten_set_albedo(Material& mtl, const nlohmann::json& val, SceneData& da
   mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
 }
 
-void tungsten_set_transmission(Material& mtl, const nlohmann::json& val, SceneData& data, SceneLoaderContext& context, const char* base_dir) {
+void tungsten_set_transmission(Material& mtl, const nlohmann::json& val, SceneData& data, const char* base_dir) {
   if (val.is_string()) {
-    uint32_t tex_idx = resolve_tungsten_texture(val, context, base_dir);
+    uint32_t tex_idx = resolve_tungsten_texture(val, data, base_dir);
     if (tex_idx != kInvalidIndex) {
       mtl.transmission.image_index = tex_idx;
       mtl.transmission.channel = 0u;
@@ -238,13 +238,13 @@ bool find_tungsten_conductor(const std::string& name, TungstenConductorIOR& out)
   return false;
 }
 
-PrimitiveLoadResult handle_infinite_sphere(const nlohmann::json& prim, const char* base_dir, SceneData& data, SceneLoaderContext& context) {
+PrimitiveLoadResult handle_infinite_sphere(const nlohmann::json& prim, const char* base_dir, SceneData& data) {
   PrimitiveLoadResult r = {};
   std::string emission = prim.value("emission", "");
   bool sample = prim.value("sample", true);
   if (emission.empty() == false && sample) {
     std::string img_path = resolve_path(base_dir, emission);
-    uint32_t img_idx = context.add_image(img_path.c_str(), Image::BuildSamplingTable | Image::RepeatU, {}, {1.0f, 1.0f});
+    uint32_t img_idx = data.add_image(img_path.c_str(), Image::BuildSamplingTable | Image::RepeatU, {}, {1.0f, 1.0f});
     uint32_t sp_white = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
 
     auto& profile = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
@@ -298,10 +298,9 @@ PrimitiveLoadResult handle_infinite_sphere_cap(const nlohmann::json& prim, Scene
   return r;
 }
 
-PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, SceneLoaderContext& context, Scene& scene, TaskScheduler& scheduler) {
+PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, Scene& scene, TaskScheduler& scheduler) {
   PrimitiveLoadResult r = {};
 
-  // Parse Tungsten skydome parameters
   float temperature = prim.value("temperature", 5777.0f);
   float intensity = prim.value("intensity", 2.0f);
   float turbidity = prim.value("turbidity", 3.0f);
@@ -315,26 +314,21 @@ PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, 
   float3 sun_dir = normalize(rotate_yxz_deg(float3{0.0f, 1.0f, 0.0f}, rotation));
   const float sun_angular_diameter_deg = 0.53f;
 
-  // Map Tungsten parameters to our unified atmosphere system
-  // Tungsten skydome is simple: only mie_scale based on turbidity
   scattering::Parameters scattering_params = {};
-  scattering_params.mie_scale = turbidity / 3.0f;  // Tungsten default turbidity is 3
+  scattering_params.mie_scale = turbidity / 3.0f;
+  scattering_params.altitude = 1000.0f;
+  scattering_params.rayleigh_scale = 1.0f;
+  scattering_params.ozone_scale = 1.0f;
 
-  // Use reasonable defaults for missing parameters
-  scattering_params.anisotropy = 0.825f;    // Default anisotropy
-  scattering_params.altitude = 1000.0f;     // Default altitude
-  scattering_params.rayleigh_scale = 1.0f;  // Default rayleigh
-  scattering_params.ozone_scale = 1.0f;     // Default ozone
-
-  // Tungsten skydome only creates sky, not sun emitter
-  float sun_scale = 0.0f;       // No sun emitter for Tungsten skydome
-  float sky_scale = intensity;  // Use intensity for sky brightness
-  float quality = 0.5f;         // Lower quality for Tungsten compatibility
+  float sun_scale = 0.0f;
+  float sky_scale = intensity;
+  float quality = 0.5f;
 
   SceneRepresentation::AtmosphereEmitterParameters params{scattering_params.anisotropy, scattering_params.altitude, scattering_params.rayleigh_scale, scattering_params.mie_scale,
     scattering_params.ozone_scale, sun_dir, sun_angular_diameter_deg, quality, sun_scale, sky_scale};
 
-  context.add_atmosphere_emitter(params, data, scene, scheduler);
+  data.add_atmosphere_emitter(params, scene, scheduler);
+  build_emitters_distribution(data, scene);
 
   r.loaded = true;
   return r;
@@ -359,8 +353,7 @@ PrimitiveLoadResult handle_builtin_primitive(const std::string& type, const floa
 }
 
 PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char* base_dir, const std::string& type, const float3& translate, const float3& scale,
-  const float3& rotation, uint32_t material_index, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler,
-  Camera& active_camera) {
+  const float3& rotation, uint32_t material_index, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera) {
   PrimitiveLoadResult r = {};
 
   if (type != "mesh")
@@ -383,15 +376,15 @@ PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char
   const char* ext = get_ext(resolved);
   bool loader_applied_transform = false;
   if (_stricmp(ext, ".obj") == 0) {
-    uint32_t flags = load_from_obj_file(resolved.c_str(), "", data, context, scene, database, scheduler);
+    uint32_t flags = load_from_obj_file(resolved.c_str(), "", data, scene, database, scheduler);
     r.loaded = (flags & SceneLoadSucceeded) != 0u;
     r.flags |= (flags & ~SceneLoadSucceeded);
   } else if (_stricmp(ext, ".gltf") == 0) {
-    uint32_t flags = load_from_gltf_file(resolved.c_str(), false, data, context, scene, scheduler, active_camera);
+    uint32_t flags = load_from_gltf_file(resolved.c_str(), false, data, scene, scheduler, active_camera);
     r.loaded = (flags & SceneLoadSucceeded) != 0u;
     r.flags |= (flags & ~SceneLoadSucceeded);
   } else if (_stricmp(ext, ".glb") == 0) {
-    uint32_t flags = load_from_gltf_file(resolved.c_str(), true, data, context, scene, scheduler, active_camera);
+    uint32_t flags = load_from_gltf_file(resolved.c_str(), true, data, scene, scheduler, active_camera);
     r.loaded = (flags & SceneLoadSucceeded) != 0u;
     r.flags |= (flags & ~SceneLoadSucceeded);
   } else if (_stricmp(ext, ".wo3") == 0) {
@@ -435,8 +428,6 @@ void set_conductor_ior(Material& mtl, const std::string& material_name, SceneDat
     mtl.int_ior.k_index = data.add_spectrum(k_spd);
     return;
   }
-
-  // Fallback: keep defaults already set by caller.
 }
 
 void set_dielectric_ior(Material& mtl, const std::string& bsdf_name, const nlohmann::json& b, SceneData& data, const IORDatabase& database) {
@@ -468,8 +459,7 @@ void set_dielectric_ior(Material& mtl, const std::string& bsdf_name, const nlohm
   mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
 }
 
-uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b, SceneData& data, SceneLoaderContext& context, const char* base_dir, const IORDatabase& database,
-  bool force_two_sided) {
+uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b, SceneData& data, const char* base_dir, const IORDatabase& database, bool force_two_sided) {
   uint32_t mat_idx = data.add_material(name.c_str());
   auto& mtl = data.materials[mat_idx];
   bool two_sided = b.value("two_sided", b.value("twoSided", false));
@@ -496,7 +486,7 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
         base_material = find_material_index(coat_base.get<std::string>());
       } else if (coat_base.is_object()) {
         std::string base_name = name.empty() ? std::string("__coat_base_") + std::to_string(data.materials.size()) : name + "__coat_base";
-        base_material = add_tungsten_material(base_name, coat_base, data, context, base_dir, database, force_two_sided);
+        base_material = add_tungsten_material(base_name, coat_base, data, base_dir, database, force_two_sided);
       }
     }
 
@@ -522,12 +512,12 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
 
   if (type == "lambert" || type == "oren_nayar") {
     mtl.cls = Material::Class::Diffuse;
-    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, context, base_dir);
+    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     float rough = b.value("roughness", 0.0f);
     mtl.roughness.value = {rough, rough};
   } else if ((type == "plastic") || (type == "rough_plastic")) {
     mtl.cls = Material::Class::Plastic;
-    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, context, base_dir);
+    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     float rough = b.value("roughness", 0.0f);
     mtl.roughness.value = {rough, rough};
     mtl.metalness.value = {0.0f, 0.0f};
@@ -536,16 +526,16 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     set_dielectric_ior(mtl, name, b, data, database);
   } else if (type == "mirror") {
     mtl.cls = Material::Class::Mirror;
-    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, context, base_dir);
+    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     mtl.roughness.value = {0.0f, 0.0f};
     mtl.metalness.value = {1.0f, 1.0f};
   } else if (type == "thinsheet") {
     mtl.cls = Material::Class::Thinfilm;
-    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, context, base_dir);
+    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     set_dielectric_ior(mtl, name, b, data, database);
   } else if ((type == "conductor") || (type == "rough_conductor")) {
     mtl.cls = Material::Class::Conductor;
-    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, context, base_dir);
+    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     float rough = b.value("roughness", 0.0f);
     mtl.roughness.value = {rough, rough};
     mtl.metalness.value = {1.0f, 1.0f};
@@ -561,7 +551,7 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     mtl.reflectance.image_index = kInvalidIndex;
     mtl.scattering.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
     mtl.scattering.image_index = kInvalidIndex;
-    tungsten_set_transmission(mtl, tungsten_albedo_json(b), data, context, base_dir);
+    tungsten_set_transmission(mtl, tungsten_albedo_json(b), data, base_dir);
   } else if (type == "transparency") {
     mtl.cls = Material::Class::Boundary;
     mtl.transmission.value = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -569,9 +559,9 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     mtl.reflectance.image_index = kInvalidIndex;
     mtl.scattering.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
     mtl.scattering.image_index = kInvalidIndex;
-    tungsten_set_transmission(mtl, tungsten_albedo_json(b), data, context, base_dir);
+    tungsten_set_transmission(mtl, tungsten_albedo_json(b), data, base_dir);
     if (b.contains("alpha")) {
-      uint32_t alpha_tex = resolve_tungsten_texture(b["alpha"], context, base_dir);
+      uint32_t alpha_tex = resolve_tungsten_texture(b["alpha"], data, base_dir);
       if (alpha_tex != kInvalidIndex) {
         mtl.transmission.image_index = alpha_tex;
         mtl.transmission.channel = 0u;
@@ -579,7 +569,7 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     }
   } else {
     mtl.cls = Material::Class::Diffuse;
-    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, context, base_dir);
+    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
   }
 
   if (two_sided || force_two_sided)
@@ -728,10 +718,10 @@ void recompute_mesh_bounds(SceneData& data, uint32_t mesh_start, uint32_t mesh_e
   }
 }
 
-void set_emission_from_json(Material& mtl, const nlohmann::json& v, SceneData& data, SceneLoaderContext& context, const char* base_dir, float scale = 1.0f) {
+void set_emission_from_json(Material& mtl, const nlohmann::json& v, SceneData& data, const char* base_dir, float scale = 1.0f) {
   float3 scaled_white = {scale, scale, scale};
   if (v.is_string()) {
-    uint32_t tex_idx = resolve_tungsten_texture(v, context, base_dir);
+    uint32_t tex_idx = resolve_tungsten_texture(v, data, base_dir);
     if (tex_idx != kInvalidIndex) {
       mtl.emission.image_index = tex_idx;
       mtl.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance(scaled_white));
@@ -1322,7 +1312,7 @@ bool load_wo3_mesh(const std::string& resolved, const float3& translate, const f
   return true;
 }
 
-void load_tungsten_media(const nlohmann::json& js, SceneData& data, SceneLoaderContext& context, Scene& scene) {
+void load_tungsten_media(const nlohmann::json& js, SceneData& data, Scene& scene) {
   if (js.contains("media") == false || js["media"].is_array() == false)
     return;
 
@@ -1332,7 +1322,7 @@ void load_tungsten_media(const nlohmann::json& js, SceneData& data, SceneLoaderC
       continue;
     std::string name = m.value("name", "");
     if (name.empty())
-      name = std::string("medium-") + std::to_string(context.mediums.array_size());
+      name = std::string("medium-") + std::to_string(data.mediums.array_size());
 
     std::string type = m.value("type", "homogeneous");
     if (type != "homogeneous") {
@@ -1348,15 +1338,15 @@ void load_tungsten_media(const nlohmann::json& js, SceneData& data, SceneLoaderC
         g = pf.value("g", 0.0f);
     }
 
-    SpectralDistribution s_a = json_to_rgb_spectrum(m.value("sigma_a", 0.0f), 0.0f);
-    SpectralDistribution s_s = json_to_rgb_spectrum(m.value("sigma_s", 0.0f), 0.0f);
+    SpectralDistribution s_a = json_to_rgb_spectrum(m["sigma_a"], 0.0f);
+    SpectralDistribution s_s = json_to_rgb_spectrum(m["sigma_s"], 0.0f);
 
-    context.add_medium(scene, data, Medium::Class::Homogeneous, name.c_str(), nullptr, s_a, s_s, g, true);
+    data.add_medium(scene, data, Medium::Class::Homogeneous, name.c_str(), nullptr, s_a, s_s, g, true);
     ++loaded;
   }
 
   if (loaded > 0) {
-    scene.mediums = {context.mediums.as_array(), context.mediums.array_size()};
+    scene.mediums = {data.mediums.as_array(), data.mediums.array_size()};
   }
 }
 
@@ -1374,8 +1364,8 @@ uint32_t count_tungsten_meshes(const nlohmann::json& js) {
   return count;
 }
 
-uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir, const std::unordered_map<std::string, uint32_t>& bsdf_to_mat, SceneData& data,
-  SceneLoaderContext& context, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera, bool force_two_sided) {
+uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir, const std::unordered_map<std::string, uint32_t>& bsdf_to_mat, SceneData& data, Scene& scene,
+  const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera, bool force_two_sided) {
   uint32_t load_flags = SceneLoadFailed;
   bool primitives_loaded = false;
 
@@ -1388,7 +1378,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
 
     std::string type = prim.value("type", "");
     if (type == "infinite_sphere") {
-      PrimitiveLoadResult r = handle_infinite_sphere(prim, base_dir, data, context);
+      PrimitiveLoadResult r = handle_infinite_sphere(prim, base_dir, data);
       primitives_loaded = primitives_loaded || r.loaded;
       load_flags |= r.flags;
       continue;
@@ -1402,7 +1392,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
     }
 
     if (type == "skydome") {
-      PrimitiveLoadResult r = handle_skydome(prim, data, context, scene, scheduler);
+      PrimitiveLoadResult r = handle_skydome(prim, data, scene, scheduler);
       primitives_loaded = primitives_loaded || r.loaded;
       load_flags |= r.flags;
       continue;
@@ -1422,13 +1412,13 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
         }
       } else if (bsdf_node->is_object()) {
         std::string mat_name = std::string("__prim_bsdf_") + std::to_string(data.materials.size());
-        material_index = add_tungsten_material(mat_name, *bsdf_node, data, context, base_dir, database, force_two_sided);
+        material_index = add_tungsten_material(mat_name, *bsdf_node, data, base_dir, database, force_two_sided);
       }
     }
 
     if (material_index == scene.missing_material) {
       std::string mat_name = std::string("__prim_bsdf_") + std::to_string(data.materials.size());
-      material_index = add_tungsten_material(mat_name, nlohmann::json::object(), data, context, base_dir, database, force_two_sided);
+      material_index = add_tungsten_material(mat_name, nlohmann::json::object(), data, base_dir, database, force_two_sided);
     }
 
     bool two_sided = prim.value("two_sided", prim.value("twoSided", false));
@@ -1485,8 +1475,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
       prim_loaded = builtin_result.loaded;
     }
 
-    PrimitiveLoadResult mesh_result =
-      handle_mesh_primitive(prim, base_dir, type, translate, scale, rotation, material_index, data, context, scene, database, scheduler, active_camera);
+    PrimitiveLoadResult mesh_result = handle_mesh_primitive(prim, base_dir, type, translate, scale, rotation, material_index, data, scene, database, scheduler, active_camera);
     prim_loaded = prim_loaded || mesh_result.loaded;
     load_flags |= mesh_result.flags;
 
@@ -1501,10 +1490,10 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
           float power_scale = emission_scale / (area * kPi);
           if (two_sided)
             power_scale *= 0.5f;
-          set_emission_from_json(mtl, prim["power"], data, context, base_dir, power_scale);
+          set_emission_from_json(mtl, prim["power"], data, base_dir, power_scale);
         }
       } else if (has_emission) {
-        set_emission_from_json(mtl, prim["emission"], data, context, base_dir, emission_scale);
+        set_emission_from_json(mtl, prim["emission"], data, base_dir, emission_scale);
       }
     }
   }
@@ -1516,8 +1505,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
 
 }  // namespace
 
-uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler,
-  Camera& active_camera) {
+uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera) {
   if ((file_name == nullptr) || (file_name[0] == 0))
     return SceneLoadFailed;
 
@@ -1544,7 +1532,6 @@ uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, SceneLo
     force_two_sided = force_two_sided || js["renderer"].value("enable_two_sided_shading", false);
   }
 
-  // Map Tungsten bsdf names to material indices (create placeholders)
   std::unordered_map<std::string, uint32_t> bsdf_to_mat;
   if (js.contains("bsdfs") && js["bsdfs"].is_array()) {
     for (const auto& b : js["bsdfs"]) {
@@ -1555,14 +1542,14 @@ uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, SceneLo
         continue;
       if (bsdf_to_mat.count(name) > 0)
         continue;
-      uint32_t mat_idx = add_tungsten_material(name, b, data, context, base_dir, database, force_two_sided);
+      uint32_t mat_idx = add_tungsten_material(name, b, data, base_dir, database, force_two_sided);
       bsdf_to_mat[name] = mat_idx;
     }
   }
 
   bool camera_loaded = load_tungsten_camera(js, data, active_camera);
 
-  load_tungsten_media(js, data, context, scene);
+  load_tungsten_media(js, data, scene);
 
   uint32_t mesh_count = count_tungsten_meshes(js);
   if (mesh_count > 0) {
@@ -1572,7 +1559,7 @@ uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, SceneLo
     reserve_mesh_triangles(data, mesh_count * kMeshTriangleReserve);
   }
 
-  uint32_t load_result = load_tungsten_primitives(js, base_dir, bsdf_to_mat, data, context, scene, database, scheduler, active_camera, force_two_sided);
+  uint32_t load_result = load_tungsten_primitives(js, base_dir, bsdf_to_mat, data, scene, database, scheduler, active_camera, force_two_sided);
 
   if ((load_result & SceneLoadSucceeded) == 0u) {
     return camera_loaded ? SceneLoadCameraInfo : SceneLoadFailed;

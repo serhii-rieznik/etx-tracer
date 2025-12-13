@@ -8,24 +8,16 @@
 #include <etx/render/shared/scattering.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
+#include <etx/render/host/distribution_builder.hxx>
 #include <etx/render/host/scene_representation.hxx>
 
 #include <cstdint>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace etx {
 
 struct SceneData {
-  struct CameraInfo {
-    Camera cam;
-    std::string id;
-    bool active = false;
-  };
-
-  using MaterialMapping = std::unordered_map<std::string, uint32_t>;
-
   struct {
     std::vector<float3> pos;
     std::vector<float3> nrm;
@@ -40,21 +32,77 @@ struct SceneData {
   std::vector<Mesh> meshes;
   std::vector<EmitterProfile> emitter_profiles;
   std::vector<Emitter> emitter_instances;
-  std::vector<std::string> spectrum_names;
   std::vector<SpectralDistribution> spectrum_values;
-  std::vector<CameraInfo> cameras;
+  std::vector<Image> images_vector;
+  std::vector<ImageStorage> images_storage_vector;
+  std::vector<Medium> mediums_vector;
+  std::vector<Distribution::Entry> emitters_distribution_storage;
 
-  std::string json_file_name;
-  std::string geometry_file_name;
-  std::string materials_file_name;
-
-  Image atmosphere_extinction;
-
+  ImagePool images;
+  MediumPool mediums;
+  std::vector<std::string> spectrum_names;
+  using MaterialMapping = std::unordered_map<std::string, uint32_t>;
   MaterialMapping material_mapping;
   MaterialMapping mesh_mapping;
   std::unordered_map<uint32_t, uint32_t> material_to_emitter_profile;
   std::unordered_map<uint32_t, uint32_t> gltf_image_mapping;
   std::unordered_map<int32_t, uint32_t> gltf_material_mapping;
+
+  struct CameraInfo {
+    Camera cam;
+    std::string id;
+    bool active = false;
+  };
+  std::vector<CameraInfo> cameras;
+  std::string json_file_name;
+  std::string geometry_file_name;
+  std::string materials_file_name;
+  scattering::ScatteringSpectrums scattering_spectrums;
+  Image atmosphere_extinction;
+
+  SceneData(TaskScheduler& s)
+    : images(images_vector, images_storage_vector)
+    , mediums(mediums_vector) {
+  }
+
+  void clear(TaskScheduler& scheduler) {
+    images.free_image(atmosphere_extinction);
+
+    images.remove_all();
+    mediums.remove_all();
+    vertices.pos.clear();
+    vertices.nrm.clear();
+    vertices.tan.clear();
+    vertices.btn.clear();
+    vertices.tex.clear();
+    triangles.clear();
+    triangle_to_emitter.clear();
+    materials.clear();
+    meshes.clear();
+    emitter_profiles.clear();
+    emitter_instances.clear();
+    spectrum_values.clear();
+    images_vector.clear();
+    images_storage_vector.clear();
+    mediums_vector.clear();
+    emitters_distribution_storage.clear();
+    spectrum_names.clear();
+    material_mapping.clear();
+    mesh_mapping.clear();
+    material_to_emitter_profile.clear();
+    gltf_image_mapping.clear();
+    gltf_material_mapping.clear();
+    cameras.clear();
+    json_file_name.clear();
+    geometry_file_name.clear();
+    materials_file_name.clear();
+    images.init(1024u);
+    mediums.init(1024u);
+    scattering::init(scheduler, scattering_spectrums, atmosphere_extinction);
+  }
+
+  SceneData(const SceneData&) = delete;
+  SceneData operator=(const SceneData&) = delete;
 
   uint32_t add_spectrum(const char* source_id, const SpectralDistribution& spd) {
     ETX_CRITICAL((source_id != nullptr) && (source_id[0] != 0));
@@ -134,20 +182,10 @@ struct SceneData {
     mesh_mapping[mesh_name] = index;
     return index;
   }
-};
-
-struct SceneLoaderContext {
-  SceneLoaderContext(TaskScheduler& s)
-    : images(s) {
-  }
-
-  ImagePool images;
-  MediumPool mediums;
-  scattering::ScatteringSpectrums scattering_spectrums;
 
   uint32_t add_image(const char* path, uint32_t options, const float2& offset, const float2& scale) {
     std::string id = path && path[0] ? path : ("##image-" + std::to_string(images.array_size()));
-    return images.add_from_file(id, options | Image::Delay, offset, scale);
+    return images.add_from_file(id, options, offset, scale);
   }
 
   uint32_t add_image(const float4* data, const uint2& dim, uint32_t options, const float2& offset, const float2& scale) {
@@ -182,7 +220,7 @@ struct SceneLoaderContext {
     return mediums.add(cls, id, volume_file, absorption_index, scattering_index, g, explicit_connections);
   }
 
-  void add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params, SceneData& data, Scene& scene, TaskScheduler& scheduler) {
+  void add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params, Scene& scene, TaskScheduler& scheduler) {
     const float3 normalized_direction = normalize(params.direction);
 
     constexpr uint2 kSunImageDimensions = uint2{128u, 128u};
@@ -192,22 +230,23 @@ struct SceneLoaderContext {
 
     uint32_t sun_emitter_index = kInvalidIndex;
     if (params.sun_scale > 0.0f) {
-      auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
-      sun_emitter_index = uint32_t(data.emitter_profiles.size());
+      auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Directional);
+      sun_emitter_index = uint32_t(emitter_profiles.size());
       instance.profile = sun_emitter_index;
 
-      auto& d = data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
-      d.emission.spectrum_index = data.add_spectrum(sun_spectrum);
+      auto& d = emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
+      d.emission.spectrum_index = add_spectrum(sun_spectrum);
       d.directional.angular_size = params.angular_diameter_degrees * kPi / 180.0f;
       d.directional.direction = normalized_direction;
       d.meta = uint32_t(EmitterProfile::Meta::Atmosphere);
 
-      data.spectrum_values[d.emission.spectrum_index].scale(params.sun_scale);
+      spectrum_values[d.emission.spectrum_index].scale(params.sun_scale);
 
       if (d.directional.angular_size > 0.0f) {
-        d.emission.image_index = add_image(nullptr, kSunImageDimensions, Image::Delay, {}, {1.0f, 1.0f});
+        d.emission.image_index = add_image(nullptr, kSunImageDimensions, 0, {}, {1.0f, 1.0f});
         auto& img = images.get(d.emission.image_index);
-        scattering::generate_sun_image(params, kSunImageDimensions, normalized_direction, d.directional.angular_size, img.pixels.f32.a, scattering_spectrums, scheduler);
+        scattering::generate_sun_image(static_cast<const scattering::Parameters&>(params), kSunImageDimensions, normalized_direction, d.directional.angular_size, img.pixels.f32.a,
+          scattering_spectrums, scheduler);
       }
     }
 
@@ -216,29 +255,30 @@ struct SceneLoaderContext {
       sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * params.quality));
       sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * params.quality));
 
-      auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-      instance.profile = uint32_t(data.emitter_profiles.size());
+      auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Environment);
+      instance.profile = uint32_t(emitter_profiles.size());
 
-      uint32_t sky_emitter_index = uint32_t(data.emitter_profiles.size());
-      auto& e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
-      e.emission.spectrum_index = data.add_spectrum(sun_spectrum);
-      e.emission.image_index = add_image(nullptr, sky_image_dimensions, Image::BuildSamplingTable | Image::Delay, {}, {1.0f, 1.0f});
+      uint32_t sky_emitter_index = uint32_t(emitter_profiles.size());
+      auto& e = emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
+      e.emission.spectrum_index = add_spectrum(sun_spectrum);
+      e.emission.image_index = add_image(nullptr, sky_image_dimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       e.directional.direction = normalized_direction;
       e.meta = uint32_t(EmitterProfile::Meta::Atmosphere);
       e.reference_emitter_index = sun_emitter_index;
 
-      if ((sun_emitter_index != kInvalidIndex) && (sun_emitter_index < data.emitter_profiles.size())) {
-        data.emitter_profiles[sun_emitter_index].reference_emitter_index = sky_emitter_index;
+      if ((sun_emitter_index != kInvalidIndex) && (sun_emitter_index < emitter_profiles.size())) {
+        emitter_profiles[sun_emitter_index].reference_emitter_index = sky_emitter_index;
       }
 
-      data.spectrum_values[e.emission.spectrum_index].scale(params.sky_scale);
+      spectrum_values[e.emission.spectrum_index].scale(params.sky_scale);
 
       auto& img = images.get(e.emission.image_index);
-      scattering::generate_sky_image(params, sky_image_dimensions, normalized_direction, data.atmosphere_extinction, img.pixels.f32.a, scattering_spectrums, scheduler);
+      scattering::generate_sky_image(static_cast<const scattering::Parameters&>(params), sky_image_dimensions, normalized_direction, atmosphere_extinction, img.pixels.f32.a,
+        scattering_spectrums, scheduler);
     }
   }
 
-  void rebuild_atmosphere_emitter(uint32_t emitter_index, SceneData& data, Scene& scene, TaskScheduler& scheduler) {
+  void rebuild_atmosphere_emitter(uint32_t emitter_index, Scene& scene, TaskScheduler& scheduler) {
     if (emitter_index >= scene.emitter_profiles.count) {
       return;
     }
@@ -263,9 +303,9 @@ struct SceneLoaderContext {
 
     if (sky_emitter.emission.image_index != kInvalidIndex) {
       auto& img = images.get(sky_emitter.emission.image_index);
-      scattering::generate_sky_image(sky_emitter.atmosphere.scattering, img.isize, sun_direction, data.atmosphere_extinction, img.pixels.f32.a, scattering_spectrums, scheduler);
+      scattering::generate_sky_image(sky_emitter.atmosphere.scattering, img.isize, sun_direction, atmosphere_extinction, img.pixels.f32.a, scattering_spectrums, scheduler);
       images.add_options(sky_emitter.emission.image_index, Image::BuildSamplingTable);
-      images.load_images();
+      images.load_images(scheduler);
     }
 
     if (sun_emitter.emission.image_index != kInvalidIndex) {
@@ -275,5 +315,57 @@ struct SceneLoaderContext {
     }
   }
 };
+
+void build_emitters_distribution(SceneData& scene_data, Scene& scene) {
+  for (uint32_t i = 0; i < scene.emitter_profiles.count; ++i) {
+    auto& emitter = scene.emitter_profiles[i];
+    if (emitter.is_distant()) {
+      emitter.directional.equivalent_disk_size = 2.0f * std::tan(emitter.directional.angular_size / 2.0f);
+      emitter.directional.angular_size_cosine = std::cos(emitter.directional.angular_size / 2.0f);
+      float additional_weight = kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
+      for (uint32_t j = 0; j < scene.emitter_instances.count; ++j) {
+        if (scene.emitter_instances[j].profile == i) {
+          scene.emitter_instances[j].additional_weight = additional_weight;
+        }
+      }
+    }
+  }
+
+  log::warning("Building emitters distribution for %llu emitters...", scene.emitter_instances.count);
+
+  scene.environment_emitters.count = 0;
+
+  // Build distribution data into SceneData's storage
+  scene_data.emitters_distribution_storage.resize(scene.emitter_instances.count + 1);
+  auto* entries = scene_data.emitters_distribution_storage.data();
+
+  for (uint32_t i = 0; i < scene.emitter_instances.count; ++i) {
+    auto& emitter = scene.emitter_instances[i];
+
+    float spectrum_weight = 0.0f;
+
+    const auto& profile = scene.emitter_profiles[emitter.profile];
+    if (profile.emission.spectrum_index != kInvalidIndex) {
+      spectrum_weight = scene.spectrums[profile.emission.spectrum_index].luminance();
+    }
+    emitter.spectrum_weight = spectrum_weight;
+
+    float total_weight = emitter.spectrum_weight * emitter.additional_weight;
+    entries[i] = {total_weight, 0.0f, 0.0f};
+
+    if (emitter.is_local()) {
+      scene.triangle_to_emitter[emitter.triangle_index] = i;
+    } else if (emitter.is_distant() && (total_weight > 0.0f)) {
+      scene.environment_emitters.emitters[scene.environment_emitters.count++] = i;
+    }
+  }
+
+  // Finalize the distribution using generic method
+  float total_weight = DistributionBuilder::finalize_entries(entries, static_cast<uint32_t>(scene.emitter_instances.count));
+
+  // Set up Scene's Distribution to reference SceneData's storage
+  scene.emitters_distribution.values = {entries, static_cast<uint32_t>(scene.emitter_instances.count)};
+  scene.emitters_distribution.total_weight = total_weight;
+}
 
 }  // namespace etx

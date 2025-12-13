@@ -192,7 +192,7 @@ struct ETX_ALIGNED VCMLightVertex {
   uint32_t path_index = 0;
 
   ETX_GPU_CODE Vertex vertex(const Scene& s) const {
-    return lerp_vertex(s.vertices, s.triangles[triangle_index], bc);
+    return lerp_vertex(s, s.triangles[triangle_index], bc);
   }
 };
 
@@ -273,7 +273,7 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
   }
 
   state.ray.d = bsdf_sample.w_o;
-  state.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, bsdf_sample.w_o);
+  state.ray.o = shading_pos(scene, tri, intersection.barycentric, bsdf_sample.w_o);
   state.ray.max_t = kMaxFloat;
   state.ray.min_t = kRayEpsilon;
   state.eta *= bsdf_sample.eta;
@@ -326,7 +326,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
 
   state.ray = {emitter_sample.origin, emitter_sample.direction};
   if (emitter_sample.triangle_index != kInvalidIndex) {
-    state.ray.o = shading_pos(scene.vertices, scene.triangles[emitter_sample.triangle_index], emitter_sample.barycentric, state.ray.d);
+    state.ray.o = shading_pos(scene, scene.triangles[emitter_sample.triangle_index], emitter_sample.barycentric, state.ray.d);
   }
 
   state.d_vcm = emitter_sample.is_distant ? 1.0f / emitter_sample.pdf_area : 1.0f / emitter_sample.pdf_dir;
@@ -442,7 +442,7 @@ ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource 
   uint32_t new_medium = (dot(tri.geo_n, state.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
   state.path_distance += intersection.t;
   state.medium_index = new_medium;
-  state.ray.o = shading_pos(scene.vertices, tri, intersection.barycentric, state.ray.d);
+  state.ray.o = shading_pos(scene, tri, intersection.barycentric, state.ray.d);
   state.ray.max_t = kMaxFloat;
   state.ray.min_t = kRayEpsilon;
   return true;
@@ -494,7 +494,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
     reverse_pdf = bsdf::reverse_pdf(data, w_o, mat, scene, state.sampler);
 
     const auto& tri = scene.triangles[isect->triangle_index];
-    origin = shading_pos(scene.vertices, tri, isect->barycentric, w_o);
+    origin = shading_pos(scene, tri, isect->barycentric, w_o);
   } else {
     const auto& medium = scene.mediums[state.medium_index];
     float p = medium_phase_function(medium, state.ray.d, w_o);
@@ -640,7 +640,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
     scatter = connection_eval.bsdf;
     reverse_pdf = bsdf::reverse_pdf(connection_data, w_o, mat, scene, state.sampler);
     const auto& tri = scene.triangles[isect->triangle_index];
-    origin = shading_pos(scene.vertices, tri, isect->barycentric, normalize(emitter_sample.origin - isect->pos));
+    origin = shading_pos(scene, tri, isect->barycentric, normalize(emitter_sample.origin - isect->pos));
     camera_factor = fabsf(dot(w_o, tri.geo_n));
   }
 
@@ -790,7 +790,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
         }
       } else {
         const auto& tri = scene.triangles[isect->triangle_index];
-        float3 p0 = shading_pos(scene.vertices, tri, isect->barycentric, normalize(target_position - isect->pos));
+        float3 p0 = shading_pos(scene, tri, isect->barycentric, normalize(target_position - isect->pos));
         auto tr = vcm_transmittance(rt, scene, state, p0, target_position);
         if (tr.is_zero() == false) {
           result += tr * value;

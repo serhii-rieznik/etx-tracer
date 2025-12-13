@@ -105,24 +105,21 @@ struct SceneSerializationImpl {
 
     ChunkInfo(const char* chunk_id, std::vector<uint8_t> meta = {}, std::vector<uint8_t> chunk_data = {}) {
       memcpy(id, chunk_id, sizeof(ChunkHeader::id));
-      id[sizeof(ChunkHeader::id)] = '\0';  // Ensure null termination
+      id[sizeof(ChunkHeader::id)] = '\0';
       meta_data = std::move(meta);
       data = std::move(chunk_data);
     }
   };
 
-  // State
   std::vector<uint8_t> _buffer;
   std::vector<std::string> _string_table;
   std::vector<ChunkInfo> _chunks;
   std::vector<MaterialIndexMapping> _material_index_mappings;
   bool _is_loaded = false;
 
-  // Helper buffer for parsing
   static constexpr uint32_t kDataBufferSize = 2048u;
   char _data_buffer[kDataBufferSize] = {};
 
-  // Helper functions for material parsing
   bool get_param(const MaterialDefinition& m, const char* param) {
     memset(_data_buffer, 0, kDataBufferSize);
     auto it = m.properties.find(param);
@@ -146,7 +143,6 @@ struct SceneSerializationImpl {
       return;
     }
 
-    // Create translation map: saved_index -> runtime_index
     std::unordered_map<uint32_t, uint32_t> index_translation;
 
     for (const auto& mapping : _material_index_mappings) {
@@ -157,7 +153,6 @@ struct SceneSerializationImpl {
 
       const std::string& material_name = _string_table[mapping.name_index];
 
-      // Find the runtime index for this material name
       if (scene_data.material_mapping.count(material_name)) {
         uint32_t runtime_index = scene_data.material_mapping[material_name];
         index_translation[mapping.saved_index] = runtime_index;
@@ -166,14 +161,12 @@ struct SceneSerializationImpl {
       }
     }
 
-    // Apply translations to triangles
     for (auto& tri : scene_data.triangles) {
       if (tri.material_index != kInvalidIndex && index_translation.count(tri.material_index)) {
         tri.material_index = index_translation[tri.material_index];
       }
     }
 
-    // Clear mappings after use
     _material_index_mappings.clear();
   }
 
@@ -324,14 +317,12 @@ struct SceneSerializationImpl {
     _string_table.clear();
     _chunks.clear();
 
-    // Reserve space for file header and initialize it
     _buffer.resize(sizeof(BinaryGeometryFileHeader));
     BinaryGeometryFileHeader* header = reinterpret_cast<BinaryGeometryFileHeader*>(_buffer.data());
     header->magic = kBinaryGeometryMagic;
     header->version = kBinaryGeometryVersion;
-    header->total_size = 0;  // Will be updated in save_to_file()
+    header->total_size = 0;
 
-    // Write vertex positions
     if (!data.vertices.pos.empty()) {
       ChunkInfo chunk = {kChunkIdVertexPositions, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
@@ -592,14 +583,13 @@ struct SceneSerializationImpl {
     return true;
   }
 
-  bool load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, SceneLoaderContext& context, Scene& scene, const IORDatabase& database,
-    TaskScheduler& scheduler) {
+  bool load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
     char base_dir[2048] = {};
     if (materials_file && materials_file[0]) {
       get_file_folder(materials_file, base_dir, sizeof(base_dir));
     }
 
-    if (!parse_materials_file(materials_file, base_dir, data, context, scene, database, scheduler)) {
+    if (!parse_materials_file(materials_file, base_dir, data, scene, database, scheduler)) {
       log::error("Failed to load materials from %s", materials_file);
       return false;
     }
@@ -1017,8 +1007,7 @@ struct SceneSerializationImpl {
     return true;
   }
 
-  bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database,
-    TaskScheduler& scheduler) {
+  bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
     std::ifstream file(path);
     if (!file.is_open()) {
       log::error("Failed to open materials file: %s", path.string().c_str());
@@ -1076,12 +1065,12 @@ struct SceneSerializationImpl {
 
     // Use the unified parsing approach
     SceneSerialization temp_serialization;
-    temp_serialization.parse_material_definitions(base_dir, materials, data, context, scene, database, scheduler);
+    temp_serialization.parse_material_definitions(base_dir, materials, data, scene, database, scheduler);
 
     return true;
   }
 
-  void parse_camera(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database) {
+  void parse_camera(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
     auto& entry = data.cameras.emplace_back();
 
     if (get_param(material, "class")) {
@@ -1174,11 +1163,11 @@ struct SceneSerializationImpl {
     if (get_param(material, "shape")) {
       char tmp_buffer[2048] = {};
       snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, _data_buffer);
-      entry.cam.lens_image = context.add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable, {}, {1.0f, 1.0f});
+      entry.cam.lens_image = data.add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable, {}, {1.0f, 1.0f});
     }
 
     if (get_param(material, "ext_medium")) {
-      auto m = context.mediums.find(_data_buffer);
+      auto m = data.mediums.find(_data_buffer);
       if (m == kInvalidIndex) {
         log::warning("Medium %s was not declared, but used in camera %s as external medium\n", _data_buffer, material.name.c_str());
       }
@@ -1199,7 +1188,7 @@ struct SceneSerializationImpl {
     build_camera(entry.cam, entry.cam.position, entry.cam.direction, entry.cam.up, entry.cam.film_size, fov);
   }
 
-  void parse_medium(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database) {
+  void parse_medium(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
     if (get_param(material, "id") == false) {
       log::warning("Medium does not have identifier - skipped");
       return;
@@ -1256,7 +1245,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "rayleigh")) {
-      s_t = context.scattering_spectrums.rayleigh;
+      s_t = data.scattering_spectrums.rayleigh;
 
       float scale = 1.0f;
       char buffer[kDataBufferSize] = {};
@@ -1271,7 +1260,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "mie")) {
-      s_t = context.scattering_spectrums.mie;
+      s_t = data.scattering_spectrums.mie;
 
       float scale = 1.0f;
       char buffer[kDataBufferSize] = {};
@@ -1422,19 +1411,19 @@ struct SceneSerializationImpl {
       uint32_t absorption_index = select_index(s_a, scene.black_spectrum);
       uint32_t scattering_index = select_index(s_t, scene.black_spectrum);
 
-      uint32_t medium_handle = context.mediums.add_noise(Medium::Class::Heterogeneous, name, noise_type, absorption_index, scattering_index, anisotropy, explicit_connections,
+      uint32_t medium_handle = data.mediums.add_noise(Medium::Class::Heterogeneous, name, noise_type, absorption_index, scattering_index, anisotropy, explicit_connections,
         noise_scale, noise_octaves, noise_lacunarity, noise_persistence, noise_seed, noise_power, noise_offset);
-      Medium& medium = context.mediums.get(medium_handle);
+      Medium& medium = data.mediums.get(medium_handle);
       medium.grid.noise.sharpness = noise_sharpness;
       medium.grid.noise.enable_border_fade = noise_border_fade;
       medium.grid.noise.border_fade_distance = noise_border_fade_distance;
       return;
     }
 
-    context.add_medium(scene, data, cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
+    data.add_medium(scene, data, cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
   }
 
-  void parse_directional_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database) {
+  void parse_directional_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
     auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
     instance.profile = uint32_t(data.emitter_profiles.size());
 
@@ -1459,7 +1448,7 @@ struct SceneSerializationImpl {
     if (get_param(material, "image")) {
       char tmp_buffer[2048] = {};
       snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, _data_buffer);
-      e.emission.image_index = context.add_image(tmp_buffer, Image::Regular, {}, {1.0f, 1.0f});
+      e.emission.image_index = data.add_image(tmp_buffer, Image::Regular, {}, {1.0f, 1.0f});
     }
 
     if (get_param(material, "angular_diameter")) {
@@ -1470,7 +1459,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "ext_medium")) {
-      auto m = context.mediums.find(_data_buffer);
+      auto m = data.mediums.find(_data_buffer);
       if (m == kInvalidIndex) {
         log::warning("Medium %s was not declared, but used in directional emitter as external medium\n", _data_buffer);
       }
@@ -1478,7 +1467,7 @@ struct SceneSerializationImpl {
     }
   }
 
-  void parse_env_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database) {
+  void parse_env_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
     auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
     instance.profile = uint32_t(data.emitter_profiles.size());
 
@@ -1501,7 +1490,7 @@ struct SceneSerializationImpl {
         u_scale = val;
       }
     }
-    e.emission.image_index = context.add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f}, {u_scale, 1.0f});
+    e.emission.image_index = data.add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f}, {u_scale, 1.0f});
 
     if (get_param(material, "color")) {
       char buffer[kDataBufferSize] = {};
@@ -1512,7 +1501,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "ext_medium")) {
-      auto m = context.mediums.find(_data_buffer);
+      auto m = data.mediums.find(_data_buffer);
       if (m == kInvalidIndex) {
         log::warning("Medium %s was not declared, but used in environment emitter as external medium\n", _data_buffer);
       }
@@ -1520,8 +1509,7 @@ struct SceneSerializationImpl {
     }
   }
 
-  void parse_atmosphere_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database,
-    TaskScheduler& scheduler) {
+  void parse_atmosphere_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
     float quality = 1.0f;
     float sun_scale = kDoublePi;  // Default: 2π
     float sky_scale = kPi;        // Default: π
@@ -1530,7 +1518,6 @@ struct SceneSerializationImpl {
 
     scattering::Parameters scattering_params = {};
 
-    // Parse parameters
     if (get_param(material, "quality")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
@@ -1596,10 +1583,11 @@ struct SceneSerializationImpl {
     SceneRepresentation::AtmosphereEmitterParameters params{scattering_params.anisotropy, scattering_params.altitude, scattering_params.rayleigh_scale, scattering_params.mie_scale,
       scattering_params.ozone_scale, direction, angular_diameter_degrees, quality, sun_scale, sky_scale};
 
-    context.add_atmosphere_emitter(params, data, scene, scheduler);
+    data.add_atmosphere_emitter(params, scene, scheduler);
+    build_emitters_distribution(data, scene);
   }
 
-  void parse_spectrum(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database) {
+  void parse_spectrum(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
     if (get_param(material, "id") == false) {
       log::warning("Spectrum does not have identifier - skipped");
       return;
@@ -1721,7 +1709,7 @@ struct SceneSerializationImpl {
     }
   }
 
-  void parse_material(const char* base_dir, const MaterialDefinition& material, SceneData& data, SceneLoaderContext& context, Scene& scene, const IORDatabase& database) {
+  void parse_material(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
     auto& material_mapping = data.material_mapping;
 
     uint32_t material_index = kInvalidIndex;
@@ -1779,7 +1767,7 @@ struct SceneSerializationImpl {
       emission_spd_defined = true;
       auto map_ke_it = material.properties.find("map_Ke");
       if (map_ke_it != material.properties.end() && get_file(base_dir, map_ke_it->second)) {
-        mtl.emission.image_index = context.add_image(_data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+        mtl.emission.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       }
     }
 
@@ -1788,7 +1776,7 @@ struct SceneSerializationImpl {
       auto params = split_params(_data_buffer);
       for (uint64_t i = 0, end = params.size(); i < end; ++i) {
         if ((strcmp(params[i], "image") == 0) && (i + 1 < end) && get_file(base_dir, params[i + 1])) {
-          mtl.emission.image_index = context.add_image(_data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+          mtl.emission.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
         } else if (strcmp(params[i], "twosided") == 0) {
           mtl.two_sided = 1u;
         } else if ((strcmp(params[i], "collimated") == 0) && (i + 1 < end)) {
@@ -1900,7 +1888,7 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.roughness.image_index = context.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.roughness.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         mtl.roughness.channel = static_cast<uint32_t>(channel);
       }
     }
@@ -1918,7 +1906,7 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.metalness.image_index = context.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.metalness.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         mtl.metalness.channel = static_cast<uint32_t>(channel);
       }
     }
@@ -1936,26 +1924,26 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.transmission.image_index = context.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.transmission.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         mtl.transmission.channel = static_cast<uint32_t>(channel);
       }
     }
 
     if (get_param(material, "map_Kd")) {
       if (get_file(base_dir, _data_buffer)) {
-        mtl.scattering.image_index = context.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.scattering.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
     if (get_param(material, "map_Ks")) {
       if (get_file(base_dir, _data_buffer)) {
-        mtl.reflectance.image_index = context.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.reflectance.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
     if (get_param(material, "map_Kt")) {
       if (get_file(base_dir, _data_buffer)) {
-        mtl.scattering.image_index = context.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.scattering.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
@@ -2034,7 +2022,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "int_medium")) {
-      auto m = context.mediums.find(_data_buffer);
+      auto m = data.mediums.find(_data_buffer);
       if (m == kInvalidIndex) {
         log::warning("Medium %s was not declared, but used in material %s as internal medium", _data_buffer, material.name.c_str());
       }
@@ -2042,7 +2030,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "ext_medium")) {
-      auto m = context.mediums.find(_data_buffer);
+      auto m = data.mediums.find(_data_buffer);
       if (m == kInvalidIndex) {
         log::warning("Medium %s was not declared, but used in material %s as external medium\n", _data_buffer, material.name.c_str());
       }
@@ -2057,7 +2045,7 @@ struct SceneSerializationImpl {
         if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
           char tmp_buffer[1024] = {};
           snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, params[i + 1]);
-          mtl.normal_image_index = context.add_image(tmp_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+          mtl.normal_image_index = data.add_image(tmp_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
           i += 1;
         }
         if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
@@ -2076,7 +2064,7 @@ struct SceneSerializationImpl {
         if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
           char tmp_buffer[1024] = {};
           snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, params[i + 1]);
-          mtl.thinfilm.thinkness_image = context.add_image(tmp_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+          mtl.thinfilm.thinkness_image = data.add_image(tmp_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
           i += 1;
         }
 
@@ -2148,23 +2136,23 @@ struct SceneSerializationImpl {
   }
 };
 
-void SceneSerialization::parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, SceneLoaderContext& context,
-  Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
+void SceneSerialization::parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, Scene& scene,
+  const IORDatabase& database, TaskScheduler& scheduler) {
   for (const auto& material : materials) {
     if (material.name == "et::camera") {
-      _private->parse_camera(base_dir, material, data, context, scene, database);
+      _private->parse_camera(base_dir, material, data, scene, database);
     } else if (material.name == "et::medium") {
-      _private->parse_medium(base_dir, material, data, context, scene, database);
+      _private->parse_medium(base_dir, material, data, scene, database);
     } else if (material.name == "et::dir") {
-      _private->parse_directional_light(base_dir, material, data, context, scene, database);
+      _private->parse_directional_light(base_dir, material, data, scene, database);
     } else if (material.name == "et::env") {
-      _private->parse_env_light(base_dir, material, data, context, scene, database);
+      _private->parse_env_light(base_dir, material, data, scene, database);
     } else if (material.name == "et::atmosphere") {
-      _private->parse_atmosphere_light(base_dir, material, data, context, scene, database, scheduler);
+      _private->parse_atmosphere_light(base_dir, material, data, scene, database, scheduler);
     } else if (material.name == "et::spectrum") {
-      _private->parse_spectrum(base_dir, material, data, context, scene, database);
+      _private->parse_spectrum(base_dir, material, data, scene, database);
     } else {
-      _private->parse_material(base_dir, material, data, context, scene, database);
+      _private->parse_material(base_dir, material, data, scene, database);
     }
   }
 }
@@ -2186,14 +2174,14 @@ bool SceneSerialization::save_to_file(const SceneData& data, const std::filesyst
   return _private->write_to_file(path);
 }
 
-bool SceneSerialization::load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, SceneLoaderContext& context, Scene& scene,
-  const IORDatabase& database, TaskScheduler& scheduler) {
-  return _private->load_from_file(path, data, materials_file, context, scene, database, scheduler);
+bool SceneSerialization::load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, Scene& scene, const IORDatabase& database,
+  TaskScheduler& scheduler) {
+  return _private->load_from_file(path, data, materials_file, scene, database, scheduler);
 }
 
-bool SceneSerialization::parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, SceneLoaderContext& context, Scene& scene,
-  const IORDatabase& database, TaskScheduler& scheduler) {
-  return _private->parse_materials_file(path, base_dir, data, context, scene, database, scheduler);
+bool SceneSerialization::parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, Scene& scene, const IORDatabase& database,
+  TaskScheduler& scheduler) {
+  return _private->parse_materials_file(path, base_dir, data, scene, database, scheduler);
 }
 
 }  // namespace etx

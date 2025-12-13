@@ -21,7 +21,6 @@ static constexpr float kDefaultDielectricEta = 1.5f;
 
 struct GltfLoaderState {
   SceneData& data;
-  SceneLoaderContext& context;
   Scene& scene;
   Camera& active_camera;
   TaskScheduler& scheduler;
@@ -383,7 +382,6 @@ bool load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node, co
 
 void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
   auto& data = state.data;
-  auto& context = state.context;
   auto& scene = state.scene;
 
   for (int32_t gltf_material_index = 0; gltf_material_index < static_cast<int32_t>(model.materials.size()); ++gltf_material_index) {
@@ -458,7 +456,7 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
     if ((material.normalTexture.index != -1) && (data.gltf_image_mapping.count(material.normalTexture.index) > 0)) {
       mtl.normal_image_index = data.gltf_image_mapping.at(material.normalTexture.index);
       mtl.normal_scale = 1.0f;
-      context.add_image_options(mtl.normal_image_index, Image::SkipSRGBConversion);
+      data.add_image_options(mtl.normal_image_index, Image::SkipSRGBConversion);
     }
 
     if (material.emissiveFactor.size() >= 3) {
@@ -520,13 +518,13 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
     mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
   }
 
-  context.images.load_images();
+  data.images.load_images(state.scheduler);
 }
 
 }  // namespace
 
-uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data, SceneLoaderContext& context, Scene& scene, TaskScheduler& scheduler, Camera& active_camera) {
-  GltfLoaderState state{data, context, scene, active_camera, scheduler};
+uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data, Scene& scene, TaskScheduler& scheduler, Camera& active_camera) {
+  GltfLoaderState state{data, scene, active_camera, scheduler};
 
   tinygltf::TinyGLTF loader;
   tinygltf::Model model;
@@ -554,7 +552,7 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
       env().file_in_tmp(file_name, buffer, sizeof(buffer));
       if (auto fout = fopen(buffer, "wb")) {
         if (fwrite(data_ptr, 1, data_size, fout) == data_size) {
-          self->data.gltf_image_mapping[image_index] = self->context.add_image(buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+          self->data.gltf_image_mapping[image_index] = self->data.add_image(buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         }
         fclose(fout);
       }
@@ -609,7 +607,7 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
     }
 
     std::string image_path_str = image_path.lexically_normal().string();
-    gltf_image_mapping[static_cast<int>(image_index)] = context.add_image(image_path_str.c_str(), Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+    gltf_image_mapping[static_cast<int>(image_index)] = data.add_image(image_path_str.c_str(), Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
   }
 
   load_gltf_materials(model, state);
@@ -701,7 +699,7 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
 
             constexpr uint2 env_image_dimensions = {512u, 256u};
             uint32_t image_options = Image::BuildSamplingTable | Image::RepeatU;
-            uint32_t image_index = context.images.add_from_spherical_harmonics(sh_coeffs, env_image_dimensions, image_options, {rotation_offset, 0.0f}, {1.0f, 1.0f});
+            uint32_t image_index = data.images.add_from_spherical_harmonics(scheduler, sh_coeffs, env_image_dimensions, image_options, {rotation_offset, 0.0f}, {1.0f, 1.0f});
 
             auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
             instance.profile = uint32_t(data.emitter_profiles.size());
@@ -751,9 +749,9 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
                     constexpr uint2 equirect_dimensions = {1024u, 512u};
                     uint32_t specular_image_options = Image::BuildSamplingTable | Image::RepeatU;
                     uint32_t specular_image_index =
-                      context.images.add_from_cubemap(cube_face_images, equirect_dimensions, specular_image_options, {rotation_offset, 0.0f}, {1.0f, 1.0f});
+                      data.images.add_from_cubemap(state.scheduler, cube_face_images, equirect_dimensions, specular_image_options, {rotation_offset, 0.0f}, {1.0f, 1.0f});
 
-                    const auto& equirect_image = context.images.get(specular_image_index);
+                    const auto& equirect_image = data.images.get(specular_image_index);
                     char exr_filename[512] = {};
                     char exr_name[64] = {};
                     snprintf(exr_name, sizeof(exr_name), "specular_env_%zu.exr", light_idx);

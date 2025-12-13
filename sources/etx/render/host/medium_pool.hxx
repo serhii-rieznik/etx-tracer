@@ -11,7 +11,7 @@ namespace etx {
 struct MediumPool {
   using Mapping = std::unordered_map<std::string, uint32_t>;
 
-  MediumPool();
+  MediumPool(std::vector<Medium>&);
   ~MediumPool();
 
   void init(uint32_t capacity);

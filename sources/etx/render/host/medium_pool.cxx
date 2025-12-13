@@ -10,6 +10,10 @@
 namespace etx {
 
 struct MediumPoolImpl {
+  MediumPoolImpl(std::vector<Medium>& external_mediums)
+    : mediums(external_mediums) {
+  }
+
   void init(uint32_t capacity) {
     mediums.reserve(capacity);
     mapping.reserve(capacity);
@@ -213,11 +217,19 @@ struct MediumPoolImpl {
     }
   }
 
-  std::vector<Medium> mediums;
+  std::vector<Medium>& mediums;
   MediumPool::Mapping mapping;
 };
 
-ETX_PIMPL_IMPLEMENT_ALL(MediumPool, Impl);
+MediumPool::MediumPool(std::vector<Medium>& external_mediums) {
+  ETX_PIMPL_CREATE(MediumPool, Impl, external_mediums);
+}
+
+MediumPool::~MediumPool() {
+  ETX_PIMPL_DESTROY(MediumPool, Impl);
+}
+
+ETX_PIMPL_IMPLEMENT(MediumPool, Impl);
 
 void MediumPool::init(uint32_t capacity) {
   _private->init(capacity);

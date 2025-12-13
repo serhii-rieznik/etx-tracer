@@ -559,7 +559,7 @@ struct CPUBidirectionalImpl : public Task {
       const auto& m = scene.materials[a_intersection.material_index];
       const auto& tri = scene.triangles[a_intersection.triangle_index];
       payload.medium_index = (dot(tri.geo_n, ray.d) < 0.0f) ? m.int_medium : m.ext_medium;
-      ray.o = shading_pos(scene.vertices, tri, a_intersection.barycentric, ray.d);
+      ray.o = shading_pos(scene, tri, a_intersection.barycentric, ray.d);
       ray.min_t = kRayEpsilon;
       ray.max_t = kMaxFloat;
       return InteractionResult::Continue;
@@ -648,7 +648,7 @@ struct CPUBidirectionalImpl : public Task {
 
       const auto& tri = scene.triangles[a_intersection.triangle_index];
 
-      ray.o = shading_pos(scene.vertices, tri, curr.intersection.barycentric, bsdf_sample.w_o);
+      ray.o = shading_pos(scene, tri, curr.intersection.barycentric, bsdf_sample.w_o);
       ray.d = bsdf_sample.w_o;
       ray.min_t = kRayEpsilon;
       ray.max_t = kMaxFloat;
@@ -1398,7 +1398,7 @@ struct CPUBidirectionalImpl : public Task {
     float3 origin = p0.intersection.pos;
     if (p0.is_surface_interaction()) {
       const auto& tri = scene.triangles[p0.intersection.triangle_index];
-      origin = shading_pos(scene.vertices, tri, p0.intersection.barycentric, normalize(p1 - p0.intersection.pos));
+      origin = shading_pos(scene, tri, p0.intersection.barycentric, normalize(p1 - p0.intersection.pos));
     }
     return rt.trace_transmittance(spect, scene, origin, p1, p0.medium, smp);
   }

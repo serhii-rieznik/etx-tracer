@@ -35,7 +35,6 @@ struct UI {
 
   bool handle_event(const sapp_event*);
 
-  // Context structure for shared state during UI building
   struct BuildContext {
     std::vector<int32_t> emitter_primary_instance;
     std::function<const char*(uint32_t)> material_name_from_index;
@@ -86,7 +85,6 @@ struct UI {
   } callbacks;
 
  private:
-  // UI Helper Functions
   void full_width_item();
   bool labeled_control(const char* label, std::function<bool()>&& control_func);
   bool validated_float_control(const char* label, float& value, float min_val, float max_val, const char* format = "%.3f");
@@ -138,7 +136,6 @@ struct UI {
 
   bool build_material_class_selector(Material& material);
 
-  // Selection-specific property builders
   void build_material_selection_properties(Scene& scene, const BuildContext& ctx);
   void build_medium_selection_properties(Scene& scene, const BuildContext& ctx);
   void build_emitter_selection_properties(Scene& scene, const BuildContext& ctx);

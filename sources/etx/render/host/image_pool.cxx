@@ -14,12 +14,14 @@
 namespace etx {
 
 struct ImagePoolImpl {
-  ImagePoolImpl(TaskScheduler& s)
-    : scheduler(s) {
+  ImagePoolImpl(std::vector<Image>& external_images, std::vector<ImageStorage>& external_storage)
+    : images(external_images)
+    , storage(external_storage) {
   }
 
   void init(uint32_t capacity) {
     images.reserve(capacity);
+    storage.reserve(capacity);
     paths.reserve(capacity);
   }
 
@@ -30,19 +32,13 @@ struct ImagePoolImpl {
   uint32_t add_copy(const Image& img) {
     ETX_ASSERT((img.options & Image::BuildSamplingTable) == 0);
     ETX_ASSERT(img.y_distribution.values.count == 0);
-    ETX_ASSERT(img.x_distributions.count == 0);
+    ETX_ASSERT(img.x_distributions.empty());
 
-    std::string path = "~mem" + std::to_string(1u + counter++);
+    std::string path = "##mem" + std::to_string(1u + counter++);
     uint32_t handle = create_entry(path);
-
-    auto ptr_pixels = reinterpret_cast<ubyte4*>(malloc(img.data_size));
-    ETX_CRITICAL(ptr_pixels != nullptr);
-    memcpy(ptr_pixels, img.pixels.u8.a, img.data_size);
 
     auto& image = images[handle];
     image = img;
-    image.pixels.u8.a = ptr_pixels;
-
     return handle;
   }
 
@@ -56,33 +52,30 @@ struct ImagePoolImpl {
     auto& image = images[handle];
     image.offset = offset;
     image.scale = scale;
-    image.options = Image::PerformLoading | image_options;
-    if ((image.options & Image::Delay) == 0) {
-      perform_loading(handle, image);
-    }
+    image.options = image_options;
 
     return handle;
   }
 
   uint32_t add_from_data(const float4 data[], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
-    std::string path = "~mem" + std::to_string(1u + counter++);
+    std::string path = "##mem" + std::to_string(1u + counter++);
     uint32_t handle = create_entry(path);
     auto& image = images[handle];
+    auto& img_storage = storage[handle];
+
     image.offset = offset;
     image.scale = scale;
     image.format = Image::Format::RGBA32F;
-    image.data_size = static_cast<uint32_t>(dimensions.x * dimensions.y * sizeof(float4));
-    image.pixels.f32 = make_array_view<float4>(calloc(image.data_size, 1u), dimensions.x * dimensions.y);
     image.options = image_options;
     image.isize = dimensions;
     image.fsize = {float(dimensions.x), float(dimensions.y)};
+    size_t pixel_count = 1llu * dimensions.x * dimensions.y;
+    img_storage.data.resize(pixel_count * sizeof(float4));
+    image.data_size = static_cast<uint32_t>(img_storage.data.size());
 
     if (data != nullptr) {
-      memcpy(image.pixels.f32.a, data, image.data_size);
-    }
-
-    if ((image.options & Image::BuildSamplingTable) && ((image.options & Image::Delay) == 0)) {
-      build_image_sampling_table(image, scheduler);
+      auto* pixels_f32 = reinterpret_cast<float4*>(img_storage.data.data());
+      memcpy(pixels_f32, data, image.data_size);
     }
 
     return handle;
@@ -117,7 +110,8 @@ struct ImagePoolImpl {
     }
   }
 
-  uint32_t add_from_spherical_harmonics(const float3 sh_coeffs[9], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
+  uint32_t add_from_spherical_harmonics(TaskScheduler& scheduler, const float3 sh_coeffs[9], const uint2& dimensions, uint32_t image_options, const float2& offset,
+    const float2& scale) {
     std::vector<float4> image_data(dimensions.x * dimensions.y);
 
     scheduler.execute(dimensions.x * dimensions.y, [&image_data, &dimensions, &sh_coeffs, &offset, &scale](uint32_t begin, uint32_t end, uint32_t) {
@@ -144,7 +138,8 @@ struct ImagePoolImpl {
     return add_from_data(image_data.data(), dimensions, image_options, offset, scale);
   }
 
-  uint32_t add_from_cubemap(const uint32_t cube_face_images[6], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
+  uint32_t add_from_cubemap(TaskScheduler& scheduler, const uint32_t cube_face_images[6], const uint2& dimensions, uint32_t image_options, const float2& offset,
+    const float2& scale) {
     bool needs_srgb_conversion[6] = {};
     for (size_t i = 0; i < 6; ++i) {
       const auto& face_img = images[cube_face_images[i]];
@@ -229,35 +224,43 @@ struct ImagePoolImpl {
     return add_from_data(equirect_data.data(), dimensions, image_options, offset, scale);
   }
 
-  void perform_loading(uint32_t handle, Image& image) {
-    if (handle >= paths.size())
-      return;
-
-    const std::string& path = paths[handle];
-    if ((image.options & Image::PerformLoading) && (path.empty() == false)) {
-      load_image(image, path.c_str());
-    }
-
-    if (image.options & Image::BuildSamplingTable) {
-      build_image_sampling_table(image, scheduler);
-    }
-
-    image.options &= ~Image::Delay;
-  }
-
-  void delay_load() {
+  void delay_load(TaskScheduler& scheduler) {
     if (images.empty())
       return;
 
-    scheduler.execute(static_cast<uint32_t>(images.size()), [this](uint32_t begin, uint32_t end, uint32_t) {
+    scheduler.execute(static_cast<uint32_t>(images.size()), [this, &scheduler](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
         if (i >= images.size())
           break;
+        ETX_CRITICAL(i < paths.size());
 
         Image& image = images[i];
-        if (image.options & Image::Delay) {
-          perform_loading(i, image);
+        if (image.options & Image::Committed)
+          continue;
+
+        if (paths[i].empty() == false) {
+          load_image(image, storage[i], paths[i].c_str());
         }
+
+        if (image.format == Image::Format::RGBA32F) {
+          image.pixels.f32 = {reinterpret_cast<float4*>(storage[i].data.data()), static_cast<uint32_t>(storage[i].data.size() / sizeof(float4))};
+        } else if (image.format == Image::Format::RGBA8) {
+          image.pixels.u8 = {reinterpret_cast<ubyte4*>(storage[i].data.data()), static_cast<uint32_t>(storage[i].data.size() / sizeof(ubyte4))};
+        }
+
+        // Detect alpha channel
+        for (uint32_t i = 0, e = image.isize.x * image.isize.y; i < e; ++i) {
+          if (image.pixel(i).w < 1.0f) {
+            image.options = image.options | Image::HasAlphaChannel;
+            break;
+          }
+        }
+
+        if (image.options & Image::BuildSamplingTable) {
+          build_image_sampling_table(image, storage[i], scheduler);
+        }
+
+        image.options |= Image::Committed;
       }
     });
   }
@@ -294,24 +297,23 @@ struct ImagePoolImpl {
     for (auto& image : images) {
       free_image(image);
     }
+    for (auto& img_storage : storage) {
+      img_storage.clear();
+    }
     images.clear();
+    storage.clear();
     paths.clear();
     mapping.clear();
     counter = 0;
   }
 
-  void load_image(Image& img, const char* file_name) {
-    ETX_ASSERT(img.pixels.f32.a == nullptr);
-    ETX_ASSERT(img.pixels.f32.count == 0);
-    ETX_ASSERT(img.x_distributions.a == nullptr);
-    ETX_ASSERT(img.y_distribution.values.count == 0);
-    ETX_ASSERT(img.y_distribution.values.a == nullptr);
-
+  void load_image(Image& img, ImageStorage& img_storage, const char* file_name) {
     const bool skip_loading = (file_name == nullptr) || (file_name[0] == '\0') || ((file_name[0] == '#') && (file_name[1] == '#'));
 
     std::vector<uint8_t> source_data = {};
 
     if (skip_loading == false) {
+      ETX_ASSERT(img.data.empty());
       img.format = load_data(file_name, source_data, img.isize);
       if ((img.format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
         log::error("Failed to load image from file: %s", file_name);
@@ -335,9 +337,10 @@ struct ImagePoolImpl {
 
     if (img.format == Image::Format::RGBA8) {
       bool convert_from_srgb = (img.options & Image::SkipSRGBConversion) == 0;
-      img.pixels.u8.count = 1llu * img.isize.x * img.isize.y;
-      img.pixels.u8.a = reinterpret_cast<ubyte4*>(calloc(img.pixels.u8.count, sizeof(ubyte4)));
-      img.data_size = static_cast<uint32_t>(img.pixels.u8.count * sizeof(ubyte4));
+      size_t pixel_count = 1llu * img.isize.x * img.isize.y;
+      img_storage.data.resize(pixel_count * sizeof(ubyte4));
+      img.data_size = static_cast<uint32_t>(img_storage.data.size());
+      auto* pixels_u8 = reinterpret_cast<ubyte4*>(img_storage.data.data());
       auto src_data = reinterpret_cast<const ubyte4*>(source_data.data());
       for (uint32_t y = 0; y < img.isize.y; ++y) {
         for (uint32_t x = 0; x < img.isize.x; ++x) {
@@ -348,78 +351,110 @@ struct ImagePoolImpl {
             float3 linear = gamma_to_linear({f.x, f.y, f.z});
             f = {linear.x, linear.y, linear.z, f.w};
           }
-          img.pixels.u8[j] = to_ubyte4(f);
+          pixels_u8[j] = to_ubyte4(f);
         }
       }
     } else if (img.format == Image::Format::RGBA32F) {
-      img.pixels.f32.count = 1llu * img.isize.x * img.isize.y;
-      img.pixels.f32.a = reinterpret_cast<float4*>(calloc(img.pixels.f32.count, sizeof(float4)));
-      img.data_size = static_cast<uint32_t>(img.pixels.f32.count * sizeof(float4));
-      ETX_CRITICAL(img.pixels.f32.a);
-      memcpy(img.pixels.f32.a, source_data.data(), source_data.size());
+      size_t pixel_count = 1llu * img.isize.x * img.isize.y;
+      img_storage.data.resize(pixel_count * sizeof(float4));
+      img.data_size = static_cast<uint32_t>(img_storage.data.size());
+      auto* pixels_f32 = reinterpret_cast<float4*>(img_storage.data.data());
+      ETX_CRITICAL(pixels_f32);
+      memcpy(pixels_f32, source_data.data(), source_data.size());
     } else {
       ETX_FAIL_FMT("Unsupported image format %u", img.format);
       return;
     }
-
-    for (uint32_t i = 0, e = img.isize.x * img.isize.y; i < e; ++i) {
-      if (img.pixel(i).w < 1.0f) {
-        img.options = img.options | Image::HasAlphaChannel;
-        break;
-      }
-    }
   }
 
-  void build_image_sampling_table(Image& img, TaskScheduler& scheduler) {
+  void build_image_sampling_table(Image& img, ImageStorage& img_storage, TaskScheduler& scheduler) {
+    ETX_ASSERT(img.x_distributions.empty());
+    ETX_ASSERT(img.y_distribution.values.count == 0);
+    ETX_ASSERT(img.y_distribution.values.a == nullptr);
     bool uniform_sampling = (img.options & Image::UniformSamplingTable) == Image::UniformSamplingTable;
-    DistributionBuilder y_dist(img.y_distribution, img.isize.y);
-    img.x_distributions.count = img.isize.y;
-    img.x_distributions.a = reinterpret_cast<Distribution*>(calloc(img.x_distributions.count, sizeof(Distribution)));
+
+    // Allocate storage for distributions
+    uint32_t x_entries_per_row = img.isize.x + 1;  // +1 for sentinel
+    uint32_t y_entries_count = img.isize.y + 1;    // +1 for sentinel
+    uint32_t total_x_entries = img.isize.y * x_entries_per_row;
+
+    img_storage.x_distributions_storage.resize(total_x_entries);
+    img_storage.y_distribution_storage.resize(y_entries_count);
+
+    // Set up x_distributions vector in storage
+    img_storage.x_distributions.resize(img.isize.y);
+
+    // Initialize x distribution pointers to point into storage
+    for (uint32_t y = 0; y < img.isize.y; ++y) {
+      auto& dist = img_storage.x_distributions[y];
+      dist.values = {img_storage.x_distributions_storage.data() + y * x_entries_per_row, img.isize.x};
+      dist.total_weight = 0.0f;  // Will be set by finalize
+    }
+
+    // Set up Image views to point to storage
+    img.x_distributions = {img_storage.x_distributions.data(), static_cast<uint32_t>(img_storage.x_distributions.size())};
+    img.y_distribution.values = {img_storage.y_distribution_storage.data(), img.isize.y};
+    img.y_distribution.total_weight = 0.0f;  // Will be set by finalize
 
     std::atomic<float> total_weight = {0.0f};
-    scheduler.execute_linear(img.isize.y, [&img, uniform_sampling, &total_weight, &y_dist](uint32_t begin, uint32_t end, uint32_t) {
+    scheduler.execute(img.isize.y, [&img, &img_storage, uniform_sampling, &total_weight, x_entries_per_row](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t y = begin; y < end; ++y) {
         float v = (float(y) + 0.5f) / img.fsize.y;
         float row_value = 0.0f;
 
-        DistributionBuilder d_x(img.x_distributions[y], img.isize.x);
+        // Build x distribution for this row
+        auto* x_entries = img_storage.x_distributions_storage.data() + y * x_entries_per_row;
         for (uint32_t x = 0; x < img.isize.x; ++x) {
           float u = (float(x) + 0.5f) / img.fsize.x;
           float4 px = img.read(img.fsize * float2{u, v});
           float lum = luminance(to_float3(px));
           row_value += lum;
-          d_x.add(lum);
+          x_entries[x] = {lum, 0.0f, 0.0f};
         }
-        d_x.finalize();
+
+        // Finalize x distribution for this row
+        DistributionBuilder::finalize_entries(x_entries, img.isize.x);
+        img_storage.x_distributions[y].total_weight = x_entries[img.isize.x].cdf;  // Last entry has total weight
 
         float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
         row_value *= row_weight;
-
         total_weight = total_weight + row_value;
-        y_dist.set(y, row_value);
+
+        // Set y distribution entry
+        img_storage.y_distribution_storage[y] = {row_value, 0.0f, 0.0f};
       }
     });
-    y_dist.set_size(img.isize.y);
-    y_dist.finalize();
+
+    // Finalize y distribution
+    float y_total_weight = DistributionBuilder::finalize_entries(img_storage.y_distribution_storage.data(), img.isize.y);
+    img.y_distribution.total_weight = y_total_weight;
 
     img.normalization = total_weight / (img.fsize.x * img.fsize.y);
   }
 
   void free_image(Image& img) {
-    free(img.pixels.f32.a);
-    for (uint64_t i = 0; (img.x_distributions.a != nullptr) && (i < img.y_distribution.values.count); ++i) {
-      free(img.x_distributions[i].values.a);
-    }
-    free(img.x_distributions.a);
-    free(img.y_distribution.values.a);
-    img = {};
+    // Reset all views to empty - storage is managed separately
+    img.pixels.f32 = {};
+    img.pixels.u8 = {};
+    img.x_distributions = {};
+    img.y_distribution = {};
+
+    // Reset other members
+    img.fsize = {};
+    img.offset = {};
+    img.scale = {1.0f, 1.0f};
+    img.isize = {};
+    img.normalization = 0.0f;
+    img.options = 0;
+    img.format = Image::Format::Undefined;
+    img.data_size = 0u;
   }
 
-  TaskScheduler& scheduler;
-  uint64_t counter = 0;
-  std::vector<Image> images;
+  std::vector<Image>& images;
+  std::vector<ImageStorage>& storage;
   std::vector<std::string> paths;
   std::unordered_map<std::string, uint32_t> mapping;
+  uint64_t counter = 0;
 
   uint32_t create_entry(const std::string& path) {
     uint32_t index = static_cast<uint32_t>(images.size());
@@ -430,15 +465,19 @@ struct ImagePoolImpl {
   }
 };
 
-ETX_PIMPL_IMPLEMENT(ImagePool, Impl);
-
-ImagePool::ImagePool(TaskScheduler& s) {
-  ETX_PIMPL_INIT(ImagePool, s);
+ImagePool::ImagePool(std::vector<Image>& external_images, std::vector<ImageStorage>& external_storage) {
+  ETX_PIMPL_CREATE(ImagePool, Impl, external_images, external_storage);
 }
 
 ImagePool::~ImagePool() {
-  ETX_PIMPL_CLEANUP(ImagePool);
+  ETX_PIMPL_DESTROY(ImagePool, Impl);
 }
+
+std::vector<ImageStorage>& ImagePool::storage() {
+  return _private->storage;
+}
+
+ETX_PIMPL_IMPLEMENT(ImagePool, Impl);
 
 void ImagePool::init(uint32_t capacity) {
   _private->init(capacity);
@@ -460,12 +499,14 @@ uint32_t ImagePool::add_from_data(const float4* data, const uint2& dimensions, u
   return _private->add_from_data(data, dimensions, image_options, offset, scale);
 }
 
-uint32_t ImagePool::add_from_spherical_harmonics(const float3 sh_coeffs[9], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
-  return _private->add_from_spherical_harmonics(sh_coeffs, dimensions, image_options, offset, scale);
+uint32_t ImagePool::add_from_spherical_harmonics(TaskScheduler& scheduler, const float3 sh_coeffs[9], const uint2& dimensions, uint32_t image_options, const float2& offset,
+  const float2& scale) {
+  return _private->add_from_spherical_harmonics(scheduler, sh_coeffs, dimensions, image_options, offset, scale);
 }
 
-uint32_t ImagePool::add_from_cubemap(const uint32_t cube_face_images[6], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
-  return _private->add_from_cubemap(cube_face_images, dimensions, image_options, offset, scale);
+uint32_t ImagePool::add_from_cubemap(TaskScheduler& scheduler, const uint32_t cube_face_images[6], const uint2& dimensions, uint32_t image_options, const float2& offset,
+  const float2& scale) {
+  return _private->add_from_cubemap(scheduler, cube_face_images, dimensions, image_options, offset, scale);
 }
 
 const Image& ImagePool::get(uint32_t handle) {
@@ -504,8 +545,8 @@ void ImagePool::add_options(uint32_t index, uint32_t options) {
   _private->images[index].options |= options;
 }
 
-void ImagePool::load_images() {
-  _private->delay_load();
+void ImagePool::load_images(TaskScheduler& scheduler) {
+  _private->delay_load(scheduler);
 }
 
 }  // namespace etx
