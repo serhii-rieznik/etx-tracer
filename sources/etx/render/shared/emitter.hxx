@@ -13,14 +13,29 @@ struct ETX_ALIGNED EmitterProfile {
     Undefined = kInvalidIndex,
   };
 
+  enum class Meta : uint32_t {
+    None = 0u,
+    Atmosphere = 1u << 0u,
+  };
+
+  struct DirectionalData {
+    float3 direction = {};
+    float angular_size = 0.0f;
+    float equivalent_disk_size = 0.0f;
+    float angular_size_cosine = 1.0f;
+  };
+
+  struct AtmosphereData {
+    scattering::Parameters scattering = {};
+  };
+
   SpectralImage emission = {};
-  float3 direction = {};
   Class cls = Class::Undefined;
-  float angular_size = 0.0f;
-  float equivalent_disk_size = 0.0f;
-  float angular_size_cosine = 1.0f;
+  DirectionalData directional = {};
+  AtmosphereData atmosphere = {};
   uint32_t medium_index ETX_INIT_WITH(kInvalidIndex);
-  float pad0 = 0.0f;
+  uint32_t reference_emitter_index ETX_INIT_WITH(kInvalidIndex);
+  uint32_t meta = 0;
 
   EmitterProfile() = default;
 

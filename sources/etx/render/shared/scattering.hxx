@@ -8,14 +8,6 @@ namespace etx {
 
 namespace scattering {
 
-struct Parameters {
-  float altitude = 1000.0f;
-  float anisotropy = 0.825f;
-  float rayleigh_scale = 1.0f;
-  float mie_scale = 1.0f;
-  float ozone_scale = 1.0f;
-};
-
 struct ETX_ALIGNED ScatteringSpectrums {
   SpectralDistribution rayleigh = {};
   SpectralDistribution mie = {};

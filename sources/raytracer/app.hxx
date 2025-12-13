@@ -57,6 +57,7 @@ struct RTApplication {
   void on_mesh_renamed(uint32_t index, const std::string&);
   void on_emitter_changed(uint32_t index);
   void on_emitter_added(uint32_t type);
+  void on_emitter_rebuild(uint32_t index);
   void on_camera_changed(bool film_changed);
   void on_scene_settings_changed();
   void on_denoise_selected();

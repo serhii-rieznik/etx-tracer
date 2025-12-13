@@ -1987,7 +1987,11 @@ void UI::build_scene_objects_window(Scene& scene, const BuildContext& ctx, const
             label = format_string("%u: directional", emitter_index);
             break;
           case EmitterProfile::Class::Environment:
-            label = format_string("%u: environment", emitter_index);
+            if ((emitter.meta & uint32_t(EmitterProfile::Meta::Atmosphere)) != 0) {
+              label = format_string("%u: atmosphere", emitter_index);
+            } else {
+              label = format_string("%u: environment", emitter_index);
+            }
             break;
           default:
             label = format_string("%u", emitter_index);
@@ -2036,9 +2040,31 @@ void UI::build_properties_window(Scene& scene, Camera& camera, const BuildContex
           }
         }
         break;
-      case SelectionKind::Emitter:
-        title_suffix("Emitter", nullptr);
+      case SelectionKind::Emitter: {
+        if ((_selection.index >= 0) && (static_cast<uint32_t>(_selection.index) < scene.emitter_profiles.count)) {
+          uint32_t emitter_index = static_cast<uint32_t>(_selection.index);
+          const auto& emitter = scene.emitter_profiles[emitter_index];
+          const char* emitter_type = nullptr;
+          switch (emitter.cls) {
+            case EmitterProfile::Class::Directional:
+              emitter_type = ((emitter.meta & uint32_t(EmitterProfile::Meta::Atmosphere)) != 0) ? "Sun" : "Directional";
+              break;
+            case EmitterProfile::Class::Environment:
+              emitter_type = ((emitter.meta & uint32_t(EmitterProfile::Meta::Atmosphere)) != 0) ? "Sky" : "Environment";
+              break;
+            case EmitterProfile::Class::Area:
+              emitter_type = "Area";
+              break;
+            default:
+              emitter_type = "Emitter";
+              break;
+          }
+          title_suffix(emitter_type, nullptr);
+        } else {
+          title_suffix("Emitter", nullptr);
+        }
         break;
+      }
       case SelectionKind::Mesh:
         if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _mesh_mapping.size())) {
           title_suffix("Mesh", _mesh_mapping.name(_selection.index));
@@ -2273,36 +2299,11 @@ void UI::build_emitter_selection_properties(Scene& scene, const BuildContext& ct
     }
   }
 
-  const char* emitter_label;
-  switch (emitter.cls) {
-    case EmitterProfile::Class::Directional:
-      emitter_label = format_string("%u (Directional)", emitter_index);
-      break;
-    case EmitterProfile::Class::Environment:
-      emitter_label = format_string("%u (Environment)", emitter_index);
-      break;
-    case EmitterProfile::Class::Area:
-      if (material_index < scene.materials.count) {
-        const char* material_name = _material_mapping.name_for(material_index);
-        if (material_name != nullptr) {
-          emitter_label = format_string("%u: area (%s)", emitter_index, material_name);
-        } else {
-          emitter_label = format_string("%u: area (material %u)", emitter_index, material_index);
-        }
-      } else {
-        emitter_label = format_string("%u: area", emitter_index);
-      }
-      break;
-    default:
-      emitter_label = format_string("%u", emitter_index);
-      break;
-  }
-
   bool common_changed = false;
   if (emitter.cls == EmitterProfile::Class::Area) {
     auto& material = scene.materials[material_index];
     std::string area_preset_id = "area_material_emission_" + std::to_string(material_index);
-    common_changed = emission_picker(scene, emitter_label, area_preset_id.c_str(), material.emission.spectrum_index);
+    common_changed = emission_picker(scene, "Emission", area_preset_id.c_str(), material.emission.spectrum_index);
     if (common_changed && (material_index < scene.materials.count)) {
       float3 integrated = material.emission.spectrum_index < scene.spectrums.count ? scene.spectrums[material.emission.spectrum_index].integrated() : float3{0.0f};
       if ((integrated.x <= 0.0f) && (integrated.y <= 0.0f) && (integrated.z <= 0.0f)) {
@@ -2317,7 +2318,7 @@ void UI::build_emitter_selection_properties(Scene& scene, const BuildContext& ct
     }
   } else {
     std::string emitter_preset_id = "emitter_emission_" + std::to_string(emitter_index);
-    common_changed = emission_picker(scene, emitter_label, emitter_preset_id.c_str(), emitter.emission.spectrum_index);
+    common_changed = emission_picker(scene, "Emission", emitter_preset_id.c_str(), emitter.emission.spectrum_index);
   }
 
   ImGui::Spacing();
@@ -2380,28 +2381,51 @@ void UI::build_emitter_selection_properties(Scene& scene, const BuildContext& ct
 
     ImGui::Text("Angular Size");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    float angular_size_deg = emitter.angular_size * 180.0f / kPi;
+    float angular_size_deg = emitter.directional.angular_size * 180.0f / kPi;
     if (ImGui::DragFloat("##angularsize", &angular_size_deg, 0.1f, 0.0f, 90.0f, "%.2f°", ImGuiSliderFlags_NoRoundToFormat)) {
-      emitter.angular_size = angular_size_deg * kPi / 180.0f;
-      emitter.angular_size_cosine = cosf(emitter.angular_size / 2.0f);
-      emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
+      emitter.directional.angular_size = angular_size_deg * kPi / 180.0f;
+      emitter.directional.angular_size_cosine = cosf(emitter.directional.angular_size / 2.0f);
+      emitter.directional.equivalent_disk_size = 2.0f * std::tan(emitter.directional.angular_size / 2.0f);
       changed = true;
     }
 
     // Convert emitter direction to angles for editing
-    auto spherical = to_spherical(emitter.direction);
+    auto spherical = to_spherical(emitter.directional.direction);
     float2 angles = {spherical.phi, spherical.theta};
 
     if (angle_editor("Light Direction", angles, -180.0f, 180.0f, -89.99f, 89.99f, 89.99f)) {
       // Convert angles back to direction
-      emitter.direction = from_spherical(angles.x, angles.y);
+      emitter.directional.direction = from_spherical(angles.x, angles.y);
       changed = true;
     }
-  } else if (emitter.cls == EmitterProfile::Class::Environment) {
-    // Show current emission spectrum info
-    ETX_ASSERT(emitter.emission.spectrum_index < scene.spectrums.count);
-    float3 integrated = scene.spectrums[emitter.emission.spectrum_index].integrated();
-    ImGui::Text("Emission: (%.2f, %.2f, %.2f)", integrated.x, integrated.y, integrated.z);
+  }
+
+  if ((emitter.meta & uint32_t(EmitterProfile::Meta::Atmosphere)) != 0) {
+    uint32_t sky_emitter_index = (emitter.cls == EmitterProfile::Class::Environment) ? emitter_index : emitter.reference_emitter_index;
+
+    if (sky_emitter_index < scene.emitter_profiles.count) {
+      auto& sky_emitter = scene.emitter_profiles[sky_emitter_index];
+
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::Spacing();
+
+      if (ImGui::CollapsingHeader("Atmosphere Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::DragFloat("##altitude", &sky_emitter.atmosphere.scattering.altitude, 10.0f, 100.0f, 100000.0f, "Altitude: %.0f m");
+        ImGui::SliderFloat("##anisotropy", &sky_emitter.atmosphere.scattering.anisotropy, -0.999f, 0.999f, "Anisotropy: %.3f");
+        ImGui::DragFloat("##rayleigh", &sky_emitter.atmosphere.scattering.rayleigh_scale, 0.0f, 0.0f, 10.0f, "Rayleigh: %.3f");
+        ImGui::DragFloat("##mie", &sky_emitter.atmosphere.scattering.mie_scale, 0.0f, 0.0f, 10.0f, "Mie: %.3f");
+        ImGui::DragFloat("##ozone", &sky_emitter.atmosphere.scattering.ozone_scale, 0.0f, 0.0f, 10.0f, "Ozone: %.3f");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        if (ImGui::Button("Rebuild Atmosphere", ImVec2(-1.0f, 0.0f))) {
+          if (callbacks.emitter_rebuild) {
+            callbacks.emitter_rebuild(emitter_index);
+          }
+        }
+      }
+    }
   }
   if (!ctx.scene_editable)
     ImGui::EndDisabled();

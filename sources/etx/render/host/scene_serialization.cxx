@@ -1447,14 +1447,14 @@ struct SceneSerializationImpl {
       e.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f}));
     }
 
-    e.direction = float3{1.0f, 1.0f, 1.0f};
+    e.directional.direction = float3{1.0f, 1.0f, 1.0f};
     if (get_param(material, "direction")) {
       float value[3] = {};
       if (sscanf(_data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-        e.direction = {value[0], value[1], value[2]};
+        e.directional.direction = {value[0], value[1], value[2]};
       }
     }
-    e.direction = normalize(e.direction);
+    e.directional.direction = normalize(e.directional.direction);
 
     if (get_param(material, "image")) {
       char tmp_buffer[2048] = {};
@@ -1465,7 +1465,7 @@ struct SceneSerializationImpl {
     if (get_param(material, "angular_diameter")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
-        e.angular_size = val * kPi / 180.0f;
+        e.directional.angular_size = val * kPi / 180.0f;
       }
     }
 

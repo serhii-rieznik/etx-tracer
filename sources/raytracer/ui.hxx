@@ -77,6 +77,7 @@ struct UI {
     std::function<void(uint32_t, const std::string&)> mesh_renamed;
     std::function<void(uint32_t)> emitter_changed;
     std::function<void(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
+    std::function<void(uint32_t)> emitter_rebuild;
     std::function<void(bool)> camera_changed;
     std::function<void()> scene_settings_changed;
     std::function<void()> denoise_selected;

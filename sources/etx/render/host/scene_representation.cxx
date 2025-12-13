@@ -510,6 +510,7 @@ struct SceneRepresentationImpl {
 
   void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
   void add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params);
+  void rebuild_atmosphere_emitter(uint32_t emitter_index);
 
   bool finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len, bool force_tangents,
     bool spectral_scene);
@@ -738,8 +739,8 @@ uint32_t SceneRepresentation::add_directional_emitter(const float3& direction, c
   auto& e = _private->data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
   e.emission.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_luminance(color));
   e.emission.image_index = kInvalidIndex;
-  e.direction = normalize(direction);
-  e.angular_size = angular_diameter_degrees * kPi / 180.0f;
+  e.directional.direction = normalize(direction);
+  e.directional.angular_size = angular_diameter_degrees * kPi / 180.0f;
   e.medium_index = medium_index;
 
   return uint32_t(_private->data.emitter_instances.size() - 1);
@@ -749,8 +750,16 @@ void SceneRepresentation::add_atmosphere_emitter(const AtmosphereEmitterParamete
   _private->add_atmosphere_emitter(params);
 }
 
+void SceneRepresentation::rebuild_atmosphere_emitter(uint32_t emitter_index) {
+  _private->rebuild_atmosphere_emitter(emitter_index);
+}
+
 void SceneRepresentationImpl::add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params) {
   context.add_atmosphere_emitter(params, data, scene, scheduler);
+}
+
+void SceneRepresentationImpl::rebuild_atmosphere_emitter(uint32_t emitter_index) {
+  context.rebuild_atmosphere_emitter(emitter_index, data, scene, scheduler);
 }
 
 template <class T>
@@ -1309,8 +1318,8 @@ void build_emitters_distribution(Scene& scene) {
   for (uint32_t i = 0; i < scene.emitter_profiles.count; ++i) {
     auto& emitter = scene.emitter_profiles[i];
     if (emitter.is_distant()) {
-      emitter.equivalent_disk_size = 2.0f * std::tan(emitter.angular_size / 2.0f);
-      emitter.angular_size_cosine = std::cos(emitter.angular_size / 2.0f);
+      emitter.directional.equivalent_disk_size = 2.0f * std::tan(emitter.directional.angular_size / 2.0f);
+      emitter.directional.angular_size_cosine = std::cos(emitter.directional.angular_size / 2.0f);
       float additional_weight = kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius;
       for (uint32_t j = 0; j < scene.emitter_instances.count; ++j) {
         if (scene.emitter_instances[j].profile == i) {
@@ -1681,9 +1690,10 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "newmtl et::dir\n";
     float3 dir_color = spectrum_rgb(directional_profile->emission.spectrum_index);
     materials_stream << "color " << dir_color.x << " " << dir_color.y << " " << dir_color.z << "\n";
-    materials_stream << "direction " << directional_profile->direction.x << " " << directional_profile->direction.y << " " << directional_profile->direction.z << "\n";
-    if (directional_profile->angular_size >= kEpsilon) {
-      materials_stream << "angular_diameter " << (directional_profile->angular_size * 180.0f / kPi) << "\n";
+    materials_stream << "direction " << directional_profile->directional.direction.x << " " << directional_profile->directional.direction.y << " "
+                     << directional_profile->directional.direction.z << "\n";
+    if (directional_profile->directional.angular_size >= kEpsilon) {
+      materials_stream << "angular_diameter " << (directional_profile->directional.angular_size * 180.0f / kPi) << "\n";
     }
     std::string dir_path = texture_path(directional_profile->emission.image_index);
     if (dir_path.empty() == false) {

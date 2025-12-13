@@ -69,6 +69,7 @@ void RTApplication::init() {
   ui.callbacks.mesh_renamed = std::bind(&RTApplication::on_mesh_renamed, this, std::placeholders::_1, std::placeholders::_2);
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
   ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
+  ui.callbacks.emitter_rebuild = std::bind(&RTApplication::on_emitter_rebuild, this, std::placeholders::_1);
   ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1);
   ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
   ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
@@ -464,6 +465,12 @@ void RTApplication::on_emitter_added(uint32_t type) {
   }
 
   scene.rebuild_area_emitters();
+  integrator_thread.restart();
+}
+
+void RTApplication::on_emitter_rebuild(uint32_t index) {
+  integrator_thread.stop(Integrator::Stop::Immediate);
+  scene.rebuild_atmosphere_emitter(index);
   integrator_thread.restart();
 }
 

@@ -146,7 +146,7 @@ struct PathVertex {
       }
 
       case EmitterProfile::Class::Directional: {
-        return direction_matches(in_direction, em.direction) ? pdf_discrete : 0.0f;
+        return direction_matches(in_direction, em.directional.direction) ? pdf_discrete : 0.0f;
       }
 
       case EmitterProfile::Class::Environment: {

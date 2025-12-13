@@ -64,6 +64,7 @@ struct SceneRepresentation {
   uint32_t add_environment_emitter(const float3& color, uint32_t medium_index);
   uint32_t add_directional_emitter(const float3& direction, const float3& color, float angular_diameter_degrees, uint32_t medium_index);
   void add_atmosphere_emitter(const AtmosphereEmitterParameters& params);
+  void rebuild_atmosphere_emitter(uint32_t emitter_index);
 
   Camera& camera();
   const Camera& camera() const;

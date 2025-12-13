@@ -198,6 +198,18 @@ constexpr const float kYIntegral() {
 
 }  // namespace spectrum
 
+namespace scattering {
+
+struct Parameters {
+  float altitude = 1000.0f;
+  float anisotropy = 0.825f;
+  float rayleigh_scale = 1.0f;
+  float mie_scale = 1.0f;
+  float ozone_scale = 1.0f;
+};
+
+}  // namespace scattering
+
 struct SpectralQuery {
   enum : uint32_t {
     Spectral = 1u << 0u,
@@ -325,12 +337,12 @@ struct SpectralResponse : public SpectralQuery {
     return spectral() ? (value <= kEpsilon) : (integrated.x <= kEpsilon) && (integrated.y <= kEpsilon) && (integrated.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                        \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
-    integrated OP other.integrated;                                            \
-    value OP other.value;                                                      \
-    return *this;                                                              \
+#define SPECTRAL_OP(OP)                                                       \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
+    integrated OP other.integrated;                                           \
+    value OP other.value;                                                     \
+    return *this;                                                             \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)

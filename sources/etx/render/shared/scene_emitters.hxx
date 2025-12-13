@@ -61,15 +61,15 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const
 
   switch (em_inst.cls) {
     case EmitterProfile::Class::Directional: {
-      if ((query.directly_visible == false) || (em.angular_size <= 0.0f) || (dot(query.direction, em.direction) < em.angular_size_cosine)) {
+      if ((query.directly_visible == false) || (em.directional.angular_size <= 0.0f) || (dot(query.direction, em.directional.direction) < em.directional.angular_size_cosine)) {
         return {spect, 0.0f};
       }
 
       pdf_dir = 1.0f;
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       pdf_dir_out = pdf_dir * pdf_area;
-      float2 uv = disk_uv(em.direction, query.direction, em.equivalent_disk_size, em.angular_size_cosine);
-      SpectralResponse direct_scale = 1.0f / (scene.spectrums[em.emission.spectrum_index](spect) * kDoublePi * (1.0f - em.angular_size_cosine));
+      float2 uv = disk_uv(em.directional.direction, query.direction, em.directional.equivalent_disk_size, em.directional.angular_size_cosine);
+      SpectralResponse direct_scale = 1.0f / (scene.spectrums[em.emission.spectrum_index](spect) * kDoublePi * (1.0f - em.directional.angular_size_cosine));
       return apply_image(spect, em.emission, uv, scene, nullptr) * direct_scale;
     }
 
@@ -130,7 +130,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, 
   switch (em_inst.cls) {
     case EmitterProfile::Class::Directional: {
       pdf_dir = 1.0f;
-      float2 uv = disk_uv(em.direction, in_direction, em.equivalent_disk_size, em.angular_size_cosine);
+      float2 uv = disk_uv(em.directional.direction, in_direction, em.directional.equivalent_disk_size, em.directional.angular_size_cosine);
       return apply_image(spect, em.emission, uv, scene, nullptr);
     }
 
@@ -174,18 +174,19 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em_inst, const Spect
 
     case EmitterProfile::Class::Directional: {
       float2 disk_sample = {};
-      if (em.angular_size > 0.0f) {
-        auto basis = orthonormal_basis(em.direction);
+      if (em.directional.angular_size > 0.0f) {
+        auto basis = orthonormal_basis(em.directional.direction);
         disk_sample = sample_disk(smp);
-        result.direction = normalize(em.direction + basis.u * disk_sample.x * (0.5f * em.equivalent_disk_size) + basis.v * disk_sample.y * (0.5f * em.equivalent_disk_size));
+        result.direction = normalize(em.directional.direction + basis.u * disk_sample.x * (0.5f * em.directional.equivalent_disk_size) +
+                                     basis.v * disk_sample.y * (0.5f * em.directional.equivalent_disk_size));
       } else {
-        result.direction = em.direction;
+        result.direction = em.directional.direction;
       }
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir = 1.0f;
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
       result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
-      result.normal = em.direction * (-1.0f);
+      result.normal = em.directional.direction * (-1.0f);
       result.value = apply_image(spect, em.emission, disk_sample * 0.5f + 0.5f, scene, nullptr);
       break;
     }
@@ -276,11 +277,12 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
     }
 
     case EmitterProfile::Class::Directional: {
-      auto direction_to_scene = em.direction * (-1.0f);
+      auto direction_to_scene = em.directional.direction * (-1.0f);
       auto basis = orthonormal_basis(direction_to_scene);
       auto pos_sample = sample_disk(smp.next_2d());
       auto dir_sample = sample_disk(smp.next_2d());
-      result.direction = normalize(direction_to_scene + basis.u * dir_sample.x * (0.5f * em.equivalent_disk_size) + basis.v * dir_sample.y * (0.5f * em.equivalent_disk_size));
+      result.direction = normalize(
+        direction_to_scene + basis.u * dir_sample.x * (0.5f * em.directional.equivalent_disk_size) + basis.v * dir_sample.y * (0.5f * em.directional.equivalent_disk_size));
       result.triangle_index = kInvalidIndex;
       result.pdf_dir = 1.0f;
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);

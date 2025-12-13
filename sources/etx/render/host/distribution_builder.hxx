@@ -8,7 +8,6 @@ struct DistributionBuilder {
   DistributionBuilder(Distribution& dist, uint32_t size)
     : _dist(dist)
     , _capacity(size + 1) {
-    // ETX_ASSERT(size > 0);
     _values.count = size;
     _values.a = reinterpret_cast<Distribution::Entry*>(calloc(_capacity, sizeof(Distribution::Entry)));
   }

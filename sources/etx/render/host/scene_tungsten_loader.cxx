@@ -291,8 +291,8 @@ PrimitiveLoadResult handle_infinite_sphere_cap(const nlohmann::json& prim, Scene
   auto& d = data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
   d.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_luminance({power, power, power}));
   d.emission.image_index = kInvalidIndex;
-  d.direction = direction;
-  d.angular_size = 2.0f * cap_angle * kPi / 180.0f;
+  d.directional.direction = direction;
+  d.directional.angular_size = 2.0f * cap_angle * kPi / 180.0f;
 
   r.loaded = true;
   return r;
