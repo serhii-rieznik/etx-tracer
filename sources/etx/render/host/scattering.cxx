@@ -85,11 +85,11 @@ float phase_mie(float l_dot_v, float g) {
   return (3.0f / 2.0f) * ((1.0f - g * g) * (1.0f + l_dot_v * l_dot_v)) / ((2.0f + g * g) * powf(1.0f + g * g - 2.0f * g * l_dot_v, 1.5f)) * (1.0f / kDoublePi);
 }
 
-float3 sample_optical_length(const float3& pos, const float3& light_direction, const Image& img) {
+float3 sample_optical_length(const float3& pos, const float3& light_direction, const OpticalDepthData& extinction) {
   float height = length(pos);
   float n_dot_l = dot(pos / height, light_direction);
   float2 uv = precomputed_params_to_uv({n_dot_l, height - kPlanetRadius});
-  float4 e = img.evaluate(uv, nullptr);
+  float4 e = extinction.evaluate(uv);
   ETX_VALIDATE(e);
   return {e.x, e.y, e.z};
 }
@@ -122,7 +122,7 @@ float3 optical_length(const float3& origin, const float3& direction, float total
   return result;
 }
 
-void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const Image& extinction, const float3& view_direction, const float3& light_direction,
+void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const OpticalDepthData& extinction, const float3& view_direction, const float3& light_direction,
   const Parameters& parameters, SpectralDistribution& result) {
   const float3 origin = {0.0f, kPlanetRadius + parameters.altitude, 0.0f};
   const float l_dot_v = dot(light_direction, view_direction);
@@ -217,7 +217,7 @@ void extinction_spectrum_at_direction(const ScatteringSpectrums& spectrums, cons
 
 }  // namespace
 
-void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, Image& extinction) {
+void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepthData& extinction) {
   constexpr uint32_t kSpectrumStepSize = 5u;
 
   log::info("Precomputing atmosphere spectrums and extinction image %u x %u...", kExtinctionImageWidth, kExtinctionImageHeight);
@@ -260,43 +260,29 @@ void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, Image& extin
   spectrums.ozone = SPD::from_samples(o_samples.data(), o_samples.size());
   spectrums.black = SPD::from_samples(b_samples.data(), b_samples.size());
 
-  extinction = {};
+  // Precompute extinction data
+  log::info("Precomputing extinction data...");
+  auto t1 = std::chrono::steady_clock::now();
+  scheduler.execute(kExtinctionImageSize, [&extinction](uint32_t begin, uint32_t end, uint32_t) {
+    for (uint32_t i = begin; i < end; ++i) {
+      uint32_t x = i % kExtinctionImageWidth;
+      uint32_t y = i / kExtinctionImageWidth;
+      float2 uv = {float(x) / float(kExtinctionImageWidth), float(y) / float(kExtinctionImageHeight)};
+      float2 params = scattering::uv_to_precomputed_params(uv);
+      float3 direction = {sqrtf(1.0f - params.x * params.x), params.x, 0.0f};
+      float3 origin = {0.0f, kPlanetRadius + params.y, 0.0f};
+      float total_distance = distance_to_sphere(origin, direction, {}, kOuterSphereSize);
+      float3 value = scattering::optical_length(origin, direction, total_distance);
+      ETX_VALIDATE(value);
+      extinction.data[x + kExtinctionImageWidth * y] = {value.x, value.y, value.z, 0.0f};
+    }
+  });
+  auto t2 = std::chrono::steady_clock::now();
+  log::info("Precomputed extinction data: %.3f ms", (t2 - t1).count() / 1.0e+6);
 }
 
-void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, Image& extinction, float4* buffer,
+void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const OpticalDepthData& extinction, float4* buffer,
   const ScatteringSpectrums& spectrums, TaskScheduler& scheduler) {
-  if (extinction.data_size == 0) {
-    auto t1 = std::chrono::steady_clock::now();
-    log::info("Precomputing extinction image...");
-
-    extinction = {};
-    extinction.format = Image::Format::RGBA32F;
-    extinction.pixels.f32 = make_array_view<float4>(calloc(kExtinctionImageSize, sizeof(float4)), kExtinctionImageSize);
-    extinction.isize = {kExtinctionImageWidth, kExtinctionImageHeight};
-    extinction.fsize = {float(kExtinctionImageWidth), float(kExtinctionImageHeight)};
-    extinction.data_size = static_cast<uint32_t>(sizeof(float4) * kExtinctionImageSize);
-    float4* image = extinction.pixels.f32.a;
-    scheduler.execute(kExtinctionImageSize, [image](uint32_t begin, uint32_t end, uint32_t) {
-      for (uint32_t i = begin; i < end; ++i) {
-        uint32_t x = i % kExtinctionImageWidth;
-        uint32_t y = i / kExtinctionImageWidth;
-        float2 uv = {float(x) / float(kExtinctionImageWidth), float(y) / float(kExtinctionImageHeight)};
-        float2 params = scattering::uv_to_precomputed_params(uv);
-        float3 direction = {sqrtf(1.0f - params.x * params.x), params.x, 0.0f};
-        float3 origin = {0.0f, kPlanetRadius + params.y, 0.0f};
-        float total_distance = distance_to_sphere(origin, direction, {}, kOuterSphereSize);
-        float3 value = scattering::optical_length(origin, direction, total_distance);
-        ETX_VALIDATE(value);
-        image[x + kExtinctionImageWidth * y] = {value.x, value.y, value.z, 0.0f};
-      }
-    });
-    auto t2 = std::chrono::steady_clock::now();
-    log::info("Precomputed extinction image: %.3f ms", (t2 - t1).count() / 1.0e+6);
-    char path[2048] = {};
-    env().file_in_tmp("optical-len.hdr", path, sizeof(path));
-    stbi_write_hdr(path, kExtinctionImageWidth, kExtinctionImageHeight, 4, &image->x);
-  }
-
   log::info("Generating sky image %u x %u...", dimensions.x, dimensions.y);
 
   auto t0 = std::chrono::steady_clock::now();

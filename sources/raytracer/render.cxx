@@ -56,8 +56,9 @@ RenderContext::~RenderContext() {
 }
 
 void RenderContext::init() {
+  constexpr float4 kBlack = {};
   _private->image_pool.init(1024u);
-  _private->def_image_handle = _private->image_pool.add_from_file("##default", Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+  _private->def_image_handle = _private->image_pool.add_from_data(&kBlack, {1u, 1u}, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
   _private->image_pool.load_images(_private->scheduler);
 
   sg_desc context = {};

@@ -189,13 +189,12 @@ struct SceneRepresentationImpl {
     , ior_database(db) {
     data.images.init(1024u);
     data.mediums.init(1024u);
-    scattering::init(scheduler, data.scattering_spectrums, data.atmosphere_extinction);
+    scattering::init(scheduler, data.scattering_spectrums, data.extinction_data);
     build_camera(active_camera, {5.0f, 5.0f, 5.0f}, normalize(float3{0.0f, 0.0f, 0.0f} - float3{5.0f, 5.0f, 5.0f}), kWorldUp, {1280u, 720u}, 26.99f);
   }
 
   ~SceneRepresentationImpl() {
     cleanup();
-    data.images.free_image(data.atmosphere_extinction);
     data.images.cleanup();
     data.mediums.cleanup();
   }

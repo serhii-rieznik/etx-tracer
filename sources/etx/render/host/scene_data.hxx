@@ -58,7 +58,7 @@ struct SceneData {
   std::string geometry_file_name;
   std::string materials_file_name;
   scattering::ScatteringSpectrums scattering_spectrums;
-  Image atmosphere_extinction;
+  scattering::OpticalDepthData extinction_data;
 
   SceneData(TaskScheduler& s)
     : images(images_vector, images_storage_vector)
@@ -66,8 +66,6 @@ struct SceneData {
   }
 
   void clear(TaskScheduler& scheduler) {
-    images.free_image(atmosphere_extinction);
-
     images.remove_all();
     mediums.remove_all();
     vertices.pos.clear();
@@ -98,7 +96,6 @@ struct SceneData {
     materials_file_name.clear();
     images.init(1024u);
     mediums.init(1024u);
-    scattering::init(scheduler, scattering_spectrums, atmosphere_extinction);
   }
 
   SceneData(const SceneData&) = delete;
@@ -226,34 +223,47 @@ struct SceneData {
     constexpr uint2 kSunImageDimensions = uint2{128u, 128u};
     constexpr uint32_t kSkyImageBaseDimensions = 1024u;
 
+    uint2 sky_image_dimensions = uint2{kSkyImageBaseDimensions, 2u * kSkyImageBaseDimensions};
+    sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * params.quality));
+    sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * params.quality));
+
+    // Calculate maximum buffer size needed for both sun and sky images
+    const uint32_t max_sky_pixels = sky_image_dimensions.x * sky_image_dimensions.y;  // 1024 * 2048
+    const uint32_t max_sun_pixels = kSunImageDimensions.x * kSunImageDimensions.y;    // 128 * 128
+    const uint32_t max_buffer_size = max(max_sky_pixels, max_sun_pixels);
+
+    // Single reusable buffer to avoid reallocations
+    std::vector<float4> image_buffer;
+    image_buffer.resize(max_buffer_size);
+
     auto sun_spectrum = SpectralDistribution::from_normalized_black_body(5772.0f, 1.0f);
 
     uint32_t sun_emitter_index = kInvalidIndex;
     if (params.sun_scale > 0.0f) {
-      auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Directional);
       sun_emitter_index = uint32_t(emitter_profiles.size());
+
+      auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Directional);
       instance.profile = sun_emitter_index;
 
-      auto& d = emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
-      d.emission.spectrum_index = add_spectrum(sun_spectrum);
-      d.directional.angular_size = params.angular_diameter_degrees * kPi / 180.0f;
-      d.directional.direction = normalized_direction;
-      d.meta = uint32_t(EmitterProfile::Meta::Atmosphere);
+      auto& profile = emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
+      profile.emission.spectrum_index = add_spectrum(sun_spectrum);
+      profile.directional.angular_size = params.angular_diameter_degrees * kPi / 180.0f;
+      profile.directional.direction = normalized_direction;
+      profile.meta = uint32_t(EmitterProfile::Meta::Atmosphere);
 
-      spectrum_values[d.emission.spectrum_index].scale(params.sun_scale);
+      spectrum_values[profile.emission.spectrum_index].scale(params.sun_scale);
 
-      if (d.directional.angular_size > 0.0f) {
-        d.emission.image_index = add_image(nullptr, kSunImageDimensions, 0, {}, {1.0f, 1.0f});
-        auto& img = images.get(d.emission.image_index);
-        scattering::generate_sun_image(static_cast<const scattering::Parameters&>(params), kSunImageDimensions, normalized_direction, d.directional.angular_size, img.pixels.f32.a,
-          scattering_spectrums, scheduler);
+      if (profile.directional.angular_size > 0.0f) {
+        scattering::generate_sun_image(static_cast<const scattering::Parameters&>(params), kSunImageDimensions, normalized_direction, profile.directional.angular_size,
+          image_buffer.data(), scattering_spectrums, scheduler);
+
+        profile.emission.image_index = add_image(image_buffer.data(), kSunImageDimensions, 0, {}, {1.0f, 1.0f});
       }
     }
 
     if (params.sky_scale > 0.0f) {
-      uint2 sky_image_dimensions = uint2{kSkyImageBaseDimensions, 2u * kSkyImageBaseDimensions};
-      sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * params.quality));
-      sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * params.quality));
+      scattering::generate_sky_image(static_cast<const scattering::Parameters&>(params), sky_image_dimensions, normalized_direction, extinction_data, image_buffer.data(),
+        scattering_spectrums, scheduler);
 
       auto& instance = emitter_instances.emplace_back(EmitterProfile::Class::Environment);
       instance.profile = uint32_t(emitter_profiles.size());
@@ -261,7 +271,7 @@ struct SceneData {
       uint32_t sky_emitter_index = uint32_t(emitter_profiles.size());
       auto& e = emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
       e.emission.spectrum_index = add_spectrum(sun_spectrum);
-      e.emission.image_index = add_image(nullptr, sky_image_dimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+      e.emission.image_index = add_image(image_buffer.data(), sky_image_dimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       e.directional.direction = normalized_direction;
       e.meta = uint32_t(EmitterProfile::Meta::Atmosphere);
       e.reference_emitter_index = sun_emitter_index;
@@ -271,11 +281,10 @@ struct SceneData {
       }
 
       spectrum_values[e.emission.spectrum_index].scale(params.sky_scale);
-
-      auto& img = images.get(e.emission.image_index);
-      scattering::generate_sky_image(static_cast<const scattering::Parameters&>(params), sky_image_dimensions, normalized_direction, atmosphere_extinction, img.pixels.f32.a,
-        scattering_spectrums, scheduler);
     }
+
+    scene.emitter_profiles = {emitter_profiles.data(), emitter_profiles.size()};
+    scene.emitter_instances = {emitter_instances.data(), emitter_instances.size()};
   }
 
   void rebuild_atmosphere_emitter(uint32_t emitter_index, Scene& scene, TaskScheduler& scheduler) {
@@ -303,7 +312,7 @@ struct SceneData {
 
     if (sky_emitter.emission.image_index != kInvalidIndex) {
       auto& img = images.get(sky_emitter.emission.image_index);
-      scattering::generate_sky_image(sky_emitter.atmosphere.scattering, img.isize, sun_direction, atmosphere_extinction, img.pixels.f32.a, scattering_spectrums, scheduler);
+      scattering::generate_sky_image(sky_emitter.atmosphere.scattering, img.isize, sun_direction, extinction_data, img.pixels.f32.a, scattering_spectrums, scheduler);
       images.add_options(sky_emitter.emission.image_index, Image::BuildSamplingTable);
       images.load_images(scheduler);
     }

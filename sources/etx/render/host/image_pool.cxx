@@ -359,7 +359,6 @@ struct ImagePoolImpl {
     std::vector<uint8_t> source_data = {};
 
     if (skip_loading == false) {
-      ETX_ASSERT(img.data.empty());
       img.format = load_data(file_name, source_data, img.isize);
       if ((img.format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
         log::error("Failed to load image from file: %s", file_name);
@@ -414,7 +413,7 @@ struct ImagePoolImpl {
   }
 
   void build_image_sampling_table(Image& img, ImageStorage& img_storage, TaskScheduler& scheduler) {
-    ETX_ASSERT(img.x_distributions.empty());
+    ETX_ASSERT(img.x_distributions.count == 0);
     ETX_ASSERT(img.y_distribution.values.count == 0);
     ETX_ASSERT(img.y_distribution.values.a == nullptr);
     bool uniform_sampling = (img.options & Image::UniformSamplingTable) == Image::UniformSamplingTable;
@@ -494,6 +493,7 @@ struct ImagePoolImpl {
   uint32_t create_entry(const std::string& path) {
     uint32_t index = static_cast<uint32_t>(images.size());
     images.emplace_back();
+    storage.emplace_back();
     paths.emplace_back(path);
     mapping[path] = index;
     return index;
