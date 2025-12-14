@@ -1,8 +1,0 @@
-{
-  "code" : "pt.cu",
-  "source" : "../output/pt.ptx",
-  "entry-points" : [
-    "raygen", 
-    "main"
-  ]
-}

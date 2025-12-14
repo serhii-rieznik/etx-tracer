@@ -1,5 +1,4 @@
 #include <etx/core/core.hxx>
-#include <etx/core/core.hxx>
 
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/bsdf.hxx>
@@ -84,7 +83,7 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void update(std::atomic<Integrator::State>& current_state) {
-    if ((current_task.data == kInvalidHandle) || (current_state == Integrator::State::Stopped) || (scheduler.completed(current_task) == false)) {
+    if ((current_task.data == Task::InvalidHandle) || (current_state == Integrator::State::Stopped) || (scheduler.completed(current_task) == false)) {
       return;
     }
 

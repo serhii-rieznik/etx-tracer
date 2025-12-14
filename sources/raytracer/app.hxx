@@ -13,8 +13,6 @@
 #include <etx/rt/integrators/vcm_cpu.hxx>
 #include <etx/rt/rt.hxx>
 
-#include <etx/gpu/gpu.hxx>
-
 #include "ui.hxx"
 #include "render.hxx"
 #include "camera_controller.hxx"

@@ -4,8 +4,6 @@
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/shared/scene.hxx>
 
-#include <etx/gpu/gpu.hxx>
-
 namespace etx {
 
 struct Film;

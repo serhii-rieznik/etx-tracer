@@ -9,21 +9,11 @@ These libraries and tools you have to install by yourself:
 - CMake
 - [Intel Embree](https://www.embree.org/) for CPU ray-tracing
 
-#### For GPU ray tracing which is now being updated, you need:
-- [CUDA](https://developer.nvidia.com/cuda-downloads)
-- [OptiX](https://developer.nvidia.com/designworks/optix/download)
-
 ## Building for Windows
 Windows is the only one platform, which is completely supported at the moment.
 - download and install the latest release of Intel Embree from [GitHub](https://github.com/embree/embree/releases);
   - add environment variable `EMBREE_LOCATION` pointing to the Embree installation folder provide this parameter to CMake (i.e `cmake -DEMBREE_LOCATION=path/to/embree`);
   - copy embree binaries (embree4.dll and other required dlls) to the `bin` folder in the root directory of `etx-tracer`
-
-Optionally:
-  - download and install CUDA and OptiX;
-  - add environment variable `OptiX_INSTALL_DIR` pointing to the OptiX installation folder;
-    
-If OptiX and/or CUDA is not available - solution will still be created, but GPU rendering will not be available. Provide `DISABLE_GPU` option to CMake to force disable GPU support
 
 After that generating and building a project should be as simple as creating a folder for build files and calling CMake, something like:
 ```cmake

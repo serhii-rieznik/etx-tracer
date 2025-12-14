@@ -7,7 +7,6 @@ Physically based ray tracer focusing on spectral rendering, participating media,
 - **CPU Path Tracing**: classic path tracing with media support.
 - **CPU Bidirectional Path Tracing (BDPT)**: modes for Path Tracing, Light Tracing, BDPT Fast, BDPT Full; options for direct hits, connect-to-camera, connect-to-light, connect vertices, MIS, blue noise.
 - **CPU Vertex Connection and Merging (VCM)**: merging via spatial grid; kernels (Tophat/Epanechnikov), initial radius and decay; connection options; MIS; blue noise.
-- **GPU backend (OptiX)**: device, pipelines, buffers; experimental PT/VCM kernels and OptiX denoiser.
 
 ### Spectral pipeline
 
@@ -131,11 +130,10 @@ Names starting with `et::` inside MTL files are not surface materials. They are 
 - **Adaptive sampling**: per-pixel noise estimation and active-pixel tracking; progressive preview via pixel downscaling.
 - **Denoisers**:
   - Intel OpenImageDenoise (CPU) with albedo/normal guides.
-  - OptiX denoiser (GPU).
 
 ### Backends, infrastructure, and UI
 
-- **CPU tracing** via Embree; **GPU** via OptiX (optional).
+- **CPU tracing** via Embree.
 - **Task scheduler** for multithreaded rendering.
 - **Sokol + ImGui UI**: integrator selection, options (BDPT/VCM), denoise, camera/material/medium controls, scene load/save.
 

@@ -48,9 +48,7 @@ Order is a subject to change, but here are main things to do:
 - [x] boilerplate code for window, input handling, etc;
 - [x] basic boilerplate code for ray-tracing;
 - [x] simplest CPU path-tracer;
-- [x] OptiX and GPU-related code basics;
 - [x] additional code for ray-tracing;
-- [ ] GPU path tracing;
 - [x] VCM integrators (CPU and GPU);
 - [x] Subsurface scattering;
 - [x] cross-platform, cross-API support;
