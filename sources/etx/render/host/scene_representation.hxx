@@ -51,6 +51,7 @@ struct SceneRepresentation {
   std::string rename_mesh(uint32_t index, const char* name);
   void rebuild_area_emitters();
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
+  void update_medium_bounds();
 
   struct AtmosphereEmitterParameters : public scattering::Parameters {
     float3 direction = {0.0f, 0.8944f, 0.4472f};

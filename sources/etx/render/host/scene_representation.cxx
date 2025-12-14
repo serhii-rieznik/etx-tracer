@@ -670,16 +670,30 @@ std::string SceneRepresentation::rename_material(uint32_t index, const char* nam
 }
 
 uint32_t SceneRepresentation::add_medium(const char* name) {
-  SpectralDistribution null_spectrum = SpectralDistribution::null();
-  uint32_t handle = _private->data.add_medium(_private->scene, _private->data, Medium::Class::Homogeneous, name, nullptr, null_spectrum, null_spectrum, 0.0f, true);
+  // Create separate zero spectra for absorption and scattering to avoid any potential sharing
+  SpectralDistribution absorption_spectrum = SpectralDistribution::constant(0.0f);
+  SpectralDistribution scattering_spectrum = SpectralDistribution::constant(1.0f);
+  uint32_t absorption_index = _private->data.add_spectrum(absorption_spectrum);
+  uint32_t scattering_index = _private->data.add_spectrum(scattering_spectrum);
+  std::string id = name && name[0] ? name : ("medium-" + std::to_string(_private->data.mediums.array_size()));
+  uint32_t handle = _private->data.mediums.add(Medium::Class::Homogeneous, id, nullptr, absorption_index, scattering_index, 0.0f, true);
+  // Update scene arrays
   _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
+  _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
   return handle;
 }
 
 std::string SceneRepresentation::rename_medium(uint32_t index, const char* name) {
   auto result = _private->data.mediums.rename(index, (name != nullptr) ? name : "");
   _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
+  _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
   return result;
+}
+
+void SceneRepresentation::update_medium_bounds() {
+  _private->update_medium_bounds();
+  _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
+  _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
 }
 
 std::string SceneRepresentation::rename_mesh(uint32_t index, const char* name) {

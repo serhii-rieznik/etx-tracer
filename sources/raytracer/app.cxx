@@ -418,6 +418,7 @@ void RTApplication::on_material_changed(uint32_t index) {
 void RTApplication::on_medium_added() {
   integrator_thread.stop(Integrator::Stop::Immediate);
   scene.add_medium(nullptr);
+  scene.update_medium_bounds();
   integrator_thread.restart();
 }
 
@@ -426,6 +427,7 @@ void RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
+  scene.update_medium_bounds();
   integrator_thread.restart();
 }
 

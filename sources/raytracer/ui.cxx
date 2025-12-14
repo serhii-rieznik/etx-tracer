@@ -1351,7 +1351,11 @@ bool UI::build_medium(Scene& scene, Medium& m) {
   }
 
   auto ensure_index = [&](uint32_t& index, uint32_t fallback) {
-    if ((index == kInvalidIndex) || (index >= scene.spectrums.count)) {
+    if (index == kInvalidIndex) {
+      index = fallback;
+    } else if (index >= scene.spectrums.count) {
+      // This shouldn't happen in normal operation, but if it does, log a warning
+      log::warning("Medium spectrum index %u is out of bounds (%u), resetting to fallback", index, scene.spectrums.count);
       index = fallback;
     }
   };
@@ -1379,14 +1383,14 @@ bool UI::build_medium(Scene& scene, Medium& m) {
 
   ImGui::Text("Absorption");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (spectrum_picker(scene, "Absorption##medium", m.absorption_index, true, true)) {
+  if (spectrum_picker(scene, "Absorption##medium_absorption", m.absorption_index, true, true)) {
     changed = true;
     recompute_extinction = true;
   }
 
   ImGui::Text("Scattering");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (spectrum_picker(scene, "Scattering##medium", m.scattering_index, true, true)) {
+  if (spectrum_picker(scene, "Scattering##medium_scattering", m.scattering_index, true, true)) {
     changed = true;
     recompute_extinction = true;
   }
