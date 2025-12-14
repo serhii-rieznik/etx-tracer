@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <functional>
 #include <filesystem>
+#include <algorithm>
 
 namespace etx {
 
@@ -30,19 +31,64 @@ struct ImagePoolImpl {
   }
 
   uint32_t add_copy(const Image& img) {
-    ETX_ASSERT((img.options & Image::BuildSamplingTable) == 0);
-    ETX_ASSERT(img.y_distribution.values.count == 0);
-    ETX_ASSERT(img.x_distributions.empty());
-
     std::string path = "##mem" + std::to_string(1u + counter++);
     uint32_t handle = create_entry(path);
 
     auto& image = images[handle];
+    auto& img_storage = storage[handle];
+
     image = img;
+
+    if (img.data_size > 0 && img.format != Image::Format::Undefined) {
+      const uint8_t* src_data = (img.format == Image::Format::RGBA32F) ? reinterpret_cast<const uint8_t*>(img.pixels.f32.a) : reinterpret_cast<const uint8_t*>(img.pixels.u8.a);
+
+      if (src_data != nullptr) {
+        img_storage.data.assign(src_data, src_data + img.data_size);
+
+        if (img.format == Image::Format::RGBA32F) {
+          image.pixels.f32 = {reinterpret_cast<float4*>(img_storage.data.data()), img.pixels.f32.count};
+        } else if (img.format == Image::Format::RGBA8) {
+          image.pixels.u8 = {reinterpret_cast<ubyte4*>(img_storage.data.data()), img.pixels.u8.count};
+        }
+      }
+    }
+
+    if (img.x_distributions.a != nullptr && img.x_distributions.count > 0) {
+      size_t total_x_entries = 0;
+      for (uint32_t i = 0; i < img.x_distributions.count; ++i) {
+        total_x_entries += img.x_distributions.a[i].values.count + 1;  // +1 for sentinel
+      }
+
+      img_storage.x_distributions_storage.resize(total_x_entries);
+      img_storage.x_distributions.resize(img.x_distributions.count);
+
+      size_t x_entry_offset = 0;
+      for (uint32_t i = 0; i < img.x_distributions.count; ++i) {
+        const auto& src_dist = img.x_distributions.a[i];
+        auto& dst_dist = img_storage.x_distributions[i];
+
+        std::copy(src_dist.values.a, src_dist.values.a + src_dist.values.count + 1, img_storage.x_distributions_storage.data() + x_entry_offset);
+
+        dst_dist.values = {img_storage.x_distributions_storage.data() + x_entry_offset, src_dist.values.count};
+        dst_dist.total_weight = src_dist.total_weight;
+
+        x_entry_offset += src_dist.values.count + 1;
+      }
+
+      image.x_distributions = {img_storage.x_distributions.data(), img.x_distributions.count};
+    }
+
+    if (img.y_distribution.values.a != nullptr && img.y_distribution.values.count > 0) {
+      img_storage.y_distribution_storage.assign(img.y_distribution.values.a, img.y_distribution.values.a + img.y_distribution.values.count + 1);
+
+      image.y_distribution.values = {img_storage.y_distribution_storage.data(), img.y_distribution.values.count};
+      image.y_distribution.total_weight = img.y_distribution.total_weight;
+    }
+
     return handle;
   }
 
-  uint32_t add_from_file(std::string path, uint32_t image_options, const float2& offset, const float2& scale) {
+  uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
     auto i = mapping.find(path);
     if (i != mapping.end()) {
       return i->second;
@@ -373,25 +419,20 @@ struct ImagePoolImpl {
     ETX_ASSERT(img.y_distribution.values.a == nullptr);
     bool uniform_sampling = (img.options & Image::UniformSamplingTable) == Image::UniformSamplingTable;
 
-    // Allocate storage for distributions
     uint32_t x_entries_per_row = img.isize.x + 1;  // +1 for sentinel
     uint32_t y_entries_count = img.isize.y + 1;    // +1 for sentinel
     uint32_t total_x_entries = img.isize.y * x_entries_per_row;
 
     img_storage.x_distributions_storage.resize(total_x_entries);
     img_storage.y_distribution_storage.resize(y_entries_count);
-
-    // Set up x_distributions vector in storage
     img_storage.x_distributions.resize(img.isize.y);
 
-    // Initialize x distribution pointers to point into storage
     for (uint32_t y = 0; y < img.isize.y; ++y) {
       auto& dist = img_storage.x_distributions[y];
       dist.values = {img_storage.x_distributions_storage.data() + y * x_entries_per_row, img.isize.x};
       dist.total_weight = 0.0f;  // Will be set by finalize
     }
 
-    // Set up Image views to point to storage
     img.x_distributions = {img_storage.x_distributions.data(), static_cast<uint32_t>(img_storage.x_distributions.size())};
     img.y_distribution.values = {img_storage.y_distribution_storage.data(), img.isize.y};
     img.y_distribution.total_weight = 0.0f;  // Will be set by finalize
@@ -402,7 +443,6 @@ struct ImagePoolImpl {
         float v = (float(y) + 0.5f) / img.fsize.y;
         float row_value = 0.0f;
 
-        // Build x distribution for this row
         auto* x_entries = img_storage.x_distributions_storage.data() + y * x_entries_per_row;
         for (uint32_t x = 0; x < img.isize.x; ++x) {
           float u = (float(x) + 0.5f) / img.fsize.x;
@@ -412,7 +452,6 @@ struct ImagePoolImpl {
           x_entries[x] = {lum, 0.0f, 0.0f};
         }
 
-        // Finalize x distribution for this row
         DistributionBuilder::finalize_entries(x_entries, img.isize.x);
         img_storage.x_distributions[y].total_weight = x_entries[img.isize.x].cdf;  // Last entry has total weight
 
@@ -420,12 +459,10 @@ struct ImagePoolImpl {
         row_value *= row_weight;
         total_weight = total_weight + row_value;
 
-        // Set y distribution entry
         img_storage.y_distribution_storage[y] = {row_value, 0.0f, 0.0f};
       }
     });
 
-    // Finalize y distribution
     float y_total_weight = DistributionBuilder::finalize_entries(img_storage.y_distribution_storage.data(), img.isize.y);
     img.y_distribution.total_weight = y_total_weight;
 
@@ -433,13 +470,11 @@ struct ImagePoolImpl {
   }
 
   void free_image(Image& img) {
-    // Reset all views to empty - storage is managed separately
     img.pixels.f32 = {};
     img.pixels.u8 = {};
     img.x_distributions = {};
     img.y_distribution = {};
 
-    // Reset other members
     img.fsize = {};
     img.offset = {};
     img.scale = {1.0f, 1.0f};
