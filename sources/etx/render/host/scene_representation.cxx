@@ -660,6 +660,7 @@ uint32_t SceneRepresentation::add_material(const char* name) {
   mat.ext_ior.eta_index = _private->scene.default_dielectric_eta;
   mat.ext_ior.k_index = _private->scene.default_conductor_k;
   _private->scene.materials = {_private->data.materials.data(), _private->data.materials.size()};
+  _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
   return index;
 }
 
@@ -670,14 +671,12 @@ std::string SceneRepresentation::rename_material(uint32_t index, const char* nam
 }
 
 uint32_t SceneRepresentation::add_medium(const char* name) {
-  // Create separate zero spectra for absorption and scattering to avoid any potential sharing
   SpectralDistribution absorption_spectrum = SpectralDistribution::constant(0.0f);
   SpectralDistribution scattering_spectrum = SpectralDistribution::constant(1.0f);
   uint32_t absorption_index = _private->data.add_spectrum(absorption_spectrum);
   uint32_t scattering_index = _private->data.add_spectrum(scattering_spectrum);
   std::string id = name && name[0] ? name : ("medium-" + std::to_string(_private->data.mediums.array_size()));
   uint32_t handle = _private->data.mediums.add(Medium::Class::Homogeneous, id, nullptr, absorption_index, scattering_index, 0.0f, true);
-  // Update scene arrays
   _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
   _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
   return handle;
