@@ -13,6 +13,7 @@
 #include <etx/render/shared/scene_medium.hxx>
 #include <etx/render/shared/scattering.hxx>
 #include <etx/render/shared/ior_database.hxx>
+#include <etx/render/host/scene_loader_utils.hxx>
 
 #include <algorithm>
 #include <cstring>
@@ -196,56 +197,6 @@ struct SceneSerializationImpl {
     return params;
   }
 
-  std::filesystem::path locate_spectrum_file(const char* identifier, std::initializer_list<const char*> fallback_folders) const {
-    if ((identifier == nullptr) || (identifier[0] == 0))
-      return {};
-
-    std::filesystem::path requested(identifier);
-    if (requested.has_extension() == false)
-      requested.replace_extension(".spd");
-
-    std::error_code ec;
-    if (requested.is_absolute()) {
-      if (std::filesystem::exists(requested, ec))
-        return requested;
-      return {};
-    }
-
-    std::filesystem::path data_root = std::filesystem::path(env().data_folder()) / "spectrum";
-
-    std::filesystem::path combined = data_root / requested;
-    if (std::filesystem::exists(combined, ec))
-      return combined;
-
-    for (const char* folder : fallback_folders) {
-      std::filesystem::path candidate = data_root / folder / requested.filename();
-      if (std::filesystem::exists(candidate, ec))
-        return candidate;
-    }
-
-    return {};
-  }
-
-  bool load_ior_from_identifier(const char* identifier, const IORDatabase& ior_database, SpectralDistribution& eta, SpectralDistribution& k,
-    SpectralDistribution::Class& cls) const {
-    if ((identifier == nullptr) || (identifier[0] == 0))
-      return false;
-
-    if (const IORDefinition* def = ior_database.find_by_name(identifier)) {
-      cls = def->cls;
-      eta = def->eta;
-      k = def->k;
-      return true;
-    }
-
-    std::filesystem::path candidate = locate_spectrum_file(identifier, {"conductor", "dielectric"});
-    if (candidate.empty())
-      return false;
-
-    cls = RefractiveIndex::load_from_file(candidate.string().c_str(), eta, k);
-    return cls != SpectralDistribution::Class::Invalid;
-  }
-
   uint32_t load_reflectance_spectrum(SceneData& data, char* values) {
     auto params = split_params(values);
 
@@ -323,7 +274,7 @@ struct SceneSerializationImpl {
     header->version = kBinaryGeometryVersion;
     header->total_size = 0;
 
-    if (!data.vertices.pos.empty()) {
+    if (data.vertices.pos.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexPositions, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.pos.size();
@@ -333,7 +284,7 @@ struct SceneSerializationImpl {
     }
 
     // Write vertex normals
-    if (!data.vertices.nrm.empty()) {
+    if (data.vertices.nrm.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexNormals, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.nrm.size();
@@ -343,7 +294,7 @@ struct SceneSerializationImpl {
     }
 
     // Write vertex texture coordinates
-    if (!data.vertices.tex.empty()) {
+    if (data.vertices.tex.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexTexCoords, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.tex.size();
@@ -353,17 +304,17 @@ struct SceneSerializationImpl {
     }
 
     // Write vertex tangents
-    if (!data.vertices.tan.empty()) {
+    if (data.vertices.tan.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexTangents, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.tan.size();
-      chunk.data.resize(data.vertices.tan.size() * sizeof(float3));
+      chunk.data.resize(chunk.data.size() * sizeof(float3));
       memcpy(chunk.data.data(), data.vertices.tan.data(), data.vertices.tan.size() * sizeof(float3));
       _chunks.emplace_back(std::move(chunk));
     }
 
     // Write vertex bitangents
-    if (!data.vertices.btn.empty()) {
+    if (data.vertices.btn.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexBitangents, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.btn.size();
@@ -466,7 +417,7 @@ struct SceneSerializationImpl {
     }
 
     // Write string table (after all strings have been added)
-    if (!write_string_table()) {
+    if (write_string_table() == false) {
       return false;
     }
 
@@ -530,14 +481,14 @@ struct SceneSerializationImpl {
     memcpy(_buffer.data() + offset, &header, sizeof(ChunkHeader));
 
     // Write metadata
-    if (!chunk.meta_data.empty()) {
+    if (chunk.meta_data.empty() == false) {
       offset = _buffer.size();
       _buffer.resize(offset + chunk.meta_data.size());
       memcpy(_buffer.data() + offset, chunk.meta_data.data(), chunk.meta_data.size());
     }
 
     // Write data
-    if (!chunk.data.empty()) {
+    if (chunk.data.empty() == false) {
       offset = _buffer.size();
       _buffer.resize(offset + chunk.data.size());
       memcpy(_buffer.data() + offset, chunk.data.data(), chunk.data.size());
@@ -548,13 +499,13 @@ struct SceneSerializationImpl {
 
   bool write_to_file(const std::filesystem::path& path) {
     // Write string table first (needed by mappings)
-    if (!write_string_table()) {
+    if (write_string_table() == false) {
       return false;
     }
 
     // Serialize all chunks
     for (const auto& chunk : _chunks) {
-      if (!serialize_chunk(chunk)) {
+      if (serialize_chunk(chunk) == false) {
         return false;
       }
     }
@@ -565,7 +516,7 @@ struct SceneSerializationImpl {
 
     // Write to file
     std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
-    if (!file.is_open()) {
+    if (file.is_open() == false) {
       log::error("Failed to open file for writing: %s", path.string().c_str());
       return false;
     }
@@ -573,7 +524,7 @@ struct SceneSerializationImpl {
     file.write(reinterpret_cast<const char*>(_buffer.data()), _buffer.size());
     file.close();
 
-    if (!file.good()) {
+    if (file.good() == false) {
       log::error("Failed to write data to file: %s", path.string().c_str());
       return false;
     }
@@ -585,17 +536,17 @@ struct SceneSerializationImpl {
 
   bool load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
     char base_dir[2048] = {};
-    if (materials_file && materials_file[0]) {
+    if ((materials_file != nullptr) && (materials_file[0] != 0)) {
       get_file_folder(materials_file, base_dir, sizeof(base_dir));
     }
 
-    if (!parse_materials_file(materials_file, base_dir, data, scene, database, scheduler)) {
+    if (parse_materials_file(materials_file, base_dir, data, scene, database, scheduler) == false) {
       log::error("Failed to load materials from %s", materials_file);
       return false;
     }
 
     std::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
+    if (file.is_open() == false) {
       log::error("Failed to open file for reading: %s", path.string().c_str());
       return false;
     }
@@ -612,7 +563,7 @@ struct SceneSerializationImpl {
     file.read(reinterpret_cast<char*>(_buffer.data()), file_size);
     file.close();
 
-    if (!file.good()) {
+    if (file.good() == false) {
       log::error("Failed to read file: %s", path.string().c_str());
       return false;
     }
@@ -672,7 +623,7 @@ struct SceneSerializationImpl {
       if (chunk_id_equals(header->id, kChunkIdStringTable) || chunk_id_equals(header->id, kChunkIdVertexPositions) || chunk_id_equals(header->id, kChunkIdVertexNormals) ||
           chunk_id_equals(header->id, kChunkIdVertexTexCoords) || chunk_id_equals(header->id, kChunkIdVertexTangents) || chunk_id_equals(header->id, kChunkIdVertexBitangents) ||
           chunk_id_equals(header->id, kChunkIdTriangles) || chunk_id_equals(header->id, kChunkIdMeshes)) {
-        if (!parse_chunk(offset, data)) {
+        if (parse_chunk(offset, data) == false) {
           return false;
         }
       } else {
@@ -691,7 +642,7 @@ struct SceneSerializationImpl {
     // Second pass: parse deferred chunks (mappings) now that string table is loaded
     for (const auto& [chunk_offset, chunk_id] : deferred_chunks) {
       size_t temp_offset = chunk_offset;
-      if (!parse_chunk(temp_offset, data)) {
+      if (parse_chunk(temp_offset, data) == false) {
         return false;
       }
     }
@@ -1009,7 +960,7 @@ struct SceneSerializationImpl {
 
   bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
     std::ifstream file(path);
-    if (!file.is_open()) {
+    if (file.is_open() == false) {
       log::error("Failed to open materials file: %s", path.string().c_str());
       return false;
     }
@@ -1024,11 +975,11 @@ struct SceneSerializationImpl {
       }
 
       line.erase(line.begin(), std::find_if(line.begin(), line.end(), [](unsigned char ch) {
-        return !std::isspace(ch);
+        return std::isspace(ch) == false;
       }));
       line.erase(std::find_if(line.rbegin(), line.rend(),
                    [](unsigned char ch) {
-                     return !std::isspace(ch);
+                     return std::isspace(ch) == false;
                    })
                    .base(),
         line.end());
@@ -1044,18 +995,18 @@ struct SceneSerializationImpl {
       if (key == "newmtl") {
         std::string material_name;
         std::getline(iss, material_name);
-        if (!material_name.empty() && material_name[0] == ' ') {
+        if ((material_name.empty() == false) && (material_name[0] == ' ')) {
           material_name.erase(0, 1);
         }
         materials.push_back({material_name, {}});
         current_material = &materials.back();
-      } else if (current_material) {
+      } else if (current_material != nullptr) {
         std::string value;
         std::getline(iss, value);
-        if (!value.empty() && value[0] == ' ') {
+        if ((value.empty() == false) && (value[0] == ' ')) {
           value.erase(0, 1);
         }
-        if (!value.empty()) {
+        if (value.empty() == false) {
           current_material->properties[key] = value;
         }
       }
@@ -1211,7 +1162,7 @@ struct SceneSerializationImpl {
       }
     }
 
-    SpectralDistribution s_a = SpectralDistribution::null();
+    SpectralDistribution s_a = SpectralDistribution::constant(0.0f);
     if (get_param(material, "absorption")) {
       float val[3] = {};
       int params_read = sscanf(_data_buffer, "%f %f %f", val + 0, val + 1, val + 2);
@@ -1233,7 +1184,7 @@ struct SceneSerializationImpl {
       }
     }
 
-    SpectralDistribution s_t = SpectralDistribution::null();
+    SpectralDistribution s_t = SpectralDistribution::constant(0.0f);
     if (get_param(material, "scattering")) {
       float val[3] = {};
       int params_read = sscanf(_data_buffer, "%f %f %f", val + 0, val + 1, val + 2);
@@ -1401,15 +1352,8 @@ struct SceneSerializationImpl {
         }
       }
 
-      auto select_index = [&](const SpectralDistribution& spd, uint32_t fallback) {
-        if (spd.spectral_entry_count == 0) {
-          return fallback;
-        }
-        return data.add_spectrum(spd);
-      };
-
-      uint32_t absorption_index = select_index(s_a, scene.black_spectrum);
-      uint32_t scattering_index = select_index(s_t, scene.black_spectrum);
+      uint32_t absorption_index = data.add_spectrum(s_a);
+      uint32_t scattering_index = data.add_spectrum(s_t);
 
       uint32_t medium_handle = data.mediums.add_noise(Medium::Class::Heterogeneous, name, noise_type, absorption_index, scattering_index, anisotropy, explicit_connections,
         noise_scale, noise_octaves, noise_lacunarity, noise_persistence, noise_seed, noise_power, noise_offset);
@@ -1420,7 +1364,7 @@ struct SceneSerializationImpl {
       return;
     }
 
-    data.add_medium(scene, data, cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
+    data.add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
   }
 
   void parse_directional_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
@@ -1510,42 +1454,22 @@ struct SceneSerializationImpl {
   }
 
   void parse_atmosphere_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
-    float quality = 1.0f;
-    float sun_scale = kDoublePi;  // Default: 2π
-    float sky_scale = kPi;        // Default: π
-    float3 direction = normalize(float3{1.0f, 1.0f, 1.0f});
-    float angular_diameter_degrees = 0.5422f;
+    float quality = 0.125f;
 
     scattering::Parameters scattering_params = {};
+
+    // Parse color parameter (similar to regular env emitters)
+    SpectralDistribution env_spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});  // Default to neutral white
+    if (get_param(material, "color")) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      env_spectrum = load_illuminant_spectrum(data, buffer);
+    }
 
     if (get_param(material, "quality")) {
       float val = {};
       if (sscanf(_data_buffer, "%f", &val) == 1) {
         quality = val;
-      }
-    }
-    if (get_param(material, "sun_scale")) {
-      float val = {};
-      if (sscanf(_data_buffer, "%f", &val) == 1) {
-        sun_scale = val;
-      }
-    }
-    if (get_param(material, "sky_scale")) {
-      float val = {};
-      if (sscanf(_data_buffer, "%f", &val) == 1) {
-        sky_scale = val;
-      }
-    }
-    if (get_param(material, "direction")) {
-      float value[3] = {};
-      if (sscanf(_data_buffer, "%f %f %f", value + 0, value + 1, value + 2) == 3) {
-        direction = normalize(float3{value[0], value[1], value[2]});
-      }
-    }
-    if (get_param(material, "angular_diameter")) {
-      float val = {};
-      if (sscanf(_data_buffer, "%f", &val) == 1) {
-        angular_diameter_degrees = val;
       }
     }
     if (get_param(material, "anisotropy")) {
@@ -1579,12 +1503,8 @@ struct SceneSerializationImpl {
       }
     }
 
-    // Create atmosphere emitter parameters and call the unified method
-    SceneRepresentation::AtmosphereEmitterParameters params{scattering_params.anisotropy, scattering_params.altitude, scattering_params.rayleigh_scale, scattering_params.mie_scale,
-      scattering_params.ozone_scale, direction, angular_diameter_degrees, quality, sun_scale, sky_scale};
-
-    data.add_atmosphere_emitter(params, scene, scheduler);
-    build_emitters_distribution(data, scene);
+    SceneRepresentation::AtmosphereEmitterParameters params{{scattering_params}, quality, env_spectrum};
+    data.add_atmosphere_emitter(params, scene);
   }
 
   void parse_spectrum(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
@@ -1751,14 +1671,11 @@ struct SceneSerializationImpl {
       mtl.scattering.spectrum_index = load_reflectance_spectrum(data, buffer);
     }
 
-    SpectralDistribution emission_spd = SpectralDistribution::null();
+    SpectralDistribution emission_spd = SpectralDistribution::constant(0.0f);
 
     float pending_scale = 1.0f;
-
     bool is_emitter = false;
-
     bool emission_spd_defined = false;
-
     float collimation = mtl.emission_collimation;
 
     if (get_param(material, "Ke")) {
@@ -2168,7 +2085,7 @@ SceneSerialization::~SceneSerialization() {
 }
 
 bool SceneSerialization::save_to_file(const SceneData& data, const std::filesystem::path& path) {
-  if (!_private->prepare_data(data)) {
+  if (_private->prepare_data(data) == false) {
     return false;
   }
   return _private->write_to_file(path);

@@ -1,10 +1,15 @@
 #pragma once
 
+#include <etx/core/environment.hxx>
 #include <etx/render/shared/math.hxx>
 #include <etx/render/shared/scene.hxx>
+#include <etx/render/shared/spectrum.hxx>
+#include <etx/render/shared/ior_database.hxx>
 
 #include <vector>
 #include <map>
+#include <string>
+#include <filesystem>
 
 namespace etx {
 
@@ -38,6 +43,56 @@ inline bool validate_triangle(Triangle& tri, const std::vector<float3>& vertices
   }
   tri.geo_n /= l;
   return true;
+}
+
+inline std::filesystem::path locate_spectrum_file(const char* identifier, std::initializer_list<const char*> fallback_folders) {
+  if ((identifier == nullptr) || (identifier[0] == 0))
+    return {};
+
+  std::filesystem::path requested(identifier);
+  if (requested.has_extension() == false)
+    requested.replace_extension(".spd");
+
+  std::error_code ec;
+  if (requested.is_absolute()) {
+    if (std::filesystem::exists(requested, ec))
+      return requested;
+    return {};
+  }
+
+  std::filesystem::path data_root = std::filesystem::path(env().data_folder()) / "spectrum";
+
+  std::filesystem::path combined = data_root / requested;
+  if (std::filesystem::exists(combined, ec))
+    return combined;
+
+  for (const char* folder : fallback_folders) {
+    std::filesystem::path candidate = data_root / folder / requested.filename();
+    if (std::filesystem::exists(candidate, ec))
+      return candidate;
+  }
+
+  return {};
+}
+
+inline bool load_ior_from_identifier(const char* identifier, const IORDatabase& ior_database, SpectralDistribution& eta, SpectralDistribution& k,
+  SpectralDistribution::Class& cls) {
+  if ((identifier == nullptr) || (identifier[0] == 0))
+    return false;
+
+  if (const IORDefinition* def = ior_database.find_by_name(identifier)) {
+    cls = def->cls;
+    eta = def->eta;
+    k = def->k;
+    return true;
+  }
+
+  std::filesystem::path candidate = locate_spectrum_file(identifier, {"conductor", "dielectric"});
+  if (candidate.empty())
+    return false;
+
+  cls = RefractiveIndex::load_from_file(candidate.string().c_str(), eta, k);
+  return cls != SpectralDistribution::Class::Invalid;
 }
 
 }  // namespace etx

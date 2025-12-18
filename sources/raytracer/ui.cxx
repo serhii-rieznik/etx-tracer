@@ -424,7 +424,7 @@ bool UI::ior_picker(Scene& scene, const char* name, RefractiveIndex& ior) {
 
   const IORDatabase* database = _ior_database;
   int matched_index = -1;
-  static const SpectralDistribution null_spectrum = SpectralDistribution::null();
+  static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
   if ((database != nullptr) && (ior.cls != SpectralDistribution::Class::Invalid)) {
     const SpectralDistribution& current_eta = scene.spectrums[ior.eta_index];
     const SpectralDistribution& current_k = (ior.k_index != kInvalidIndex) ? scene.spectrums[ior.k_index] : null_spectrum;
@@ -606,7 +606,7 @@ bool UI::emission_picker(Scene& scene, const char* label, const char* id_suffix,
   const IORDatabase* database = _ior_database;
   int matched_index = -1;
   if ((database != nullptr) && (spectrum_index < scene.spectrums.count)) {
-    static const SpectralDistribution null_spectrum = SpectralDistribution::null();
+    static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
     matched_index = database->find_matching_index(scene.spectrums[spectrum_index], null_spectrum, SpectralDistribution::Class::Illuminant);
   }
 
@@ -631,7 +631,7 @@ bool UI::emission_picker(Scene& scene, const char* label, const char* id_suffix,
   ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 28.0f, 0.0f), ImGuiCond_Always);
   if (ImGui::BeginPopup(popup_id)) {
     if (ImGui::Selectable("None", false)) {
-      scene.spectrums[spectrum_index] = SpectralDistribution::null();
+      scene.spectrums[spectrum_index] = SpectralDistribution::constant(0.0f);
       matched_index = -1;
       changed = true;
       ImGui::CloseCurrentPopup();
@@ -836,7 +836,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
 
     if (from_color) {
       value *= applied_scale;
-      spd = SpectralDistribution::rgb_reflectance(value);
+      spd = SpectralDistribution::rgb_luminance(value);
       editor_state.scale = applied_scale;
     } else if (scale) {
       if (editor_state.mode == SpectrumEditorState::Mode::Temperature) {
@@ -1988,7 +1988,7 @@ void UI::build_scene_objects_window(Scene& scene, const BuildContext& ctx, const
             label = format_string("%u: directional", emitter_index);
             break;
           case EmitterProfile::Class::Environment:
-            if ((emitter.meta & uint32_t(EmitterProfile::Meta::Atmosphere)) != 0) {
+            if ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) {
               label = format_string("%u: atmosphere", emitter_index);
             } else {
               label = format_string("%u: environment", emitter_index);
@@ -2048,10 +2048,10 @@ void UI::build_properties_window(Scene& scene, Camera& camera, const BuildContex
           const char* emitter_type = nullptr;
           switch (emitter.cls) {
             case EmitterProfile::Class::Directional:
-              emitter_type = ((emitter.meta & uint32_t(EmitterProfile::Meta::Atmosphere)) != 0) ? "Sun" : "Directional";
+              emitter_type = ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) ? "Sun" : "Directional";
               break;
             case EmitterProfile::Class::Environment:
-              emitter_type = ((emitter.meta & uint32_t(EmitterProfile::Meta::Atmosphere)) != 0) ? "Sky" : "Environment";
+              emitter_type = ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) ? "Sky" : "Environment";
               break;
             case EmitterProfile::Class::Area:
               emitter_type = "Area";
@@ -2087,12 +2087,12 @@ void UI::build_properties_window(Scene& scene, Camera& camera, const BuildContex
 
   std::string properties_window_name = properties_title + "###properties";
   ctx.with_window(UIProperties, properties_window_name.c_str(), [&]() {
-    if (!ctx.has_scene) {
+    if (ctx.has_scene == false) {
       ImGui::Text("No scene loaded");
       return;
     }
 
-    if (!ctx.scene_editable) {
+    if (ctx.scene_editable == false) {
       ImGui::TextDisabled("Rendering in progress; editing disabled.");
     }
 
@@ -2210,7 +2210,11 @@ void UI::build_material_selection_properties(Scene& scene, const BuildContext& c
   const char* material_name = _material_mapping.name(_selection.index);
   update_name_buffer(SelectionKind::Material, _selection.index, material_name);
 
-  if (!ctx.scene_editable)
+  if (ctx.has_scene == false) {
+    return;
+  }
+
+  if (ctx.scene_editable == false)
     ImGui::BeginDisabled();
   ImGui::AlignTextToFramePadding();
   ImGui::Text("Name");
@@ -2218,16 +2222,16 @@ void UI::build_material_selection_properties(Scene& scene, const BuildContext& c
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   bool name_edit_active = ImGui::InputText("##material_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
   bool name_commit = ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter));
-  if (!ctx.scene_editable)
+  if (ctx.scene_editable == false)
     ImGui::EndDisabled();
   if (ctx.scene_editable && name_commit && callbacks.material_renamed) {
     callbacks.material_renamed(material_index, std::string(_name_edit_buffer));
     _pending_selection = {SelectionKind::Material, material_index, true};
   }
-  if (!ctx.scene_editable)
+  if (ctx.scene_editable == false)
     ImGui::BeginDisabled();
   bool changed = build_material(scene, material);
-  if (!ctx.scene_editable)
+  if (ctx.scene_editable == false)
     ImGui::EndDisabled();
   if (ctx.scene_editable && changed && callbacks.material_changed) {
     callbacks.material_changed(material_index);
@@ -2247,7 +2251,7 @@ void UI::build_medium_selection_properties(Scene& scene, const BuildContext& ctx
   Medium& medium = scene.mediums[medium_index];
   const char* medium_name = _medium_mapping.name(_selection.index);
   update_name_buffer(SelectionKind::Medium, _selection.index, medium_name);
-  if (!ctx.scene_editable)
+  if (ctx.scene_editable == false)
     ImGui::BeginDisabled();
   ImGui::AlignTextToFramePadding();
   ImGui::Text("Name");
@@ -2255,16 +2259,16 @@ void UI::build_medium_selection_properties(Scene& scene, const BuildContext& ctx
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   bool name_edit_active = ImGui::InputText("##medium_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
   bool name_commit = ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter));
-  if (!ctx.scene_editable)
+  if (ctx.scene_editable == false)
     ImGui::EndDisabled();
   if (ctx.scene_editable && name_commit && callbacks.medium_renamed) {
     callbacks.medium_renamed(medium_index, std::string(_name_edit_buffer));
     _pending_selection = {SelectionKind::Medium, medium_index, true};
   }
-  if (!ctx.scene_editable)
+  if (ctx.scene_editable == false)
     ImGui::BeginDisabled();
   bool changed = build_medium(scene, medium);
-  if (!ctx.scene_editable)
+  if (ctx.scene_editable == false)
     ImGui::EndDisabled();
   if (ctx.scene_editable && changed) {
     clamp_medium_density(scene, medium);
@@ -2399,9 +2403,69 @@ void UI::build_emitter_selection_properties(Scene& scene, const BuildContext& ct
       emitter.directional.direction = from_spherical(angles.x, angles.y);
       changed = true;
     }
+
+    // Check if there's an atmosphere emitter in the scene
+    bool has_atmosphere = false;
+    for (uint32_t i = 0; i < scene.emitter_profiles.count; ++i) {
+      auto& candidate = scene.emitter_profiles[i];
+      if (candidate.cls == EmitterProfile::Class::Environment && (candidate.meta & EmitterProfile::Meta::Atmosphere) != 0) {
+        has_atmosphere = true;
+        break;
+      }
+    }
+
+    if (has_atmosphere) {
+      // Sun checkbox - links directional emitter to atmosphere
+      bool is_sun = (emitter.reference_emitter_index != kInvalidIndex) && (emitter.reference_emitter_index < scene.emitter_profiles.count) &&
+                    (scene.emitter_profiles[emitter.reference_emitter_index].cls == EmitterProfile::Class::Environment) &&
+                    ((scene.emitter_profiles[emitter.reference_emitter_index].meta & EmitterProfile::Meta::Atmosphere) != 0);
+
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::Spacing();
+
+      if (ImGui::Checkbox("Use as Sun", &is_sun)) {
+        if (is_sun) {
+          // Find atmosphere emitter
+          uint32_t atmosphere_index = kInvalidIndex;
+          for (uint32_t i = 0; i < scene.emitter_profiles.count; ++i) {
+            auto& candidate = scene.emitter_profiles[i];
+            if (candidate.cls == EmitterProfile::Class::Environment && (candidate.meta & EmitterProfile::Meta::Atmosphere) != 0) {
+              atmosphere_index = i;
+              break;
+            }
+          }
+
+          if (atmosphere_index != kInvalidIndex) {
+            // Link this directional emitter to atmosphere
+            emitter.reference_emitter_index = atmosphere_index;
+          } else {
+            // Reset checkbox if no atmosphere emitter exists
+            is_sun = false;
+          }
+        } else {
+          // Unlink from atmosphere
+          emitter.reference_emitter_index = kInvalidIndex;
+        }
+        changed = true;
+      }
+
+      // Rebuild atmosphere button when linked to atmosphere
+      if (emitter.reference_emitter_index != kInvalidIndex && emitter.reference_emitter_index < scene.emitter_profiles.count &&
+          scene.emitter_profiles[emitter.reference_emitter_index].cls == EmitterProfile::Class::Environment) {
+        if (ImGui::Button("Rebuild Atmosphere", ImVec2(-1.0f, 0.0f))) {
+          if (callbacks.emitter_rebuild) {
+            callbacks.emitter_rebuild(emitter_index);
+          }
+        }
+      }
+    } else {
+      // No atmosphere emitter exists
+      ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Create an atmosphere emitter to enable sun linking.");
+    }
   }
 
-  if ((emitter.meta & uint32_t(EmitterProfile::Meta::Atmosphere)) != 0) {
+  if ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) {
     uint32_t sky_emitter_index = (emitter.cls == EmitterProfile::Class::Environment) ? emitter_index : emitter.reference_emitter_index;
 
     if (sky_emitter_index < scene.emitter_profiles.count) {

@@ -168,7 +168,7 @@ struct ImagePoolImpl {
         float u = (float(x) + 0.5f) / float(dimensions.x);
         float v = (float(y) + 0.5f) / float(dimensions.y);
 
-        float3 dir = uv_to_direction({u, v}, offset, scale.x);
+        float3 dir = uv_to_direction({u, v}, offset, scale.x, ProjectionType::Equirectangular);
 
         float3 color = {};
         for (uint32_t j = 0; j < 9; ++j) {
@@ -203,7 +203,7 @@ struct ImagePoolImpl {
           float u = (float(x) + 0.5f) / float(dimensions.x);
           float v = (float(y) + 0.5f) / float(dimensions.y);
 
-          float3 dir = uv_to_direction({u, v}, offset, scale.x);
+          float3 dir = uv_to_direction({u, v}, offset, scale.x, ProjectionType::Equirectangular);
 
           float3 abs_dir = {fabsf(dir.x), fabsf(dir.y), fabsf(dir.z)};
           int face_idx = 0;
@@ -268,6 +268,22 @@ struct ImagePoolImpl {
       });
 
     return add_from_data(equirect_data.data(), dimensions, image_options, offset, scale);
+  }
+
+  void rebuild_sampling_table(uint32_t index, TaskScheduler& scheduler) {
+    ETX_CRITICAL((index < images.size()));
+    Image& image = images[index];
+    ImageStorage& img_storage = storage[index];
+
+    img_storage.x_distributions_storage.clear();
+    img_storage.y_distribution_storage.clear();
+    img_storage.x_distributions.clear();
+
+    image.x_distributions = {};
+    image.y_distribution.values = {};
+    image.y_distribution.total_weight = 0.0f;
+
+    build_image_sampling_table(image, img_storage, scheduler);
   }
 
   void delay_load(TaskScheduler& scheduler) {
@@ -464,7 +480,6 @@ struct ImagePoolImpl {
 
     float y_total_weight = DistributionBuilder::finalize_entries(img_storage.y_distribution_storage.data(), img.isize.y);
     img.y_distribution.total_weight = y_total_weight;
-
     img.normalization = total_weight / (img.fsize.x * img.fsize.y);
   }
 
@@ -582,6 +597,10 @@ void ImagePool::add_options(uint32_t index, uint32_t options) {
 
 void ImagePool::load_images(TaskScheduler& scheduler) {
   _private->delay_load(scheduler);
+}
+
+void ImagePool::rebuild_sampling_table(uint32_t index, TaskScheduler& scheduler) {
+  _private->rebuild_sampling_table(index, scheduler);
 }
 
 }  // namespace etx

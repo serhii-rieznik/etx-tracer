@@ -28,8 +28,8 @@ struct OpticalDepthData {
 
   OpticalDepthData(const OpticalDepthData&) = delete;
   OpticalDepthData& operator=(const OpticalDepthData&) = delete;
-  OpticalDepthData(OpticalDepthData&&) = delete;
-  OpticalDepthData& operator=(OpticalDepthData&&) = delete;
+  OpticalDepthData(OpticalDepthData&&) = default;
+  OpticalDepthData& operator=(OpticalDepthData&&) = default;
 
   float4 evaluate(const float2& uv) const {
     float x = uv.x * (kWidth - 1.0f);
@@ -57,6 +57,8 @@ struct OpticalDepthData {
 };
 
 void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepthData& extinction);
+
+OpticalDepthData precompute_optical_depth(TaskScheduler& scheduler);
 
 void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const OpticalDepthData& extinction, float4* buffer,
   const ScatteringSpectrums& spectrums, TaskScheduler& scheduler);

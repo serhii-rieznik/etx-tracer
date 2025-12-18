@@ -53,12 +53,10 @@ struct SceneRepresentation {
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
   void update_medium_bounds();
 
-  struct AtmosphereEmitterParameters : public scattering::Parameters {
-    float3 direction = {0.0f, 0.8944f, 0.4472f};
-    float angular_diameter_degrees = 0.5422f;
+  struct AtmosphereEmitterParameters {
+    scattering::Parameters scattering = {};
     float quality = 0.125f;
-    float sun_scale = kDoublePi;
-    float sky_scale = kPi;
+    SpectralDistribution env_spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
   };
 
   uint32_t add_environment_emitter(const float3& color, uint32_t medium_index);

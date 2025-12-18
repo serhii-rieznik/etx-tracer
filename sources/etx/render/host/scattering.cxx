@@ -8,10 +8,6 @@
 
 namespace etx {
 
-constexpr uint32_t kExtinctionImageWidth = ETX_DEBUG ? 128u : 1024u;
-constexpr uint32_t kExtinctionImageHeight = ETX_DEBUG ? 128u : 1024u;
-constexpr uint32_t kExtinctionImageSize = kExtinctionImageWidth * kExtinctionImageHeight;
-
 constexpr const float kPlanetRadius = 6371e+3f;
 constexpr const float kAtmosphereRadius = 120e+3f;
 constexpr const float kOuterSphereSize = kPlanetRadius + kAtmosphereRadius;
@@ -48,7 +44,92 @@ float ozone_absorption(float l) {
   return (base > 0.0f) ? base * na * concentration : 0.0f;
 }
 
-float3 density(float height_above_surface) {
+struct DensityPair {
+  float rayleigh;
+  float mie;
+};
+
+struct DensityAndDerivative {
+  float3 density;
+  float3 derivative;
+};
+
+struct TransmittanceTable {
+  static constexpr uint32_t kDepthSamples = 8192u;
+  static constexpr float kMaxOpticalDepth = 16.0f;
+  static constexpr float kDepthStep = kMaxOpticalDepth / float(kDepthSamples - 1u);
+
+  float data[kDepthSamples];
+
+  TransmittanceTable() {
+    for (uint32_t d = 0; d < kDepthSamples; ++d) {
+      float depth = float(d) * kDepthStep;
+      data[d] = expf(-depth);
+    }
+  }
+
+  ETX_GPU_CODE float lookup(float optical_depth) const {
+    if (optical_depth <= 0.0f) {
+      return 1.0f;
+    }
+    if (optical_depth >= kMaxOpticalDepth) {
+      return expf(-optical_depth);
+    }
+
+    float depth_index = optical_depth / kDepthStep;
+    uint32_t index0 = static_cast<uint32_t>(depth_index);
+    uint32_t index1 = min(index0 + 1u, kDepthSamples - 1u);
+    float t = depth_index - float(index0);
+    float v0 = data[index0];
+    float v1 = data[index1];
+    return v0 * (1.0f - t) + v1 * t;
+  }
+} g_transmittance_table;
+
+struct DensityTable {
+  static constexpr uint32_t kHeightSamples = 8192u;
+  static constexpr float kMaxHeight = kAtmosphereRadius * 3.0f / 4.0f;
+  static constexpr float kHeightStep = kMaxHeight / float(kHeightSamples - 1u);
+
+  DensityPair data[kHeightSamples];
+
+  DensityTable() {
+    for (uint32_t h = 0; h < kHeightSamples; ++h) {
+      float height = float(h) * kHeightStep;
+      data[h].rayleigh = expf(-height / kRayleighDensityScale);
+      data[h].mie = expf(-height / kMieDensityScale);
+    }
+  }
+
+  ETX_GPU_CODE DensityPair lookup(float height) const {
+    if (height <= 0.0f) {
+      return {1.0f, 1.0f};
+    }
+    if (height >= kMaxHeight) {
+      return {expf(-height / kRayleighDensityScale), expf(-height / kMieDensityScale)};
+    }
+
+    float height_index = height / kHeightStep;
+    uint32_t index0 = static_cast<uint32_t>(height_index);
+    uint32_t index1 = min(index0 + 1u, kHeightSamples - 1u);
+    float t = height_index - float(index0);
+    DensityPair v0 = data[index0];
+    DensityPair v1 = data[index1];
+    return {
+      v0.rayleigh * (1.0f - t) + v1.rayleigh * t,
+      v0.mie * (1.0f - t) + v1.mie * t,
+    };
+  }
+} g_density_table;
+
+struct LightSource {
+  SpectralDistribution emission_spectrum;
+  float3 direction;
+  float angular_size;
+  float intensity_scale;
+};
+
+DensityAndDerivative density_and_derivative(float height_above_surface) {
   float h = fmaxf(0.0f, height_above_surface);
   float x = h / 1000.0f;
   float x2 = x * x;
@@ -56,13 +137,33 @@ float3 density(float height_above_surface) {
   float x4 = x2 * x2;
   float x5 = x4 * x;
   float x6 = x3 * x3;
+
+  DensityPair densities = g_density_table.lookup(h);
+  float rayleigh_density = densities.rayleigh;
+  float mie_density = densities.mie;
+  float rayleigh_derivative = -rayleigh_density / kRayleighDensityScale;
+  float mie_derivative = -mie_density / kMieDensityScale;
+
   float f = 3.759384e-08f * x6 - 1.067250e-05f * x5 + 1.080311e-03f * x4 - 4.851181e-02f * x3 + 9.185432e-01f * x2 - 4.886021e+00f * x + 7.900478e+00f;
+  float df = 6.0f * 3.759384e-08f * x5 - 5.0f * 1.067250e-05f * x4 + 4.0f * 1.080311e-03f * x3 - 3.0f * 4.851181e-02f * x2 + 2.0f * 9.185432e-01f * x - 4.886021e+00f;
+
   constexpr float kOzoneScale = 1.0f / 30.8491249f;
+  constexpr float dx_dh = 1.0f / 1000.0f;
+  float ozone_density = fmaxf(0.0f, f * kOzoneScale);
+  float ozone_derivative = fmaxf(0.0f, df) * dx_dh * kOzoneScale;
+
   return {
-    expf(-h / kRayleighDensityScale),
-    expf(-h / kMieDensityScale),
-    fmaxf(0.0f, f * kOzoneScale),
+    {rayleigh_density, mie_density, ozone_density},
+    {rayleigh_derivative, mie_derivative, ozone_derivative},
   };
+}
+
+float3 density(float height_above_surface) {
+  return density_and_derivative(height_above_surface).density;
+}
+
+float3 density_derivative(float height_above_surface) {
+  return density_and_derivative(height_above_surface).derivative;
 }
 
 float2 precomputed_params_to_uv(const float2& params) {
@@ -82,7 +183,8 @@ float phase_rayleigh(float l_dot_v) {
 }
 
 float phase_mie(float l_dot_v, float g) {
-  return (3.0f / 2.0f) * ((1.0f - g * g) * (1.0f + l_dot_v * l_dot_v)) / ((2.0f + g * g) * powf(1.0f + g * g - 2.0f * g * l_dot_v, 1.5f)) * (1.0f / kDoublePi);
+  float temp = 1.0f + g * g - 2.0f * g * l_dot_v;
+  return (3.0f / 2.0f) * ((1.0f - g * g) * (1.0f + l_dot_v * l_dot_v)) / ((2.0f + g * g) * temp * sqrtf(temp)) * (1.0f / kDoublePi);
 }
 
 float3 sample_optical_length(const float3& pos, const float3& light_direction, const OpticalDepthData& extinction) {
@@ -94,40 +196,42 @@ float3 sample_optical_length(const float3& pos, const float3& light_direction, c
   return {e.x, e.y, e.z};
 }
 
-float calculate_step_size(float current_distance, float total_distance, const float3 origin, const float3& direction, const float3& d0) {
-  float3 grad = density(length(origin + direction * (1.0f + current_distance)) - kPlanetRadius) - d0;
-  float l0 = logf((1.0f + grad.x) / kDeltaDensity) * kRayleighDensityScale;
-  float l1 = logf((1.0f + grad.y) / kDeltaDensity) * kMieDensityScale;
+float calculate_step_size(float current_distance, float total_distance, const float3 origin, const float3& direction) {
+  float3 position = origin + direction * current_distance;
+  float height = length(position) - kPlanetRadius;
+  float3 directional_derivative = density_derivative(height);
+
+  float3 normalized_position = position / length(position);
+  directional_derivative = directional_derivative * dot(normalized_position, direction);
+
+  float l0 = logf(fmaxf(kRayEpsilon, (1.0f + directional_derivative.x) / kDeltaDensity)) * kRayleighDensityScale;
+  float l1 = logf(fmaxf(kRayEpsilon, (1.0f + directional_derivative.y) / kDeltaDensity)) * kMieDensityScale;
   float calculated = sqrtf(kDeltaDensity * (l0 * l0 + l1 * l1));
-  return fminf(total_distance - current_distance, calculated);
+  return fminf(total_distance - current_distance, fmaxf(kRayEpsilon, calculated));
 }
 
 float3 optical_length(const float3& origin, const float3& direction, float total_distance) {
   float3 result = {};
   float height_above_surface = length(origin) - kPlanetRadius;
-  float3 d = density(height_above_surface);
-  float3 p = origin;
   float t = 0.0f;
 
+  constexpr uint32_t kMaxSteps = 1u << 14u;
   uint32_t steps = 0;
-  while (t < total_distance) {
-    float dt = calculate_step_size(t, total_distance, origin, direction, d);
+  while ((t < total_distance) && (steps < kMaxSteps)) {
+    float dt = calculate_step_size(t, total_distance, origin, direction);
     float3 p = origin + direction * (t + 0.5f * dt);
     t += dt;
     height_above_surface = length(p) - kPlanetRadius;
-    d = density(height_above_surface);
-    result += dt * d;
+    result += dt * density(height_above_surface);
+    ++steps;
   }
 
   return result;
 }
 
-void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const OpticalDepthData& extinction, const float3& view_direction, const float3& light_direction,
-  const Parameters& parameters, SpectralDistribution& result) {
+void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const OpticalDepthData& extinction, const float3& view_direction,
+  const std::vector<LightSource>& light_sources, const Parameters& parameters, SpectralDistribution& result) {
   const float3 origin = {0.0f, kPlanetRadius + parameters.altitude, 0.0f};
-  const float l_dot_v = dot(light_direction, view_direction);
-  const float phase_r = phase_rayleigh(l_dot_v);
-  const float phase_m = phase_mie(l_dot_v, parameters.anisotropy);
   float height_above_surface = length(origin) - kPlanetRadius;
 
   const float3 density_scale = {
@@ -139,6 +243,7 @@ void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const 
   float3 view_optical_path = {};
   float3 current_density = density(height_above_surface);
 
+  result.spectral_entry_count = spectrum::WavelengthCount;
   for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
     result.spectral_entries[i].power = 0;
   }
@@ -151,7 +256,7 @@ void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const 
   }
 
   while (t < to_space) {
-    float dt = calculate_step_size(t, to_space, origin, view_direction, current_density);
+    float dt = calculate_step_size(t, to_space, origin, view_direction);
     float3 p = origin + view_direction * (t + 0.5f * dt);
     height_above_surface = length(p) - kPlanetRadius;
     t += dt;
@@ -162,16 +267,38 @@ void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const 
     current_density = density(height_above_surface);
     view_optical_path += dt * density_scale * current_density;
 
-    float3 light_optical_path = density_scale * sample_optical_length(p, light_direction, extinction);
-    float3 total_optical_path = view_optical_path + light_optical_path;
+    // Accumulate contributions from all light sources
+    for (const auto& light_source : light_sources) {
+      float3 light_optical_path = density_scale * sample_optical_length(p, light_source.direction, extinction);
+      float3 total_optical_path = view_optical_path + light_optical_path;
 
-    for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
-      float r = spectrums.rayleigh.spectral_entries[i].power;
-      float m = spectrums.mie.spectral_entries[i].power;
-      float o = spectrums.ozone.spectral_entries[i].power;
-      float tr = r * total_optical_path.x + m * total_optical_path.y + o * total_optical_path.z;
-      float value = expf(-tr) * dt * (phase_r * r * density_scale.x * current_density.x + phase_m * m * density_scale.y * current_density.y);
-      result.spectral_entries[i].power += value;
+      // For extended light sources, phase function should be averaged over solid angle
+      // For now, use point source approximation (valid for small angular sizes)
+      const float l_dot_v = dot(light_source.direction, view_direction);
+      const float phase_r = phase_rayleigh(l_dot_v);
+      const float phase_m = phase_mie(l_dot_v, parameters.anisotropy);
+
+      for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
+        float r = spectrums.rayleigh.spectral_entries[i].power;
+        float m = spectrums.mie.spectral_entries[i].power;
+        float o = spectrums.ozone.spectral_entries[i].power;
+
+        float transmittance_r = g_transmittance_table.lookup(r * total_optical_path.x);
+        float transmittance_m = g_transmittance_table.lookup(m * total_optical_path.y);
+        float transmittance_o = g_transmittance_table.lookup(o * total_optical_path.z);
+        float total_transmittance = transmittance_r * transmittance_m * transmittance_o;
+
+        // Calculate scattering coefficient contribution
+        float scattering_coeff = phase_r * r * density_scale.x * current_density.x + phase_m * m * density_scale.y * current_density.y;
+
+        // Multiply by light source emission spectrum at this wavelength
+        float light_emission = light_source.emission_spectrum.spectral_entries[i].power * light_source.intensity_scale;
+
+        // Note: Angular size effects are handled at the emitter level, not in scattering calculation
+        // For distant light sources, we use the point source approximation
+        float value = total_transmittance * dt * scattering_coeff * light_emission;
+        result.spectral_entries[i].power += value;
+      }
     }
   }
 }
@@ -198,7 +325,7 @@ void extinction_spectrum_at_direction(const ScatteringSpectrums& spectrums, cons
 
   float t = 0.0f;
   while (t < to_space) {
-    float dt = calculate_step_size(t, to_space, origin, view_direction, current_density);
+    float dt = calculate_step_size(t, to_space, origin, view_direction);
     float3 p = origin + view_direction * (t + 0.5f * dt);
     height_above_surface = length(p) - kPlanetRadius;
     t += dt;
@@ -210,8 +337,11 @@ void extinction_spectrum_at_direction(const ScatteringSpectrums& spectrums, cons
     float r = spectrums.rayleigh.spectral_entries[i].power;
     float m = spectrums.mie.spectral_entries[i].power;
     float o = spectrums.ozone.spectral_entries[i].power;
-    float tr = r * view_optical_path.x + m * view_optical_path.y + o * view_optical_path.z;
-    result.spectral_entries[i].power = expf(-tr);
+
+    float transmittance_r = g_transmittance_table.lookup(r * view_optical_path.x);
+    float transmittance_m = g_transmittance_table.lookup(m * view_optical_path.y);
+    float transmittance_o = g_transmittance_table.lookup(o * view_optical_path.z);
+    result.spectral_entries[i].power = transmittance_r * transmittance_m * transmittance_o;
   }
 }
 
@@ -220,7 +350,7 @@ void extinction_spectrum_at_direction(const ScatteringSpectrums& spectrums, cons
 void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepthData& extinction) {
   constexpr uint32_t kSpectrumStepSize = 5u;
 
-  log::info("Precomputing atmosphere spectrums and extinction image %u x %u...", kExtinctionImageWidth, kExtinctionImageHeight);
+  log::info("Precomputing atmosphere spectrums and extinction image %u x %u...", OpticalDepthData::kWidth, OpticalDepthData::kHeight);
 
   std::vector<float2> r_samples;
   r_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
@@ -260,66 +390,83 @@ void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepth
   spectrums.ozone = SPD::from_samples(o_samples.data(), o_samples.size());
   spectrums.black = SPD::from_samples(b_samples.data(), b_samples.size());
 
-  // Precompute extinction data
   log::info("Precomputing extinction data...");
   auto t1 = std::chrono::steady_clock::now();
-  scheduler.execute(kExtinctionImageSize, [&extinction](uint32_t begin, uint32_t end, uint32_t) {
+  scheduler.execute(OpticalDepthData::kSize, [&extinction](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
-      uint32_t x = i % kExtinctionImageWidth;
-      uint32_t y = i / kExtinctionImageWidth;
-      float2 uv = {float(x) / float(kExtinctionImageWidth), float(y) / float(kExtinctionImageHeight)};
+      uint32_t x = i % OpticalDepthData::kWidth;
+      uint32_t y = i / OpticalDepthData::kWidth;
+      float2 uv = {float(x) / float(OpticalDepthData::kWidth), float(y) / float(OpticalDepthData::kHeight)};
       float2 params = scattering::uv_to_precomputed_params(uv);
       float3 direction = {sqrtf(1.0f - params.x * params.x), params.x, 0.0f};
       float3 origin = {0.0f, kPlanetRadius + params.y, 0.0f};
       float total_distance = distance_to_sphere(origin, direction, {}, kOuterSphereSize);
       float3 value = scattering::optical_length(origin, direction, total_distance);
       ETX_VALIDATE(value);
-      extinction.data[x + kExtinctionImageWidth * y] = {value.x, value.y, value.z, 0.0f};
+      extinction.data[x + OpticalDepthData::kWidth * y] = {value.x, value.y, value.z, 0.0f};
     }
   });
   auto t2 = std::chrono::steady_clock::now();
   log::info("Precomputed extinction data: %.3f ms", (t2 - t1).count() / 1.0e+6);
 }
 
-void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const OpticalDepthData& extinction, float4* buffer,
+void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources, const OpticalDepthData& extinction, float4* buffer,
   const ScatteringSpectrums& spectrums, TaskScheduler& scheduler) {
   log::info("Generating sky image %u x %u...", dimensions.x, dimensions.y);
 
   auto t0 = std::chrono::steady_clock::now();
+
   std::atomic<float> ax = {};
   std::atomic<float> ay = {};
   std::atomic<float> az = {};
   std::atomic<float> aw = {};
-  scheduler.execute(dimensions.x * dimensions.y,
-    [&parameters, &dimensions, light_direction, &extinction, buffer, &spectrums, &ax, &ay, &az, &aw](uint32_t begin, uint32_t end, uint32_t thread_id) {
-      float3 avg = {};
-      float w = 0.0f;
-      SpectralDistribution radiance = spectrums.black;
-      for (uint32_t i = begin; i < end; ++i) {
-        uint32_t x = i % dimensions.x;
-        uint32_t y = i / dimensions.x;
-        float u = float(x + 0.5f) / float(dimensions.x) * 2.0f - 1.0f;
-        float v = float(y + 0.5f) / float(dimensions.y) * 2.0f - 1.0f;
-        float3 direction = from_spherical(u * kPi, v * kHalfPi);
-        radiance_spectrum_at_direction(spectrums, extinction, direction, light_direction, parameters, radiance);
-        float3 xyz = radiance.integrate_to_xyz();
-        float3 rgb = max({}, spectrum::xyz_to_rgb(xyz));
-        if (v > 0.0f) {
-          // Poor man multiple scattering
-          // Gather average color of the upper hemisphere
-          // Weighted in the way that top pixels contribute more
-          // Not physically correct, but looks nice
-          float weight = sinf(v * kHalfPi);
-          w += weight;
-          avg += rgb * weight;
-        }
-        buffer[x + dimensions.x * (dimensions.y - y - 1u)] = {rgb.x, rgb.y, rgb.z, 1.0f};
+  scheduler.execute(dimensions.x * dimensions.y, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    float3 avg = {};
+    float w = 0.0f;
+    SpectralDistribution radiance = spectrums.black;
+    for (uint32_t i = begin; i < end; ++i) {
+      uint32_t x = i % dimensions.x;
+      uint32_t y = i / dimensions.x;
+      float u = float(x + 0.5f) / float(dimensions.x);
+      float v = float(y + 0.5f) / float(dimensions.y);
+
+      float theta = (1.0f - v) * kPi - kHalfPi;
+      float phi = u * kDoublePi - kPi;  // 0 to 1 -> -π to π
+      float3 direction;
+      if (ETX_USE_EQUAL_AREA_PROJECTION) {
+        float v_mapped = v * 2.0f - 1.0f;
+        theta = asinf(fmaxf(-1.0f, fminf(1.0f, -v_mapped)));
       }
-      ax = ax + avg.x;
-      ay = ay + avg.y;
-      az = az + avg.z;
-      aw = aw + w;
-    });
+      direction = from_spherical(phi, theta);
+      radiance_spectrum_at_direction(spectrums, extinction, direction, light_sources, parameters, radiance);
+      float3 xyz = radiance.integrate_to_xyz();
+      float3 rgb = max({}, spectrum::xyz_to_rgb(xyz));
+      // Poor man multiple scattering
+      // Gather average color of the upper hemisphere
+      // Weighted in the way that top pixels contribute more
+      // Not physically correct, but looks nice
+      float weight = 0.0f;
+      if (ETX_USE_EQUAL_AREA_PROJECTION) {
+        if (theta > 0.0f) {
+          weight = sinf(theta);
+        }
+      } else {
+        float sin_theta = sinf(theta);
+        if (sin_theta > 0.0f) {
+          weight = sin_theta;
+        }
+      }
+      if (weight > 0.0f) {
+        w += weight;
+        avg += rgb * weight;
+      }
+      buffer[x + dimensions.x * y] = {rgb.x, rgb.y, rgb.z, 1.0f};
+    }
+    ax += avg.x;
+    ay += avg.y;
+    az += avg.z;
+    aw += w;
+  });
 
   float3 average_color = float3{ax.load(), ay.load(), az.load()} / aw.load();
 

@@ -9,10 +9,6 @@
 namespace etx {
 
 SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count) {
-  if (count > spectrum::WavelengthCount) {
-    count *= 1u;
-  }
-
   SpectralDistribution result;
 
   if ((wavelengths_power == nullptr) || (count == 0)) {
@@ -105,10 +101,6 @@ void SpectralDistribution::scale(float factor) {
   ETX_ASSERT(valid());
 }
 
-SpectralDistribution SpectralDistribution::null() {
-  return constant(0.0f);
-}
-
 SpectralDistribution SpectralDistribution::constant(float value) {
   float2 samples[2] = {
     {spectrum::kShortestWavelength, value},
@@ -138,7 +130,7 @@ SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, f
 
 SpectralDistribution SpectralDistribution::rgb_reflectance(const float3& rgb) {
   if (etx::luminance(rgb) == 0.0f)
-    return SpectralDistribution::null();
+    return SpectralDistribution::constant(0.0f);
 
   ETX_VALIDATE(rgb);
 

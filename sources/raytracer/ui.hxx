@@ -139,6 +139,7 @@ struct UI {
   void build_material_selection_properties(Scene& scene, const BuildContext& ctx);
   void build_medium_selection_properties(Scene& scene, const BuildContext& ctx);
   void build_emitter_selection_properties(Scene& scene, const BuildContext& ctx);
+  void build_atmosphere_selection_properties(Scene& scene, const BuildContext& ctx);
   void build_mesh_selection_properties(Scene& scene, const BuildContext& ctx);
   void build_camera_selection_properties(Scene& scene, Camera& camera, const BuildContext& ctx);
   void build_scene_selection_properties(Scene& scene, const BuildContext& ctx);

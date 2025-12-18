@@ -24,8 +24,10 @@
 #include <etx/render/host/scene_tungsten_loader.hxx>
 
 #include <tinyexr.hxx>
+#include <stb_image_write.hxx>
 
 #include <mikktspace.h>
+#include <filesystem>
 
 namespace etx {
 
@@ -116,55 +118,6 @@ struct SceneRepresentationImpl {
   std::mutex mt;
 
   const IORDatabase& ior_database;
-
-  std::filesystem::path locate_spectrum_file(const char* identifier, std::initializer_list<const char*> fallback_folders) const {
-    if ((identifier == nullptr) || (identifier[0] == 0))
-      return {};
-
-    std::filesystem::path requested(identifier);
-    if (requested.has_extension() == false)
-      requested.replace_extension(".spd");
-
-    std::error_code ec;
-    if (requested.is_absolute()) {
-      if (std::filesystem::exists(requested, ec))
-        return requested;
-      return {};
-    }
-
-    std::filesystem::path data_root = std::filesystem::path(env().data_folder()) / "spectrum";
-
-    std::filesystem::path combined = data_root / requested;
-    if (std::filesystem::exists(combined, ec))
-      return combined;
-
-    for (const char* folder : fallback_folders) {
-      std::filesystem::path candidate = data_root / folder / requested.filename();
-      if (std::filesystem::exists(candidate, ec))
-        return candidate;
-    }
-
-    return {};
-  }
-
-  bool load_ior_from_identifier(const char* identifier, SpectralDistribution& eta, SpectralDistribution& k, SpectralDistribution::Class& cls) const {
-    if ((identifier == nullptr) || (identifier[0] == 0))
-      return false;
-
-    if (const IORDefinition* def = ior_database.find_by_name(identifier)) {
-      cls = def->cls;
-      eta = def->eta;
-      k = def->k;
-      return true;
-    }
-
-    std::filesystem::path candidate = locate_spectrum_file(identifier, {"conductor", "dielectric"});
-    if (candidate.empty())
-      return false;
-
-    cls = RefractiveIndex::load_from_file(candidate.string().c_str(), eta, k);
-    return cls != SpectralDistribution::Class::Invalid;
-  }
 
   bool load_illuminant_from_identifier(const char* identifier, SpectralDistribution& spd) const {
     if ((identifier == nullptr) || (identifier[0] == 0))
@@ -443,9 +396,6 @@ struct SceneRepresentationImpl {
   }
 
   void commit(bool spectral) {
-    log::warning("Instancing area emitters...");
-
-    log::warning("Building pixel sampler...");
     std::vector<float4> sampler_image;
     Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
     uint32_t image_options = Image::BuildSamplingTable | Image::UniformSamplingTable;
@@ -503,6 +453,8 @@ struct SceneRepresentationImpl {
   void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
   void add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params);
   void rebuild_atmosphere_emitter(uint32_t emitter_index);
+
+  void setup_atmosphere_references();
 
   bool finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len, bool force_tangents,
     bool spectral_scene);
@@ -760,12 +712,12 @@ void SceneRepresentation::rebuild_atmosphere_emitter(uint32_t emitter_index) {
 }
 
 void SceneRepresentationImpl::add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params) {
-  data.add_atmosphere_emitter(params, scene, scheduler);
-  build_emitters_distribution(data, scene);
+  uint32_t emitter_index = data.add_atmosphere_emitter(params, scene);
+  data.build_atmosphere_and_sun_images(emitter_index);
 }
 
 void SceneRepresentationImpl::rebuild_atmosphere_emitter(uint32_t emitter_index) {
-  data.rebuild_atmosphere_emitter(emitter_index, scene, scheduler);
+  data.rebuild_atmosphere_emitter(emitter_index);
 }
 
 template <class T>
@@ -1032,8 +984,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   auto ext = get_file_ext(_private->data.geometry_file_name.c_str());
   if (strcmp(ext, ".etx") == 0) {
     SceneSerialization loader;
-    if (!loader.load_from_file(_private->data.geometry_file_name.c_str(), _private->data, _private->data.materials_file_name.c_str(), _private->scene, _private->ior_database,
-          _private->scheduler)) {
+    if (loader.load_from_file(_private->data.geometry_file_name.c_str(), _private->data, _private->data.materials_file_name.c_str(), _private->scene, _private->ior_database,
+          _private->scheduler) == false) {
       log::error("Failed to load ETX file from %s", _private->data.geometry_file_name.c_str());
       return false;
     }
@@ -1396,7 +1348,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
   auto geometry_export_start = std::chrono::high_resolution_clock::now();
   SceneSerialization archive;
-  if (!archive.save_to_file(impl->data, geometry_path)) {
+  if (archive.save_to_file(impl->data, geometry_path) == false) {
     log::error("Failed to export geometry to %s", geometry_path.string().c_str());
     return {};
   }
@@ -1512,7 +1464,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   };
 
   auto spectrum_by_index = [&](uint32_t index) -> const SpectralDistribution& {
-    static const SpectralDistribution null_spectrum = SpectralDistribution::null();
+    static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
     if ((index == kInvalidIndex) || (index >= impl->data.spectrum_values.size())) {
       return null_spectrum;
     }
@@ -1606,28 +1558,50 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "\n";
   }
 
-  const EmitterProfile* environment_profile = nullptr;
-  const EmitterProfile* directional_profile = nullptr;
-  for (const auto& profile : impl->data.emitter_profiles) {
-    if ((profile.cls == EmitterProfile::Class::Environment) && (environment_profile == nullptr)) {
-      environment_profile = &profile;
-    } else if ((profile.cls == EmitterProfile::Class::Directional) && (directional_profile == nullptr)) {
-      directional_profile = &profile;
+  std::vector<uint32_t> atmosphere_emitter_indices;
+
+  for (uint32_t i = 0; i < impl->data.emitter_profiles.size(); ++i) {
+    const auto& profile = impl->data.emitter_profiles[i];
+    if ((profile.meta & EmitterProfile::Meta::Atmosphere) && (profile.cls == EmitterProfile::Class::Environment)) {
+      atmosphere_emitter_indices.push_back(i);
     }
   }
 
-  if (environment_profile != nullptr) {
+  for (uint32_t emitter_index : atmosphere_emitter_indices) {
+    const auto& env_profile = impl->data.emitter_profiles[emitter_index];
+    float3 env_color = spectrum_rgb(env_profile.emission.spectrum_index);
+    const auto& scattering = env_profile.atmosphere.scattering;
+    materials_stream << "newmtl et::atmosphere\n";
+    materials_stream << "anisotropy " << scattering.anisotropy << "\n";
+    materials_stream << "altitude " << scattering.altitude << "\n";
+    materials_stream << "rayleigh " << scattering.rayleigh_scale << "\n";
+    materials_stream << "mie " << scattering.mie_scale << "\n";
+    materials_stream << "ozone " << scattering.ozone_scale << "\n";
+    materials_stream << "quality " << env_profile.atmosphere.quality << "\n";
+    materials_stream << "color " << env_color.x << " " << env_color.y << " " << env_color.z << "\n";
+    materials_stream << "\n";
+  }
+
+  for (uint32_t i = 0; i < impl->data.emitter_profiles.size(); ++i) {
+    const auto& profile = impl->data.emitter_profiles[i];
+    if (profile.cls != EmitterProfile::Class::Environment) {
+      continue;
+    }
+    if (profile.meta & EmitterProfile::Meta::Atmosphere) {
+      continue;
+    }
+
     materials_stream << "newmtl et::env\n";
-    std::string env_path = texture_path(environment_profile->emission.image_index);
+    std::string env_path = texture_path(profile.emission.image_index);
     if (env_path.empty() == false) {
       materials_stream << "image " << env_path << "\n";
     }
-    float3 env_color = spectrum_rgb(environment_profile->emission.spectrum_index);
+    float3 env_color = spectrum_rgb(profile.emission.spectrum_index);
     materials_stream << "color " << env_color.x << " " << env_color.y << " " << env_color.z << "\n";
     float env_rotation_offset = 0.0f;
     float env_scale_u = 1.0f;
-    if (environment_profile->emission.image_index != kInvalidIndex) {
-      const Image& env_image = impl->data.images.get(environment_profile->emission.image_index);
+    if (profile.emission.image_index != kInvalidIndex) {
+      const Image& env_image = impl->data.images.get(profile.emission.image_index);
       env_rotation_offset = env_image.offset.x;
       env_scale_u = env_image.scale.x;
     }
@@ -1637,29 +1611,33 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (std::fabs(env_scale_u - 1.0f) >= kEpsilon) {
       materials_stream << "scale " << env_scale_u << "\n";
     }
-    bool env_medium_valid = (environment_profile->medium_index != kInvalidIndex) && (medium_names.count(environment_profile->medium_index) > 0);
+    bool env_medium_valid = (profile.medium_index != kInvalidIndex) && (medium_names.count(profile.medium_index) > 0);
     if (env_medium_valid) {
-      materials_stream << "ext_medium " << medium_names[environment_profile->medium_index] << "\n";
+      materials_stream << "ext_medium " << medium_names[profile.medium_index] << "\n";
     }
     materials_stream << "\n";
   }
 
-  if (directional_profile != nullptr) {
-    materials_stream << "newmtl et::dir\n";
-    float3 dir_color = spectrum_rgb(directional_profile->emission.spectrum_index);
-    materials_stream << "color " << dir_color.x << " " << dir_color.y << " " << dir_color.z << "\n";
-    materials_stream << "direction " << directional_profile->directional.direction.x << " " << directional_profile->directional.direction.y << " "
-                     << directional_profile->directional.direction.z << "\n";
-    if (directional_profile->directional.angular_size >= kEpsilon) {
-      materials_stream << "angular_diameter " << (directional_profile->directional.angular_size * 180.0f / kPi) << "\n";
+  for (uint32_t i = 0; i < impl->data.emitter_profiles.size(); ++i) {
+    const auto& profile = impl->data.emitter_profiles[i];
+    if (profile.cls != EmitterProfile::Class::Directional) {
+      continue;
     }
-    std::string dir_path = texture_path(directional_profile->emission.image_index);
+
+    materials_stream << "newmtl et::dir\n";
+    float3 dir_color = spectrum_rgb(profile.emission.spectrum_index);
+    materials_stream << "color " << dir_color.x << " " << dir_color.y << " " << dir_color.z << "\n";
+    materials_stream << "direction " << profile.directional.direction.x << " " << profile.directional.direction.y << " " << profile.directional.direction.z << "\n";
+    if (profile.directional.angular_size >= kEpsilon) {
+      materials_stream << "angular_diameter " << (profile.directional.angular_size * 180.0f / kPi) << "\n";
+    }
+    std::string dir_path = texture_path(profile.emission.image_index);
     if (dir_path.empty() == false) {
       materials_stream << "image " << dir_path << "\n";
     }
-    bool dir_medium_valid = (directional_profile->medium_index != kInvalidIndex) && (medium_names.count(directional_profile->medium_index) > 0);
+    bool dir_medium_valid = (profile.medium_index != kInvalidIndex) && (medium_names.count(profile.medium_index) > 0);
     if (dir_medium_valid) {
-      materials_stream << "ext_medium " << medium_names[directional_profile->medium_index] << "\n";
+      materials_stream << "ext_medium " << medium_names[profile.medium_index] << "\n";
     }
     materials_stream << "\n";
   }
@@ -1904,6 +1882,28 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   return json_path.generic_string();
 }
 
+void SceneRepresentationImpl::setup_atmosphere_references() {
+  // Find atmosphere emitter (environment emitter with atmosphere meta)
+  uint32_t atmosphere_emitter_index = kInvalidIndex;
+  for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
+    const auto& profile = data.emitter_profiles[i];
+    if ((profile.cls == EmitterProfile::Class::Environment) && (profile.meta & EmitterProfile::Meta::Atmosphere) != 0) {
+      atmosphere_emitter_index = i;
+      break;  // For now, only support one atmosphere emitter
+    }
+  }
+
+  // If we found an atmosphere emitter, set up references for all directional emitters
+  if (atmosphere_emitter_index != kInvalidIndex) {
+    for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
+      auto& profile = data.emitter_profiles[i];
+      if (profile.cls == EmitterProfile::Class::Directional) {
+        profile.reference_emitter_index = atmosphere_emitter_index;
+      }
+    }
+  }
+}
+
 bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len,
   bool force_tangents, bool spectral_scene) {
   auto& camera = active_camera;
@@ -1936,13 +1936,10 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     }
   }
 
-  if (data.emitter_profiles.empty() && !has_emissive_materials) {
-    add_atmosphere_emitter({});
-    data.images.load_images(scheduler);
-  }
-
   validate_materials();
   validate_mediums();
+
+  data.images.load_images(scheduler);
 
   {
     TimeMeasure m = {};
@@ -1955,6 +1952,16 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     log::warning("Tangents built: %.2f sec", m.lap());
     validate_tangents(referenced_vertices, has_invalid_tangents || force_tangents);
     log::warning("Tangents validated: %.2f sec", m.lap());
+  }
+
+  setup_atmosphere_references();
+
+  // Rebuild atmospheres now that references are set up
+  for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
+    const auto& profile = data.emitter_profiles[i];
+    if ((profile.cls == EmitterProfile::Class::Environment) && (profile.meta & EmitterProfile::Meta::Atmosphere) != 0) {
+      rebuild_atmosphere_emitter(i);
+    }
   }
 
   update_medium_bounds();

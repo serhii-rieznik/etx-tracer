@@ -320,16 +320,10 @@ PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, 
   scattering_params.rayleigh_scale = 1.0f;
   scattering_params.ozone_scale = 1.0f;
 
-  float sun_scale = 0.0f;
-  float sky_scale = intensity;
-  float quality = 0.5f;
+  constexpr float kDefaultQuality = 0.25f;
+  SceneRepresentation::AtmosphereEmitterParameters params{{scattering_params}, kDefaultQuality};
 
-  SceneRepresentation::AtmosphereEmitterParameters params{scattering_params.anisotropy, scattering_params.altitude, scattering_params.rayleigh_scale, scattering_params.mie_scale,
-    scattering_params.ozone_scale, sun_dir, sun_angular_diameter_deg, quality, sun_scale, sky_scale};
-
-  data.add_atmosphere_emitter(params, scene, scheduler);
-  build_emitters_distribution(data, scene);
-
+  data.add_atmosphere_emitter(params, scene);
   r.loaded = true;
   return r;
 }
@@ -1341,7 +1335,7 @@ void load_tungsten_media(const nlohmann::json& js, SceneData& data, Scene& scene
     SpectralDistribution s_a = json_to_rgb_spectrum(m["sigma_a"], 0.0f);
     SpectralDistribution s_s = json_to_rgb_spectrum(m["sigma_s"], 0.0f);
 
-    data.add_medium(scene, data, Medium::Class::Homogeneous, name.c_str(), nullptr, s_a, s_s, g, true);
+    data.add_medium(Medium::Class::Homogeneous, name.c_str(), nullptr, s_a, s_s, g, true);
     ++loaded;
   }
 

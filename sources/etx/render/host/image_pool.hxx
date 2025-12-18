@@ -32,6 +32,7 @@ struct ImagePool {
 
   void add_options(uint32_t, uint32_t);
   void load_images(TaskScheduler& scheduler);
+  void rebuild_sampling_table(uint32_t index, TaskScheduler& scheduler);
 
   const Image& get(uint32_t);
   std::string path(uint32_t) const;

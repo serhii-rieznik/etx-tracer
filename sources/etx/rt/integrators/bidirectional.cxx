@@ -151,8 +151,16 @@ struct PathVertex {
 
       case EmitterProfile::Class::Environment: {
         const auto& img = scene.images[em.emission.image_index];
-        float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x);
+        bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
+        ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
+        float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x, projection);
+
         float sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
+        if (projection == ProjectionType::EqualArea) {
+          float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
+          sin_t = sin_theta;
+        }
+
         float image_pdf = 0.0f;
         img.evaluate(uv, &image_pdf);
         return pdf_discrete * image_pdf / (2.0f * kPi * kPi * sin_t);
@@ -920,6 +928,8 @@ struct CPUBidirectionalImpl : public Task {
 
   SpectralResponse build_emitter_path(Sampler& smp, SpectralQuery spect, PathData& path_data) const {
     path_data.emitter_path.clear();
+    path_data.emitter_path_size = 0;
+
     const auto& emitter_sample = sample_emission(rt.scene(), spect, smp);
     if ((emitter_sample.pdf_area == 0.0f) || (emitter_sample.pdf_dir == 0.0f) || (emitter_sample.value.is_zero())) {
       return {spect, 0.0f};
@@ -1122,7 +1132,7 @@ struct CPUBidirectionalImpl : public Task {
       return 1.0f / (1.0f + w_light);
     }
 
-    if (mode == Mode::BDPTFast) {
+    if ((mode == Mode::BDPTFast) && (path_data.emitter_path_size >= 2)) {
       const auto& e0 = path_data.emitter_path[0];
       const auto& e1 = path_data.emitter_path[1];
       float p_sample = e0.pdf.from_prev;
@@ -1185,8 +1195,6 @@ struct CPUBidirectionalImpl : public Task {
       if (z_prev.connectible == false) {
         p_sample *= fabsf(1.0f);
       }
-
-      const auto& e0 = path_data.emitter_path[0];
 
       float ratio = z_prev.pdf.history;
       float to_emitter_direct = z_prev.pdf.from_prev * z_curr.pdf.from_prev;

@@ -75,8 +75,16 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const
 
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
-      float2 uv = direction_to_uv(query.direction, img.offset, img.scale.x);
+      bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
+      ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
+      float2 uv = direction_to_uv(query.direction, img.offset, img.scale.x, projection);
+
       auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
+      if (projection == ProjectionType::EqualArea) {
+        float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
+        sin_t = sin_theta;
+      }
+
       auto image_pdf = 0.0f;
       auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
       pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
@@ -136,8 +144,16 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, 
 
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
-      float2 uv = direction_to_uv(in_direction, img.offset, 1.0f);
+      bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
+      ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
+      float2 uv = direction_to_uv(in_direction, img.offset, 1.0f, projection);
+
       auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
+      if (projection == ProjectionType::EqualArea) {
+        float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
+        sin_t = sin_theta;
+      }
+
       auto image_pdf = 0.0f;
       auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
       pdf_dir = image_pdf / (2.0f * kPi * kPi * sin_t);
@@ -193,13 +209,21 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em_inst, const Spect
 
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
+      bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
+      ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
       float pdf_image = 0.0f;
       uint2 image_location = {};
       float4 image_value = {};
       float2 uv = img.sample(smp, pdf_image, image_location, image_value);
+
       float sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
+      if (projection == ProjectionType::EqualArea) {
+        float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
+        sin_t = sin_theta;
+      }
+
       result.image_uv = uv;
-      result.direction = uv_to_direction(result.image_uv, img.offset, img.scale.x);
+      result.direction = uv_to_direction(result.image_uv, img.offset, img.scale.x, projection);
       result.normal = -result.direction;
       result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
@@ -230,9 +254,9 @@ ETX_GPU_CODE uint32_t sample_emitter_index(const Scene& scene, float rnd) {
     return kInvalidIndex;
   }
   float pdf_sample = 0.0f;
-  uint32_t emitter_index = static_cast<uint32_t>(scene.emitters_distribution.sample(rnd, pdf_sample));
-  ETX_ASSERT(emitter_index < scene.emitters_distribution.values.count);
-  return emitter_index;
+  uint32_t dist_index = scene.emitters_distribution.sample(rnd, pdf_sample);
+  ETX_ASSERT(dist_index < scene.emitters_distribution.values.count);
+  return scene.emitters_distribution.values[dist_index].reference;
 }
 
 ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_index, const float2& smp, const float3& from_point, const Scene& scene) {
@@ -253,10 +277,12 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
     return {};
   }
   EmitterSample result = {};
-  result.emitter_index = scene.emitters_distribution.sample(smp.next(), result.pdf_sample);
-  if ((result.emitter_index == kInvalidIndex) || (result.emitter_index >= scene.emitter_instances.count)) {
+  uint32_t dist_index = scene.emitters_distribution.sample(smp.next(), result.pdf_sample);
+  if ((dist_index == kInvalidIndex) || (dist_index >= scene.emitters_distribution.values.count)) {
     return {};
   }
+  result.emitter_index = scene.emitters_distribution.values[dist_index].reference;
+  ETX_ASSERT(result.emitter_index < scene.emitter_instances.count);
 
   const auto& em_inst = scene.emitter_instances[result.emitter_index];
   const auto& em = scene.emitter_profiles[em_inst.profile];
@@ -296,6 +322,8 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
 
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
+      bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
+      ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
       float pdf_image = 0.0f;
       uint2 image_location = {};
       float4 image_value = {};
@@ -305,7 +333,12 @@ ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQue
       }
 
       auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
-      auto d = -uv_to_direction(uv, img.offset, img.scale.x);
+      if (projection == ProjectionType::EqualArea) {
+        float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
+        sin_t = sin_theta;
+      }
+
+      auto d = -uv_to_direction(uv, img.offset, img.scale.x, projection);
       auto basis = orthonormal_basis(d);
       auto disk_sample = sample_disk(smp.next_2d());
 

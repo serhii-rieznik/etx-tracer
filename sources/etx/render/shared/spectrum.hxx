@@ -551,7 +551,6 @@ struct ETX_ALIGNED SpectralDistribution {
 
   static SpectralDistribution from_samples(const float2 wavelengths_power[], uint64_t count);
 
-  static SpectralDistribution null();
   static SpectralDistribution constant(float value);
   static SpectralDistribution from_black_body(float temperature, float scale);
   static SpectralDistribution from_normalized_black_body(float temperature, float scale);

@@ -13,9 +13,11 @@ struct ETX_ALIGNED EmitterProfile {
     Undefined = kInvalidIndex,
   };
 
-  enum class Meta : uint32_t {
-    None = 0u,
-    Atmosphere = 1u << 0u,
+  struct Meta {
+    enum : uint32_t {
+      None = 0u,
+      Atmosphere = 1u << 0u,
+    };
   };
 
   struct DirectionalData {
@@ -27,6 +29,7 @@ struct ETX_ALIGNED EmitterProfile {
 
   struct AtmosphereData {
     scattering::Parameters scattering = {};
+    float quality = 0.125f;
   };
 
   SpectralImage emission = {};

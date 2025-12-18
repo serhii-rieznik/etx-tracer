@@ -9,6 +9,7 @@ struct ETX_ALIGNED Distribution {
     float value = 0.0f;
     float pdf = 0.0f;
     float cdf = 0.0f;
+    uint32_t reference = kInvalidIndex;
   };
   ArrayView<Entry> values ETX_EMPTY_INIT;
   float total_weight ETX_EMPTY_INIT;

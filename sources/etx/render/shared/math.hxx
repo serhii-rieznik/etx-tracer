@@ -24,6 +24,11 @@ struct vector4 {
   t x, y, z, w;
 };
 
+enum class ProjectionType : uint32_t {
+  Equirectangular = 0u,
+  EqualArea = 1u,
+};
+
 struct SphericalCoordinates {
   float phi;
   float theta;
@@ -1006,7 +1011,7 @@ ETX_GPU_CODE float3 from_spherical(float phi, float theta) {
   return from_spherical({phi, theta, 1.0f});
 }
 
-ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset, float u_scale) {
+ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset, float u_scale, ProjectionType projection) {
   float u = uv.x;
   if (u_scale < 0.0f) {
     u = 1.0f - u;
@@ -1015,10 +1020,14 @@ ETX_GPU_CODE float3 uv_to_direction(const float2& uv, const float2& offset, floa
   u = u - floorf(u);
   float phi = (u * 2.0f - 1.0f) * kPi;
   float theta = (0.5f - uv.y) * kPi;
+  if (projection == ProjectionType::EqualArea) {
+    float v_mapped = (1.0f - uv.y * 2.0f);
+    theta = asinf(fmaxf(-1.0f, fminf(1.0f, v_mapped)));
+  }
   return from_spherical(phi, theta);
 }
 
-ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset, float u_scale) {
+ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset, float u_scale, ProjectionType projection) {
   auto s = to_spherical(dir);
   float u = (s.phi / kPi + 1.0f) / 2.0f;
   if (u_scale < 0.0f) {
@@ -1027,6 +1036,10 @@ ETX_GPU_CODE float2 direction_to_uv(const float3& dir, const float2& offset, flo
   u = u + offset.x;
   u = u - floorf(u);
   float v = 0.5f - s.theta / kPi;
+  if (projection == ProjectionType::EqualArea) {
+    float sin_theta = sinf(s.theta);
+    v = 0.5f - sin_theta * 0.5f;
+  }
   return {u, v};
 }
 
