@@ -624,7 +624,7 @@ struct ETX_ALIGNED Triangle {
   uint32_t i[3] = {kInvalidIndex, kInvalidIndex, kInvalidIndex};
   uint32_t material_index = kInvalidIndex;
   float3 geo_n = {};
-  float pad = 0.0f;
+  uint32_t emitter_index = kInvalidIndex;
 };
 
 struct ETX_ALIGNED Mesh {

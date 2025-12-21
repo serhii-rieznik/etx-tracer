@@ -121,14 +121,10 @@ struct Integrator {
 };
 
 struct TaskScheduler;
+struct SceneRepresentation;
 struct IntegratorThreadImpl;
 struct IntegratorThread {
-  enum Mode : uint32_t {
-    ExternalControl,
-    Async,
-  };
-
-  IntegratorThread(TaskScheduler&, Mode mode);
+  IntegratorThread(SceneRepresentation& scene_rep, Raytracing& raytracing);
   ~IntegratorThread();
 
   void start(Integrator*);
@@ -147,7 +143,7 @@ struct IntegratorThread {
   void restart();
 
  private:
-  ETX_DECLARE_PIMPL(IntegratorThread, 256);
+  ETX_DECLARE_PIMPL(IntegratorThread, 1024);
 };
 
 inline const char* integrator_type_to_id(Integrator::Type type) {

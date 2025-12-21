@@ -7,6 +7,12 @@
 
 #include <vector>
 #include <string>
+#include <cstring>
+
+extern "C" {
+uint32_t XXH32(const void* input, size_t length, uint32_t seed);
+uint64_t XXH64(const void* input, size_t length, uint64_t seed);
+}
 
 namespace etx {
 
@@ -44,38 +50,52 @@ constexpr inline T align_up(T sz, T al) {
   return sz + m & (~m);
 }
 
-enum : uint32_t {
-  kFnv1a32Prime = 16777619u,
-  kFnv1a32Begin = 2166136261u,
-};
-
-constexpr inline uint32_t fnv1a32(const char* str, const uint32_t hash = kFnv1a32Begin) {
-  return (str && (*str)) ? fnv1a32(str + 1, (hash ^ uint32_t(*str)) * kFnv1a32Prime) : hash;
+inline uint32_t xxh32(const void* ptr, uint64_t size) {
+  return XXH32(ptr, size, 0);
 }
 
-constexpr inline uint32_t fnv1a32(const uint8_t* ptr, uint64_t size, const uint32_t hash = kFnv1a32Begin) {
-  uint32_t hsh = hash;
-  for (uint64_t i = 0; i < size; ++i) {
-    hsh = (hsh ^ uint32_t(ptr[i])) * kFnv1a32Prime;
-  }
-  return hsh;
+inline uint32_t xxh32(const char* str) {
+  return XXH32(str, str ? strlen(str) : 0, 0);
 }
 
-enum : uint64_t {
-  kFnv1a64Prime = 1099511628211ull,
-  kFnv1a64Begin = 1469598103934665603ull,
-};
-
-constexpr inline uint64_t fnv1a64(const char* str, const uint64_t hash = kFnv1a64Begin) {
-  return (str && (*str)) ? fnv1a64(str + 1, (hash ^ uint64_t(*str)) * kFnv1a64Prime) : hash;
+inline uint64_t xxh64(const void* ptr, uint64_t size) {
+  return XXH64(ptr, size, 0);
 }
 
-constexpr inline uint64_t fnv1a64(const uint8_t* ptr, uint64_t size, const uint64_t hash = kFnv1a64Begin) {
-  uint64_t hsh = hash;
-  for (uint64_t i = 0; i < size; ++i) {
-    hsh = (hsh ^ uint64_t(ptr[i])) * kFnv1a64Prime;
-  }
-  return hsh;
+inline uint64_t xxh64(const char* str) {
+  return XXH64(str, str ? strlen(str) : 0, 0);
+}
+
+inline uint32_t etx_hash32(const uint8_t* ptr, uint64_t size) {
+  return xxh32(ptr, size);
+}
+
+inline uint32_t etx_hash32(const char* str) {
+  return xxh32(str);
+}
+
+inline uint64_t etx_hash64(const uint8_t* ptr, uint64_t size) {
+  return xxh64(ptr, size);
+}
+
+inline uint64_t etx_hash64(const char* str) {
+  return xxh64(str);
+}
+
+inline uint32_t etx_hash32_continue(const void* ptr, uint64_t size, uint32_t seed) {
+  return XXH32(ptr, size, seed);
+}
+
+inline uint32_t etx_hash32_continue(const char* str, uint32_t seed) {
+  return XXH32(str, strlen(str), seed);
+}
+
+inline uint64_t etx_hash64_continue(const void* ptr, uint64_t size, uint64_t seed) {
+  return XXH64(ptr, size, seed);
+}
+
+inline uint64_t etx_hash64_continue(const char* str, uint64_t seed) {
+  return XXH64(str, strlen(str), seed);
 }
 
 }  // namespace etx

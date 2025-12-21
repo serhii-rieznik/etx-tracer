@@ -10,10 +10,9 @@
 
 namespace etx {
 
-struct Scene;
 struct IORDatabase;
 struct TaskScheduler;
 
-uint32_t load_from_obj_file(const char* obj_file_name, const char* mtl_file_name, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler);
+uint32_t load_from_obj_file(const char* obj_file_name, const char* mtl_file_name, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler);
 
 }  // namespace etx

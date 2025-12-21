@@ -1,0 +1,346 @@
+#include <etx/render/host/scene_data.hxx>
+
+#include <etx/core/core.hxx>
+
+namespace etx {
+
+SceneData::SceneData(TaskScheduler& s)
+  : images(images_vector, images_storage_vector)
+  , mediums(mediums_vector, mediums_storage_vector)
+  , scheduler(s) {
+}
+
+BoundingBox SceneData::compute_bounding_volumes() const {
+  BoundingBox bbox = {
+    float3{kMaxFloat, kMaxFloat, kMaxFloat},
+    0.0f,
+    float3{-kMaxFloat, -kMaxFloat, -kMaxFloat},
+    0.0f,
+  };
+
+  std::vector<BoundingBox> thread_bounds(scheduler.max_thread_count(), bbox);
+
+  scheduler.execute(triangles.size(), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    BoundingBox& local_bounds = thread_bounds[thread_id];
+    for (uint32_t i = begin; i < end; ++i) {
+      const auto& tri = triangles[i];
+      if (tri.i[0] < vertices.pos.size()) {
+        const float3& v = vertices.pos[tri.i[0]];
+        local_bounds.p_min = min(local_bounds.p_min, v);
+        local_bounds.p_max = max(local_bounds.p_max, v);
+      }
+      if (tri.i[1] < vertices.pos.size()) {
+        const float3& v = vertices.pos[tri.i[1]];
+        local_bounds.p_min = min(local_bounds.p_min, v);
+        local_bounds.p_max = max(local_bounds.p_max, v);
+      }
+      if (tri.i[2] < vertices.pos.size()) {
+        const float3& v = vertices.pos[tri.i[2]];
+        local_bounds.p_min = min(local_bounds.p_min, v);
+        local_bounds.p_max = max(local_bounds.p_max, v);
+      }
+    }
+  });
+
+  for (const auto& tb : thread_bounds) {
+    bbox.p_min = min(bbox.p_min, tb.p_min);
+    bbox.p_max = max(bbox.p_max, tb.p_max);
+  }
+
+  return bbox;
+}
+
+SceneHashes SceneData::compute_hashes() const {
+  SceneHashes result = {};
+
+  // Vertex data (5 separate ArrayViews)
+  result.vertices_pos_hash = xxh64(vertices.pos.data(), vertices.pos.size() * sizeof(float3));
+  result.vertices_nrm_hash = xxh64(vertices.nrm.data(), vertices.nrm.size() * sizeof(float3));
+  result.vertices_tan_hash = xxh64(vertices.tan.data(), vertices.tan.size() * sizeof(float3));
+  result.vertices_btn_hash = xxh64(vertices.btn.data(), vertices.btn.size() * sizeof(float3));
+  result.vertices_tex_hash = xxh64(vertices.tex.data(), vertices.tex.size() * sizeof(float2));
+
+  // Geometry data
+  result.triangles_hash = xxh64(triangles.data(), triangles.size() * sizeof(Triangle));
+  result.meshes_hash = xxh64(meshes.data(), meshes.size() * sizeof(Mesh));
+
+  // Material data
+  result.materials_hash = xxh64(materials.data(), materials.size() * sizeof(Material));
+  result.spectra_hash = xxh64(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution));
+
+  // Emitter data
+  result.emitter_profiles_hash = xxh64(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile));
+
+  // Resource data
+  // WARNING: Image structs contain ArrayView pointers to external storage
+  // This hash is NOT stable and may change even when image data hasn't changed
+  // TODO: Only hash stable metadata (dimensions, format) instead of full struct
+  result.images_hash = xxh64(images.as_array(), images.array_size() * sizeof(Image));
+
+  // WARNING: Medium structs contain DensityGrid with ArrayView pointers to external storage
+  // This hash is NOT stable and may change even when medium data hasn't changed
+  // TODO: Only hash stable metadata (type, indices) instead of full struct
+  result.mediums_hash = xxh64(mediums.as_array(), mediums.array_size() * sizeof(Medium));
+
+  // Non-ArrayView scene data
+  result.pixel_filter_hash = xxh64(&pixel_filter, sizeof(PixelFilter));
+  result.defaults_hash = xxh64(&defaults, sizeof(Scene::Defaults));
+  result.options_hash = xxh64(&options, sizeof(Scene::Options));
+
+  return result;
+}
+
+void SceneData::clear(TaskScheduler& scheduler) {
+  images.remove_all();
+  mediums.remove_all();
+  vertices.pos.clear();
+  vertices.nrm.clear();
+  vertices.tan.clear();
+  vertices.btn.clear();
+  vertices.tex.clear();
+  triangles.clear();
+  materials.clear();
+  meshes.clear();
+  emitter_profiles.clear();
+  spectrum_values.clear();
+  images_vector.clear();
+  images_storage_vector.clear();
+  mediums_vector.clear();
+  spectrum_names.clear();
+  material_mapping.clear();
+  mesh_mapping.clear();
+  material_to_emitter_profile.clear();
+  gltf_image_mapping.clear();
+  gltf_material_mapping.clear();
+  cameras.clear();
+  json_file_name.clear();
+  geometry_file_name.clear();
+  materials_file_name.clear();
+  images.init(1024u);
+  mediums.init(1024u);
+}
+
+uint32_t SceneData::add_spectrum(const char* source_id, const SpectralDistribution& spd) {
+  ETX_CRITICAL((source_id != nullptr) && (source_id[0] != 0));
+
+  uint32_t index = uint32_t(spectrum_values.size());
+  spectrum_values.emplace_back(spd);
+  spectrum_names.emplace_back(source_id);
+  return index;
+}
+
+uint32_t SceneData::add_spectrum(const char* id) {
+  return add_spectrum(id, SpectralDistribution{});
+}
+
+uint32_t SceneData::add_spectrum() {
+  char buffer[64] = {};
+  snprintf(buffer, sizeof(buffer), "##spectrum%04u", uint32_t(spectrum_names.size()));
+  return add_spectrum(buffer);
+}
+
+uint32_t SceneData::add_spectrum(const SpectralDistribution& spd) {
+  uint32_t i = add_spectrum();
+  spectrum_values[i] = spd;
+  return i;
+}
+
+uint32_t SceneData::find_spectrum(const char* id) const {
+  if ((id == nullptr) || (id[0] == 0))
+    return kInvalidIndex;
+
+  auto i = std::find(spectrum_names.begin(), spectrum_names.end(), id);
+  if (i == spectrum_names.end())
+    return kInvalidIndex;
+
+  return uint32_t(std::distance(spectrum_names.begin(), i));
+}
+
+bool SceneData::has_material(const char* name) const {
+  return material_mapping.count(name) > 0;
+}
+
+uint32_t SceneData::add_material(const char* name) {
+  std::string id = (name != nullptr) && (name[0] != 0) ? name : ("material-" + std::to_string(materials.size()));
+  auto i = material_mapping.find(id);
+  if (i != material_mapping.end()) {
+    uint32_t existing_index = i->second;
+    if (existing_index >= materials.size()) {
+      materials.resize(existing_index + 1);
+    }
+    return existing_index;
+  }
+  uint32_t index = static_cast<uint32_t>(materials.size());
+  materials.emplace_back();
+  material_mapping[id] = index;
+  return index;
+}
+
+uint32_t SceneData::clone_material(const Material& src, const char* name) {
+  uint32_t index = static_cast<uint32_t>(materials.size());
+  materials.emplace_back(src);
+  std::string id = (name != nullptr) && (name[0] != 0) ? name : ("material-" + std::to_string(index));
+  if (material_mapping.count(id) > 0) {
+    id += "#" + std::to_string(index);
+  }
+  material_mapping[id] = index;
+  return index;
+}
+
+uint32_t SceneData::add_mesh(const char* name, uint32_t triangle_offset, uint32_t triangle_count, const float3& bbox_min, const float3& bbox_max) {
+  uint32_t index = static_cast<uint32_t>(meshes.size());
+  auto& mesh = meshes.emplace_back();
+  mesh.triangle_offset = triangle_offset;
+  mesh.triangle_count = triangle_count;
+  mesh.bbox_min = bbox_min;
+  mesh.bbox_max = bbox_max;
+  std::string mesh_name = name && name[0] ? name : ("mesh-" + std::to_string(index));
+  mesh_mapping[mesh_name] = index;
+  return index;
+}
+
+uint32_t SceneData::add_image(const char* path, uint32_t options, const float2& offset, const float2& scale) {
+  std::string id = path && path[0] ? path : ("##image-" + std::to_string(images.array_size()));
+  return images.add_from_file(id, options, offset, scale);
+}
+
+uint32_t SceneData::add_image(const float4* data, const uint2& dim, uint32_t options, const float2& offset, const float2& scale) {
+  return images.add_from_data(data, dim, options, offset, scale);
+}
+
+uint32_t SceneData::add_image(const Image& img) {
+  return images.add_copy(img);
+}
+
+uint32_t SceneData::add_image(const char* path, uint32_t options) {
+  return add_image(path, options, {}, {1.0f, 1.0f});
+}
+
+void SceneData::add_image_options(uint32_t index, uint32_t options) {
+  images.add_options(index, options);
+}
+
+uint32_t SceneData::add_medium(Medium::Class cls, const char* name, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g,
+  bool explicit_connections) {
+  uint32_t absorption_index = add_spectrum(s_a);
+  uint32_t scattering_index = add_spectrum(s_t);
+
+  std::string id = name && name[0] ? name : ("medium-" + std::to_string(mediums.array_size()));
+  return mediums.add(cls, id, volume_file, absorption_index, scattering_index, g, explicit_connections);
+}
+
+uint32_t SceneData::add_atmosphere_emitter(const AtmosphereEmitterParameters& params) {
+  constexpr uint32_t kSkyImageBaseDimensions = 1024u;
+
+  uint2 sky_image_dimensions = uint2{kSkyImageBaseDimensions, 2u * kSkyImageBaseDimensions};
+  sky_image_dimensions.x = max(64u, uint32_t(sky_image_dimensions.x * params.quality));
+  sky_image_dimensions.y = max(64u, uint32_t(sky_image_dimensions.y * params.quality));
+
+  uint32_t atmosphere_emitter_index = uint32_t(emitter_profiles.size());
+
+  // Create placeholder sky image (will be properly generated later in finalize_scene_loading)
+  std::vector<float4> image_buffer(sky_image_dimensions.x * sky_image_dimensions.y, float4{0.0f, 0.0f, 0.0f, 1.0f});
+
+  auto& e = emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
+  e.emission.spectrum_index = add_spectrum(params.env_spectrum);
+  e.atmosphere.scattering = params.scattering;
+  e.atmosphere.quality = params.quality;
+  e.meta = EmitterProfile::Meta::Atmosphere;
+  e.emission.image_index = add_image(image_buffer.data(), sky_image_dimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+
+  return atmosphere_emitter_index;
+}
+
+void SceneData::build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_index) {
+  auto& atmosphere_emitter = emitter_profiles[atmosphere_emitter_index];
+
+  std::vector<uint32_t> sun_emitter_indices;
+  std::vector<scattering::LightSource> light_sources;
+  for (uint32_t i = 0; i < emitter_profiles.size(); ++i) {
+    auto& candidate = emitter_profiles[i];
+    if ((candidate.cls == EmitterProfile::Class::Directional) && (candidate.reference_emitter_index == atmosphere_emitter_index)) {
+      sun_emitter_indices.push_back(i);
+      scattering::LightSource sun_light = {
+        spectrum_values[candidate.emission.spectrum_index],
+        candidate.directional.direction,
+        candidate.directional.angular_size,
+        1.0f,
+      };
+      light_sources.push_back(sun_light);
+    }
+  }
+
+  if (atmosphere_emitter.emission.image_index != kInvalidIndex) {
+    images.load_images(scheduler);
+    const auto& img = images.get(atmosphere_emitter.emission.image_index);
+    auto& img_storage = images_storage_vector[atmosphere_emitter.emission.image_index];
+    auto ptr = reinterpret_cast<float4*>(img_storage.data.data());
+    scattering::generate_sky_image(atmosphere_emitter.atmosphere.scattering, img.isize, light_sources, extinction_data, ptr, scattering_spectrums, scheduler);
+    images.rebuild_sampling_table(atmosphere_emitter.emission.image_index, scheduler);
+  }
+
+  rebuild_sun_images_for_atmosphere(atmosphere_emitter_index, sun_emitter_indices);
+}
+
+void SceneData::rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_index, const std::vector<uint32_t>& sun_emitter_indices) {
+  auto& atmosphere_emitter = emitter_profiles[atmosphere_emitter_index];
+
+  constexpr uint2 kSunImageDimensions = uint2{128u, 128u};
+
+  static uint32_t sun_image_counter = 0;
+
+  for (uint32_t sun_idx : sun_emitter_indices) {
+    auto& sun_emitter = emitter_profiles[sun_idx];
+
+    std::vector<float4> sun_buffer(kSunImageDimensions.x * kSunImageDimensions.y, float4{0.0f, 0.0f, 0.0f, 0.0f});
+    scattering::generate_sun_image(atmosphere_emitter.atmosphere.scattering, kSunImageDimensions, sun_emitter.directional.direction, sun_emitter.directional.angular_size,
+      sun_buffer.data(), scattering_spectrums, scheduler);
+
+    char tmp_path[2048] = {};
+    std::string filename = std::string("sun_") + std::to_string(sun_image_counter++) + ".hdr";
+    env().file_in_tmp(filename.c_str(), tmp_path, sizeof(tmp_path));
+    stbi_write_hdr(tmp_path, kSunImageDimensions.x, kSunImageDimensions.y, 4, reinterpret_cast<const float*>(&sun_buffer[0]));
+
+    if (sun_emitter.emission.image_index == kInvalidIndex) {
+      sun_emitter.emission.image_index = add_image(sun_buffer.data(), kSunImageDimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+      images.load_images(scheduler);
+    } else {
+      const auto& img = images_vector[sun_emitter.emission.image_index];
+      auto& img_storage = images_storage_vector[sun_emitter.emission.image_index];
+      if ((img.isize.x != kSunImageDimensions.x) || (img.isize.y != kSunImageDimensions.y)) {
+        sun_emitter.emission.image_index = add_image(sun_buffer.data(), kSunImageDimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+        images.load_images(scheduler);
+      } else {
+        memcpy(img_storage.data.data(), sun_buffer.data(), sun_buffer.size() * sizeof(float4));
+        images.rebuild_sampling_table(sun_emitter.emission.image_index, scheduler);
+      }
+    }
+  }
+}
+
+void SceneData::rebuild_atmosphere_emitter(uint32_t emitter_index) {
+  if (emitter_index >= emitter_profiles.size()) {
+    return;
+  }
+
+  auto& emitter = emitter_profiles[emitter_index];
+
+  uint32_t atmosphere_emitter_index = kInvalidIndex;
+  if (((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) && (emitter.cls == EmitterProfile::Class::Environment)) {
+    atmosphere_emitter_index = emitter_index;
+  } else if ((emitter.cls == EmitterProfile::Class::Directional) && (emitter.reference_emitter_index != kInvalidIndex)) {
+    uint32_t ref_index = emitter.reference_emitter_index;
+    if (ref_index < emitter_profiles.size()) {
+      auto& ref_emitter = emitter_profiles[ref_index];
+      if (((ref_emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) && (ref_emitter.cls == EmitterProfile::Class::Environment)) {
+        atmosphere_emitter_index = ref_index;
+      }
+    }
+  }
+
+  if (atmosphere_emitter_index != kInvalidIndex) {
+    build_atmosphere_and_sun_images(atmosphere_emitter_index);
+  }
+}
+
+}  // namespace etx

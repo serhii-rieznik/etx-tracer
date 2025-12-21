@@ -62,12 +62,12 @@ namespace etx {
 
 template <class T>
 struct ETX_ALIGNED ArrayView {
-  T* a ETX_EMPTY_INIT;
+  const T* a ETX_EMPTY_INIT;
   uint64_t count ETX_EMPTY_INIT;
 
   ArrayView() = default;
 
-  ETX_GPU_CODE ArrayView(T* p, uint64_t c)
+  ETX_GPU_CODE ArrayView(const T* p, uint64_t c)
     : a(p)
     , count(c) {
   }
@@ -79,20 +79,13 @@ struct ETX_ALIGNED ArrayView {
     return a[i];
   }
 
-  ETX_GPU_CODE T& operator[](uint64_t i) {
-    ETX_ASSERT_GREATER(count, 0llu);
-    ETX_ASSERT(a != nullptr);
-    ETX_ASSERT_LESS(i, count);
-    return a[i];
-  }
-
-  ETX_GPU_CODE T* begin() const {
+  ETX_GPU_CODE const T* begin() const {
     ETX_ASSERT_GREATER(count, 0llu);
     ETX_ASSERT(a != nullptr);
     return a;
   }
 
-  ETX_GPU_CODE T* end() const {
+  ETX_GPU_CODE const T* end() const {
     ETX_ASSERT_GREATER(count, 0llu);
     ETX_ASSERT(a != nullptr);
     return a + count;

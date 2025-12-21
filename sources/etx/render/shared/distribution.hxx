@@ -40,6 +40,33 @@ struct ETX_ALIGNED Distribution {
     } while ((e - b) > 1);
     return b;
   }
+
+  static ETX_GPU_CODE Distribution build(Distribution::Entry* entries, uint32_t count) {
+    float total_weight = 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+      entries[i].cdf = total_weight;
+      total_weight += entries[i].value;
+    }
+
+    if (total_weight == 0.0f) {
+      for (uint32_t i = 0; i < count; ++i) {
+        entries[i].value = 1.0f;
+        entries[i].pdf = 1.0f / float(count);
+        entries[i].cdf = float(i) / float(count);
+      }
+    } else {
+      for (uint32_t i = 0; i < count; ++i) {
+        entries[i].pdf = entries[i].value / total_weight;
+        entries[i].cdf /= total_weight;
+      }
+    }
+    entries[count] = {0.0f, 0.0f, 1.0f};
+
+    Distribution result;
+    result.values = {entries, count};
+    result.total_weight = total_weight;
+    return result;
+  }
 };
 
 }  // namespace etx

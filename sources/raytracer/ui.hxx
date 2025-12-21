@@ -24,7 +24,7 @@ struct UI {
   void initialize(Film* film, const IORDatabase*);
   void cleanup();
 
-  void build(double dt, const std::vector<std::string>& recent_files, Scene& scene, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
+  void build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
     const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
@@ -45,8 +45,6 @@ struct UI {
     float button_size = {};
     float input_size = {};
     bool has_integrator = false;
-    bool has_scene = false;
-    bool scene_editable = false;
   };
 
   ViewOptions view_options() const;
@@ -109,13 +107,13 @@ struct UI {
   void save_scene_file_as() const;
   void save_image(SaveImageMode mode) const;
   void load_image() const;
-  bool build_material(Scene& scene, Material&);
-  bool build_medium(Scene& scene, Medium&);
+  bool build_material(SceneRepresentation& scene_rep, Material& material);
+  bool build_medium(SceneRepresentation& scene_rep, Medium& medium);
   bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
-  bool spectrum_picker(Scene& scene, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
+  bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);
-  bool ior_picker(Scene& scene, const char* name, RefractiveIndex& ior);
-  bool emission_picker(Scene& scene, const char* label, const char* id_suffix, uint32_t& spectrum_index);
+  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior);
+  bool emission_picker(SceneRepresentation& scene_rep, const char* label, const char* id_suffix, uint32_t& spectrum_index);
   bool medium_dropdown(const char* label, uint32_t& medium);
   void update_name_buffer(SelectionKind kind, int32_t index, const char* current_name);
 
@@ -123,27 +121,27 @@ struct UI {
   void reload_geometry();
   void reload_scene();
   void set_selection(SelectionKind kind, int32_t index, bool track_history = true);
-  void validate_selections(const Scene& scene);
+  void validate_selections(SceneRepresentation& scene_rep);
   void navigate_history(int32_t step);
   bool can_navigate_back() const;
   bool can_navigate_forward() const;
 
   void build_main_menu_bar(const std::vector<std::string>& recent_files);
   void build_toolbar(const BuildContext& ctx);
-  void build_scene_objects_window(Scene& scene, const BuildContext& ctx, const SceneRepresentation::MaterialMapping& materials, const SceneRepresentation::MediumMapping& mediums,
-    const SceneRepresentation::MeshMapping& meshes);
-  void build_properties_window(Scene& scene, Camera& camera, const BuildContext& ctx);
+  void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const SceneRepresentation::MaterialMapping& materials,
+    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes);
+  void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx);
 
   bool build_material_class_selector(Material& material);
 
-  void build_material_selection_properties(Scene& scene, const BuildContext& ctx);
-  void build_medium_selection_properties(Scene& scene, const BuildContext& ctx);
-  void build_emitter_selection_properties(Scene& scene, const BuildContext& ctx);
-  void build_atmosphere_selection_properties(Scene& scene, const BuildContext& ctx);
-  void build_mesh_selection_properties(Scene& scene, const BuildContext& ctx);
-  void build_camera_selection_properties(Scene& scene, Camera& camera, const BuildContext& ctx);
-  void build_scene_selection_properties(Scene& scene, const BuildContext& ctx);
-  void build_integrator_selection_properties(Scene& scene, const BuildContext& ctx);
+  void build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx);
+  void build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_integrator_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
 
  private:
   Integrator* _current_integrator = nullptr;

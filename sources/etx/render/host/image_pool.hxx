@@ -13,7 +13,6 @@ struct ImagePool {
   ImagePool(std::vector<Image>&, std::vector<ImageStorage>&);
   ~ImagePool();
 
-  // Access to storage for external management
   std::vector<ImageStorage>& storage();
 
   void init(uint32_t capacity);
@@ -34,13 +33,13 @@ struct ImagePool {
   void load_images(TaskScheduler& scheduler);
   void rebuild_sampling_table(uint32_t index, TaskScheduler& scheduler);
 
-  const Image& get(uint32_t);
+  const Image& get(uint32_t) const;
   std::string path(uint32_t) const;
 
   void free_image(Image&);
 
-  Image* as_array();
-  uint64_t array_size();
+  const Image* as_array() const;
+  const uint64_t array_size() const;
 
   ETX_DECLARE_PIMPL(ImagePool, 384);
 };

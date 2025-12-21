@@ -204,7 +204,7 @@ struct VCMLightPath {
 };
 
 ETX_GPU_CODE bool vcm_can_extend_path(const Scene& scene, const VCMPathState& state) {
-  return (state.total_path_depth + 1 <= scene.max_path_length);
+  return (state.total_path_depth + 1 <= scene.options.max_path_length);
 }
 
 ETX_GPU_CODE bool vcm_medium_explicit(const Scene& scene, const VCMPathState& state) {
@@ -217,7 +217,7 @@ ETX_GPU_CODE SpectralResponse vcm_transmittance(const Raytracing& rt, const Scen
 
 ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source, const VCMOptions& options, VCMPathState& state, const VCMIteration& it,
   const Intersection& intersection, const BSDFData& bsdf_data, const BSDFSample& bsdf_sample, bool subsurface_sample) {
-  if (state.total_path_depth + 1 > scene.max_path_length)
+  if (state.total_path_depth + 1 > scene.options.max_path_length)
     return false;
 
   if (bsdf_sample.valid() == false) {
@@ -238,7 +238,7 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
     return false;
   }
 
-  if (random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput) == false) {
+  if (random_continue(state.total_path_depth, scene.options.random_path_termination, state.eta, state.sampler, state.throughput) == false) {
     return false;
   }
 
@@ -427,10 +427,10 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
   state.ray.max_t = kMaxFloat;
   state.ray.min_t = kRayEpsilon;
 
-  if (state.total_path_depth + 1 > scene.max_path_length)
+  if (state.total_path_depth + 1 > scene.options.max_path_length)
     return false;
 
-  return random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput);
+  return random_continue(state.total_path_depth, scene.options.random_path_termination, state.eta, state.sampler, state.throughput);
 }
 
 ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state) {
@@ -462,7 +462,7 @@ ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPath
 
 ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration, const VCMOptions& options,
   bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
-  if ((options.connect_to_camera() == false) || (state.total_path_depth + 2 > scene.max_path_length) || (state.total_path_depth + 2 < scene.min_path_length)) {
+  if ((options.connect_to_camera() == false) || (state.total_path_depth + 2 > scene.options.max_path_length) || (state.total_path_depth + 2 < scene.options.min_path_length)) {
     return {};
   }
 
@@ -598,7 +598,7 @@ ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& op
   if ((options.direct_hit() == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
-  if ((state.total_path_depth > scene.max_path_length) || (state.total_path_depth < scene.min_path_length))
+  if ((state.total_path_depth > scene.options.max_path_length) || (state.total_path_depth < scene.options.min_path_length))
     return;
 
   const auto& emitter_instance = scene.emitter_instances[intersection.emitter_index];
@@ -607,7 +607,7 @@ ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& op
 
 ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
   const Intersection* isect, const float3& medium_pos, const Raytracing& rt, VCMPathState& state) {
-  if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.max_path_length) || (state.total_path_depth + 1 < scene.min_path_length))
+  if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.options.max_path_length) || (state.total_path_depth + 1 < scene.options.min_path_length))
     return {state.spect, 0.0f};
 
   float3 sample_pos = camera_at_medium ? medium_pos : isect->pos;
@@ -772,9 +772,9 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, cons
   SpectralResponse result = {state.spect, 0.0f};
   for (uint64_t i = 0; i < light_path.count; ++i) {
     const uint64_t target_path_length = state.total_path_depth + i + 2u;
-    if (target_path_length < scene.min_path_length)
+    if (target_path_length < scene.options.min_path_length)
       continue;
-    if (target_path_length > scene.max_path_length)
+    if (target_path_length > scene.options.max_path_length)
       break;
 
     float3 target_position = {};
@@ -841,7 +841,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
     for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
       auto d = positions[j] - intersection.pos;
       float distance_squared = dot(d, d);
-      if ((distance_squared > radius_squared) || (path_lengths[j] + state.total_path_depth + 1 > scene.max_path_length)) {
+      if ((distance_squared > radius_squared) || (path_lengths[j] + state.total_path_depth + 1 > scene.options.max_path_length)) {
         continue;
       }
       if (dot(intersection.nrm, normals[j]) <= kEpsilon) {
@@ -939,9 +939,9 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
 
     // Override with blue noise for first camera interaction (limit early iterations for parity with BDPT)
     if (options.blue_noise && (state.total_path_depth == 1) && (iteration.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 0);
-      rnd_connection = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 2);
-      rnd_support = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 4);
+      rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 0);
+      rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 2);
+      rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 4);
     }
     // Fold pending boundary + medium segment before connections
     float seg = state.path_distance + medium_sample.sampled_medium_t;
@@ -959,7 +959,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     ETX_VALIDATE(pdf_rev);
 
     // Explicit connections from medium BEFORE sampling continuation (match surface ordering)
-    if (med.enable_explicit_connections && (state.total_path_depth + 1 <= scene.max_path_length)) {
+    if (med.enable_explicit_connections && (state.total_path_depth + 1 <= scene.options.max_path_length)) {
       if (options.connect_to_light()) {
         state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
         state.gathered += vcm_connect_to_light(scene, iteration, options, true, nullptr, medium_sample.pos, rt, state);
@@ -988,10 +988,10 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     // Medium scattering increases path length
     state.total_path_depth += 1;
 
-    if (state.total_path_depth + 1 > scene.max_path_length)
+    if (state.total_path_depth + 1 > scene.options.max_path_length)
       return false;
 
-    return random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput);
+    return random_continue(state.total_path_depth, scene.options.random_path_termination, state.eta, state.sampler, state.throughput);
   }
 
   if (found_intersection == false) {
@@ -1016,9 +1016,9 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
 
   // Override with blue noise for first camera interaction (limit early iterations for parity with BDPT)
   if (options.blue_noise && (state.total_path_depth == 1) && (iteration.iteration < 256u)) {
-    rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 0);
-    rnd_connection = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 2);
-    rnd_support = sample_blue_noise(state.pixel_coord, scene.samples, iteration.iteration, 4);
+    rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 0);
+    rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 2);
+    rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 4);
   }
 
   // Use fixed sample allocation for BSDF sampling
@@ -1038,7 +1038,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
         Intersection out_isect = ss_gather.intersections[i];
-        out_isect.material_index = scene.subsurface_exit_material;
+        out_isect.material_index = scene.defaults.subsurface_exit_material;
         state.gathered += ss_gather.weights[i] * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &out_isect, {}, rt, state);
         // Use fixed samples for each subsurface connection
         state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
@@ -1057,7 +1057,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
   if (subsurface_sampled) {
     state.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
     intersection = ss_gather.intersections[ss_gather.selected_intersection];
-    intersection.material_index = scene.subsurface_exit_material;
+    intersection.material_index = scene.defaults.subsurface_exit_material;
     // Use the already allocated samples for subsurface cosine distribution
     state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, 0.0f);
     bsdf_sample.w_o = sample_cosine_distribution(state.sampler.next_2d(), intersection.nrm, 1.0f);
@@ -1067,7 +1067,7 @@ ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iterat
     bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
   }
 
-  if (is_connectible && options.merge_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
+  if (is_connectible && options.merge_vertices() && (state.total_path_depth + 1 <= scene.options.max_path_length)) {
     state.merged += spatial_grid.gather(scene, state, options, intersection, iteration.vc_weight);
   }
 
@@ -1107,7 +1107,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
 
     const auto& med = scene.mediums[state.medium_index];
     // Register medium light vertex for camera connections BEFORE sampling continuation
-    if (options.connect_vertices() && (state.total_path_depth + 1 <= scene.max_path_length)) {
+    if (options.connect_vertices() && (state.total_path_depth + 1 <= scene.options.max_path_length)) {
       VCMLightVertex v = {};
       v.throughput = state.throughput;
       v.w_i = state.ray.d;  // incoming direction before scattering
@@ -1127,7 +1127,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
     }
 
     // Connect to camera from medium BEFORE sampling continuation (align with BDPT)
-    if (options.connect_to_camera() && med.enable_explicit_connections && (state.total_path_depth + 1 <= scene.max_path_length)) {
+    if (options.connect_to_camera() && med.enable_explicit_connections && (state.total_path_depth + 1 <= scene.options.max_path_length)) {
       float2 uv = {};
       state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
       auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, true, nullptr, medium_sample.pos, state, uv);
@@ -1163,8 +1163,8 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
 
     state.total_path_depth += 1;
 
-    result.continue_tracing =
-      (state.total_path_depth + 1 <= scene.max_path_length) && random_continue(state.total_path_depth, scene.random_path_termination, state.eta, state.sampler, state.throughput);
+    result.continue_tracing = (state.total_path_depth + 1 <= scene.options.max_path_length) &&
+                              random_continue(state.total_path_depth, scene.options.random_path_termination, state.eta, state.sampler, state.throughput);
 
     return result;
   }
@@ -1204,13 +1204,13 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
     result.vertex_to_add = {state, intersection, path_index};
     result.splat_count = 0;
 
-    if (options.connect_to_camera() && (state.total_path_depth + 1 <= scene.max_path_length)) {
+    if (options.connect_to_camera() && (state.total_path_depth + 1 <= scene.options.max_path_length)) {
       if (subsurface_sampled) {
         for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
           // Use fixed samples for each subsurface camera connection
           state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
           Intersection out_isect = ss_gather.intersections[i];
-          out_isect.material_index = scene.subsurface_exit_material;
+          out_isect.material_index = scene.defaults.subsurface_exit_material;
           auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &out_isect, {}, state, result.splat_uvs[result.splat_count]);
           state.sampler.pop_fixed();
           ETX_VALIDATE(value);
@@ -1255,7 +1255,7 @@ ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& ca
     return result;
   }
 
-  result.continue_tracing = state.total_path_depth + 1u < scene.max_path_length;
+  result.continue_tracing = state.total_path_depth + 1u < scene.options.max_path_length;
   return result;
 }
 

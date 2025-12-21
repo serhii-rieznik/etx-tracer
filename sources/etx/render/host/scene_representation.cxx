@@ -13,7 +13,6 @@
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
-#include <etx/render/host/distribution_builder.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
@@ -28,6 +27,7 @@
 
 #include <mikktspace.h>
 #include <filesystem>
+#include <algorithm>
 
 namespace etx {
 
@@ -112,7 +112,6 @@ struct SceneRepresentationImpl {
   static constexpr float kDefaultConductorK = 1000000.0f;
 
   TaskScheduler& scheduler;
-  Scene scene;
   SceneData data;
   Camera active_camera;
   std::mutex mt;
@@ -153,39 +152,37 @@ struct SceneRepresentationImpl {
   }
 
   void init_default_values() {
-    scene.black_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
-    scene.white_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
-    scene.rayleigh_spectrum = data.add_spectrum(data.scattering_spectrums.rayleigh);
-    scene.mie_spectrum = data.add_spectrum(data.scattering_spectrums.mie);
-    scene.ozone_spectrum = data.add_spectrum(data.scattering_spectrums.ozone);
-    scene.default_dielectric_eta = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
-    scene.default_conductor_eta = data.add_spectrum(SpectralDistribution::constant(0.0f));
-    scene.default_conductor_k = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
+    data.defaults.black_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
+    data.defaults.white_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+    data.defaults.rayleigh_spectrum = data.add_spectrum(data.scattering_spectrums.rayleigh);
+    data.defaults.mie_spectrum = data.add_spectrum(data.scattering_spectrums.mie);
+    data.defaults.ozone_spectrum = data.add_spectrum(data.scattering_spectrums.ozone);
+    data.defaults.dielectric_eta = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
+    data.defaults.conductor_eta = data.add_spectrum(SpectralDistribution::constant(0.0f));
+    data.defaults.conductor_k = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
 
-    scene.properties[Scene::Properties::Spectral] = false;
-    scene.properties[Scene::Properties::MultipleImportanceSampling] = true;
-    scene.properties[Scene::Properties::BlueNoise] = true;
+    data.options.properties[Scene::Properties::Spectral] = false;
+    data.options.properties[Scene::Properties::MultipleImportanceSampling] = true;
+    data.options.properties[Scene::Properties::BlueNoise] = true;
 
-    scene.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
-    data.materials[scene.subsurface_scatter_material].reflectance = {.spectrum_index = scene.black_spectrum};
-    data.materials[scene.subsurface_scatter_material].scattering = {.spectrum_index = scene.white_spectrum};
-    data.materials[scene.subsurface_scatter_material].cls = Material::Class::Translucent;
+    data.defaults.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
+    data.materials[data.defaults.subsurface_scatter_material].reflectance = {.spectrum_index = data.defaults.black_spectrum};
+    data.materials[data.defaults.subsurface_scatter_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
+    data.materials[data.defaults.subsurface_scatter_material].cls = Material::Class::Translucent;
 
-    scene.subsurface_exit_material = data.add_material("etx::subsurface-exit");
-    data.materials[scene.subsurface_exit_material].reflectance = {.spectrum_index = scene.white_spectrum};
-    data.materials[scene.subsurface_exit_material].scattering = {.spectrum_index = scene.white_spectrum};
-    data.materials[scene.subsurface_exit_material].cls = Material::Class::Diffuse;
+    data.defaults.subsurface_exit_material = data.add_material("etx::subsurface-exit");
+    data.materials[data.defaults.subsurface_exit_material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
+    data.materials[data.defaults.subsurface_exit_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
+    data.materials[data.defaults.subsurface_exit_material].cls = Material::Class::Diffuse;
 
-    scene.missing_material = data.add_material("etx::missing");
-    data.materials[scene.missing_material].reflectance = {.spectrum_index = scene.white_spectrum};
-    data.materials[scene.missing_material].scattering = {.spectrum_index = scene.white_spectrum};
-    data.materials[scene.missing_material].cls = Material::Class::Diffuse;
+    data.defaults.missing_material = data.add_material("etx::missing");
+    data.materials[data.defaults.missing_material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
+    data.materials[data.defaults.missing_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
+    data.materials[data.defaults.missing_material].cls = Material::Class::Diffuse;
   }
 
   void cleanup() {
     data.clear(scheduler);
-
-    scene = {};
 
     active_camera = {};
     active_camera.lens_image = kInvalidIndex;
@@ -227,19 +224,31 @@ struct SceneRepresentationImpl {
           mtl.roughness.value.y = max(kEpsilon, mtl.roughness.value.y);
         }
         if (mtl.int_ior.eta_index == kInvalidIndex) {
+          std::unique_lock lock(mt);
           if (mtl.cls == Material::Class::Conductor) {
-            mtl.int_ior.eta_index = scene.default_conductor_eta;
+            mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
+            mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
           } else {
-            mtl.int_ior.eta_index = scene.default_dielectric_eta;
+            mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
+            mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
           }
         }
         if (mtl.int_ior.k_index == kInvalidIndex) {
+          std::unique_lock lock(mt);
           if (mtl.cls == Material::Class::Conductor) {
-            mtl.int_ior.k_index = scene.default_conductor_k;
+            mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
           } else {
-            std::unique_lock lock(mt);
             mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
           }
+        }
+        if (mtl.ext_ior.eta_index == kInvalidIndex) {
+          std::unique_lock lock(mt);
+          mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
+          mtl.ext_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
+        }
+        if (mtl.ext_ior.k_index == kInvalidIndex) {
+          std::unique_lock lock(mt);
+          mtl.ext_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
         }
         if (mtl.thinfilm.ior.k_index == kInvalidIndex) {
           std::unique_lock lock(mt);
@@ -257,7 +266,39 @@ struct SceneRepresentationImpl {
     // Clamp medium densities to prevent extremely small mean free paths
     for (uint32_t i = 0; i < data.mediums.array_size(); ++i) {
       const Medium& medium = data.mediums.get(i);
-      clamp_medium_density(scene, medium);
+
+      if (medium.absorption_index == kInvalidIndex || medium.absorption_index >= data.spectrum_values.size()) {
+        continue;
+      }
+
+      if (medium.scattering_index == kInvalidIndex || medium.scattering_index >= data.spectrum_values.size()) {
+        continue;
+      }
+
+      SpectralDistribution& absorption = data.spectrum_values[medium.absorption_index];
+      SpectralDistribution& scattering = data.spectrum_values[medium.scattering_index];
+
+      // Find maximum values
+      float max_absorption = absorption.maximum_spectral_power();
+      float max_scattering = scattering.maximum_spectral_power();
+
+      float max_extinction = max_absorption + max_scattering;
+      if (max_extinction <= 0.0f) {
+        continue;
+      }
+
+      constexpr float kMinMeanFreePathAbsolute = 0.01f;  // Minimum mean free path in absolute units
+      float max_allowed_extinction = 1.0f / kMinMeanFreePathAbsolute;
+
+      if (max_extinction <= max_allowed_extinction) {
+        continue;
+      }
+
+      float scale_factor = max_allowed_extinction / max_extinction;
+
+      // Scale both spectra by the same factor to preserve ratios
+      absorption.scale(scale_factor);
+      scattering.scale(scale_factor);
     }
   }
 
@@ -395,65 +436,16 @@ struct SceneRepresentationImpl {
     }
   }
 
-  void commit(bool spectral) {
-    std::vector<float4> sampler_image;
-    Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
-    uint32_t image_options = Image::BuildSamplingTable | Image::UniformSamplingTable;
-    uint32_t image = data.images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, image_options, {}, {1.0f, 1.0f});
-    scene.pixel_sampler = {image, 1.5f};
-
-    float3 bbox_min = data.triangles.empty() ? float3{-1.0f, -1.0f, -1.0f} : float3{kMaxFloat, kMaxFloat, kMaxFloat};
-    float3 bbox_max = data.triangles.empty() ? float3{+1.0f, +1.0f, +1.0f} : float3{-kMaxFloat, -kMaxFloat, -kMaxFloat};
-    for (const auto& tri : data.triangles) {
-      bbox_min = min(bbox_min, data.vertices.pos[tri.i[0]]);
-      bbox_min = min(bbox_min, data.vertices.pos[tri.i[1]]);
-      bbox_min = min(bbox_min, data.vertices.pos[tri.i[2]]);
-      bbox_max = max(bbox_max, data.vertices.pos[tri.i[0]]);
-      bbox_max = max(bbox_max, data.vertices.pos[tri.i[1]]);
-      bbox_max = max(bbox_max, data.vertices.pos[tri.i[2]]);
-    }
-
-    scene.bounding_box_min = bbox_min;
-    scene.bounding_box_max = bbox_max;
-    scene.bounding_sphere_center = 0.5f * (bbox_min + bbox_max);
-    scene.bounding_sphere_radius = length(bbox_max - scene.bounding_sphere_center);
-
-    scene.vertices.pos = {data.vertices.pos.data(), data.vertices.pos.size()};
-    scene.vertices.nrm = {data.vertices.nrm.data(), data.vertices.nrm.size()};
-    scene.vertices.tan = {data.vertices.tan.data(), data.vertices.tan.size()};
-    scene.vertices.btn = {data.vertices.btn.data(), data.vertices.btn.size()};
-    scene.vertices.tex = {data.vertices.tex.data(), data.vertices.tex.size()};
-    scene.triangles = {data.triangles.data(), data.triangles.size()};
-    scene.materials = {data.materials.data(), data.materials.size()};
-    scene.meshes = {data.meshes.data(), data.meshes.size()};
-    scene.spectrums = {data.spectrum_values.data(), data.spectrum_values.size()};
-    scene.images = {data.images.as_array(), data.images.array_size()};
-    scene.mediums = {data.mediums.as_array(), data.mediums.array_size()};
-
-    rebuild_area_emitters();
-
-    scene.properties[Scene::Properties::Committed] = true;
-    scene.properties[Scene::Properties::Spectral] = spectral;
-  }
-
-  struct TriangleEmitterData {
-    uint32_t triangle_index;
-    uint32_t material_index;
-    float tri_area;
-    float additional_weight;
-    SpectralImage emission;
-  };
-
-  TriangleEmitterData compute_triangle_emitter_data(uint32_t triangle_index);
-  void populate_area_emitters();
-  void rebuild_area_emitters();
   void update_medium_bounds();
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
 
   void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
-  void add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params);
+  void add_atmosphere_emitter(const AtmosphereEmitterParameters& params);
   void rebuild_atmosphere_emitter(uint32_t emitter_index);
+  void generate_pixel_sampler_image();
 
+  void create_area_emitters_from_materials();
+  bool delete_emitter(uint32_t emitter_index);
   void setup_atmosphere_references();
 
   bool finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len, bool force_tangents,
@@ -564,6 +556,63 @@ void compute_camera_position_to_fit_scene(const Scene& scene_data, const Camera&
   out_target = center;
 }
 
+void compute_camera_position_to_fit_scene(const SceneData& scene_data, const Camera& camera, const float3& view_direction, float3& out_position, float3& out_target) {
+  auto bbox = scene_data.compute_bounding_volumes();
+  const float3 bbox_size = bbox.p_max - bbox.p_min;
+  const float3 center = 0.5f * (bbox.p_min + bbox.p_max);
+
+  constexpr float kMinCosineThreshold = 0.99f;
+  const float3 view_dir = clamp_view_direction_away_from_up(view_direction, kWorldUp, kMinCosineThreshold);
+
+  float distance = 3.0f * length(bbox_size);
+
+  if ((camera.cls == Camera::Class::Perspective) && (camera.tan_half_fov > kEpsilon)) {
+    float3 right = cross(view_dir, kWorldUp);
+    if (length(right) < kEpsilon) {
+      right = cross(view_dir, kWorldRight);
+    }
+    right = normalize(right);
+    const float3 up = normalize(cross(right, view_dir));
+
+    const float3 bbox_half_size = 0.5f * bbox_size;
+    const float3 bbox_corners[8] = {
+      center + float3{-bbox_half_size.x, -bbox_half_size.y, -bbox_half_size.z},
+      center + float3{+bbox_half_size.x, -bbox_half_size.y, -bbox_half_size.z},
+      center + float3{-bbox_half_size.x, +bbox_half_size.y, -bbox_half_size.z},
+      center + float3{+bbox_half_size.x, +bbox_half_size.y, -bbox_half_size.z},
+      center + float3{-bbox_half_size.x, -bbox_half_size.y, +bbox_half_size.z},
+      center + float3{+bbox_half_size.x, -bbox_half_size.y, +bbox_half_size.z},
+      center + float3{-bbox_half_size.x, +bbox_half_size.y, +bbox_half_size.z},
+      center + float3{+bbox_half_size.x, +bbox_half_size.y, +bbox_half_size.z},
+    };
+
+    const float tan_half_fov = camera.tan_half_fov;
+    const float aspect = camera.aspect;
+    const float margin = 1.1f;
+
+    float min_distance = 0.0f;
+
+    for (uint32_t i = 0; i < 8; ++i) {
+      const float3 corner_rel = bbox_corners[i] - center;
+      const float right_proj = dot(corner_rel, right);
+      const float up_proj = dot(corner_rel, up);
+      const float forward_proj = dot(corner_rel, view_dir);
+
+      const float corner_dist_for_width = margin * fabsf(right_proj) / tan_half_fov;
+      const float corner_dist_for_height = margin * fabsf(up_proj) * aspect / tan_half_fov;
+      const float corner_required_dist = max(corner_dist_for_width, corner_dist_for_height);
+
+      const float corner_distance = forward_proj + corner_required_dist;
+      min_distance = max(min_distance, corner_distance);
+    }
+
+    distance = max(distance, min_distance);
+  }
+
+  out_position = center + distance * view_dir;
+  out_target = center;
+}
+
 ETX_PIMPL_IMPLEMENT(SceneRepresentation, Impl);
 
 SceneRepresentation::SceneRepresentation(TaskScheduler& s, const IORDatabase& db) {
@@ -574,16 +623,16 @@ SceneRepresentation::~SceneRepresentation() {
   ETX_PIMPL_CLEANUP(SceneRepresentation);
 }
 
-Scene& SceneRepresentation::mutable_scene() {
-  return _private->scene;
+SceneData& SceneRepresentation::data() {
+  return _private->data;
+}
+
+const SceneData& SceneRepresentation::data() const {
+  return _private->data;
 }
 
 Camera& SceneRepresentation::mutable_camera() {
   return _private->active_camera;
-}
-
-const Scene& SceneRepresentation::scene() const {
-  return _private->scene;
 }
 
 const SceneRepresentation::MaterialMapping& SceneRepresentation::material_mapping() const {
@@ -606,19 +655,17 @@ uint32_t SceneRepresentation::add_material(const char* name) {
   mat.scattering.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
   mat.emission.spectrum_index = _private->data.add_spectrum(SpectralDistribution::constant(0.0f));
   mat.subsurface.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
-  mat.int_ior.eta_index = _private->scene.default_dielectric_eta;
-  mat.int_ior.k_index = _private->scene.default_conductor_k;
-  mat.ext_ior.eta_index = _private->scene.default_dielectric_eta;
-  mat.ext_ior.k_index = _private->scene.default_conductor_k;
-  _private->scene.materials = {_private->data.materials.data(), _private->data.materials.size()};
-  _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
+  mat.int_ior.cls = SpectralDistribution::Class::Dielectric;
+  mat.int_ior.eta_index = _private->data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
+  mat.int_ior.k_index = _private->data.add_spectrum(SpectralDistribution::constant(0.0f));
+  mat.ext_ior.cls = SpectralDistribution::Class::Dielectric;
+  mat.ext_ior.eta_index = _private->data.add_spectrum(SpectralDistribution::constant(1.0f));
+  mat.ext_ior.k_index = _private->data.add_spectrum(SpectralDistribution::constant(0.0f));
   return index;
 }
 
 std::string SceneRepresentation::rename_material(uint32_t index, const char* name) {
-  auto result = rename_entry(_private->data.material_mapping, index, name, "material-");
-  _private->scene.materials = {_private->data.materials.data(), _private->data.materials.size()};
-  return result;
+  return rename_entry(_private->data.material_mapping, index, name, "material-");
 }
 
 uint32_t SceneRepresentation::add_medium(const char* name) {
@@ -627,33 +674,19 @@ uint32_t SceneRepresentation::add_medium(const char* name) {
   uint32_t absorption_index = _private->data.add_spectrum(absorption_spectrum);
   uint32_t scattering_index = _private->data.add_spectrum(scattering_spectrum);
   std::string id = name && name[0] ? name : ("medium-" + std::to_string(_private->data.mediums.array_size()));
-  uint32_t handle = _private->data.mediums.add(Medium::Class::Homogeneous, id, nullptr, absorption_index, scattering_index, 0.0f, true);
-  _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
-  _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
-  return handle;
+  return _private->data.mediums.add(Medium::Class::Homogeneous, id, nullptr, absorption_index, scattering_index, 0.0f, true);
 }
 
 std::string SceneRepresentation::rename_medium(uint32_t index, const char* name) {
-  auto result = _private->data.mediums.rename(index, (name != nullptr) ? name : "");
-  _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
-  _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
-  return result;
+  return _private->data.mediums.rename(index, (name != nullptr) ? name : "");
 }
 
 void SceneRepresentation::update_medium_bounds() {
   _private->update_medium_bounds();
-  _private->scene.mediums = {_private->data.mediums.as_array(), _private->data.mediums.array_size()};
-  _private->scene.spectrums = {_private->data.spectrum_values.data(), _private->data.spectrum_values.size()};
 }
 
 std::string SceneRepresentation::rename_mesh(uint32_t index, const char* name) {
-  auto result = rename_entry(_private->data.mesh_mapping, index, name, "mesh-");
-  _private->scene.meshes = {_private->data.meshes.data(), _private->data.meshes.size()};
-  return result;
-}
-
-void SceneRepresentation::rebuild_area_emitters() {
-  _private->rebuild_area_emitters();
+  return rename_entry(_private->data.mesh_mapping, index, name, "mesh-");
 }
 
 void SceneRepresentation::set_mesh_material(uint32_t mesh_index, uint32_t material_index) {
@@ -669,12 +702,11 @@ const Camera& SceneRepresentation::camera() const {
 }
 
 bool SceneRepresentation::valid() const {
-  return _private->scene.committed();
+  return true;
 }
 
 uint32_t SceneRepresentation::add_environment_emitter(const float3& color, uint32_t medium_index) {
-  auto& instance = _private->data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-  instance.profile = uint32_t(_private->data.emitter_profiles.size());
+  uint32_t profile_index = uint32_t(_private->data.emitter_profiles.size());
 
   auto& e = _private->data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
   e.emission.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_luminance(color));
@@ -686,12 +718,11 @@ uint32_t SceneRepresentation::add_environment_emitter(const float3& color, uint3
   uint32_t image_options = Image::BuildSamplingTable | Image::RepeatU;
   e.emission.image_index = _private->data.add_image(uniform_image_data.data(), kUniformEnvImageDimensions, image_options, {}, {1.0f, 1.0f});
   e.medium_index = medium_index;
-  return uint32_t(_private->data.emitter_instances.size() - 1);
+  return profile_index;
 }
 
 uint32_t SceneRepresentation::add_directional_emitter(const float3& direction, const float3& color, float angular_diameter_degrees, uint32_t medium_index) {
-  auto& instance = _private->data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
-  instance.profile = uint32_t(_private->data.emitter_profiles.size());
+  uint32_t profile_index = uint32_t(_private->data.emitter_profiles.size());
 
   auto& e = _private->data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
   e.emission.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_luminance(color));
@@ -700,7 +731,15 @@ uint32_t SceneRepresentation::add_directional_emitter(const float3& direction, c
   e.directional.angular_size = angular_diameter_degrees * kPi / 180.0f;
   e.medium_index = medium_index;
 
-  return uint32_t(_private->data.emitter_instances.size() - 1);
+  return profile_index;
+}
+
+void SceneRepresentation::create_area_emitters_from_materials() {
+  _private->create_area_emitters_from_materials();
+}
+
+bool SceneRepresentation::delete_emitter(uint32_t emitter_index) {
+  return _private->delete_emitter(emitter_index);
 }
 
 void SceneRepresentation::add_atmosphere_emitter(const AtmosphereEmitterParameters& params) {
@@ -711,8 +750,8 @@ void SceneRepresentation::rebuild_atmosphere_emitter(uint32_t emitter_index) {
   _private->rebuild_atmosphere_emitter(emitter_index);
 }
 
-void SceneRepresentationImpl::add_atmosphere_emitter(const SceneRepresentation::AtmosphereEmitterParameters& params) {
-  uint32_t emitter_index = data.add_atmosphere_emitter(params, scene);
+void SceneRepresentationImpl::add_atmosphere_emitter(const AtmosphereEmitterParameters& params) {
+  uint32_t emitter_index = data.add_atmosphere_emitter(params);
   data.build_atmosphere_and_sun_images(emitter_index);
 }
 
@@ -793,21 +832,21 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
           out_integrator->selected = map_integrator(t);
         }
         if (itg.contains("min_bounces") && itg["min_bounces"].is_number_integer()) {
-          _private->scene.min_path_length = static_cast<uint32_t>(std::max<int64_t>(0, itg["min_bounces"].get<int64_t>()));
+          _private->data.options.min_path_length = static_cast<uint32_t>(std::max<int64_t>(0, itg["min_bounces"].get<int64_t>()));
         }
         if (itg.contains("max_bounces") && itg["max_bounces"].is_number_integer()) {
-          _private->scene.max_path_length = static_cast<uint32_t>(std::max<int64_t>(0, itg["max_bounces"].get<int64_t>()));
+          _private->data.options.max_path_length = static_cast<uint32_t>(std::max<int64_t>(0, itg["max_bounces"].get<int64_t>()));
         }
       }
 
       if (js.contains("renderer") && js["renderer"].is_object()) {
         const auto& rnd = js["renderer"];
         if (rnd.contains("spp") && rnd["spp"].is_number_integer()) {
-          _private->scene.samples = static_cast<uint32_t>(std::max<int64_t>(1, rnd["spp"].get<int64_t>()));
+          _private->data.options.samples = static_cast<uint32_t>(std::max<int64_t>(1, rnd["spp"].get<int64_t>()));
         }
       }
 
-      uint32_t load_result = load_from_tungsten_file(filename, _private->data, _private->scene, _private->ior_database, _private->scheduler, _private->active_camera);
+      uint32_t load_result = load_from_tungsten_file(filename, _private->data, _private->ior_database, _private->scheduler, _private->active_camera);
       if ((load_result & SceneLoadSucceeded) == 0)
         return false;
       return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
@@ -826,13 +865,13 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
       int64_t int_value = 0;
       bool bool_value = false;
       if (json_get_int(i, "samples", int_value)) {
-        _private->scene.samples = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->data.options.samples = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_int(i, "random-termination-start", int_value)) {
-        _private->scene.random_path_termination = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->data.options.random_path_termination = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_int(i, "max-path-length", int_value)) {
-        _private->scene.max_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->data.options.max_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_int(i, "min-path-length", int_value)) {
-        _private->scene.min_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->data.options.min_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
       } else if (json_get_string(i, "geometry", str_value)) {
         _private->data.geometry_file_name = std::string(base_folder) + str_value;
       } else if (json_get_string(i, "materials", str_value)) {
@@ -840,9 +879,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
       } else if (json_get_bool(i, "spectral", bool_value)) {
         spectral_scene = bool_value;
       } else if (json_get_bool(i, "multiple_importance_sampling", bool_value)) {
-        _private->scene.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
+        _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
       } else if (json_get_bool(i, "blue_noise", bool_value)) {
-        _private->scene.properties[Scene::Properties::BlueNoise] = bool_value;
+        _private->data.options.properties[Scene::Properties::BlueNoise] = bool_value;
       } else if (key == "strategies" && obj.is_object()) {
         uint32_t strategy_flags = Scene::Strategy::Default;
         for (auto strat_it = obj.begin(); strat_it != obj.end(); ++strat_it) {
@@ -864,12 +903,12 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
           } else if (strat_key == "merge_vertices") {
             strategy_flags = (strategy_flags & (~Scene::Strategy::MergeVertices)) | (strat_value ? Scene::Strategy::MergeVertices : 0u);
           } else if (strat_key == "multiple_importance_sampling") {
-            _private->scene.properties[Scene::Properties::MultipleImportanceSampling] = strat_value;
+            _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = strat_value;
           } else if (strat_key == "blue_noise") {
-            _private->scene.properties[Scene::Properties::BlueNoise] = strat_value;
+            _private->data.options.properties[Scene::Properties::BlueNoise] = strat_value;
           }
         }
-        _private->scene.strategy_flags = strategy_flags;
+        _private->data.options.strategy_flags = strategy_flags;
       } else if (json_get_bool(i, "force-tangents", bool_value)) {
         force_tangents = bool_value;
       } else if ((key == "camera") && obj.is_object()) {
@@ -984,19 +1023,19 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   auto ext = get_file_ext(_private->data.geometry_file_name.c_str());
   if (strcmp(ext, ".etx") == 0) {
     SceneSerialization loader;
-    if (loader.load_from_file(_private->data.geometry_file_name.c_str(), _private->data, _private->data.materials_file_name.c_str(), _private->scene, _private->ior_database,
-          _private->scheduler) == false) {
+    if (loader.load_from_file(_private->data.geometry_file_name.c_str(), _private->data, _private->data.materials_file_name.c_str(), _private->ior_database, _private->scheduler) ==
+        false) {
       log::error("Failed to load ETX file from %s", _private->data.geometry_file_name.c_str());
       return false;
     }
     load_result = SceneLoadSucceeded;
   } else if (strcmp(ext, ".obj") == 0) {
-    load_result = load_from_obj_file(_private->data.geometry_file_name.c_str(), _private->data.materials_file_name.c_str(), _private->data, _private->scene, _private->ior_database,
-      _private->scheduler);
+    load_result =
+      load_from_obj_file(_private->data.geometry_file_name.c_str(), _private->data.materials_file_name.c_str(), _private->data, _private->ior_database, _private->scheduler);
   } else if (strcmp(ext, ".gltf") == 0) {
-    load_result = load_from_gltf_file(_private->data.geometry_file_name.c_str(), false, _private->data, _private->scene, _private->scheduler, _private->active_camera);
+    load_result = load_from_gltf_file(_private->data.geometry_file_name.c_str(), false, _private->data, _private->scheduler, _private->active_camera);
   } else if (strcmp(ext, ".glb") == 0) {
-    load_result = load_from_gltf_file(_private->data.geometry_file_name.c_str(), true, _private->data, _private->scene, _private->scheduler, _private->active_camera);
+    load_result = load_from_gltf_file(_private->data.geometry_file_name.c_str(), true, _private->data, _private->scheduler, _private->active_camera);
   }
 
   if ((load_result & SceneLoadSucceeded) == 0) {
@@ -1026,171 +1065,6 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   }
 
   return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
-}
-
-SceneRepresentationImpl::TriangleEmitterData SceneRepresentationImpl::compute_triangle_emitter_data(uint32_t triangle_index) {
-  TriangleEmitterData result = {};
-  result.triangle_index = kInvalidIndex;
-
-  if (triangle_index >= data.triangles.size())
-    return result;
-
-  const auto& tri = data.triangles[triangle_index];
-  uint32_t material_index = tri.material_index;
-  if (material_index >= data.materials.size())
-    return result;
-
-  const auto& mtl = data.materials[material_index];
-  if (mtl.emission.spectrum_index == kInvalidIndex)
-    return result;
-
-  if (mtl.emission.spectrum_index >= data.spectrum_values.size())
-    return result;
-
-  float texture_emission = 1.0f;
-  if (mtl.emission.image_index != kInvalidIndex) {
-    const auto& img = data.images.get(mtl.emission.image_index);
-    constexpr float kBCScale = 2.0f;
-
-    const float2& tex0 = data.vertices.tex[tri.i[0]];
-    const float2& tex1 = data.vertices.tex[tri.i[1]];
-    const float2& tex2 = data.vertices.tex[tri.i[2]];
-
-    auto min_uv = min(tex0, min(tex1, tex2));
-    auto max_uv = max(tex0, max(tex1, tex2));
-
-    float uv_area = fabsf((max_uv.x - min_uv.x) * (max_uv.y - min_uv.y));
-    uint32_t sample_count = max(16u, uint32_t(uv_area * img.fsize.x * img.fsize.y * kBCScale));
-
-    Sampler smp(triangle_index, material_index);
-
-    float sum = 0.0f;
-    for (uint32_t i = 0; i < sample_count; ++i) {
-      float2 rnd = smp.next_2d();
-      auto b = random_barycentric(rnd);
-      auto uv = tex0 * b.x + tex1 * b.y + tex2 * b.z;
-      float4 val = img.evaluate(uv, nullptr);
-      sum += luminance(to_float3(val)) * val.w;
-    }
-
-    texture_emission = sum / float(sample_count);
-  }
-
-  float tri_area = triangle_area(tri);
-  float spectrum_weight = data.spectrum_values[mtl.emission.spectrum_index].luminance();
-  float additional_weight = (mtl.two_sided ? 2.0f : 1.0f) * (tri_area * kPi) * texture_emission;
-  if ((additional_weight <= 0.0f) || (spectrum_weight <= 0.0f))
-    return result;
-
-  result.triangle_index = triangle_index;
-  result.material_index = material_index;
-  result.tri_area = tri_area;
-  result.additional_weight = additional_weight;
-  result.emission = mtl.emission;
-
-  return result;
-}
-
-void SceneRepresentationImpl::populate_area_emitters() {
-  std::unordered_map<uint32_t, uint32_t> profile_remap;
-  std::vector<EmitterProfile> preserved_profiles;
-  preserved_profiles.reserve(data.emitter_profiles.size());
-  for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
-    const auto& profile = data.emitter_profiles[i];
-    if (profile.cls != EmitterProfile::Class::Area) {
-      uint32_t new_index = static_cast<uint32_t>(preserved_profiles.size());
-      profile_remap[i] = new_index;
-      preserved_profiles.emplace_back(profile);
-    }
-  }
-
-  std::vector<Emitter> preserved_instances;
-  preserved_instances.reserve(data.emitter_instances.size());
-  for (const auto& emitter : data.emitter_instances) {
-    if (emitter.cls != EmitterProfile::Class::Area) {
-      auto remap = profile_remap.find(emitter.profile);
-      ETX_CRITICAL(remap != profile_remap.end());
-      auto copy = emitter;
-      copy.profile = remap->second;
-      preserved_instances.emplace_back(copy);
-    }
-  }
-
-  data.emitter_profiles = std::move(preserved_profiles);
-  data.emitter_instances = std::move(preserved_instances);
-
-  data.triangle_to_emitter.resize(data.triangles.size(), kInvalidIndex);
-  std::fill(data.triangle_to_emitter.begin(), data.triangle_to_emitter.end(), kInvalidIndex);
-
-  for (auto it = data.material_to_emitter_profile.begin(); it != data.material_to_emitter_profile.end();) {
-    uint32_t profile_index = it->second;
-    auto remap_it = profile_remap.find(profile_index);
-    if (remap_it == profile_remap.end()) {
-      it = data.material_to_emitter_profile.erase(it);
-    } else {
-      it->second = remap_it->second;
-      ++it;
-    }
-  }
-
-  data.images.load_images(scheduler);
-
-  std::mutex emitter_mutex;
-  scheduler.execute(data.triangles.size(), [this, &emitter_mutex](uint32_t begin, uint32_t end, uint32_t) {
-    std::vector<TriangleEmitterData> local_emitters;
-    std::unordered_map<uint32_t, std::pair<uint32_t, SpectralImage>> local_material_profiles;
-
-    for (uint32_t tri_index = begin; tri_index < end; ++tri_index) {
-      auto emitter_data = compute_triangle_emitter_data(tri_index);
-      if (emitter_data.triangle_index == kInvalidIndex)
-        continue;
-
-      uint32_t local_profile_index = kInvalidIndex;
-      auto profile_it = local_material_profiles.find(emitter_data.material_index);
-      if (profile_it != local_material_profiles.end()) {
-        local_profile_index = profile_it->second.first;
-      } else {
-        local_profile_index = static_cast<uint32_t>(local_material_profiles.size());
-        local_material_profiles[emitter_data.material_index] = {local_profile_index, emitter_data.emission};
-      }
-
-      local_emitters.push_back(emitter_data);
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(emitter_mutex);
-      std::unordered_map<uint32_t, uint32_t> local_to_global_profile;
-
-      for (const auto& [material_index, profile_data] : local_material_profiles) {
-        uint32_t global_profile_index = kInvalidIndex;
-        auto mapping_it = data.material_to_emitter_profile.find(material_index);
-        if (mapping_it != data.material_to_emitter_profile.end()) {
-          global_profile_index = mapping_it->second;
-        } else {
-          global_profile_index = static_cast<uint32_t>(data.emitter_profiles.size());
-          data.material_to_emitter_profile[material_index] = global_profile_index;
-          data.emitter_profiles.emplace_back(EmitterProfile::Class::Area);
-          data.emitter_profiles[global_profile_index].emission = profile_data.second;
-        }
-        local_to_global_profile[profile_data.first] = global_profile_index;
-      }
-
-      for (const auto& emitter_data : local_emitters) {
-        auto profile_it = local_material_profiles.find(emitter_data.material_index);
-        ETX_ASSERT(profile_it != local_material_profiles.end());
-        uint32_t local_profile_index = profile_it->second.first;
-        uint32_t global_profile_index = local_to_global_profile[local_profile_index];
-
-        uint32_t global_emitter_index = static_cast<uint32_t>(data.emitter_instances.size());
-        auto& emitter = data.emitter_instances.emplace_back(EmitterProfile::Class::Area);
-        emitter.profile = global_profile_index;
-        emitter.triangle_index = emitter_data.triangle_index;
-        emitter.triangle_area = emitter_data.tri_area;
-        emitter.additional_weight = emitter_data.additional_weight;
-        data.triangle_to_emitter[emitter_data.triangle_index] = global_emitter_index;
-      }
-    }
-  });
 }
 
 void SceneRepresentationImpl::update_medium_bounds() {
@@ -1242,16 +1116,6 @@ void SceneRepresentationImpl::update_medium_bounds() {
       medium.bounds = {bounds_pair.first, 0.0f, bounds_pair.second, 0.0f};
     }
   }
-}
-
-void SceneRepresentationImpl::rebuild_area_emitters() {
-  populate_area_emitters();
-  scene.triangle_to_emitter = {data.triangle_to_emitter.data(), data.triangle_to_emitter.size()};
-  scene.emitter_profiles = {data.emitter_profiles.data(), data.emitter_profiles.size()};
-  scene.emitter_instances = {data.emitter_instances.data(), data.emitter_instances.size()};
-  scene.spectrums = {data.spectrum_values.data(), data.spectrum_values.size()};
-  scene.images = {data.images.as_array(), data.images.array_size()};
-  build_emitters_distribution(data, scene);
 }
 
 void SceneRepresentationImpl::set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index) {
@@ -1344,8 +1208,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   std::string geometry_ref = to_relative(geometry_path, json_path.parent_path());
   std::string materials_ref = to_relative(materials_path, json_path.parent_path());
 
-  const Scene& scene_data = impl->scene;
-
   auto geometry_export_start = std::chrono::high_resolution_clock::now();
   SceneSerialization archive;
   if (archive.save_to_file(impl->data, geometry_path) == false) {
@@ -1357,24 +1219,24 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   log::info("Geometry export: %lld ms", geometry_export_duration.count());
 
   nlohmann::json js = nlohmann::json::object();
-  js["samples"] = scene_data.samples;
-  js["random-termination-start"] = scene_data.random_path_termination;
-  js["max-path-length"] = scene_data.max_path_length;
-  js["min-path-length"] = scene_data.min_path_length;
+  js["samples"] = impl->data.options.samples;
+  js["random-termination-start"] = impl->data.options.random_path_termination;
+  js["max-path-length"] = impl->data.options.max_path_length;
+  js["min-path-length"] = impl->data.options.min_path_length;
   js["geometry"] = geometry_ref;
   if (materials_ref.empty() == false) {
     js["materials"] = materials_ref;
   }
-  js["spectral"] = scene_data.properties[Scene::Properties::Spectral];
-  js["multiple_importance_sampling"] = scene_data.properties[Scene::Properties::MultipleImportanceSampling];
-  js["blue_noise"] = scene_data.properties[Scene::Properties::BlueNoise];
+  js["spectral"] = impl->data.options.properties[Scene::Properties::Spectral];
+  js["multiple_importance_sampling"] = impl->data.options.properties[Scene::Properties::MultipleImportanceSampling];
+  js["blue_noise"] = impl->data.options.properties[Scene::Properties::BlueNoise];
 
   nlohmann::json strategies = nlohmann::json::object();
-  strategies["direct_hit"] = ((scene_data.strategy_flags & Scene::Strategy::DirectHit) == Scene::Strategy::DirectHit);
-  strategies["connect_to_light"] = ((scene_data.strategy_flags & Scene::Strategy::ConnectToLight) == Scene::Strategy::ConnectToLight);
-  strategies["connect_to_camera"] = ((scene_data.strategy_flags & Scene::Strategy::ConnectToCamera) == Scene::Strategy::ConnectToCamera);
-  strategies["connect_vertices"] = ((scene_data.strategy_flags & Scene::Strategy::ConnectVertices) == Scene::Strategy::ConnectVertices);
-  strategies["merge_vertices"] = ((scene_data.strategy_flags & Scene::Strategy::MergeVertices) == Scene::Strategy::MergeVertices);
+  strategies["direct_hit"] = ((impl->data.options.strategy_flags & Scene::Strategy::DirectHit) == Scene::Strategy::DirectHit);
+  strategies["connect_to_light"] = ((impl->data.options.strategy_flags & Scene::Strategy::ConnectToLight) == Scene::Strategy::ConnectToLight);
+  strategies["connect_to_camera"] = ((impl->data.options.strategy_flags & Scene::Strategy::ConnectToCamera) == Scene::Strategy::ConnectToCamera);
+  strategies["connect_vertices"] = ((impl->data.options.strategy_flags & Scene::Strategy::ConnectVertices) == Scene::Strategy::ConnectVertices);
+  strategies["merge_vertices"] = ((impl->data.options.strategy_flags & Scene::Strategy::MergeVertices) == Scene::Strategy::MergeVertices);
   js["strategies"] = strategies;
 
   if (selected_type != Integrator::Type::Invalid && integrator_array != nullptr && integrator_count > 0) {
@@ -1647,11 +1509,11 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     const Medium& medium = impl->data.mediums.get(pool_index);
     materials_stream << "newmtl et::medium\n";
     materials_stream << "id " << medium_entries[medium_index].first << "\n";
-    float3 absorption = medium_absorption_rgb(impl->scene, medium);
+    float3 absorption = impl->data.spectrum_values[medium.absorption_index].integrated();
     if ((std::fabs(absorption.x) >= kEpsilon) || (std::fabs(absorption.y) >= kEpsilon) || (std::fabs(absorption.z) >= kEpsilon)) {
       materials_stream << "absorption " << absorption.x << " " << absorption.y << " " << absorption.z << "\n";
     }
-    float3 scattering = medium_scattering_rgb(impl->scene, medium);
+    float3 scattering = impl->data.spectrum_values[medium.scattering_index].integrated();
     if ((std::fabs(scattering.x) >= kEpsilon) || (std::fabs(scattering.y) >= kEpsilon) || (std::fabs(scattering.z) >= kEpsilon)) {
       materials_stream << "scattering " << scattering.x << " " << scattering.y << " " << scattering.z << "\n";
     }
@@ -1882,6 +1744,15 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   return json_path.generic_string();
 }
 
+void SceneRepresentationImpl::generate_pixel_sampler_image() {
+  std::vector<float4> sampler_image;
+  Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
+  uint32_t image_options = Image::BuildSamplingTable | Image::UniformSamplingTable;
+  uint32_t image_index = data.images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, image_options, {}, {1.0f, 1.0f});
+  data.pixel_filter = {image_index, 1.5f};
+  data.images.load_images(scheduler);
+}
+
 void SceneRepresentationImpl::setup_atmosphere_references() {
   // Find atmosphere emitter (environment emitter with atmosphere meta)
   uint32_t atmosphere_emitter_index = kInvalidIndex;
@@ -1956,6 +1827,9 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
 
   setup_atmosphere_references();
 
+  // Create area emitters from materials with emission
+  create_area_emitters_from_materials();
+
   // Rebuild atmospheres now that references are set up
   for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
     const auto& profile = data.emitter_profiles[i];
@@ -1965,16 +1839,87 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
 
   update_medium_bounds();
-  commit(spectral_scene);
+  generate_pixel_sampler_image();
 
   if (needs_camera_positioning) {
     constexpr float3 kDefaultViewDirection = {1.0f, 1.0f, 1.0f};
     float3 position = {};
     float3 target = {};
-    compute_camera_position_to_fit_scene(scene, camera, kDefaultViewDirection, position, target);
+    compute_camera_position_to_fit_scene(data, camera, kDefaultViewDirection, position, target);
     const float3 direction = normalize(target - position);
     build_camera(camera, position, direction, kWorldUp, camera.film_size, camera_fov);
   }
+
+  return true;
+}
+
+void SceneRepresentationImpl::create_area_emitters_from_materials() {
+  // Remove existing area emitter profiles, keeping only directional and environment emitters
+  auto new_profiles_end = std::remove_if(data.emitter_profiles.begin(), data.emitter_profiles.end(), [](const EmitterProfile& profile) {
+    return profile.cls == EmitterProfile::Class::Area;
+  });
+  data.emitter_profiles.erase(new_profiles_end, data.emitter_profiles.end());
+
+  // Clear triangle emitter references (now point to profiles, not instances)
+  for (Triangle& tri : data.triangles) {
+    tri.emitter_index = kInvalidIndex;
+  }
+
+  // Create area emitter profiles for emissive materials
+  std::unordered_map<uint32_t, uint32_t> material_to_profile;
+
+  for (size_t tri_index = 0; tri_index < data.triangles.size(); ++tri_index) {
+    const Triangle& tri = data.triangles[tri_index];
+    if (tri.material_index >= data.materials.size())
+      continue;
+
+    const Material& mtl = data.materials[tri.material_index];
+    if (mtl.emission.spectrum_index == kInvalidIndex)
+      continue;
+
+    float spectrum_weight = data.spectrum_values[mtl.emission.spectrum_index].luminance();
+    if (spectrum_weight <= kEpsilon)
+      continue;
+
+    // Get or create emitter profile for this material
+    uint32_t profile_index = kInvalidIndex;
+    auto mat_it = material_to_profile.find(tri.material_index);
+    if (mat_it != material_to_profile.end()) {
+      profile_index = mat_it->second;
+    } else {
+      profile_index = static_cast<uint32_t>(data.emitter_profiles.size());
+      material_to_profile[tri.material_index] = profile_index;
+
+      EmitterProfile& profile = data.emitter_profiles.emplace_back(EmitterProfile::Class::Area);
+      profile.emission = mtl.emission;
+      profile.medium_index = kInvalidIndex;
+    }
+
+    // Mark triangle as referencing this emitter profile
+    data.triangles[tri_index].emitter_index = profile_index;
+  }
+}
+
+bool SceneRepresentationImpl::delete_emitter(uint32_t emitter_index) {
+  if (emitter_index >= data.emitter_profiles.size()) {
+    return false;
+  }
+
+  const auto& profile = data.emitter_profiles[emitter_index];
+
+  // Don't allow deleting area emitters - they are managed by materials
+  if (profile.cls == EmitterProfile::Class::Area) {
+    return false;
+  }
+
+  // Remove the emitter profile
+  data.emitter_profiles.erase(data.emitter_profiles.begin() + emitter_index);
+
+  // Rebuild atmosphere/sun references from scratch
+  setup_atmosphere_references();
+
+  // Rebuild area emitters from materials (this will update triangle references)
+  create_area_emitters_from_materials();
 
   return true;
 }

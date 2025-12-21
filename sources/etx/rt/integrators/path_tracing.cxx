@@ -71,10 +71,10 @@ struct CPUPathTracingImpl : public Task {
       auto color = (payload.accumulated / payload.spect.sampling_pdf()).to_rgb();
       ETX_CHECK_FINITE(color);
 
-      if ((scene.radiance_clamp > 0.0f) && (payload.path_length > 1)) {
+      if ((scene.options.radiance_clamp > 0.0f) && (payload.path_length > 1)) {
         float lum = luminance(color);
-        if (lum > scene.radiance_clamp) {
-          color *= scene.radiance_clamp / lum;
+        if (lum > scene.options.radiance_clamp) {
+          color *= scene.options.radiance_clamp / lum;
         }
       }
 
@@ -96,9 +96,9 @@ struct CPUPathTracingImpl : public Task {
     status.completed_iterations += 1u;
 
     scheduler.wait(current_task);
-    film.estimate_noise_levels(status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
+    film.estimate_noise_levels(status.current_iteration, rt.scene().options.samples, rt.scene().options.noise_threshold);
 
-    if ((current_state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1 >= rt.scene().samples)) {
+    if ((current_state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1 >= rt.scene().options.samples)) {
       current_task = {};
       current_state = Integrator::State::Stopped;
     } else {

@@ -11,8 +11,10 @@ namespace etx {
 struct MediumPool {
   using Mapping = std::unordered_map<std::string, uint32_t>;
 
-  MediumPool(std::vector<Medium>&);
+  MediumPool(std::vector<Medium>&, std::vector<MediumStorage>&);
   ~MediumPool();
+
+  std::vector<MediumStorage>& storage();
 
   void init(uint32_t capacity);
   void cleanup();
@@ -31,8 +33,8 @@ struct MediumPool {
   const Medium& get(uint32_t) const;
 
   const Mapping& mapping() const;
-  Medium* as_array();
-  uint64_t array_size();
+  const Medium* as_array() const;
+  const uint64_t array_size() const;
 
   std::string rename(uint32_t index, const std::string& desired_name);
 

@@ -231,7 +231,7 @@ void RenderContext::set_output_dimensions(const uint2& dim) {
     return;
   }
 
-  _private->output_dimensions = dim;
+  _private->output_dimensions = {max(1u, dim.x), max(1u, dim.y)};
   sg_destroy_image(_private->sample_image);
 
   sg_image_desc desc = {};

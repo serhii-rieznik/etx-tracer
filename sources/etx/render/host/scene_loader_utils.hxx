@@ -75,6 +75,29 @@ inline std::filesystem::path locate_spectrum_file(const char* identifier, std::i
   return {};
 }
 
+inline void trim_whitespace(std::string& str) {
+  if (str.empty()) {
+    return;
+  }
+
+  const size_t len = str.size();
+  size_t start = 0;
+  while ((start < len) && std::isspace(str[start])) {
+    ++start;
+  }
+
+  size_t end = len;
+  while ((end > start) && std::isspace(str[end - 1])) {
+    --end;
+  }
+
+  if (start == 0 && end == len) {
+    return;  // No trimming needed
+  }
+
+  str = str.substr(start, end - start);
+}
+
 inline bool load_ior_from_identifier(const char* identifier, const IORDatabase& ior_database, SpectralDistribution& eta, SpectralDistribution& k,
   SpectralDistribution::Class& cls) {
   if ((identifier == nullptr) || (identifier[0] == 0))

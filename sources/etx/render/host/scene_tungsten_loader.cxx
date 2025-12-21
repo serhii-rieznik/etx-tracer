@@ -252,11 +252,6 @@ PrimitiveLoadResult handle_infinite_sphere(const nlohmann::json& prim, const cha
     profile.emission.image_index = img_idx;
     profile.medium_index = kInvalidIndex;
 
-    auto& inst = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-    inst.profile = static_cast<uint32_t>(data.emitter_profiles.size() - 1);
-    inst.triangle_index = kInvalidIndex;
-    inst.additional_weight = 0.0f;
-
     r.loaded = true;
   } else {
     log::warning("Skipping Tungsten infinite_sphere without emission or sample=false");
@@ -285,9 +280,6 @@ PrimitiveLoadResult handle_infinite_sphere_cap(const nlohmann::json& prim, Scene
   float3 direction = rotate_yxz_deg(float3{0.0f, 1.0f, 0.0f}, rotation);
   direction = normalize(direction);
 
-  auto& inst = data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
-  inst.profile = static_cast<uint32_t>(data.emitter_profiles.size());
-
   auto& d = data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
   d.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_luminance({power, power, power}));
   d.emission.image_index = kInvalidIndex;
@@ -298,7 +290,7 @@ PrimitiveLoadResult handle_infinite_sphere_cap(const nlohmann::json& prim, Scene
   return r;
 }
 
-PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, Scene& scene, TaskScheduler& scheduler) {
+PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, TaskScheduler& scheduler) {
   PrimitiveLoadResult r = {};
 
   float temperature = prim.value("temperature", 5777.0f);
@@ -321,9 +313,7 @@ PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, 
   scattering_params.ozone_scale = 1.0f;
 
   constexpr float kDefaultQuality = 0.25f;
-  SceneRepresentation::AtmosphereEmitterParameters params{{scattering_params}, kDefaultQuality};
-
-  data.add_atmosphere_emitter(params, scene);
+  data.add_atmosphere_emitter({scattering_params, kDefaultQuality});
   r.loaded = true;
   return r;
 }
@@ -347,7 +337,7 @@ PrimitiveLoadResult handle_builtin_primitive(const std::string& type, const floa
 }
 
 PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char* base_dir, const std::string& type, const float3& translate, const float3& scale,
-  const float3& rotation, uint32_t material_index, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera) {
+  const float3& rotation, uint32_t material_index, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera) {
   PrimitiveLoadResult r = {};
 
   if (type != "mesh")
@@ -370,15 +360,15 @@ PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char
   const char* ext = get_ext(resolved);
   bool loader_applied_transform = false;
   if (_stricmp(ext, ".obj") == 0) {
-    uint32_t flags = load_from_obj_file(resolved.c_str(), "", data, scene, database, scheduler);
+    uint32_t flags = load_from_obj_file(resolved.c_str(), "", data, database, scheduler);
     r.loaded = (flags & SceneLoadSucceeded) != 0u;
     r.flags |= (flags & ~SceneLoadSucceeded);
   } else if (_stricmp(ext, ".gltf") == 0) {
-    uint32_t flags = load_from_gltf_file(resolved.c_str(), false, data, scene, scheduler, active_camera);
+    uint32_t flags = load_from_gltf_file(resolved.c_str(), false, data, scheduler, active_camera);
     r.loaded = (flags & SceneLoadSucceeded) != 0u;
     r.flags |= (flags & ~SceneLoadSucceeded);
   } else if (_stricmp(ext, ".glb") == 0) {
-    uint32_t flags = load_from_gltf_file(resolved.c_str(), true, data, scene, scheduler, active_camera);
+    uint32_t flags = load_from_gltf_file(resolved.c_str(), true, data, scheduler, active_camera);
     r.loaded = (flags & SceneLoadSucceeded) != 0u;
     r.flags |= (flags & ~SceneLoadSucceeded);
   } else if (_stricmp(ext, ".wo3") == 0) {
@@ -676,8 +666,6 @@ void reserve_mesh_triangles(SceneData& data, uint32_t extra_triangles) {
   size_t required = data.triangles.size() + static_cast<size_t>(extra_triangles);
   if (data.triangles.capacity() < required)
     data.triangles.reserve(required);
-  if (data.triangle_to_emitter.capacity() < required)
-    data.triangle_to_emitter.reserve(required);
 }
 
 void recompute_mesh_bounds(SceneData& data, uint32_t mesh_start, uint32_t mesh_end) {
@@ -802,8 +790,6 @@ bool add_builtin_quad(const float3& translate, const float3& scale, const float3
   const uint32_t tri_start = static_cast<uint32_t>(data.triangles.size());
   data.triangles.emplace_back(t0);
   data.triangles.emplace_back(t1);
-  data.triangle_to_emitter.emplace_back(kInvalidIndex);
-  data.triangle_to_emitter.emplace_back(kInvalidIndex);
 
   const char* mesh_name = (name != nullptr) && (name[0] != 0) ? name : "quad";
   data.add_mesh(mesh_name, tri_start, 2, bbox_min, bbox_max);
@@ -899,7 +885,6 @@ bool add_builtin_cube(const float3& translate, const float3& scale, const float3
       data.triangles.pop_back();
       continue;
     }
-    data.triangle_to_emitter.emplace_back(kInvalidIndex);
   }
 
   uint32_t tri_end = static_cast<uint32_t>(data.triangles.size());
@@ -1033,7 +1018,6 @@ bool add_builtin_sphere(const float3& translate, const float3& scale, const floa
     if (validate_triangle(t, data.vertices.pos) == false)
       continue;
     data.triangles.emplace_back(t);
-    data.triangle_to_emitter.emplace_back(kInvalidIndex);
   }
 
   uint32_t tri_end = static_cast<uint32_t>(data.triangles.size());
@@ -1103,7 +1087,6 @@ bool add_builtin_disk(const float3& translate, const float3& scale, const float3
       continue;
 
     data.triangles.emplace_back(t);
-    data.triangle_to_emitter.emplace_back(kInvalidIndex);
   }
 
   uint32_t tri_end = static_cast<uint32_t>(data.triangles.size());
@@ -1276,7 +1259,6 @@ bool load_wo3_mesh(const std::string& resolved, const float3& translate, const f
   }
 
   data.triangles.reserve(data.triangles.size() + tbuf.size());
-  data.triangle_to_emitter.reserve(data.triangle_to_emitter.size() + tbuf.size());
 
   for (const auto& tri_in : tbuf) {
     Triangle& tri = data.triangles.emplace_back();
@@ -1288,7 +1270,6 @@ bool load_wo3_mesh(const std::string& resolved, const float3& translate, const f
       data.triangles.pop_back();
       continue;
     }
-    data.triangle_to_emitter.emplace_back(kInvalidIndex);
   }
 
   uint32_t triangle_end = static_cast<uint32_t>(data.triangles.size());
@@ -1306,7 +1287,7 @@ bool load_wo3_mesh(const std::string& resolved, const float3& translate, const f
   return true;
 }
 
-void load_tungsten_media(const nlohmann::json& js, SceneData& data, Scene& scene) {
+void load_tungsten_media(const nlohmann::json& js, SceneData& data) {
   if (js.contains("media") == false || js["media"].is_array() == false)
     return;
 
@@ -1338,10 +1319,6 @@ void load_tungsten_media(const nlohmann::json& js, SceneData& data, Scene& scene
     data.add_medium(Medium::Class::Homogeneous, name.c_str(), nullptr, s_a, s_s, g, true);
     ++loaded;
   }
-
-  if (loaded > 0) {
-    scene.mediums = {data.mediums.as_array(), data.mediums.array_size()};
-  }
 }
 
 uint32_t count_tungsten_meshes(const nlohmann::json& js) {
@@ -1358,7 +1335,7 @@ uint32_t count_tungsten_meshes(const nlohmann::json& js) {
   return count;
 }
 
-uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir, const std::unordered_map<std::string, uint32_t>& bsdf_to_mat, SceneData& data, Scene& scene,
+uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir, const std::unordered_map<std::string, uint32_t>& bsdf_to_mat, SceneData& data,
   const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera, bool force_two_sided) {
   uint32_t load_flags = SceneLoadFailed;
   bool primitives_loaded = false;
@@ -1386,13 +1363,13 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
     }
 
     if (type == "skydome") {
-      PrimitiveLoadResult r = handle_skydome(prim, data, scene, scheduler);
+      PrimitiveLoadResult r = handle_skydome(prim, data, scheduler);
       primitives_loaded = primitives_loaded || r.loaded;
       load_flags |= r.flags;
       continue;
     }
 
-    uint32_t material_index = scene.missing_material;
+    uint32_t material_index = data.defaults.missing_material;
     bool bsdf_is_string = false;
     std::string bsdf_name;
     const nlohmann::json* bsdf_node = prim.contains("bsdf") ? &prim["bsdf"] : nullptr;
@@ -1410,7 +1387,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
       }
     }
 
-    if (material_index == scene.missing_material) {
+    if (material_index == data.defaults.missing_material) {
       std::string mat_name = std::string("__prim_bsdf_") + std::to_string(data.materials.size());
       material_index = add_tungsten_material(mat_name, nlohmann::json::object(), data, base_dir, database, force_two_sided);
     }
@@ -1429,7 +1406,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
       emission_scale = float(prim["scale"].get<double>());
 
     bool wants_emission = has_power || has_emission;
-    if (wants_emission && bsdf_is_string && (material_index != scene.missing_material)) {
+    if (wants_emission && bsdf_is_string && (material_index != data.defaults.missing_material)) {
       std::string clone_name = bsdf_name.empty() ? std::string{} : bsdf_name + "__emitter_" + std::to_string(data.materials.size());
       material_index = data.clone_material(data.materials[material_index], clone_name.c_str());
     }
@@ -1469,7 +1446,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
       prim_loaded = builtin_result.loaded;
     }
 
-    PrimitiveLoadResult mesh_result = handle_mesh_primitive(prim, base_dir, type, translate, scale, rotation, material_index, data, scene, database, scheduler, active_camera);
+    PrimitiveLoadResult mesh_result = handle_mesh_primitive(prim, base_dir, type, translate, scale, rotation, material_index, data, database, scheduler, active_camera);
     prim_loaded = prim_loaded || mesh_result.loaded;
     load_flags |= mesh_result.flags;
 
@@ -1499,7 +1476,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
 
 }  // namespace
 
-uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera) {
+uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera) {
   if ((file_name == nullptr) || (file_name[0] == 0))
     return SceneLoadFailed;
 
@@ -1543,7 +1520,7 @@ uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, Scene& 
 
   bool camera_loaded = load_tungsten_camera(js, data, active_camera);
 
-  load_tungsten_media(js, data, scene);
+  load_tungsten_media(js, data);
 
   uint32_t mesh_count = count_tungsten_meshes(js);
   if (mesh_count > 0) {
@@ -1553,7 +1530,7 @@ uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, Scene& 
     reserve_mesh_triangles(data, mesh_count * kMeshTriangleReserve);
   }
 
-  uint32_t load_result = load_tungsten_primitives(js, base_dir, bsdf_to_mat, data, scene, database, scheduler, active_camera, force_two_sided);
+  uint32_t load_result = load_tungsten_primitives(js, base_dir, bsdf_to_mat, data, database, scheduler, active_camera, force_two_sided);
 
   if ((load_result & SceneLoadSucceeded) == 0u) {
     return camera_loaded ? SceneLoadCameraInfo : SceneLoadFailed;

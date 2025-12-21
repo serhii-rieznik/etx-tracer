@@ -88,7 +88,6 @@ inline bool chunk_id_equals(const char* chunk_id, const char* expected_id) {
     if (c1 != c2) {
       return false;
     }
-    // Stop at null terminator in expected_id
     if (c2 == '\0') {
       return true;
     }
@@ -283,7 +282,6 @@ struct SceneSerializationImpl {
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write vertex normals
     if (data.vertices.nrm.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexNormals, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
@@ -293,7 +291,6 @@ struct SceneSerializationImpl {
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write vertex texture coordinates
     if (data.vertices.tex.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexTexCoords, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
@@ -303,7 +300,6 @@ struct SceneSerializationImpl {
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write vertex tangents
     if (data.vertices.tan.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexTangents, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
@@ -313,7 +309,6 @@ struct SceneSerializationImpl {
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write vertex bitangents
     if (data.vertices.btn.empty() == false) {
       ChunkInfo chunk = {kChunkIdVertexBitangents, {}};
       chunk.meta_data.resize(sizeof(uint64_t));
@@ -323,24 +318,19 @@ struct SceneSerializationImpl {
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write triangles
     {
       ChunkInfo chunk = {kChunkIdTriangles, {}};
 
-      // Metadata: triangle count
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.triangles.size();
 
-      // Data: triangle array
       chunk.data.resize(data.triangles.size() * sizeof(Triangle));
       memcpy(chunk.data.data(), data.triangles.data(), data.triangles.size() * sizeof(Triangle));
 
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write material index mapping (maps saved triangle indices to material names)
     {
-      // Find all unique material indices referenced by triangles
       std::set<uint32_t> referenced_indices;
       for (const auto& tri : data.triangles) {
         if (tri.material_index != kInvalidIndex) {
@@ -348,13 +338,11 @@ struct SceneSerializationImpl {
         }
       }
 
-      // Create mapping: saved_index -> material_name_index
       std::vector<MaterialIndexMapping> mappings;
       mappings.reserve(referenced_indices.size());
 
       for (uint32_t saved_idx : referenced_indices) {
         if (saved_idx < data.materials.size()) {
-          // Find the material name for this index
           for (const auto& [name, runtime_idx] : data.material_mapping) {
             if (runtime_idx == saved_idx && !is_internal_name(name)) {
               uint32_t name_index = add_string(name);
@@ -369,41 +357,32 @@ struct SceneSerializationImpl {
 
       ChunkInfo chunk = {kChunkIdMaterialIndexMapping, {}};
 
-      // Metadata: mapping count
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = mappings.size();
 
-      // Data: mapping entries
       chunk.data.resize(mappings.size() * sizeof(MaterialIndexMapping));
       memcpy(chunk.data.data(), mappings.data(), mappings.size() * sizeof(MaterialIndexMapping));
 
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write meshes
     {
       ChunkInfo chunk = {kChunkIdMeshes, {}};
 
-      // Metadata: mesh count
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.meshes.size();
 
-      // Data: mesh array
       chunk.data.resize(data.meshes.size() * sizeof(Mesh));
       memcpy(chunk.data.data(), data.meshes.data(), data.meshes.size() * sizeof(Mesh));
 
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write mesh mapping (populates string table)
     {
       ChunkInfo chunk = {kChunkIdMeshMapping, {}};
 
-      // Metadata: mapping count
       chunk.meta_data.resize(sizeof(uint64_t));
       *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.mesh_mapping.size();
-
-      // Data: mapping entries
       chunk.data.resize(data.mesh_mapping.size() * sizeof(MappingEntry));
       MappingEntry* entries = reinterpret_cast<MappingEntry*>(chunk.data.data());
       uint32_t index = 0;
@@ -416,7 +395,6 @@ struct SceneSerializationImpl {
       _chunks.emplace_back(std::move(chunk));
     }
 
-    // Write string table (after all strings have been added)
     if (write_string_table() == false) {
       return false;
     }
@@ -442,11 +420,9 @@ struct SceneSerializationImpl {
 
     ChunkInfo chunk = {kChunkIdStringTable, {}};
 
-    // Metadata: string count
     chunk.meta_data.resize(sizeof(uint64_t));
     *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = _string_table.size();
 
-    // Calculate total data size
     size_t total_size = 0;
     for (const auto& str : _string_table) {
       total_size += sizeof(uint32_t) + str.size() + 1;  // length + string + null terminator
@@ -454,7 +430,6 @@ struct SceneSerializationImpl {
 
     chunk.data.resize(total_size);
 
-    // Pack strings
     size_t offset = 0;
     for (const auto& str : _string_table) {
       uint32_t length = static_cast<uint32_t>(str.size() + 1);  // include null terminator
@@ -475,19 +450,16 @@ struct SceneSerializationImpl {
     header.size = chunk.data.size();
     header.meta_size = static_cast<uint32_t>(chunk.meta_data.size());
 
-    // Write chunk header
     size_t offset = _buffer.size();
     _buffer.resize(offset + sizeof(ChunkHeader));
     memcpy(_buffer.data() + offset, &header, sizeof(ChunkHeader));
 
-    // Write metadata
     if (chunk.meta_data.empty() == false) {
       offset = _buffer.size();
       _buffer.resize(offset + chunk.meta_data.size());
       memcpy(_buffer.data() + offset, chunk.meta_data.data(), chunk.meta_data.size());
     }
 
-    // Write data
     if (chunk.data.empty() == false) {
       offset = _buffer.size();
       _buffer.resize(offset + chunk.data.size());
@@ -498,23 +470,19 @@ struct SceneSerializationImpl {
   }
 
   bool write_to_file(const std::filesystem::path& path) {
-    // Write string table first (needed by mappings)
     if (write_string_table() == false) {
       return false;
     }
 
-    // Serialize all chunks
     for (const auto& chunk : _chunks) {
       if (serialize_chunk(chunk) == false) {
         return false;
       }
     }
 
-    // Update file header with total size
     BinaryGeometryFileHeader* header = reinterpret_cast<BinaryGeometryFileHeader*>(_buffer.data());
     header->total_size = _buffer.size();
 
-    // Write to file
     std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
     if (file.is_open() == false) {
       log::error("Failed to open file for writing: %s", path.string().c_str());
@@ -534,13 +502,13 @@ struct SceneSerializationImpl {
     return true;
   }
 
-  bool load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
+  bool load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, const IORDatabase& database, TaskScheduler& scheduler) {
     char base_dir[2048] = {};
     if ((materials_file != nullptr) && (materials_file[0] != 0)) {
       get_file_folder(materials_file, base_dir, sizeof(base_dir));
     }
 
-    if (parse_materials_file(materials_file, base_dir, data, scene, database, scheduler) == false) {
+    if (parse_materials_file(materials_file, base_dir, data, database, scheduler) == false) {
       log::error("Failed to load materials from %s", materials_file);
       return false;
     }
@@ -568,7 +536,6 @@ struct SceneSerializationImpl {
       return false;
     }
 
-    // Clear existing geometry data in SceneData (preserve material mappings if we loaded them)
     data.vertices.pos.clear();
     data.vertices.nrm.clear();
     data.vertices.tex.clear();
@@ -603,15 +570,11 @@ struct SceneSerializationImpl {
       return false;
     }
 
-    // Clear string table for new file
     _string_table.clear();
-
-    // First pass: parse independent chunks (geometry, string table)
     size_t offset = sizeof(BinaryGeometryFileHeader);
     std::vector<std::pair<size_t, std::string>> deferred_chunks;
 
     while (offset < _buffer.size()) {
-      // Peek at chunk ID without advancing offset
       if (offset + sizeof(ChunkHeader) > _buffer.size()) {
         log::error("Unexpected end of file while reading chunk header");
         return false;
@@ -619,7 +582,6 @@ struct SceneSerializationImpl {
 
       const ChunkHeader* header = reinterpret_cast<const ChunkHeader*>(_buffer.data() + offset);
 
-      // Process independent chunks immediately
       if (chunk_id_equals(header->id, kChunkIdStringTable) || chunk_id_equals(header->id, kChunkIdVertexPositions) || chunk_id_equals(header->id, kChunkIdVertexNormals) ||
           chunk_id_equals(header->id, kChunkIdVertexTexCoords) || chunk_id_equals(header->id, kChunkIdVertexTangents) || chunk_id_equals(header->id, kChunkIdVertexBitangents) ||
           chunk_id_equals(header->id, kChunkIdTriangles) || chunk_id_equals(header->id, kChunkIdMeshes)) {
@@ -627,7 +589,6 @@ struct SceneSerializationImpl {
           return false;
         }
       } else {
-        // Defer dependent chunks (mappings) until string table is loaded
         std::string chunk_id_str(header->id, sizeof(ChunkHeader::id));
         size_t null_pos = chunk_id_str.find('\0');
         if (null_pos != std::string::npos) {
@@ -639,7 +600,6 @@ struct SceneSerializationImpl {
       }
     }
 
-    // Second pass: parse deferred chunks (mappings) now that string table is loaded
     for (const auto& [chunk_offset, chunk_id] : deferred_chunks) {
       size_t temp_offset = chunk_offset;
       if (parse_chunk(temp_offset, data) == false) {
@@ -675,7 +635,6 @@ struct SceneSerializationImpl {
     const uint8_t* chunk_data = (data_size > 0) ? _buffer.data() + offset : nullptr;
     offset += data_size;
 
-    // Handle different chunk types
     if (chunk_id_equals(header->id, kChunkIdVertexPositions)) {
       return parse_vertex_positions_chunk(data, meta_data, meta_size, chunk_data, data_size);
     } else if (chunk_id_equals(header->id, kChunkIdVertexNormals)) {
@@ -697,7 +656,6 @@ struct SceneSerializationImpl {
     } else if (chunk_id_equals(header->id, kChunkIdMeshMapping)) {
       return parse_mesh_mapping_chunk(data, meta_data, meta_size, chunk_data, data_size);
     } else {
-      // Create a string for logging unknown chunk types
       std::string chunk_id_str(header->id, sizeof(ChunkHeader::id));
       size_t null_pos = chunk_id_str.find('\0');
       if (null_pos != std::string::npos) {
@@ -819,12 +777,10 @@ struct SceneSerializationImpl {
     scene_data.triangles.resize(triangle_count);
     memcpy(scene_data.triangles.data(), data, data_size);
 
-    // Validate triangle data
     size_t vertex_count = scene_data.vertices.pos.size();
     for (uint64_t i = 0; i < triangle_count; ++i) {
       const auto& tri = scene_data.triangles[i];
 
-      // Validate vertex indices
       for (int j = 0; j < 3; ++j) {
         if (tri.i[j] >= vertex_count) {
           log::error("Triangle %llu vertex %d references invalid vertex index %u (total vertices: %zu)", i, j, tri.i[j], vertex_count);
@@ -853,7 +809,6 @@ struct SceneSerializationImpl {
     scene_data.meshes.resize(mesh_count);
     memcpy(scene_data.meshes.data(), data, data_size);
 
-    // Validate mesh triangle ranges
     size_t triangle_count = scene_data.triangles.size();
     for (uint64_t i = 0; i < mesh_count; ++i) {
       const auto& mesh = scene_data.meshes[i];
@@ -958,7 +913,7 @@ struct SceneSerializationImpl {
     return true;
   }
 
-  bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
+  bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler) {
     std::ifstream file(path);
     if (file.is_open() == false) {
       log::error("Failed to open materials file: %s", path.string().c_str());
@@ -970,21 +925,8 @@ struct SceneSerializationImpl {
 
     std::string line;
     while (std::getline(file, line)) {
+      trim_whitespace(line);
       if (line.empty() || line[0] == '#') {
-        continue;
-      }
-
-      line.erase(line.begin(), std::find_if(line.begin(), line.end(), [](unsigned char ch) {
-        return std::isspace(ch) == false;
-      }));
-      line.erase(std::find_if(line.rbegin(), line.rend(),
-                   [](unsigned char ch) {
-                     return std::isspace(ch) == false;
-                   })
-                   .base(),
-        line.end());
-
-      if (line.empty()) {
         continue;
       }
 
@@ -995,17 +937,15 @@ struct SceneSerializationImpl {
       if (key == "newmtl") {
         std::string material_name;
         std::getline(iss, material_name);
-        if ((material_name.empty() == false) && (material_name[0] == ' ')) {
-          material_name.erase(0, 1);
-        }
+        trim_whitespace(material_name);
+        // Convert to lowercase to match tinyobj's behavior
+        std::transform(material_name.begin(), material_name.end(), material_name.begin(), ::tolower);
         materials.push_back({material_name, {}});
         current_material = &materials.back();
       } else if (current_material != nullptr) {
         std::string value;
         std::getline(iss, value);
-        if ((value.empty() == false) && (value[0] == ' ')) {
-          value.erase(0, 1);
-        }
+        trim_whitespace(value);
         if (value.empty() == false) {
           current_material->properties[key] = value;
         }
@@ -1014,14 +954,13 @@ struct SceneSerializationImpl {
 
     file.close();
 
-    // Use the unified parsing approach
     SceneSerialization temp_serialization;
-    temp_serialization.parse_material_definitions(base_dir, materials, data, scene, database, scheduler);
+    temp_serialization.parse_material_definitions(base_dir, materials, data, database, scheduler);
 
     return true;
   }
 
-  void parse_camera(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
+  void parse_camera(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
     auto& entry = data.cameras.emplace_back();
 
     if (get_param(material, "class")) {
@@ -1139,7 +1078,7 @@ struct SceneSerializationImpl {
     build_camera(entry.cam, entry.cam.position, entry.cam.direction, entry.cam.up, entry.cam.film_size, fov);
   }
 
-  void parse_medium(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
+  void parse_medium(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
     if (get_param(material, "id") == false) {
       log::warning("Medium does not have identifier - skipped");
       return;
@@ -1367,10 +1306,7 @@ struct SceneSerializationImpl {
     data.add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
   }
 
-  void parse_directional_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
-    auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Directional);
-    instance.profile = uint32_t(data.emitter_profiles.size());
-
+  void parse_directional_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
     auto& e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
     if (get_param(material, "color")) {
       char buffer[kDataBufferSize] = {};
@@ -1411,10 +1347,7 @@ struct SceneSerializationImpl {
     }
   }
 
-  void parse_env_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
-    auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-    instance.profile = uint32_t(data.emitter_profiles.size());
-
+  void parse_env_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
     auto& e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
 
     char tmp_buffer[2048] = {};
@@ -1453,7 +1386,7 @@ struct SceneSerializationImpl {
     }
   }
 
-  void parse_atmosphere_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler) {
+  void parse_atmosphere_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler) {
     float quality = 0.125f;
 
     scattering::Parameters scattering_params = {};
@@ -1503,11 +1436,11 @@ struct SceneSerializationImpl {
       }
     }
 
-    SceneRepresentation::AtmosphereEmitterParameters params{{scattering_params}, quality, env_spectrum};
-    data.add_atmosphere_emitter(params, scene);
+    AtmosphereEmitterParameters params{{scattering_params}, quality, env_spectrum};
+    data.add_atmosphere_emitter(params);
   }
 
-  void parse_spectrum(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
+  void parse_spectrum(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
     if (get_param(material, "id") == false) {
       log::warning("Spectrum does not have identifier - skipped");
       return;
@@ -1629,7 +1562,7 @@ struct SceneSerializationImpl {
     }
   }
 
-  void parse_material(const char* base_dir, const MaterialDefinition& material, SceneData& data, Scene& scene, const IORDatabase& database) {
+  void parse_material(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
     auto& material_mapping = data.material_mapping;
 
     uint32_t material_index = kInvalidIndex;
@@ -2053,23 +1986,23 @@ struct SceneSerializationImpl {
   }
 };
 
-void SceneSerialization::parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, Scene& scene,
-  const IORDatabase& database, TaskScheduler& scheduler) {
+void SceneSerialization::parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, const IORDatabase& database,
+  TaskScheduler& scheduler) {
   for (const auto& material : materials) {
     if (material.name == "et::camera") {
-      _private->parse_camera(base_dir, material, data, scene, database);
+      _private->parse_camera(base_dir, material, data, database);
     } else if (material.name == "et::medium") {
-      _private->parse_medium(base_dir, material, data, scene, database);
+      _private->parse_medium(base_dir, material, data, database);
     } else if (material.name == "et::dir") {
-      _private->parse_directional_light(base_dir, material, data, scene, database);
+      _private->parse_directional_light(base_dir, material, data, database);
     } else if (material.name == "et::env") {
-      _private->parse_env_light(base_dir, material, data, scene, database);
+      _private->parse_env_light(base_dir, material, data, database);
     } else if (material.name == "et::atmosphere") {
-      _private->parse_atmosphere_light(base_dir, material, data, scene, database, scheduler);
+      _private->parse_atmosphere_light(base_dir, material, data, database, scheduler);
     } else if (material.name == "et::spectrum") {
-      _private->parse_spectrum(base_dir, material, data, scene, database);
+      _private->parse_spectrum(base_dir, material, data, database);
     } else {
-      _private->parse_material(base_dir, material, data, scene, database);
+      _private->parse_material(base_dir, material, data, database);
     }
   }
 }
@@ -2091,14 +2024,12 @@ bool SceneSerialization::save_to_file(const SceneData& data, const std::filesyst
   return _private->write_to_file(path);
 }
 
-bool SceneSerialization::load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, Scene& scene, const IORDatabase& database,
-  TaskScheduler& scheduler) {
-  return _private->load_from_file(path, data, materials_file, scene, database, scheduler);
+bool SceneSerialization::load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, const IORDatabase& database, TaskScheduler& scheduler) {
+  return _private->load_from_file(path, data, materials_file, database, scheduler);
 }
 
-bool SceneSerialization::parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, Scene& scene, const IORDatabase& database,
-  TaskScheduler& scheduler) {
-  return _private->parse_materials_file(path, base_dir, data, scene, database, scheduler);
+bool SceneSerialization::parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler) {
+  return _private->parse_materials_file(path, base_dir, data, database, scheduler);
 }
 
 }  // namespace etx

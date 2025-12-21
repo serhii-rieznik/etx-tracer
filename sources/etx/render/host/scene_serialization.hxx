@@ -35,13 +35,9 @@ struct SceneSerialization {
   ~SceneSerialization();
 
   bool save_to_file(const SceneData& data, const std::filesystem::path& path);
-
-  bool load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler);
-
-  void parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, Scene& scene, const IORDatabase& database,
-    TaskScheduler& scheduler);
-
-  bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, Scene& scene, const IORDatabase& database, TaskScheduler& scheduler);
+  bool load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, const IORDatabase& database, TaskScheduler& scheduler);
+  void parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler);
+  bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler);
 
  private:
   ETX_DECLARE_PIMPL(SceneSerialization, 4096);

@@ -92,6 +92,7 @@ struct RTApplication {
   std::vector<std::string> _recent_files = {};
   std::string _current_scene_file = {};
   TimeMeasure time_measure = {};
+  TimeMeasure scene_commit_time = {};
   bool last_camera_controller_state = false;
 };
 

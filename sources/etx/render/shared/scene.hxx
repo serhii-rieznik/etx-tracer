@@ -34,6 +34,17 @@ struct ETX_ALIGNED Scene {
     constexpr static uint32_t Default = DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices;
   };
 
+  struct Options {
+    uint32_t min_path_length = 0u;
+    uint32_t max_path_length = 65535u;
+    uint32_t samples = 256u;
+    uint32_t random_path_termination = 6u;
+    float noise_threshold = 0.1f;
+    float radiance_clamp = 0.0f;
+    uint32_t strategy_flags = 1u << 0u | 1u << 1u | 1u << 2u | 1u << 3u | 1u << 4u;  // DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices
+    bool properties[Properties::Count] = {};
+  } options = {};
+
   struct {
     ArrayView<float3> pos;
     ArrayView<float3> nrm;
@@ -43,7 +54,6 @@ struct ETX_ALIGNED Scene {
   } vertices ETX_EMPTY_INIT;
 
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
-  ArrayView<uint32_t> triangle_to_emitter ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
   ArrayView<Mesh> meshes ETX_EMPTY_INIT;
   ArrayView<EmitterProfile> emitter_profiles ETX_EMPTY_INIT;
@@ -60,45 +70,42 @@ struct ETX_ALIGNED Scene {
 
   Distribution emitters_distribution ETX_EMPTY_INIT;
 
+  struct Defaults {
+    uint32_t black_spectrum = kInvalidIndex;
+    uint32_t white_spectrum = kInvalidIndex;
+    uint32_t rayleigh_spectrum = kInvalidIndex;
+    uint32_t mie_spectrum = kInvalidIndex;
+    uint32_t ozone_spectrum = kInvalidIndex;
+    uint32_t subsurface_scatter_material = kInvalidIndex;
+    uint32_t subsurface_exit_material = kInvalidIndex;
+    uint32_t missing_material = kInvalidIndex;
+    uint32_t dielectric_eta = kInvalidIndex;
+    uint32_t conductor_eta = kInvalidIndex;
+    uint32_t conductor_k = kInvalidIndex;
+  } defaults = {};
+
   float3 bounding_sphere_center ETX_EMPTY_INIT;
   float bounding_sphere_radius ETX_EMPTY_INIT;
   float3 bounding_box_min ETX_EMPTY_INIT;
   float3 bounding_box_max ETX_EMPTY_INIT;
+
   PixelFilter pixel_sampler ETX_EMPTY_INIT;
-  uint32_t min_path_length ETX_INIT_WITH(0u);
-  uint32_t max_path_length ETX_INIT_WITH(65535u);
-  uint32_t samples ETX_INIT_WITH(256u);
-  uint32_t random_path_termination ETX_INIT_WITH(6u);
-  float noise_threshold ETX_INIT_WITH(0.1f);
-  float radiance_clamp ETX_INIT_WITH(0.0f);
-  uint32_t black_spectrum = kInvalidIndex;
-  uint32_t white_spectrum = kInvalidIndex;
-  uint32_t rayleigh_spectrum = kInvalidIndex;
-  uint32_t mie_spectrum = kInvalidIndex;
-  uint32_t ozone_spectrum = kInvalidIndex;
-  uint32_t subsurface_scatter_material = kInvalidIndex;
-  uint32_t subsurface_exit_material = kInvalidIndex;
-  uint32_t missing_material = kInvalidIndex;
-  uint32_t default_dielectric_eta = kInvalidIndex;
-  uint32_t default_conductor_eta = kInvalidIndex;
-  uint32_t default_conductor_k = kInvalidIndex;
   uint32_t strategy_flags ETX_INIT_WITH(Strategy::Default);
-  bool properties[Properties::Count] ETX_EMPTY_INIT;
 
   bool committed() const {
-    return properties[Properties::Committed];
+    return options.properties[Properties::Committed];
   }
   bool spectral() const {
-    return properties[Properties::Spectral];
+    return options.properties[Properties::Spectral];
   }
   bool multiple_importance_sampling() const {
-    return properties[Properties::MultipleImportanceSampling];
+    return options.properties[Properties::MultipleImportanceSampling];
   }
   bool blue_noise() const {
-    return properties[Properties::BlueNoise];
+    return options.properties[Properties::BlueNoise];
   }
   ETX_GPU_CODE bool strategy_enabled(uint32_t flag) const {
-    return (strategy_flags & flag) != 0u;
+    return (options.strategy_flags & flag) != 0u;
   }
 };
 
@@ -245,8 +252,8 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
   result_intersection.triangle_index = base.triangle_index;
   result_intersection.w_i = w_i;
   result_intersection.t = base.t;
-  result_intersection.material_index = scene.triangles[base.triangle_index].material_index;
-  result_intersection.emitter_index = scene.triangle_to_emitter[result_intersection.triangle_index];
+  result_intersection.material_index = tri.material_index;
+  result_intersection.emitter_index = tri.emitter_index;
 
   const auto& mat = scene.materials[result_intersection.material_index];
   if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > kEpsilon)) {

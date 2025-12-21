@@ -272,7 +272,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-  if (options.nee && (payload.path_length + 1 <= rt.scene().max_path_length) && medium.enable_explicit_connections) {
+  if (options.nee && (payload.path_length + 1 <= rt.scene().options.max_path_length) && medium.enable_explicit_connections) {
     uint32_t emitter_index = sample_emitter_index(scene, payload.smp.next());
     auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp.next_2d(), medium_sample.pos, scene);
     if (emitter_sample.pdf_dir > 0) {
@@ -378,9 +378,9 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   float2 rnd_support = payload.smp.next_2d();
 
   if (payload.use_blue_noise && (payload.path_length == 1)) {
-    rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 0);
-    rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 2);
-    rnd_support = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 4);
+    rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0);
+    rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2);
+    rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4);
   }
 
   payload.smp.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
@@ -411,7 +411,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  if (options.nee && (payload.path_length + 1 <= rt.scene().max_path_length)) {
+  if (options.nee && (payload.path_length + 1 <= rt.scene().options.max_path_length)) {
     payload.smp.push_fixed(rnd_em_sample.x, rnd_em_sample.y, rnd_support.x);
 
     uint32_t emitter_index = sample_emitter_index(scene, rnd_support.y);
@@ -419,7 +419,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
         auto local_sample = sample_emitter(payload.spect, emitter_index, rnd_em_sample, ss_gather.intersections[i].pos, scene);
-        SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, scene.materials[scene.subsurface_exit_material],  //
+        SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, scene.materials[scene.defaults.subsurface_exit_material],  //
           payload.medium, payload.spect, local_sample, payload.smp, options.mis);
         direct_light += ss_gather.weights[i] * light_value;
         ETX_VALIDATE(direct_light);
@@ -458,7 +458,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   payload.path_length += 1;
 
   ETX_CHECK_FINITE(payload.ray.d);
-  return random_continue(payload.path_length, scene.random_path_termination, payload.eta, payload.smp, payload.throughput);
+  return random_continue(payload.path_length, scene.options.random_path_termination, payload.eta, payload.smp, payload.throughput);
 }  // namespace etx
 
 ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
@@ -483,7 +483,7 @@ ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
 }
 
 ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
-  if (payload.path_length > rt.scene().max_path_length)
+  if (payload.path_length > rt.scene().options.max_path_length)
     return false;
 
   ETX_CHECK_FINITE(payload.ray.d);
@@ -495,7 +495,7 @@ ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& option
 
   if (medium_sample.sampled_medium()) {
     handle_sampled_medium(scene, medium_sample, rt, options, payload);
-    return random_continue(payload.path_length, scene.random_path_termination, payload.eta, payload.smp, payload.throughput);
+    return random_continue(payload.path_length, scene.options.random_path_termination, payload.eta, payload.smp, payload.throughput);
   }
 
   if (found_intersection) {

@@ -56,11 +56,18 @@ struct OpticalDepthData {
   }
 };
 
+struct LightSource {
+  SpectralDistribution emission_spectrum = {};
+  float3 direction = {};
+  float angular_size = {};
+  float intensity_scale = {};
+};
+
 void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepthData& extinction);
 
 OpticalDepthData precompute_optical_depth(TaskScheduler& scheduler);
 
-void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const OpticalDepthData& extinction, float4* buffer,
+void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources, const OpticalDepthData& extinction, float4* buffer,
   const ScatteringSpectrums& spectrums, TaskScheduler& scheduler);
 
 void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer,

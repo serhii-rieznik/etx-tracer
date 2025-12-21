@@ -6,6 +6,16 @@
 
 namespace etx {
 
+struct MediumStorage {
+  // Density grid storage - raw data for heterogeneous mediums
+  std::vector<float> density_data;
+
+  // Clear all storage
+  void clear() {
+    density_data.clear();
+  }
+};
+
 struct ETX_ALIGNED Medium {
   enum class Class : uint16_t {
     Homogeneous,
@@ -36,6 +46,10 @@ struct ETX_ALIGNED Medium {
     }
   };
 
+  // View to density data (points to external storage)
+  ArrayView<float> density_view;
+
+  // Other medium properties (small data, kept in view)
   DensityGrid grid = {};
   BoundingBox bounds = {};
   Class cls = Class::Homogeneous;

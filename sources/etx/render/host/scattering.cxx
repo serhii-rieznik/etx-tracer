@@ -122,13 +122,6 @@ struct DensityTable {
   }
 } g_density_table;
 
-struct LightSource {
-  SpectralDistribution emission_spectrum;
-  float3 direction;
-  float angular_size;
-  float intensity_scale;
-};
-
 DensityAndDerivative density_and_derivative(float height_above_surface) {
   float h = fmaxf(0.0f, height_above_surface);
   float x = h / 1000.0f;
@@ -267,7 +260,6 @@ void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const 
     current_density = density(height_above_surface);
     view_optical_path += dt * density_scale * current_density;
 
-    // Accumulate contributions from all light sources
     for (const auto& light_source : light_sources) {
       float3 light_optical_path = density_scale * sample_optical_length(p, light_source.direction, extinction);
       float3 total_optical_path = view_optical_path + light_optical_path;

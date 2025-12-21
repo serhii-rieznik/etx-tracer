@@ -387,7 +387,7 @@ struct CPUDebugIntegratorImpl : public Task {
         uint32_t it = random_iteration == ~0u ? status.current_iteration : random_iteration;
         uint32_t dim = random_dimension == ~0u ? 0 : min(16u, random_dimension);
 
-        BNSampler local_smp(xy.x, xy.y, scene.samples, it);
+        BNSampler local_smp(xy.x, xy.y, scene.options.samples, it);
 
         float t = {};
         uint32_t k = 0;

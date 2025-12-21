@@ -28,12 +28,12 @@ namespace etx {
      MicroProfileOnThreadExit();    \
    } while (0)
 
-# define ETX_PROFILER_SCOPE()                                                                                                                                      \
-   static MicroProfileToken MICROPROFILE_TOKEN_PASTE(_, __LINE__) = MicroProfileGetToken("CPU", __FUNCTION__, fnv1a32(__FUNCTION__), MicroProfileTokenTypeCpu, 0); \
+# define ETX_PROFILER_SCOPE()                                                                                                                                         \
+   static MicroProfileToken MICROPROFILE_TOKEN_PASTE(_, __LINE__) = MicroProfileGetToken("CPU", __FUNCTION__, etx_hash32(__FUNCTION__), MicroProfileTokenTypeCpu, 0); \
    MICROPROFILE_SCOPE_TOKEN(MICROPROFILE_TOKEN_PASTE(_, __LINE__));
 
-# define ETX_PROFILER_NAMED_SCOPE(name)                                                                                                                        \
-   static MicroProfileToken MICROPROFILE_TOKEN_PASTE(profile_token, __LINE__) = MicroProfileGetToken("CPU", name, fnv1a32(name), MicroProfileTokenTypeCpu, 0); \
+# define ETX_PROFILER_NAMED_SCOPE(name)                                                                                                                           \
+   static MicroProfileToken MICROPROFILE_TOKEN_PASTE(profile_token, __LINE__) = MicroProfileGetToken("CPU", name, etx_hash32(name), MicroProfileTokenTypeCpu, 0); \
    MICROPROFILE_SCOPE_TOKEN(MICROPROFILE_TOKEN_PASTE(profile_token, __LINE__));
 
 # define ETX_END_PROFILER_FRAME() MicroProfileFlip(nullptr)

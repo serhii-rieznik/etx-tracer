@@ -1,6 +1,9 @@
 ﻿#include "integrator.hxx"
 
 #include <etx/render/host/tasks.hxx>
+#include <etx/render/host/scene_representation.hxx>
+#include <etx/render/shared/camera.hxx>
+#include <etx/rt/rt.hxx>
 
 #include <thread>
 #include <mutex>
@@ -18,37 +21,58 @@ struct ITMessage {
 
 struct IntegratorThreadImpl {
   IntegratorThread* i = nullptr;
-  std::thread thread;
   std::atomic<bool> running = {};
   std::deque<ITMessage> messages;
   std::mutex lock;
 
-  TaskScheduler& scheduler;
+  SceneRepresentation& scene_representation;
+  Raytracing& raytracing;
+  SceneHashes current_scene_hashes = {};
+  uint64_t current_camera_hash = 0;
   Integrator* integrator = nullptr;
   Integrator::State latest_state = Integrator::State::Stopped;
   Integrator::Status latest_status = {};
 
-  bool async = false;
-
-  IntegratorThreadImpl(TaskScheduler& sch, bool create_thread)
-    : scheduler(sch)
-    , async(create_thread)
+  IntegratorThreadImpl(SceneRepresentation& scene_rep, Raytracing& rt)
+    : scene_representation(scene_rep)
+    , raytracing(rt)
     , running(true) {
-    if (async) {
-      thread = std::thread(&IntegratorThreadImpl::thread_function, this);
-    }
+    // External control mode - no background thread
   }
 
   ~IntegratorThreadImpl() {
     running = false;
-    if (async && thread.joinable()) {
-      thread.join();
-    }
   }
 
   void post_message(const ITMessage& msg) {
     std::unique_lock l(lock);
     messages.push_back(msg);
+  }
+
+  void check_and_commit_scene_changes() {
+    scene_representation.data().images.load_images(raytracing.scheduler());
+    SceneHashes new_hashes = scene_representation.data().compute_hashes();
+
+    UpdateFlags changes = new_hashes.compare(current_scene_hashes);
+    const auto& camera = scene_representation.camera();
+    uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
+    bool camera_changed = (current_camera_hash != new_camera_hash);
+
+    if (changes.any() || camera_changed) {
+      if ((integrator != nullptr) && (latest_state == Integrator::State::Running)) {
+        integrator->stop(Integrator::Stop::Immediate);
+        latest_state = integrator->state();
+      }
+
+      raytracing.commit(scene_representation.data(), scene_representation.camera(), changes);
+      current_scene_hashes = new_hashes;
+      current_camera_hash = new_camera_hash;
+
+      if (integrator != nullptr) {
+        integrator->run();
+        latest_state = integrator->state();
+      }
+    }
   }
 
   void post_messages(const std::initializer_list<ITMessage>& msgs) {
@@ -94,27 +118,10 @@ struct IntegratorThreadImpl {
       }
     }
   }
-
-  void thread_function() {
-    ETX_PROFILER_REGISTER_THREAD("integrator");
-    scheduler.register_thread();
-
-    while (running) {
-      {
-        ETX_PROFILER_NAMED_SCOPE("integrator::update");
-        i->update();
-      }
-
-      if (latest_state == Integrator::State::Stopped) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      }
-    }
-    ETX_PROFILER_EXIT_THREAD();
-  }
 };
 
-IntegratorThread::IntegratorThread(TaskScheduler& scheduler, Mode mode) {
-  ETX_PIMPL_INIT(IntegratorThread, scheduler, mode == Mode::Async);
+IntegratorThread::IntegratorThread(SceneRepresentation& scene_rep, Raytracing& raytracing) {
+  ETX_PIMPL_INIT(IntegratorThread, scene_rep, raytracing);
 }
 
 IntegratorThread ::~IntegratorThread() {
@@ -155,11 +162,7 @@ void IntegratorThread::stop(Integrator::Stop st) {
 
   if (st == Integrator::Stop::Immediate) {
     while (_private->latest_state != Integrator::State::Stopped) {
-      if (_private->async) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1u));
-      } else {
-        update();
-      }
+      update();  // External control mode - call update directly
     }
   }
 }
@@ -177,6 +180,9 @@ void IntegratorThread::update() {
 
   if (_private->integrator == nullptr)
     return;
+
+  // Check for scene changes and commit if needed
+  _private->check_and_commit_scene_changes();
 
   _private->integrator->update();
   _private->latest_state = _private->integrator->state();

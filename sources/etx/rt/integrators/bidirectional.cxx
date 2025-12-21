@@ -420,10 +420,10 @@ struct CPUBidirectionalImpl : public Task {
     const uint32_t camera_path_length = path_data.camera_path_length();
     for (uint32_t light_s = 1, light_s_e = static_cast<uint32_t>(path_data.emitter_path.size()); running() && (light_s < light_s_e); ++light_s) {
       const uint32_t target_path_length = camera_path_length + light_s + 1;
-      if (target_path_length < scene.min_path_length)
+      if (target_path_length < scene.options.min_path_length)
         continue;
 
-      if (target_path_length > scene.max_path_length)
+      if (target_path_length > scene.options.max_path_length)
         break;
 
       const auto& y_i = path_data.emitter_path[light_s];
@@ -515,9 +515,9 @@ struct CPUBidirectionalImpl : public Task {
     float2 rnd_em_sample = smp.next_2d();
     float2 rnd_support = smp.next_2d();
     if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 0);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 2);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 4);
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4);
     }
 
     float3 w_o = sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
@@ -558,9 +558,9 @@ struct CPUBidirectionalImpl : public Task {
     float2 rnd_em_sample = smp.next_2d();
     float2 rnd_support = smp.next_2d();
     if ((payload.mode == PathSource::Camera) && first_interaction && enable_blue_noise) {
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 0);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 2);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().samples, payload.iteration, 4);
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4);
     }
 
     if (scene.materials[a_intersection.material_index].cls == Material::Class::Boundary) {
@@ -599,7 +599,7 @@ struct CPUBidirectionalImpl : public Task {
 
     if (subsurface_path) {
       const auto& sss_material = scene.materials[a_intersection.material_index];
-      material_index = scene.subsurface_scatter_material;
+      material_index = scene.defaults.subsurface_scatter_material;
       medium_instance.index = sss_material.int_medium;
 
       if (medium_instance.index == kInvalidIndex) {
@@ -801,7 +801,7 @@ struct CPUBidirectionalImpl : public Task {
 
     Intersection intersection = {};
     Medium::Sample medium_sample = {};
-    for (uint32_t path_length = 0; running() && (path_length < scene.max_path_length);) {
+    for (uint32_t path_length = 0; running() && (path_length < scene.options.max_path_length);) {
       prev = curr;
 
       auto step = StepResult::Nothing;
@@ -830,7 +830,7 @@ struct CPUBidirectionalImpl : public Task {
       } else if (step == StepResult::IntersectionFound) {
         bool from_subsurface = subsurface_material != kInvalidIndex;
         if (from_subsurface) {
-          intersection.material_index = scene.subsurface_scatter_material;
+          intersection.material_index = scene.defaults.subsurface_scatter_material;
           subsurface_material = kInvalidIndex;
         }
 
@@ -861,7 +861,7 @@ struct CPUBidirectionalImpl : public Task {
         payload.result += direct_hit_environment_emitter(curr, prev, path_data, payload.spect, smp, path_length == 0);
       }
 
-      if (should_break || random_continue(path_length, scene.random_path_termination, payload.eta, smp, payload.throughput) == false) {
+      if (should_break || random_continue(path_length, scene.options.random_path_termination, payload.eta, smp, payload.throughput) == false) {
         break;
       }
 
@@ -1218,7 +1218,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     const uint32_t target_path_length = path_data.camera_path_length();
-    if ((target_path_length > scene.max_path_length) || (target_path_length < scene.min_path_length))
+    if ((target_path_length > scene.options.max_path_length) || (target_path_length < scene.options.min_path_length))
       return {spect, 0.0f};
 
     const auto& emitter_instance = scene.emitter_instances[z_curr.intersection.emitter_index];
@@ -1271,7 +1271,7 @@ struct CPUBidirectionalImpl : public Task {
       return {spect, 0.0f};
 
     const uint32_t target_path_length = path_data.camera_path_length();
-    if ((target_path_length > scene.max_path_length) || (target_path_length < scene.min_path_length))
+    if ((target_path_length > scene.options.max_path_length) || (target_path_length < scene.options.min_path_length))
       return {spect, 0.0f};
 
     EmitterRadianceQuery q = {
@@ -1317,7 +1317,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     uint32_t connection_len = path_data.camera_path_length() + 1u;
-    bool invalid_path_length = (connection_len > scene.max_path_length) || (connection_len < scene.min_path_length);
+    bool invalid_path_length = (connection_len > scene.options.max_path_length) || (connection_len < scene.options.min_path_length);
     if (invalid_path_length || (enable_connect_to_light == false) || (mode == Mode::LightTracing))
       return {spect, 0.0f};
 
@@ -1359,7 +1359,8 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     const uint32_t target_path_length = path_data.emitter_path_length() + 1u;
-    if ((mode == Mode::PathTracing) || (enable_connect_to_camera == false) || (target_path_length > scene.max_path_length) || (target_path_length < scene.min_path_length))
+    if ((mode == Mode::PathTracing) || (enable_connect_to_camera == false) || (target_path_length > scene.options.max_path_length) ||
+        (target_path_length < scene.options.min_path_length))
       return {spect, 0.0f};
 
     const auto& camera = rt.camera();
@@ -1443,7 +1444,7 @@ struct CPUBidirectionalImpl : public Task {
     enable_blue_noise = scene.blue_noise();
 
     for (auto& path_data : per_thread_path_data) {
-      path_data.emitter_path.reserve(2llu + rt.scene().max_path_length);
+      path_data.emitter_path.reserve(2llu + rt.scene().options.max_path_length);
     }
 
     status = {};
@@ -1482,13 +1483,13 @@ void CPUBidirectional::update() {
   }
 
   rt.film().commit_light_iteration(_private->status.current_iteration);
-  // rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().samples, rt.scene().noise_threshold);
+  // rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().options.samples, rt.scene().noise_threshold);
 
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().wait(_private->current_task);
     _private->current_task = {};
     current_state = Integrator::State::Stopped;
-  } else if (_private->status.current_iteration + 1u < rt.scene().samples) {
+  } else if (_private->status.current_iteration + 1u < rt.scene().options.samples) {
     _private->completed();
     rt.scheduler().restart(_private->current_task);
   } else {

@@ -21,7 +21,6 @@ static constexpr float kDefaultDielectricEta = 1.5f;
 
 struct GltfLoaderState {
   SceneData& data;
-  Scene& scene;
   Camera& active_camera;
   TaskScheduler& scheduler;
 };
@@ -130,9 +129,7 @@ bool load_gltf_camera(const tinygltf::Node& node, const tinygltf::Model& model, 
 
 void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh& mesh, const float4x4& transform, GltfLoaderState& state) {
   auto& data = state.data;
-  auto& scene = state.scene;
   auto& triangles = data.triangles;
-  auto& triangle_to_emitter = data.triangle_to_emitter;
   auto& vertices = data.vertices;
 
   if (mesh.primitives.empty())
@@ -148,7 +145,7 @@ void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, co
     if (has_positions == false)
       continue;
 
-    uint32_t material_index = scene.missing_material;
+    uint32_t material_index = data.defaults.missing_material;
     if ((primitive.material >= 0) && (primitive.material < static_cast<int32_t>(model.materials.size()))) {
       auto it = data.gltf_material_mapping.find(static_cast<int32_t>(primitive.material));
       if (it != data.gltf_material_mapping.end()) {
@@ -229,8 +226,6 @@ void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, co
 
     uint32_t linear_index = 0;
     for (uint32_t tri_index = 0; tri_index < expected_triangle_count; ++tri_index) {
-      triangle_to_emitter.emplace_back(kInvalidIndex);
-
       uint32_t base_index = static_cast<uint32_t>(vertices.pos.size());
       Triangle& tri = triangles.emplace_back();
       tri.i[0] = base_index + 0;
@@ -306,7 +301,6 @@ void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, co
 
       if (validate_triangle(tri, vertices.pos) == false) {
         triangles.pop_back();
-        triangle_to_emitter.pop_back();
         vertices.pos.pop_back();
         vertices.pos.pop_back();
         vertices.pos.pop_back();
@@ -382,7 +376,6 @@ bool load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node, co
 
 void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
   auto& data = state.data;
-  auto& scene = state.scene;
 
   for (int32_t gltf_material_index = 0; gltf_material_index < static_cast<int32_t>(model.materials.size()); ++gltf_material_index) {
     auto& material = model.materials[gltf_material_index];
@@ -523,8 +516,8 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
 
 }  // namespace
 
-uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data, Scene& scene, TaskScheduler& scheduler, Camera& active_camera) {
-  GltfLoaderState state{data, scene, active_camera, scheduler};
+uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data, TaskScheduler& scheduler, Camera& active_camera) {
+  GltfLoaderState state{data, active_camera, scheduler};
 
   tinygltf::TinyGLTF loader;
   tinygltf::Model model;
@@ -544,7 +537,7 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
     auto self = reinterpret_cast<GltfLoaderState*>(user_pointer);
 
     if (((width == 0) || (height == 0)) && (data_ptr != nullptr)) {
-      uint32_t hash = fnv1a32(data_ptr, data_size, kFnv1a32Begin);
+      uint32_t hash = etx_hash32(data_ptr, data_size);
       char file_name[64] = {};
       snprintf(file_name, sizeof(file_name), "img-%x.png", hash);
 
@@ -701,9 +694,6 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
             uint32_t image_options = Image::BuildSamplingTable | Image::RepeatU;
             uint32_t image_index = data.images.add_from_spherical_harmonics(scheduler, sh_coeffs, env_image_dimensions, image_options, {rotation_offset, 0.0f}, {1.0f, 1.0f});
 
-            auto& instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-            instance.profile = uint32_t(data.emitter_profiles.size());
-
             auto& e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
 
             e.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
@@ -763,9 +753,6 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
                     } else {
                       log::info("Saved specular environment map to %s", exr_filename);
                     }
-
-                    auto& spec_instance = data.emitter_instances.emplace_back(EmitterProfile::Class::Environment);
-                    spec_instance.profile = uint32_t(data.emitter_profiles.size());
 
                     auto& spec_e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
                     spec_e.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));

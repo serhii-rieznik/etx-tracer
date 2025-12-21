@@ -2,8 +2,8 @@
 
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/image_loaders.hxx>
-#include <etx/render/host/distribution_builder.hxx>
 #include <etx/render/shared/math.hxx>
+#include <etx/render/shared/distribution.hxx>
 
 #include <atomic>
 #include <vector>
@@ -310,7 +310,6 @@ struct ImagePoolImpl {
           image.pixels.u8 = {reinterpret_cast<ubyte4*>(storage[i].data.data()), static_cast<uint32_t>(storage[i].data.size() / sizeof(ubyte4))};
         }
 
-        // Detect alpha channel
         for (uint32_t i = 0, e = image.isize.x * image.isize.y; i < e; ++i) {
           if (image.pixel(i).w < 1.0f) {
             image.options = image.options | Image::HasAlphaChannel;
@@ -467,8 +466,8 @@ struct ImagePoolImpl {
           x_entries[x] = {lum, 0.0f, 0.0f};
         }
 
-        DistributionBuilder::finalize_entries(x_entries, img.isize.x);
-        img_storage.x_distributions[y].total_weight = x_entries[img.isize.x].cdf;  // Last entry has total weight
+        auto temp_dist = Distribution::build(x_entries, img.isize.x);
+        img_storage.x_distributions[y].total_weight = temp_dist.total_weight;
 
         float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
         row_value *= row_weight;
@@ -478,8 +477,8 @@ struct ImagePoolImpl {
       }
     });
 
-    float y_total_weight = DistributionBuilder::finalize_entries(img_storage.y_distribution_storage.data(), img.isize.y);
-    img.y_distribution.total_weight = y_total_weight;
+    auto y_dist = Distribution::build(img_storage.y_distribution_storage.data(), img.isize.y);
+    img.y_distribution.total_weight = y_dist.total_weight;
     img.normalization = total_weight / (img.fsize.x * img.fsize.y);
   }
 
@@ -559,7 +558,7 @@ uint32_t ImagePool::add_from_cubemap(TaskScheduler& scheduler, const uint32_t cu
   return _private->add_from_cubemap(scheduler, cube_face_images, dimensions, image_options, offset, scale);
 }
 
-const Image& ImagePool::get(uint32_t handle) {
+const Image& ImagePool::get(uint32_t handle) const {
   return _private->get(handle);
 }
 
@@ -582,11 +581,11 @@ void ImagePool::remove_all() {
   _private->remove_all();
 }
 
-Image* ImagePool::as_array() {
+const Image* ImagePool::as_array() const {
   return _private->images.empty() ? nullptr : _private->images.data();
 }
 
-uint64_t ImagePool::array_size() {
+const uint64_t ImagePool::array_size() const {
   return _private->images.size();
 }
 

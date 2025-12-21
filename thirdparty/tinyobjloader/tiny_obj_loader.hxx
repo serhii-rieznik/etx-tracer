@@ -353,7 +353,8 @@ struct mesh_t {
   std::vector<unsigned char> num_face_vertices;   // The number of vertices per
                                                   // face. 3 = triangle, 4 = quad,
                                                   // ... Up to 255 vertices per face.
-  std::vector<int> material_ids;                  // per-face material ID
+  std::vector<std::string> material_names;        // unique material names
+  std::vector<int> material_ids;                  // per-face material ID (index into material_names)
   std::vector<unsigned int> smoothing_group_ids;  // per-face smoothing group
                                                   // ID(0 = off. positive value
                                                   // = group id)
@@ -1402,13 +1403,26 @@ static int pnpoly(int nvert, T* vertx, T* verty, T testx, T testy) {
 }
 
 // TODO(syoyo): refactor function.
-static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, const std::vector<tag_t>& tags, const int material_id, const std::string& name, bool triangulate,
-  const std::vector<real_t>& v, std::string* warn) {
+static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, const std::vector<tag_t>& tags, const std::string& material_name, const std::string& name,
+  bool triangulate, const std::vector<real_t>& v, std::string* warn) {
   if (prim_group.IsEmpty()) {
     return false;
   }
 
   shape->name = name;
+
+  // Find or add material name to the material_names vector
+  int material_id = -1;
+  for (size_t i = 0; i < shape->mesh.material_names.size(); ++i) {
+    if (shape->mesh.material_names[i] == material_name) {
+      material_id = static_cast<int>(i);
+      break;
+    }
+  }
+  if (material_id == -1) {
+    material_id = static_cast<int>(shape->mesh.material_names.size());
+    shape->mesh.material_names.push_back(material_name);
+  }
 
   // polygon
   if (!prim_group.faceGroup.empty()) {
@@ -1813,7 +1827,7 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, con
         }
 
         shape->mesh.num_face_vertices.push_back(static_cast<unsigned char>(npolys));
-        shape->mesh.material_ids.push_back(material_id);                     // per face
+        shape->mesh.material_names.push_back(material_name);                 // per face
         shape->mesh.smoothing_group_ids.push_back(face.smoothing_group_id);  // per face
       }
     }
@@ -2354,6 +2368,7 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
   // material
   std::map<std::string, int> material_map;
   int material = -1;
+  std::string material_name_str;
 
   // smoothing group id
   unsigned int current_smoothing_id = 0;  // Initial value. 0 means no smoothing.
@@ -2605,11 +2620,14 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
         }
       }
 
+      // Always update material_name_str with the name from usemtl
+      material_name_str = namebuf;
+
       if (newMaterialId != material) {
         // Create per-face material. Thus we don't add `shape` to `shapes` at
         // this time.
         // just clear `faceGroup` after `exportGroupsToShape()` call.
-        exportGroupsToShape(&shape, prim_group, tags, material, name, triangulate, v, warn);
+        exportGroupsToShape(&shape, prim_group, tags, material_name_str, name, triangulate, v, warn);
         prim_group.faceGroup.clear();
         material = newMaterialId;
       }
@@ -2674,7 +2692,7 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
     // group name
     if (token[0] == 'g' && IS_SPACE((token[1]))) {
       // flush previous face group.
-      bool ret = exportGroupsToShape(&shape, prim_group, tags, material, name, triangulate, v, warn);
+      bool ret = exportGroupsToShape(&shape, prim_group, tags, material_name_str, name, triangulate, v, warn);
       (void)ret;  // return value not used.
 
       if (shape.mesh.indices.size() > 0) {
@@ -2725,7 +2743,7 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
     // object name
     if (token[0] == 'o' && IS_SPACE((token[1]))) {
       // flush previous face group.
-      bool ret = exportGroupsToShape(&shape, prim_group, tags, material, name, triangulate, v, warn);
+      bool ret = exportGroupsToShape(&shape, prim_group, tags, material_name_str, name, triangulate, v, warn);
       (void)ret;  // return value not used.
 
       if (shape.mesh.indices.size() > 0 || shape.lines.indices.size() > 0 || shape.points.indices.size() > 0) {
@@ -2861,7 +2879,7 @@ bool LoadObj(attrib_t* attrib, std::vector<shape_t>* shapes, std::vector<materia
     }
   }
 
-  bool ret = exportGroupsToShape(&shape, prim_group, tags, material, name, triangulate, v, warn);
+  bool ret = exportGroupsToShape(&shape, prim_group, tags, material_name_str, name, triangulate, v, warn);
   // exportGroupsToShape return false when `usemtl` is called in the last
   // line.
   // we also add `shape` to `shapes` when `shape.mesh` has already some
@@ -2984,7 +3002,8 @@ bool LoadObjWithCallback(std::istream& inStream, const callback_t& callback, voi
 
   // material
   std::map<std::string, int> material_map;
-  int material_id = -1;  // -1 = invalid
+  int material_id = -1;       // -1 = invalid
+  std::string material_name;  // current material name
 
   std::vector<index_t> indices;
   std::vector<material_t> materials;
@@ -3100,6 +3119,9 @@ bool LoadObjWithCallback(std::istream& inStream, const callback_t& callback, voi
           (*warn) += "material [ " + namebuf + " ] not found in .mtl\n";
         }
       }
+
+      // Always update material_name with the name from usemtl
+      material_name = namebuf;
 
       if (newMaterialId != material_id) {
         material_id = newMaterialId;

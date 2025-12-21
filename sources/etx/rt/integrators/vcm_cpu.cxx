@@ -231,7 +231,7 @@ struct CPUVCMImpl {
 
     have_camera_image = true;
 
-    if ((*state == Integrator::State::WaitingForCompletion) || (*state == Integrator::State::Stopped) || (vcm_iteration.iteration + 1 >= rt.scene().samples)) {
+    if ((*state == Integrator::State::WaitingForCompletion) || (*state == Integrator::State::Stopped) || (vcm_iteration.iteration + 1 >= rt.scene().options.samples)) {
       *state = Integrator::State::Stopped;
       return;
     }

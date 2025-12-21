@@ -1,4 +1,4 @@
-#include <etx/core/environment.hxx>
+#include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/core/profiler.hxx>
 
@@ -29,9 +29,7 @@ RTApplication::RTApplication()
   , _ior_database()
   , scene(raytracing.scheduler(), _ior_database)
   , camera_controller(scene.camera())
-  , integrator_thread(raytracing.scheduler(), IntegratorThread::Mode::ExternalControl) {
-  raytracing.link_scene(scene.scene());
-  raytracing.link_camera(scene.camera());
+  , integrator_thread(scene, raytracing) {
 }
 
 RTApplication::~RTApplication() {
@@ -167,7 +165,7 @@ void RTApplication::frame() {
   const auto frame_data = raytracing.film().layer(options.layer);
   render.update_image(frame_data);
 
-  ui.build(dt, _recent_files, scene.mutable_scene(), scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping());
+  ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping());
   render.end_frame();
 }
 
@@ -215,9 +213,8 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   if (scene.load_from_file(_current_scene_file.c_str(), options, &integrator_data) == false) {
     log::error("Failed to load scene from file: %s", _current_scene_file.c_str());
   }
-  log::warning("Committing changes...");
-  raytracing.commit_changes();
-  render.set_output_dimensions(raytracing.film().dimensions());
+  log::warning("Setting output dimensions...");
+  render.set_output_dimensions(scene.camera().film_size);
 
   if (scene.valid() == false) {
     return;
@@ -399,10 +396,7 @@ void RTApplication::on_options_changed() {
 }
 
 void RTApplication::on_material_added() {
-  integrator_thread.stop(Integrator::Stop::Immediate);
   scene.add_material(nullptr);
-  scene.rebuild_area_emitters();
-  integrator_thread.restart();
 }
 
 void RTApplication::on_material_renamed(uint32_t index, const std::string& name) {
@@ -410,16 +404,12 @@ void RTApplication::on_material_renamed(uint32_t index, const std::string& name)
 }
 
 void RTApplication::on_material_changed(uint32_t index) {
-  integrator_thread.stop(Integrator::Stop::Immediate);
-  scene.rebuild_area_emitters();
-  integrator_thread.restart();
+  scene.create_area_emitters_from_materials();
 }
 
 void RTApplication::on_medium_added() {
-  integrator_thread.stop(Integrator::Stop::Immediate);
   scene.add_medium(nullptr);
   scene.update_medium_bounds();
-  integrator_thread.restart();
 }
 
 void RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
@@ -428,14 +418,11 @@ void RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
 
 void RTApplication::on_medium_changed(uint32_t index) {
   scene.update_medium_bounds();
-  integrator_thread.restart();
 }
 
 void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index) {
-  integrator_thread.stop(Integrator::Stop::Immediate);
   scene.set_mesh_material(mesh_index, material_index);
-  scene.rebuild_area_emitters();
-  integrator_thread.restart();
+  scene.create_area_emitters_from_materials();
 }
 
 void RTApplication::on_mesh_renamed(uint32_t index, const std::string& name) {
@@ -443,14 +430,9 @@ void RTApplication::on_mesh_renamed(uint32_t index, const std::string& name) {
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
-  integrator_thread.stop(Integrator::Stop::Immediate);
-  scene.rebuild_area_emitters();
-  integrator_thread.restart();
 }
 
 void RTApplication::on_emitter_added(uint32_t type) {
-  integrator_thread.stop(Integrator::Stop::Immediate);
-
   switch (type) {
     case 0: {
       scene.add_environment_emitter({1.0f, 1.0f, 1.0f}, kInvalidIndex);
@@ -465,30 +447,21 @@ void RTApplication::on_emitter_added(uint32_t type) {
       break;
     }
   }
-
-  scene.rebuild_area_emitters();
-  integrator_thread.restart();
 }
 
 void RTApplication::on_emitter_rebuild(uint32_t index) {
-  integrator_thread.stop(Integrator::Stop::Immediate);
   scene.rebuild_atmosphere_emitter(index);
-  integrator_thread.restart();
 }
 
 void RTApplication::on_camera_changed(bool film_changed) {
   if (film_changed) {
     integrator_thread.stop(Integrator::Stop::Immediate);
-    raytracing.commit_changes();
-    render.set_output_dimensions(raytracing.film().dimensions());
-    integrator_thread.restart();
-  } else {
-    integrator_thread.restart();
+    render.set_output_dimensions(scene.camera().film_size);
   }
+  integrator_thread.restart();
 }
 
 void RTApplication::on_scene_settings_changed() {
-  integrator_thread.restart();
 }
 
 void RTApplication::on_denoise_selected() {
@@ -497,8 +470,9 @@ void RTApplication::on_denoise_selected() {
 }
 
 void RTApplication::update_camera_to_fit_scene(const float3& view_direction) {
-  float3 position, target;
-  compute_camera_position_to_fit_scene(scene.scene(), scene.camera(), view_direction, position, target);
+  float3 position = {};
+  float3 target = {};
+  compute_camera_position_to_fit_scene(scene.data(), scene.camera(), view_direction, position, target);
   camera_controller.schedule(position, target);
 }
 
