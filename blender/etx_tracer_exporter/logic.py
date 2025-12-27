@@ -561,7 +561,6 @@ def _ensure_image_export(
 
 def _export_scene_json(operator, json_path, obj_path):
     """Export scene settings to JSON file"""
-    # Get relative paths for JSON references
     base_dir = os.path.dirname(json_path)
     rel_obj_path = os.path.relpath(obj_path, base_dir)
 
@@ -573,7 +572,6 @@ def _export_scene_json(operator, json_path, obj_path):
     samples = resolve_scene_samples(operator)
     max_path_length = resolve_scene_max_path_length(operator)
 
-    # Build scene data
     scene_data = {
         "geometry": rel_obj_path.replace("\\", "/"),  # Use forward slashes
         "materials": rel_mtl_path.replace("\\", "/"),  # Reference MTL file
@@ -585,7 +583,6 @@ def _export_scene_json(operator, json_path, obj_path):
         "camera": _get_camera_data(operator),
     }
 
-    # Write JSON file
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(scene_data, f, indent=2)
 
@@ -596,6 +593,7 @@ def _finalize_material_textures(operator, obj_path, blender_mat, properties):
     Accepts temporary values placed by _extract_texture_connections:
       - map_Kd: bpy.types.Image or string
       - map_Pr: bpy.types.Image or string
+      - map_Ke: bpy.types.Image or string
       - normalmap: tuple(Image, scale) or string
     """
     if getattr(operator, "export_textures", False) == False:
@@ -632,6 +630,13 @@ def _finalize_material_textures(operator, obj_path, blender_mat, properties):
                 _mtl_relpath(obj_path, sp) if (sp and os.path.isfile(sp)) else tm.name
             )
 
+        ke = properties.get("map_Ke")
+        if isinstance(ke, bpy.types.Image):
+            sp = _abspath_image(ke)
+            properties["map_Ke"] = (
+                _mtl_relpath(obj_path, sp) if (sp and os.path.isfile(sp)) else ke.name
+            )
+
         nm = properties.get("normalmap")
         if isinstance(nm, tuple) and isinstance(nm[0], bpy.types.Image):
             img, scale = nm[0], nm[1]
@@ -642,7 +647,6 @@ def _finalize_material_textures(operator, obj_path, blender_mat, properties):
             properties["normalmap"] = f"image {rel} scale {float(scale):.4f}"
         return
 
-    # Export each referenced image and update to relative paths
     def resolve_image(img_or_str, *, suggested):
         if isinstance(img_or_str, bpy.types.Image):
             rel = _ensure_image_export(
@@ -668,7 +672,6 @@ def _finalize_material_textures(operator, obj_path, blender_mat, properties):
         if rel:
             properties["map_Pr"] = rel
 
-    # metallic texture
     if "map_Ml" in properties and properties["map_Ml"] is not None:
         rel = resolve_image(
             properties["map_Ml"], suggested=f"{blender_mat.name}_Ml.png"
@@ -676,13 +679,19 @@ def _finalize_material_textures(operator, obj_path, blender_mat, properties):
         if rel:
             properties["map_Ml"] = rel
 
-    # transmission texture
     if "map_Tm" in properties and properties["map_Tm"] is not None:
         rel = resolve_image(
             properties["map_Tm"], suggested=f"{blender_mat.name}_Tm.png"
         )
         if rel:
             properties["map_Tm"] = rel
+
+    if "map_Ke" in properties and properties["map_Ke"] is not None:
+        rel = resolve_image(
+            properties["map_Ke"], suggested=f"{blender_mat.name}_Ke.png"
+        )
+        if rel:
+            properties["map_Ke"] = rel
 
     nm = properties.get("normalmap")
     if isinstance(nm, tuple) and len(nm) >= 2:
@@ -758,24 +767,20 @@ def _bake_procedural_textures(operator, materials, obj_path):
     Creates temporary images per material, assigns to a temporary image node,
     performs cycles bake for selected objects that use the material.
     """
-    # Ensure Cycles is available
     scene = bpy.context.scene
     prev_engine = scene.render.engine
     try:
-        # Switch to Cycles if available
         if bpy.app.build_options.cycles:
             scene.render.engine = "CYCLES"
         else:
             return  # skip baking if no cycles
 
-        # Common bake settings
         scene.cycles.bake_type = "DIFFUSE"
         scene.render.bake.use_selected_to_active = False
         scene.render.bake.use_clear = True
         scene.render.bake.margin = int(getattr(operator, "bake_margin", 4))
         res = int(getattr(operator, "bake_resolution", "2048"))
 
-        # Collect objects by material
         mat_to_objs = {}
         for obj in bpy.context.scene.objects:
             if obj.type != "MESH" or obj.data is None:
@@ -784,7 +789,6 @@ def _bake_procedural_textures(operator, materials, obj_path):
                 if slot and slot.material in materials:
                     mat_to_objs.setdefault(slot.material, []).append(obj)
 
-        # Prepare export dir
         textures_dir = _get_textures_dir(operator, obj_path)
 
         for mat, objs in mat_to_objs.items():
@@ -792,7 +796,6 @@ def _bake_procedural_textures(operator, materials, obj_path):
                 continue
 
             nt = mat.node_tree
-            # Ensure active output/material
             out = None
             for n in nt.nodes:
                 if n.type == "OUTPUT_MATERIAL" and n.is_active_output:
@@ -801,17 +804,14 @@ def _bake_procedural_textures(operator, materials, obj_path):
             if out is None:
                 continue
 
-            # Create image node
             img_node = nt.nodes.new("ShaderNodeTexImage")
             img_node.interpolation = "Smart"
             img_node.label = "ETX_BAKE_TARGET"
 
-            # Set bake targets we want
             bake_targets = [
                 ("DIFFUSE", f"{_sanitize_filename(mat.name)}_baked_Kd.png"),
             ]
 
-            # Try normal bake if there is a normal linkage
             has_normal = False
             try:
                 shader = _find_shader_node(nt)
@@ -824,7 +824,6 @@ def _bake_procedural_textures(operator, materials, obj_path):
                     ("NORMAL", f"{_sanitize_filename(mat.name)}_baked_N.png")
                 )
 
-            # Ensure objects are selected for baking
             prev_selection = [o for o in bpy.context.selected_objects]
             prev_active = bpy.context.view_layer.objects.active
             try:
@@ -837,8 +836,7 @@ def _bake_procedural_textures(operator, materials, obj_path):
 
                 baked_paths = {}
                 for bake_type, filename in bake_targets:
-                    # Create/replace image
-                    img = bpy.data.images.new(
+                img = bpy.data.images.new(
                         name=filename,
                         width=res,
                         height=res,
@@ -857,10 +855,8 @@ def _bake_procedural_textures(operator, materials, obj_path):
                     elif bake_type == "NORMAL":
                         scene.cycles.bake_type = "NORMAL"
 
-                    # Perform bake
                     bpy.ops.object.bake(type=scene.cycles.bake_type)
 
-                    # Save baked image
                     out_path = os.path.join(textures_dir, filename)
                     img.filepath_raw = out_path
                     img.file_format = "PNG"
@@ -876,19 +872,16 @@ def _bake_procedural_textures(operator, materials, obj_path):
                     elif bake_type == "NORMAL":
                         baked_paths["N"] = rel
 
-                # Store per-material baked results for later override
                 if baked_paths:
                     if getattr(operator, "_etx_baked", None) is None:
                         operator._etx_baked = {}
                     operator._etx_baked[mat.name] = baked_paths
 
             finally:
-                # Cleanup image node
                 try:
                     nt.nodes.remove(img_node)
                 except Exception:
                     pass
-                # Restore selection
                 for o in bpy.context.selected_objects:
                     o.select_set(False)
                 for o in prev_selection:
@@ -912,7 +905,6 @@ def _get_camera_data(operator):
     context = bpy.context
     scene = getattr(context, "scene", None)
 
-    # Defaults that work even in headless/background sessions
     location = Vector((7.4, 5.3, 6.5))
     target = Vector((0.0, 0.0, 0.0))
     up = Vector((0.0, 1.0, 0.0))
@@ -1098,7 +1090,6 @@ def _get_all_cameras_data(operator):
             name = obj.name if obj.name else "Camera"
         except Exception:
             name = "Camera"
-        # Reuse material name sanitizer for identifier tokens
         try:
             cam_id = _sanitize_material_name(name)
         except Exception:
@@ -1140,7 +1131,6 @@ def _get_environment_light_material(operator, obj_path):
         if link_node.type == "TEX_ENVIRONMENT":
             texture_node = link_node
 
-    # Blackbody color on background (supports simple chains)
     temp = _find_blackbody_temperature_from_socket(color_socket)
     if temp is not None:
         env_material["properties"][
@@ -1149,7 +1139,6 @@ def _get_environment_light_material(operator, obj_path):
         return env_material
 
     if texture_node and texture_node.image:
-        # Export environment texture to disk and reference relatively
         if getattr(operator, "export_textures", False):
             rel = _ensure_image_export(
                 operator, obj_path, texture_node.image, is_environment=True
@@ -1157,7 +1146,6 @@ def _get_environment_light_material(operator, obj_path):
         else:
             rel = texture_node.image.name
         env_material["properties"]["image"] = rel
-        # With a texture, use Background Strength as scalar (ignore base color)
         env_material["properties"][
             "color"
         ] = f"{strength:.4f} {strength:.4f} {strength:.4f}"
@@ -1211,7 +1199,6 @@ def _get_lights_as_materials(operator):
 
             color_value = None
 
-            # Analyze node tree first (supports Blackbody + Exposure chain)
             try:
                 if getattr(light_data, "use_nodes", False) and getattr(
                     light_data, "node_tree", None
@@ -1239,7 +1226,6 @@ def _get_lights_as_materials(operator):
                             normalize_bb = True
                             temperature = None
 
-                            # Walk upstream to find Exposure and Blackbody
                             def _walk_color_socket(sock, _visited=None):
                                 nonlocal exposure_sum, temperature, normalize_bb
                                 try:
@@ -1293,7 +1279,6 @@ def _get_lights_as_materials(operator):
 
                             _walk_color_socket(col_sock)
 
-                            # Build color from findings
                             energy = float(getattr(light_data, "energy", 1.0))
                             exposure_scale = (
                                 pow(2.0, exposure_sum) if exposure_sum != 0.0 else 1.0
@@ -1310,7 +1295,6 @@ def _get_lights_as_materials(operator):
                 color_value = None
 
             if color_value is None:
-                # If light UI uses temperature and the checkbox is enabled, export as blackbody
                 try:
                     if _light_uses_temperature(light_data):
                         temperature = _get_light_temperature(light_data)
@@ -1323,7 +1307,6 @@ def _get_lights_as_materials(operator):
                     color_value = None
 
             if color_value is None:
-                # Fallback to raw RGB color scaled by energy
                 color = light_data.color
                 energy = float(getattr(light_data, "energy", 1.0))
                 emission_color = [c * energy for c in color]
@@ -1572,7 +1555,6 @@ def _extract_principled_properties(operator, principled, properties):
     emission_socket = principled.inputs.get("Emission Color")
     emission_strength = _get_node_input_value(principled, "Emission Strength", 0.0)
     if emission_strength > 0.0 and emission_socket:
-        use_color_emission = True
         if emission_socket.is_linked:
             linked_node = emission_socket.links[0].from_node
             if linked_node.type == "BLACKBODY":
@@ -1580,8 +1562,8 @@ def _extract_principled_properties(operator, principled, properties):
                 properties["emitter"] = (
                     f"nblackbody {temperature:.0f} scale {emission_strength:.4f}"
                 )
-                use_color_emission = False
-        if use_color_emission:
+        else:
+            # Only set constant emission if no texture is connected (textures handled separately)
             emission_color = _get_node_input_value(
                 principled, "Emission Color", [0.0, 0.0, 0.0, 1.0]
             )
@@ -1630,6 +1612,16 @@ def _extract_emission_properties(operator, emission_node, properties):
     strength = _get_node_input_value(emission_node, "Strength", 0.0)
     # Make the surface purely emissive by default
     properties["Kd"] = "0.000 0.000 0.000"
+
+    # Check for texture connections first
+    if _input_is_linked(emission_node, "Color"):
+        texture_node = _find_texture_node(emission_node.inputs["Color"])
+        if texture_node and texture_node.image:
+            properties["map_Ke"] = texture_node.image
+            # Always set Ke for textured emission (scene serialization requires it)
+            properties["Ke"] = f"{strength:.4f} {strength:.4f} {strength:.4f}"
+            return
+
     # If color is (directly or indirectly) driven by a Blackbody node, export as nblackbody emitter
     try:
         color_input = emission_node.inputs.get("Color")
@@ -1713,6 +1705,19 @@ def _extract_texture_connections(operator, principled_node, properties):
         texture_node = _find_texture_node(principled_node.inputs["Transmission"])
         if texture_node and texture_node.image:
             properties["map_Tm"] = texture_node.image
+
+    # Emissive texture
+    if _input_is_linked(principled_node, "Emission Color"):
+        texture_node = _find_texture_node(principled_node.inputs["Emission Color"])
+        if texture_node and texture_node.image:
+            properties["map_Ke"] = texture_node.image
+            # Always set Ke for textured emission (scene serialization requires it)
+            emission_strength = _get_node_input_value(
+                principled_node, "Emission Strength", 1.0
+            )
+            properties["Ke"] = (
+                f"{emission_strength:.4f} {emission_strength:.4f} {emission_strength:.4f}"
+            )
 
 
 def _input_is_linked(node, input_name):

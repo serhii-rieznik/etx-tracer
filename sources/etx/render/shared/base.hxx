@@ -90,6 +90,10 @@ struct ETX_ALIGNED ArrayView {
     ETX_ASSERT(a != nullptr);
     return a + count;
   }
+
+  ETX_GPU_CODE uint64_t size() const {
+    return count;
+  }
 };
 
 template <class T>

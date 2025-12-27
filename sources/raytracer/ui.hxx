@@ -25,7 +25,7 @@ struct UI {
   void cleanup();
 
   void build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes);
+    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
@@ -80,6 +80,7 @@ struct UI {
     std::function<void()> denoise_selected;
     std::function<void(uint32_t)> view_scene;
     std::function<void()> clear_recent_files;
+    std::function<void(uint32_t)> camera_activated;
   } callbacks;
 
  private:
@@ -129,7 +130,7 @@ struct UI {
   void build_main_menu_bar(const std::vector<std::string>& recent_files);
   void build_toolbar(const BuildContext& ctx);
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const SceneRepresentation::MaterialMapping& materials,
-    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes);
+    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras);
   void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx);
 
   bool build_material_class_selector(Material& material);
@@ -139,7 +140,7 @@ struct UI {
   void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx);
+  void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx);
   void build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_integrator_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
 
@@ -219,6 +220,7 @@ struct UI {
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
   MappingRepresentation _mesh_mapping;
+  MappingRepresentation _camera_mapping;
   SelectionState _selection;
   SelectionState _name_edit_selection = {};
   char _name_edit_buffer[256] = {};
@@ -231,6 +233,7 @@ struct UI {
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;
+  uint64_t _camera_mapping_hash = 0ull;
   const IORDatabase* _ior_database = nullptr;
   bool _auto_open_emission_section = false;
 };

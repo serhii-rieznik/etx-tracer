@@ -45,6 +45,7 @@ struct RaytracingImpl {
   }
 
   void commit(const SceneData& scene_data, const Camera& camera, const UpdateFlags& update_flags) {
+    ETX_PROFILER_SCOPE();
     internal_data.camera = camera;
 
     if (update_flags[UpdateFlags::AnyGeometry] || update_flags[UpdateFlags::AnyMaterials] || update_flags[UpdateFlags::Emitters] || update_flags[UpdateFlags::Images] ||
@@ -95,7 +96,9 @@ struct RaytracingImpl {
   }
 
   void update_scene_data(const SceneData& scene_data, const UpdateFlags& update_flags) {
+    ETX_PROFILER_SCOPE();
     if (update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Emitters]) {
+      ETX_PROFILER_NAMED_SCOPE("update_triangles_and_emitters");
       update_triangles_internal(scene_data);
       update_emitters_internal(scene_data);
     }
@@ -105,6 +108,7 @@ struct RaytracingImpl {
     }
 
     if (update_flags[UpdateFlags::Emitters] || update_flags[UpdateFlags::AnyMaterials] || update_flags[UpdateFlags::Triangles]) {
+      ETX_PROFILER_NAMED_SCOPE("build_emitters_distribution");
       build_emitters_distribution(scene_data);
     }
 
@@ -112,6 +116,7 @@ struct RaytracingImpl {
   }
 
   void build_emitters_distribution(const SceneData& scene_data) {
+    ETX_PROFILER_SCOPE();
     auto bbox = scene_data.compute_bounding_volumes();
     float3 bounding_sphere_center = 0.5f * (bbox.p_min + bbox.p_max);
     float bounding_sphere_radius = length(bbox.p_max - bounding_sphere_center);
@@ -233,6 +238,7 @@ struct RaytracingImpl {
   }
 
   void build_host_scene(const Scene& s) {
+    ETX_PROFILER_SCOPE();
     rtcSetDeviceErrorFunction(
       rt_device,
       [](void* userPtr, enum RTCError code, const char* str) {

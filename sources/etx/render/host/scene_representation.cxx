@@ -344,14 +344,13 @@ struct SceneRepresentationImpl {
   }
 
   void build_tangents() {
-    static std::map<uint32_t, uint32_t> a = {};
-
     const uint64_t normal_count = data.vertices.nrm.size();
     if (data.vertices.tan.size() != normal_count)
       data.vertices.tan.resize(normal_count);
     if (data.vertices.btn.size() != normal_count)
       data.vertices.btn.resize(normal_count);
 
+    TimeMeasure uv_timer = {};
     float2 min_uv = {kMaxFloat, kMaxFloat};
     float2 max_uv = {-kMaxFloat, -kMaxFloat};
     for (const auto& v : data.vertices.tex) {
@@ -363,55 +362,95 @@ struct SceneRepresentationImpl {
       log::warning("No texture coordinates: tangents will be computed automatically");
       return;
     }
+    log::info("UV validation: %.4f sec", uv_timer.lap());
 
+    TimeMeasure total_timer = {};
+
+    // Pre-resolve vertex data to eliminate index lookups during computation
+    // Use SoA (Structure of Arrays) for better cache performance
+    TimeMeasure resolve_timer = {};
+    const size_t total_vertices = data.triangles.size() * 3;
+    std::vector<float3> resolved_positions(total_vertices);
+    std::vector<float3> resolved_normals(total_vertices);
+    std::vector<float2> resolved_texcoords(total_vertices);
+
+    for (size_t tri_idx = 0; tri_idx < data.triangles.size(); ++tri_idx) {
+      const auto& tri = data.triangles[tri_idx];
+      const size_t base_idx = tri_idx * 3;
+      for (uint32_t i = 0; i < 3; ++i) {
+        uint32_t vertex_index = tri.i[i];
+        resolved_positions[base_idx + i] = data.vertices.pos[vertex_index];
+        resolved_normals[base_idx + i] = data.vertices.nrm[vertex_index];
+        resolved_texcoords[base_idx + i] = data.vertices.tex[vertex_index];
+      }
+    }
+    log::info("Vertex data resolution: %.4f sec", resolve_timer.lap());
+
+    struct MikkTSpaceUserData {
+      const std::vector<float3>& positions;
+      const std::vector<float3>& normals;
+      const std::vector<float2>& texcoords;
+      SceneData& data;
+      std::vector<bool> computed_flags;
+    };
+    MikkTSpaceUserData user_data = {resolved_positions, resolved_normals, resolved_texcoords, data, std::vector<bool>(normal_count, false)};
+
+    TimeMeasure interface_timer = {};
     SMikkTSpaceInterface contextInterface = {};
     contextInterface.m_getNumFaces = [](const SMikkTSpaceContext* pContext) -> int {
-      const auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
-      return static_cast<int>(data.triangles.size());
+      const auto& user_data = *reinterpret_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+      return static_cast<int>(user_data.data.triangles.size());
     };
     contextInterface.m_getNumVerticesOfFace = [](const SMikkTSpaceContext* pContext, const int iFace) -> int {
       return 3;
     };
     contextInterface.m_getPosition = [](const SMikkTSpaceContext* pContext, float fvPosOut[], const int iFace, const int iVert) {
-      const auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
-      const auto& tri = data.triangles[iFace];
-      const auto& vertex = data.vertices.pos[tri.i[iVert]];
-      fvPosOut[0] = vertex.x;
-      fvPosOut[1] = vertex.y;
-      fvPosOut[2] = vertex.z;
+      const auto& user_data = *reinterpret_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+      const auto& pos = user_data.positions[iFace * 3 + iVert];
+      fvPosOut[0] = pos.x;
+      fvPosOut[1] = pos.y;
+      fvPosOut[2] = pos.z;
     };
     contextInterface.m_getNormal = [](const SMikkTSpaceContext* pContext, float fvNormOut[], const int iFace, const int iVert) {
-      const auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
-      const auto& tri = data.triangles[iFace];
-      const auto& vertex = data.vertices.nrm[tri.i[iVert]];
-      fvNormOut[0] = vertex.x;
-      fvNormOut[1] = vertex.y;
-      fvNormOut[2] = vertex.z;
+      const auto& user_data = *reinterpret_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+      const auto& nrm = user_data.normals[iFace * 3 + iVert];
+      fvNormOut[0] = nrm.x;
+      fvNormOut[1] = nrm.y;
+      fvNormOut[2] = nrm.z;
     };
     contextInterface.m_getTexCoord = [](const SMikkTSpaceContext* pContext, float fvTexcOut[], const int iFace, const int iVert) {
-      const auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
-      const auto& tri = data.triangles[iFace];
-      const auto& vertex = data.vertices.tex[tri.i[iVert]];
-      fvTexcOut[0] = vertex.x;
-      fvTexcOut[1] = vertex.y;
+      const auto& user_data = *reinterpret_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+      const auto& tex = user_data.texcoords[iFace * 3 + iVert];
+      fvTexcOut[0] = tex.x;
+      fvTexcOut[1] = tex.y;
     };
     contextInterface.m_setTSpaceBasic = [](const SMikkTSpaceContext* pContext, const float fvTangent[], const float fSign, const int iFace, const int iVert) {
-      auto& data = reinterpret_cast<SceneRepresentationImpl*>(pContext->m_pUserData)->data;
-      const auto& tri = data.triangles[iFace];
-      auto& nrm = data.vertices.nrm[tri.i[iVert]];
-      auto& tan = data.vertices.tan[tri.i[iVert]];
-      auto& btn = data.vertices.btn[tri.i[iVert]];
-      if (is_valid_vector(tan) == false) {
+      auto& user_data = *reinterpret_cast<MikkTSpaceUserData*>(pContext->m_pUserData);
+      const auto& tri = user_data.data.triangles[iFace];
+      uint32_t vertex_index = tri.i[iVert];
+      auto& nrm = user_data.data.vertices.nrm[vertex_index];
+      auto& tan = user_data.data.vertices.tan[vertex_index];
+      auto& btn = user_data.data.vertices.btn[vertex_index];
+
+      // Let MikkTSpace set tangents for vertices it hasn't touched yet
+      if (user_data.computed_flags[vertex_index] == false) {
         tan = normalize(float3{fvTangent[0], fvTangent[1], fvTangent[2]});
         btn = normalize(cross(tan, nrm) * fSign);
+        user_data.computed_flags[vertex_index] = true;
       }
     };
 
     SMikkTSpaceContext context = {};
-    context.m_pUserData = this;
+    context.m_pUserData = &user_data;
     context.m_pInterface = &contextInterface;
 
+    log::info("MikkTSpace interface setup: %.4f sec", interface_timer.lap());
+
+    TimeMeasure compute_timer = {};
     genTangSpaceDefault(&context);
+    log::info("MikkTSpace computation: %.4f sec", compute_timer.lap());
+
+    log::info("Total tangent building: %.4f sec", total_timer.lap());
   }
 
   void validate_tangents(std::vector<bool>& referenced_vertices, bool force) {
@@ -647,6 +686,15 @@ const SceneRepresentation::MeshMapping& SceneRepresentation::mesh_mapping() cons
   return _private->data.mesh_mapping;
 }
 
+const SceneRepresentation::CameraMapping& SceneRepresentation::camera_mapping() const {
+  static CameraMapping camera_mapping_cache;
+  camera_mapping_cache.clear();
+  for (size_t i = 0; i < _private->data.cameras.size(); ++i) {
+    camera_mapping_cache[_private->data.cameras[i].id] = static_cast<uint32_t>(i);
+  }
+  return camera_mapping_cache;
+}
+
 uint32_t SceneRepresentation::add_material(const char* name) {
   uint32_t index = _private->data.add_material(name);
   auto& mat = _private->data.materials[index];
@@ -683,6 +731,15 @@ std::string SceneRepresentation::rename_medium(uint32_t index, const char* name)
 
 void SceneRepresentation::update_medium_bounds() {
   _private->update_medium_bounds();
+}
+
+void SceneRepresentation::update_active_camera() {
+  auto it = std::find_if(_private->data.cameras.begin(), _private->data.cameras.end(), [](const auto& e) {
+    return e.active;
+  });
+  if (it != _private->data.cameras.end()) {
+    _private->active_camera = it->cam;
+  }
 }
 
 std::string SceneRepresentation::rename_mesh(uint32_t index, const char* name) {
@@ -780,13 +837,13 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   _private->active_camera.medium_index = kInvalidIndex;
   _private->active_camera.up = kWorldUp;
 
-  Camera json_camera = {};
-  json_camera.lens_image = kInvalidIndex;
-  json_camera.medium_index = kInvalidIndex;
-  json_camera.up = kWorldUp;
-  json_camera.cls = Camera::Class::Perspective;
+  Camera default_camera = {};
+  default_camera.lens_image = kInvalidIndex;
+  default_camera.medium_index = kInvalidIndex;
+  default_camera.up = kWorldUp;
+  default_camera.cls = Camera::Class::Perspective;
 
-  float3 camera_target = json_camera.position + json_camera.direction;
+  float3 camera_target = default_camera.position + default_camera.direction;
   bool has_target = false;
   bool has_direction = false;
   float camera_focal_len = 50.0f;
@@ -916,38 +973,38 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
           const auto& ckey = ci.key();
           const auto& cobj = ci.value();
           if (json_get_string(ci, "class", str_value)) {
-            json_camera.cls = str_value == "eq" ? Camera::Class::Equirectangular : Camera::Class::Perspective;
+            default_camera.cls = str_value == "eq" ? Camera::Class::Equirectangular : Camera::Class::Perspective;
           } else if (json_get_float(ci, "fov", float_value)) {
             camera_fov = float_value;
           } else if (json_get_float(ci, "focal-length", float_value)) {
             camera_focal_len = float_value;
             use_focal_len = true;
           } else if (json_get_float(ci, "lens-radius", float_value)) {
-            json_camera.lens_radius = float_value;
+            default_camera.lens_radius = float_value;
           } else if (json_get_float(ci, "focal-distance", float_value)) {
-            json_camera.focal_distance = float_value;
+            default_camera.focal_distance = float_value;
           } else if (json_get_float(ci, "clip-near", float_value)) {
-            json_camera.clip_near = float_value;
+            default_camera.clip_near = float_value;
           } else if (json_get_float(ci, "clip-far", float_value)) {
-            json_camera.clip_far = float_value;
+            default_camera.clip_far = float_value;
           } else if (cobj.is_array()) {
             if (ckey == "origin") {
               auto values = cobj.get<std::vector<float>>();
-              get_values(values, &json_camera.position.x, 3llu);
+              get_values(values, &default_camera.position.x, 3llu);
             } else if (ckey == "target") {
               auto values = cobj.get<std::vector<float>>();
               get_values(values, &camera_target.x, 3llu);
               has_target = true;
             } else if (ckey == "direction") {
               auto values = cobj.get<std::vector<float>>();
-              get_values(values, &json_camera.direction.x, 3llu);
+              get_values(values, &default_camera.direction.x, 3llu);
               has_direction = true;
             } else if (ckey == "up") {
               auto values = cobj.get<std::vector<float>>();
-              get_values(values, &json_camera.up.x, 3llu);
+              get_values(values, &default_camera.up.x, 3llu);
             } else if (ckey == "viewport") {
               auto values = cobj.get<std::vector<uint32_t>>();
-              get_values(values, &json_camera.film_size.x, 2llu);
+              get_values(values, &default_camera.film_size.x, 2llu);
             } else {
               log::warning("Unhandled value in camera description : %s", key.c_str());
             }
@@ -955,11 +1012,11 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         }
 
         if (has_direction) {
-          json_camera.direction = normalize(json_camera.direction);
+          default_camera.direction = normalize(default_camera.direction);
         } else if (has_target) {
-          json_camera.direction = normalize(camera_target - json_camera.position);
+          default_camera.direction = normalize(camera_target - default_camera.position);
         } else {
-          json_camera.direction = kWorldForward;
+          default_camera.direction = kWorldForward;
         }
       } else if ((key == "integrator") && obj.is_object()) {
         if (out_integrator != nullptr) {
@@ -1042,26 +1099,26 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     return false;
   }
 
-  if (has_target || has_direction || json_camera.film_size.x > 0 || json_camera.lens_radius > 0.0f) {
+  if (has_target || has_direction || default_camera.film_size.x > 0 || default_camera.lens_radius > 0.0f) {
     if (use_focal_len) {
       camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
     }
 
-    if (json_camera.film_size.x * json_camera.film_size.y == 0) {
-      json_camera.film_size = {1280, 720};
+    if (default_camera.film_size.x * default_camera.film_size.y == 0) {
+      default_camera.film_size = {1280, 720};
     }
 
     auto& entry = _private->data.cameras.emplace_back();
-    entry.id = "json_camera";
+    entry.id = "default";
     entry.active = _private->data.cameras.size() == 1;
 
-    build_camera(entry.cam, json_camera.position, json_camera.direction, json_camera.up, json_camera.film_size, camera_fov);
+    build_camera(entry.cam, default_camera.position, default_camera.direction, default_camera.up, default_camera.film_size, camera_fov);
 
-    entry.cam.cls = json_camera.cls;
-    entry.cam.lens_radius = json_camera.lens_radius;
-    entry.cam.focal_distance = json_camera.focal_distance;
-    entry.cam.clip_near = json_camera.clip_near;
-    entry.cam.clip_far = json_camera.clip_far;
+    entry.cam.cls = default_camera.cls;
+    entry.cam.lens_radius = default_camera.lens_radius;
+    entry.cam.focal_distance = default_camera.focal_distance;
+    entry.cam.clip_near = default_camera.clip_near;
+    entry.cam.clip_far = default_camera.clip_far;
   }
 
   return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
@@ -1819,8 +1876,14 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     std::vector<bool> referenced_vertices;
     validate_normals(referenced_vertices, has_invalid_tangents);
     log::warning("Normals validated: %.2f sec", m.lap());
-    build_tangents();
-    log::warning("Tangents built: %.2f sec", m.lap());
+
+    if (has_invalid_tangents || force_tangents) {
+      build_tangents();
+      log::warning("Tangents built: %.2f sec", m.lap());
+    } else {
+      log::warning("Tangents are valid, skipping rebuild");
+    }
+
     validate_tangents(referenced_vertices, has_invalid_tangents || force_tangents);
     log::warning("Tangents validated: %.2f sec", m.lap());
   }

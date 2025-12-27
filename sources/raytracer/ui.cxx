@@ -904,7 +904,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
 constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
 
 void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes) {
+  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras) {
   ETX_PROFILER_SCOPE();
 
   if (_selection.kind == SelectionKind::None) {
@@ -953,6 +953,12 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
     _mesh_mapping_hash = meshh;
   }
 
+  uint64_t camh = hash_mapping(cameras);
+  if (camh != _camera_mapping_hash) {
+    _camera_mapping.build(cameras);
+    _camera_mapping_hash = camh;
+  }
+
   auto apply_pending_selection = [&](const MappingRepresentation& map, SelectionKind kind) {
     if ((_pending_selection.has == false) || (_pending_selection.kind != kind)) {
       return;
@@ -966,6 +972,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
   apply_pending_selection(_material_mapping, SelectionKind::Material);
   apply_pending_selection(_medium_mapping, SelectionKind::Medium);
   apply_pending_selection(_mesh_mapping, SelectionKind::Mesh);
+  apply_pending_selection(_camera_mapping, SelectionKind::Camera);
   _pending_selection = {};
 
   validate_selections(scene_rep);
@@ -973,7 +980,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
   build_main_menu_bar(recent_files);
   build_toolbar(ctx);
-  build_scene_objects_window(scene_rep, ctx, materials, mediums, meshes);
+  build_scene_objects_window(scene_rep, ctx, materials, mediums, meshes, cameras);
   build_properties_window(scene_rep, camera, ctx);
 
   if (ctx.has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr)) {
@@ -1759,7 +1766,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
 }
 
 void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const SceneRepresentation::MaterialMapping& materials,
-  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes) {
+  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras) {
   const float kDefaultListHeight = 5.0f * ImGui::GetTextLineHeightWithSpacing();
 
   ctx.with_window(UIObjects, "Scene Objects", [&]() {
@@ -1839,16 +1846,46 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
     }
     ImGui::PopStyleColor();
 
-    ImGui::PushStyleColor(ImGuiCol_Text, kCameraTextColor);
-    bool camera_selected = (_selection.kind == SelectionKind::Camera);
-    if (ImGui::Selectable("Camera", camera_selected)) {
-      set_selection(SelectionKind::Camera, 0);
-    }
-    ImGui::PopStyleColor();
-
     bool integrator_selected = (_selection.kind == SelectionKind::Integrator);
     if (ImGui::Selectable("Integrator", integrator_selected)) {
       set_selection(SelectionKind::Integrator, 0);
+    }
+
+    ImGui::Separator();
+
+    ImGui::Text("Cameras (%zu)", _camera_mapping.size());
+    if (_camera_mapping.empty()) {
+      ImGui::TextDisabled("None");
+    } else if (ImGui::BeginListBox("##cameras_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
+      for (uint64_t i = 0; i < _camera_mapping.size(); ++i) {
+        ImGui::PushID(static_cast<int>(i));
+        bool camera_selected = (_selection.kind == SelectionKind::Camera) && (_selection.index == static_cast<int32_t>(i));
+        const auto& entry = _camera_mapping.entry(static_cast<int32_t>(i));
+        uint32_t camera_index = entry.index;
+
+        // Check if this camera is active
+        bool is_active = (camera_index < scene_rep.data().cameras.size()) && scene_rep.data().cameras[camera_index].active;
+
+        // Display camera name with bullet point and special color for active cameras
+        if (is_active) {
+          ImGui::PushStyleColor(ImGuiCol_Text, kCameraTextColor);
+          std::string display_name = std::string("[") + entry.name + "]";
+          if (ImGui::Selectable(display_name.c_str(), camera_selected)) {
+            set_selection(SelectionKind::Camera, static_cast<int32_t>(i));
+          }
+          ImGui::PopStyleColor();
+        } else {
+          if (ImGui::Selectable(entry.name, camera_selected)) {
+            set_selection(SelectionKind::Camera, static_cast<int32_t>(i));
+          }
+        }
+
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) && callbacks.camera_activated) {
+          callbacks.camera_activated(camera_index);
+        }
+        ImGui::PopID();
+      }
+      ImGui::EndListBox();
     }
 
     ImGui::Separator();
@@ -2025,7 +2062,11 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
       }
       break;
     case SelectionKind::Camera:
-      title_suffix("Camera", nullptr);
+      if (_selection.index >= 0 && _selection.index < int32_t(_camera_mapping.size())) {
+        title_suffix("Camera", _camera_mapping.name(_selection.index));
+      } else {
+        title_suffix("Camera", nullptr);
+      }
       break;
     case SelectionKind::Scene:
       title_suffix("Scene", nullptr);
@@ -2057,7 +2098,13 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
         break;
       }
       case SelectionKind::Camera: {
-        build_camera_selection_properties(scene_rep, camera, ctx);
+        if (_selection.index >= 0 && _selection.index < int32_t(_camera_mapping.size())) {
+          uint32_t camera_index = _camera_mapping.at(_selection.index);
+          if (camera_index < scene_rep.data().cameras.size()) {
+            auto& selected_camera = scene_rep.data().cameras[camera_index].cam;
+            build_camera_selection_properties(scene_rep, selected_camera, camera_index, ctx);
+          }
+        }
         break;
       }
       case SelectionKind::Scene: {
@@ -2538,7 +2585,7 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
   }
 }
 
-void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx) {
+void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx) {
   if (_film == nullptr) {
     ImGui::Text("No camera available");
     return;
@@ -2679,12 +2726,12 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
           })) {
         camera_changed = true;
       }
+    } else {
+      ImGui::TextDisabled("No mediums available. Add mediums in the scene to enable external medium selection.");
     }
   }
 
-  if (camera_changed && callbacks.camera_changed) {
-    _film->set_pixel_size(1u << pixel_size);
-
+  if (camera_changed) {
     viewport.x = clamp(viewport.x, 1, 1024 * 16);
     viewport.y = clamp(viewport.y, 1, 1024 * 16);
     camera.film_size = {uint32_t(viewport.x), uint32_t(viewport.y)};
@@ -2697,7 +2744,11 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
     build_camera(camera, pos, camera.direction, kWorldUp, camera.film_size, fov);
 
-    callbacks.camera_changed(film_changed);
+    // Only call camera_changed callback if this is the active camera
+    if (scene_rep.data().cameras[camera_index].active && callbacks.camera_changed) {
+      _film->set_pixel_size(1u << pixel_size);
+      callbacks.camera_changed(film_changed);
+    }
   }
 }
 

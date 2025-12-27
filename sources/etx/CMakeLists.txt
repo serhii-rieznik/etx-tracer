@@ -65,6 +65,7 @@ target_include_directories(etx-core PUBLIC ..)
 
 create_library(render)
 target_link_libraries(etx-render PRIVATE etx-core stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS nanovdb oidn bcdec)
+target_link_libraries(etx-render PUBLIC bcdec)
 target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 
 create_library(util)

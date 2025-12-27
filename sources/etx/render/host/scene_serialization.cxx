@@ -12,6 +12,7 @@
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scene_medium.hxx>
 #include <etx/render/shared/scattering.hxx>
+#include <etx/render/shared/material.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
 
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <vector>
 #include <map>
 
@@ -98,27 +100,39 @@ inline bool chunk_id_equals(const char* chunk_id, const char* expected_id) {
 }  // namespace
 
 struct SceneSerializationImpl {
-  struct ChunkInfo {
-    char id[sizeof(ChunkHeader::id) + 1] = {};
-    std::vector<uint8_t> meta_data;
-    std::vector<uint8_t> data;
-
-    ChunkInfo(const char* chunk_id, std::vector<uint8_t> meta = {}, std::vector<uint8_t> chunk_data = {}) {
-      memcpy(id, chunk_id, sizeof(ChunkHeader::id));
-      id[sizeof(ChunkHeader::id)] = '\0';
-      meta_data = std::move(meta);
-      data = std::move(chunk_data);
-    }
-  };
-
-  std::vector<uint8_t> _buffer;
+  std::vector<uint8_t> _buffer;  // Keep for loading functionality
   std::vector<std::string> _string_table;
-  std::vector<ChunkInfo> _chunks;
   std::vector<MaterialIndexMapping> _material_index_mappings;
   bool _is_loaded = false;
 
   static constexpr uint32_t kDataBufferSize = 2048u;
   char _data_buffer[kDataBufferSize] = {};
+  char _file_buffer[kDataBufferSize] = {};
+
+  bool write_chunk_to_file(std::ofstream& file, const char* chunk_id, const void* meta_data, size_t meta_size, const void* data, size_t data_size) {
+    ChunkHeader header = {};
+    memcpy(header.id, chunk_id, sizeof(ChunkHeader::id));
+    header.size = data_size;
+    header.meta_size = static_cast<uint32_t>(meta_size);
+
+    file.write(reinterpret_cast<const char*>(&header), sizeof(ChunkHeader));
+    if (!file.good())
+      return false;
+
+    if (meta_size > 0) {
+      file.write(reinterpret_cast<const char*>(meta_data), meta_size);
+      if (!file.good())
+        return false;
+    }
+
+    if (data_size > 0) {
+      file.write(reinterpret_cast<const char*>(data), data_size);
+      if (!file.good())
+        return false;
+    }
+
+    return true;
+  }
 
   bool get_param(const MaterialDefinition& m, const char* param) {
     memset(_data_buffer, 0, kDataBufferSize);
@@ -171,9 +185,9 @@ struct SceneSerializationImpl {
   }
 
   bool get_file(const char* base_dir, const std::string& base) {
-    memset(_data_buffer, 0, sizeof(_data_buffer));
+    memset(_file_buffer, 0, sizeof(_file_buffer));
     if (base.empty() == false) {
-      snprintf(_data_buffer, sizeof(_data_buffer), "%s/%s", base_dir, base.c_str());
+      snprintf(_file_buffer, sizeof(_file_buffer), "%s/%s", base_dir, base.c_str());
       return true;
     }
     return false;
@@ -262,72 +276,49 @@ struct SceneSerializationImpl {
     return emitter_spectrum;
   }
 
-  bool prepare_data(const SceneData& data) {
-    _buffer.clear();
+  bool write_data_to_file(const SceneData& data, std::ofstream& file) {
     _string_table.clear();
-    _chunks.clear();
-
-    _buffer.resize(sizeof(BinaryGeometryFileHeader));
-    BinaryGeometryFileHeader* header = reinterpret_cast<BinaryGeometryFileHeader*>(_buffer.data());
-    header->magic = kBinaryGeometryMagic;
-    header->version = kBinaryGeometryVersion;
-    header->total_size = 0;
 
     if (data.vertices.pos.empty() == false) {
-      ChunkInfo chunk = {kChunkIdVertexPositions, {}};
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.pos.size();
-      chunk.data.resize(data.vertices.pos.size() * sizeof(float3));
-      memcpy(chunk.data.data(), data.vertices.pos.data(), data.vertices.pos.size() * sizeof(float3));
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t vertex_count = data.vertices.pos.size();
+      if (!write_chunk_to_file(file, kChunkIdVertexPositions, &vertex_count, sizeof(uint64_t), data.vertices.pos.data(), data.vertices.pos.size() * sizeof(float3))) {
+        return false;
+      }
     }
 
     if (data.vertices.nrm.empty() == false) {
-      ChunkInfo chunk = {kChunkIdVertexNormals, {}};
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.nrm.size();
-      chunk.data.resize(data.vertices.nrm.size() * sizeof(float3));
-      memcpy(chunk.data.data(), data.vertices.nrm.data(), data.vertices.nrm.size() * sizeof(float3));
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t vertex_count = data.vertices.nrm.size();
+      if (!write_chunk_to_file(file, kChunkIdVertexNormals, &vertex_count, sizeof(uint64_t), data.vertices.nrm.data(), data.vertices.nrm.size() * sizeof(float3))) {
+        return false;
+      }
     }
 
     if (data.vertices.tex.empty() == false) {
-      ChunkInfo chunk = {kChunkIdVertexTexCoords, {}};
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.tex.size();
-      chunk.data.resize(data.vertices.tex.size() * sizeof(float2));
-      memcpy(chunk.data.data(), data.vertices.tex.data(), data.vertices.tex.size() * sizeof(float2));
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t vertex_count = data.vertices.tex.size();
+      if (!write_chunk_to_file(file, kChunkIdVertexTexCoords, &vertex_count, sizeof(uint64_t), data.vertices.tex.data(), data.vertices.tex.size() * sizeof(float2))) {
+        return false;
+      }
     }
 
     if (data.vertices.tan.empty() == false) {
-      ChunkInfo chunk = {kChunkIdVertexTangents, {}};
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.tan.size();
-      chunk.data.resize(chunk.data.size() * sizeof(float3));
-      memcpy(chunk.data.data(), data.vertices.tan.data(), data.vertices.tan.size() * sizeof(float3));
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t vertex_count = data.vertices.tan.size();
+      if (!write_chunk_to_file(file, kChunkIdVertexTangents, &vertex_count, sizeof(uint64_t), data.vertices.tan.data(), data.vertices.tan.size() * sizeof(float3))) {
+        return false;
+      }
     }
 
     if (data.vertices.btn.empty() == false) {
-      ChunkInfo chunk = {kChunkIdVertexBitangents, {}};
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.vertices.btn.size();
-      chunk.data.resize(data.vertices.btn.size() * sizeof(float3));
-      memcpy(chunk.data.data(), data.vertices.btn.data(), data.vertices.btn.size() * sizeof(float3));
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t vertex_count = data.vertices.btn.size();
+      if (!write_chunk_to_file(file, kChunkIdVertexBitangents, &vertex_count, sizeof(uint64_t), data.vertices.btn.data(), data.vertices.btn.size() * sizeof(float3))) {
+        return false;
+      }
     }
 
     {
-      ChunkInfo chunk = {kChunkIdTriangles, {}};
-
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.triangles.size();
-
-      chunk.data.resize(data.triangles.size() * sizeof(Triangle));
-      memcpy(chunk.data.data(), data.triangles.data(), data.triangles.size() * sizeof(Triangle));
-
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t triangle_count = data.triangles.size();
+      if (!write_chunk_to_file(file, kChunkIdTriangles, &triangle_count, sizeof(uint64_t), data.triangles.data(), data.triangles.size() * sizeof(Triangle))) {
+        return false;
+      }
     }
 
     {
@@ -355,36 +346,22 @@ struct SceneSerializationImpl {
         }
       }
 
-      ChunkInfo chunk = {kChunkIdMaterialIndexMapping, {}};
-
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = mappings.size();
-
-      chunk.data.resize(mappings.size() * sizeof(MaterialIndexMapping));
-      memcpy(chunk.data.data(), mappings.data(), mappings.size() * sizeof(MaterialIndexMapping));
-
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t mapping_count = mappings.size();
+      if (!write_chunk_to_file(file, kChunkIdMaterialIndexMapping, &mapping_count, sizeof(uint64_t), mappings.data(), mappings.size() * sizeof(MaterialIndexMapping))) {
+        return false;
+      }
     }
 
     {
-      ChunkInfo chunk = {kChunkIdMeshes, {}};
-
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.meshes.size();
-
-      chunk.data.resize(data.meshes.size() * sizeof(Mesh));
-      memcpy(chunk.data.data(), data.meshes.data(), data.meshes.size() * sizeof(Mesh));
-
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t mesh_count = data.meshes.size();
+      if (!write_chunk_to_file(file, kChunkIdMeshes, &mesh_count, sizeof(uint64_t), data.meshes.data(), data.meshes.size() * sizeof(Mesh))) {
+        return false;
+      }
     }
 
     {
-      ChunkInfo chunk = {kChunkIdMeshMapping, {}};
-
-      chunk.meta_data.resize(sizeof(uint64_t));
-      *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = data.mesh_mapping.size();
-      chunk.data.resize(data.mesh_mapping.size() * sizeof(MappingEntry));
-      MappingEntry* entries = reinterpret_cast<MappingEntry*>(chunk.data.data());
+      std::vector<MappingEntry> entries;
+      entries.resize(data.mesh_mapping.size());
       uint32_t index = 0;
       for (const auto& [name, id] : data.mesh_mapping) {
         entries[index].string_index = add_string(name);
@@ -392,10 +369,13 @@ struct SceneSerializationImpl {
         ++index;
       }
 
-      _chunks.emplace_back(std::move(chunk));
+      uint64_t mapping_count = data.mesh_mapping.size();
+      if (!write_chunk_to_file(file, kChunkIdMeshMapping, &mapping_count, sizeof(uint64_t), entries.data(), entries.size() * sizeof(MappingEntry))) {
+        return false;
+      }
     }
 
-    if (write_string_table() == false) {
+    if (write_string_table(file) == false) {
       return false;
     }
 
@@ -413,91 +393,70 @@ struct SceneSerializationImpl {
     return index;
   }
 
-  bool write_string_table() {
+  bool write_string_table(std::ofstream& file) {
     if (_string_table.empty()) {
       return true;  // Empty string table is OK
     }
 
-    ChunkInfo chunk = {kChunkIdStringTable, {}};
-
-    chunk.meta_data.resize(sizeof(uint64_t));
-    *reinterpret_cast<uint64_t*>(chunk.meta_data.data()) = _string_table.size();
+    uint64_t string_count = _string_table.size();
 
     size_t total_size = 0;
     for (const auto& str : _string_table) {
       total_size += sizeof(uint32_t) + str.size() + 1;  // length + string + null terminator
     }
 
-    chunk.data.resize(total_size);
-
+    std::vector<uint8_t> string_data(total_size);
     size_t offset = 0;
     for (const auto& str : _string_table) {
       uint32_t length = static_cast<uint32_t>(str.size() + 1);  // include null terminator
-      memcpy(chunk.data.data() + offset, &length, sizeof(uint32_t));
+      memcpy(string_data.data() + offset, &length, sizeof(uint32_t));
       offset += sizeof(uint32_t);
 
-      memcpy(chunk.data.data() + offset, str.c_str(), str.size() + 1);
+      memcpy(string_data.data() + offset, str.c_str(), str.size() + 1);
       offset += str.size() + 1;
     }
 
-    _chunks.emplace_back(std::move(chunk));
-    return true;
+    return write_chunk_to_file(file, kChunkIdStringTable, &string_count, sizeof(uint64_t), string_data.data(), string_data.size());
   }
 
-  bool serialize_chunk(const ChunkInfo& chunk) {
-    ChunkHeader header = {};
-    memcpy(header.id, chunk.id, sizeof(ChunkHeader::id));
-    header.size = chunk.data.size();
-    header.meta_size = static_cast<uint32_t>(chunk.meta_data.size());
-
-    size_t offset = _buffer.size();
-    _buffer.resize(offset + sizeof(ChunkHeader));
-    memcpy(_buffer.data() + offset, &header, sizeof(ChunkHeader));
-
-    if (chunk.meta_data.empty() == false) {
-      offset = _buffer.size();
-      _buffer.resize(offset + chunk.meta_data.size());
-      memcpy(_buffer.data() + offset, chunk.meta_data.data(), chunk.meta_data.size());
-    }
-
-    if (chunk.data.empty() == false) {
-      offset = _buffer.size();
-      _buffer.resize(offset + chunk.data.size());
-      memcpy(_buffer.data() + offset, chunk.data.data(), chunk.data.size());
-    }
-
-    return true;
-  }
-
-  bool write_to_file(const std::filesystem::path& path) {
-    if (write_string_table() == false) {
-      return false;
-    }
-
-    for (const auto& chunk : _chunks) {
-      if (serialize_chunk(chunk) == false) {
-        return false;
-      }
-    }
-
-    BinaryGeometryFileHeader* header = reinterpret_cast<BinaryGeometryFileHeader*>(_buffer.data());
-    header->total_size = _buffer.size();
-
+  bool write_to_file(const SceneData& data, const std::filesystem::path& path) {
     std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
     if (file.is_open() == false) {
       log::error("Failed to open file for writing: %s", path.string().c_str());
       return false;
     }
 
-    file.write(reinterpret_cast<const char*>(_buffer.data()), _buffer.size());
-    file.close();
-
-    if (file.good() == false) {
-      log::error("Failed to write data to file: %s", path.string().c_str());
+    // Write file header placeholder (will be updated at the end)
+    BinaryGeometryFileHeader header = {kBinaryGeometryMagic, kBinaryGeometryVersion, 0};
+    file.write(reinterpret_cast<const char*>(&header), sizeof(BinaryGeometryFileHeader));
+    if (!file.good()) {
+      log::error("Failed to write file header");
       return false;
     }
 
-    log::info("Binary geometry saved to %s (%zu bytes, %zu chunks)", path.string().c_str(), _buffer.size(), _chunks.size());
+    size_t chunk_count = 0;
+    auto start_pos = file.tellp();
+
+    // Write all data chunks directly to file
+    if (!write_data_to_file(data, file)) {
+      log::error("Failed to write data chunks");
+      return false;
+    }
+
+    // Update file header with total size
+    auto end_pos = file.tellp();
+    header.total_size = static_cast<uint64_t>(end_pos - std::streampos(0));
+
+    file.seekp(0);
+    file.write(reinterpret_cast<const char*>(&header), sizeof(BinaryGeometryFileHeader));
+    file.close();
+
+    if (file.good() == false) {
+      log::error("Failed to finalize file: %s", path.string().c_str());
+      return false;
+    }
+
+    log::info("Binary geometry saved to %s (%zu bytes)", path.string().c_str(), header.total_size);
 
     return true;
   }
@@ -1617,16 +1576,29 @@ struct SceneSerializationImpl {
       emission_spd_defined = true;
       auto map_ke_it = material.properties.find("map_Ke");
       if (map_ke_it != material.properties.end() && get_file(base_dir, map_ke_it->second)) {
-        mtl.emission.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+        mtl.emission.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+      }
+    }
+
+    // Handle map_Ke even without Ke parameter (for textured emission with default strength)
+    if (mtl.emission.image_index == kInvalidIndex) {
+      auto map_ke_it = material.properties.find("map_Ke");
+      if (map_ke_it != material.properties.end() && get_file(base_dir, map_ke_it->second)) {
+        is_emitter = true;
+        if (!emission_spd_defined) {
+          emission_spd = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
+          emission_spd_defined = true;
+        }
+        mtl.emission.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       }
     }
 
     if (get_param(material, "emitter")) {
       is_emitter = true;
       auto params = split_params(_data_buffer);
-      for (uint64_t i = 0, end = params.size(); i < end; ++i) {
+      for (uint64_t i = 0, end = params.size(); (i < end); ++i) {
         if ((strcmp(params[i], "image") == 0) && (i + 1 < end) && get_file(base_dir, params[i + 1])) {
-          mtl.emission.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+          mtl.emission.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
         } else if (strcmp(params[i], "twosided") == 0) {
           mtl.two_sided = 1u;
         } else if ((strcmp(params[i], "collimated") == 0) && (i + 1 < end)) {
@@ -1738,7 +1710,7 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.roughness.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.roughness.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         mtl.roughness.channel = static_cast<uint32_t>(channel);
       }
     }
@@ -1756,7 +1728,7 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.metalness.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.metalness.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         mtl.metalness.channel = static_cast<uint32_t>(channel);
       }
     }
@@ -1774,26 +1746,26 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.transmission.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.transmission.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         mtl.transmission.channel = static_cast<uint32_t>(channel);
       }
     }
 
     if (get_param(material, "map_Kd")) {
       if (get_file(base_dir, _data_buffer)) {
-        mtl.scattering.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.scattering.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
     if (get_param(material, "map_Ks")) {
       if (get_file(base_dir, _data_buffer)) {
-        mtl.reflectance.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.reflectance.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
     if (get_param(material, "map_Kt")) {
       if (get_file(base_dir, _data_buffer)) {
-        mtl.scattering.image_index = data.add_image(_data_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.scattering.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
@@ -2018,10 +1990,7 @@ SceneSerialization::~SceneSerialization() {
 }
 
 bool SceneSerialization::save_to_file(const SceneData& data, const std::filesystem::path& path) {
-  if (_private->prepare_data(data) == false) {
-    return false;
-  }
-  return _private->write_to_file(path);
+  return _private->write_to_file(data, path);
 }
 
 bool SceneSerialization::load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, const IORDatabase& database, TaskScheduler& scheduler) {

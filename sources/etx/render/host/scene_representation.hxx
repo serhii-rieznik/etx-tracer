@@ -20,6 +20,7 @@ struct SceneRepresentation {
   using MaterialMapping = std::unordered_map<std::string, uint32_t>;
   using MediumMapping = std::unordered_map<std::string, uint32_t>;
   using MeshMapping = std::unordered_map<std::string, uint32_t>;
+  using CameraMapping = std::unordered_map<std::string, uint32_t>;
 
   enum : uint32_t {
     LoadGeometry = 0u,
@@ -44,6 +45,7 @@ struct SceneRepresentation {
   const MaterialMapping& material_mapping() const;
   const MediumMapping& medium_mapping() const;
   const MeshMapping& mesh_mapping() const;
+  const CameraMapping& camera_mapping() const;
 
   uint32_t add_material(const char* name = nullptr);
   std::string rename_material(uint32_t index, const char* name);
@@ -52,6 +54,7 @@ struct SceneRepresentation {
   std::string rename_mesh(uint32_t index, const char* name);
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
   void update_medium_bounds();
+  void update_active_camera();
 
   uint32_t add_environment_emitter(const float3& color, uint32_t medium_index);
   uint32_t add_directional_emitter(const float3& direction, const float3& color, float angular_diameter_degrees, uint32_t medium_index);

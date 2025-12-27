@@ -31,10 +31,10 @@
 #include "mikktspace.h"
 
 #define TFALSE 0
-#define TTRUE 1
+#define TTRUE  1
 
 #ifndef M_PI
-#define M_PI 3.1415926535897932384626433832795
+# define M_PI 3.1415926535897932384626433832795
 #endif
 
 #define INTERNAL_RND_SORT_SEED 39871946
@@ -117,10 +117,10 @@ typedef struct {
 } SGroup;
 
 //
-#define MARK_DEGENERATE 1
+#define MARK_DEGENERATE    1
 #define QUAD_ONE_DEGEN_TRI 2
-#define GROUP_WITH_ANY 4
-#define ORIENT_PRESERVING 8
+#define GROUP_WITH_ANY     4
+#define ORIENT_PRESERVING  8
 
 typedef struct {
   int FaceNeighbors[3];
@@ -401,9 +401,9 @@ typedef struct {
 static const int g_iCells = 2048;
 
 #ifdef _MSC_VER
-#define NOINLINE __declspec(noinline)
+# define NOINLINE __declspec(noinline)
 #else
-#define NOINLINE __attribute__((noinline))
+# define NOINLINE __attribute__((noinline))
 #endif
 
 // it is IMPORTANT that this function is called to evaluate the hash since

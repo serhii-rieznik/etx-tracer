@@ -40,7 +40,7 @@ struct SceneSerialization {
   bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler);
 
  private:
-  ETX_DECLARE_PIMPL(SceneSerialization, 4096);
+  ETX_DECLARE_PIMPL(SceneSerialization, 5120);
 };
 
 }  // namespace etx

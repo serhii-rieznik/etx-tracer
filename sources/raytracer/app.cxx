@@ -73,6 +73,7 @@ void RTApplication::init() {
   ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
   ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
   ui.callbacks.clear_recent_files = std::bind(&RTApplication::on_clear_recent_files, this);
+  ui.callbacks.camera_activated = std::bind(&RTApplication::on_camera_activated, this, std::placeholders::_1);
 
   _options.load_from_file(env().file_in_data("options.json"));
 
@@ -165,7 +166,7 @@ void RTApplication::frame() {
   const auto frame_data = raytracing.film().layer(options.layer);
   render.update_image(frame_data);
 
-  ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping());
+  ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping(), scene.camera_mapping());
   render.end_frame();
 }
 
@@ -219,6 +220,9 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   if (scene.valid() == false) {
     return;
   }
+
+  // Reset scene hashes for clean state with new scene
+  integrator_thread.reset_scene_hashes();
 
   for (const auto& [type, options] : integrator_data.settings) {
     Integrator* integrator = integrator_type_to_instance(type, _integrator_array, std::size(_integrator_array));
@@ -494,6 +498,26 @@ void RTApplication::on_clear_recent_files() {
   _recent_files.clear();
   add_to_recent(_current_scene_file);
   save_options();
+}
+
+void RTApplication::on_camera_activated(uint32_t camera_index) {
+  if (camera_index >= scene.data().cameras.size()) {
+    return;
+  }
+
+  // Deactivate all cameras
+  for (auto& cam : scene.data().cameras) {
+    cam.active = false;
+  }
+
+  // Activate the selected camera
+  scene.data().cameras[camera_index].active = true;
+
+  // Update the active camera in the scene representation
+  scene.update_active_camera();
+
+  // Restart rendering with the new camera
+  integrator_thread.restart();
 }
 
 }  // namespace etx

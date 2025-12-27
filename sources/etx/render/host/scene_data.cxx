@@ -51,41 +51,55 @@ BoundingBox SceneData::compute_bounding_volumes() const {
 }
 
 SceneHashes SceneData::compute_hashes() const {
+  ETX_PROFILER_SCOPE();
   SceneHashes result = {};
 
-  // Vertex data (5 separate ArrayViews)
-  result.vertices_pos_hash = xxh64(vertices.pos.data(), vertices.pos.size() * sizeof(float3));
-  result.vertices_nrm_hash = xxh64(vertices.nrm.data(), vertices.nrm.size() * sizeof(float3));
-  result.vertices_tan_hash = xxh64(vertices.tan.data(), vertices.tan.size() * sizeof(float3));
-  result.vertices_btn_hash = xxh64(vertices.btn.data(), vertices.btn.size() * sizeof(float3));
-  result.vertices_tex_hash = xxh64(vertices.tex.data(), vertices.tex.size() * sizeof(float2));
+  // Always use parallel hashing
+  ETX_PROFILER_NAMED_SCOPE("parallel_hashing");
+
+  // Create tasks for parallel hash computation
+  struct HashTask {
+    const void* data;
+    size_t size;
+    uint64_t* result;
+  };
+
+  std::vector<HashTask> tasks;
+  tasks.reserve(32);  // Reserve more since we may have multiple tasks per resource type
+
+  // Vertex data
+  tasks.emplace_back(vertices.pos.data(), vertices.pos.size() * sizeof(float3), &result.vertices_pos_hash);
+  tasks.emplace_back(vertices.nrm.data(), vertices.nrm.size() * sizeof(float3), &result.vertices_nrm_hash);
+  tasks.emplace_back(vertices.tan.data(), vertices.tan.size() * sizeof(float3), &result.vertices_tan_hash);
+  tasks.emplace_back(vertices.btn.data(), vertices.btn.size() * sizeof(float3), &result.vertices_btn_hash);
+  tasks.emplace_back(vertices.tex.data(), vertices.tex.size() * sizeof(float2), &result.vertices_tex_hash);
 
   // Geometry data
-  result.triangles_hash = xxh64(triangles.data(), triangles.size() * sizeof(Triangle));
-  result.meshes_hash = xxh64(meshes.data(), meshes.size() * sizeof(Mesh));
+  tasks.emplace_back(triangles.data(), triangles.size() * sizeof(Triangle), &result.triangles_hash);
+  tasks.emplace_back(meshes.data(), meshes.size() * sizeof(Mesh), &result.meshes_hash);
 
   // Material data
-  result.materials_hash = xxh64(materials.data(), materials.size() * sizeof(Material));
-  result.spectra_hash = xxh64(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution));
+  tasks.emplace_back(materials.data(), materials.size() * sizeof(Material), &result.materials_hash);
+  tasks.emplace_back(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution), &result.spectra_hash);
 
   // Emitter data
-  result.emitter_profiles_hash = xxh64(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile));
+  tasks.emplace_back(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile), &result.emitter_profiles_hash);
 
-  // Resource data
-  // WARNING: Image structs contain ArrayView pointers to external storage
-  // This hash is NOT stable and may change even when image data hasn't changed
-  // TODO: Only hash stable metadata (dimensions, format) instead of full struct
-  result.images_hash = xxh64(images.as_array(), images.array_size() * sizeof(Image));
-
-  // WARNING: Medium structs contain DensityGrid with ArrayView pointers to external storage
-  // This hash is NOT stable and may change even when medium data hasn't changed
-  // TODO: Only hash stable metadata (type, indices) instead of full struct
-  result.mediums_hash = xxh64(mediums.as_array(), mediums.array_size() * sizeof(Medium));
+  // Resource data - hash structs only for now
+  tasks.emplace_back(images_vector.data(), images_vector.size() * sizeof(Image), &result.images_hash);
+  tasks.emplace_back(mediums_vector.data(), mediums_vector.size() * sizeof(Medium), &result.mediums_hash);
 
   // Non-ArrayView scene data
-  result.pixel_filter_hash = xxh64(&pixel_filter, sizeof(PixelFilter));
-  result.defaults_hash = xxh64(&defaults, sizeof(Scene::Defaults));
-  result.options_hash = xxh64(&options, sizeof(Scene::Options));
+  tasks.emplace_back(&pixel_filter, sizeof(PixelFilter), &result.pixel_filter_hash);
+  tasks.emplace_back(&defaults, sizeof(Scene::Defaults), &result.defaults_hash);
+  tasks.emplace_back(&options, sizeof(Scene::Options), &result.options_hash);
+
+  scheduler.execute_linear(tasks.size(), [&](uint32_t start, uint32_t end, uint32_t thread_id) {
+    for (uint32_t i = start; i < end; ++i) {
+      const auto& task = tasks[i];
+      *task.result = xxh64(task.data, task.size);
+    }
+  });
 
   return result;
 }

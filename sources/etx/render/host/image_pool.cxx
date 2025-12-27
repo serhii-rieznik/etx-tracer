@@ -49,6 +49,8 @@ struct ImagePoolImpl {
           image.pixels.f32 = {reinterpret_cast<float4*>(img_storage.data.data()), img.pixels.f32.count};
         } else if (img.format == Image::Format::RGBA8) {
           image.pixels.u8 = {reinterpret_cast<ubyte4*>(img_storage.data.data()), img.pixels.u8.count};
+        } else if (Image::is_compressed_bc_format(img.format)) {
+          image.pixels.compressed = {img_storage.data.data(), static_cast<uint32_t>(img_storage.data.size())};
         }
       }
     }
@@ -308,6 +310,8 @@ struct ImagePoolImpl {
           image.pixels.f32 = {reinterpret_cast<float4*>(storage[i].data.data()), static_cast<uint32_t>(storage[i].data.size() / sizeof(float4))};
         } else if (image.format == Image::Format::RGBA8) {
           image.pixels.u8 = {reinterpret_cast<ubyte4*>(storage[i].data.data()), static_cast<uint32_t>(storage[i].data.size() / sizeof(ubyte4))};
+        } else if (Image::is_compressed_bc_format(image.format)) {
+          image.pixels.compressed = {storage[i].data.data(), static_cast<uint32_t>(storage[i].data.size())};
         }
 
         for (uint32_t i = 0, e = image.isize.x * image.isize.y; i < e; ++i) {
@@ -421,6 +425,13 @@ struct ImagePoolImpl {
       auto* pixels_f32 = reinterpret_cast<float4*>(img_storage.data.data());
       ETX_CRITICAL(pixels_f32);
       memcpy(pixels_f32, source_data.data(), source_data.size());
+#if ETX_STORE_COMPRESSED_BC
+    } else if (Image::is_compressed_bc_format(img.format)) {
+      // Store compressed BC data directly - no decompression at load time
+      img_storage.data = std::move(source_data);
+      img.data_size = static_cast<uint32_t>(img_storage.data.size());
+      // TODO: Setup compressed data view for runtime decompression during sampling
+#endif
     } else {
       ETX_FAIL_FMT("Unsupported image format %u", img.format);
       return;
@@ -485,6 +496,7 @@ struct ImagePoolImpl {
   void free_image(Image& img) {
     img.pixels.f32 = {};
     img.pixels.u8 = {};
+    img.pixels.compressed = {};
     img.x_distributions = {};
     img.y_distribution = {};
 

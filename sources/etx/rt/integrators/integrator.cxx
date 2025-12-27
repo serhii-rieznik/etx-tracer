@@ -49,6 +49,11 @@ struct IntegratorThreadImpl {
     messages.push_back(msg);
   }
 
+  void reset_scene_hashes() {
+    current_scene_hashes = {};
+    current_camera_hash = 0;
+  }
+
   void check_and_commit_scene_changes() {
     scene_representation.data().images.load_images(raytracing.scheduler());
     SceneHashes new_hashes = scene_representation.data().compute_hashes();
@@ -174,15 +179,20 @@ void IntegratorThread::restart() {
   });
 }
 
+void IntegratorThread::reset_scene_hashes() {
+  _private->reset_scene_hashes();
+}
+
 void IntegratorThread::update() {
   ETX_PROFILER_SCOPE();
-  _private->process_messages();
 
-  if (_private->integrator == nullptr)
+  if (_private->integrator == nullptr) {
+    _private->process_messages();
     return;
+  }
 
-  // Check for scene changes and commit if needed
   _private->check_and_commit_scene_changes();
+  _private->process_messages();
 
   _private->integrator->update();
   _private->latest_state = _private->integrator->state();

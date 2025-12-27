@@ -142,6 +142,8 @@ struct IntegratorThread {
   void stop(Integrator::Stop);
   void restart();
 
+  void reset_scene_hashes();
+
  private:
   ETX_DECLARE_PIMPL(IntegratorThread, 1024);
 };

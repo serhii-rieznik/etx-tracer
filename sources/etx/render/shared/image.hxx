@@ -3,6 +3,17 @@
 #include <etx/render/shared/distribution.hxx>
 #include <etx/render/shared/spectrum.hxx>
 
+extern "C" {
+#define BCDEC_BC4BC5_PRECISE
+#include <bcdec.h>
+}
+
+// Compile-time flag to control DDS BC texture loading behavior
+// Default: disabled (decompress BC to RGBA8/RGBA32F at load time)
+// When enabled: store compressed BC data directly (decompress at runtime during sampling)
+// Note: BC format support is always available for runtime sampling
+#define ETX_STORE_COMPRESSED_BC 0
+
 namespace etx {
 
 struct ImageStorage {
@@ -28,6 +39,20 @@ struct Image {
     Undefined,
     RGBA32F,
     RGBA8,
+    // Compressed BC formats - always available for sampling support
+    // Loading behavior controlled by ETX_STORE_COMPRESSED_BC flag
+    BC1,
+    BC1_SRGB,
+    BC2,
+    BC2_SRGB,
+    BC3,
+    BC3_SRGB,
+    BC4,
+    BC5,
+    BC6H,
+    BC6H_SIGNED,
+    BC7,
+    BC7_SRGB,
   };
 
   enum : uint32_t {
@@ -51,10 +76,12 @@ struct Image {
     uint32_t row_1 = 0;
   };
 
-  // Runtime pixel access (f32/u8 views into external storage) - RENDERING
+  // Runtime pixel access (f32/u8/compressed views into external storage) - RENDERING
+  // Compressed BC data view is always available for sampling support
   union {
     ArrayView<float4> f32;
     ArrayView<ubyte4> u8;
+    ArrayView<uint8_t> compressed;  // BC compressed data
   } pixels = {};
 
   // View to x distribution data (points to external storage)
@@ -115,11 +142,179 @@ struct Image {
     return g.p00.w + g.p01.w + g.p10.w + g.p11.w;
   }
 
+  static ETX_GPU_CODE bool is_compressed_bc_format(Format format) {
+    return format == Format::BC1 || format == Format::BC1_SRGB || format == Format::BC2 || format == Format::BC2_SRGB || format == Format::BC3 || format == Format::BC3_SRGB ||
+           format == Format::BC4 || format == Format::BC5 || format == Format::BC6H || format == Format::BC6H_SIGNED || format == Format::BC7 || format == Format::BC7_SRGB;
+  }
+
+  static ETX_GPU_CODE uint32_t get_bc_block_size(Format format) {
+    switch (format) {
+      case Format::BC1:
+      case Format::BC1_SRGB:
+      case Format::BC4:
+        return 8;  // 8 bytes
+      case Format::BC2:
+      case Format::BC2_SRGB:
+      case Format::BC3:
+      case Format::BC3_SRGB:
+      case Format::BC5:
+      case Format::BC6H:
+      case Format::BC6H_SIGNED:
+      case Format::BC7:
+      case Format::BC7_SRGB:
+        return 16;  // 16 bytes
+      default:
+        return 0;
+    }
+  }
+
+  static ETX_GPU_CODE bool is_bc_srgb_format(Format format) {
+    return format == Format::BC1_SRGB || format == Format::BC2_SRGB || format == Format::BC3_SRGB || format == Format::BC7_SRGB;
+  }
+
+  static ETX_GPU_CODE bool is_bc_signed_format(Format format) {
+    return format == Format::BC6H_SIGNED;
+  }
+
+  static ETX_GPU_CODE void decompress_bc_to_rgba(Format format, const uint8_t* block_data, uint8_t decompressed_rgba[64], bool is_signed = false) {
+    float decompressed_float[48] = {};
+
+    switch (format) {
+      case Format::BC1:
+      case Format::BC1_SRGB:
+        bcdec_bc1(block_data, decompressed_rgba, 4 * 4);
+        break;
+      case Format::BC2:
+      case Format::BC2_SRGB:
+        bcdec_bc2(block_data, decompressed_rgba, 4 * 4);
+        break;
+      case Format::BC3:
+      case Format::BC3_SRGB:
+        bcdec_bc3(block_data, decompressed_rgba, 4 * 4);
+        break;
+      case Format::BC4:
+        bcdec_bc4(block_data, decompressed_rgba, 4 * 1, is_signed ? 1 : 0);
+        for (uint32_t p = 0; p < 16; ++p) {
+          uint8_t r = decompressed_rgba[p];
+          decompressed_rgba[p * 4 + 0] = r;
+          decompressed_rgba[p * 4 + 1] = r;
+          decompressed_rgba[p * 4 + 2] = r;
+          decompressed_rgba[p * 4 + 3] = 255;
+        }
+        break;
+      case Format::BC5: {
+        float bc5_float[32] = {};
+        bcdec_bc5_float(block_data, bc5_float, 4 * 2, is_signed ? 1 : 0);
+        for (uint32_t p = 0; p < 16; ++p) {
+          float r = bc5_float[p * 2 + 0];
+          float g = bc5_float[p * 2 + 1];
+          decompressed_rgba[p * 4 + 0] = static_cast<uint8_t>(max(0.0f, min(255.0f, r * 255.0f)));
+          decompressed_rgba[p * 4 + 1] = static_cast<uint8_t>(max(0.0f, min(255.0f, g * 255.0f)));
+          decompressed_rgba[p * 4 + 2] = 0;
+          decompressed_rgba[p * 4 + 3] = 255;
+        }
+        break;
+      }
+      case Format::BC6H:
+      case Format::BC6H_SIGNED:
+        for (uint32_t i = 0; i < 64; ++i) {
+          decompressed_rgba[i] = 128;
+        }
+        break;
+      case Format::BC7:
+      case Format::BC7_SRGB:
+        bcdec_bc7(block_data, decompressed_rgba, 4 * 4);
+        break;
+      default:
+        // Unknown format - fill with black
+        for (uint32_t i = 0; i < 64; ++i) {
+          decompressed_rgba[i] = (i % 4 == 3) ? 255 : 0;  // RGBA(0,0,0,255)
+        }
+        break;
+    }
+  }
+
+  ETX_GPU_CODE float4 decompress_bc_pixel(uint32_t pixel_index) const {
+    uint32_t pixel_x = pixel_index % isize.x;
+    uint32_t pixel_y = pixel_index / isize.x;
+
+    uint32_t corrected_pixel_y = pixel_y;
+
+    if (format == Format::BC5) {
+      uint32_t blocks_y = (isize.y + 3) / 4;
+      uint32_t block_y = pixel_y / 4;
+      uint32_t local_y = pixel_y % 4;
+      corrected_pixel_y = (blocks_y - 1 - block_y) * 4 + (3 - local_y);
+    } else {
+      corrected_pixel_y = isize.y - 1 - pixel_y;
+    }
+
+    uint32_t block_x = pixel_x / 4;
+    uint32_t block_y = corrected_pixel_y / 4;
+    uint32_t local_x = pixel_x % 4;
+    uint32_t local_y = corrected_pixel_y % 4;
+
+    uint32_t blocks_per_row = (isize.x + 3) / 4;
+    uint32_t block_index = block_y * blocks_per_row + block_x;
+    uint32_t block_size = get_bc_block_size(format);
+    uint32_t block_offset = block_index * block_size;
+
+    const uint8_t* block_data = pixels.compressed.a + block_offset;
+
+    float4 result;
+    if (format == Format::BC6H || format == Format::BC6H_SIGNED) {
+      // Use the correct signed/unsigned decompression based on format detected during loading
+      float decompressed_float[48] = {};
+      bcdec_bc6h_float(block_data, decompressed_float, 4 * 3, is_bc_signed_format(format) ? 1 : 0);
+
+      uint32_t pixel_offset = (local_y * 4 + local_x) * 3;
+      result = {decompressed_float[pixel_offset + 0], decompressed_float[pixel_offset + 1], decompressed_float[pixel_offset + 2], 1.0f};
+    } else {
+      uint8_t decompressed_rgba[64] = {};
+      decompress_bc_to_rgba(format, block_data, decompressed_rgba, is_bc_signed_format(format));
+
+      uint32_t pixel_offset = (local_y * 4 + local_x) * 4;
+      result = {decompressed_rgba[pixel_offset + 0] / 255.0f, decompressed_rgba[pixel_offset + 1] / 255.0f, decompressed_rgba[pixel_offset + 2] / 255.0f,
+        decompressed_rgba[pixel_offset + 3] / 255.0f};
+    }
+
+    if (format == Format::BC5) {
+      float r = result.x;
+      float g = result.y;
+      float nx = r * 2.0f - 1.0f;
+      float ny = g * 2.0f - 1.0f;
+      float nz = 1.0f;
+
+      float length = sqrtf(nx * nx + ny * ny + nz * nz);
+      if (length > 0.0f) {
+        nx /= length;
+        ny /= length;
+        nz /= length;
+      }
+
+      result = {nx * 0.5f + 0.5f, ny * 0.5f + 0.5f, nz * 0.5f + 0.5f, 1.0f};
+    }
+
+    // Apply sRGB to linear conversion if needed (but not for BC5 normal maps)
+    if (is_bc_srgb_format(format)) {
+      result.x = gamma_to_linear(result.x);
+      result.y = gamma_to_linear(result.y);
+      result.z = gamma_to_linear(result.z);
+    }
+
+    return result;
+  }
+
   ETX_GPU_CODE float4 pixel(uint32_t i) const {
     ETX_ASSERT(format != Format::Undefined);
 
     if (format == Format::RGBA8)
       return to_float4(pixels.u8[i]);
+
+    // Compressed BC formats - decompress on-the-fly for sampling
+    if (is_compressed_bc_format(format)) {
+      return decompress_bc_pixel(i);
+    }
 
     return pixels.f32[i];
   }
