@@ -32,6 +32,7 @@ struct IntegratorThreadImpl {
   Integrator* integrator = nullptr;
   Integrator::State latest_state = Integrator::State::Stopped;
   Integrator::Status latest_status = {};
+  std::atomic<bool> scene_updates_locked = {false};
 
   IntegratorThreadImpl(SceneRepresentation& scene_rep, Raytracing& rt)
     : scene_representation(scene_rep)
@@ -56,14 +57,18 @@ struct IntegratorThreadImpl {
 
   void check_and_commit_scene_changes() {
     scene_representation.data().images.load_images(raytracing.scheduler());
-    SceneHashes new_hashes = scene_representation.data().compute_hashes();
 
-    UpdateFlags changes = new_hashes.compare(current_scene_hashes);
+    SceneHashes new_hashes = {};
+    UpdateFlags changes = {};
+    if (scene_updates_locked.load() == false) {
+      new_hashes = scene_representation.data().compute_hashes();
+      changes = new_hashes.compare(current_scene_hashes);
+    }
+
     const auto& camera = scene_representation.camera();
     uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
-    bool camera_changed = (current_camera_hash != new_camera_hash);
 
-    if (changes.any() || camera_changed) {
+    if (changes.any() || (current_camera_hash != new_camera_hash)) {
       if ((integrator != nullptr) && (latest_state == Integrator::State::Running)) {
         integrator->stop(Integrator::Stop::Immediate);
         latest_state = integrator->state();
@@ -181,6 +186,14 @@ void IntegratorThread::restart() {
 
 void IntegratorThread::reset_scene_hashes() {
   _private->reset_scene_hashes();
+}
+
+void IntegratorThread::set_scene_updates_locked(bool locked) {
+  _private->scene_updates_locked.store(locked);
+}
+
+bool IntegratorThread::scene_updates_locked() const {
+  return _private->scene_updates_locked.load();
 }
 
 void IntegratorThread::update() {

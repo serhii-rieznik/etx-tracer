@@ -25,7 +25,7 @@ struct UI {
   void cleanup();
 
   void build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras);
+    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras, const IntegratorThread* integrator_thread);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
@@ -45,6 +45,7 @@ struct UI {
     float button_size = {};
     float input_size = {};
     bool has_integrator = false;
+    const IntegratorThread* integrator_thread = nullptr;
   };
 
   ViewOptions view_options() const;
@@ -81,6 +82,7 @@ struct UI {
     std::function<void(uint32_t)> view_scene;
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
+    std::function<void(bool)> scene_updates_locked_changed;
   } callbacks;
 
  private:

@@ -904,7 +904,8 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
 constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
 
 void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras) {
+  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras,
+  const IntegratorThread* integrator_thread) {
   ETX_PROFILER_SCOPE();
 
   if (_selection.kind == SelectionKind::None) {
@@ -918,6 +919,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
   ctx.button_size = 32.0f;
   ctx.input_size = 64.0f;
   ctx.has_integrator = (_current_integrator != nullptr);
+  ctx.integrator_thread = integrator_thread;
 
   ctx.emitter_primary_instance.clear();
   // No longer need primary instance mapping since we work directly with profiles
@@ -1695,6 +1697,19 @@ void UI::build_toolbar(const BuildContext& ctx) {
     }
     if (state_available[0] == false) {
       ImGui::EndDisabled();
+    }
+
+    ImGui::SameLine(0.0f, ctx.wpadding.x);
+
+    {
+      bool scene_locked = ctx.integrator_thread && ctx.integrator_thread->scene_updates_locked();
+      ImGui::PushStyleColor(ImGuiCol_Button, scene_locked ? kToolbarTerminateColor : kToolbarLaunchColor);
+      if (ImGui::Button(scene_locked ? "  Unlock Scene  " : "  Lock Scene  ", {0.0f, ctx.button_size})) {
+        if (callbacks.scene_updates_locked_changed) {
+          callbacks.scene_updates_locked_changed(!scene_locked);
+        }
+      }
+      ImGui::PopStyleColor(1);
     }
 
     ImGui::SameLine(0.0f, ctx.wpadding.x);

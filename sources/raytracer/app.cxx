@@ -74,6 +74,7 @@ void RTApplication::init() {
   ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
   ui.callbacks.clear_recent_files = std::bind(&RTApplication::on_clear_recent_files, this);
   ui.callbacks.camera_activated = std::bind(&RTApplication::on_camera_activated, this, std::placeholders::_1);
+  ui.callbacks.scene_updates_locked_changed = std::bind(&RTApplication::on_scene_updates_locked_changed, this, std::placeholders::_1);
 
   _options.load_from_file(env().file_in_data("options.json"));
 
@@ -166,7 +167,7 @@ void RTApplication::frame() {
   const auto frame_data = raytracing.film().layer(options.layer);
   render.update_image(frame_data);
 
-  ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping(), scene.camera_mapping());
+  ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping(), scene.camera_mapping(), &integrator_thread);
   render.end_frame();
 }
 
@@ -518,6 +519,10 @@ void RTApplication::on_camera_activated(uint32_t camera_index) {
 
   // Restart rendering with the new camera
   integrator_thread.restart();
+}
+
+void RTApplication::on_scene_updates_locked_changed(bool locked) {
+  integrator_thread.set_scene_updates_locked(locked);
 }
 
 }  // namespace etx

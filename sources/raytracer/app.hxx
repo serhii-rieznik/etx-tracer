@@ -62,6 +62,7 @@ struct RTApplication {
   void on_view_scene(uint32_t direction);
   void on_clear_recent_files();
   void on_camera_activated(uint32_t camera_index);
+  void on_scene_updates_locked_changed(bool locked);
 
  private:
   void add_to_recent(const std::string&);
