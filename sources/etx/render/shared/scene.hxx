@@ -14,6 +14,15 @@
 namespace etx {
 
 struct ETX_ALIGNED Scene {
+  enum class LightSampling : uint32_t {
+    Uniform,
+    FromDistribution,
+    RIS_Uniform,
+    RIS_FromDistribution,
+
+    Count,
+  };
+
   struct Properties {
     enum : uint32_t {
       Committed,
@@ -43,6 +52,7 @@ struct ETX_ALIGNED Scene {
     float radiance_clamp = 0.0f;
     uint32_t strategy_flags = 1u << 0u | 1u << 1u | 1u << 2u | 1u << 3u | 1u << 4u;  // DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices
     bool properties[Properties::Count] = {};
+    LightSampling light_sampling = LightSampling::RIS_FromDistribution;
   } options = {};
 
   struct {
@@ -103,6 +113,17 @@ struct ETX_ALIGNED Scene {
   }
   bool blue_noise() const {
     return options.properties[Properties::BlueNoise];
+  }
+  LightSampling light_sampling_method() const {
+    return options.light_sampling;
+  }
+
+  bool reservoir_sampling() const {
+    return (options.light_sampling == LightSampling::RIS_Uniform) || (options.light_sampling == LightSampling::RIS_FromDistribution);
+  }
+
+  bool sample_lights_from_distribution() const {
+    return (options.light_sampling == LightSampling::FromDistribution) || (options.light_sampling == LightSampling::RIS_FromDistribution);
   }
   ETX_GPU_CODE bool strategy_enabled(uint32_t flag) const {
     return (options.strategy_flags & flag) != 0u;

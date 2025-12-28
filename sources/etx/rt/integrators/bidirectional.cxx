@@ -1321,8 +1321,7 @@ struct CPUBidirectionalImpl : public Task {
     if (invalid_path_length || (enable_connect_to_light == false) || (mode == Mode::LightTracing))
       return {spect, 0.0f};
 
-    uint32_t emitter_index = sample_emitter_index(scene, smp.fixed_w);
-    auto emitter_sample = sample_emitter(spect, emitter_index, {smp.fixed_u, smp.fixed_v}, z_curr.intersection.pos, rt.scene());
+    auto emitter_sample = sample_emitter(scene, spect, smp, z_curr.intersection.pos);
     if (emitter_sample.value.is_zero() || (emitter_sample.pdf_dir == 0.0f)) {
       return {spect, 0.0f};
     }

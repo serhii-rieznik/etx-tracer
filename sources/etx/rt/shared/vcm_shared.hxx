@@ -611,8 +611,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
     return {state.spect, 0.0f};
 
   float3 sample_pos = camera_at_medium ? medium_pos : isect->pos;
-  uint32_t emitter_index = sample_emitter_index(scene, state.sampler.fixed_w);
-  auto emitter_sample = sample_emitter(state.spect, emitter_index, {state.sampler.fixed_u, state.sampler.fixed_v}, sample_pos, scene);
+  auto emitter_sample = sample_emitter(scene, state.spect, state.sampler, sample_pos);
   if (emitter_sample.pdf_dir <= 0.0f)
     return {state.spect, 0.0f};
 
@@ -652,7 +651,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
   float w_light = 0.0f;
   if (emitter_sample.is_delta == false) {
     if (camera_at_medium) {
-      w_light = (scatter.value) / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
+      w_light = scatter.value / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
     } else {
       const auto& mat = scene.materials[isect->material_index];
       BSDFData data = {state.spect, state.medium_index, PathSource::Camera, *isect, isect->w_i};

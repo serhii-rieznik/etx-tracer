@@ -25,7 +25,8 @@ struct UI {
   void cleanup();
 
   void build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras, const IntegratorThread* integrator_thread);
+    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras,
+    const IntegratorThread* integrator_thread);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
@@ -38,7 +39,7 @@ struct UI {
   struct BuildContext {
     std::vector<int32_t> emitter_primary_instance;
     std::function<const char*(uint32_t)> material_name_from_index;
-    std::function<void(uint32_t, const char*, std::function<void()>&&)> with_window;
+    std::function<void(uint32_t, const char*, bool, std::function<void()>&&)> with_window;
     float2 wpadding = {};
     float2 fpadding = {};
     float text_size = {};
@@ -46,6 +47,7 @@ struct UI {
     float input_size = {};
     bool has_integrator = false;
     const IntegratorThread* integrator_thread = nullptr;
+    bool scene_locked = false;
   };
 
   ViewOptions view_options() const;
@@ -129,7 +131,7 @@ struct UI {
   bool can_navigate_back() const;
   bool can_navigate_forward() const;
 
-  void build_main_menu_bar(const std::vector<std::string>& recent_files);
+  void build_main_menu_bar(const std::vector<std::string>& recent_files, bool scene_locked);
   void build_toolbar(const BuildContext& ctx);
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const SceneRepresentation::MaterialMapping& materials,
     const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras);
@@ -238,6 +240,9 @@ struct UI {
   uint64_t _camera_mapping_hash = 0ull;
   const IORDatabase* _ior_database = nullptr;
   bool _auto_open_emission_section = false;
+  double _last_fps_update_time = 0.0;
+  uint32_t _frame_count = 0;
+  float _current_fps = 0.0f;
 };
 
 }  // namespace etx

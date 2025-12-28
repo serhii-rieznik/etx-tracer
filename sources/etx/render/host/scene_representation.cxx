@@ -939,6 +939,16 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
       } else if (json_get_bool(i, "blue_noise", bool_value)) {
         _private->data.options.properties[Scene::Properties::BlueNoise] = bool_value;
+      } else if (json_get_string(i, "light_sampling", str_value)) {
+        if (str_value == "uniform") {
+          _private->data.options.light_sampling = Scene::LightSampling::Uniform;
+        } else if (str_value == "from_distribution") {
+          _private->data.options.light_sampling = Scene::LightSampling::FromDistribution;
+        } else if (str_value == "ris_uniform") {
+          _private->data.options.light_sampling = Scene::LightSampling::RIS_Uniform;
+        } else if (str_value == "ris_from_distribution") {
+          _private->data.options.light_sampling = Scene::LightSampling::RIS_FromDistribution;
+        }
       } else if (key == "strategies" && obj.is_object()) {
         uint32_t strategy_flags = Scene::Strategy::Default;
         for (auto strat_it = obj.begin(); strat_it != obj.end(); ++strat_it) {
@@ -1287,6 +1297,24 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   js["spectral"] = impl->data.options.properties[Scene::Properties::Spectral];
   js["multiple_importance_sampling"] = impl->data.options.properties[Scene::Properties::MultipleImportanceSampling];
   js["blue_noise"] = impl->data.options.properties[Scene::Properties::BlueNoise];
+
+  switch (impl->data.options.light_sampling) {
+    case Scene::LightSampling::Uniform:
+      js["light_sampling"] = "uniform";
+      break;
+    case Scene::LightSampling::FromDistribution:
+      js["light_sampling"] = "from_distribution";
+      break;
+    case Scene::LightSampling::RIS_Uniform:
+      js["light_sampling"] = "ris_uniform";
+      break;
+    case Scene::LightSampling::RIS_FromDistribution:
+      js["light_sampling"] = "ris_from_distribution";
+      break;
+    default:
+      js["light_sampling"] = "ris_from_distribution";
+      break;
+  }
 
   nlohmann::json strategies = nlohmann::json::object();
   strategies["direct_hit"] = ((impl->data.options.strategy_flags & Scene::Strategy::DirectHit) == Scene::Strategy::DirectHit);

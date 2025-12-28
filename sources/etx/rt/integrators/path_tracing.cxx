@@ -19,7 +19,6 @@ struct CPUPathTracingImpl : public Task {
   TimeMeasure iteration_time = {};
   Task::Handle current_task = {};
   Integrator::Status status = {};
-  PTOptions options = {};
 
   std::atomic<uint32_t> pixels_processed = {};
   std::atomic<Integrator::State>* state = nullptr;
@@ -32,12 +31,6 @@ struct CPUPathTracingImpl : public Task {
   }
 
   void start(const Options& opt) {
-    const auto& scene = rt.scene();
-    options.direct = scene.strategy_enabled(Scene::Strategy::DirectHit);
-    options.nee = scene.strategy_enabled(Scene::Strategy::ConnectToLight);
-    options.mis = scene.multiple_importance_sampling();
-    options.blue_noise = scene.blue_noise();
-
     status = {};
     total_time = {};
     iteration_time = {};
@@ -59,9 +52,9 @@ struct CPUPathTracingImpl : public Task {
       }
 
       pixels_processed++;
-      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, i, status.current_iteration, scene.spectral(), options.blue_noise);
+      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, i, status.current_iteration, scene.spectral(), scene.blue_noise());
 
-      while ((state->load() != Integrator::State::Stopped) && run_path_iteration(scene, options, rt, payload)) {
+      while ((state->load() != Integrator::State::Stopped) && run_path_iteration(scene, rt, payload)) {
         ETX_VALIDATE(payload.accumulated);
       }
 

@@ -249,23 +249,98 @@ ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distributi
   return (emitter.spectrum_weight * emitter.additional_weight) / dist.total_weight;
 }
 
-ETX_GPU_CODE uint32_t sample_emitter_index(const Scene& scene, float rnd) {
-  if ((scene.emitter_instances.count == 0) || (scene.emitters_distribution.values.count == 0)) {
-    return kInvalidIndex;
+ETX_GPU_CODE float emitter_ris_candidate_weight(const EmitterSample& emitter_sample, const float3& source_position) {
+  float radiance_weight = emitter_sample.value.luminance();
+  if (radiance_weight <= 0.0f) {
+    return 0.0f;
   }
-  float pdf_sample = 0.0f;
-  uint32_t dist_index = scene.emitters_distribution.sample(rnd, pdf_sample);
-  ETX_ASSERT(dist_index < scene.emitters_distribution.values.count);
-  return scene.emitters_distribution.values[dist_index].reference;
+
+  float3 to_emitter = emitter_sample.origin - source_position;
+  float len_sq = dot(to_emitter, to_emitter);
+  float emitter_orientation = dot(emitter_sample.normal, -to_emitter);
+  if ((emitter_orientation <= 0.0f) || (len_sq <= kEpsilon)) {
+    return 0.0f;
+  }
+
+  float distance_weight = 1.0f / fmaxf(1.0f, len_sq);
+  return radiance_weight * distance_weight * (emitter_orientation / sqrtf(len_sq));
 }
 
-ETX_GPU_CODE EmitterSample sample_emitter(SpectralQuery spect, uint32_t emitter_index, const float2& smp, const float3& from_point, const Scene& scene) {
-  if ((scene.emitter_instances.count == 0) || (emitter_index == kInvalidIndex) || (emitter_index >= scene.emitter_instances.count)) {
+ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, SpectralQuery spect, Sampler& smp, const float3& from_point) {
+  if (scene.emitter_instances.count == 0) {
     return {};
   }
+
+  auto sampling_method = scene.light_sampling_method();
+
+  if ((sampling_method == Scene::LightSampling::RIS_Uniform) || (sampling_method == Scene::LightSampling::RIS_FromDistribution)) {
+    // RIS sampling
+    constexpr uint32_t kCandidateCount = 16;
+
+    float weight_sum = 0.0f;
+    float selected_weight = 0.0f;
+    EmitterSample selected_sample = {};
+
+    for (uint32_t i = 0; i < kCandidateCount; ++i) {
+      float pdf_sample = 0.0f;
+      uint32_t emitter_index = kInvalidIndex;
+
+      if (sampling_method == Scene::LightSampling::RIS_FromDistribution) {
+        // Sample from distribution
+        uint32_t dist_index = scene.emitters_distribution.sample(smp.next(), pdf_sample);
+        ETX_ASSERT(dist_index < scene.emitters_distribution.values.count);
+        emitter_index = scene.emitters_distribution.values[dist_index].reference;
+      } else {
+        // Uniform sampling
+        emitter_index = uint32_t(smp.next() * float(scene.emitter_instances.count));
+        pdf_sample = 1.0f / float(scene.emitter_instances.count);
+      }
+
+      const auto& emitter = scene.emitter_instances[emitter_index];
+      EmitterSample sample = emitter_sample_in(emitter, spect, from_point, scene, smp.next_2d());
+      sample.pdf_sample = pdf_sample;
+      sample.emitter_index = emitter_index;
+      sample.triangle_index = emitter.triangle_index;
+      sample.is_delta = emitter.is_delta();
+
+      float candidate_weight = emitter_ris_candidate_weight(sample, from_point);
+      float weight = candidate_weight / pdf_sample;
+
+      weight_sum += weight;
+      if (smp.next() * weight_sum < weight) {
+        selected_sample = sample;
+        selected_weight = weight;
+      }
+    }
+
+    if (selected_weight <= 0.0f)
+      return {};
+
+    selected_sample.value *= weight_sum / (float(kCandidateCount) * selected_weight);
+    return selected_sample;
+  }
+
+  // Non-RIS sampling
+  float pdf_sample = 0.0f;
+  uint32_t emitter_index = kInvalidIndex;
+
+  if (sampling_method == Scene::LightSampling::FromDistribution) {
+    // Sample from distribution
+    if (scene.emitters_distribution.values.count == 0) {
+      return {};
+    }
+    uint32_t dist_index = scene.emitters_distribution.sample(smp.next(), pdf_sample);
+    ETX_ASSERT(dist_index < scene.emitters_distribution.values.count);
+    emitter_index = scene.emitters_distribution.values[dist_index].reference;
+  } else {
+    // Uniform sampling
+    emitter_index = uint32_t(smp.next() * float(scene.emitter_instances.count));
+    pdf_sample = 1.0f / float(scene.emitter_instances.count);
+  }
+
   const auto& emitter = scene.emitter_instances[emitter_index];
-  EmitterSample sample = emitter_sample_in(emitter, spect, from_point, scene, smp);
-  sample.pdf_sample = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+  EmitterSample sample = emitter_sample_in(emitter, spect, from_point, scene, smp.next_2d());
+  sample.pdf_sample = pdf_sample;
   sample.emitter_index = emitter_index;
   sample.triangle_index = emitter.triangle_index;
   sample.is_delta = emitter.is_delta();

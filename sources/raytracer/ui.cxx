@@ -920,11 +920,19 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
   ctx.input_size = 64.0f;
   ctx.has_integrator = (_current_integrator != nullptr);
   ctx.integrator_thread = integrator_thread;
+  ctx.scene_locked = integrator_thread && integrator_thread->scene_updates_locked();
+
+  _frame_count++;
+  _last_fps_update_time += dt;
+  if (_last_fps_update_time >= 0.5) {
+    _current_fps = static_cast<float>(_frame_count) / static_cast<float>(_last_fps_update_time);
+    _frame_count = 0;
+    _last_fps_update_time = 0.0;
+  }
 
   ctx.emitter_primary_instance.clear();
-  // No longer need primary instance mapping since we work directly with profiles
 
-  ctx.with_window = [&](uint32_t flag, const char* title, std::function<void()>&& body) {
+  ctx.with_window = [&](uint32_t flag, const char* title, bool disable_when_locked, std::function<void()>&& body) {
     if ((_ui_setup & flag) == 0)
       return;
 
@@ -932,7 +940,13 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
     float target_width = char_width * 30.0f + ImGui::GetStyle().WindowPadding.x * 2.0f;
     ImGui::SetNextWindowSize(ImVec2(target_width, 0.0f), ImGuiCond_Always);
     if (ImGui::Begin(title, nullptr, kWindowFlags | ImGuiWindowFlags_NoResize)) {
+      if (disable_when_locked && ctx.scene_locked) {
+        ImGui::BeginDisabled();
+      }
       body();
+      if (disable_when_locked && ctx.scene_locked) {
+        ImGui::EndDisabled();
+      }
     }
     ImGui::End();
   };
@@ -980,7 +994,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
   validate_selections(scene_rep);
 
   simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
-  build_main_menu_bar(recent_files);
+  build_main_menu_bar(recent_files, ctx.scene_locked);
   build_toolbar(ctx);
   build_scene_objects_window(scene_rep, ctx, materials, mediums, meshes, cameras);
   build_properties_window(scene_rep, camera, ctx);
@@ -1475,7 +1489,7 @@ void UI::reload_scene() {
   }
 }
 
-void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
+void UI::build_main_menu_bar(const std::vector<std::string>& recent_files, bool scene_locked) {
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("etx-tracer")) {
       if (ImGui::MenuItem("Exit", "Ctrl+Q", false, true)) {
@@ -1485,13 +1499,13 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
     }
 
     if (ImGui::BeginMenu("Scene", true)) {
-      if (ImGui::MenuItem("Open...", "Ctrl+O", false, true)) {
+      if (ImGui::MenuItem("Open...", "Ctrl+O", false, !scene_locked)) {
         select_scene_file();
       }
-      if (ImGui::MenuItem("Reload Scene", "Ctrl+R", false, true)) {
+      if (ImGui::MenuItem("Reload Scene", "Ctrl+R", false, !scene_locked)) {
         reload_scene();
       }
-      if (ImGui::MenuItem("Reload Geometry and Materials", "Ctrl+G", false, true)) {
+      if (ImGui::MenuItem("Reload Geometry and Materials", "Ctrl+G", false, !scene_locked)) {
         reload_geometry();
       }
 
@@ -1520,10 +1534,10 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
       }
 
       ImGui::Separator();
-      if (ImGui::MenuItem("Save", nullptr, false, true)) {
+      if (ImGui::MenuItem("Save", nullptr, false, !scene_locked)) {
         save_scene_file();
       }
-      if (ImGui::MenuItem("Save as...", nullptr, false, true)) {
+      if (ImGui::MenuItem("Save as...", nullptr, false, !scene_locked)) {
         save_scene_file_as();
       }
       ImGui::EndMenu();
@@ -1771,9 +1785,8 @@ void UI::build_toolbar(const BuildContext& ctx) {
 
     double average_time = status.completed_iterations > 0 ? status.total_time / status.completed_iterations : 0.0;
 
-    const char* buffer = format_string("%-4d | %s | %.3fms last, %.3fms avg, %.3fs total",  //
-      status.completed_iterations, status_str[uint32_t(state)],                             //
-      status.last_iteration_time * 1000.0, average_time * 1000.0f, status.total_time);
+    const char* buffer = format_string("%-4d | %s | %.3fms last, %.3fms avg, %.3fs total | %.1f FPS", status.completed_iterations, status_str[uint32_t(state)],
+      status.last_iteration_time * 1000.0, average_time * 1000.0f, status.total_time, _current_fps);
 
     ImGui::Text("%s", buffer);
     ImGui::End();
@@ -1784,7 +1797,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
   const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras) {
   const float kDefaultListHeight = 5.0f * ImGui::GetTextLineHeightWithSpacing();
 
-  ctx.with_window(UIObjects, "Scene Objects", [&]() {
+  ctx.with_window(UIObjects, "Scene Objects", true, [&]() {
     auto draw_history_button = [&](const char* label, bool enabled, int32_t step) {
       ImGui::PushStyleColor(ImGuiCol_Button, kHistoryButtonBaseColor);
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kHistoryButtonHoverColor);
@@ -2094,7 +2107,7 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
   }
 
   std::string properties_window_name = properties_title + "###properties";
-  ctx.with_window(UIProperties, properties_window_name.c_str(), [&]() {
+  ctx.with_window(UIProperties, properties_window_name.c_str(), true, [&]() {
     switch (_selection.kind) {
       case SelectionKind::Material: {
         build_material_selection_properties(scene_rep, ctx);
@@ -2903,6 +2916,17 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   bool blue_noise_changed = ImGui::Checkbox("Blue Noise", scene_rep.data().options.properties + Scene::Properties::BlueNoise);
   if (blue_noise_changed && callbacks.scene_settings_changed) {
     callbacks.scene_settings_changed();
+  }
+
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  int current_light_sampling = static_cast<int>(scene_rep.data().options.light_sampling);
+  const char* light_sampling_options[] = {"Uniform", "From Distribution", "RIS Uniform", "RIS From Distribution"};
+  bool light_sampling_changed = ImGui::Combo("##light_sampling", &current_light_sampling, light_sampling_options, IM_ARRAYSIZE(light_sampling_options));
+  if (light_sampling_changed) {
+    scene_rep.data().options.light_sampling = static_cast<Scene::LightSampling>(current_light_sampling);
+    if (callbacks.scene_settings_changed) {
+      callbacks.scene_settings_changed();
+    }
   }
 
   if (options_changed && callbacks.options_changed) {

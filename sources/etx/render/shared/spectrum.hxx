@@ -313,7 +313,7 @@ struct SpectralResponse : public SpectralQuery {
   }
 
   ETX_GPU_CODE float monochromatic() const {
-    return spectral() ? value : luminance(integrated);
+    return spectral() ? value : etx::luminance(integrated);
   }
 
   ETX_GPU_CODE float sum() const {
@@ -322,6 +322,10 @@ struct SpectralResponse : public SpectralQuery {
 
   ETX_GPU_CODE float average() const {
     return spectral() ? value : (integrated.x + integrated.y + integrated.z) / 3.0f;
+  }
+
+  ETX_GPU_CODE float luminance() const {
+    return to_xyz().y;
   }
 
   ETX_GPU_CODE float component(uint32_t i) const {

@@ -5,14 +5,6 @@
 
 namespace etx {
 
-struct ETX_ALIGNED PTOptions {
-  uint32_t path_per_iteration ETX_INIT_WITH(1u);
-  bool nee ETX_INIT_WITH(true);
-  bool direct ETX_INIT_WITH(true);
-  bool mis ETX_INIT_WITH(true);
-  bool blue_noise ETX_INIT_WITH(true);
-};
-
 struct ETX_ALIGNED PTRayPayload {
   Ray ray = {};
   SpectralResponse throughput = {};
@@ -267,14 +259,13 @@ ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload
   return medium_sample;
 }
 
-ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const Raytracing& rt, const PTOptions& options, PTRayPayload& payload) {
+ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const Raytracing& rt, PTRayPayload& payload) {
   const auto& medium = scene.mediums[payload.medium];
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-  if (options.nee && (payload.path_length + 1 <= rt.scene().options.max_path_length) && medium.enable_explicit_connections) {
-    uint32_t emitter_index = sample_emitter_index(scene, payload.smp.next());
-    auto emitter_sample = sample_emitter(payload.spect, emitter_index, payload.smp.next_2d(), medium_sample.pos, scene);
+  if (scene.strategy_enabled(Scene::Strategy::ConnectToLight) && (payload.path_length + 1 <= rt.scene().options.max_path_length) && medium.enable_explicit_connections) {
+    auto emitter_sample = sample_emitter(scene, payload.spect, payload.smp, medium_sample.pos);
     if (emitter_sample.pdf_dir > 0) {
       auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, {.index = payload.medium}, payload.smp);
       float phase_function = medium_phase_function(medium, payload.ray.d, emitter_sample.direction);
@@ -322,9 +313,8 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
   return bsdf_eval.bsdf * emitter_sample.value * tr * wscale;
 }
 
-ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, const PTOptions& options,
-  PTRayPayload& payload) {
-  if ((options.direct == false) || (intersection.emitter_index == kInvalidIndex))
+ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, PTRayPayload& payload) {
+  if ((scene.strategy_enabled(Scene::Strategy::DirectHit) == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
   const auto& emitter_instance = scene.emitter_instances[intersection.emitter_index];
@@ -345,14 +335,14 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
   if (pdf_emitter_dir > 0.0f) {
     auto tr = rt.trace_transmittance(payload.spect, scene, payload.ray.o, intersection.pos, {.index = payload.medium}, payload.smp);
     float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
-    bool no_weight = (options.mis == false) || q.directly_visible || (payload.mis_weight == false);
+    bool no_weight = (scene.multiple_importance_sampling() == false) || q.directly_visible || (payload.mis_weight == false);
     auto weight = no_weight ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
     payload.accumulated += payload.throughput * e * tr * weight;
     ETX_VALIDATE(payload.accumulated);
   }
 }
 
-ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
+ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const Raytracing& rt, PTRayPayload& payload) {
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
 
@@ -364,7 +354,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     return true;
   }
 
-  handle_direct_emitter(scene, tri, intersection, rt, options, payload);
+  handle_direct_emitter(scene, tri, intersection, rt, payload);
 
   BSDFData bsdf_data = {payload.spect, payload.medium, PathSource::Camera, intersection, intersection.w_i};
 
@@ -411,26 +401,22 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  if (options.nee && (payload.path_length + 1 <= rt.scene().options.max_path_length)) {
-    payload.smp.push_fixed(rnd_em_sample.x, rnd_em_sample.y, rnd_support.x);
-
-    uint32_t emitter_index = sample_emitter_index(scene, rnd_support.y);
+  if (scene.strategy_enabled(Scene::Strategy::ConnectToLight) && (payload.path_length + 1 <= rt.scene().options.max_path_length)) {
     SpectralResponse direct_light = {payload.spect, 0.0f};
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-        auto local_sample = sample_emitter(payload.spect, emitter_index, rnd_em_sample, ss_gather.intersections[i].pos, scene);
+        auto local_sample = sample_emitter(scene, payload.spect, payload.smp, ss_gather.intersections[i].pos);
         SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, scene.materials[scene.defaults.subsurface_exit_material],  //
-          payload.medium, payload.spect, local_sample, payload.smp, options.mis);
+          payload.medium, payload.spect, local_sample, payload.smp, scene.multiple_importance_sampling());
         direct_light += ss_gather.weights[i] * light_value;
         ETX_VALIDATE(direct_light);
       }
     } else {
-      auto emitter_sample = sample_emitter(payload.spect, emitter_index, rnd_em_sample, intersection.pos, scene);
-      direct_light += evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, options.mis);
+      auto emitter_sample = sample_emitter(scene, payload.spect, payload.smp, intersection.pos);
+      direct_light += evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, scene.multiple_importance_sampling());
       ETX_VALIDATE(direct_light);
     }
     payload.accumulated += payload.throughput * direct_light;
-    payload.smp.pop_fixed();
     ETX_VALIDATE(payload.accumulated);
   }
 
@@ -482,7 +468,7 @@ ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
   }
 }
 
-ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& options, const Raytracing& rt, PTRayPayload& payload) {
+ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const Raytracing& rt, PTRayPayload& payload) {
   if (payload.path_length > rt.scene().options.max_path_length)
     return false;
 
@@ -494,15 +480,15 @@ ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const PTOptions& option
   Medium::Sample medium_sample = try_sampling_medium(scene, payload, found_intersection ? intersection.t : kMaxFloat);
 
   if (medium_sample.sampled_medium()) {
-    handle_sampled_medium(scene, medium_sample, rt, options, payload);
+    handle_sampled_medium(scene, medium_sample, rt, payload);
     return random_continue(payload.path_length, scene.options.random_path_termination, payload.eta, payload.smp, payload.throughput);
   }
 
   if (found_intersection) {
-    return handle_hit_ray(scene, intersection, options, rt, payload);
+    return handle_hit_ray(scene, intersection, rt, payload);
   }
 
-  if (options.direct) {
+  if (scene.strategy_enabled(Scene::Strategy::DirectHit)) {
     handle_missed_ray(scene, payload);
   }
 
