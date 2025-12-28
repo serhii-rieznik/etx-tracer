@@ -59,6 +59,7 @@ THE SOFTWARE.
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <charconv>
 
 struct BufferedReader {
   struct Line {
@@ -438,7 +439,14 @@ static inline int parseInt(char** token) {
 }
 
 static bool tryParseDouble(char* s, char* s_end, double* result) {
+#if defined(__APPLE__) && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 160000
+  // On macOS with older deployment targets, std::from_chars for floating-point is not available
+  char* endptr = nullptr;
+  *result = strtod(s, &endptr);
+  return endptr != nullptr && endptr <= s_end;
+#else
   return uint32_t(std::from_chars(s, s_end, *result).ec) == 0;
+#endif
 }
 
 static inline real_t parseReal(char** token, double default_value = 0.0) {
