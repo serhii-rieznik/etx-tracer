@@ -3,6 +3,7 @@
 #include <etx/core/debug.hxx>
 
 #include <string>
+#include <cstdio>
 
 namespace etx {
 
@@ -29,6 +30,7 @@ struct Environment {
 uint64_t get_file_folder(const char* file_name, char buffer[], uint64_t buffer_size);
 void get_base_directory(const char* file_path, char* buffer, size_t buffer_size);
 const char* get_file_ext(const char* file_name);  // returns `ext` with dot
+size_t get_file_size(FILE* f);
 
 Environment& env();
 

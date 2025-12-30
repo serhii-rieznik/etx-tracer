@@ -255,6 +255,11 @@ ETX_GPU_CODE float emitter_ris_candidate_weight(const EmitterSample& emitter_sam
     return 0.0f;
   }
 
+  if (emitter_sample.is_distant) {
+    return radiance_weight;
+  }
+
+  // For local emitters (area lights), use distance and orientation weighting
   float3 to_emitter = emitter_sample.origin - source_position;
   float len_sq = dot(to_emitter, to_emitter);
   float emitter_orientation = dot(emitter_sample.normal, -to_emitter);
@@ -274,24 +279,21 @@ ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, SpectralQuery spec
   auto sampling_method = scene.light_sampling_method();
 
   if ((sampling_method == Scene::LightSampling::RIS_Uniform) || (sampling_method == Scene::LightSampling::RIS_FromDistribution)) {
-    // RIS sampling
-    constexpr uint32_t kCandidateCount = 16;
+    uint32_t candidate_count = min(4u * uint32_t(scene.emitter_instances.count), 16u);
 
     float weight_sum = 0.0f;
     float selected_weight = 0.0f;
     EmitterSample selected_sample = {};
 
-    for (uint32_t i = 0; i < kCandidateCount; ++i) {
+    for (uint32_t i = 0; i < candidate_count; ++i) {
       float pdf_sample = 0.0f;
       uint32_t emitter_index = kInvalidIndex;
 
       if (sampling_method == Scene::LightSampling::RIS_FromDistribution) {
-        // Sample from distribution
         uint32_t dist_index = scene.emitters_distribution.sample(smp.next(), pdf_sample);
         ETX_ASSERT(dist_index < scene.emitters_distribution.values.count);
         emitter_index = scene.emitters_distribution.values[dist_index].reference;
       } else {
-        // Uniform sampling
         emitter_index = uint32_t(smp.next() * float(scene.emitter_instances.count));
         pdf_sample = 1.0f / float(scene.emitter_instances.count);
       }
@@ -302,6 +304,7 @@ ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, SpectralQuery spec
       sample.emitter_index = emitter_index;
       sample.triangle_index = emitter.triangle_index;
       sample.is_delta = emitter.is_delta();
+      sample.is_distant = emitter.is_distant();
 
       float candidate_weight = emitter_ris_candidate_weight(sample, from_point);
       float weight = candidate_weight / pdf_sample;
@@ -316,16 +319,14 @@ ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, SpectralQuery spec
     if (selected_weight <= 0.0f)
       return {};
 
-    selected_sample.value *= weight_sum / (float(kCandidateCount) * selected_weight);
+    selected_sample.value *= weight_sum / (float(candidate_count) * selected_weight);
     return selected_sample;
   }
 
-  // Non-RIS sampling
   float pdf_sample = 0.0f;
   uint32_t emitter_index = kInvalidIndex;
 
   if (sampling_method == Scene::LightSampling::FromDistribution) {
-    // Sample from distribution
     if (scene.emitters_distribution.values.count == 0) {
       return {};
     }
@@ -333,7 +334,6 @@ ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, SpectralQuery spec
     ETX_ASSERT(dist_index < scene.emitters_distribution.values.count);
     emitter_index = scene.emitters_distribution.values[dist_index].reference;
   } else {
-    // Uniform sampling
     emitter_index = uint32_t(smp.next() * float(scene.emitter_instances.count));
     pdf_sample = 1.0f / float(scene.emitter_instances.count);
   }

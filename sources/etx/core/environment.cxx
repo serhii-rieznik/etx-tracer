@@ -18,8 +18,14 @@ namespace etx {
 
 #if (ETX_PLATFORM_WINDOWS)
 constexpr char kDelimiter = '\\';
+# define ETX_FSEEK     _fseeki64
+# define ETX_FTELL     _ftelli64
+# define ETX_FPOS_TYPE long long
 #else
 constexpr char kDelimiter = '/';
+# define ETX_FSEEK     fseeko
+# define ETX_FTELL     ftello
+# define ETX_FPOS_TYPE off_t
 #endif
 
 inline static void normalize_path(char buffer[]) {
@@ -217,6 +223,21 @@ const char* get_file_ext(const char* file_name) {
     --fn_len;
   }
   return "";
+}
+
+size_t get_file_size(FILE* f) {
+  if (f == nullptr) {
+    return 0;
+  }
+
+  if (ETX_FSEEK(f, 0, SEEK_END) != 0) {
+    return 0;
+  }
+  ETX_FPOS_TYPE size = ETX_FTELL(f);
+  if (ETX_FSEEK(f, 0, SEEK_SET) != 0) {
+    return 0;
+  }
+  return (size > 0) ? static_cast<size_t>(size) : 0;
 }
 
 Environment& env() {

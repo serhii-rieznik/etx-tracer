@@ -855,13 +855,11 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   if (strcmp(get_file_ext(filename), ".json") == 0) {
     std::string json_content;
     if (auto f = fopen(filename, "rb")) {
-      if (_fseeki64(f, 0, SEEK_END) == 0) {
-        long long size = _ftelli64(f);
-        if ((size > 0) && (_fseeki64(f, 0, SEEK_SET) == 0)) {
-          json_content.resize(static_cast<size_t>(size));
-          size_t read_bytes = fread(json_content.data(), 1, json_content.size(), f);
-          json_content.resize(read_bytes);
-        }
+      size_t file_size = get_file_size(f);
+      if (file_size > 0) {
+        json_content.resize(file_size);
+        size_t read_bytes = fread(json_content.data(), 1, json_content.size(), f);
+        json_content.resize(read_bytes);
       }
       fclose(f);
     }
