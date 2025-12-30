@@ -644,9 +644,6 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, con
         continue;
       }
 
-      // Store material_id for this face
-      shape->face_material_ids.push_back(current_material_id);
-
       if (triangulate) {
         if (npolys == 4) {
           vertex_index_t i0 = face.vertex_indices[0];
@@ -740,6 +737,10 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, con
 
           shape->mesh.smoothing_group_ids.push_back(face.smoothing_group_id);
           shape->mesh.smoothing_group_ids.push_back(face.smoothing_group_id);
+
+          // Two material IDs (one for each triangle)
+          shape->face_material_ids.push_back(current_material_id);
+          shape->face_material_ids.push_back(current_material_id);
 
         } else {
           vertex_index_t i0 = face.vertex_indices[0];
@@ -910,6 +911,7 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, con
 
               shape->mesh.num_face_vertices.push_back(3);
               shape->mesh.smoothing_group_ids.push_back(face.smoothing_group_id);
+              shape->face_material_ids.push_back(current_material_id);
             }
 
             // remove v1 from the list
@@ -939,6 +941,7 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, con
 
               shape->mesh.num_face_vertices.push_back(3);
               shape->mesh.smoothing_group_ids.push_back(face.smoothing_group_id);
+              shape->face_material_ids.push_back(current_material_id);
             }
           }
         }  // npolys
@@ -951,6 +954,7 @@ static bool exportGroupsToShape(shape_t* shape, const PrimGroup& prim_group, con
 
         shape->mesh.num_face_vertices.push_back(static_cast<unsigned char>(npolys));
         shape->mesh.smoothing_group_ids.push_back(face.smoothing_group_id);  // per face
+        shape->face_material_ids.push_back(current_material_id);             // per face
       }
     }
   }

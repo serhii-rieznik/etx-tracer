@@ -353,6 +353,10 @@ ETX_GPU_CODE float2 evaluate_roughness(const Material& material, const float2& u
   return float2{material.roughness.value.x, material.roughness.value.y} * evaluate_image(material.roughness, uv, scene, 1.0f);
 }
 
+ETX_GPU_CODE float evaluate_transmission(const Material& material, const float2& uv, const Scene& scene) {
+  return material.transmission.value.x * evaluate_image(material.transmission, uv, scene, 1.0f);
+}
+
 ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, float* image_pdf) {
   if (image_pdf) {
     *image_pdf = 0.0f;

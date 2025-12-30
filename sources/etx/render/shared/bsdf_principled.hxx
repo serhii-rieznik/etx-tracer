@@ -16,6 +16,7 @@ struct PrincipledMaterial {
 ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& in_mtl, const Scene& scene, Sampler& smp) {
   auto m_local = in_mtl;
   auto metalness = evaluate_metalness(m_local, data.tex, scene);
+  auto transmission = evaluate_transmission(m_local, data.tex, scene);
 
 #if (WOMP_DEBUG_PRINCIPLED_BSDF)
   auto roughness = evaluate_roughness(m_local, data.tex, scene).x;
@@ -43,7 +44,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& in_mtl, con
     m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;
-    if (smp.next() < m_local.transmission.value.x) {
+    if (smp.next() < transmission) {
       return DielectricBSDF::sample(data, m_local, scene, smp);
     } else {
       return PlasticBSDF::sample(data, m_local, scene, smp);
@@ -54,6 +55,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& in_mtl, con
 ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& in_mtl, const Scene& scene, Sampler& smp) {
   auto m_local = in_mtl;
   auto metalness = evaluate_metalness(m_local, data.tex, scene);
+  auto transmission = evaluate_transmission(m_local, data.tex, scene);
 
 #if (WOMP_DEBUG_PRINCIPLED_BSDF)
   auto roughness = evaluate_roughness(m_local, data.tex, scene).x;
@@ -79,7 +81,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
     m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;
-    if (smp.next() < m_local.transmission.value.x) {
+    if (smp.next() < transmission) {
       return DielectricBSDF::evaluate(data, w_o, m_local, scene, smp);
     } else {
       return PlasticBSDF::evaluate(data, w_o, m_local, scene, smp);
@@ -94,6 +96,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
 
   auto m_local = in_mtl;
   auto metalness = evaluate_metalness(m_local, data.tex, scene);
+  auto transmission = evaluate_transmission(m_local, data.tex, scene);
   if (smp.next() < metalness) {
     m_local.int_ior.cls = SpectralDistribution::Class::Conductor;
     m_local.int_ior.eta_index = scene.defaults.conductor_eta;
@@ -105,7 +108,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
     m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;
-    if (smp.next() < m_local.transmission.value.x) {
+    if (smp.next() < transmission) {
       return DielectricBSDF::pdf(data, w_o, m_local, scene, smp);
     } else {
       return PlasticBSDF::pdf(data, w_o, m_local, scene, smp);

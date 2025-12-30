@@ -5,7 +5,7 @@
 
 namespace etx {
 
-constexpr float kGeometryEpsilon = 1e-6f;
+constexpr float kGeometryEpsilon = 1.0f / 8.0f * 1.0e-4f;
 
 inline int64_t quantize_float(float val, float eps) {
   return static_cast<int64_t>(std::floor(val / eps));
@@ -68,20 +68,20 @@ struct VertexKey {
 struct VertexKeyHash {
   uint64_t operator()(const VertexKey& key) const {
     uint64_t h = 0;
-    // Hash position
-    h = hash_combine(h, std::hash<float>()(key.position.x));
-    h = hash_combine(h, std::hash<float>()(key.position.y));
-    h = hash_combine(h, std::hash<float>()(key.position.z));
+    // Hash position using quantized values (consistent with equality check)
+    h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.position.x, kGeometryEpsilon)));
+    h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.position.y, kGeometryEpsilon)));
+    h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.position.z, kGeometryEpsilon)));
     // Hash normal if present
     if (key.has_normal) {
-      h = hash_combine(h, std::hash<float>()(key.normal.x));
-      h = hash_combine(h, std::hash<float>()(key.normal.y));
-      h = hash_combine(h, std::hash<float>()(key.normal.z));
+      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.normal.x, kGeometryEpsilon)));
+      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.normal.y, kGeometryEpsilon)));
+      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.normal.z, kGeometryEpsilon)));
     }
     // Hash UV if present
     if (key.has_uv) {
-      h = hash_combine(h, std::hash<float>()(key.uv.x));
-      h = hash_combine(h, std::hash<float>()(key.uv.y));
+      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.uv.x, kGeometryEpsilon)));
+      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.uv.y, kGeometryEpsilon)));
     }
     // Hash flags
     h = hash_combine(h, std::hash<bool>()(key.has_normal));

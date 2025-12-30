@@ -1087,22 +1087,22 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
 
   uint32_t load_result = SceneLoadFailed;
 
-  auto ext = get_file_ext(_private->data.geometry_file_name.c_str());
+  const char* geometry_file_name = _private->data.geometry_file_name.c_str();
+  const char* materials_file_name = _private->data.materials_file_name.c_str();
+  auto ext = get_file_ext(geometry_file_name);
   if (strcmp(ext, ".etx") == 0) {
     SceneSerialization loader;
-    if (loader.load_from_file(_private->data.geometry_file_name.c_str(), _private->data, _private->data.materials_file_name.c_str(), _private->ior_database, _private->scheduler) ==
-        false) {
-      log::error("Failed to load ETX file from %s", _private->data.geometry_file_name.c_str());
+    if (loader.load_from_file(geometry_file_name, _private->data, materials_file_name, _private->ior_database, _private->scheduler) == false) {
+      log::error("Failed to load ETX file from %s", geometry_file_name);
       return false;
     }
     load_result = SceneLoadSucceeded;
   } else if (strcmp(ext, ".obj") == 0) {
-    load_result =
-      load_from_obj_file(_private->data.geometry_file_name.c_str(), _private->data.materials_file_name.c_str(), _private->data, _private->ior_database, _private->scheduler);
+    load_result = load_from_obj_file(geometry_file_name, materials_file_name, _private->data, _private->ior_database, _private->scheduler);
   } else if (strcmp(ext, ".gltf") == 0) {
-    load_result = load_from_gltf_file(_private->data.geometry_file_name.c_str(), false, _private->data, _private->scheduler, _private->active_camera);
+    load_result = load_from_gltf_file(geometry_file_name, false, _private->data, _private->scheduler, _private->active_camera);
   } else if (strcmp(ext, ".glb") == 0) {
-    load_result = load_from_gltf_file(_private->data.geometry_file_name.c_str(), true, _private->data, _private->scheduler, _private->active_camera);
+    load_result = load_from_gltf_file(geometry_file_name, true, _private->data, _private->scheduler, _private->active_camera);
   }
 
   if ((load_result & SceneLoadSucceeded) == 0) {

@@ -182,9 +182,9 @@ void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& o
     float3 mesh_bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
 
     uint32_t material_index = data.defaults.missing_material;
-    if (!faces.empty()) {
+    if (faces.empty() == false) {
       const auto& first_face = faces[0];
-      if (first_face.material_id >= 0 && static_cast<size_t>(first_face.material_id) < obj_materials.size()) {
+      if ((first_face.material_id >= 0) && (static_cast<size_t>(first_face.material_id) < obj_materials.size())) {
         std::string material_name = obj_materials[first_face.material_id].name;
         auto material_it = material_mapping.find(material_name);
         if (material_it != material_mapping.end()) {
@@ -208,11 +208,13 @@ void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& o
 
         float3 position = {static_cast<float>(obj_attrib.vertex_x[index.vertex_index]), static_cast<float>(obj_attrib.vertex_y[index.vertex_index]),
           static_cast<float>(obj_attrib.vertex_z[index.vertex_index])};
-        bool has_normal = (index.normal_index >= 0);
+
+        bool has_normal = (index.normal_index >= 0) && (static_cast<size_t>(index.normal_index) < obj_attrib.normal_x.size());
         float3 normal = has_normal ? float3{static_cast<float>(obj_attrib.normal_x[index.normal_index]), static_cast<float>(obj_attrib.normal_y[index.normal_index]),
                                        static_cast<float>(obj_attrib.normal_z[index.normal_index])}
                                    : float3{0.0f, 1.0f, 0.0f};
-        bool has_uv = (index.texcoord_index >= 0);
+
+        bool has_uv = (index.texcoord_index >= 0) && (static_cast<size_t>(index.texcoord_index) < obj_attrib.texcoord_u.size());
         float2 uv =
           has_uv ? float2{static_cast<float>(obj_attrib.texcoord_u[index.texcoord_index]), static_cast<float>(obj_attrib.texcoord_v[index.texcoord_index])} : float2{0.0f, 0.0f};
 
