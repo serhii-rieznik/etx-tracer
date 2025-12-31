@@ -1,4 +1,4 @@
-﻿add_library(tinyexr
+﻿add_library(tinyexr STATIC
   tinyexr.hxx
   tinyexr.cxx
 )

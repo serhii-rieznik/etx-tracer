@@ -29,6 +29,13 @@ enum class ProjectionType : uint32_t {
   EqualArea = 1u,
 };
 
+enum class InteractionType : uint32_t {
+  Surface,
+  Medium,
+
+  Count,
+};
+
 struct SphericalCoordinates {
   float phi;
   float theta;

@@ -1,4 +1,4 @@
-add_library(tiny_gltf
+add_library(tiny_gltf STATIC
   tiny_gltf.hxx
   tiny_gltf.cxx
 )

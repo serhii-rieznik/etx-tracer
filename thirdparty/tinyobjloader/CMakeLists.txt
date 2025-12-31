@@ -1,4 +1,4 @@
-add_library(tiny_obj_loader
+add_library(tiny_obj_loader STATIC
   tiny_obj_loader.hxx
   tiny_obj_loader.cxx
 )

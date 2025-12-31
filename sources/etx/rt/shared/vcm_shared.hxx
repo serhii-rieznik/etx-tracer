@@ -611,7 +611,13 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
     return {state.spect, 0.0f};
 
   float3 sample_pos = camera_at_medium ? medium_pos : isect->pos;
-  auto emitter_sample = sample_emitter(scene, state.spect, state.sampler, sample_pos);
+  EmitterSampleQuery query = {
+    .spect = state.spect,
+    .source_type = camera_at_medium ? InteractionType::Medium : InteractionType::Surface,
+    .source_position = sample_pos,
+    .source_normal = camera_at_medium ? isect->nrm : float3{},
+  };
+  auto emitter_sample = sample_emitter(scene, query, state.sampler);
   if (emitter_sample.pdf_dir <= 0.0f)
     return {state.spect, 0.0f};
 
@@ -667,7 +673,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
   ETX_VALIDATE(weight);
 
   return tr * state.throughput * scatter * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
-}
+}  // namespace etx
 
 ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
   bool camera_at_medium, const Intersection* camera_isect, const float3& medium_pos, float vm_weight, uint32_t state_medium, float3& target_position, SpectralResponse& value) {

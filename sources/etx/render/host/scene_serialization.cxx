@@ -336,7 +336,8 @@ struct SceneSerializationImpl {
         if (saved_idx < data.materials.size()) {
           for (const auto& [name, runtime_idx] : data.material_mapping) {
             if (runtime_idx == saved_idx && !is_internal_name(name)) {
-              uint32_t name_index = add_string(name);
+              std::string normalized_name = normalize_material_name(name);
+              uint32_t name_index = add_string(normalized_name);
               mappings.push_back({saved_idx, name_index});
               break;
             }
@@ -896,9 +897,7 @@ struct SceneSerializationImpl {
       if (key == "newmtl") {
         std::string material_name;
         std::getline(iss, material_name);
-        trim_whitespace(material_name);
-        // Convert to lowercase to match tinyobj's behavior
-        std::transform(material_name.begin(), material_name.end(), material_name.begin(), ::tolower);
+        material_name = normalize_material_name(material_name);
         materials.push_back({material_name, {}});
         current_material = &materials.back();
       } else if (current_material != nullptr) {

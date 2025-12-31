@@ -1891,10 +1891,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
         const auto& entry = _camera_mapping.entry(static_cast<int32_t>(i));
         uint32_t camera_index = entry.index;
 
-        // Check if this camera is active
         bool is_active = (camera_index < scene_rep.data().cameras.size()) && scene_rep.data().cameras[camera_index].active;
-
-        // Display camera name with bullet point and special color for active cameras
         if (is_active) {
           ImGui::PushStyleColor(ImGuiCol_Text, kCameraTextColor);
           std::string display_name = std::string("[") + entry.name + "]";
@@ -2179,7 +2176,6 @@ bool UI::build_material_class_selector(Material& material) {
       ImGui::PopStyleColor();
       for (auto cls : entries) {
         const char* material_name = format_string("%s", material_class_to_string(cls));
-        // Capitalize first letter
         char capitalized_buffer[128];
         snprintf(capitalized_buffer, sizeof(capitalized_buffer), "%s", material_name);
         capitalized_buffer[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(capitalized_buffer[0])));
@@ -2209,10 +2205,6 @@ bool UI::build_material_class_selector(Material& material) {
 
   return changed;
 }
-
-// ============================================================================
-// Selection-specific property builders - Empty placeholder implementations
-// ============================================================================
 
 void UI::build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
   if (_material_mapping.empty()) {
@@ -2382,17 +2374,14 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
       changed = true;
     }
 
-    // Convert emitter direction to angles for editing
     auto spherical = to_spherical(emitter.directional.direction);
     float2 angles = {spherical.phi, spherical.theta};
 
     if (angle_editor("Light Direction", angles, -180.0f, 180.0f, -89.99f, 89.99f, 89.99f)) {
-      // Convert angles back to direction
       emitter.directional.direction = from_spherical(angles.x, angles.y);
       changed = true;
     }
 
-    // Check if there's an atmosphere emitter in the scene
     bool has_atmosphere = false;
     for (uint32_t i = 0; i < scene_rep.data().emitter_profiles.size(); ++i) {
       auto& candidate = scene_rep.data().emitter_profiles[i];
@@ -2403,7 +2392,6 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     }
 
     if (has_atmosphere) {
-      // Sun checkbox - links directional emitter to atmosphere
       bool is_sun = (emitter.reference_emitter_index != kInvalidIndex) && (emitter.reference_emitter_index < scene_rep.data().emitter_profiles.size()) &&
                     (scene_rep.data().emitter_profiles[emitter.reference_emitter_index].cls == EmitterProfile::Class::Environment) &&
                     ((scene_rep.data().emitter_profiles[emitter.reference_emitter_index].meta & EmitterProfile::Meta::Atmosphere) != 0);
@@ -2414,7 +2402,6 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
 
       if (ImGui::Checkbox("Use as Sun", &is_sun)) {
         if (is_sun) {
-          // Find atmosphere emitter
           uint32_t atmosphere_index = kInvalidIndex;
           for (uint32_t i = 0; i < scene_rep.data().emitter_profiles.size(); ++i) {
             auto& candidate = scene_rep.data().emitter_profiles[i];
@@ -2425,20 +2412,16 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
           }
 
           if (atmosphere_index != kInvalidIndex) {
-            // Link this directional emitter to atmosphere
             emitter.reference_emitter_index = atmosphere_index;
           } else {
-            // Reset checkbox if no atmosphere emitter exists
             is_sun = false;
           }
         } else {
-          // Unlink from atmosphere
           emitter.reference_emitter_index = kInvalidIndex;
         }
         changed = true;
       }
 
-      // Rebuild atmosphere button when linked to atmosphere
       if (emitter.reference_emitter_index != kInvalidIndex && emitter.reference_emitter_index < scene_rep.data().emitter_profiles.size() &&
           scene_rep.data().emitter_profiles[emitter.reference_emitter_index].cls == EmitterProfile::Class::Environment) {
         if (ImGui::Button("Rebuild Atmosphere", ImVec2(-1.0f, 0.0f))) {
@@ -2487,7 +2470,6 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
     if (ImGui::Button("Delete Emitter", ImVec2(-1.0f, 0.0f))) {
       if (scene_rep.delete_emitter(emitter_index)) {
-        // Emitter was deleted successfully, clear selection
         set_selection(SelectionKind::Scene, 0, false);
       }
     }
@@ -2529,7 +2511,6 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
 
   ImGui::Text("Triangles: %u", mesh.triangle_count);
 
-  // Material assignment dropdown
   uint32_t current_material = kInvalidIndex;
   if (mesh.triangle_count > 0) {
     uint32_t first_triangle_index = mesh.triangle_offset;
@@ -2559,19 +2540,16 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
     }
   }
 
-  // Navigation buttons
   ImGui::Spacing();
   ImGui::Separator();
   ImGui::Text("Edit Links");
   ImGui::Spacing();
 
-  // Edit Material button
   bool has_valid_material = (current_material != kInvalidIndex);
   if (has_valid_material == false) {
     ImGui::BeginDisabled();
   }
   if (ImGui::Button("Edit Material", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-    // Find material index in mapping
     for (int i = 0; i < static_cast<int>(_material_mapping.size()); ++i) {
       if (_material_mapping.at(i) == current_material) {
         set_selection(SelectionKind::Material, i);
@@ -2583,7 +2561,6 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
     ImGui::EndDisabled();
   }
 
-  // Find if mesh has emitter by checking for area emitters in this mesh's triangles
   uint32_t emitter_profile_index = kInvalidIndex;
   if (mesh.triangle_count > 0) {
     uint32_t start_triangle = mesh.triangle_offset;
@@ -2600,7 +2577,6 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
     }
   }
 
-  // Edit Emitter button
   bool has_emitter = (emitter_profile_index != kInvalidIndex);
   if (has_emitter == false) {
     ImGui::BeginDisabled();
@@ -2627,25 +2603,21 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
   int32_t pixel_size = std::countr_zero(_film->pixel_size());
 
   if (ImGui::CollapsingHeader("Lens & Focus", ImGuiTreeNodeFlags_Framed)) {
-    // Control mode selector
     static int control_mode = 0;  // 0 = Focal Length, 1 = Field of View
     const char* control_modes[] = {"Focal Length", "Field of View"};
 
     if (labeled_control("Control Mode", [&]() {
           return ImGui::Combo("##control_mode", &control_mode, control_modes, IM_ARRAYSIZE(control_modes));
         })) {
-      // Mode changed, no immediate camera change needed
     }
 
     if (control_mode == 0) {
-      // Focal Length mode
       if (labeled_control("Focal Length", [&]() {
             return ImGui::DragFloat("##focal_length", &focal_len, 0.1f, 1.0f, 5000.0f, "%.1fmm");
           })) {
         camera_changed = true;
       }
     } else {
-      // Field of View mode
       float current_fov_deg = focal_length_to_fov(focal_len) * 180.0f / kPi;
       static float fov_input = current_fov_deg;  // Static to maintain value between frames
       fov_input = current_fov_deg;               // Sync with current camera FOV
@@ -2656,8 +2628,6 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
         focal_len = fov_to_focal_length(fov_input * kPi / 180.0f);
         camera_changed = true;
       }
-
-      // FOV conversion buttons
       ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
       ImGui::AlignTextToFramePadding();
       ImGui::Text("Convert FOV");
@@ -2694,7 +2664,6 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
   }
 
   if (ImGui::CollapsingHeader("Position & Orientation", ImGuiTreeNodeFlags_Framed)) {
-    // Camera position with special validation
     ImGui::Text("Camera Position:");
     full_width_item();
     if (ImGui::InputFloat3("##campos", &pos.x, "%.3f")) {
@@ -2704,17 +2673,14 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
       camera_changed = true;
     }
 
-    // Convert camera direction to angles for editing
     auto spherical = to_spherical(camera.direction);
     float2 angles = {spherical.phi, spherical.theta};
 
     if (angle_editor("Camera Direction", angles, -180.0f, 180.0f, -89.99f, 89.99f, 89.99f)) {
-      // Convert angles back to direction
       camera.direction = from_spherical(angles.x, angles.y);
       camera_changed = true;
     }
 
-    // Clip Planes with validation
     float clip_values[2] = {camera.clip_near, camera.clip_far};
     if (labeled_control("Clip Planes (near/far)", [&]() {
           return ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 5000.0f, "%.3f");
@@ -2772,8 +2738,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
     build_camera(camera, pos, camera.direction, kWorldUp, camera.film_size, fov);
 
-    // Only call camera_changed callback if this is the active camera
-    if (scene_rep.data().cameras[camera_index].active && callbacks.camera_changed) {
+    if (callbacks.camera_changed && scene_rep.data().cameras[camera_index].active) {
       _film->set_pixel_size(1u << pixel_size);
       callbacks.camera_changed(film_changed);
     }
@@ -2783,12 +2748,10 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
 void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
   bool scene_settings_changed = false;
 
-  // Samples per pixel with validation
   if (validated_int_control("Samples Per Pixel", reinterpret_cast<int32_t&>(scene_rep.data().options.samples), 1, 1000000)) {
     scene_settings_changed = true;
   }
 
-  // Path length controls with validation
   int32_t min_path = static_cast<int32_t>(scene_rep.data().options.min_path_length);
   int32_t max_path = static_cast<int32_t>(scene_rep.data().options.max_path_length);
 
@@ -2801,7 +2764,6 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
     scene_settings_changed = true;
   }
 
-  // Other controls
   if (validated_int_control("Random Termination", reinterpret_cast<int32_t&>(scene_rep.data().options.random_path_termination), 0, 65536)) {
     scene_settings_changed = true;
   }

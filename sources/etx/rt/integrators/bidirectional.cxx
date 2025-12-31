@@ -1321,7 +1321,13 @@ struct CPUBidirectionalImpl : public Task {
     if (invalid_path_length || (enable_connect_to_light == false) || (mode == Mode::LightTracing))
       return {spect, 0.0f};
 
-    auto emitter_sample = sample_emitter(scene, spect, smp, z_curr.intersection.pos);
+    EmitterSampleQuery query = {
+      .spect = spect,
+      .source_type = InteractionType::Surface,
+      .source_position = z_curr.intersection.pos,
+      .source_normal = z_curr.intersection.nrm,
+    };
+    auto emitter_sample = sample_emitter(scene, query, smp);
     if (emitter_sample.value.is_zero() || (emitter_sample.pdf_dir == 0.0f)) {
       return {spect, 0.0f};
     }

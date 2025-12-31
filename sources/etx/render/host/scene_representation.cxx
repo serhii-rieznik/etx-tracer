@@ -278,7 +278,6 @@ struct SceneRepresentationImpl {
       SpectralDistribution& absorption = data.spectrum_values[medium.absorption_index];
       SpectralDistribution& scattering = data.spectrum_values[medium.scattering_index];
 
-      // Find maximum values
       float max_absorption = absorption.maximum_spectral_power();
       float max_scattering = scattering.maximum_spectral_power();
 
@@ -1421,7 +1420,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       return {};
     }
     std::string stored = impl->data.images.path(image_index);
-    if (stored.empty()) {
+    if (stored.empty() || stored.compare(0, 5, "##mem") == 0) {
       return {};
     }
     std::filesystem::path tex_path = std::filesystem::path(stored).lexically_normal();
@@ -1833,7 +1832,6 @@ void SceneRepresentationImpl::generate_pixel_sampler_image() {
   uint32_t image_options = Image::BuildSamplingTable | Image::UniformSamplingTable;
   uint32_t image_index = data.images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, image_options, {}, {1.0f, 1.0f});
   data.pixel_filter = {image_index, 1.5f};
-  data.images.load_images(scheduler);
 }
 
 void SceneRepresentationImpl::setup_atmosphere_references() {
@@ -1847,7 +1845,6 @@ void SceneRepresentationImpl::setup_atmosphere_references() {
     }
   }
 
-  // If we found an atmosphere emitter, set up references for all directional emitters
   if (atmosphere_emitter_index != kInvalidIndex) {
     for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
       auto& profile = data.emitter_profiles[i];
@@ -1893,6 +1890,8 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   validate_materials();
   validate_mediums();
 
+  generate_pixel_sampler_image();
+
   data.images.load_images(scheduler);
 
   {
@@ -1928,7 +1927,6 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
 
   update_medium_bounds();
-  generate_pixel_sampler_image();
 
   if (needs_camera_positioning) {
     constexpr float3 kDefaultViewDirection = {1.0f, 1.0f, 1.0f};

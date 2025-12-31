@@ -249,30 +249,35 @@ ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distributi
   return (emitter.spectrum_weight * emitter.additional_weight) / dist.total_weight;
 }
 
-ETX_GPU_CODE float emitter_ris_candidate_weight(const EmitterSample& emitter_sample, const float3& source_position) {
+ETX_GPU_CODE float emitter_ris_candidate_weight(const EmitterSample& emitter_sample, const EmitterSampleQuery& query) {
   float radiance_weight = emitter_sample.value.luminance();
   if (radiance_weight <= 0.0f) {
     return 0.0f;
   }
 
-  if (emitter_sample.is_distant) {
-    return radiance_weight;
+  float source_alignment = 1.0f;
+  float3 to_emitter = emitter_sample.origin - query.source_position;
+  float len_sq = dot(to_emitter, to_emitter);
+
+  if (query.source_type == InteractionType::Surface) {
+    source_alignment = fabsf(dot(query.source_normal, to_emitter) / sqrtf(len_sq));
   }
 
-  // For local emitters (area lights), use distance and orientation weighting
-  float3 to_emitter = emitter_sample.origin - source_position;
-  float len_sq = dot(to_emitter, to_emitter);
+  if (emitter_sample.is_distant) {
+    return radiance_weight * source_alignment;
+  }
+
   float emitter_orientation = dot(emitter_sample.normal, -to_emitter);
   if ((emitter_orientation <= 0.0f) || (len_sq <= kEpsilon)) {
     return 0.0f;
   }
 
   float distance_weight = 1.0f / fmaxf(1.0f, len_sq);
-  return radiance_weight * distance_weight * (emitter_orientation / sqrtf(len_sq));
+  return radiance_weight * distance_weight * (emitter_orientation / sqrtf(len_sq)) * source_alignment;
 }
 
-ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, SpectralQuery spect, Sampler& smp, const float3& from_point) {
-  if (scene.emitter_instances.count == 0) {
+ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, const EmitterSampleQuery& query, Sampler& smp) {
+  if ((scene.emitter_instances.count == 0) || (scene.emitters_distribution.values.count == 0)) {
     return {};
   }
 
@@ -299,14 +304,14 @@ ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, SpectralQuery spec
       }
 
       const auto& emitter = scene.emitter_instances[emitter_index];
-      EmitterSample sample = emitter_sample_in(emitter, spect, from_point, scene, smp.next_2d());
+      EmitterSample sample = emitter_sample_in(emitter, query.spect, query.source_position, scene, smp.next_2d());
       sample.pdf_sample = pdf_sample;
       sample.emitter_index = emitter_index;
       sample.triangle_index = emitter.triangle_index;
       sample.is_delta = emitter.is_delta();
       sample.is_distant = emitter.is_distant();
 
-      float candidate_weight = emitter_ris_candidate_weight(sample, from_point);
+      float candidate_weight = emitter_ris_candidate_weight(sample, query);
       float weight = candidate_weight / pdf_sample;
 
       weight_sum += weight;
@@ -339,7 +344,7 @@ ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, SpectralQuery spec
   }
 
   const auto& emitter = scene.emitter_instances[emitter_index];
-  EmitterSample sample = emitter_sample_in(emitter, spect, from_point, scene, smp.next_2d());
+  EmitterSample sample = emitter_sample_in(emitter, query.spect, query.source_position, scene, smp.next_2d());
   sample.pdf_sample = pdf_sample;
   sample.emitter_index = emitter_index;
   sample.triangle_index = emitter.triangle_index;

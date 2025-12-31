@@ -265,7 +265,12 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
    * direct light sampling from medium
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
   if (scene.strategy_enabled(Scene::Strategy::ConnectToLight) && (payload.path_length + 1 <= rt.scene().options.max_path_length) && medium.enable_explicit_connections) {
-    auto emitter_sample = sample_emitter(scene, payload.spect, payload.smp, medium_sample.pos);
+    EmitterSampleQuery query = {
+      .spect = payload.spect,
+      .source_type = InteractionType::Medium,
+      .source_position = medium_sample.pos,
+    };
+    auto emitter_sample = sample_emitter(scene, query, payload.smp);
     if (emitter_sample.pdf_dir > 0) {
       auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, {.index = payload.medium}, payload.smp);
       float phase_function = medium_phase_function(medium, payload.ray.d, emitter_sample.direction);
@@ -405,14 +410,26 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
     SpectralResponse direct_light = {payload.spect, 0.0f};
     if (subsurface_sampled) {
       for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-        auto local_sample = sample_emitter(scene, payload.spect, payload.smp, ss_gather.intersections[i].pos);
+        EmitterSampleQuery query = {
+          .spect = payload.spect,
+          .source_type = InteractionType::Surface,
+          .source_position = ss_gather.intersections[i].pos,
+          .source_normal = ss_gather.intersections[i].nrm,
+        };
+        auto local_sample = sample_emitter(scene, query, payload.smp);
         SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, scene.materials[scene.defaults.subsurface_exit_material],  //
           payload.medium, payload.spect, local_sample, payload.smp, scene.multiple_importance_sampling());
         direct_light += ss_gather.weights[i] * light_value;
         ETX_VALIDATE(direct_light);
       }
     } else {
-      auto emitter_sample = sample_emitter(scene, payload.spect, payload.smp, intersection.pos);
+      EmitterSampleQuery query = {
+        .spect = payload.spect,
+        .source_type = InteractionType::Surface,
+        .source_position = intersection.pos,
+        .source_normal = intersection.nrm,
+      };
+      auto emitter_sample = sample_emitter(scene, query, payload.smp);
       direct_light += evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, scene.multiple_importance_sampling());
       ETX_VALIDATE(direct_light);
     }

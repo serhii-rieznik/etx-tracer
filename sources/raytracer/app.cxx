@@ -15,8 +15,6 @@
 #include <filesystem>
 
 #if defined(ETX_PLATFORM_WINDOWS)
-
-// TODO : fix hacks
 # define WIN32_LEAN_AND_MEAN 1
 # include <Windows.h>
 
@@ -448,7 +446,10 @@ void RTApplication::on_emitter_added(uint32_t type) {
       break;
     }
     case 2: {
-      scene.add_atmosphere_emitter({{0.825f, 1000.0f, 1.0f, 1.0f, 1.0f}, 0.125f});
+      scene.add_atmosphere_emitter({
+        .scattering = {.altitude = 1000.0f, .anisotropy = 0.825f, .rayleigh_scale = 1.0f, .mie_scale = 1.0f, .ozone_scale = 1.0f},
+        .quality = 0.125f,
+      });
       break;
     }
   }
@@ -459,6 +460,8 @@ void RTApplication::on_emitter_rebuild(uint32_t index) {
 }
 
 void RTApplication::on_camera_changed(bool film_changed) {
+  scene.update_active_camera();
+
   if (film_changed) {
     integrator_thread.stop(Integrator::Stop::Immediate);
     render.set_output_dimensions(scene.camera().film_size);
@@ -514,7 +517,6 @@ void RTApplication::on_camera_activated(uint32_t camera_index) {
   // Activate the selected camera
   scene.data().cameras[camera_index].active = true;
 
-  // Update the active camera in the scene representation
   scene.update_active_camera();
 
   // Restart rendering with the new camera

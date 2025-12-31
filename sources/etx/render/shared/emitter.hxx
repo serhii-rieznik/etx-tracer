@@ -120,4 +120,11 @@ struct EmitterRadianceQuery {
   bool directly_visible = false;
 };
 
+struct EmitterSampleQuery {
+  SpectralQuery spect = {};
+  InteractionType source_type = InteractionType::Medium;
+  float3 source_position = {};
+  float3 source_normal = {};
+};
+
 }  // namespace etx

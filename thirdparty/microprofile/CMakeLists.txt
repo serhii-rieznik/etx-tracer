@@ -12,7 +12,7 @@ set(MICROPROFILE_PUBLIC_HEADERS
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 
-add_library(${PROJECT_NAME} microprofile.cpp)
+add_library(${PROJECT_NAME} STATIC microprofile.cpp)
 
 include(GenerateExportHeader)
 generate_export_header(${PROJECT_NAME}

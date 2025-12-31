@@ -1,4 +1,4 @@
-add_library(stb_image
+add_library(stb_image STATIC
   stb_image.hxx
   stb_image_write.hxx
   stb_image.cxx

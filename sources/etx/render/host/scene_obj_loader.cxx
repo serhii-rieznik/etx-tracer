@@ -36,9 +36,7 @@ bool load_materials(SceneData& data, const IORDatabase& ior_database, TaskSchedu
 
 etx::MaterialDefinition convert_tinyobj_to_material_definition(const tinyobj::material_t& material) {
   etx::MaterialDefinition result;
-  result.name = material.name;
-  trim_whitespace(result.name);
-  std::transform(result.name.begin(), result.name.end(), result.name.begin(), ::tolower);
+  result.name = etx::normalize_material_name(material.name);
 
   for (const auto& param : material.unknown_parameter) {
     result.properties[param.first] = param.second;
@@ -285,7 +283,6 @@ void process_obj_shapes(const ObjFileData& obj_data, SceneData& data) {
     process_obj_shape(shape, obj_data.attrib, obj_data.materials, data, vertex_map, cache_hits);
   }
 
-  // Log deduplication statistics
   size_t total_vertices_processed = vertex_map.size() + cache_hits;
   size_t unique_vertices = vertex_map.size();
   log::info("Vertex deduplication: %llu total processed, %llu unique (%.1f%% reduction)", total_vertices_processed, unique_vertices,

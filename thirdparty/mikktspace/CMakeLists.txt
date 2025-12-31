@@ -1,4 +1,4 @@
-add_library(mikktspace
+add_library(mikktspace STATIC
   mikktspace.h
   mikktspace.c
 )

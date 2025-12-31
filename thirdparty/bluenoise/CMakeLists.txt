@@ -1,4 +1,4 @@
-add_library(bluenoise
+add_library(bluenoise STATIC
   bluenoise.hxx
   bluenoise.cxx
   bluenoise_shared.hpp
