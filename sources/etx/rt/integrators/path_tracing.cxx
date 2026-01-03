@@ -36,7 +36,7 @@ struct CPUPathTracingImpl : public Task {
     iteration_time = {};
     pixels_processed = 0;
 
-    film.clear(Film::ClearCameraData);
+    film.clear(Film::ClearEverything);
     current_task = scheduler.schedule(film.pixel_count(), this);
   }
 
@@ -71,7 +71,7 @@ struct CPUPathTracingImpl : public Task {
         }
       }
 
-      film.accumulate_camera_image(pixel, color, normal, albedo);
+      film.submit(color, normal, albedo, pixel);
     }
   }
 
@@ -79,6 +79,7 @@ struct CPUPathTracingImpl : public Task {
     if ((current_task.data == Task::InvalidHandle) || (current_state == Integrator::State::Stopped) || (scheduler.completed(current_task) == false)) {
       return;
     }
+    scheduler.wait_and_release(current_task);
 
     if (pixels_processed == 0) {
       current_state = Integrator::State::WaitingForCompletion;
@@ -87,12 +88,9 @@ struct CPUPathTracingImpl : public Task {
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
     status.completed_iterations += 1u;
-
-    scheduler.wait(current_task);
-    film.estimate_noise_levels(status.current_iteration, rt.scene().options.samples, rt.scene().options.noise_threshold);
+    film.commit_iteration(status.current_iteration, rt.scene());
 
     if ((current_state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1 >= rt.scene().options.samples)) {
-      current_task = {};
       current_state = Integrator::State::Stopped;
     } else {
       iteration_time = {};
@@ -146,9 +144,8 @@ void CPUPathTracing::stop(Stop st) {
   if (st == Stop::WaitForCompletion) {
     current_state = State::WaitingForCompletion;
   } else {
+    _private->scheduler.wait_and_release(_private->current_task);
     current_state = State::Stopped;
-    _private->scheduler.wait(_private->current_task);
-    _private->current_task = {};
   }
 }
 

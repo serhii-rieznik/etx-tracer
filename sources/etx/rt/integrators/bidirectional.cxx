@@ -146,7 +146,8 @@ struct PathVertex {
       }
 
       case EmitterProfile::Class::Directional: {
-        return direction_matches(in_direction, em.directional.direction) ? pdf_discrete : 0.0f;
+        float cosine_threshold = em.directional.angular_size > 0.0f ? em.directional.angular_size_cosine : 1.0f;
+        return direction_matches(in_direction, em.directional.direction, cosine_threshold) ? pdf_discrete : 0.0f;
       }
 
       case EmitterProfile::Class::Environment: {
@@ -348,23 +349,17 @@ struct CPUBidirectionalImpl : public Task {
       if (film.active_pixel(i, pixel) == false)
         continue;
 
-      // Create separate samplers for camera and light paths (like VCM)
-      // Both use same index like VCM, but are used sequentially
       auto camera_smp = Sampler(i, status.current_iteration);
       auto light_smp = Sampler(i, status.current_iteration);
 
-      // Generate spectrum from light path first (like VCM)
       SpectralQuery spect = SpectralQuery::sample();
       if (mode != Mode::PathTracing) {
-        // Light path generates the spectrum
         spect = scene.spectral() ? SpectralQuery::spectral_sample(light_smp.next()) : SpectralQuery::sample();
         build_emitter_path(light_smp, spect, path_data);
-        // Camera path uses the light path spectrum but still consumes a sample (like VCM)
         if (scene.spectral()) {
-          camera_smp.next();  // Consume sample to match VCM pattern
+          camera_smp.next();
         }
       } else {
-        // PathTracing mode: camera generates its own spectrum
         spect = scene.spectral() ? SpectralQuery::spectral_sample(camera_smp.next()) : SpectralQuery::sample();
       }
 
@@ -378,7 +373,7 @@ struct CPUBidirectionalImpl : public Task {
 
       auto xyz = (result / spect.sampling_pdf()).to_rgb();
       auto albedo = (gbuffer.albedo / spect.sampling_pdf()).to_rgb();
-      film.accumulate_camera_image(pixel, xyz, gbuffer.normal, albedo);
+      film.submit(xyz, gbuffer.normal, albedo, pixel);
     }
   }
 
@@ -490,7 +485,7 @@ struct CPUBidirectionalImpl : public Task {
       if (curr.connectible) {
         CameraSample camera_sample = {};
         auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);
-        rt.film().atomic_add_light_iteration(splat.to_rgb(), camera_sample.uv);
+        rt.film().submit(splat.to_rgb(), camera_sample.uv);
       }
     } else if (payload.mode == PathSource::Camera) {
       smp.push_fixed(smp_fixed.x, smp_fixed.y, smp_fixed.z);
@@ -1417,7 +1412,7 @@ struct CPUBidirectionalImpl : public Task {
     return rt.trace_transmittance(spect, scene, origin, p1, p0.medium, smp);
   }
 
-  void build_options(Options& options) {
+  void build_options(Options& options) const {
     options.options.clear();
 
     options.set_integral("bdpt-mode", mode, "Mode", Option::Meta::EnumValue, {CPUBidirectionalImpl::Mode::PathTracing, CPUBidirectionalImpl::Mode::BDPTFull}).name_getter =
@@ -1454,7 +1449,7 @@ struct CPUBidirectionalImpl : public Task {
 
     status = {};
     iteration_time = {};
-    rt.film().clear(Film::ClearCameraData | Film::ClearLightData);
+    rt.film().clear(Film::ClearEverything);
     current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
   }
 };
@@ -1487,18 +1482,14 @@ void CPUBidirectional::update() {
     return;
   }
 
-  rt.film().commit_light_iteration(_private->status.current_iteration);
-  // rt.film().estimate_noise_levels(_private->status.current_iteration, rt.scene().options.samples, rt.scene().noise_threshold);
+  rt.scheduler().wait_task(_private->current_task);
+  rt.film().commit_iteration(_private->status.current_iteration, rt.scene());
+  _private->completed();
 
-  if (current_state == State::WaitingForCompletion) {
-    rt.scheduler().wait(_private->current_task);
-    _private->current_task = {};
-    current_state = Integrator::State::Stopped;
-  } else if (_private->status.current_iteration + 1u < rt.scene().options.samples) {
-    _private->completed();
+  if (_private->status.current_iteration + 1u < rt.scene().options.samples) {
     rt.scheduler().restart(_private->current_task);
   } else {
-    rt.scheduler().wait(_private->current_task);
+    rt.scheduler().release(_private->current_task);
     current_state = Integrator::State::Stopped;
   }
 }
@@ -1509,9 +1500,8 @@ void CPUBidirectional::stop(Stop st) {
   }
 
   if (st == Stop::Immediate) {
+    rt.scheduler().wait_and_release(_private->current_task);
     current_state = State::Stopped;
-    rt.scheduler().wait(_private->current_task);
-    _private->current_task = {};
   } else {
     current_state = State::WaitingForCompletion;
   }

@@ -43,9 +43,6 @@ struct CPUVCMImpl {
 
   Task::Handle task_handle = {};
 
-  std::atomic<bool> have_light_image = {};
-  std::atomic<bool> have_camera_image = {};
-
   VCMOptions vcm_options = {};
   VCMIteration vcm_iteration = {};
   VCMSpatialGrid _current_grid = {};
@@ -74,7 +71,7 @@ struct CPUVCMImpl {
   }
 
   void wait_for_tasks() {
-    rt.scheduler().wait(task_handle);
+    rt.scheduler().wait_and_release(task_handle);
     task_handle = {};
   }
 
@@ -83,9 +80,7 @@ struct CPUVCMImpl {
 
     status = {};
 
-    rt.film().clear(Film::ClearCameraData | Film::ClearLightData);
-    have_camera_image = true;
-    have_light_image = true;
+    rt.film().clear(Film::ClearEverything);
 
     vcm_options.load(opt, rt.scene());
     vcm_iteration.iteration = 0;
@@ -148,7 +143,7 @@ struct CPUVCMImpl {
         for (uint32_t i = 0; i < step_result.splat_count; ++i) {
           const float3& val = step_result.values_to_splat[i].to_rgb() / step_result.values_to_splat[i].sampling_pdf();
           if (dot(val, val) > kEpsilon) {
-            film.atomic_add_light_iteration(val, step_result.splat_uvs[i]);
+            film.submit(val, step_result.splat_uvs[i]);
           }
         }
       }
@@ -195,21 +190,12 @@ struct CPUVCMImpl {
         state.merged *= vcm_iteration.vm_normalization;
         state.merged += (state.gathered / state.spect.sampling_pdf()).to_rgb();
 
-        film.accumulate_camera_image(pixel, state.merged, {}, {});
-
-        if (pi % 256 == 0) {
-          have_camera_image = true;
-        }
+        film.submit(state.merged, {}, {}, pixel);
       }
     }
-
-    have_camera_image = true;
   }
 
   void complete_light_vertices() {
-    rt.film().commit_light_iteration(vcm_iteration.iteration);
-    have_light_image = true;
-
     if (*state == Integrator::State::Stopped) {
       return;
     }
@@ -225,11 +211,10 @@ struct CPUVCMImpl {
   }
 
   void complete_camera_vertices() {
+    rt.film().commit_iteration(vcm_iteration.iteration, rt.scene());
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
-
-    have_camera_image = true;
 
     if ((*state == Integrator::State::WaitingForCompletion) || (*state == Integrator::State::Stopped) || (vcm_iteration.iteration + 1 >= rt.scene().options.samples)) {
       *state = Integrator::State::Stopped;
@@ -299,18 +284,6 @@ void CPUVCM::sync_from_options(const Options& options) {
 
 uint32_t CPUVCM::supported_strategies() const {
   return Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices | Scene::Strategy::MergeVertices;
-}
-
-bool CPUVCM::have_updated_camera_image() const {
-  bool result = _private->have_camera_image;
-  _private->have_camera_image = false;
-  return result;
-}
-
-bool CPUVCM::have_updated_light_image() const {
-  bool result = _private->have_light_image;
-  _private->have_light_image = false;
-  return result;
 }
 
 const Integrator::Status& CPUVCM::status() const {

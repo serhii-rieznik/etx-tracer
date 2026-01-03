@@ -23,9 +23,6 @@ struct CPUVCM : public Integrator {
   void sync_from_options(const Options& options) override;
   uint32_t supported_strategies() const override;
 
-  bool have_updated_camera_image() const override;
-  bool have_updated_light_image() const override;
-
   const Status& status() const override;
 
  private:

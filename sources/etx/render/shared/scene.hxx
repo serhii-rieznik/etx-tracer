@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/core/profiler.hxx>
 
@@ -48,7 +48,7 @@ struct ETX_ALIGNED Scene {
     uint32_t max_path_length = 65535u;
     uint32_t samples = 256u;
     uint32_t random_path_termination = 6u;
-    float noise_threshold = 0.1f;
+    float noise_threshold = 0.0f;
     float radiance_clamp = 0.0f;
     uint32_t strategy_flags = 1u << 0u | 1u << 1u | 1u << 2u | 1u << 3u | 1u << 4u;  // DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices
     bool properties[Properties::Count] = {};

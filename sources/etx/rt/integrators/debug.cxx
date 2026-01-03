@@ -152,7 +152,7 @@ struct CPUDebugIntegratorImpl : public Task {
     total_time = {};
     iteration_time = {};
 
-    rt.film().clear(Film::ClearCameraData);
+    rt.film().clear(Film::ClearEverything);
     current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
   }
 
@@ -165,7 +165,7 @@ struct CPUDebugIntegratorImpl : public Task {
       if (film.active_pixel(i, pixel)) {
         float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
         float3 xyz = preview_pixel(smp, uv, pixel, i);
-        rt.film().accumulate_camera_image(pixel, xyz, {}, {});
+        rt.film().submit(xyz, {}, {}, pixel);
       }
     }
   }
@@ -682,9 +682,11 @@ void CPUDebugIntegrator::update() {
     return;
   }
 
+  rt.scheduler().wait_task(_private->current_task);
+  rt.film().commit_iteration(_private->status.current_iteration, rt.scene());
+
   if (current_state == State::WaitingForCompletion) {
-    rt.scheduler().wait(_private->current_task);
-    _private->current_task = {};
+    rt.scheduler().release(_private->current_task);
     current_state = Integrator::State::Stopped;
   } else {
     _private->iteration_time = {};
@@ -702,9 +704,8 @@ void CPUDebugIntegrator::stop(Stop st) {
   if (st == Stop::WaitForCompletion) {
     current_state = State::WaitingForCompletion;
   } else {
+    rt.scheduler().wait_and_release(_private->current_task);
     current_state = State::Stopped;
-    rt.scheduler().wait(_private->current_task);
-    _private->current_task = {};
   }
 }
 

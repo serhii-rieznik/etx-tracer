@@ -2768,13 +2768,6 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
     scene_settings_changed = true;
   }
 
-  if (labeled_control("Noise Threshold", [&]() {
-        return ImGui::InputFloat("##noise_thresh", &scene_rep.data().options.noise_threshold, 0.0001f, 0.01f, "%0.5f");
-      })) {
-    scene_rep.data().options.noise_threshold = std::clamp(scene_rep.data().options.noise_threshold, 0.0f, 1.0f);
-    scene_settings_changed = true;
-  }
-
   if (labeled_control("Radiance Clamp", [&]() {
         return ImGui::InputFloat("##radiance_clamp", &scene_rep.data().options.radiance_clamp, 0.1f, 1.f, "%0.2f");
       })) {
@@ -2782,10 +2775,20 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
     scene_settings_changed = true;
   }
 
-  ImGui::Text("Active pixels: %.2f%%", double(_film->active_pixel_count()) / double(_film->pixel_count()) * 100.0);
-
   bool spectral_changed = ImGui::Checkbox("Spectral rendering", scene_rep.data().options.properties + Scene::Properties::Spectral);
   scene_settings_changed = scene_settings_changed || spectral_changed;
+
+  ImGui::Separator();
+  ImGui::Text("Experimental");
+  if (labeled_control("Noise Threshold", [&]() {
+        return ImGui::InputFloat("##noise_thresh", &scene_rep.data().options.noise_threshold, 0.0001f, 0.01f, "%0.5f");
+      })) {
+    scene_rep.data().options.noise_threshold = std::clamp(scene_rep.data().options.noise_threshold, 0.0f, 1.0f);
+    scene_settings_changed = true;
+  }
+  if (scene_rep.data().options.noise_threshold > 0.0f) {
+    ImGui::Text("Active pixels: %.2f%%", double(_film->active_pixel_count()) / double(_film->pixel_count()) * 100.0);
+  }
 
   if (scene_settings_changed) {
     scene_rep.data().options.max_path_length = std::min(scene_rep.data().options.max_path_length, 65536u);

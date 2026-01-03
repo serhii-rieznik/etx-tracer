@@ -110,12 +110,12 @@ Task::Handle TaskScheduler::schedule(uint64_t range, std::function<void(uint32_t
 
 void TaskScheduler::execute(uint64_t range, Task* t) {
   auto handle = schedule(range, t);
-  wait(handle);
+  wait_and_release(handle);
 }
 
 void TaskScheduler::execute(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
   auto handle = schedule(range, func);
-  wait(handle);
+  wait_and_release(handle);
 }
 
 void TaskScheduler::execute_linear(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
@@ -131,13 +131,19 @@ bool TaskScheduler::completed(Task::Handle handle) {
   return task_wrapper.executed && task_wrapper.GetIsComplete();
 }
 
-void TaskScheduler::wait(Task::Handle& handle) {
+void TaskScheduler::wait_task(const Task::Handle& handle) {
   if (handle.data == Task::InvalidHandle) {
     return;
   }
 
   auto& task_wrapper = _private->task_pool.get(handle.data);
   _private->scheduler.WaitforTask(&task_wrapper);
+}
+
+void TaskScheduler::release(Task::Handle& handle) {
+  if (handle.data == Task::InvalidHandle) {
+    return;
+  }
   _private->task_pool.free(handle.data);
 
   auto func_task = _private->task_to_function.find(handle.data);
@@ -147,6 +153,11 @@ void TaskScheduler::wait(Task::Handle& handle) {
   }
 
   handle.data = Task::InvalidHandle;
+}
+
+void TaskScheduler::wait_and_release(Task::Handle& handle) {
+  wait_task(handle);
+  release(handle);
 }
 
 void TaskScheduler::restart(Task::Handle handle) {

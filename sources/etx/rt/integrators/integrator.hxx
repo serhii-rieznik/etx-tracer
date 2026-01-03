@@ -82,14 +82,6 @@ struct Integrator {
   virtual void sync_from_options(const Options& options) {
   }
 
-  virtual bool have_updated_camera_image() const {
-    return state() != State::Stopped;
-  }
-
-  virtual bool have_updated_light_image() const {
-    return state() != State::Stopped;
-  }
-
   virtual const Status& status() const = 0;
 
   virtual Type type() const {

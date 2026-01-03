@@ -15,11 +15,8 @@ namespace {
 constexpr uint32_t kMinSamples = 32u;
 
 enum StorageLayers : uint32_t {
-  StorageCameraImage,
-  StorageLightImage,
-  StorageCameraAdaptive,
-  StorageLightAdaptive,
-  StorageLightIteration,
+  StorageAccumulation,
+  StorageAdaptive,
   StorageNormals,
   StorageAlbedo,
   StorageDenoised,
@@ -28,10 +25,13 @@ enum StorageLayers : uint32_t {
 };
 
 struct InternalData {
+  float3 color = {};
   float error_level = 0.0f;
-  uint32_t sample_count : 30;
-  uint32_t converged    : 1;
-  uint32_t tmp          : 1;
+  uint32_t sample_count = 0;
+  uint8_t written = 0;
+  uint8_t converged = 0;
+  uint8_t tmp = 0;
+  uint8_t pad = 0;
 };
 
 struct LayerInfo {
@@ -40,13 +40,11 @@ struct LayerInfo {
 } layer_info[Film::LayerCount] = {
   {Film::Result, kInvalidIndex},
   {Film::Denoised, StorageDenoised},
+  {Film::CurrentFrame, kInvalidIndex},
+  {Film::Accumulation, StorageAccumulation},
+  {Film::AdaptiveAccumulation, StorageAdaptive},
   {Film::Albedo, StorageAlbedo},
   {Film::Normals, StorageNormals},
-  {Film::CameraImage, StorageCameraImage},
-  {Film::LightImage, StorageLightImage},
-  {Film::LightIteration, StorageLightIteration},
-  {Film::CameraAdaptive, StorageCameraAdaptive},
-  {Film::LightAdaptive, StorageLightAdaptive},
   {Film::Debug, kInvalidIndex},
 };
 
@@ -91,6 +89,9 @@ struct FilmImpl {
   uint32_t total_pixel_count() const {
     return dimensions.x * dimensions.y;
   }
+
+  void commit_iteration();
+  void estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold);
 };
 
 Film::Film(TaskScheduler& t) {
@@ -144,8 +145,33 @@ float2 Film::sample(const Scene& scene, const PixelFilter& sampler, const uint2&
   return {u, v};
 }
 
-void Film::atomic_add_light_iteration(const float3& value, const float2& ndc_coord) {
-  if (dot(value, value) == 0.0f)
+void Film::submit(const float3& value, const float3& normal, const float3& albedo, const uint2& pixel) {
+  if ((pixel.x >= _private->dimensions.x) || (pixel.y >= _private->dimensions.y)) {
+    return;
+  }
+
+  auto int_data = _private->internal_data.data();
+  auto normal_data = _private->storage_buffers[StorageNormals].data();
+  auto albedo_data = _private->storage_buffers[StorageAlbedo].data();
+
+  uint32_t p_base_x = (pixel.x / _private->pixel_size) * _private->pixel_size;
+  uint32_t p_base_y = (pixel.y / _private->pixel_size) * _private->pixel_size;
+  for (uint32_t py = p_base_y, pye = min(p_base_y + _private->pixel_size, _private->dimensions.y); py < pye; ++py) {
+    for (uint32_t px = p_base_x, pxe = min(p_base_x + _private->pixel_size, _private->dimensions.x); px < pxe; ++px) {
+      uint32_t i = px + (_private->dimensions.y - 1u - py) * _private->dimensions.x;
+      auto& target = int_data[i].color;
+      atomic_add_float(&target.x, value.x);
+      atomic_add_float(&target.y, value.y);
+      atomic_add_float(&target.z, value.z);
+      normal_data[i] = normal;
+      albedo_data[i] = albedo;
+      int_data[i].written = 1;
+    }
+  }
+}
+
+void Film::submit(const float3& value, const float2& ndc_coord) {
+  if (dot(value, value) < kEpsilon)
     return;
 
   float2 uv = ndc_coord * 0.5f + 0.5f;
@@ -155,83 +181,24 @@ void Film::atomic_add_light_iteration(const float3& value, const float2& ndc_coo
     return;
   }
 
-  const uint32_t p_base_x = (x / _private->pixel_size) * _private->pixel_size;
-  const uint32_t p_base_y = (y / _private->pixel_size) * _private->pixel_size;
-  auto ptr = _private->storage_buffers[StorageLightIteration].data();
-  for (uint32_t v = 0; v < _private->pixel_size; ++v) {
-    const uint32_t py = min(p_base_y + v, _private->dimensions.y - 1u);
-    for (uint32_t u = 0; u < _private->pixel_size; ++u) {
-      const uint32_t px = min(p_base_x + u, _private->dimensions.x - 1u);
-      const uint32_t i = px + (_private->dimensions.y - 1u - py) * _private->dimensions.x;
-      atomic_add_float(&ptr[i].x, value.x);
-      atomic_add_float(&ptr[i].y, value.y);
-      atomic_add_float(&ptr[i].z, value.z);
-    }
-  }
-}
-
-void Film::accumulate_camera_image(const uint2& pixel, const float3& color, const float3& normal, const float3& albedo) {
-  if ((pixel.x >= _private->dimensions.x) || (pixel.y >= _private->dimensions.y)) {
-    return;
-  }
-
-  auto var_data = _private->storage_buffers[StorageCameraAdaptive].data();
   auto int_data = _private->internal_data.data();
 
-  auto colors_data = _private->storage_buffers[StorageCameraImage].data();
-  auto normal_data = _private->storage_buffers[StorageNormals].data();
-  auto albedo_data = _private->storage_buffers[StorageAlbedo].data();
-
-  uint32_t p_base_x = (pixel.x / _private->pixel_size) * _private->pixel_size;
-  uint32_t p_base_y = (pixel.y / _private->pixel_size) * _private->pixel_size;
+  uint32_t p_base_x = (x / _private->pixel_size) * _private->pixel_size;
+  uint32_t p_base_y = (y / _private->pixel_size) * _private->pixel_size;
   for (uint32_t py = p_base_y, pye = min(p_base_y + _private->pixel_size, _private->dimensions.y); py < pye; ++py) {
     for (uint32_t px = p_base_x, pxe = min(p_base_x + _private->pixel_size, _private->dimensions.x); px < pxe; ++px) {
       uint32_t i = px + (_private->dimensions.y - 1u - py) * _private->dimensions.x;
-
-      uint32_t sample_index = int_data[i].sample_count;
-      double ds = double(sample_index);
-
-      if (sample_index == 0) {
-        colors_data[i] = color;
-        normal_data[i] = normal;
-        albedo_data[i] = albedo;
-        var_data[i] = color;
-      } else {
-        float t = float(ds / (ds + 1.0));
-
-        colors_data[i] = {
-          .x = lerp(color.x, colors_data[i].x, t),
-          .y = lerp(color.y, colors_data[i].y, t),
-          .z = lerp(color.z, colors_data[i].z, t),
-        };
-        normal_data[i] = {
-          .x = lerp(normal.x, normal_data[i].x, t),
-          .y = lerp(normal.y, normal_data[i].y, t),
-          .z = lerp(normal.z, normal_data[i].z, t),
-        };
-        albedo_data[i] = {
-          .x = lerp(albedo.x, albedo_data[i].x, t),
-          .y = lerp(albedo.y, albedo_data[i].y, t),
-          .z = lerp(albedo.z, albedo_data[i].z, t),
-        };
-
-        if ((sample_index % 2) == 0) {
-          t = float(ds / (ds + 2.0));
-          var_data[i] = {
-            .x = lerp(color.x, var_data[i].x, t),
-            .y = lerp(color.y, var_data[i].y, t),
-            .z = lerp(color.z, var_data[i].z, t),
-          };
-        }
-      }
-
-      int_data[i].sample_count += 1u;
+      auto& target = int_data[i].color;
+      atomic_add_float(&target.x, value.x);
+      atomic_add_float(&target.y, value.y);
+      atomic_add_float(&target.z, value.z);
+      int_data[i].written = 1;
     }
   }
 }
 
-void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, float threshold) {
-  _private->max_sample_count = total_samples;
+void FilmImpl::estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold) {
+  max_sample_count = total_samples;
 
   if ((threshold == 0.0f) || (sample_index < kMinSamples) || (sample_index % 2) != 0)
     return;
@@ -240,13 +207,13 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
   auto t0 = std::chrono::steady_clock::now();
 #endif
 
-  auto var_data = _private->storage_buffers[StorageCameraAdaptive].data();
-  auto cam_data = _private->storage_buffers[StorageCameraImage].data();
-  auto int_data = _private->internal_data.data();
+  auto var_data = storage_buffers[StorageAdaptive].data();
+  auto cam_data = storage_buffers[StorageAccumulation].data();
+  auto int_data = internal_data.data();
 
-  _private->active_pixels = 0;
-  _private->last_noise_level = 0.0f;
-  _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
+  active_pixels = 0;
+  last_noise_level = 0.0f;
+  tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
     float total_noise = 0.0f;
     for (uint32_t i = begin; i < end; ++i) {
       if (int_data[i].converged)
@@ -263,10 +230,10 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
       int_data[i].converged = converged;
       int_data[i].tmp = converged;
 
-      _private->active_pixels += converged;
+      active_pixels += converged;
       total_noise += error_level;
     }
-    _private->last_noise_level.fetch_add(total_noise);
+    last_noise_level.fetch_add(total_noise);
   });
 
 #if (ETX_LOG_NOISE_LEVEL)
@@ -275,17 +242,17 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
 
   constexpr uint32_t kBlockSize = 5u;
 
-  if (_private->active_pixels > 0.0f) {
-    _private->last_noise_level = _private->last_noise_level / float(_private->active_pixels);
+  if (active_pixels > 0.0f) {
+    last_noise_level = last_noise_level / float(active_pixels);
   }
 
-  _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
+  tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
       if (int_data[i].converged) {
         continue;
       }
 
-      uint32_t w = _private->dimensions.x;
+      uint32_t w = dimensions.x;
       uint32_t x = i % w;
       uint32_t y = i / w;
       uint32_t begin_x = x >= kBlockSize ? x - kBlockSize : 0u;
@@ -300,14 +267,14 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
   auto t2 = std::chrono::steady_clock::now();
 #endif
 
-  _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
+  tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
     for (uint32_t i = begin; i < end; ++i) {
       if (int_data[i].tmp) {
         continue;
       }
 
-      uint32_t w = _private->dimensions.x;
-      uint32_t h = _private->dimensions.y;
+      uint32_t w = dimensions.x;
+      uint32_t h = dimensions.y;
       uint32_t x = i % w;
       uint32_t y = i / w;
 
@@ -329,30 +296,64 @@ void Film::estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, 
 #endif
 }
 
-void Film::commit_light_iteration(uint32_t i) {
-  float t = float(double(i) / double(i + 1u));
+void FilmImpl::commit_iteration() {
+  auto int_data = internal_data.data();
+  auto accumumlation = storage_buffers[StorageAccumulation].data();
+  auto adaptive = storage_buffers[StorageAdaptive].data();
 
-  auto sptr = _private->storage_buffers[StorageLightIteration].data();
-  auto dptr = _private->storage_buffers[StorageLightImage].data();
-
-  uint64_t pixel_count = _private->total_pixel_count();
+  uint64_t pixel_count = total_pixel_count();
   for (uint64_t i = 0; i < pixel_count; ++i) {
-    dptr[i] = (t == 0.0f) ? sptr[i] : lerp(sptr[i], dptr[i], t);
-    sptr[i] = {};
+    auto& idata = int_data[i];
+    if (idata.written == 0)
+      continue;
+
+    const uint32_t sample_count = idata.sample_count;
+
+    if (sample_count == 0) {
+      accumumlation[i] = idata.color;
+      adaptive[i] = idata.color;
+    } else {
+      float t = float(double(sample_count) / double(sample_count + 1u));
+      accumumlation[i] = lerp(idata.color, accumumlation[i], t);
+      if (sample_count % 2 == 0) {
+        uint32_t adaptive_sample_count = sample_count / 2u;
+        t = float(double(adaptive_sample_count) / double(adaptive_sample_count + 1u));
+        adaptive[i] = lerp(idata.color, adaptive[i], t);
+      }
+    }
+
+    idata.color = {};
+    idata.written = 0;
+    idata.sample_count++;
   }
 }
 
+void Film::commit_iteration(uint32_t sample_index, const Scene& scene) {
+  _private->commit_iteration();
+  _private->estimate_noise(sample_index, scene.options.samples, scene.options.noise_threshold);
+}
+
 void Film::clear(uint32_t options) {
-  if ((options & ClearCameraData) || (options & ClearEverything)) {
+  bool clear_all = options & ClearEverything;
+  bool clear_frame = clear_all || (options & ClearIteration);
+
+  if (clear_all) {
     memset(_private->internal_data.data(), 0, _private->internal_data.size() * sizeof(_private->internal_data[0]));
   }
 
-  bool clear[StorageLayerCount] = {};
-  clear[StorageLightImage] = options & ClearLightData;
-  clear[StorageLightIteration] = clear[StorageLightImage] || (options & ClearLightIteration);
-  for (auto id = 0; (options & ClearEverything) && (id < StorageLayerCount); ++id) {
-    clear[id] = true;
+  if (clear_frame) {
+    for (auto& i : _private->internal_data) {
+      i.color = {};
+      i.written = 0;
+    }
   }
+
+  bool clear[StorageLayerCount] = {};
+  clear[StorageAccumulation] = clear_all;
+  clear[StorageAdaptive] = clear_all;
+  clear[StorageNormals] = clear_all;
+  clear[StorageAlbedo] = clear_all;
+  clear[StorageDenoised] = clear_all;
 
   auto& buffers = _private->storage_buffers;
   for (auto id = 0; id < StorageLayerCount; ++id) {
@@ -362,9 +363,10 @@ void Film::clear(uint32_t options) {
     }
   }
 
-  _private->pixel_size = _private->target_pixel_size;
-  _private->last_noise_level = {};
-  _private->active_pixels = pixel_count();
+  if (clear_all) {
+    _private->last_noise_level = {};
+    _private->active_pixels = pixel_count();
+  }
 }
 
 const uint2& Film::size() const {
@@ -397,14 +399,33 @@ float4* Film::layer(uint32_t layer) const {
     });
   } else if (layer == Result) {
     ETX_PROFILER_SCOPE();
-    auto c_buf = _private->storage_buffers[StorageCameraImage].data();
-    auto l_buf = _private->storage_buffers[StorageLightImage].data();
+    auto accum = _private->storage_buffers[StorageAccumulation].data();
+    auto current = _private->internal_data.data();
     _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
-        output[i] = to_float4(max({}, c_buf[i] + l_buf[i]));
+        const auto& curr = current[i];
+        if (curr.sample_count == 0) {
+          output[i] = to_float4(max({}, curr.color));
+        } else if (current[i].written == 0) {
+          output[i] = to_float4(max({}, accum[i]));
+        } else {
+          uint32_t effective_sample_count = current[i].sample_count + 1u;
+          float t = float(double(effective_sample_count) / double(effective_sample_count + 1u));
+          float3 blended = lerp(current[i].color, accum[i], t);
+          output[i] = to_float4(max({}, blended));
+        }
+      }
+    });
+  } else if (layer == CurrentFrame) {
+    ETX_PROFILER_SCOPE();
+    auto frame = _private->internal_data.data();
+    _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
+      for (uint32_t i = begin; i < end; ++i) {
+        output[i] = to_float4(max({}, frame[i].color));
       }
     });
   } else if (layer_ref != kInvalidIndex) {
+    ETX_PROFILER_SCOPE();
     auto buf = _private->storage_buffers[layer_ref].data();
     _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
@@ -466,13 +487,11 @@ const char* Film::layer_name(uint32_t layer) {
   static const char* names[] = {
     "Result",
     "Denoised",
+    "Current Frame",
+    "Accumulation",
+    "Adaptive Accumulation",
     "Albedo",
     "Normals",
-    "Camera Image",
-    "Light Image",
-    "Light Iteration",
-    "Camera Adaptive",
-    "Light Adaptive",
     "Debug",
   };
   static_assert(std::size(names) == LayerCount);

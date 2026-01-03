@@ -17,10 +17,6 @@ struct CPUPathTracing : public Integrator {
     return Integrator::Type::PathTracing;
   }
 
-  bool have_updated_light_image() const override {
-    return false;
-  }
-
   const Status& status() const override;
 
   void run() override;

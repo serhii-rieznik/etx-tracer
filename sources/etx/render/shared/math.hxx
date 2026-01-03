@@ -1156,10 +1156,11 @@ ETX_GPU_CODE bool intersect_ray_plane(const Ray& ray, const float3& plane_n, con
   return true;
 }
 
-ETX_GPU_CODE bool direction_matches(const float3& ideal, const float3& actual) {
+ETX_GPU_CODE bool direction_matches(const float3& ideal, const float3& actual, float cosine_threshold) {
+  constexpr const float kDefaultThreshold = 1.0f - kInvMaxHalf;
   const float3 i = normalize(ideal);
   const float3 a = normalize(actual);
-  return dot(i, a) > 1.0f - kInvMaxHalf;
+  return dot(i, a) >= fminf(kDefaultThreshold, cosine_threshold);
 }
 
 }  // namespace etx

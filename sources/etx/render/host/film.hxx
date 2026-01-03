@@ -13,23 +13,19 @@ struct Film {
   enum : uint32_t {
     Result,
     Denoised,
+    CurrentFrame,
+    Accumulation,
+    AdaptiveAccumulation,
     Albedo,
     Normals,
-    CameraImage,
-    LightImage,
-    LightIteration,
-    CameraAdaptive,
-    LightAdaptive,
     Debug,
 
     LayerCount,
   };
 
   enum ClearOptions : uint32_t {
-    ClearCameraData = 1u << 0u,
-    ClearLightData = 1u << 1u,
-    ClearEverything = 1u << 2u,
-    ClearLightIteration = 1u << 3u,
+    ClearIteration = 1u << 0u,
+    ClearEverything = 1u << 1u,
   };
 
   enum : uint32_t {
@@ -54,9 +50,9 @@ struct Film {
 
   float2 sample(const Scene& scene, const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const;
 
-  void accumulate_camera_image(const uint2& pixel, const float3& color, const float3& normal, const float3& albedo);
-  void atomic_add_light_iteration(const float3& value, const float2& ndc_coord);
-  void commit_light_iteration(uint32_t i);
+  void submit(const float3& value, const float2& ndc_coord);
+  void submit(const float3& value, const float3& normal, const float3& albedo, const uint2& pixel);
+  void commit_iteration(uint32_t sample_index, const Scene& scene);
 
   void clear(uint32_t clear_options);
 

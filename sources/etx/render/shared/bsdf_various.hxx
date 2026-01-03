@@ -237,7 +237,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   auto frame = data.get_normal_frame(mtl);
   const float3 ideal_w_o = normalize(reflect(data.w_i, frame.nrm));
   const float3 actual_w_o = normalize(w_o);
-  if (direction_matches(ideal_w_o, actual_w_o)) {
+  if (direction_matches(ideal_w_o, actual_w_o, 1.0f)) {
     result.func = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
     result.bsdf = result.func;
     result.pdf = 1.0f;
@@ -250,7 +250,7 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   auto frame = data.get_normal_frame(mtl);
   const float3 ideal_w_o = normalize(reflect(data.w_i, frame.nrm));
   const float3 actual_w_o = normalize(w_o);
-  return direction_matches(ideal_w_o, actual_w_o) ? 1.0f : 0.0f;
+  return direction_matches(ideal_w_o, actual_w_o, 1.0f) ? 1.0f : 0.0f;
 }
 
 ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {

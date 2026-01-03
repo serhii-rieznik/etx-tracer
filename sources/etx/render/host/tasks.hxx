@@ -36,8 +36,11 @@ struct TaskScheduler {
 
   void execute_linear(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
+  void wait_task(const Task::Handle&);
+
   bool completed(Task::Handle);
-  void wait(Task::Handle&);
+  void wait_and_release(Task::Handle&);
+  void release(Task::Handle&);
 
   void restart(Task::Handle);
 
