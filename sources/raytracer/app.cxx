@@ -162,7 +162,7 @@ void RTApplication::frame() {
 
   render.start_frame(integrator_thread.status().current_iteration, options);
 
-  const auto frame_data = raytracing.film().layer(options.layer);
+  const auto frame_data = raytracing.film().layer(options.layer, raytracing.scene());
   render.update_image(frame_data);
 
   ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping(), scene.camera_mapping(), &integrator_thread);
@@ -220,7 +220,6 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return;
   }
 
-  // Reset scene hashes for clean state with new scene
   integrator_thread.reset_scene_hashes();
 
   for (const auto& [type, options] : integrator_data.settings) {
@@ -279,14 +278,14 @@ void RTApplication::on_use_image_as_reference() {
   _options.set_string("ref", {}, "Reference");
   save_options();
 
-  const float4* data = raytracing.film().layer(Film::Result);
+  const float4* data = raytracing.film().layer(Film::Result, raytracing.scene());
   uint2 size = raytracing.film().dimensions();
   render.set_reference_image(data, size);
 }
 
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
   uint2 image_size = {raytracing.camera().film_size.x, raytracing.camera().film_size.y};
-  const float4* output = raytracing.film().layer(ui.view_options().layer);
+  const float4* output = raytracing.film().layer(ui.view_options().layer, raytracing.scene());
 
   if (mode == SaveImageMode::TonemappedLDR) {
     if (strlen(get_file_ext(file_name.c_str())) == 0) {
@@ -473,7 +472,7 @@ void RTApplication::on_scene_settings_changed() {
 }
 
 void RTApplication::on_denoise_selected() {
-  raytracing.film().denoise(ui.view_options().layer);
+  raytracing.film().denoise(ui.view_options().layer, raytracing.scene());
   ui.mutable_view_options().layer = Film::Denoised;
 }
 
@@ -509,17 +508,14 @@ void RTApplication::on_camera_activated(uint32_t camera_index) {
     return;
   }
 
-  // Deactivate all cameras
   for (auto& cam : scene.data().cameras) {
     cam.active = false;
   }
 
-  // Activate the selected camera
   scene.data().cameras[camera_index].active = true;
 
   scene.update_active_camera();
 
-  // Restart rendering with the new camera
   integrator_thread.restart();
 }
 

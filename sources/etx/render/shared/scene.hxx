@@ -206,17 +206,13 @@ ETX_GPU_CODE float3 barycentrics(const Scene& scene, const Triangle& t, const fl
   const float3 v1 = c - a;
   const float3 v2 = p - a;
 
-  // Compute dot products
   float d00 = dot(v0, v0);
   float d01 = dot(v0, v1);
   float d11 = dot(v1, v1);
   float d20 = dot(v2, v0);
   float d21 = dot(v2, v1);
 
-  // Compute denominator
   float denom = d00 * d11 - d01 * d01;
-
-  // Compute barycentric coordinates
   float u = (d11 * d20 - d01 * d21) / denom;
   float v = (d00 * d21 - d01 * d20) / denom;
   return {1.0f - u - v, u, v};

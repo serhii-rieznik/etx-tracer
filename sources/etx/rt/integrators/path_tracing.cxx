@@ -58,20 +58,11 @@ struct CPUPathTracingImpl : public Task {
         ETX_VALIDATE(payload.accumulated);
       }
 
-      auto normal = payload.view_normal;
       auto albedo = (payload.view_albedo / payload.spect.sampling_pdf()).to_rgb();
       ETX_CHECK_FINITE(albedo);
       auto color = (payload.accumulated / payload.spect.sampling_pdf()).to_rgb();
       ETX_CHECK_FINITE(color);
-
-      if ((scene.options.radiance_clamp > 0.0f) && (payload.path_length > 1)) {
-        float lum = luminance(color);
-        if (lum > scene.options.radiance_clamp) {
-          color *= scene.options.radiance_clamp / lum;
-        }
-      }
-
-      film.submit(color, normal, albedo, pixel);
+      film.submit(color, payload.view_normal, albedo, pixel);
     }
   }
 
@@ -81,16 +72,14 @@ struct CPUPathTracingImpl : public Task {
     }
     scheduler.wait_and_release(current_task);
 
-    if (pixels_processed == 0) {
-      current_state = Integrator::State::WaitingForCompletion;
-    }
-
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
     status.completed_iterations += 1u;
     film.commit_iteration(status.current_iteration, rt.scene());
 
-    if ((current_state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1 >= rt.scene().options.samples)) {
+    if (current_state == Integrator::State::WaitingForCompletion) {
+      current_state = Integrator::State::Stopped;
+    } else if ((pixels_processed == 0) || (status.current_iteration + 1 >= rt.scene().options.samples)) {
       current_state = Integrator::State::Stopped;
     } else {
       iteration_time = {};

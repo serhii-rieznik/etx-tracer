@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/core/pimpl.hxx>
 #include <etx/render/shared/camera.hxx>
@@ -59,8 +59,8 @@ struct Film {
   const uint2& size() const;  // total size of the film in pixels
   uint2 dimensions() const;   // current size of the film in pixels, accounting for pixel size
 
-  float4* layer(uint32_t layer) const;
-  void denoise(uint32_t layer_to_denoise);
+  float4* layer(uint32_t layer, const Scene& scene) const;
+  void denoise(uint32_t layer_to_denoise, const Scene& scene);
 
   uint32_t pixel_size() const;
   void set_pixel_size(uint32_t size);

@@ -90,7 +90,7 @@ struct FilmImpl {
     return dimensions.x * dimensions.y;
   }
 
-  void commit_iteration();
+  void commit_iteration(const Scene& scene);
   void estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold);
 };
 
@@ -163,8 +163,17 @@ void Film::submit(const float3& value, const float3& normal, const float3& albed
       atomic_add_float(&target.x, value.x);
       atomic_add_float(&target.y, value.y);
       atomic_add_float(&target.z, value.z);
-      normal_data[i] = normal;
-      albedo_data[i] = albedo;
+
+      const uint32_t sample_count = int_data[i].sample_count;
+      if (sample_count == 0) {
+        normal_data[i] = normal;
+        albedo_data[i] = albedo;
+      } else {
+        float t = float(double(sample_count) / double(sample_count + 1u));
+        normal_data[i] = lerp(normal, normal_data[i], t);
+        albedo_data[i] = lerp(albedo, albedo_data[i], t);
+      }
+
       int_data[i].written = 1;
     }
   }
@@ -296,7 +305,7 @@ void FilmImpl::estimate_noise(uint32_t sample_index, uint32_t total_samples, flo
 #endif
 }
 
-void FilmImpl::commit_iteration() {
+void FilmImpl::commit_iteration(const Scene& scene) {
   auto int_data = internal_data.data();
   auto accumumlation = storage_buffers[StorageAccumulation].data();
   auto adaptive = storage_buffers[StorageAdaptive].data();
@@ -308,6 +317,14 @@ void FilmImpl::commit_iteration() {
       continue;
 
     const uint32_t sample_count = idata.sample_count;
+
+    // Apply radiance clamping to accumulated color before blending
+    if (scene.options.radiance_clamp > 0.0f) {
+      float lum = luminance(idata.color);
+      if (lum > scene.options.radiance_clamp) {
+        idata.color *= scene.options.radiance_clamp / lum;
+      }
+    }
 
     if (sample_count == 0) {
       accumumlation[i] = idata.color;
@@ -329,7 +346,7 @@ void FilmImpl::commit_iteration() {
 }
 
 void Film::commit_iteration(uint32_t sample_index, const Scene& scene) {
-  _private->commit_iteration();
+  _private->commit_iteration(scene);
   _private->estimate_noise(sample_index, scene.options.samples, scene.options.noise_threshold);
 }
 
@@ -380,7 +397,7 @@ uint2 Film::dimensions() const {
   };
 }
 
-float4* Film::layer(uint32_t layer) const {
+float4* Film::layer(uint32_t layer, const Scene& scene) const {
   ETX_PROFILER_SCOPE();
 
   const auto layer_ref = layer_info[layer].storage;
@@ -403,17 +420,29 @@ float4* Film::layer(uint32_t layer) const {
     auto current = _private->internal_data.data();
     _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
+        float3 color;
         const auto& curr = current[i];
+
+        // Clamp current iteration's color before blending
+        float3 clamped_curr_color = curr.color;
+        if (scene.options.radiance_clamp > 0.0f) {
+          float lum = luminance(clamped_curr_color);
+          if (lum > scene.options.radiance_clamp) {
+            clamped_curr_color *= scene.options.radiance_clamp / lum;
+          }
+        }
+
         if (curr.sample_count == 0) {
-          output[i] = to_float4(max({}, curr.color));
+          color = max({}, clamped_curr_color);
         } else if (current[i].written == 0) {
-          output[i] = to_float4(max({}, accum[i]));
+          color = max({}, accum[i]);
         } else {
           uint32_t effective_sample_count = current[i].sample_count + 1u;
           float t = float(double(effective_sample_count) / double(effective_sample_count + 1u));
-          float3 blended = lerp(current[i].color, accum[i], t);
-          output[i] = to_float4(max({}, blended));
+          color = max({}, lerp(clamped_curr_color, accum[i], t));
         }
+
+        output[i] = to_float4(color);
       }
     });
   } else if (layer == CurrentFrame) {
@@ -430,7 +459,7 @@ float4* Film::layer(uint32_t layer) const {
     _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
         float3 out = (layer == Normals) ? buf[i] * 0.5f + 0.5f : buf[i];
-        output[i] = to_float4(out);
+        output[i] = to_float4(max({}, out));
       }
     });
   }
@@ -438,8 +467,8 @@ float4* Film::layer(uint32_t layer) const {
   return output;
 }
 
-void Film::denoise(uint32_t layer_to_denoise) {
-  const auto source = layer(layer_to_denoise);
+void Film::denoise(uint32_t layer_to_denoise, const Scene& scene) {
+  const auto source = layer(layer_to_denoise, scene);
   _private->denoiser.denoise(source, _private->storage_buffers[StorageDenoised].data());
 }
 

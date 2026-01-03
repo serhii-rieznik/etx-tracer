@@ -222,7 +222,6 @@ struct CPUDebugIntegratorImpl : public Task {
     if (a * a < kEpsilon)
       return 0;
 
-    // at + b = 0
     roots[0] = -b / a;
     return 1;
   }
@@ -249,7 +248,6 @@ struct CPUDebugIntegratorImpl : public Task {
       return solve_quadratic(b, c, d, roots);
     }
 
-    // t^3 + pt + q = 0
     float p = (3.0f * a * c - b * b) / (3.0f * a * a);
     float q = (2.0f * b * b * b - 9.0f * a * b * c + 27.0f * a * a * d) / (27.0f * a * a * a);
 
@@ -271,20 +269,16 @@ struct CPUDebugIntegratorImpl : public Task {
     float e = b / (3.0f * a);
     float Q = q * q / 4.0f + p * p * p / 27.0f;
     if (fabsf(Q) <= kEpsilon) {
-      // discriminant = 0 -> two roots
       roots[0] = -1.5f * q / p - e;
       roots[1] = 3.0f * q / p - e;
       return 2u;
     }
 
     if (Q > 0.0f) {
-      // discriminant > 0 -> only one real root
       float sqrt_Q = sqrtf(Q);
       roots[0] = cube_root(-q / 2.0f + sqrt_Q) + cube_root(-q / 2.0f - sqrt_Q) - e;
       return 1u;
     }
-
-    // discriminant < 0 -> three roots
     float u = 2.0f * sqrtf(-p / 3.0f);
     float cos_phi = clamp(3.0f * q / p / u, -1.0f, 1.0f);
     float t = acosf(cos_phi) / 3.0f;

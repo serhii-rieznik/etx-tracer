@@ -1486,7 +1486,10 @@ void CPUBidirectional::update() {
   rt.film().commit_iteration(_private->status.current_iteration, rt.scene());
   _private->completed();
 
-  if (_private->status.current_iteration + 1u < rt.scene().options.samples) {
+  if (current_state == State::WaitingForCompletion) {
+    rt.scheduler().release(_private->current_task);
+    current_state = Integrator::State::Stopped;
+  } else if (_private->status.current_iteration + 1u < rt.scene().options.samples) {
     rt.scheduler().restart(_private->current_task);
   } else {
     rt.scheduler().release(_private->current_task);
