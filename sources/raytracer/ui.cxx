@@ -231,22 +231,22 @@ void UI::validate_selections(SceneRepresentation& scene_rep) {
   switch (_selection.kind) {
     case SelectionKind::Material:
       if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _material_mapping.size())) {
-        set_selection(SelectionKind::Scene, 0, false);
+        set_selection(SelectionKind::Rendering, 0, false);
       }
       break;
     case SelectionKind::Medium:
       if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _medium_mapping.size())) {
-        set_selection(SelectionKind::Scene, 0, false);
+        set_selection(SelectionKind::Rendering, 0, false);
       }
       break;
     case SelectionKind::Mesh:
       if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _mesh_mapping.size())) {
-        set_selection(SelectionKind::Scene, 0, false);
+        set_selection(SelectionKind::Rendering, 0, false);
       }
       break;
     case SelectionKind::Emitter:
       if ((_selection.index < 0) || (static_cast<uint32_t>(_selection.index) >= scene_rep.data().emitter_profiles.size())) {
-        set_selection(SelectionKind::Scene, 0, false);
+        set_selection(SelectionKind::Rendering, 0, false);
       }
       break;
     default:
@@ -909,7 +909,7 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
   ETX_PROFILER_SCOPE();
 
   if (_selection.kind == SelectionKind::None) {
-    set_selection(SelectionKind::Scene, 0);
+    set_selection(SelectionKind::Rendering, 0);
   }
 
   BuildContext ctx = {};
@@ -1113,7 +1113,7 @@ ViewOptions& UI::mutable_view_options() {
 void UI::set_current_integrator(Integrator* i) {
   _current_integrator = i;
   if (i != nullptr) {
-    set_selection(SelectionKind::Integrator, 0, false);
+    set_selection(SelectionKind::Rendering, 0, false);
   }
 }
 
@@ -1868,16 +1868,11 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
     ImGui::Separator();
 
     ImGui::PushStyleColor(ImGuiCol_Text, kSceneTextColor);
-    bool scene_selected = (_selection.kind == SelectionKind::Scene);
-    if (ImGui::Selectable("Scene", scene_selected)) {
-      set_selection(SelectionKind::Scene, 0);
+    bool rendering_selected = (_selection.kind == SelectionKind::Rendering);
+    if (ImGui::Selectable("Rendering", rendering_selected)) {
+      set_selection(SelectionKind::Rendering, 0);
     }
     ImGui::PopStyleColor();
-
-    bool integrator_selected = (_selection.kind == SelectionKind::Integrator);
-    if (ImGui::Selectable("Integrator", integrator_selected)) {
-      set_selection(SelectionKind::Integrator, 0);
-    }
 
     ImGui::Separator();
 
@@ -2093,11 +2088,8 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
         title_suffix("Camera", nullptr);
       }
       break;
-    case SelectionKind::Scene:
-      title_suffix("Scene", nullptr);
-      break;
-    case SelectionKind::Integrator:
-      title_suffix("Integrator", nullptr);
+    case SelectionKind::Rendering:
+      title_suffix("Rendering", nullptr);
       break;
     default:
       break;
@@ -2132,12 +2124,8 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
         }
         break;
       }
-      case SelectionKind::Scene: {
-        build_scene_selection_properties(scene_rep, ctx);
-        break;
-      }
-      case SelectionKind::Integrator: {
-        build_integrator_selection_properties(scene_rep, ctx);
+      case SelectionKind::Rendering: {
+        build_rendering_properties(scene_rep, ctx);
         break;
       }
       default:
@@ -2470,7 +2458,7 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
     if (ImGui::Button("Delete Emitter", ImVec2(-1.0f, 0.0f))) {
       if (scene_rep.delete_emitter(emitter_index)) {
-        set_selection(SelectionKind::Scene, 0, false);
+        set_selection(SelectionKind::Rendering, 0, false);
       }
     }
     ImGui::PopStyleColor(3);
@@ -2779,8 +2767,7 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
   scene_settings_changed = scene_settings_changed || spectral_changed;
 
   ImGui::Separator();
-  ImGui::Text("Experimental");
-  if (labeled_control("Noise Threshold", [&]() {
+  if (labeled_control("Noise Threshold (experimental)", [&]() {
         return ImGui::InputFloat("##noise_thresh", &scene_rep.data().options.noise_threshold, 0.0001f, 0.01f, "%0.5f");
       })) {
     scene_rep.data().options.noise_threshold = std::clamp(scene_rep.data().options.noise_threshold, 0.0f, 1.0f);
@@ -2897,6 +2884,11 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   if (options_changed && callbacks.options_changed) {
     callbacks.options_changed();
   }
+}
+
+void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+  build_scene_selection_properties(scene_rep, ctx);
+  build_integrator_selection_properties(scene_rep, ctx);
 }
 
 }  // namespace etx

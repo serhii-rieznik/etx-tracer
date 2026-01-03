@@ -224,7 +224,6 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
 
   for (const auto& [type, options] : integrator_data.settings) {
     Integrator* integrator = integrator_type_to_instance(type, _integrator_array, std::size(_integrator_array));
-
     if (integrator != nullptr) {
       integrator->sync_from_options(options);
       integrator->update_options();

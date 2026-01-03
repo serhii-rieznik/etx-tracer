@@ -101,8 +101,7 @@ struct UI {
     Mesh,
     Emitter,
     Camera,
-    Scene,
-    Integrator,
+    Rendering,  // Combined Scene + Integrator properties
   };
 
   bool build_options(Options&);
@@ -147,6 +146,7 @@ struct UI {
   void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx);
   void build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_integrator_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
 
  private:
   Integrator* _current_integrator = nullptr;
