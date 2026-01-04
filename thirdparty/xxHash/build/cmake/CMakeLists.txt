@@ -110,7 +110,8 @@ if (BUILD_SHARED_LIBS)
 endif ()
 set_target_properties(xxhash PROPERTIES
   SOVERSION "${XXHASH_LIB_SOVERSION}"
-  VERSION "${XXHASH_VERSION_STRING}")
+  VERSION "${XXHASH_VERSION_STRING}"
+  FOLDER "thirdparty")
 
 if(XXHASH_BUILD_XXHSUM)
   set(XXHSUM_DIR "${XXHASH_DIR}/cli")
@@ -131,6 +132,7 @@ if(XXHASH_BUILD_XXHSUM)
 
   target_link_libraries(xxhsum PRIVATE xxhash)
   target_include_directories(xxhsum PRIVATE "${XXHASH_DIR}")
+  set_target_properties(xxhsum PROPERTIES FOLDER "thirdparty")
 endif(XXHASH_BUILD_XXHSUM)
 
 # Extra warning flags
