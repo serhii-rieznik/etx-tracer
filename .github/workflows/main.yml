@@ -1,0 +1,272 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            embree_url: https://github.com/RenderKit/embree/releases/download/v4.4.0/embree-4.4.0.x64.windows.zip
+            embree_dir: embree-4.4.0.x64.windows
+          - os: macos-latest
+            embree_url: https://github.com/RenderKit/embree/releases/download/v4.4.0/embree-4.4.0.arm64.macosx.zip
+            embree_dir: embree-4.4.0.arm64.macosx
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      ARCHFLAGS: "-arch arm64"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Download and extract Embree for macOS (v4.4.0 from RenderKit)
+          echo "Downloading Embree for ARM64..."
+          wget -O embree.tar.gz ${{ matrix.embree_url }}
+          echo "Extracting Embree..."
+          mkdir -p embree_temp && tar -xzf embree.tar.gz -C embree_temp
+          echo "Moving Embree files..."
+          # Try different extraction structures
+          if [ -d "embree_temp/${{ matrix.embree_dir }}" ]; then
+            cp -r embree_temp/${{ matrix.embree_dir }}/* thirdparty/embree/ 2>/dev/null || mkdir -p thirdparty/embree && cp -r embree_temp/${{ matrix.embree_dir }}/* thirdparty/embree/
+          else
+            cp -r embree_temp/* thirdparty/embree/ 2>/dev/null || mkdir -p thirdparty/embree && cp -r embree_temp/* thirdparty/embree/
+          fi
+          # Set EMBREE_LOCATION for CMake
+          echo "EMBREE_LOCATION=$PWD/thirdparty/embree" >> $GITHUB_ENV
+
+      - name: Install OIDN (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Download and extract OIDN for macOS (v2.3.3 from RenderKit)
+          # GitHub macOS runners are ARM64-based, so we need ARM64 version
+          echo "Downloading OIDN for ARM64..."
+          wget -O oidn.tar.gz https://github.com/RenderKit/oidn/releases/download/v2.3.3/oidn-2.3.3.arm64.macos.tar.gz
+          echo "Extracting OIDN..."
+          mkdir -p oidn_temp && tar -xzf oidn.tar.gz -C oidn_temp
+          echo "OIDN extraction contents:"
+          find oidn_temp -type f -name "*.dylib" | head -10
+          echo "Moving OIDN files..."
+          # Try different extraction structures
+          if [ -d "oidn_temp/lib" ]; then
+            cp -r oidn_temp/* thirdparty/oidn/
+          elif [ -d "oidn_temp/oidn-2.3.3.arm64.macos" ]; then
+            cp -r oidn_temp/oidn-2.3.3.arm64.macos/* thirdparty/oidn/
+          else
+            echo "Unknown OIDN extraction structure, copying everything"
+            cp -r oidn_temp/* thirdparty/oidn/ 2>/dev/null || true
+          fi
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Download and extract Embree to fixed location (force overwrite)
+          Write-Host "Downloading embree from: ${{ matrix.embree_url }}"
+          Invoke-WebRequest -Uri "${{ matrix.embree_url }}" -OutFile "embree.zip"
+          # Ensure clean extraction - remove any existing directory
+          if (Test-Path "thirdparty/embree") {
+            Write-Host "Removing existing thirdparty/embree directory..."
+            Remove-Item -Path "thirdparty/embree" -Recurse -Force
+          }
+          # Create fresh directory and extract with force overwrite
+          Write-Host "Creating fresh thirdparty/embree directory..."
+          New-Item -ItemType Directory -Path "thirdparty/embree" -Force | Out-Null
+          Write-Host "Extracting embree.zip to thirdparty/embree (force overwrite)..."
+          Expand-Archive -Path "embree.zip" -DestinationPath "thirdparty/embree" -Force
+
+          # Download and extract OIDN (preserve CMakeLists.txt)
+          Invoke-WebRequest -Uri "https://github.com/RenderKit/oidn/releases/download/v2.3.3/oidn-2.3.3.x64.windows.zip" -OutFile "oidn.zip"
+          Expand-Archive -Path "oidn.zip" -DestinationPath "oidn_temp" -Force
+          # Clean existing OIDN subdirectories but preserve CMakeLists.txt
+          if (Test-Path "thirdparty/oidn/include") {
+            Remove-Item -Path "thirdparty/oidn/include" -Recurse -Force
+          }
+          if (Test-Path "thirdparty/oidn/lib") {
+            Remove-Item -Path "thirdparty/oidn/lib" -Recurse -Force
+          }
+          if (Test-Path "thirdparty/oidn/bin") {
+            Remove-Item -Path "thirdparty/oidn/bin" -Recurse -Force
+          }
+          # Move contents from the extracted directory to thirdparty/oidn
+          if (Test-Path "oidn_temp/oidn-2.3.3.x64.windows") {
+            Move-Item -Path "oidn_temp/oidn-2.3.3.x64.windows/*" -Destination "thirdparty/oidn" -Force
+          } else {
+            Move-Item -Path "oidn_temp/*" -Destination "thirdparty/oidn" -Force
+          }
+          # Clean up temp directory
+          Remove-Item -Path "oidn_temp" -Recurse -Force
+
+      - name: Verify OIDN installation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "Checking OIDN installation..."
+          Get-ChildItem "thirdparty/oidn/"
+          if (Test-Path "thirdparty/oidn/lib") {
+            Write-Host "OIDN lib directory found"
+            Get-ChildItem "thirdparty/oidn/lib/"
+          } else {
+            Write-Host "OIDN lib directory NOT found!"
+            exit 1
+          }
+          if (Test-Path "thirdparty/oidn/include") {
+            Write-Host "OIDN include directory found"
+          } else {
+            Write-Host "OIDN include directory NOT found!"
+            exit 1
+          }
+
+      - name: Verify OIDN installation
+        if: runner.os == 'macOS'
+        run: |
+          echo "Checking OIDN installation..."
+          ls -la thirdparty/oidn/
+          if [ -d "thirdparty/oidn/lib" ]; then
+            echo "OIDN lib directory found"
+            ls -la thirdparty/oidn/lib/
+          else
+            echo "OIDN lib directory NOT found!"
+            exit 1
+          fi
+          if [ -d "thirdparty/oidn/include" ]; then
+            echo "OIDN include directory found"
+          else
+            echo "OIDN include directory NOT found!"
+            exit 1
+          fi
+
+      - name: Prepare library directory (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "Ensuring bin/lib directory exists..."
+          New-Item -ItemType Directory -Path "bin/lib" -Force | Out-Null
+          Write-Host "Library directory contents:"
+          Get-ChildItem "bin/lib/" -Force
+
+      - name: Prepare library directory (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "Ensuring bin/lib directory exists..."
+          mkdir -p bin/lib
+          echo "Library directory contents:"
+          ls -la bin/lib/ || true
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "build" -Force | Out-Null
+          Set-Location build
+          # Embree is now in a fixed location
+          $embreeLocation = "$PWD/../thirdparty/embree"
+          Write-Host "Setting EMBREE_LOCATION to: $embreeLocation"
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF -DCMAKE_VERBOSE_MAKEFILE=ON -DEMBREE_LOCATION="$embreeLocation"
+
+      - name: Configure CMake (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF -DCMAKE_VERBOSE_MAKEFILE=ON -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+
+      - name: Build dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-Location build
+          cmake --build . --config Release --parallel 8 --target etx-core etx-render etx-rt etx-util
+
+      - name: Build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd build
+          cmake --build . --config Release --parallel --target etx-core etx-render etx-rt etx-util
+
+      - name: Check library architectures
+        if: runner.os == 'macOS'
+        run: |
+          echo "Checking library architectures..."
+          find build -name "*.a" -o -name "*.dylib" | head -10 | xargs file 2>/dev/null | head -10 || echo "No libraries found yet"
+          echo "Checking Embree architecture..."
+          file /opt/homebrew/lib/libembree4.dylib 2>/dev/null || echo "Embree not found"
+
+      - name: Build raytracer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-Location build
+          cmake --build . --config Release --parallel 8 --target raytracer
+
+      - name: Build raytracer (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd build
+          cmake --build . --config Release --target raytracer --verbose
+
+      - name: Verify build artifacts (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd build
+          echo "Checking for raytracer executable..."
+          ls -la ../bin/
+          if [ -f "../bin/raytracer" ]; then
+            echo "Found raytracer executable"
+            file ../bin/raytracer
+          elif [ -f "raytracer" ]; then
+            echo "Found raytracer in build directory"
+            file raytracer
+          else
+            echo "Raytracer executable not found in expected locations"
+            echo "Checking build directory contents:"
+            find . -name "*raytracer*" 2>/dev/null || echo "No raytracer files found"
+            exit 1
+          fi
+
+      - name: Verify build artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          cd build
+          Write-Host "Checking for raytracer executable..."
+          Get-ChildItem "../bin/"
+          if (Test-Path "../bin/raytracer.exe") {
+            Write-Host "Found raytracer.exe"
+          } elseif (Test-Path "raytracer.exe") {
+            Write-Host "Found raytracer.exe in build directory"
+          } else {
+            Write-Host "Raytracer executable not found in expected locations"
+            Get-ChildItem -Recurse -Filter "*raytracer*" | Select-Object FullName
+            throw "raytracer.exe not found"
+          }
+
+      - name: Create release archive (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          chmod +x scripts/create-release-archive.sh
+          ./scripts/create-release-archive.sh
+
+      - name: Create release archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ./scripts/create-release-archive.bat
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: etx-tracer-${{ runner.os }}
+          path: etx-tracer-*.zip
+          retention-days: 30
