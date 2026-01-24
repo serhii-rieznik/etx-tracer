@@ -71,6 +71,16 @@ target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 create_library(util)
 target_link_libraries(etx-util PRIVATE etx-core etx-render)
 
+create_library(rhi)
+target_link_libraries(etx-rhi PRIVATE etx-core imgui sokol_new)
+
+# Add Vulkan dependency for Windows
+if(WIN32)
+  find_package(Vulkan REQUIRED)
+  target_link_libraries(etx-rhi PRIVATE Vulkan::Vulkan)
+  target_include_directories(etx-rhi PRIVATE ${Vulkan_INCLUDE_DIRS})
+endif()
+
 find_package(embree 4.0 REQUIRED)
 
 create_library(rt)

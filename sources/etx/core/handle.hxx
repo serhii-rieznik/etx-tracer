@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/core/debug.hxx>
 
@@ -16,10 +16,11 @@ union Handle {
     GenBits = 28,
     GenMax = (1 << GenBits) - 1,
     BitCount = ClsBits + IndexBits + GenBits,
+    kInvalidHandleValue = ~0ULL,
   };
   static_assert(BitCount == 64);
 
-  uint64_t value = 0;
+  uint64_t value = kInvalidHandleValue;
   struct {
     uint64_t cls : ClsBits;
     uint64_t index : IndexBits;
@@ -28,6 +29,14 @@ union Handle {
 
   bool operator==(const Handle& h) const {
     return value == h.value;
+  }
+
+  bool valid() const {
+    return value != kInvalidHandleValue;
+  }
+
+  bool invalid() const {
+    return value == kInvalidHandleValue;
   }
 
   static inline Handle construct(uint64_t a_cls, uint64_t a_index, uint64_t a_generation) {

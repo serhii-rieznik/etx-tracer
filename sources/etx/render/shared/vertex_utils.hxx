@@ -1,5 +1,6 @@
 #pragma once
 
+#include <etx/core/core.hxx>
 #include <unordered_map>
 #include <functional>
 
@@ -69,30 +70,36 @@ struct VertexKeyHash {
   uint64_t operator()(const VertexKey& key) const {
     uint64_t h = 0;
     // Hash position using quantized values (consistent with equality check)
-    h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.position.x, kGeometryEpsilon)));
-    h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.position.y, kGeometryEpsilon)));
-    h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.position.z, kGeometryEpsilon)));
+    auto px = quantize_float(key.position.x, kGeometryEpsilon);
+    auto py = quantize_float(key.position.y, kGeometryEpsilon);
+    auto pz = quantize_float(key.position.z, kGeometryEpsilon);
+    h = etx_hash64_continue(&px, sizeof(px), h);
+    h = etx_hash64_continue(&py, sizeof(py), h);
+    h = etx_hash64_continue(&pz, sizeof(pz), h);
+
     // Hash normal if present
     if (key.has_normal) {
-      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.normal.x, kGeometryEpsilon)));
-      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.normal.y, kGeometryEpsilon)));
-      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.normal.z, kGeometryEpsilon)));
+      auto nx = quantize_float(key.normal.x, kGeometryEpsilon);
+      auto ny = quantize_float(key.normal.y, kGeometryEpsilon);
+      auto nz = quantize_float(key.normal.z, kGeometryEpsilon);
+      h = etx_hash64_continue(&nx, sizeof(nx), h);
+      h = etx_hash64_continue(&ny, sizeof(ny), h);
+      h = etx_hash64_continue(&nz, sizeof(nz), h);
     }
+
     // Hash UV if present
     if (key.has_uv) {
-      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.uv.x, kGeometryEpsilon)));
-      h = hash_combine(h, std::hash<int64_t>()(quantize_float(key.uv.y, kGeometryEpsilon)));
+      auto ux = quantize_float(key.uv.x, kGeometryEpsilon);
+      auto uy = quantize_float(key.uv.y, kGeometryEpsilon);
+      h = etx_hash64_continue(&ux, sizeof(ux), h);
+      h = etx_hash64_continue(&uy, sizeof(uy), h);
     }
-    // Hash flags
-    h = hash_combine(h, std::hash<bool>()(key.has_normal));
-    h = hash_combine(h, std::hash<bool>()(key.has_uv));
-    return h;
-  }
 
- private:
-  static uint64_t hash_combine(uint64_t seed, uint64_t value) {
-    constexpr uint64_t magic = 0x9e3779b9;  // Golden ratio constant
-    return seed ^ (value + magic + (seed << 6) + (seed >> 2));
+    // Hash flags
+    h = etx_hash64_continue(&key.has_normal, sizeof(key.has_normal), h);
+    h = etx_hash64_continue(&key.has_uv, sizeof(key.has_uv), h);
+
+    return h;
   }
 };
 

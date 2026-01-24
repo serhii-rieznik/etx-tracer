@@ -1,0 +1,177 @@
+Starting RHI test mode (windowed)...
+RHI Test Application created
+Initializing windowed mode with sokol_app...
+Starting sokol_app with 800x600 window...
+sokol_app init callback called
+=== RHI TEST APPLICATION INIT START ===
+Initializing RHI Test Application...
+Creating RHI context...
+Creating RHI context with backend: {}
+Initializing Vulkan device...
+Selected physical device: NVIDIA GeForce RTX 3080
+Vulkan device created successfully
+Graphics queue family: 0
+Compute queue family: 2
+Transfer queue family: 1
+Bindless descriptors supported: yes
+Vulkan device initialized successfully
+VKDevice created
+Vulkan Bindless Manager created
+Shader compiler created
+Vulkan RHI Context created
+RHI context created successfully
+Got device and bindless manager pointers
+Initializing bindless manager manually...
+Set max buffers to 1024
+Set max textures to 4096
+Set max samplers to 256
+set_max_acceleration_structures: acceleration structures not supported without VK_KHR_acceleration_structure extension
+Initializing Vulkan bindless manager with capacities: buffers=1024, textures=4096, samplers=256
+Created bindless descriptor set layout with 1024 buffers, 4096 textures, 256 samplers, 512 acceleration structures
+Created bindless descriptor pool
+Allocated bindless descriptor set
+Vulkan bindless manager initialized successfully
+Bindless manager initialized
+Testing bindless handle encoding/decoding...
+Original: type=1, generation=42, index=1337
+Decoded:  type=1, generation=42, index=1337
+Bindless handle encoding/decoding test PASSED
+Windowed mode: Creating swapchain for presentation
+Windowed mode: Got native window handle: 0000000001F702A8
+Initializing DXC shader compiler...
+Loaded DXC DLL from current directory: dxcompiler.dll
+DXC shader compiler initialized successfully
+Shader compiler initialized by VKContext
+Registered bindless resource type=1 index=0 handle=4611686022722355200
+Registered texture at descriptor index 0
+Registered swapchain image 0 with bindless handle 4611686022722355200
+Registered bindless resource type=1 index=1 handle=4611686022722355201
+Registered texture at descriptor index 1
+Registered swapchain image 1 with bindless handle 4611686022722355201
+Registered bindless resource type=1 index=2 handle=4611686022722355202
+Registered texture at descriptor index 2
+Registered swapchain image 2 with bindless handle 4611686022722355202
+Swapchain created: 800x600 format=50 with 3 images
+Vulkan swapchain created successfully
+Windowed mode: Swapchain created successfully
+RHI Test Application initialized successfully
+Init complete, initialized = 1
+Windowed mode: RHI initialized, window should now be visible
+Window created and RHI initialized
+Frame method called
+Frame time: 0.016667
+Running resource creation test...
+Creating Vulkan buffer: size=1024, usage=8
+Vulkan buffer created successfully: 1024 bytes
+Registering buffer with bindless manager (usage: 8)
+Registered bindless resource type=0 index=0 handle=4294967296
+Registered buffer 00000246CEEE7B40 at descriptor index 0
+Created buffer with bindless handle: 4294967296
+Buffer creation PASSED - handle: 4294967296
+Creating Vulkan texture: 256x256 format=4 usage=1
+Vulkan texture created successfully: 256x256 format=4
+Registered bindless resource type=1 index=3 handle=4611686022722355203
+Registered texture at descriptor index 3
+Created texture with bindless handle: 4611686022722355203
+Texture creation PASSED - handle: 4611686022722355203
+Testing Sampler 0 creation (min=0, mag=0, mip=0, addr=0)
+Creating Vulkan sampler: min=0, mag=0, mip=0
+Vulkan sampler created successfully: 00000246D50041B0
+VKSampler created with VkSampler handle: 00000246D50041B0
+Registered bindless resource type=2 index=0 handle=9223372041149743104
+Created sampler with bindless handle: 9223372041149743104
+Sampler 0 creation PASSED - handle: 9223372041149743104
+Sampler 0 handle validation - type: 2, index: 0, generation: 1
+Testing Sampler 1 creation (min=1, mag=1, mip=1, addr=2)
+Creating Vulkan sampler: min=1, mag=1, mip=1
+Vulkan sampler created successfully: 00000246D5003CA0
+VKSampler created with VkSampler handle: 00000246D5003CA0
+Registered bindless resource type=2 index=1 handle=9223372041149743105
+Created sampler with bindless handle: 9223372041149743105
+Sampler 1 creation PASSED - handle: 9223372041149743105
+Sampler 1 handle validation - type: 2, index: 1, generation: 1
+Running compute pipeline creation test...
+Testing HLSL compute shader compilation...
+Shader compilation requested for test_compute.hlsl:main (stage: 2)
+Phase 1: Preprocessing HLSL source...
+Phase 1 complete: Preprocessed 106 bytes of HLSL
+Phase 2: Compiling preprocessed HLSL to SPIR-V...
+Successfully compiled HLSL to SPIR-V: 168 bytes (preprocessed: 106 bytes)
+HLSL to SPIR-V compilation PASSED - generated 168 bytes of SPIR-V
+Created Vulkan shader module with handle: 0
+Compute shader creation from compiled HLSL PASSED - handle: 0
+Created bindless pipeline layout
+Created Vulkan shader module for stage 2 from SPIR-V (168 bytes)
+Created Vulkan compute pipeline successfully
+Created compute pipeline with handle: 0
+Compute pipeline creation PASSED - handle: 0
+Destroying VkShaderModule 00000246D249A140 for shader handle 0
+Destroyed shader with handle: 0
+Setting up quad geometry and shaders...
+Creating Vulkan buffer: size=120, usage=8
+Vulkan buffer created successfully: 120 bytes
+Registering buffer with bindless manager (usage: 8)
+Registered bindless resource type=0 index=1 handle=4294967297
+Registered buffer 00000246D70B1600 at descriptor index 1
+Created buffer with bindless handle: 4294967297
+Quad vertex buffer creation PASSED - handle: 4294967297
+Quad vertex data uploaded successfully
+Creating vertex and fragment shaders...
+Shader compilation requested for quad_vertex.hlsl:main (stage: 0)
+Phase 1: Preprocessing HLSL source...
+Phase 1 complete: Preprocessed 763 bytes of HLSL
+Phase 2: Compiling preprocessed HLSL to SPIR-V...
+Successfully compiled HLSL to SPIR-V: 1060 bytes (preprocessed: 763 bytes)
+Vertex shader compilation PASSED - 1060 bytes
+Created Vulkan shader module with handle: 1
+Vertex shader creation PASSED - handle: 1
+Shader compilation requested for quad_fragment.hlsl:main (stage: 1)
+Phase 1: Preprocessing HLSL source...
+Phase 1 complete: Preprocessed 233 bytes of HLSL
+Phase 2: Compiling preprocessed HLSL to SPIR-V...
+Successfully compiled HLSL to SPIR-V: 488 bytes (preprocessed: 233 bytes)
+Fragment shader compilation PASSED - 488 bytes
+Created Vulkan shader module with handle: 2
+Fragment shader creation PASSED - handle: 2
+Testing shader variants...
+Compiling new shader variant for quad_vertex_variant.hlsl:main
+Shader compilation requested for quad_vertex_variant.hlsl:main (stage: 0)
+Phase 1: Preprocessing HLSL source...
+Phase 1 complete: Preprocessed 763 bytes of HLSL
+Phase 2: Compiling preprocessed HLSL to SPIR-V...
+Successfully compiled HLSL to SPIR-V: 1060 bytes (preprocessed: 763 bytes)
+Created Vulkan shader variant with handle: 3 (1060 bytes SPIR-V)
+Shader variant creation PASSED - handle: 3
+Shader variant cache hit for quad_vertex_variant.hlsl:main
+Created Vulkan shader variant with handle: 4 (1060 bytes SPIR-V)
+Cached shader variant creation PASSED - handle: 4
+Testing shader loading from files...
+Attempting to load shader from: test_vertex.hlsl
+Shader file found, reading content...
+Compiling new shader variant for test_vertex.hlsl:main
+Shader compilation requested for test_vertex.hlsl:main (stage: 0)
+Phase 1: Preprocessing HLSL source...
+Phase 1 complete: Preprocessed 407 bytes of HLSL
+Phase 2: Compiling preprocessed HLSL to SPIR-V...
+Successfully compiled HLSL to SPIR-V: 612 bytes (preprocessed: 407 bytes)
+Unhandled exception:
+ code: EXCEPTION_ACCESS_VIOLATION
+ address: 0x00007FF8D408D311
+Backtrace (hash = 0x1667AEB1):
+ - t (0x00007FF7FDE77473)
+ - UnhandledExceptionFilter (0x00007FFA0B9F58D0)
+ - strncpy (0x00007FFA0E387F50)
+ - _C_specific_handler (0x00007FFA0E341810)
+ - _chkstk (0x00007FFA0E386260)
+ - RtlLocateExtendedFeature (0x00007FFA0E231D90)
+ - KiUserExceptionDispatcher (0x00007FFA0E385C10)
+ - vk_icdNegotiateLoaderICDInterfaceVersion (0x00007FF8D3ADF150)
+ - vkGetInstanceProcAddr (0x00007FF8D397ED20)
+ - vkResetEvent (0x00007FF90E011250)
+ - std::_Hash_vec<std::allocator<std::_List_unchecked_iterator<std::_List_val<std::_List_simple_types<std::pair<std::basic_string<char,std::char_traits<char>,std::allocator<char> > const ,std::basic_string<char,std::char_traits<char>,std::allocator<char> > > > > > > >::_Tidy (0x00007FF7FDE8C500)
+ - ILT+12745(??1?$basic_filebufDU?$char_traitsDstdstdUEAAXZ) (0x00007FF7FDE741CE)
+ - ILT+25185(??$_Destroy_rangePEAV?$_List_unchecked_iteratorV?$_List_valU?$_List_simple_typesU?$pair$$CBV?$basic_stringDU?$char_traitsDstdV?$allocatorD (0x00007FF7FDE77266)
+ - ILT+820(?unregister_resourceImplVKBindlessManageretxQEAA?AW4RHIResult (0x00007FF7FDE71339)
+ - _sapp_update_cursor (0x00007FF7FDE95540)
+ - BaseThreadInitThunk (0x00007FFA0C77E8C0)
+ - RtlUserThreadStart (0x00007FFA0E2AC510)

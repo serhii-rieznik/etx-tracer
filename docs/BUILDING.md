@@ -8,12 +8,26 @@ Most of external libraries will be located directly in the source code, to reduc
 These libraries and tools you have to install by yourself:
 - CMake
 - [Intel Embree](https://www.embree.org/) for CPU ray-tracing
+- [DirectX Shader Compiler (DXC)](https://github.com/microsoft/DirectXShaderCompiler) for HLSL-to-SPIR-V compilation (automatically downloaded by CMake if not found)
 
 ## Building for Windows
 Windows is the only one platform, which is completely supported at the moment.
 - download and install the latest release of Intel Embree from [GitHub](https://github.com/embree/embree/releases);
   - add environment variable `EMBREE_LOCATION` pointing to the Embree installation folder provide this parameter to CMake (i.e `cmake -DEMBREE_LOCATION=path/to/embree`);
   - copy embree binaries (embree4.dll and other required dlls) to the `bin` folder in the root directory of `etx-tracer`
+
+### DXC (DirectX Shader Compiler)
+DXC is required for compiling HLSL shaders to SPIR-V for Vulkan. CMake will automatically:
+1. Check if DXC is already installed on your system
+2. If not found, download the latest DXC release from GitHub
+3. Copy DXC binaries to the `bin` folder for runtime usage
+
+You can also install DXC manually using:
+- WinGet: `winget install -e --id Microsoft.DirectXShaderCompiler`
+- Chocolatey: `choco install directxshadercompiler`
+- Or download directly from [GitHub releases](https://github.com/microsoft/DirectXShaderCompiler/releases)
+
+If you have DXC installed in a custom location, you can set the `DXC_PATH` environment variable.
 
 After that generating and building a project should be as simple as creating a folder for build files and calling CMake, something like:
 ```cmake

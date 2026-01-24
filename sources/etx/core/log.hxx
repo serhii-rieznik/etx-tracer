@@ -22,7 +22,7 @@ struct log {
 
   template <class... args>
   static inline void debug(const char* fmt, args... a) {
-    output(Color::White, fmt, static_cast<args&&>(a)...);
+    // output(Color::White, fmt, static_cast<args&&>(a)...);
   }
 
   template <class... args>

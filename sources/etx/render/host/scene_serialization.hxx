@@ -18,7 +18,6 @@ inline std::string normalize_material_name(std::string name) {
   return name;
 }
 
-
 struct Scene;
 struct IORDatabase;
 struct TaskScheduler;

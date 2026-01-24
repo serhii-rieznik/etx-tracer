@@ -32,6 +32,9 @@ add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
 set(root_folder ${CMAKE_CURRENT_LIST_DIR})
 
+# Find or install DXC
+find_package(DXC REQUIRED)
+
 add_subdirectory(thirdparty)
 add_subdirectory(sources)
 
