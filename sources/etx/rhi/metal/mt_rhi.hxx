@@ -63,6 +63,8 @@ struct MTDevice : RHIDevice {
   uint64_t get_min_uniform_buffer_offset_alignment() const override;
   uint64_t get_min_storage_buffer_offset_alignment() const override;
 
+  RHIMemoryStats get_memory_statistics() const override;
+
  private:
   class Impl;
   Impl* _impl = nullptr;
@@ -116,11 +118,6 @@ struct MTCommandBuffer : RHICommandBuffer {
 
   void buffer_barrier(RHIBuffer buffer, RHIResourceState old_state, RHIResourceState new_state) override;
   void texture_barrier(RHITexture texture, RHIResourceState old_state, RHIResourceState new_state) override;
-
-  void set_buffer_state(RHIBuffer buffer, RHIResourceState state) override;
-  void set_texture_state(RHITexture texture, RHIResourceState state) override;
-  RHIResourceState get_buffer_state(RHIBuffer buffer) const override;
-  RHIResourceState get_texture_state(RHITexture texture) const override;
 
   void begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors = nullptr, RHITexture depth_attachment = {}) override;
   void end_render_pass() override;

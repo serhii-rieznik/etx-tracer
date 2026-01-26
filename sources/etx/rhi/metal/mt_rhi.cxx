@@ -321,24 +321,6 @@ void MTCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
   log::warning("Metal RHI: texture_barrier not implemented");
 }
 
-void MTCommandBuffer::set_buffer_state(RHIBuffer buffer, RHIResourceState state) {
-  log::warning("Metal RHI: set_buffer_state not implemented");
-}
-
-void MTCommandBuffer::set_texture_state(RHITexture texture, RHIResourceState state) {
-  log::warning("Metal RHI: set_texture_state not implemented");
-}
-
-RHIResourceState MTCommandBuffer::get_buffer_state(RHIBuffer buffer) const {
-  log::warning("Metal RHI: get_buffer_state not implemented");
-  return RHIResourceState::Undefined;
-}
-
-RHIResourceState MTCommandBuffer::get_texture_state(RHITexture texture) const {
-  log::warning("Metal RHI: get_texture_state not implemented");
-  return RHIResourceState::Undefined;
-}
-
 void MTCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors, RHITexture depth_attachment) {
   log::warning("Metal RHI: begin_render_pass not implemented");
 }
@@ -422,6 +404,10 @@ RHICreateShaderResult MTDevice::create_shader_from_file(const std::string& file_
   const std::unordered_map<std::string, std::string>& defines) {
   log::warning("Metal RHI: create_shader_from_file not implemented");
   return {RHIResult::NotImplemented, {}};
+}
+
+RHIMemoryStats MTDevice::get_memory_statistics() const {
+  return {};
 }
 
 }  // namespace etx

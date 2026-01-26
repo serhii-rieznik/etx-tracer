@@ -43,8 +43,6 @@ extern "C" int main(int argc, char* argv[]) {
     return 0;
   }
 
-  log::info("Starting RHI test mode (%s)...", headless_mode ? "headless" : "windowed");
-
   RHITestApplication rhi_app;
   rhi_app.set_headless_mode(headless_mode);
 
@@ -53,24 +51,19 @@ extern "C" int main(int argc, char* argv[]) {
     rhi_app.init();
     rhi_app.run_headless_test();
     rhi_app.cleanup();
-    log::info("RHI headless test completed");
     ShaderCompiler::shutdown_global();
     return 0;
   } else {
     // Run in windowed mode with sokol_app
-    log::info("Initializing windowed mode with sokol_app...");
     sapp_desc desc = {};
     {
       desc.init_userdata_cb = [](void* data) {
-        log::info("sokol_app init callback called");
         reinterpret_cast<RHITestApplication*>(data)->init();
-        log::info("Window created and RHI initialized");
       };
       desc.frame_userdata_cb = [](void* data) {
         reinterpret_cast<RHITestApplication*>(data)->frame();
       };
       desc.cleanup_userdata_cb = [](void* data) {
-        log::info("sokol_app cleanup callback called");
         reinterpret_cast<RHITestApplication*>(data)->cleanup();
       };
       desc.event_userdata_cb = [](const sapp_event* e, void* data) {
@@ -88,9 +81,7 @@ extern "C" int main(int argc, char* argv[]) {
       desc.alpha = false;
     }
 
-    log::info("Starting sokol_app with %dx%d window...", desc.width, desc.height);
     sapp_run(desc);
-    log::info("sokol_app finished");
     ShaderCompiler::shutdown_global();
     return 0;
   }

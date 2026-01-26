@@ -6,27 +6,19 @@
 
 namespace etx {
 
-RHIContext* create_rhi_context(const RHIInitInfo& info) {
+RHIContext* RHIContext::create(const RHIInitInfo& info) {
   switch (info.backend) {
-    case RHIBackend::Vulkan: {
-      auto context = new VKContext();
-      return context;
-    }
-    case RHIBackend::Metal: {
-      auto context = new MTContext();
-      return context;
-    }
+    case RHIBackend::Vulkan:
+      return new VKContext(info);
+    case RHIBackend::Metal:
+      return new MTContext();
     default:
       log::error("Unsupported RHI backend: {}", static_cast<uint32_t>(info.backend));
       return nullptr;
   }
 }
 
-void destroy_rhi_context(RHIContext* context) {
-  if (context == nullptr) {
-    return;
-  }
-
+void RHIContext::release(RHIContext* context) {
   delete context;
 }
 

@@ -88,32 +88,3 @@ if(DXC_FOUND AND DXC_LIBRARY)
         COMMENT "Copying DXC library to bin folder"
     )
 endif()
-
-
-add_executable(rhi-standalone-test
-  rhi_standalone_test.cxx
-)
-
-target_link_libraries(rhi-standalone-test
-  PRIVATE etx-core etx-rhi
-)
-
-# Add Vulkan dependency for Windows
-if(WIN32)
-  find_package(Vulkan REQUIRED)
-  target_link_libraries(rhi-standalone-test PRIVATE Vulkan::Vulkan)
-  target_include_directories(rhi-standalone-test PRIVATE ${Vulkan_INCLUDE_DIRS})
-endif()
-
-set_target_properties(rhi-standalone-test PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
-  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
-  RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"
-  RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${root_folder}/bin"
-)
-
-if(MSVC)
-  target_link_options(rhi-standalone-test PRIVATE "/NODEFAULTLIB:LIBCMT")
-endif()
-
-set_property(TARGET rhi-standalone-test PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_folder}/bin")

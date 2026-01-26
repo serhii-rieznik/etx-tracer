@@ -16,14 +16,19 @@ class RHICommandBuffer;
 struct RHIInitInfo {
   RHIBackend backend = RHIBackend::Vulkan;
   bool enable_validation = false;
-  bool enable_debug_names = false;
-  uint32_t max_frames_in_flight = 2;
 };
 
-RHIContext* create_rhi_context(const RHIInitInfo& info);
-void destroy_rhi_context(RHIContext* context);
+struct RHIMemoryStats {
+  uint64_t cpu_used_bytes = 0;
+  uint64_t gpu_allocated_bytes = 0;
+  uint64_t gpu_driver_allocated_bytes = 0;
+  uint64_t gpu_driver_budget_bytes = 0;
+};
 
 struct RHIContext {
+  static RHIContext* create(const RHIInitInfo& info);
+  static void release(RHIContext*);
+
   virtual ~RHIContext() = default;
 
   virtual RHIDevice* get_device() = 0;
@@ -76,6 +81,8 @@ struct RHIDevice {
   virtual bool supports_bindless() const = 0;
   virtual uint64_t get_min_uniform_buffer_offset_alignment() const = 0;
   virtual uint64_t get_min_storage_buffer_offset_alignment() const = 0;
+
+  virtual RHIMemoryStats get_memory_statistics() const = 0;
 };
 
 struct RHICommandBuffer {
@@ -87,11 +94,6 @@ struct RHICommandBuffer {
 
   virtual void buffer_barrier(RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) = 0;
   virtual void texture_barrier(RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state) = 0;
-
-  virtual void set_buffer_state(RHIBindlessHandle buffer, RHIResourceState state) = 0;
-  virtual void set_texture_state(RHIBindlessHandle texture, RHIResourceState state) = 0;
-  virtual RHIResourceState get_buffer_state(RHIBindlessHandle buffer) const = 0;
-  virtual RHIResourceState get_texture_state(RHIBindlessHandle texture) const = 0;
 
   virtual void begin_render_pass(uint32_t color_attachment_count, RHIBindlessHandle* color_attachments, const float* clear_colors = nullptr,
     RHIBindlessHandle depth_attachment = {}) = 0;

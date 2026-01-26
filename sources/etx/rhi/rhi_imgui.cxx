@@ -176,8 +176,19 @@ void RHIImGui::destroy_resources() {
 }
 
 RHIResult RHIImGui::create_font_texture() {
-  ImGuiIO& io = ImGui::GetIO();
+  auto device = _context ? _context->get_device() : nullptr;
+  if (device != nullptr) {
+    if (_font_texture != 0) {
+      device->destroy_texture(_font_texture);
+      _font_texture = {};
+    }
+    if (_font_sampler != 0) {
+      device->destroy_sampler(_font_sampler);
+      _font_sampler = {};
+    }
+  }
 
+  ImGuiIO& io = ImGui::GetIO();
   io.Fonts->Clear();
 
   ImFontConfig font_config = {};
@@ -340,24 +351,28 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
     if (_vertices.buffer) {
       device->destroy_buffer(_vertices.buffer);
     }
-    RHIBufferDesc desc = {required_vb_size, RHIBufferUsage::Storage | RHIBufferUsage::TransferDst, true};
+
+    size_t new_size = required_vb_size + (required_vb_size / 2);
+    RHIBufferDesc desc = {new_size, RHIBufferUsage::Storage | RHIBufferUsage::TransferDst, true};
     auto res = device->create_buffer(desc);
     if (res.result != RHIResult::Success)
       return res.result;
     _vertices.buffer = res.handle;
-    _vertices.data.resize(required_vb_size);
+    _vertices.data.resize(new_size);
   }
 
   if (required_ib_size > _indices.data.size()) {
     if (_indices.buffer) {
       device->destroy_buffer(_indices.buffer);
     }
-    RHIBufferDesc desc = {required_ib_size, RHIBufferUsage::Index | RHIBufferUsage::TransferDst, true};
+
+    size_t new_size = required_ib_size + (required_ib_size / 2);
+    RHIBufferDesc desc = {new_size, RHIBufferUsage::Index | RHIBufferUsage::TransferDst, true};
     auto res = device->create_buffer(desc);
     if (res.result != RHIResult::Success)
       return res.result;
     _indices.buffer = res.handle;
-    _indices.data.resize(required_ib_size);
+    _indices.data.resize(new_size);
   }
 
   size_t vb_offset = 0;

@@ -24,32 +24,32 @@
 namespace etx {
 
 RHITestApplication::RHITestApplication() {
-  log::info("RHI Test Application created");
 }
 
 RHITestApplication::~RHITestApplication() {
-  log::info("RHI Test Application destroyed");
 }
 
 void RHITestApplication::init() {
   RHIInitInfo init_info = {
     .backend = RHIBackend::Vulkan,
-    .enable_validation = true,
-    .enable_debug_names = true,
-    .max_frames_in_flight = 2,
+    .enable_validation = false,
   };
 
-  rhi_context = create_rhi_context(init_info);
+  rhi_context = RHIContext::create(init_info);
   if (rhi_context == nullptr) {
     return;
+  }
+
+  // Initialize bindless manager manually for headless testing
+  if (headless_mode) {
+    static_cast<VKContext*>(rhi_context)->initialize_for_headless();
   }
 
   // In windowed mode, create a swapchain for the window
   if (!headless_mode && rhi_context != nullptr) {
     const void* native_window = nullptr;
-#if defined(_WIN32)
+#if ETX_PLATFORM_WINDOWS
     native_window = sapp_win32_get_hwnd();
-    log::info("Windowed mode: Got native window handle: %p", native_window);
 #elif defined(__APPLE__)
     native_window = sapp_macos_get_window();
 #endif
@@ -64,8 +64,9 @@ void RHITestApplication::init() {
     return;
   }
 
-  RHIImGuiDesc desc = {};
-  desc.color_format = rhi_context->get_swapchain_format();
+  RHIImGuiDesc desc = {
+    .color_format = rhi_context->get_swapchain_format(),
+  };
   imgui.setup(rhi_context, desc);
 
   initialized = true;
@@ -77,10 +78,85 @@ void RHITestApplication::run_headless_test() {
   }
 }
 
+bool have = false;
+std::map<uint64_t, std::pair<uint32_t, const char*>> errrs;
+
+void rep_err() {
+  for (const auto& kv : errrs) {
+    if (kv.second.first < 20u)
+      continue;
+
+    auto l_from = kv.first & 0x00000000ffffffff;
+    auto l_to = (kv.first & 0xffffffff00000000) >> 32llu;
+    if (l_to - l_from == 0) {
+      log::warning("[%u] %u : %s", l_to, kv.second.first, kv.second.second);
+    } else if (l_to - l_from == 2) {
+      log::warning("[%u] %u : %s", l_to + 1u, kv.second.first, kv.second.second);
+    } else {
+      log::warning("[%u -> %u] %u : %s", l_from, l_to, kv.second.first, kv.second.second);
+    }
+  }
+}
+
+void RHITestApplication::memtest(int32_t line, const char* expr) {
+  return;
+  static int64_t last = 0;
+  static int32_t ln = 0;
+  RHIMemoryStats stats = rhi_context->get_device()->get_memory_statistics();
+  if (stats.cpu_used_bytes != last) {
+    int64_t diff = int64_t(stats.cpu_used_bytes) - last;
+    int64_t bytes = ::abs(diff);
+    int64_t mb = bytes / 1024 / 1024;
+    int64_t kb = (bytes - mb * 1024 * 1024) / 1024;
+    log::warning("[%u -> %u] %s %llu (%llu.%llu)", ln, line, diff > 0 ? "+" : "-", bytes, mb, kb);
+    uint64_t key = ln | (uint64_t(line) << 32llu);
+    errrs[key].first += 1u;
+    errrs[key].second = expr;
+    last = stats.cpu_used_bytes;
+    have = true;
+    rep_err();
+  }
+  ln = line;
+}
+
+#define IMGUI(expr)  // expr
+
+#define STR0(expr) #expr
+#define STR(expr)  STR0(expr)
+
+// clang-format off
+#define test(...)    memtest(__LINE__, STR(__VA_ARGS__)); __VA_ARGS__; memtest(__LINE__, STR(__VA_ARGS__))
+// clang-format on
+
+struct ComputePushConstants {
+  uint32_t texture_index;
+  uint32_t vertex_buffer_index;  // Not used in compute
+  uint32_t viewport_width;       // Not used in compute
+  uint32_t viewport_height;      // Not used in compute
+  uint32_t texture_width;
+  uint32_t texture_height;
+  uint32_t noise_seed;
+  float noise_scale;
+};
+static ComputePushConstants compute_pc;
+struct PushConstants {
+  uint32_t texture_index;
+  uint32_t vertex_buffer_index;
+  uint32_t viewport_width;
+  uint32_t viewport_height;
+  uint32_t texture_width;
+  uint32_t texture_height;
+  float color[3];
+};
+static PushConstants pc;
+static RHIViewport viewport;
+static float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
 void RHITestApplication::frame() {
+  have = false;
   if (initialized == false)
     return;
-
+  frame_counter++;
   if (headless_mode) {
     time += 0.016667f;
   } else {
@@ -88,19 +164,25 @@ void RHITestApplication::frame() {
   }
 
   if (headless_mode == false) {
-    RHIImGuiFrameDesc imgui_frame_desc = {
+    static RHIImGuiFrameDesc imgui_frame_desc = {};
+    imgui_frame_desc = {
       .width = static_cast<uint32_t>(sapp_width()),
       .height = static_cast<uint32_t>(sapp_height()),
       .delta_time = sapp_frame_duration(),
       .dpi_scale = sapp_dpi_scale(),
     };
     imgui.new_frame(imgui_frame_desc);
-
     ImGui::Begin("RHI Test Controls");
     ImGui::SliderFloat("Noise Speed", &ui_params.noise_speed, 0.0f, 5.0f);
     ImGui::SliderFloat("Noise Scale", &ui_params.noise_scale, 0.1f, 10.0f);
     ImGui::ColorEdit3("Quad Color", ui_params.color);
     ImGui::Checkbox("Show ImGui Demo", &ui_params.show_demo_window);
+    ImGui::Separator();
+    RHIMemoryStats stats = rhi_context->get_device()->get_memory_statistics();
+    ImGui::Text("CPU Memory: %.2f MB", static_cast<double>(stats.cpu_used_bytes) / 1024.0 / 1024.0);
+    ImGui::Text("GPU Allocated: %.2f MB", static_cast<double>(stats.gpu_allocated_bytes) / 1024.0 / 1024.0);
+    ImGui::Text("Driver Usage: %.2f MB / Budget: %.2f MB", static_cast<double>(stats.gpu_driver_allocated_bytes) / 1024.0 / 1024.0,
+      static_cast<double>(stats.gpu_driver_budget_bytes) / 1024.0 / 1024.0);
     ImGui::End();
 
     if (ui_params.show_demo_window) {
@@ -108,82 +190,54 @@ void RHITestApplication::frame() {
     }
   }
 
-  rhi_context->begin_frame();
-  RHITexture swapchain_texture = rhi_context->get_current_swapchain_texture();
-  command_buffer = rhi_context->get_command_buffer();
-  if (command_buffer && swapchain_texture) {
-    struct ComputePushConstants {
-      uint32_t texture_index;
-      uint32_t vertex_buffer_index;  // Not used in compute
-      uint32_t viewport_width;       // Not used in compute
-      uint32_t viewport_height;      // Not used in compute
-      uint32_t texture_width;
-      uint32_t texture_height;
-      uint32_t noise_seed;
-      float noise_scale;
-    } compute_pc = {
-      .texture_index = get_bindless_descriptor_index(noise_texture),
-      .texture_width = static_cast<uint32_t>(sapp_width()),
-      .texture_height = static_cast<uint32_t>(sapp_height()),
-      .noise_seed = static_cast<uint32_t>(time * 1000.0f * ui_params.noise_speed),
-      .noise_scale = ui_params.noise_scale,
-    };
-
-    struct PushConstants {
-      uint32_t texture_index;
-      uint32_t vertex_buffer_index;
-      uint32_t viewport_width;
-      uint32_t viewport_height;
-      uint32_t texture_width;
-      uint32_t texture_height;
-      float color[3];
-    } pc = {
-      .texture_index = get_bindless_descriptor_index(noise_texture),
-      .vertex_buffer_index = vertex_buffer_index,
-      .viewport_width = static_cast<uint32_t>(sapp_width()),
-      .viewport_height = static_cast<uint32_t>(sapp_height()),
-      .texture_width = static_cast<uint32_t>(sapp_width()),
-      .texture_height = static_cast<uint32_t>(sapp_height()),
-      .color = {ui_params.color[0], ui_params.color[1], ui_params.color[2]},
-    };
-
-    RHIViewport viewport = {
-      .width = static_cast<float>(sapp_width()),
-      .height = static_cast<float>(sapp_height()),
-    };
-
-    command_buffer->begin();
-    command_buffer->set_pipeline(compute_pipeline);
-    command_buffer->push_constants(&compute_pc, sizeof(ComputePushConstants));
-    command_buffer->dispatch({32u, 32u, 1u});
-    // TODO: In a complete implementation, we'd add a barrier here to ensure compute writes are visible to graphics pipeline
-
-    float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    command_buffer->begin_render_pass(1, &swapchain_texture, clear_color);
-    command_buffer->set_pipeline(graphics_pipeline);
-    command_buffer->set_viewport(viewport);
-    command_buffer->push_constants(&pc, sizeof(PushConstants));
-    command_buffer->draw_indexed({.index_count = 24}, index_buffer);
-
-    if (headless_mode == false) {
-      imgui.render(command_buffer);
-    }
-
-    command_buffer->end_render_pass();
-    command_buffer->end();
-    rhi_context->submit_command_buffer(command_buffer);
+  test(rhi_context->begin_frame());
+  test(RHITexture swapchain_texture = rhi_context->get_current_swapchain_texture());
+  test(command_buffer = rhi_context->get_command_buffer());
+  test(compute_pc = {
+         .texture_index = get_bindless_descriptor_index(noise_texture),
+         .texture_width = static_cast<uint32_t>(sapp_width()),
+         .texture_height = static_cast<uint32_t>(sapp_height()),
+         .noise_seed = static_cast<uint32_t>(time * 1000.0f * ui_params.noise_speed),
+         .noise_scale = ui_params.noise_scale,
+       };);
+  test(pc = {
+         .texture_index = get_bindless_descriptor_index(noise_texture),
+         .vertex_buffer_index = vertex_buffer_index,
+         .viewport_width = static_cast<uint32_t>(sapp_width()),
+         .viewport_height = static_cast<uint32_t>(sapp_height()),
+         .texture_width = static_cast<uint32_t>(sapp_width()),
+         .texture_height = static_cast<uint32_t>(sapp_height()),
+         .color = {ui_params.color[0], ui_params.color[1], ui_params.color[2]},
+       });
+  test(viewport = {
+         .width = static_cast<float>(sapp_width()),
+         .height = static_cast<float>(sapp_height()),
+       });
+  test(command_buffer->begin());
+  test(command_buffer->set_pipeline(compute_pipeline));
+  test(command_buffer->push_constants(&compute_pc, sizeof(ComputePushConstants)));
+  test(command_buffer->dispatch({32u, 32u, 1u}));
+  test(command_buffer->begin_render_pass(1, &swapchain_texture, clear_color));
+  test(command_buffer->set_pipeline(graphics_pipeline));
+  test(command_buffer->set_viewport(viewport));
+  test(command_buffer->push_constants(&pc, sizeof(PushConstants)));
+  test(command_buffer->draw_indexed({.index_count = 24}, index_buffer));
+  if (headless_mode == false) {
+    test(imgui.render(command_buffer));
   }
+  test(command_buffer->end_render_pass());
+  test(command_buffer->end());
+  test(rhi_context->submit_command_buffer(command_buffer));
 
-  uint32_t frame_index = rhi_context->get_current_frame_index();
-  rhi_context->end_frame();
-  if (swapchain_texture != 0) {
-    rhi_context->present_with_frame_index(frame_index);
+  test(uint32_t frame_index = rhi_context->get_current_frame_index());
+  test(rhi_context->end_frame());
+  test(rhi_context->present_with_frame_index(frame_index));
+  if (have) {
+    test(log::info("------------------------------------"));
   }
-}  // namespace etx
+}
 
 void RHITestApplication::cleanup() {
-  log::info("Cleaning up minimal RHI Test Application...");
-
   // Wait for all GPU work to complete before destroying resources
   // For Vulkan backend, wait for device idle to ensure all command buffers complete
   if (rhi_context != nullptr) {
@@ -196,8 +250,6 @@ void RHITestApplication::cleanup() {
         VkResult wait_result = vkDeviceWaitIdle(vk_device);
         if (wait_result != VK_SUCCESS) {
           log::warning("Failed to wait for device idle during cleanup: %d", static_cast<int>(wait_result));
-        } else {
-          log::info("Device wait idle completed");
         }
       }
     }
@@ -236,7 +288,6 @@ void RHITestApplication::cleanup() {
 
     auto bindless_manager = rhi_context->get_bindless_manager();
 
-    // Destroy vertex buffer
     if (bindless_manager->is_valid_handle(vertex_buffer)) {
       device->destroy_buffer(vertex_buffer);
       vertex_buffer = {};
@@ -252,21 +303,12 @@ void RHITestApplication::cleanup() {
       device->destroy_texture(noise_texture);
       noise_texture = {};
     }
-
-    // Note: Pre-defined samplers are not destroyed here
   }
 
-  if (rhi_context != nullptr) {
-    destroy_rhi_context(rhi_context);
-    rhi_context = nullptr;
-  }
-
-  log::info("Minimal RHI Test Application cleanup complete");
+  RHIContext::release(rhi_context);
 }
 
 bool RHITestApplication::create_rendering_resources() {
-  log::info("Creating rendering resources (bindless approach)...");
-
   auto device = rhi_context->get_device();
   auto bindless_manager = rhi_context->get_bindless_manager();
   if (device == nullptr) {
@@ -274,11 +316,11 @@ bool RHITestApplication::create_rendering_resources() {
     return false;
   }
 
-  // Note: Using procedural vertex generation in shaders, no vertex buffer needed
-  // But we still create an index buffer for indexed drawing
+  if (bindless_manager == nullptr) {
+    log::error("Bindless manager not available");
+    return false;
+  }
 
-  // Create vertex buffer for 4 quads (24 vertices: 4 quads × 6 vertices each)
-  // Store vertices as Vertex structures directly (UVs calculated in fragment shader)
   struct Vertex {
     float2 position;
     uint32_t quad_index;
@@ -286,7 +328,7 @@ bool RHITestApplication::create_rendering_resources() {
 
   std::vector<Vertex> vertices;
   vertices.reserve(24);
-  uint16_t indices[24];  // 4 quads × 6 indices each
+  uint16_t indices[24] = {};
 
   // Quad positions in each quarter of screen, taking 1/8 of screen area each
   // Centers positioned at +/-0.5 from screen center
@@ -380,17 +422,10 @@ bool RHITestApplication::create_rendering_resources() {
   bool vertex_valid = bindless_manager->is_valid_handle(vertex_buffer);
   bool index_valid = bindless_manager->is_valid_handle(index_buffer);
 
-  log::info("Vertex buffer: handle=%llu, index=%u, valid=%s, size=%zu bytes (%zu vertices)", vertex_buffer, vertex_buffer_index, vertex_valid ? "yes" : "no",
-    vertices.size() * sizeof(Vertex), vertices.size());
-  log::info("Index buffer: handle=%llu, index=%u, valid=%s, size=%zu bytes (%zu indices)", index_buffer, index_buffer_index, index_valid ? "yes" : "no", sizeof(indices),
-    sizeof(indices) / sizeof(uint16_t));
-
   if (!vertex_valid || !index_valid) {
     log::error("Buffer registration failed!");
     return false;
   }
-
-  log::info("Vertex and index buffers created and registered for 4 quads");
 
   // Compile vertex shader to SPIR-V
   std::vector<uint8_t> vertex_spirv;
@@ -410,7 +445,6 @@ bool RHITestApplication::create_rendering_resources() {
     return false;
   }
   vertex_shader = vertex_shader_result.handle;
-  log::info("Vertex shader created");
 
   // Compile fragment shader to SPIR-V (from same file as vertex shader)
   std::vector<uint8_t> fragment_spirv;
@@ -430,7 +464,6 @@ bool RHITestApplication::create_rendering_resources() {
     return false;
   }
   fragment_shader = fragment_shader_result.handle;
-  log::info("Fragment shader created");
 
   // Create graphics pipeline
   // Create compute pipeline for noise generation
@@ -455,7 +488,6 @@ bool RHITestApplication::create_rendering_resources() {
     return false;
   }
   compute_pipeline = compute_pipeline_result.handle;
-  log::info("Compute pipeline created");
 
   RHIGraphicsPipelineDesc pipeline_desc = {};
 
@@ -484,7 +516,6 @@ bool RHITestApplication::create_rendering_resources() {
     return false;
   }
   graphics_pipeline = pipeline_result.handle;
-  log::info("Graphics pipeline created");
 
   // Create noise texture
   if (!create_noise_texture()) {
@@ -492,7 +523,6 @@ bool RHITestApplication::create_rendering_resources() {
     return false;
   }
 
-  log::info("All rendering resources created successfully");
   return true;
 }
 
@@ -523,8 +553,6 @@ bool RHITestApplication::create_noise_texture() {
   }
   noise_texture = texture_result.handle;
 
-  log::info("Noise texture handle: %llu", noise_texture);
-  log::info("Noise texture created for compute shader output");
   return true;
 }
 
@@ -562,33 +590,21 @@ bool RHITestApplication::compile_shader_to_spirv(const std::string& file_path, c
   }
 
   out_spirv = std::move(result.spirv_data);
-  log::info("Shader compiled successfully: %s (%zu bytes SPIR-V)", file_path.c_str(), out_spirv.size());
   return true;
 }
 
 void RHITestApplication::process_event(const sapp_event* event) {
-  if (imgui.handle_event(event)) {
+  if (imgui.handle_event(event))
     return;
-  }
 
   if (event->type == SAPP_EVENTTYPE_KEY_DOWN) {
     if (event->key_code == SAPP_KEYCODE_ESCAPE) {
-      log::info("Escape key pressed - exiting windowed test");
       sapp_request_quit();
     }
   } else if (event->type == SAPP_EVENTTYPE_RESIZED) {
     // Handle window resize (including DPI changes)
-    float dpi_scale = sapp_dpi_scale();
-    log::info("Window resized - physical size: %dx%d, logical size: %dx%d, DPI scale: %.2f", sapp_width(), sapp_height(),
-      static_cast<int>(static_cast<float>(sapp_width()) / dpi_scale), static_cast<int>(static_cast<float>(sapp_height()) / dpi_scale), dpi_scale);
-
     if (rhi_context != nullptr) {
       rhi_context->resize_swapchain(static_cast<uint32_t>(sapp_width()), static_cast<uint32_t>(sapp_height()));
-    }
-
-    if (sapp_high_dpi()) {
-      log::info("High DPI resize - logical size: %dx%d, framebuffer size: %dx%d", sapp_width(), sapp_height(), static_cast<int>(static_cast<float>(sapp_width())),
-        static_cast<int>(static_cast<float>(sapp_height())));
     }
   }
 }

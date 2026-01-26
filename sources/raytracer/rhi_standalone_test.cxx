@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
   printf("Global shader compiler initialized successfully\n");
 
   printf("Creating RHI context...\n");
-  RHIContext* rhi_context = create_rhi_context(init_info);
+  auto rhi_context = RHIContext::create(init_info);
   if (rhi_context == nullptr) {
     printf("Failed to create RHI context\n");
     return 1;

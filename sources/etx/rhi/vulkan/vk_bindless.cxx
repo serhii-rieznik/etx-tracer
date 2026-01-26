@@ -111,9 +111,7 @@ bool VKBindlessManager::Impl::create_descriptor_set_layout() {
   layout_info.pBindings = bindings.data();
   layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT;
 
-  VkResult result = vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &descriptor_set_layout);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to create bindless descriptor set layout: %d", static_cast<int>(result));
+  if (etx_vk_call(vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &descriptor_set_layout)) != VK_SUCCESS) {
     return false;
   }
 
@@ -152,9 +150,7 @@ bool VKBindlessManager::Impl::create_descriptor_pool() {
   pool_info.maxSets = 1;
   pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT_EXT | VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
-  VkResult result = vkCreateDescriptorPool(device, &pool_info, nullptr, &descriptor_pool);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to create bindless descriptor pool: %d", static_cast<int>(result));
+  if (etx_vk_call(vkCreateDescriptorPool(device, &pool_info, nullptr, &descriptor_pool)) != VK_SUCCESS) {
     return false;
   }
 
@@ -168,9 +164,7 @@ bool VKBindlessManager::Impl::allocate_descriptor_set() {
   alloc_info.descriptorSetCount = 1;
   alloc_info.pSetLayouts = &descriptor_set_layout;
 
-  VkResult result = vkAllocateDescriptorSets(device, &alloc_info, &descriptor_set);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to allocate bindless descriptor set: %d", static_cast<int>(result));
+  if (etx_vk_call(vkAllocateDescriptorSets(device, &alloc_info, &descriptor_set)) != VK_SUCCESS) {
     return false;
   }
 

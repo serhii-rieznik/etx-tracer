@@ -1,7 +1,4 @@
 #pragma once
 
-#include <etx/rhi/vulkan/vk_rhi.hxx>
-
-#include <vulkan/vulkan.h>
-
-namespace etx {}
+// This file is currently unused as VKDevice is defined in vk_rhi.hxx.
+// Keeping it empty to avoid include conflicts if it's referenced in build packs.

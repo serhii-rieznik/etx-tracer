@@ -85,4 +85,29 @@ static RHITextureFormat vk_format_to_rhi(VkFormat format) {
   }
 }
 
+static uint64_t convert_rhi_format_to_bytes_per_pixel(RHITextureFormat format) {
+  switch (format) {
+    case RHITextureFormat::R8_UNORM:
+      return 1;
+    case RHITextureFormat::R8G8_UNORM:
+      return 2;
+    case RHITextureFormat::R8G8B8_UNORM:
+      return 3;
+    case RHITextureFormat::R8G8B8A8_UNORM:
+    case RHITextureFormat::R8G8B8A8_SRGB:
+    case RHITextureFormat::B8G8R8A8_SRGB:
+    case RHITextureFormat::R32_FLOAT:
+    case RHITextureFormat::D32_FLOAT:
+      return 4;
+    case RHITextureFormat::R32G32_FLOAT:
+      return 8;
+    case RHITextureFormat::R32G32B32_FLOAT:
+      return 12;
+    case RHITextureFormat::R32G32B32A32_FLOAT:
+      return 16;
+    default:
+      return 4;
+  }
+}
+
 }  // namespace etx

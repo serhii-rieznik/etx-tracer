@@ -16,6 +16,7 @@ struct RHITestApplication {
   void frame();
   void cleanup();
   void process_event(const sapp_event*);
+  void memtest(int32_t line, const char*);
 
   void set_headless_mode(bool headless) {
     headless_mode = headless;
@@ -46,6 +47,7 @@ struct RHITestApplication {
   bool initialized = false;
   bool headless_mode = false;
   float time = 0.0f;
+  uint32_t frame_counter = 0;
 
   struct {
     float noise_speed = 1.0f;

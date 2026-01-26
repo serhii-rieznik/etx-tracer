@@ -1,22 +1,113 @@
-#ifdef _WIN32
-# define VK_USE_PLATFORM_WIN32_KHR
-#endif
-
-#include <vulkan/vulkan.h>
-
-#ifdef _WIN32
-# include <vulkan/vulkan_win32.h>
-#endif
-
 #include <etx/rhi/vulkan/vk_rhi.hxx>
-#include <etx/rhi/vulkan/vk_pipeline.hxx>
 #include <etx/rhi/vulkan/vk_utils.hxx>
 
 #include <etx/core/log.hxx>
+#include <etx/core/core.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 
 #include <chrono>
 #include <thread>
+
+const char* vk_error_to_string(VkResult err) {
+  switch (err) {
+    case VK_SUCCESS:
+      return "VK_SUCCESS";
+    case VK_NOT_READY:
+      return "VK_NOT_READY";
+    case VK_TIMEOUT:
+      return "VK_TIMEOUT";
+    case VK_EVENT_SET:
+      return "VK_EVENT_SET";
+    case VK_EVENT_RESET:
+      return "VK_EVENT_RESET";
+    case VK_INCOMPLETE:
+      return "VK_INCOMPLETE";
+    case VK_ERROR_OUT_OF_HOST_MEMORY:
+      return "VK_ERROR_OUT_OF_HOST_MEMORY";
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+      return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+    case VK_ERROR_INITIALIZATION_FAILED:
+      return "VK_ERROR_INITIALIZATION_FAILED";
+    case VK_ERROR_DEVICE_LOST:
+      return "VK_ERROR_DEVICE_LOST";
+    case VK_ERROR_MEMORY_MAP_FAILED:
+      return "VK_ERROR_MEMORY_MAP_FAILED";
+    case VK_ERROR_LAYER_NOT_PRESENT:
+      return "VK_ERROR_LAYER_NOT_PRESENT";
+    case VK_ERROR_EXTENSION_NOT_PRESENT:
+      return "VK_ERROR_EXTENSION_NOT_PRESENT";
+    case VK_ERROR_FEATURE_NOT_PRESENT:
+      return "VK_ERROR_FEATURE_NOT_PRESENT";
+    case VK_ERROR_INCOMPATIBLE_DRIVER:
+      return "VK_ERROR_INCOMPATIBLE_DRIVER";
+    case VK_ERROR_TOO_MANY_OBJECTS:
+      return "VK_ERROR_TOO_MANY_OBJECTS";
+    case VK_ERROR_FORMAT_NOT_SUPPORTED:
+      return "VK_ERROR_FORMAT_NOT_SUPPORTED";
+    case VK_ERROR_FRAGMENTED_POOL:
+      return "VK_ERROR_FRAGMENTED_POOL";
+    case VK_ERROR_UNKNOWN:
+      return "VK_ERROR_UNKNOWN";
+    case VK_ERROR_OUT_OF_POOL_MEMORY:
+      return "VK_ERROR_OUT_OF_POOL_MEMORY";
+    case VK_ERROR_INVALID_EXTERNAL_HANDLE:
+      return "VK_ERROR_INVALID_EXTERNAL_HANDLE";
+    case VK_ERROR_FRAGMENTATION:
+      return "VK_ERROR_FRAGMENTATION";
+    case VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS:
+      return "VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS";
+    case VK_PIPELINE_COMPILE_REQUIRED:
+      return "VK_PIPELINE_COMPILE_REQUIRED";
+    case VK_ERROR_SURFACE_LOST_KHR:
+      return "VK_ERROR_SURFACE_LOST_KHR";
+    case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR:
+      return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
+    case VK_SUBOPTIMAL_KHR:
+      return "VK_SUBOPTIMAL_KHR";
+    case VK_ERROR_OUT_OF_DATE_KHR:
+      return "VK_ERROR_OUT_OF_DATE_KHR";
+    case VK_ERROR_INCOMPATIBLE_DISPLAY_KHR:
+      return "VK_ERROR_INCOMPATIBLE_DISPLAY_KHR";
+    case VK_ERROR_VALIDATION_FAILED_EXT:
+      return "VK_ERROR_VALIDATION_FAILED_EXT";
+    case VK_ERROR_INVALID_SHADER_NV:
+      return "VK_ERROR_INVALID_SHADER_NV";
+    case VK_ERROR_IMAGE_USAGE_NOT_SUPPORTED_KHR:
+      return "VK_ERROR_IMAGE_USAGE_NOT_SUPPORTED_KHR";
+    case VK_ERROR_VIDEO_PICTURE_LAYOUT_NOT_SUPPORTED_KHR:
+      return "VK_ERROR_VIDEO_PICTURE_LAYOUT_NOT_SUPPORTED_KHR";
+    case VK_ERROR_VIDEO_PROFILE_OPERATION_NOT_SUPPORTED_KHR:
+      return "VK_ERROR_VIDEO_PROFILE_OPERATION_NOT_SUPPORTED_KHR";
+    case VK_ERROR_VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR:
+      return "VK_ERROR_VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR";
+    case VK_ERROR_VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR:
+      return "VK_ERROR_VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR";
+    case VK_ERROR_VIDEO_STD_VERSION_NOT_SUPPORTED_KHR:
+      return "VK_ERROR_VIDEO_STD_VERSION_NOT_SUPPORTED_KHR";
+    case VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT:
+      return "VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT";
+    case VK_ERROR_NOT_PERMITTED_KHR:
+      return "VK_ERROR_NOT_PERMITTED_KHR";
+    case VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT:
+      return "VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT";
+    case VK_THREAD_IDLE_KHR:
+      return "VK_THREAD_IDLE_KHR";
+    case VK_THREAD_DONE_KHR:
+      return "VK_THREAD_DONE_KHR";
+    case VK_OPERATION_DEFERRED_KHR:
+      return "VK_OPERATION_DEFERRED_KHR";
+    case VK_OPERATION_NOT_DEFERRED_KHR:
+      return "VK_OPERATION_NOT_DEFERRED_KHR";
+    case VK_ERROR_INVALID_VIDEO_STD_PARAMETERS_KHR:
+      return "VK_ERROR_INVALID_VIDEO_STD_PARAMETERS_KHR";
+    case VK_ERROR_COMPRESSION_EXHAUSTED_EXT:
+      return "VK_ERROR_COMPRESSION_EXHAUSTED_EXT";
+    case VK_INCOMPATIBLE_SHADER_BINARY_EXT:
+      return "VK_INCOMPATIBLE_SHADER_BINARY_EXT";
+    default:
+      return "Unknown VkResult value";
+  }
+}
 
 namespace etx {
 
@@ -33,26 +124,47 @@ struct RenderPassKey {
 
 struct RenderPassKeyHash {
   size_t operator()(const RenderPassKey& key) const {
-    size_t hash = 0;
-    hash = hash * 31 + static_cast<size_t>(key.color_format);
-    hash = hash * 31 + (key.has_depth ? 1 : 0);
-    hash = hash * 31 + static_cast<size_t>(key.depth_format);
-    hash = hash * 31 + key.color_attachment_count;
-    return hash;
+    uint64_t h = 0;
+    h = etx_hash64_continue(&key.color_format, sizeof(key.color_format), h);
+    h = etx_hash64_continue(&key.has_depth, sizeof(key.has_depth), h);
+    h = etx_hash64_continue(&key.depth_format, sizeof(key.depth_format), h);
+    h = etx_hash64_continue(&key.color_attachment_count, sizeof(key.color_attachment_count), h);
+    return static_cast<size_t>(h);
+  }
+};
+
+struct FramebufferKey {
+  VkRenderPass render_pass;
+  uint32_t image_index;
+  uint32_t width;   // Included in key to handle window resize - different sizes get different framebuffers
+  uint32_t height;  // Included in key to handle window resize - different sizes get different framebuffers
+
+  bool operator==(const FramebufferKey& other) const {
+    return render_pass == other.render_pass && image_index == other.image_index && width == other.width && height == other.height;
+  }
+};
+
+struct FramebufferKeyHash {
+  size_t operator()(const FramebufferKey& key) const {
+    uint64_t h = 0;
+    h = etx_hash64_continue(&key.render_pass, sizeof(key.render_pass), h);
+    h = etx_hash64_continue(&key.image_index, sizeof(key.image_index), h);
+    h = etx_hash64_continue(&key.width, sizeof(key.width), h);
+    h = etx_hash64_continue(&key.height, sizeof(key.height), h);
+    return static_cast<size_t>(h);
   }
 };
 
 struct VKContext::Impl {
-  static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2u;
-
+  RHIInitInfo init_info = {};
   VKDevice device;
-  VKBindlessManager bindless_manager;
-
+  VKBindlessManager bindless_manager = {};
   std::vector<VKCommandBuffer> command_buffers = {};
-
   uint32_t predefined_sampler_indices[4] = {};
 
-  Impl() {
+  Impl(const RHIInitInfo& inf)
+    : init_info(inf)
+    , device(inf) {
   }
 
   void initialize_bindless_manager() {
@@ -157,6 +269,7 @@ struct VKContext::Impl {
   std::unordered_map<RenderPassKey, VkRenderPass, RenderPassKeyHash> permanent_render_pass_cache;
 
   std::vector<VkFramebuffer> swapchain_framebuffers;
+  std::unordered_map<FramebufferKey, VkFramebuffer, FramebufferKeyHash> permanent_framebuffer_cache;
 
   uint32_t current_framebuffer_width = 0;
   uint32_t current_framebuffer_height = 0;
@@ -179,6 +292,9 @@ struct VKContext::Impl {
   void destroy_permanent_render_pass_cache();
   bool create_framebuffer_cache();
   void destroy_framebuffer_cache();
+  VkFramebuffer get_or_create_permanent_framebuffer(VkRenderPass render_pass, uint32_t image_index, uint32_t width, uint32_t height, const VkImageView* attachment_views,
+    uint32_t attachment_count);
+  void destroy_permanent_framebuffer_cache();
   void initialize_deferred_destruction();
   void destroy_deferred_objects();
   void process_deferred_destruction_for_frame(uint32_t frame_index);
@@ -191,26 +307,18 @@ struct VKContext::Impl {
   VkFramebuffer get_or_create_swapchain_framebuffer(VkRenderPass render_pass, uint32_t image_index, uint32_t width, uint32_t height);
 };
 
-VKContext::VKContext()
-  : _impl(new Impl()) {
+VKContext::VKContext(const RHIInitInfo& info)
+  : _impl(new Impl(info)) {
 }
 
 VKContext::~VKContext() {
   if (_impl->device._impl != nullptr && _impl->device._impl->device != VK_NULL_HANDLE) {
     if (!_impl->in_flight_fences.empty()) {
-      VkResult fence_result =
-        vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX);
-      if (fence_result != VK_SUCCESS) {
-        log::warning("Failed to wait for swapchain fences during shutdown: %d", static_cast<int>(fence_result));
-      }
+      etx_vk_call(vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
     }
 
     if (!_impl->temporary_fences.empty()) {
-      VkResult temp_fence_result =
-        vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->temporary_fences.size()), _impl->temporary_fences.data(), VK_TRUE, UINT64_MAX);
-      if (temp_fence_result != VK_SUCCESS) {
-        log::warning("Failed to wait for temporary fences during shutdown: %d", static_cast<int>(temp_fence_result));
-      }
+      etx_vk_call(vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->temporary_fences.size()), _impl->temporary_fences.data(), VK_TRUE, UINT64_MAX));
 
       for (VkFence fence : _impl->temporary_fences) {
         if (fence != VK_NULL_HANDLE) {
@@ -220,10 +328,7 @@ VKContext::~VKContext() {
       _impl->temporary_fences.clear();
     }
 
-    VkResult idle_result = vkDeviceWaitIdle(_impl->device._impl->device);
-    if (idle_result != VK_SUCCESS) {
-      log::warning("Failed to wait for device idle during shutdown: %d", static_cast<int>(idle_result));
-    }
+    etx_vk_call(vkDeviceWaitIdle(_impl->device._impl->device));
   }
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -239,17 +344,9 @@ VKContext::~VKContext() {
       VkCommandBuffer vk_cmd = cmd_buffer.get_vk_command_buffer();
       if (vk_cmd != VK_NULL_HANDLE) {
         if (cmd_buffer.is_recording()) {
-          VkResult end_result = vkEndCommandBuffer(vk_cmd);
-          if (end_result == VK_SUCCESS) {
-          } else {
-            log::warning("Failed to end recording command buffer during shutdown: %d", static_cast<int>(end_result));
-          }
+          etx_vk_call(vkEndCommandBuffer(vk_cmd));
         }
-
-        VkResult reset_result = vkResetCommandBuffer(vk_cmd, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
-        if (reset_result != VK_SUCCESS) {
-          log::warning("Failed to reset command buffer during shutdown: %d", static_cast<int>(reset_result));
-        }
+        etx_vk_call(vkResetCommandBuffer(vk_cmd, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT));
       }
 
       cmd_buffer.reset_internal_state();
@@ -263,7 +360,7 @@ VKContext::~VKContext() {
   _impl->device.destroy_all_resources();
 
   _impl->destroy_framebuffer_cache();
-
+  _impl->destroy_permanent_framebuffer_cache();
   _impl->destroy_permanent_render_pass_cache();
 
   _impl->destroy_swapchain();
@@ -319,14 +416,13 @@ void VKContext::resize_swapchain(uint32_t width, uint32_t height) {
 
   vkDeviceWaitIdle(_impl->device._impl->device);
 
-  for (uint32_t frame_index = 0; frame_index < _impl->MAX_FRAMES_IN_FLIGHT; ++frame_index) {
+  for (uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index) {
     _impl->process_deferred_destruction_for_frame(frame_index);
   }
 
   _impl->destroy_framebuffer_cache();
-
+  _impl->destroy_permanent_framebuffer_cache();
   _impl->destroy_permanent_render_pass_cache();
-
   _impl->destroy_swapchain();
 
   _impl->width = width;
@@ -338,24 +434,7 @@ void VKContext::resize_swapchain(uint32_t width, uint32_t height) {
       return;
     }
 
-    VkSemaphoreCreateInfo semaphore_info = {};
-    semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-    VkFenceCreateInfo fence_info = {};
-    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-
-    for (size_t i = 0; i < _impl->MAX_FRAMES_IN_FLIGHT; i++) {
-      VkResult result1 = vkCreateSemaphore(_impl->device._impl->device, &semaphore_info, nullptr, &_impl->image_available_semaphores[i]);
-      VkResult result2 = vkCreateSemaphore(_impl->device._impl->device, &semaphore_info, nullptr, &_impl->render_finished_semaphores[i]);
-      VkResult result3 = vkCreateFence(_impl->device._impl->device, &fence_info, nullptr, &_impl->in_flight_fences[i]);
-
-      if (result1 != VK_SUCCESS || result2 != VK_SUCCESS || result3 != VK_SUCCESS) {
-        log::error("Failed to create synchronization objects for frame %zu: image_available=%d, render_finished=%d, fence=%d", i, static_cast<int>(result1),
-          static_cast<int>(result2), static_cast<int>(result3));
-        return;
-      }
-    }
+    _impl->create_sync_objects();
   }
 
   if (!_impl->create_render_pass_cache()) {
@@ -400,30 +479,19 @@ void VKContext::present_with_frame_index(uint32_t frame_index) {
   present_info.pImageIndices = &_impl->current_swapchain_image;
 
   VkResult result = vkQueuePresentKHR(_impl->device._impl->graphics_queue, &present_info);
-  if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+  if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
     if (!_impl->in_flight_fences.empty()) {
-      VkResult fence_wait_result =
-        vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX);
-      if (fence_wait_result != VK_SUCCESS) {
-        log::warning("Failed to wait for in-flight fences during swapchain recreation: %d", static_cast<int>(fence_wait_result));
-      }
+      etx_vk_call(vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
     }
-
-    for (uint32_t frame_index = 0; frame_index < _impl->MAX_FRAMES_IN_FLIGHT; ++frame_index) {
+    for (uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index) {
       _impl->process_deferred_destruction_for_frame(frame_index);
     }
-
     _impl->destroy_swapchain();
-
     if (!_impl->create_swapchain(_impl->width, _impl->height)) {
       log::error("Failed to recreate swapchain after out-of-date condition");
       return;
     }
-
     _impl->create_sync_objects();
-
-  } else if (result != VK_SUCCESS) {
-    log::error("Failed to present swapchain image: %d", static_cast<int>(result));
   }
 }
 
@@ -432,39 +500,29 @@ void VKContext::begin_frame() {
     return;
   }
 
-  _impl->process_deferred_destruction_for_frame(_impl->current_frame);
-
-  VkResult fence_result = vkWaitForFences(_impl->device._impl->device, 1, &_impl->in_flight_fences[_impl->current_frame], VK_TRUE, UINT64_MAX);
-  if (fence_result != VK_SUCCESS) {
-    log::error("Failed to wait for frame fence %u: %d", _impl->current_frame, static_cast<int>(fence_result));
-
-  } else {
+  if (etx_vk_call(vkWaitForFences(_impl->device._impl->device, 1, &_impl->in_flight_fences[_impl->current_frame], VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
+    return;
   }
 
-  VkResult result = vkAcquireNextImageKHR(_impl->device._impl->device, _impl->swapchain, UINT64_MAX, _impl->image_available_semaphores[_impl->current_frame], VK_NULL_HANDLE,
-    &_impl->current_swapchain_image);
+  _impl->process_deferred_destruction_for_frame(_impl->current_frame);
+
+  VkResult result = etx_vk_call(vkAcquireNextImageKHR(_impl->device._impl->device, _impl->swapchain, UINT64_MAX, _impl->image_available_semaphores[_impl->current_frame],
+    VK_NULL_HANDLE, &_impl->current_swapchain_image));
 
   if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
     if (!_impl->in_flight_fences.empty()) {
-      VkResult fence_wait_result =
-        vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX);
-      if (fence_wait_result != VK_SUCCESS) {
-        log::warning("Failed to wait for in-flight fences during swapchain recreation: %d", static_cast<int>(fence_wait_result));
-      }
+      etx_vk_call(vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
     }
 
-    for (uint32_t frame_index = 0; frame_index < _impl->MAX_FRAMES_IN_FLIGHT; ++frame_index) {
+    for (uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index) {
       _impl->process_deferred_destruction_for_frame(frame_index);
     }
 
     _impl->destroy_framebuffer_cache();
-
     _impl->destroy_swapchain();
 
     VkSurfaceCapabilitiesKHR capabilities;
-    VkResult cap_result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_impl->device._impl->physical_device, _impl->surface, &capabilities);
-    if (cap_result != VK_SUCCESS) {
-      log::error("Failed to get surface capabilities during swapchain recreation: %d", static_cast<int>(cap_result));
+    if (etx_vk_call(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_impl->device._impl->physical_device, _impl->surface, &capabilities)) != VK_SUCCESS) {
       return;
     }
 
@@ -484,7 +542,6 @@ void VKContext::begin_frame() {
       return;
     }
   } else if (result != VK_SUCCESS) {
-    log::error("Failed to acquire swapchain image: %d", static_cast<int>(result));
     return;
   }
 
@@ -493,7 +550,8 @@ void VKContext::begin_frame() {
     _impl->destroy_framebuffer_cache();
   }
 
-  vkResetFences(_impl->device._impl->device, 1, &_impl->in_flight_fences[_impl->current_frame]);
+  etx_vk_call(vkResetFences(_impl->device._impl->device, 1, &_impl->in_flight_fences[_impl->current_frame]));
+  etx_vk_call(vkResetCommandPool(_impl->device.get_vk_device(), _impl->device._impl->command_pools[_impl->current_frame], VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
 }
 
 void VKContext::end_frame() {
@@ -501,7 +559,7 @@ void VKContext::end_frame() {
     return;
   }
 
-  _impl->current_frame = (_impl->current_frame + 1) % _impl->MAX_FRAMES_IN_FLIGHT;
+  _impl->current_frame = (_impl->current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 uint32_t VKContext::get_current_frame_index() const {
@@ -518,10 +576,10 @@ uint32_t VKContext::get_sampler_index(RHISamplerType type) const {
 
 RHICommandBuffer* VKContext::get_command_buffer() {
   if (_impl->command_buffers.empty()) {
-    _impl->command_buffers.reserve(_impl->MAX_FRAMES_IN_FLIGHT);
-    for (uint32_t i = 0; i < _impl->MAX_FRAMES_IN_FLIGHT; ++i) {
+    _impl->command_buffers.reserve(MAX_FRAMES_IN_FLIGHT);
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
       _impl->command_buffers.emplace_back();
-      _impl->command_buffers.back().initialize(this);
+      _impl->command_buffers.back().initialize(this, i);
     }
   }
 
@@ -557,9 +615,7 @@ void VKContext::submit_command_buffer(RHICommandBuffer* command_buffer) {
   } else {
     VkFenceCreateInfo fence_info = {};
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    VkResult fence_result = vkCreateFence(_impl->device._impl->device, &fence_info, nullptr, &submit_fence);
-    if (fence_result != VK_SUCCESS) {
-      log::error("Failed to create temporary fence for headless submission: %d", static_cast<int>(fence_result));
+    if (etx_vk_call(vkCreateFence(_impl->device._impl->device, &fence_info, nullptr, &submit_fence)) != VK_SUCCESS) {
       submit_fence = VK_NULL_HANDLE;
     }
 
@@ -571,10 +627,7 @@ void VKContext::submit_command_buffer(RHICommandBuffer* command_buffer) {
   VkCommandBuffer vk_cmd_buffer = vk_cmd_buf->get_vk_command_buffer();
   submit_info.pCommandBuffers = &vk_cmd_buffer;
 
-  VkResult result = vkQueueSubmit(_impl->device._impl->graphics_queue, 1, &submit_info, submit_fence);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to submit command buffer: %d", static_cast<int>(result));
-
+  if (etx_vk_call(vkQueueSubmit(_impl->device._impl->graphics_queue, 1, &submit_info, submit_fence)) != VK_SUCCESS) {
     if (!has_sync_objects && submit_fence != VK_NULL_HANDLE) {
       vkDestroyFence(_impl->device._impl->device, submit_fence, nullptr);
     }
@@ -582,13 +635,28 @@ void VKContext::submit_command_buffer(RHICommandBuffer* command_buffer) {
   }
 
   if (!has_sync_objects && submit_fence != VK_NULL_HANDLE) {
-    VkResult wait_result = vkWaitForFences(_impl->device._impl->device, 1, &submit_fence, VK_TRUE, UINT64_MAX);
-    if (wait_result != VK_SUCCESS) {
-      log::error("Failed to wait for command buffer completion in headless mode: %d", static_cast<int>(wait_result));
-
+    if (etx_vk_call(vkWaitForFences(_impl->device._impl->device, 1, &submit_fence, VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
       _impl->temporary_fences.push_back(submit_fence);
     } else {
       vkDestroyFence(_impl->device._impl->device, submit_fence, nullptr);
+    }
+  }
+
+  // Periodically clean up temporary fences that have completed
+  if (!_impl->temporary_fences.empty() && (_impl->current_frame % 10 == 0)) {
+    auto it = _impl->temporary_fences.begin();
+    while (it != _impl->temporary_fences.end()) {
+      VkResult status = etx_vk_call(vkGetFenceStatus(_impl->device._impl->device, *it));
+      if (status == VK_SUCCESS) {
+        vkDestroyFence(_impl->device._impl->device, *it, nullptr);
+        it = _impl->temporary_fences.erase(it);
+      } else if (status == VK_NOT_READY) {
+        ++it;
+      } else {
+        // Error case - destroy the fence anyway to prevent leak
+        vkDestroyFence(_impl->device._impl->device, *it, nullptr);
+        it = _impl->temporary_fences.erase(it);
+      }
     }
   }
 }
@@ -597,8 +665,8 @@ VkDevice VKContext::get_vk_device() const {
   return _impl->device._impl->device;
 }
 
-VkCommandPool VKContext::get_vk_command_pool() const {
-  return _impl->device._impl->command_pool;
+VkCommandPool VKContext::get_vk_command_pool(uint32_t index) const {
+  return _impl->device._impl->command_pools[index];
 }
 
 VkFence VKContext::get_current_frame_fence() const {
@@ -608,20 +676,14 @@ VkFence VKContext::get_current_frame_fence() const {
 VkQueue VKContext::get_graphics_queue() const {
   return _impl->device._impl->graphics_queue;
 }
-class VKCommandBuffer::Impl {
- public:
+
+struct VKCommandBuffer::Impl {
   VKContext* context = nullptr;
   VKDevice* device = nullptr;
   VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-  VkRenderPass render_pass = VK_NULL_HANDLE;
-  VkFramebuffer framebuffer = VK_NULL_HANDLE;
-  VkImageView current_image_view = VK_NULL_HANDLE;
   bool in_render_pass = false;
   bool is_recording = false;
   uint32_t render_pass_depth = 0;
-
-  std::unordered_map<RHIBindlessHandle, RHIResourceState> buffer_states;
-  std::unordered_map<RHIBindlessHandle, RHIResourceState> texture_states;
 
   VkRenderPass current_render_pass = VK_NULL_HANDLE;
   VkFramebuffer current_framebuffer = VK_NULL_HANDLE;
@@ -630,185 +692,17 @@ class VKCommandBuffer::Impl {
   VkPipelineBindPoint current_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
   VkPipelineLayout current_pipeline_layout = VK_NULL_HANDLE;
 
-  uint32_t current_width = 0;
-  uint32_t current_height = 0;
-  VkFormat current_format = VK_FORMAT_UNDEFINED;
-
-  void create_render_pass() {
-    VkAttachmentDescription attachment = {};
-    attachment.format = context->_impl->swapchain_format;
-    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    VkAttachmentReference color_attachment_ref = {};
-    color_attachment_ref.attachment = 0;
-    color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass = {};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &color_attachment_ref;
-
-    VkSubpassDependency dependencies[2] = {};
-
-    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[0].srcAccessMask = 0;
-    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-    dependencies[1].srcSubpass = 0;
-    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    dependencies[1].dstAccessMask = 0;
-
-    VkRenderPassCreateInfo render_pass_info = {};
-    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    render_pass_info.attachmentCount = 1;
-    render_pass_info.pAttachments = &attachment;
-    render_pass_info.subpassCount = 1;
-    render_pass_info.pSubpasses = &subpass;
-    render_pass_info.dependencyCount = 2;
-    render_pass_info.pDependencies = dependencies;
-
-    VkResult result = vkCreateRenderPass(context->get_vk_device(), &render_pass_info, nullptr, &render_pass);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to create render pass: %d", static_cast<int>(result));
-    }
-  }
-
-  void update_framebuffer(VkImageView image_view) {
-    if (current_image_view == image_view && framebuffer != VK_NULL_HANDLE) {
-      return;
-    }
-
-    if (framebuffer != VK_NULL_HANDLE) {
-      vkDestroyFramebuffer(context->get_vk_device(), framebuffer, nullptr);
-    }
-
-    VkFramebufferCreateInfo framebuffer_info = {};
-    framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebuffer_info.renderPass = render_pass;
-    framebuffer_info.attachmentCount = 1;
-    framebuffer_info.pAttachments = &image_view;
-    framebuffer_info.width = context->_impl->swapchain_extent.width;
-    framebuffer_info.height = context->_impl->swapchain_extent.height;
-    framebuffer_info.layers = 1;
-
-    VkResult result = vkCreateFramebuffer(context->get_vk_device(), &framebuffer_info, nullptr, &framebuffer);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to create framebuffer: %d", static_cast<int>(result));
-    } else {
-      current_image_view = image_view;
-    }
-  }
-
-  bool create_render_pass(VkFormat format) {
-    if (render_pass != VK_NULL_HANDLE && current_format == format) {
-      return true;
-    }
-
-    if (render_pass != VK_NULL_HANDLE) {
-      vkDestroyRenderPass(context->_impl->device._impl->device, render_pass, nullptr);
-    }
-
-    VkAttachmentDescription color_attachment = {};
-    color_attachment.format = format;
-    color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    VkAttachmentReference color_attachment_ref = {};
-    color_attachment_ref.attachment = 0;
-    color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass = {};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &color_attachment_ref;
-
-    VkSubpassDependency dependencies[2] = {};
-
-    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[0].dstSubpass = 0;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[0].srcAccessMask = 0;
-    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-    dependencies[1].srcSubpass = 0;
-    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-    dependencies[1].dstAccessMask = 0;
-
-    VkRenderPassCreateInfo render_pass_info = {};
-    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    render_pass_info.attachmentCount = 1;
-    render_pass_info.pAttachments = &color_attachment;
-    render_pass_info.subpassCount = 1;
-    render_pass_info.pSubpasses = &subpass;
-    render_pass_info.dependencyCount = 2;
-    render_pass_info.pDependencies = dependencies;
-
-    VkResult result = vkCreateRenderPass(context->_impl->device._impl->device, &render_pass_info, nullptr, &render_pass);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to create render pass: %d", static_cast<int>(result));
-      return false;
-    }
-
-    current_format = format;
-    return true;
-  }
-
-  bool create_framebuffer(VkImageView image_view, uint32_t width, uint32_t height) {
-    if (framebuffer != VK_NULL_HANDLE) {
-      vkDestroyFramebuffer(context->_impl->device._impl->device, framebuffer, nullptr);
-    }
-
-    VkImageView attachments[] = {image_view};
-
-    VkFramebufferCreateInfo framebuffer_info = {};
-    framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebuffer_info.renderPass = render_pass;
-    framebuffer_info.attachmentCount = 1;
-    framebuffer_info.pAttachments = attachments;
-    framebuffer_info.width = width;
-    framebuffer_info.height = height;
-    framebuffer_info.layers = 1;
-
-    VkResult result = vkCreateFramebuffer(context->_impl->device._impl->device, &framebuffer_info, nullptr, &framebuffer);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to create framebuffer: %d", static_cast<int>(result));
-      return false;
-    }
-
-    current_width = width;
-    current_height = height;
-    return true;
-  }
-
   VkRenderPass create_render_pass_for_attachments(const std::vector<VkFormat>& attachment_formats, bool has_depth) {
-    std::vector<VkAttachmentDescription> attachments;
-    std::vector<VkAttachmentReference> color_refs;
+    // Fixed-size arrays (max 9 attachments as per Vulkan limits)
+    VkAttachmentDescription attachments[9] = {};
+    VkAttachmentReference color_refs[8] = {};  // Max 8 color attachments
     VkAttachmentReference depth_ref = {};
 
-    uint32_t attachment_index = 0;
+    uint32_t attachment_count = 0;
+    uint32_t color_ref_count = 0;
 
-    for (VkFormat format : attachment_formats) {
+    for (size_t i = 0; i < attachment_formats.size() && attachment_count < 9; ++i) {
+      VkFormat format = attachment_formats[i];
       VkAttachmentDescription attachment = {};
       attachment.format = format;
       attachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -818,28 +712,29 @@ class VKCommandBuffer::Impl {
       attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
       attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-      bool is_depth = (format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D32_SFLOAT_S8_UINT);
+      bool is_depth = (format == VK_FORMAT_D32_SFLOAT) ||         //
+                      (format == VK_FORMAT_D24_UNORM_S8_UINT) ||  //
+                      (format == VK_FORMAT_D32_SFLOAT_S8_UINT);
 
-      if (is_depth && has_depth) {
+      if (is_depth && has_depth && depth_ref.attachment == VK_ATTACHMENT_UNUSED) {
         attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        depth_ref.attachment = attachment_index;
+        depth_ref.attachment = attachment_count;
         depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-      } else {
+      } else if (color_ref_count < 8) {
         attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         VkAttachmentReference color_ref = {};
-        color_ref.attachment = attachment_index;
+        color_ref.attachment = attachment_count;
         color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color_refs.push_back(color_ref);
+        color_refs[color_ref_count++] = color_ref;
       }
 
-      attachments.push_back(attachment);
-      attachment_index++;
+      attachments[attachment_count++] = attachment;
     }
 
     VkSubpassDescription subpass = {};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = static_cast<uint32_t>(color_refs.size());
-    subpass.pColorAttachments = color_refs.data();
+    subpass.colorAttachmentCount = color_ref_count;
+    subpass.pColorAttachments = color_refs;
     if (has_depth) {
       subpass.pDepthStencilAttachment = &depth_ref;
     }
@@ -862,54 +757,37 @@ class VKCommandBuffer::Impl {
 
     VkRenderPassCreateInfo render_pass_info = {};
     render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    render_pass_info.attachmentCount = static_cast<uint32_t>(attachments.size());
-    render_pass_info.pAttachments = attachments.data();
+    render_pass_info.attachmentCount = attachment_count;
+    render_pass_info.pAttachments = attachments;
     render_pass_info.subpassCount = 1;
     render_pass_info.pSubpasses = &subpass;
     render_pass_info.dependencyCount = 2;
     render_pass_info.pDependencies = dependencies;
 
     VkRenderPass render_pass;
-    VkResult result = vkCreateRenderPass(context->get_vk_device(), &render_pass_info, nullptr, &render_pass);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to create render pass for attachments: %d", static_cast<int>(result));
+    if (etx_vk_call(vkCreateRenderPass(context->get_vk_device(), &render_pass_info, nullptr, &render_pass)) != VK_SUCCESS) {
       return VK_NULL_HANDLE;
     }
 
     return render_pass;
   }
 
-  VkFramebuffer create_framebuffer_for_attachments(VkRenderPass render_pass, const std::vector<VkImageView>& attachment_views, uint32_t width, uint32_t height) {
+  VkFramebuffer create_framebuffer_for_attachments(VkRenderPass render_pass, const VkImageView* attachment_views, uint32_t attachment_count, uint32_t width, uint32_t height) {
     VkFramebufferCreateInfo framebuffer_info = {};
     framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebuffer_info.renderPass = render_pass;
-    framebuffer_info.attachmentCount = static_cast<uint32_t>(attachment_views.size());
-    framebuffer_info.pAttachments = attachment_views.data();
+    framebuffer_info.attachmentCount = attachment_count;
+    framebuffer_info.pAttachments = attachment_views;
     framebuffer_info.width = width;
     framebuffer_info.height = height;
     framebuffer_info.layers = 1;
 
     VkFramebuffer framebuffer;
-    VkResult result = vkCreateFramebuffer(context->get_vk_device(), &framebuffer_info, nullptr, &framebuffer);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to create framebuffer for attachments: %d", static_cast<int>(result));
+    if (etx_vk_call(vkCreateFramebuffer(context->get_vk_device(), &framebuffer_info, nullptr, &framebuffer)) != VK_SUCCESS) {
       return VK_NULL_HANDLE;
     }
 
     return framebuffer;
-  }
-
-  void initialize_command_buffer(VKContext* ctx) {
-    VkCommandBufferAllocateInfo alloc_info = {};
-    alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    alloc_info.commandPool = ctx->get_vk_command_pool();
-    alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    alloc_info.commandBufferCount = 1;
-
-    VkResult result = vkAllocateCommandBuffers(ctx->get_vk_device(), &alloc_info, &command_buffer);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to allocate command buffer: %d", static_cast<int>(result));
-    }
   }
 };
 
@@ -917,10 +795,14 @@ VKCommandBuffer::VKCommandBuffer()
   : _impl(new Impl()) {
 }
 
-void VKCommandBuffer::initialize(VKContext* ctx) {
+void VKCommandBuffer::initialize(VKContext* ctx, uint32_t pool_index) {
   _impl->context = ctx;
   _impl->device = static_cast<VKDevice*>(ctx->get_device());
-  _impl->initialize_command_buffer(ctx);
+  VkCommandBufferAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+  alloc_info.commandPool = ctx->get_vk_command_pool(pool_index);
+  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  alloc_info.commandBufferCount = 1;
+  etx_vk_call(vkAllocateCommandBuffers(ctx->get_vk_device(), &alloc_info, &_impl->command_buffer));
 }
 
 void VKCommandBuffer::destroy_resources() {
@@ -960,11 +842,9 @@ bool VKCommandBuffer::is_recording() const {
 
 VKCommandBuffer::~VKCommandBuffer() {
   destroy_resources();
-
-  if (_impl->command_buffer != VK_NULL_HANDLE && _impl->context != nullptr) {
-    vkFreeCommandBuffers(_impl->context->get_vk_device(), _impl->context->get_vk_command_pool(), 1, &_impl->command_buffer);
-  }
-
+  // if (_impl->command_buffer != VK_NULL_HANDLE && _impl->context != nullptr) {
+  //   vkFreeCommandBuffers(_impl->context->get_vk_device(), _impl->context->get_vk_command_pool(), 1, &_impl->command_buffer);
+  // }
   delete _impl;
 }
 
@@ -994,9 +874,7 @@ void VKCommandBuffer::begin() {
     return;
   }
 
-  VkResult reset_result = vkResetCommandBuffer(_impl->command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
-  if (reset_result != VK_SUCCESS) {
-    log::error("Failed to reset command buffer: %d", static_cast<int>(reset_result));
+  if (etx_vk_call(vkResetCommandBuffer(_impl->command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT)) != VK_SUCCESS) {
     return;
   }
 
@@ -1004,16 +882,13 @@ void VKCommandBuffer::begin() {
   begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-  VkResult result = vkBeginCommandBuffer(_impl->command_buffer, &begin_info);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to begin command buffer: %d", static_cast<int>(result));
+  if (etx_vk_call(vkBeginCommandBuffer(_impl->command_buffer, &begin_info)) != VK_SUCCESS) {
     return;
   }
 
   _impl->is_recording = true;
-
-  _impl->render_pass_depth = 0;
   _impl->in_render_pass = false;
+  _impl->render_pass_depth = 0;
   _impl->current_render_pass = VK_NULL_HANDLE;
   _impl->current_framebuffer = VK_NULL_HANDLE;
 }
@@ -1035,10 +910,7 @@ void VKCommandBuffer::end() {
     _impl->in_render_pass = false;
   }
 
-  VkResult result = vkEndCommandBuffer(_impl->command_buffer);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to end command buffer: %d", static_cast<int>(result));
-  } else {
+  if (etx_vk_call(vkEndCommandBuffer(_impl->command_buffer)) == VK_SUCCESS) {
     _impl->is_recording = false;
   }
 }
@@ -1187,20 +1059,20 @@ void VKCommandBuffer::ensure_texture_layout(RHITexture texture, VkImageLayout re
     return;
   }
 
-  auto texture_it = device->_impl->texture_handle_map.find(texture);
-  if (texture_it == device->_impl->texture_handle_map.end()) {
+  uint32_t texture_index = device->_impl->textures.get_index(texture);
+  if (texture_index == UINT32_MAX) {
     return;
   }
-  VKTexture* texture_obj = texture_it->second;
+  const VKTextureData& texture_data = device->_impl->textures.get_data(texture_index);
 
-  if (texture_obj->get_current_layout() == required_layout) {
+  if (texture_data.current_layout == required_layout) {
     return;
   }
 
   RHIResourceState current_state = RHIResourceState::Undefined;
   RHIResourceState target_state = RHIResourceState::Undefined;
 
-  switch (texture_obj->get_current_layout()) {
+  switch (texture_data.current_layout) {
     case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
       current_state = RHIResourceState::ShaderReadOnly;
       break;
@@ -1266,12 +1138,12 @@ void VKCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
     return;
   }
 
-  auto texture_it = device->_impl->texture_handle_map.find(texture);
-  if (texture_it == device->_impl->texture_handle_map.end()) {
+  uint32_t texture_index = device->_impl->textures.get_index(texture);
+  if (texture_index == UINT32_MAX) {
     log::error("Texture handle not found in texture map");
     return;
   }
-  VKTexture* texture_obj = texture_it->second;
+  VKTextureData& texture_data = device->_impl->textures.get_data(texture_index);
 
   VkImageMemoryBarrier barrier = {};
   barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -1279,7 +1151,7 @@ void VKCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
   barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.image = vk_image;
 
-  VkImageLayout old_layout = texture_obj->get_current_layout();
+  VkImageLayout old_layout = texture_data.current_layout;
 
   VkAccessFlags src_access = 0;
   VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -1355,10 +1227,10 @@ void VKCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
   barrier.subresourceRange.baseArrayLayer = 0;
   barrier.subresourceRange.layerCount = 1;
 
-  if (texture_obj->get_desc().format == RHITextureFormat::D32_FLOAT || texture_obj->get_desc().format == RHITextureFormat::D24_UNORM_S8_UINT ||
-      texture_obj->get_desc().format == RHITextureFormat::D32_FLOAT_S8_UINT) {
+  if (texture_data.desc.format == RHITextureFormat::D32_FLOAT || texture_data.desc.format == RHITextureFormat::D24_UNORM_S8_UINT ||
+      texture_data.desc.format == RHITextureFormat::D32_FLOAT_S8_UINT) {
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    if (texture_obj->get_desc().format == RHITextureFormat::D24_UNORM_S8_UINT || texture_obj->get_desc().format == RHITextureFormat::D32_FLOAT_S8_UINT) {
+    if (texture_data.desc.format == RHITextureFormat::D24_UNORM_S8_UINT || texture_data.desc.format == RHITextureFormat::D32_FLOAT_S8_UINT) {
       barrier.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
     }
   }
@@ -1370,49 +1242,17 @@ void VKCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
 
   vkCmdPipelineBarrier(_impl->command_buffer, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-  texture_obj->set_current_layout(new_layout);
-}
-
-void VKCommandBuffer::set_buffer_state(RHIBuffer buffer, RHIResourceState state) {
-  if (_impl == nullptr) {
-    log::error("Cannot set buffer state: command buffer not initialized");
-    return;
-  }
-  _impl->buffer_states[buffer] = state;
-}
-
-void VKCommandBuffer::set_texture_state(RHITexture texture, RHIResourceState state) {
-  if (_impl == nullptr) {
-    log::error("Cannot set texture state: command buffer not initialized");
-    return;
-  }
-  _impl->texture_states[texture] = state;
-}
-
-RHIResourceState VKCommandBuffer::get_buffer_state(RHIBuffer buffer) const {
-  if (_impl == nullptr) {
-    return RHIResourceState::Undefined;
-  }
-  auto it = _impl->buffer_states.find(buffer);
-  return (it != _impl->buffer_states.end()) ? it->second : RHIResourceState::Undefined;
-}
-
-RHIResourceState VKCommandBuffer::get_texture_state(RHITexture texture) const {
-  if (_impl == nullptr) {
-    return RHIResourceState::Undefined;
-  }
-  auto it = _impl->texture_states.find(texture);
-  return (it != _impl->texture_states.end()) ? it->second : RHIResourceState::Undefined;
+  texture_data.current_layout = new_layout;
 }
 
 void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors, RHITexture depth_attachment) {
   if (_impl == nullptr) {
-    log::error("Cannot begin render pass: command buffer not initialized");
+    log::error("Cannot begin render pass: command buffer implementation is null");
     return;
   }
 
   if (_impl->command_buffer == VK_NULL_HANDLE) {
-    log::error("Cannot begin render pass: command buffer not initialized");
+    log::error("Cannot begin render pass: Vulkan command buffer handle is invalid");
     return;
   }
 
@@ -1469,9 +1309,17 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
 
   VKDevice* device = static_cast<VKDevice*>(_impl->context->get_device());
 
-  std::vector<VkFormat> attachment_formats;
-  std::vector<VkImageView> attachment_views;
-  std::vector<VkClearValue> clear_values;
+  // Fixed-size arrays for attachments (Vulkan max color attachments = 8, +1 for depth = 9)
+  constexpr uint32_t MAX_ATTACHMENTS = 9;
+  VkFormat attachment_formats[MAX_ATTACHMENTS] = {};
+  VkImageView attachment_views[MAX_ATTACHMENTS] = {};
+  VkClearValue clear_values[MAX_ATTACHMENTS] = {};
+  uint32_t total_attachments = 0;
+
+  if (color_attachment_count > MAX_ATTACHMENTS - 1) {  // Reserve 1 for potential depth
+    log::error("Too many color attachments: %u (max %u)", color_attachment_count, MAX_ATTACHMENTS - 1);
+    return;
+  }
 
   for (uint32_t i = 0; i < color_attachment_count; ++i) {
     VkImage vk_image = device->get_vk_image_from_bindless(color_attachments[i]);
@@ -1500,18 +1348,18 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
       attachment_format = swapchain_format;
       attachment_view = swapchain_image_view;
     } else {
-      auto texture_it = device->_impl->texture_handle_map.find(color_attachments[i]);
-      if (texture_it == device->_impl->texture_handle_map.end()) {
+      uint32_t texture_index = device->_impl->textures.get_index(color_attachments[i]);
+      if (texture_index == UINT32_MAX) {
         log::error("Color attachment %u not found in texture map", i);
         return;
       }
-      VKTexture* texture = texture_it->second;
-      attachment_format = convert_rhi_format_to_vk(texture->get_desc().format);
-      attachment_view = texture->get_vk_image_view();
+      const VKTextureData& texture_data = device->_impl->textures.get_data(texture_index);
+      attachment_format = convert_rhi_format_to_vk(texture_data.desc.format);
+      attachment_view = texture_data.image_view;
     }
 
-    attachment_formats.push_back(attachment_format);
-    attachment_views.push_back(attachment_view);
+    attachment_formats[total_attachments] = attachment_format;
+    attachment_views[total_attachments] = attachment_view;
 
     VkClearValue clear_value = {};
     if (clear_colors) {
@@ -1519,7 +1367,8 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
     } else {
       clear_value.color = {0.0f, 0.0f, 0.0f, 1.0f};
     }
-    clear_values.push_back(clear_value);
+    clear_values[total_attachments] = clear_value;
+    total_attachments++;
 
     ensure_texture_layout(color_attachments[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
   }
@@ -1532,19 +1381,20 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
       return;
     }
 
-    auto texture_it = device->_impl->texture_handle_map.find(depth_attachment);
-    if (texture_it == device->_impl->texture_handle_map.end()) {
+    uint32_t texture_index = device->_impl->textures.get_index(depth_attachment);
+    if (texture_index == UINT32_MAX) {
       log::error("Depth attachment not found in texture map");
       return;
     }
-    VKTexture* texture = texture_it->second;
+    const VKTextureData& texture_data = device->_impl->textures.get_data(texture_index);
 
-    attachment_formats.push_back(convert_rhi_format_to_vk(texture->get_desc().format));
-    attachment_views.push_back(texture->get_vk_image_view());
+    attachment_formats[total_attachments] = convert_rhi_format_to_vk(texture_data.desc.format);
+    attachment_views[total_attachments] = texture_data.image_view;
 
     VkClearValue clear_value = {};
     clear_value.depthStencil = {1.0f, 0};
-    clear_values.push_back(clear_value);
+    clear_values[total_attachments] = clear_value;
+    total_attachments++;
 
     ensure_texture_layout(depth_attachment, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
   }
@@ -1572,10 +1422,10 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
     VkFormat depth_format = VK_FORMAT_UNDEFINED;
 
     if (has_depth && depth_attachment != 0) {
-      auto texture_it = device->_impl->texture_handle_map.find(depth_attachment);
-      if (texture_it != device->_impl->texture_handle_map.end()) {
-        VKTexture* texture = texture_it->second;
-        depth_format = convert_rhi_format_to_vk(texture->get_desc().format);
+      uint32_t texture_index = device->_impl->textures.get_index(depth_attachment);
+      if (texture_index != UINT32_MAX) {
+        const VKTextureData& texture_data = device->_impl->textures.get_data(texture_index);
+        depth_format = convert_rhi_format_to_vk(texture_data.desc.format);
       }
     }
 
@@ -1603,15 +1453,14 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
   }
 
   if (!is_swapchain_attachment) {
-    auto texture_it = device->_impl->texture_handle_map.find(color_attachments[0]);
-    if (texture_it == device->_impl->texture_handle_map.end()) {
+    uint32_t texture_index = device->_impl->textures.get_index(color_attachments[0]);
+    if (texture_index == UINT32_MAX) {
       log::error("First color attachment not found in texture map");
-
       return;
     }
-    VKTexture* first_texture = texture_it->second;
-    width = first_texture->get_width();
-    height = first_texture->get_height();
+    const VKTextureData& texture_data = device->_impl->textures.get_data(texture_index);
+    width = texture_data.desc.width;
+    height = texture_data.desc.height;
   }
 
   VkFramebuffer framebuffer = VK_NULL_HANDLE;
@@ -1623,10 +1472,19 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
       use_cached_framebuffer = true;
     } else {
       log::warning("Failed to get cached swapchain framebuffer, creating dynamically");
-      framebuffer = _impl->create_framebuffer_for_attachments(render_pass_to_use, attachment_views, width, height);
+      framebuffer = _impl->create_framebuffer_for_attachments(render_pass_to_use, attachment_views, total_attachments, width, height);
+    }
+  } else if (is_swapchain_attachment) {
+    // Use permanent framebuffer cache for swapchain attachments with permanent render passes
+    framebuffer = _impl->context->_impl->get_or_create_permanent_framebuffer(render_pass_to_use, _impl->context->_impl->current_swapchain_image, width, height, attachment_views,
+      total_attachments);
+    if (framebuffer != VK_NULL_HANDLE) {
+      use_cached_framebuffer = true;
+    } else {
+      framebuffer = _impl->create_framebuffer_for_attachments(render_pass_to_use, attachment_views, total_attachments, width, height);
     }
   } else {
-    framebuffer = _impl->create_framebuffer_for_attachments(render_pass_to_use, attachment_views, width, height);
+    framebuffer = _impl->create_framebuffer_for_attachments(render_pass_to_use, attachment_views, total_attachments, width, height);
   }
 
   if (framebuffer == VK_NULL_HANDLE) {
@@ -1641,8 +1499,8 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
   begin_info.framebuffer = framebuffer;
   begin_info.renderArea.offset = {0, 0};
   begin_info.renderArea.extent = {width, height};
-  begin_info.clearValueCount = static_cast<uint32_t>(clear_values.size());
-  begin_info.pClearValues = clear_values.data();
+  begin_info.clearValueCount = total_attachments;
+  begin_info.pClearValues = clear_values;
 
   vkCmdBeginRenderPass(_impl->command_buffer, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -1675,6 +1533,34 @@ void VKCommandBuffer::end_render_pass() {
     if (current_texture != 0) {
       ensure_texture_layout(current_texture, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     }
+  }
+
+  // Queue framebuffer for deferred destruction if it's not cached
+  if (_impl->current_framebuffer != VK_NULL_HANDLE && _impl->context != nullptr) {
+    const auto& cached_framebuffers = _impl->context->_impl->swapchain_framebuffers;
+    bool is_cached_framebuffer = false;
+    for (VkFramebuffer cached_fb : cached_framebuffers) {
+      if (_impl->current_framebuffer == cached_fb) {
+        is_cached_framebuffer = true;
+        break;
+      }
+    }
+
+    // Check if it's in permanent framebuffer cache
+    if (!is_cached_framebuffer) {
+      bool is_permanent_framebuffer = false;
+      for (const auto& pair : _impl->context->_impl->permanent_framebuffer_cache) {
+        if (pair.second == _impl->current_framebuffer) {
+          is_permanent_framebuffer = true;
+          break;
+        }
+      }
+
+      if (!is_permanent_framebuffer) {
+        _impl->context->_impl->queue_deferred_destruction(VK_NULL_HANDLE, _impl->current_framebuffer);
+      }
+    }
+    _impl->current_framebuffer = VK_NULL_HANDLE;
   }
 
   _impl->render_pass_depth--;
@@ -1748,11 +1634,11 @@ void VKCommandBuffer::set_pipeline(RHIPipeline pipeline) {
 
   VKDevice* vk_device = static_cast<VKDevice*>(_impl->device);
 
-  VKGraphicsPipeline* graphics_pipeline = vk_device->get_graphics_pipeline(pipeline);
-  if (graphics_pipeline != nullptr) {
-    _impl->current_pipeline_layout = graphics_pipeline->get_vk_pipeline_layout();
+  const VKPipelineData* graphics_pipeline_data = vk_device->get_graphics_pipeline_data(pipeline);
+  if (graphics_pipeline_data != nullptr) {
+    _impl->current_pipeline_layout = graphics_pipeline_data->layout;
     _impl->current_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    vkCmdBindPipeline(_impl->command_buffer, _impl->current_bind_point, graphics_pipeline->get_vk_pipeline());
+    vkCmdBindPipeline(_impl->command_buffer, _impl->current_bind_point, graphics_pipeline_data->pipeline);
     VkDescriptorSet bindless_set = static_cast<VKBindlessManager*>(_impl->context->get_bindless_manager())->get_descriptor_set();
     if (bindless_set != VK_NULL_HANDLE) {
       vkCmdBindDescriptorSets(_impl->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _impl->current_pipeline_layout, 0, 1, &bindless_set, 0, nullptr);
@@ -1760,11 +1646,11 @@ void VKCommandBuffer::set_pipeline(RHIPipeline pipeline) {
     return;
   }
 
-  VKComputePipeline* compute_pipeline = vk_device->get_compute_pipeline(pipeline);
-  if (compute_pipeline != nullptr) {
-    _impl->current_pipeline_layout = compute_pipeline->get_vk_pipeline_layout();
+  const VKPipelineData* compute_pipeline_data = vk_device->get_compute_pipeline_data(pipeline);
+  if (compute_pipeline_data != nullptr) {
+    _impl->current_pipeline_layout = compute_pipeline_data->layout;
     _impl->current_bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
-    vkCmdBindPipeline(_impl->command_buffer, _impl->current_bind_point, compute_pipeline->get_vk_pipeline());
+    vkCmdBindPipeline(_impl->command_buffer, _impl->current_bind_point, compute_pipeline_data->pipeline);
     return;
   }
 
@@ -1804,13 +1690,13 @@ void VKCommandBuffer::draw_indexed(const RHIIndexedDrawDesc& desc, RHIBuffer ind
 
   VKDevice* device = static_cast<VKDevice*>(_impl->context->get_device());
 
-  VKGraphicsPipeline* pipeline = device->get_graphics_pipeline(_impl->current_pipeline);
-  if (pipeline == nullptr) {
+  const VKPipelineData* pipeline_data = device->get_graphics_pipeline_data(_impl->current_pipeline);
+  if (pipeline_data == nullptr) {
     log::error("Failed to find graphics pipeline: %llu", _impl->current_pipeline.value);
     return;
   }
 
-  vkCmdBindPipeline(_impl->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->get_vk_pipeline());
+  vkCmdBindPipeline(_impl->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_data->pipeline);
 
   VkBuffer vk_index_buffer = device->get_vk_buffer_from_bindless(index_buffer);
   if (vk_index_buffer == VK_NULL_HANDLE) {
@@ -1832,13 +1718,13 @@ void VKCommandBuffer::draw(const RHIDrawDesc& desc) {
 
   VKDevice* device = static_cast<VKDevice*>(_impl->context->get_device());
 
-  VKGraphicsPipeline* pipeline = device->get_graphics_pipeline(_impl->current_pipeline);
-  if (pipeline == nullptr) {
+  const VKPipelineData* pipeline_data = device->get_graphics_pipeline_data(_impl->current_pipeline);
+  if (pipeline_data == nullptr) {
     log::error("Failed to find graphics pipeline: %llu", _impl->current_pipeline.value);
     return;
   }
 
-  vkCmdBindPipeline(_impl->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->get_vk_pipeline());
+  vkCmdBindPipeline(_impl->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_data->pipeline);
 
   vkCmdDraw(_impl->command_buffer, desc.vertex_count, desc.instance_count, desc.first_vertex, desc.first_instance);
 }
@@ -1859,14 +1745,14 @@ void VKCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
     return;
   }
 
-  VKComputePipeline* compute_pipeline = static_cast<VKDevice*>(_impl->context->get_device())->get_compute_pipeline(_impl->current_pipeline);
-  if (compute_pipeline == nullptr) {
+  const VKPipelineData* compute_pipeline_data = static_cast<VKDevice*>(_impl->context->get_device())->get_compute_pipeline_data(_impl->current_pipeline);
+  if (compute_pipeline_data == nullptr) {
     log::error("Failed to find compute pipeline: %llu", _impl->current_pipeline.value);
     return;
   }
 
-  VkPipeline vk_pipeline = compute_pipeline->get_vk_pipeline();
-  VkPipelineLayout vk_pipeline_layout = compute_pipeline->get_vk_pipeline_layout();
+  VkPipeline vk_pipeline = compute_pipeline_data->pipeline;
+  VkPipelineLayout vk_pipeline_layout = compute_pipeline_data->layout;
 
   if (vk_pipeline == VK_NULL_HANDLE || vk_pipeline_layout == VK_NULL_HANDLE) {
     log::error("Invalid Vulkan pipeline or pipeline layout");
@@ -1994,10 +1880,7 @@ void VKCommandBuffer::set_debug_name(const char* name) {
     name_info.objectHandle = (uint64_t)_impl->command_buffer;
     name_info.pObjectName = name;
 
-    VkResult result = vkSetDebugUtilsObjectNameEXT(device, &name_info);
-    if (result != VK_SUCCESS) {
-      log::warning("Failed to set debug name for command buffer: %d", static_cast<int>(result));
-    }
+    etx_vk_call(vkSetDebugUtilsObjectNameEXT(device, &name_info));
   }
 }
 bool VKContext::Impl::create_surface() {
@@ -2018,9 +1901,7 @@ bool VKContext::Impl::create_surface() {
     return false;
   }
 
-  VkResult result = vkCreateWin32SurfaceKHR(device._impl->instance, &surface_info, nullptr, &surface);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to create Win32 surface: %d", static_cast<int>(result));
+  if (etx_vk_call(vkCreateWin32SurfaceKHR(device._impl->instance, &surface_info, nullptr, &surface)) != VK_SUCCESS) {
     return false;
   }
 #else
@@ -2040,17 +1921,27 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
   }
 
   VkSurfaceCapabilitiesKHR capabilities;
-  vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &capabilities);
+  if (etx_vk_call(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &capabilities)) != VK_SUCCESS) {
+    return false;
+  }
 
   uint32_t format_count;
-  vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, nullptr);
+  if (etx_vk_call(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, nullptr)) != VK_SUCCESS) {
+    return false;
+  }
   std::vector<VkSurfaceFormatKHR> formats(format_count);
-  vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, formats.data());
+  if (etx_vk_call(vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, formats.data())) != VK_SUCCESS) {
+    return false;
+  }
 
   uint32_t present_mode_count;
-  vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, nullptr);
+  if (etx_vk_call(vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, nullptr)) != VK_SUCCESS) {
+    return false;
+  }
   std::vector<VkPresentModeKHR> present_modes(present_mode_count);
-  vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, present_modes.data());
+  if (etx_vk_call(vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, present_modes.data())) != VK_SUCCESS) {
+    return false;
+  }
 
   VkSurfaceFormatKHR surface_format = choose_swap_surface_format(formats);
   VkPresentModeKHR present_mode = choose_swap_present_mode(present_modes);
@@ -2079,17 +1970,15 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
   swapchain_info.clipped = VK_TRUE;
   swapchain_info.oldSwapchain = VK_NULL_HANDLE;
 
-  VkResult result = vkCreateSwapchainKHR(device._impl->device, &swapchain_info, nullptr, &swapchain);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to create swapchain: %d", static_cast<int>(result));
+  if (etx_vk_call(vkCreateSwapchainKHR(device._impl->device, &swapchain_info, nullptr, &swapchain)) != VK_SUCCESS) {
     return false;
   }
 
   swapchain_format = surface_format.format;
 
-  vkGetSwapchainImagesKHR(device._impl->device, swapchain, &image_count, nullptr);
+  etx_vk_call(vkGetSwapchainImagesKHR(device._impl->device, swapchain, &image_count, nullptr));
   swapchain_images.resize(image_count);
-  vkGetSwapchainImagesKHR(device._impl->device, swapchain, &image_count, swapchain_images.data());
+  etx_vk_call(vkGetSwapchainImagesKHR(device._impl->device, swapchain, &image_count, swapchain_images.data()));
 
   swapchain_image_views.resize(image_count);
   for (uint32_t i = 0; i < image_count; i++) {
@@ -2108,9 +1997,7 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
     view_info.subresourceRange.baseArrayLayer = 0;
     view_info.subresourceRange.layerCount = 1;
 
-    result = vkCreateImageView(device._impl->device, &view_info, nullptr, &swapchain_image_views[i]);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to create swapchain image view %u: %d", i, static_cast<int>(result));
+    if (etx_vk_call(vkCreateImageView(device._impl->device, &view_info, nullptr, &swapchain_image_views[i])) != VK_SUCCESS) {
       return false;
     }
   }
@@ -2149,13 +2036,9 @@ void VKContext::Impl::create_sync_objects() {
   in_flight_fences.resize(MAX_FRAMES_IN_FLIGHT);
 
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-    VkResult result1 = vkCreateSemaphore(device._impl->device, &semaphore_info, nullptr, &image_available_semaphores[i]);
-    VkResult result2 = vkCreateSemaphore(device._impl->device, &semaphore_info, nullptr, &render_finished_semaphores[i]);
-    VkResult result3 = vkCreateFence(device._impl->device, &fence_info, nullptr, &in_flight_fences[i]);
-
-    if (result1 != VK_SUCCESS || result2 != VK_SUCCESS || result3 != VK_SUCCESS) {
-      log::error("Failed to create synchronization objects for frame %zu", i);
-    }
+    etx_vk_call(vkCreateSemaphore(device._impl->device, &semaphore_info, nullptr, &image_available_semaphores[i]));
+    etx_vk_call(vkCreateSemaphore(device._impl->device, &semaphore_info, nullptr, &render_finished_semaphores[i]));
+    etx_vk_call(vkCreateFence(device._impl->device, &fence_info, nullptr, &in_flight_fences[i]));
   }
 
   initialize_deferred_destruction();
@@ -2187,6 +2070,8 @@ void VKContext::Impl::destroy_sync_objects() {
 }
 
 void VKContext::Impl::destroy_swapchain() {
+  // Clear permanent framebuffer cache when swapchain is destroyed since image views will be invalid
+  destroy_permanent_framebuffer_cache();
   if (device._impl->device == VK_NULL_HANDLE) {
     return;
   }
@@ -2365,9 +2250,7 @@ bool VKContext::Impl::create_render_pass_cache() {
   render_pass_info.dependencyCount = 2;
   render_pass_info.pDependencies = dependencies;
 
-  VkResult result = vkCreateRenderPass(device._impl->device, &render_pass_info, nullptr, &swapchain_render_pass);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to create cached swapchain render pass: %d", static_cast<int>(result));
+  if (etx_vk_call(vkCreateRenderPass(device._impl->device, &render_pass_info, nullptr, &swapchain_render_pass)) != VK_SUCCESS) {
     return false;
   }
 
@@ -2474,9 +2357,7 @@ VkFramebuffer VKContext::Impl::get_or_create_swapchain_framebuffer(VkRenderPass 
   framebuffer_info.height = height;
   framebuffer_info.layers = 1;
 
-  VkResult result = vkCreateFramebuffer(device._impl->device, &framebuffer_info, nullptr, &swapchain_framebuffers[image_index]);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to create swapchain framebuffer for image %u: %d", image_index, static_cast<int>(result));
+  if (etx_vk_call(vkCreateFramebuffer(device._impl->device, &framebuffer_info, nullptr, &swapchain_framebuffers[image_index])) != VK_SUCCESS) {
     return VK_NULL_HANDLE;
   }
 
@@ -2515,10 +2396,7 @@ bool VKContext::Impl::create_framebuffer_cache() {
     framebuffer_info.height = swapchain_extent.height;
     framebuffer_info.layers = 1;
 
-    VkResult result = vkCreateFramebuffer(device._impl->device, &framebuffer_info, nullptr, &swapchain_framebuffers[i]);
-    if (result != VK_SUCCESS) {
-      log::error("Failed to create cached swapchain framebuffer %zu: %d", i, static_cast<int>(result));
-
+    if (etx_vk_call(vkCreateFramebuffer(device._impl->device, &framebuffer_info, nullptr, &swapchain_framebuffers[i])) != VK_SUCCESS) {
       for (size_t j = 0; j < i; ++j) {
         if (swapchain_framebuffers[j] != VK_NULL_HANDLE) {
           vkDestroyFramebuffer(device._impl->device, swapchain_framebuffers[j], nullptr);
@@ -2559,9 +2437,13 @@ VkRenderPass VKContext::Impl::get_or_create_permanent_render_pass(const RenderPa
 
   VkRenderPass render_pass = VK_NULL_HANDLE;
 
-  std::vector<VkAttachmentDescription> attachments;
-  std::vector<VkAttachmentReference> color_refs;
+  // Fixed-size arrays for render pass creation (max 2 attachments: color + depth)
+  VkAttachmentDescription attachments[2] = {};
+  VkAttachmentReference color_refs[1] = {};
   VkAttachmentReference depth_ref = {};
+
+  uint32_t attachment_count = 0;
+  uint32_t color_ref_count = 0;
 
   VkAttachmentDescription color_attachment = {};
   color_attachment.format = key.color_format;
@@ -2572,12 +2454,12 @@ VkRenderPass VKContext::Impl::get_or_create_permanent_render_pass(const RenderPa
   color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
   color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-  attachments.push_back(color_attachment);
+  attachments[attachment_count++] = color_attachment;
 
   VkAttachmentReference color_ref = {};
   color_ref.attachment = 0;
   color_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-  color_refs.push_back(color_ref);
+  color_refs[color_ref_count++] = color_ref;
 
   if (key.has_depth) {
     VkAttachmentDescription depth_attachment = {};
@@ -2589,7 +2471,7 @@ VkRenderPass VKContext::Impl::get_or_create_permanent_render_pass(const RenderPa
     depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
     depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    attachments.push_back(depth_attachment);
+    attachments[attachment_count++] = depth_attachment;
 
     depth_ref.attachment = 1;
     depth_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
@@ -2597,8 +2479,8 @@ VkRenderPass VKContext::Impl::get_or_create_permanent_render_pass(const RenderPa
 
   VkSubpassDescription subpass = {};
   subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-  subpass.colorAttachmentCount = static_cast<uint32_t>(color_refs.size());
-  subpass.pColorAttachments = color_refs.data();
+  subpass.colorAttachmentCount = color_ref_count;
+  subpass.pColorAttachments = color_refs;
   if (key.has_depth) {
     subpass.pDepthStencilAttachment = &depth_ref;
   }
@@ -2635,16 +2517,14 @@ VkRenderPass VKContext::Impl::get_or_create_permanent_render_pass(const RenderPa
 
   VkRenderPassCreateInfo render_pass_info = {};
   render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  render_pass_info.attachmentCount = static_cast<uint32_t>(attachments.size());
-  render_pass_info.pAttachments = attachments.data();
+  render_pass_info.attachmentCount = attachment_count;
+  render_pass_info.pAttachments = attachments;
   render_pass_info.subpassCount = 1;
   render_pass_info.pSubpasses = &subpass;
   render_pass_info.dependencyCount = 2;
   render_pass_info.pDependencies = dependencies;
 
-  VkResult result = vkCreateRenderPass(device._impl->device, &render_pass_info, nullptr, &render_pass);
-  if (result != VK_SUCCESS) {
-    log::error("Failed to create permanent render pass: %d", static_cast<int>(result));
+  if (etx_vk_call(vkCreateRenderPass(device._impl->device, &render_pass_info, nullptr, &render_pass)) != VK_SUCCESS) {
     return VK_NULL_HANDLE;
   }
 
@@ -2670,6 +2550,43 @@ void VKContext::Impl::destroy_permanent_render_pass_cache() {
     }
 
   } else {
+  }
+}
+
+VkFramebuffer VKContext::Impl::get_or_create_permanent_framebuffer(VkRenderPass render_pass, uint32_t image_index, uint32_t width, uint32_t height,
+  const VkImageView* attachment_views, uint32_t attachment_count) {
+  FramebufferKey key = {render_pass, image_index, width, height};
+  auto it = permanent_framebuffer_cache.find(key);
+  if (it != permanent_framebuffer_cache.end()) {
+    return it->second;
+  }
+
+  VkFramebufferCreateInfo framebuffer_info = {};
+  framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+  framebuffer_info.renderPass = render_pass;
+  framebuffer_info.attachmentCount = attachment_count;
+  framebuffer_info.pAttachments = attachment_views;
+  framebuffer_info.width = width;
+  framebuffer_info.height = height;
+  framebuffer_info.layers = 1;
+
+  VkFramebuffer framebuffer = VK_NULL_HANDLE;
+  if (etx_vk_call(vkCreateFramebuffer(device._impl->device, &framebuffer_info, nullptr, &framebuffer)) != VK_SUCCESS) {
+    return VK_NULL_HANDLE;
+  }
+
+  permanent_framebuffer_cache[key] = framebuffer;
+  return framebuffer;
+}
+
+void VKContext::Impl::destroy_permanent_framebuffer_cache() {
+  if (!permanent_framebuffer_cache.empty() && device._impl != nullptr && device._impl->device != VK_NULL_HANDLE) {
+    for (const auto& pair : permanent_framebuffer_cache) {
+      if (pair.second != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(device._impl->device, pair.second, nullptr);
+      }
+    }
+    permanent_framebuffer_cache.clear();
   }
 }
 

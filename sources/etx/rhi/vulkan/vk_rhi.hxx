@@ -1,21 +1,146 @@
 #pragma once
 
-#ifdef _WIN32
+#ifdef ETX_PLATFORM_WINDOWS
 # define VK_USE_PLATFORM_WIN32_KHR
+# include <vulkan/vulkan.h>
+# include <vulkan/vulkan_win32.h>
+#else
+# error Unsupported platform
 #endif
-
-#include <vulkan/vulkan.h>
 
 #include <etx/rhi/rhi.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 
+#include <etx/core/log.hxx>
+#include <functional>
+
+const char* vk_error_to_string(VkResult);
+
+#define etx_vk_call(expr)                                                                                \
+  ([&](const char* _f, unsigned _l) -> VkResult {                                                        \
+    auto _r = expr;                                                                                      \
+    if (_r != VK_SUCCESS) {                                                                              \
+      log::error("[Vulkan] Call %s at [%s:%u] resulted with %s", #expr, _f, _l, vk_error_to_string(_r)); \
+    }                                                                                                    \
+    return _r;                                                                                           \
+  }(__FILE__, __LINE__))
+
 namespace etx {
+
+static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2u;
 
 class VKComputePipeline;
 class VKGraphicsPipeline;
 
+struct VKBufferData {
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkDeviceMemory memory = VK_NULL_HANDLE;
+  RHIBufferDesc desc = {};
+  uint64_t allocated_size = 0;
+};
+
+struct VKTextureData {
+  VkImage image = VK_NULL_HANDLE;
+  VkImageView image_view = VK_NULL_HANDLE;
+  VkDeviceMemory memory = VK_NULL_HANDLE;
+  RHITextureDesc desc = {};
+  VkImageLayout current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  uint64_t allocated_size = 0;
+};
+
+struct VKSamplerData {
+  VkSampler sampler = VK_NULL_HANDLE;
+  RHISamplerDesc desc = {};
+};
+
+struct VKPipelineData {
+  VkPipeline pipeline = VK_NULL_HANDLE;
+  VkPipelineLayout layout = VK_NULL_HANDLE;
+  RHIPipeline handle = {};
+};
+
+template <typename T, typename Key>
+struct VKResourcePool {
+  uint32_t allocate_index() {
+    uint32_t index;
+    if (!free_indices.empty()) {
+      index = free_indices.back();
+      free_indices.pop_back();
+    } else {
+      index = static_cast<uint32_t>(data.size());
+      data.emplace_back();
+    }
+    return index;
+  }
+
+  void free_index(uint32_t index, std::function<void(T&)> cleanup = nullptr) {
+    if (index < data.size()) {
+      if (cleanup) {
+        cleanup(data[index]);
+      }
+      data[index] = T{};  // Reset to default
+      free_indices.push_back(index);
+    }
+  }
+
+  T& get_data(uint32_t index) {
+    return data[index];
+  }
+
+  const T& get_data(uint32_t index) const {
+    return data[index];
+  }
+
+  uint32_t get_index(const Key& key) const {
+    auto it = handle_to_index_map.find(key);
+    return (it != handle_to_index_map.end()) ? it->second : UINT32_MAX;
+  }
+
+  T* get_data_ptr(const Key& key) {
+    uint32_t index = get_index(key);
+    return (index != UINT32_MAX) ? &data[index] : nullptr;
+  }
+
+  const T* get_data_ptr(const Key& key) const {
+    uint32_t index = get_index(key);
+    return (index != UINT32_MAX) ? &data[index] : nullptr;
+  }
+
+  void set_handle_to_index(const Key& key, uint32_t index) {
+    handle_to_index_map[key] = index;
+  }
+
+  void remove_handle(const Key& key) {
+    handle_to_index_map.erase(key);
+  }
+
+  std::vector<Key> get_all_keys() const {
+    std::vector<Key> keys;
+    keys.reserve(handle_to_index_map.size());
+    for (const auto& pair : handle_to_index_map) {
+      keys.push_back(pair.first);
+    }
+    return keys;
+  }
+
+  void clear() {
+    data.clear();
+    free_indices.clear();
+    handle_to_index_map.clear();
+  }
+
+  size_t size() const {
+    return handle_to_index_map.size();
+  }
+
+ private:
+  std::vector<T> data;
+  std::vector<uint32_t> free_indices;
+  std::unordered_map<Key, uint32_t> handle_to_index_map;
+};
+
 struct VKContext : RHIContext {
-  VKContext();
+  VKContext(const RHIInitInfo&);
   ~VKContext() override;
 
   RHIDevice* get_device() override;
@@ -40,30 +165,24 @@ struct VKContext : RHIContext {
   void submit_command_buffer(RHICommandBuffer* command_buffer) override;
 
   VkDevice get_vk_device() const;
-  VkCommandPool get_vk_command_pool() const;
+  VkCommandPool get_vk_command_pool(uint32_t index) const;
   VkFence get_current_frame_fence() const;
   VkQueue get_graphics_queue() const;
 
- public:
-  class Impl;
+ private:
+  friend struct VKCommandBuffer;
+  struct Impl;
   Impl* _impl = nullptr;
 };
 
 struct VKDevice : RHIDevice {
-  VKDevice();
+  VKDevice(const RHIInitInfo&);
   ~VKDevice() override;
-
- public:
-  class Impl;
 
   VkDevice get_vk_device() const;
   VkPhysicalDevice get_vk_physical_device() const;
   void set_bindless_manager(RHIBindlessManager* manager);
-
   void destroy_all_resources();
-
- private:
-  friend class VKContext;
 
   RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc) override;
   RHICreateBindlessResult create_texture(const RHITextureDesc& desc) override;
@@ -92,14 +211,19 @@ struct VKDevice : RHIDevice {
   uint64_t get_min_uniform_buffer_offset_alignment() const override;
   uint64_t get_min_storage_buffer_offset_alignment() const override;
 
- public:
-  VKComputePipeline* get_compute_pipeline(RHIPipeline handle) const;
-  VKGraphicsPipeline* get_graphics_pipeline(RHIPipeline handle) const;
+  RHIMemoryStats get_memory_statistics() const override;
+
+  const VKPipelineData* get_compute_pipeline_data(RHIPipeline handle) const;
+  const VKPipelineData* get_graphics_pipeline_data(RHIPipeline handle) const;
   VkBuffer get_vk_buffer_from_bindless(RHIBindlessHandle handle) const;
   VkImage get_vk_image_from_bindless(RHIBindlessHandle handle) const;
 
   void set_shader_compiler(ShaderCompiler* compiler);
   ShaderCompiler* get_shader_compiler() const;
+
+ private:
+  friend class VKContext;
+  friend class VKCommandBuffer;
   class Impl;
   Impl* _impl = nullptr;
 };
@@ -159,8 +283,7 @@ struct VKBindlessManager : RHIBindlessManager {
   Impl* _impl = nullptr;
 };
 
-class VKBindlessManager::Impl {
- public:
+struct VKBindlessManager::Impl {
   Impl(VkDevice device, VkPhysicalDevice physical_device, uint32_t max_buffers, uint32_t max_textures, uint32_t max_samplers, uint32_t max_acceleration_structures);
   ~Impl();
 
@@ -203,7 +326,6 @@ class VKBindlessManager::Impl {
   bool create_descriptor_set_layout();
   bool create_descriptor_pool();
   bool allocate_descriptor_set();
-
   bool initialize_bindless_arrays();
 
   RHIResult register_resource(RHIResourceType type, uint32_t& out_descriptor_index, RHIBindlessHandle& out_handle);
@@ -217,7 +339,7 @@ struct VKCommandBuffer : RHICommandBuffer {
   VKCommandBuffer();
   ~VKCommandBuffer() override;
 
-  void initialize(VKContext* ctx);
+  void initialize(VKContext* ctx, uint32_t pool_index);
   void destroy_resources();
   bool is_initialized() const;
   VkCommandBuffer get_vk_command_buffer() const;
@@ -234,11 +356,6 @@ struct VKCommandBuffer : RHICommandBuffer {
 
   void buffer_barrier(RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) override;
   void texture_barrier(RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state) override;
-
-  void set_buffer_state(RHIBindlessHandle buffer, RHIResourceState state) override;
-  void set_texture_state(RHIBindlessHandle texture, RHIResourceState state) override;
-  RHIResourceState get_buffer_state(RHIBindlessHandle buffer) const override;
-  RHIResourceState get_texture_state(RHIBindlessHandle texture) const override;
 
   void begin_render_pass(uint32_t color_attachment_count, RHIBindlessHandle* color_attachments, const float* clear_colors = nullptr,
     RHIBindlessHandle depth_attachment = {}) override;
@@ -261,9 +378,10 @@ struct VKCommandBuffer : RHICommandBuffer {
 
   void set_debug_name(const char* name) override;
 
- private:
   void ensure_texture_layout(RHIBindlessHandle texture, VkImageLayout required_layout);
   void set_scissor_from_viewport(const RHIViewport& viewport);
+
+ private:
   class Impl;
   Impl* _impl = nullptr;
 };
