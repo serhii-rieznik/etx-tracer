@@ -62,14 +62,8 @@ void MTContext::present() {
   log::warning("Metal RHI: present not implemented");
 }
 
-void MTContext::present_with_frame_index(uint32_t frame_index) {
-}
-
 void MTContext::begin_frame() {
   _impl->current_frame = (_impl->current_frame + 1) % 2;
-}
-
-void MTContext::end_frame() {
 }
 
 uint32_t MTContext::get_current_frame_index() const {

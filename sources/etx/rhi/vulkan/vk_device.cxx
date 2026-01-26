@@ -337,8 +337,7 @@ bool VKDevice::Impl::initialize_physical_device() {
   vkEnumeratePhysicalDevices(instance, &device_count, devices.data());
 
   VkPhysicalDevice selected_device = VK_NULL_HANDLE;
-  VkPhysicalDeviceProperties device_properties;
-
+  VkPhysicalDeviceProperties device_properties = {};
   for (const auto& device : devices) {
     vkGetPhysicalDeviceProperties(device, &device_properties);
 

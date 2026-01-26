@@ -154,10 +154,8 @@ struct VKContext : RHIContext {
   RHITexture get_current_swapchain_texture() override;
   RHITextureFormat get_swapchain_format() const override;
   void present() override;
-  void present_with_frame_index(uint32_t frame_index) override;
 
   void begin_frame() override;
-  void end_frame() override;
   uint32_t get_current_frame_index() const override;
   uint32_t get_sampler_index(RHISamplerType type) const override;
 

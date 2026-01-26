@@ -18,11 +18,6 @@ struct RHITestApplication {
   void process_event(const sapp_event*);
   void memtest(int32_t line, const char*);
 
-  void set_headless_mode(bool headless) {
-    headless_mode = headless;
-  }
-  void run_headless_test();
-
  private:
   bool create_rendering_resources();
   bool create_noise_texture();
@@ -45,7 +40,6 @@ struct RHITestApplication {
   RHIPipeline compute_pipeline = {};
 
   bool initialized = false;
-  bool headless_mode = false;
   float time = 0.0f;
   uint32_t frame_counter = 0;
 

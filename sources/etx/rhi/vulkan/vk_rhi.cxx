@@ -466,19 +466,15 @@ RHITextureFormat VKContext::get_swapchain_format() const {
 }
 
 void VKContext::present() {
-  present_with_frame_index(_impl->current_frame);
-}
-
-void VKContext::present_with_frame_index(uint32_t frame_index) {
-  VkPresentInfoKHR present_info = {};
-  present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+  VkPresentInfoKHR present_info = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
   present_info.waitSemaphoreCount = 1;
-  present_info.pWaitSemaphores = &_impl->render_finished_semaphores[frame_index];
+  present_info.pWaitSemaphores = &_impl->render_finished_semaphores[_impl->current_frame];
   present_info.swapchainCount = 1;
   present_info.pSwapchains = &_impl->swapchain;
   present_info.pImageIndices = &_impl->current_swapchain_image;
 
   VkResult result = vkQueuePresentKHR(_impl->device._impl->graphics_queue, &present_info);
+
   if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
     if (!_impl->in_flight_fences.empty()) {
       etx_vk_call(vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
@@ -493,6 +489,8 @@ void VKContext::present_with_frame_index(uint32_t frame_index) {
     }
     _impl->create_sync_objects();
   }
+
+  _impl->current_frame = (_impl->current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void VKContext::begin_frame() {
@@ -505,6 +503,7 @@ void VKContext::begin_frame() {
   }
 
   _impl->process_deferred_destruction_for_frame(_impl->current_frame);
+  etx_vk_call(vkResetCommandPool(_impl->device.get_vk_device(), _impl->device._impl->command_pools[_impl->current_frame], VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
 
   VkResult result = etx_vk_call(vkAcquireNextImageKHR(_impl->device._impl->device, _impl->swapchain, UINT64_MAX, _impl->image_available_semaphores[_impl->current_frame],
     VK_NULL_HANDLE, &_impl->current_swapchain_image));
@@ -551,15 +550,6 @@ void VKContext::begin_frame() {
   }
 
   etx_vk_call(vkResetFences(_impl->device._impl->device, 1, &_impl->in_flight_fences[_impl->current_frame]));
-  etx_vk_call(vkResetCommandPool(_impl->device.get_vk_device(), _impl->device._impl->command_pools[_impl->current_frame], VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
-}
-
-void VKContext::end_frame() {
-  if (_impl->swapchain == VK_NULL_HANDLE) {
-    return;
-  }
-
-  _impl->current_frame = (_impl->current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 uint32_t VKContext::get_current_frame_index() const {
@@ -2118,6 +2108,8 @@ VkSurfaceFormatKHR VKContext::Impl::choose_swap_surface_format(const std::vector
 
 VkPresentModeKHR VKContext::Impl::choose_swap_present_mode(const std::vector<VkPresentModeKHR>& available_present_modes) {
   for (const auto& present_mode : available_present_modes) {
+    if (present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR)
+      return present_mode;
     if (present_mode == VK_PRESENT_MODE_MAILBOX_KHR) {
       return present_mode;
     }

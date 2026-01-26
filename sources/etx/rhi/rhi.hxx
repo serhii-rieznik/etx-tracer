@@ -39,11 +39,10 @@ struct RHIContext {
   virtual void resize_swapchain(uint32_t width, uint32_t height) = 0;
   virtual RHITexture get_current_swapchain_texture() = 0;
   virtual RHITextureFormat get_swapchain_format() const = 0;
-  virtual void present() = 0;
-  virtual void present_with_frame_index(uint32_t frame_index) = 0;
 
   virtual void begin_frame() = 0;
-  virtual void end_frame() = 0;
+  virtual void present() = 0;
+
   virtual uint32_t get_current_frame_index() const = 0;
 
   virtual uint32_t get_sampler_index(RHISamplerType type) const = 0;
