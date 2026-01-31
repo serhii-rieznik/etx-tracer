@@ -4,6 +4,7 @@
 #include <etx/render/shared/base.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 #include <etx/render/host/scene_representation.hxx>
+#include <etx/rhi/rhi_imgui.hxx>
 
 #include "options.hxx"
 
@@ -21,12 +22,12 @@ struct UI {
   UI() = default;
   ~UI() = default;
 
-  void initialize(Film* film, const IORDatabase*);
+  void initialize(Film* film, const IORDatabase*, void* context);
   void cleanup();
 
   void build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
     const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras,
-    const IntegratorThread* integrator_thread);
+    const IntegratorThread* integrator_thread, void* context);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
@@ -151,6 +152,7 @@ struct UI {
  private:
   Integrator* _current_integrator = nullptr;
   Film* _film = nullptr;
+  RHIImGui _rhi_imgui = {};
 
   ArrayView<Integrator*> _integrators = {};
   ViewOptions _view_options = {};

@@ -79,8 +79,7 @@ struct ShaderReflectionInfo {
   bool supports_subgroups = false;
 };
 
-class ShaderCompiler {
- public:
+struct ShaderCompiler {
   ShaderCompiler();
   ~ShaderCompiler();
 

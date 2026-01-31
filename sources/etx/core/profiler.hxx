@@ -6,7 +6,7 @@
 
 namespace etx {
 
-#define ETX_PROFILER_ENABLED 0
+#define ETX_PROFILER_ENABLED 1
 
 #if (ETX_PROFILER_ENABLED)
 

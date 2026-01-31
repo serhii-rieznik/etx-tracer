@@ -33,6 +33,7 @@ HMODULE ShaderCompiler::global_dxc_dll = nullptr;
 std::atomic<bool> ShaderCompiler::global_com_initialized{false};
 std::mutex ShaderCompiler::global_dll_mutex;
 ShaderCompiler::DxcCreateInstanceProc ShaderCompiler::global_dxc_create_instance = nullptr;
+
 RHIResult ShaderCompiler::initialize_global() {
   std::lock_guard<std::mutex> lock(global_init_mutex);
   if (global_initialized.load(std::memory_order_acquire)) {
@@ -83,12 +84,14 @@ void ShaderCompiler::shutdown_global() {
 }
 
 ShaderCompiler* ShaderCompiler::get_global_instance() {
-  if (!global_initialized.load(std::memory_order_acquire)) {
+  initialize_global();
+
+  if (global_initialized.load(std::memory_order_acquire) == false) {
     log::error("Global shader compiler not initialized - call initialize_global() first");
     return nullptr;
   }
 
-  if (!global_instance->is_initialized()) {
+  if (global_instance->is_initialized() == false) {
     RHIResult result = global_instance->initialize();
     if (result != RHIResult::Success) {
       log::error("Failed to initialize global shader compiler instance");

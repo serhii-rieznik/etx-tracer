@@ -1,4 +1,8 @@
-#include <sokol_app.h>
+#if ETX_USE_RHI
+# include <sokol_app_new.h>
+#else
+# include <sokol_app.h>
+#endif
 
 #include <etx/render/shared/camera.hxx>
 

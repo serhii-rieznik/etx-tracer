@@ -1,7 +1,7 @@
 #include <etx/rhi/rhi_imgui.hxx>
 
 #include <imgui.h>
-#include <sokol_app.h>
+#include <sokol_app_new.h>
 
 #include <etx/core/log.hxx>
 #include <etx/core/environment.hxx>
@@ -12,7 +12,7 @@ namespace etx {
 RHIImGui::RHIImGui() = default;
 
 RHIImGui::~RHIImGui() {
-  shutdown();
+  ETX_CRITICAL(_initialized == false);
 }
 
 RHIResult RHIImGui::setup(RHIContext* context, const RHIImGuiDesc& desc) {
@@ -29,7 +29,7 @@ RHIResult RHIImGui::setup(RHIContext* context, const RHIImGuiDesc& desc) {
     ImGui::StyleColorsDark();
 
     ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = _desc.ini_filename;
+    io.IniFilename = _desc.ini_filename.c_str();
     io.BackendRendererName = "etx-rhi-imgui";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
   }
@@ -53,10 +53,8 @@ void RHIImGui::shutdown() {
   if (_initialized == false) {
     return;
   }
-
+  ImGui::SaveIniSettingsToDisk(_desc.ini_filename.c_str());
   destroy_resources();
-
-  // Don't destroy ImGui context here as it might be shared
   _initialized = false;
   _context = nullptr;
 }
@@ -102,39 +100,37 @@ void RHIImGui::render(RHICommandBuffer* command_buffer) {
 }
 
 RHIResult RHIImGui::create_resources() {
-  // Create vertex buffer
-  RHIBufferDesc vb_desc = {};
-  vb_desc.size = _desc.max_vertices * sizeof(ImDrawVert);
-  vb_desc.usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
-  vb_desc.host_visible = true;
+  RHIBufferDesc vb_desc = {
+    .size = _desc.max_vertices * sizeof(ImDrawVert),
+    .usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst,
+    .host_visible = true,
+  };
+  RHIBufferDesc ib_desc = {
+    .size = _desc.max_vertices * 3 * sizeof(ImDrawIdx),
+    .usage = RHIBufferUsage::Index | RHIBufferUsage::TransferDst,
+    .host_visible = true,
+  };
 
-  auto vb_result = _context->get_device()->create_buffer(vb_desc);
-  if (vb_result.result != RHIResult::Success) {
-    return vb_result.result;
+  for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
+    auto vb_result = _context->get_device()->create_buffer(vb_desc);
+    if (vb_result.result != RHIResult::Success) {
+      return vb_result.result;
+    }
+    auto ib_result = _context->get_device()->create_buffer(ib_desc);
+    if (ib_result.result != RHIResult::Success) {
+      return ib_result.result;
+    }
+    _vertices[i].buffer = vb_result.handle;
+    _vertices[i].data.resize(vb_desc.size);
+    _indices[i].buffer = ib_result.handle;
+    _indices[i].data.resize(ib_desc.size);
   }
-  _vertices.buffer = vb_result.handle;
-  _vertices.data.resize(vb_desc.size);
 
-  // Create index buffer
-  RHIBufferDesc ib_desc = {};
-  ib_desc.size = _desc.max_vertices * 3 * sizeof(ImDrawIdx);
-  ib_desc.usage = RHIBufferUsage::Index | RHIBufferUsage::TransferDst;
-  ib_desc.host_visible = true;
-
-  auto ib_result = _context->get_device()->create_buffer(ib_desc);
-  if (ib_result.result != RHIResult::Success) {
-    return ib_result.result;
-  }
-  _indices.buffer = ib_result.handle;
-  _indices.data.resize(ib_desc.size);
-
-  // Create font texture and sampler
   auto font_result = create_font_texture();
   if (font_result != RHIResult::Success) {
     return font_result;
   }
 
-  // Create pipeline
   auto pipeline_result = create_pipeline();
   if (pipeline_result != RHIResult::Success) {
     return pipeline_result;
@@ -149,30 +145,18 @@ void RHIImGui::destroy_resources() {
     return;
   }
 
-  if (_vertices.buffer != 0) {
-    device->destroy_buffer(_vertices.buffer);
-    _vertices.buffer = {};
+  for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
+    device->destroy_buffer(_vertices[i].buffer);
+    _vertices[i].buffer = {};
+    device->destroy_buffer(_indices[i].buffer);
+    _indices[i].buffer = {};
   }
 
-  if (_indices.buffer != 0) {
-    device->destroy_buffer(_indices.buffer);
-    _indices.buffer = {};
-  }
+  device->destroy_texture(_font_texture);
+  _font_texture = {};
 
-  if (_font_texture != 0) {
-    device->destroy_texture(_font_texture);
-    _font_texture = {};
-  }
-
-  if (_font_sampler) {
-    device->destroy_sampler(_font_sampler);
-    _font_sampler = {};
-  }
-
-  if (_pipeline.valid()) {
-    device->destroy_pipeline(_pipeline);
-    _pipeline = {};
-  }
+  device->destroy_pipeline(_pipeline);
+  _pipeline = {};
 }
 
 RHIResult RHIImGui::create_font_texture() {
@@ -181,10 +165,6 @@ RHIResult RHIImGui::create_font_texture() {
     if (_font_texture != 0) {
       device->destroy_texture(_font_texture);
       _font_texture = {};
-    }
-    if (_font_sampler != 0) {
-      device->destroy_sampler(_font_sampler);
-      _font_sampler = {};
     }
   }
 
@@ -201,7 +181,6 @@ RHIResult RHIImGui::create_font_texture() {
 
   auto font = io.Fonts->AddFontFromFileTTF(font_file, font_size * _cur_dpi_scale, &font_config, nullptr);
   if (font == nullptr) {
-    // Fallback to default font if Ubuntu is not found
     font = io.Fonts->AddFontDefault(&font_config);
   }
 
@@ -219,12 +198,13 @@ RHIResult RHIImGui::create_font_texture() {
   }
 
   // Create texture
-  RHITextureDesc tex_desc = {};
-  tex_desc.width = static_cast<uint32_t>(width);
-  tex_desc.height = static_cast<uint32_t>(height);
-  tex_desc.format = RHITextureFormat::R8G8B8A8_UNORM;
-  tex_desc.usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst;
-  tex_desc.host_visible = false;
+  RHITextureDesc tex_desc = {
+    .width = static_cast<uint32_t>(width),
+    .height = static_cast<uint32_t>(height),
+    .format = RHITextureFormat::R8G8B8A8_UNORM,
+    .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst,
+    .host_visible = false,
+  };
 
   auto tex_result = _context->get_device()->create_texture(tex_desc);
   if (tex_result.result != RHIResult::Success) {
@@ -255,11 +235,8 @@ RHIResult RHIImGui::create_font_texture() {
     _font_texture = {};
     return sampler_result.result;
   }
-  _font_sampler = sampler_result.handle;
 
-  // Set texture ID for ImGui
   io.Fonts->TexID = static_cast<ImTextureID>(_font_texture);
-
   return RHIResult::Success;
 }
 
@@ -290,39 +267,35 @@ RHIResult RHIImGui::create_pipeline() {
     return ps_result.result;
   }
 
-  // Create graphics pipeline
-  RHIGraphicsPipelineDesc pipeline_desc = {};
-
-  // Shaders
-  pipeline_desc.vertex_shader.spirv_data = vs_result.spirv_data.data();
-  pipeline_desc.vertex_shader.spirv_size = vs_result.spirv_data.size();
-  pipeline_desc.vertex_shader.stage = RHIShaderStage::Vertex;
-  pipeline_desc.vertex_entry_point = "vs_main";
-
-  pipeline_desc.fragment_shader.spirv_data = ps_result.spirv_data.data();
-  pipeline_desc.fragment_shader.spirv_size = ps_result.spirv_data.size();
-  pipeline_desc.fragment_shader.stage = RHIShaderStage::Fragment;
-  pipeline_desc.fragment_entry_point = "ps_main";
-
-  // Pipeline state
-  pipeline_desc.rasterization.depth_clamp_enable = false;
-
-  pipeline_desc.blend.blend_enable = true;
-  pipeline_desc.blend.src_color_blend_factor = RHIBlendFactor::SrcAlpha;
-  pipeline_desc.blend.dst_color_blend_factor = RHIBlendFactor::OneMinusSrcAlpha;
-  pipeline_desc.blend.color_blend_op = RHIBlendOp::Add;
-  pipeline_desc.blend.src_alpha_blend_factor = RHIBlendFactor::OneMinusSrcAlpha;
-  pipeline_desc.blend.dst_alpha_blend_factor = RHIBlendFactor::Zero;
-  pipeline_desc.blend.alpha_blend_op = RHIBlendOp::Add;
-
-  // Vertex input - using bindless fetching, no layout needed
-  pipeline_desc.vertex_attribute_count = 0;
-  pipeline_desc.vertex_binding_count = 0;
-
-  // Render targets
-  pipeline_desc.color_formats[0] = _desc.color_format;
-  pipeline_desc.color_attachment_count = 1;
-  pipeline_desc.depth_format = _desc.depth_format;
+  RHIGraphicsPipelineDesc pipeline_desc = {
+    .vertex_shader =
+      {
+        .spirv_data = vs_result.spirv_data.data(),
+        .spirv_size = vs_result.spirv_data.size(),
+        .stage = RHIShaderStage::Vertex,
+        .entry_point = "vs_main",
+      },
+    .fragment_shader =
+      {
+        .spirv_data = ps_result.spirv_data.data(),
+        .spirv_size = ps_result.spirv_data.size(),
+        .stage = RHIShaderStage::Fragment,
+        .entry_point = "ps_main",
+      },
+    .blend =
+      {
+        .src_color_blend_factor = RHIBlendFactor::SrcAlpha,
+        .dst_color_blend_factor = RHIBlendFactor::OneMinusSrcAlpha,
+        .color_blend_op = RHIBlendOp::Add,
+        .src_alpha_blend_factor = RHIBlendFactor::OneMinusSrcAlpha,
+        .dst_alpha_blend_factor = RHIBlendFactor::Zero,
+        .alpha_blend_op = RHIBlendOp::Add,
+        .blend_enable = true,
+      },
+    .color_attachment_count = 1,
+    .color_formats = {_desc.color_format},
+    .depth_format = _desc.depth_format,
+  };
 
   auto pipeline_result = device->create_graphics_pipeline(pipeline_desc);
   if (pipeline_result.result != RHIResult::Success) {
@@ -342,14 +315,18 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
     return RHIResult::Success;
   }
 
+  const uint32_t frame_index = _context->get_current_frame_index();
+  auto& vertices = _vertices[frame_index];
+  auto& indices = _indices[frame_index];
+
   size_t required_vb_size = total_vertices * sizeof(ImDrawVert);
   size_t required_ib_size = total_indices * sizeof(ImDrawIdx);
 
   auto device = _context->get_device();
 
-  if (required_vb_size > _vertices.data.size()) {
-    if (_vertices.buffer) {
-      device->destroy_buffer(_vertices.buffer);
+  if (required_vb_size > vertices.data.size()) {
+    if (vertices.buffer) {
+      device->destroy_buffer(vertices.buffer);
     }
 
     size_t new_size = required_vb_size + (required_vb_size / 2);
@@ -357,13 +334,14 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
     auto res = device->create_buffer(desc);
     if (res.result != RHIResult::Success)
       return res.result;
-    _vertices.buffer = res.handle;
-    _vertices.data.resize(new_size);
+
+    vertices.buffer = res.handle;
+    vertices.data.resize(new_size);
   }
 
-  if (required_ib_size > _indices.data.size()) {
-    if (_indices.buffer) {
-      device->destroy_buffer(_indices.buffer);
+  if (required_ib_size > indices.data.size()) {
+    if (indices.buffer) {
+      device->destroy_buffer(indices.buffer);
     }
 
     size_t new_size = required_ib_size + (required_ib_size / 2);
@@ -371,22 +349,22 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
     auto res = device->create_buffer(desc);
     if (res.result != RHIResult::Success)
       return res.result;
-    _indices.buffer = res.handle;
-    _indices.data.resize(new_size);
+    indices.buffer = res.handle;
+    indices.data.resize(new_size);
   }
 
   size_t vb_offset = 0;
   size_t ib_offset = 0;
   for (int i = 0; i < draw_data->CmdListsCount; ++i) {
     const ImDrawList* cmd_list = draw_data->CmdLists[i];
-    memcpy(_vertices.data.data() + vb_offset, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
+    memcpy(vertices.data.data() + vb_offset, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
     vb_offset += cmd_list->VtxBuffer.Size * sizeof(ImDrawVert);
-    memcpy(_indices.data.data() + ib_offset, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
+    memcpy(indices.data.data() + ib_offset, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
     ib_offset += cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx);
   }
 
-  device->update_buffer(_vertices.buffer, _vertices.data.data(), required_vb_size);
-  device->update_buffer(_indices.buffer, _indices.data.data(), required_ib_size);
+  device->update_buffer(vertices.buffer, vertices.data.data(), required_vb_size);
+  device->update_buffer(indices.buffer, indices.data.data(), required_ib_size);
 
   return RHIResult::Success;
 }
@@ -403,6 +381,10 @@ struct ImGuiPushConstants {
 void RHIImGui::render_draw_data(RHICommandBuffer* command_buffer, const ImDrawData* draw_data) {
   command_buffer->set_pipeline(_pipeline);
 
+  const uint32_t frame_index = _context->get_current_frame_index();
+  auto& vertices = _vertices[frame_index];
+  auto& indices = _indices[frame_index];
+
   float L = draw_data->DisplayPos.x;
   float R = draw_data->DisplayPos.x + draw_data->DisplaySize.x;
   float T = draw_data->DisplayPos.y;
@@ -413,8 +395,8 @@ void RHIImGui::render_draw_data(RHICommandBuffer* command_buffer, const ImDrawDa
   pc.scale[1] = 2.0f / (B - T);
   pc.translate[0] = (R + L) / (L - R);
   pc.translate[1] = (T + B) / (T - B);
-  pc.vertex_buffer_index = get_bindless_descriptor_index(_vertices.buffer);
-  pc.sampler_index = get_bindless_descriptor_index(_font_sampler);
+  pc.vertex_buffer_index = get_bindless_descriptor_index(vertices.buffer);
+  pc.sampler_index = _context->get_sampler_index(RHISamplerType::LinearRepeat);
 
   float fb_width = draw_data->DisplaySize.x * draw_data->FramebufferScale.x;
   float fb_height = draw_data->DisplaySize.y * draw_data->FramebufferScale.y;
@@ -448,20 +430,24 @@ void RHIImGui::render_draw_data(RHICommandBuffer* command_buffer, const ImDrawDa
       if ((clip_max.x <= clip_min.x) || (clip_max.y <= clip_min.y))
         continue;
 
-      RHIRect scissor = {static_cast<int32_t>(clip_min.x), static_cast<int32_t>(clip_min.y), static_cast<uint32_t>(clip_max.x - clip_min.x),
-        static_cast<uint32_t>(clip_max.y - clip_min.y)};
-      command_buffer->set_scissor(scissor);
-
+      RHIRect scissor = {
+        static_cast<int32_t>(clip_min.x),
+        static_cast<int32_t>(clip_min.y),
+        static_cast<uint32_t>(clip_max.x - clip_min.x),
+        static_cast<uint32_t>(clip_max.y - clip_min.y),
+      };
+      RHIIndexedDrawDesc draw_desc = {
+        .index_count = pcmd->ElemCount,
+        .instance_count = 1,
+        .first_index = pcmd->IdxOffset + index_offset,
+        .vertex_offset = pcmd->VtxOffset + vertex_offset,
+        .index_type = sizeof(ImDrawIdx) == 2 ? RHIIndexType::UInt16 : RHIIndexType::UInt32,
+      };
       pc.texture_index = get_bindless_descriptor_index(static_cast<RHIBindlessHandle>(pcmd->GetTexID()));
-      command_buffer->push_constants(&pc, sizeof(ImGuiPushConstants));
 
-      RHIIndexedDrawDesc draw_desc = {};
-      draw_desc.index_count = pcmd->ElemCount;
-      draw_desc.instance_count = 1;
-      draw_desc.first_index = pcmd->IdxOffset + index_offset;
-      draw_desc.vertex_offset = pcmd->VtxOffset + vertex_offset;
-      draw_desc.index_type = sizeof(ImDrawIdx) == 2 ? RHIIndexType::UInt16 : RHIIndexType::UInt32;
-      command_buffer->draw_indexed(draw_desc, _indices.buffer);
+      command_buffer->set_scissor(scissor);
+      command_buffer->push_constants(&pc, sizeof(ImGuiPushConstants));
+      command_buffer->draw_indexed(draw_desc, indices.buffer);
     }
     vertex_offset += cmd_list->VtxBuffer.Size;
     index_offset += cmd_list->IdxBuffer.Size;

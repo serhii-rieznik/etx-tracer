@@ -78,24 +78,21 @@ inline RHIBufferUsage operator|(RHIBufferUsage a, RHIBufferUsage b) {
 }
 
 enum class RHITextureFormat : uint32_t {
-  Undefined = 0,
-
-  R8_UNORM = 1,
-  R8G8_UNORM = 2,
-  R8G8B8_UNORM = 3,
-  R8G8B8A8_UNORM = 4,
-
-  R32_FLOAT = 5,
-  R32G32_FLOAT = 6,
-  R32G32B32_FLOAT = 7,
-  R32G32B32A32_FLOAT = 8,
-
-  R8G8B8A8_SRGB = 9,
-  B8G8R8A8_SRGB = 13,
-
-  D32_FLOAT = 10,
-  D24_UNORM_S8_UINT = 11,
-  D32_FLOAT_S8_UINT = 12,
+  Undefined,
+  R8_UNORM,
+  R8G8_UNORM,
+  R8G8B8_UNORM,
+  R8G8B8A8_UNORM,
+  B8G8R8A8_UNORM,
+  R32_FLOAT,
+  R32G32_FLOAT,
+  R32G32B32_FLOAT,
+  R32G32B32A32_FLOAT,
+  R8G8B8A8_SRGB,
+  B8G8R8A8_SRGB,
+  D32_FLOAT,
+  D24_UNORM_S8_UINT,
+  D32_FLOAT_S8_UINT,
 };
 
 enum class RHITextureUsage : uint32_t {
@@ -219,13 +216,13 @@ enum class RHIBlendOp : uint32_t {
 };
 
 struct RHIBlendState {
-  bool blend_enable = false;
   RHIBlendFactor src_color_blend_factor = RHIBlendFactor::One;
   RHIBlendFactor dst_color_blend_factor = RHIBlendFactor::Zero;
   RHIBlendOp color_blend_op = RHIBlendOp::Add;
   RHIBlendFactor src_alpha_blend_factor = RHIBlendFactor::One;
   RHIBlendFactor dst_alpha_blend_factor = RHIBlendFactor::Zero;
   RHIBlendOp alpha_blend_op = RHIBlendOp::Add;
+  bool blend_enable = false;
 };
 
 enum class RHIResourceState : uint32_t {
@@ -298,10 +295,10 @@ struct RHIDispatchDesc {
 };
 
 struct RHIDrawDesc {
-  uint32_t vertex_count;
-  uint32_t instance_count;
-  uint32_t first_vertex;
-  uint32_t first_instance;
+  uint32_t vertex_count = 0;
+  uint32_t instance_count = 1;
+  uint32_t first_vertex = 0;
+  uint32_t first_instance = 0;
 };
 
 struct RHIIndexedDrawDesc {
@@ -334,6 +331,7 @@ struct RHIShaderDesc {
   const void* spirv_data = nullptr;
   uint64_t spirv_size = 0;
   RHIShaderStage stage = RHIShaderStage::Vertex;
+  std::string entry_point = "main";
 };
 
 struct RHIShaderVariantDesc {
@@ -359,9 +357,7 @@ struct RHIVertexBinding {
 
 struct RHIGraphicsPipelineDesc {
   RHIShaderDesc vertex_shader = {};
-  std::string vertex_entry_point = "main";
   RHIShaderDesc fragment_shader = {};
-  std::string fragment_entry_point = "main";
   RHIRasterizationState rasterization = {};
   RHIDepthStencilState depth_stencil = {};
   RHIBlendState blend = {};
@@ -386,5 +382,7 @@ struct RHIComputePipelineDesc {
   uint32_t local_size_y = 1;
   uint32_t local_size_z = 1;
 };
+
+static constexpr uint32_t kRHIMaxFrames = 3u;
 
 }  // namespace etx

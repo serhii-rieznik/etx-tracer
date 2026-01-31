@@ -165,6 +165,7 @@ struct VKContext::Impl {
   Impl(const RHIInitInfo& inf)
     : init_info(inf)
     , device(inf) {
+    initialize_bindless_manager();
   }
 
   void initialize_bindless_manager() {
@@ -416,7 +417,7 @@ void VKContext::resize_swapchain(uint32_t width, uint32_t height) {
 
   vkDeviceWaitIdle(_impl->device._impl->device);
 
-  for (uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index) {
+  for (uint32_t frame_index = 0; frame_index < kRHIMaxFrames; ++frame_index) {
     _impl->process_deferred_destruction_for_frame(frame_index);
   }
 
@@ -451,13 +452,12 @@ void VKContext::resize_swapchain(uint32_t width, uint32_t height) {
 RHITexture VKContext::get_current_swapchain_texture() {
   if (_impl->current_swapchain_image < _impl->swapchain_textures.size()) {
     RHITexture handle = _impl->swapchain_textures[_impl->current_swapchain_image];
-
-    if (handle != 0 && _impl->bindless_manager.is_valid_handle(handle)) {
+    if (_impl->bindless_manager.is_valid_handle(handle)) {
       return handle;
-    } else {
-      log::error("Swapchain texture handle %llu is invalid or stale", handle);
     }
+    log::error("Swapchain texture handle %llu is invalid or stale", handle);
   }
+
   return {};
 }
 
@@ -479,7 +479,7 @@ void VKContext::present() {
     if (!_impl->in_flight_fences.empty()) {
       etx_vk_call(vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
     }
-    for (uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index) {
+    for (uint32_t frame_index = 0; frame_index < kRHIMaxFrames; ++frame_index) {
       _impl->process_deferred_destruction_for_frame(frame_index);
     }
     _impl->destroy_swapchain();
@@ -490,7 +490,7 @@ void VKContext::present() {
     _impl->create_sync_objects();
   }
 
-  _impl->current_frame = (_impl->current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+  _impl->current_frame = (_impl->current_frame + 1) % kRHIMaxFrames;
 }
 
 void VKContext::begin_frame() {
@@ -513,7 +513,7 @@ void VKContext::begin_frame() {
       etx_vk_call(vkWaitForFences(_impl->device._impl->device, static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
     }
 
-    for (uint32_t frame_index = 0; frame_index < MAX_FRAMES_IN_FLIGHT; ++frame_index) {
+    for (uint32_t frame_index = 0; frame_index < kRHIMaxFrames; ++frame_index) {
       _impl->process_deferred_destruction_for_frame(frame_index);
     }
 
@@ -566,15 +566,14 @@ uint32_t VKContext::get_sampler_index(RHISamplerType type) const {
 
 RHICommandBuffer* VKContext::get_command_buffer() {
   if (_impl->command_buffers.empty()) {
-    _impl->command_buffers.reserve(MAX_FRAMES_IN_FLIGHT);
-    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-      _impl->command_buffers.emplace_back();
-      _impl->command_buffers.back().initialize(this, i);
+    _impl->command_buffers.reserve(kRHIMaxFrames);
+    for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
+      _impl->command_buffers.emplace_back().initialize(this, i);
     }
   }
 
   uint32_t frame_index = _impl->current_frame;
-  return &_impl->command_buffers[frame_index];
+  return _impl->command_buffers.data() + frame_index;
 }
 
 void VKContext::submit_command_buffer(RHICommandBuffer* command_buffer) {
@@ -587,8 +586,7 @@ void VKContext::submit_command_buffer(RHICommandBuffer* command_buffer) {
 
   bool has_sync_objects = !_impl->image_available_semaphores.empty() && !_impl->render_finished_semaphores.empty() && !_impl->in_flight_fences.empty();
 
-  VkSubmitInfo submit_info = {};
-  submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
 
   VkFence submit_fence = VK_NULL_HANDLE;
 
@@ -603,8 +601,7 @@ void VKContext::submit_command_buffer(RHICommandBuffer* command_buffer) {
 
     submit_fence = _impl->in_flight_fences[_impl->current_frame];
   } else {
-    VkFenceCreateInfo fence_info = {};
-    fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     if (etx_vk_call(vkCreateFence(_impl->device._impl->device, &fence_info, nullptr, &submit_fence)) != VK_SUCCESS) {
       submit_fence = VK_NULL_HANDLE;
     }
@@ -745,8 +742,7 @@ struct VKCommandBuffer::Impl {
     dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
     dependencies[1].dstAccessMask = 0;
 
-    VkRenderPassCreateInfo render_pass_info = {};
-    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    VkRenderPassCreateInfo render_pass_info = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
     render_pass_info.attachmentCount = attachment_count;
     render_pass_info.pAttachments = attachments;
     render_pass_info.subpassCount = 1;
@@ -763,8 +759,7 @@ struct VKCommandBuffer::Impl {
   }
 
   VkFramebuffer create_framebuffer_for_attachments(VkRenderPass render_pass, const VkImageView* attachment_views, uint32_t attachment_count, uint32_t width, uint32_t height) {
-    VkFramebufferCreateInfo framebuffer_info = {};
-    framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    VkFramebufferCreateInfo framebuffer_info = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
     framebuffer_info.renderPass = render_pass;
     framebuffer_info.attachmentCount = attachment_count;
     framebuffer_info.pAttachments = attachment_views;
@@ -868,8 +863,7 @@ void VKCommandBuffer::begin() {
     return;
   }
 
-  VkCommandBufferBeginInfo begin_info = {};
-  begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  VkCommandBufferBeginInfo begin_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
   if (etx_vk_call(vkBeginCommandBuffer(_impl->command_buffer, &begin_info)) != VK_SUCCESS) {
@@ -932,8 +926,7 @@ void VKCommandBuffer::buffer_barrier(RHIBuffer buffer, RHIResourceState old_stat
     return;
   }
 
-  VkBufferMemoryBarrier barrier = {};
-  barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  VkBufferMemoryBarrier barrier = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
   barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.buffer = vk_buffer;
@@ -1003,8 +996,7 @@ void VKCommandBuffer::ensure_texture_layout(RHITexture texture, VkImageLayout re
   }
 
   if (is_swapchain_texture) {
-    VkImageMemoryBarrier barrier = {};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = required_layout;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -1135,8 +1127,7 @@ void VKCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
   }
   VKTextureData& texture_data = device->_impl->textures.get_data(texture_index);
 
-  VkImageMemoryBarrier barrier = {};
-  barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
   barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.image = vk_image;
@@ -1299,7 +1290,6 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
 
   VKDevice* device = static_cast<VKDevice*>(_impl->context->get_device());
 
-  // Fixed-size arrays for attachments (Vulkan max color attachments = 8, +1 for depth = 9)
   constexpr uint32_t MAX_ATTACHMENTS = 9;
   VkFormat attachment_formats[MAX_ATTACHMENTS] = {};
   VkImageView attachment_views[MAX_ATTACHMENTS] = {};
@@ -1483,8 +1473,7 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIText
     return;
   }
 
-  VkRenderPassBeginInfo begin_info = {};
-  begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
   begin_info.renderPass = render_pass_to_use;
   begin_info.framebuffer = framebuffer;
   begin_info.renderArea.offset = {0, 0};
@@ -1626,7 +1615,7 @@ void VKCommandBuffer::set_pipeline(RHIPipeline pipeline) {
 
   const VKPipelineData* graphics_pipeline_data = vk_device->get_graphics_pipeline_data(pipeline);
   if (graphics_pipeline_data != nullptr) {
-    _impl->current_pipeline_layout = graphics_pipeline_data->layout;
+    _impl->current_pipeline_layout = vk_device->get_bindless_pipeline_layout();
     _impl->current_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
     vkCmdBindPipeline(_impl->command_buffer, _impl->current_bind_point, graphics_pipeline_data->pipeline);
     VkDescriptorSet bindless_set = static_cast<VKBindlessManager*>(_impl->context->get_bindless_manager())->get_descriptor_set();
@@ -1638,7 +1627,7 @@ void VKCommandBuffer::set_pipeline(RHIPipeline pipeline) {
 
   const VKPipelineData* compute_pipeline_data = vk_device->get_compute_pipeline_data(pipeline);
   if (compute_pipeline_data != nullptr) {
-    _impl->current_pipeline_layout = compute_pipeline_data->layout;
+    _impl->current_pipeline_layout = vk_device->get_bindless_pipeline_layout();
     _impl->current_bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
     vkCmdBindPipeline(_impl->command_buffer, _impl->current_bind_point, compute_pipeline_data->pipeline);
     return;
@@ -1735,16 +1724,15 @@ void VKCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
     return;
   }
 
-  const VKPipelineData* compute_pipeline_data = static_cast<VKDevice*>(_impl->context->get_device())->get_compute_pipeline_data(_impl->current_pipeline);
+  auto device = static_cast<VKDevice*>(_impl->context->get_device());
+  const VKPipelineData* compute_pipeline_data = device->get_compute_pipeline_data(_impl->current_pipeline);
   if (compute_pipeline_data == nullptr) {
     log::error("Failed to find compute pipeline: %llu", _impl->current_pipeline.value);
     return;
   }
 
   VkPipeline vk_pipeline = compute_pipeline_data->pipeline;
-  VkPipelineLayout vk_pipeline_layout = compute_pipeline_data->layout;
-
-  if (vk_pipeline == VK_NULL_HANDLE || vk_pipeline_layout == VK_NULL_HANDLE) {
+  if (vk_pipeline == VK_NULL_HANDLE) {
     log::error("Invalid Vulkan pipeline or pipeline layout");
     return;
   }
@@ -1753,6 +1741,7 @@ void VKCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
 
   VkDescriptorSet bindless_set = static_cast<VKBindlessManager*>(_impl->context->get_bindless_manager())->get_descriptor_set();
   if (bindless_set != VK_NULL_HANDLE) {
+    auto vk_pipeline_layout = device->get_bindless_pipeline_layout();
     vkCmdBindDescriptorSets(_impl->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pipeline_layout, 0, 1, &bindless_set, 0, nullptr);
   }
 
@@ -1864,8 +1853,7 @@ void VKCommandBuffer::set_debug_name(const char* name) {
   auto vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT");
 
   if (vkSetDebugUtilsObjectNameEXT) {
-    VkDebugUtilsObjectNameInfoEXT name_info = {};
-    name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    VkDebugUtilsObjectNameInfoEXT name_info = {VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
     name_info.objectType = VK_OBJECT_TYPE_COMMAND_BUFFER;
     name_info.objectHandle = (uint64_t)_impl->command_buffer;
     name_info.pObjectName = name;
@@ -1880,8 +1868,7 @@ bool VKContext::Impl::create_surface() {
   }
 
 #ifdef _WIN32
-  VkWin32SurfaceCreateInfoKHR surface_info = {};
-  surface_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+  VkWin32SurfaceCreateInfoKHR surface_info = {VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
   surface_info.hinstance = GetModuleHandle(nullptr);
   surface_info.hwnd = HWND(native_window);
 
@@ -1942,8 +1929,7 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
     image_count = capabilities.maxImageCount;
   }
 
-  VkSwapchainCreateInfoKHR swapchain_info = {};
-  swapchain_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+  VkSwapchainCreateInfoKHR swapchain_info = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
   swapchain_info.surface = surface;
   swapchain_info.minImageCount = image_count;
   swapchain_info.imageFormat = surface_format.format;
@@ -1972,8 +1958,7 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
 
   swapchain_image_views.resize(image_count);
   for (uint32_t i = 0; i < image_count; i++) {
-    VkImageViewCreateInfo view_info = {};
-    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    VkImageViewCreateInfo view_info = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view_info.image = swapchain_images[i];
     view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
     view_info.format = surface_format.format;
@@ -2014,18 +1999,16 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
 }
 
 void VKContext::Impl::create_sync_objects() {
-  VkSemaphoreCreateInfo semaphore_info = {};
-  semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  VkSemaphoreCreateInfo semaphore_info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
-  VkFenceCreateInfo fence_info = {};
-  fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-  image_available_semaphores.resize(MAX_FRAMES_IN_FLIGHT);
-  render_finished_semaphores.resize(MAX_FRAMES_IN_FLIGHT);
-  in_flight_fences.resize(MAX_FRAMES_IN_FLIGHT);
+  image_available_semaphores.resize(kRHIMaxFrames);
+  render_finished_semaphores.resize(kRHIMaxFrames);
+  in_flight_fences.resize(kRHIMaxFrames);
 
-  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+  for (size_t i = 0; i < kRHIMaxFrames; i++) {
     etx_vk_call(vkCreateSemaphore(device._impl->device, &semaphore_info, nullptr, &image_available_semaphores[i]));
     etx_vk_call(vkCreateSemaphore(device._impl->device, &semaphore_info, nullptr, &render_finished_semaphores[i]));
     etx_vk_call(vkCreateFence(device._impl->device, &fence_info, nullptr, &in_flight_fences[i]));
@@ -2097,12 +2080,13 @@ void VKContext::Impl::destroy_swapchain() {
 }
 
 VkSurfaceFormatKHR VKContext::Impl::choose_swap_surface_format(const std::vector<VkSurfaceFormatKHR>& available_formats) {
+  /*
   for (const auto& format : available_formats) {
     if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
       return format;
     }
   }
-
+  */
   return available_formats[0];
 }
 
@@ -2250,7 +2234,7 @@ bool VKContext::Impl::create_render_pass_cache() {
 }
 
 void VKContext::Impl::initialize_deferred_destruction() {
-  deferred_destruction_per_frame.resize(MAX_FRAMES_IN_FLIGHT);
+  deferred_destruction_per_frame.resize(kRHIMaxFrames);
 }
 
 void VKContext::Impl::process_deferred_destruction_for_frame(uint32_t frame_index) {

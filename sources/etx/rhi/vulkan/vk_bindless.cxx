@@ -91,8 +91,7 @@ bool VKBindlessManager::Impl::create_descriptor_set_layout() {
   storage_texture_binding.stageFlags = VK_SHADER_STAGE_ALL;
   bindings.push_back(storage_texture_binding);
 
-  VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags = {};
-  binding_flags.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+  VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
   VkDescriptorBindingFlags binding_flag_value = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
   std::vector<VkDescriptorBindingFlags> binding_flags_array(bindings.size(), binding_flag_value);
 
@@ -104,8 +103,7 @@ bool VKBindlessManager::Impl::create_descriptor_set_layout() {
     bindings[2].descriptorCount = max_samplers;
   }
 
-  VkDescriptorSetLayoutCreateInfo layout_info = {};
-  layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  VkDescriptorSetLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
   layout_info.pNext = &binding_flags;
   layout_info.bindingCount = static_cast<uint32_t>(bindings.size());
   layout_info.pBindings = bindings.data();
@@ -143,8 +141,7 @@ bool VKBindlessManager::Impl::create_descriptor_pool() {
     pool_sizes.push_back(sampler_pool_size);
   }
 
-  VkDescriptorPoolCreateInfo pool_info = {};
-  pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
   pool_info.pPoolSizes = pool_sizes.data();
   pool_info.maxSets = 1;
@@ -158,8 +155,7 @@ bool VKBindlessManager::Impl::create_descriptor_pool() {
 }
 
 bool VKBindlessManager::Impl::allocate_descriptor_set() {
-  VkDescriptorSetAllocateInfo alloc_info = {};
-  alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  VkDescriptorSetAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
   alloc_info.descriptorPool = descriptor_pool;
   alloc_info.descriptorSetCount = 1;
   alloc_info.pSetLayouts = &descriptor_set_layout;
@@ -304,8 +300,7 @@ void VKBindlessManager::Impl::update_descriptor_array(VkDescriptorType descripto
     return;
   }
 
-  VkWriteDescriptorSet write = {};
-  write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
   write.dstSet = descriptor_set;
   write.dstBinding = binding;
   write.dstArrayElement = descriptor_index;
@@ -343,11 +338,9 @@ void VKBindlessManager::initialize(VkDevice device, VkPhysicalDevice physical_de
     return;
   }
 
-  VkPhysicalDeviceDescriptorIndexingProperties descriptor_indexing_props = {};
-  descriptor_indexing_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+  VkPhysicalDeviceDescriptorIndexingProperties descriptor_indexing_props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES};
 
-  VkPhysicalDeviceProperties2 props2 = {};
-  props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+  VkPhysicalDeviceProperties2 props2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
   props2.pNext = &descriptor_indexing_props;
 
   vkGetPhysicalDeviceProperties2(physical_device, &props2);
@@ -526,7 +519,7 @@ RHIResult VKBindlessManager::unregister_acceleration_structure(RHIBindlessHandle
 }
 
 bool VKBindlessManager::is_valid_handle(RHIBindlessHandle handle) const {
-  if (!_impl) {
+  if (_impl == nullptr) {
     return false;
   }
 
@@ -536,7 +529,7 @@ bool VKBindlessManager::is_valid_handle(RHIBindlessHandle handle) const {
   }
 
   const auto& entry = it->second;
-  if (!entry.valid) {
+  if (entry.valid == false) {
     return false;
   }
 
@@ -590,17 +583,11 @@ uint32_t VKBindlessManager::get_acceleration_structure_count() const {
 }
 
 VkDescriptorSetLayout VKBindlessManager::get_descriptor_set_layout() const {
-  if (!_impl) {
-    return VK_NULL_HANDLE;
-  }
-  return _impl->descriptor_set_layout;
+  return _impl ? _impl->descriptor_set_layout : VK_NULL_HANDLE;
 }
 
 VkDescriptorSet VKBindlessManager::get_descriptor_set() const {
-  if (!_impl) {
-    return VK_NULL_HANDLE;
-  }
-  return _impl->descriptor_set;
+  return _impl ? _impl->descriptor_set : VK_NULL_HANDLE;
 }
 
 VkImage VKBindlessManager::get_vk_image(RHIBindlessHandle handle) const {

@@ -39,7 +39,7 @@ void RTApplication::init() {
   std::string ior_folder = env().file_in_data("./spectrum/");
   _ior_database.load(ior_folder.c_str());
 
-  ui.initialize(&raytracing.film(), &_ior_database);
+  ui.initialize(&raytracing.film(), &_ior_database, render.get_context());
   ui.set_integrator_list(_integrator_array, std::size(_integrator_array));
 
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
@@ -160,18 +160,19 @@ void RTApplication::frame() {
   ETX_PROFILER_NAMED_SCOPE("process");
   integrator_thread.update();
 
-  render.start_frame(integrator_thread.status().current_iteration, options);
-
   const auto frame_data = raytracing.film().layer(options.layer, raytracing.scene());
-  render.update_image(frame_data);
 
-  ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping(), scene.camera_mapping(), &integrator_thread);
+  render.start_frame(integrator_thread.status().current_iteration, options);
+  render.update_image(frame_data);
+  ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping(), scene.camera_mapping(), &integrator_thread,
+    render.get_context());
   render.end_frame();
 }
 
 void RTApplication::cleanup() {
-  render.cleanup();
-  ui.cleanup();
+  render.cleanup([this]() {
+    ui.cleanup();
+  });
 }
 
 void RTApplication::process_event(const sapp_event* e) {

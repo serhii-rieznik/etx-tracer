@@ -27,8 +27,6 @@ const char* vk_error_to_string(VkResult);
 
 namespace etx {
 
-static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2u;
-
 class VKComputePipeline;
 class VKGraphicsPipeline;
 
@@ -55,7 +53,7 @@ struct VKSamplerData {
 
 struct VKPipelineData {
   VkPipeline pipeline = VK_NULL_HANDLE;
-  VkPipelineLayout layout = VK_NULL_HANDLE;
+  // VkPipelineLayout layout = VK_NULL_HANDLE;
   RHIPipeline handle = {};
 };
 
@@ -183,27 +181,28 @@ struct VKDevice : RHIDevice {
   void destroy_all_resources();
 
   RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc) override;
+  RHIResult update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset = 0) override;
+  RHIResult destroy_buffer(RHIBindlessHandle buffer) override;
+
   RHICreateBindlessResult create_texture(const RHITextureDesc& desc) override;
+  RHIResult update_texture(RHIBindlessHandle texture, const void* data, uint32_t mip_level = 0, uint32_t array_layer = 0) override;
+  RHIResult destroy_texture(RHIBindlessHandle texture) override;
+
   RHICreateBindlessResult create_sampler(const RHISamplerDesc& desc) override;
+  RHIResult destroy_sampler(RHIBindlessHandle sampler) override;
+
   RHICreateShaderResult create_shader(const RHIShaderDesc& desc) override;
   RHICreateShaderResult create_shader_variant(const RHIShaderVariantDesc& desc) override;
   RHICreateShaderResult create_shader_from_file(const std::string& file_path, const std::string& entry_point, RHIShaderStage stage,
     const std::unordered_map<std::string, std::string>& defines = {}) override;
+  RHIResult reload_shader(RHIShader shader, const RHIShaderDesc& new_desc) override;
+  RHIResult destroy_shader(RHIShader shader) override;
+
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc) override;
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc) override;
-
-  RHIResult destroy_buffer(RHIBindlessHandle buffer) override;
-  RHIResult destroy_texture(RHIBindlessHandle texture) override;
-  RHIResult destroy_sampler(RHIBindlessHandle sampler) override;
-  RHIResult destroy_shader(RHIShader shader) override;
-  RHIResult destroy_pipeline(RHIPipeline pipeline) override;
-
-  RHIResult update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset = 0) override;
-  RHIResult update_texture(RHIBindlessHandle texture, const void* data, uint32_t mip_level = 0, uint32_t array_layer = 0) override;
-
-  RHIResult reload_shader(RHIShader shader, const RHIShaderDesc& new_desc) override;
   RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc) override;
   RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc) override;
+  RHIResult destroy_pipeline(RHIPipeline pipeline) override;
 
   bool supports_bindless() const override;
   uint64_t get_min_uniform_buffer_offset_alignment() const override;
@@ -215,6 +214,7 @@ struct VKDevice : RHIDevice {
   const VKPipelineData* get_graphics_pipeline_data(RHIPipeline handle) const;
   VkBuffer get_vk_buffer_from_bindless(RHIBindlessHandle handle) const;
   VkImage get_vk_image_from_bindless(RHIBindlessHandle handle) const;
+  VkPipelineLayout get_bindless_pipeline_layout();
 
   void set_shader_compiler(ShaderCompiler* compiler);
   ShaderCompiler* get_shader_compiler() const;

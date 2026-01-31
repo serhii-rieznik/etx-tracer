@@ -13,7 +13,7 @@ struct sapp_event;
 
 namespace etx {
 
-class RHIContext;
+struct RHIContext;
 class RHICommandBuffer;
 
 struct RHIImGuiDesc {
@@ -21,7 +21,7 @@ struct RHIImGuiDesc {
   RHITextureFormat color_format = RHITextureFormat::B8G8R8A8_SRGB;
   RHITextureFormat depth_format = RHITextureFormat::Undefined;
   uint32_t sample_count = 1;
-  const char* ini_filename = nullptr;
+  std::string ini_filename = {};
   bool no_default_font = false;
   bool write_alpha_channel = false;
 };
@@ -33,12 +33,11 @@ struct RHIImGuiFrameDesc {
   float dpi_scale = 1.0f;
 };
 
-class RHIImGui {
- public:
+struct RHIImGui {
   RHIImGui();
   ~RHIImGui();
 
-  RHIResult setup(RHIContext* context, const RHIImGuiDesc& desc);
+  RHIResult setup(RHIContext* context, const etx::RHIImGuiDesc& desc);
   void shutdown();
 
   void new_frame(const RHIImGuiFrameDesc& desc);
@@ -74,10 +73,9 @@ class RHIImGui {
   RHIContext* _context = nullptr;
   RHIImGuiDesc _desc = {};
 
-  VertexBuffer _vertices;
-  IndexBuffer _indices;
+  VertexBuffer _vertices[kRHIMaxFrames] = {};
+  IndexBuffer _indices[kRHIMaxFrames] = {};
   RHIBindlessHandle _font_texture = {};
-  RHISampler _font_sampler = {};
   RHIPipeline _pipeline = {};
 
   bool _initialized = false;

@@ -1,5 +1,4 @@
-add_executable(raytracer
-  main.cxx
+set(RAYTRACER_SHARED_SOURCES
   app.hxx
   app.cxx
   ui.hxx
@@ -10,9 +9,17 @@ add_executable(raytracer
   camera_controller.hxx
 )
 
+add_executable(raytracer
+  main.cxx
+  ${RAYTRACER_SHARED_SOURCES}
+)
+
 target_link_libraries(raytracer
   PRIVATE imgui sokol etx-core etx-render etx-rt etx-util etx-rhi tinyexr stb_image
 )
+
+target_include_directories(raytracer
+    PRIVATE "${CMAKE_SOURCE_DIR}/bin")
 
 set_target_properties(raytracer PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
@@ -37,21 +44,22 @@ endif()
 
 set_property(TARGET raytracer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_folder}/bin")
 
-
 add_executable(raytracer-rhi
   main_rhi.cxx
   rhi_test_app.hxx
   rhi_test_app.cxx
+  ${RAYTRACER_SHARED_SOURCES}
 )
+target_compile_definitions(raytracer-rhi PRIVATE ETX_USE_RHI)
 
 target_link_libraries(raytracer-rhi
   PRIVATE imgui sokol_new etx-core etx-render etx-rt etx-util etx-rhi tinyexr stb_image
 )
 
-if(WIN32)
+if (WIN32)
   find_package(Vulkan REQUIRED)
   target_link_libraries(raytracer-rhi PRIVATE Vulkan::Vulkan)
-  target_include_directories(raytracer-rhi PRIVATE ${Vulkan_INCLUDE_DIRS})
+  target_include_directories(raytracer-rhi PRIVATE ${Vulkan_INCLUDE_DIRS} "${CMAKE_SOURCE_DIR}/bin")
 endif()
 
 set_target_properties(raytracer-rhi PROPERTIES

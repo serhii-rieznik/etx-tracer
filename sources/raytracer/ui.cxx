@@ -12,12 +12,19 @@
 #include "ui.hxx"
 #include "camera_controller.hxx"
 
-#include <sokol_app.h>
-#include <sokol_gfx.h>
-
-#include <imgui.h>
-#include <imgui_internal.h>
-#include <util/sokol_imgui.h>
+#if defined(ETX_USE_RHI)
+# include <imgui.h>
+# include <imgui_internal.h>
+# include <etx/rhi/rhi_types.hxx>
+# include <etx/rhi/rhi.hxx>
+# include <etx/rhi/rhi_imgui.hxx>
+#else
+# include <sokol_app.h>
+# include <sokol_gfx.h>
+# include <imgui.h>
+# include <imgui_internal.h>
+# include <util/sokol_imgui.h>
+#endif
 
 #if (ETX_PLATFORM_APPLE)
 # include <unistd.h>
@@ -181,10 +188,17 @@ void UI::update_name_buffer(SelectionKind kind, int32_t index, const char* curre
   }
 }
 
-void UI::initialize(Film* film, const IORDatabase* db) {
+void UI::initialize(Film* film, const IORDatabase* db, void* context) {
   _film = film;
   _ior_database = db;
 
+#if ETX_USE_RHI
+  static RHIImGuiDesc imgui_desc = {
+    .color_format = reinterpret_cast<RHIContext*>(context)->get_swapchain_format(),
+    .ini_filename = env().file_in_data("ui.ini"),
+  };
+  _rhi_imgui.setup(reinterpret_cast<RHIContext*>(context), imgui_desc);
+#else
   simgui_desc_t imggui_desc = {};
   imggui_desc.depth_format = SG_PIXELFORMAT_NONE;
   imggui_desc.no_default_font = true;
@@ -193,19 +207,16 @@ void UI::initialize(Film* film, const IORDatabase* db) {
     auto font_config = ImFontConfig();
     font_config.OversampleH = 4;
     font_config.OversampleV = 4;
-
     auto& io = ImGui::GetIO();
     unsigned char* font_pixels = nullptr;
     int font_width = 0;
     int font_height = 0;
     int bytes_per_pixel = 0;
-
     char font_file[1024] = {};
     env().file_in_data("fonts/ubuntu.ttf", font_file, sizeof(font_file));
     auto font = io.Fonts->AddFontFromFileTTF(font_file, 14.0f * sapp_dpi_scale(), &font_config, nullptr);
     font->Scale = 1.0f / sapp_dpi_scale();
     io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width, &font_height, &bytes_per_pixel);
-
     sg_image_desc img_desc = {};
     img_desc.width = font_width;
     img_desc.height = font_height;
@@ -221,10 +232,14 @@ void UI::initialize(Film* film, const IORDatabase* db) {
     io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_image;
   }
   ImGui::LoadIniSettingsFromDisk(env().file_in_data("ui.ini"));
+#endif
 }
 
 void UI::cleanup() {
   ImGui::SaveIniSettingsToDisk(env().file_in_data("ui.ini"));
+#if ETX_USE_RHI
+  _rhi_imgui.shutdown();
+#endif
 }
 
 void UI::validate_selections(SceneRepresentation& scene_rep) {
@@ -905,8 +920,26 @@ constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_A
 
 void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
   const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras,
-  const IntegratorThread* integrator_thread) {
+  const IntegratorThread* integrator_thread, void* context) {
   ETX_PROFILER_SCOPE();
+
+#if ETX_USE_RHI
+  etx::RHIImGuiFrameDesc frame_desc = {
+    .width = uint32_t(sapp_width()),
+    .height = uint32_t(sapp_height()),
+    .delta_time = dt,
+    .dpi_scale = sapp_dpi_scale(),
+  };
+  _rhi_imgui.new_frame(frame_desc);
+#else
+  simgui_frame_desc_t frame_desc = {
+    .width = sapp_width(),
+    .height = sapp_height(),
+    .delta_time = dt,
+    .dpi_scale = sapp_dpi_scale(),
+  };
+  simgui_new_frame(frame_desc);
+#endif
 
   if (_selection.kind == SelectionKind::None) {
     set_selection(SelectionKind::Rendering, 0);
@@ -993,7 +1026,6 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
 
   validate_selections(scene_rep);
 
-  simgui_new_frame(simgui_frame_desc_t{sapp_width(), sapp_height(), dt, sapp_dpi_scale()});
   build_main_menu_bar(recent_files, ctx.scene_locked);
   build_toolbar(ctx);
   build_scene_objects_window(scene_rep, ctx, materials, mediums, meshes, cameras);
@@ -1010,13 +1042,24 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
     }
   }
 
+#if ETX_USE_RHI
+  auto cb = reinterpret_cast<RHIContext*>(context)->get_command_buffer();
+  _rhi_imgui.render(cb);
+#else
   simgui_render();
+#endif
 }
 
 bool UI::handle_event(const sapp_event* e) {
+#if defined(ETX_USE_RHI)
+  if (_rhi_imgui.handle_event(e)) {
+    return true;
+  }
+#else
   if (simgui_handle_event(e)) {
     return true;
   }
+#endif
 
   if (e->type != SAPP_EVENTTYPE_KEY_DOWN) {
     return false;
@@ -2720,7 +2763,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
     camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
     camera.clip_near = std::max(camera.clip_near, 0.0f);
-    camera.clip_far = std::max(camera.clip_far, camera.clip_near + 0.001f);
+    camera.clip_far = std::max(camera.clip_near + 0.001f, camera.clip_far);
     scene_rep.data().pixel_filter.radius = clamp(pixel_filter_radius, 0.0f, 32.0f);
 
     auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;

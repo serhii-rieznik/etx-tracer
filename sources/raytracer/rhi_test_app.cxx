@@ -164,11 +164,7 @@ void RHITestApplication::frame() {
 }
 
 void RHITestApplication::cleanup() {
-  // Wait for all GPU work to complete before destroying resources
-  // For Vulkan backend, wait for device idle to ensure all command buffers complete
   if (rhi_context != nullptr) {
-    // Cast to Vulkan context to access device wait idle
-    // Note: This assumes Vulkan backend - Metal would need different handling
     auto vk_context = static_cast<VKContext*>(rhi_context);
     if (vk_context != nullptr) {
       VkDevice vk_device = vk_context->get_vk_device();
@@ -419,11 +415,11 @@ bool RHITestApplication::create_rendering_resources() {
 
   // Vertex shader
   pipeline_desc.vertex_shader = vertex_shader_desc;
-  pipeline_desc.vertex_entry_point = "vs_main";
+  pipeline_desc.vertex_shader.entry_point = "vs_main";
 
   // Fragment shader
   pipeline_desc.fragment_shader = fragment_shader_desc;
-  pipeline_desc.fragment_entry_point = "fs_main";
+  pipeline_desc.fragment_shader.entry_point = "fs_main";
 
   // Vertex input - using procedural vertex generation, no vertex buffers
   pipeline_desc.vertex_attribute_count = 0;

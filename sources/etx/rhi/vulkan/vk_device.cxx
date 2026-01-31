@@ -38,8 +38,7 @@ struct VKStagingBuffer {
     vkGetPhysicalDeviceProperties(physical_device, &properties);
     alignment = properties.limits.minMemoryMapAlignment;
 
-    VkBufferCreateInfo buffer_info = {};
-    buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    VkBufferCreateInfo buffer_info = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     buffer_info.size = capacity;
     buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -51,8 +50,7 @@ struct VKStagingBuffer {
     VkMemoryRequirements mem_requirements;
     vkGetBufferMemoryRequirements(device, buffer, &mem_requirements);
 
-    VkMemoryAllocateInfo alloc_info = {};
-    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    VkMemoryAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     alloc_info.allocationSize = mem_requirements.size;
 
     VkPhysicalDeviceMemoryProperties mem_properties;
@@ -194,7 +192,8 @@ struct VKDevice::Impl {
   // Reusable fence pool for staging operations
   std::vector<FenceResource> fence_pool;
 
-  VKStagingBuffer staging_buffer;
+  VKStagingBuffer staging_buffer = {};
+  VkPipelineLayout bindless_layout = {};
 
   bool initialize_instance(const RHIInitInfo&);
   bool initialize_physical_device();
@@ -211,10 +210,11 @@ struct VKDevice::Impl {
   RHIResult create_vulkan_texture(const RHITextureDesc& desc, VkImage& out_image, VkDeviceMemory& out_memory);
   RHIResult create_vulkan_image_view(const RHITextureDesc& desc, VkImage image, VkImageView& out_view);
   RHIResult create_vulkan_sampler(const RHISamplerDesc& desc, VkSampler& out_sampler);
-  RHIResult create_vulkan_pipeline_layout(VkPipelineLayout& out_layout);
   RHIResult create_vulkan_graphics_pipeline(const RHIGraphicsPipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline);
   RHIResult create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline);
   RHIResult execute_single_time_commands(std::function<void(VkCommandBuffer)> recorder);
+
+  RHICreateResult<VkPipelineLayout> get_bindless_pipeline_layout();
 
   uint32_t allocate_buffer_index();
   void free_buffer_index(uint32_t index);
@@ -259,6 +259,10 @@ VKDevice::Impl::~Impl() {
   // Clean up pools before destroying command pool
   cleanup_pools();
   staging_buffer.destroy(device);
+
+  if (bindless_layout != VK_NULL_HANDLE) {
+    vkDestroyPipelineLayout(device, bindless_layout, nullptr);
+  }
 
   for (auto& command_pool : command_pools) {
     if (command_pool != VK_NULL_HANDLE && device != VK_NULL_HANDLE) {
@@ -413,8 +417,7 @@ bool VKDevice::Impl::initialize_device() {
   float queue_priority = 1.0f;
 
   for (uint32_t family : unique_families) {
-    VkDeviceQueueCreateInfo queue_info = {};
-    queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    VkDeviceQueueCreateInfo queue_info = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     queue_info.queueFamilyIndex = family;
     queue_info.queueCount = 1;
     queue_info.pQueuePriorities = &queue_priority;
@@ -449,8 +452,7 @@ bool VKDevice::Impl::initialize_device() {
   VkPhysicalDeviceFeatures device_features = {};
   device_features.samplerAnisotropy = VK_TRUE;
 
-  VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features = {};
-  descriptor_indexing_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+  VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
   descriptor_indexing_features.runtimeDescriptorArray = VK_TRUE;
   descriptor_indexing_features.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
   descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
@@ -462,8 +464,7 @@ bool VKDevice::Impl::initialize_device() {
   descriptor_indexing_features.descriptorBindingPartiallyBound = VK_TRUE;
   descriptor_indexing_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
 
-  VkDeviceCreateInfo device_create_info = {};
-  device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  VkDeviceCreateInfo device_create_info = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   device_create_info.pNext = &descriptor_indexing_features;
   device_create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size());
   device_create_info.pQueueCreateInfos = queue_create_infos.data();
@@ -483,8 +484,8 @@ bool VKDevice::Impl::initialize_device() {
   pool_info.queueFamilyIndex = graphics_queue_family;
   pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
-  command_pools.resize(MAX_FRAMES_IN_FLIGHT + 1u);
-  for (uint32_t i = 0; i <= MAX_FRAMES_IN_FLIGHT; ++i) {
+  command_pools.resize(kRHIMaxFrames + 1u);
+  for (uint32_t i = 0; i <= kRHIMaxFrames; ++i) {
     if (etx_vk_call(vkCreateCommandPool(device, &pool_info, nullptr, command_pools.data() + i)) != VK_SUCCESS) {
       return false;
     }
@@ -543,11 +544,9 @@ bool VKDevice::Impl::check_extension_support(const std::vector<const char*>& ext
 }
 
 bool VKDevice::Impl::check_bindless_support() {
-  VkPhysicalDeviceDescriptorIndexingProperties descriptor_indexing_props = {};
-  descriptor_indexing_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+  VkPhysicalDeviceDescriptorIndexingProperties descriptor_indexing_props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES};
 
-  VkPhysicalDeviceProperties2 props2 = {};
-  props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+  VkPhysicalDeviceProperties2 props2 = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
   props2.pNext = &descriptor_indexing_props;
 
   vkGetPhysicalDeviceProperties2(physical_device, &props2);
@@ -583,8 +582,7 @@ uint32_t VKDevice::Impl::find_memory_type(uint32_t type_filter, VkMemoryProperty
 }
 
 RHIResult VKDevice::Impl::allocate_memory(VkMemoryRequirements requirements, VkMemoryPropertyFlags properties, VkDeviceMemory& out_memory) {
-  VkMemoryAllocateInfo alloc_info = {};
-  alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  VkMemoryAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   alloc_info.allocationSize = requirements.size;
   alloc_info.memoryTypeIndex = find_vulkan_memory_type(physical_device, requirements.memoryTypeBits, properties);
 
@@ -631,8 +629,7 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
     vk_usage |= VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
   }
 
-  VkBufferCreateInfo buffer_info = {};
-  buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  VkBufferCreateInfo buffer_info = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
   buffer_info.size = desc.size;
   buffer_info.usage = vk_usage;
   buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -742,13 +739,15 @@ static VkBlendOp convert_blend_op(RHIBlendOp op) {
   }
 }
 
-RHIResult VKDevice::Impl::create_vulkan_pipeline_layout(VkPipelineLayout& out_layout) {
-  VkPipelineLayoutCreateInfo layout_info = {};
-  layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+RHICreateResult<VkPipelineLayout> VKDevice::Impl::get_bindless_pipeline_layout() {
+  if (bindless_layout)
+    return {RHIResult::Success, bindless_layout};
+
+  VkPipelineLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
   layout_info.setLayoutCount = 1;
 
-  VkDescriptorSetLayout bindless_layout = static_cast<VKBindlessManager*>(bindless_manager)->get_descriptor_set_layout();
-  layout_info.pSetLayouts = &bindless_layout;
+  VkDescriptorSetLayout ds_set_layout = static_cast<VKBindlessManager*>(bindless_manager)->get_descriptor_set_layout();
+  layout_info.pSetLayouts = &ds_set_layout;
 
   VkPushConstantRange push_constants = {};
   push_constants.stageFlags = VK_SHADER_STAGE_ALL;
@@ -758,30 +757,34 @@ RHIResult VKDevice::Impl::create_vulkan_pipeline_layout(VkPipelineLayout& out_la
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_constants;
 
-  if (etx_vk_call(vkCreatePipelineLayout(device, &layout_info, nullptr, &out_layout)) != VK_SUCCESS) {
-    return RHIResult::ValidationError;
+  if (etx_vk_call(vkCreatePipelineLayout(device, &layout_info, nullptr, &bindless_layout)) != VK_SUCCESS) {
+    return {RHIResult::ValidationError, {}};
   }
 
-  return RHIResult::Success;
+  return {RHIResult::Success, bindless_layout};
 }
 
 RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline) {
+  if (desc.vertex_shader.spirv_size == 0)
+    return RHIResult::ValidationError;
+
+  if (desc.fragment_shader.spirv_size == 0)
+    return RHIResult::ValidationError;
+
   // Create vertex shader module from SPIR-V
-  VkShaderModuleCreateInfo vert_info = {};
-  vert_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  VkShaderModuleCreateInfo vert_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   vert_info.codeSize = desc.vertex_shader.spirv_size;
   vert_info.pCode = reinterpret_cast<const uint32_t*>(desc.vertex_shader.spirv_data);
-  VkShaderModule vert_module;
+  VkShaderModule vert_module = {};
   if (etx_vk_call(vkCreateShaderModule(device, &vert_info, nullptr, &vert_module)) != VK_SUCCESS) {
     return RHIResult::ValidationError;
   }
 
   // Create fragment shader module from SPIR-V
-  VkShaderModuleCreateInfo frag_info = {};
-  frag_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  VkShaderModuleCreateInfo frag_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   frag_info.codeSize = desc.fragment_shader.spirv_size;
   frag_info.pCode = reinterpret_cast<const uint32_t*>(desc.fragment_shader.spirv_data);
-  VkShaderModule frag_module;
+  VkShaderModule frag_module = {};
   if (etx_vk_call(vkCreateShaderModule(device, &frag_info, nullptr, &frag_module)) != VK_SUCCESS) {
     vkDestroyShaderModule(device, vert_module, nullptr);
     return RHIResult::ValidationError;
@@ -792,13 +795,13 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
       .stage = VK_SHADER_STAGE_VERTEX_BIT,
       .module = vert_module,
-      .pName = desc.vertex_entry_point.c_str(),
+      .pName = desc.vertex_shader.entry_point.c_str(),
     },
     {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
       .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
       .module = frag_module,
-      .pName = desc.fragment_entry_point.c_str(),
+      .pName = desc.fragment_shader.entry_point.c_str(),
     },
   };
 
@@ -836,25 +839,21 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
     vertex_attributes.push_back(vk_attr);
   }
 
-  VkPipelineVertexInputStateCreateInfo vertex_input = {};
-  vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+  VkPipelineVertexInputStateCreateInfo vertex_input = {VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
   vertex_input.vertexBindingDescriptionCount = static_cast<uint32_t>(vertex_bindings.size());
   vertex_input.pVertexBindingDescriptions = vertex_bindings.data();
   vertex_input.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertex_attributes.size());
   vertex_input.pVertexAttributeDescriptions = vertex_attributes.data();
 
-  VkPipelineInputAssemblyStateCreateInfo input_assembly = {};
-  input_assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  VkPipelineInputAssemblyStateCreateInfo input_assembly = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
   input_assembly.topology = desc.primitive_topology == RHIPrimitiveTopology::TriangleList ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
   input_assembly.primitiveRestartEnable = VK_FALSE;
 
-  VkPipelineViewportStateCreateInfo viewport_state = {};
-  viewport_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  VkPipelineViewportStateCreateInfo viewport_state = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
   viewport_state.viewportCount = 1;
   viewport_state.scissorCount = 1;
 
-  VkPipelineRasterizationStateCreateInfo rasterizer = {};
-  rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  VkPipelineRasterizationStateCreateInfo rasterizer = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
   rasterizer.depthClampEnable = desc.rasterization.depth_clamp_enable ? VK_TRUE : VK_FALSE;
   rasterizer.rasterizerDiscardEnable = VK_FALSE;
   rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
@@ -863,8 +862,7 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
   rasterizer.depthBiasEnable = VK_FALSE;
 
-  VkPipelineDepthStencilStateCreateInfo depth_stencil = {};
-  depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+  VkPipelineDepthStencilStateCreateInfo depth_stencil = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
   depth_stencil.depthTestEnable = desc.depth_stencil.depth_test_enable ? VK_TRUE : VK_FALSE;
   depth_stencil.depthWriteEnable = desc.depth_stencil.depth_write_enable ? VK_TRUE : VK_FALSE;
   depth_stencil.depthCompareOp = convert_compare_op(desc.depth_stencil.depth_compare_op);
@@ -873,8 +871,7 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   depth_stencil.maxDepthBounds = desc.depth_stencil.max_depth_bounds;
   depth_stencil.stencilTestEnable = VK_FALSE;
 
-  VkPipelineMultisampleStateCreateInfo multisampling = {};
-  multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  VkPipelineMultisampleStateCreateInfo multisampling = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
   multisampling.sampleShadingEnable = VK_FALSE;
   multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -890,15 +887,13 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
     color_blend_attachment.alphaBlendOp = convert_blend_op(desc.blend.alpha_blend_op);
   }
 
-  VkPipelineColorBlendStateCreateInfo color_blending = {};
-  color_blending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  VkPipelineColorBlendStateCreateInfo color_blending = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
   color_blending.logicOpEnable = VK_FALSE;
   color_blending.attachmentCount = 1;
   color_blending.pAttachments = &color_blend_attachment;
 
   VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-  VkPipelineDynamicStateCreateInfo dynamic_state_info = {};
-  dynamic_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+  VkPipelineDynamicStateCreateInfo dynamic_state_info = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
   dynamic_state_info.dynamicStateCount = 2;
   dynamic_state_info.pDynamicStates = dynamic_states;
 
@@ -943,8 +938,7 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
   dependencies[1].dstAccessMask = 0;
 
-  VkRenderPassCreateInfo render_pass_info = {};
-  render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  VkRenderPassCreateInfo render_pass_info = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
   render_pass_info.attachmentCount = 1;
   render_pass_info.pAttachments = &color_attachment;
   render_pass_info.subpassCount = 1;
@@ -957,8 +951,7 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
     return RHIResult::ValidationError;
   }
 
-  VkGraphicsPipelineCreateInfo pipeline_info = {};
-  pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  VkGraphicsPipelineCreateInfo pipeline_info = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
   pipeline_info.stageCount = 2;
   pipeline_info.pStages = shader_stages;
   pipeline_info.pVertexInputState = &vertex_input;
@@ -989,8 +982,7 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
 
 RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline) {
   // Create compute shader module from SPIR-V
-  VkShaderModuleCreateInfo comp_info = {};
-  comp_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  VkShaderModuleCreateInfo comp_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   comp_info.codeSize = desc.compute_shader.spirv_size;
   comp_info.pCode = reinterpret_cast<const uint32_t*>(desc.compute_shader.spirv_data);
   VkShaderModule comp_module;
@@ -998,14 +990,12 @@ RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelin
     return RHIResult::ValidationError;
   }
 
-  VkPipelineShaderStageCreateInfo shader_stage = {};
-  shader_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  VkPipelineShaderStageCreateInfo shader_stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
   shader_stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
   shader_stage.module = comp_module;
   shader_stage.pName = desc.entry_point.c_str();
 
-  VkComputePipelineCreateInfo pipeline_info = {};
-  pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  VkComputePipelineCreateInfo pipeline_info = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
   pipeline_info.stage = shader_stage;
   pipeline_info.layout = layout;
   pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
@@ -1060,8 +1050,7 @@ static VkSamplerAddressMode convert_sampler_address_mode(RHISamplerAddressMode m
 }
 
 RHIResult VKDevice::Impl::create_vulkan_sampler(const RHISamplerDesc& desc, VkSampler& out_sampler) {
-  VkSamplerCreateInfo sampler_info = {};
-  sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  VkSamplerCreateInfo sampler_info = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
   sampler_info.magFilter = convert_sampler_filter(desc.mag_filter);
   sampler_info.minFilter = convert_sampler_filter(desc.min_filter);
   sampler_info.mipmapMode = convert_sampler_mipmap_mode(desc.mipmap_mode);
@@ -1087,7 +1076,7 @@ RHIResult VKDevice::Impl::create_vulkan_sampler(const RHISamplerDesc& desc, VkSa
 
 RHIResult VKDevice::Impl::execute_single_time_commands(std::function<void(VkCommandBuffer)> recorder) {
   // Acquire resources from pools
-  VkCommandBuffer command_buffer = acquire_command_buffer(MAX_FRAMES_IN_FLIGHT);
+  VkCommandBuffer command_buffer = acquire_command_buffer(kRHIMaxFrames);
   if (command_buffer == VK_NULL_HANDLE) {
     log::error("Failed to acquire command buffer from pool");
     return RHIResult::OutOfMemory;
@@ -1100,8 +1089,7 @@ RHIResult VKDevice::Impl::execute_single_time_commands(std::function<void(VkComm
     return RHIResult::OutOfMemory;
   }
 
-  VkCommandBufferBeginInfo begin_info = {};
-  begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  VkCommandBufferBeginInfo begin_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
   if (etx_vk_call(vkBeginCommandBuffer(command_buffer, &begin_info)) != VK_SUCCESS) {
@@ -1118,8 +1106,7 @@ RHIResult VKDevice::Impl::execute_single_time_commands(std::function<void(VkComm
     return RHIResult::ValidationError;
   }
 
-  VkSubmitInfo submit_info = {};
-  submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit_info.commandBufferCount = 1;
   submit_info.pCommandBuffers = &command_buffer;
 
@@ -1145,8 +1132,7 @@ RHIResult VKDevice::Impl::execute_single_time_commands(std::function<void(VkComm
 }
 
 RHIResult VKDevice::Impl::create_vulkan_texture(const RHITextureDesc& desc, VkImage& out_image, VkDeviceMemory& out_memory) {
-  VkImageCreateInfo image_info = {};
-  image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  VkImageCreateInfo image_info = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   image_info.imageType = (desc.depth > 1) ? VK_IMAGE_TYPE_3D : (desc.height > 1) ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_1D;
   image_info.format = convert_rhi_format_to_vk(desc.format);
   image_info.extent.width = desc.width;
@@ -1206,8 +1192,7 @@ RHIResult VKDevice::Impl::create_vulkan_texture(const RHITextureDesc& desc, VkIm
 }
 
 RHIResult VKDevice::Impl::create_vulkan_image_view(const RHITextureDesc& desc, VkImage image, VkImageView& out_view) {
-  VkImageViewCreateInfo view_info = {};
-  view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  VkImageViewCreateInfo view_info = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
   view_info.image = image;
   view_info.viewType = (desc.depth > 1) ? VK_IMAGE_VIEW_TYPE_3D : (desc.height > 1) ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_1D;
   view_info.format = convert_rhi_format_to_vk(desc.format);
@@ -1264,17 +1249,14 @@ void VKDevice::Impl::free_shader_slot(uint32_t handle_index) {
 }
 
 VkCommandBuffer VKDevice::Impl::acquire_command_buffer(uint32_t pool_index) {
-  // First try to find an available command buffer
   for (auto& resource : command_buffer_pool) {
-    if (resource.used == false) {
+    if ((resource.pool_index == pool_index) && (resource.used == false)) {
       resource.used = true;
       return resource.buffer;
     }
   }
 
-  // No available buffer found, allocate a new one
-  VkCommandBufferAllocateInfo alloc_info = {};
-  alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  VkCommandBufferAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
   alloc_info.commandPool = command_pools[pool_index];
   alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
   alloc_info.commandBufferCount = 1;
@@ -1284,11 +1266,10 @@ VkCommandBuffer VKDevice::Impl::acquire_command_buffer(uint32_t pool_index) {
     return VK_NULL_HANDLE;
   }
 
-  // Add to pool
-  CommandBufferResource resource;
+  CommandBufferResource& resource = command_buffer_pool.emplace_back();
   resource.buffer = new_buffer;
+  resource.pool_index = pool_index;
   resource.used = true;
-  command_buffer_pool.push_back(resource);
   return new_buffer;
 }
 
@@ -1312,8 +1293,7 @@ VkFence VKDevice::Impl::acquire_fence() {
   }
 
   // No available fence found, create a new one
-  VkFenceCreateInfo fence_info = {};
-  fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 
   VkFence new_fence;
   if (etx_vk_call(vkCreateFence(device, &fence_info, nullptr, &new_fence)) != VK_SUCCESS) {
@@ -1661,8 +1641,7 @@ RHICreateShaderResult VKDevice::create_shader(const RHIShaderDesc& desc) {
     return {RHIResult::ValidationError, {}};
   }
 
-  VkShaderModuleCreateInfo create_info = {};
-  create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  VkShaderModuleCreateInfo create_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   create_info.codeSize = desc.spirv_size;
   create_info.pCode = reinterpret_cast<const uint32_t*>(desc.spirv_data);
 
@@ -1700,8 +1679,7 @@ RHICreateShaderResult VKDevice::create_shader_variant(const RHIShaderVariantDesc
     return {RHIResult::ValidationError, {}};
   }
 
-  VkShaderModuleCreateInfo create_info = {};
-  create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  VkShaderModuleCreateInfo create_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   create_info.codeSize = result.spirv_data.size();
   create_info.pCode = reinterpret_cast<const uint32_t*>(result.spirv_data.data());
 
@@ -1740,8 +1718,7 @@ RHICreateShaderResult VKDevice::create_shader_from_file(const std::string& file_
     return {RHIResult::ValidationError, {}};
   }
 
-  VkShaderModuleCreateInfo create_info = {};
-  create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  VkShaderModuleCreateInfo create_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   create_info.codeSize = result.spirv_data.size();
   create_info.pCode = reinterpret_cast<const uint32_t*>(result.spirv_data.data());
 
@@ -1773,16 +1750,14 @@ RHICreatePipelineResult VKDevice::create_graphics_pipeline(const RHIGraphicsPipe
     return {RHIResult::InvalidArgument, {}};
   }
 
-  VkPipelineLayout vk_layout = VK_NULL_HANDLE;
-  RHIResult layout_result = _impl->create_vulkan_pipeline_layout(vk_layout);
-  if (layout_result != RHIResult::Success) {
-    return {layout_result, {}};
+  auto vk_layout = _impl->get_bindless_pipeline_layout();
+  if (vk_layout.result != RHIResult::Success) {
+    return {vk_layout.result, {}};
   }
 
   VkPipeline vk_pipeline = VK_NULL_HANDLE;
-  RHIResult pipeline_result = _impl->create_vulkan_graphics_pipeline(desc, vk_layout, vk_pipeline);
+  RHIResult pipeline_result = _impl->create_vulkan_graphics_pipeline(desc, vk_layout.handle, vk_pipeline);
   if (pipeline_result != RHIResult::Success) {
-    vkDestroyPipelineLayout(_impl->device, vk_layout, nullptr);
     return {pipeline_result, {}};
   }
 
@@ -1793,7 +1768,6 @@ RHICreatePipelineResult VKDevice::create_graphics_pipeline(const RHIGraphicsPipe
   // Initialize POD data
   auto& pipeline_data = _impl->graphics_pipelines.get_data(index);
   pipeline_data.pipeline = vk_pipeline;
-  pipeline_data.layout = vk_layout;
   pipeline_data.handle = pipeline_handle;
 
   // Store the mapping
@@ -1813,16 +1787,14 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
     return {RHIResult::InvalidArgument, {}};
   }
 
-  VkPipelineLayout vk_layout = VK_NULL_HANDLE;
-  RHIResult layout_result = _impl->create_vulkan_pipeline_layout(vk_layout);
-  if (layout_result != RHIResult::Success) {
-    return {layout_result, {}};
+  auto vk_layout = _impl->get_bindless_pipeline_layout();
+  if (vk_layout.result != RHIResult::Success) {
+    return {vk_layout.result, {}};
   }
 
   VkPipeline vk_pipeline = VK_NULL_HANDLE;
-  RHIResult pipeline_result = _impl->create_vulkan_compute_pipeline(desc, vk_layout, vk_pipeline);
+  RHIResult pipeline_result = _impl->create_vulkan_compute_pipeline(desc, vk_layout.handle, vk_pipeline);
   if (pipeline_result != RHIResult::Success) {
-    vkDestroyPipelineLayout(_impl->device, vk_layout, nullptr);
     return {pipeline_result, {}};
   }
 
@@ -1833,7 +1805,6 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
   // Initialize POD data
   auto& pipeline_data = _impl->compute_pipelines.get_data(index);
   pipeline_data.pipeline = vk_pipeline;
-  pipeline_data.layout = vk_layout;
   pipeline_data.handle = pipeline_handle;
 
   // Store the mapping
@@ -1972,16 +1943,10 @@ RHIResult VKDevice::destroy_pipeline(RHIPipeline pipeline_handle) {
   uint32_t compute_index = _impl->compute_pipelines.get_index(pipeline_handle);
   if (compute_index != UINT32_MAX) {
     _impl->compute_pipelines.remove_handle(pipeline_handle);
-
-    // Cleanup Vulkan resources
     _impl->compute_pipelines.free_index(compute_index, [this](VKPipelineData& data) {
       if (data.pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(_impl->device, data.pipeline, nullptr);
         data.pipeline = VK_NULL_HANDLE;
-      }
-      if (data.layout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(_impl->device, data.layout, nullptr);
-        data.layout = VK_NULL_HANDLE;
       }
     });
     return RHIResult::Success;
@@ -1990,16 +1955,10 @@ RHIResult VKDevice::destroy_pipeline(RHIPipeline pipeline_handle) {
   uint32_t graphics_index = _impl->graphics_pipelines.get_index(pipeline_handle);
   if (graphics_index != UINT32_MAX) {
     _impl->graphics_pipelines.remove_handle(pipeline_handle);
-
-    // Cleanup Vulkan resources
     _impl->graphics_pipelines.free_index(graphics_index, [this](VKPipelineData& data) {
       if (data.pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(_impl->device, data.pipeline, nullptr);
         data.pipeline = VK_NULL_HANDLE;
-      }
-      if (data.layout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(_impl->device, data.layout, nullptr);
-        data.layout = VK_NULL_HANDLE;
       }
     });
     return RHIResult::Success;
@@ -2150,8 +2109,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
   }
 
   RHIResult submit_result = _impl->execute_single_time_commands([&](VkCommandBuffer command_buffer) {
-    VkImageMemoryBarrier barrier = {};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = texture_data.image;
@@ -2251,8 +2209,7 @@ RHIResult VKDevice::reload_shader(RHIShader shader, const RHIShaderDesc& new_des
     return RHIResult::InvalidHandle;
   }
 
-  VkShaderModuleCreateInfo create_info = {};
-  create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  VkShaderModuleCreateInfo create_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
   create_info.codeSize = new_desc.spirv_size;
   create_info.pCode = reinterpret_cast<const uint32_t*>(new_desc.spirv_data);
 
@@ -2336,6 +2293,10 @@ RHIMemoryStats VKDevice::get_memory_statistics() const {
   }
 
   return stats;
+}
+
+VkPipelineLayout VKDevice::get_bindless_pipeline_layout() {
+  return _impl->get_bindless_pipeline_layout().handle;
 }
 
 }  // namespace etx

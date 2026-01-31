@@ -12,7 +12,7 @@ struct RenderContext {
   ~RenderContext();
 
   void init();
-  void cleanup();
+  void cleanup(std::function<void()> clean_resources);
 
   void start_frame(uint32_t sample_count, const ViewOptions&);
   void end_frame();
@@ -21,6 +21,8 @@ struct RenderContext {
   void update_image(const float4* camera);
   void set_reference_image(const char*);
   void set_reference_image(const float4 data[], const uint2 dimensions);
+
+  void* get_context();
 
   ETX_DECLARE_PIMPL(RenderContext, 1024);
 
