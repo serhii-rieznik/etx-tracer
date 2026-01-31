@@ -1,7 +1,7 @@
 #include <etx/rhi/rhi_imgui.hxx>
 
 #include <imgui.h>
-#include <sokol_app_new.h>
+#include <sokol_app.h>
 
 #include <etx/core/log.hxx>
 #include <etx/core/environment.hxx>
@@ -23,7 +23,6 @@ RHIResult RHIImGui::setup(RHIContext* context, const RHIImGuiDesc& desc) {
   _context = context;
   _desc = desc;
 
-  // Initialize ImGui context if not already done
   if (ImGui::GetCurrentContext() == nullptr) {
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
@@ -34,9 +33,7 @@ RHIResult RHIImGui::setup(RHIContext* context, const RHIImGuiDesc& desc) {
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
   }
 
-  // Update DPI scale before creating resources (needed for style)
   _cur_dpi_scale = (sapp_dpi_scale() > 0.0f) ? sapp_dpi_scale() : 1.0f;
-
   _desc.no_default_font = true;
 
   auto result = create_resources();
@@ -176,7 +173,7 @@ RHIResult RHIImGui::create_font_texture() {
   font_config.OversampleV = 4;
 
   char font_file[1024] = {};
-  env().file_in_data("fonts/ubuntu.ttf", font_file, sizeof(font_file));
+  env().file_in_data("fonts/roboto.ttf", font_file, sizeof(font_file));
   float font_size = 14.0f;
 
   auto font = io.Fonts->AddFontFromFileTTF(font_file, font_size * _cur_dpi_scale, &font_config, nullptr);

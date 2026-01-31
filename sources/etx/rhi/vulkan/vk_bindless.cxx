@@ -24,6 +24,7 @@ VKBindlessManager::Impl::Impl(VkDevice vk_device, VkPhysicalDevice physical_devi
   buffer_entries.resize(max_buffers);
   texture_entries.resize(max_textures);
   sampler_entries.resize(max_samplers);
+  acceleration_structure_entries.resize(max_acceleration_structures);
 
   if (!create_descriptor_set_layout()) {
     log::error("Failed to create bindless descriptor set layout");
@@ -91,6 +92,15 @@ bool VKBindlessManager::Impl::create_descriptor_set_layout() {
   storage_texture_binding.stageFlags = VK_SHADER_STAGE_ALL;
   bindings.push_back(storage_texture_binding);
 
+  if (max_acceleration_structures > 0) {
+    VkDescriptorSetLayoutBinding as_binding = {};
+    as_binding.binding = 4;
+    as_binding.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    as_binding.descriptorCount = max_acceleration_structures;
+    as_binding.stageFlags = VK_SHADER_STAGE_ALL;
+    bindings.push_back(as_binding);
+  }
+
   VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
   VkDescriptorBindingFlags binding_flag_value = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
   std::vector<VkDescriptorBindingFlags> binding_flags_array(bindings.size(), binding_flag_value);
@@ -141,6 +151,13 @@ bool VKBindlessManager::Impl::create_descriptor_pool() {
     pool_sizes.push_back(sampler_pool_size);
   }
 
+  if (max_acceleration_structures > 0) {
+    VkDescriptorPoolSize as_pool_size = {};
+    as_pool_size.type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    as_pool_size.descriptorCount = max_acceleration_structures;
+    pool_sizes.push_back(as_pool_size);
+  }
+
   VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
   pool_info.pPoolSizes = pool_sizes.data();
@@ -187,6 +204,11 @@ RHIResult VKBindlessManager::Impl::register_resource(RHIResourceType type, uint3
       resource_array = &sampler_entries;
       max_count = max_samplers;
       count_ptr = &sampler_count;
+      break;
+    case RHIResourceType::AccelerationStructure:
+      resource_array = &acceleration_structure_entries;
+      max_count = max_acceleration_structures;
+      count_ptr = &acceleration_structure_count;
       break;
 
     default:
@@ -248,6 +270,9 @@ RHIResult VKBindlessManager::Impl::unregister_resource(RHIBindlessHandle handle)
     case RHIResourceType::Sampler:
       resource_array = &sampler_entries;
       break;
+    case RHIResourceType::AccelerationStructure:
+      resource_array = &acceleration_structure_entries;
+      break;
     default:
       resource_array = nullptr;
       break;
@@ -266,6 +291,9 @@ RHIResult VKBindlessManager::Impl::unregister_resource(RHIBindlessHandle handle)
       break;
     case RHIResourceType::Sampler:
       sampler_count--;
+      break;
+    case RHIResourceType::AccelerationStructure:
+      acceleration_structure_count--;
       break;
   }
 
@@ -289,6 +317,9 @@ void VKBindlessManager::Impl::update_descriptor_array(VkDescriptorType descripto
       break;
     case 3:
       max_descriptors = max_textures;
+      break;
+    case 4:
+      max_descriptors = max_acceleration_structures;
       break;
     default:
       log::error("Invalid binding %u in update_descriptor_array", binding);
@@ -356,6 +387,12 @@ void VKBindlessManager::initialize(VkDevice device, VkPhysicalDevice physical_de
   }
 
   _impl = new Impl(device, physical_device, _stored_max_buffers, _stored_max_textures, _stored_max_samplers, _stored_max_acceleration_structures);
+
+  vkGetPhysicalDeviceProperties2(physical_device, &props2);
+  _impl->acceleration_structure_properties.pNext = nullptr;
+  _impl->acceleration_structure_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+  props2.pNext = &_impl->acceleration_structure_properties;
+  vkGetPhysicalDeviceProperties2(physical_device, &props2);
 }
 
 VKBindlessManager::~VKBindlessManager() {
@@ -388,8 +425,9 @@ void VKBindlessManager::set_max_samplers(uint32_t count) {
 
 void VKBindlessManager::set_max_acceleration_structures(uint32_t count) {
   _stored_max_acceleration_structures = count;
-
-  log::warning("set_max_acceleration_structures: acceleration structures not supported without VK_KHR_acceleration_structure extension");
+  if (_impl) {
+    log::warning("Changed max acceleration structures to %u, but bindless manager already initialized - layout unchanged", count);
+  }
 }
 
 RHIResult VKBindlessManager::register_buffer(void* vk_buffer, RHIResourceType type, RHIBindlessHandle& out_handle) {
@@ -508,14 +546,40 @@ RHIResult VKBindlessManager::unregister_sampler(RHIBindlessHandle handle) {
 }
 
 RHIResult VKBindlessManager::register_acceleration_structure(const void* data, uint64_t size, RHIBindlessHandle& out_handle) {
-  out_handle = 0;
-  log::warning("register_acceleration_structure: acceleration structures not supported without VK_KHR_acceleration_structure extension");
   return RHIResult::NotImplemented;
 }
 
+RHIResult VKBindlessManager::register_acceleration_structure_vk(VkAccelerationStructureKHR vk_as, RHIBindlessHandle& out_handle) {
+  if (!_impl) {
+    return RHIResult::NotImplemented;
+  }
+
+  uint32_t descriptor_index = 0;
+  RHIResult result = _impl->register_resource(RHIResourceType::AccelerationStructure, descriptor_index, out_handle);
+  if (result != RHIResult::Success) {
+    return result;
+  }
+
+  auto& entry = _impl->acceleration_structure_entries[descriptor_index];
+  entry.vulkan_handle.acceleration_structure = vk_as;
+
+  _impl->handle_to_resource[out_handle] = entry;
+
+  VkWriteDescriptorSetAccelerationStructureKHR as_info = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+  as_info.accelerationStructureCount = 1;
+  as_info.pAccelerationStructures = &vk_as;
+
+  _impl->update_descriptor_array(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4, descriptor_index, nullptr, nullptr, &as_info);
+
+  return RHIResult::Success;
+}
+
 RHIResult VKBindlessManager::unregister_acceleration_structure(RHIBindlessHandle handle) {
-  log::warning("unregister_acceleration_structure: acceleration structures not supported without VK_KHR_acceleration_structure extension");
-  return RHIResult::NotImplemented;
+  if (!_impl) {
+    return RHIResult::NotImplemented;
+  }
+
+  return _impl->unregister_resource(handle);
 }
 
 bool VKBindlessManager::is_valid_handle(RHIBindlessHandle handle) const {
@@ -579,7 +643,7 @@ uint32_t VKBindlessManager::get_sampler_count() const {
 }
 
 uint32_t VKBindlessManager::get_acceleration_structure_count() const {
-  return 0;
+  return _impl ? _impl->acceleration_structure_count : 0;
 }
 
 VkDescriptorSetLayout VKBindlessManager::get_descriptor_set_layout() const {
@@ -627,6 +691,19 @@ VkSampler VKBindlessManager::get_vk_sampler(RHIBindlessHandle handle) const {
   }
 
   return it->second.vulkan_handle.sampler;
+}
+
+VkAccelerationStructureKHR VKBindlessManager::get_vk_acceleration_structure(RHIBindlessHandle handle) const {
+  if (!_impl) {
+    return VK_NULL_HANDLE;
+  }
+
+  auto it = _impl->handle_to_resource.find(handle);
+  if (it == _impl->handle_to_resource.end() || !it->second.valid || it->second.type != RHIResourceType::AccelerationStructure) {
+    return VK_NULL_HANDLE;
+  }
+
+  return it->second.vulkan_handle.acceleration_structure;
 }
 
 }  // namespace etx

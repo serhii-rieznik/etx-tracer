@@ -2,17 +2,10 @@
   "values": [
     {
       "class": 5,
-      "description": "Integrator",
-      "id": "integrator",
-      "meta": 0,
-      "value": "Bidirectional (CPU)"
-    },
-    {
-      "class": 5,
       "description": "Scene",
       "id": "scene",
       "meta": 0,
-      "value": "D:/tmp/26_01_07_12_51_44_557.etx.json"
+      "value": "./assets/cornellbox/cornellbox.etx.json"
     },
     {
       "class": 5,
@@ -26,35 +19,7 @@
       "description": "Recent File",
       "id": "recent-0",
       "meta": 0,
-      "value": "./assets/cornellbox/cornellbox.json"
-    },
-    {
-      "class": 5,
-      "description": "Recent File",
-      "id": "recent-1",
-      "meta": 0,
       "value": "./assets/cornellbox/cornellbox.etx.json"
-    },
-    {
-      "class": 5,
-      "description": "Recent File",
-      "id": "recent-2",
-      "meta": 0,
-      "value": "F:/Projects/Womp/kakapo/data/meshes/d2/d2.obj"
-    },
-    {
-      "class": 5,
-      "description": "Recent File",
-      "id": "recent-3",
-      "meta": 0,
-      "value": "D:/tmp/26_01_07_12_51_44_557.glb"
-    },
-    {
-      "class": 5,
-      "description": "Recent File",
-      "id": "recent-4",
-      "meta": 0,
-      "value": "D:/tmp/26_01_07_12_51_44_557.etx.json"
     }
   ]
 }

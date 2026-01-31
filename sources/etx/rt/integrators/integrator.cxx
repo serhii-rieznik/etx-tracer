@@ -146,7 +146,7 @@ void IntegratorThread::start(Integrator* i) {
 void IntegratorThread::terminate() {
 }
 
-Integrator* IntegratorThread::integrator() {
+Integrator* IntegratorThread::integrator() const {
   return _private->integrator;
 }
 
@@ -155,7 +155,7 @@ void IntegratorThread::set_integrator(Integrator* i) {
   _private->integrator = i;
 }
 
-bool IntegratorThread::running() {
+bool IntegratorThread::running() const {
   return (_private->integrator != nullptr) && (_private->latest_state == Integrator::State::Running);
 }
 

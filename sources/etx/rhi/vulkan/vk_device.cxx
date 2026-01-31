@@ -1,6 +1,7 @@
 #include <etx/rhi/vulkan/vk_device.hxx>
 #include <etx/rhi/vulkan/vk_rhi.hxx>
 #include <etx/rhi/vulkan/vk_utils.hxx>
+#include <etx/rhi/rhi_types.hxx>
 
 #include <etx/core/log.hxx>
 
@@ -27,12 +28,17 @@ struct VKStagingBuffer {
   VkDeviceMemory memory = VK_NULL_HANDLE;
   void* mapped_ptr = nullptr;
   uint64_t capacity = 0;
-  uint64_t current_offset = 0;
+  uint64_t frame_offsets[kRHIMaxFrames] = {0};  // Per-frame offsets for proper synchronization
   uint64_t alignment = 0;
+  uint64_t per_frame_capacity = 0;  // Capacity allocated per frame
 
   void initialize(VkDevice device, VkPhysicalDevice physical_device, uint64_t size) {
     capacity = size;
-    current_offset = 0;
+    per_frame_capacity = capacity / kRHIMaxFrames;
+
+    for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
+      frame_offsets[i] = 0;
+    }
 
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(physical_device, &properties);
@@ -104,23 +110,41 @@ struct VKStagingBuffer {
     }
   }
 
-  bool allocate(uint64_t size, uint64_t& out_offset, void*& out_ptr) {
-    uint64_t aligned_offset = (current_offset + alignment - 1) & ~(alignment - 1);
-    if (aligned_offset + size > capacity) {
-      // Reset to beginning (simplistic ring buffer assumption: old frames done)
-      // In a real engine, we'd wait for fences here if wrapping around too fast.
-      current_offset = 0;
-      aligned_offset = 0;
+  // Frame-aware allocation to prevent data corruption
+  bool allocate(uint32_t frame_index, uint64_t size, uint64_t& out_offset, void*& out_ptr) {
+    if (frame_index >= kRHIMaxFrames) {
+      log::error("Invalid frame index %u for staging buffer allocation", frame_index);
+      return false;
     }
 
-    if (aligned_offset + size > capacity) {
+    // Calculate base offset for this frame's region
+    uint64_t frame_base = frame_index * per_frame_capacity;
+    uint64_t frame_end = frame_base + per_frame_capacity;
+
+    // Get current offset within this frame's region
+    uint64_t current_offset = frame_base + frame_offsets[frame_index];
+    uint64_t aligned_offset = (current_offset + alignment - 1) & ~(alignment - 1);
+
+    // Check if allocation fits in this frame's region
+    if (aligned_offset + size > frame_end) {
+      // Can't fit in this frame's region - caller should use transient staging buffer
       return false;
     }
 
     out_offset = aligned_offset;
     out_ptr = static_cast<uint8_t*>(mapped_ptr) + aligned_offset;
-    current_offset = aligned_offset + size;
+
+    // Update frame offset (relative to frame base)
+    frame_offsets[frame_index] = (aligned_offset - frame_base) + size;
+
     return true;
+  }
+
+  // Reset a specific frame's region (called at frame start after fence wait)
+  void reset_frame(uint32_t frame_index) {
+    if (frame_index < kRHIMaxFrames) {
+      frame_offsets[frame_index] = 0;
+    }
   }
 };
 
@@ -177,14 +201,19 @@ struct VKDevice::Impl {
   VKResourcePool<VKSamplerData, RHIBindlessHandle> samplers;
   VKResourcePool<VKPipelineData, RHIPipeline> compute_pipelines;
   VKResourcePool<VKPipelineData, RHIPipeline> graphics_pipelines;
+  VKResourcePool<VKAccelerationStructureData, RHIBindlessHandle> acceleration_structures;
 
   // Shaders are handled differently - direct vector with index-based handles
   std::vector<VkShaderModule> shaders;
+  std::vector<uint32_t> shader_generations;
   std::vector<uint32_t> free_shader_indices;
   std::unordered_map<RHIShader, VkShaderModule> shader_handle_map;
 
   // Separate tracking for mapped buffers (since void* can't be in POD)
   std::unordered_map<RHIBindlessHandle, void*> mapped_buffer_ptrs;
+
+  // Track acceleration structure buffers for destruction
+  std::unordered_map<RHIBindlessHandle, RHIBindlessHandle> as_to_buffer_map;
 
   std::vector<VkCommandPool> command_pools;
   std::vector<CommandBufferResource> command_buffer_pool;
@@ -194,6 +223,66 @@ struct VKDevice::Impl {
 
   VKStagingBuffer staging_buffer = {};
   VkPipelineLayout bindless_layout = {};
+
+  // Frame tracking for staging buffer synchronization
+  uint32_t current_frame_index = 0;
+
+  // AS extension function pointers
+  PFN_vkGetAccelerationStructureBuildSizesKHR impl_vkGetAccelerationStructureBuildSizesKHR = nullptr;
+  PFN_vkCreateAccelerationStructureKHR impl_vkCreateAccelerationStructureKHR = nullptr;
+  PFN_vkDestroyAccelerationStructureKHR impl_vkDestroyAccelerationStructureKHR = nullptr;
+  PFN_vkGetAccelerationStructureDeviceAddressKHR impl_vkGetAccelerationStructureDeviceAddressKHR = nullptr;
+  PFN_vkCmdBuildAccelerationStructuresKHR impl_vkCmdBuildAccelerationStructuresKHR = nullptr;
+  PFN_vkGetBufferDeviceAddress impl_vkGetBufferDeviceAddress = nullptr;
+
+  RHIResult load_acceleration_structure_functions() {
+    impl_vkGetAccelerationStructureBuildSizesKHR = (PFN_vkGetAccelerationStructureBuildSizesKHR)vkGetDeviceProcAddr(device, "vkGetAccelerationStructureBuildSizesKHR");
+    if (impl_vkGetAccelerationStructureBuildSizesKHR == nullptr) {
+      return RHIResult::UnsupportedFeature;
+    }
+
+    impl_vkDestroyAccelerationStructureKHR = (PFN_vkDestroyAccelerationStructureKHR)vkGetDeviceProcAddr(device, "vkDestroyAccelerationStructureKHR");
+    if (impl_vkDestroyAccelerationStructureKHR == nullptr) {
+      return RHIResult::UnsupportedFeature;
+    }
+
+    impl_vkCreateAccelerationStructureKHR = (PFN_vkCreateAccelerationStructureKHR)vkGetDeviceProcAddr(device, "vkCreateAccelerationStructureKHR");
+    if (impl_vkCreateAccelerationStructureKHR == nullptr) {
+      return RHIResult::UnsupportedFeature;
+    }
+
+    impl_vkGetAccelerationStructureDeviceAddressKHR = (PFN_vkGetAccelerationStructureDeviceAddressKHR)vkGetDeviceProcAddr(device, "vkGetAccelerationStructureDeviceAddressKHR");
+    if (impl_vkGetAccelerationStructureDeviceAddressKHR == nullptr) {
+      return RHIResult::UnsupportedFeature;
+    }
+
+    impl_vkCmdBuildAccelerationStructuresKHR = (PFN_vkCmdBuildAccelerationStructuresKHR)vkGetDeviceProcAddr(device, "vkCmdBuildAccelerationStructuresKHR");
+    if (impl_vkCmdBuildAccelerationStructuresKHR == nullptr) {
+      return RHIResult::UnsupportedFeature;
+    }
+
+    impl_vkGetBufferDeviceAddress = (PFN_vkGetBufferDeviceAddress)vkGetDeviceProcAddr(device, "vkGetBufferDeviceAddress");
+    if (vkGetBufferDeviceAddress == nullptr) {
+      return RHIResult::UnsupportedFeature;
+    }
+
+    return RHIResult::Success;
+  }
+
+  struct DeferredResource {
+    enum class Type { Buffer, Texture, Sampler, AccelerationStructure, Pipeline, Shader } type;
+    struct {
+      VkBuffer buffer = VK_NULL_HANDLE;
+      VkDeviceMemory memory = VK_NULL_HANDLE;
+      VkImageView image_view = VK_NULL_HANDLE;
+      VkImage image = VK_NULL_HANDLE;
+      VkSampler sampler = VK_NULL_HANDLE;
+      VkAccelerationStructureKHR as = VK_NULL_HANDLE;
+      VkPipeline pipeline = VK_NULL_HANDLE;
+      VkShaderModule shader = VK_NULL_HANDLE;
+    } vk;
+  };
+  std::vector<DeferredResource> deferred_resources[kRHIMaxFrames];
 
   bool initialize_instance(const RHIInitInfo&);
   bool initialize_physical_device();
@@ -222,6 +311,8 @@ struct VKDevice::Impl {
   void free_texture_index(uint32_t index);
   uint32_t allocate_sampler_index();
   void free_sampler_index(uint32_t index);
+  uint32_t allocate_acceleration_structure_index();
+  void free_acceleration_structure_index(uint32_t index);
   uint32_t allocate_shader_slot();
   void free_shader_slot(uint32_t index);
 
@@ -232,6 +323,117 @@ struct VKDevice::Impl {
 
   bool initialize_pools();
   void cleanup_pools();
+
+  // Frame-aware staging buffer management
+  void set_current_frame_index(uint32_t index) {
+    current_frame_index = index;
+  }
+
+  void reset_staging_buffer_for_frame(uint32_t frame_index) {
+    staging_buffer.reset_frame(frame_index);
+  }
+
+  void queue_deferred_destruction(const VKBufferData& data) {
+    DeferredResource res;
+    res.type = DeferredResource::Type::Buffer;
+    res.vk.buffer = data.buffer;
+    res.vk.memory = data.memory;
+    deferred_resources[current_frame_index].push_back(res);
+  }
+
+  void queue_deferred_destruction(const VKTextureData& data) {
+    DeferredResource res;
+    res.type = DeferredResource::Type::Texture;
+    res.vk.image_view = data.image_view;
+    res.vk.image = data.image;
+    res.vk.memory = data.memory;
+    deferred_resources[current_frame_index].push_back(res);
+  }
+
+  void queue_deferred_destruction(const VKSamplerData& data) {
+    DeferredResource res;
+    res.type = DeferredResource::Type::Sampler;
+    res.vk.sampler = data.sampler;
+    deferred_resources[current_frame_index].push_back(res);
+  }
+
+  void queue_deferred_destruction(const VKAccelerationStructureData& data) {
+    DeferredResource res;
+    res.type = DeferredResource::Type::AccelerationStructure;
+    res.vk.as = data.acceleration_structure;
+    deferred_resources[current_frame_index].push_back(res);
+  }
+
+  void queue_deferred_destruction(const VKPipelineData& data, bool is_compute) {
+    DeferredResource res;
+    res.type = DeferredResource::Type::Pipeline;
+    res.vk.pipeline = data.pipeline;
+    deferred_resources[current_frame_index].push_back(res);
+  }
+
+  void queue_deferred_destruction(VkShaderModule shader) {
+    DeferredResource res;
+    res.type = DeferredResource::Type::Shader;
+    res.vk.shader = shader;
+    deferred_resources[current_frame_index].push_back(res);
+  }
+
+  void process_deferred_destruction(uint32_t frame_index) {
+    if (frame_index >= kRHIMaxFrames)
+      return;
+
+    auto& resources = deferred_resources[frame_index];
+    for (auto& res : resources) {
+      switch (res.type) {
+        case DeferredResource::Type::Buffer: {
+          if (res.vk.buffer != VK_NULL_HANDLE) {
+            vkDestroyBuffer(device, res.vk.buffer, nullptr);
+          }
+          if (res.vk.memory != VK_NULL_HANDLE) {
+            vkFreeMemory(device, res.vk.memory, nullptr);
+          }
+          break;
+        }
+        case DeferredResource::Type::Texture: {
+          if (res.vk.image_view != VK_NULL_HANDLE) {
+            vkDestroyImageView(device, res.vk.image_view, nullptr);
+          }
+          if (res.vk.image != VK_NULL_HANDLE) {
+            vkDestroyImage(device, res.vk.image, nullptr);
+          }
+          if (res.vk.memory != VK_NULL_HANDLE) {
+            vkFreeMemory(device, res.vk.memory, nullptr);
+          }
+          break;
+        }
+        case DeferredResource::Type::Sampler: {
+          if (res.vk.sampler != VK_NULL_HANDLE) {
+            vkDestroySampler(device, res.vk.sampler, nullptr);
+          }
+          break;
+        }
+        case DeferredResource::Type::AccelerationStructure: {
+          if (res.vk.as != VK_NULL_HANDLE) {
+            impl_vkDestroyAccelerationStructureKHR(device, res.vk.as, nullptr);
+          }
+          break;
+        }
+        case DeferredResource::Type::Pipeline: {
+          if (res.vk.pipeline != VK_NULL_HANDLE) {
+            vkDestroyPipeline(device, res.vk.pipeline, nullptr);
+          }
+          break;
+        }
+        case DeferredResource::Type::Shader: {
+          if (res.vk.shader != VK_NULL_HANDLE) {
+            vkDestroyShaderModule(device, res.vk.shader, nullptr);
+          }
+          break;
+        }
+      }
+    }
+    resources.clear();
+  }
 };
 
 VKDevice::Impl::Impl(const RHIInitInfo& info) {
@@ -250,6 +452,11 @@ VKDevice::Impl::Impl(const RHIInitInfo& info) {
     return;
   }
 
+  if (load_acceleration_structure_functions() == RHIResult::UnsupportedFeature) {
+    log::error("Failed load acceleration structure functions");
+    return;
+  }
+
   staging_buffer.initialize(device, physical_device, 64 * 1024 * 1024);  // 64 MB staging buffer
 }
 
@@ -258,6 +465,11 @@ VKDevice::Impl::~Impl() {
 
   // Clean up pools before destroying command pool
   cleanup_pools();
+
+  for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
+    process_deferred_destruction(i);
+  }
+
   staging_buffer.destroy(device);
 
   if (bindless_layout != VK_NULL_HANDLE) {
@@ -434,6 +646,10 @@ bool VKDevice::Impl::initialize_device() {
     VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
     VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
     VK_KHR_MAINTENANCE_3_EXTENSION_NAME,
+    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+    VK_KHR_RAY_QUERY_EXTENSION_NAME,
+    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+    VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
   };
 
   for (const auto& ext : available_device_extensions) {
@@ -451,8 +667,22 @@ bool VKDevice::Impl::initialize_device() {
 
   VkPhysicalDeviceFeatures device_features = {};
   device_features.samplerAnisotropy = VK_TRUE;
+  device_features.shaderInt64 = VK_TRUE;
+
+  VkPhysicalDeviceBufferDeviceAddressFeatures buffer_device_address_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
+  buffer_device_address_features.bufferDeviceAddress = VK_TRUE;
+
+  VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration_structure_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+  acceleration_structure_features.pNext = &buffer_device_address_features;
+  acceleration_structure_features.accelerationStructure = VK_TRUE;
+  acceleration_structure_features.descriptorBindingAccelerationStructureUpdateAfterBind = VK_TRUE;
+
+  VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+  ray_query_features.pNext = &acceleration_structure_features;
+  ray_query_features.rayQuery = VK_TRUE;
 
   VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
+  descriptor_indexing_features.pNext = &ray_query_features;
   descriptor_indexing_features.runtimeDescriptorArray = VK_TRUE;
   descriptor_indexing_features.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
   descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
@@ -627,6 +857,9 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
   }
   if (usage & static_cast<BufferUsage>(RHIBufferUsage::ShaderBindingTable)) {
     vk_usage |= VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
+  }
+  if (usage & static_cast<BufferUsage>(RHIBufferUsage::ShaderDeviceAddress)) {
+    vk_usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
   }
 
   VkBufferCreateInfo buffer_info = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -948,6 +1181,8 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
 
   VkRenderPass temp_render_pass;
   if (etx_vk_call(vkCreateRenderPass(device, &render_pass_info, nullptr, &temp_render_pass)) != VK_SUCCESS) {
+    vkDestroyShaderModule(device, frag_module, nullptr);
+    vkDestroyShaderModule(device, vert_module, nullptr);
     return RHIResult::ValidationError;
   }
 
@@ -993,7 +1228,7 @@ RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelin
   VkPipelineShaderStageCreateInfo shader_stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
   shader_stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
   shader_stage.module = comp_module;
-  shader_stage.pName = desc.entry_point.c_str();
+  shader_stage.pName = desc.compute_shader.entry_point.c_str();
 
   VkComputePipelineCreateInfo pipeline_info = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
   pipeline_info.stage = shader_stage;
@@ -1228,12 +1463,111 @@ uint32_t VKDevice::Impl::allocate_shader_slot() {
   if (!free_shader_indices.empty()) {
     index = free_shader_indices.back();
     free_shader_indices.pop_back();
+    shader_generations[index] = (shader_generations[index] + 1) & 0x0FFFFFFF;  // Increment generation on reuse
   } else {
     index = static_cast<uint32_t>(shaders.size());
     shaders.push_back(VK_NULL_HANDLE);
+    shader_generations.push_back(0);
   }
 
   return index;
+}
+
+void VKDevice::Impl::free_sampler_index(uint32_t index) {
+  samplers.free_index(index);
+}
+
+uint32_t VKDevice::Impl::allocate_acceleration_structure_index() {
+  return acceleration_structures.allocate_index();
+}
+
+void VKDevice::Impl::free_acceleration_structure_index(uint32_t index) {
+  acceleration_structures.free_index(index);
+}
+
+RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAccelerationStructureDesc& desc) {
+  VkAccelerationStructureBuildGeometryInfoKHR build_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+  build_info.type = (desc.type == RHIAccelerationStructureType::BottomLevel) ? VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR : VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+  build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+
+  VkAccelerationStructureBuildSizesInfoKHR size_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+
+  std::vector<VkAccelerationStructureGeometryKHR> vk_geometries;
+  if (desc.type == RHIAccelerationStructureType::BottomLevel) {
+    if (desc.geometry_count == 0 || desc.geometries == nullptr) {
+      return {RHIResult::InvalidArgument, 0};
+    }
+
+    vk_geometries.resize(desc.geometry_count);
+    std::vector<uint32_t> max_primitive_counts(desc.geometry_count);
+
+    for (uint32_t i = 0; i < desc.geometry_count; ++i) {
+      const auto& src_geo = desc.geometries[i];
+      auto& vk_geo = vk_geometries[i];
+      vk_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+      vk_geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+      vk_geo.flags = src_geo.is_opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
+      vk_geo.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+      vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;  // Simplified, should ideally match src_geo.triangles.vertex_format
+      vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
+      vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
+      vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+
+      max_primitive_counts[i] = src_geo.triangles.index_count / 3;
+    }
+
+    build_info.geometryCount = desc.geometry_count;
+    build_info.pGeometries = vk_geometries.data();
+    _impl->impl_vkGetAccelerationStructureBuildSizesKHR(_impl->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, max_primitive_counts.data(), &size_info);
+  } else {
+    VkAccelerationStructureGeometryKHR instances_geo = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+    instances_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    instances_geo.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    instances_geo.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+    instances_geo.geometry.instances.arrayOfPointers = VK_FALSE;
+
+    build_info.geometryCount = 1;
+    build_info.pGeometries = &instances_geo;
+    _impl->impl_vkGetAccelerationStructureBuildSizesKHR(_impl->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, &desc.instance_count, &size_info);
+  }
+
+  RHIBufferDesc buffer_desc = {};
+  buffer_desc.size = size_info.accelerationStructureSize;
+  buffer_desc.usage = RHIBufferUsage::AccelerationStructureStorage | RHIBufferUsage::ShaderDeviceAddress;
+  auto buffer_res = create_buffer(buffer_desc);
+  if (buffer_res.result != RHIResult::Success) {
+    return {buffer_res.result, 0};
+  }
+
+  VkAccelerationStructureCreateInfoKHR create_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+  create_info.buffer = _impl->buffers.get_data(_impl->buffers.get_index(buffer_res.handle)).buffer;
+  create_info.size = size_info.accelerationStructureSize;
+  create_info.type = build_info.type;
+
+  VkAccelerationStructureKHR vk_as = VK_NULL_HANDLE;
+  if (etx_vk_call(_impl->impl_vkCreateAccelerationStructureKHR(_impl->device, &create_info, nullptr, &vk_as)) != VK_SUCCESS) {
+    destroy_buffer(buffer_res.handle);
+    return {RHIResult::ValidationError, 0};
+  }
+
+  RHIBindlessHandle as_handle = 0;
+  auto bindless = static_cast<VKBindlessManager*>(_impl->bindless_manager);
+  RHIResult reg_result = bindless->register_acceleration_structure_vk(vk_as, as_handle);
+  if (reg_result != RHIResult::Success) {
+    _impl->impl_vkDestroyAccelerationStructureKHR(_impl->device, vk_as, nullptr);
+    destroy_buffer(buffer_res.handle);
+    return {reg_result, 0};
+  }
+
+  uint32_t index = _impl->acceleration_structures.allocate_index();
+  auto& as_data = _impl->acceleration_structures.get_data(index);
+  as_data.acceleration_structure = vk_as;
+  as_data.buffer = buffer_res.handle;
+  as_data.desc = desc;
+  _impl->acceleration_structures.set_handle_to_index(as_handle, index);
+  _impl->as_to_buffer_map[as_handle] = buffer_res.handle;
+
+  return {RHIResult::Success, as_handle};
 }
 
 void VKDevice::Impl::free_shader_slot(uint32_t handle_index) {
@@ -1484,6 +1818,10 @@ void VKDevice::destroy_all_resources() {
     }
   }
   _impl->samplers.clear();
+
+  for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
+    _impl->process_deferred_destruction(i);
+  }
 }
 
 VKDevice::~VKDevice() {
@@ -1568,7 +1906,6 @@ RHICreateBindlessResult VKDevice::create_texture(const RHITextureDesc& desc) {
   texture_data.image_view = vk_view;
   texture_data.memory = vk_memory;
   texture_data.desc = desc;
-  texture_data.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   texture_data.allocated_size = tex_mem_req.size;
 
   // Register with bindless manager
@@ -1651,9 +1988,9 @@ RHICreateShaderResult VKDevice::create_shader(const RHIShaderDesc& desc) {
   }
 
   uint32_t slot = _impl->allocate_shader_slot();
+  uint32_t generation = _impl->shader_generations[slot];
 
-  RHIShader shader_handle = {};
-  shader_handle.value = slot;
+  RHIShader shader_handle = Handle::construct(0, slot, generation);
 
   _impl->shaders[slot] = shader_module;
   _impl->shader_handle_map[shader_handle] = shader_module;
@@ -1689,9 +2026,9 @@ RHICreateShaderResult VKDevice::create_shader_variant(const RHIShaderVariantDesc
   }
 
   uint32_t slot = _impl->allocate_shader_slot();
+  uint32_t generation = _impl->shader_generations[slot];
 
-  RHIShader shader_handle = {};
-  shader_handle.value = slot;
+  RHIShader shader_handle = Handle::construct(0, slot, generation);
 
   _impl->shaders[slot] = shader_module;
   _impl->shader_handle_map[shader_handle] = shader_module;
@@ -1728,9 +2065,9 @@ RHICreateShaderResult VKDevice::create_shader_from_file(const std::string& file_
   }
 
   uint32_t slot = _impl->allocate_shader_slot();
+  uint32_t generation = _impl->shader_generations[slot];
 
-  RHIShader shader_handle = {};
-  shader_handle.value = slot;
+  RHIShader shader_handle = Handle::construct(0, slot, generation);
 
   _impl->shaders[slot] = shader_module;
   _impl->shader_handle_map[shader_handle] = shader_module;
@@ -1762,8 +2099,8 @@ RHICreatePipelineResult VKDevice::create_graphics_pipeline(const RHIGraphicsPipe
   }
 
   uint32_t index = _impl->graphics_pipelines.allocate_index();
-  RHIPipeline pipeline_handle = {};
-  pipeline_handle.value = index;
+  uint32_t generation = _impl->graphics_pipelines.get_generation(index);
+  RHIPipeline pipeline_handle = Handle::construct(0, index, generation);
 
   // Initialize POD data
   auto& pipeline_data = _impl->graphics_pipelines.get_data(index);
@@ -1799,8 +2136,8 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
   }
 
   uint32_t index = _impl->compute_pipelines.allocate_index();
-  RHIPipeline pipeline_handle = {};
-  pipeline_handle.value = index;
+  uint32_t generation = _impl->compute_pipelines.get_generation(index);
+  RHIPipeline pipeline_handle = Handle::construct(0, index, generation);
 
   // Initialize POD data
   auto& pipeline_data = _impl->compute_pipelines.get_data(index);
@@ -1833,18 +2170,11 @@ RHIResult VKDevice::destroy_buffer(RHIBindlessHandle buffer_handle) {
   const auto& buffer_data = _impl->buffers.get_data(index);
   uint64_t size_to_subtract = buffer_data.allocated_size;
 
-  _impl->buffers.free_index(index, [this, size_to_subtract](VKBufferData& data) {
+  _impl->buffers.free_index(index, [this, size_to_subtract](const VKBufferData& data) {
     if (size_to_subtract != 0) {
       _impl->gpu_allocated_bytes -= size_to_subtract;
     }
-    if (data.buffer != VK_NULL_HANDLE) {
-      vkDestroyBuffer(_impl->device, data.buffer, nullptr);
-      data.buffer = VK_NULL_HANDLE;
-    }
-    if (data.memory != VK_NULL_HANDLE) {
-      vkFreeMemory(_impl->device, data.memory, nullptr);
-      data.memory = VK_NULL_HANDLE;
-    }
+    _impl->queue_deferred_destruction(data);
   });
 
   return RHIResult::Success;
@@ -1872,23 +2202,11 @@ RHIResult VKDevice::destroy_texture(RHIBindlessHandle texture_handle) {
   const auto& tex_data = _impl->textures.get_data(index);
   uint64_t tex_size_to_subtract = tex_data.allocated_size;
 
-  _impl->textures.free_index(index, [this, tex_size_to_subtract](VKTextureData& data) {
+  _impl->textures.free_index(index, [this, tex_size_to_subtract](const VKTextureData& data) {
     if (tex_size_to_subtract != 0) {
       _impl->gpu_allocated_bytes -= tex_size_to_subtract;
     }
-    if (data.image_view != VK_NULL_HANDLE) {
-      vkDestroyImageView(_impl->device, data.image_view, nullptr);
-      data.image_view = VK_NULL_HANDLE;
-    }
-    if (data.image != VK_NULL_HANDLE) {
-      vkDestroyImage(_impl->device, data.image, nullptr);
-      data.image = VK_NULL_HANDLE;
-    }
-    if (data.memory != VK_NULL_HANDLE) {
-      vkFreeMemory(_impl->device, data.memory, nullptr);
-      data.memory = VK_NULL_HANDLE;
-    }
-    data.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    _impl->queue_deferred_destruction(data);
   });
 
   return RHIResult::Success;
@@ -1914,11 +2232,8 @@ RHIResult VKDevice::destroy_sampler(RHIBindlessHandle sampler_handle) {
   _impl->samplers.remove_handle(sampler_handle);
 
   // Cleanup Vulkan resources
-  _impl->samplers.free_index(index, [this](VKSamplerData& data) {
-    if (data.sampler != VK_NULL_HANDLE) {
-      vkDestroySampler(_impl->device, data.sampler, nullptr);
-      data.sampler = VK_NULL_HANDLE;
-    }
+  _impl->samplers.free_index(index, [this](const VKSamplerData& data) {
+    _impl->queue_deferred_destruction(data);
   });
 
   return RHIResult::Success;
@@ -1932,8 +2247,9 @@ RHIResult VKDevice::destroy_shader(RHIShader shader) {
   }
 
   VkShaderModule vk_shader = it->second;
+  _impl->queue_deferred_destruction(vk_shader);
 
-  _impl->free_shader_slot(static_cast<uint32_t>(shader.value));
+  _impl->free_shader_slot(shader.get_index());
   _impl->shader_handle_map.erase(it);
 
   return RHIResult::Success;
@@ -1943,11 +2259,8 @@ RHIResult VKDevice::destroy_pipeline(RHIPipeline pipeline_handle) {
   uint32_t compute_index = _impl->compute_pipelines.get_index(pipeline_handle);
   if (compute_index != UINT32_MAX) {
     _impl->compute_pipelines.remove_handle(pipeline_handle);
-    _impl->compute_pipelines.free_index(compute_index, [this](VKPipelineData& data) {
-      if (data.pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(_impl->device, data.pipeline, nullptr);
-        data.pipeline = VK_NULL_HANDLE;
-      }
+    _impl->compute_pipelines.free_index(compute_index, [this](const VKPipelineData& data) {
+      _impl->queue_deferred_destruction(data, true);
     });
     return RHIResult::Success;
   }
@@ -1955,11 +2268,8 @@ RHIResult VKDevice::destroy_pipeline(RHIPipeline pipeline_handle) {
   uint32_t graphics_index = _impl->graphics_pipelines.get_index(pipeline_handle);
   if (graphics_index != UINT32_MAX) {
     _impl->graphics_pipelines.remove_handle(pipeline_handle);
-    _impl->graphics_pipelines.free_index(graphics_index, [this](VKPipelineData& data) {
-      if (data.pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(_impl->device, data.pipeline, nullptr);
-        data.pipeline = VK_NULL_HANDLE;
-      }
+    _impl->graphics_pipelines.free_index(graphics_index, [this](const VKPipelineData& data) {
+      _impl->queue_deferred_destruction(data, false);
     });
     return RHIResult::Success;
   }
@@ -1995,10 +2305,10 @@ RHIResult VKDevice::update_buffer(RHIBindlessHandle buffer_handle, const void* d
     return RHIResult::Success;
   }
 
-  // Try to use persistent staging buffer
+  // Try to use persistent staging buffer with frame-aware allocation
   uint64_t staging_offset = 0;
   void* staging_ptr = nullptr;
-  bool use_persistent_staging = _impl->staging_buffer.allocate(size, staging_offset, staging_ptr);
+  bool use_persistent_staging = _impl->staging_buffer.allocate(_impl->current_frame_index, size, staging_offset, staging_ptr);
 
   VkBuffer staging_handle = VK_NULL_HANDLE;
   VkDeviceMemory staging_memory = VK_NULL_HANDLE;
@@ -2073,10 +2383,10 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
   uint64_t bytes_per_pixel = convert_rhi_format_to_bytes_per_pixel(desc.format);
   uint64_t data_size = mip_width * mip_height * mip_depth * bytes_per_pixel;
 
-  // Try to use persistent staging buffer
+  // Try to use persistent staging buffer with frame-aware allocation
   uint64_t staging_offset = 0;
   void* staging_ptr = nullptr;
-  bool use_persistent_staging = _impl->staging_buffer.allocate(data_size, staging_offset, staging_ptr);
+  bool use_persistent_staging = _impl->staging_buffer.allocate(_impl->current_frame_index, data_size, staging_offset, staging_ptr);
 
   VkBuffer staging_handle = VK_NULL_HANDLE;
   VkDeviceMemory staging_memory = VK_NULL_HANDLE;
@@ -2113,7 +2423,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = texture_data.image;
-    barrier.oldLayout = texture_data.current_layout;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // Safe to discard previous contents
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.srcAccessMask = 0;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -2125,8 +2435,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
 
     vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    _impl->textures.get_data(index).current_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-
+    // Layout tracking removed - no race conditions
     VkBufferImageCopy copy_region = {};
     copy_region.bufferOffset = use_persistent_staging ? staging_offset : 0;
     copy_region.bufferRowLength = 0;
@@ -2147,7 +2456,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
 
     vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    _impl->textures.get_data(index).current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    // Final layout is SHADER_READ_ONLY_OPTIMAL (set by barrier above)
   });
 
   if (!use_persistent_staging) {
@@ -2203,7 +2512,7 @@ RHIResult VKDevice::reload_shader(RHIShader shader, const RHIShaderDesc& new_des
     return RHIResult::ValidationError;
   }
 
-  uint32_t array_index = static_cast<uint32_t>(shader.value);
+  uint32_t array_index = shader.get_index();
   if (array_index >= _impl->shaders.size()) {
     log::error("Shader handle %llu out of range", shader.value);
     return RHIResult::InvalidHandle;
@@ -2223,7 +2532,7 @@ RHIResult VKDevice::reload_shader(RHIShader shader, const RHIShaderDesc& new_des
   _impl->shader_handle_map[shader] = new_module;
 
   if (old_module != VK_NULL_HANDLE) {
-    vkDestroyShaderModule(_impl->device, old_module, nullptr);
+    _impl->queue_deferred_destruction(old_module);
   }
 
   return RHIResult::Success;
@@ -2297,6 +2606,63 @@ RHIMemoryStats VKDevice::get_memory_statistics() const {
 
 VkPipelineLayout VKDevice::get_bindless_pipeline_layout() {
   return _impl->get_bindless_pipeline_layout().handle;
+}
+
+uint64_t VKDevice::get_buffer_device_address(RHIBindlessHandle buffer) const {
+  uint32_t index = _impl->buffers.get_index(buffer);
+  if (index == UINT32_MAX) {
+    return 0;
+  }
+
+  const auto& buffer_data = _impl->buffers.get_data(index);
+  VkBufferDeviceAddressInfo address_info = {VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+  address_info.buffer = buffer_data.buffer;
+
+  return vkGetBufferDeviceAddress(_impl->device, &address_info);
+}
+
+uint64_t VKDevice::get_acceleration_structure_device_address(RHIBindlessHandle as_handle) {
+  uint32_t index = _impl->acceleration_structures.get_index(as_handle);
+  if (index == UINT32_MAX) {
+    return 0;
+  }
+
+  const auto& as_data = _impl->acceleration_structures.get_data(index);
+  VkAccelerationStructureDeviceAddressInfoKHR address_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
+  address_info.accelerationStructure = as_data.acceleration_structure;
+
+  return _impl->impl_vkGetAccelerationStructureDeviceAddressKHR(_impl->device, &address_info);
+}
+
+RHIResult VKDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) {
+  uint32_t index = _impl->acceleration_structures.get_index(as_handle);
+  if (index == UINT32_MAX) {
+    return RHIResult::InvalidHandle;
+  }
+
+  _impl->bindless_manager->unregister_acceleration_structure(as_handle);
+  _impl->acceleration_structures.remove_handle(as_handle);
+
+  // Collect buffer handle BEFORE destroying AS to avoid use-after-free
+  // This prevents potential issues if destroy_buffer modifies as_to_buffer_map
+  RHIBindlessHandle buffer_to_destroy = {};
+  auto it = _impl->as_to_buffer_map.find(as_handle);
+  if (it != _impl->as_to_buffer_map.end()) {
+    buffer_to_destroy = it->second;
+    _impl->as_to_buffer_map.erase(it);
+  }
+
+  // Destroy acceleration structure (no map access in callback)
+  _impl->acceleration_structures.free_index(index, [this](const VKAccelerationStructureData& data) {
+    _impl->queue_deferred_destruction(data);
+  });
+
+  // Now safely destroy the buffer after AS is destroyed
+  if (buffer_to_destroy != 0) {
+    destroy_buffer(buffer_to_destroy);
+  }
+
+  return RHIResult::Success;
 }
 
 }  // namespace etx

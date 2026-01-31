@@ -815,7 +815,7 @@ std::vector<std::wstring> ShaderCompiler::build_dxc_arguments(const std::string&
     arguments.push_back(L"-O3");
 
     constexpr const wchar_t* shift_args[] = {L"-fvk-s-shift", L"-fvk-t-shift", L"-fvk-b-shift", L"-fvk-u-shift"};
-    constexpr const wchar_t* offset_args[] = {L"100", L"200", L"300", L"400"};
+    constexpr const wchar_t* offset_args[] = {L"0", L"0", L"0", L"0"};
 
     for (uint32_t i = 0u; i < std::size(shift_args); i++) {
       arguments.push_back(shift_args[i]);

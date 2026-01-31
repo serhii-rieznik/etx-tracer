@@ -1,11 +1,7 @@
-#if ETX_USE_RHI
-# include <sokol_app_new.h>
-#else
-# include <sokol_app.h>
-#endif
+#pragma once
 
+#include <sokol_app.h>
 #include <etx/render/shared/camera.hxx>
-
 #include <unordered_set>
 
 namespace etx {
@@ -72,7 +68,6 @@ struct CameraController {
       float3 direction = _camera.direction;
       float3 side = cross(direction, kWorldUp);
       _camera.position += (move_fwd * direction + move_side * side) * _move_speed;
-      // direction unchanged, target moves with position
     }
 
     if (scheduled.active) {
@@ -118,10 +113,12 @@ struct CameraController {
 
       case SAPP_EVENTTYPE_MOUSE_DOWN: {
         _mouse_delta = {};
-        mouse_buttons = mouse_buttons                                                         //
-                        | MouseLeft * uint32_t(e->mouse_button == SAPP_MOUSEBUTTON_LEFT)      //
-                        | MouseMiddle * uint32_t(e->mouse_button == SAPP_MOUSEBUTTON_MIDDLE)  //
-                        | MouseRight * uint32_t(e->mouse_button == SAPP_MOUSEBUTTON_RIGHT);
+        if (e->mouse_button == SAPP_MOUSEBUTTON_LEFT)
+          mouse_buttons = mouse_buttons | MouseLeft;
+        if (e->mouse_button == SAPP_MOUSEBUTTON_MIDDLE)
+          mouse_buttons = mouse_buttons | MouseMiddle;
+        if (e->mouse_button == SAPP_MOUSEBUTTON_RIGHT)
+          mouse_buttons = mouse_buttons | MouseRight;
         break;
       }
 

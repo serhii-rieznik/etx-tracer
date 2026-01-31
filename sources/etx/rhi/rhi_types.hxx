@@ -71,6 +71,7 @@ enum class RHIBufferUsage : uint32_t {
   AccelerationStructureBuild = 1u << 6u,
   AccelerationStructureStorage = 1u << 7u,
   ShaderBindingTable = 1u << 8u,
+  ShaderDeviceAddress = 1u << 9u,
 };
 
 inline RHIBufferUsage operator|(RHIBufferUsage a, RHIBufferUsage b) {
@@ -381,6 +382,52 @@ struct RHIComputePipelineDesc {
   uint32_t local_size_x = 1;
   uint32_t local_size_y = 1;
   uint32_t local_size_z = 1;
+};
+
+enum class RHIAccelerationStructureType : uint32_t {
+  BottomLevel = 0,
+  TopLevel = 1,
+};
+
+struct RHIAccelerationStructureGeometryTriangles {
+  RHIBindlessHandle vertex_buffer = 0;
+  uint32_t vertex_stride = 0;
+  uint32_t vertex_count = 0;
+  RHIVertexFormat vertex_format = RHIVertexFormat::Float3;
+  RHIBindlessHandle index_buffer = 0;
+  uint32_t index_count = 0;
+  RHIIndexType index_type = RHIIndexType::UInt32;
+};
+
+struct RHIAccelerationStructureGeometry {
+  RHIAccelerationStructureGeometryTriangles triangles = {};
+  bool is_opaque = true;
+};
+
+struct RHIAccelerationStructureInstance {
+  float transform[12];  // 3x4 row-major transform matrix
+  uint32_t instance_custom_index                       : 24;
+  uint32_t mask                                        : 8;
+  uint32_t instance_shader_binding_table_record_offset : 24;
+  uint32_t flags                                       : 8;
+  uint64_t acceleration_structure_reference;  // Device address of BLAS
+};
+
+struct RHIAccelerationStructureDesc {
+  RHIAccelerationStructureType type = RHIAccelerationStructureType::BottomLevel;
+  uint32_t geometry_count = 0;                                   // for BLAS
+  const RHIAccelerationStructureGeometry* geometries = nullptr;  // for BLAS size calculation
+  uint32_t instance_count = 0;                                   // for TLAS
+};
+
+struct RHIAccelerationStructureBuildDesc {
+  RHIBindlessHandle as_handle = 0;
+  RHIAccelerationStructureType type = RHIAccelerationStructureType::BottomLevel;
+  uint32_t geometry_count = 0;
+  const RHIAccelerationStructureGeometry* geometries = nullptr;
+  uint32_t instance_count = 0;
+  RHIBindlessHandle instance_buffer = 0;
+  bool allow_update = false;
 };
 
 static constexpr uint32_t kRHIMaxFrames = 3u;

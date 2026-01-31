@@ -22,10 +22,18 @@ union Handle {
 
   uint64_t value = kInvalidHandleValue;
   struct {
-    uint64_t cls : ClsBits;
-    uint64_t index : IndexBits;
+    uint64_t cls        : ClsBits;
+    uint64_t index      : IndexBits;
     uint64_t generation : GenBits;
   };
+
+  uint32_t get_index() const {
+    return static_cast<uint32_t>(index);
+  }
+
+  uint32_t get_generation() const {
+    return static_cast<uint32_t>(generation);
+  }
 
   bool operator==(const Handle& h) const {
     return value == h.value;

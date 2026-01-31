@@ -58,6 +58,10 @@ struct MTDevice : RHIDevice {
   RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc) override;
   RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc) override;
 
+  RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc) override;
+  RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle) override;
+  uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle) override;
+
   bool supports_bindless() const override;
   uint64_t get_min_uniform_buffer_offset_alignment() const override;
   uint64_t get_min_storage_buffer_offset_alignment() const override;
@@ -131,6 +135,8 @@ struct MTCommandBuffer : RHICommandBuffer {
   void draw_indexed(const RHIIndexedDrawDesc& desc, RHIBuffer index_buffer) override;
 
   void dispatch(const RHIDispatchDesc& desc) override;
+
+  void build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0) override;
 
   void copy_buffer(RHIBuffer src, RHIBuffer dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0) override;
   void copy_buffer_to_texture(RHIBuffer src, RHITexture dst, uint32_t width, uint32_t height, uint32_t mip_level = 0) override;

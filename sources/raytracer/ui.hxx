@@ -6,6 +6,7 @@
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/rhi/rhi_imgui.hxx>
 
+#include "renderer.hxx"
 #include "options.hxx"
 
 #include <functional>
@@ -35,6 +36,10 @@ struct UI {
 
   void set_current_integrator(Integrator*);
 
+  void set_current_renderer_mode(RendererMode mode) {
+    _current_renderer_mode = mode;
+  }
+
   bool handle_event(const sapp_event*);
 
   struct BuildContext {
@@ -51,8 +56,8 @@ struct UI {
     bool scene_locked = false;
   };
 
-  ViewOptions view_options() const;
-  ViewOptions& mutable_view_options();
+  ViewParameters view_options() const;
+  ViewParameters& mutable_view_options();
 
   struct {
     std::function<void(std::string)> reference_image_selected;
@@ -60,7 +65,7 @@ struct UI {
     std::function<void(std::string)> scene_file_selected;
     std::function<void(std::string)> save_scene_file_selected;
     std::function<void()> save_scene_file_as_selected;
-    std::function<void(Integrator*)> integrator_selected;
+    std::function<void(RendererMode)> renderer_selected;
     std::function<void(bool)> stop_selected;
     std::function<void()> run_selected;
     std::function<void()> restart_selected;
@@ -82,7 +87,8 @@ struct UI {
     std::function<void(bool)> camera_changed;
     std::function<void()> scene_settings_changed;
     std::function<void()> denoise_selected;
-    std::function<void(uint32_t)> view_scene;
+    std::function<void(uint32_t direction)> view_scene;
+    std::function<void(Integrator::Type)> integrator_selected;
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
     std::function<void(bool)> scene_updates_locked_changed;
@@ -151,11 +157,17 @@ struct UI {
 
  private:
   Integrator* _current_integrator = nullptr;
+  RendererMode _current_renderer_mode = RendererMode::CPURaytracing;
   Film* _film = nullptr;
   RHIImGui _rhi_imgui = {};
 
   ArrayView<Integrator*> _integrators = {};
-  ViewOptions _view_options = {};
+  ViewParameters _view_options = {
+    .exposure = 1.0f,
+    .view_option = (uint32_t)ViewOptions::Tonemapped,
+    .view_image = (uint32_t)OutputView::OutputImage,
+    .view_layer = (uint32_t)ViewLayer::Result,
+  };
 
   struct MappingRepresentation {
     struct Entry {

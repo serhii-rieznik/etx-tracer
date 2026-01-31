@@ -125,10 +125,10 @@ struct IntegratorThread {
 
   void update();
 
-  Integrator* integrator();
+  Integrator* integrator() const;
   void set_integrator(Integrator*);
 
-  bool running();
+  bool running() const;
   const Integrator::Status& status() const;
 
   void run();

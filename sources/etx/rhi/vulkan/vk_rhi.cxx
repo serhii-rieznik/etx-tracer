@@ -502,6 +502,12 @@ void VKContext::begin_frame() {
     return;
   }
 
+  // Set current frame index for staging buffer allocations
+  _impl->device._impl->set_current_frame_index(_impl->current_frame);
+  // After fence wait, it's safe to reset this frame's staging buffer region
+  // GPU has finished reading from it in previous cycle
+  _impl->device._impl->reset_staging_buffer_for_frame(_impl->current_frame);
+
   _impl->process_deferred_destruction_for_frame(_impl->current_frame);
   etx_vk_call(vkResetCommandPool(_impl->device.get_vk_device(), _impl->device._impl->command_pools[_impl->current_frame], VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
 
@@ -1047,33 +1053,10 @@ void VKCommandBuffer::ensure_texture_layout(RHITexture texture, VkImageLayout re
   }
   const VKTextureData& texture_data = device->_impl->textures.get_data(texture_index);
 
-  if (texture_data.current_layout == required_layout) {
-    return;
-  }
-
+  // Layout tracking removed - always transition from UNDEFINED
+  // This is safe as we're discarding previous contents
   RHIResourceState current_state = RHIResourceState::Undefined;
   RHIResourceState target_state = RHIResourceState::Undefined;
-
-  switch (texture_data.current_layout) {
-    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-      current_state = RHIResourceState::ShaderReadOnly;
-      break;
-    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-      current_state = RHIResourceState::ColorAttachment;
-      break;
-    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-      current_state = RHIResourceState::TransferSrc;
-      break;
-    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-      current_state = RHIResourceState::TransferDst;
-      break;
-    case VK_IMAGE_LAYOUT_GENERAL:
-      current_state = RHIResourceState::General;
-      break;
-    default:
-      current_state = RHIResourceState::Undefined;
-      break;
-  }
 
   switch (required_layout) {
     case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
@@ -1132,8 +1115,7 @@ void VKCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
   barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.image = vk_image;
 
-  VkImageLayout old_layout = texture_data.current_layout;
-
+  VkImageLayout old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   VkAccessFlags src_access = 0;
   VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 
@@ -1222,8 +1204,6 @@ void VKCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
   barrier.dstAccessMask = dst_access;
 
   vkCmdPipelineBarrier(_impl->command_buffer, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-  texture_data.current_layout = new_layout;
 }
 
 void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors, RHITexture depth_attachment) {
@@ -1850,9 +1830,7 @@ void VKCommandBuffer::set_debug_name(const char* name) {
   }
 
   VkDevice device = _impl->context->get_vk_device();
-  auto vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT");
-
-  if (vkSetDebugUtilsObjectNameEXT) {
+  if (auto vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT")) {
     VkDebugUtilsObjectNameInfoEXT name_info = {VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
     name_info.objectType = VK_OBJECT_TYPE_COMMAND_BUFFER;
     name_info.objectHandle = (uint64_t)_impl->command_buffer;
@@ -2257,6 +2235,8 @@ void VKContext::Impl::process_deferred_destruction_for_frame(uint32_t frame_inde
     }
   }
 
+  device._impl->process_deferred_destruction(frame_index);
+
   frame_objects.render_passes.clear();
   frame_objects.framebuffers.clear();
 }
@@ -2564,6 +2544,89 @@ void VKContext::Impl::destroy_permanent_framebuffer_cache() {
     }
     permanent_framebuffer_cache.clear();
   }
+}
+
+void VKCommandBuffer::build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
+  uint32_t as_index = _impl->device->_impl->acceleration_structures.get_index(desc.as_handle);
+  if (as_index == UINT32_MAX) {
+    return;
+  }
+
+  VKAccelerationStructureData& as_data = _impl->device->_impl->acceleration_structures.get_data(as_index);
+
+  VkAccelerationStructureBuildGeometryInfoKHR build_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+  build_info.type = (desc.type == RHIAccelerationStructureType::BottomLevel) ? VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR : VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+  build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+  build_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+  build_info.dstAccelerationStructure = as_data.acceleration_structure;
+  build_info.scratchData.deviceAddress = _impl->device->get_buffer_device_address(scratch_buffer) + scratch_offset;
+
+  std::vector<VkAccelerationStructureGeometryKHR> geometries;
+  std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
+  std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> p_ranges;
+
+  if (desc.type == RHIAccelerationStructureType::BottomLevel) {
+    geometries.resize(desc.geometry_count);
+    ranges.resize(desc.geometry_count);
+    p_ranges.resize(desc.geometry_count);
+
+    for (uint32_t i = 0; i < desc.geometry_count; ++i) {
+      const auto& src_geo = desc.geometries[i];
+      auto& vk_geo = geometries[i];
+      vk_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+      vk_geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+      vk_geo.flags = src_geo.is_opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
+      vk_geo.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+
+      switch (src_geo.triangles.vertex_format) {
+        case RHIVertexFormat::Float2:
+          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32_SFLOAT;
+          break;
+        case RHIVertexFormat::Float3:
+          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+          break;
+        case RHIVertexFormat::Float4:
+          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+          break;
+        default:
+          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+          break;
+      }
+
+      vk_geo.geometry.triangles.vertexData.deviceAddress = _impl->device->get_buffer_device_address(src_geo.triangles.vertex_buffer);
+      vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
+      vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
+      vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+      vk_geo.geometry.triangles.indexData.deviceAddress = _impl->device->get_buffer_device_address(src_geo.triangles.index_buffer);
+
+      ranges[i].primitiveCount = src_geo.triangles.index_count / 3;
+      ranges[i].primitiveOffset = 0;
+      ranges[i].firstVertex = 0;
+      ranges[i].transformOffset = 0;
+      p_ranges[i] = &ranges[i];
+    }
+  } else {
+    geometries.resize(1);
+    auto& vk_geo = geometries[0];
+    vk_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    vk_geo.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    vk_geo.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+    vk_geo.geometry.instances.arrayOfPointers = VK_FALSE;
+    vk_geo.geometry.instances.data.deviceAddress = _impl->device->get_buffer_device_address(desc.instance_buffer);
+
+    ranges.resize(1);
+    ranges[0].primitiveCount = desc.instance_count;
+    ranges[0].primitiveOffset = 0;
+    ranges[0].firstVertex = 0;
+    ranges[0].transformOffset = 0;
+    p_ranges.resize(1);
+    p_ranges[0] = &ranges[0];
+  }
+
+  build_info.geometryCount = static_cast<uint32_t>(geometries.size());
+  build_info.pGeometries = geometries.data();
+
+  _impl->device->_impl->impl_vkCmdBuildAccelerationStructuresKHR(_impl->command_buffer, 1, &build_info, p_ranges.data());
 }
 
 }  // namespace etx

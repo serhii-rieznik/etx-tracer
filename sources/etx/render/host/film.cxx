@@ -6,6 +6,9 @@
 
 #include <etx/render/shared/scene.hxx>
 
+// TODO : make better option
+#include <../../../bin/shaders/shared/render_options.hxx>
+
 #define ETX_LOG_NOISE_LEVEL 0
 
 namespace etx {
@@ -37,15 +40,15 @@ struct InternalData {
 struct LayerInfo {
   uint32_t layer_id = 0;
   uint32_t storage = 0;
-} layer_info[Film::LayerCount] = {
-  {Film::Result, kInvalidIndex},
-  {Film::Denoised, StorageDenoised},
-  {Film::CurrentFrame, kInvalidIndex},
-  {Film::Accumulation, StorageAccumulation},
-  {Film::AdaptiveAccumulation, StorageAdaptive},
-  {Film::Albedo, StorageAlbedo},
-  {Film::Normals, StorageNormals},
-  {Film::Debug, kInvalidIndex},
+} layer_info[ViewLayer::Count] = {
+  {ViewLayer::Result, kInvalidIndex},
+  {ViewLayer::Denoised, StorageDenoised},
+  {ViewLayer::CurrentFrame, kInvalidIndex},
+  {ViewLayer::Accumulation, StorageAccumulation},
+  {ViewLayer::AdaptiveAccumulation, StorageAdaptive},
+  {ViewLayer::Albedo, StorageAlbedo},
+  {ViewLayer::Normals, StorageNormals},
+  {ViewLayer::Debug, kInvalidIndex},
 };
 
 float filter_box(const float2& p, float radius) {
@@ -384,6 +387,8 @@ void Film::clear(uint32_t options) {
     _private->last_noise_level = {};
     _private->active_pixels = pixel_count();
   }
+
+  _private->pixel_size = _private->target_pixel_size;
 }
 
 const uint2& Film::size() const {
@@ -403,7 +408,7 @@ float4* Film::layer(uint32_t layer, const Scene& scene) const {
   const auto layer_ref = layer_info[layer].storage;
   auto output = _private->output_data.data();
 
-  if (layer == Debug) {
+  if (layer == ViewLayer::Debug) {
     const auto int_data = _private->internal_data.data();
     bool total_valid = _private->max_sample_count > kMinSamples;
     _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
@@ -414,7 +419,7 @@ float4* Film::layer(uint32_t layer, const Scene& scene) const {
         output[i] = to_float4(hsv_to_rgb({h, 1.0f, 1.0f}));
       }
     });
-  } else if (layer == Result) {
+  } else if (layer == ViewLayer::Result) {
     ETX_PROFILER_SCOPE();
     auto accum = _private->storage_buffers[StorageAccumulation].data();
     auto current = _private->internal_data.data();
@@ -445,12 +450,12 @@ float4* Film::layer(uint32_t layer, const Scene& scene) const {
         output[i] = to_float4(color);
       }
     });
-  } else if (layer == CurrentFrame) {
+  } else if (layer == ViewLayer::CurrentFrame) {
     ETX_PROFILER_SCOPE();
     auto frame = _private->internal_data.data();
     _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
-        output[i] = to_float4(max({}, frame[i].color));
+        output[i] = to_float4(frame[i].color);
       }
     });
   } else if (layer_ref != kInvalidIndex) {
@@ -458,8 +463,7 @@ float4* Film::layer(uint32_t layer, const Scene& scene) const {
     auto buf = _private->storage_buffers[layer_ref].data();
     _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
-        float3 out = (layer == Normals) ? buf[i] * 0.5f + 0.5f : buf[i];
-        output[i] = to_float4(max({}, out));
+        output[i] = to_float4(buf[i]);
       }
     });
   }
@@ -523,8 +527,8 @@ const char* Film::layer_name(uint32_t layer) {
     "Normals",
     "Debug",
   };
-  static_assert(std::size(names) == LayerCount);
-  ETX_ASSERT(layer < LayerCount);
+  static_assert(std::size(names) == ViewLayer::Count);
+  ETX_ASSERT(layer < ViewLayer::Count);
   return names[layer];
 }
 

@@ -404,4 +404,23 @@ RHIMemoryStats MTDevice::get_memory_statistics() const {
   return {};
 }
 
+RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAccelerationStructureDesc& desc) {
+  log::warning("Metal RHI: create_acceleration_structure not implemented");
+  return {RHIResult::NotImplemented, 0};
+}
+
+RHIResult MTDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) {
+  log::warning("Metal RHI: destroy_acceleration_structure not implemented");
+  return RHIResult::NotImplemented;
+}
+
+uint64_t MTDevice::get_acceleration_structure_device_address(RHIBindlessHandle as_handle) {
+  log::warning("Metal RHI: get_acceleration_structure_device_address not implemented");
+  return 0;
+}
+
+void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
+  log::warning("Metal RHI: build_acceleration_structure not implemented");
+}
+
 }  // namespace etx

@@ -72,7 +72,7 @@ create_library(util)
 target_link_libraries(etx-util PRIVATE etx-core etx-render)
 
 create_library(rhi)
-target_link_libraries(etx-rhi PRIVATE etx-core imgui sokol_new)
+target_link_libraries(etx-rhi PRIVATE etx-core imgui sokol)
 
 # Add Vulkan dependency for Windows
 if(WIN32)

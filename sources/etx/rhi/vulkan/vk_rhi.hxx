@@ -42,7 +42,6 @@ struct VKTextureData {
   VkImageView image_view = VK_NULL_HANDLE;
   VkDeviceMemory memory = VK_NULL_HANDLE;
   RHITextureDesc desc = {};
-  VkImageLayout current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   uint64_t allocated_size = 0;
 };
 
@@ -53,8 +52,13 @@ struct VKSamplerData {
 
 struct VKPipelineData {
   VkPipeline pipeline = VK_NULL_HANDLE;
-  // VkPipelineLayout layout = VK_NULL_HANDLE;
   RHIPipeline handle = {};
+};
+
+struct VKAccelerationStructureData {
+  VkAccelerationStructureKHR acceleration_structure = VK_NULL_HANDLE;
+  RHIBindlessHandle buffer = 0;
+  RHIAccelerationStructureDesc desc = {};
 };
 
 template <typename T, typename Key>
@@ -64,9 +68,11 @@ struct VKResourcePool {
     if (!free_indices.empty()) {
       index = free_indices.back();
       free_indices.pop_back();
+      generations[index] = (generations[index] + 1) & 0x0FFFFFFF;  // Increment generation on reuse
     } else {
       index = static_cast<uint32_t>(data.size());
       data.emplace_back();
+      generations.push_back(0);
     }
     return index;
   }
@@ -87,6 +93,10 @@ struct VKResourcePool {
 
   const T& get_data(uint32_t index) const {
     return data[index];
+  }
+
+  uint32_t get_generation(uint32_t index) const {
+    return (index < generations.size()) ? generations[index] : 0;
   }
 
   uint32_t get_index(const Key& key) const {
@@ -123,6 +133,7 @@ struct VKResourcePool {
 
   void clear() {
     data.clear();
+    generations.clear();
     free_indices.clear();
     handle_to_index_map.clear();
   }
@@ -133,6 +144,7 @@ struct VKResourcePool {
 
  private:
   std::vector<T> data;
+  std::vector<uint32_t> generations;
   std::vector<uint32_t> free_indices;
   std::unordered_map<Key, uint32_t> handle_to_index_map;
 };
@@ -180,6 +192,8 @@ struct VKDevice : RHIDevice {
   void set_bindless_manager(RHIBindlessManager* manager);
   void destroy_all_resources();
 
+  uint64_t get_buffer_device_address(RHIBindlessHandle buffer) const;
+
   RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc) override;
   RHIResult update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset = 0) override;
   RHIResult destroy_buffer(RHIBindlessHandle buffer) override;
@@ -190,6 +204,10 @@ struct VKDevice : RHIDevice {
 
   RHICreateBindlessResult create_sampler(const RHISamplerDesc& desc) override;
   RHIResult destroy_sampler(RHIBindlessHandle sampler) override;
+
+  RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc) override;
+  RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle) override;
+  uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle) override;
 
   RHICreateShaderResult create_shader(const RHIShaderDesc& desc) override;
   RHICreateShaderResult create_shader_variant(const RHIShaderVariantDesc& desc) override;
@@ -249,11 +267,13 @@ struct VKBindlessManager : RHIBindlessManager {
   RHIResult unregister_sampler(RHIBindlessHandle handle) override;
 
   RHIResult register_acceleration_structure(const void* data, uint64_t size, RHIBindlessHandle& out_handle) override;
+  RHIResult register_acceleration_structure_vk(VkAccelerationStructureKHR vk_as, RHIBindlessHandle& out_handle);
   RHIResult unregister_acceleration_structure(RHIBindlessHandle handle) override;
 
   VkImage get_vk_image(RHIBindlessHandle handle) const;
   VkBuffer get_vk_buffer(RHIBindlessHandle handle) const;
   VkSampler get_vk_sampler(RHIBindlessHandle handle) const;
+  VkAccelerationStructureKHR get_vk_acceleration_structure(RHIBindlessHandle handle) const;
 
   bool is_valid_handle(RHIBindlessHandle handle) const override;
   RHIResourceType get_resource_type(RHIBindlessHandle handle) const override;
@@ -301,6 +321,8 @@ struct VKBindlessManager::Impl {
   uint32_t sampler_count = 0;
   uint32_t acceleration_structure_count = 0;
 
+  VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+
   struct ResourceEntry {
     uint32_t generation = 0;
     uint32_t descriptor_index = 0;
@@ -311,7 +333,7 @@ struct VKBindlessManager::Impl {
       VkBuffer buffer;
       VkImage image;
       VkSampler sampler;
-      void* acceleration_structure;
+      VkAccelerationStructureKHR acceleration_structure;
     } vulkan_handle = {};
   };
 
@@ -369,6 +391,8 @@ struct VKCommandBuffer : RHICommandBuffer {
   void draw_indexed(const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer) override;
 
   void dispatch(const RHIDispatchDesc& desc) override;
+
+  void build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0) override;
 
   void copy_buffer(RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0) override;
   void copy_buffer_to_texture(RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0) override;

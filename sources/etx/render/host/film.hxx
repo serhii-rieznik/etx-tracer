@@ -10,19 +10,6 @@ struct Scene;
 
 struct FilmImpl;
 struct Film {
-  enum : uint32_t {
-    Result,
-    Denoised,
-    CurrentFrame,
-    Accumulation,
-    AdaptiveAccumulation,
-    Albedo,
-    Normals,
-    Debug,
-
-    LayerCount,
-  };
-
   enum ClearOptions : uint32_t {
     ClearIteration = 1u << 0u,
     ClearEverything = 1u << 1u,

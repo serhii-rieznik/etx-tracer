@@ -81,6 +81,10 @@ struct RHIDevice {
   virtual uint64_t get_min_uniform_buffer_offset_alignment() const = 0;
   virtual uint64_t get_min_storage_buffer_offset_alignment() const = 0;
 
+  virtual RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc) = 0;
+  virtual RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle) = 0;
+  virtual uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle) = 0;
+
   virtual RHIMemoryStats get_memory_statistics() const = 0;
 };
 
@@ -108,6 +112,8 @@ struct RHICommandBuffer {
   virtual void draw_indexed(const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer) = 0;
 
   virtual void dispatch(const RHIDispatchDesc& desc) = 0;
+
+  virtual void build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0) = 0;
 
   virtual void copy_buffer(RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0) = 0;
   virtual void copy_buffer_to_texture(RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0) = 0;

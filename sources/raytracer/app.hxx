@@ -1,22 +1,36 @@
 #pragma once
 
+#pragma once
+
+#if !defined(WIN32_LEAN_AND_MEAN)
+# define WIN32_LEAN_AND_MEAN 1
+#endif
+
 #include <etx/core/core.hxx>
 #include <etx/core/handle.hxx>
+#include <etx/core/environment.hxx>
+#include <etx/render/host/tasks.hxx>
 
+#include <etx/render/shared/base.hxx>
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/film.hxx>
 
+#include <etx/rt/integrators/integrator.hxx>
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
-#include <etx/rt/integrators/bdpt_distilled.hxx>
-#include <etx/rt/integrators/vcm_cpu.hxx>
-#include <etx/rt/rt.hxx>
 
 #include "ui.hxx"
 #include "render.hxx"
-#include "camera_controller.hxx"
+#include "renderer.hxx"
+#include "cpu_renderer.hxx"
+#include "raster_renderer.hxx"
+#include "gpu_renderer.hxx"
+
+#include <vector>
+#include <string>
+#include <memory>
 
 namespace etx {
 
@@ -29,6 +43,8 @@ struct RTApplication {
   void cleanup();
   void process_event(const sapp_event*);
 
+  void set_renderer_mode(RendererMode mode);
+
  private:
   void load_scene_file(const std::string&, uint32_t options, bool start_rendering);
   std::string save_scene_file(const std::string&);
@@ -38,7 +54,7 @@ struct RTApplication {
   void on_scene_file_selected(std::string);
   void on_save_scene_file_selected(std::string);
   void on_save_scene_file_as_selected();
-  void on_integrator_selected(Integrator*);
+  void on_integrator_selected(Integrator::Type);
   void on_run_selected();
   void on_stop_selected(bool wait_for_completion);
   void on_restart_selected();
@@ -72,33 +88,22 @@ struct RTApplication {
 
  private:
   UI ui;
-  Raytracing raytracing;
+  TaskScheduler scheduler;
   RenderContext render;
   IORDatabase _ior_database;
   SceneRepresentation scene;
-  CameraController camera_controller;
-  IntegratorThread integrator_thread;
 
-  CPUDebugIntegrator _debug = {raytracing};
-  CPUPathTracing _cpu_pt = {raytracing};
-  CPUBidirectional _cpu_bidir = {raytracing};
-  BDPTDistilled _bdpt_distilled = {raytracing};
-  CPUVCM _cpu_vcm = {raytracing};
+  CPURaytracingRenderer cpu_renderer;
+  RasterizationRenderer raster_renderer;
+  GPURaytracingRenderer gpu_renderer;
 
-  Integrator* _integrator_array[5] = {
-    &_debug,           // Debug = 0
-    &_cpu_pt,          // PathTracing = 1
-    &_cpu_bidir,       // Bidirectional = 2
-    &_cpu_vcm,         // VCM = 3
-    &_bdpt_distilled,  // BDPTDistilled = 4
-  };
+  Renderer* _active_renderer = nullptr;
 
   Options _options;
   std::vector<std::string> _recent_files = {};
   std::string _current_scene_file = {};
   TimeMeasure time_measure = {};
   TimeMeasure scene_commit_time = {};
-  bool last_camera_controller_state = false;
 };
 
 }  // namespace etx

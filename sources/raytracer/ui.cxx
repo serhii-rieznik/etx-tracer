@@ -12,19 +12,12 @@
 #include "ui.hxx"
 #include "camera_controller.hxx"
 
-#if defined(ETX_USE_RHI)
-# include <imgui.h>
-# include <imgui_internal.h>
-# include <etx/rhi/rhi_types.hxx>
-# include <etx/rhi/rhi.hxx>
-# include <etx/rhi/rhi_imgui.hxx>
-#else
-# include <sokol_app.h>
-# include <sokol_gfx.h>
-# include <imgui.h>
-# include <imgui_internal.h>
-# include <util/sokol_imgui.h>
-#endif
+#include <imgui.h>
+#include <imgui_internal.h>
+
+#include <etx/rhi/rhi_types.hxx>
+#include <etx/rhi/rhi.hxx>
+#include <etx/rhi/rhi_imgui.hxx>
 
 #if (ETX_PLATFORM_APPLE)
 # include <unistd.h>
@@ -76,11 +69,11 @@ const ImVec4 kMaterialHeaderPrimaryColor(0.96f, 0.79f, 0.45f, 1.0f);
 const ImVec4 kMaterialHeaderSpecializedColor(0.54f, 0.80f, 0.98f, 1.0f);
 const ImVec4 kMaterialHeaderInterfacesColor(0.88f, 0.68f, 0.97f, 1.0f);
 
-inline void decrease_exposure(ViewOptions& o) {
+inline void decrease_exposure(ViewParameters& o) {
   o.exposure = fmaxf(1.0f / 1024.0f, 0.5f * o.exposure);
 }
 
-inline void increase_exposure(ViewOptions& o) {
+inline void increase_exposure(ViewParameters& o) {
   o.exposure = fmaxf(1.0f / 1024.0f, 2.0f * o.exposure);
 }
 
@@ -192,54 +185,16 @@ void UI::initialize(Film* film, const IORDatabase* db, void* context) {
   _film = film;
   _ior_database = db;
 
-#if ETX_USE_RHI
   static RHIImGuiDesc imgui_desc = {
     .color_format = reinterpret_cast<RHIContext*>(context)->get_swapchain_format(),
     .ini_filename = env().file_in_data("ui.ini"),
   };
   _rhi_imgui.setup(reinterpret_cast<RHIContext*>(context), imgui_desc);
-#else
-  simgui_desc_t imggui_desc = {};
-  imggui_desc.depth_format = SG_PIXELFORMAT_NONE;
-  imggui_desc.no_default_font = true;
-  simgui_setup(imggui_desc);
-  {
-    auto font_config = ImFontConfig();
-    font_config.OversampleH = 4;
-    font_config.OversampleV = 4;
-    auto& io = ImGui::GetIO();
-    unsigned char* font_pixels = nullptr;
-    int font_width = 0;
-    int font_height = 0;
-    int bytes_per_pixel = 0;
-    char font_file[1024] = {};
-    env().file_in_data("fonts/ubuntu.ttf", font_file, sizeof(font_file));
-    auto font = io.Fonts->AddFontFromFileTTF(font_file, 14.0f * sapp_dpi_scale(), &font_config, nullptr);
-    font->Scale = 1.0f / sapp_dpi_scale();
-    io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_width, &font_height, &bytes_per_pixel);
-    sg_image_desc img_desc = {};
-    img_desc.width = font_width;
-    img_desc.height = font_height;
-    img_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
-    img_desc.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
-    img_desc.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
-    img_desc.min_filter = SG_FILTER_LINEAR;
-    img_desc.mag_filter = SG_FILTER_LINEAR;
-    img_desc.data.subimage[0][0].ptr = font_pixels;
-    img_desc.data.subimage[0][0].size = (size_t)(font_width * font_height) * sizeof(uint32_t);
-    img_desc.label = "sokol-imgui-font";
-    _font_image = sg_make_image(&img_desc).id;
-    io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_image;
-  }
-  ImGui::LoadIniSettingsFromDisk(env().file_in_data("ui.ini"));
-#endif
 }
 
 void UI::cleanup() {
   ImGui::SaveIniSettingsToDisk(env().file_in_data("ui.ini"));
-#if ETX_USE_RHI
   _rhi_imgui.shutdown();
-#endif
 }
 
 void UI::validate_selections(SceneRepresentation& scene_rep) {
@@ -923,7 +878,6 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
   const IntegratorThread* integrator_thread, void* context) {
   ETX_PROFILER_SCOPE();
 
-#if ETX_USE_RHI
   etx::RHIImGuiFrameDesc frame_desc = {
     .width = uint32_t(sapp_width()),
     .height = uint32_t(sapp_height()),
@@ -931,15 +885,6 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
     .dpi_scale = sapp_dpi_scale(),
   };
   _rhi_imgui.new_frame(frame_desc);
-#else
-  simgui_frame_desc_t frame_desc = {
-    .width = sapp_width(),
-    .height = sapp_height(),
-    .delta_time = dt,
-    .dpi_scale = sapp_dpi_scale(),
-  };
-  simgui_new_frame(frame_desc);
-#endif
 
   if (_selection.kind == SelectionKind::None) {
     set_selection(SelectionKind::Rendering, 0);
@@ -1042,29 +987,17 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
     }
   }
 
-#if ETX_USE_RHI
   auto cb = reinterpret_cast<RHIContext*>(context)->get_command_buffer();
   _rhi_imgui.render(cb);
-#else
-  simgui_render();
-#endif
 }
 
 bool UI::handle_event(const sapp_event* e) {
-#if defined(ETX_USE_RHI)
   if (_rhi_imgui.handle_event(e)) {
     return true;
   }
-#else
-  if (simgui_handle_event(e)) {
-    return true;
-  }
-#endif
-
   if (e->type != SAPP_EVENTTYPE_KEY_DOWN) {
     return false;
   }
-
   auto modifiers = e->modifiers;
   bool has_alt = modifiers & SAPP_MODIFIER_ALT;
   bool has_shift = modifiers & SAPP_MODIFIER_SHIFT;
@@ -1127,7 +1060,7 @@ bool UI::handle_event(const sapp_event* e) {
     case SAPP_KEYCODE_4:
     case SAPP_KEYCODE_5:
     case SAPP_KEYCODE_6: {
-      _view_options.view = static_cast<OutputView>(e->key_code - SAPP_KEYCODE_1);
+      _view_options.view_image = static_cast<uint32_t>(e->key_code - SAPP_KEYCODE_1);
       break;
     }
     case SAPP_KEYCODE_KP_DIVIDE: {
@@ -1145,11 +1078,11 @@ bool UI::handle_event(const sapp_event* e) {
   return false;
 }
 
-ViewOptions UI::view_options() const {
+ViewParameters UI::view_options() const {
   return _view_options;
 }
 
-ViewOptions& UI::mutable_view_options() {
+ViewParameters& UI::mutable_view_options() {
   return _view_options;
 }
 
@@ -1535,6 +1468,22 @@ void UI::reload_scene() {
 void UI::build_main_menu_bar(const std::vector<std::string>& recent_files, bool scene_locked) {
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("etx-tracer")) {
+      if (ImGui::MenuItem("CPU Raytracer", nullptr, _current_renderer_mode == RendererMode::CPURaytracing)) {
+        if (callbacks.renderer_selected) {
+          callbacks.renderer_selected(RendererMode::CPURaytracing);
+        }
+      }
+      if (ImGui::MenuItem("Rasterizer", nullptr, _current_renderer_mode == RendererMode::Rasterization)) {
+        if (callbacks.renderer_selected) {
+          callbacks.renderer_selected(RendererMode::Rasterization);
+        }
+      }
+      if (ImGui::MenuItem("GPU Raytracer", nullptr, _current_renderer_mode == RendererMode::GPURaytracing)) {
+        if (callbacks.renderer_selected) {
+          callbacks.renderer_selected(RendererMode::GPURaytracing);
+        }
+      }
+      ImGui::Separator();
       if (ImGui::MenuItem("Exit", "Ctrl+Q", false, true)) {
         quit();
       }
@@ -1590,7 +1539,7 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files, bool 
       for (uint64_t i = 0; i < _integrators.count; ++i) {
         if (ImGui::MenuItem(_integrators[i]->name(), nullptr, _current_integrator == _integrators[i], _integrators[i]->enabled())) {
           if (callbacks.integrator_selected) {
-            callbacks.integrator_selected(_integrators[i]);
+            callbacks.integrator_selected(_integrators[i]->type());
             set_current_integrator(_integrators[i]);
           }
         }
@@ -1784,13 +1733,13 @@ void UI::build_toolbar(const BuildContext& ctx) {
     ImGui::SameLine(0.0f, ctx.wpadding.x);
     ImGui::PopItemWidth();
 
-    ImGui::PushItemWidth(2.0f * ctx.input_size);
-    if (ImGui::BeginCombo("Layer", Film::layer_name(_view_options.layer))) {
-      for (uint32_t i = 0; i < Film::LayerCount; ++i) {
-        bool selected = i == _view_options.layer;
+    ImGui::PushItemWidth(2.25f * ctx.input_size);
+    if (ImGui::BeginCombo("##view_layer", Film::layer_name(_view_options.view_layer))) {
+      for (uint32_t i = 0; i < ViewLayer::Count; ++i) {
+        bool selected = i == _view_options.view_layer;
         if (ImGui::Selectable(Film::layer_name(i), &selected)) {
           if (selected) {
-            _view_options.layer = i;
+            _view_options.view_layer = i;
           }
         }
       }
@@ -1801,17 +1750,33 @@ void UI::build_toolbar(const BuildContext& ctx) {
     ImGui::SameLine(0.0f, ctx.wpadding.x);
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::PushItemWidth(2.5f * ctx.input_size);
-    if (ImGui::BeginCombo("##view_opt", output_view_to_string(uint32_t(_view_options.view)).c_str())) {
+    ImGui::PushItemWidth(2.25f * ctx.input_size);
+    if (ImGui::BeginCombo("##view_img", output_view_to_string(uint32_t(_view_options.view_image)).c_str())) {
       for (uint32_t i = 0; i < uint32_t(OutputView::Count); ++i) {
-        bool selected = i == uint32_t(_view_options.view);
+        bool selected = i == uint32_t(_view_options.view_image);
         if (ImGui::Selectable(output_view_to_string(i).c_str(), &selected)) {
-          _view_options.view = static_cast<OutputView>(i);
+          _view_options.view_image = i;
         }
       }
       ImGui::EndCombo();
     }
     ImGui::PopItemWidth();
+
+    ImGui::SameLine(0.0f, ctx.wpadding.x);
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine(0.0f, ctx.wpadding.x);
+    ImGui::PushItemWidth(2.25f * ctx.input_size);
+    if (ImGui::BeginCombo("##view_opt", view_option_to_string(uint32_t(_view_options.view_option)).c_str())) {
+      for (uint32_t i = 0; i < uint32_t(ViewOptions::Count); ++i) {
+        bool selected = i == uint32_t(_view_options.view_option);
+        if (ImGui::Selectable(view_option_to_string(i).c_str(), &selected)) {
+          _view_options.view_option = i;
+        }
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::PopItemWidth();
+
     ImGui::GetStyle().FramePadding.y = ctx.fpadding.y;
     ImGui::End();
   }
@@ -2842,7 +2807,7 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
       bool is_selected = (_integrators[i] == _current_integrator);
       if (ImGui::Selectable(_integrators[i]->name(), is_selected)) {
         if (callbacks.integrator_selected) {
-          callbacks.integrator_selected(_integrators[i]);
+          callbacks.integrator_selected(_integrators[i]->type());
           set_current_integrator(_integrators[i]);
         }
       }
@@ -2930,8 +2895,26 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
 }
 
 void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+  ImGui::Text("Renderer Mode:");
+  full_width_item();
+  const char* renderer_modes[] = {"CPU Raytracing", "Rasterization", "GPU Raytracing"};
+  int current_mode = static_cast<int>(_current_renderer_mode);
+  if (ImGui::Combo("##renderer_mode", &current_mode, renderer_modes, IM_ARRAYSIZE(renderer_modes))) {
+    _current_renderer_mode = static_cast<RendererMode>(current_mode);
+    if (callbacks.renderer_selected) {
+      callbacks.renderer_selected(_current_renderer_mode);
+    }
+  }
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
   build_scene_selection_properties(scene_rep, ctx);
-  build_integrator_selection_properties(scene_rep, ctx);
+
+  if (_current_renderer_mode == RendererMode::CPURaytracing) {
+    build_integrator_selection_properties(scene_rep, ctx);
+  }
 }
 
 }  // namespace etx
