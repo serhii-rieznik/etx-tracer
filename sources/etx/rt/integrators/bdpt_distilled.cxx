@@ -1178,7 +1178,7 @@ struct BDPTDistilledImpl : public Task {
     status = {};
     iteration_time = {};
     rt.film().clear(Film::ClearEverything);
-    current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
+    current_task = rt.scheduler().schedule(rt.film().current_pixel_count(), this);
   }
 };
 

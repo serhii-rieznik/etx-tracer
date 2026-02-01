@@ -43,8 +43,9 @@ struct Film {
 
   void clear(uint32_t clear_options);
 
-  const uint2& size() const;  // total size of the film in pixels
-  uint2 dimensions() const;   // current size of the film in pixels, accounting for pixel size
+  const uint2& size() const;         // total size of the film in pixels
+  uint2 current_dimensions() const;  // current size of the film in pixels, accounting for pixel size
+  uint2 base_dimensions() const;     // current size of the film in pixels, accounting for pixel size
 
   float4* layer(uint32_t layer, const Scene& scene) const;
   void denoise(uint32_t layer_to_denoise, const Scene& scene);
@@ -55,7 +56,8 @@ struct Film {
   /*
    * Adaptive sampling
    */
-  uint32_t pixel_count() const;
+  uint32_t total_pixel_count() const;
+  uint32_t current_pixel_count() const;
   uint32_t active_pixel_count() const;
 
   bool active_pixel(uint32_t linear_index, uint2& location) const;

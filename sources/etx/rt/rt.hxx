@@ -17,7 +17,7 @@ struct ContinousTraceOptions {
 };
 
 struct Raytracing {
-  Raytracing();
+  Raytracing(TaskScheduler&, Film&);
   ~Raytracing();
 
   TaskScheduler& scheduler();

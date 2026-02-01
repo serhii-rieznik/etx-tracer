@@ -33,6 +33,7 @@ struct MediumPool {
   const Medium& get(uint32_t) const;
 
   const Mapping& mapping() const;
+
   const Medium* as_array() const;
   const uint64_t array_size() const;
 

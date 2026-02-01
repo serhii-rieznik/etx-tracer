@@ -153,7 +153,7 @@ struct CPUDebugIntegratorImpl : public Task {
     iteration_time = {};
 
     rt.film().clear(Film::ClearEverything);
-    current_task = rt.scheduler().schedule(rt.film().pixel_count(), this);
+    current_task = rt.scheduler().schedule(rt.film().current_pixel_count(), this);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {

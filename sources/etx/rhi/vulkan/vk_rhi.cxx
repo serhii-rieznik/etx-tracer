@@ -869,8 +869,10 @@ void VKCommandBuffer::begin() {
     return;
   }
 
-  VkCommandBufferBeginInfo begin_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-  begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VkCommandBufferBeginInfo begin_info = {
+    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+  };
 
   if (etx_vk_call(vkBeginCommandBuffer(_impl->command_buffer, &begin_info)) != VK_SUCCESS) {
     return;

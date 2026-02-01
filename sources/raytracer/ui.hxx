@@ -20,15 +20,18 @@ namespace etx {
 struct IORDatabase;
 
 struct UI {
+  struct FrameData {
+    const IORDatabase& ior_database;
+    const std::vector<std::string>& recent_files;
+    const Film& film;
+    float dt = 0.0f;
+    bool scene_locked = false;
+  };
+
   UI() = default;
   ~UI() = default;
 
-  void initialize(Film* film, const IORDatabase*, void* context);
-  void cleanup();
-
-  void build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras,
-    const IntegratorThread* integrator_thread, void* context);
+  void build(SceneRepresentation& scene_rep, const FrameData& data);
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
@@ -52,7 +55,6 @@ struct UI {
     float button_size = {};
     float input_size = {};
     bool has_integrator = false;
-    const IntegratorThread* integrator_thread = nullptr;
     bool scene_locked = false;
   };
 
@@ -84,7 +86,7 @@ struct UI {
     std::function<void(uint32_t)> emitter_changed;
     std::function<void(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
     std::function<void(uint32_t)> emitter_rebuild;
-    std::function<void(bool)> camera_changed;
+    std::function<void(uint2 /* viewport */, uint32_t /* pixel size*/)> camera_changed;
     std::function<void()> scene_settings_changed;
     std::function<void()> denoise_selected;
     std::function<void(uint32_t direction)> view_scene;
@@ -118,13 +120,13 @@ struct UI {
   void save_scene_file_as() const;
   void save_image(SaveImageMode mode) const;
   void load_image() const;
-  bool build_material(SceneRepresentation& scene_rep, Material& material);
+  bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&);
   bool build_medium(SceneRepresentation& scene_rep, Medium& medium);
   bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);
-  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior);
-  bool emission_picker(SceneRepresentation& scene_rep, const char* label, const char* id_suffix, uint32_t& spectrum_index);
+  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&);
+  bool emission_picker(SceneRepresentation& scene_rep, const char* label, const char* id_suffix, uint32_t& spectrum_index, const FrameData&);
   bool medium_dropdown(const char* label, uint32_t& medium);
   void update_name_buffer(SelectionKind kind, int32_t index, const char* current_name);
 
@@ -139,27 +141,24 @@ struct UI {
 
   void build_main_menu_bar(const std::vector<std::string>& recent_files, bool scene_locked);
   void build_toolbar(const BuildContext& ctx);
-  void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const SceneRepresentation::MaterialMapping& materials,
-    const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras);
-  void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx);
+  void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx, const FrameData& data);
 
   bool build_material_class_selector(Material& material);
 
-  void build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx);
-  void build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx, const FrameData& data);
+  void build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_integrator_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
 
  private:
   Integrator* _current_integrator = nullptr;
   RendererMode _current_renderer_mode = RendererMode::CPURaytracing;
-  Film* _film = nullptr;
-  RHIImGui _rhi_imgui = {};
 
   ArrayView<Integrator*> _integrators = {};
   ViewParameters _view_options = {
@@ -252,7 +251,6 @@ struct UI {
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;
   uint64_t _camera_mapping_hash = 0ull;
-  const IORDatabase* _ior_database = nullptr;
   bool _auto_open_emission_section = false;
   double _last_fps_update_time = 0.0;
   uint32_t _frame_count = 0;

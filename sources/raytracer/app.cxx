@@ -24,10 +24,11 @@
 namespace etx {
 
 RTApplication::RTApplication()
-  : _ior_database()
+  : rt(scheduler, film)
+  , film(scheduler)
   , scene(scheduler, _ior_database)
-  , render(scheduler)
-  , cpu_renderer(scheduler, scene)
+  , render_context(scheduler)
+  , cpu_renderer(rt, scene)
   , raster_renderer(scheduler)
   , gpu_renderer(scheduler) {
   _active_renderer = &cpu_renderer;
@@ -39,16 +40,15 @@ RTApplication::~RTApplication() {
 }
 
 void RTApplication::init() {
-  render.init();
+  render_context.init();
   std::string ior_folder = env().file_in_data("./spectrum/");
   _ior_database.load(ior_folder.c_str());
 
-  ui.initialize(nullptr, &_ior_database, render.get_context());
   ui.set_integrator_list(cpu_renderer.integrator_list(), cpu_renderer.integrator_count());
 
-  cpu_renderer.init(render, scene);
-  raster_renderer.init(render, scene);
-  gpu_renderer.init(render, scene);
+  cpu_renderer.init(render_context.get_context(), scene);
+  raster_renderer.init(render_context.get_context(), scene);
+  gpu_renderer.init(render_context.get_context(), scene);
 
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
@@ -74,7 +74,7 @@ void RTApplication::init() {
   ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
   ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
   ui.callbacks.emitter_rebuild = std::bind(&RTApplication::on_emitter_rebuild, this, std::placeholders::_1);
-  ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1);
+  ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1, std::placeholders::_2);
   ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
   ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
   ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
@@ -103,7 +103,7 @@ void RTApplication::init() {
 
   Integrator* integrator = nullptr;
 
-  auto selected_integrator = _options.get_string("integrator", std::string{});
+  const auto& selected_integrator = _options.get_string("integrator", std::string{});
   for (uint64_t i = 0; (selected_integrator.empty() == false) && (i < (uint64_t)cpu_renderer.integrator_count()); ++i) {
     Integrator* it = cpu_renderer.integrator_list()[i];
     ETX_ASSERT(it != nullptr);
@@ -179,31 +179,41 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
 void RTApplication::frame() {
   ETX_PROFILER_SCOPE();
 
-  auto dt = time_measure.lap();
+  auto thread = _active_renderer && (_active_renderer->mode() == RendererMode::CPURaytracing) ? &cpu_renderer.integrator_thread() : nullptr;
 
-  render.begin_frame();
+  RenderContext::FrameData render_frame_data = {
+    .dt = float(time_measure.lap()),
+    .sample_count = thread ? thread->status().current_iteration : 0u,
+    .view_parameters = ui.view_options(),
+  };
 
-  if (_active_renderer != nullptr) {
-    _active_renderer->frame(render, scene, dt);
-  }
+  UI::FrameData ui_frame_data = {
+    .ior_database = _ior_database,
+    .recent_files = _recent_files,
+    .film = film,
+    .dt = render_frame_data.dt,
+    .scene_locked = thread && thread->scene_updates_locked(),
+  };
 
-  uint32_t iteration = (_active_renderer != nullptr && _active_renderer->mode() == RendererMode::CPURaytracing) ? cpu_renderer.integrator_thread().status().current_iteration : 0;
-
-  render.start_frame(iteration, ui.view_options());
-  ui.build(dt, _recent_files, scene, scene.mutable_camera(), scene.material_mapping(), scene.medium_mapping(), scene.mesh_mapping(), scene.camera_mapping(),
-    (_active_renderer != nullptr && _active_renderer->mode() == RendererMode::CPURaytracing) ? &cpu_renderer.integrator_thread() : nullptr, render.get_context());
-  render.end_frame();
+  render_context.start_frame(_active_renderer, scene, render_frame_data);
+  ui.build(scene, ui_frame_data);
+  render_context.end_frame();
 }
 
 void RTApplication::cleanup() {
-  render.cleanup([this]() {
-    ui.cleanup();
-  });
+  render_context.cleanup();
 }
 
 void RTApplication::process_event(const sapp_event* e) {
   ETX_PROFILER_SCOPE();
-  if (ui.handle_event(e) == false && _active_renderer != nullptr) {
+
+  if (render_context.rhi_ui().handle_event(e))
+    return;
+
+  if (ui.handle_event(e))
+    return;
+
+  if (_active_renderer != nullptr) {
     _active_renderer->process_event(e);
   }
 }
@@ -241,7 +251,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     log::error("Failed to load scene from file: %s", _current_scene_file.c_str());
   }
   log::warning("Setting output dimensions...");
-  render.set_output_dimensions(scene.camera().film_size);
+  cpu_renderer.set_output_dimensions(scene.camera().film_size);
 
   if (scene.valid() == false) {
     return;
@@ -299,7 +309,7 @@ void RTApplication::on_referenece_image_selected(std::string file_name) {
   _options.set_string("ref", file_name, "Reference");
   save_options();
 
-  render.set_reference_image(file_name.c_str());
+  cpu_renderer.set_reference_image(file_name.c_str());
 }
 
 void RTApplication::on_use_image_as_reference() {
@@ -307,8 +317,8 @@ void RTApplication::on_use_image_as_reference() {
   save_options();
 
   const float4* data = cpu_renderer.film().layer(ViewLayer::Result, cpu_renderer.scene());
-  uint2 size = cpu_renderer.film().dimensions();
-  render.set_reference_image(data, size);
+  uint2 size = cpu_renderer.film().base_dimensions();
+  cpu_renderer.set_reference_image(data, size);
 }
 
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
@@ -487,12 +497,10 @@ void RTApplication::on_emitter_rebuild(uint32_t index) {
   scene.rebuild_atmosphere_emitter(index);
 }
 
-void RTApplication::on_camera_changed(bool film_changed) {
+void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
   scene.update_active_camera();
-
-  if (film_changed) {
-    cpu_renderer.stop();
-    render.set_output_dimensions(scene.camera().film_size);
+  if ((viewport != film.base_dimensions()) || (pixel_size != film.pixel_size())) {
+    cpu_renderer.set_output_dimensions(scene.camera().film_size);
   }
   cpu_renderer.restart();
 }

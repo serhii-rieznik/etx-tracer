@@ -94,7 +94,7 @@ struct CPUVCMImpl {
 
     float used_radius = vcm_options.initial_radius;
     if (used_radius == 0.0f) {
-      uint2 current_dim = rt.film().dimensions() * rt.film().pixel_size();
+      uint2 current_dim = rt.film().current_dimensions() * rt.film().pixel_size();
       uint32_t max_dim = max(current_dim.x, current_dim.y);
       used_radius = 5.0f * rt.scene().bounding_sphere_radius / float(max_dim);
     }
@@ -102,7 +102,7 @@ struct CPUVCMImpl {
     float radius_scale = 1.0f / (1.0f + float(vcm_iteration.iteration) / float(vcm_options.radius_decay));
     vcm_iteration.current_radius = used_radius * radius_scale;
 
-    float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(rt.film().pixel_count());
+    float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(rt.film().current_pixel_count());
     vcm_iteration.vc_weight = 1.0f / eta_vcm;
     vcm_iteration.vm_weight = vcm_options.enable_merging() ? eta_vcm : 0.0f;
     vcm_iteration.vm_normalization = 1.0f / eta_vcm;
@@ -110,12 +110,12 @@ struct CPUVCMImpl {
     status.current_iteration = vcm_iteration.iteration;
 
     _light_paths.clear();
-    _light_paths.resize(rt.film().pixel_count());
+    _light_paths.resize(rt.film().current_pixel_count());
 
     _light_vertices.clear();
 
     mode = Mode::Light;
-    task_handle = rt.scheduler().schedule(rt.film().pixel_count(), &light_gather);
+    task_handle = rt.scheduler().schedule(rt.film().current_pixel_count(), &light_gather);
   }
 
   void gather_light_vertices(uint32_t range_begin, uint32_t range_end, uint32_t thread_id) {
@@ -207,7 +207,7 @@ struct CPUVCMImpl {
     }
 
     mode = CPUVCMImpl::Mode::Camera;
-    task_handle = rt.scheduler().schedule(rt.film().pixel_count(), &camera_gather);
+    task_handle = rt.scheduler().schedule(rt.film().current_pixel_count(), &camera_gather);
   }
 
   void complete_camera_vertices() {

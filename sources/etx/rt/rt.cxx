@@ -10,8 +10,8 @@
 namespace etx {
 
 struct RaytracingImpl {
-  TaskScheduler scheduler;
-  Film film;
+  TaskScheduler& scheduler;
+  Film& film;
 
   Scene scene = {};
   RTCDevice rt_device = {};
@@ -26,8 +26,9 @@ struct RaytracingImpl {
     std::vector<Triangle> triangles = {};
   } internal_data;
 
-  RaytracingImpl()
-    : film(scheduler) {
+  RaytracingImpl(TaskScheduler& s, Film& f)
+    : scheduler(s)
+    , film(f) {
     rt_device = rtcNewDevice(nullptr);
     const auto version_major = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_MAJOR);
     const auto version_minor = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_MINOR);
@@ -307,8 +308,8 @@ struct RaytracingImpl {
 
 ETX_PIMPL_IMPLEMENT(Raytracing, Impl);
 
-Raytracing::Raytracing() {
-  ETX_PIMPL_INIT(Raytracing);
+Raytracing::Raytracing(TaskScheduler& s, Film& f) {
+  ETX_PIMPL_INIT(Raytracing, s, f);
 }
 
 Raytracing::~Raytracing() {

@@ -22,7 +22,7 @@
 #include <etx/rt/integrators/bidirectional.hxx>
 
 #include "ui.hxx"
-#include "render.hxx"
+#include "render_context.hxx"
 #include "renderer.hxx"
 #include "cpu_renderer.hxx"
 #include "raster_renderer.hxx"
@@ -73,7 +73,7 @@ struct RTApplication {
   void on_emitter_changed(uint32_t index);
   void on_emitter_added(uint32_t type);
   void on_emitter_rebuild(uint32_t index);
-  void on_camera_changed(bool film_changed);
+  void on_camera_changed(uint2 viewport, uint32_t pixel_size);
   void on_scene_settings_changed();
   void on_denoise_selected();
   void on_view_scene(uint32_t direction);
@@ -87,16 +87,17 @@ struct RTApplication {
   void update_camera_to_fit_scene(const float3& view_direction);
 
  private:
-  UI ui;
   TaskScheduler scheduler;
-  RenderContext render;
+  Film film;
+  Raytracing rt;
+  RenderContext render_context;
   IORDatabase _ior_database;
   SceneRepresentation scene;
+  UI ui;
 
   CPURaytracingRenderer cpu_renderer;
   RasterizationRenderer raster_renderer;
   GPURaytracingRenderer gpu_renderer;
-
   Renderer* _active_renderer = nullptr;
 
   Options _options;

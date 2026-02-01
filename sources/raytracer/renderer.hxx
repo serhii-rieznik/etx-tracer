@@ -1,8 +1,10 @@
 #pragma once
 #include <etx/core/core.hxx>
 #include <etx/render/host/scene_representation.hxx>
-#include "render.hxx"
+
+#include "render_context.hxx"
 #include "camera_controller.hxx"
+
 #include <memory>
 
 struct sapp_event;
@@ -18,31 +20,55 @@ enum class RendererMode {
 };
 
 struct Renderer {
+  struct FrameData {
+    ViewParameters view_parameters = {};
+    RHITexture swapchain_image = {};
+    RHICommandBuffer* cmd = {};
+    float dt = 0.0f;
+  };
+
   Renderer(TaskScheduler& s)
     : scheduler(s) {
   }
 
   virtual ~Renderer() = default;
 
-  virtual void init(RenderContext& render_context, SceneRepresentation& scene) {
-    if (_camera_controller == nullptr) {
-      _camera_controller.reset(new CameraController(scene.mutable_camera()));
-    }
-  }
-  virtual void frame(RenderContext& render_context, SceneRepresentation& scene, float dt) {
-    if (_camera_controller && _camera_controller->update(dt)) {
-      on_camera_changed(scene, false);
-    }
-  }
-  virtual void cleanup(RenderContext& render_context) = 0;
-  virtual void process_event(const sapp_event* e) {
-    if (_camera_controller) {
-      _camera_controller->handle_event(e);
-    }
+  virtual void init(RHIContext* ctx, SceneRepresentation& scene) {
+    ETX_CRITICAL(_camera_controller == nullptr);
+    _camera_controller.reset(new CameraController(scene.mutable_camera()));
   }
 
-  virtual void on_camera_changed(SceneRepresentation& scene, bool path_changed) = 0;
-  virtual void on_scene_changed(SceneRepresentation& scene) = 0;
+  virtual void prepare_frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+    ETX_CRITICAL(_camera_controller);
+
+    bool camera_updated = _camera_controller->update(data.dt);
+    if (camera_updated) {
+      on_camera_changed(scene);
+    } else if (camera_updated != last_camera_update_state) {
+      on_camera_become_steady(scene);
+    }
+    last_camera_update_state = camera_updated;
+  }
+
+  virtual void frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+  }
+
+  virtual void cleanup(RHIContext* ctx) {
+  }
+
+  virtual void process_event(const sapp_event* e) {
+    ETX_CRITICAL(_camera_controller);
+    _camera_controller->handle_event(e);
+  }
+
+  virtual void on_camera_changed(SceneRepresentation& scene) {
+  }
+
+  virtual void on_camera_become_steady(SceneRepresentation& scene) {
+  }
+
+  virtual void on_scene_changed(SceneRepresentation& scene) {
+  }
 
   virtual const char* name() const = 0;
   virtual RendererMode mode() const = 0;
@@ -50,10 +76,13 @@ struct Renderer {
   virtual bool is_running() const {
     return false;
   }
+
   virtual void start() {
   }
+
   virtual void stop() {
   }
+
   virtual void restart() {
   }
 
@@ -64,6 +93,7 @@ struct Renderer {
  protected:
   TaskScheduler& scheduler;
   std::unique_ptr<CameraController> _camera_controller = nullptr;
+  bool last_camera_update_state = false;
 };
 
 }  // namespace etx

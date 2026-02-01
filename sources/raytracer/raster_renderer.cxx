@@ -10,17 +10,18 @@ RasterizationRenderer::RasterizationRenderer(TaskScheduler& s)
 RasterizationRenderer::~RasterizationRenderer() {
 }
 
-void RasterizationRenderer::init(RenderContext& render_context, SceneRepresentation& scene) {
-  Renderer::init(render_context, scene);
-  create_pipeline(render_context);
+void RasterizationRenderer::init(RHIContext* ctx, SceneRepresentation& scene) {
+  Renderer::init(ctx, scene);
+  // create_pipeline(render_context);
   _initialized = true;
 }
 
-void RasterizationRenderer::frame(RenderContext& render_context, SceneRepresentation& scene, float dt) {
-  Renderer::frame(render_context, scene, dt);
+void RasterizationRenderer::frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+  Renderer::frame(ctx, scene, data);
 }
 
-void RasterizationRenderer::cleanup(RenderContext& render_context) {
+void RasterizationRenderer::cleanup(RHIContext* ctx) {
+  /*
   if (_pipeline.valid()) {
     auto device = render_context.get_device();
     if (device) {
@@ -28,12 +29,14 @@ void RasterizationRenderer::cleanup(RenderContext& render_context) {
     }
     _pipeline = {};
   }
+  */
 }
 
 void RasterizationRenderer::on_scene_changed(SceneRepresentation& scene) {
 }
 
-void RasterizationRenderer::create_pipeline(RenderContext& render_context) {
+void RasterizationRenderer::create_pipeline() {
+  /*
   auto device = render_context.get_device();
   auto compiler = ShaderCompiler::get_global_instance();
 
@@ -64,6 +67,7 @@ void RasterizationRenderer::create_pipeline(RenderContext& render_context) {
   desc.depth_format = render_context.get_depth_format();
 
   _pipeline = device->create_graphics_pipeline(desc).handle;
+  */
 }
 
 }  // namespace etx

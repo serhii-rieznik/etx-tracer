@@ -452,7 +452,7 @@ VKDevice::Impl::Impl(const RHIInitInfo& info) {
     return;
   }
 
-  if (load_acceleration_structure_functions() == RHIResult::UnsupportedFeature) {
+  if (load_acceleration_structure_functions() != RHIResult::Success) {
     log::error("Failed load acceleration structure functions");
     return;
   }
@@ -2151,6 +2151,9 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
 }
 
 RHIResult VKDevice::destroy_buffer(RHIBindlessHandle buffer_handle) {
+  if (buffer_handle == 0)
+    return RHIResult::Success;
+
   uint32_t index = _impl->buffers.get_index(buffer_handle);
   if (index == UINT32_MAX) {
     log::error("Buffer handle not found: %llu", buffer_handle);
@@ -2181,6 +2184,9 @@ RHIResult VKDevice::destroy_buffer(RHIBindlessHandle buffer_handle) {
 }
 
 RHIResult VKDevice::destroy_texture(RHIBindlessHandle texture_handle) {
+  if (texture_handle == 0)
+    return RHIResult::Success;
+
   if (_impl->bindless_manager == nullptr) {
     return RHIResult::InvalidArgument;
   }
@@ -2213,6 +2219,9 @@ RHIResult VKDevice::destroy_texture(RHIBindlessHandle texture_handle) {
 }
 
 RHIResult VKDevice::destroy_sampler(RHIBindlessHandle sampler_handle) {
+  if (sampler_handle == 0)
+    return RHIResult::Success;
+
   if (_impl->bindless_manager == nullptr) {
     return RHIResult::InvalidArgument;
   }
@@ -2240,6 +2249,9 @@ RHIResult VKDevice::destroy_sampler(RHIBindlessHandle sampler_handle) {
 }
 
 RHIResult VKDevice::destroy_shader(RHIShader shader) {
+  if (shader.valid() == false)
+    return RHIResult::Success;
+
   auto it = _impl->shader_handle_map.find(shader);
   if (it == _impl->shader_handle_map.end()) {
     log::error("Shader handle %llu not found for destruction", shader);
@@ -2256,6 +2268,9 @@ RHIResult VKDevice::destroy_shader(RHIShader shader) {
 }
 
 RHIResult VKDevice::destroy_pipeline(RHIPipeline pipeline_handle) {
+  if (pipeline_handle.valid() == false)
+    return RHIResult::Success;
+
   uint32_t compute_index = _impl->compute_pipelines.get_index(pipeline_handle);
   if (compute_index != UINT32_MAX) {
     _impl->compute_pipelines.remove_handle(pipeline_handle);
@@ -2455,8 +2470,6 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-
-    // Final layout is SHADER_READ_ONLY_OPTIMAL (set by barrier above)
   });
 
   if (!use_persistent_staging) {

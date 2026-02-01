@@ -187,8 +187,8 @@ void Film::submit(const float3& value, const float2& ndc_coord) {
     return;
 
   float2 uv = ndc_coord * 0.5f + 0.5f;
-  uint32_t x = static_cast<uint32_t>(uv.x * dimensions().x) * _private->pixel_size;
-  uint32_t y = static_cast<uint32_t>(uv.y * dimensions().y) * _private->pixel_size;
+  uint32_t x = static_cast<uint32_t>(uv.x * current_dimensions().x) * _private->pixel_size;
+  uint32_t y = static_cast<uint32_t>(uv.y * current_dimensions().y) * _private->pixel_size;
   if ((x >= _private->dimensions.x) || (y >= _private->dimensions.y)) {
     return;
   }
@@ -385,17 +385,17 @@ void Film::clear(uint32_t options) {
 
   if (clear_all) {
     _private->last_noise_level = {};
-    _private->active_pixels = pixel_count();
+    _private->active_pixels = current_pixel_count();
   }
 
   _private->pixel_size = _private->target_pixel_size;
 }
 
-const uint2& Film::size() const {
+uint2 Film::base_dimensions() const {
   return _private->dimensions;
 }
 
-uint2 Film::dimensions() const {
+uint2 Film::current_dimensions() const {
   return {
     (_private->dimensions.x + _private->pixel_size - 1u) / _private->pixel_size,
     (_private->dimensions.y + _private->pixel_size - 1u) / _private->pixel_size,
@@ -476,8 +476,13 @@ void Film::denoise(uint32_t layer_to_denoise, const Scene& scene) {
   _private->denoiser.denoise(source, _private->storage_buffers[StorageDenoised].data());
 }
 
-uint32_t Film::pixel_count() const {
-  uint2 dim = dimensions();
+uint32_t Film::total_pixel_count() const {
+  uint2 dim = base_dimensions();
+  return dim.x * dim.y;
+}
+
+uint32_t Film::current_pixel_count() const {
+  uint2 dim = current_dimensions();
   return dim.x * dim.y;
 }
 
@@ -492,7 +497,7 @@ bool Film::active_pixel(uint32_t index, uint2& location) const {
   const uint2& film_size = _private->dimensions;
 
   if (_private->pixel_size > 1) {
-    uint2 dim = dimensions();
+    uint2 dim = current_dimensions();
     uint2 a_location = {
       (index % dim.x) * _private->pixel_size,
       (index / dim.x) * _private->pixel_size,

@@ -181,22 +181,6 @@ void UI::update_name_buffer(SelectionKind kind, int32_t index, const char* curre
   }
 }
 
-void UI::initialize(Film* film, const IORDatabase* db, void* context) {
-  _film = film;
-  _ior_database = db;
-
-  static RHIImGuiDesc imgui_desc = {
-    .color_format = reinterpret_cast<RHIContext*>(context)->get_swapchain_format(),
-    .ini_filename = env().file_in_data("ui.ini"),
-  };
-  _rhi_imgui.setup(reinterpret_cast<RHIContext*>(context), imgui_desc);
-}
-
-void UI::cleanup() {
-  ImGui::SaveIniSettingsToDisk(env().file_in_data("ui.ini"));
-  _rhi_imgui.shutdown();
-}
-
 void UI::validate_selections(SceneRepresentation& scene_rep) {
   switch (_selection.kind) {
     case SelectionKind::Material:
@@ -394,22 +378,21 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
   return changed;
 }
 
-bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior) {
+bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data) {
   bool changed = false;
   bool load_from_file = false;
 
-  const IORDatabase* database = _ior_database;
   int matched_index = -1;
   static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
-  if ((database != nullptr) && (ior.cls != SpectralDistribution::Class::Invalid)) {
+  if (ior.cls != SpectralDistribution::Class::Invalid) {
     const SpectralDistribution& current_eta = scene.data().spectrum_values[ior.eta_index];
     const SpectralDistribution& current_k = (ior.k_index != kInvalidIndex) ? scene.data().spectrum_values[ior.k_index] : null_spectrum;
-    matched_index = database->find_matching_index(current_eta, current_k, ior.cls);
+    matched_index = data.ior_database.find_matching_index(current_eta, current_k, ior.cls);
   }
 
   const char* preview_text = name;
-  if ((database != nullptr) && (matched_index >= 0) && (matched_index < static_cast<int>(database->definitions.size()))) {
-    preview_text = database->definitions[static_cast<size_t>(matched_index)].title.c_str();
+  if ((matched_index >= 0) && (matched_index < static_cast<int>(data.ior_database.definitions.size()))) {
+    preview_text = data.ior_database.definitions[static_cast<size_t>(matched_index)].title.c_str();
   }
   std::string button_label = std::string(preview_text) + "##ior_" + name;
   const char* popup_id = format_string("ior_popup##%s", name);
@@ -420,18 +403,18 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
 
   ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 32.0f, 0.0f), ImGuiCond_Always);
   if (ImGui::BeginPopup(popup_id)) {
-    if ((database != nullptr) && (database->definitions.empty() == false)) {
+    if (data.ior_database.definitions.empty() == false) {
       struct ColumnInfo {
         SpectralDistribution::Class cls;
         const char* title;
       };
 
       std::vector<ColumnInfo> columns;
-      const auto& conductors = database->class_entries(SpectralDistribution::Class::Conductor);
+      const auto& conductors = data.ior_database.class_entries(SpectralDistribution::Class::Conductor);
       if (conductors.empty() == false) {
         columns.push_back({SpectralDistribution::Class::Conductor, "Conductors"});
       }
-      const auto& dielectrics = database->class_entries(SpectralDistribution::Class::Dielectric);
+      const auto& dielectrics = data.ior_database.class_entries(SpectralDistribution::Class::Dielectric);
       if (dielectrics.empty() == false) {
         columns.push_back({SpectralDistribution::Class::Dielectric, "Dielectrics"});
       }
@@ -446,11 +429,11 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
           ImGui::PushStyleColor(ImGuiCol_Text, kIorPickerColors[uint32_t(cls)]);
           ImGui::Text("%s", title);
           ImGui::PopStyleColor();
-          const auto& entries = database->class_entries(cls);
+          const auto& entries = data.ior_database.class_entries(cls);
           for (size_t idx : entries) {
-            if (idx >= database->definitions.size())
+            if (idx >= data.ior_database.definitions.size())
               continue;
-            const IORDefinition& def = database->definitions[idx];
+            const IORDefinition& def = data.ior_database.definitions[idx];
             int def_index = static_cast<int>(idx);
             bool is_current = (matched_index == def_index);
             if (ImGui::Selectable(def.title.c_str(), is_current)) {
@@ -508,7 +491,7 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
   return changed;
 }
 
-bool UI::emission_picker(SceneRepresentation& scene, const char* label, const char* id_suffix, uint32_t& spectrum_index) {
+bool UI::emission_picker(SceneRepresentation& scene, const char* label, const char* id_suffix, uint32_t& spectrum_index, const FrameData& data) {
   if (scene.data().spectrum_values.empty())
     return false;
 
@@ -567,17 +550,16 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
   }
   changed |= spectrum_picker(scene, color_name.c_str(), spectrum_index, true, true, editor_state.mode == SpectrumEditorState::Mode::Color, true);
 
-  const IORDatabase* database = _ior_database;
   int matched_index = -1;
-  if ((database != nullptr) && (spectrum_index < scene.data().spectrum_values.size())) {
+  if ((spectrum_index < scene.data().spectrum_values.size())) {
     static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
-    matched_index = database->find_matching_index(scene.data().spectrum_values[spectrum_index], null_spectrum, SpectralDistribution::Class::Illuminant);
+    matched_index = data.ior_database.find_matching_index(scene.data().spectrum_values[spectrum_index], null_spectrum, SpectralDistribution::Class::Illuminant);
   }
 
   const char* preview_text = base_label;
   std::string preview_storage;
-  if ((database != nullptr) && (matched_index >= 0) && (matched_index < static_cast<int>(database->definitions.size()))) {
-    preview_storage = database->definitions[static_cast<size_t>(matched_index)].title;
+  if ((matched_index >= 0) && (matched_index < static_cast<int>(data.ior_database.definitions.size()))) {
+    preview_storage = data.ior_database.definitions[static_cast<size_t>(matched_index)].title;
     preview_text = preview_storage.c_str();
   } else {
     preview_text = "Select Preset";
@@ -603,8 +585,8 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
     ImGui::Separator();
 
     bool has_presets = false;
-    if ((database != nullptr) && (database->definitions.empty() == false)) {
-      const auto& entries = database->class_entries(SpectralDistribution::Class::Illuminant);
+    if (data.ior_database.definitions.empty() == false) {
+      const auto& entries = data.ior_database.class_entries(SpectralDistribution::Class::Illuminant);
       has_presets = entries.empty() == false;
 
       if (has_presets) {
@@ -619,9 +601,9 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
             size_t end = std::min(start + per_column, entries.size());
             for (size_t idx = start; idx < end; ++idx) {
               size_t def_index = entries[idx];
-              if (def_index >= database->definitions.size())
+              if (def_index >= data.ior_database.definitions.size())
                 continue;
-              const IORDefinition& def = database->definitions[def_index];
+              const IORDefinition& def = data.ior_database.definitions[def_index];
               bool is_current = (matched_index == static_cast<int>(def_index));
               if (ImGui::Selectable(def.title.c_str(), is_current)) {
                 scene.data().spectrum_values[spectrum_index] = def.eta;
@@ -873,18 +855,8 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
 
 constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
 
-void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRepresentation& scene_rep, Camera& camera, const SceneRepresentation::MaterialMapping& materials,
-  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras,
-  const IntegratorThread* integrator_thread, void* context) {
+void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
-
-  etx::RHIImGuiFrameDesc frame_desc = {
-    .width = uint32_t(sapp_width()),
-    .height = uint32_t(sapp_height()),
-    .delta_time = dt,
-    .dpi_scale = sapp_dpi_scale(),
-  };
-  _rhi_imgui.new_frame(frame_desc);
 
   if (_selection.kind == SelectionKind::None) {
     set_selection(SelectionKind::Rendering, 0);
@@ -897,11 +869,10 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
   ctx.button_size = 32.0f;
   ctx.input_size = 64.0f;
   ctx.has_integrator = (_current_integrator != nullptr);
-  ctx.integrator_thread = integrator_thread;
-  ctx.scene_locked = integrator_thread && integrator_thread->scene_updates_locked();
+  ctx.scene_locked = data.scene_locked;
 
   _frame_count++;
-  _last_fps_update_time += dt;
+  _last_fps_update_time += data.dt;
   if (_last_fps_update_time >= 0.5) {
     _current_fps = static_cast<float>(_frame_count) / static_cast<float>(_last_fps_update_time);
     _frame_count = 0;
@@ -929,27 +900,27 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
     ImGui::End();
   };
 
-  uint64_t mmh = hash_mapping(materials);
+  uint64_t mmh = hash_mapping(scene_rep.material_mapping());
   if (mmh != _material_mapping_hash) {
-    _material_mapping.build(materials);
+    _material_mapping.build(scene_rep.material_mapping());
     _material_mapping_hash = mmh;
   }
 
-  uint64_t medh = hash_mapping(mediums);
+  uint64_t medh = hash_mapping(scene_rep.medium_mapping());
   if (medh != _medium_mapping_hash) {
-    _medium_mapping.build(mediums);
+    _medium_mapping.build(scene_rep.medium_mapping());
     _medium_mapping_hash = medh;
   }
 
-  uint64_t meshh = hash_mapping(meshes);
+  uint64_t meshh = hash_mapping(scene_rep.mesh_mapping());
   if (meshh != _mesh_mapping_hash) {
-    _mesh_mapping.build(meshes);
+    _mesh_mapping.build(scene_rep.mesh_mapping());
     _mesh_mapping_hash = meshh;
   }
 
-  uint64_t camh = hash_mapping(cameras);
+  uint64_t camh = hash_mapping(scene_rep.camera_mapping());
   if (camh != _camera_mapping_hash) {
-    _camera_mapping.build(cameras);
+    _camera_mapping.build(scene_rep.camera_mapping());
     _camera_mapping_hash = camh;
   }
 
@@ -971,10 +942,10 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
 
   validate_selections(scene_rep);
 
-  build_main_menu_bar(recent_files, ctx.scene_locked);
+  build_main_menu_bar(data.recent_files, ctx.scene_locked);
   build_toolbar(ctx);
-  build_scene_objects_window(scene_rep, ctx, materials, mediums, meshes, cameras);
-  build_properties_window(scene_rep, camera, ctx);
+  build_scene_objects_window(scene_rep, ctx);
+  build_properties_window(scene_rep, scene_rep.camera(), ctx, data);
 
   if (ctx.has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr)) {
     if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
@@ -986,18 +957,13 @@ void UI::build(double dt, const std::vector<std::string>& recent_files, SceneRep
       ImGui::End();
     }
   }
-
-  auto cb = reinterpret_cast<RHIContext*>(context)->get_command_buffer();
-  _rhi_imgui.render(cb);
 }
 
 bool UI::handle_event(const sapp_event* e) {
-  if (_rhi_imgui.handle_event(e)) {
-    return true;
-  }
   if (e->type != SAPP_EVENTTYPE_KEY_DOWN) {
     return false;
   }
+
   auto modifiers = e->modifiers;
   bool has_alt = modifiers & SAPP_MODIFIER_ALT;
   bool has_shift = modifiers & SAPP_MODIFIER_SHIFT;
@@ -1130,7 +1096,7 @@ void UI::load_image() const {
   }
 }
 
-bool UI::build_material(SceneRepresentation& scene_rep, Material& material) {
+bool UI::build_material(SceneRepresentation& scene_rep, Material& material, const FrameData& data) {
   bool changed = build_material_class_selector(material);
 
   ImVec4 base_bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
@@ -1248,10 +1214,10 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material) {
       ImGui::TableNextRow();
       ImGui::TableSetColumnIndex(0);
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      changed |= ior_picker(scene_rep, "Inside", material.int_ior);
+      changed |= ior_picker(scene_rep, "Inside", material.int_ior, data);
       ImGui::TableSetColumnIndex(1);
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      changed |= ior_picker(scene_rep, "Outside", material.ext_ior);
+      changed |= ior_picker(scene_rep, "Outside", material.ext_ior, data);
       ImGui::EndTable();
     }
     ImGui::PopStyleVar();
@@ -1259,7 +1225,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material) {
     ImGui::Spacing();
     ImGui::Text("Thin-film IoR");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    changed |= ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior);
+    changed |= ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data);
 
     ImGui::Spacing();
     ImGui::Text("Thin-film Thickness (nm)");
@@ -1287,7 +1253,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material) {
       }
 
       std::string preset_id = "material_emission_" + std::to_string(material.emission.spectrum_index);
-      changed |= emission_picker(scene_rep, "Emission", preset_id.c_str(), material.emission.spectrum_index);
+      changed |= emission_picker(scene_rep, "Emission", preset_id.c_str(), material.emission.spectrum_index, data);
     },
     _auto_open_emission_section);
 
@@ -1708,11 +1674,10 @@ void UI::build_toolbar(const BuildContext& ctx) {
     ImGui::SameLine(0.0f, ctx.wpadding.x);
 
     {
-      bool scene_locked = ctx.integrator_thread && ctx.integrator_thread->scene_updates_locked();
-      ImGui::PushStyleColor(ImGuiCol_Button, scene_locked ? kToolbarTerminateColor : kToolbarLaunchColor);
-      if (ImGui::Button(scene_locked ? "  Unlock Scene  " : "  Lock Scene  ", {0.0f, ctx.button_size})) {
+      ImGui::PushStyleColor(ImGuiCol_Button, ctx.scene_locked ? kToolbarTerminateColor : kToolbarLaunchColor);
+      if (ImGui::Button(ctx.scene_locked ? "  Unlock Scene  " : "  Lock Scene  ", {0.0f, ctx.button_size})) {
         if (callbacks.scene_updates_locked_changed) {
-          callbacks.scene_updates_locked_changed(!scene_locked);
+          callbacks.scene_updates_locked_changed(!ctx.scene_locked);
         }
       }
       ImGui::PopStyleColor(1);
@@ -1801,8 +1766,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
   }
 }
 
-void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const SceneRepresentation::MaterialMapping& materials,
-  const SceneRepresentation::MediumMapping& mediums, const SceneRepresentation::MeshMapping& meshes, const SceneRepresentation::CameraMapping& cameras) {
+void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
   const float kDefaultListHeight = 5.0f * ImGui::GetTextLineHeightWithSpacing();
 
   ctx.with_window(UIObjects, "Scene Objects", true, [&]() {
@@ -1837,16 +1801,16 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
       if (ImGui::Selectable("Add Material")) {
         if (callbacks.material_added) {
           callbacks.material_added();
-          _material_mapping.build(materials);
-          _material_mapping_hash = hash_mapping(materials);
+          _material_mapping.build(scene_rep.material_mapping());
+          _material_mapping_hash = hash_mapping(scene_rep.material_mapping());
         }
         ImGui::CloseCurrentPopup();
       }
       if (ImGui::Selectable("Add Medium")) {
         if (callbacks.medium_added) {
           callbacks.medium_added();
-          _medium_mapping.build(mediums);
-          _medium_mapping_hash = hash_mapping(mediums);
+          _medium_mapping.build(scene_rep.medium_mapping());
+          _medium_mapping_hash = hash_mapping(scene_rep.medium_mapping());
         }
         ImGui::CloseCurrentPopup();
       }
@@ -2029,7 +1993,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
   });
 }
 
-void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx) {
+void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx, const FrameData& data) {
   if ((_ui_setup & UIProperties) == 0)
     return;
 
@@ -2107,11 +2071,11 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
   ctx.with_window(UIProperties, properties_window_name.c_str(), true, [&]() {
     switch (_selection.kind) {
       case SelectionKind::Material: {
-        build_material_selection_properties(scene_rep, ctx);
+        build_material_selection_properties(scene_rep, ctx, data);
         break;
       }
       case SelectionKind::Medium: {
-        build_medium_selection_properties(scene_rep, ctx);
+        build_medium_selection_properties(scene_rep, ctx, data);
         break;
       }
       case SelectionKind::Mesh: {
@@ -2119,7 +2083,7 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
         break;
       }
       case SelectionKind::Emitter: {
-        build_emitter_selection_properties(scene_rep, ctx);
+        build_emitter_selection_properties(scene_rep, ctx, data);
         break;
       }
       case SelectionKind::Camera: {
@@ -2127,13 +2091,13 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
           uint32_t camera_index = _camera_mapping.at(_selection.index);
           if (camera_index < scene_rep.data().cameras.size()) {
             auto& selected_camera = scene_rep.data().cameras[camera_index].cam;
-            build_camera_selection_properties(scene_rep, selected_camera, camera_index, ctx);
+            build_camera_selection_properties(scene_rep, selected_camera, camera_index, ctx, data);
           }
         }
         break;
       }
       case SelectionKind::Rendering: {
-        build_rendering_properties(scene_rep, ctx);
+        build_rendering_properties(scene_rep, ctx, data);
         break;
       }
       default:
@@ -2202,7 +2166,7 @@ bool UI::build_material_class_selector(Material& material) {
   return changed;
 }
 
-void UI::build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+void UI::build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   if (_material_mapping.empty()) {
     ImGui::Text("No materials available");
     return;
@@ -2226,13 +2190,13 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
     callbacks.material_renamed(material_index, std::string(_name_edit_buffer));
     _pending_selection = {SelectionKind::Material, material_index, true};
   }
-  bool changed = build_material(scene_rep, material);
+  bool changed = build_material(scene_rep, material, data);
   if (changed && callbacks.material_changed) {
     callbacks.material_changed(material_index);
   }
 }
 
-void UI::build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+void UI::build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   if (_medium_mapping.empty()) {
     ImGui::Text("No mediums available");
     return;
@@ -2263,7 +2227,7 @@ void UI::build_medium_selection_properties(SceneRepresentation& scene_rep, const
   }
 }
 
-void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   if ((_selection.index < 0) || (static_cast<uint32_t>(_selection.index) >= scene_rep.data().emitter_profiles.size())) {
     ImGui::Text("Invalid emitter selection");
     return;
@@ -2289,7 +2253,7 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
   if (emitter.cls == EmitterProfile::Class::Area) {
     auto& material = scene_rep.data().materials[material_index];
     std::string area_preset_id = "area_material_emission_" + std::to_string(material_index);
-    common_changed = emission_picker(scene_rep, "Emission", area_preset_id.c_str(), material.emission.spectrum_index);
+    common_changed = emission_picker(scene_rep, "Emission", area_preset_id.c_str(), material.emission.spectrum_index, data);
     if (common_changed && (material_index < scene_rep.data().materials.size())) {
       float3 integrated = material.emission.spectrum_index < scene_rep.data().spectrum_values.size()  //
                             ? scene_rep.data().spectrum_values[material.emission.spectrum_index].integrated()
@@ -2306,7 +2270,7 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     }
   } else {
     std::string emitter_preset_id = "emitter_emission_" + std::to_string(emitter_index);
-    common_changed = emission_picker(scene_rep, "Emission", emitter_preset_id.c_str(), emitter.emission.spectrum_index);
+    common_changed = emission_picker(scene_rep, "Emission", emitter_preset_id.c_str(), emitter.emission.spectrum_index, data);
   }
 
   if (_medium_mapping.empty() == false) {
@@ -2585,18 +2549,14 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
   }
 }
 
-void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx) {
-  if (_film == nullptr) {
-    ImGui::Text("No camera available");
-    return;
-  }
-  bool film_changed = false;
+void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx, const FrameData& data) {
+  // bool film_changed = false;
   bool camera_changed = false;
 
-  int2 viewport = {int32_t(camera.film_size.x), int32_t(camera.film_size.y)};
+  uint2 viewport = camera.film_size;
   float3 pos = camera.position;
   float focal_len = get_camera_focal_length(camera);
-  int32_t pixel_size = std::countr_zero(_film->pixel_size());
+  int32_t pixel_size = std::countr_zero(data.film.pixel_size());
 
   if (ImGui::CollapsingHeader("Lens & Focus", ImGuiTreeNodeFlags_Framed)) {
     static int control_mode = 0;  // 0 = Focal Length, 1 = Field of View
@@ -2691,8 +2651,8 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
   if (ImGui::CollapsingHeader("Output", ImGuiTreeNodeFlags_Framed)) {
     ImGui::Text("Output Image Size:");
     full_width_item();
-    if (ImGui::InputInt2("##outimgsize", &viewport.x)) {
-      film_changed = true;
+    if (ImGui::InputInt2("##outimgsize", reinterpret_cast<int32_t*>(&viewport.x))) {
+      // film_changed = true;
       camera_changed = true;
     }
 
@@ -2722,8 +2682,8 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
   }
 
   if (camera_changed) {
-    viewport.x = clamp(viewport.x, 1, 1024 * 16);
-    viewport.y = clamp(viewport.y, 1, 1024 * 16);
+    viewport.x = clamp(viewport.x, 1u, 1024u * 16u);
+    viewport.y = clamp(viewport.y, 1u, 1024u * 16u);
     camera.film_size = {uint32_t(viewport.x), uint32_t(viewport.y)};
     camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
     camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
@@ -2735,13 +2695,12 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     build_camera(camera, pos, camera.direction, kWorldUp, camera.film_size, fov);
 
     if (callbacks.camera_changed && scene_rep.data().cameras[camera_index].active) {
-      _film->set_pixel_size(1u << pixel_size);
-      callbacks.camera_changed(film_changed);
+      callbacks.camera_changed(viewport, 1u << pixel_size);
     }
   }
 }
 
-void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   bool scene_settings_changed = false;
 
   if (validated_int_control("Samples Per Pixel", reinterpret_cast<int32_t&>(scene_rep.data().options.samples), 1, 1000000)) {
@@ -2782,7 +2741,7 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
     scene_settings_changed = true;
   }
   if (scene_rep.data().options.noise_threshold > 0.0f) {
-    ImGui::Text("Active pixels: %.2f%%", double(_film->active_pixel_count()) / double(_film->pixel_count()) * 100.0);
+    ImGui::Text("Active pixels: %.2f%%", double(data.film.active_pixel_count()) / double(data.film.current_pixel_count()) * 100.0);
   }
 
   if (scene_settings_changed) {
@@ -2894,7 +2853,7 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   }
 }
 
-void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   ImGui::Text("Renderer Mode:");
   full_width_item();
   const char* renderer_modes[] = {"CPU Raytracing", "Rasterization", "GPU Raytracing"};
@@ -2910,7 +2869,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
   ImGui::Separator();
   ImGui::Spacing();
 
-  build_scene_selection_properties(scene_rep, ctx);
+  build_scene_selection_properties(scene_rep, ctx, data);
 
   if (_current_renderer_mode == RendererMode::CPURaytracing) {
     build_integrator_selection_properties(scene_rep, ctx);

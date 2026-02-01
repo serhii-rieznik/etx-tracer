@@ -12,9 +12,10 @@ GPURaytracingRenderer::GPURaytracingRenderer(TaskScheduler& s)
 GPURaytracingRenderer::~GPURaytracingRenderer() {
 }
 
-void GPURaytracingRenderer::init(RenderContext& render_context, SceneRepresentation& scene) {
-  Renderer::init(render_context, scene);
+void GPURaytracingRenderer::init(RHIContext* ctx, SceneRepresentation& scene) {
+  Renderer::init(ctx, scene);
 
+  /*
   auto device = render_context.get_device();
   auto compiler = ShaderCompiler::get_global_instance();
   auto cs = compiler->load_and_compile_shader_from_file("shaders/gpu_rt.hlsl", "compute_main", RHIShaderStage::Compute);
@@ -27,11 +28,12 @@ void GPURaytracingRenderer::init(RenderContext& render_context, SceneRepresentat
 
   _pipeline = device->create_compute_pipeline(desc).handle;
   _initialized = true;
+  */
 }
 
-void GPURaytracingRenderer::frame(RenderContext& render_context, SceneRepresentation& scene, float dt) {
-  Renderer::frame(render_context, scene, dt);
-
+void GPURaytracingRenderer::frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData& frame_data) {
+  Renderer::frame(ctx, scene, frame_data);
+  /*
   if (!_initialized || _pipeline.valid() == false)
     return;
 
@@ -53,21 +55,24 @@ void GPURaytracingRenderer::frame(RenderContext& render_context, SceneRepresenta
 
   uint2 dim = render_context.get_output_dimensions();
   cmd->dispatch({.group_count_x = (dim.x + 15) / 16, .group_count_y = (dim.y + 15) / 16});
+  */
 }
 
-void GPURaytracingRenderer::cleanup(RenderContext& render_context) {
+void GPURaytracingRenderer::cleanup(RHIContext* ctx) {
+  /*
   if (_pipeline.valid()) {
     render_context.get_device()->destroy_pipeline(_pipeline);
     _pipeline = {};
   }
   _initialized = false;
+  */
 }
 
 void GPURaytracingRenderer::process_event(const sapp_event* e) {
   Renderer::process_event(e);
 }
 
-void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene, bool path_changed) {
+void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
 }
 
 void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {

@@ -2,6 +2,7 @@
 
 #include "renderer.hxx"
 #include <etx/render/shared/scene.hxx>
+
 #include <etx/rt/rt.hxx>
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
@@ -12,16 +13,18 @@
 namespace etx {
 
 struct CPURaytracingRenderer : public Renderer {
-  CPURaytracingRenderer(TaskScheduler& scheduler, SceneRepresentation& scene);
+  CPURaytracingRenderer(Raytracing& rt, SceneRepresentation& scene);
   ~CPURaytracingRenderer() override;
 
-  void init(RenderContext& render_context, SceneRepresentation& scene) override;
-  void frame(RenderContext& render_context, SceneRepresentation& scene, float dt) override;
-  void cleanup(RenderContext& render_context) override;
+  void init(RHIContext* ctx, SceneRepresentation& scene) override;
+  void prepare_frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+  void frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+  void cleanup(RHIContext* ctx) override;
 
   const char* name() const override {
     return "CPU Raytracing";
   }
+
   RendererMode mode() const override {
     return RendererMode::CPURaytracing;
   }
@@ -31,26 +34,37 @@ struct CPURaytracingRenderer : public Renderer {
   void stop() override;
   void restart() override;
 
-  void on_camera_changed(SceneRepresentation& scene, bool path_changed) override;
+  void set_output_dimensions(const uint2& dim);
+  void on_camera_changed(SceneRepresentation& scene) override;
+  void on_camera_become_steady(SceneRepresentation& scene) override;
   void on_scene_changed(SceneRepresentation& scene) override;
 
-  // Extra methods for CPURaytracing
   Integrator* current_integrator() const;
   void set_integrator(Integrator*);
   Integrator** integrator_list();
   uint64_t integrator_count() const;
+
   IntegratorThread& integrator_thread() {
     return _integrator_thread;
   }
+
   const Scene& scene() const {
     return _raytracing.scene();
   }
+
   Film& film() {
     return _raytracing.film();
   }
 
+  void set_reference_image(const char*);
+  void set_reference_image(const float4 data[], const uint2 dimensions);
+
  private:
-  Raytracing _raytracing;
+  void apply_reference_image(RHIContext* ctx, uint32_t);
+  void update_image(const float4* camera);
+
+ private:
+  Raytracing& _raytracing;
   IntegratorThread _integrator_thread;
 
   CPUDebugIntegrator _debug = {_raytracing};
@@ -66,6 +80,19 @@ struct CPURaytracingRenderer : public Renderer {
     &_cpu_vcm,         // VCM = 3
     &_bdpt_distilled,  // BDPTDistilled = 4
   };
+
+  std::vector<Image> images;
+  std::vector<ImageStorage> images_storage;
+  ImagePool image_pool;
+
+  RHIContext* context = nullptr;
+  RHIPipeline rhi_pipeline = {};
+  RHITexture rhi_output_texture = {};
+  RHITexture rhi_reference_texture = {};
+  uint32_t def_image_handle = kInvalidIndex;
+  uint32_t ref_image_handle = kInvalidIndex;
+
+  uint2 output_dimensions = {};
 };
 
 }  // namespace etx
