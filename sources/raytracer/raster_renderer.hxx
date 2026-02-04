@@ -9,7 +9,8 @@ struct RasterizationRenderer : public Renderer {
   ~RasterizationRenderer() override;
 
   void init(RHIContext* ctx, SceneRepresentation& scene) override;
-  void frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+  void render(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+
   void cleanup(RHIContext* ctx) override;
 
   const char* name() const override {
@@ -27,6 +28,7 @@ struct RasterizationRenderer : public Renderer {
 
  private:
   RHIPipeline _pipeline = {};
+
   bool _initialized = false;
 };
 

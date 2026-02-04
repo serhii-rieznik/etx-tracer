@@ -73,6 +73,7 @@ struct UI {
     std::function<void()> restart_selected;
     std::function<void()> reload_scene_selected;
     std::function<void()> reload_geometry_selected;
+    std::function<void()> reload_shaders_selected;
     std::function<void()> options_changed;
     std::function<void()> use_image_as_reference;
     std::function<void()> material_added;

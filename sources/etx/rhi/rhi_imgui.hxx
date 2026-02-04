@@ -14,7 +14,6 @@ struct sapp_event;
 namespace etx {
 
 struct RHIContext;
-class RHICommandBuffer;
 
 struct RHIImGuiDesc {
   uint32_t max_vertices = 65536;
@@ -41,7 +40,7 @@ struct RHIImGui {
   void shutdown();
 
   void new_frame(const RHIImGuiFrameDesc& desc);
-  void render(RHICommandBuffer* command_buffer);
+  void render(RHICommandBuffer command_buffer);
 
   bool handle_event(const sapp_event* event);
 
@@ -83,7 +82,7 @@ struct RHIImGui {
   RHIResult create_resources();
   void destroy_resources();
   RHIResult update_buffers(const ImDrawData* draw_data);
-  void render_draw_data(RHICommandBuffer* command_buffer, const ImDrawData* draw_data);
+  void render_draw_data(RHICommandBuffer command_buffer, const ImDrawData* draw_data);
 
   RHIResult create_font_texture();
   RHIResult create_pipeline();

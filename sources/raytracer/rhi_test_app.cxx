@@ -145,19 +145,19 @@ void RHITestApplication::frame() {
     .width = static_cast<float>(sapp_width()),
     .height = static_cast<float>(sapp_height()),
   };
-  command_buffer->begin();
-  command_buffer->set_pipeline(compute_pipeline);
-  command_buffer->push_constants(&compute_pc, sizeof(ComputePushConstants));
-  command_buffer->dispatch({32u, 32u, 1u});
-  command_buffer->begin_render_pass(1, &swapchain_texture, clear_color);
-  command_buffer->set_pipeline(graphics_pipeline);
-  command_buffer->set_viewport(viewport);
-  command_buffer->push_constants(&pc, sizeof(PushConstants));
-  command_buffer->draw_indexed({.index_count = 24}, index_buffer);
+  rhi_context->command_buffer_begin(command_buffer);
+  rhi_context->cmd_set_pipeline(command_buffer, compute_pipeline);
+  rhi_context->cmd_push_constants(command_buffer, &compute_pc, sizeof(ComputePushConstants));
+  rhi_context->cmd_dispatch(command_buffer, {32u, 32u, 1u});
+  rhi_context->cmd_begin_render_pass(command_buffer, 1, &swapchain_texture, clear_color);
+  rhi_context->cmd_set_pipeline(command_buffer, graphics_pipeline);
+  rhi_context->cmd_set_viewport(command_buffer, viewport);
+  rhi_context->cmd_push_constants(command_buffer, &pc, sizeof(PushConstants));
+  rhi_context->cmd_draw_indexed(command_buffer, {.index_count = 24}, index_buffer);
 
   imgui.render(command_buffer);
-  command_buffer->end_render_pass();
-  command_buffer->end();
+  rhi_context->cmd_end_render_pass(command_buffer);
+  rhi_context->command_buffer_end(command_buffer);
 
   rhi_context->submit_command_buffer(command_buffer);
   rhi_context->present();

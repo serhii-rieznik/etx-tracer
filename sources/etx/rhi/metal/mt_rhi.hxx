@@ -20,11 +20,11 @@ struct MTContext : RHIContext {
   void begin_frame() override;
   void present() override;
 
+  RHISemaphore get_image_acquired_semaphore() override;
+  RHISemaphore get_render_complete_semaphore() override;
+
   uint32_t get_current_frame_index() const override;
   uint32_t get_sampler_index(RHISamplerType type) const override;
-
-  RHICommandBuffer* get_command_buffer() override;
-  void submit_command_buffer(RHICommandBuffer* command_buffer) override;
 
  private:
   class Impl;
@@ -34,6 +34,9 @@ struct MTContext : RHIContext {
 struct MTDevice : RHIDevice {
   MTDevice();
   ~MTDevice() override;
+
+  RHICreateResult<RHISemaphore> create_semaphore() override;
+  RHIResult destroy_semaphore(RHISemaphore semaphore) override;
 
   RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc) override;
   RHICreateBindlessResult create_texture(const RHITextureDesc& desc) override;
@@ -111,38 +114,38 @@ struct MTBindlessManager : RHIBindlessManager {
   Impl* _impl = nullptr;
 };
 
-struct MTCommandBuffer : RHICommandBuffer {
+struct MTCommandBuffer {
   MTCommandBuffer();
-  ~MTCommandBuffer() override;
+  ~MTCommandBuffer();
 
-  void begin() override;
-  void end() override;
-  void reset() override;
+  void begin();
+  void end();
+  void reset();
 
-  void buffer_barrier(RHIBuffer buffer, RHIResourceState old_state, RHIResourceState new_state) override;
-  void texture_barrier(RHITexture texture, RHIResourceState old_state, RHIResourceState new_state) override;
+  void buffer_barrier(RHIBuffer buffer, RHIResourceState old_state, RHIResourceState new_state);
+  void texture_barrier(RHITexture texture, RHIResourceState old_state, RHIResourceState new_state);
 
-  void begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors = nullptr, RHITexture depth_attachment = {}) override;
-  void end_render_pass() override;
+  void begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors = nullptr, RHITexture depth_attachment = {});
+  void end_render_pass();
 
-  void set_viewport(const RHIViewport& viewport) override;
-  void set_scissor(const RHIRect& scissor) override;
-  void set_pipeline(RHIPipeline pipeline) override;
+  void set_viewport(const RHIViewport& viewport);
+  void set_scissor(const RHIRect& scissor);
+  void set_pipeline(RHIPipeline pipeline);
 
-  void push_constants(const void* data, uint32_t size, uint32_t offset = 0) override;
+  void push_constants(const void* data, uint32_t size, uint32_t offset = 0);
 
-  void draw(const RHIDrawDesc& desc) override;
-  void draw_indexed(const RHIIndexedDrawDesc& desc, RHIBuffer index_buffer) override;
+  void draw(const RHIDrawDesc& desc);
+  void draw_indexed(const RHIIndexedDrawDesc& desc, RHIBuffer index_buffer);
 
-  void dispatch(const RHIDispatchDesc& desc) override;
+  void dispatch(const RHIDispatchDesc& desc);
 
-  void build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0) override;
+  void build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0);
 
-  void copy_buffer(RHIBuffer src, RHIBuffer dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0) override;
-  void copy_buffer_to_texture(RHIBuffer src, RHITexture dst, uint32_t width, uint32_t height, uint32_t mip_level = 0) override;
-  void copy_texture_to_buffer(RHITexture src, RHIBuffer dst, uint32_t width, uint32_t height, uint32_t mip_level = 0) override;
+  void copy_buffer(RHIBuffer src, RHIBuffer dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0);
+  void copy_buffer_to_texture(RHIBuffer src, RHITexture dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
+  void copy_texture_to_buffer(RHITexture src, RHIBuffer dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
 
-  void set_debug_name(const char* name) override;
+  void set_debug_name(const char* name);
 
  private:
   class Impl;

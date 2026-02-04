@@ -32,12 +32,14 @@ struct RenderContext {
   void start_frame(Renderer* renderer, SceneRepresentation& scene, const FrameData&);
   void end_frame();
 
-  RHICommandBuffer* current_command_buffer();
   RHIImGui& rhi_ui();
   RHIContext* get_context();
   RHIDevice* get_device();
   RHITextureFormat get_swapchain_format();
   RHITextureFormat get_depth_format();
+
+  void set_reference_image(const char*);
+  void set_reference_image(const float4 data[], const uint2 dimensions);
 
  public:
   ETX_DECLARE_PIMPL(RenderContext, 1024);

@@ -1,6 +1,7 @@
 #pragma once
 #include <etx/core/core.hxx>
 #include <etx/render/host/scene_representation.hxx>
+#include <etx/rhi/rhi_types.hxx>
 
 #include "render_context.hxx"
 #include "camera_controller.hxx"
@@ -22,8 +23,7 @@ enum class RendererMode {
 struct Renderer {
   struct FrameData {
     ViewParameters view_parameters = {};
-    RHITexture swapchain_image = {};
-    RHICommandBuffer* cmd = {};
+    RHICommandBuffer cmd = {};
     float dt = 0.0f;
   };
 
@@ -38,10 +38,10 @@ struct Renderer {
     _camera_controller.reset(new CameraController(scene.mutable_camera()));
   }
 
-  virtual void prepare_frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+  virtual void update_camera(SceneRepresentation& scene, float dt) {
     ETX_CRITICAL(_camera_controller);
 
-    bool camera_updated = _camera_controller->update(data.dt);
+    bool camera_updated = _camera_controller->update(dt);
     if (camera_updated) {
       on_camera_changed(scene);
     } else if (camera_updated != last_camera_update_state) {
@@ -50,7 +50,14 @@ struct Renderer {
     last_camera_update_state = camera_updated;
   }
 
-  virtual void frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+  virtual void render(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+  }
+
+  virtual RHITexture output_texture() const {
+    return _output_texture;
+  }
+  virtual uint2 output_size() const {
+    return _output_dimensions;
   }
 
   virtual void cleanup(RHIContext* ctx) {
@@ -93,6 +100,8 @@ struct Renderer {
  protected:
   TaskScheduler& scheduler;
   std::unique_ptr<CameraController> _camera_controller = nullptr;
+  uint2 _output_dimensions = {};
+  RHITexture _output_texture = {};
   bool last_camera_update_state = false;
 };
 

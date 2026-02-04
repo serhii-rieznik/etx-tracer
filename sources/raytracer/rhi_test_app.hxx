@@ -25,7 +25,7 @@ struct RHITestApplication {
 
  private:
   RHIContext* rhi_context = nullptr;
-  RHICommandBuffer* command_buffer = nullptr;
+  RHICommandBuffer command_buffer = {};
   RHIImGui imgui = {};
 
   RHITexture noise_texture = {};

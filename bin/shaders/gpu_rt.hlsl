@@ -1,44 +1,55 @@
+#include "bindless.hlsl"
+#include "shared/render_options.hxx"
+#include "shared/camera.hxx"
+
 struct GPUConstants {
-  uint as_index;
-  uint output_image_index;
-  uint2 pad;
+  uint32_t as_index;
+  uint32_t output_image_index;
+  uint32_t frame_index;
+  uint32_t sample_index;
+  Camera camera;
 };
 
-[[vk::push_constant]]
-GPUConstants params;
+[[vk::push_constant]] GPUConstants constants;
 
-RaytracingAccelerationStructure GlobalAS[] : register(t4, space0);
-RWTexture2D<float4> GlobalStorageImages[] : register(u3, space0);
+[numthreads(8, 8, 1)]
+void compute_main(uint3 dtid : SV_DispatchThreadID) {
+  if (any(dtid.xy >= constants.camera.film_size))
+    return;
 
-[numthreads(16, 16, 1)]
-void compute_main(uint3 dispatch_thread_id : SV_DispatchThreadID) {
-  RWTexture2D<float4> output_image = GlobalStorageImages[params.output_image_index];
-  uint2 size;
-  output_image.GetDimensions(size.x, size.y);
-  if (any(dispatch_thread_id.xy >= size)) return;
+  float2 pixel = float2(dtid.xy) + 0.5f;
+  float2 uv = pixel / float2(constants.camera.film_size);
+  float2 ndc = uv * 2.0f - 1.0f;
+  ndc.y = -ndc.y;
 
-  float2 uv = (float2(dispatch_thread_id.xy) + 0.5f) / float2(size);
-  
-  // Basic ray generation (placeholder)
-  float3 origin = float3(0, 0, -5);
-  float3 direction = normalize(float3(uv * 2.0f - 1.0f, 1.0f));
+  // Generate ray from camera
+  // Match etx::generate_ray logic from scene_camera.hxx
+  float3 s = ndc.x * constants.camera.side;
+  float3 u = ndc.y * constants.camera.up / constants.camera.aspect;
+  float3 ray_dir = normalize(constants.camera.tan_half_fov * (s + u) + constants.camera.direction);
 
   RayDesc ray;
-  ray.Origin = origin;
-  ray.Direction = direction;
+  ray.Origin = constants.camera.position;
+  ray.Direction = ray_dir;
   ray.TMin = 0.001f;
-  ray.TMax = 1000.0f;
+  ray.TMax = 10000.0f;
 
-  RaytracingAccelerationStructure scene = GlobalAS[params.as_index];
-  RayQuery<RAY_FLAG_FORCE_OPAQUE> query;
-  query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF, ray);
-  query.Proceed();
+  RayQuery<RAY_FLAG_NONE> q;
+  RaytracingAccelerationStructure as = bindless_accel_structs[NonUniformResourceIndex(constants.as_index)];
+  
+  q.TraceRayInline(as, RAY_FLAG_NONE, 0xFF, ray);
+  q.Proceed();
 
-  float3 color = float3(0, 0, 0);
-  if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-    float2 barycentrics = query.CommittedTriangleBarycentrics();
-    color = float3(barycentrics, 1.0f - barycentrics.x - barycentrics.y);
+  float4 color = float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+  if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+    float2 bary = q.CommittedTriangleBarycentrics();
+    color = float4(bary.x, bary.y, 1.0f - bary.x - bary.y, 1.0f);
+  } else {
+    // Gradient sky
+    float t = 0.5f * (ray_dir.y + 1.0f);
+    color = lerp(float4(1.0f, 1.0f, 1.0f, 1.0f), float4(0.5f, 0.7f, 1.0f, 1.0f), t);
   }
 
-  output_image[dispatch_thread_id.xy] = float4(color, 1.0f);
+  bindless_storage_textures[constants.output_image_index][dtid.xy] = color;
 }

@@ -10,9 +10,11 @@ struct GPURaytracingRenderer : public Renderer {
   ~GPURaytracingRenderer() override;
 
   void init(RHIContext* ctx, SceneRepresentation& scene) override;
-  void frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+  void render(RHIContext* ctx, SceneRepresentation& scene, const FrameData& frame_data) override;
+
   void cleanup(RHIContext* ctx) override;
-  void process_event(const sapp_event* e) override;
+
+  void reload_shaders(RHIContext* ctx);
 
   const char* name() const override {
     return "GPU Raytracing";
@@ -25,12 +27,19 @@ struct GPURaytracingRenderer : public Renderer {
   void on_scene_changed(SceneRepresentation& scene) override;
 
  private:
-  void build_acceleration_structures(RenderContext& render_context, SceneRepresentation& scene);
+  void build_acceleration_structures(RHIContext* ctx, SceneRepresentation& scene);
+  void create_pipelines(RHIContext* ctx);
 
  private:
   RHIPipeline _pipeline = {};
+
   RHIBindlessHandle _tlas = {};
+
+  std::vector<RHIBindlessHandle> _blas;
+  std::vector<RHIBindlessHandle> _blas_buffers;
+
   bool _initialized = false;
+  bool _scene_dirty = false;
 };
 
 }  // namespace etx

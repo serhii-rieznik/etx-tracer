@@ -4,7 +4,10 @@
 
 #include <stdint.h>
 #include <string>
+#include <stdint.h>
+#include <string>
 #include <unordered_map>
+#include <functional>
 
 namespace etx {
 
@@ -33,13 +36,31 @@ struct RHICreateResult {
   T handle = {};
 };
 
-using RHIBindlessHandle = uint64_t;
+struct RHIBindlessHandle {
+  uint64_t value = ~0ULL;
+
+  bool valid() const {
+    return value != ~0ULL;
+  }
+
+  bool operator==(const RHIBindlessHandle& other) const {
+    return value == other.value;
+  }
+
+  bool operator!=(const RHIBindlessHandle& other) const {
+    return value != other.value;
+  }
+};
+
+static constexpr RHIBindlessHandle kInvalidBindlessHandle = {};
 
 using RHIBuffer = RHIBindlessHandle;
 using RHITexture = RHIBindlessHandle;
 using RHISampler = RHIBindlessHandle;
 using RHIShader = Handle;
 using RHIPipeline = Handle;
+using RHICommandBuffer = Handle;
+using RHISemaphore = Handle;
 
 using RHICreateBindlessResult = RHICreateResult<RHIBindlessHandle>;
 using RHICreateShaderResult = RHICreateResult<RHIShader>;
@@ -258,19 +279,19 @@ inline RHIBindlessHandle make_bindless_handle(RHIResourceType type, uint32_t gen
   result |= static_cast<uint64_t>(descriptor_index) & kRHIBindlessDescriptorIndexMask;
   result |= (static_cast<uint64_t>(generation) & kRHIBindlessGenerationMask) << kRHIBindlessDescriptorIndexBits;
   result |= (static_cast<uint64_t>(type) & kRHIBindlessResourceTypeMask) << (kRHIBindlessDescriptorIndexBits + kRHIBindlessGenerationBits);
-  return result;
+  return {result};
 }
 
 inline RHIResourceType get_bindless_resource_type(RHIBindlessHandle handle) {
-  return static_cast<RHIResourceType>((handle >> (kRHIBindlessGenerationBits + kRHIBindlessDescriptorIndexBits)) & kRHIBindlessResourceTypeMask);
+  return static_cast<RHIResourceType>((handle.value >> (kRHIBindlessGenerationBits + kRHIBindlessDescriptorIndexBits)) & kRHIBindlessResourceTypeMask);
 }
 
 inline uint32_t get_bindless_generation(RHIBindlessHandle handle) {
-  return (handle >> kRHIBindlessDescriptorIndexBits) & kRHIBindlessGenerationMask;
+  return (handle.value >> kRHIBindlessDescriptorIndexBits) & kRHIBindlessGenerationMask;
 }
 
 inline uint32_t get_bindless_descriptor_index(RHIBindlessHandle handle) {
-  return handle & kRHIBindlessDescriptorIndexMask;
+  return static_cast<uint32_t>(handle.value & kRHIBindlessDescriptorIndexMask);
 }
 
 struct RHIViewport {
@@ -390,11 +411,11 @@ enum class RHIAccelerationStructureType : uint32_t {
 };
 
 struct RHIAccelerationStructureGeometryTriangles {
-  RHIBindlessHandle vertex_buffer = 0;
+  RHIBindlessHandle vertex_buffer = {};
   uint32_t vertex_stride = 0;
   uint32_t vertex_count = 0;
   RHIVertexFormat vertex_format = RHIVertexFormat::Float3;
-  RHIBindlessHandle index_buffer = 0;
+  RHIBindlessHandle index_buffer = {};
   uint32_t index_count = 0;
   RHIIndexType index_type = RHIIndexType::UInt32;
 };
@@ -421,15 +442,24 @@ struct RHIAccelerationStructureDesc {
 };
 
 struct RHIAccelerationStructureBuildDesc {
-  RHIBindlessHandle as_handle = 0;
+  RHIBindlessHandle as_handle = {};
   RHIAccelerationStructureType type = RHIAccelerationStructureType::BottomLevel;
   uint32_t geometry_count = 0;
   const RHIAccelerationStructureGeometry* geometries = nullptr;
   uint32_t instance_count = 0;
-  RHIBindlessHandle instance_buffer = 0;
+  RHIBindlessHandle instance_buffer = {};
   bool allow_update = false;
 };
 
 static constexpr uint32_t kRHIMaxFrames = 3u;
 
 }  // namespace etx
+
+namespace std {
+template <>
+struct hash<etx::RHIBindlessHandle> {
+  size_t operator()(const etx::RHIBindlessHandle& handle) const {
+    return hash<uint64_t>{}(handle.value);
+  }
+};
+}  // namespace std

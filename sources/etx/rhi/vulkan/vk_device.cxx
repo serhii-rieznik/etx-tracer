@@ -202,6 +202,7 @@ struct VKDevice::Impl {
   VKResourcePool<VKPipelineData, RHIPipeline> compute_pipelines;
   VKResourcePool<VKPipelineData, RHIPipeline> graphics_pipelines;
   VKResourcePool<VKAccelerationStructureData, RHIBindlessHandle> acceleration_structures;
+  VKResourcePool<VkSemaphore, RHISemaphore> semaphores;
 
   // Shaders are handled differently - direct vector with index-based handles
   std::vector<VkShaderModule> shaders;
@@ -294,7 +295,7 @@ struct VKDevice::Impl {
   bool check_bindless_support();
 
   uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
-  RHIResult allocate_memory(VkMemoryRequirements mem_requirements, VkMemoryPropertyFlags properties, VkDeviceMemory& out_memory);
+  RHIResult allocate_memory(VkMemoryRequirements mem_requirements, VkMemoryPropertyFlags properties, VkMemoryAllocateFlags flags, VkDeviceMemory& out_memory);
   RHIResult create_vulkan_buffer(const RHIBufferDesc& desc, VkBuffer& out_buffer, VkDeviceMemory& out_memory);
   RHIResult create_vulkan_texture(const RHITextureDesc& desc, VkImage& out_image, VkDeviceMemory& out_memory);
   RHIResult create_vulkan_image_view(const RHITextureDesc& desc, VkImage image, VkImageView& out_view);
@@ -811,8 +812,12 @@ uint32_t VKDevice::Impl::find_memory_type(uint32_t type_filter, VkMemoryProperty
   return UINT32_MAX;
 }
 
-RHIResult VKDevice::Impl::allocate_memory(VkMemoryRequirements requirements, VkMemoryPropertyFlags properties, VkDeviceMemory& out_memory) {
+RHIResult VKDevice::Impl::allocate_memory(VkMemoryRequirements requirements, VkMemoryPropertyFlags properties, VkMemoryAllocateFlags flags, VkDeviceMemory& out_memory) {
+  VkMemoryAllocateFlagsInfo flags_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+  flags_info.flags = flags;
+
   VkMemoryAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  alloc_info.pNext = (flags != 0) ? &flags_info : nullptr;
   alloc_info.allocationSize = requirements.size;
   alloc_info.memoryTypeIndex = find_vulkan_memory_type(physical_device, requirements.memoryTypeBits, properties);
 
@@ -876,7 +881,12 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
 
   VkMemoryPropertyFlags mem_props = desc.host_visible ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
-  RHIResult alloc_result = allocate_memory(mem_requirements, mem_props, out_memory);
+  VkMemoryAllocateFlags mem_flags = 0;
+  if (vk_usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
+    mem_flags |= VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+  }
+
+  RHIResult alloc_result = allocate_memory(mem_requirements, mem_props, mem_flags, out_memory);
   if (alloc_result != RHIResult::Success) {
     log::error("Failed to allocate memory for buffer");
     vkDestroyBuffer(device, out_buffer, nullptr);
@@ -1407,7 +1417,7 @@ RHIResult VKDevice::Impl::create_vulkan_texture(const RHITextureDesc& desc, VkIm
 
   VkMemoryPropertyFlags mem_props = desc.host_visible ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
-  RHIResult alloc_result = allocate_memory(mem_requirements, mem_props, out_memory);
+  RHIResult alloc_result = allocate_memory(mem_requirements, mem_props, 0u, out_memory);
   if (alloc_result != RHIResult::Success) {
     log::error("Failed to allocate memory for texture");
     vkDestroyImage(device, out_image, nullptr);
@@ -1495,7 +1505,7 @@ RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAcceler
   std::vector<VkAccelerationStructureGeometryKHR> vk_geometries;
   if (desc.type == RHIAccelerationStructureType::BottomLevel) {
     if (desc.geometry_count == 0 || desc.geometries == nullptr) {
-      return {RHIResult::InvalidArgument, 0};
+      return {RHIResult::InvalidArgument, {}};
     }
 
     vk_geometries.resize(desc.geometry_count);
@@ -1536,7 +1546,7 @@ RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAcceler
   buffer_desc.usage = RHIBufferUsage::AccelerationStructureStorage | RHIBufferUsage::ShaderDeviceAddress;
   auto buffer_res = create_buffer(buffer_desc);
   if (buffer_res.result != RHIResult::Success) {
-    return {buffer_res.result, 0};
+    return {buffer_res.result, {}};
   }
 
   VkAccelerationStructureCreateInfoKHR create_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
@@ -1547,16 +1557,16 @@ RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAcceler
   VkAccelerationStructureKHR vk_as = VK_NULL_HANDLE;
   if (etx_vk_call(_impl->impl_vkCreateAccelerationStructureKHR(_impl->device, &create_info, nullptr, &vk_as)) != VK_SUCCESS) {
     destroy_buffer(buffer_res.handle);
-    return {RHIResult::ValidationError, 0};
+    return {RHIResult::ValidationError, {}};
   }
 
-  RHIBindlessHandle as_handle = 0;
+  RHIBindlessHandle as_handle = {};
   auto bindless = static_cast<VKBindlessManager*>(_impl->bindless_manager);
-  RHIResult reg_result = bindless->register_acceleration_structure_vk(vk_as, as_handle);
+  RHIResult reg_result = bindless->register_acceleration_structure_vk(vk_as, desc.type, as_handle);
   if (reg_result != RHIResult::Success) {
     _impl->impl_vkDestroyAccelerationStructureKHR(_impl->device, vk_as, nullptr);
     destroy_buffer(buffer_res.handle);
-    return {reg_result, 0};
+    return {reg_result, {}};
   }
 
   uint32_t index = _impl->acceleration_structures.allocate_index();
@@ -1658,7 +1668,15 @@ bool VKDevice::Impl::initialize_pools() {
 }
 
 void VKDevice::Impl::cleanup_pools() {
-  // Destroy all fences
+  // Destroy command buffers
+  for (const auto& resource : command_buffer_pool) {
+    if (resource.buffer != VK_NULL_HANDLE) {
+      vkFreeCommandBuffers(device, command_pools[resource.pool_index], 1u, &resource.buffer);
+    }
+  }
+  command_buffer_pool.clear();
+
+  // Destroy fences
   for (const auto& resource : fence_pool) {
     if (resource.fence != VK_NULL_HANDLE) {
       vkDestroyFence(device, resource.fence, nullptr);
@@ -1666,12 +1684,75 @@ void VKDevice::Impl::cleanup_pools() {
   }
   fence_pool.clear();
 
-  for (const auto& resource : command_buffer_pool) {
-    if (resource.buffer != VK_NULL_HANDLE) {
-      vkFreeCommandBuffers(device, command_pools[resource.pool_index], 1u, &resource.buffer);
+  // Destroy acceleration structures
+  acceleration_structures.for_each([this](VKAccelerationStructureData& data) {
+    if (data.acceleration_structure != VK_NULL_HANDLE) {
+      if (impl_vkDestroyAccelerationStructureKHR) {
+        impl_vkDestroyAccelerationStructureKHR(device, data.acceleration_structure, nullptr);
+      }
+      data.acceleration_structure = VK_NULL_HANDLE;
+    }
+  });
+  acceleration_structures.clear();
+
+  // Destroy pipelines
+  auto destroy_pipeline = [this](VKPipelineData& data) {
+    if (data.pipeline != VK_NULL_HANDLE) {
+      vkDestroyPipeline(device, data.pipeline, nullptr);
+      data.pipeline = VK_NULL_HANDLE;
+    }
+  };
+  compute_pipelines.for_each(destroy_pipeline);
+  compute_pipelines.clear();
+  graphics_pipelines.for_each(destroy_pipeline);
+  graphics_pipelines.clear();
+
+  // Destroy shaders
+  for (auto& module : shaders) {
+    if (module != VK_NULL_HANDLE) {
+      vkDestroyShaderModule(device, module, nullptr);
     }
   }
-  command_buffer_pool.clear();
+  shaders.clear();
+
+  // Destroy samplers
+  samplers.for_each([this](VKSamplerData& data) {
+    if (data.sampler != VK_NULL_HANDLE) {
+      vkDestroySampler(device, data.sampler, nullptr);
+      data.sampler = VK_NULL_HANDLE;
+    }
+  });
+  samplers.clear();
+
+  // Destroy textures
+  textures.for_each([this](VKTextureData& data) {
+    if (data.image_view != VK_NULL_HANDLE) {
+      vkDestroyImageView(device, data.image_view, nullptr);
+      data.image_view = VK_NULL_HANDLE;
+    }
+    if (data.image != VK_NULL_HANDLE) {
+      vkDestroyImage(device, data.image, nullptr);
+      data.image = VK_NULL_HANDLE;
+    }
+    if (data.memory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, data.memory, nullptr);
+      data.memory = VK_NULL_HANDLE;
+    }
+  });
+  textures.clear();
+
+  // Destroy buffers
+  buffers.for_each([this](VKBufferData& data) {
+    if (data.buffer != VK_NULL_HANDLE) {
+      vkDestroyBuffer(device, data.buffer, nullptr);
+      data.buffer = VK_NULL_HANDLE;
+    }
+    if (data.memory != VK_NULL_HANDLE) {
+      vkFreeMemory(device, data.memory, nullptr);
+      data.memory = VK_NULL_HANDLE;
+    }
+  });
+  buffers.clear();
 }
 
 const VKPipelineData* VKDevice::get_compute_pipeline_data(RHIPipeline handle) const {
@@ -1857,7 +1938,7 @@ RHICreateBindlessResult VKDevice::create_buffer(const RHIBufferDesc& desc) {
   buffer_data.allocated_size = mem_req.size;
 
   // Register with bindless manager
-  RHIBindlessHandle handle = 0;
+  RHIBindlessHandle handle = {};
   RHIResult reg_result = _impl->bindless_manager->register_buffer(buffer_data.buffer, RHIResourceType::Buffer, handle);
   if (reg_result != RHIResult::Success) {
     log::error("Failed to register buffer with bindless manager");
@@ -1906,6 +1987,7 @@ RHICreateBindlessResult VKDevice::create_texture(const RHITextureDesc& desc) {
   texture_data.image_view = vk_view;
   texture_data.memory = vk_memory;
   texture_data.desc = desc;
+  texture_data.current_state = RHIResourceState::Undefined;
   texture_data.allocated_size = tex_mem_req.size;
 
   // Register with bindless manager
@@ -2151,12 +2233,12 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
 }
 
 RHIResult VKDevice::destroy_buffer(RHIBindlessHandle buffer_handle) {
-  if (buffer_handle == 0)
+  if (buffer_handle.valid() == false)
     return RHIResult::Success;
 
   uint32_t index = _impl->buffers.get_index(buffer_handle);
   if (index == UINT32_MAX) {
-    log::error("Buffer handle not found: %llu", buffer_handle);
+    log::error("Buffer handle not found: %llu", buffer_handle.value);
     return RHIResult::InvalidHandle;
   }
 
@@ -2184,7 +2266,7 @@ RHIResult VKDevice::destroy_buffer(RHIBindlessHandle buffer_handle) {
 }
 
 RHIResult VKDevice::destroy_texture(RHIBindlessHandle texture_handle) {
-  if (texture_handle == 0)
+  if (texture_handle.valid() == false)
     return RHIResult::Success;
 
   if (_impl->bindless_manager == nullptr) {
@@ -2193,13 +2275,13 @@ RHIResult VKDevice::destroy_texture(RHIBindlessHandle texture_handle) {
 
   uint32_t index = _impl->textures.get_index(texture_handle);
   if (index == UINT32_MAX) {
-    log::error("Texture handle not found: %llu", texture_handle);
+    log::error("[VKDevice::destroy_texture] Texture handle not found: %llu", texture_handle.value);
     return RHIResult::InvalidHandle;
   }
 
   RHIResult result = _impl->bindless_manager->unregister_texture(texture_handle);
   if (result != RHIResult::Success) {
-    log::error("Failed to unregister texture from bindless manager");
+    log::error("[VKDevice::destroy_texture] Failed to unregister texture from bindless manager");
     return result;
   }
 
@@ -2219,7 +2301,7 @@ RHIResult VKDevice::destroy_texture(RHIBindlessHandle texture_handle) {
 }
 
 RHIResult VKDevice::destroy_sampler(RHIBindlessHandle sampler_handle) {
-  if (sampler_handle == 0)
+  if (sampler_handle.valid() == false)
     return RHIResult::Success;
 
   if (_impl->bindless_manager == nullptr) {
@@ -2228,7 +2310,7 @@ RHIResult VKDevice::destroy_sampler(RHIBindlessHandle sampler_handle) {
 
   uint32_t index = _impl->samplers.get_index(sampler_handle);
   if (index == UINT32_MAX) {
-    log::error("Sampler handle not found: %llu", sampler_handle);
+    log::error("Sampler handle not found: %llu", sampler_handle.value);
     return RHIResult::InvalidHandle;
   }
 
@@ -2378,7 +2460,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
     return RHIResult::InvalidHandle;
   }
 
-  const auto& texture_data = _impl->textures.get_data(index);
+  auto& texture_data = _impl->textures.get_data(index);
   const RHITextureDesc& desc = texture_data.desc;
 
   if (mip_level >= desc.mip_levels) {
@@ -2475,6 +2557,10 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
   if (!use_persistent_staging) {
     vkFreeMemory(_impl->device, staging_memory, nullptr);
     vkDestroyBuffer(_impl->device, staging_handle, nullptr);
+  }
+
+  if (submit_result == RHIResult::Success) {
+    texture_data.current_state = RHIResourceState::ShaderReadOnly;
   }
 
   return submit_result;
@@ -2671,10 +2757,48 @@ RHIResult VKDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) 
   });
 
   // Now safely destroy the buffer after AS is destroyed
-  if (buffer_to_destroy != 0) {
+  if (buffer_to_destroy.valid()) {
     destroy_buffer(buffer_to_destroy);
   }
 
+  return RHIResult::Success;
+}
+
+VkSemaphore VKDevice::get_vk_semaphore(RHISemaphore handle) const {
+  if (handle.invalid())
+    return VK_NULL_HANDLE;
+  const VkSemaphore* sem = _impl->semaphores.get_data_ptr(handle);
+  return sem ? *sem : VK_NULL_HANDLE;
+}
+
+RHICreateResult<RHISemaphore> VKDevice::create_semaphore() {
+  VkSemaphoreCreateInfo create_info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+  VkSemaphore vk_sem = VK_NULL_HANDLE;
+  if (vkCreateSemaphore(_impl->device, &create_info, nullptr, &vk_sem) != VK_SUCCESS) {
+    return {RHIResult::InvalidHandle};
+  }
+
+  uint32_t index = _impl->semaphores.allocate_index();
+  _impl->semaphores.get_data(index) = vk_sem;
+  Handle h = Handle::construct(0, index, _impl->semaphores.get_generation(index));
+  _impl->semaphores.set_handle_to_index(h, index);
+  return {RHIResult::Success, h};
+}
+
+RHIResult VKDevice::destroy_semaphore(RHISemaphore semaphore) {
+  if (semaphore.invalid())
+    return RHIResult::InvalidHandle;
+
+  VkSemaphore* vk_sem = _impl->semaphores.get_data_ptr(semaphore);
+  if (!vk_sem)
+    return RHIResult::InvalidHandle;
+
+  if (*vk_sem != VK_NULL_HANDLE) {
+    vkDestroySemaphore(_impl->device, *vk_sem, nullptr);
+  }
+
+  _impl->semaphores.free_index(_impl->semaphores.get_index(semaphore));
+  _impl->semaphores.remove_handle(semaphore);
   return RHIResult::Success;
 }
 

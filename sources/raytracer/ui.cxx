@@ -1680,13 +1680,20 @@ void UI::build_toolbar(const BuildContext& ctx) {
           callbacks.scene_updates_locked_changed(!ctx.scene_locked);
         }
       }
-      ImGui::PopStyleColor(1);
+      ImGui::PopStyleColor();
+    }
+
+    if ((_current_renderer_mode != RendererMode::CPURaytracing) && (_current_renderer_mode != RendererMode::Rasterization)) {
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      if (ImGui::Button("  Reload Shaders  ", {0.0f, ctx.button_size})) {
+        if (callbacks.reload_shaders_selected) {
+          callbacks.reload_shaders_selected();
+        }
+      }
     }
 
     ImGui::SameLine(0.0f, ctx.wpadding.x);
-
     ImGui::GetStyle().FramePadding.y = (ctx.button_size - ctx.text_size) / 2.0f;
-
     ImGui::PushItemWidth(ctx.input_size);
     {
       ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);

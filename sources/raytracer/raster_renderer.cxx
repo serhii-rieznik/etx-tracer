@@ -12,12 +12,12 @@ RasterizationRenderer::~RasterizationRenderer() {
 
 void RasterizationRenderer::init(RHIContext* ctx, SceneRepresentation& scene) {
   Renderer::init(ctx, scene);
-  // create_pipeline(render_context);
   _initialized = true;
 }
 
-void RasterizationRenderer::frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
-  Renderer::frame(ctx, scene, data);
+void RasterizationRenderer::render(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+  Renderer::update_camera(scene, data.dt);
+  Renderer::render(ctx, scene, data);
 }
 
 void RasterizationRenderer::cleanup(RHIContext* ctx) {

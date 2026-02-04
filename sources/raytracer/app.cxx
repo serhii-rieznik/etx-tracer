@@ -32,7 +32,6 @@ RTApplication::RTApplication()
   , raster_renderer(scheduler)
   , gpu_renderer(scheduler) {
   _active_renderer = &cpu_renderer;
-  ui.set_current_renderer_mode(RendererMode::CPURaytracing);
 }
 
 RTApplication::~RTApplication() {
@@ -40,6 +39,9 @@ RTApplication::~RTApplication() {
 }
 
 void RTApplication::init() {
+  std::string options_file = env().file_in_data("options.json");
+  _options.load_from_file(options_file);
+
   render_context.init();
   std::string ior_folder = env().file_in_data("./spectrum/");
   _ior_database.load(ior_folder.c_str());
@@ -49,6 +51,15 @@ void RTApplication::init() {
   cpu_renderer.init(render_context.get_context(), scene);
   raster_renderer.init(render_context.get_context(), scene);
   gpu_renderer.init(render_context.get_context(), scene);
+
+  RendererMode mode = RendererMode::CPURaytracing;
+  auto renderer_name = _options.get_string("renderer", "cpu");
+  if (renderer_name == "gpu") {
+    mode = RendererMode::GPURaytracing;
+  } else if (renderer_name == "raster") {
+    mode = RendererMode::Rasterization;
+  }
+  set_renderer_mode(mode);
 
   ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
   ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
@@ -62,6 +73,7 @@ void RTApplication::init() {
   ui.callbacks.reload_scene_selected = std::bind(&RTApplication::on_reload_scene_selected, this);
   ui.callbacks.reload_geometry_selected = std::bind(&RTApplication::on_reload_geometry_selected, this);
   ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
+  ui.callbacks.reload_shaders_selected = std::bind(&RTApplication::on_reload_shaders_selected, this);
   ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
   ui.callbacks.material_added = std::bind(&RTApplication::on_material_added, this);
   ui.callbacks.material_renamed = std::bind(&RTApplication::on_material_renamed, this, std::placeholders::_1, std::placeholders::_2);
@@ -82,8 +94,6 @@ void RTApplication::init() {
   ui.callbacks.camera_activated = std::bind(&RTApplication::on_camera_activated, this, std::placeholders::_1);
   ui.callbacks.scene_updates_locked_changed = std::bind(&RTApplication::on_scene_updates_locked_changed, this, std::placeholders::_1);
   ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
-
-  _options.load_from_file(env().file_in_data("options.json"));
 
   for (uint32_t i = 0; i < 7; ++i) {
     const auto name = "recent-" + std::to_string(i);
@@ -141,24 +151,34 @@ void RTApplication::save_options() {
   for (const auto& recent : _recent_files) {
     _options.set_string("recent-" + std::to_string(i++), env().to_project_relative(recent), "Recent File");
   }
+  if (_current_scene_file.empty() == false) {
+    _options.set_string("scene", env().to_project_relative(_current_scene_file), "Scene");
+  }
   _options.save_to_file(env().file_in_data("options.json"));
 }
 
 void RTApplication::set_renderer_mode(RendererMode mode) {
   Renderer* next_renderer = nullptr;
+  std::string renderer_name;
   switch (mode) {
     case RendererMode::Rasterization:
       next_renderer = &raster_renderer;
+      renderer_name = "raster";
       break;
 
     case RendererMode::GPURaytracing:
       next_renderer = &gpu_renderer;
+      renderer_name = "gpu";
       break;
 
     default:
       next_renderer = &cpu_renderer;
+      renderer_name = "cpu";
       break;
   }
+
+  _options.set_string("renderer", renderer_name, "Renderer");
+  save_options();
 
   if (next_renderer == _active_renderer)
     return;
@@ -309,7 +329,7 @@ void RTApplication::on_referenece_image_selected(std::string file_name) {
   _options.set_string("ref", file_name, "Reference");
   save_options();
 
-  cpu_renderer.set_reference_image(file_name.c_str());
+  render_context.set_reference_image(file_name.c_str());
 }
 
 void RTApplication::on_use_image_as_reference() {
@@ -318,7 +338,7 @@ void RTApplication::on_use_image_as_reference() {
 
   const float4* data = cpu_renderer.film().layer(ViewLayer::Result, cpu_renderer.scene());
   uint2 size = cpu_renderer.film().base_dimensions();
-  cpu_renderer.set_reference_image(data, size);
+  render_context.set_reference_image(data, size);
 }
 
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
@@ -560,6 +580,12 @@ void RTApplication::on_camera_activated(uint32_t camera_index) {
 
 void RTApplication::on_scene_updates_locked_changed(bool locked) {
   cpu_renderer.integrator_thread().set_scene_updates_locked(locked);
+}
+
+void RTApplication::on_reload_shaders_selected() {
+  if (_active_renderer == &gpu_renderer) {
+    gpu_renderer.reload_shaders(render_context.get_context());
+  }
 }
 
 }  // namespace etx

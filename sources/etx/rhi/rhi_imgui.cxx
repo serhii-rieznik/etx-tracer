@@ -76,8 +76,8 @@ void RHIImGui::new_frame(const RHIImGuiFrameDesc& desc) {
   ImGui::NewFrame();
 }
 
-void RHIImGui::render(RHICommandBuffer* command_buffer) {
-  if (_initialized == false || command_buffer == nullptr) {
+void RHIImGui::render(RHICommandBuffer command_buffer) {
+  if (_initialized == false) {
     return;
   }
 
@@ -159,7 +159,7 @@ void RHIImGui::destroy_resources() {
 RHIResult RHIImGui::create_font_texture() {
   auto device = _context ? _context->get_device() : nullptr;
   if (device != nullptr) {
-    if (_font_texture != 0) {
+    if (_font_texture.valid()) {
       device->destroy_texture(_font_texture);
       _font_texture = {};
     }
@@ -233,7 +233,7 @@ RHIResult RHIImGui::create_font_texture() {
     return sampler_result.result;
   }
 
-  io.Fonts->TexID = static_cast<ImTextureID>(_font_texture);
+  io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_texture.value;
   return RHIResult::Success;
 }
 
@@ -322,7 +322,7 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
   auto device = _context->get_device();
 
   if (required_vb_size > vertices.data.size()) {
-    if (vertices.buffer) {
+    if (vertices.buffer.valid()) {
       device->destroy_buffer(vertices.buffer);
     }
 
@@ -337,7 +337,7 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
   }
 
   if (required_ib_size > indices.data.size()) {
-    if (indices.buffer) {
+    if (indices.buffer.valid()) {
       device->destroy_buffer(indices.buffer);
     }
 
@@ -375,8 +375,8 @@ struct ImGuiPushConstants {
   uint32_t padding;
 };
 
-void RHIImGui::render_draw_data(RHICommandBuffer* command_buffer, const ImDrawData* draw_data) {
-  command_buffer->set_pipeline(_pipeline);
+void RHIImGui::render_draw_data(RHICommandBuffer command_buffer, const ImDrawData* draw_data) {
+  _context->cmd_set_pipeline(command_buffer, _pipeline);
 
   const uint32_t frame_index = _context->get_current_frame_index();
   auto& vertices = _vertices[frame_index];
@@ -399,7 +399,7 @@ void RHIImGui::render_draw_data(RHICommandBuffer* command_buffer, const ImDrawDa
   float fb_height = draw_data->DisplaySize.y * draw_data->FramebufferScale.y;
 
   RHIViewport viewport = {0.0f, 0.0f, fb_width, fb_height, 0.0f, 1.0f};
-  command_buffer->set_viewport(viewport);
+  _context->cmd_set_viewport(command_buffer, viewport);
 
   uint32_t vertex_offset = 0;
   uint32_t index_offset = 0;
@@ -440,11 +440,11 @@ void RHIImGui::render_draw_data(RHICommandBuffer* command_buffer, const ImDrawDa
         .vertex_offset = pcmd->VtxOffset + vertex_offset,
         .index_type = sizeof(ImDrawIdx) == 2 ? RHIIndexType::UInt16 : RHIIndexType::UInt32,
       };
-      pc.texture_index = get_bindless_descriptor_index(static_cast<RHIBindlessHandle>(pcmd->GetTexID()));
+      pc.texture_index = get_bindless_descriptor_index(RHIBindlessHandle{static_cast<uint64_t>((uintptr_t)pcmd->GetTexID())});
 
-      command_buffer->set_scissor(scissor);
-      command_buffer->push_constants(&pc, sizeof(ImGuiPushConstants));
-      command_buffer->draw_indexed(draw_desc, indices.buffer);
+      _context->cmd_set_scissor(command_buffer, scissor);
+      _context->cmd_push_constants(command_buffer, &pc, sizeof(ImGuiPushConstants));
+      _context->cmd_draw_indexed(command_buffer, draw_desc, indices.buffer);
     }
     vertex_offset += cmd_list->VtxBuffer.Size;
     index_offset += cmd_list->IdxBuffer.Size;

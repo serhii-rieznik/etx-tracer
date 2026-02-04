@@ -3,8 +3,8 @@ set(RAYTRACER_SHARED_SOURCES
   app.cxx
   ui.hxx
   ui.cxx
-  render.hxx
-  render.cxx
+  render_context.hxx
+  render_context.cxx
   options.hxx
   camera_controller.hxx
   gpu_renderer.hxx

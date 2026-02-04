@@ -200,7 +200,7 @@ struct CPUVCMImpl {
       return;
     }
 
-    ETX_ASSERT(_light_paths.size() == rt.film().pixel_count());
+    ETX_ASSERT(_light_paths.size() == rt.film().current_pixel_count());
 
     if (vcm_options.merge_vertices()) {
       _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius, rt.scheduler());

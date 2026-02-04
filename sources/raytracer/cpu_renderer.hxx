@@ -17,8 +17,9 @@ struct CPURaytracingRenderer : public Renderer {
   ~CPURaytracingRenderer() override;
 
   void init(RHIContext* ctx, SceneRepresentation& scene) override;
-  void prepare_frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
-  void frame(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+
+  void render(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+
   void cleanup(RHIContext* ctx) override;
 
   const char* name() const override {
@@ -56,11 +57,7 @@ struct CPURaytracingRenderer : public Renderer {
     return _raytracing.film();
   }
 
-  void set_reference_image(const char*);
-  void set_reference_image(const float4 data[], const uint2 dimensions);
-
  private:
-  void apply_reference_image(RHIContext* ctx, uint32_t);
   void update_image(const float4* camera);
 
  private:
@@ -81,18 +78,9 @@ struct CPURaytracingRenderer : public Renderer {
     &_bdpt_distilled,  // BDPTDistilled = 4
   };
 
-  std::vector<Image> images;
-  std::vector<ImageStorage> images_storage;
-  ImagePool image_pool;
+  RHIContext* _rhi_context = nullptr;
 
-  RHIContext* context = nullptr;
   RHIPipeline rhi_pipeline = {};
-  RHITexture rhi_output_texture = {};
-  RHITexture rhi_reference_texture = {};
-  uint32_t def_image_handle = kInvalidIndex;
-  uint32_t ref_image_handle = kInvalidIndex;
-
-  uint2 output_dimensions = {};
 };
 
 }  // namespace etx

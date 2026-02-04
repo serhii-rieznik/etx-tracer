@@ -778,52 +778,45 @@ std::vector<std::wstring> ShaderCompiler::build_dxc_arguments(const std::string&
   std::wstring profile;
   switch (stage) {
     case RHIShaderStage::Vertex:
-      profile = L"vs_6_2";
+      profile = L"vs_6_6";
       break;
     case RHIShaderStage::Fragment:
-      profile = L"ps_6_2";
+      profile = L"ps_6_6";
       break;
     case RHIShaderStage::Compute:
-      profile = L"cs_6_2";
+      profile = L"cs_6_6";
       break;
     default:
       log::error("Unsupported shader stage for DXC compilation");
       return arguments;
   }
 
-  if (!for_preprocessing) {
-    arguments.push_back(L"-T");
-    arguments.push_back(profile.c_str());
-
+  if (for_preprocessing == false) {
     std::wstring entry_wstr(entry_point.begin(), entry_point.end());
-    arguments.push_back(L"-E");
-    arguments.push_back(entry_wstr.c_str());
 
-    arguments.push_back(L"-spirv");
-
-    arguments.push_back(L"-fvk-use-dx-layout");
-
-    arguments.push_back(L"-fvk-use-dx-position-w");
-
-    arguments.push_back(L"-fspv-target-env=vulkan1.2");
-
-    arguments.push_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
-    arguments.push_back(L"-fspv-extension=KHR");
-
-    arguments.push_back(L"-enable-16bit-types");
-
-    arguments.push_back(L"-O3");
+    arguments.emplace_back(L"-T");
+    arguments.emplace_back(profile.c_str());
+    arguments.emplace_back(L"-E");
+    arguments.emplace_back(entry_wstr.c_str());
+    arguments.emplace_back(L"-spirv");
+    arguments.emplace_back(L"-fvk-use-dx-layout");
+    arguments.emplace_back(L"-fvk-use-dx-position-w");
+    arguments.emplace_back(L"-fspv-target-env=vulkan1.2");
+    arguments.emplace_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
+    arguments.emplace_back(L"-fspv-extension=SPV_KHR_ray_query");
+    arguments.emplace_back(L"-enable-16bit-types");
+    arguments.emplace_back(L"-O3");
 
     constexpr const wchar_t* shift_args[] = {L"-fvk-s-shift", L"-fvk-t-shift", L"-fvk-b-shift", L"-fvk-u-shift"};
     constexpr const wchar_t* offset_args[] = {L"0", L"0", L"0", L"0"};
 
     for (uint32_t i = 0u; i < std::size(shift_args); i++) {
-      arguments.push_back(shift_args[i]);
-      arguments.push_back(offset_args[i]);
-      arguments.push_back(L"all");
+      arguments.emplace_back(shift_args[i]);
+      arguments.emplace_back(offset_args[i]);
+      arguments.emplace_back(L"all");
     }
   } else {
-    arguments.push_back(L"-P");
+    arguments.emplace_back(L"-P");
   }
 
   auto string_to_wstring = [](const std::string& str) -> std::wstring {

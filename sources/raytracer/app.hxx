@@ -80,6 +80,7 @@ struct RTApplication {
   void on_clear_recent_files();
   void on_camera_activated(uint32_t camera_index);
   void on_scene_updates_locked_changed(bool locked);
+  void on_reload_shaders_selected();
 
  private:
   void add_to_recent(const std::string&);

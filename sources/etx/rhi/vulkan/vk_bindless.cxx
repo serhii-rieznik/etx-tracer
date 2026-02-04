@@ -549,7 +549,7 @@ RHIResult VKBindlessManager::register_acceleration_structure(const void* data, u
   return RHIResult::NotImplemented;
 }
 
-RHIResult VKBindlessManager::register_acceleration_structure_vk(VkAccelerationStructureKHR vk_as, RHIBindlessHandle& out_handle) {
+RHIResult VKBindlessManager::register_acceleration_structure_vk(VkAccelerationStructureKHR vk_as, RHIAccelerationStructureType type, RHIBindlessHandle& out_handle) {
   if (!_impl) {
     return RHIResult::NotImplemented;
   }
@@ -565,11 +565,13 @@ RHIResult VKBindlessManager::register_acceleration_structure_vk(VkAccelerationSt
 
   _impl->handle_to_resource[out_handle] = entry;
 
-  VkWriteDescriptorSetAccelerationStructureKHR as_info = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-  as_info.accelerationStructureCount = 1;
-  as_info.pAccelerationStructures = &vk_as;
+  if (type == RHIAccelerationStructureType::TopLevel) {
+    VkWriteDescriptorSetAccelerationStructureKHR as_info = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    as_info.accelerationStructureCount = 1;
+    as_info.pAccelerationStructures = &vk_as;
 
-  _impl->update_descriptor_array(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4, descriptor_index, nullptr, nullptr, &as_info);
+    _impl->update_descriptor_array(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4, descriptor_index, nullptr, nullptr, &as_info);
+  }
 
   return RHIResult::Success;
 }

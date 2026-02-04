@@ -74,12 +74,14 @@ uint32_t MTContext::get_sampler_index(RHISamplerType type) const {
   return static_cast<uint32_t>(type);
 }
 
-RHICommandBuffer* MTContext::get_command_buffer() {
-  return &_impl->command_buffer;
+RHISemaphore MTContext::get_image_acquired_semaphore() {
+  log::warning("Metal RHI: get_image_acquired_semaphore not implemented");
+  return {};
 }
 
-void MTContext::submit_command_buffer(RHICommandBuffer* command_buffer) {
-  log::warning("Metal RHI: submit_command_buffer not implemented");
+RHISemaphore MTContext::get_render_complete_semaphore() {
+  log::warning("Metal RHI: get_render_complete_semaphore not implemented");
+  return {};
 }
 
 class MTDevice::Impl {
@@ -92,6 +94,16 @@ MTDevice::MTDevice()
 
 MTDevice::~MTDevice() {
   delete _impl;
+}
+
+RHICreateResult<RHISemaphore> MTDevice::create_semaphore() {
+  log::warning("Metal RHI: create_semaphore not implemented");
+  return {RHIResult::NotImplemented, {}};
+}
+
+RHIResult MTDevice::destroy_semaphore(RHISemaphore semaphore) {
+  log::warning("Metal RHI: destroy_semaphore not implemented");
+  return RHIResult::NotImplemented;
 }
 
 RHICreateBindlessResult MTDevice::create_buffer(const RHIBufferDesc& desc) {
@@ -201,7 +213,7 @@ void MTBindlessManager::set_max_acceleration_structures(uint32_t count) {
 
 RHIResult MTBindlessManager::register_buffer(void* vk_buffer, RHIResourceType type, RHIBindlessHandle& out_handle) {
   log::warning("Metal RHI: register_buffer not implemented");
-  out_handle = 0;
+  out_handle = {};
   return RHIResult::NotImplemented;
 }
 
@@ -212,7 +224,7 @@ RHIResult MTBindlessManager::unregister_buffer(RHIBindlessHandle handle) {
 
 RHIResult MTBindlessManager::register_texture(void* vk_image_view, RHIResourceType type, RHIBindlessHandle& out_handle, uint32_t usage_flags, void* vk_image) {
   log::warning("Metal RHI: register_texture not implemented");
-  out_handle = 0;
+  out_handle = {};
   return RHIResult::NotImplemented;
 }
 
@@ -223,7 +235,7 @@ RHIResult MTBindlessManager::unregister_texture(RHIBindlessHandle handle) {
 
 RHIResult MTBindlessManager::register_sampler(void* vk_sampler, RHIResourceType type, RHIBindlessHandle& out_handle) {
   log::warning("Metal RHI: register_sampler not implemented");
-  out_handle = 0;
+  out_handle = {};
   return RHIResult::NotImplemented;
 }
 
@@ -234,7 +246,7 @@ RHIResult MTBindlessManager::unregister_sampler(RHIBindlessHandle handle) {
 
 RHIResult MTBindlessManager::register_acceleration_structure(const void* data, uint64_t size, RHIBindlessHandle& out_handle) {
   log::warning("Metal RHI: register_acceleration_structure not implemented");
-  out_handle = 0;
+  out_handle = {};
   return RHIResult::NotImplemented;
 }
 
@@ -406,7 +418,7 @@ RHIMemoryStats MTDevice::get_memory_statistics() const {
 
 RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAccelerationStructureDesc& desc) {
   log::warning("Metal RHI: create_acceleration_structure not implemented");
-  return {RHIResult::NotImplemented, 0};
+  return {RHIResult::NotImplemented, {}};
 }
 
 RHIResult MTDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) {
