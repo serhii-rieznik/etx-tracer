@@ -9,11 +9,6 @@
 #include <etx/render/host/scene_representation.hxx>
 
 #include <tinyexr.hxx>
-
-#include <filesystem>
-#include <set>
-#include <cmath>
-
 namespace etx {
 namespace {
 

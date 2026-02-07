@@ -3,9 +3,6 @@
 #include <etx/rhi/rhi_types.hxx>
 
 #include <imgui.h>
-#include <vector>
-#include <memory>
-
 struct ImDrawData;
 struct ImFontAtlas;
 
@@ -36,7 +33,7 @@ struct RHIImGui {
   RHIImGui();
   ~RHIImGui();
 
-  RHIResult setup(RHIContext* context, const etx::RHIImGuiDesc& desc);
+  RHIResult setup(RHIContext& context, const etx::RHIImGuiDesc& desc);
   void shutdown();
 
   void new_frame(const RHIImGuiFrameDesc& desc);

@@ -41,6 +41,23 @@ add_subdirectory(sources)
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT raytracer)
 
 set(bin_dir "${CMAKE_CURRENT_LIST_DIR}/bin")
+set(shader_dir "${CMAKE_CURRENT_LIST_DIR}/sources/etx/shaders")
+set(shader_files "")
+
+if (EXISTS "${shader_dir}")
+  if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.12")
+    file(GLOB_RECURSE shader_files CONFIGURE_DEPENDS
+      "${shader_dir}/*.hlsl"
+      "${shader_dir}/*.hxx"
+    )
+  else()
+    file(GLOB_RECURSE shader_files
+      "${shader_dir}/*.hlsl"
+      "${shader_dir}/*.hxx"
+    )
+  endif()
+endif()
+
 if (EXISTS "${bin_dir}")
   if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.12")
     file(GLOB_RECURSE bin_files CONFIGURE_DEPENDS
@@ -48,19 +65,34 @@ if (EXISTS "${bin_dir}")
       "${bin_dir}/*.mtl"
       "${bin_dir}/*.cu"
       "${bin_dir}/*.spd"
-      "${bin_dir}/*.materials")
+      "${bin_dir}/*.materials"
+      "${bin_dir}/*.hlsl"
+      "${bin_dir}/*.hxx"
+    )
   else()
     file(GLOB_RECURSE bin_files
       "${bin_dir}/*.json"
       "${bin_dir}/*.mtl"
       "${bin_dir}/*.cu"
       "${bin_dir}/*.spd"
-      "${bin_dir}/*.materials")
+      "${bin_dir}/*.materials"
+      "${bin_dir}/*.hlsl"
+      "${bin_dir}/*.hxx"
+    )
   endif()
   list(FILTER bin_files EXCLUDE REGEX "[/\\\\]assets_testing[/\\\\]")
-  if (bin_files)
-    add_custom_target(data SOURCES ${bin_files})
-    source_group(TREE "${bin_dir}" PREFIX "data" FILES ${bin_files})
+  if (bin_files OR shader_files)
+    add_custom_target(data SOURCES ${bin_files} ${shader_files})
+    if (bin_files)
+      source_group(TREE "${bin_dir}" PREFIX "data/bin" FILES ${bin_files})
+    endif()
+    if (shader_files)
+      source_group(TREE "${shader_dir}" PREFIX "data/shaders" FILES ${shader_files})
+    endif()
     set_property(TARGET data PROPERTY EXCLUDE_FROM_ALL TRUE)
   endif()
+elseif (shader_files)
+  add_custom_target(data SOURCES ${shader_files})
+  source_group(TREE "${shader_dir}" PREFIX "data/shaders" FILES ${shader_files})
+  set_property(TARGET data PROPERTY EXCLUDE_FROM_ALL TRUE)
 endif()

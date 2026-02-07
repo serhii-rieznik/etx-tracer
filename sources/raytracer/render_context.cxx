@@ -7,10 +7,8 @@
 #include <etx/rhi/rhi.hxx>
 #include <etx/rhi/rhi_imgui.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
-#include <etx/rhi/vulkan/vk_rhi.hxx>
 
 #include <sokol_app.h>
-#include <vulkan/vulkan.h>
 
 #include "render_context.hxx"
 #include "renderer.hxx"
@@ -27,10 +25,9 @@ struct RenderContextImpl {
   }
 
   TaskScheduler& scheduler;
-  RHIContext* rhi_context = nullptr;
+  RHIContext rhi_context = {};
   RHIImGui rhi_imgui = {};
   RHICommandBuffer rhi_cmd = {};
-  RHIDevice* rhi_device = nullptr;
   RHIPipeline presentation_pipeline = {};
   Renderer* active_renderer = nullptr;
   RenderContext::FrameData frame_data = {};
@@ -41,10 +38,10 @@ struct RenderContextImpl {
   ImagePool image_pool;
   uint32_t reference_image_handle = kInvalidIndex;
 
-  void apply_reference_image(RHIContext* ctx, uint32_t handle) {
+  void apply_reference_image(RHIContext& ctx, uint32_t handle) {
     const auto& img = image_pool.get(handle);
     if (reference_texture.valid()) {
-      ctx->get_device()->destroy_texture(reference_texture);
+      ctx.device().destroy_texture(reference_texture);
       reference_texture = {};
     }
     RHITextureDesc desc = {
@@ -53,19 +50,10 @@ struct RenderContextImpl {
       .format = (img.format == Image::Format::RGBA32F) ? RHITextureFormat::R32G32B32A32_FLOAT : RHITextureFormat::R8G8B8A8_UNORM,
       .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst,
     };
-    reference_texture = ctx->get_device()->create_texture(desc).handle;
+    reference_texture = ctx.device().create_texture(desc).handle;
     const void* data_ptr = (img.format == Image::Format::RGBA32F) ? (const void*)img.pixels.f32.a : (const void*)img.pixels.u8.a;
-    ctx->get_device()->update_texture(reference_texture, data_ptr, 0, 0);
+    ctx.device().update_texture(reference_texture, data_ptr, 0, 0);
   }
-};
-
-struct RenderParameters {
-  ViewParameters view;
-  float4 dimensions;
-  uint32_t sample_count;
-  uint32_t sample_image_index;
-  uint32_t reference_image_index;
-  uint32_t pad;
 };
 
 ETX_IMPLEMENT_PIMPL(RenderContext);
@@ -78,16 +66,19 @@ RenderContext::~RenderContext() {
   ETX_PIMPL_CLEANUP(RenderContext);
 }
 
-RHIContext* RenderContext::get_context() {
+RHIContext& RenderContext::get_context() {
+  ETX_ASSERT(_private->rhi_context.valid());
   return _private->rhi_context;
 }
 
-RHIDevice* RenderContext::get_device() {
-  return _private->rhi_device;
+RHIDevice& RenderContext::get_device() {
+  ETX_ASSERT(_private->rhi_context.valid());
+  return _private->rhi_context.device();
 }
 
 RHITextureFormat RenderContext::get_swapchain_format() {
-  return _private->rhi_context != nullptr ? _private->rhi_context->get_swapchain_format() : RHITextureFormat::Undefined;
+  ETX_ASSERT(_private->rhi_context.valid());
+  return _private->rhi_context.get_swapchain_format();
 }
 
 RHITextureFormat RenderContext::get_depth_format() {
@@ -95,8 +86,13 @@ RHITextureFormat RenderContext::get_depth_format() {
 }
 
 void RenderContext::init() {
+  RHIBackend backend = RHIBackend::Vulkan;
+#if defined(ETX_PLATFORM_APPLE)
+  backend = RHIBackend::Metal;
+#endif
+
   RHIInitInfo info = {
-    .backend = RHIBackend::Vulkan,
+    .backend = backend,
     .enable_validation = ETX_DEBUG,
   };
   const void* native_window = nullptr;
@@ -109,75 +105,58 @@ void RenderContext::init() {
     return;
 
   _private->rhi_context = RHIContext::create(info);
-  if ((_private->rhi_context == nullptr) || (_private->rhi_context->get_device() == nullptr)) {
+  if (_private->rhi_context.valid() == false) {
     return;
   }
 
-  _private->rhi_context->create_swapchain(native_window, static_cast<uint32_t>(sapp_width()), static_cast<uint32_t>(sapp_height()));
-  _private->rhi_device = _private->rhi_context->get_device();
+  _private->rhi_context.create_swapchain(native_window, static_cast<uint32_t>(sapp_width()), static_cast<uint32_t>(sapp_height()));
 
   static RHIImGuiDesc imgui_desc = {
-    .color_format = _private->rhi_context->get_swapchain_format(),
+    .color_format = _private->rhi_context.get_swapchain_format(),
     .ini_filename = env().file_in_data("ui.ini"),
   };
   _private->rhi_imgui.setup(_private->rhi_context, imgui_desc);
 
-  ShaderCompiler* compiler = ShaderCompiler::get_global_instance();
-  auto vs = compiler->load_and_compile_shader_from_file("shaders/render.hlsl", "vertex_main", RHIShaderStage::Vertex);
-  auto fs = compiler->load_and_compile_shader_from_file("shaders/render.hlsl", "fragment_main", RHIShaderStage::Fragment);
+  auto& compiler = ShaderCompiler::instance();
+
+  auto result = compiler.compile("etx/shaders/render.hlsl", {{"vertex_main", RHIShaderStage::Vertex}, {"fragment_main", RHIShaderStage::Fragment}});
+
+  if (result.result != RHIResult::Success) {
+    log::error("Failed to compile render shader: %s", result.error_message.c_str());
+    return;
+  }
+
   RHIGraphicsPipelineDesc pipeline_desc = {
-    .vertex_shader =
-      {
-        .spirv_data = vs.spirv_data.data(),
-        .spirv_size = vs.spirv_data.size(),
-        .stage = RHIShaderStage::Vertex,
-        .entry_point = "vertex_main",
-      },
-    .fragment_shader =
-      {
-        .spirv_data = fs.spirv_data.data(),
-        .spirv_size = fs.spirv_data.size(),
-        .stage = RHIShaderStage::Fragment,
-        .entry_point = "fragment_main",
-      },
     .color_attachment_count = 1,
-    .color_formats = {_private->rhi_context->get_swapchain_format()},
+    .color_formats = {_private->rhi_context.get_swapchain_format()},
   };
-  _private->presentation_pipeline = _private->rhi_device->create_graphics_pipeline(pipeline_desc).handle;
+
+  _private->presentation_pipeline = _private->rhi_context.device().create_graphics_pipeline(pipeline_desc, result.binaries[0], result.binaries[1]).handle;
 }
 
 void RenderContext::cleanup() {
-  if (_private->rhi_context == nullptr)
+  if (_private->rhi_context.valid() == false)
     return;
 
-  auto vk_context = static_cast<VKContext*>(_private->rhi_context);
-  if (vk_context != nullptr) {
-    VkDevice vk_device = vk_context->get_vk_device();
-    if (vk_device != VK_NULL_HANDLE) {
-      vkDeviceWaitIdle(vk_device);
-    }
-  }
+  _private->rhi_context.wait_idle();
 
   _private->rhi_imgui.shutdown();
 
-  if (_private->rhi_device) {
-    _private->rhi_device->destroy_pipeline(_private->presentation_pipeline);
-    if (_private->reference_texture.valid()) {
-      _private->rhi_device->destroy_texture(_private->reference_texture);
-    }
+  auto& device = _private->rhi_context.device();
+  device.destroy_pipeline(_private->presentation_pipeline);
+  if (_private->reference_texture.valid()) {
+    device.destroy_texture(_private->reference_texture);
   }
   _private->image_pool.remove(_private->reference_image_handle);
   _private->image_pool.cleanup();
 
-  RHIContext::release(_private->rhi_context);
-  _private->rhi_context = nullptr;
-  _private->rhi_device = nullptr;
+  _private->rhi_context = {};
   _private->rhi_cmd = {};
 }
 
 void RenderContext::set_reference_image(const char* file_name) {
   _private->image_pool.remove(_private->reference_image_handle);
-  if (_private->rhi_context == nullptr)
+  if (_private->rhi_context.valid() == false)
     return;
 
   _private->reference_image_handle = _private->image_pool.add_from_file(file_name, 0, {}, {1.0f, 1.0f});
@@ -187,7 +166,7 @@ void RenderContext::set_reference_image(const char* file_name) {
 
 void RenderContext::set_reference_image(const float4 data[], const uint2 dimensions) {
   _private->image_pool.remove(_private->reference_image_handle);
-  if (_private->rhi_context == nullptr)
+  if (_private->rhi_context.valid() == false)
     return;
 
   _private->reference_image_handle = _private->image_pool.add_from_data(data, dimensions, 0u, {}, {1.0f, 1.0f});
@@ -196,7 +175,7 @@ void RenderContext::set_reference_image(const float4 data[], const uint2 dimensi
 }
 
 void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, const FrameData& frame_data) {
-  if (_private->rhi_context == nullptr)
+  if (_private->rhi_context.valid() == false)
     return;
 
   etx::RHIImGuiFrameDesc imgui_frame_desc = {
@@ -212,11 +191,11 @@ void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, 
     .dt = frame_data.dt,
   };
 
-  _private->rhi_context->begin_frame();
-  render_frame_data.cmd = _private->rhi_context->get_command_buffer();
+  _private->rhi_context.begin_frame();
+  render_frame_data.cmd = _private->rhi_context.get_command_buffer();
   _private->rhi_cmd = render_frame_data.cmd;
-  _private->rhi_context->command_buffer_begin(_private->rhi_cmd);
-  renderer->render(_private->rhi_context, scene, render_frame_data);
+  _private->rhi_context.command_buffer_begin(_private->rhi_cmd);
+  renderer->render(&(_private->rhi_context), scene, render_frame_data);
   _private->active_renderer = renderer;
   _private->frame_data = frame_data;
 }
@@ -224,19 +203,20 @@ void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, 
 void RenderContext::end_frame() {
   ETX_PROFILER_SCOPE();
 
-  if (_private->rhi_context == nullptr)
+  if (_private->rhi_context.valid() == false)
     return;
 
-  RHITexture swapchain_image = _private->rhi_context->get_current_swapchain_texture();
-  _private->rhi_context->cmd_begin_render_pass(_private->rhi_cmd, 1, &swapchain_image);
+  float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+  RHITexture swapchain_image = _private->rhi_context.get_current_swapchain_texture();
+  _private->rhi_context.cmd_begin_render_pass(_private->rhi_cmd, 1, &swapchain_image, clear_color);
 
   RHITexture output = _private->active_renderer ? _private->active_renderer->output_texture() : RHITexture{};
 
   if (output.valid()) {
     const RHIViewport viewport = {.width = float(sapp_width()), .height = float(sapp_height())};
     const RHIRect scissor = {.width = uint32_t(sapp_width()), .height = uint32_t(sapp_height())};
-    _private->rhi_context->cmd_set_viewport(_private->rhi_cmd, viewport);
-    _private->rhi_context->cmd_set_scissor(_private->rhi_cmd, scissor);
+    _private->rhi_context.cmd_set_viewport(_private->rhi_cmd, viewport);
+    _private->rhi_context.cmd_set_scissor(_private->rhi_cmd, scissor);
 
     uint2 output_size = _private->active_renderer->output_size();
     RenderParameters params = {
@@ -247,24 +227,24 @@ void RenderContext::end_frame() {
       .reference_image_index = _private->reference_texture.valid() ? get_bindless_descriptor_index(_private->reference_texture) : ~0u,
     };
 
-    _private->rhi_context->cmd_set_pipeline(_private->rhi_cmd, _private->presentation_pipeline);
-    _private->rhi_context->cmd_push_constants(_private->rhi_cmd, &params, sizeof(params));
-    _private->rhi_context->cmd_draw(_private->rhi_cmd, {.vertex_count = 3});
+    _private->rhi_context.cmd_set_pipeline(_private->rhi_cmd, _private->presentation_pipeline);
+    _private->rhi_context.cmd_push_constants(_private->rhi_cmd, &params, sizeof(params));
+    _private->rhi_context.cmd_draw(_private->rhi_cmd, {.vertex_count = 3});
   }
 
   _private->rhi_imgui.render(_private->rhi_cmd);
-  _private->rhi_context->cmd_end_render_pass(_private->rhi_cmd);
-  _private->rhi_context->command_buffer_end(_private->rhi_cmd);
-  auto acquired_sem = _private->rhi_context->get_image_acquired_semaphore();
-  auto render_complete_sem = _private->rhi_context->get_render_complete_semaphore();
+  _private->rhi_context.cmd_end_render_pass(_private->rhi_cmd);
+  _private->rhi_context.command_buffer_end(_private->rhi_cmd);
+  auto acquired_sem = _private->rhi_context.get_image_acquired_semaphore();
+  auto render_complete_sem = _private->rhi_context.get_render_complete_semaphore();
 
   RHISubmitInfo submit_info = {};
   submit_info.command_buffer = _private->rhi_cmd;
   submit_info.wait_semaphores.push_back(acquired_sem);
   submit_info.signal_semaphores.push_back(render_complete_sem);
 
-  _private->rhi_context->submit_command_buffer(submit_info);
-  _private->rhi_context->present();
+  _private->rhi_context.submit_command_buffer(submit_info);
+  _private->rhi_context.present();
   _private->rhi_cmd = {};
 }
 

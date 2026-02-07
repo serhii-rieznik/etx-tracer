@@ -9,8 +9,6 @@
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
-
-#include <algorithm>
 #include <tiny_obj_loader.hxx>
 
 namespace etx {

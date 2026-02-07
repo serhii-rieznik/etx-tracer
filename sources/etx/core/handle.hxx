@@ -1,10 +1,6 @@
 #pragma once
 
 #include <etx/core/debug.hxx>
-
-#include <functional>
-#include <stdint.h>
-
 namespace etx {
 
 union Handle {
@@ -22,8 +18,8 @@ union Handle {
 
   uint64_t value = kInvalidHandleValue;
   struct {
-    uint64_t cls        : ClsBits;
-    uint64_t index      : IndexBits;
+    uint64_t cls : ClsBits;
+    uint64_t index : IndexBits;
     uint64_t generation : GenBits;
   };
 
@@ -62,9 +58,6 @@ union Handle {
 static_assert(sizeof(Handle) == sizeof(uint64_t));
 
 }  // namespace etx
-
-#include <type_traits>
-
 namespace std {
 
 template <>

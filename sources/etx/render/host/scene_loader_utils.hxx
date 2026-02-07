@@ -5,12 +5,6 @@
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/ior_database.hxx>
-
-#include <vector>
-#include <map>
-#include <string>
-#include <filesystem>
-
 namespace etx {
 
 struct MaterialDefinition {

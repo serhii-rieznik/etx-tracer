@@ -1,13 +1,8 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/core/debug.hxx>
 #include <etx/render/shared/base.hxx>
 #include <etx/core/json.hxx>
-
-#include <vector>
-#include <string>
-#include <functional>
-
 namespace etx {
 
 struct Option {

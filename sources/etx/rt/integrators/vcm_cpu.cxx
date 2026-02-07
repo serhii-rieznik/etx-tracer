@@ -7,9 +7,6 @@
 #include <etx/render/shared/scene_camera.hxx>
 
 #include <etx/rt/shared/vcm_shared.hxx>
-
-#include <mutex>
-
 namespace etx {
 
 struct CPUVCMImpl {

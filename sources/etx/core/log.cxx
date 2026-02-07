@@ -1,9 +1,4 @@
 #include <etx/core/log.hxx>
-
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-
 namespace etx {
 
 #if !defined(ETX_PLATFORM_WINDOWS)

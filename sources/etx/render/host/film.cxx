@@ -7,7 +7,7 @@
 #include <etx/render/shared/scene.hxx>
 
 // TODO : make better option
-#include <../../../bin/shaders/shared/render_options.hxx>
+#include <etx/shaders/shared/render_options.hxx>
 
 #define ETX_LOG_NOISE_LEVEL 0
 

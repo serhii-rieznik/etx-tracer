@@ -1,14 +1,9 @@
-﻿#include "integrator.hxx"
+#include "integrator.hxx"
 
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/rt/rt.hxx>
-
-#include <thread>
-#include <mutex>
-#include <deque>
-
 namespace etx {
 
 struct ITMessage {
@@ -22,7 +17,7 @@ struct ITMessage {
 struct IntegratorThreadImpl {
   IntegratorThread* i = nullptr;
   std::atomic<bool> running = {};
-  std::deque<ITMessage> messages;
+  std::vector<ITMessage> messages;
   std::mutex lock;
 
   SceneRepresentation& scene_representation;
@@ -98,7 +93,7 @@ struct IntegratorThreadImpl {
       return false;
 
     msg = messages.front();
-    messages.pop_front();
+    messages.erase(messages.begin());
     return true;
   }
 

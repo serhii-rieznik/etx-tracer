@@ -15,16 +15,6 @@
 #include <etx/render/shared/material.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
-
-#include <algorithm>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
-#include <map>
-
 namespace etx {
 
 namespace {

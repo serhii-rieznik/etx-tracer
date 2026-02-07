@@ -1,9 +1,6 @@
 #pragma once
 
 #include <etx/core/pimpl.hxx>
-
-#include <functional>
-
 namespace etx {
 
 struct Task {

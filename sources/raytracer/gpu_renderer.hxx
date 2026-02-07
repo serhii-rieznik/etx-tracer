@@ -32,9 +32,7 @@ struct GPURaytracingRenderer : public Renderer {
 
  private:
   RHIPipeline _pipeline = {};
-
   RHIBindlessHandle _tlas = {};
-
   std::vector<RHIBindlessHandle> _blas;
   std::vector<RHIBindlessHandle> _blas_buffers;
 

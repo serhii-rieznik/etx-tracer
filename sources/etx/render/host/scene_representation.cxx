@@ -26,9 +26,6 @@
 #include <stb_image_write.hxx>
 
 #include <mikktspace.h>
-#include <filesystem>
-#include <algorithm>
-
 namespace etx {
 
 namespace {

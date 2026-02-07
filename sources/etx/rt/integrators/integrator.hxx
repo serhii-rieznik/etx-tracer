@@ -5,10 +5,6 @@
 #include <etx/util/options.hxx>
 #include <etx/rt/rt.hxx>
 #include <etx/render/shared/math.hxx>
-
-#include <atomic>
-#include <cstring>
-
 namespace etx {
 
 struct Integrator {

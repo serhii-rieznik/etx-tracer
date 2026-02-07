@@ -7,10 +7,6 @@
 #include <etx/render/shared/scattering.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 #include <etx/util/options.hxx>
-
-#include <unordered_map>
-#include <string>
-
 namespace etx {
 
 struct IORDatabase;

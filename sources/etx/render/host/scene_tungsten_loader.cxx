@@ -11,12 +11,6 @@
 #include <etx/render/host/scene_gltf_loader.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
 #include <etx/render/shared/ior_database.hxx>
-
-#include <array>
-#include <filesystem>
-#include <fstream>
-#include <unordered_map>
-
 namespace etx {
 
 namespace {

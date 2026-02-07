@@ -1,19 +1,10 @@
 #include "bindless.hlsl"
 #include "shared/render_options.hxx"
-#include "shared/camera.hxx"
+#include "shared/gpu_rt_shared.hxx"
 
-struct GPUConstants {
-  uint32_t as_index;
-  uint32_t output_image_index;
-  uint32_t frame_index;
-  uint32_t sample_index;
-  Camera camera;
-};
+[[vk::push_constant]] GPURTConstants constants;
 
-[[vk::push_constant]] GPUConstants constants;
-
-[numthreads(8, 8, 1)]
-void compute_main(uint3 dtid : SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void compute_main(uint3 dtid : SV_DispatchThreadID) {
   if (any(dtid.xy >= constants.camera.film_size))
     return;
 
@@ -36,7 +27,7 @@ void compute_main(uint3 dtid : SV_DispatchThreadID) {
 
   RayQuery<RAY_FLAG_NONE> q;
   RaytracingAccelerationStructure as = bindless_accel_structs[NonUniformResourceIndex(constants.as_index)];
-  
+
   q.TraceRayInline(as, RAY_FLAG_NONE, 0xFF, ray);
   q.Proceed();
 

@@ -20,6 +20,14 @@ add_executable(raytracer
   ${RAYTRACER_SHARED_SOURCES}
 )
 
+set(ETX_UNITY_STD_HEADER "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
+
+if(MSVC)
+  target_compile_options(raytracer PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
+else()
+  target_compile_options(raytracer PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
+endif()
+
 target_link_libraries(raytracer
   PRIVATE imgui sokol etx-core etx-render etx-rt etx-util etx-rhi tinyexr stb_image
 )

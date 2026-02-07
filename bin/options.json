@@ -2,24 +2,31 @@
   "values": [
     {
       "class": 5,
-      "description": "Scene",
-      "id": "scene",
+      "description": "Renderer",
+      "id": "renderer",
       "meta": 0,
-      "value": "./assets/cornellbox/cornellbox.etx.json"
+      "value": "gpu"
     },
     {
       "class": 5,
-      "description": "Reference",
-      "id": "ref",
+      "description": "Renderer",
+      "id": "renderer",
       "meta": 0,
-      "value": ""
+      "value": "cpu"
+    },
+    {
+      "class": 5,
+      "description": "Scene",
+      "id": "scene",
+      "meta": 0,
+      "value": "E:/Media/Raytracing/balls/balls.json"
     },
     {
       "class": 5,
       "description": "Recent File",
       "id": "recent-0",
       "meta": 0,
-      "value": "./assets/cornellbox/cornellbox.etx.json"
+      "value": "E:/Media/Raytracing/balls/balls.json"
     }
   ]
 }

@@ -1,11 +1,5 @@
 #include <etx/core/log.hxx>
 #include <etx/render/shared/spectrum.hxx>
-
-#include <vector>
-#include <algorithm>
-#include <cmath>
-#include <string>
-
 namespace etx {
 
 SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count) {

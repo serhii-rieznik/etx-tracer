@@ -1,8 +1,6 @@
 #pragma once
 
-#if !defined(ETX_ALIGNED)
-# define ETX_ALIGNED
-#endif
+#include "types.hxx"
 
 struct ViewLayer {
   enum : uint32_t {

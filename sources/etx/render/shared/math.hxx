@@ -4,11 +4,6 @@
 #else
 # error This file should not be included separately. Use etx/render/shared/base.hxx instead
 #endif
-
-#include <math.h>
-#include <complex.h>
-#include <string.h>
-
 template <class t>
 struct vector2 {
   t x, y;

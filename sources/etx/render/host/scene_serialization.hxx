@@ -3,13 +3,6 @@
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
 #include <etx/render/shared/math.hxx>
-
-#include <string>
-#include <map>
-#include <unordered_map>
-#include <vector>
-#include <filesystem>
-
 namespace etx {
 
 inline std::string normalize_material_name(std::string name) {

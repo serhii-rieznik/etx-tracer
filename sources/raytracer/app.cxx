@@ -19,7 +19,7 @@
 # include <Windows.h>
 #endif
 
-#include <shaders/shared/render_options.hxx>
+#include <etx/shaders/shared/render_options.hxx>
 
 namespace etx {
 
@@ -48,9 +48,9 @@ void RTApplication::init() {
 
   ui.set_integrator_list(cpu_renderer.integrator_list(), cpu_renderer.integrator_count());
 
-  cpu_renderer.init(render_context.get_context(), scene);
-  raster_renderer.init(render_context.get_context(), scene);
-  gpu_renderer.init(render_context.get_context(), scene);
+  cpu_renderer.init(&render_context.get_context(), scene);
+  raster_renderer.init(&render_context.get_context(), scene);
+  gpu_renderer.init(&render_context.get_context(), scene);
 
   RendererMode mode = RendererMode::CPURaytracing;
   auto renderer_name = _options.get_string("renderer", "cpu");
@@ -584,7 +584,7 @@ void RTApplication::on_scene_updates_locked_changed(bool locked) {
 
 void RTApplication::on_reload_shaders_selected() {
   if (_active_renderer == &gpu_renderer) {
-    gpu_renderer.reload_shaders(render_context.get_context());
+    gpu_renderer.reload_shaders(&render_context.get_context());
   }
 }
 

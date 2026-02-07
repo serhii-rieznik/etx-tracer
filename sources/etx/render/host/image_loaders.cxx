@@ -7,14 +7,6 @@
 #define BCDEC_IMPLEMENTATION
 #define BCDEC_BC4BC5_PRECISE
 #include <bcdec.h>
-
-#include <atomic>
-#include <vector>
-#include <functional>
-#include <cstring>
-#include <cstdio>
-#include <algorithm>
-
 namespace etx {
 
 #pragma pack(push, 1)

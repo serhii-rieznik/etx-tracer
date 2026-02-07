@@ -1,8 +1,4 @@
 #pragma once
-
-#include <cstdint>
-#include <cassert>
-
 #include <etx/core/platform.hxx>
 
 #if defined(NDEBUG) || defined(_NDEBUG)
@@ -24,9 +20,6 @@
 # define ETX_ASSERT_ATOMIC_CHECK() atomicAdd(reported, 1u) == 0
 
 #else
-
-# include <stdio.h>
-
 # define ETX_NVCC_COMPILER 0
 # define ETX_CPU_CODE
 # define ETX_GPU_CODE    inline

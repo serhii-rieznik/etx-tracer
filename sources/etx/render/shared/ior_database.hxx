@@ -2,17 +2,6 @@
 
 #include <etx/core/environment.hxx>
 #include <etx/render/shared/spectrum.hxx>
-
-#include <filesystem>
-#include <vector>
-#include <array>
-#include <string>
-#include <unordered_map>
-#include <cctype>
-#include <algorithm>
-#include <system_error>
-#include <cmath>
-
 namespace etx {
 
 struct IORDefinition {

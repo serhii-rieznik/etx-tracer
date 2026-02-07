@@ -4,14 +4,6 @@
 #include <etx/render/host/image_loaders.hxx>
 #include <etx/render/shared/math.hxx>
 #include <etx/render/shared/distribution.hxx>
-
-#include <atomic>
-#include <vector>
-#include <unordered_map>
-#include <functional>
-#include <filesystem>
-#include <algorithm>
-
 namespace etx {
 
 struct ImagePoolImpl {

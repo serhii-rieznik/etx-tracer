@@ -1,11 +1,6 @@
 #pragma once
 
 #include <etx/core/debug.hxx>
-
-#include <memory.h>
-#include <stdint.h>
-#include <new>
-
 #define ETX_PIMPL_DECLARE(T, SUFFIX, SZ)         \
  public:                                         \
   T(const T&) = delete;                          \

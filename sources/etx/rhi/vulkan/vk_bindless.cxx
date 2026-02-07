@@ -1,9 +1,62 @@
-#include <etx/rhi/vulkan/vk_bindless.hxx>
 #include <etx/rhi/vulkan/vk_rhi.hxx>
 
 #include <etx/core/log.hxx>
 
 namespace etx {
+
+struct VKBindlessManager::Impl {
+  Impl(VkDevice device, VkPhysicalDevice physical_device, uint32_t max_buffers, uint32_t max_textures, uint32_t max_samplers, uint32_t max_acceleration_structures);
+  ~Impl();
+
+  VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
+  VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+  VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+
+  VkDevice device = VK_NULL_HANDLE;
+
+  uint32_t max_buffers = kDefaultMaxBuffers;
+  uint32_t max_textures = kDefaultMaxTextures;
+  uint32_t max_samplers = kDefaultMaxSamplers;
+  uint32_t max_acceleration_structures = kDefaultMaxAccelerationStructures;
+
+  uint32_t buffer_count = 0;
+  uint32_t texture_count = 0;
+  uint32_t sampler_count = 0;
+  uint32_t acceleration_structure_count = 0;
+
+  VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+
+  struct ResourceEntry {
+    uint32_t generation = 0;
+    uint32_t descriptor_index = 0;
+    RHIResourceType type = RHIResourceType::Buffer;
+    bool valid = false;
+
+    union {
+      VkBuffer buffer;
+      VkImage image;
+      VkSampler sampler;
+      VkAccelerationStructureKHR acceleration_structure;
+    } vulkan_handle = {};
+  };
+
+  std::unordered_map<RHIBindlessHandle, ResourceEntry> handle_to_resource;
+  std::vector<ResourceEntry> buffer_entries;
+  std::vector<ResourceEntry> texture_entries;
+  std::vector<ResourceEntry> sampler_entries;
+  std::vector<ResourceEntry> acceleration_structure_entries;
+
+  bool create_descriptor_set_layout();
+  bool create_descriptor_pool();
+  bool allocate_descriptor_set();
+  bool initialize_bindless_arrays();
+
+  RHIResult register_resource(RHIResourceType type, uint32_t& out_descriptor_index, RHIBindlessHandle& out_handle);
+  RHIResult unregister_resource(RHIBindlessHandle handle);
+
+  void update_descriptor_array(VkDescriptorType descriptor_type, uint32_t binding, uint32_t descriptor_index, VkDescriptorBufferInfo* buffer_info = nullptr,
+    VkDescriptorImageInfo* image_info = nullptr, VkWriteDescriptorSetAccelerationStructureKHR* accel_info = nullptr);
+};
 
 VKBindlessManager::Impl::Impl(VkDevice vk_device, VkPhysicalDevice physical_device, uint32_t max_buf, uint32_t max_tex, uint32_t max_samp, uint32_t max_accel)
   : device(vk_device)
@@ -376,9 +429,9 @@ void VKBindlessManager::initialize(VkDevice device, VkPhysicalDevice physical_de
 
   vkGetPhysicalDeviceProperties2(physical_device, &props2);
 
-  bool bindless_supported = descriptor_indexing_props.maxUpdateAfterBindDescriptorsInAllPools > 0 && descriptor_indexing_props.maxPerStageDescriptorUpdateAfterBindSamplers > 0;
+  bool bindless_supported = (descriptor_indexing_props.maxUpdateAfterBindDescriptorsInAllPools > 0) && (descriptor_indexing_props.maxPerStageDescriptorUpdateAfterBindSamplers > 0);
 
-  if (!bindless_supported) {
+  if (bindless_supported == false) {
     log::error("Device does not support bindless descriptors - cannot initialize bindless manager");
     log::error("Required: maxUpdateAfterBindDescriptorsInAllPools > 0 and maxPerStageDescriptorUpdateAfterBindSamplers > 0");
     log::error("Actual values: maxUpdateAfterBindDescriptorsInAllPools=%u, maxPerStageDescriptorUpdateAfterBindSamplers=%u",

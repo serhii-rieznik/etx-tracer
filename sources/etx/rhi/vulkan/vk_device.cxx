@@ -1,4 +1,3 @@
-#include <etx/rhi/vulkan/vk_device.hxx>
 #include <etx/rhi/vulkan/vk_rhi.hxx>
 #include <etx/rhi/vulkan/vk_utils.hxx>
 #include <etx/rhi/rhi_types.hxx>
@@ -12,13 +11,6 @@
 #endif
 
 #include <vulkan/vulkan.h>
-
-#include <vector>
-#include <set>
-#include <algorithm>
-#include <unordered_map>
-#include <functional>
-
 namespace etx {
 
 static constexpr uint32_t kVKMaxPushConstantsSize = 256;
@@ -96,15 +88,15 @@ struct VKStagingBuffer {
   }
 
   void destroy(VkDevice device) {
-    if (mapped_ptr) {
+    if (mapped_ptr != nullptr) {
       vkUnmapMemory(device, memory);
       mapped_ptr = nullptr;
     }
-    if (memory) {
+    if (memory != VK_NULL_HANDLE) {
       vkFreeMemory(device, memory, nullptr);
       memory = VK_NULL_HANDLE;
     }
-    if (buffer) {
+    if (buffer != VK_NULL_HANDLE) {
       vkDestroyBuffer(device, buffer, nullptr);
       buffer = VK_NULL_HANDLE;
     }
@@ -189,9 +181,7 @@ struct VKDevice::Impl {
   std::vector<VkExtensionProperties> available_device_extensions = {};
   std::vector<VkExtensionProperties> available_instance_extensions = {};
 
-  RHIBindlessManager* bindless_manager = nullptr;
-
-  ShaderCompiler* shader_compiler = nullptr;
+  VKBindlessManager* bindless_manager = nullptr;
 
   std::unordered_map<RHIBindlessHandle, VkBuffer> buffer_map;
 
@@ -203,12 +193,6 @@ struct VKDevice::Impl {
   VKResourcePool<VKPipelineData, RHIPipeline> graphics_pipelines;
   VKResourcePool<VKAccelerationStructureData, RHIBindlessHandle> acceleration_structures;
   VKResourcePool<VkSemaphore, RHISemaphore> semaphores;
-
-  // Shaders are handled differently - direct vector with index-based handles
-  std::vector<VkShaderModule> shaders;
-  std::vector<uint32_t> shader_generations;
-  std::vector<uint32_t> free_shader_indices;
-  std::unordered_map<RHIShader, VkShaderModule> shader_handle_map;
 
   // Separate tracking for mapped buffers (since void* can't be in POD)
   std::unordered_map<RHIBindlessHandle, void*> mapped_buffer_ptrs;
@@ -438,17 +422,17 @@ struct VKDevice::Impl {
 };
 
 VKDevice::Impl::Impl(const RHIInitInfo& info) {
-  if (!initialize_instance(info)) {
+  if (initialize_instance(info) == false) {
     log::error("Failed to initialize Vulkan instance");
     return;
   }
 
-  if (!initialize_physical_device()) {
+  if (initialize_physical_device() == false) {
     log::error("Failed to initialize physical device");
     return;
   }
 
-  if (!initialize_device()) {
+  if (initialize_device() == false) {
     log::error("Failed to initialize device");
     return;
   }
@@ -657,7 +641,8 @@ bool VKDevice::Impl::initialize_device() {
     if (strcmp(ext.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0) {
       device_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
       memory_budget_supported = true;
-      break;
+    } else if (strcmp(ext.extensionName, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) == 0) {
+      device_extensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
     }
   }
 
@@ -695,8 +680,16 @@ bool VKDevice::Impl::initialize_device() {
   descriptor_indexing_features.descriptorBindingPartiallyBound = VK_TRUE;
   descriptor_indexing_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
 
+  VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES};
+  dynamic_rendering_features.pNext = &descriptor_indexing_features;
+  dynamic_rendering_features.dynamicRendering = VK_TRUE;
+
+  VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures demote_to_helper_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES};
+  demote_to_helper_features.pNext = &dynamic_rendering_features;
+  demote_to_helper_features.shaderDemoteToHelperInvocation = VK_TRUE;
+
   VkDeviceCreateInfo device_create_info = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-  device_create_info.pNext = &descriptor_indexing_features;
+  device_create_info.pNext = &demote_to_helper_features;
   device_create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size());
   device_create_info.pQueueCreateInfos = queue_create_infos.data();
   device_create_info.pEnabledFeatures = &device_features;
@@ -1140,63 +1133,30 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   dynamic_state_info.dynamicStateCount = 2;
   dynamic_state_info.pDynamicStates = dynamic_states;
 
-  VkFormat color_format = VK_FORMAT_B8G8R8A8_SRGB;
-  if (desc.color_attachment_count > 0) {
-    color_format = convert_rhi_format_to_vk(desc.color_formats[0]);
-    if (color_format == VK_FORMAT_UNDEFINED) {
-      color_format = VK_FORMAT_B8G8R8A8_SRGB;
+  std::vector<VkFormat> color_formats;
+  color_formats.reserve(desc.color_attachment_count);
+  for (uint32_t i = 0; i < desc.color_attachment_count; ++i) {
+    color_formats.push_back(convert_rhi_format_to_vk(desc.color_formats[i]));
+  }
+
+  // Handle undefined formats that might be passed in
+  for (auto& fmt : color_formats) {
+    if (fmt == VK_FORMAT_UNDEFINED) {
+      fmt = VK_FORMAT_B8G8R8A8_SRGB;
     }
   }
 
-  VkAttachmentDescription color_attachment = {};
-  color_attachment.format = color_format;
-  color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-  color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-  color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-  color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  VkFormat depth_format = convert_rhi_format_to_vk(desc.depth_format);
+  VkFormat stencil_format = (depth_format == VK_FORMAT_D24_UNORM_S8_UINT || depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT) ? depth_format : VK_FORMAT_UNDEFINED;
 
-  VkAttachmentReference color_attachment_ref = {};
-  color_attachment_ref.attachment = 0;
-  color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-  VkSubpassDescription subpass = {};
-  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-  subpass.colorAttachmentCount = 1;
-  subpass.pColorAttachments = &color_attachment_ref;
-
-  VkSubpassDependency dependencies[2] = {};
-  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-  dependencies[0].dstSubpass = 0;
-  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependencies[0].srcAccessMask = 0;
-  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  dependencies[1].srcSubpass = 0;
-  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-  dependencies[1].dstAccessMask = 0;
-
-  VkRenderPassCreateInfo render_pass_info = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-  render_pass_info.attachmentCount = 1;
-  render_pass_info.pAttachments = &color_attachment;
-  render_pass_info.subpassCount = 1;
-  render_pass_info.pSubpasses = &subpass;
-  render_pass_info.dependencyCount = 2;
-  render_pass_info.pDependencies = dependencies;
-
-  VkRenderPass temp_render_pass;
-  if (etx_vk_call(vkCreateRenderPass(device, &render_pass_info, nullptr, &temp_render_pass)) != VK_SUCCESS) {
-    vkDestroyShaderModule(device, frag_module, nullptr);
-    vkDestroyShaderModule(device, vert_module, nullptr);
-    return RHIResult::ValidationError;
-  }
+  VkPipelineRenderingCreateInfo rendering_info = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+  rendering_info.colorAttachmentCount = static_cast<uint32_t>(color_formats.size());
+  rendering_info.pColorAttachmentFormats = color_formats.data();
+  rendering_info.depthAttachmentFormat = depth_format;
+  rendering_info.stencilAttachmentFormat = stencil_format;
 
   VkGraphicsPipelineCreateInfo pipeline_info = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+  pipeline_info.pNext = &rendering_info;
   pipeline_info.stageCount = 2;
   pipeline_info.pStages = shader_stages;
   pipeline_info.pVertexInputState = &vertex_input;
@@ -1208,17 +1168,12 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   pipeline_info.pColorBlendState = &color_blending;
   pipeline_info.pDynamicState = &dynamic_state_info;
   pipeline_info.layout = layout;
-  pipeline_info.renderPass = temp_render_pass;
-  pipeline_info.subpass = 0;
-  pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
 
   if (etx_vk_call(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &out_pipeline)) != VK_SUCCESS) {
-    vkDestroyRenderPass(device, temp_render_pass, nullptr);
     vkDestroyShaderModule(device, frag_module, nullptr);
     vkDestroyShaderModule(device, vert_module, nullptr);
     return RHIResult::ValidationError;
   }
-  vkDestroyRenderPass(device, temp_render_pass, nullptr);
   vkDestroyShaderModule(device, frag_module, nullptr);
   vkDestroyShaderModule(device, vert_module, nullptr);
 
@@ -1226,33 +1181,34 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
 }
 
 RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline) {
-  // Create compute shader module from SPIR-V
-  VkShaderModuleCreateInfo comp_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-  comp_info.codeSize = desc.compute_shader.spirv_size;
-  comp_info.pCode = reinterpret_cast<const uint32_t*>(desc.compute_shader.spirv_data);
-  VkShaderModule comp_module;
+  VkShaderModuleCreateInfo comp_info = {
+    .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+    .codeSize = desc.compute_shader.spirv_size,
+    .pCode = reinterpret_cast<const uint32_t*>(desc.compute_shader.spirv_data),
+  };
+  VkShaderModule comp_module = {};
   if (etx_vk_call(vkCreateShaderModule(device, &comp_info, nullptr, &comp_module)) != VK_SUCCESS) {
     return RHIResult::ValidationError;
   }
 
-  VkPipelineShaderStageCreateInfo shader_stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-  shader_stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-  shader_stage.module = comp_module;
-  shader_stage.pName = desc.compute_shader.entry_point.c_str();
+  VkPipelineShaderStageCreateInfo shader_stage = {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+    .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+    .module = comp_module,
+    .pName = desc.compute_shader.entry_point.c_str(),
+  };
 
-  VkComputePipelineCreateInfo pipeline_info = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-  pipeline_info.stage = shader_stage;
-  pipeline_info.layout = layout;
-  pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
-  pipeline_info.basePipelineIndex = -1;
+  VkComputePipelineCreateInfo pipeline_info = {
+    .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+    .stage = shader_stage,
+    .layout = layout,
+    .basePipelineIndex = -1,
+  };
 
-  if (etx_vk_call(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &out_pipeline)) != VK_SUCCESS) {
-    vkDestroyShaderModule(device, comp_module, nullptr);
-    return RHIResult::ValidationError;
-  }
+  bool success = etx_vk_call(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &out_pipeline)) == VK_SUCCESS;
   vkDestroyShaderModule(device, comp_module, nullptr);
 
-  return RHIResult::Success;
+  return success ? RHIResult::Success : RHIResult::ValidationError;
 }
 
 static VkFilter convert_sampler_filter(RHISamplerFilter filter) {
@@ -1467,22 +1423,6 @@ RHIResult VKDevice::Impl::create_vulkan_image_view(const RHITextureDesc& desc, V
   return RHIResult::Success;
 }
 
-uint32_t VKDevice::Impl::allocate_shader_slot() {
-  uint32_t index;
-
-  if (!free_shader_indices.empty()) {
-    index = free_shader_indices.back();
-    free_shader_indices.pop_back();
-    shader_generations[index] = (shader_generations[index] + 1) & 0x0FFFFFFF;  // Increment generation on reuse
-  } else {
-    index = static_cast<uint32_t>(shaders.size());
-    shaders.push_back(VK_NULL_HANDLE);
-    shader_generations.push_back(0);
-  }
-
-  return index;
-}
-
 void VKDevice::Impl::free_sampler_index(uint32_t index) {
   samplers.free_index(index);
 }
@@ -1578,18 +1518,6 @@ RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAcceler
   _impl->as_to_buffer_map[as_handle] = buffer_res.handle;
 
   return {RHIResult::Success, as_handle};
-}
-
-void VKDevice::Impl::free_shader_slot(uint32_t handle_index) {
-  uint32_t array_index = handle_index;
-
-  if (array_index < shaders.size()) {
-    if (shaders[array_index] != VK_NULL_HANDLE) {
-      vkDestroyShaderModule(device, shaders[array_index], nullptr);
-      shaders[array_index] = VK_NULL_HANDLE;
-    }
-    free_shader_indices.push_back(array_index);
-  }
 }
 
 VkCommandBuffer VKDevice::Impl::acquire_command_buffer(uint32_t pool_index) {
@@ -1707,14 +1635,6 @@ void VKDevice::Impl::cleanup_pools() {
   graphics_pipelines.for_each(destroy_pipeline);
   graphics_pipelines.clear();
 
-  // Destroy shaders
-  for (auto& module : shaders) {
-    if (module != VK_NULL_HANDLE) {
-      vkDestroyShaderModule(device, module, nullptr);
-    }
-  }
-  shaders.clear();
-
   // Destroy samplers
   samplers.for_each([this](VKSamplerData& data) {
     if (data.sampler != VK_NULL_HANDLE) {
@@ -1817,14 +1737,6 @@ VkImage VKDevice::get_vk_image_from_bindless(RHIBindlessHandle handle) const {
   return VK_NULL_HANDLE;
 }
 
-void VKDevice::set_shader_compiler(ShaderCompiler* compiler) {
-  _impl->shader_compiler = compiler;
-}
-
-ShaderCompiler* VKDevice::get_shader_compiler() const {
-  return _impl->shader_compiler;
-}
-
 VKDevice::VKDevice(const RHIInitInfo& info)
   : _impl(new Impl(info)) {
 }
@@ -1836,21 +1748,15 @@ void VKDevice::destroy_all_resources() {
 
   uint32_t graphics_pipeline_count = static_cast<uint32_t>(_impl->graphics_pipelines.size());
   uint32_t compute_pipeline_count = static_cast<uint32_t>(_impl->compute_pipelines.size());
-  uint32_t shader_count = static_cast<uint32_t>(_impl->shader_handle_map.size());
   uint32_t texture_count = static_cast<uint32_t>(_impl->textures.size());
   uint32_t buffer_count = static_cast<uint32_t>(_impl->buffers.size());
   uint32_t sampler_count = static_cast<uint32_t>(_impl->samplers.size());
 
   std::vector<RHIPipeline> graphics_pipeline_handles = _impl->graphics_pipelines.get_all_keys();
   std::vector<RHIPipeline> compute_pipeline_handles = _impl->compute_pipelines.get_all_keys();
-  std::vector<RHIShader> shader_handles;
   std::vector<RHIBindlessHandle> texture_handles = _impl->textures.get_all_keys();
   std::vector<RHIBindlessHandle> buffer_handles = _impl->buffers.get_all_keys();
   std::vector<RHIBindlessHandle> sampler_handles = _impl->samplers.get_all_keys();
-
-  for (const auto& pair : _impl->shader_handle_map) {
-    shader_handles.push_back(pair.first);
-  }
 
   for (RHIPipeline handle : graphics_pipeline_handles) {
     RHIResult result = destroy_pipeline(handle);
@@ -1867,14 +1773,6 @@ void VKDevice::destroy_all_resources() {
     }
   }
   _impl->compute_pipelines.clear();
-
-  for (RHIShader handle : shader_handles) {
-    RHIResult result = destroy_shader(handle);
-    if (result != RHIResult::Success) {
-      log::warning("Failed to destroy shader %llu: %d", handle.value, static_cast<int>(result));
-    }
-  }
-  _impl->shader_handle_map.clear();
 
   for (RHIBindlessHandle handle : texture_handles) {
     RHIResult result = destroy_texture(handle);
@@ -1899,6 +1797,15 @@ void VKDevice::destroy_all_resources() {
     }
   }
   _impl->samplers.clear();
+
+  std::vector<RHISemaphore> semaphore_handles = _impl->semaphores.get_all_keys();
+  for (RHISemaphore handle : semaphore_handles) {
+    RHIResult result = destroy_semaphore(handle);
+    if (result != RHIResult::Success) {
+      log::warning("Failed to destroy semaphore %llu: %d", handle.value, static_cast<int>(result));
+    }
+  }
+  _impl->semaphores.clear();
 
   for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
     _impl->process_deferred_destruction(i);
@@ -2042,120 +1949,6 @@ RHICreateBindlessResult VKDevice::create_sampler(const RHISamplerDesc& desc) {
   _impl->samplers.set_handle_to_index(handle, index);
 
   return {RHIResult::Success, handle};
-}
-
-RHICreateShaderResult VKDevice::create_shader(const RHIShaderDesc& desc) {
-  if (_impl->device == VK_NULL_HANDLE) {
-    log::error("Vulkan device not initialized");
-    return {RHIResult::InvalidArgument, {}};
-  }
-
-  if (desc.spirv_data == nullptr || desc.spirv_size == 0) {
-    log::error("Invalid SPIR-V data provided to create_shader");
-    return {RHIResult::InvalidArgument, {}};
-  }
-
-  if (desc.spirv_size % 4 != 0) {
-    log::error("SPIR-V data size not aligned to 4 bytes: %llu", desc.spirv_size);
-    return {RHIResult::ValidationError, {}};
-  }
-
-  VkShaderModuleCreateInfo create_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-  create_info.codeSize = desc.spirv_size;
-  create_info.pCode = reinterpret_cast<const uint32_t*>(desc.spirv_data);
-
-  VkShaderModule shader_module;
-  if (etx_vk_call(vkCreateShaderModule(_impl->device, &create_info, nullptr, &shader_module)) != VK_SUCCESS) {
-    return {RHIResult::ValidationError, {}};
-  }
-
-  uint32_t slot = _impl->allocate_shader_slot();
-  uint32_t generation = _impl->shader_generations[slot];
-
-  RHIShader shader_handle = Handle::construct(0, slot, generation);
-
-  _impl->shaders[slot] = shader_module;
-  _impl->shader_handle_map[shader_handle] = shader_module;
-
-  return {RHIResult::Success, shader_handle};
-}
-
-RHICreateShaderResult VKDevice::create_shader_variant(const RHIShaderVariantDesc& desc) {
-  if (_impl->shader_compiler == nullptr) {
-    log::error("Shader compiler not available for variant creation");
-    return {RHIResult::InvalidArgument, {}};
-  }
-
-  ShaderCompilationResult result = _impl->shader_compiler->get_or_compile_shader_variant(desc.hlsl_source, desc.entry_point, desc.stage, desc.source_name, desc.defines);
-
-  if (result.result != RHIResult::Success) {
-    log::error("Shader variant compilation failed: %s", result.error_message.c_str());
-    return {result.result, {}};
-  }
-
-  if (result.spirv_data.size() % 4 != 0) {
-    log::error("SPIR-V data size not aligned to 4 bytes: %zu", result.spirv_data.size());
-    return {RHIResult::ValidationError, {}};
-  }
-
-  VkShaderModuleCreateInfo create_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-  create_info.codeSize = result.spirv_data.size();
-  create_info.pCode = reinterpret_cast<const uint32_t*>(result.spirv_data.data());
-
-  VkShaderModule shader_module;
-  if (etx_vk_call(vkCreateShaderModule(_impl->device, &create_info, nullptr, &shader_module)) != VK_SUCCESS) {
-    return {RHIResult::ValidationError, {}};
-  }
-
-  uint32_t slot = _impl->allocate_shader_slot();
-  uint32_t generation = _impl->shader_generations[slot];
-
-  RHIShader shader_handle = Handle::construct(0, slot, generation);
-
-  _impl->shaders[slot] = shader_module;
-  _impl->shader_handle_map[shader_handle] = shader_module;
-
-  return {RHIResult::Success, shader_handle};
-}
-
-RHICreateShaderResult VKDevice::create_shader_from_file(const std::string& file_path, const std::string& entry_point, RHIShaderStage stage,
-  const std::unordered_map<std::string, std::string>& defines) {
-  if (!_impl->shader_compiler) {
-    log::error("Shader compiler not available for file loading");
-    return {RHIResult::InvalidArgument, {}};
-  }
-
-  ShaderCompilationResult result = _impl->shader_compiler->load_and_compile_shader_from_file(file_path, entry_point, stage, defines);
-
-  if (result.result != RHIResult::Success) {
-    log::error("Shader file compilation failed: %s", result.error_message.c_str());
-    return {result.result, {}};
-  }
-
-  if (result.spirv_data.size() % 4 != 0) {
-    log::error("SPIR-V data size not aligned to 4 bytes: %zu", result.spirv_data.size());
-    return {RHIResult::ValidationError, {}};
-  }
-
-  VkShaderModuleCreateInfo create_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-  create_info.codeSize = result.spirv_data.size();
-  create_info.pCode = reinterpret_cast<const uint32_t*>(result.spirv_data.data());
-
-  VkShaderModule shader_module;
-  if (etx_vk_call(vkCreateShaderModule(_impl->device, &create_info, nullptr, &shader_module)) != VK_SUCCESS) {
-    return {RHIResult::ValidationError, {}};
-  }
-
-  uint32_t slot = _impl->allocate_shader_slot();
-  uint32_t generation = _impl->shader_generations[slot];
-
-  RHIShader shader_handle = Handle::construct(0, slot, generation);
-
-  _impl->shaders[slot] = shader_module;
-  _impl->shader_handle_map[shader_handle] = shader_module;
-
-  std::filesystem::path file_path_obj(file_path);
-  return {RHIResult::Success, shader_handle};
 }
 
 RHICreatePipelineResult VKDevice::create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc) {
@@ -2326,25 +2119,6 @@ RHIResult VKDevice::destroy_sampler(RHIBindlessHandle sampler_handle) {
   _impl->samplers.free_index(index, [this](const VKSamplerData& data) {
     _impl->queue_deferred_destruction(data);
   });
-
-  return RHIResult::Success;
-}
-
-RHIResult VKDevice::destroy_shader(RHIShader shader) {
-  if (shader.valid() == false)
-    return RHIResult::Success;
-
-  auto it = _impl->shader_handle_map.find(shader);
-  if (it == _impl->shader_handle_map.end()) {
-    log::error("Shader handle %llu not found for destruction", shader);
-    return RHIResult::InvalidHandle;
-  }
-
-  VkShaderModule vk_shader = it->second;
-  _impl->queue_deferred_destruction(vk_shader);
-
-  _impl->free_shader_slot(shader.get_index());
-  _impl->shader_handle_map.erase(it);
 
   return RHIResult::Success;
 }
@@ -2566,75 +2340,12 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
   return submit_result;
 }
 
-bool VKDevice::supports_bindless() const {
-  return _impl->bindless_supported;
-}
-
-uint64_t VKDevice::get_min_uniform_buffer_offset_alignment() const {
-  return _impl->min_uniform_buffer_offset_alignment;
-}
-
-uint64_t VKDevice::get_min_storage_buffer_offset_alignment() const {
-  return _impl->min_storage_buffer_offset_alignment;
-}
-
-VkDevice VKDevice::get_vk_device() const {
-  return _impl->device;
-}
-
 VkPhysicalDevice VKDevice::get_vk_physical_device() const {
   return _impl->physical_device;
 }
 
-void VKDevice::set_bindless_manager(RHIBindlessManager* manager) {
+void VKDevice::set_bindless_manager(VKBindlessManager* manager) {
   _impl->bindless_manager = manager;
-}
-
-RHIResult VKDevice::reload_shader(RHIShader shader, const RHIShaderDesc& new_desc) {
-  if (_impl->device == VK_NULL_HANDLE) {
-    return RHIResult::InvalidArgument;
-  }
-
-  auto shader_it = _impl->shader_handle_map.find(shader);
-  if (shader_it == _impl->shader_handle_map.end()) {
-    log::error("Shader handle %llu not found for reloading", shader.value);
-    return RHIResult::InvalidHandle;
-  }
-
-  if ((new_desc.spirv_data == nullptr) || (new_desc.spirv_size == 0)) {
-    log::error("Invalid SPIR-V data provided to reload_shader");
-    return RHIResult::InvalidArgument;
-  }
-
-  if ((new_desc.spirv_size % 4) != 0) {
-    log::error("SPIR-V data size not aligned to 4 bytes: %llu", new_desc.spirv_size);
-    return RHIResult::ValidationError;
-  }
-
-  uint32_t array_index = shader.get_index();
-  if (array_index >= _impl->shaders.size()) {
-    log::error("Shader handle %llu out of range", shader.value);
-    return RHIResult::InvalidHandle;
-  }
-
-  VkShaderModuleCreateInfo create_info = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-  create_info.codeSize = new_desc.spirv_size;
-  create_info.pCode = reinterpret_cast<const uint32_t*>(new_desc.spirv_data);
-
-  VkShaderModule new_module = VK_NULL_HANDLE;
-  if (etx_vk_call(vkCreateShaderModule(_impl->device, &create_info, nullptr, &new_module)) != VK_SUCCESS) {
-    return RHIResult::ValidationError;
-  }
-
-  VkShaderModule old_module = _impl->shaders[array_index];
-  _impl->shaders[array_index] = new_module;
-  _impl->shader_handle_map[shader] = new_module;
-
-  if (old_module != VK_NULL_HANDLE) {
-    _impl->queue_deferred_destruction(old_module);
-  }
-
-  return RHIResult::Success;
 }
 
 RHIResult VKDevice::reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc) {
@@ -2800,6 +2511,44 @@ RHIResult VKDevice::destroy_semaphore(RHISemaphore semaphore) {
   _impl->semaphores.free_index(_impl->semaphores.get_index(semaphore));
   _impl->semaphores.remove_handle(semaphore);
   return RHIResult::Success;
+}
+
+VkDevice VKDevice::get_vk_device() const {
+  return _impl->device;
+}
+
+VkInstance VKDevice::get_vk_instance() const {
+  return _impl->instance;
+}
+
+VkQueue VKDevice::get_graphics_queue() const {
+  return _impl->graphics_queue;
+}
+
+VkCommandPool VKDevice::get_vk_command_pool(uint32_t index) const {
+  return _impl->command_pools[index];
+}
+
+void VKDevice::set_current_frame_index(uint32_t index) {
+  _impl->set_current_frame_index(index);
+}
+
+void VKDevice::reset_staging_buffer_for_frame(uint32_t frame_index) {
+  _impl->reset_staging_buffer_for_frame(frame_index);
+}
+
+VKTextureData* VKDevice::get_texture_data(RHIBindlessHandle handle) const {
+  uint32_t index = _impl->textures.get_index(handle);
+  return (index != UINT32_MAX) ? &_impl->textures.get_data(index) : nullptr;
+}
+
+const VKAccelerationStructureData* VKDevice::get_acceleration_structure_data(RHIBindlessHandle handle) const {
+  uint32_t index = _impl->acceleration_structures.get_index(handle);
+  return (index != UINT32_MAX) ? &_impl->acceleration_structures.get_data(index) : nullptr;
+}
+
+PFN_vkCmdBuildAccelerationStructuresKHR VKDevice::get_vkCmdBuildAccelerationStructuresKHR() const {
+  return _impl->impl_vkCmdBuildAccelerationStructuresKHR;
 }
 
 }  // namespace etx

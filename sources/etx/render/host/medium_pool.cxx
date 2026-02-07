@@ -6,15 +6,6 @@
 #include <etx/render/shared/math.hxx>
 
 #include <nanovdb/util/IO.h>
-
-#include <string>
-#include <vector>
-#include <unordered_map>
-#include <algorithm>
-
-#include <algorithm>
-#include <vector>
-
 namespace etx {
 
 struct MediumPoolImpl {

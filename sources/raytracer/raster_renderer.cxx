@@ -38,10 +38,10 @@ void RasterizationRenderer::on_scene_changed(SceneRepresentation& scene) {
 void RasterizationRenderer::create_pipeline() {
   /*
   auto device = render_context.get_device();
-  auto compiler = ShaderCompiler::get_global_instance();
+  auto& compiler = ShaderCompiler::instance();
 
-  auto vs = compiler->load_and_compile_shader_from_file("shaders/raster.hlsl", "vertex_main", RHIShaderStage::Vertex);
-  auto fs = compiler->load_and_compile_shader_from_file("shaders/raster.hlsl", "fragment_main", RHIShaderStage::Fragment);
+  auto vs = compiler->load_and_compile_shader_from_file("etx/shaders/raster.hlsl", "vertex_main", RHIShaderStage::Vertex);
+  auto fs = compiler->load_and_compile_shader_from_file("etx/shaders/raster.hlsl", "fragment_main", RHIShaderStage::Fragment);
 
   RHIGraphicsPipelineDesc desc = {};
   desc.vertex_shader.spirv_data = vs.spirv_data.data();

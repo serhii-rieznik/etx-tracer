@@ -1,10 +1,6 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/core/debug.hxx>
-
-#include <string>
-#include <cstdio>
-
 namespace etx {
 
 struct Environment {

@@ -33,8 +33,8 @@ struct RenderContext {
   void end_frame();
 
   RHIImGui& rhi_ui();
-  RHIContext* get_context();
-  RHIDevice* get_device();
+  RHIContext& get_context();
+  RHIDevice& get_device();
   RHITextureFormat get_swapchain_format();
   RHITextureFormat get_depth_format();
 
@@ -42,7 +42,7 @@ struct RenderContext {
   void set_reference_image(const float4 data[], const uint2 dimensions);
 
  public:
-  ETX_DECLARE_PIMPL(RenderContext, 1024);
+  ETX_DECLARE_PIMPL(RenderContext, 2048);
 };
 
 }  // namespace etx

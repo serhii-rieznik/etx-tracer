@@ -2,8 +2,6 @@
 #include <etx/render/host/film.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/shared/path_tracing_shared.hxx>
-#include <atomic>
-
 namespace etx {
 
 namespace {

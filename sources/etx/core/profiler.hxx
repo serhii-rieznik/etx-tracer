@@ -1,9 +1,6 @@
 #pragma once
 
 #include <etx/core/pimpl.hxx>
-
-#include <chrono>
-
 namespace etx {
 
 #define ETX_PROFILER_ENABLED 1

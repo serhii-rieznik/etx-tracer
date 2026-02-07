@@ -42,7 +42,6 @@ extern "C" int main(int argc, char* argv[]) {
   desc.alpha = false;
 
   sapp_run(desc);
-  ShaderCompiler::shutdown_global();
   return 0;
 }
 

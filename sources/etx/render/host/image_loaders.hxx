@@ -1,9 +1,6 @@
 #pragma once
 
 #include <etx/render/shared/image.hxx>
-
-#include <vector>
-
 namespace etx {
 
 Image::Format load_data(const char* source, std::vector<uint8_t>& data, uint2& dimensions);

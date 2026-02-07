@@ -30,7 +30,7 @@ void CPURaytracingRenderer::cleanup(RHIContext* ctx) {
   _integrator_thread.stop(Integrator::Stop::Immediate);
   _camera_controller.reset();
 
-  ctx->get_device()->destroy_texture(_output_texture);
+  ctx->device().destroy_texture(_output_texture);
 }
 
 bool CPURaytracingRenderer::is_running() const {
@@ -96,7 +96,7 @@ void CPURaytracingRenderer::update_image(const float4* camera) {
   }
 
   if (_output_texture.valid()) {
-    _rhi_context->get_device()->update_texture(_output_texture, data_ptr, 0, 0);
+    _rhi_context->device().update_texture(_output_texture, data_ptr, 0, 0);
   }
 }
 
@@ -110,7 +110,7 @@ void CPURaytracingRenderer::set_output_dimensions(const uint2& dim) {
   _output_dimensions = {std::max(1u, dim.x), std::max(1u, dim.y)};
 
   if (_output_texture.valid()) {
-    _rhi_context->get_device()->destroy_texture(_output_texture);
+    _rhi_context->device().destroy_texture(_output_texture);
     _output_texture = {};
   }
 
@@ -120,7 +120,7 @@ void CPURaytracingRenderer::set_output_dimensions(const uint2& dim) {
     .format = RHITextureFormat::R32G32B32A32_FLOAT,
     .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst | RHITextureUsage::Storage,
   };
-  _output_texture = _rhi_context->get_device()->create_texture(desc).handle;
+  _output_texture = _rhi_context->device().create_texture(desc).handle;
 }
 
 }  // namespace etx

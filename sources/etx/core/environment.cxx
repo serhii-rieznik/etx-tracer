@@ -1,17 +1,9 @@
-﻿#include <etx/core/environment.hxx>
+#include <etx/core/environment.hxx>
 #include <etx/core/debug.hxx>
-
-#include <filesystem>
-#include <cstdlib>
-
-#include <string.h>
-#include <stdio.h>
-
 #if (ETX_PLATFORM_WINDOWS)
 # include <windows.h>
 #else
 # include <unistd.h>
-# include <limits.h>
 #endif
 
 namespace etx {

@@ -4,10 +4,6 @@
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
 #include <etx/render/shared/math.hxx>
-
-#include <string>
-#include <map>
-
 namespace etx {
 
 struct IORDatabase;

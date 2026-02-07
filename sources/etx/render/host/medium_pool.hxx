@@ -2,10 +2,6 @@
 
 #include <etx/core/pimpl.hxx>
 #include <etx/render/shared/medium.hxx>
-
-#include <string>
-#include <unordered_map>
-
 namespace etx {
 
 struct MediumPool {

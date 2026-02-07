@@ -1,13 +1,5 @@
 #include "bindless.hlsl"
-
-struct ImGuiPushConstants {
-  float2 scale;
-  float2 translate;
-  uint vertex_buffer_index;
-  uint texture_index;
-  uint sampler_index;
-  uint padding;
-};
+#include "shared/imgui_shared.hxx"
 
 [[vk::push_constant]] ImGuiPushConstants pushConstants;
 

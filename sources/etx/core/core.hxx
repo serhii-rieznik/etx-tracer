@@ -5,10 +5,6 @@
 #include <etx/core/log.hxx>
 #include <etx/core/profiler.hxx>
 
-#include <vector>
-#include <string>
-#include <cstring>
-
 extern "C" {
 uint32_t XXH32(const void* input, size_t length, uint32_t seed);
 uint64_t XXH64(const void* input, size_t length, uint64_t seed);
@@ -65,7 +61,7 @@ inline uint64_t xxh64(const char* str) {
   return XXH64(str, str ? strlen(str) : 0, 0);
 }
 
-inline uint32_t etx_hash32(const uint8_t* ptr, uint64_t size) {
+inline uint32_t etx_hash32(const void* ptr, uint64_t size) {
   return xxh32(ptr, size);
 }
 
@@ -73,7 +69,7 @@ inline uint32_t etx_hash32(const char* str) {
   return xxh32(str);
 }
 
-inline uint64_t etx_hash64(const uint8_t* ptr, uint64_t size) {
+inline uint64_t etx_hash64(const void* ptr, uint64_t size) {
   return xxh64(ptr, size);
 }
 

@@ -57,8 +57,7 @@ VSOutput vertex_main(uint vertexIndex : SV_VertexID) {
   return output;
 }
 
-float4 fragment_main(in VSOutput input)
-  : SV_Target0 {
+float4 fragment_main(in VSOutput input) : SV_Target0 {
   float2 offset = 0.5f * (options.dimensions.xy - options.dimensions.zw);
 
   int2 coord = int2(floor(input.pos.xy - offset));

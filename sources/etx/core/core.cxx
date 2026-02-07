@@ -1,5 +1,4 @@
 #include <etx/core/core.hxx>
-#include <chrono>
 
 namespace etx {
 

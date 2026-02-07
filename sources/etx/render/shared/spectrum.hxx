@@ -1,8 +1,6 @@
 #pragma once
 
 #include <etx/render/shared/base.hxx>
-#include <string>
-
 namespace etx {
 
 namespace spectrum {

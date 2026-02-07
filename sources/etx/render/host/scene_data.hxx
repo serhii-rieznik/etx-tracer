@@ -11,11 +11,6 @@
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
-
-#include <cstdint>
-#include <string>
-#include <vector>
-
 namespace etx {
 
 struct AtmosphereEmitterParameters {

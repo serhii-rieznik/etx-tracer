@@ -1,9 +1,6 @@
 #pragma once
 
 #include <etx/core/core.hxx>
-#include <unordered_map>
-#include <functional>
-
 namespace etx {
 
 constexpr float kGeometryEpsilon = 1.0f / 8.0f * 1.0e-4f;

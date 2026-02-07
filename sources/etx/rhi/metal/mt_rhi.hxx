@@ -1,113 +1,151 @@
 #pragma once
 
+#ifndef ETX_RHI_INTERNAL
+# error "mt_rhi.hxx is an internal etx-rhi implementation header."
+#endif
+
 #include <etx/rhi/rhi.hxx>
 
 namespace etx {
 
-struct MTContext : RHIContext {
+struct MTDevice;
+struct MTBindlessManager;
+
+struct MTContext {
   MTContext();
-  ~MTContext() override;
+  ~MTContext();
+  MTContext(const MTContext&) = delete;
+  MTContext& operator=(const MTContext&) = delete;
+  MTContext(MTContext&&) noexcept;
+  MTContext& operator=(MTContext&&) noexcept = delete;
 
-  RHIDevice* get_device() override;
-  RHIBindlessManager* get_bindless_manager() override;
+  MTDevice* get_device();
+  MTBindlessManager* get_bindless_manager();
 
-  void create_swapchain(const void* native_window, uint32_t width, uint32_t height) override;
-  void destroy_swapchain() override;
-  void resize_swapchain(uint32_t width, uint32_t height) override;
-  RHITexture get_current_swapchain_texture() override;
-  RHITextureFormat get_swapchain_format() const override;
+  void create_swapchain(const void* native_window, uint32_t width, uint32_t height);
+  void destroy_swapchain();
+  void resize_swapchain(uint32_t width, uint32_t height);
+  RHITexture get_current_swapchain_texture();
+  RHITextureFormat get_swapchain_format() const;
 
-  void begin_frame() override;
-  void present() override;
+  void begin_frame();
+  void present();
+  RHIResult wait_idle();
 
-  RHISemaphore get_image_acquired_semaphore() override;
-  RHISemaphore get_render_complete_semaphore() override;
+  RHISemaphore get_image_acquired_semaphore();
+  RHISemaphore get_render_complete_semaphore();
 
-  uint32_t get_current_frame_index() const override;
-  uint32_t get_sampler_index(RHISamplerType type) const override;
+  uint32_t get_current_frame_index() const;
+  uint32_t get_sampler_index(RHISamplerType type) const;
+
+  RHICommandBuffer get_command_buffer();
+  void destroy_command_buffer(RHICommandBuffer cmd);
+  void submit_command_buffer(const RHISubmitInfo& info);
+
+  void program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func);
+
+  void command_buffer_begin(RHICommandBuffer cmd);
+  void command_buffer_end(RHICommandBuffer cmd);
+  void command_buffer_reset(RHICommandBuffer cmd);
+
+  void cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state);
+  void cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state);
+
+  void cmd_begin_render_pass(RHICommandBuffer cmd, uint32_t color_attachment_count, RHIBindlessHandle* color_attachments, const float* clear_colors = nullptr,
+    RHIBindlessHandle depth_attachment = {}, const RHIResourceState* color_final_states = nullptr, RHIResourceState depth_final_state = RHIResourceState::Undefined);
+  void cmd_end_render_pass(RHICommandBuffer cmd);
+
+  void cmd_set_viewport(RHICommandBuffer cmd, const RHIViewport& viewport);
+  void cmd_set_scissor(RHICommandBuffer cmd, const RHIRect& scissor);
+  void cmd_set_pipeline(RHICommandBuffer cmd, RHIPipeline pipeline);
+
+  void cmd_push_constants(RHICommandBuffer cmd, const void* data, uint32_t size, uint32_t offset = 0);
+
+  void cmd_draw(RHICommandBuffer cmd, const RHIDrawDesc& desc);
+  void cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
+
+  void cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc);
+
+  void cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0);
+
+  void cmd_copy_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0);
+  void cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
+  void cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
+
+  void cmd_set_debug_name(RHICommandBuffer cmd, const char* name);
 
  private:
   class Impl;
   Impl* _impl = nullptr;
 };
 
-struct MTDevice : RHIDevice {
+struct MTDevice {
   MTDevice();
-  ~MTDevice() override;
+  ~MTDevice();
 
-  RHICreateResult<RHISemaphore> create_semaphore() override;
-  RHIResult destroy_semaphore(RHISemaphore semaphore) override;
+  RHICreateResult<RHISemaphore> create_semaphore();
+  RHIResult destroy_semaphore(RHISemaphore semaphore);
 
-  RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc) override;
-  RHICreateBindlessResult create_texture(const RHITextureDesc& desc) override;
-  RHICreateBindlessResult create_sampler(const RHISamplerDesc& desc) override;
-  RHICreateShaderResult create_shader(const RHIShaderDesc& desc) override;
-  RHICreateShaderResult create_shader_variant(const RHIShaderVariantDesc& desc) override;
-  RHICreateShaderResult create_shader_from_file(const std::string& file_path, const std::string& entry_point, RHIShaderStage stage,
-    const std::unordered_map<std::string, std::string>& defines = {}) override;
-  RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc) override;
-  RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc) override;
+  RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc);
+  RHICreateBindlessResult create_texture(const RHITextureDesc& desc);
+  RHICreateBindlessResult create_sampler(const RHISamplerDesc& desc);
+  RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
+  RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
 
-  RHIResult destroy_buffer(RHIBuffer buffer) override;
-  RHIResult destroy_texture(RHITexture texture) override;
-  RHIResult destroy_sampler(RHISampler sampler) override;
-  RHIResult destroy_shader(RHIShader shader) override;
-  RHIResult destroy_pipeline(RHIPipeline pipeline) override;
+  RHIResult destroy_buffer(RHIBuffer buffer);
+  RHIResult destroy_texture(RHITexture texture);
+  RHIResult destroy_sampler(RHISampler sampler);
+  RHIResult destroy_pipeline(RHIPipeline pipeline);
 
-  RHIResult update_buffer(RHIBuffer buffer, const void* data, uint64_t size, uint64_t offset = 0) override;
-  RHIResult update_texture(RHITexture texture, const void* data, uint32_t mip_level = 0, uint32_t array_layer = 0) override;
+  RHIResult update_buffer(RHIBuffer buffer, const void* data, uint64_t size, uint64_t offset = 0);
+  RHIResult update_texture(RHITexture texture, const void* data, uint32_t mip_level = 0, uint32_t array_layer = 0);
 
-  RHIResult reload_shader(RHIShader shader, const RHIShaderDesc& new_desc) override;
-  RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc) override;
-  RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc) override;
+  RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc);
+  RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc);
 
-  RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc) override;
-  RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle) override;
-  uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle) override;
+  RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc);
+  RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle);
+  uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle);
 
-  bool supports_bindless() const override;
-  uint64_t get_min_uniform_buffer_offset_alignment() const override;
-  uint64_t get_min_storage_buffer_offset_alignment() const override;
-
-  RHIMemoryStats get_memory_statistics() const override;
+  RHIMemoryStats get_memory_statistics() const;
 
  private:
   class Impl;
   Impl* _impl = nullptr;
 };
 
-struct MTBindlessManager : RHIBindlessManager {
+struct MTBindlessManager {
   MTBindlessManager();
-  ~MTBindlessManager() override;
+  ~MTBindlessManager();
 
-  void set_max_buffers(uint32_t count) override;
-  void set_max_textures(uint32_t count) override;
-  void set_max_samplers(uint32_t count) override;
-  void set_max_acceleration_structures(uint32_t count) override;
+  void set_max_buffers(uint32_t count);
+  void set_max_textures(uint32_t count);
+  void set_max_samplers(uint32_t count);
+  void set_max_acceleration_structures(uint32_t count);
 
-  RHIResult register_buffer(void* vk_buffer, RHIResourceType type, RHIBindlessHandle& out_handle) override;
-  RHIResult register_texture(void* vk_image_view, RHIResourceType type, RHIBindlessHandle& out_handle, uint32_t usage_flags, void* vk_image = nullptr) override;
-  RHIResult register_sampler(void* vk_sampler, RHIResourceType type, RHIBindlessHandle& out_handle) override;
+  RHIResult register_buffer(void* vk_buffer, RHIResourceType type, RHIBindlessHandle& out_handle);
+  RHIResult register_texture(void* vk_image_view, RHIResourceType type, RHIBindlessHandle& out_handle, uint32_t usage_flags, void* vk_image = nullptr);
+  RHIResult register_sampler(void* vk_sampler, RHIResourceType type, RHIBindlessHandle& out_handle);
 
-  RHIResult unregister_buffer(RHIBindlessHandle handle) override;
-  RHIResult unregister_texture(RHIBindlessHandle handle) override;
-  RHIResult unregister_sampler(RHIBindlessHandle handle) override;
+  RHIResult unregister_buffer(RHIBindlessHandle handle);
+  RHIResult unregister_texture(RHIBindlessHandle handle);
+  RHIResult unregister_sampler(RHIBindlessHandle handle);
 
-  RHIResult register_acceleration_structure(const void* data, uint64_t size, RHIBindlessHandle& out_handle) override;
-  RHIResult unregister_acceleration_structure(RHIBindlessHandle handle) override;
+  RHIResult register_acceleration_structure(const void* data, uint64_t size, RHIBindlessHandle& out_handle);
+  RHIResult unregister_acceleration_structure(RHIBindlessHandle handle);
 
-  bool is_valid_handle(RHIBindlessHandle handle) const override;
-  RHIResourceType get_resource_type(RHIBindlessHandle handle) const override;
+  bool is_valid_handle(RHIBindlessHandle handle) const;
+  RHIResourceType get_resource_type(RHIBindlessHandle handle) const;
 
-  uint32_t get_max_buffers() const override;
-  uint32_t get_max_textures() const override;
-  uint32_t get_max_samplers() const override;
-  uint32_t get_max_acceleration_structures() const override;
+  uint32_t get_max_buffers() const;
+  uint32_t get_max_textures() const;
+  uint32_t get_max_samplers() const;
+  uint32_t get_max_acceleration_structures() const;
 
-  uint32_t get_buffer_count() const override;
-  uint32_t get_texture_count() const override;
-  uint32_t get_sampler_count() const override;
-  uint32_t get_acceleration_structure_count() const override;
+  uint32_t get_buffer_count() const;
+  uint32_t get_texture_count() const;
+  uint32_t get_sampler_count() const;
+  uint32_t get_acceleration_structure_count() const;
 
  private:
   class Impl;

@@ -1,8 +1,6 @@
 #pragma once
 
 #include <etx/rt/shared/vcm_shared.hxx>
-#include <vector>
-
 namespace etx {
 
 struct VCMSpatialGrid {

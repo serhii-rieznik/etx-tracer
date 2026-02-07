@@ -1,8 +1,17 @@
 #include <etx/rhi/metal/mt_rhi.hxx>
 
 #include <etx/core/log.hxx>
+#include <new>
 
 namespace etx {
+
+void create_metal_context(RHIContext& context, const RHIInitInfo& info) {
+  (void)info;
+  static_assert(sizeof(MTContext) <= RHIContext::kBackendStorageSize, "MTContext does not fit into RHIContext backend storage");
+  static_assert(alignof(MTContext) <= RHIContext::kBackendStorageAlignment, "MTContext alignment exceeds RHIContext backend storage alignment");
+  auto* mt_context = new (context._backend_storage) MTContext();
+  context.initialize_backend(mt_context, mt_context->get_device(), mt_context->get_bindless_manager());
+}
 
 class MTContext::Impl {
  public:
@@ -20,15 +29,20 @@ MTContext::MTContext()
   : _impl(new Impl()) {
 }
 
+MTContext::MTContext(MTContext&& other) noexcept
+  : _impl(other._impl) {
+  other._impl = nullptr;
+}
+
 MTContext::~MTContext() {
   delete _impl;
 }
 
-RHIDevice* MTContext::get_device() {
+MTDevice* MTContext::get_device() {
   return &_impl->device;
 }
 
-RHIBindlessManager* MTContext::get_bindless_manager() {
+MTBindlessManager* MTContext::get_bindless_manager() {
   return &_impl->bindless_manager;
 }
 
@@ -62,6 +76,10 @@ void MTContext::present() {
   log::warning("Metal RHI: present not implemented");
 }
 
+RHIResult MTContext::wait_idle() {
+  return RHIResult::Success;
+}
+
 void MTContext::begin_frame() {
   _impl->current_frame = (_impl->current_frame + 1) % 2;
 }
@@ -72,6 +90,124 @@ uint32_t MTContext::get_current_frame_index() const {
 
 uint32_t MTContext::get_sampler_index(RHISamplerType type) const {
   return static_cast<uint32_t>(type);
+}
+
+RHICommandBuffer MTContext::get_command_buffer() {
+  return {1u};
+}
+
+void MTContext::destroy_command_buffer(RHICommandBuffer cmd) {
+  (void)cmd;
+}
+
+void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
+  (void)info;
+  log::warning("Metal RHI: submit_command_buffer not implemented");
+}
+
+void MTContext::program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func) {
+  (void)cmd;
+  if (func) {
+    func();
+  }
+}
+
+void MTContext::command_buffer_begin(RHICommandBuffer cmd) {
+  (void)cmd;
+  _impl->command_buffer.begin();
+}
+
+void MTContext::command_buffer_end(RHICommandBuffer cmd) {
+  (void)cmd;
+  _impl->command_buffer.end();
+}
+
+void MTContext::command_buffer_reset(RHICommandBuffer cmd) {
+  (void)cmd;
+  _impl->command_buffer.reset();
+}
+
+void MTContext::cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) {
+  (void)cmd;
+  _impl->command_buffer.buffer_barrier(buffer, old_state, new_state);
+}
+
+void MTContext::cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state) {
+  (void)cmd;
+  _impl->command_buffer.texture_barrier(texture, old_state, new_state);
+}
+
+void MTContext::cmd_begin_render_pass(RHICommandBuffer cmd, uint32_t color_attachment_count, RHIBindlessHandle* color_attachments, const float* clear_colors,
+  RHIBindlessHandle depth_attachment, const RHIResourceState* color_final_states, RHIResourceState depth_final_state) {
+  (void)cmd;
+  (void)color_final_states;
+  (void)depth_final_state;
+  _impl->command_buffer.begin_render_pass(color_attachment_count, color_attachments, clear_colors, depth_attachment);
+}
+
+void MTContext::cmd_end_render_pass(RHICommandBuffer cmd) {
+  (void)cmd;
+  _impl->command_buffer.end_render_pass();
+}
+
+void MTContext::cmd_set_viewport(RHICommandBuffer cmd, const RHIViewport& viewport) {
+  (void)cmd;
+  _impl->command_buffer.set_viewport(viewport);
+}
+
+void MTContext::cmd_set_scissor(RHICommandBuffer cmd, const RHIRect& scissor) {
+  (void)cmd;
+  _impl->command_buffer.set_scissor(scissor);
+}
+
+void MTContext::cmd_set_pipeline(RHICommandBuffer cmd, RHIPipeline pipeline) {
+  (void)cmd;
+  _impl->command_buffer.set_pipeline(pipeline);
+}
+
+void MTContext::cmd_push_constants(RHICommandBuffer cmd, const void* data, uint32_t size, uint32_t offset) {
+  (void)cmd;
+  _impl->command_buffer.push_constants(data, size, offset);
+}
+
+void MTContext::cmd_draw(RHICommandBuffer cmd, const RHIDrawDesc& desc) {
+  (void)cmd;
+  _impl->command_buffer.draw(desc);
+}
+
+void MTContext::cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer) {
+  (void)cmd;
+  _impl->command_buffer.draw_indexed(desc, index_buffer);
+}
+
+void MTContext::cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc) {
+  (void)cmd;
+  _impl->command_buffer.dispatch(desc);
+}
+
+void MTContext::cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
+  (void)cmd;
+  _impl->command_buffer.build_acceleration_structure(desc, scratch_buffer, scratch_offset);
+}
+
+void MTContext::cmd_copy_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset, uint64_t dst_offset) {
+  (void)cmd;
+  _impl->command_buffer.copy_buffer(src, dst, size, src_offset, dst_offset);
+}
+
+void MTContext::cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level) {
+  (void)cmd;
+  _impl->command_buffer.copy_buffer_to_texture(src, dst, width, height, mip_level);
+}
+
+void MTContext::cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level) {
+  (void)cmd;
+  _impl->command_buffer.copy_texture_to_buffer(src, dst, width, height, mip_level);
+}
+
+void MTContext::cmd_set_debug_name(RHICommandBuffer cmd, const char* name) {
+  (void)cmd;
+  _impl->command_buffer.set_debug_name(name);
 }
 
 RHISemaphore MTContext::get_image_acquired_semaphore() {
@@ -121,11 +257,6 @@ RHICreateBindlessResult MTDevice::create_sampler(const RHISamplerDesc& desc) {
   return {RHIResult::NotImplemented, {}};
 }
 
-RHICreateShaderResult MTDevice::create_shader(const RHIShaderDesc& desc) {
-  log::warning("Metal RHI: create_shader not implemented");
-  return {RHIResult::NotImplemented, {}};
-}
-
 RHICreatePipelineResult MTDevice::create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc) {
   log::warning("Metal RHI: create_graphics_pipeline not implemented");
   return {RHIResult::NotImplemented, {}};
@@ -151,11 +282,6 @@ RHIResult MTDevice::destroy_sampler(RHISampler sampler) {
   return RHIResult::NotImplemented;
 }
 
-RHIResult MTDevice::destroy_shader(RHIShader shader) {
-  log::warning("Metal RHI: destroy_shader not implemented");
-  return RHIResult::NotImplemented;
-}
-
 RHIResult MTDevice::destroy_pipeline(RHIPipeline pipeline) {
   log::warning("Metal RHI: destroy_pipeline not implemented");
   return RHIResult::NotImplemented;
@@ -169,18 +295,6 @@ RHIResult MTDevice::update_buffer(RHIBuffer buffer, const void* data, uint64_t s
 RHIResult MTDevice::update_texture(RHITexture texture, const void* data, uint32_t mip_level, uint32_t array_layer) {
   log::warning("Metal RHI: update_texture not implemented");
   return RHIResult::NotImplemented;
-}
-
-bool MTDevice::supports_bindless() const {
-  return true;
-}
-
-uint64_t MTDevice::get_min_uniform_buffer_offset_alignment() const {
-  return 256;
-}
-
-uint64_t MTDevice::get_min_storage_buffer_offset_alignment() const {
-  return 16;
 }
 
 class MTBindlessManager::Impl {
@@ -386,11 +500,6 @@ void MTCommandBuffer::set_debug_name(const char* name) {
   log::warning("Metal RHI: set_debug_name not implemented");
 }
 
-RHIResult MTDevice::reload_shader(RHIShader shader, const RHIShaderDesc& new_desc) {
-  log::warning("Metal RHI: reload_shader not implemented");
-  return RHIResult::NotImplemented;
-}
-
 RHIResult MTDevice::reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc) {
   log::warning("Metal RHI: reload_graphics_pipeline not implemented");
   return RHIResult::NotImplemented;
@@ -399,17 +508,6 @@ RHIResult MTDevice::reload_graphics_pipeline(RHIPipeline pipeline, const RHIGrap
 RHIResult MTDevice::reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc) {
   log::warning("Metal RHI: reload_compute_pipeline not implemented");
   return RHIResult::NotImplemented;
-}
-
-RHICreateShaderResult MTDevice::create_shader_variant(const RHIShaderVariantDesc& desc) {
-  log::warning("Metal RHI: create_shader_variant not implemented");
-  return {RHIResult::NotImplemented, {}};
-}
-
-RHICreateShaderResult MTDevice::create_shader_from_file(const std::string& file_path, const std::string& entry_point, RHIShaderStage stage,
-  const std::unordered_map<std::string, std::string>& defines) {
-  log::warning("Metal RHI: create_shader_from_file not implemented");
-  return {RHIResult::NotImplemented, {}};
 }
 
 RHIMemoryStats MTDevice::get_memory_statistics() const {

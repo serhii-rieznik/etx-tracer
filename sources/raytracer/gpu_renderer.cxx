@@ -1,17 +1,10 @@
 #include "gpu_renderer.hxx"
+#include <etx/shaders/shared/gpu_rt_shared.hxx>
 #include <etx/rhi/rhi.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 #include <etx/render/host/scene_representation.hxx>
 
 namespace etx {
-
-struct GPUConstants {
-  uint32_t as_index;
-  uint32_t output_image_index;
-  uint32_t frame_index;
-  uint32_t sample_index;
-  Camera camera;
-};
 
 GPURaytracingRenderer::GPURaytracingRenderer(TaskScheduler& s)
   : Renderer(s) {
@@ -28,31 +21,23 @@ void GPURaytracingRenderer::init(RHIContext* ctx, SceneRepresentation& scene) {
 }
 
 void GPURaytracingRenderer::create_pipelines(RHIContext* ctx) {
-  auto device = ctx->get_device();
+  auto& device = ctx->device();
 
   if (_pipeline.valid()) {
-    device->destroy_pipeline(_pipeline);
+    device.destroy_pipeline(_pipeline);
     _pipeline = {};
   }
 
-  auto compiler = ShaderCompiler::get_global_instance();
+  auto& compiler = ShaderCompiler::instance();
 
-  // Compute Pipeline
-  auto cs = compiler->load_and_compile_shader_from_file("shaders/gpu_rt.hlsl", "compute_main", RHIShaderStage::Compute);
-  if (cs.result != RHIResult::Success) {
-    log::error("Failed to compile GPU RT shader: %s", cs.error_message.c_str());
+  auto result = compiler.compile("etx/shaders/gpu_rt.hlsl", {{"compute_main", RHIShaderStage::Compute}});
+  if (result.result != RHIResult::Success) {
+    log::error("Failed to compile GPU RT shader: %s", result.error_message.c_str());
     return;
   }
-  RHIComputePipelineDesc desc = {};
-  desc.compute_shader.spirv_data = cs.spirv_data.data();
-  desc.compute_shader.spirv_size = cs.spirv_data.size();
-  desc.compute_shader.stage = RHIShaderStage::Compute;
-  desc.compute_shader.entry_point = "compute_main";
-  _pipeline = device->create_compute_pipeline(desc).handle;
 
-  desc.compute_shader.stage = RHIShaderStage::Compute;
-  desc.compute_shader.entry_point = "compute_main";
-  _pipeline = device->create_compute_pipeline(desc).handle;
+  RHIComputePipelineDesc desc = device.make_compute_pipeline_desc(result.binaries[0]);
+  _pipeline = device.create_compute_pipeline(desc).handle;
 }
 
 void GPURaytracingRenderer::reload_shaders(RHIContext* ctx) {
@@ -67,15 +52,15 @@ void GPURaytracingRenderer::render(RHIContext* ctx, SceneRepresentation& scene, 
 
   if (_scene_dirty) {
     if (_tlas.valid()) {
-      ctx->get_device()->destroy_acceleration_structure(_tlas);
+      ctx->device().destroy_acceleration_structure(_tlas);
       _tlas = {};
     }
     for (auto blas : _blas) {
-      ctx->get_device()->destroy_acceleration_structure(blas);
+      ctx->device().destroy_acceleration_structure(blas);
     }
     _blas.clear();
     for (auto buf : _blas_buffers) {
-      ctx->get_device()->destroy_buffer(buf);
+      ctx->device().destroy_buffer(buf);
     }
     _blas_buffers.clear();
     _scene_dirty = false;
@@ -92,21 +77,21 @@ void GPURaytracingRenderer::render(RHIContext* ctx, SceneRepresentation& scene, 
   uint2 current_dim = scene.camera().film_size;
   if (_output_dimensions.x != current_dim.x || _output_dimensions.y != current_dim.y) {
     if (_output_texture.valid()) {
-      ctx->get_device()->destroy_texture(_output_texture);
+      ctx->device().destroy_texture(_output_texture);
     }
     RHITextureDesc desc = {};
     desc.width = current_dim.x;
     desc.height = current_dim.y;
     desc.format = RHITextureFormat::R32G32B32A32_FLOAT;
     desc.usage = RHITextureUsage::Storage | RHITextureUsage::Sampled | RHITextureUsage::TransferSrc;
-    _output_texture = ctx->get_device()->create_texture(desc).handle;
+    _output_texture = ctx->device().create_texture(desc).handle;
     _output_dimensions = current_dim;
   }
 
-  GPUConstants constants = {
+  GPURTConstants constants = {
+    .camera = to_shader_camera(scene.camera()),
     .as_index = get_bindless_descriptor_index(_tlas),
     .output_image_index = get_bindless_descriptor_index(_output_texture),
-    .camera = scene.camera(),
   };
 
   auto cmd = ctx->get_command_buffer();
@@ -121,29 +106,29 @@ void GPURaytracingRenderer::render(RHIContext* ctx, SceneRepresentation& scene, 
 }
 
 void GPURaytracingRenderer::cleanup(RHIContext* ctx) {
-  auto device = ctx->get_device();
+  auto& device = ctx->device();
   if (_pipeline.value != 0) {
-    device->destroy_pipeline(_pipeline);
+    device.destroy_pipeline(_pipeline);
     _pipeline = {};
   }
 
   if (_tlas.valid()) {
-    device->destroy_acceleration_structure(_tlas);
+    device.destroy_acceleration_structure(_tlas);
     _tlas = {};
   }
 
   for (auto blas : _blas) {
-    device->destroy_acceleration_structure(blas);
+    device.destroy_acceleration_structure(blas);
   }
   _blas.clear();
 
   for (auto buf : _blas_buffers) {
-    device->destroy_buffer(buf);
+    device.destroy_buffer(buf);
   }
   _blas_buffers.clear();
 
   if (_output_texture.valid()) {
-    device->destroy_texture(_output_texture);
+    device.destroy_texture(_output_texture);
     _output_texture = {};
   }
 
@@ -158,7 +143,7 @@ void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
 }
 
 void GPURaytracingRenderer::build_acceleration_structures(RHIContext* ctx, SceneRepresentation& scene) {
-  auto device = ctx->get_device();
+  auto& device = ctx->device();
 
   // 1. Create BLAS
   const auto& s = scene.data();
@@ -167,8 +152,8 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext* ctx, Scene
   RHIBufferDesc vb_desc = {};
   vb_desc.size = s.vertices.pos.size() * sizeof(float3);
   vb_desc.usage = RHIBufferUsage::Vertex | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::TransferDst;
-  auto vb_res = device->create_buffer(vb_desc);
-  device->update_buffer(vb_res.handle, s.vertices.pos.data(), vb_desc.size);
+  auto vb_res = device.create_buffer(vb_desc);
+  device.update_buffer(vb_res.handle, s.vertices.pos.data(), vb_desc.size);
   _blas_buffers.push_back(vb_res.handle);
 
   // Index Buffer (Repack from Triangle to uint32 stream)
@@ -183,8 +168,8 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext* ctx, Scene
   RHIBufferDesc ib_desc = {};
   ib_desc.size = indices.size() * sizeof(uint32_t);
   ib_desc.usage = RHIBufferUsage::Index | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::TransferDst;
-  auto ib_res = device->create_buffer(ib_desc);
-  device->update_buffer(ib_res.handle, indices.data(), ib_desc.size);
+  auto ib_res = device.create_buffer(ib_desc);
+  device.update_buffer(ib_res.handle, indices.data(), ib_desc.size);
   _blas_buffers.push_back(ib_res.handle);
 
   RHIAccelerationStructureGeometry geometry = {};
@@ -202,7 +187,7 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext* ctx, Scene
   blas_desc.geometry_count = 1;
   blas_desc.geometries = &geometry;
 
-  auto blas_result = device->create_acceleration_structure(blas_desc);  // This creates the backing buffer for AS
+  auto blas_result = device.create_acceleration_structure(blas_desc);  // This creates the backing buffer for AS
   if (blas_result.result != RHIResult::Success) {
     log::error("Failed to create BLAS");
     return;
@@ -214,7 +199,7 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext* ctx, Scene
   RHIBufferDesc scratch_desc = {};
   scratch_desc.size = scratch_size;
   scratch_desc.usage = RHIBufferUsage::Storage | RHIBufferUsage::ShaderDeviceAddress;  // VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-  auto scratch_res = device->create_buffer(scratch_desc);
+  auto scratch_res = device.create_buffer(scratch_desc);
   _blas_buffers.push_back(scratch_res.handle);
 
   RHIAccelerationStructureBuildDesc build_desc = {};
@@ -238,21 +223,21 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext* ctx, Scene
   instance.mask = 0xFF;
   instance.instance_shader_binding_table_record_offset = 0;
   instance.flags = 0;  // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR etc.
-  instance.acceleration_structure_reference = device->get_acceleration_structure_device_address(blas_result.handle);
+  instance.acceleration_structure_reference = device.get_acceleration_structure_device_address(blas_result.handle);
 
   RHIBufferDesc inst_buf_desc = {};
   inst_buf_desc.size = sizeof(RHIAccelerationStructureInstance);
   inst_buf_desc.usage = RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::TransferDst;  // Input to build
   // Wait, usually it's `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR`
-  auto inst_res = device->create_buffer(inst_buf_desc);
-  device->update_buffer(inst_res.handle, &instance, sizeof(instance));
+  auto inst_res = device.create_buffer(inst_buf_desc);
+  device.update_buffer(inst_res.handle, &instance, sizeof(instance));
   _blas_buffers.push_back(inst_res.handle);
 
   RHIAccelerationStructureDesc tlas_desc = {};
   tlas_desc.type = RHIAccelerationStructureType::TopLevel;
   tlas_desc.instance_count = 1;
 
-  auto tlas_result = device->create_acceleration_structure(tlas_desc);
+  auto tlas_result = device.create_acceleration_structure(tlas_desc);
   _tlas = tlas_result.handle;
 
   RHIAccelerationStructureBuildDesc tlas_build_desc = {};

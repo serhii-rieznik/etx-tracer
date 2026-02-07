@@ -15,8 +15,7 @@ struct RasterConstants {
   uint pad;
 };
 
-[[vk::push_constant]]
-RasterConstants params;
+[[vk::push_constant]] RasterConstants params;
 
 VSOutput vertex_main(VSInput input) {
   VSOutput output;

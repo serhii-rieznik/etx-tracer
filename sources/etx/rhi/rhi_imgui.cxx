@@ -6,6 +6,7 @@
 #include <etx/core/log.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
+#include <etx/shaders/shared/imgui_shared.hxx>
 
 namespace etx {
 
@@ -15,12 +16,12 @@ RHIImGui::~RHIImGui() {
   ETX_CRITICAL(_initialized == false);
 }
 
-RHIResult RHIImGui::setup(RHIContext* context, const RHIImGuiDesc& desc) {
+RHIResult RHIImGui::setup(RHIContext& context, const RHIImGuiDesc& desc) {
   if (_initialized) {
     shutdown();
   }
 
-  _context = context;
+  _context = &context;
   _desc = desc;
 
   if (ImGui::GetCurrentContext() == nullptr) {
@@ -109,11 +110,11 @@ RHIResult RHIImGui::create_resources() {
   };
 
   for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
-    auto vb_result = _context->get_device()->create_buffer(vb_desc);
+    auto vb_result = _context->device().create_buffer(vb_desc);
     if (vb_result.result != RHIResult::Success) {
       return vb_result.result;
     }
-    auto ib_result = _context->get_device()->create_buffer(ib_desc);
+    auto ib_result = _context->device().create_buffer(ib_desc);
     if (ib_result.result != RHIResult::Success) {
       return ib_result.result;
     }
@@ -137,30 +138,30 @@ RHIResult RHIImGui::create_resources() {
 }
 
 void RHIImGui::destroy_resources() {
-  auto device = _context ? _context->get_device() : nullptr;
-  if (device == nullptr) {
+  if (_context == nullptr) {
     return;
   }
+  auto& device = _context->device();
 
   for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
-    device->destroy_buffer(_vertices[i].buffer);
+    device.destroy_buffer(_vertices[i].buffer);
     _vertices[i].buffer = {};
-    device->destroy_buffer(_indices[i].buffer);
+    device.destroy_buffer(_indices[i].buffer);
     _indices[i].buffer = {};
   }
 
-  device->destroy_texture(_font_texture);
+  device.destroy_texture(_font_texture);
   _font_texture = {};
 
-  device->destroy_pipeline(_pipeline);
+  device.destroy_pipeline(_pipeline);
   _pipeline = {};
 }
 
 RHIResult RHIImGui::create_font_texture() {
-  auto device = _context ? _context->get_device() : nullptr;
-  if (device != nullptr) {
+  if (_context != nullptr) {
+    auto& device = _context->device();
     if (_font_texture.valid()) {
-      device->destroy_texture(_font_texture);
+      device.destroy_texture(_font_texture);
       _font_texture = {};
     }
   }
@@ -203,16 +204,16 @@ RHIResult RHIImGui::create_font_texture() {
     .host_visible = false,
   };
 
-  auto tex_result = _context->get_device()->create_texture(tex_desc);
+  auto tex_result = _context->device().create_texture(tex_desc);
   if (tex_result.result != RHIResult::Success) {
     return tex_result.result;
   }
   _font_texture = tex_result.handle;
 
   // Upload texture data
-  auto update_result = _context->get_device()->update_texture(_font_texture, pixels, 0, 0);
+  auto update_result = _context->device().update_texture(_font_texture, pixels, 0, 0);
   if (update_result != RHIResult::Success) {
-    _context->get_device()->destroy_texture(_font_texture);
+    _context->device().destroy_texture(_font_texture);
     _font_texture = {};
     return update_result;
   }
@@ -226,9 +227,9 @@ RHIResult RHIImGui::create_font_texture() {
   sampler_desc.address_mode_v = RHISamplerAddressMode::ClampToEdge;
   sampler_desc.address_mode_w = RHISamplerAddressMode::ClampToEdge;
 
-  auto sampler_result = _context->get_device()->create_sampler(sampler_desc);
+  auto sampler_result = _context->device().create_sampler(sampler_desc);
   if (sampler_result.result != RHIResult::Success) {
-    _context->get_device()->destroy_texture(_font_texture);
+    _context->device().destroy_texture(_font_texture);
     _font_texture = {};
     return sampler_result.result;
   }
@@ -238,44 +239,40 @@ RHIResult RHIImGui::create_font_texture() {
 }
 
 RHIResult RHIImGui::create_pipeline() {
-  auto device = _context->get_device();
-  auto compiler = ShaderCompiler::get_global_instance();
-  if (compiler == nullptr) {
-    log::error("Shader compiler not available");
-    return RHIResult::InvalidArgument;
+  auto& device = _context->device();
+  auto& compiler = ShaderCompiler::instance();
+
+  auto result = compiler.compile("etx/shaders/imgui.hlsl", {{"vs_main", RHIShaderStage::Vertex}, {"ps_main", RHIShaderStage::Fragment}});
+
+  if (result.result != RHIResult::Success) {
+    log::error("Failed to compile imgui shader: {}", result.error_message);
+    return result.result;
   }
 
-  std::string error_message;
-  std::string hlsl_source = compiler->read_file_content("./shaders/imgui.hlsl", error_message);
-  if (hlsl_source.empty()) {
-    log::error("Failed to read imgui.hlsl: {}", error_message);
-    return RHIResult::InvalidArgument;
+  if (result.binaries.size() != 2) {
+    log::error("Expected 2 shader binaries, got {}", result.binaries.size());
+    return RHIResult::ValidationError;
   }
 
-  auto vs_result = compiler->compile_hlsl_to_spirv(hlsl_source, "vs_main", RHIShaderStage::Vertex, "imgui.hlsl");
-  if (vs_result.result != RHIResult::Success) {
-    log::error("Failed to compile imgui vertex shader: {}", vs_result.error_message);
-    return vs_result.result;
-  }
-
-  auto ps_result = compiler->compile_hlsl_to_spirv(hlsl_source, "ps_main", RHIShaderStage::Fragment, "imgui.hlsl");
-  if (ps_result.result != RHIResult::Success) {
-    log::error("Failed to compile imgui fragment shader: {}", ps_result.error_message);
-    return ps_result.result;
+  // Calculate offsets for each binary in shared blob
+  size_t offset = 0;
+  for (auto& binary : result.binaries) {
+    binary.spirv_data = result.shared_blob.data() + offset;
+    offset += binary.spirv_size;
   }
 
   RHIGraphicsPipelineDesc pipeline_desc = {
     .vertex_shader =
       {
-        .spirv_data = vs_result.spirv_data.data(),
-        .spirv_size = vs_result.spirv_data.size(),
+        .spirv_data = result.binaries[0].spirv_data,
+        .spirv_size = result.binaries[0].spirv_size,
         .stage = RHIShaderStage::Vertex,
         .entry_point = "vs_main",
       },
     .fragment_shader =
       {
-        .spirv_data = ps_result.spirv_data.data(),
-        .spirv_size = ps_result.spirv_data.size(),
+        .spirv_data = result.binaries[1].spirv_data,
+        .spirv_size = result.binaries[1].spirv_size,
         .stage = RHIShaderStage::Fragment,
         .entry_point = "ps_main",
       },
@@ -294,7 +291,7 @@ RHIResult RHIImGui::create_pipeline() {
     .depth_format = _desc.depth_format,
   };
 
-  auto pipeline_result = device->create_graphics_pipeline(pipeline_desc);
+  auto pipeline_result = device.create_graphics_pipeline(pipeline_desc);
   if (pipeline_result.result != RHIResult::Success) {
     log::error("Failed to create imgui graphics pipeline");
     return pipeline_result.result;
@@ -319,16 +316,16 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
   size_t required_vb_size = total_vertices * sizeof(ImDrawVert);
   size_t required_ib_size = total_indices * sizeof(ImDrawIdx);
 
-  auto device = _context->get_device();
+  auto& device = _context->device();
 
   if (required_vb_size > vertices.data.size()) {
     if (vertices.buffer.valid()) {
-      device->destroy_buffer(vertices.buffer);
+      device.destroy_buffer(vertices.buffer);
     }
 
     size_t new_size = required_vb_size + (required_vb_size / 2);
     RHIBufferDesc desc = {new_size, RHIBufferUsage::Storage | RHIBufferUsage::TransferDst, true};
-    auto res = device->create_buffer(desc);
+    auto res = device.create_buffer(desc);
     if (res.result != RHIResult::Success)
       return res.result;
 
@@ -338,12 +335,12 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
 
   if (required_ib_size > indices.data.size()) {
     if (indices.buffer.valid()) {
-      device->destroy_buffer(indices.buffer);
+      device.destroy_buffer(indices.buffer);
     }
 
     size_t new_size = required_ib_size + (required_ib_size / 2);
     RHIBufferDesc desc = {new_size, RHIBufferUsage::Index | RHIBufferUsage::TransferDst, true};
-    auto res = device->create_buffer(desc);
+    auto res = device.create_buffer(desc);
     if (res.result != RHIResult::Success)
       return res.result;
     indices.buffer = res.handle;
@@ -360,20 +357,11 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
     ib_offset += cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx);
   }
 
-  device->update_buffer(vertices.buffer, vertices.data.data(), required_vb_size);
-  device->update_buffer(indices.buffer, indices.data.data(), required_ib_size);
+  device.update_buffer(vertices.buffer, vertices.data.data(), required_vb_size);
+  device.update_buffer(indices.buffer, indices.data.data(), required_ib_size);
 
   return RHIResult::Success;
 }
-
-struct ImGuiPushConstants {
-  float scale[2];
-  float translate[2];
-  uint32_t vertex_buffer_index;
-  uint32_t texture_index;
-  uint32_t sampler_index;
-  uint32_t padding;
-};
 
 void RHIImGui::render_draw_data(RHICommandBuffer command_buffer, const ImDrawData* draw_data) {
   _context->cmd_set_pipeline(command_buffer, _pipeline);
@@ -388,10 +376,8 @@ void RHIImGui::render_draw_data(RHICommandBuffer command_buffer, const ImDrawDat
   float B = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
 
   ImGuiPushConstants pc = {};
-  pc.scale[0] = 2.0f / (R - L);
-  pc.scale[1] = 2.0f / (B - T);
-  pc.translate[0] = (R + L) / (L - R);
-  pc.translate[1] = (T + B) / (T - B);
+  pc.scale = {2.0f / (R - L), 2.0f / (B - T)};
+  pc.translate = {(R + L) / (L - R), (T + B) / (T - B)};
   pc.vertex_buffer_index = get_bindless_descriptor_index(vertices.buffer);
   pc.sampler_index = _context->get_sampler_index(RHISamplerType::LinearRepeat);
 

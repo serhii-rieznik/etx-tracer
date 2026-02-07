@@ -1,14 +1,6 @@
 #pragma once
 
 #include <etx/core/handle.hxx>
-
-#include <stdint.h>
-#include <string>
-#include <stdint.h>
-#include <string>
-#include <unordered_map>
-#include <functional>
-
 namespace etx {
 
 enum class RHIResult : uint32_t {
@@ -356,6 +348,13 @@ struct RHIShaderDesc {
   std::string entry_point = "main";
 };
 
+struct RHIShaderBinary {
+  const uint8_t* spirv_data = nullptr;
+  size_t spirv_size = 0;
+  RHIShaderStage stage = RHIShaderStage::Vertex;
+  std::string entry_point;
+};
+
 struct RHIShaderVariantDesc {
   std::string hlsl_source;
   std::string entry_point = "main";
@@ -398,11 +397,6 @@ struct RHIGraphicsPipelineDesc {
 
 struct RHIComputePipelineDesc {
   RHIShaderDesc compute_shader = {};
-  std::string entry_point = "main";
-
-  uint32_t local_size_x = 1;
-  uint32_t local_size_y = 1;
-  uint32_t local_size_z = 1;
 };
 
 enum class RHIAccelerationStructureType : uint32_t {

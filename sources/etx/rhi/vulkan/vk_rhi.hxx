@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef ETX_RHI_INTERNAL
+# error "vk_rhi.hxx is an internal etx-rhi implementation header."
+#endif
+
 #ifdef ETX_PLATFORM_WINDOWS
 # define VK_USE_PLATFORM_WIN32_KHR
 # include <vulkan/vulkan.h>
@@ -12,8 +16,6 @@
 #include <etx/rhi/shader/shader_compiler.hxx>
 
 #include <etx/core/log.hxx>
-#include <functional>
-
 const char* vk_error_to_string(VkResult);
 
 #define etx_vk_call(expr)                                                                                \
@@ -27,8 +29,10 @@ const char* vk_error_to_string(VkResult);
 
 namespace etx {
 
-class VKComputePipeline;
-class VKGraphicsPipeline;
+struct VKComputePipeline;
+struct VKGraphicsPipeline;
+struct VKDevice;
+struct VKBindlessManager;
 
 struct VKBufferData {
   VkBuffer buffer = VK_NULL_HANDLE;
@@ -66,10 +70,10 @@ template <typename T, typename Key>
 struct VKResourcePool {
   uint32_t allocate_index() {
     uint32_t index;
-    if (!free_indices.empty()) {
+    if (free_indices.empty() == false) {
       index = free_indices.back();
       free_indices.pop_back();
-      generations[index] = (generations[index] + 1) & 0x0FFFFFFF;  // Increment generation on reuse
+      generations[index] = ((generations[index] + 1) & 0x0FFFFFFF);  // Increment generation on reuse
     } else {
       index = static_cast<uint32_t>(data.size());
       data.emplace_back();
@@ -80,7 +84,7 @@ struct VKResourcePool {
 
   void free_index(uint32_t index, std::function<void(T&)> cleanup = nullptr) {
     if (index < data.size()) {
-      if (cleanup) {
+      if (cleanup != nullptr) {
         cleanup(data[index]);
       }
       data[index] = T{};  // Reset to default
@@ -157,185 +161,187 @@ struct VKResourcePool {
   std::unordered_map<Key, uint32_t> handle_to_index_map;
 };
 
-struct VKContext : RHIContext {
+struct VKContext {
   VKContext(const RHIInitInfo&);
-  ~VKContext() override;
+  ~VKContext();
+  VKContext(const VKContext&) = delete;
+  VKContext& operator=(const VKContext&) = delete;
+  VKContext(VKContext&&) noexcept;
+  VKContext& operator=(VKContext&&) noexcept = delete;
 
-  RHIDevice* get_device() override;
-  RHIBindlessManager* get_bindless_manager() override;
+  VKDevice* get_device();
+  VKBindlessManager* get_bindless_manager();
 
   void initialize_for_headless();
 
-  void create_swapchain(const void* native_window, uint32_t width, uint32_t height) override;
-  void destroy_swapchain() override;
-  void resize_swapchain(uint32_t width, uint32_t height) override;
-  RHITexture get_current_swapchain_texture() override;
-  RHITextureFormat get_swapchain_format() const override;
-  void present() override;
+  void create_swapchain(const void* native_window, uint32_t width, uint32_t height);
+  void destroy_swapchain();
+  void resize_swapchain(uint32_t width, uint32_t height);
+  RHITexture get_current_swapchain_texture();
+  RHITextureFormat get_swapchain_format() const;
+  void present();
+  RHIResult wait_idle();
 
-  void begin_frame() override;
-  RHISemaphore get_image_acquired_semaphore() override;
-  RHISemaphore get_render_complete_semaphore() override;
-  uint32_t get_current_frame_index() const override;
-  uint32_t get_sampler_index(RHISamplerType type) const override;
+  void begin_frame();
+  RHISemaphore get_image_acquired_semaphore();
+  RHISemaphore get_render_complete_semaphore();
+  uint32_t get_current_frame_index() const;
+  uint32_t get_sampler_index(RHISamplerType type) const;
 
-  RHICommandBuffer get_command_buffer() override;
-  void destroy_command_buffer(RHICommandBuffer cmd) override;
+  RHICommandBuffer get_command_buffer();
+  void destroy_command_buffer(RHICommandBuffer cmd);
 
-  void submit_command_buffer(const RHISubmitInfo& info) override;
+  void submit_command_buffer(const RHISubmitInfo& info);
 
-  void program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func) override;
+  void program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func);
 
-  void command_buffer_begin(RHICommandBuffer cmd) override;
-  void command_buffer_end(RHICommandBuffer cmd) override;
-  void command_buffer_reset(RHICommandBuffer cmd) override;
+  void command_buffer_begin(RHICommandBuffer cmd);
+  void command_buffer_end(RHICommandBuffer cmd);
+  void command_buffer_reset(RHICommandBuffer cmd);
 
-  void cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) override;
-  void cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state) override;
+  void cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state);
+  void cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state);
 
   void cmd_begin_render_pass(RHICommandBuffer cmd, uint32_t color_attachment_count, RHIBindlessHandle* color_attachments, const float* clear_colors = nullptr,
-    RHIBindlessHandle depth_attachment = {}, const RHIResourceState* color_final_states = nullptr, RHIResourceState depth_final_state = RHIResourceState::Undefined) override;
-  void cmd_end_render_pass(RHICommandBuffer cmd) override;
+    RHIBindlessHandle depth_attachment = {}, const RHIResourceState* color_final_states = nullptr, RHIResourceState depth_final_state = RHIResourceState::Undefined);
+  void cmd_end_render_pass(RHICommandBuffer cmd);
 
-  void cmd_set_viewport(RHICommandBuffer cmd, const RHIViewport& viewport) override;
-  void cmd_set_scissor(RHICommandBuffer cmd, const RHIRect& scissor) override;
-  void cmd_set_pipeline(RHICommandBuffer cmd, RHIPipeline pipeline) override;
+  void cmd_set_viewport(RHICommandBuffer cmd, const RHIViewport& viewport);
+  void cmd_set_scissor(RHICommandBuffer cmd, const RHIRect& scissor);
+  void cmd_set_pipeline(RHICommandBuffer cmd, RHIPipeline pipeline);
 
-  void cmd_push_constants(RHICommandBuffer cmd, const void* data, uint32_t size, uint32_t offset = 0) override;
+  void cmd_push_constants(RHICommandBuffer cmd, const void* data, uint32_t size, uint32_t offset = 0);
 
-  void cmd_draw(RHICommandBuffer cmd, const RHIDrawDesc& desc) override;
-  void cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer) override;
+  void cmd_draw(RHICommandBuffer cmd, const RHIDrawDesc& desc);
+  void cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
 
-  void cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc) override;
+  void cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc);
 
-  void cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer,
-    uint64_t scratch_offset = 0) override;
+  void cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0);
 
-  void cmd_copy_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0) override;
-  void cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0) override;
-  void cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0) override;
+  void cmd_copy_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0);
+  void cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
+  void cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
 
-  void cmd_set_debug_name(RHICommandBuffer cmd, const char* name) override;
+  void cmd_set_debug_name(RHICommandBuffer cmd, const char* name);
 
   VkDevice get_vk_device() const;
   VkCommandPool get_vk_command_pool(uint32_t index) const;
   VkFence get_current_frame_fence() const;
   VkQueue get_graphics_queue() const;
 
+  bool is_swapchain_texture(RHIBindlessHandle handle) const;
+  VkImageView get_swapchain_image_view(RHIBindlessHandle handle) const;
+  VkExtent2D get_swapchain_extent() const;
+
  private:
-  friend struct VKCommandBuffer;
   struct Impl;
   Impl* _impl = nullptr;
 };
 
-struct VKDevice : RHIDevice {
+struct VKDevice {
   VKDevice(const RHIInitInfo&);
-  ~VKDevice() override;
+  ~VKDevice();
 
   VkDevice get_vk_device() const;
   VkPhysicalDevice get_vk_physical_device() const;
-  void set_bindless_manager(RHIBindlessManager* manager);
+  void set_bindless_manager(VKBindlessManager* manager);
   void destroy_all_resources();
 
   uint64_t get_buffer_device_address(RHIBindlessHandle buffer) const;
 
-  RHICreateResult<RHISemaphore> create_semaphore() override;
-  RHIResult destroy_semaphore(RHISemaphore semaphore) override;
+  RHICreateResult<RHISemaphore> create_semaphore();
+  RHIResult destroy_semaphore(RHISemaphore semaphore);
 
-  RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc) override;
-  RHIResult update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset = 0) override;
-  RHIResult destroy_buffer(RHIBindlessHandle buffer) override;
+  RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc);
+  RHIResult update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset = 0);
+  RHIResult destroy_buffer(RHIBindlessHandle buffer);
 
-  RHICreateBindlessResult create_texture(const RHITextureDesc& desc) override;
-  RHIResult update_texture(RHIBindlessHandle texture, const void* data, uint32_t mip_level = 0, uint32_t array_layer = 0) override;
-  RHIResult destroy_texture(RHIBindlessHandle texture) override;
+  RHICreateBindlessResult create_texture(const RHITextureDesc& desc);
+  RHIResult update_texture(RHIBindlessHandle texture, const void* data, uint32_t mip_level = 0, uint32_t array_layer = 0);
+  RHIResult destroy_texture(RHIBindlessHandle texture);
 
-  RHICreateBindlessResult create_sampler(const RHISamplerDesc& desc) override;
-  RHIResult destroy_sampler(RHIBindlessHandle sampler) override;
+  RHICreateBindlessResult create_sampler(const RHISamplerDesc& desc);
+  RHIResult destroy_sampler(RHIBindlessHandle sampler);
 
-  RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc) override;
-  RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle) override;
-  uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle) override;
+  RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc);
+  RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle);
+  uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle);
 
-  RHICreateShaderResult create_shader(const RHIShaderDesc& desc) override;
-  RHICreateShaderResult create_shader_variant(const RHIShaderVariantDesc& desc) override;
-  RHICreateShaderResult create_shader_from_file(const std::string& file_path, const std::string& entry_point, RHIShaderStage stage,
-    const std::unordered_map<std::string, std::string>& defines = {}) override;
-  RHIResult reload_shader(RHIShader shader, const RHIShaderDesc& new_desc) override;
-  RHIResult destroy_shader(RHIShader shader) override;
+  RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
+  RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
+  RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc);
+  RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc);
+  RHIResult destroy_pipeline(RHIPipeline pipeline);
 
-  RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc) override;
-  RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc) override;
-  RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc) override;
-  RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc) override;
-  RHIResult destroy_pipeline(RHIPipeline pipeline) override;
-
-  bool supports_bindless() const override;
-  uint64_t get_min_uniform_buffer_offset_alignment() const override;
-  uint64_t get_min_storage_buffer_offset_alignment() const override;
-
-  RHIMemoryStats get_memory_statistics() const override;
+  RHIMemoryStats get_memory_statistics() const;
 
   const VKPipelineData* get_compute_pipeline_data(RHIPipeline handle) const;
   const VKPipelineData* get_graphics_pipeline_data(RHIPipeline handle) const;
+  VKTextureData* get_texture_data(RHIBindlessHandle handle) const;
+  const VKAccelerationStructureData* get_acceleration_structure_data(RHIBindlessHandle handle) const;
+  PFN_vkCmdBuildAccelerationStructuresKHR get_vkCmdBuildAccelerationStructuresKHR() const;
+
   VkBuffer get_vk_buffer_from_bindless(RHIBindlessHandle handle) const;
   VkImage get_vk_image_from_bindless(RHIBindlessHandle handle) const;
   VkSemaphore get_vk_semaphore(RHISemaphore handle) const;
   VkPipelineLayout get_bindless_pipeline_layout();
 
-  void set_shader_compiler(ShaderCompiler* compiler);
-  ShaderCompiler* get_shader_compiler() const;
+  VkInstance get_vk_instance() const;
+  VkQueue get_graphics_queue() const;
+  VkCommandPool get_vk_command_pool(uint32_t index) const;
+
+  void set_current_frame_index(uint32_t index);
+  void reset_staging_buffer_for_frame(uint32_t frame_index);
 
  private:
-  friend class VKContext;
-  friend class VKCommandBuffer;
   class Impl;
   Impl* _impl = nullptr;
 };
 
-struct VKBindlessManager : RHIBindlessManager {
+struct VKBindlessManager {
   VKBindlessManager();
-  ~VKBindlessManager() override;
+  ~VKBindlessManager();
 
   void initialize(VkDevice device, VkPhysicalDevice physical_device);
   bool is_initialized() const {
     return _impl != nullptr;
   }
 
-  void set_max_buffers(uint32_t count) override;
-  void set_max_textures(uint32_t count) override;
-  void set_max_samplers(uint32_t count) override;
-  void set_max_acceleration_structures(uint32_t count) override;
+  void set_max_buffers(uint32_t count);
+  void set_max_textures(uint32_t count);
+  void set_max_samplers(uint32_t count);
+  void set_max_acceleration_structures(uint32_t count);
 
-  RHIResult register_buffer(void* vk_buffer, RHIResourceType type, RHIBindlessHandle& out_handle) override;
-  RHIResult register_texture(void* vk_image_view, RHIResourceType type, RHIBindlessHandle& out_handle, uint32_t usage_flags, void* vk_image = nullptr) override;
-  RHIResult register_sampler(void* vk_sampler, RHIResourceType type, RHIBindlessHandle& out_handle) override;
+  RHIResult register_buffer(void* vk_buffer, RHIResourceType type, RHIBindlessHandle& out_handle);
+  RHIResult register_texture(void* vk_image_view, RHIResourceType type, RHIBindlessHandle& out_handle, uint32_t usage_flags, void* vk_image = nullptr);
+  RHIResult register_sampler(void* vk_sampler, RHIResourceType type, RHIBindlessHandle& out_handle);
 
-  RHIResult unregister_buffer(RHIBindlessHandle handle) override;
-  RHIResult unregister_texture(RHIBindlessHandle handle) override;
-  RHIResult unregister_sampler(RHIBindlessHandle handle) override;
+  RHIResult unregister_buffer(RHIBindlessHandle handle);
+  RHIResult unregister_texture(RHIBindlessHandle handle);
+  RHIResult unregister_sampler(RHIBindlessHandle handle);
 
-  RHIResult register_acceleration_structure(const void* data, uint64_t size, RHIBindlessHandle& out_handle) override;
+  RHIResult register_acceleration_structure(const void* data, uint64_t size, RHIBindlessHandle& out_handle);
   RHIResult register_acceleration_structure_vk(VkAccelerationStructureKHR vk_as, RHIAccelerationStructureType type, RHIBindlessHandle& out_handle);
-  RHIResult unregister_acceleration_structure(RHIBindlessHandle handle) override;
+  RHIResult unregister_acceleration_structure(RHIBindlessHandle handle);
 
   VkImage get_vk_image(RHIBindlessHandle handle) const;
   VkBuffer get_vk_buffer(RHIBindlessHandle handle) const;
   VkSampler get_vk_sampler(RHIBindlessHandle handle) const;
   VkAccelerationStructureKHR get_vk_acceleration_structure(RHIBindlessHandle handle) const;
 
-  bool is_valid_handle(RHIBindlessHandle handle) const override;
-  RHIResourceType get_resource_type(RHIBindlessHandle handle) const override;
+  bool is_valid_handle(RHIBindlessHandle handle) const;
+  RHIResourceType get_resource_type(RHIBindlessHandle handle) const;
 
-  uint32_t get_max_buffers() const override;
-  uint32_t get_max_textures() const override;
-  uint32_t get_max_samplers() const override;
-  uint32_t get_max_acceleration_structures() const override;
+  uint32_t get_max_buffers() const;
+  uint32_t get_max_textures() const;
+  uint32_t get_max_samplers() const;
+  uint32_t get_max_acceleration_structures() const;
 
-  uint32_t get_buffer_count() const override;
-  uint32_t get_texture_count() const override;
-  uint32_t get_sampler_count() const override;
-  uint32_t get_acceleration_structure_count() const override;
+  uint32_t get_buffer_count() const;
+  uint32_t get_texture_count() const;
+  uint32_t get_sampler_count() const;
+  uint32_t get_acceleration_structure_count() const;
 
   VkDescriptorSetLayout get_descriptor_set_layout() const;
   VkDescriptorSet get_descriptor_set() const;
@@ -348,60 +354,6 @@ struct VKBindlessManager : RHIBindlessManager {
 
   class Impl;
   Impl* _impl = nullptr;
-};
-
-struct VKBindlessManager::Impl {
-  Impl(VkDevice device, VkPhysicalDevice physical_device, uint32_t max_buffers, uint32_t max_textures, uint32_t max_samplers, uint32_t max_acceleration_structures);
-  ~Impl();
-
-  VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
-  VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-  VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
-
-  VkDevice device = VK_NULL_HANDLE;
-
-  uint32_t max_buffers = kDefaultMaxBuffers;
-  uint32_t max_textures = kDefaultMaxTextures;
-  uint32_t max_samplers = kDefaultMaxSamplers;
-  uint32_t max_acceleration_structures = kDefaultMaxAccelerationStructures;
-
-  uint32_t buffer_count = 0;
-  uint32_t texture_count = 0;
-  uint32_t sampler_count = 0;
-  uint32_t acceleration_structure_count = 0;
-
-  VkPhysicalDeviceAccelerationStructurePropertiesKHR acceleration_structure_properties = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
-
-  struct ResourceEntry {
-    uint32_t generation = 0;
-    uint32_t descriptor_index = 0;
-    RHIResourceType type = RHIResourceType::Buffer;
-    bool valid = false;
-
-    union {
-      VkBuffer buffer;
-      VkImage image;
-      VkSampler sampler;
-      VkAccelerationStructureKHR acceleration_structure;
-    } vulkan_handle = {};
-  };
-
-  std::unordered_map<RHIBindlessHandle, ResourceEntry> handle_to_resource;
-  std::vector<ResourceEntry> buffer_entries;
-  std::vector<ResourceEntry> texture_entries;
-  std::vector<ResourceEntry> sampler_entries;
-  std::vector<ResourceEntry> acceleration_structure_entries;
-
-  bool create_descriptor_set_layout();
-  bool create_descriptor_pool();
-  bool allocate_descriptor_set();
-  bool initialize_bindless_arrays();
-
-  RHIResult register_resource(RHIResourceType type, uint32_t& out_descriptor_index, RHIBindlessHandle& out_handle);
-  RHIResult unregister_resource(RHIBindlessHandle handle);
-
-  void update_descriptor_array(VkDescriptorType descriptor_type, uint32_t binding, uint32_t descriptor_index, VkDescriptorBufferInfo* buffer_info = nullptr,
-    VkDescriptorImageInfo* image_info = nullptr, VkWriteDescriptorSetAccelerationStructureKHR* accel_info = nullptr);
 };
 
 struct VKCommandBuffer {
@@ -460,9 +412,6 @@ struct VKCommandBuffer {
   void ensure_texture_layout(RHIBindlessHandle texture, VkImageLayout required_layout);
   void set_scissor_from_viewport(const RHIViewport& viewport);
 
-  VkRenderPass create_render_pass_for_attachments(const std::vector<VkFormat>& attachment_formats, bool has_depth);
-  VkFramebuffer create_framebuffer_for_attachments(VkRenderPass render_pass, const VkImageView* attachment_views, uint32_t attachment_count, uint32_t width, uint32_t height);
-
  private:
   VKContext* context = nullptr;
   VKDevice* device = nullptr;
@@ -470,10 +419,9 @@ struct VKCommandBuffer {
   bool _in_render_pass = false;
   bool _is_recording = false;
   bool _submitted = false;
-  uint32_t render_pass_depth = 0;
+  bool _rendering_to_swapchain = false;
+  uint32_t _render_pass_depth = 0;
 
-  VkRenderPass current_render_pass = VK_NULL_HANDLE;
-  VkFramebuffer current_framebuffer = VK_NULL_HANDLE;
   std::vector<RHITexture> current_color_attachments;
   std::vector<RHIResourceState> current_color_final_states;
   RHITexture current_depth_attachment = {};

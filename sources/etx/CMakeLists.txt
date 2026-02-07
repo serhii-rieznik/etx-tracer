@@ -9,11 +9,24 @@ function(etx_build_pack target folder)
 
   file(GLOB_RECURSE cxx_sources "${folder}/*.cxx")
   list(APPEND sources ${cxx_sources})
+  
+  if (WIN32)
+    file(GLOB_RECURSE metal_sources "${folder}/metal/*.*")
+    list(REMOVE_ITEM sources ${metal_sources})
+    list(REMOVE_ITEM hxx_sources ${metal_sources})
+    list(REMOVE_ITEM cxx_sources ${metal_sources})
+  elseif(APPLE)
+    file(GLOB_RECURSE vulkan_sources "${folder}/vulkan/*.*")
+    list(REMOVE_ITEM sources ${vulkan_sources})
+    list(REMOVE_ITEM hxx_sources ${vulkan_sources})
+    list(REMOVE_ITEM cxx_sources ${vulkan_sources})
+  endif()
 
   source_group(TREE "${folder}/../" FILES ${sources})
 
   set(lib_source "${CMAKE_CURRENT_BINARY_DIR}/../compile_packs/${target}.pack.cpp")
-  file(WRITE ${lib_source})
+  set(unity_std_header "${CMAKE_CURRENT_LIST_DIR}/std.hxx")
+  file(WRITE ${lib_source} "#include \"${unity_std_header}\"\n")
 
   foreach(source ${cxx_sources})
     target_sources(${target} PRIVATE ${source})
@@ -73,6 +86,7 @@ target_link_libraries(etx-util PRIVATE etx-core etx-render)
 
 create_library(rhi)
 target_link_libraries(etx-rhi PRIVATE etx-core imgui sokol)
+target_compile_definitions(etx-rhi PRIVATE ETX_RHI_INTERNAL=1)
 
 # Add Vulkan dependency for Windows
 if(WIN32)
