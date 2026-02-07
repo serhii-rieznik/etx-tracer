@@ -4,6 +4,91 @@
 
 [[vk::push_constant]] GPURTConstants constants;
 
+static const uint INVALID_INDEX = 0xFFFFFFFFu;
+
+uint hash_u32(uint x) {
+  x ^= x >> 16;
+  x *= 0x7feb352du;
+  x ^= x >> 15;
+  x *= 0x846ca68bu;
+  x ^= x >> 16;
+  return x;
+}
+
+float rnd01(inout uint state) {
+  state = hash_u32(state);
+  return (state & 0x00ffffffu) * (1.0f / 16777216.0f);
+}
+
+float3 load_float3(ByteAddressBuffer buffer, uint index) {
+  return asfloat(buffer.Load3(index * 12u));
+}
+
+struct TriangleData {
+  uint3 i;
+  uint material_index;
+  float3 geo_n;
+  uint emitter_index;
+};
+
+TriangleData load_triangle(ByteAddressBuffer buffer, uint triangle_index) {
+  const uint base_offset = triangle_index * 32u;
+  uint4 a = buffer.Load4(base_offset + 0u);
+  uint4 b = buffer.Load4(base_offset + 16u);
+
+  TriangleData result;
+  result.i = a.xyz;
+  result.material_index = a.w;
+  result.geo_n = asfloat(b.xyz);
+  result.emitter_index = b.w;
+  return result;
+}
+
+float3x3 basis_from_normal(float3 n) {
+  float3 up = (abs(n.z) < 0.999f) ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
+  float3 t = normalize(cross(up, n));
+  float3 b = cross(n, t);
+  return float3x3(t, b, n);
+}
+
+float3 sample_cosine_hemisphere(float2 u) {
+  float r = sqrt(u.x);
+  float phi = 6.28318530718f * u.y;
+  float x = r * cos(phi);
+  float y = r * sin(phi);
+  float z = sqrt(saturate(1.0f - x * x - y * y));
+  return float3(x, y, z);
+}
+
+float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 normal, float radius, uint seed) {
+  const uint kSampleCount = 8u;
+  float occluded = 0.0f;
+  float3x3 basis = basis_from_normal(normal);
+
+  [unroll]
+  for (uint i = 0u; i < kSampleCount; ++i) {
+    float2 u = float2(rnd01(seed), rnd01(seed));
+    float3 local_dir = sample_cosine_hemisphere(u);
+    float3 world_dir = normalize(mul(local_dir, basis));
+
+    RayDesc ray;
+    ray.Origin = position + normal * 0.002f;
+    ray.Direction = world_dir;
+    ray.TMin = 0.001f;
+    ray.TMax = radius;
+
+    RayQuery<RAY_FLAG_NONE> q;
+    q.TraceRayInline(as, RAY_FLAG_NONE, 0xFF, ray);
+    q.Proceed();
+
+    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+      occluded += 1.0f;
+    }
+  }
+
+  return 1.0f - occluded / float(kSampleCount);
+}
+
 [numthreads(8, 8, 1)] void compute_main(uint3 dtid : SV_DispatchThreadID) {
   if (any(dtid.xy >= constants.camera.film_size))
     return;
@@ -34,8 +119,55 @@
   float4 color = float4(0.0f, 0.0f, 0.0f, 1.0f);
 
   if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-    float2 bary = q.CommittedTriangleBarycentrics();
-    color = float4(bary.x, bary.y, 1.0f - bary.x - bary.y, 1.0f);
+    const bool has_geometry_buffers = (constants.scene.triangles != INVALID_INDEX) && (constants.scene.vertex_positions != INVALID_INDEX) &&
+                                      (constants.scene.vertex_normals != INVALID_INDEX) && (constants.scene.scene_globals != INVALID_INDEX);
+
+    if (has_geometry_buffers) {
+      ByteAddressBuffer triangle_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)];
+      ByteAddressBuffer position_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_positions)];
+      ByteAddressBuffer normal_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_normals)];
+      ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+
+      uint vertex_count = scene_globals.Load(0u);
+      uint triangle_count = scene_globals.Load(4u);
+      float bounding_sphere_radius = asfloat(scene_globals.Load(44u));
+
+      uint triangle_index = q.CommittedPrimitiveIndex();
+      if (triangle_index < triangle_count) {
+        TriangleData tri = load_triangle(triangle_buffer, triangle_index);
+
+        bool valid_indices = (tri.i.x < vertex_count) && (tri.i.y < vertex_count) && (tri.i.z < vertex_count);
+        if (valid_indices) {
+          float2 bary = q.CommittedTriangleBarycentrics();
+          float3 bc = float3(1.0f - bary.x - bary.y, bary.x, bary.y);
+
+          float3 p0 = load_float3(position_buffer, tri.i.x);
+          float3 p1 = load_float3(position_buffer, tri.i.y);
+          float3 p2 = load_float3(position_buffer, tri.i.z);
+          float3 hit_position = p0 * bc.x + p1 * bc.y + p2 * bc.z;
+
+          float3 n0 = load_float3(normal_buffer, tri.i.x);
+          float3 n1 = load_float3(normal_buffer, tri.i.y);
+          float3 n2 = load_float3(normal_buffer, tri.i.z);
+          float3 hit_normal = normalize(n0 * bc.x + n1 * bc.y + n2 * bc.z);
+
+          float ao_radius = max(0.1f, 0.05f * bounding_sphere_radius);
+          uint seed = hash_u32((dtid.x * 73856093u) ^ (dtid.y * 19349663u) ^ (constants.frame_index * 83492791u) ^ (constants.sample_index * 2654435761u));
+          float ao = evaluate_ao(as, hit_position, hit_normal, ao_radius, seed);
+
+          float n_dot_up = saturate(dot(hit_normal, float3(0.0f, 1.0f, 0.0f)));
+          float3 base = lerp(float3(0.35f, 0.37f, 0.42f), float3(0.85f, 0.87f, 0.9f), n_dot_up);
+          color = float4(base * ao, 1.0f);
+        } else {
+          color = float4(1.0f, 0.0f, 1.0f, 1.0f);
+        }
+      } else {
+        color = float4(1.0f, 0.0f, 1.0f, 1.0f);
+      }
+    } else {
+      float2 bary = q.CommittedTriangleBarycentrics();
+      color = float4(bary.x, bary.y, 1.0f - bary.x - bary.y, 1.0f);
+    }
   } else {
     // Gradient sky
     float t = 0.5f * (ray_dir.y + 1.0f);

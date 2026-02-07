@@ -2,6 +2,7 @@
 
 #include "renderer.hxx"
 #include <etx/rhi/rhi_types.hxx>
+#include <interop/gpu_scene_shared.hxx>
 
 namespace etx {
 
@@ -28,6 +29,7 @@ struct GPURaytracingRenderer : public Renderer {
 
  private:
   void build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene);
+  void upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
   void create_pipelines(RHIContext& ctx);
 
  private:
@@ -35,6 +37,10 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _tlas = {};
   std::vector<RHIBindlessHandle> _blas;
   std::vector<RHIBindlessHandle> _blas_buffers;
+  std::vector<RHIBindlessHandle> _scene_buffers;
+  GPUScene _gpu_scene = {};
+  uint32_t _frame_index = 0u;
+  uint32_t _sample_index = 0u;
 
   bool _initialized = false;
   bool _scene_dirty = false;

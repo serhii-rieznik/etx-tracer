@@ -5,9 +5,97 @@
 #include <etx/render/host/scene_representation.hxx>
 
 namespace etx {
+namespace {
+constexpr uint32_t kInvalidDescriptorIndex = ~0u;
+
+GPUScene make_invalid_gpu_scene() {
+  return {
+    .vertex_positions = kInvalidDescriptorIndex,
+    .vertex_normals = kInvalidDescriptorIndex,
+    .vertex_tangents = kInvalidDescriptorIndex,
+    .vertex_bitangents = kInvalidDescriptorIndex,
+    .vertex_texcoords = kInvalidDescriptorIndex,
+    .triangles = kInvalidDescriptorIndex,
+    .meshes = kInvalidDescriptorIndex,
+    .emitter_profiles = kInvalidDescriptorIndex,
+    .emitter_instances = kInvalidDescriptorIndex,
+    .scene_globals = kInvalidDescriptorIndex,
+    .materials = kInvalidDescriptorIndex,
+    .spectrums = kInvalidDescriptorIndex,
+    .images = kInvalidDescriptorIndex,
+    .mediums = kInvalidDescriptorIndex,
+    .emitters_distribution = kInvalidDescriptorIndex,
+    .scene_options = kInvalidDescriptorIndex,
+  };
+}
+
+template <typename T>
+RHIBindlessHandle upload_linear_buffer(RHIDevice& device, const T* data, size_t count, std::vector<RHIBindlessHandle>& owner, RHIBufferUsage usage) {
+  if ((data == nullptr) || (count == 0)) {
+    return {};
+  }
+
+  RHIBufferDesc desc = {};
+  desc.size = count * sizeof(T);
+  desc.usage = usage;
+
+  auto result = device.create_buffer(desc);
+  if ((result.result != RHIResult::Success) || (result.handle.valid() == false)) {
+    return {};
+  }
+
+  device.update_buffer(result.handle, data, desc.size);
+  owner.push_back(result.handle);
+  return result.handle;
+}
+
+GPUSceneGlobals build_scene_globals(const SceneData& scene_data) {
+  auto bbox = scene_data.compute_bounding_volumes();
+  const float3 sphere_center = 0.5f * (bbox.p_min + bbox.p_max);
+  const float sphere_radius = length(bbox.p_max - sphere_center);
+
+  GPUSceneGlobals globals = {};
+  globals.vertex_count = static_cast<uint32_t>(scene_data.vertices.pos.size());
+  globals.triangle_count = static_cast<uint32_t>(scene_data.triangles.size());
+  globals.mesh_count = static_cast<uint32_t>(scene_data.meshes.size());
+  globals.emitter_profile_count = static_cast<uint32_t>(scene_data.emitter_profiles.size());
+  globals.emitter_instance_count = 0u;  // TODO: add packed emitter instances for GPU path.
+
+  globals.bounding_sphere_center = sphere_center;
+  globals.bounding_sphere_radius = sphere_radius;
+  globals.bounding_box_min = bbox.p_min;
+  globals.bounding_box_max = bbox.p_max;
+
+  globals.default_black_spectrum = scene_data.defaults.black_spectrum;
+  globals.default_white_spectrum = scene_data.defaults.white_spectrum;
+  globals.default_rayleigh_spectrum = scene_data.defaults.rayleigh_spectrum;
+  globals.default_mie_spectrum = scene_data.defaults.mie_spectrum;
+  globals.default_ozone_spectrum = scene_data.defaults.ozone_spectrum;
+  globals.default_subsurface_scatter_material = scene_data.defaults.subsurface_scatter_material;
+  globals.default_subsurface_exit_material = scene_data.defaults.subsurface_exit_material;
+  globals.default_missing_material = scene_data.defaults.missing_material;
+  globals.default_dielectric_eta = scene_data.defaults.dielectric_eta;
+  globals.default_conductor_eta = scene_data.defaults.conductor_eta;
+  globals.default_conductor_k = scene_data.defaults.conductor_k;
+
+  uint32_t environment_count = 0u;
+  for (uint32_t i = 0, e = static_cast<uint32_t>(scene_data.emitter_profiles.size()); i < e; ++i) {
+    const auto& emitter = scene_data.emitter_profiles[i];
+    const bool is_environment = (emitter.cls == EmitterProfile::Class::Environment);
+    const bool is_directional = (emitter.cls == EmitterProfile::Class::Directional);
+    if ((is_environment || is_directional) && (environment_count < GPUSceneGlobals::MaxEnvironmentEmitters)) {
+      globals.environment_emitters[environment_count++] = i;
+    }
+  }
+  globals.environment_emitter_count = environment_count;
+
+  return globals;
+}
+}  // namespace
 
 GPURaytracingRenderer::GPURaytracingRenderer(TaskScheduler& s)
   : Renderer(s) {
+  _gpu_scene = make_invalid_gpu_scene();
 }
 
 GPURaytracingRenderer::~GPURaytracingRenderer() {
@@ -63,6 +151,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       ctx.device().destroy_buffer(buf);
     }
     _blas_buffers.clear();
+    for (auto buf : _scene_buffers) {
+      ctx.device().destroy_buffer(buf);
+    }
+    _scene_buffers.clear();
+    _gpu_scene = make_invalid_gpu_scene();
     _scene_dirty = false;
   }
 
@@ -92,6 +185,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     .camera = scene.camera(),
     .as_index = get_bindless_descriptor_index(_tlas),
     .output_image_index = get_bindless_descriptor_index(_output_texture),
+    .frame_index = _frame_index,
+    .sample_index = _sample_index,
+    .scene = _gpu_scene,
   };
 
   auto cmd = ctx.get_command_buffer();
@@ -103,6 +199,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   ctx.cmd_texture_barrier(cmd, _output_texture, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
   ctx.command_buffer_end(cmd);
   ctx.submit_command_buffer({cmd});
+
+  _frame_index += 1u;
+  _sample_index += 1u;
 }
 
 void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
@@ -126,6 +225,11 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
     device.destroy_buffer(buf);
   }
   _blas_buffers.clear();
+  for (auto buf : _scene_buffers) {
+    device.destroy_buffer(buf);
+  }
+  _scene_buffers.clear();
+  _gpu_scene = make_invalid_gpu_scene();
 
   if (_output_texture.valid()) {
     device.destroy_texture(_output_texture);
@@ -133,6 +237,8 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   }
 
   _initialized = false;
+  _frame_index = 0u;
+  _sample_index = 0u;
 }
 
 void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
@@ -140,6 +246,8 @@ void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
 
 void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
   _scene_dirty = true;
+  _frame_index = 0u;
+  _sample_index = 0u;
 }
 
 void GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene) {
@@ -250,6 +358,70 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   ctx.cmd_build_acceleration_structure(cmd, tlas_build_desc, scratch_res.handle, 32 * 1024 * 1024);  // Offset 32MB just in case
   ctx.command_buffer_end(cmd);
   ctx.submit_command_buffer({cmd});
+
+  upload_scene_data(ctx, scene, vb_res.handle);
+}
+
+void GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer) {
+  auto& device = ctx.device();
+  const auto& data = scene.data();
+
+  _gpu_scene = make_invalid_gpu_scene();
+
+  if (vertex_positions_buffer.valid()) {
+    _gpu_scene.vertex_positions = get_bindless_descriptor_index(vertex_positions_buffer);
+  }
+
+  const RHIBufferUsage scene_buffer_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
+
+  auto normals = upload_linear_buffer(device, data.vertices.nrm.data(), data.vertices.nrm.size(), _scene_buffers, scene_buffer_usage);
+  if (normals.valid()) {
+    _gpu_scene.vertex_normals = get_bindless_descriptor_index(normals);
+  }
+
+  auto tangents = upload_linear_buffer(device, data.vertices.tan.data(), data.vertices.tan.size(), _scene_buffers, scene_buffer_usage);
+  if (tangents.valid()) {
+    _gpu_scene.vertex_tangents = get_bindless_descriptor_index(tangents);
+  }
+
+  auto bitangents = upload_linear_buffer(device, data.vertices.btn.data(), data.vertices.btn.size(), _scene_buffers, scene_buffer_usage);
+  if (bitangents.valid()) {
+    _gpu_scene.vertex_bitangents = get_bindless_descriptor_index(bitangents);
+  }
+
+  auto texcoords = upload_linear_buffer(device, data.vertices.tex.data(), data.vertices.tex.size(), _scene_buffers, scene_buffer_usage);
+  if (texcoords.valid()) {
+    _gpu_scene.vertex_texcoords = get_bindless_descriptor_index(texcoords);
+  }
+
+  auto triangles = upload_linear_buffer(device, data.triangles.data(), data.triangles.size(), _scene_buffers, scene_buffer_usage);
+  if (triangles.valid()) {
+    _gpu_scene.triangles = get_bindless_descriptor_index(triangles);
+  }
+
+  auto meshes = upload_linear_buffer(device, data.meshes.data(), data.meshes.size(), _scene_buffers, scene_buffer_usage);
+  if (meshes.valid()) {
+    _gpu_scene.meshes = get_bindless_descriptor_index(meshes);
+  }
+
+  auto emitter_profiles = upload_linear_buffer(device, data.emitter_profiles.data(), data.emitter_profiles.size(), _scene_buffers, scene_buffer_usage);
+  if (emitter_profiles.valid()) {
+    _gpu_scene.emitter_profiles = get_bindless_descriptor_index(emitter_profiles);
+  }
+
+  GPUSceneGlobals globals = build_scene_globals(data);
+  auto scene_globals = upload_linear_buffer(device, &globals, size_t(1), _scene_buffers, scene_buffer_usage);
+  if (scene_globals.valid()) {
+    _gpu_scene.scene_globals = get_bindless_descriptor_index(scene_globals);
+  }
+
+  // TODO: upload packed emitter instances buffer.
+  // TODO: upload packed materials buffer.
+  // TODO: upload packed spectrums buffer.
+  // TODO: upload packed images metadata and raw image/distribution tables.
+  // TODO: upload packed mediums metadata and density grids.
+  // TODO: upload packed emitters distribution data.
+  // TODO: upload packed scene options buffer.
 }
 
 }  // namespace etx

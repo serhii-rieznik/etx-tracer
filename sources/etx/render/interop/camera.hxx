@@ -10,24 +10,24 @@ struct ETX_ALIGNED Camera {
     };
   };
 
-  float3 position;
-  uint32_t cls;
-  float3 direction;
-  float aspect;
-  float3 side;
-  float tan_half_fov;
-  float3 up;
-  float image_plane;
-  uint2 film_size;
-  float lens_radius;
-  float focal_distance;
-  float clip_near;
-  float clip_far;
-  uint32_t lens_image;
-  uint32_t medium_index;
-  float4x4 view_proj;
-  float area;
-  float pad[3];
+  float3 position ETX_INIT({});
+  uint32_t cls ETX_INIT(Class::Perspective);
+  float3 direction ETX_INIT({});
+  float aspect ETX_INIT({});
+  float3 side ETX_INIT({});
+  float tan_half_fov ETX_INIT({});
+  float3 up ETX_INIT({});
+  float image_plane ETX_INIT({});
+  uint2 film_size ETX_INIT({});
+  float lens_radius ETX_INIT({});
+  float focal_distance ETX_INIT({});
+  float clip_near ETX_INIT({});
+  float clip_far ETX_INIT({});
+  uint32_t lens_image ETX_INIT({});
+  uint32_t medium_index ETX_INIT({});
+  float4x4 view_proj ETX_INIT({});
+  float area ETX_INIT({});
+  float pad[3] ETX_INIT({});
 };
 
 ETX_GPU_CODE float3 camera_target(ETX_IN(Camera, camera)) {
