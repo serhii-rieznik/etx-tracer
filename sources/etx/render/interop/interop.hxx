@@ -3,11 +3,11 @@
 #define ETX_GPU_CODE inline
 
 #if defined(__cplusplus)
-# define ETX_SHARED_INLINE inline
-# define ETX_IN(type, name) const type& name
-# define ETX_OUT(type, name) type& name
+# define ETX_SHARED_INLINE     inline
+# define ETX_IN(type, name)    const type& name
+# define ETX_OUT(type, name)   type& name
 # define ETX_INOUT(type, name) type& name
-# define ETX_ALIGNED alignas(16)
+# define ETX_ALIGNED           alignas(16)
 # include <etx/render/shared/base.hxx>
 
 namespace etx {
@@ -44,10 +44,10 @@ inline void print_value<float4>(const char* name, const float4& v, const char* f
 
 #else
 
-# define ETX_SHARED_INLINE inline
-# define ETX_IN(type, name) in type name
-# define ETX_OUT(type, name) out type name
+# define ETX_SHARED_INLINE     inline
+# define ETX_IN(type, name)    in type name
+# define ETX_OUT(type, name)   out type name
 # define ETX_INOUT(type, name) inout type name
-# define ETX_ALIGNED /* */
+# define ETX_ALIGNED           /* */
 
 #endif

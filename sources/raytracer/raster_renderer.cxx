@@ -42,13 +42,10 @@ void RasterizationRenderer::create_pipeline() {
   auto& compiler = ShaderCompiler::instance();
 
   auto vs = compiler->load_and_compile_shader_from_file("shaders/raster.hlsl", "vertex_main", RHIShaderStage::Vertex);
-  auto fs = compiler->load_and_compile_shader_from_file("shaders/raster.hlsl", "fragment_main", RHIShaderStage::Fragment);
-
-  RHIGraphicsPipelineDesc desc = {};
-  desc.vertex_shader.spirv_data = vs.spirv_data.data();
-  desc.vertex_shader.spirv_size = vs.spirv_data.size();
-  desc.vertex_shader.stage = RHIShaderStage::Vertex;
-  desc.vertex_shader.entry_point = "vertex_main";
+  auto fs =
+  compiler->load_and_compile_shader_from_file("shaders/raster.hlsl", "fragment_main", RHIShaderStage::Fragment);
+ RHIGraphicsPipelineDesc desc = {}; desc.vertex_shader.spirv_data =
+  vs.spirv_data.data(); desc.vertex_shader.spirv_size = vs.spirv_data.size(); desc.vertex_shader.stage = RHIShaderStage::Vertex; desc.vertex_shader.entry_point = "vertex_main";
 
   desc.fragment_shader.spirv_data = fs.spirv_data.data();
   desc.fragment_shader.spirv_size = fs.spirv_data.size();

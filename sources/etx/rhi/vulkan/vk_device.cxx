@@ -13,8 +13,6 @@
 #include <vulkan/vulkan.h>
 namespace etx {
 
-static constexpr uint32_t kVKMaxPushConstantsSize = 256;
-
 struct VKStagingBuffer {
   VkBuffer buffer = VK_NULL_HANDLE;
   VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -208,6 +206,7 @@ struct VKDevice::Impl {
 
   VKStagingBuffer staging_buffer = {};
   VkPipelineLayout bindless_layout = {};
+  uint32_t max_push_constants_size = 128;
 
   // Frame tracking for staging buffer synchronization
   uint32_t current_frame_index = 0;
@@ -563,6 +562,7 @@ bool VKDevice::Impl::initialize_physical_device() {
 
   min_uniform_buffer_offset_alignment = properties.limits.minUniformBufferOffsetAlignment;
   min_storage_buffer_offset_alignment = properties.limits.minStorageBufferOffsetAlignment;
+  max_push_constants_size = properties.limits.maxPushConstantsSize;
 
   return true;
 }
@@ -988,7 +988,7 @@ RHICreateResult<VkPipelineLayout> VKDevice::Impl::get_bindless_pipeline_layout()
   VkPushConstantRange push_constants = {};
   push_constants.stageFlags = VK_SHADER_STAGE_ALL;
   push_constants.offset = 0;
-  push_constants.size = kVKMaxPushConstantsSize;
+  push_constants.size = max_push_constants_size;
 
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_constants;
@@ -2416,6 +2416,10 @@ RHIMemoryStats VKDevice::get_memory_statistics() const {
 
 VkPipelineLayout VKDevice::get_bindless_pipeline_layout() {
   return _impl->get_bindless_pipeline_layout().handle;
+}
+
+uint32_t VKDevice::get_max_push_constants_size() const {
+  return _impl->max_push_constants_size;
 }
 
 uint64_t VKDevice::get_buffer_device_address(RHIBindlessHandle buffer) const {

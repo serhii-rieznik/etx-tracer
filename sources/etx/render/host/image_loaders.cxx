@@ -407,9 +407,8 @@ Image::Format load_dds(const char* source, std::vector<uint8_t>& data, uint2& di
             float4 val = decompressed_block[block_pixel_index];
 
             if (is_srgb) {
-              output_byte[pixel_index] = {static_cast<uint8_t>(max(0.0f, min(255.0f, val.x * 255.0f))),
-                static_cast<uint8_t>(max(0.0f, min(255.0f, val.y * 255.0f))), static_cast<uint8_t>(max(0.0f, min(255.0f, val.z * 255.0f))),
-                static_cast<uint8_t>(max(0.0f, min(255.0f, val.w * 255.0f)))};
+              output_byte[pixel_index] = {static_cast<uint8_t>(max(0.0f, min(255.0f, val.x * 255.0f))), static_cast<uint8_t>(max(0.0f, min(255.0f, val.y * 255.0f))),
+                static_cast<uint8_t>(max(0.0f, min(255.0f, val.z * 255.0f))), static_cast<uint8_t>(max(0.0f, min(255.0f, val.w * 255.0f)))};
             } else {
               output_float[pixel_index] = val;
             }

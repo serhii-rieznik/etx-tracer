@@ -56,9 +56,13 @@ find_program(DXC_EXECUTABLE
 )
 
 # Check if we found DXC
-if(DXC_LIBRARY AND DXC_EXECUTABLE)
+if(DXC_LIBRARY)
     set(DXC_FOUND TRUE)
-    message(STATUS "Found DXC: ${DXC_EXECUTABLE}")
+    if(DXC_EXECUTABLE)
+        message(STATUS "Found DXC: ${DXC_EXECUTABLE}")
+    else()
+        message(STATUS "Found DXC runtime library: ${DXC_LIBRARY}")
+    endif()
 else()
     set(DXC_FOUND FALSE)
     message(STATUS "DXC not found locally, will attempt to download")
@@ -95,17 +99,41 @@ function(install_dxc)
             DESTINATION "${DXC_EXTRACT_DIR}"
         )
 
-        # Find and copy only the library file (DLL)
-        file(GLOB DXC_LIBRARY_FILES "${DXC_EXTRACT_DIR}/bin/dxcompiler.dll")
+        # Find and copy runtime libraries (layout differs across release archives)
+        file(GLOB_RECURSE DXC_LIBRARY_FILES
+            "${DXC_EXTRACT_DIR}/dxcompiler.dll"
+            "${DXC_EXTRACT_DIR}/bin/dxcompiler.dll"
+            "${DXC_EXTRACT_DIR}/bin/x64/dxcompiler.dll"
+        )
         if(DXC_LIBRARY_FILES)
-            configure_file("${DXC_LIBRARY_FILES}" "${DXC_INSTALL_DIR}/dxcompiler.dll" COPYONLY)
+            list(GET DXC_LIBRARY_FILES 0 DXC_LIBRARY_FILE)
+            configure_file("${DXC_LIBRARY_FILE}" "${DXC_INSTALL_DIR}/dxcompiler.dll" COPYONLY)
             set(DXC_LIBRARY "${DXC_INSTALL_DIR}/dxcompiler.dll" PARENT_SCOPE)
         else()
             message(FATAL_ERROR "dxcompiler.dll not found in extracted DXC archive")
         endif()
 
-        # We don't need the executable for runtime compilation
-        set(DXC_EXECUTABLE "" PARENT_SCOPE)
+        file(GLOB_RECURSE DXIL_LIBRARY_FILES
+            "${DXC_EXTRACT_DIR}/dxil.dll"
+            "${DXC_EXTRACT_DIR}/bin/dxil.dll"
+            "${DXC_EXTRACT_DIR}/bin/x64/dxil.dll"
+        )
+        if(DXIL_LIBRARY_FILES)
+            list(GET DXIL_LIBRARY_FILES 0 DXIL_LIBRARY_FILE)
+            configure_file("${DXIL_LIBRARY_FILE}" "${DXC_INSTALL_DIR}/dxil.dll" COPYONLY)
+        endif()
+
+        find_program(DXC_DOWNLOADED_EXECUTABLE
+            NAMES dxc.exe
+            PATHS "${DXC_EXTRACT_DIR}"
+            PATH_SUFFIXES bin bin/x64
+            NO_DEFAULT_PATH
+        )
+        if(DXC_DOWNLOADED_EXECUTABLE)
+            set(DXC_EXECUTABLE "${DXC_DOWNLOADED_EXECUTABLE}" PARENT_SCOPE)
+        else()
+            set(DXC_EXECUTABLE "" PARENT_SCOPE)
+        endif()
 
     elseif(APPLE)
         message(WARNING "DXC installation for macOS not implemented yet. Please install manually.")
@@ -122,7 +150,7 @@ endfunction()
 if(NOT DXC_FOUND)
     install_dxc()
 
-    if(EXISTS "${DXC_LIBRARY}" AND EXISTS "${DXC_EXECUTABLE}")
+    if(EXISTS "${DXC_LIBRARY}")
         set(DXC_FOUND TRUE)
         message(STATUS "DXC installation successful")
     else()
@@ -136,11 +164,10 @@ if(DXC_FOUND)
         add_library(DXC::Compiler SHARED IMPORTED)
         set_target_properties(DXC::Compiler PROPERTIES
             IMPORTED_LOCATION "${DXC_LIBRARY}"
-            IMPORTED_IMPLIB "${DXC_LIBRARY}"
         )
     endif()
 
-    if(NOT TARGET DXC::DXC)
+    if(NOT TARGET DXC::DXC AND DXC_EXECUTABLE)
         add_executable(DXC::DXC IMPORTED)
         set_target_properties(DXC::DXC PROPERTIES
             IMPORTED_LOCATION "${DXC_EXECUTABLE}"

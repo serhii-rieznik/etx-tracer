@@ -9,3 +9,10 @@ struct ETX_ALIGNED GPURTConstants {
   uint32_t frame_index;
   uint32_t sample_index;
 };
+
+#if defined(__cplusplus)
+static_assert(std::is_standard_layout_v<GPURTConstants>, "GPURTConstants must stay standard layout for C++/HLSL interop");
+static_assert(alignof(GPURTConstants) == 16, "GPURTConstants alignment must match HLSL packing");
+static_assert(sizeof(GPURTConstants) == 192, "GPURTConstants size changed; update shared ABI or padding");
+static_assert(offsetof(GPURTConstants, as_index) == 176, "GPURTConstants::as_index offset changed");
+#endif

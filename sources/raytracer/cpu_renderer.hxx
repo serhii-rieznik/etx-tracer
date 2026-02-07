@@ -53,7 +53,7 @@ struct CPURaytracingRenderer : public Renderer {
     return _raytracing.scene();
   }
 
- Film& film() {
+  Film& film() {
     return _raytracing.film();
   }
 

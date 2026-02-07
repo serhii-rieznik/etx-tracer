@@ -3,6 +3,7 @@
 #include <etx/core/log.hxx>
 #include <array>
 #include <string_view>
+#include <vector>
 
 #if !defined(WIN32_LEAN_AND_MEAN)
 # define WIN32_LEAN_AND_MEAN
@@ -93,9 +94,111 @@ bool contains_include_directive(const std::string& source) {
   return false;
 }
 
-bool should_suppress_preprocess_diagnostics(const std::string& diagnostics) {
+std::string_view trim_preprocess_line(std::string_view line) {
+  while (line.empty() == false && (line.front() == ' ' || line.front() == '\t' || line.front() == '\r')) {
+    line.remove_prefix(1);
+  }
+  while (line.empty() == false && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
+    line.remove_suffix(1);
+  }
+  return line;
+}
+
+bool is_suppressible_preprocess_line(std::string_view line) {
   static constexpr std::string_view angled_include_advisory = "with <angled> include; use \"quotes\" instead";
-  return diagnostics.find(angled_include_advisory) != std::string::npos;
+  line = trim_preprocess_line(line);
+  return line.find(angled_include_advisory) != std::string_view::npos;
+}
+
+std::string_view first_quoted_token(std::string_view line) {
+  line = trim_preprocess_line(line);
+  size_t begin = line.find('"');
+  if (begin == std::string_view::npos) {
+    return {};
+  }
+  size_t end = line.find('"', begin + 1);
+  if (end == std::string_view::npos || end <= begin + 1) {
+    return {};
+  }
+  return line.substr(begin + 1, end - begin - 1);
+}
+
+bool is_angled_include_advisory_triplet(std::string_view line0, std::string_view line1, std::string_view line2) {
+  line0 = trim_preprocess_line(line0);
+  line1 = trim_preprocess_line(line1);
+  line2 = trim_preprocess_line(line2);
+
+  if (line0.rfind("#include <", 0) != 0) {
+    return false;
+  }
+  size_t include_begin = line0.find('<');
+  size_t include_end = line0.rfind('>');
+  if (include_begin == std::string_view::npos || include_end == std::string_view::npos || include_end <= include_begin + 1) {
+    return false;
+  }
+  std::string_view include_path = line0.substr(include_begin + 1, include_end - include_begin - 1);
+
+  if (line1.empty() || line1.front() != '^' || line1.find('~') == std::string_view::npos) {
+    return false;
+  }
+
+  std::string_view suggested_path = first_quoted_token(line2);
+  if (suggested_path.empty()) {
+    return false;
+  }
+
+  return suggested_path == include_path;
+}
+
+std::string filter_preprocess_diagnostics(const std::string& diagnostics) {
+  std::vector<std::string_view> lines;
+  lines.reserve(16);
+  size_t pos = 0;
+  while (pos < diagnostics.size()) {
+    size_t line_end = diagnostics.find('\n', pos);
+    if (line_end == std::string::npos) {
+      line_end = diagnostics.size();
+    }
+
+    std::string_view line(diagnostics.data() + pos, line_end - pos);
+    while (line.empty() == false && line.back() == '\r') {
+      line.remove_suffix(1);
+    }
+    lines.push_back(line);
+
+    pos = line_end;
+    if (pos < diagnostics.size() && diagnostics[pos] == '\n') {
+      ++pos;
+    }
+  }
+
+  std::vector<uint8_t> suppress(lines.size(), 0);
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (is_suppressible_preprocess_line(lines[i])) {
+      suppress[i] = 1;
+    }
+  }
+
+  for (size_t i = 0; (i + 2) < lines.size(); ++i) {
+    if (is_angled_include_advisory_triplet(lines[i], lines[i + 1], lines[i + 2])) {
+      suppress[i + 0] = 1;
+      suppress[i + 1] = 1;
+      suppress[i + 2] = 1;
+      i += 2;
+    }
+  }
+
+  std::string filtered;
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (suppress[i] == 0) {
+      if (filtered.empty() == false) {
+        filtered.push_back('\n');
+      }
+      filtered.append(lines[i].data(), lines[i].size());
+    }
+  }
+
+  return filtered;
 }
 }  // namespace
 
@@ -311,6 +414,12 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     return result;
   }
 
+  if (hlsl_source.size() > MAX_SHADER_SOURCE_SIZE) {
+    result.result = RHIResult::InvalidArgument;
+    result.error_message = "HLSL source exceeds max size: " + std::to_string(hlsl_source.size()) + " bytes (max: " + std::to_string(MAX_SHADER_SOURCE_SIZE) + " bytes)";
+    return result;
+  }
+
   if (is_initialized() == false) {
     result.result = RHIResult::InvalidArgument;
     result.error_message = "Shader compiler not initialized";
@@ -388,14 +497,20 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       }
     }
 
-    const bool suppress_preprocess_diagnostics = should_suppress_preprocess_diagnostics(preprocess_diagnostics);
+    const std::string filtered_preprocess_diagnostics = filter_preprocess_diagnostics(preprocess_diagnostics);
 
-    if (preprocess_diagnostics.empty() == false && (suppress_preprocess_diagnostics == false)) {
-      log::warning("Shader preprocessing diagnostics [%s]:\n%s", source_name.empty() ? "<memory>" : source_name.c_str(), preprocess_diagnostics.c_str());
+    if (filtered_preprocess_diagnostics.empty() == false) {
+      log::warning("Shader preprocessing diagnostics [%s]:\n%s", source_name.empty() ? "<memory>" : source_name.c_str(), filtered_preprocess_diagnostics.c_str());
     }
 
-    if (FAILED(preprocess_status) && (suppress_preprocess_diagnostics == false)) {
-      log::warning("Shader preprocessing status is failed for [%s], attempting compilation of produced HLSL anyway", source_name.empty() ? "<memory>" : source_name.c_str());
+    if (FAILED(preprocess_status)) {
+      if (filtered_preprocess_diagnostics.empty() == false) {
+        result.result = RHIResult::ValidationError;
+        result.error_message = filtered_preprocess_diagnostics;
+        return result;
+      }
+
+      log::warning("Shader preprocessing status failed for [%s] with only suppressed diagnostics, continuing", source_name.empty() ? "<memory>" : source_name.c_str());
     }
 
     ComPtr<IDxcBlobUtf8> canonical_hlsl_blob;
@@ -412,6 +527,13 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       return result;
     }
     preprocessed_source.assign(canonical_hlsl_blob->GetStringPointer(), canonical_hlsl_blob->GetStringLength());
+
+    if (preprocessed_source.size() > MAX_SHADER_SOURCE_SIZE) {
+      result.result = RHIResult::ValidationError;
+      result.error_message =
+        "Preprocessed HLSL exceeds max size: " + std::to_string(preprocessed_source.size()) + " bytes (max: " + std::to_string(MAX_SHADER_SOURCE_SIZE) + " bytes)";
+      return result;
+    }
   }
 
   if (contains_include_directive(preprocessed_source)) {
@@ -428,25 +550,31 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     ShaderVariantKey key{source_name, ep.entry_point, ep.stage, ordered_defines, source_hash};
 
     // Check cache
+    std::vector<uint8_t> cached_spirv;
     {
       std::lock_guard<std::mutex> lock(_impl->cache_mutex);
       auto it = _impl->shader_cache.find(key);
       if (it != _impl->shader_cache.end() && it->second.result == RHIResult::Success) {
-        // Cache hit - copy data to shared Blob (we will optimize shared blob usage later or doing it differently)
-        // For now, let's just use the logic as requested: return array of compiled spir-v
-        // But the user asked for potentially shared buffer.
-        // Let's postpone packing into one buffer for simplicity and correctness first, or just append to the vector.
-        // Wait, if we use cache, we get individual blobs.
-        // Let's proceed with individual compilations and append to shared blob.
+        cached_spirv = it->second.spirv_data;
       }
     }
 
-    // Prepare for compilation
-    ComPtr<IDxcBlobEncoding> preprocessed_blob;
-    _impl->dxc_utils->CreateBlob(preprocessed_source.data(), static_cast<uint32_t>(preprocessed_source.size()), DXC_CP_UTF8, &preprocessed_blob);
-    DxcBuffer compile_buffer = {preprocessed_blob->GetBufferPointer(), preprocessed_blob->GetBufferSize(), DXC_CP_UTF8};
+    if (cached_spirv.empty() == false) {
+      result.binaries[i].spirv_data = nullptr;  // Fix up pointers later
+      result.binaries[i].spirv_size = cached_spirv.size();
+      result.binaries[i].stage = ep.stage;
+      result.binaries[i].entry_point = ep.entry_point;
+      result.shared_blob.insert(result.shared_blob.end(), cached_spirv.begin(), cached_spirv.end());
+      continue;
+    }
 
     std::vector<std::wstring> arguments = _impl->build_dxc_arguments(ep.entry_point, ep.stage, defines, false);
+    if (arguments.empty()) {
+      result.result = RHIResult::InvalidArgument;
+      result.error_message = "Unsupported shader stage for DXC compilation";
+      return result;
+    }
+
     std::vector<const wchar_t*> arguments_ptr;
     arguments_ptr.reserve(arguments.size());
     for (const auto& arg : arguments) {
@@ -470,8 +598,11 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       entry_result.result = RHIResult::ValidationError;
       entry_result.error_message = "DXC Compile failed";
     } else {
-      compile_result->GetStatus(&hr);
-      if (FAILED(hr)) {
+      HRESULT compile_status = S_OK;
+      if (FAILED(compile_result->GetStatus(&compile_status))) {
+        entry_result.result = RHIResult::ValidationError;
+        entry_result.error_message = "Failed to get DXC compile status";
+      } else if (FAILED(compile_status)) {
         entry_result.result = RHIResult::ValidationError;
       }
       Microsoft::WRL::ComPtr<IDxcBlobUtf8> errors;
@@ -492,26 +623,29 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     }
 
     Microsoft::WRL::ComPtr<IDxcBlob> shader_obj;
-    compile_result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(shader_obj.GetAddressOf()), nullptr);
+    HRESULT object_hr = compile_result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(shader_obj.GetAddressOf()), nullptr);
+    if (FAILED(object_hr) || !shader_obj || shader_obj->GetBufferPointer() == nullptr || shader_obj->GetBufferSize() == 0) {
+      result.result = RHIResult::ValidationError;
+      result.error_message = entry_result.error_message.empty() ? "DXC did not produce shader object output" : entry_result.error_message;
+      return result;
+    }
 
-    if (shader_obj) {
-      const uint8_t* ptr = static_cast<const uint8_t*>(shader_obj->GetBufferPointer());
-      size_t size = shader_obj->GetBufferSize();
+    const uint8_t* ptr = static_cast<const uint8_t*>(shader_obj->GetBufferPointer());
+    size_t size = shader_obj->GetBufferSize();
 
-      result.binaries[i].spirv_data = nullptr;  // Fix up pointers later or store offsets
-      result.binaries[i].spirv_size = size;
-      result.binaries[i].stage = ep.stage;
-      result.binaries[i].entry_point = ep.entry_point;
+    result.binaries[i].spirv_data = nullptr;  // Fix up pointers later or store offsets
+    result.binaries[i].spirv_size = size;
+    result.binaries[i].stage = ep.stage;
+    result.binaries[i].entry_point = ep.entry_point;
 
-      result.shared_blob.insert(result.shared_blob.end(), ptr, ptr + size);
-      // Update cache (we need to convert back to ShaderCompilationResult for cache compatibility)
-      ShaderCompilationResult partial_res;
-      partial_res.result = RHIResult::Success;
-      partial_res.spirv_data.assign(ptr, ptr + size);
-      {
-        std::lock_guard<std::mutex> lock(_impl->cache_mutex);
-        _impl->shader_cache[key] = partial_res;
-      }
+    result.shared_blob.insert(result.shared_blob.end(), ptr, ptr + size);
+    // Update cache (we need to convert back to ShaderCompilationResult for cache compatibility)
+    ShaderCompilationResult partial_res;
+    partial_res.result = RHIResult::Success;
+    partial_res.spirv_data.assign(ptr, ptr + size);
+    {
+      std::lock_guard<std::mutex> lock(_impl->cache_mutex);
+      _impl->shader_cache[key] = partial_res;
     }
   }
 
@@ -637,10 +771,21 @@ RHIResult load_dxc_dll_global() {
   const char* path_env = getenv("PATH");
   if (path_env) {
     std::string path_str(path_env);
-    size_t pos = 0;
-    while ((pos = path_str.find(';', pos)) != std::string::npos) {
-      search_paths.push_back(path_str.substr(0, pos + 1));
-      pos++;
+    size_t begin = 0;
+    while (begin <= path_str.size()) {
+      size_t separator = path_str.find(';', begin);
+      std::string entry = (separator == std::string::npos) ? path_str.substr(begin) : path_str.substr(begin, separator - begin);
+      if (entry.empty() == false) {
+        if (entry.back() != '\\' && entry.back() != '/') {
+          entry.push_back('\\');
+        }
+        search_paths.push_back(std::move(entry));
+      }
+
+      if (separator == std::string::npos) {
+        break;
+      }
+      begin = separator + 1;
     }
   }
 
@@ -693,7 +838,11 @@ RHIResult load_dxc_dll_global() {
   if (global_dxc_create_instance == nullptr) {
     log::error("Failed to get DxcCreateInstance function from DXC DLL");
     log::error("The loaded DLL may not be a valid DXC installation.");
-    unload_dxc_dll_global();
+    if (global_dxc_dll) {
+      FreeLibrary(global_dxc_dll);
+      global_dxc_dll = nullptr;
+    }
+    global_dxc_create_instance = nullptr;
     return RHIResult::NotImplemented;
   }
 
@@ -837,7 +986,7 @@ HRESULT STDMETHODCALLTYPE CustomIncludeHandler::LoadSource(LPCWSTR pFilename, ID
   std::error_code ec;
   auto file_size = std::filesystem::file_size(full_path, ec);
   if (ec || file_size > MAX_SHADER_FILE_SIZE) {
-    log::error("Include file too large or invalid: %s (%zu bytes)", full_path.c_str(), file_size);
+    log::error("Include file too large or invalid: %s (%zu bytes)", full_path.c_str(), static_cast<size_t>(file_size));
     return E_FAIL;
   }
 
@@ -900,18 +1049,13 @@ std::string CustomIncludeHandler::find_include_file(const std::string& filename)
     return (ec.value() == 0) ? absolute_path.string() : path.string();
   };
 
-  auto trim_first_component = [](const std::filesystem::path& path) -> std::filesystem::path {
-    auto it = path.begin();
-    if (it == path.end()) {
-      return {};
+  auto contains_parent_reference = [](const std::filesystem::path& path) -> bool {
+    for (const auto& part : path) {
+      if (part == "..") {
+        return true;
+      }
     }
-    ++it;
-
-    std::filesystem::path trimmed;
-    for (; it != path.end(); ++it) {
-      trimmed /= *it;
-    }
-    return trimmed;
+    return false;
   };
 
   auto resolve_relative_to_root = [&](const std::filesystem::path& root, std::filesystem::path include_path) -> std::string {
@@ -920,31 +1064,23 @@ std::string CustomIncludeHandler::find_include_file(const std::string& filename)
     }
 
     include_path = include_path.lexically_normal();
-    for (;;) {
-      if (include_path.empty() == false) {
-        auto candidate = root / include_path;
-        if (auto resolved = absolute_if_exists(candidate); resolved.empty() == false) {
-          return resolved;
-        }
+    if (include_path.empty() == false) {
+      auto candidate = root / include_path;
+      if (auto resolved = absolute_if_exists(candidate); resolved.empty() == false) {
+        return resolved;
       }
-
-      auto trimmed = trim_first_component(include_path);
-      if (trimmed.empty() || trimmed == include_path) {
-        break;
-      }
-      include_path = std::move(trimmed);
     }
 
     return {};
   };
 
-  if (auto resolved = absolute_if_exists(std::filesystem::path(filename)); resolved.empty() == false) {
-    return resolved;
+  std::filesystem::path include_path = std::filesystem::path(filename).lexically_normal();
+  if (contains_parent_reference(include_path)) {
+    return {};
   }
 
-  std::filesystem::path include_path = std::filesystem::path(filename).lexically_normal();
   if (include_path.is_absolute()) {
-    return {};
+    return absolute_if_exists(include_path);
   }
 
   if (_shader_directory.empty() == false) {

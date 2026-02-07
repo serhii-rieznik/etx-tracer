@@ -68,7 +68,13 @@ set_property(TARGET raytracer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_fol
 # Copy DXC library to bin folder (we only need the DLL for runtime compilation)
 if(DXC_FOUND AND DXC_LIBRARY)
   get_filename_component(DXC_LIBRARY_NAME "${DXC_LIBRARY}" NAME)
+  get_filename_component(DXC_LIBRARY_DIR "${DXC_LIBRARY}" DIRECTORY)
   add_custom_command(TARGET raytracer POST_BUILD 
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DXC_LIBRARY}" "${root_folder}/bin/${DXC_LIBRARY_NAME}" 
     COMMENT "Copying DXC library to bin folder")
+  if(EXISTS "${DXC_LIBRARY_DIR}/dxil.dll")
+    add_custom_command(TARGET raytracer POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DXC_LIBRARY_DIR}/dxil.dll" "${root_folder}/bin/dxil.dll"
+      COMMENT "Copying DXIL library to bin folder")
+  endif()
 endif()

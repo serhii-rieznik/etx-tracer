@@ -286,6 +286,7 @@ struct VKDevice {
   VkImage get_vk_image_from_bindless(RHIBindlessHandle handle) const;
   VkSemaphore get_vk_semaphore(RHISemaphore handle) const;
   VkPipelineLayout get_bindless_pipeline_layout();
+  uint32_t get_max_push_constants_size() const;
 
   VkInstance get_vk_instance() const;
   VkQueue get_graphics_queue() const;

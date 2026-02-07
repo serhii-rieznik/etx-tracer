@@ -1422,8 +1422,9 @@ void VKCommandBuffer::push_constants(const void* data, uint32_t size, uint32_t o
   }
 
   uint64_t end_offset = static_cast<uint64_t>(offset) + static_cast<uint64_t>(size);
-  if (end_offset > kVKMaxPushConstantsSize) {
-    log::error("Push constants size exceeds layout range: size=%u offset=%u", size, offset);
+  const uint32_t push_constants_limit = device->get_max_push_constants_size();
+  if (end_offset > push_constants_limit) {
+    log::error("Push constants size exceeds layout range: size=%u offset=%u limit=%u", size, offset, push_constants_limit);
     return;
   }
 

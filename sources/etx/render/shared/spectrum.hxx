@@ -340,12 +340,12 @@ struct SpectralResponse : public SpectralQuery {
     return spectral() ? (value <= kEpsilon) : (integrated.x <= kEpsilon) && (integrated.y <= kEpsilon) && (integrated.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                        \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
-    integrated OP other.integrated;                                            \
-    value OP other.value;                                                      \
-    return *this;                                                              \
+#define SPECTRAL_OP(OP)                                                       \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
+    integrated OP other.integrated;                                           \
+    value OP other.value;                                                     \
+    return *this;                                                             \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)
