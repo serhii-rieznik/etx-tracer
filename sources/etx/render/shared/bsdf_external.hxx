@@ -710,15 +710,15 @@ inline SpectralResponse erf(const SpectralResponse& x) {
     return {x.query(), erf(x.value)};
   }
 
-  SpectralResponse e = exp(-x * x);
-  return sign(x) * 2.0f / kSqrtPI * sqrt(1.0f - e) * (kSqrtPI / 2.0f + 31.0f / 200.0f * e - 341.0f / 8000.0f * e * e);
+  SpectralResponse e = spectrum_exp(-x * x);
+  return spectrum_sign(x) * 2.0f / kSqrtPI * spectrum_sqrt(1.0f - e) * (kSqrtPI / 2.0f + 31.0f / 200.0f * e - 341.0f / 8000.0f * e * e);
 }
 
 inline SpectralResponse fm(float ui, float uo, float r, SpectralResponse c) {
-  SpectralResponse C = sqrt(1.0f - c);
+  SpectralResponse C = spectrum_sqrt(1.0f - c);
   SpectralResponse Ck = (1.0f - 0.5441615108674713f * C - 0.45302863761693374f * (1.0f - c)) / (1.0f + 1.4293127703064865f * C);
-  SpectralResponse Ca = c / pow(1.0075f + 1.16942f * C, atan((0.0225272f + (-0.264641f + r) * r) * erf(c)));
-  return max(0.0f, 0.384016f * (-0.341969f + Ca) * Ca * Ck * (-0.0578978f / (0.287663f + ui * uo) + fabsf(-0.0898863f + tanhf(r))));
+  SpectralResponse Ca = c / spectrum_pow(1.0075f + 1.16942f * C, spectrum_atan((0.0225272f + (-0.264641f + r) * r) * erf(c)));
+  return spectrum_max(0.0f, 0.384016f * (-0.341969f + Ca) * Ca * Ck * (-0.0578978f / (0.287663f + ui * uo) + fabsf(-0.0898863f + tanhf(r))));
 }
 
 inline float sigmaBeckmannExpanded(float u, float m) {

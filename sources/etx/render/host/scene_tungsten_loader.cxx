@@ -1,8 +1,8 @@
+#include <etx/render/interop/interop.hxx>
+
 #include <etx/core/environment.hxx>
 #include <etx/core/json.hxx>
 
-#include <etx/render/shared/base.hxx>
-#include <etx/render/shared/math.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scattering.hxx>
 #include <etx/render/shared/spectrum.hxx>
@@ -953,7 +953,7 @@ bool add_builtin_sphere(const float3& translate, const float3& scale, const floa
   };
 
   auto midpoint = [&](uint32_t a, uint32_t b, std::unordered_map<EdgeKey, uint32_t, EdgeHash>& cache) -> uint32_t {
-    EdgeKey key{std::min(a, b), std::max(a, b)};
+    EdgeKey key{min(a, b), max(a, b)};
     auto it = cache.find(key);
     if (it != cache.end())
       return it->second;

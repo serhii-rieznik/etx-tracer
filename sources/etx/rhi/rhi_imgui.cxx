@@ -6,7 +6,7 @@
 #include <etx/core/log.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
-#include <etx/shaders/shared/imgui_shared.hxx>
+#include <interop/imgui_shared.hxx>
 
 namespace etx {
 
@@ -38,10 +38,7 @@ RHIResult RHIImGui::setup(RHIContext& context, const RHIImGuiDesc& desc) {
   _desc.no_default_font = true;
 
   auto result = create_resources();
-  if (result != RHIResult::Success) {
-    log::error("Failed to create RHI ImGui resources: {}", static_cast<uint32_t>(result));
-    return result;
-  }
+  ETX_CRITICAL(result == RHIResult::Success);
 
   _initialized = true;
   return RHIResult::Success;
@@ -234,6 +231,7 @@ RHIResult RHIImGui::create_font_texture() {
     return sampler_result.result;
   }
 
+  io.FontDefault = font;
   io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_texture.value;
   return RHIResult::Success;
 }
@@ -242,15 +240,15 @@ RHIResult RHIImGui::create_pipeline() {
   auto& device = _context->device();
   auto& compiler = ShaderCompiler::instance();
 
-  auto result = compiler.compile("etx/shaders/imgui.hlsl", {{"vs_main", RHIShaderStage::Vertex}, {"ps_main", RHIShaderStage::Fragment}});
+  auto result = compiler.compile("shaders/imgui.hlsl", {{"vs_main", RHIShaderStage::Vertex}, {"ps_main", RHIShaderStage::Fragment}});
 
   if (result.result != RHIResult::Success) {
-    log::error("Failed to compile imgui shader: {}", result.error_message);
+    log::error("Failed to compile imgui shader: %s", result.error_message.c_str());
     return result.result;
   }
 
   if (result.binaries.size() != 2) {
-    log::error("Expected 2 shader binaries, got {}", result.binaries.size());
+    log::error("Expected 2 shader binaries, got %llu", result.binaries.size());
     return RHIResult::ValidationError;
   }
 

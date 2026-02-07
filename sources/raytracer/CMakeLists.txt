@@ -33,7 +33,8 @@ target_link_libraries(raytracer
 )
 
 target_include_directories(raytracer
-    PRIVATE "${CMAKE_SOURCE_DIR}/bin")
+    PRIVATE "${CMAKE_SOURCE_DIR}/bin"
+    PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render")
 
 set_target_properties(raytracer PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
@@ -55,7 +56,7 @@ if (APPLE)
 elseif (WIN32)
   find_package(Vulkan REQUIRED)
   target_link_libraries(raytracer PRIVATE Vulkan::Vulkan)
-  target_include_directories(raytracer PRIVATE ${Vulkan_INCLUDE_DIRS} "${CMAKE_SOURCE_DIR}/bin")
+  target_include_directories(raytracer PRIVATE ${Vulkan_INCLUDE_DIRS} "${CMAKE_SOURCE_DIR}/bin" "${CMAKE_SOURCE_DIR}/sources/etx/render")
 endif()
 
 if(MSVC)

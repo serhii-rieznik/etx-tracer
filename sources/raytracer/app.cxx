@@ -19,7 +19,7 @@
 # include <Windows.h>
 #endif
 
-#include <etx/shaders/shared/render_options.hxx>
+#include <interop/render_options.hxx>
 
 namespace etx {
 
@@ -48,9 +48,9 @@ void RTApplication::init() {
 
   ui.set_integrator_list(cpu_renderer.integrator_list(), cpu_renderer.integrator_count());
 
-  cpu_renderer.init(&render_context.get_context(), scene);
-  raster_renderer.init(&render_context.get_context(), scene);
-  gpu_renderer.init(&render_context.get_context(), scene);
+  cpu_renderer.init(render_context.get_context(), scene);
+  raster_renderer.init(render_context.get_context(), scene);
+  gpu_renderer.init(render_context.get_context(), scene);
 
   RendererMode mode = RendererMode::CPURaytracing;
   auto renderer_name = _options.get_string("renderer", "cpu");
@@ -271,7 +271,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     log::error("Failed to load scene from file: %s", _current_scene_file.c_str());
   }
   log::warning("Setting output dimensions...");
-  cpu_renderer.set_output_dimensions(scene.camera().film_size);
+  cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
 
   if (scene.valid() == false) {
     return;
@@ -520,7 +520,7 @@ void RTApplication::on_emitter_rebuild(uint32_t index) {
 void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
   scene.update_active_camera();
   if ((viewport != film.base_dimensions()) || (pixel_size != film.pixel_size())) {
-    cpu_renderer.set_output_dimensions(scene.camera().film_size);
+    cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
   }
   cpu_renderer.restart();
 }
@@ -584,7 +584,7 @@ void RTApplication::on_scene_updates_locked_changed(bool locked) {
 
 void RTApplication::on_reload_shaders_selected() {
   if (_active_renderer == &gpu_renderer) {
-    gpu_renderer.reload_shaders(&render_context.get_context());
+    gpu_renderer.reload_shaders(render_context.get_context());
   }
 }
 

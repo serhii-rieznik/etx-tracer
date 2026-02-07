@@ -1,6 +1,6 @@
 #include "bindless.hlsl"
-#include "shared/render_options.hxx"
-#include "shared/gpu_rt_shared.hxx"
+#include <interop/render_options.hxx>
+#include <interop/gpu_rt_shared.hxx>
 
 [[vk::push_constant]] GPURTConstants constants;
 

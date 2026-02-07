@@ -1,7 +1,7 @@
+#include <etx/render/interop/interop.hxx>
+
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
-#include <etx/render/shared/base.hxx>
-#include <etx/render/shared/math.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/host/scene_gltf_loader.hxx>

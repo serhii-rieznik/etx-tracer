@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include <etx/render/shared/base.hxx>
+#include <etx/render/interop/interop.hxx>
 
 namespace etx {
 
@@ -10,48 +10,48 @@ struct Sampler {
   float fixed_v = 0.0f;
   float fixed_w = 0.0f;
 
-  ETX_SHARED_CODE Sampler() {
+  Sampler() {
   }
 
-  ETX_SHARED_CODE Sampler(uint32_t state)
+  Sampler(uint32_t state)
     : seed(state) {
   }
 
-  ETX_SHARED_CODE Sampler(uint32_t a, uint32_t b)
+  Sampler(uint32_t a, uint32_t b)
     : seed(random_seed(a, b)) {
   }
 
-  ETX_SHARED_CODE void init(uint32_t a, uint32_t b) {
+  void init(uint32_t a, uint32_t b) {
     seed = random_seed(a, b);
   }
 
-  ETX_SHARED_CODE float next() {
+  float next() {
     return next_random(seed);
   }
 
-  ETX_SHARED_CODE float2 next_2d() {
+  float2 next_2d() {
     float a = next();
     float b = next();
     return {a, b};
   }
 
-  ETX_SHARED_CODE void push_fixed(float u, float v, float w) {
+  void push_fixed(float u, float v, float w) {
     fixed_u = u;
     fixed_v = v;
     fixed_w = w;
   }
 
-  ETX_SHARED_CODE void pop_fixed() {
+  void pop_fixed() {
     fixed_u = 0.0f;
     fixed_v = 0.0f;
     fixed_w = 0.0f;
   }
 
-  ETX_SHARED_CODE bool has_fixed() const {
+  bool has_fixed() const {
     return (sqr(fixed_u) + sqr(fixed_v) + sqr(fixed_w)) > kEpsilon;
   }
 
-  static ETX_SHARED_CODE uint32_t random_seed(const uint32_t val0, const uint32_t val1) {
+  static uint32_t random_seed(const uint32_t val0, const uint32_t val1) {
     uint32_t v0 = val0;
     uint32_t v1 = val1;
     uint32_t s0 = 0u;
@@ -63,7 +63,7 @@ struct Sampler {
     return v0;
   }
 
-  static ETX_SHARED_CODE float next_random(uint32_t& seed) {
+  static float next_random(uint32_t& seed) {
     seed = (seed ^ 61u) ^ (seed >> 16u);
     seed *= 9u;
     seed = seed ^ (seed >> 4u);

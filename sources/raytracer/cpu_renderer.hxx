@@ -16,11 +16,11 @@ struct CPURaytracingRenderer : public Renderer {
   CPURaytracingRenderer(Raytracing& rt, SceneRepresentation& scene);
   ~CPURaytracingRenderer() override;
 
-  void init(RHIContext* ctx, SceneRepresentation& scene) override;
+  void init(RHIContext& ctx, SceneRepresentation& scene) override;
 
-  void render(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+  void render(RHIContext& ctx, SceneRepresentation& scene, const FrameData&) override;
 
-  void cleanup(RHIContext* ctx) override;
+  void cleanup(RHIContext& ctx) override;
 
   const char* name() const override {
     return "CPU Raytracing";
@@ -35,7 +35,7 @@ struct CPURaytracingRenderer : public Renderer {
   void stop() override;
   void restart() override;
 
-  void set_output_dimensions(const uint2& dim);
+  void set_output_dimensions(RHIContext& ctx, const uint2& dim);
   void on_camera_changed(SceneRepresentation& scene) override;
   void on_camera_become_steady(SceneRepresentation& scene) override;
   void on_scene_changed(SceneRepresentation& scene) override;
@@ -53,12 +53,12 @@ struct CPURaytracingRenderer : public Renderer {
     return _raytracing.scene();
   }
 
-  Film& film() {
+ Film& film() {
     return _raytracing.film();
   }
 
  private:
-  void update_image(const float4* camera);
+  void update_image(RHIContext& ctx, const float4* camera);
 
  private:
   Raytracing& _raytracing;
@@ -77,8 +77,6 @@ struct CPURaytracingRenderer : public Renderer {
     &_cpu_vcm,         // VCM = 3
     &_bdpt_distilled,  // BDPTDistilled = 4
   };
-
-  RHIContext* _rhi_context = nullptr;
 
   RHIPipeline rhi_pipeline = {};
 };

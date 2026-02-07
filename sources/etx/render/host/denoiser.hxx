@@ -1,7 +1,7 @@
 #pragma once
 
 #include <etx/core/pimpl.hxx>
-#include <etx/render/shared/base.hxx>
+#include <etx/render/interop/interop.hxx>
 
 namespace etx {
 

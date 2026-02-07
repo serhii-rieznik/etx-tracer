@@ -178,13 +178,13 @@ struct MediumPoolImpl {
 
     auto accessor = grid->getAccessor();
     const auto& grid_bbox = grid->indexBBox();
-    const auto& min = grid_bbox.min();
-    const auto& max = grid_bbox.max();
-    auto dim = max - min;
+    const auto& box_min = grid_bbox.min();
+    const auto& box_max = grid_bbox.max();
+    auto dim = box_max - box_min;
     d.x = static_cast<uint32_t>(dim.x());
     d.y = static_cast<uint32_t>(dim.y());
     d.z = static_cast<uint32_t>(dim.z());
-    uint32_t dmax = std::max(d.x, std::max(d.y, d.z));
+    uint32_t dmax = max(d.x, max(d.y, d.z));
     float3 fd = {float(d.x) / float(dmax), float(d.y) / float(dmax), float(d.z) / float(dmax)};
 
     log::info("Medium bounding box: [%d %d %d]...[%d %d %d] : [%d %d %d] (%.4f %.4f %.4f)",  //
@@ -199,14 +199,14 @@ struct MediumPoolImpl {
     double avg_val = 0.0f;
     uint64_t value_count = 0;
     nanovdb::Coord c = {};
-    for (c.z() = min.z(); c.z() < max.z(); ++c.z()) {
-      for (c.y() = min.y(); c.y() < max.y(); ++c.y()) {
-        for (c.x() = min.x(); c.x() < max.x(); ++c.x()) {
+    for (c.z() = box_min.z(); c.z() < box_max.z(); ++c.z()) {
+      for (c.y() = box_min.y(); c.y() < box_max.y(); ++c.y()) {
+        for (c.x() = box_min.x(); c.x() < box_max.x(); ++c.x()) {
           float val = accessor.getValue(c);
           if (val > 0.0f) {
-            min_val = std::min(min_val, val);
-            max_val = std::max(max_val, val);
-            nanovdb::Coord cr = c - min;
+            min_val = min(min_val, val);
+            max_val = max(max_val, val);
+            nanovdb::Coord cr = c - box_min;
             density[cr.x() + 1llu * cr.y() * d.x + 1llu * cr.z() * d.x * d.y] = val;
             value_count += 1u;
             avg_val += val;

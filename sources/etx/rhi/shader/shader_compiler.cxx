@@ -1,6 +1,8 @@
 #include <etx/rhi/shader/shader_compiler.hxx>
 
 #include <etx/core/log.hxx>
+#include <array>
+#include <string_view>
 
 #if !defined(WIN32_LEAN_AND_MEAN)
 # define WIN32_LEAN_AND_MEAN
@@ -23,39 +25,16 @@ RHIResult initialize_dxc_interfaces_global();
 
 namespace {
 
-std::wstring string_to_wstring(const std::string& str) {
-  if (str.empty())
-    return {};
-  int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
-  std::wstring wstrTo(size_needed, 0);
-  MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
-  return wstrTo;
-}
+constexpr std::array<std::string_view, 6> default_shader_search_paths = {
+  "./sources/etx/render",
+  "../sources/etx/render",
+  "../../sources/etx/render",
+  "./sources",
+  "../sources",
+  "../../sources",
+};
 
-std::string wstring_to_string(const std::wstring& wstr) {
-  if (wstr.empty())
-    return {};
-  int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
-  std::string strTo(size_needed, 0);
-  WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
-  return strTo;
-}
-
-const std::vector<std::string>& default_shader_search_paths() {
-  static const std::vector<std::string> paths = {
-    "./shaders",
-    "./bin/shaders",
-    "./sources/etx/shaders",
-    "../sources/etx/shaders",
-    "../../sources/etx/shaders",
-    "./sources",
-    "../sources",
-    "../../sources",
-  };
-  return paths;
-}
-
-std::string resolve_shader_file_path(const std::string& filename, const std::vector<std::string>& include_paths) {
+std::string resolve_shader_file_path(const std::string& filename) {
   if (filename.empty()) {
     return {};
   }
@@ -67,12 +46,12 @@ std::string resolve_shader_file_path(const std::string& filename, const std::vec
     return ec.value() == 0 ? abs_path.string() : input_path.string();
   }
 
-  for (const auto& path : include_paths) {
+  for (const auto path : default_shader_search_paths) {
     if (path.empty()) {
       continue;
     }
 
-    std::filesystem::path candidate = std::filesystem::path(path) / filename;
+    std::filesystem::path candidate = std::filesystem::path(std::string(path)) / filename;
     ec = {};
     if (std::filesystem::exists(candidate, ec) && (ec.value() == 0)) {
       auto abs_path = std::filesystem::absolute(candidate, ec);
@@ -82,11 +61,47 @@ std::string resolve_shader_file_path(const std::string& filename, const std::vec
 
   return {};
 }
+
+bool contains_include_directive(const std::string& source) {
+  size_t pos = 0;
+  while (pos < source.size()) {
+    size_t line_end = source.find('\n', pos);
+    if (line_end == std::string::npos) {
+      line_end = source.size();
+    }
+
+    size_t i = pos;
+    while (i < line_end && (source[i] == ' ' || source[i] == '\t' || source[i] == '\r')) {
+      ++i;
+    }
+
+    if (i < line_end && source[i] == '#') {
+      ++i;
+      while (i < line_end && (source[i] == ' ' || source[i] == '\t')) {
+        ++i;
+      }
+
+      static constexpr std::string_view include_kw = "include";
+      if ((line_end - i) >= include_kw.size() && source.compare(i, include_kw.size(), include_kw.data()) == 0) {
+        return true;
+      }
+    }
+
+    pos = line_end + 1;
+  }
+
+  return false;
+}
+
+bool should_suppress_preprocess_diagnostics(const std::string& diagnostics) {
+  static constexpr std::string_view angled_include_advisory = "with <angled> include; use \"quotes\" instead";
+  return diagnostics.find(angled_include_advisory) != std::string::npos;
+}
 }  // namespace
 
 class CustomIncludeHandler : public IDxcIncludeHandler {
  public:
-  CustomIncludeHandler(Microsoft::WRL::ComPtr<IDxcUtils> dxc_utils, const std::vector<std::string>& include_paths);
+  CustomIncludeHandler(Microsoft::WRL::ComPtr<IDxcUtils> dxc_utils, std::string shader_directory);
   ~CustomIncludeHandler();
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** ppvObject) override;
@@ -97,14 +112,13 @@ class CustomIncludeHandler : public IDxcIncludeHandler {
 
  private:
   Microsoft::WRL::ComPtr<IDxcUtils> _dxc_utils;
-  std::vector<std::string> _include_paths;
+  std::string _shader_directory;
   std::unordered_map<std::string, Microsoft::WRL::ComPtr<IDxcBlobEncoding>> _include_cache;
   std::mutex _include_cache_mutex;
   std::atomic<ULONG> _ref_count = 1;
 
   std::string find_include_file(const std::string& filename);
   std::string wstring_to_string(const std::wstring& wstr);
-  std::wstring string_to_wstring(const std::string& str);
 };
 
 struct ShaderVariantKey {
@@ -135,13 +149,11 @@ struct ShaderVariantKeyHash {
 };
 
 struct ShaderCompiler::Impl {
-  std::vector<std::string> include_paths;
   std::unordered_map<ShaderVariantKey, ShaderCompilationResult, ShaderVariantKeyHash> shader_cache;
   std::mutex cache_mutex;
 
   ComPtr<IDxcUtils> dxc_utils;
   ComPtr<IDxcCompiler3> dxc_compiler;
-  CustomIncludeHandler* custom_include_handler = nullptr;
 
   // Helper method
   std::vector<std::wstring> build_dxc_arguments(const std::string& entry_point, RHIShaderStage stage, const std::unordered_map<std::string, std::string>& defines,
@@ -152,7 +164,6 @@ struct ShaderCompiler::Impl {
 std::mutex global_init_mutex;
 Microsoft::WRL::ComPtr<IDxcUtils> global_dxc_utils;
 Microsoft::WRL::ComPtr<IDxcCompiler3> global_dxc_compiler;
-CustomIncludeHandler* custom_include_handler = nullptr;
 HMODULE global_dxc_dll = nullptr;
 std::atomic<bool> global_com_initialized{false};
 std::mutex global_dll_mutex;
@@ -176,7 +187,7 @@ ShaderCompiler& ShaderCompiler::instance() {
     // Initialize COM
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hr) && (hr != RPC_E_CHANGED_MODE)) {
-      log::error("Failed to initialize COM: 0x{:08X}", static_cast<uint32_t>(hr));
+      log::error("Failed to initialize COM: 0x%08X", static_cast<uint32_t>(hr));
       unload_dxc_dll_global();
       init_failed = true;
       return;
@@ -217,11 +228,6 @@ ShaderCompiler& ShaderCompiler::instance() {
 void ShaderCompiler::shutdown() {
   std::lock_guard<std::mutex> dll_lock(global_dll_mutex);
 
-  if (custom_include_handler != nullptr) {
-    custom_include_handler->Release();
-    custom_include_handler = nullptr;
-  }
-
   global_dxc_utils.Reset();
   global_dxc_compiler.Reset();
 
@@ -244,7 +250,6 @@ ShaderCompiler::ShaderCompiler()
 ShaderCompiler::~ShaderCompiler() {
   if (_impl != nullptr) {
     _impl->shader_cache.clear();
-    _impl->include_paths.clear();
   }
 }
 
@@ -255,45 +260,18 @@ RHIResult ShaderCompiler::initialize() {
 
   _impl->dxc_utils = global_dxc_utils;
   _impl->dxc_compiler = global_dxc_compiler;
-  _impl->custom_include_handler = custom_include_handler;
-
-  if (_impl->custom_include_handler) {
-    _impl->custom_include_handler->AddRef();
-  }
-
-  if (_impl->include_paths.empty()) {
-    _impl->include_paths = default_shader_search_paths();
-  }
 
   return RHIResult::Success;
 }
 
 bool ShaderCompiler::is_initialized() const {
-  return _impl && _impl->dxc_utils && _impl->dxc_compiler && _impl->custom_include_handler;
-}
-
-void ShaderCompiler::add_include_path(const std::string& path) {
-  if (path.empty()) {
-    log::warning("Attempted to add empty include path");
-    return;
-  }
-
-  if (path.length() > 1024) {
-    log::warning("Include path too long: %zu characters", path.length());
-    return;
-  }
-
-  _impl->include_paths.push_back(path);
-}
-
-void ShaderCompiler::clear_include_paths() {
-  _impl->include_paths.clear();
+  return _impl && _impl->dxc_utils && _impl->dxc_compiler;
 }
 
 // File-loading overload
 ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& filename, const std::vector<ShaderEntryPoint>& entry_points,
   const std::unordered_map<std::string, std::string>& defines) {
-  std::string source_path = resolve_shader_file_path(filename, _impl->include_paths);
+  std::string source_path = resolve_shader_file_path(filename);
   if (source_path.empty()) {
     source_path = filename;
   }
@@ -314,7 +292,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     return result;
   }
 
-  return compile(source, filename, entry_points, defines);
+  return compile(source, source_path, entry_points, defines);
 }
 
 ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& hlsl_source, const std::string& source_name,
@@ -336,6 +314,27 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
   if (is_initialized() == false) {
     result.result = RHIResult::InvalidArgument;
     result.error_message = "Shader compiler not initialized";
+    return result;
+  }
+
+  std::string shader_directory;
+  if (source_name.empty() == false) {
+    std::filesystem::path source_path(source_name);
+    if (source_path.has_parent_path()) {
+      shader_directory = source_path.parent_path().string();
+    }
+  }
+
+  auto include_handler =
+    std::unique_ptr<CustomIncludeHandler, void (*)(CustomIncludeHandler*)>(new CustomIncludeHandler(_impl->dxc_utils, shader_directory), [](CustomIncludeHandler* p) {
+      if (p != nullptr) {
+        p->Release();
+      }
+    });
+
+  if (include_handler == nullptr) {
+    result.result = RHIResult::OutOfMemory;
+    result.error_message = "Failed to create include handler";
     return result;
   }
 
@@ -364,7 +363,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     }
 
     ComPtr<IDxcResult> preprocess_result;
-    hr = _impl->dxc_compiler->Compile(&dxc_buffer, preprocess_args_ptr.data(), static_cast<uint32_t>(preprocess_args_ptr.size()), _impl->custom_include_handler,
+    hr = _impl->dxc_compiler->Compile(&dxc_buffer, preprocess_args_ptr.data(), static_cast<uint32_t>(preprocess_args_ptr.size()), include_handler.get(),
       IID_PPV_ARGS(&preprocess_result));
     if (FAILED(hr)) {
       result.result = RHIResult::ValidationError;
@@ -372,17 +371,31 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       return result;
     }
 
-    ComPtr<IDxcBlobUtf8> preprocess_errors;
-    hr = preprocess_result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&preprocess_errors), nullptr);
+    HRESULT preprocess_status = S_OK;
+    hr = preprocess_result->GetStatus(&preprocess_status);
     if (FAILED(hr)) {
       result.result = RHIResult::ValidationError;
-      result.error_message = "Failed to get preprocessing errors";
+      result.error_message = "Failed to get preprocessing status";
       return result;
     }
-    if (preprocess_errors && preprocess_errors->GetStringLength() > 0) {
-      result.result = RHIResult::ValidationError;
-      result.error_message = std::string(preprocess_errors->GetStringPointer(), preprocess_errors->GetStringLength());
-      return result;
+
+    std::string preprocess_diagnostics;
+    {
+      ComPtr<IDxcBlobUtf8> preprocess_errors;
+      hr = preprocess_result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&preprocess_errors), nullptr);
+      if (SUCCEEDED(hr) && preprocess_errors && preprocess_errors->GetStringLength() > 0) {
+        preprocess_diagnostics.assign(preprocess_errors->GetStringPointer(), preprocess_errors->GetStringLength());
+      }
+    }
+
+    const bool suppress_preprocess_diagnostics = should_suppress_preprocess_diagnostics(preprocess_diagnostics);
+
+    if (preprocess_diagnostics.empty() == false && (suppress_preprocess_diagnostics == false)) {
+      log::warning("Shader preprocessing diagnostics [%s]:\n%s", source_name.empty() ? "<memory>" : source_name.c_str(), preprocess_diagnostics.c_str());
+    }
+
+    if (FAILED(preprocess_status) && (suppress_preprocess_diagnostics == false)) {
+      log::warning("Shader preprocessing status is failed for [%s], attempting compilation of produced HLSL anyway", source_name.empty() ? "<memory>" : source_name.c_str());
     }
 
     ComPtr<IDxcBlobUtf8> canonical_hlsl_blob;
@@ -398,8 +411,11 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       result.error_message = "Failed to get preprocessed HLSL";
       return result;
     }
-
     preprocessed_source.assign(canonical_hlsl_blob->GetStringPointer(), canonical_hlsl_blob->GetStringLength());
+  }
+
+  if (contains_include_directive(preprocessed_source)) {
+    log::warning("Preprocessed shader source still contains #include directives [%s]", source_name.empty() ? "<memory>" : source_name.c_str());
   }
 
   uint64_t source_hash = etx_hash64(preprocessed_source.data(), preprocessed_source.size());
@@ -444,8 +460,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     };
 
     Microsoft::WRL::ComPtr<IDxcResult> compile_result = {};
-    HRESULT hr = _impl->dxc_compiler->Compile(&source_buffer, arguments_ptr.data(), (uint32_t)arguments_ptr.size(), _impl->custom_include_handler,
-      IID_PPV_ARGS(compile_result.GetAddressOf()));
+    HRESULT hr = _impl->dxc_compiler->Compile(&source_buffer, arguments_ptr.data(), (uint32_t)arguments_ptr.size(), nullptr, IID_PPV_ARGS(compile_result.GetAddressOf()));
 
     ShaderCompilationResult entry_result = {
       .result = RHIResult::Success,
@@ -506,7 +521,6 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     binary.spirv_data = result.shared_blob.data() + current_offset;
     current_offset += binary.spirv_size;
   }
-
   return result;
 }
 
@@ -525,13 +539,6 @@ RHIResult initialize_dxc_interfaces_global() {
   if (FAILED(hr)) {
     log::error("Failed to create DXC compiler: 0x%08X", static_cast<uint32_t>(hr));
     return RHIResult::ValidationError;
-  }
-
-  std::vector<std::string> include_paths(default_shader_search_paths().begin(), default_shader_search_paths().end());
-  custom_include_handler = new CustomIncludeHandler(global_dxc_utils, include_paths);
-  if (!custom_include_handler) {
-    log::error("Failed to create global custom include handler");
-    return RHIResult::OutOfMemory;
   }
 
   return RHIResult::Success;
@@ -774,9 +781,13 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
   return arguments;
 }
 
-CustomIncludeHandler::CustomIncludeHandler(Microsoft::WRL::ComPtr<IDxcUtils> dxc_utils, const std::vector<std::string>& include_paths)
-  : _dxc_utils(dxc_utils)
-  , _include_paths(include_paths) {
+CustomIncludeHandler::CustomIncludeHandler(Microsoft::WRL::ComPtr<IDxcUtils> dxc_utils, std::string shader_directory)
+  : _dxc_utils(dxc_utils) {
+  if (shader_directory.empty() == false) {
+    std::error_code ec;
+    auto absolute_path = std::filesystem::absolute(std::filesystem::path(shader_directory), ec);
+    _shader_directory = (ec.value() == 0) ? absolute_path.string() : shader_directory;
+  }
 }
 
 CustomIncludeHandler::~CustomIncludeHandler() {
@@ -880,20 +891,84 @@ HRESULT STDMETHODCALLTYPE CustomIncludeHandler::LoadSource(LPCWSTR pFilename, ID
 }
 
 std::string CustomIncludeHandler::find_include_file(const std::string& filename) {
-  if (std::filesystem::exists(filename)) {
-    return std::filesystem::absolute(filename).string();
+  auto absolute_if_exists = [](const std::filesystem::path& path) -> std::string {
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec) == false || ec.value() != 0) {
+      return {};
+    }
+    auto absolute_path = std::filesystem::absolute(path, ec);
+    return (ec.value() == 0) ? absolute_path.string() : path.string();
+  };
+
+  auto trim_first_component = [](const std::filesystem::path& path) -> std::filesystem::path {
+    auto it = path.begin();
+    if (it == path.end()) {
+      return {};
+    }
+    ++it;
+
+    std::filesystem::path trimmed;
+    for (; it != path.end(); ++it) {
+      trimmed /= *it;
+    }
+    return trimmed;
+  };
+
+  auto resolve_relative_to_root = [&](const std::filesystem::path& root, std::filesystem::path include_path) -> std::string {
+    if (root.empty()) {
+      return {};
+    }
+
+    include_path = include_path.lexically_normal();
+    for (;;) {
+      if (include_path.empty() == false) {
+        auto candidate = root / include_path;
+        if (auto resolved = absolute_if_exists(candidate); resolved.empty() == false) {
+          return resolved;
+        }
+      }
+
+      auto trimmed = trim_first_component(include_path);
+      if (trimmed.empty() || trimmed == include_path) {
+        break;
+      }
+      include_path = std::move(trimmed);
+    }
+
+    return {};
+  };
+
+  if (auto resolved = absolute_if_exists(std::filesystem::path(filename)); resolved.empty() == false) {
+    return resolved;
   }
 
-  for (const auto& path : _include_paths) {
-    std::filesystem::path include_path = path;
-    include_path /= filename;
+  std::filesystem::path include_path = std::filesystem::path(filename).lexically_normal();
+  if (include_path.is_absolute()) {
+    return {};
+  }
 
-    if (std::filesystem::exists(include_path)) {
-      return std::filesystem::absolute(include_path).string();
+  if (_shader_directory.empty() == false) {
+    std::filesystem::path root = std::filesystem::path(_shader_directory);
+    for (uint32_t depth = 0; depth < 8 && root.empty() == false; ++depth) {
+      if (auto resolved = resolve_relative_to_root(root, include_path); resolved.empty() == false) {
+        return resolved;
+      }
+
+      std::filesystem::path parent = root.parent_path();
+      if (parent.empty() || parent == root) {
+        break;
+      }
+      root = std::move(parent);
     }
   }
 
-  return "";
+  for (const auto root : default_shader_search_paths) {
+    if (auto resolved = resolve_relative_to_root(std::filesystem::path(std::string(root)), include_path); resolved.empty() == false) {
+      return resolved;
+    }
+  }
+
+  return {};
 }
 
 std::string CustomIncludeHandler::wstring_to_string(const std::wstring& wstr) {
@@ -904,16 +979,6 @@ std::string CustomIncludeHandler::wstring_to_string(const std::wstring& wstr) {
   std::string str(size_needed, 0);
   WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &str[0], size_needed, nullptr, nullptr);
   return str;
-}
-
-std::wstring CustomIncludeHandler::string_to_wstring(const std::string& str) {
-  if (str.empty())
-    return L"";
-
-  int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), nullptr, 0);
-  std::wstring wstr(size_needed, 0);
-  MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), &wstr[0], size_needed);
-  return wstr;
 }
 
 std::string ShaderCompiler::read_file_content(const std::string& file_path, std::string& error_message) {

@@ -1,8 +1,9 @@
 #pragma once
 
+#include <etx/render/interop/interop.hxx>
 #include <etx/core/debug.hxx>
-#include <etx/render/shared/base.hxx>
 #include <etx/core/json.hxx>
+
 namespace etx {
 
 struct Option {
@@ -26,7 +27,7 @@ struct Option {
 
   Class cls = Class::Undefined;
   uint32_t meta = 0;
-  uint8_t data[40] = {};
+  uint8_t data[64] = {};
   std::string id = {};
   std::string description = {};
   std::function<std::string(uint32_t)> name_getter = {};

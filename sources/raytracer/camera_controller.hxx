@@ -23,7 +23,7 @@ struct CameraController {
 
     if (rotation) {
       if (mouse_buttons & MouseLeft) {
-        float3 target = _camera.target();
+        float3 target = camera_target(_camera);
         auto s = to_spherical(target - _camera.position);
         s.phi += _rotation_speed * (_mouse_delta.x * kPi / 180.0f);
         s.theta = clamp(s.theta - _rotation_speed * (_mouse_delta.y * kDoublePi / 180.0f), -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
@@ -37,13 +37,13 @@ struct CameraController {
           _camera.position += (_mouse_delta.y * up + _mouse_delta.x * side) * _move_speed * (1.0f + length(direction));
           // direction unchanged
         } else if (_keys.count(SAPP_KEYCODE_LEFT_CONTROL)) {
-          float3 target = _camera.target();
+          float3 target = camera_target(_camera);
           auto s = to_spherical(_camera.position - target);
           s.r = clamp(s.r + _mouse_delta.y / kPi, 1.0f / 255.0f, kMaxCameraDistance);
           _camera.position = target + from_spherical(s);
           _camera.direction = normalize(target - _camera.position);
         } else {
-          float3 target = _camera.target();
+          float3 target = camera_target(_camera);
           auto s = to_spherical(_camera.position - target);
           s.phi += _rotation_speed * (_mouse_delta.x * kPi / 180.0f);
           s.theta = clamp(s.theta + _rotation_speed * (_mouse_delta.y * kPi / 180.0f), -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
@@ -56,7 +56,7 @@ struct CameraController {
     }
 
     if (zoom) {
-      float3 target = _camera.target();
+      float3 target = camera_target(_camera);
       auto s = to_spherical(_camera.position - target);
       s.r = clamp(s.r + _mouse_delta.z * (1.0f + s.r), 1.0f / 255.0f, kMaxCameraDistance);
       _camera.position = target + from_spherical(s);

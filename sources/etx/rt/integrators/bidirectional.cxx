@@ -748,7 +748,7 @@ struct CPUBidirectionalImpl : public Task {
 
       ETX_VALIDATE(ray.max_t);
 
-      SpectralResponse tr = exp(-ray.max_t * extinction);
+      SpectralResponse tr = spectrum_exp(-ray.max_t * extinction);
 
       pdf *= found_intersection ? tr : tr * extinction;
       if (pdf.is_zero())

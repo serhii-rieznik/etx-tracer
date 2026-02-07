@@ -1,5 +1,5 @@
 #include "bindless.hlsl"
-#include "shared/render_options.hxx"
+#include <interop/render_options.hxx>
 
 [[vk::push_constant]] RenderParameters options;
 

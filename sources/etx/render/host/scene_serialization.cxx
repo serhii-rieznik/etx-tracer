@@ -1,5 +1,6 @@
-#include <etx/render/host/scene_serialization.hxx>
+#include <etx/render/interop/interop.hxx>
 
+#include <etx/render/host/scene_serialization.hxx>
 #include <etx/core/core.hxx>
 #include <etx/core/debug.hxx>
 #include <etx/core/environment.hxx>
@@ -7,14 +8,13 @@
 #include <etx/core/log.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/scene_representation.hxx>
-#include <etx/render/shared/base.hxx>
-#include <etx/render/shared/math.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scene_medium.hxx>
 #include <etx/render/shared/scattering.hxx>
 #include <etx/render/shared/material.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
+
 namespace etx {
 
 namespace {
@@ -1694,7 +1694,7 @@ struct SceneSerializationImpl {
       int channel = 0;
       for (uint64_t i = 0, e = params.size(); i < e; ++i) {
         if ((strcmp(params[i], "channel") == 0) && (i + 1 < e)) {
-          channel = std::max(0, atoi(params[i + 1]));
+          channel = max(0, atoi(params[i + 1]));
           ++i;
         }
       }
@@ -1712,7 +1712,7 @@ struct SceneSerializationImpl {
       int channel = 0;
       for (uint64_t i = 0, e = params.size(); i < e; ++i) {
         if ((strcmp(params[i], "channel") == 0) && (i + 1 < e)) {
-          channel = std::max(0, atoi(params[i + 1]));
+          channel = max(0, atoi(params[i + 1]));
           ++i;
         }
       }
@@ -1730,7 +1730,7 @@ struct SceneSerializationImpl {
       int channel = 0;
       for (uint64_t i = 0, e = params.size(); i < e; ++i) {
         if ((strcmp(params[i], "channel") == 0) && (i + 1 < e)) {
-          channel = std::max(0, atoi(params[i + 1]));
+          channel = max(0, atoi(params[i + 1]));
           ++i;
         }
       }

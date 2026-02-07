@@ -1,8 +1,9 @@
+#include <etx/render/interop/interop.hxx>
+
 #include <etx/core/profiler.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/image_pool.hxx>
-#include <etx/render/shared/base.hxx>
 
 #include <etx/rhi/rhi.hxx>
 #include <etx/rhi/rhi_imgui.hxx>
@@ -119,7 +120,7 @@ void RenderContext::init() {
 
   auto& compiler = ShaderCompiler::instance();
 
-  auto result = compiler.compile("etx/shaders/render.hlsl", {{"vertex_main", RHIShaderStage::Vertex}, {"fragment_main", RHIShaderStage::Fragment}});
+  auto result = compiler.compile("shaders/render.hlsl", {{"vertex_main", RHIShaderStage::Vertex}, {"fragment_main", RHIShaderStage::Fragment}});
 
   if (result.result != RHIResult::Success) {
     log::error("Failed to compile render shader: %s", result.error_message.c_str());
@@ -195,7 +196,7 @@ void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, 
   render_frame_data.cmd = _private->rhi_context.get_command_buffer();
   _private->rhi_cmd = render_frame_data.cmd;
   _private->rhi_context.command_buffer_begin(_private->rhi_cmd);
-  renderer->render(&(_private->rhi_context), scene, render_frame_data);
+  renderer->render(_private->rhi_context, scene, render_frame_data);
   _private->active_renderer = renderer;
   _private->frame_data = frame_data;
 }

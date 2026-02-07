@@ -8,10 +8,10 @@ struct RasterizationRenderer : public Renderer {
   RasterizationRenderer(TaskScheduler&);
   ~RasterizationRenderer() override;
 
-  void init(RHIContext* ctx, SceneRepresentation& scene) override;
-  void render(RHIContext* ctx, SceneRepresentation& scene, const FrameData&) override;
+  void init(RHIContext& ctx, SceneRepresentation& scene) override;
+  void render(RHIContext& ctx, SceneRepresentation& scene, const FrameData&) override;
 
-  void cleanup(RHIContext* ctx) override;
+  void cleanup(RHIContext& ctx) override;
 
   const char* name() const override {
     return "Rasterization";

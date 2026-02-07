@@ -270,7 +270,7 @@ void process_obj_shapes(const ObjFileData& obj_data, SceneData& data) {
 
   triangles.reserve(total_triangles);
 
-  const uint64_t total_count = std::min(static_cast<uint64_t>(total_triangles) * 3, static_cast<uint64_t>(obj_data.attrib.vertex_x.size()));
+  const uint64_t total_count = min(static_cast<uint64_t>(total_triangles) * 3, static_cast<uint64_t>(obj_data.attrib.vertex_x.size()));
   vertices.pos.reserve(total_count);
   vertices.nrm.reserve(total_count);
   vertices.tan.reserve(total_count);

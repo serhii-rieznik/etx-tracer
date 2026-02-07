@@ -10,17 +10,18 @@ RasterizationRenderer::RasterizationRenderer(TaskScheduler& s)
 RasterizationRenderer::~RasterizationRenderer() {
 }
 
-void RasterizationRenderer::init(RHIContext* ctx, SceneRepresentation& scene) {
+void RasterizationRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
   Renderer::init(ctx, scene);
   _initialized = true;
 }
 
-void RasterizationRenderer::render(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+void RasterizationRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& data) {
   Renderer::update_camera(scene, data.dt);
   Renderer::render(ctx, scene, data);
 }
 
-void RasterizationRenderer::cleanup(RHIContext* ctx) {
+void RasterizationRenderer::cleanup(RHIContext& ctx) {
+  (void)ctx;
   /*
   if (_pipeline.valid()) {
     auto device = render_context.get_device();
@@ -40,8 +41,8 @@ void RasterizationRenderer::create_pipeline() {
   auto device = render_context.get_device();
   auto& compiler = ShaderCompiler::instance();
 
-  auto vs = compiler->load_and_compile_shader_from_file("etx/shaders/raster.hlsl", "vertex_main", RHIShaderStage::Vertex);
-  auto fs = compiler->load_and_compile_shader_from_file("etx/shaders/raster.hlsl", "fragment_main", RHIShaderStage::Fragment);
+  auto vs = compiler->load_and_compile_shader_from_file("shaders/raster.hlsl", "vertex_main", RHIShaderStage::Vertex);
+  auto fs = compiler->load_and_compile_shader_from_file("shaders/raster.hlsl", "fragment_main", RHIShaderStage::Fragment);
 
   RHIGraphicsPipelineDesc desc = {};
   desc.vertex_shader.spirv_data = vs.spirv_data.data();

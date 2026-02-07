@@ -6,12 +6,13 @@
 # define WIN32_LEAN_AND_MEAN 1
 #endif
 
+#include <etx/render/interop/interop.hxx>
+
 #include <etx/core/core.hxx>
 #include <etx/core/handle.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/render/host/tasks.hxx>
 
-#include <etx/render/shared/base.hxx>
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/film.hxx>

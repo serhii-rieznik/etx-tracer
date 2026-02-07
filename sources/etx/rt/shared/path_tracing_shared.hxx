@@ -1,6 +1,6 @@
 #pragma once
 
-#include <etx/render/shared/base.hxx>
+#include <etx/render/interop/interop.hxx>
 #include <etx/render/shared/scene.hxx>
 
 namespace etx {
@@ -99,7 +99,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
       ray.max_t = local_i.t;
     }
 
-    SpectralResponse tr = exp(-ray.max_t * extinction);
+    SpectralResponse tr = spectrum_exp(-ray.max_t * extinction);
     ETX_VALIDATE(tr);
 
     pdf *= intersection_found ? tr : safe_mul(tr, extinction);

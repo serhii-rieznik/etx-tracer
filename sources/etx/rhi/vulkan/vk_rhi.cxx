@@ -1919,8 +1919,8 @@ VkExtent2D VKContext::Impl::choose_swap_extent(const VkSurfaceCapabilitiesKHR& c
   } else {
     VkExtent2D actual_extent = {width, height};
 
-    actual_extent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, actual_extent.width));
-    actual_extent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, actual_extent.height));
+    actual_extent.width = max(capabilities.minImageExtent.width, min(capabilities.maxImageExtent.width, actual_extent.width));
+    actual_extent.height = max(capabilities.minImageExtent.height, min(capabilities.maxImageExtent.height, actual_extent.height));
 
     return actual_extent;
   }

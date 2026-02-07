@@ -149,14 +149,14 @@ ETX_GPU_CODE Medium::Instance make_medium_instance(const Scene& scene, const Med
 }
 
 ETX_GPU_CODE SpectralResponse medium_transmittance(const Medium::Instance& instance, float distance) {
-  return exp(instance.extinction * (-distance));
+  return spectrum_exp(instance.extinction * (-distance));
 }
 
 ETX_GPU_CODE SpectralResponse medium_transmittance(const Scene& scene, const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction,
   float distance) {
   switch (medium.cls) {
     case Medium::Class::Homogeneous:
-      return exp(medium_extinction(scene, medium, spect) * (-distance));
+      return spectrum_exp(medium_extinction(scene, medium, spect) * (-distance));
 
     case Medium::Class::Heterogeneous: {
       SpectralResponse base_extinction = medium_extinction(scene, medium, spect);
@@ -190,7 +190,7 @@ ETX_GPU_CODE SpectralResponse medium_transmittance(const Scene& scene, const Med
         float density_value = medium.grid.sample(local_pos, medium.bounds);
         SpectralResponse extinction_at_point = base_extinction * density_value;
         SpectralResponse weight = SpectralResponse{spect, 1.0f} - extinction_at_point / max_sigma;
-        transmittance *= max(0.0f, weight);
+        transmittance *= spectrum_max(0.0f, weight);
         ETX_VALIDATE(transmittance);
 
         float transmittance_max = transmittance.maximum();
@@ -241,7 +241,7 @@ ETX_GPU_CODE Medium::Sample sample_medium(const Scene& scene, const Medium& medi
 
       bool sampled_medium = t < max_t;
 
-      SpectralResponse tr = exp(-t * extinction_value);
+      SpectralResponse tr = spectrum_exp(-t * extinction_value);
       pdf *= sampled_medium ? tr * extinction_value : tr;
 
       if (pdf.is_zero())
@@ -322,7 +322,7 @@ ETX_GPU_CODE Medium::Sample sample_medium(const Scene& scene, const Medium& medi
         }
 
         SpectralResponse weight = SpectralResponse{spect, 1.0f} - extinction_at_point / max_sigma;
-        transmittance *= max(0.0f, weight);
+        transmittance *= spectrum_max(0.0f, weight);
         ETX_VALIDATE(transmittance);
 
         float transmittance_max = transmittance.maximum();

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.hxx"
+#include "interop.hxx"
 
 struct ViewLayer {
   enum : uint32_t {

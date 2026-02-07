@@ -345,8 +345,8 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
     return false;
   }
 
-  float clamped_min_elevation = std::max(min_elevation, -pole_threshold);
-  float clamped_max_elevation = std::min(max_elevation, pole_threshold);
+  float clamped_min_elevation = max(min_elevation, -pole_threshold);
+  float clamped_max_elevation = min(max_elevation, pole_threshold);
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (ImGui::SliderFloat("##elevation", &elevation_deg, clamped_min_elevation, clamped_max_elevation, "Elevation: %.1f°")) {
     angles.y = std::clamp(elevation_deg * kPi / 180.0f, clamped_min_elevation * kPi / 180.0f, clamped_max_elevation * kPi / 180.0f);
@@ -598,7 +598,7 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
           for (size_t col = 0; col < column_count; ++col) {
             ImGui::TableNextColumn();
             size_t start = col * per_column;
-            size_t end = std::min(start + per_column, entries.size());
+            size_t end = min(start + per_column, entries.size());
             for (size_t idx = start; idx < end; ++idx) {
               size_t def_index = entries[idx];
               if (def_index >= data.ior_database.definitions.size())
@@ -713,7 +713,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
 
   float3 linear_rgb = spd.integrated();
   float default_scale = 1.0f;
-  float max_component = std::max(std::max(linear_rgb.x, linear_rgb.y), linear_rgb.z);
+  float max_component = max(max(linear_rgb.x, linear_rgb.y), linear_rgb.z);
   if (scale) {
     constexpr float kScaleUnityThreshold = 1.0001f;
     if (max_component > kScaleUnityThreshold) {
@@ -747,7 +747,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
 
     constexpr float kScaleUnityThreshold = 1.0001f;
     if (scale && (update_color || update_scale)) {
-      float refreshed_max = std::max(std::max(refreshed_linear.x, refreshed_linear.y), refreshed_linear.z);
+      float refreshed_max = max(max(refreshed_linear.x, refreshed_linear.y), refreshed_linear.z);
       if (refreshed_max > kScaleUnityThreshold) {
         refreshed_scale = refreshed_max;
         if (refreshed_scale > 0.0f) {
@@ -778,7 +778,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
     if ((linear == false) && from_color) {
       value = gamma_to_linear(value);
     }
-    applied_scale = from_color ? std::max(applied_scale, 1.0f) : std::max(applied_scale, 0.0f);
+    applied_scale = from_color ? max(applied_scale, 1.0f) : max(applied_scale, 0.0f);
 
     if (from_color) {
       value *= applied_scale;
@@ -788,7 +788,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
       if (editor_state.mode == SpectrumEditorState::Mode::Temperature) {
         spd = SpectralDistribution::from_normalized_black_body(editor_state.temperature, applied_scale);
       } else {
-        spd.scale(applied_scale / std::max(editor_state.scale, 1.0e-6f));
+        spd.scale(applied_scale / max(editor_state.scale, 1.0e-6f));
       }
       editor_state.scale = applied_scale;
     }
@@ -827,16 +827,16 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
   bool scale_deactivated_after_edit = false;
   if (scale && show_scale) {
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    float drag_speed = std::max(0.01f, std::max(editor_state.scale, 1.0f) * 0.01f);
+    float drag_speed = max(0.01f, max(editor_state.scale, 1.0f) * 0.01f);
     float scale_value = editor_state.scale;
     scale_changed = ImGui::DragFloat(scale_label, &scale_value, drag_speed, show_color ? 1.0f : 0.01f, 1000.0f, "Scale: %.2f", ImGuiSliderFlags_NoRoundToFormat);
     scale_active = ImGui::IsItemActive();
     scale_deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
     if (scale_changed) {
       if (show_color) {
-        scale_value = std::max(scale_value, 1.0f);
+        scale_value = max(scale_value, 1.0f);
       } else {
-        scale_value = std::max(scale_value, 0.0f);
+        scale_value = max(scale_value, 0.0f);
       }
       rebuild_spectrum(scale_value, show_color);
       editor_state.scale = scale_value;
@@ -1232,7 +1232,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
     float avail = ImGui::GetContentRegionAvail().x;
     float spacing = ImGui::GetStyle().ItemSpacing.x;
     float dash_width = ImGui::CalcTextSize(" - ").x;
-    float field_width = std::max((avail - dash_width - spacing * 2.0f) * 0.5f, 0.0f);
+    float field_width = max((avail - dash_width - spacing * 2.0f) * 0.5f, 0.0f);
     ImGui::SetNextItemWidth(field_width);
     changed |= ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
     ImGui::SameLine();
@@ -1274,7 +1274,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       float avail = ImGui::GetContentRegionAvail().x;
       float spacing = ImGui::GetStyle().ItemSpacing.x;
       float combo_width = (avail - spacing) * 0.5f;
-      combo_width = std::max(combo_width, 0.0f);
+      combo_width = max(combo_width, 0.0f);
 
       ImGui::TextDisabled("Internal / External");
       ImGui::SetNextItemWidth(combo_width);
@@ -2648,8 +2648,8 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     if (labeled_control("Clip Planes (near/far)", [&]() {
           return ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 5000.0f, "%.3f");
         })) {
-      camera.clip_near = std::max(0.0f, clip_values[0]);
-      camera.clip_far = std::max(camera.clip_near + 0.001f, clip_values[1]);
+      camera.clip_near = max(0.0f, clip_values[0]);
+      camera.clip_far = max(camera.clip_near + 0.001f, clip_values[1]);
       camera_changed = true;
     }
   }
@@ -2694,8 +2694,8 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     camera.film_size = {uint32_t(viewport.x), uint32_t(viewport.y)};
     camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
     camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
-    camera.clip_near = std::max(camera.clip_near, 0.0f);
-    camera.clip_far = std::max(camera.clip_near + 0.001f, camera.clip_far);
+    camera.clip_near = max(camera.clip_near, 0.0f);
+    camera.clip_far = max(camera.clip_near + 0.001f, camera.clip_far);
     scene_rep.data().pixel_filter.radius = clamp(pixel_filter_radius, 0.0f, 32.0f);
 
     auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
@@ -2721,8 +2721,8 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
   bool max_changed = validated_int_control("Max Path Length", max_path, 0, 65536);
 
   if (min_changed || max_changed) {
-    scene_rep.data().options.min_path_length = static_cast<uint32_t>(std::min(min_path, max_path));
-    scene_rep.data().options.max_path_length = static_cast<uint32_t>(std::max(min_path, max_path));
+    scene_rep.data().options.min_path_length = static_cast<uint32_t>(min(min_path, max_path));
+    scene_rep.data().options.max_path_length = static_cast<uint32_t>(max(min_path, max_path));
     scene_settings_changed = true;
   }
 
@@ -2733,7 +2733,7 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
   if (labeled_control("Radiance Clamp", [&]() {
         return ImGui::InputFloat("##radiance_clamp", &scene_rep.data().options.radiance_clamp, 0.1f, 1.f, "%0.2f");
       })) {
-    scene_rep.data().options.radiance_clamp = std::max(scene_rep.data().options.radiance_clamp, 0.0f);
+    scene_rep.data().options.radiance_clamp = max(scene_rep.data().options.radiance_clamp, 0.0f);
     scene_settings_changed = true;
   }
 
@@ -2752,7 +2752,7 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
   }
 
   if (scene_settings_changed) {
-    scene_rep.data().options.max_path_length = std::min(scene_rep.data().options.max_path_length, 65536u);
+    scene_rep.data().options.max_path_length = min(scene_rep.data().options.max_path_length, 65536u);
     if (callbacks.scene_settings_changed) {
       callbacks.scene_settings_changed();
     }

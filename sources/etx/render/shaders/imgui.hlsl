@@ -1,5 +1,5 @@
 #include "bindless.hlsl"
-#include "shared/imgui_shared.hxx"
+#include <interop/imgui_shared.hxx>
 
 [[vk::push_constant]] ImGuiPushConstants pushConstants;
 

@@ -1,9 +1,9 @@
+#include <etx/render/interop/interop.hxx>
+
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/core/json.hxx>
 
-#include <etx/render/shared/base.hxx>
-#include <etx/render/shared/math.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scattering.hxx>
 #include <etx/render/shared/ior_database.hxx>
@@ -916,13 +916,13 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
       int64_t int_value = 0;
       bool bool_value = false;
       if (json_get_int(i, "samples", int_value)) {
-        _private->data.options.samples = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->data.options.samples = static_cast<uint32_t>(max(int64_t(1), int_value));
       } else if (json_get_int(i, "random-termination-start", int_value)) {
-        _private->data.options.random_path_termination = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->data.options.random_path_termination = static_cast<uint32_t>(max(int64_t(1), int_value));
       } else if (json_get_int(i, "max-path-length", int_value)) {
-        _private->data.options.max_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->data.options.max_path_length = static_cast<uint32_t>(max(int64_t(1), int_value));
       } else if (json_get_int(i, "min-path-length", int_value)) {
-        _private->data.options.min_path_length = static_cast<uint32_t>(std::max(int64_t(1), int_value));
+        _private->data.options.min_path_length = static_cast<uint32_t>(max(int64_t(1), int_value));
       } else if (json_get_string(i, "geometry", str_value)) {
         _private->data.geometry_file_name = std::string(base_folder) + str_value;
       } else if (json_get_string(i, "materials", str_value)) {
@@ -1649,8 +1649,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     float rough_u = material.roughness.value.x;
     float rough_v = material.roughness.value.y;
     if ((rough_u >= kEpsilon) || (rough_v >= kEpsilon)) {
-      float value_u = std::sqrt(std::max(0.0f, rough_u));
-      float value_v = std::sqrt(std::max(0.0f, rough_v));
+      float value_u = std::sqrt(max(0.0f, rough_u));
+      float value_v = std::sqrt(max(0.0f, rough_v));
       if (std::fabs(value_u - value_v) < kEpsilon) {
         materials_stream << "Pr " << value_u << "\n";
       } else {

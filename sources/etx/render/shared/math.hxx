@@ -4,6 +4,7 @@
 #else
 # error This file should not be included separately. Use etx/render/shared/base.hxx instead
 #endif
+
 template <class t>
 struct vector2 {
   t x, y;
@@ -19,6 +20,22 @@ struct vector4 {
   t x, y, z, w;
 };
 
+constexpr float kQuarterPi = 0.78539816339744830961566084581988f;
+constexpr float kHalfPi = 1.5707963267948966192313216916398f;
+constexpr float kPi = 3.1415926535897932384626433832795f;
+constexpr float kDoublePi = 6.283185307179586476925286766559f;
+constexpr float kSqrt2 = 1.4142135623730950488016887242097f;
+constexpr float kInvPi = 0.31830988618379067153776752674503f;
+constexpr float kSqrtPI = 1.7724538509055160272981674833411f;
+constexpr float kEpsilon = 1.192092896e-07f;
+constexpr float kMaxFloat = 3.402823466e+38f;
+constexpr float kMaxHalf = 65504.0f;
+constexpr float kInvMaxHalf = 1.0f / kMaxHalf;
+constexpr float kRayEpsilon = 15.0f / (kMaxHalf - 1.0f);
+constexpr float kDeltaAlphaTreshold = 1.0e-4f;
+constexpr float kGoldenRatio = 1.6180339887498948482f;
+constexpr uint32_t kInvalidIndex = ~0u;
+
 enum class ProjectionType : uint32_t {
   Equirectangular = 0u,
   EqualArea = 1u,
@@ -31,21 +48,6 @@ enum class InteractionType : uint32_t {
   Count,
 };
 
-struct SphericalCoordinates {
-  float phi;
-  float theta;
-  float r;
-};
-
-#if (ETX_NVCC_COMPILER)
-# if defined(__NVCC__)
-#  include <thrust/complex.h>
-#  define STD_NS thrust
-# else
-#  define STD_NS cuda::std
-# endif
-#else
-# define STD_NS std
 using float2 = vector2<float>;
 using float3 = vector3<float>;
 using float4 = vector4<float>;
@@ -73,53 +75,23 @@ using char4 = byte4;
 using uchar2 = ubyte2;
 using uchar3 = ubyte3;
 using uchar4 = ubyte4;
-#endif
-
-using complex = STD_NS::complex<float>;
+using complex = std::complex<float>;
 
 ETX_GPU_CODE complex complex_sqrt(complex c) {
-  return STD_NS::sqrt(c);
+  return std::sqrt(c);
 }
 ETX_GPU_CODE complex complex_cos(complex c) {
-  return STD_NS::cos(c);
+  return std::cos(c);
 }
 ETX_GPU_CODE complex complex_exp(complex c) {
-  return STD_NS::exp(c);
+  return std::exp(c);
 }
 ETX_GPU_CODE float complex_abs(complex c) {
-  return STD_NS::abs(c);
+  return std::abs(c);
 }
 ETX_GPU_CODE float complex_norm(complex c) {
-  return STD_NS::norm(c);
+  return std::norm(c);
 }
-
-struct float3x3 {
-  float3 col[3] ETX_EMPTY_INIT;
-};
-
-union float4x4 {
-  float4 col[4] ETX_EMPTY_INIT;
-  float val[16];
-};
-
-namespace etx {
-
-constexpr float kQuarterPi = 0.78539816339744830961566084581988f;
-constexpr float kHalfPi = 1.5707963267948966192313216916398f;
-constexpr float kPi = 3.1415926535897932384626433832795f;
-constexpr float kDoublePi = 6.283185307179586476925286766559f;
-constexpr float kSqrt2 = 1.4142135623730950488016887242097f;
-constexpr float kInvPi = 0.31830988618379067153776752674503f;
-constexpr float kSqrtPI = 1.7724538509055160272981674833411f;
-constexpr float kEpsilon = 1.192092896e-07f;
-constexpr float kMaxFloat = 3.402823466e+38f;
-constexpr float kMaxHalf = 65504.0f;
-constexpr float kInvMaxHalf = 1.0f / kMaxHalf;
-constexpr float kRayEpsilon = 15.0f / (kMaxHalf - 1.0f);
-constexpr float kDeltaAlphaTreshold = 1.0e-4f;
-constexpr float kGoldenRatio = 1.6180339887498948482f;
-
-constexpr uint32_t kInvalidIndex = ~0u;
 
 template <class t>
 ETX_GPU_CODE constexpr t min(t a, t b) {
@@ -136,13 +108,22 @@ ETX_GPU_CODE constexpr t clamp(t val, t min_val, t max_val) {
   return (val < min_val) ? min_val : (val > max_val ? max_val : val);
 }
 
-ETX_GPU_CODE constexpr float saturate(float val) {
+ETX_GPU_CODE constexpr float saturate(const float& val) {
   return clamp(val, 0.0f, 1.0f);
 }
 
 ETX_GPU_CODE constexpr float sign(float val) {
   return val >= 0.0f ? 1.0f : -1.0f;
 }
+
+struct float3x3 {
+  float3 col[3] ETX_EMPTY_INIT;
+};
+
+union float4x4 {
+  float4 col[4] ETX_EMPTY_INIT;
+  float val[16];
+};
 
 /*
  * Float2
@@ -415,12 +396,12 @@ ETX_V2(int2, int32_t)
 ETX_V3(int3, int32_t)
 ETX_V4(int4, int32_t)
 
-#pragma warning(push)
-#pragma warning(disable : 4146)
+// #pragma warning(push)
+// #pragma warning(disable : 4146)
 ETX_V2(uint2, uint32_t)
 ETX_V3(uint3, uint32_t)
 ETX_V4(uint4, uint32_t)
-#pragma warning(pop)
+// #pragma warning(pop)
 
 #define ETX_FUNC_2(func, cfunc)               \
   ETX_GPU_CODE float2 func(const float2& a) { \
@@ -502,7 +483,6 @@ ETX_UNARY_FUNC(floor, floorf);
 ETX_UNARY_FUNC(saturate, saturate);
 ETX_UNARY_FUNC(sign, sign);
 ETX_UNARY_FUNC(atan, atanf);
-
 ETX_BINARY_FUNC(max, fmaxf)
 ETX_BINARY_FUNC(min, fminf)
 ETX_BINARY_FUNC(pow, powf)
@@ -526,25 +506,21 @@ ETX_GPU_CODE float dot(const float3& a, const float3& b) {
 ETX_GPU_CODE float dot(const float4& a, const float4& b) {
   return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
 }
-
 ETX_GPU_CODE float length(const float2& v) {
   return sqrtf(dot(v, v));
 }
 ETX_GPU_CODE float length(const float3& v) {
   return sqrtf(dot(v, v));
 }
-
 ETX_GPU_CODE float2 normalize(const float2& v) {
   return v / length(v);
 }
 ETX_GPU_CODE float3 normalize(const float3& v) {
   return v / length(v);
 }
-
 ETX_GPU_CODE float3 reflect(const float3& v, const float3& n) {
   return v - (2.0f * dot(v, n)) * n;
 }
-
 ETX_GPU_CODE float3 cross(const float3& a, const float3& b) {
   return {
     a.y * b.z - b.y * a.z,
@@ -552,7 +528,6 @@ ETX_GPU_CODE float3 cross(const float3& a, const float3& b) {
     a.x * b.y - b.x * a.y,
   };
 }
-
 ETX_GPU_CODE float2 lerp(const float2& a, const float2& b, float t) {
   float inv_t = 1.0f - t;
   return {
@@ -560,7 +535,6 @@ ETX_GPU_CODE float2 lerp(const float2& a, const float2& b, float t) {
     a.y * inv_t + b.y * t,
   };
 }
-
 ETX_GPU_CODE float3 lerp(const float3& a, const float3& b, float t) {
   float inv_t = 1.0f - t;
   return {
@@ -569,7 +543,6 @@ ETX_GPU_CODE float3 lerp(const float3& a, const float3& b, float t) {
     a.z * inv_t + b.z * t,
   };
 }
-
 ETX_GPU_CODE float4 lerp(const float4& a, const float4& b, float t) {
   float inv_t = 1.0f - t;
   return {
@@ -579,6 +552,14 @@ ETX_GPU_CODE float4 lerp(const float4& a, const float4& b, float t) {
     a.w * inv_t + b.w * t,
   };
 }
+
+namespace etx {
+
+struct SphericalCoordinates {
+  float phi;
+  float theta;
+  float r;
+};
 
 struct ETX_ALIGNED BoundingBox {
   float3 p_min ETX_EMPTY_INIT;

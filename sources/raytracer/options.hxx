@@ -4,7 +4,7 @@
 
 #include <etx/render/host/film.hxx>
 
-#include <etx/shaders/shared/render_options.hxx>
+#include <interop/render_options.hxx>
 
 namespace etx {
 

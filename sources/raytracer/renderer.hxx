@@ -33,7 +33,8 @@ struct Renderer {
 
   virtual ~Renderer() = default;
 
-  virtual void init(RHIContext* ctx, SceneRepresentation& scene) {
+  virtual void init(RHIContext& ctx, SceneRepresentation& scene) {
+    (void)ctx;
     ETX_CRITICAL(_camera_controller == nullptr);
     _camera_controller.reset(new CameraController(scene.mutable_camera()));
   }
@@ -50,7 +51,10 @@ struct Renderer {
     last_camera_update_state = camera_updated;
   }
 
-  virtual void render(RHIContext* ctx, SceneRepresentation& scene, const FrameData& data) {
+  virtual void render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& data) {
+    (void)ctx;
+    (void)scene;
+    (void)data;
   }
 
   virtual RHITexture output_texture() const {
@@ -60,7 +64,8 @@ struct Renderer {
     return _output_dimensions;
   }
 
-  virtual void cleanup(RHIContext* ctx) {
+  virtual void cleanup(RHIContext& ctx) {
+    (void)ctx;
   }
 
   virtual void process_event(const sapp_event* e) {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "types.hxx"
+#include "interop.hxx"
 
 struct ETX_ALIGNED ImGuiPushConstants {
   float2 scale;

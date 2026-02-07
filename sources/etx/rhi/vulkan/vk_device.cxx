@@ -1260,7 +1260,7 @@ RHIResult VKDevice::Impl::create_vulkan_sampler(const RHISamplerDesc& desc, VkSa
   sampler_info.addressModeW = convert_sampler_address_mode(desc.address_mode_w);
   sampler_info.mipLodBias = 0.0f;
   sampler_info.anisotropyEnable = (desc.max_anisotropy > 1.0f) ? VK_TRUE : VK_FALSE;
-  sampler_info.maxAnisotropy = std::max(1.0f, desc.max_anisotropy);
+  sampler_info.maxAnisotropy = max(1.0f, desc.max_anisotropy);
   sampler_info.compareEnable = VK_FALSE;
   sampler_info.compareOp = VK_COMPARE_OP_ALWAYS;
   sampler_info.minLod = 0.0f;
@@ -2247,9 +2247,9 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
     return RHIResult::InvalidArgument;
   }
 
-  uint32_t mip_width = std::max(desc.width >> mip_level, 1u);
-  uint32_t mip_height = std::max(desc.height >> mip_level, 1u);
-  uint32_t mip_depth = std::max(desc.depth >> mip_level, 1u);
+  uint32_t mip_width = max(desc.width >> mip_level, 1u);
+  uint32_t mip_height = max(desc.height >> mip_level, 1u);
+  uint32_t mip_depth = max(desc.depth >> mip_level, 1u);
 
   uint64_t bytes_per_pixel = convert_rhi_format_to_bytes_per_pixel(desc.format);
   uint64_t data_size = mip_width * mip_height * mip_depth * bytes_per_pixel;

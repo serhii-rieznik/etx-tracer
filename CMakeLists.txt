@@ -41,19 +41,20 @@ add_subdirectory(sources)
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT raytracer)
 
 set(bin_dir "${CMAKE_CURRENT_LIST_DIR}/bin")
-set(shader_dir "${CMAKE_CURRENT_LIST_DIR}/sources/etx/shaders")
-set(shader_files "")
+set(render_dir "${CMAKE_CURRENT_LIST_DIR}/sources/etx/render")
+set(bin_files "")
+set(render_files "")
 
-if (EXISTS "${shader_dir}")
+if (EXISTS "${render_dir}")
   if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.12")
-    file(GLOB_RECURSE shader_files CONFIGURE_DEPENDS
-      "${shader_dir}/*.hlsl"
-      "${shader_dir}/*.hxx"
+    file(GLOB_RECURSE render_files CONFIGURE_DEPENDS
+      "${render_dir}/*.hlsl"
+      "${render_dir}/*.hxx"
     )
   else()
-    file(GLOB_RECURSE shader_files
-      "${shader_dir}/*.hlsl"
-      "${shader_dir}/*.hxx"
+    file(GLOB_RECURSE render_files
+      "${render_dir}/*.hlsl"
+      "${render_dir}/*.hxx"
     )
   endif()
 endif()
@@ -81,18 +82,49 @@ if (EXISTS "${bin_dir}")
     )
   endif()
   list(FILTER bin_files EXCLUDE REGEX "[/\\\\]assets_testing[/\\\\]")
-  if (bin_files OR shader_files)
-    add_custom_target(data SOURCES ${bin_files} ${shader_files})
+
+  set(data_hlsl_files "")
+  set(render_hlsl_files ${render_files})
+  list(FILTER render_hlsl_files INCLUDE REGEX "\\.hlsl$")
+  list(APPEND data_hlsl_files ${render_hlsl_files})
+
+  set(bin_hlsl_files ${bin_files})
+  list(FILTER bin_hlsl_files INCLUDE REGEX "\\.hlsl$")
+  list(APPEND data_hlsl_files ${bin_hlsl_files})
+
+  if (data_hlsl_files)
+    list(REMOVE_DUPLICATES data_hlsl_files)
+    set_source_files_properties(${data_hlsl_files} PROPERTIES HEADER_FILE_ONLY TRUE)
+    if (MSVC)
+      set_source_files_properties(${data_hlsl_files} PROPERTIES VS_TOOL_OVERRIDE "None")
+    endif()
+  endif()
+
+  if (bin_files OR render_files)
+    add_custom_target(data SOURCES ${bin_files} ${render_files})
     if (bin_files)
       source_group(TREE "${bin_dir}" PREFIX "data/bin" FILES ${bin_files})
     endif()
-    if (shader_files)
-      source_group(TREE "${shader_dir}" PREFIX "data/shaders" FILES ${shader_files})
+    if (render_files)
+      source_group(TREE "${render_dir}" PREFIX "data/render" FILES ${render_files})
     endif()
     set_property(TARGET data PROPERTY EXCLUDE_FROM_ALL TRUE)
   endif()
-elseif (shader_files)
-  add_custom_target(data SOURCES ${shader_files})
-  source_group(TREE "${shader_dir}" PREFIX "data/shaders" FILES ${shader_files})
+elseif (render_files)
+  set(data_hlsl_files "")
+  set(render_hlsl_files ${render_files})
+  list(FILTER render_hlsl_files INCLUDE REGEX "\\.hlsl$")
+  list(APPEND data_hlsl_files ${render_hlsl_files})
+
+  if (data_hlsl_files)
+    list(REMOVE_DUPLICATES data_hlsl_files)
+    set_source_files_properties(${data_hlsl_files} PROPERTIES HEADER_FILE_ONLY TRUE)
+    if (MSVC)
+      set_source_files_properties(${data_hlsl_files} PROPERTIES VS_TOOL_OVERRIDE "None")
+    endif()
+  endif()
+
+  add_custom_target(data SOURCES ${render_files})
+  source_group(TREE "${render_dir}" PREFIX "data/render" FILES ${render_files})
   set_property(TARGET data PROPERTY EXCLUDE_FROM_ALL TRUE)
 endif()

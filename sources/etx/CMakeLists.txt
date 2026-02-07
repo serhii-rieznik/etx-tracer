@@ -80,6 +80,7 @@ create_library(render)
 target_link_libraries(etx-render PRIVATE etx-core stb_image tinyexr tiny_obj_loader tiny_gltf mikktspace enkiTS nanovdb oidn bcdec)
 target_link_libraries(etx-render PUBLIC bcdec)
 target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
+target_include_directories(etx-render PUBLIC "${CMAKE_SOURCE_DIR}/sources/etx/render")
 
 create_library(util)
 target_link_libraries(etx-util PRIVATE etx-core etx-render)
@@ -87,6 +88,7 @@ target_link_libraries(etx-util PRIVATE etx-core etx-render)
 create_library(rhi)
 target_link_libraries(etx-rhi PRIVATE etx-core imgui sokol)
 target_compile_definitions(etx-rhi PRIVATE ETX_RHI_INTERNAL=1)
+target_include_directories(etx-rhi PUBLIC "${CMAKE_SOURCE_DIR}/sources/etx/render")
 
 # Add Vulkan dependency for Windows
 if(WIN32)

@@ -59,7 +59,7 @@ ETX_GPU_CODE SpectralResponse evaluate(const SpectralQuery spect, const Scene& s
 
   radius = fmaxf(radius, kEpsilon);
 
-  auto term_0 = exp(-radius / (3.0f * sd));
+  auto term_0 = spectrum_exp(-radius / (3.0f * sd));
   ETX_VALIDATE(term_0);
 
   auto term_1 = term_0 * term_0 * term_0;

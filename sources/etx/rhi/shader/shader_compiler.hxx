@@ -49,9 +49,6 @@ struct ShaderCompiler {
   RHIResult initialize();
   bool is_initialized() const;
 
-  void add_include_path(const std::string& path);
-  void clear_include_paths();
-
   struct ShaderEntryPoint {
     std::string entry_point;
     RHIShaderStage stage;

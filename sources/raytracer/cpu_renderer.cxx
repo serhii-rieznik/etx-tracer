@@ -13,24 +13,23 @@ CPURaytracingRenderer::CPURaytracingRenderer(Raytracing& rt, SceneRepresentation
 CPURaytracingRenderer::~CPURaytracingRenderer() {
 }
 
-void CPURaytracingRenderer::init(RHIContext* ctx, SceneRepresentation& scene) {
-  _rhi_context = ctx;
+void CPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
   Renderer::init(ctx, scene);
 }
 
-void CPURaytracingRenderer::render(RHIContext* ctx, SceneRepresentation& scene, const FrameData& frame_data) {
+void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) {
   Renderer::update_camera(scene, frame_data.dt);
   _integrator_thread.update();
 
   const auto film_layer_data = _raytracing.film().layer(frame_data.view_parameters.view_layer, _raytracing.scene());
-  update_image(film_layer_data);
+  update_image(ctx, film_layer_data);
 }
 
-void CPURaytracingRenderer::cleanup(RHIContext* ctx) {
+void CPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _integrator_thread.stop(Integrator::Stop::Immediate);
   _camera_controller.reset();
 
-  ctx->device().destroy_texture(_output_texture);
+  ctx.device().destroy_texture(_output_texture);
 }
 
 bool CPURaytracingRenderer::is_running() const {
@@ -84,7 +83,7 @@ uint64_t CPURaytracingRenderer::integrator_count() const {
   return std::size(_integrator_array);
 }
 
-void CPURaytracingRenderer::update_image(const float4* camera) {
+void CPURaytracingRenderer::update_image(RHIContext& ctx, const float4* camera) {
   ETX_PROFILER_SCOPE();
 
   std::vector<float4> black_image;
@@ -96,21 +95,21 @@ void CPURaytracingRenderer::update_image(const float4* camera) {
   }
 
   if (_output_texture.valid()) {
-    _rhi_context->device().update_texture(_output_texture, data_ptr, 0, 0);
+    ctx.device().update_texture(_output_texture, data_ptr, 0, 0);
   }
 }
 
-void CPURaytracingRenderer::set_output_dimensions(const uint2& dim) {
+void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& dim) {
   if (_output_dimensions == dim) {
     return;
   }
 
   stop();
 
-  _output_dimensions = {std::max(1u, dim.x), std::max(1u, dim.y)};
+  _output_dimensions = {max(1u, dim.x), max(1u, dim.y)};
 
   if (_output_texture.valid()) {
-    _rhi_context->device().destroy_texture(_output_texture);
+    ctx.device().destroy_texture(_output_texture);
     _output_texture = {};
   }
 
@@ -120,7 +119,7 @@ void CPURaytracingRenderer::set_output_dimensions(const uint2& dim) {
     .format = RHITextureFormat::R32G32B32A32_FLOAT,
     .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst | RHITextureUsage::Storage,
   };
-  _output_texture = _rhi_context->device().create_texture(desc).handle;
+  _output_texture = ctx.device().create_texture(desc).handle;
 }
 
 }  // namespace etx

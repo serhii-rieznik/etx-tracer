@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include <etx/render/shared/base.hxx>
+#include <etx/render/interop/interop.hxx>
 
 namespace etx {
 

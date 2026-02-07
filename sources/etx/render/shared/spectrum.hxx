@@ -1,6 +1,7 @@
 #pragma once
 
-#include <etx/render/shared/base.hxx>
+#include <etx/render/interop/interop.hxx>
+
 namespace etx {
 
 namespace spectrum {
@@ -339,12 +340,12 @@ struct SpectralResponse : public SpectralQuery {
     return spectral() ? (value <= kEpsilon) : (integrated.x <= kEpsilon) && (integrated.y <= kEpsilon) && (integrated.z <= kEpsilon);
   }
 
-#define SPECTRAL_OP(OP)                                                       \
-  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse& other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                           \
-    integrated OP other.integrated;                                           \
-    value OP other.value;                                                     \
-    return *this;                                                             \
+#define SPECTRAL_OP(OP)                                                        \
+  ETX_GPU_CODE SpectralResponse& operator OP(const SpectralResponse & other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                            \
+    integrated OP other.integrated;                                            \
+    value OP other.value;                                                      \
+    return *this;                                                              \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)
@@ -402,43 +403,43 @@ ETX_GPU_CODE SpectralResponse operator-(const SpectralResponse& s) {
 ETX_GPU_CODE SpectralResponse operator-(float other, const SpectralResponse& s) {
   return s.spectral() ? SpectralResponse{s.query(), other - s.value} : SpectralResponse{s.query(), other - s.integrated};
 }
-ETX_GPU_CODE SpectralResponse exp(const SpectralResponse& s) {
+ETX_GPU_CODE SpectralResponse spectrum_exp(const SpectralResponse& s) {
   return s.spectral() ? SpectralResponse{s.query(), expf(s.value)} : SpectralResponse{s.query(), exp(s.integrated)};
 }
-ETX_GPU_CODE SpectralResponse sqrt(const SpectralResponse& s) {
+ETX_GPU_CODE SpectralResponse spectrum_sqrt(const SpectralResponse& s) {
   return s.spectral() ? SpectralResponse{s.query(), sqrtf(s.value)} : SpectralResponse{s.query(), sqrt(s.integrated)};
 }
-ETX_GPU_CODE SpectralResponse cos(const SpectralResponse& s) {
+ETX_GPU_CODE SpectralResponse spectrum_cos(const SpectralResponse& s) {
   return s.spectral() ? SpectralResponse{s.query(), cosf(s.value)} : SpectralResponse{s.query(), cos(s.integrated)};
 }
-ETX_GPU_CODE SpectralResponse abs(const SpectralResponse& s) {
+ETX_GPU_CODE SpectralResponse spectrum_abs(const SpectralResponse& s) {
   return s.spectral() ? SpectralResponse{s.query(), fabsf(s.value)} : SpectralResponse{s.query(), abs(s.integrated)};
 }
-ETX_GPU_CODE SpectralResponse saturate(const SpectralResponse& s) {
+ETX_GPU_CODE SpectralResponse spectrum_saturate(const SpectralResponse& s) {
   return s.spectral() ? SpectralResponse{s.query(), saturate(s.value)} : SpectralResponse{s.query(), saturate(s.integrated)};
 }
-ETX_GPU_CODE SpectralResponse sign(const SpectralResponse& b) {
+ETX_GPU_CODE SpectralResponse spectrum_sign(const SpectralResponse& b) {
   return b.spectral() ? SpectralResponse{b.query(), sign(b.value)} : SpectralResponse(b.query(), sign(b.integrated));
 }
-ETX_GPU_CODE SpectralResponse atan(const SpectralResponse& b) {
+ETX_GPU_CODE SpectralResponse spectrum_atan(const SpectralResponse& b) {
   return b.spectral() ? SpectralResponse{b.query(), atanf(b.value)} : SpectralResponse(b.query(), atan(b.integrated));
 }
-ETX_GPU_CODE SpectralResponse pow(const SpectralResponse& a, float b) {
+ETX_GPU_CODE SpectralResponse spectrum_pow(const SpectralResponse& a, float b) {
   return a.spectral() ? SpectralResponse{a.query(), powf(a.value, b)} : SpectralResponse(a.query(), pow(a.integrated, b));
 }
-ETX_GPU_CODE SpectralResponse pow(const SpectralResponse& a, const SpectralResponse& b) {
+ETX_GPU_CODE SpectralResponse spectrum_pow(const SpectralResponse& a, const SpectralResponse& b) {
   return a.spectral() ? SpectralResponse{b.query(), powf(a.value, b.value)} : SpectralResponse(b.query(), pow(a.integrated, b.integrated));
 }
-ETX_GPU_CODE SpectralResponse max(const SpectralResponse& a, float b) {
+ETX_GPU_CODE SpectralResponse spectrum_max(const SpectralResponse& a, float b) {
   return a.spectral() ? SpectralResponse{a.query(), fmaxf(a.value, b)} : SpectralResponse(a.query(), max(a.integrated, b));
 }
-ETX_GPU_CODE SpectralResponse max(float a, const SpectralResponse& b) {
+ETX_GPU_CODE SpectralResponse spectrum_max(float a, const SpectralResponse& b) {
   return b.spectral() ? SpectralResponse{b.query(), fmaxf(b.value, a)} : SpectralResponse(b.query(), max(b.integrated, a));
 }
-ETX_GPU_CODE SpectralResponse min(const SpectralResponse& a, float b) {
+ETX_GPU_CODE SpectralResponse spectrum_min(const SpectralResponse& a, float b) {
   return a.spectral() ? SpectralResponse{a.query(), fminf(a.value, b)} : SpectralResponse(a.query(), min(a.integrated, b));
 }
-ETX_GPU_CODE SpectralResponse min(float a, const SpectralResponse& b) {
+ETX_GPU_CODE SpectralResponse spectrum_min(float a, const SpectralResponse& b) {
   return b.spectral() ? SpectralResponse{b.query(), fminf(b.value, a)} : SpectralResponse(b.query(), min(b.integrated, a));
 }
 

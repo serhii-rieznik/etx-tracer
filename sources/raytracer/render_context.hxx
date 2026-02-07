@@ -1,12 +1,11 @@
 ﻿#pragma once
 
+#include <etx/render/interop/interop.hxx>
+
 #include <etx/core/pimpl.hxx>
-#include <etx/render/shared/base.hxx>
 #include <etx/rhi/rhi_types.hxx>
 #include <etx/rhi/rhi.hxx>
-
 #include "options.hxx"
-
 #include <functional>
 
 namespace etx {
