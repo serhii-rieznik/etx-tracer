@@ -34,13 +34,13 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& in_mtl, con
 #endif
 
   if (smp.next() < metalness) {
-    m_local.int_ior.cls = SpectralDistribution::Class::Conductor;
+    m_local.int_ior.cls = SpectralDistribution::Conductor;
     m_local.int_ior.eta_index = scene.defaults.conductor_eta;
     m_local.int_ior.k_index = scene.defaults.conductor_k;
     m_local.scattering.image_index = kInvalidIndex;
     return ConductorBSDF::sample(data, m_local, scene, smp);
   } else {
-    m_local.int_ior.cls = SpectralDistribution::Class::Dielectric;
+    m_local.int_ior.cls = SpectralDistribution::Dielectric;
     m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;
@@ -71,13 +71,13 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
 #endif
 
   if (smp.next() < metalness) {
-    m_local.int_ior.cls = SpectralDistribution::Class::Conductor;
+    m_local.int_ior.cls = SpectralDistribution::Conductor;
     m_local.int_ior.eta_index = scene.defaults.conductor_eta;
     m_local.int_ior.k_index = scene.defaults.conductor_k;
     m_local.scattering.image_index = kInvalidIndex;
     return ConductorBSDF::evaluate(data, w_o, m_local, scene, smp);
   } else {
-    m_local.int_ior.cls = SpectralDistribution::Class::Dielectric;
+    m_local.int_ior.cls = SpectralDistribution::Dielectric;
     m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;
@@ -98,13 +98,13 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   auto metalness = evaluate_metalness(m_local, data.tex, scene);
   auto transmission = evaluate_transmission(m_local, data.tex, scene);
   if (smp.next() < metalness) {
-    m_local.int_ior.cls = SpectralDistribution::Class::Conductor;
+    m_local.int_ior.cls = SpectralDistribution::Conductor;
     m_local.int_ior.eta_index = scene.defaults.conductor_eta;
     m_local.int_ior.k_index = scene.defaults.conductor_k;
     m_local.scattering.image_index = kInvalidIndex;
     return ConductorBSDF::pdf(data, w_o, m_local, scene, smp);
   } else {
-    m_local.int_ior.cls = SpectralDistribution::Class::Dielectric;
+    m_local.int_ior.cls = SpectralDistribution::Dielectric;
     m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;

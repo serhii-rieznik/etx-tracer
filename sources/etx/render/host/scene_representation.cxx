@@ -119,7 +119,7 @@ struct SceneRepresentationImpl {
     if ((identifier == nullptr) || (identifier[0] == 0))
       return false;
 
-    if (const IORDefinition* def = ior_database.find_by_name(identifier, SpectralDistribution::Class::Illuminant)) {
+    if (const IORDefinition* def = ior_database.find_by_name(identifier, SpectralDistribution::Illuminant)) {
       spd = def->eta;
       return true;
     }
@@ -128,8 +128,9 @@ struct SceneRepresentationImpl {
     if (candidate.empty())
       return false;
 
-    auto cls = SpectralDistribution::load_from_file(candidate.string().c_str(), spd, nullptr, false);
-    return cls != SpectralDistribution::Class::Invalid;
+    std::string title;
+    auto cls = SpectralDistribution::load_from_file(candidate.string().c_str(), spd, nullptr, false, title);
+    return cls != SpectralDistribution::Invalid;
   }
 
   SceneRepresentationImpl(TaskScheduler& s, const IORDatabase& db)
@@ -223,10 +224,10 @@ struct SceneRepresentationImpl {
         if (mtl.int_ior.eta_index == kInvalidIndex) {
           std::unique_lock lock(mt);
           if (mtl.cls == Material::Class::Conductor) {
-            mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
+            mtl.int_ior.cls = SpectralDistribution::Conductor;
             mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
           } else {
-            mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
+            mtl.int_ior.cls = SpectralDistribution::Dielectric;
             mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
           }
         }
@@ -240,7 +241,7 @@ struct SceneRepresentationImpl {
         }
         if (mtl.ext_ior.eta_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
+          mtl.ext_ior.cls = SpectralDistribution::Dielectric;
           mtl.ext_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
         }
         if (mtl.ext_ior.k_index == kInvalidIndex) {
@@ -699,10 +700,10 @@ uint32_t SceneRepresentation::add_material(const char* name) {
   mat.scattering.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
   mat.emission.spectrum_index = _private->data.add_spectrum(SpectralDistribution::constant(0.0f));
   mat.subsurface.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
-  mat.int_ior.cls = SpectralDistribution::Class::Dielectric;
+  mat.int_ior.cls = SpectralDistribution::Dielectric;
   mat.int_ior.eta_index = _private->data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
   mat.int_ior.k_index = _private->data.add_spectrum(SpectralDistribution::constant(0.0f));
-  mat.ext_ior.cls = SpectralDistribution::Class::Dielectric;
+  mat.ext_ior.cls = SpectralDistribution::Dielectric;
   mat.ext_ior.eta_index = _private->data.add_spectrum(SpectralDistribution::constant(1.0f));
   mat.ext_ior.k_index = _private->data.add_spectrum(SpectralDistribution::constant(0.0f));
   return index;
@@ -1682,24 +1683,24 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
 
     int matched_int_index = -1;
-    if (material.int_ior.cls != SpectralDistribution::Class::Invalid) {
+    if (material.int_ior.cls != SpectralDistribution::Invalid) {
       matched_int_index = database.find_matching_index(spectrum_by_index(material.int_ior.eta_index), spectrum_by_index(material.int_ior.k_index), material.int_ior.cls);
     }
     if ((matched_int_index >= 0) && (matched_int_index < static_cast<int>(database.definitions.size()))) {
       const IORDefinition& def = database.definitions[static_cast<size_t>(matched_int_index)];
       materials_stream << "int_ior " << def.name << "\n";
-    } else if ((material.int_ior.eta_index != kInvalidIndex) && (material.int_ior.cls != SpectralDistribution::Class::Invalid)) {
+    } else if ((material.int_ior.eta_index != kInvalidIndex) && (material.int_ior.cls != SpectralDistribution::Invalid)) {
       float eta_value = spectrum_scalar(material.int_ior.eta_index, 1.0f);
-      if (material.int_ior.cls == SpectralDistribution::Class::Dielectric) {
+      if (material.int_ior.cls == SpectralDistribution::Dielectric) {
         materials_stream << "int_ior " << eta_value << "\n";
-      } else if (material.int_ior.cls == SpectralDistribution::Class::Conductor) {
+      } else if (material.int_ior.cls == SpectralDistribution::Conductor) {
         float k_value = spectrum_scalar(material.int_ior.k_index, 0.0f);
         materials_stream << "int_ior " << eta_value << " " << k_value << "\n";
       }
     }
 
     int matched_ext_index = -1;
-    if (material.ext_ior.cls != SpectralDistribution::Class::Invalid) {
+    if (material.ext_ior.cls != SpectralDistribution::Invalid) {
       matched_ext_index = database.find_matching_index(spectrum_by_index(material.ext_ior.eta_index), spectrum_by_index(material.ext_ior.k_index), material.ext_ior.cls);
     }
     if ((matched_ext_index >= 0) && (matched_ext_index < static_cast<int>(database.definitions.size()))) {
@@ -1707,11 +1708,11 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       materials_stream << "ext_ior " << def.name << "\n";
     } else {
       float ext_eta_value = spectrum_scalar(material.ext_ior.eta_index, 1.0f);
-      if ((material.ext_ior.eta_index != kInvalidIndex) && (material.ext_ior.cls != SpectralDistribution::Class::Invalid) &&
-          (material.ext_ior.cls != SpectralDistribution::Class::Dielectric || std::fabs(ext_eta_value - 1.0f) >= kEpsilon)) {
-        if (material.ext_ior.cls == SpectralDistribution::Class::Dielectric) {
+      if ((material.ext_ior.eta_index != kInvalidIndex) && (material.ext_ior.cls != SpectralDistribution::Invalid) &&
+          (material.ext_ior.cls != SpectralDistribution::Dielectric || std::fabs(ext_eta_value - 1.0f) >= kEpsilon)) {
+        if (material.ext_ior.cls == SpectralDistribution::Dielectric) {
           materials_stream << "ext_ior " << ext_eta_value << "\n";
-        } else if (material.ext_ior.cls == SpectralDistribution::Class::Conductor) {
+        } else if (material.ext_ior.cls == SpectralDistribution::Conductor) {
           float ext_k_value = spectrum_scalar(material.ext_ior.k_index, 0.0f);
           materials_stream << "ext_ior " << ext_eta_value << " " << ext_k_value << "\n";
         }
@@ -1782,7 +1783,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       }
       materials_stream << " range " << material.thinfilm.min_thickness << " " << material.thinfilm.max_thickness;
       int matched_thinfilm_index = -1;
-      if (material.thinfilm.ior.cls != SpectralDistribution::Class::Invalid) {
+      if (material.thinfilm.ior.cls != SpectralDistribution::Invalid) {
         matched_thinfilm_index =
           database.find_matching_index(spectrum_by_index(material.thinfilm.ior.eta_index), spectrum_by_index(material.thinfilm.ior.k_index), material.thinfilm.ior.cls);
       }

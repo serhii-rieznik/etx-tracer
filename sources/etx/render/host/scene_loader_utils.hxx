@@ -108,8 +108,9 @@ inline bool load_ior_from_identifier(const char* identifier, const IORDatabase& 
   if (candidate.empty())
     return false;
 
-  cls = RefractiveIndex::load_from_file(candidate.string().c_str(), eta, k);
-  return cls != SpectralDistribution::Class::Invalid;
+  std::string title = {};
+  cls = SpectralDistribution::load_refractive_index(candidate.string().c_str(), eta, k, title);
+  return cls != SpectralDistribution::Invalid;
 }
 
 }  // namespace etx

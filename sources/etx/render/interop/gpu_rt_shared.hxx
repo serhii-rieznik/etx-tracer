@@ -1,6 +1,5 @@
 #pragma once
 
-#include "camera.hxx"
 #include "gpu_scene_shared.hxx"
 
 struct ETX_ALIGNED GPURTConstants {

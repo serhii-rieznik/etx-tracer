@@ -8,7 +8,7 @@ struct IORDefinition {
   std::string filename;
   std::string name;
   std::string title;
-  SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
+  SpectralDistribution::Class cls = SpectralDistribution::Invalid;
   SpectralDistribution eta;
   SpectralDistribution k;
   float3 eta_integrated = {};
@@ -44,7 +44,7 @@ struct IORDatabase {
     return _class_indices[index];
   }
 
-  const IORDefinition* find_by_name(const char* name, SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid) const {
+  const IORDefinition* find_by_name(const char* name, SpectralDistribution::Class cls = SpectralDistribution::Invalid) const {
     if ((name == nullptr) || (name[0] == 0))
       return nullptr;
 
@@ -55,7 +55,7 @@ struct IORDatabase {
     auto range = _definitions_by_name.equal_range(key);
     for (auto it = range.first; it != range.second; ++it) {
       const IORDefinition& def = definitions[it->second];
-      if ((cls == SpectralDistribution::Class::Invalid) || (def.cls == cls))
+      if ((cls == SpectralDistribution::Invalid) || (def.cls == cls))
         return &def;
     }
     return nullptr;
@@ -89,8 +89,8 @@ struct IORDatabase {
         SpectralDistribution eta = {};
         SpectralDistribution k = {};
         std::string file_title;
-        auto cls = RefractiveIndex::load_from_file(current_path.string().c_str(), eta, k, &file_title);
-        if (cls != SpectralDistribution::Class::Invalid) {
+        auto cls = SpectralDistribution::load_refractive_index(current_path.string().c_str(), eta, k, file_title);
+        if (cls != SpectralDistribution::Invalid) {
           IORDefinition def = {};
           def.filename = current_path.string();
           def.name = current_path.stem().string();
@@ -121,7 +121,7 @@ struct IORDatabase {
 
   int find_matching_index(const SpectralDistribution& eta, const SpectralDistribution& k, SpectralDistribution::Class cls) const {
     constexpr float kMatchTolerance = 1.0e-4f;
-    if (cls == SpectralDistribution::Class::Invalid)
+    if (cls == SpectralDistribution::Invalid)
       return -1;
 
     const float3 eta_target = eta.integrated();
@@ -131,7 +131,7 @@ struct IORDatabase {
       if (def.cls != cls)
         continue;
       float diff = fabsf(eta_target.x - def.eta_integrated.x) + fabsf(eta_target.y - def.eta_integrated.y) + fabsf(eta_target.z - def.eta_integrated.z);
-      if (cls == SpectralDistribution::Class::Conductor) {
+      if (cls == SpectralDistribution::Conductor) {
         diff += fabsf(k_target.x - def.k_integrated.x) + fabsf(k_target.y - def.k_integrated.y) + fabsf(k_target.z - def.k_integrated.z);
       }
       if (diff < kMatchTolerance)
@@ -142,7 +142,7 @@ struct IORDatabase {
   }
 
  private:
-  static constexpr size_t kClassCount = static_cast<size_t>(SpectralDistribution::Class::Illuminant) + 1u;
+  static constexpr size_t kClassCount = static_cast<size_t>(SpectralDistribution::Illuminant) + 1u;
 
   static size_t class_to_index(SpectralDistribution::Class cls) {
     return static_cast<size_t>(cls);

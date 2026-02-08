@@ -23,8 +23,8 @@ struct ETX_ALIGNED Camera {
   float focal_distance ETX_INIT({});
   float clip_near ETX_INIT({});
   float clip_far ETX_INIT({});
-  uint32_t lens_image ETX_INIT({});
-  uint32_t medium_index ETX_INIT({});
+  uint32_t lens_image ETX_INIT(kInvalidIndex);
+  uint32_t medium_index ETX_INIT(kInvalidIndex);
   float4x4 view_proj ETX_INIT({});
   float area ETX_INIT({});
   float pad[3] ETX_INIT({});

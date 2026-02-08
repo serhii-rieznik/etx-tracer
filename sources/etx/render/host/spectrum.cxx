@@ -23,7 +23,7 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
     float wavelength = wavelengths_power[i].x * wavelength_scale;
     float power = wavelengths_power[i].y;
     if (valid_value(power)) {
-      wavelength = std::clamp(wavelength, spectrum::kShortestWavelength, spectrum::kLongestWavelength);
+      wavelength = std::clamp(wavelength, kShortestWavelength, kLongestWavelength);
       samples.emplace_back(float2{wavelength, power});
     }
   }
@@ -52,11 +52,11 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
     unique_samples.emplace_back(float2{unique_samples.front().x, unique_samples.front().y});
   }
 
-  result.spectral_entry_count = spectrum::WavelengthCount;
+  result.spectral_entry_count = WavelengthCount;
 
   size_t segment = 0u;
-  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
-    float wavelength = float(spectrum::ShortestWavelength + i);
+  for (uint32_t i = 0; i < WavelengthCount; ++i) {
+    float wavelength = float(ShortestWavelength + i);
 
     float power = 0.0f;
     if (wavelength <= unique_samples.front().x) {
@@ -81,7 +81,7 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
   ETX_ASSERT(result.valid());
 
   float3 xyz = result.integrate_to_xyz();
-  result.integrated_value = spectrum::xyz_to_rgb(xyz);
+  result.integrated_value = xyz_to_rgb(xyz);
   result.integrated_value = max(result.integrated_value, float3{0.0f, 0.0f, 0.0f});
   return result;
 }
@@ -97,8 +97,8 @@ void SpectralDistribution::scale(float factor) {
 
 SpectralDistribution SpectralDistribution::constant(float value) {
   float2 samples[2] = {
-    {spectrum::kShortestWavelength, value},
-    {spectrum::kLongestWavelength, value},
+    {kShortestWavelength, value},
+    {kLongestWavelength, value},
   };
   SpectralDistribution spd = from_samples(samples, 2);
   spd.integrated_value = {value, value, value};
@@ -106,35 +106,35 @@ SpectralDistribution SpectralDistribution::constant(float value) {
 }
 
 SpectralDistribution SpectralDistribution::from_black_body(float temperature, float scale) {
-  float2 samples[spectrum::WavelengthCount] = {};
-  for (uint32_t i = 0; i < spectrum::WavelengthCount; ++i) {
-    float wl = float(i + spectrum::ShortestWavelength);
-    samples[i] = {wl, spectrum::black_body_radiation(wl, temperature) * scale};
+  float2 samples[WavelengthCount] = {};
+  for (uint32_t i = 0; i < WavelengthCount; ++i) {
+    float wl = float(i + ShortestWavelength);
+    samples[i] = {wl, black_body_radiation(wl, temperature) * scale};
   }
-  return from_samples(samples, spectrum::WavelengthCount);
+  return from_samples(samples, WavelengthCount);
 }
 
 SpectralDistribution SpectralDistribution::from_normalized_black_body(float t, float scale) {
-  float w = spectrum::black_body_radiation_maximum_wavelength(t);
-  float r = spectrum::black_body_radiation(w, t);
+  float w = black_body_radiation_maximum_wavelength(t);
+  float r = black_body_radiation(w, t);
   auto spd = SpectralDistribution::from_black_body(t, 1.0f / r);
   spd.scale(scale / spd.luminance());
   return spd;
 }
 
 SpectralDistribution SpectralDistribution::rgb_reflectance(const float3& rgb) {
-  if (etx::luminance(rgb) == 0.0f)
+  if (::luminance(rgb) == 0.0f)
     return SpectralDistribution::constant(0.0f);
 
   ETX_VALIDATE(rgb);
 
-  float2 samples[spectrum::RGBResponseWavelengthCount] = {};
-  for (uint32_t i = spectrum::RGBResponseShortestWavelength; i <= spectrum::RGBResponseLongestWavelength; ++i) {
-    auto p = rgb_response({float(i), SpectralQuery::Spectral}, rgb);
-    samples[i - spectrum::RGBResponseShortestWavelength] = {float(i), p.value};
+  float2 samples[RGBResponseWavelengthCount] = {};
+  for (uint32_t i = RGBResponseShortestWavelength; i <= RGBResponseLongestWavelength; ++i) {
+    auto p = rgb_response({float(i), SpectralFlags::Spectral}, rgb);
+    samples[i - RGBResponseShortestWavelength] = {float(i), p.value};
   }
 
-  SpectralDistribution spd = from_samples(samples, spectrum::RGBResponseWavelengthCount);
+  SpectralDistribution spd = from_samples(samples, RGBResponseWavelengthCount);
   spd.integrated_value = rgb;
   return spd;
 }
@@ -146,11 +146,11 @@ SpectralDistribution SpectralDistribution::rgb_luminance(const float3& rgb) {
 }
 
 SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range,
-  std::string* out_title) {
+  std::string& out_title) {
   auto file = fopen(file_name, "r");
   if (file == nullptr) {
     log::error("Failed to load SpectralDistribution from file: %s\n", file_name);
-    return SpectralDistribution::Class::Invalid;
+    return SpectralDistribution::Invalid;
   }
 
   fseek(file, 0, SEEK_END);
@@ -169,10 +169,9 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     }
   };
 
-  Class cls = Class::Invalid;
-  std::string file_title;
+  Class cls = SpectralDistribution::Invalid;
   std::vector<Sample> samples;
-  samples.reserve(spectrum::WavelengthCount);
+  samples.reserve(WavelengthCount);
 
   char* begin = data.data();
   char* end = data.data() + file_size;
@@ -197,13 +196,13 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
           }
           std::string cls_name(cls_begin, colon - cls_begin);
           if (cls_name == "conductor") {
-            cls = Class::Conductor;
+            cls = SpectralDistribution::Conductor;
           } else if (cls_name == "dielectric") {
-            cls = Class::Dielectric;
+            cls = SpectralDistribution::Dielectric;
           } else if (cls_name == "illuminant") {
-            cls = Class::Illuminant;
+            cls = SpectralDistribution::Illuminant;
           } else if (cls_name.empty() == false) {
-            cls = Class::Reflectance;
+            cls = SpectralDistribution::Reflectance;
           }
         }
       } else if (strstr(begin, "#title") == begin) {
@@ -218,7 +217,7 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
             title.pop_back();
           }
           if (title.empty() == false) {
-            file_title = title;
+            out_title = title;
           }
         }
       }
@@ -238,7 +237,7 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
 
   if (samples.empty()) {
     log::error("Failed to load SpectralDistribution from file: %s\n", file_name);
-    return SpectralDistribution::Class::Invalid;
+    return SpectralDistribution::Invalid;
   }
 
   std::sort(samples.begin(), samples.end());
@@ -251,12 +250,12 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
   }
 
   std::vector<float2> samples0;
-  samples0.reserve(spectrum::WavelengthCount);
+  samples0.reserve(WavelengthCount);
   std::vector<float2> samples1;
-  samples1.reserve(spectrum::WavelengthCount);
+  samples1.reserve(WavelengthCount);
   for (auto& sample : samples) {
     float w = sample.wavelength * scale;
-    if ((w >= spectrum::kShortestWavelength) && (w <= spectrum::kLongestWavelength)) {
+    if ((w >= kShortestWavelength) && (w <= kLongestWavelength)) {
       samples0.emplace_back(float2{w, sample.values[0]});
       samples1.emplace_back(float2{w, sample.values[1]});
     }
@@ -264,30 +263,30 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
 
   if (samples0.empty()) {
     float fallback = samples.front().values[0];
-    samples0.emplace_back(float2{spectrum::kShortestWavelength, fallback});
-    samples0.emplace_back(float2{spectrum::kLongestWavelength, fallback});
+    samples0.emplace_back(float2{kShortestWavelength, fallback});
+    samples0.emplace_back(float2{kLongestWavelength, fallback});
   }
 
-  if ((values1 != nullptr) && samples1.empty() && (cls == Class::Conductor)) {
+  if ((values1 != nullptr) && samples1.empty() && (cls == SpectralDistribution::Conductor)) {
     float fallback = samples.front().values[1];
-    samples1.emplace_back(float2{spectrum::kShortestWavelength, fallback});
-    samples1.emplace_back(float2{spectrum::kLongestWavelength, fallback});
+    samples1.emplace_back(float2{kShortestWavelength, fallback});
+    samples1.emplace_back(float2{kLongestWavelength, fallback});
   }
 
   if (extend_range) {
-    if ((samples0.size() < spectrum::WavelengthCount) && (samples0.front().x > spectrum::kShortestWavelength)) {
-      samples0.insert(samples0.begin(), samples0.front())->x = spectrum::kShortestWavelength;
+    if ((samples0.size() < WavelengthCount) && (samples0.front().x > kShortestWavelength)) {
+      samples0.insert(samples0.begin(), samples0.front())->x = kShortestWavelength;
     }
-    if ((samples0.size() < spectrum::WavelengthCount) && (samples0.back().x < spectrum::kLongestWavelength)) {
-      samples0.emplace_back(samples0.back()).x = spectrum::kLongestWavelength;
+    if ((samples0.size() < WavelengthCount) && (samples0.back().x < kLongestWavelength)) {
+      samples0.emplace_back(samples0.back()).x = kLongestWavelength;
     }
 
     if (samples1.empty() == false) {
-      if ((samples1.size() < spectrum::WavelengthCount) && (samples1.front().x > spectrum::kShortestWavelength)) {
-        samples1.insert(samples1.begin(), samples1.front())->x = spectrum::kShortestWavelength;
+      if ((samples1.size() < WavelengthCount) && (samples1.front().x > kShortestWavelength)) {
+        samples1.insert(samples1.begin(), samples1.front())->x = kShortestWavelength;
       }
-      if ((samples1.size() < spectrum::WavelengthCount) && (samples1.back().x < spectrum::kLongestWavelength)) {
-        samples1.emplace_back(samples1.back()).x = spectrum::kLongestWavelength;
+      if ((samples1.size() < WavelengthCount) && (samples1.back().x < kLongestWavelength)) {
+        samples1.emplace_back(samples1.back()).x = kLongestWavelength;
       }
     }
   }
@@ -297,8 +296,8 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
   if (values1) {
     if (samples1.empty()) {
       float2 zero_samples[2] = {
-        {spectrum::kShortestWavelength, 0.0f},
-        {spectrum::kLongestWavelength, 0.0f},
+        {kShortestWavelength, 0.0f},
+        {kLongestWavelength, 0.0f},
       };
       *values1 = from_samples(zero_samples, 2);
     } else {
@@ -306,17 +305,25 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     }
   }
 
-  if (out_title != nullptr) {
-    *out_title = file_title;
-  }
-
-  if (cls == Class::Illuminant) {
+  if (cls == SpectralDistribution::Illuminant) {
     float lum = values0.luminance();
     if (lum > 0.0f) {
       values0.scale(1.0f / lum);
     }
   }
 
+  return cls;
+}
+
+SpectralDistribution::Class SpectralDistribution::load_refractive_index(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k, std::string& out_title) {
+  SpectralDistribution::Class cls = SpectralDistribution::load_from_file(file_name, out_eta, &out_k, true, out_title);
+  if (cls != SpectralDistribution::Invalid) {
+    out_eta.integrated_value = rgb_to_xyz(out_eta.integrated_value);
+    out_k.integrated_value = rgb_to_xyz(out_k.integrated_value);
+  } else {
+    out_eta = SpectralDistribution::constant(1.0f);
+    out_k = SpectralDistribution::constant(0.0f);
+  }
   return cls;
 }
 
@@ -339,8 +346,8 @@ float SpectralDistribution::maximum_spectral_power() const {
 
 float3 SpectralDistribution::integrate_to_xyz() const {
   float3 result = {};
-  SpectralResponse s_begin = {{0.0f, SpectralQuery::Spectral}};
-  SpectralResponse s_end = {{0.0f, SpectralQuery::Spectral}};
+  SpectralResponse s_begin = {{0.0f, SpectralFlags::Spectral}};
+  SpectralResponse s_end = {{0.0f, SpectralFlags::Spectral}};
 
   for (uint32_t index = 0; index + 1 < spectral_entry_count; ++index) {
     float l0 = spectral_entries[index + 0].wavelength;
@@ -369,23 +376,11 @@ float3 SpectralDistribution::integrate_to_xyz() const {
 }
 
 float SpectralDistribution::luminance() const {
-  return etx::luminance(integrated_value);
+  return ::luminance(integrated_value);
 }
 
 const float3& SpectralDistribution::integrated() const {
   return integrated_value;
-}
-
-SpectralDistribution::Class RefractiveIndex::load_from_file(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k, std::string* out_title) {
-  SpectralDistribution::Class cls = SpectralDistribution::load_from_file(file_name, out_eta, &out_k, true, out_title);
-  if (cls != SpectralDistribution::Class::Invalid) {
-    out_eta.integrated_value = spectrum::rgb_to_xyz(out_eta.integrated_value);
-    out_k.integrated_value = spectrum::rgb_to_xyz(out_k.integrated_value);
-  } else {
-    out_eta = SpectralDistribution::constant(1.0f);
-    out_k = SpectralDistribution::constant(0.0f);
-  }
-  return cls;
 }
 
 SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb) {
@@ -394,7 +389,7 @@ SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb) {
   if (luminance(rgb) == 0.0f)
     return {spect, 0.0f};
 
-  constexpr float3 response[spectrum::RGBResponseWavelengthCount] = {{0.361396471056708f, 0.252275705864828f, 0.386327749991032f},
+  constexpr float3 response[RGBResponseWavelengthCount] = {{0.361396471056708f, 0.252275705864828f, 0.386327749991032f},
     {0.366205305492837f, 0.235416148479571f, 0.398378488359465f}, {0.371266544491276f, 0.21551362909132f, 0.413219780889496f},
     {0.375826682752906f, 0.193361838306436f, 0.430811443451517f}, {0.378931281646137f, 0.170213950722939f, 0.450854739893322f},
     {0.379486367262762f, 0.146935008502323f, 0.473578602657459f}, {0.376593730760743f, 0.124520895668156f, 0.498885356527868f},
@@ -591,11 +586,11 @@ SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb) {
     {0.334044269237699f, 0.332772397765162f, 0.333171643842437f}, {0.334003485294713f, 0.332811116613815f, 0.333172848857627f},
     {0.333960612549575f, 0.332834225679941f, 0.33319177783655f}, {0.333915928070901f, 0.332870662692583f, 0.333199256746151f}};
 
-  if ((spect.wavelength < spectrum::kRGBResponseShortestWavelength) || (spect.wavelength > spectrum::kRGBResponseLongestWavelength))
+  if ((spect.wavelength < kRGBResponseShortestWavelength) || (spect.wavelength > kRGBResponseLongestWavelength))
     return {spect, 0.0f};
 
-  uint32_t wi = uint32_t(spect.wavelength - spectrum::kRGBResponseShortestWavelength);
-  uint32_t wj = min(wi + 1u, spectrum::RGBResponseWavelengthCount - 1u);
+  uint32_t wi = uint32_t(spect.wavelength - kRGBResponseShortestWavelength);
+  uint32_t wj = min(wi + 1u, RGBResponseWavelengthCount - 1u);
 
   float dw = spect.wavelength - floorf(spect.wavelength);
   float3 w = lerp(response[wi], response[wj], dw);

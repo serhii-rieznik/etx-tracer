@@ -233,7 +233,7 @@ void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const 
   float3 view_optical_path = {};
   float3 current_density = density(height_above_surface);
 
-  result.spectral_entry_count = spectrum::WavelengthCount;
+  result.spectral_entry_count = WavelengthCount;
   for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
     result.spectral_entries[i].power = 0;
   }
@@ -342,22 +342,22 @@ void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepth
   log::info("Precomputing atmosphere spectrums and extinction image %u x %u...", OpticalDepthData::kWidth, OpticalDepthData::kHeight);
 
   std::vector<float2> r_samples;
-  r_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
+  r_samples.reserve(WavelengthCount / kSpectrumStepSize + 1);
 
   std::vector<float2> m_samples;
-  m_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
+  m_samples.reserve(WavelengthCount / kSpectrumStepSize + 1);
 
   std::vector<float2> o_samples;
-  o_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
+  o_samples.reserve(WavelengthCount / kSpectrumStepSize + 1);
 
   std::vector<float2> b_samples;
-  b_samples.reserve(spectrum::WavelengthCount / kSpectrumStepSize + 1);
+  b_samples.reserve(WavelengthCount / kSpectrumStepSize + 1);
 
   auto t0 = std::chrono::steady_clock::now();
   uint32_t count = 0;
   float3 accum = {};
-  for (uint32_t w = spectrum::ShortestWavelength; w <= spectrum::LongestWavelength; ++w) {
-    uint32_t i = w - spectrum::ShortestWavelength;
+  for (uint32_t w = ShortestWavelength; w <= LongestWavelength; ++w) {
+    uint32_t i = w - ShortestWavelength;
 
     accum.x += scattering::rayleigh(float(w));
     accum.y += scattering::mie(float(w));
@@ -429,7 +429,7 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
       direction = from_spherical(phi, theta);
       radiance_spectrum_at_direction(spectrums, extinction, direction, light_sources, parameters, radiance);
       float3 xyz = radiance.integrate_to_xyz();
-      float3 rgb = max({}, spectrum::xyz_to_rgb(xyz));
+      float3 rgb = max({}, xyz_to_rgb(xyz));
       // Poor man multiple scattering
       // Gather average color of the upper hemisphere
       // Weighted in the way that top pixels contribute more
@@ -499,7 +499,7 @@ void generate_sun_image(const Parameters& parameters, const uint2& dimensions, c
         extinction_spectrum_at_direction(spectrums, d0, d1, parameters, radiance);
         float darkening = (1.0f - 0.6f * (1.0f - fmaxf(0.0f, 1.0f - (u * u + v0 * v0))));
         float3 xyz = darkening * radiance.integrate_to_xyz();
-        float3 rgb = max({}, spectrum::xyz_to_rgb(xyz));
+        float3 rgb = max({}, xyz_to_rgb(xyz));
         buffer[x + dimensions.x * y] = {rgb.x, rgb.y, rgb.z, 1.0f};
       }
     });

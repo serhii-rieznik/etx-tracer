@@ -25,7 +25,7 @@ ETX_GPU_CODE SpectralResponse specular_func(const BSDFData& data, const float3& 
   auto roughness = evaluate_roughness(mtl, data.tex, scene);
   auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
   auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto m_eta = (int_ior.eta / ext_ior.eta).monochromatic();
+  auto m_eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
 
   SpectralResponse value = external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, true, roughness, ext_ior, int_ior, thinfilm);

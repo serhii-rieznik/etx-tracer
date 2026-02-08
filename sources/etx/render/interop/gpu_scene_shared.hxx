@@ -1,6 +1,9 @@
 #pragma once
 
 #include "interop.hxx"
+#include "camera.hxx"
+#include "spectrum.hxx"
+#include "material.hxx"
 
 struct ETX_ALIGNED GPUSceneGlobals {
   enum : uint32_t {

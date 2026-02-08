@@ -20,22 +20,6 @@ struct vector4 {
   t x, y, z, w;
 };
 
-constexpr float kQuarterPi = 0.78539816339744830961566084581988f;
-constexpr float kHalfPi = 1.5707963267948966192313216916398f;
-constexpr float kPi = 3.1415926535897932384626433832795f;
-constexpr float kDoublePi = 6.283185307179586476925286766559f;
-constexpr float kSqrt2 = 1.4142135623730950488016887242097f;
-constexpr float kInvPi = 0.31830988618379067153776752674503f;
-constexpr float kSqrtPI = 1.7724538509055160272981674833411f;
-constexpr float kEpsilon = 1.192092896e-07f;
-constexpr float kMaxFloat = 3.402823466e+38f;
-constexpr float kMaxHalf = 65504.0f;
-constexpr float kInvMaxHalf = 1.0f / kMaxHalf;
-constexpr float kRayEpsilon = 15.0f / (kMaxHalf - 1.0f);
-constexpr float kDeltaAlphaTreshold = 1.0e-4f;
-constexpr float kGoldenRatio = 1.6180339887498948482f;
-constexpr uint32_t kInvalidIndex = ~0u;
-
 enum class ProjectionType : uint32_t {
   Equirectangular = 0u,
   EqualArea = 1u,
@@ -730,10 +714,6 @@ ETX_GPU_CODE float3 hsv_to_rgb(const float3& hsv) {
   float s = hsv.y;
   float v = hsv.z;
   return v * (1.0f - s * saturate(2.0f - abs(mod(h * 6.0f + float3{0.0f, 4.0f, 2.0f}, 6.0f) - 3.0f)));
-}
-
-ETX_GPU_CODE float luminance(const float3& value) {
-  return value.x * 0.212671f + value.y * 0.715160f + value.z * 0.072169f;
 }
 
 ETX_GPU_CODE float3 orthonormalize(const float3& nrm, const float3& tan) {

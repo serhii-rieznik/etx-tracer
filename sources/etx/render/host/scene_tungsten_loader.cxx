@@ -387,7 +387,7 @@ PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char
 }
 
 void set_conductor_ior(Material& mtl, const std::string& material_name, SceneData& data, const IORDatabase& database) {
-  const IORDefinition* def = database.find_by_name(material_name.c_str(), SpectralDistribution::Class::Conductor);
+  const IORDefinition* def = database.find_by_name(material_name.c_str(), SpectralDistribution::Conductor);
   if (def != nullptr) {
     mtl.int_ior.cls = def->cls;
     mtl.int_ior.eta_index = data.add_spectrum(def->title.c_str(), def->eta);
@@ -397,11 +397,11 @@ void set_conductor_ior(Material& mtl, const std::string& material_name, SceneDat
 
   TungstenConductorIOR t = {};
   if (find_tungsten_conductor(material_name, t)) {
-    float3 eta_rgb = max(float3{}, spectrum::rgb_to_xyz(t.eta));
-    float3 k_rgb = max(float3{}, spectrum::rgb_to_xyz(t.k));
+    float3 eta_rgb = max(float3{}, rgb_to_xyz(t.eta));
+    float3 k_rgb = max(float3{}, rgb_to_xyz(t.k));
     SpectralDistribution eta_spd = SpectralDistribution::rgb_reflectance(eta_rgb);
     SpectralDistribution k_spd = SpectralDistribution::rgb_reflectance(k_rgb);
-    mtl.int_ior.cls = SpectralDistribution::Class::Conductor;
+    mtl.int_ior.cls = SpectralDistribution::Conductor;
     mtl.int_ior.eta_index = data.add_spectrum(eta_spd);
     mtl.int_ior.k_index = data.add_spectrum(k_spd);
     return;
@@ -412,7 +412,7 @@ void set_dielectric_ior(Material& mtl, const std::string& bsdf_name, const nlohm
   auto try_name = [&](const std::string& n) -> bool {
     if (n.empty())
       return false;
-    const IORDefinition* def = database.find_by_name(n.c_str(), SpectralDistribution::Class::Dielectric);
+    const IORDefinition* def = database.find_by_name(n.c_str(), SpectralDistribution::Dielectric);
     if (def == nullptr)
       return false;
     mtl.int_ior.cls = def->cls;
@@ -432,7 +432,7 @@ void set_dielectric_ior(Material& mtl, const std::string& bsdf_name, const nlohm
   }
 
   float ior = b.value("ior", 1.5f);
-  mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
+  mtl.int_ior.cls = SpectralDistribution::Dielectric;
   mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(ior));
   mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
 }
@@ -442,10 +442,10 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
   auto& mtl = data.materials[mat_idx];
   bool two_sided = b.value("two_sided", b.value("twoSided", false));
   std::string type = b.value("type", "lambert");
-  mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
+  mtl.ext_ior.cls = SpectralDistribution::Dielectric;
   mtl.ext_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
   mtl.ext_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
-  mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
+  mtl.int_ior.cls = SpectralDistribution::Dielectric;
   mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.5f));
   mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
 
@@ -478,7 +478,7 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     if (thickness_nm > 0.0f) {
       mtl.thinfilm.min_thickness = thickness_nm;
       mtl.thinfilm.max_thickness = thickness_nm;
-      mtl.thinfilm.ior.cls = SpectralDistribution::Class::Dielectric;
+      mtl.thinfilm.ior.cls = SpectralDistribution::Dielectric;
       mtl.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(coat_ior));
       mtl.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
     }

@@ -1495,7 +1495,7 @@ struct SceneSerializationImpl {
       if (get_param(material, "normalize")) {
         float3 xyz = spectrum.integrate_to_xyz();
         bool normalize_rgb = strcmp(_data_buffer, "luminance") != 0;
-        float3 rgb = spectrum::xyz_to_rgb(xyz);
+        float3 rgb = xyz_to_rgb(xyz);
         float lum = normalize_rgb ? fmaxf(fmaxf(0.0f, rgb.x), fmaxf(rgb.y, rgb.z)) : xyz.y;
         if (lum > kEpsilon) {
           spectrum.scale(1.0f / lum);
@@ -1616,8 +1616,9 @@ struct SceneSerializationImpl {
         } else if ((strcmp(params[i], "spectrum") == 0) && (i + 1 < end)) {
           char buffer[2048] = {};
           snprintf(buffer, sizeof(buffer), "%s/%s", base_dir, params[i + 1]);
-          auto cls = SpectralDistribution::load_from_file(buffer, emission_spd, nullptr, false);
-          if (cls != SpectralDistribution::Class::Illuminant) {
+          std::string title = {};
+          auto cls = SpectralDistribution::load_from_file(buffer, emission_spd, nullptr, false, title);
+          if (cls != SpectralDistribution::Illuminant) {
             log::warning("Spectrum %s is not illuminant", buffer);
           }
           emission_spd_defined = true;
@@ -1780,35 +1781,36 @@ struct SceneSerializationImpl {
     auto load_ior = [&](RefractiveIndex& target, const char* buffer) {
       float2 values = {};
       int values_read = sscanf(buffer, "%f %f", &values.x, &values.y);
-      target.cls = SpectralDistribution::Class::Dielectric;
+      target.cls = SpectralDistribution::Dielectric;
       if (values_read == 1) {
         target.eta_index = data.add_spectrum(SpectralDistribution::constant(values.x));
         target.k_index = kInvalidIndex;
       } else if (values_read == 2) {
-        target.cls = SpectralDistribution::Class::Conductor;
+        target.cls = SpectralDistribution::Conductor;
         target.eta_index = data.add_spectrum(SpectralDistribution::constant(values.x));
         target.k_index = data.add_spectrum(SpectralDistribution::constant(values.y));
       } else {
         SpectralDistribution eta_spd = {};
         SpectralDistribution k_spd = {};
-        SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
+        SpectralDistribution::Class cls = SpectralDistribution::Invalid;
         if (load_ior_from_identifier(buffer, database, eta_spd, k_spd, cls) == false) {
           std::filesystem::path fallback = locate_spectrum_file(buffer, {});
           if (fallback.empty() == false) {
-            cls = RefractiveIndex::load_from_file(fallback.string().c_str(), eta_spd, k_spd);
+            std::string title = {};
+            cls = SpectralDistribution::load_refractive_index(fallback.string().c_str(), eta_spd, k_spd, title);
           }
         }
 
-        if (cls == SpectralDistribution::Class::Invalid) {
+        if (cls == SpectralDistribution::Invalid) {
           log::warning("Unable to load IOR spectrum `%s`, falling back to 1.5 dielectric", buffer);
-          cls = SpectralDistribution::Class::Dielectric;
+          cls = SpectralDistribution::Dielectric;
           eta_spd = SpectralDistribution::constant(1.5f);
           k_spd = SpectralDistribution::constant(0.0f);
         }
 
         target.cls = cls;
         target.eta_index = data.add_spectrum(eta_spd);
-        if (cls == SpectralDistribution::Class::Conductor) {
+        if (cls == SpectralDistribution::Conductor) {
           target.k_index = data.add_spectrum(k_spd);
         } else {
           target.k_index = k_spd.empty() ? data.add_spectrum(SpectralDistribution::constant(0.0f)) : data.add_spectrum(k_spd);
@@ -1819,7 +1821,7 @@ struct SceneSerializationImpl {
     if (get_param(material, "int_ior")) {
       load_ior(mtl.int_ior, _data_buffer);
     } else {
-      mtl.int_ior.cls = SpectralDistribution::Class::Dielectric;
+      mtl.int_ior.cls = SpectralDistribution::Dielectric;
       mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.5f));
       mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
     }
@@ -1827,7 +1829,7 @@ struct SceneSerializationImpl {
     if (get_param(material, "ext_ior")) {
       load_ior(mtl.ext_ior, _data_buffer);
     } else {
-      mtl.ext_ior.cls = SpectralDistribution::Class::Dielectric;
+      mtl.ext_ior.cls = SpectralDistribution::Dielectric;
       mtl.ext_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
       mtl.ext_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
     }
@@ -1888,30 +1890,31 @@ struct SceneSerializationImpl {
         if ((strcmp(params[i], "ior") == 0) && (i + 1 < e)) {
           float value = 0.0f;
           if (sscanf(params[i + 1], "%f", &value) == 1) {
-            mtl.thinfilm.ior.cls = SpectralDistribution::Class::Dielectric;
+            mtl.thinfilm.ior.cls = SpectralDistribution::Dielectric;
             mtl.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(value));
             mtl.thinfilm.ior.k_index = kInvalidIndex;
           } else {
             SpectralDistribution eta_spd = {};
             SpectralDistribution k_spd = {};
-            SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
+            SpectralDistribution::Class cls = SpectralDistribution::Invalid;
             if (load_ior_from_identifier(params[i + 1], database, eta_spd, k_spd, cls) == false) {
               std::filesystem::path fallback = locate_spectrum_file(params[i + 1], {});
               if (fallback.empty() == false) {
-                cls = RefractiveIndex::load_from_file(fallback.string().c_str(), eta_spd, k_spd);
+                std::string title = {};
+                cls = SpectralDistribution::load_refractive_index(fallback.string().c_str(), eta_spd, k_spd, title);
               }
             }
 
-            if (cls == SpectralDistribution::Class::Invalid) {
+            if (cls == SpectralDistribution::Invalid) {
               log::warning("Unable to load thinfilm IOR `%s`, using dielectric 1.5", params[i + 1]);
-              cls = SpectralDistribution::Class::Dielectric;
+              cls = SpectralDistribution::Dielectric;
               eta_spd = SpectralDistribution::constant(1.5f);
               k_spd = SpectralDistribution::constant(0.0f);
             }
 
             mtl.thinfilm.ior.cls = cls;
             mtl.thinfilm.ior.eta_index = data.add_spectrum(eta_spd);
-            if (cls == SpectralDistribution::Class::Conductor) {
+            if (cls == SpectralDistribution::Conductor) {
               mtl.thinfilm.ior.k_index = data.add_spectrum(k_spd);
             } else {
               mtl.thinfilm.ior.k_index = k_spd.empty() ? kInvalidIndex : data.add_spectrum(k_spd);

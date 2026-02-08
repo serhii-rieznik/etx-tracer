@@ -345,7 +345,7 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
   return complex_abs(1.0f - ratio * 0.5f * (tp + ts));
 }
 
-ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndex::Sample& ext_ior, const RefractiveIndex::Sample& int_ior,
+ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
   const Thinfilm::Eval& thinfilm) {
   ETX_ASSERT(spect.wavelength == ext_ior.wavelength);
   ETX_ASSERT(spect.wavelength == int_ior.wavelength);
@@ -356,7 +356,7 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
 
   if (spect.spectral()) {
     float value = 0.0f;
-    if ((thinfilm.thickness == 0.0f) || thinfilm.ior.eta.is_zero()) {
+    if ((thinfilm.thickness == 0.0f) || spectral_response_is_zero(thinfilm.ior.eta)) {
       value = fresnel_generic(cos_theta, ext_ior.as_complex(), int_ior.as_complex());
     } else {
       value = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), thinfilm.ior.as_complex(), int_ior.as_complex(), thinfilm.thickness);
@@ -364,12 +364,12 @@ ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, co
     result.value = saturate(value);
   } else {
     float3 values = {};
-    if ((thinfilm.thickness == 0.0f) || thinfilm.ior.eta.is_zero()) {
+    if ((thinfilm.thickness == 0.0f) || spectral_response_is_zero(thinfilm.ior.eta)) {
       values.x = fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x());
       values.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
       values.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
-      if (int_ior.cls == SpectralDistribution::Class::Conductor) {
-        values = spectrum::xyz_to_rgb(values) * SpectralDistribution::kRGBLuminanceScale;
+      if (int_ior.cls == SpectralDistribution::Conductor) {
+        values = xyz_to_rgb(values) * SpectralDistribution::kRGBLuminanceScale;
       }
     } else {
       values.x = fresnel_thinfilm(thinfilm.rgb_wavelengths.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);

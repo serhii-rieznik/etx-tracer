@@ -369,8 +369,8 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralIma
   return apply_rgb(spect, result, eval, scene);
 }
 
-ETX_GPU_CODE RefractiveIndex::Sample evaluate_refractive_index(const Scene& scene, const RefractiveIndex& ri, const SpectralQuery q) {
-  RefractiveIndex::Sample result = {q};
+ETX_GPU_CODE RefractiveIndexSample evaluate_refractive_index(const Scene& scene, const RefractiveIndex& ri, const SpectralQuery q) {
+  RefractiveIndexSample result = {};
   result.cls = ri.cls;
   result.eta = (ri.eta_index == kInvalidIndex) ? SpectralResponse(q, 1.0f) : scene.spectrums[ri.eta_index](q);
   result.k = (ri.k_index == kInvalidIndex) ? SpectralResponse(q, 0.0f) : scene.spectrums[ri.k_index](q);

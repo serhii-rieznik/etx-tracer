@@ -132,7 +132,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
     result.properties = BSDFSample::Reflection | delta_sample;
     result.medium_index = data.current_medium;
   } else {
-    float eta = (int_ior.eta / ext_ior.eta).monochromatic();
+    float eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
     result.eta = eta;
     result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
     result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged | delta_sample;
@@ -220,7 +220,9 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
     wh = normalize(w_o + w_i);
     dwh_dwo = 1.0f / (4.0f * dot(w_o, wh));
   } else {
-    auto eta = outside ? (int_ior.eta / ext_ior.eta).monochromatic() : (ext_ior.eta / int_ior.eta).monochromatic();
+    auto eta = outside  //
+                 ? spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta))
+                 : spectral_response_monochromatic(spectral_response_div(ext_ior.eta, int_ior.eta));
     wh = normalize(w_i + w_o * eta);
     float sqrt_denom = dot(w_i, wh) + eta * dot(w_o, wh);
     dwh_dwo = sqr(eta) * dot(w_o, wh) / sqr(sqrt_denom);

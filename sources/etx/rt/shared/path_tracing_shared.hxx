@@ -46,8 +46,9 @@ inline SpectralResponse safe_mul(const SpectralResponse& a, const SpectralRespon
   ETX_ASSERT((a.spectral() && b.spectral()) || ((a.spectral() == false) && (b.spectral() == false)));
   ETX_ASSERT(a.wavelength == b.wavelength);
 
-  return a.spectral() ? SpectralResponse{a.query(), safe_mul(a.value, b.value)}
-                      : SpectralResponse{a.query(), {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}};
+  return a.spectral()
+           ? SpectralResponse{a.as_query(), safe_mul(a.value, b.value)}
+           : SpectralResponse{a.as_query(), {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}};
 }
 
 ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {

@@ -14,6 +14,8 @@
 
 namespace etx {
 
+static std::string string_buffer = {};
+
 static RefractiveIndex spd_base = {};
 static RefractiveIndex spd_air = {};
 static Thinfilm thinfilm = {};
@@ -75,21 +77,21 @@ struct CPUDebugIntegratorImpl : public Task {
     {
       SpectralDistribution eta = {};
       SpectralDistribution k = {};
-      spd_air.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/dielectric/air.spd"), eta, k);
+      spd_air.cls = SpectralDistribution::load_refractive_index(env().file_in_data("spectrum/dielectric/air.spd"), eta, k, string_buffer);
       spd_air_eta = eta;
       spd_air_k = k;
     }
     {
       SpectralDistribution eta = {};
       SpectralDistribution k = {};
-      spd_base.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/dielectric/water.spd"), eta, k);
+      spd_base.cls = SpectralDistribution::load_refractive_index(env().file_in_data("spectrum/dielectric/water.spd"), eta, k, string_buffer);
       spd_base_eta = eta;
       spd_base_k = k;
     }
     {
       SpectralDistribution eta = {};
       SpectralDistribution k = {};
-      thinfilm.ior.cls = RefractiveIndex::load_from_file(env().file_in_data("spectrum/dielectric/glycerol.spd"), eta, k);
+      thinfilm.ior.cls = SpectralDistribution::load_refractive_index(env().file_in_data("spectrum/dielectric/glycerol.spd"), eta, k, string_buffer);
       spd_film_eta = eta;
       spd_film_k = k;
     }
@@ -107,10 +109,10 @@ struct CPUDebugIntegratorImpl : public Task {
       result.set_float("t-max", th_max, "Max Thickness", {0.0f, 1024.0f});
     } else if (mode == Mode::Thinfilm) {
       result.set_bool("thinfilm_spectral", thinfilm_spectral, "Spectral");
-      float3 kMin = {spectrum::kShortestWavelength, spectrum::kShortestWavelength, spectrum::kShortestWavelength};
-      float3 kMax = {spectrum::kLongestWavelength, spectrum::kLongestWavelength, spectrum::kLongestWavelength};
+      float3 kMin = {kShortestWavelength, kShortestWavelength, kShortestWavelength};
+      float3 kMax = {kLongestWavelength, kLongestWavelength, kLongestWavelength};
       float3 kMinSpan = {0.5f, 0.5f, 0.5f};
-      float3 kMaxSpan = {spectrum::kWavelengthCount, spectrum::kWavelengthCount, spectrum::kWavelengthCount};
+      float3 kMaxSpan = {kWavelengthCount, kWavelengthCount, kWavelengthCount};
       result.set_float3("thinfilm_rgb", thinfilm_rgb, "Wavelengths", {kMin, kMax});
       result.set_float3("thinfilm_span", thinfilm_span, "Wavelengths Span", {kMinSpan, kMaxSpan});
       // result.add(0.0f, _private->thinfilm.max_thickness, 10000.0f, "test_th", "Thickness");
@@ -205,9 +207,9 @@ struct CPUDebugIntegratorImpl : public Task {
     return true;
   }
 
-  static ETX_GPU_CODE RefractiveIndex::Sample make_ior_sample(const SpectralQuery q, SpectralDistribution::Class cls, const SpectralDistribution& eta,
+  static ETX_GPU_CODE RefractiveIndexSample make_ior_sample(const SpectralQuery q, SpectralDistribution::Class cls, const SpectralDistribution& eta,
     const SpectralDistribution& k) {
-    RefractiveIndex::Sample s = {q};
+    RefractiveIndexSample s = {};
     s.cls = cls;
     s.eta = eta(q);
     s.k = k(q);
@@ -424,7 +426,7 @@ struct CPUDebugIntegratorImpl : public Task {
         spds[3] = SpectralDistribution::from_normalized_black_body(12000.0f, 1.0f);
         spds[4] = SpectralDistribution::from_normalized_black_body(20000.0f, 1.0f);
 
-        SpectralDistribution::load_from_file(env().file_in_data("spectrum/emission/d65.spd"), spds[5], nullptr, false);
+        SpectralDistribution::load_from_file(env().file_in_data("spectrum/emission/d65.spd"), spds[5], nullptr, false, string_buffer);
 
         spds[6] = SpectralDistribution::constant(0.5f);
         spds[7] = SpectralDistribution::rgb_reflectance({0.5, 0.5f, 0.5f});
@@ -444,7 +446,7 @@ struct CPUDebugIntegratorImpl : public Task {
         SpectralQuery s_rgb = SpectralQuery::sample();
         value_rgb = (spds[band](s_rgb) / s_rgb.sampling_pdf()).to_rgb();
       } else {
-        constexpr uint64_t kSampleCount = 1;  // spectrum::WavelengthCount;
+        constexpr uint64_t kSampleCount = 1;  // WavelengthCount;
         for (uint64_t i = 0; i < kSampleCount; ++i) {
           SpectralQuery s_s = SpectralQuery::spectral_sample(smp.next());
           auto r = spds[band](s_s);
@@ -459,7 +461,7 @@ struct CPUDebugIntegratorImpl : public Task {
       uint32_t band = static_cast<uint32_t>(clamp(kBandCount * (1.0f - s), 0.0f, kBandCount - 1.0f));
 
       struct IORSPD {
-        SpectralDistribution::Class cls = SpectralDistribution::Class::Invalid;
+        SpectralDistribution::Class cls = SpectralDistribution::Invalid;
         SpectralDistribution eta = {};
         SpectralDistribution k = {};
       };
@@ -469,7 +471,7 @@ struct CPUDebugIntegratorImpl : public Task {
         uint32_t i = 0;
         auto load_ior = [](const char* path) {
           IORSPD ri = {};
-          ri.cls = RefractiveIndex::load_from_file(path, ri.eta, ri.k);
+          ri.cls = SpectralDistribution::load_refractive_index(path, ri.eta, ri.k, string_buffer);
           return ri;
         };
         spds[i++] = load_ior(env().file_in_data("spectrum/dielectric/water.spd"));

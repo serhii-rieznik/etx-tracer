@@ -1,27 +1,19 @@
 #pragma once
 
-#include <etx/render/interop/interop.hxx>
+#include <etx/render/interop/material.hxx>
 #include <etx/render/shared/spectrum.hxx>
 
 namespace etx {
 
-struct SpectralImage {
-  uint32_t spectrum_index = kInvalidIndex;
-  uint32_t image_index = kInvalidIndex;
-};
-
-struct SampledImage {
-  float4 value = {};
-  uint32_t image_index = kInvalidIndex;
-  uint32_t channel = kInvalidIndex;
-};
+using SpectralImage = ::SpectralImage;
+using SampledImage = ::SampledImage;
 
 struct Thinfilm {
   constexpr static const float3 kRGBWavelengths = {610.0f, 537.0f, 450.0f};
   constexpr static const float3 kRGBWavelengthsSpan = {45.0f, 47.0f, 23.5f};
 
   struct Eval {
-    RefractiveIndex::Sample ior;
+    RefractiveIndexSample ior;
     float3 rgb_wavelengths = kRGBWavelengths;
     float thickness = 0.0f;
   };

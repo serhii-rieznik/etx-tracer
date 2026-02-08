@@ -384,7 +384,7 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
 
   int matched_index = -1;
   static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
-  if (ior.cls != SpectralDistribution::Class::Invalid) {
+  if (ior.cls != SpectralDistribution::Invalid) {
     const SpectralDistribution& current_eta = scene.data().spectrum_values[ior.eta_index];
     const SpectralDistribution& current_k = (ior.k_index != kInvalidIndex) ? scene.data().spectrum_values[ior.k_index] : null_spectrum;
     matched_index = data.ior_database.find_matching_index(current_eta, current_k, ior.cls);
@@ -410,13 +410,13 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
       };
 
       std::vector<ColumnInfo> columns;
-      const auto& conductors = data.ior_database.class_entries(SpectralDistribution::Class::Conductor);
+      const auto& conductors = data.ior_database.class_entries(SpectralDistribution::Conductor);
       if (conductors.empty() == false) {
-        columns.push_back({SpectralDistribution::Class::Conductor, "Conductors"});
+        columns.push_back({SpectralDistribution::Conductor, "Conductors"});
       }
-      const auto& dielectrics = data.ior_database.class_entries(SpectralDistribution::Class::Dielectric);
+      const auto& dielectrics = data.ior_database.class_entries(SpectralDistribution::Dielectric);
       if (dielectrics.empty() == false) {
-        columns.push_back({SpectralDistribution::Class::Dielectric, "Dielectrics"});
+        columns.push_back({SpectralDistribution::Dielectric, "Dielectrics"});
       }
 
       if (columns.empty()) {
@@ -475,10 +475,11 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
 
   if (load_from_file) {
     auto filename = open_file("spd");
+    std::string title = {};
     SpectralDistribution t_eta = {};
     SpectralDistribution t_k = {};
-    auto cls = RefractiveIndex::load_from_file(filename.c_str(), t_eta, t_k);
-    if (cls != SpectralDistribution::Class::Invalid) {
+    auto cls = SpectralDistribution::load_refractive_index(filename.c_str(), t_eta, t_k, title);
+    if (cls != SpectralDistribution::Invalid) {
       ior.cls = cls;
       ETX_CRITICAL(ior.eta_index != kInvalidIndex);
       scene.data().spectrum_values[ior.eta_index] = t_eta;
@@ -553,7 +554,7 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
   int matched_index = -1;
   if ((spectrum_index < scene.data().spectrum_values.size())) {
     static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
-    matched_index = data.ior_database.find_matching_index(scene.data().spectrum_values[spectrum_index], null_spectrum, SpectralDistribution::Class::Illuminant);
+    matched_index = data.ior_database.find_matching_index(scene.data().spectrum_values[spectrum_index], null_spectrum, SpectralDistribution::Illuminant);
   }
 
   const char* preview_text = base_label;
@@ -586,7 +587,7 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
 
     bool has_presets = false;
     if (data.ior_database.definitions.empty() == false) {
-      const auto& entries = data.ior_database.class_entries(SpectralDistribution::Class::Illuminant);
+      const auto& entries = data.ior_database.class_entries(SpectralDistribution::Illuminant);
       has_presets = entries.empty() == false;
 
       if (has_presets) {
@@ -637,9 +638,10 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
   if (load_from_file) {
     auto filename = open_file("spd");
     if (filename.empty() == false) {
+      std::string title = {};
       SpectralDistribution loaded = {};
-      auto cls = SpectralDistribution::load_from_file(filename.c_str(), loaded, nullptr, false);
-      if (cls != SpectralDistribution::Class::Invalid) {
+      auto cls = SpectralDistribution::load_from_file(filename.c_str(), loaded, nullptr, false, title);
+      if (cls != SpectralDistribution::Invalid) {
         scene.data().spectrum_values[spectrum_index] = loaded;
         scene.data().spectrum_values[spectrum_index].scale(editor_state.scale);
         matched_index = -1;
