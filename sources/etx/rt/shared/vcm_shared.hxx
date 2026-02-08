@@ -282,7 +282,8 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const Intersection& intersection) {
+ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter& emitter, const VCMPathState& state, const VCMOptions& options,
+  const Intersection& intersection) {
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;
@@ -435,7 +436,7 @@ ETX_SHARED_INLINE bool vcm_handle_sampled_medium(const Scene& scene, const Mediu
 
 ETX_SHARED_INLINE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state) {
   const auto& mat = scene.materials[intersection.material_index];
-  if (mat.cls != Material::Class::Boundary)
+  if (mat.cls != MaterialClass::Boundary)
     return false;
 
   const auto& tri = scene.triangles[intersection.triangle_index];
@@ -460,8 +461,8 @@ ETX_SHARED_INLINE void vcm_update_light_vcm(const Intersection& intersection, VC
   state.path_distance = 0.0f;
 }
 
-ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration, const VCMOptions& options,
-  bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
+ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration,
+  const VCMOptions& options, bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
   if ((options.connect_to_camera() == false) || (state.total_path_depth + 2 > scene.options.max_path_length) || (state.total_path_depth + 2 < scene.options.min_path_length)) {
     return {};
   }
@@ -675,8 +676,9 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
   return tr * state.throughput * scatter * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 }  // namespace etx
 
-ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
-  bool camera_at_medium, const Intersection* camera_isect, const float3& medium_pos, float vm_weight, uint32_t state_medium, float3& target_position, SpectralResponse& value) {
+ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex,
+  const VCMOptions& options, bool camera_at_medium, const Intersection* camera_isect, const float3& medium_pos, float vm_weight, uint32_t state_medium, float3& target_position,
+  SpectralResponse& value) {
   Vertex light_v = light_vertex.is_medium ? Vertex{} : light_vertex.vertex(scene);
   target_position = light_vertex.is_medium ? light_vertex.pos : light_v.pos;
 
@@ -831,7 +833,8 @@ struct ETX_ALIGNED VCMSpatialGridData {
     return cell_index(static_cast<int32_t>(m.x), static_cast<int32_t>(m.y), static_cast<int32_t>(m.z));
   }
 
-  ETX_SHARED_INLINE float3 gather_index(const Scene& scene, const Intersection& intersection, const VCMOptions& options, float vc_weight, uint32_t index, VCMPathState& state) const {
+  ETX_SHARED_INLINE float3 gather_index(const Scene& scene, const Intersection& intersection, const VCMOptions& options, float vc_weight, uint32_t index,
+    VCMPathState& state) const {
     const auto& mat = scene.materials[intersection.material_index];
 
     const auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
@@ -1004,7 +1007,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
     return false;
   }
 
-  if (scene.materials[intersection.material_index].cls == Material::Class::Boundary) {
+  if (scene.materials[intersection.material_index].cls == MaterialClass::Boundary) {
     if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, intersection, state)) {
       // TODO : infinite loop
       return true;
@@ -1036,7 +1039,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   vcm_handle_direct_hit(scene, options, intersection, state);
 
   subsurface::Gather ss_gather = {};
-  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
+  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface_cls != SubsurfaceMaterial::Disabled);
   bool subsurface_sampled = subsurface_path && (subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather) == subsurface::GatherResult::Succeedded);
 
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
@@ -1201,7 +1204,7 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
   vcm_update_light_vcm(intersection, state);
 
   subsurface::Gather ss_gather = {};
-  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled);
+  bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface_cls != SubsurfaceMaterial::Disabled);
   bool subsurface_sampled = subsurface_path && (subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather) == subsurface::GatherResult::Succeedded);
 
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler

@@ -353,7 +353,7 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
     }
 
     const auto& mat = ctx->scene->materials[tri.material_index];
-    if (mat.cls == Material::Class::Void) {
+    if (mat.cls == MaterialClass::Void) {
       *args->valid = 0;
       return;
     }
@@ -405,7 +405,7 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     const auto& scene = *ctx->scene;
     const auto& mat = ctx->scene->materials[tri.material_index];
 
-    if (mat.cls == Material::Class::Void) {
+    if (mat.cls == MaterialClass::Void) {
       *args->valid = 0;
       return;
     }
@@ -447,7 +447,7 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
     const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
     const auto& tri = ctx->scene->triangles[triangle_index];
     const auto& mat = ctx->scene->materials[tri.material_index];
-    if (mat.cls == Material::Class::Void) {
+    if (mat.cls == MaterialClass::Void) {
       *args->valid = 0;
       return;
     }
@@ -500,7 +500,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     const auto v = RTCHitN_v(args->hit, args->N, 0);
     const auto& tri = ctx->scene.triangles[triangle_index];
     const auto& mat = ctx->scene.materials[tri.material_index];
-    if (mat.cls == Material::Class::Void) {
+    if (mat.cls == MaterialClass::Void) {
       *args->valid = 0;
       return;
     }
@@ -508,7 +508,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       *args->valid = 0;
       return;
     }
-    if ((mat.cls != Material::Class::Boundary) || (ctx->intersection_count + 1u >= kIntersectionBufferSize)) {
+    if ((mat.cls != MaterialClass::Boundary) || (ctx->intersection_count + 1u >= kIntersectionBufferSize)) {
       ctx->occlusion_found = 1u;
       *args->valid = -1;
       return;

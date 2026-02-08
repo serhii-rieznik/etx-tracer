@@ -5,6 +5,10 @@
 [[vk::push_constant]] GPURTConstants constants;
 
 static const uint INVALID_INDEX = 0xFFFFFFFFu;
+static const uint MATERIAL_STRIDE = 272u;
+static const uint MATERIAL_SCATTERING_SPECTRUM_INDEX_OFFSET = 16u;
+static const uint SPECTRAL_DISTRIBUTION_STRIDE = 3552u;
+static const uint SPECTRAL_DISTRIBUTION_INTEGRATED_OFFSET = 0u;
 
 uint hash_u32(uint x) {
   x ^= x >> 16;
@@ -42,6 +46,43 @@ TriangleData load_triangle(ByteAddressBuffer buffer, uint triangle_index) {
   result.geo_n = asfloat(b.xyz);
   result.emitter_index = b.w;
   return result;
+}
+
+uint load_material_scattering_spectrum_index(ByteAddressBuffer buffer, uint material_index) {
+  uint base_offset = material_index * MATERIAL_STRIDE;
+  return buffer.Load(base_offset + MATERIAL_SCATTERING_SPECTRUM_INDEX_OFFSET);
+}
+
+float3 load_spectrum_integrated_value(ByteAddressBuffer buffer, uint spectrum_index) {
+  uint base_offset = spectrum_index * SPECTRAL_DISTRIBUTION_STRIDE;
+  return asfloat(buffer.Load3(base_offset + SPECTRAL_DISTRIBUTION_INTEGRATED_OFFSET));
+}
+
+bool has_material_spectrum_buffers() {
+  return (constants.scene.materials != INVALID_INDEX) && (constants.scene.spectrums != INVALID_INDEX);
+}
+
+float3 default_ao_shading(float3 hit_normal, float ao) {
+  float n_dot_up = saturate(dot(hit_normal, float3(0.0f, 1.0f, 0.0f)));
+  float3 base = lerp(float3(0.35f, 0.37f, 0.42f), float3(0.85f, 0.87f, 0.9f), n_dot_up);
+  return base * ao;
+}
+
+float3 material_scattering_integrated_or_fallback(uint material_index, float ao, float3 fallback_color) {
+  if (has_material_spectrum_buffers() == false) {
+    return fallback_color;
+  }
+
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
+  uint scattering_spectrum_index = load_material_scattering_spectrum_index(material_buffer, material_index);
+
+  if (scattering_spectrum_index == INVALID_INDEX) {
+    return fallback_color;
+  }
+
+  float3 scattering_integrated = load_spectrum_integrated_value(spectrum_buffer, scattering_spectrum_index);
+  return max(scattering_integrated, float3(0.0f, 0.0f, 0.0f)) * ao;
 }
 
 float3x3 basis_from_normal(float3 n) {
@@ -155,9 +196,9 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
           uint seed = hash_u32((dtid.x * 73856093u) ^ (dtid.y * 19349663u) ^ (constants.frame_index * 83492791u) ^ (constants.sample_index * 2654435761u));
           float ao = evaluate_ao(as, hit_position, hit_normal, ao_radius, seed);
 
-          float n_dot_up = saturate(dot(hit_normal, float3(0.0f, 1.0f, 0.0f)));
-          float3 base = lerp(float3(0.35f, 0.37f, 0.42f), float3(0.85f, 0.87f, 0.9f), n_dot_up);
-          color = float4(base * ao, 1.0f);
+          float3 shaded = default_ao_shading(hit_normal, ao);
+          shaded = material_scattering_integrated_or_fallback(tri.material_index, ao, shaded);
+          color = float4(shaded, 1.0f);
         } else {
           color = float4(1.0f, 0.0f, 1.0f, 1.0f);
         }

@@ -105,6 +105,7 @@ struct RTApplication {
   Options _options;
   std::vector<std::string> _recent_files = {};
   std::string _current_scene_file = {};
+  bool _scene_updates_locked = false;
   TimeMeasure time_measure = {};
   TimeMeasure scene_commit_time = {};
 };

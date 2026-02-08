@@ -46,30 +46,30 @@ struct ChunkHeader {
 
 inline Material::Class material_string_to_class(const char* s) {
   if (strcmp(s, "diffuse") == 0)
-    return Material::Class::Diffuse;
+    return MaterialClass::Diffuse;
   if (strcmp(s, "translucent") == 0)
-    return Material::Class::Translucent;
+    return MaterialClass::Translucent;
   else if (strcmp(s, "plastic") == 0)
-    return Material::Class::Plastic;
+    return MaterialClass::Plastic;
   else if (strcmp(s, "conductor") == 0)
-    return Material::Class::Conductor;
+    return MaterialClass::Conductor;
   else if (strcmp(s, "dielectric") == 0)
-    return Material::Class::Dielectric;
+    return MaterialClass::Dielectric;
   else if (strcmp(s, "thinfilm") == 0)
-    return Material::Class::Thinfilm;
+    return MaterialClass::Thinfilm;
   else if (strcmp(s, "mirror") == 0)
-    return Material::Class::Mirror;
+    return MaterialClass::Mirror;
   else if (strcmp(s, "boundary") == 0)
-    return Material::Class::Boundary;
+    return MaterialClass::Boundary;
   else if (strcmp(s, "velvet") == 0)
-    return Material::Class::Velvet;
+    return MaterialClass::Velvet;
   else if (strcmp(s, "principled") == 0)
-    return Material::Class::Principled;
+    return MaterialClass::Principled;
   else if (strcmp(s, "void") == 0)
-    return Material::Class::Void;
+    return MaterialClass::Void;
   else {
     log::error("Undefined BSDF: `%s`", s);
-    return Material::Class::Diffuse;
+    return MaterialClass::Diffuse;
   }
 }
 
@@ -1523,7 +1523,7 @@ struct SceneSerializationImpl {
 
     auto& mtl = data.materials[material_index];
 
-    mtl.cls = Material::Class::Diffuse;
+    mtl.cls = MaterialClass::Diffuse;
     mtl.emission = {};
     mtl.emission_collimation = 0.0f;
 
@@ -1925,7 +1925,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "subsurface")) {
-      mtl.subsurface.cls = SubsurfaceMaterial::Class::RandomWalk;
+      mtl.subsurface_cls = SubsurfaceMaterial::RandomWalk;
 
       float subsurface_scale = 1.0f;
       float3 scattering_distances = {1.0f, 0.2f, 0.04f};
@@ -1936,7 +1936,7 @@ struct SceneSerializationImpl {
       for (uint64_t i = 0, e = params.size(); i < e; ++i) {
         if ((strcmp(params[i], "path") == 0) && (i + 1 < e)) {
           bool is_refraction = (strcmp(params[i + 1], "refracted") == 0) || (strcmp(params[i + 1], "refraction") == 0) || (strcmp(params[i + 1], "refract") == 0);
-          mtl.subsurface.path = is_refraction ? SubsurfaceMaterial::Path::Refracted : SubsurfaceMaterial::Path::Diffuse;
+          mtl.subsurface_path = is_refraction ? SubsurfaceMaterial::RefractedPath : SubsurfaceMaterial::DiffusePath;
         }
 
         if ((strcmp(params[i], "distances") == 0) && (i + 3 < e)) {

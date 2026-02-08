@@ -503,14 +503,10 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       log::warning("Shader preprocessing diagnostics [%s]:\n%s", source_name.empty() ? "<memory>" : source_name.c_str(), filtered_preprocess_diagnostics.c_str());
     }
 
-    if (FAILED(preprocess_status)) {
-      if (filtered_preprocess_diagnostics.empty() == false) {
-        result.result = RHIResult::ValidationError;
-        result.error_message = filtered_preprocess_diagnostics;
-        return result;
-      }
-
-      log::warning("Shader preprocessing status failed for [%s] with only suppressed diagnostics, continuing", source_name.empty() ? "<memory>" : source_name.c_str());
+    if (FAILED(preprocess_status) && (filtered_preprocess_diagnostics.empty() == false)) {
+      result.result = RHIResult::ValidationError;
+      result.error_message = filtered_preprocess_diagnostics;
+      return result;
     }
 
     ComPtr<IDxcBlobUtf8> canonical_hlsl_blob;

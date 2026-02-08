@@ -76,7 +76,7 @@ ETX_SHARED_INLINE GatherResult gather_rw(SpectralQuery spect, const Scene& scene
   }
 
   Ray ray = {};
-  ray.d = mat.subsurface.path == SubsurfaceMaterial::Path::Diffuse ? sample_cosine_distribution(smp.next_2d(), -in_intersection.nrm, 1.0f) : in_intersection.w_i;
+  ray.d = mat.subsurface_path == SubsurfaceMaterial::DiffusePath ? sample_cosine_distribution(smp.next_2d(), -in_intersection.nrm, 1.0f) : in_intersection.w_i;
   ray.min_t = kRayEpsilon;
   ray.o = shading_pos(scene, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d);
   ray.max_t = kMaxFloat;
@@ -214,14 +214,10 @@ ETX_SHARED_INLINE GatherResult gather_cb(SpectralQuery spect, const Scene& scene
 
 template <class RT>
 ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
-  const auto& mtl = scene.materials[in_intersection.material_index].subsurface;
+  if (scene.materials[in_intersection.material_index].subsurface_cls == SubsurfaceMaterial::ChristensenBurley)
+    return gather_cb(spect, scene, in_intersection, rt, smp, result);
 
-  switch (mtl.cls) {
-    case SubsurfaceMaterial::Class::ChristensenBurley:
-      return gather_cb(spect, scene, in_intersection, rt, smp, result);
-    default:
-      return gather_rw(spect, scene, in_intersection, rt, smp, result);
-  }
+  return gather_rw(spect, scene, in_intersection, rt, smp, result);
 }
 
 }  // namespace subsurface
@@ -352,7 +348,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
 
-  if (mat.cls == Material::Class::Boundary) {
+  if (mat.cls == MaterialClass::Boundary) {
     payload.medium = (dot(intersection.nrm, payload.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
     payload.ray.o = shading_pos(scene, tri, intersection.barycentric, payload.ray.d);
     payload.ray.max_t = kMaxFloat;
@@ -383,7 +379,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, payload.smp);
   payload.smp.pop_fixed();
 
-  bool subsurface_path = (mat.subsurface.cls != SubsurfaceMaterial::Class::Disabled) &&  //
+  bool subsurface_path = (mat.subsurface_cls != SubsurfaceMaterial::Disabled) &&  //
                          (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
 
   // uint8_t ss_gather_data[sizeof(subsurface::Gather)];

@@ -489,12 +489,12 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
   }
 
   if (type == "lambert" || type == "oren_nayar") {
-    mtl.cls = Material::Class::Diffuse;
+    mtl.cls = MaterialClass::Diffuse;
     tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     float rough = b.value("roughness", 0.0f);
     mtl.roughness.value = {rough, rough};
   } else if ((type == "plastic") || (type == "rough_plastic")) {
-    mtl.cls = Material::Class::Plastic;
+    mtl.cls = MaterialClass::Plastic;
     tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     float rough = b.value("roughness", 0.0f);
     mtl.roughness.value = {rough, rough};
@@ -503,16 +503,16 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
     set_dielectric_ior(mtl, name, b, data, database);
   } else if (type == "mirror") {
-    mtl.cls = Material::Class::Mirror;
+    mtl.cls = MaterialClass::Mirror;
     tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     mtl.roughness.value = {0.0f, 0.0f};
     mtl.metalness.value = {1.0f, 1.0f};
   } else if (type == "thinsheet") {
-    mtl.cls = Material::Class::Thinfilm;
+    mtl.cls = MaterialClass::Thinfilm;
     tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     set_dielectric_ior(mtl, name, b, data, database);
   } else if ((type == "conductor") || (type == "rough_conductor")) {
-    mtl.cls = Material::Class::Conductor;
+    mtl.cls = MaterialClass::Conductor;
     tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
     float rough = b.value("roughness", 0.0f);
     mtl.roughness.value = {rough, rough};
@@ -521,7 +521,7 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     if (mat_name.empty() == false)
       set_conductor_ior(mtl, mat_name, data, database);
   } else if ((type == "dielectric") || (type == "rough_dielectric")) {
-    mtl.cls = Material::Class::Dielectric;
+    mtl.cls = MaterialClass::Dielectric;
     set_dielectric_ior(mtl, name, b, data, database);
     mtl.transmission.value = {1.0f, 1.0f, 1.0f, 1.0f};
     mtl.roughness.value = {b.value("roughness", 0.0f), b.value("roughness", 0.0f)};
@@ -531,7 +531,7 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     mtl.scattering.image_index = kInvalidIndex;
     tungsten_set_transmission(mtl, tungsten_albedo_json(b), data, base_dir);
   } else if (type == "transparency") {
-    mtl.cls = Material::Class::Boundary;
+    mtl.cls = MaterialClass::Boundary;
     mtl.transmission.value = {1.0f, 1.0f, 1.0f, 1.0f};
     mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
     mtl.reflectance.image_index = kInvalidIndex;
@@ -546,7 +546,7 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
       }
     }
   } else {
-    mtl.cls = Material::Class::Diffuse;
+    mtl.cls = MaterialClass::Diffuse;
     tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
   }
 

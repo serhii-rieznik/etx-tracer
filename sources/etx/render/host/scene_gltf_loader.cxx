@@ -398,7 +398,7 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
       }
     }
 
-    mtl.cls = is_unlit ? Material::Class::Diffuse : Material::Class::Principled;
+    mtl.cls = is_unlit ? MaterialClass::Diffuse : MaterialClass::Principled;
     mtl.ext_ior.cls = SpectralDistribution::Dielectric;
     mtl.ext_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
     mtl.ext_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));

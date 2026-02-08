@@ -94,8 +94,8 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "void",
     "undefined",
   };
-  static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(Material::Class::Count) + 1);
-  *str = cls < Material::Class::Count ? names[uint32_t(cls)] : "undefined";
+  static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(MaterialClass::Count) + 1);
+  *str = cls < MaterialClass::Count ? names[uint32_t(cls)] : "undefined";
 }
 
 const char* material_class_to_string(Material::Class cls) {
@@ -166,17 +166,17 @@ struct SceneRepresentationImpl {
     data.defaults.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
     data.materials[data.defaults.subsurface_scatter_material].reflectance = {.spectrum_index = data.defaults.black_spectrum};
     data.materials[data.defaults.subsurface_scatter_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
-    data.materials[data.defaults.subsurface_scatter_material].cls = Material::Class::Translucent;
+    data.materials[data.defaults.subsurface_scatter_material].cls = MaterialClass::Translucent;
 
     data.defaults.subsurface_exit_material = data.add_material("etx::subsurface-exit");
     data.materials[data.defaults.subsurface_exit_material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
     data.materials[data.defaults.subsurface_exit_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
-    data.materials[data.defaults.subsurface_exit_material].cls = Material::Class::Diffuse;
+    data.materials[data.defaults.subsurface_exit_material].cls = MaterialClass::Diffuse;
 
     data.defaults.missing_material = data.add_material("etx::missing");
     data.materials[data.defaults.missing_material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
     data.materials[data.defaults.missing_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
-    data.materials[data.defaults.missing_material].cls = Material::Class::Diffuse;
+    data.materials[data.defaults.missing_material].cls = MaterialClass::Diffuse;
   }
 
   void cleanup() {
@@ -223,7 +223,7 @@ struct SceneRepresentationImpl {
         }
         if (mtl.int_ior.eta_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          if (mtl.cls == Material::Class::Conductor) {
+          if (mtl.cls == MaterialClass::Conductor) {
             mtl.int_ior.cls = SpectralDistribution::Conductor;
             mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
           } else {
@@ -233,7 +233,7 @@ struct SceneRepresentationImpl {
         }
         if (mtl.int_ior.k_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          if (mtl.cls == Material::Class::Conductor) {
+          if (mtl.cls == MaterialClass::Conductor) {
             mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
           } else {
             mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
@@ -695,7 +695,7 @@ const SceneRepresentation::CameraMapping& SceneRepresentation::camera_mapping() 
 uint32_t SceneRepresentation::add_material(const char* name) {
   uint32_t index = _private->data.add_material(name);
   auto& mat = _private->data.materials[index];
-  mat.cls = Material::Class::Diffuse;
+  mat.cls = MaterialClass::Diffuse;
   mat.reflectance.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
   mat.scattering.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
   mat.emission.spectrum_index = _private->data.add_spectrum(SpectralDistribution::constant(0.0f));
@@ -1642,7 +1642,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "material class " << material_class_to_string(material.cls) << "\n";
 
     write_spectrum_line(materials_stream, "Kd", material.scattering.spectrum_index, true);
-    if ((material.cls == Material::Class::Dielectric) || (material.cls == Material::Class::Translucent) || (material.transmission.value.x > kEpsilon)) {
+    if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Translucent) || (material.transmission.value.x > kEpsilon)) {
       write_spectrum_line(materials_stream, "Kt", material.scattering.spectrum_index, true);
     }
     write_spectrum_line(materials_stream, "Ks", material.reflectance.spectrum_index, true);
@@ -1761,12 +1761,12 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       materials_stream << "\n";
     }
 
-    if (material.subsurface.cls != SubsurfaceMaterial::Class::Disabled) {
+    if (material.subsurface_cls != SubsurfaceMaterial::Disabled) {
       materials_stream << "subsurface";
-      if (material.subsurface.cls == SubsurfaceMaterial::Class::ChristensenBurley) {
+      if (material.subsurface_cls == SubsurfaceMaterial::ChristensenBurley) {
         materials_stream << " class approximate";
       }
-      if (material.subsurface.path == SubsurfaceMaterial::Path::Refracted) {
+      if (material.subsurface_path == SubsurfaceMaterial::RefractedPath) {
         materials_stream << " path refracted";
       }
       float3 subsurface_color = spectrum_rgb(material.subsurface.spectrum_index);

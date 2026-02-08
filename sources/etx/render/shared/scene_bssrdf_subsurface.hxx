@@ -53,8 +53,8 @@ ETX_SHARED_INLINE float sample_s_r(float rnd) {
   return 3.0f * logf(1.0f / (1.0f - rnd));
 }
 
-ETX_SHARED_INLINE SpectralResponse evaluate(const SpectralQuery spect, const Scene& scene, const Intersection& data, const SubsurfaceMaterial& m, float radius) {
-  auto sd = apply_image(spect, m, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse evaluate(const SpectralQuery spect, const Scene& scene, const Intersection& data, const SpectralImage& subsurface_mtl, float radius) {
+  auto sd = apply_image(spect, subsurface_mtl, data.tex, scene, nullptr);
   ETX_VALIDATE(sd);
 
   radius = fmaxf(radius, kEpsilon);
@@ -86,8 +86,8 @@ struct Sample {
   }
 };
 
-ETX_SHARED_INLINE Sample sample(SpectralQuery spect, const Scene& scene, const Vertex& data, const SubsurfaceMaterial& mtl, const uint32_t direction, Sampler& smp) {
-  SpectralResponse sampled_distance = apply_image(spect, mtl, data.tex, scene, nullptr);
+ETX_SHARED_INLINE Sample sample(SpectralQuery spect, const Scene& scene, const Vertex& data, const SpectralImage& subsurface_mtl, const uint32_t direction, Sampler& smp) {
+  SpectralResponse sampled_distance = apply_image(spect, subsurface_mtl, data.tex, scene, nullptr);
   uint32_t channel = uint32_t(sampled_distance.component_count() * smp.next());
   float scattering_distance = sampled_distance.component(channel);
   if (scattering_distance == 0.0f)

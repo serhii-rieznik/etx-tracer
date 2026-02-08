@@ -1132,7 +1132,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   };
 
   with_section(0, "Surface Basics", [&]() {
-    if (material.has_diffuse()) {
+    if (material_has_diffuse(material)) {
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       int dv = static_cast<int>(material.diffuse_variation);
       if (ImGui::Combo("##diff_var", &dv, "Diffuse: Lambert\0Diffuse: Microfacet\0Diffuse: vMF\0")) {
@@ -1192,7 +1192,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       }
     }
 
-    if (material.cls == Material::Class::Principled) {
+    if (material.cls == MaterialClass::Principled) {
       ImGui::Spacing();
       float metal = material.metalness.value.x;
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -1264,9 +1264,9 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   with_section(3, "Scattering & Media", [&]() {
     ImGui::TextDisabled("Subsurface Scattering");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface.cls), "Disabled\0Random Walk\0Christensen-Burley\0");
+    changed |= ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface_cls), "Disabled\0Random Walk\0Christensen-Burley\0");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface.path), "Diffuse Transmittance\0Refraction\0");
+    changed |= ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface_path), "Diffuse Transmittance\0Refraction\0");
     changed |= spectrum_picker(scene_rep, "Subsurface Distance", material.subsurface.spectrum_index, true, true);
 
     ImGui::Spacing();
@@ -2161,12 +2161,12 @@ bool UI::build_material_class_selector(Material& material) {
     };
 
     uint32_t column_index = 0u;
-    draw_material_column(column_index++, "Primary", {Material::Class::Diffuse, Material::Class::Plastic, Material::Class::Conductor, Material::Class::Dielectric});
+    draw_material_column(column_index++, "Primary", {MaterialClass::Diffuse, MaterialClass::Plastic, MaterialClass::Conductor, MaterialClass::Dielectric});
     ImGui::NextColumn();
     draw_material_column(column_index++, "Specialized",
-      {Material::Class::Principled, Material::Class::Translucent, Material::Class::Thinfilm, Material::Class::Velvet, Material::Class::Mirror});
+      {MaterialClass::Principled, MaterialClass::Translucent, MaterialClass::Thinfilm, MaterialClass::Velvet, MaterialClass::Mirror});
     ImGui::NextColumn();
-    draw_material_column(column_index++, "Interfaces", {Material::Class::Boundary, Material::Class::Void});
+    draw_material_column(column_index++, "Interfaces", {MaterialClass::Boundary, MaterialClass::Void});
 
     ImGui::Columns(1);
     ImGui::EndPopup();

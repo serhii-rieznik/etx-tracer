@@ -346,7 +346,7 @@ ETX_SHARED_INLINE float fresnel_thinfilm(float wavelength, const float cos_theta
 }
 
 ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
-  const Thinfilm::Eval& thinfilm) {
+  const ThinFilmEval& thinfilm) {
   ETX_ASSERT(spect.wavelength == ext_ior.wavelength);
   ETX_ASSERT(spect.wavelength == int_ior.wavelength);
 
@@ -359,7 +359,8 @@ ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_thet
     if ((thinfilm.thickness == 0.0f) || spectral_response_is_zero(thinfilm.ior.eta)) {
       value = fresnel_generic(cos_theta, ext_ior.as_complex(), int_ior.as_complex());
     } else {
-      value = fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), thinfilm.ior.as_complex(), int_ior.as_complex(), thinfilm.thickness);
+      value =
+        fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), refractive_index_sample_as_complex_spectral(thinfilm.ior), int_ior.as_complex(), thinfilm.thickness);
     }
     result.value = saturate(value);
   } else {
@@ -372,9 +373,12 @@ ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_thet
         values = xyz_to_rgb(values) * SpectralDistribution::kRGBLuminanceScale;
       }
     } else {
-      values.x = fresnel_thinfilm(thinfilm.rgb_wavelengths.x, cos_theta, ext_ior.as_complex_x(), thinfilm.ior.as_complex_x(), int_ior.as_complex_x(), thinfilm.thickness);
-      values.y = fresnel_thinfilm(thinfilm.rgb_wavelengths.y, cos_theta, ext_ior.as_complex_y(), thinfilm.ior.as_complex_y(), int_ior.as_complex_y(), thinfilm.thickness);
-      values.z = fresnel_thinfilm(thinfilm.rgb_wavelengths.z, cos_theta, ext_ior.as_complex_z(), thinfilm.ior.as_complex_z(), int_ior.as_complex_z(), thinfilm.thickness);
+      values.x = fresnel_thinfilm(thinfilm.rgb_wavelengths.x, cos_theta, ext_ior.as_complex_x(), refractive_index_sample_as_complex_x(thinfilm.ior), int_ior.as_complex_x(),
+        thinfilm.thickness);
+      values.y = fresnel_thinfilm(thinfilm.rgb_wavelengths.y, cos_theta, ext_ior.as_complex_y(), refractive_index_sample_as_complex_y(thinfilm.ior), int_ior.as_complex_y(),
+        thinfilm.thickness);
+      values.z = fresnel_thinfilm(thinfilm.rgb_wavelengths.z, cos_theta, ext_ior.as_complex_z(), refractive_index_sample_as_complex_z(thinfilm.ior), int_ior.as_complex_z(),
+        thinfilm.thickness);
     }
     result.integrated = saturate(values);
   }

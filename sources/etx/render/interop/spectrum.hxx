@@ -109,3 +109,19 @@ ETX_SHARED_INLINE SpectralResponse spectral_response_div(ETX_IN(SpectralResponse
 
   return spectral_response_make(a.integrated / b.integrated);
 }
+
+ETX_SHARED_INLINE complex refractive_index_sample_as_complex_spectral(ETX_IN(RefractiveIndexSample, value)) {
+  return make_complex(value.eta.value, value.k.value);
+}
+
+ETX_SHARED_INLINE complex refractive_index_sample_as_complex_x(ETX_IN(RefractiveIndexSample, value)) {
+  return make_complex(value.eta.integrated.x, value.k.integrated.x);
+}
+
+ETX_SHARED_INLINE complex refractive_index_sample_as_complex_y(ETX_IN(RefractiveIndexSample, value)) {
+  return make_complex(value.eta.integrated.y, value.k.integrated.y);
+}
+
+ETX_SHARED_INLINE complex refractive_index_sample_as_complex_z(ETX_IN(RefractiveIndexSample, value)) {
+  return make_complex(value.eta.integrated.z, value.k.integrated.z);
+}

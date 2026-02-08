@@ -59,23 +59,6 @@ using char4 = byte4;
 using uchar2 = ubyte2;
 using uchar3 = ubyte3;
 using uchar4 = ubyte4;
-using complex = std::complex<float>;
-
-ETX_SHARED_INLINE complex complex_sqrt(complex c) {
-  return std::sqrt(c);
-}
-ETX_SHARED_INLINE complex complex_cos(complex c) {
-  return std::cos(c);
-}
-ETX_SHARED_INLINE complex complex_exp(complex c) {
-  return std::exp(c);
-}
-ETX_SHARED_INLINE float complex_abs(complex c) {
-  return std::abs(c);
-}
-ETX_SHARED_INLINE float complex_norm(complex c) {
-  return std::norm(c);
-}
 
 template <class t>
 ETX_SHARED_INLINE constexpr t min(t a, t b) {
@@ -856,10 +839,6 @@ ETX_SHARED_INLINE bool value_is_correct(const float4& v) {
   return value_is_correct(v.x) && value_is_correct(v.y) && value_is_correct(v.z) && value_is_correct(v.w);
 }
 
-ETX_SHARED_INLINE bool value_is_correct(const complex& v) {
-  return value_is_correct(v.real()) && value_is_correct(v.imag());
-}
-
 ETX_SHARED_INLINE bool is_valid_vector(const float3& v) {
   return value_is_correct(v) && (dot(v, v) > 0.0f);
 }
@@ -874,14 +853,6 @@ ETX_SHARED_INLINE bool isfinite(const float3& v) {
 
 ETX_SHARED_INLINE bool isfinite(const float4& v) {
   return isfinite(v.x) && isfinite(v.y) && isfinite(v.z) && valid_value(v.w);
-}
-
-ETX_SHARED_INLINE bool valid_value(complex t) {
-  return isfinite(t.real()) && isfinite(t.imag());
-}
-
-ETX_SHARED_INLINE bool isfinite(complex t) {
-  return isfinite(t.real()) && isfinite(t.imag());
 }
 
 ETX_SHARED_INLINE float to_float(uint32_t value) {

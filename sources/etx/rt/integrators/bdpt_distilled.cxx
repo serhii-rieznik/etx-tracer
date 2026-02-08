@@ -455,7 +455,7 @@ struct BDPTDistilledImpl : public Task {
       rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4);
     }
 
-    if (scene.materials[a_intersection.material_index].cls == Material::Class::Boundary) {
+    if (scene.materials[a_intersection.material_index].cls == MaterialClass::Boundary) {
       const auto& m = scene.materials[a_intersection.material_index];
       const auto& tri = scene.triangles[a_intersection.triangle_index];
       payload.medium_index = (dot(tri.geo_n, ray.d) < 0.0f) ? m.int_medium : m.ext_medium;
@@ -479,8 +479,8 @@ struct BDPTDistilledImpl : public Task {
 
     ETX_VALIDATE(bsdf_sample.weight);
 
-    bool subsurface_path = (subsurface_exit == false) &&                                                                              //
-                           (scene.materials[a_intersection.material_index].subsurface.cls != SubsurfaceMaterial::Class::Disabled) &&  //
+    bool subsurface_path = (subsurface_exit == false) &&                                                                       //
+                           (scene.materials[a_intersection.material_index].subsurface_cls != SubsurfaceMaterial::Disabled) &&  //
                            (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
 
     uint32_t material_index = a_intersection.material_index;
@@ -498,7 +498,7 @@ struct BDPTDistilledImpl : public Task {
         medium_instance = subsurface_to_medium_instance(material_index, payload, a_intersection);
       }
 
-      const bool diffuse_transmission = sss_material.subsurface.path == SubsurfaceMaterial::Path::Diffuse;
+      const bool diffuse_transmission = sss_material.subsurface_path == SubsurfaceMaterial::DiffusePath;
       auto w_o = diffuse_transmission ? sample_cosine_distribution(smp.next_2d(), -a_intersection.nrm, 1.0f) : a_intersection.w_i;
 
       bsdf_sample.w_o = w_o;

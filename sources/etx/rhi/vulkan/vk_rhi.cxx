@@ -410,28 +410,35 @@ RHIResult VKContext::wait_idle() {
 }
 
 void VKContext::begin_frame() {
+  ETX_PROFILER_SCOPE();
   if (_impl->swapchain == VK_NULL_HANDLE) {
     return;
   }
 
-  if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &_impl->in_flight_fences[_impl->current_frame], VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
-    return;
+  {
+    ETX_PROFILER_NAMED_SCOPE("vkWaitForFences");
+    if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &_impl->in_flight_fences[_impl->current_frame], VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
+      return;
+    }
   }
 
-  // Set current frame index for staging buffer allocations
-  _impl->device.set_current_frame_index(_impl->current_frame);
-  // After fence wait, it's safe to reset this frame's staging buffer region
-  // GPU has finished reading from it in previous cycle
-  _impl->device.reset_staging_buffer_for_frame(_impl->current_frame);
+  {
+    ETX_PROFILER_NAMED_SCOPE("reset");
+    _impl->device.set_current_frame_index(_impl->current_frame);
+    _impl->device.reset_staging_buffer_for_frame(_impl->current_frame);
+    etx_vk_call(vkResetCommandPool(_impl->device.get_vk_device(), _impl->device.get_vk_command_pool(_impl->current_frame), VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
+    _impl->command_buffer_pool.clear();
+  }
 
-  etx_vk_call(vkResetCommandPool(_impl->device.get_vk_device(), _impl->device.get_vk_command_pool(_impl->current_frame), VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
+  VkResult result = VK_SUCCESS;
+  {
+    ETX_PROFILER_NAMED_SCOPE("vkAcquireNextImageKHR");
+    result = etx_vk_call(vkAcquireNextImageKHR(_impl->device.get_vk_device(), _impl->swapchain, UINT64_MAX,
+      _impl->device.get_vk_semaphore(_impl->image_available_semaphores[_impl->current_frame]), VK_NULL_HANDLE, &_impl->current_swapchain_image));
+  }
 
-  _impl->command_buffer_pool.clear();
-
-  VkResult result = etx_vk_call(vkAcquireNextImageKHR(_impl->device.get_vk_device(), _impl->swapchain, UINT64_MAX,
-    _impl->device.get_vk_semaphore(_impl->image_available_semaphores[_impl->current_frame]), VK_NULL_HANDLE, &_impl->current_swapchain_image));
-
-  if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+  if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
+    ETX_PROFILER_NAMED_SCOPE("Re-create swapchain");
     if (!_impl->in_flight_fences.empty()) {
       etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
     }
@@ -458,7 +465,10 @@ void VKContext::begin_frame() {
     return;
   }
 
-  etx_vk_call(vkResetFences(_impl->device.get_vk_device(), 1, &_impl->in_flight_fences[_impl->current_frame]));
+  {
+    ETX_PROFILER_NAMED_SCOPE("vkResetFences");
+    etx_vk_call(vkResetFences(_impl->device.get_vk_device(), 1, &_impl->in_flight_fences[_impl->current_frame]));
+  }
 }
 
 RHISemaphore VKContext::get_image_acquired_semaphore() {
@@ -482,6 +492,7 @@ uint32_t VKContext::get_sampler_index(RHISamplerType type) const {
 }
 
 RHICommandBuffer VKContext::get_command_buffer() {
+  ETX_PROFILER_SCOPE();
   uint32_t index = _impl->command_buffer_pool.allocate_index();
   auto& cmd = _impl->command_buffer_pool.get_data(index);
   cmd.initialize(this, _impl->current_frame);

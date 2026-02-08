@@ -205,7 +205,7 @@ ETX_SHARED_INLINE float3 sampleVNDF(Sampler& smp, const float3& wi, const float2
 }
 
 ETX_SHARED_INLINE SpectralResponse phase_function_reflection(SpectralQuery spect, const RayInfo& ray, const float3& wo, const float2& alpha, const RefractiveIndexSample& ext_ior,
-  const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
+  const RefractiveIndexSample& int_ior, const ThinFilmEval& thinfilm) {
   if (ray.w.z > 0.9999f)
     return {spect, 0.0f};
 
@@ -239,7 +239,7 @@ ETX_SHARED_INLINE SpectralResponse phase_function_reflection(SpectralQuery spect
 }
 
 ETX_SHARED_INLINE float3 samplePhaseFunction_conductor(SpectralQuery spect, const float2& slope_rnd, const float3& wi, const float2& alpha, const RefractiveIndexSample& ext_ior,
-  const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm, SpectralResponse& weight) {
+  const RefractiveIndexSample& int_ior, const ThinFilmEval& thinfilm, SpectralResponse& weight) {
   // sample D_wi
   // stretch to match configuration with alpha=1.0
   const float3 wi_11 = normalize(float3{alpha.x * wi.x, alpha.y * wi.y, wi.z});
@@ -279,7 +279,7 @@ ETX_SHARED_INLINE float MISweight_conductor(const float3& wi, const float3& wo, 
 }
 
 ETX_SHARED_INLINE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const float2& alpha, const RefractiveIndexSample& ext_ior,
-  const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
+  const RefractiveIndexSample& int_ior, const ThinFilmEval& thinfilm) {
   if (wi.z <= 0 || wo.z <= 0)
     return {spect, 0.0f};
 
@@ -375,7 +375,7 @@ ETX_SHARED_INLINE float3 refract(const float3& wi, const float3& wm, const float
 
 // by convention, ray is always outside
 ETX_SHARED_INLINE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery spect, const RayInfo& ray, const float3& wo, const bool reflection,
-  const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm, const float2& alpha) {
+  const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinFilmEval& thinfilm, const float2& alpha) {
   if (ray.w.z > 0.9999f)
     return {spect, 0.0f};
 
@@ -411,7 +411,7 @@ struct DielectricSample {
 };
 
 ETX_SHARED_INLINE DielectricSample samplePhaseFunction_dielectric(const SpectralQuery spect, const float2& rnd_slope, const float rnd_reflection, const float3& wi,
-  const float2& alpha, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
+  const float2& alpha, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinFilmEval& thinfilm) {
   // stretch to match configuration with alpha=1.0
   const float3 wi_11 = normalize(float3{alpha.x * wi.x, alpha.y * wi.y, wi.z});
 
@@ -464,7 +464,7 @@ ETX_SHARED_INLINE float MISweight_dielectric(const float3& wi, const float3& wo,
 }
 
 ETX_SHARED_INLINE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const bool wo_outside, const float2& alpha,
-  const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
+  const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinFilmEval& thinfilm) {
   if ((wi.z <= 0) || (wo.z <= 0 && wo_outside) || (wo.z >= 0 && !wo_outside))
     return {spect, 0.0f};
 

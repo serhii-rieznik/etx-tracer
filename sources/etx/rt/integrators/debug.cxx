@@ -64,8 +64,8 @@ struct CPUDebugIntegratorImpl : public Task {
   float th_factor = 1.0f;
   float th_min = 0.0f;
   float th_max = 1.0f;
-  float3 thinfilm_rgb = Thinfilm::kRGBWavelengths;
-  float3 thinfilm_span = Thinfilm::kRGBWavelengthsSpan;
+  float3 thinfilm_rgb = kRGBWavelengths;
+  float3 thinfilm_span = kRGBWavelengthsSpan;
   uint32_t random_iteration = 0u;
   uint32_t random_dimension = 0u;
 
@@ -405,7 +405,7 @@ struct CPUDebugIntegratorImpl : public Task {
       };
 
       SpectralQuery q_s = thinfilm_spectral ? SpectralQuery::spectral_sample(smp.next()) : SpectralQuery::sample();
-      Thinfilm::Eval thinfilm_eval_s = {};
+      ThinFilmEval thinfilm_eval_s = {};
       thinfilm_eval_s.ior = make_ior_sample(q_s, thinfilm.ior.cls, spd_film_eta, spd_film_k);
       thinfilm_eval_s.rgb_wavelengths = local_wl;
       thinfilm_eval_s.thickness = thickness;

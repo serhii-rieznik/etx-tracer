@@ -62,11 +62,7 @@ struct ETX_ALIGNED GPUScene {
   uint32_t emitter_profiles;
   uint32_t emitter_instances;
   uint32_t scene_globals;
-
-  // TODO: Material is not a stable direct GPU ABI type. Add packed GPUMaterial[] first.
   uint32_t materials;
-
-  // TODO: SpectralDistribution should be packed to GPU-specific spectral representation.
   uint32_t spectrums;
 
   // TODO: Image contains pointer-based views and nested distributions. Split into packed image metadata + raw tables.

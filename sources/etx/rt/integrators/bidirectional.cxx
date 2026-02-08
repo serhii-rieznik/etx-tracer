@@ -30,7 +30,7 @@ struct PathVertex {
     float ratio = 0.0f;
   } pdf;
 
-  Material::Class material = Material::Class::Count;
+  uint32_t material = MaterialClass::Undefined;
   Class cls = Class::Invalid;
   bool connectible = true;
   bool mis_connectible = true;
@@ -514,7 +514,7 @@ struct CPUBidirectionalImpl : public Task {
     path_data.emitter_path_size += uint32_t(payload.mode == PathSource::Light);
 
     curr = PathVertex{medium_sample_pos, ray.d, medium_instance};
-    curr.material = Material::Class::Undefined;
+    curr.material = MaterialClass::Undefined;
     curr.connectible = true;
     curr.mis_connectible = prev.connectible;
     curr.throughput = payload.throughput;
@@ -549,7 +549,7 @@ struct CPUBidirectionalImpl : public Task {
       rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4);
     }
 
-    if (scene.materials[a_intersection.material_index].cls == Material::Class::Boundary) {
+    if (scene.materials[a_intersection.material_index].cls == MaterialClass::Boundary) {
       const auto& m = scene.materials[a_intersection.material_index];
       const auto& tri = scene.triangles[a_intersection.triangle_index];
       payload.medium_index = (dot(tri.geo_n, ray.d) < 0.0f) ? m.int_medium : m.ext_medium;
@@ -573,8 +573,8 @@ struct CPUBidirectionalImpl : public Task {
 
     ETX_VALIDATE(bsdf_sample.weight);
 
-    bool subsurface_path = (subsurface_exit == false) &&                                                                              //
-                           (scene.materials[a_intersection.material_index].subsurface.cls != SubsurfaceMaterial::Class::Disabled) &&  //
+    bool subsurface_path = (subsurface_exit == false) &&                                                                       //
+                           (scene.materials[a_intersection.material_index].subsurface_cls != SubsurfaceMaterial::Disabled) &&  //
                            (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
 
     uint32_t material_index = a_intersection.material_index;
@@ -592,7 +592,7 @@ struct CPUBidirectionalImpl : public Task {
         medium_instance = subsurface_to_medium_instance(material_index, payload, a_intersection);
       }
 
-      const bool diffuse_transmission = sss_material.subsurface.path == SubsurfaceMaterial::Path::Diffuse;
+      const bool diffuse_transmission = sss_material.subsurface_path == SubsurfaceMaterial::DiffusePath;
       auto w_o = diffuse_transmission ? sample_cosine_distribution(smp.next_2d(), -a_intersection.nrm, 1.0f) : a_intersection.w_i;
 
       bsdf_sample.w_o = w_o;

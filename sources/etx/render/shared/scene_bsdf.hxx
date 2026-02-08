@@ -2,8 +2,8 @@
 
 namespace etx {
 
-#define ETX_DECLARE_BSDF(Class)                                                                                  \
-  namespace Class##BSDF {                                                                                        \
+#define ETX_DECLARE_BSDF(Class)                                                                                       \
+  namespace Class##BSDF {                                                                                             \
     ETX_SHARED_INLINE BSDFSample sample(const BSDFData&, const Material&, const Scene&, Sampler&);                    \
     ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&); \
     ETX_SHARED_INLINE float pdf(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&);         \
@@ -24,7 +24,7 @@ ETX_DECLARE_BSDF(Principled)
 ETX_DECLARE_BSDF(Void);
 
 #define CASE_IMPL(CLS, FUNC, ...) \
-  case Material::Class::CLS:      \
+  case MaterialClass::CLS:        \
     return CLS##BSDF::FUNC(__VA_ARGS__)
 
 #define CASE_IMPL_SAMPLE(A)   CASE_IMPL(A, sample, data, mtl, scene, smp)
@@ -107,7 +107,7 @@ namespace bsdf {
 #undef CASE_IMPL
 }  // namespace bsdf
 
-ETX_SHARED_INLINE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE ThinFilmEval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene, Sampler& smp) {
   if (film.max_thickness * film.min_thickness <= 0.0f) {
     return {{}, 0.0f};
   }
@@ -117,16 +117,16 @@ ETX_SHARED_INLINE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Th
 
   float3 wavelengths = {spect.wavelength, spect.wavelength, spect.wavelength};
   if (spect.spectral() == false) {
-    wavelengths.x = Thinfilm::kRGBWavelengths.x + Thinfilm::kRGBWavelengthsSpan.x * (2.0f * smp.next() - 1.0f);
-    wavelengths.y = Thinfilm::kRGBWavelengths.y + Thinfilm::kRGBWavelengthsSpan.y * (2.0f * smp.next() - 1.0f);
-    wavelengths.z = Thinfilm::kRGBWavelengths.z + Thinfilm::kRGBWavelengthsSpan.z * (2.0f * smp.next() - 1.0f);
+    wavelengths.x = kRGBWavelengths.x + kRGBWavelengthsSpan.x * (2.0f * smp.next() - 1.0f);
+    wavelengths.y = kRGBWavelengths.y + kRGBWavelengthsSpan.y * (2.0f * smp.next() - 1.0f);
+    wavelengths.z = kRGBWavelengths.z + kRGBWavelengthsSpan.z * (2.0f * smp.next() - 1.0f);
   }
 
   return {evaluate_refractive_index(scene, film.ior, spect), wavelengths, thickness};
 }
 
 ETX_SHARED_INLINE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
-  if (mat.cls == Material::Class::Void) {
+  if (mat.cls == MaterialClass::Void) {
     return true;
   }
 

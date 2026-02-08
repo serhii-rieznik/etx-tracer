@@ -3,81 +3,77 @@
 #include <sokol_app.h>
 #include <etx/render/shared/camera.hxx>
 #include <unordered_set>
+#include <cmath>
 
 namespace etx {
 
 struct CameraController {
   static constexpr float kMaxCameraDistance = 8192.0f;
+  static constexpr float kMinCameraDistance = 1.0f / 255.0f;
 
   CameraController(Camera& cam)
     : _camera(cam) {
   }
 
   bool update(double dt) {
-    float move_fwd = float(_keys.count(SAPP_KEYCODE_W)) - float(_keys.count(SAPP_KEYCODE_S));
-    float move_side = float(_keys.count(SAPP_KEYCODE_D)) - float(_keys.count(SAPP_KEYCODE_A));
+    float dt_sec = clamp(float(dt), 0.0f, 0.1f);
 
-    bool movement = (move_fwd != 0.0f) || (move_side != 0.0f);
-    bool rotation = (mouse_buttons != 0) && ((_mouse_delta.x != 0.0f) || (_mouse_delta.y != 0.0f));
-    bool zoom = (_mouse_delta.z != 0.0f);
-
-    if (rotation) {
-      if (mouse_buttons & MouseLeft) {
-        float3 target = camera_target(_camera);
-        auto s = to_spherical(target - _camera.position);
-        s.phi += _rotation_speed * (_mouse_delta.x * kPi / 180.0f);
-        s.theta = clamp(s.theta - _rotation_speed * (_mouse_delta.y * kDoublePi / 180.0f), -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
-        target = _camera.position + from_spherical(s);
-        _camera.direction = normalize(target - _camera.position);
-      } else if (mouse_buttons & MouseMiddle) {
-        if (_keys.count(SAPP_KEYCODE_LEFT_SHIFT)) {
-          float3 direction = _camera.direction;
-          float3 side = normalize(cross(kWorldUp, direction));
-          float3 up = normalize(cross(direction, side));
-          _camera.position += (_mouse_delta.y * up + _mouse_delta.x * side) * _move_speed * (1.0f + length(direction));
-          // direction unchanged
-        } else if (_keys.count(SAPP_KEYCODE_LEFT_CONTROL)) {
-          float3 target = camera_target(_camera);
-          auto s = to_spherical(_camera.position - target);
-          s.r = clamp(s.r + _mouse_delta.y / kPi, 1.0f / 255.0f, kMaxCameraDistance);
-          _camera.position = target + from_spherical(s);
-          _camera.direction = normalize(target - _camera.position);
-        } else {
-          float3 target = camera_target(_camera);
-          auto s = to_spherical(_camera.position - target);
-          s.phi += _rotation_speed * (_mouse_delta.x * kPi / 180.0f);
-          s.theta = clamp(s.theta + _rotation_speed * (_mouse_delta.y * kPi / 180.0f), -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
-          _camera.position = target + from_spherical(s);
-          _camera.direction = normalize(target - _camera.position);
-        }
-      }
-
-      _mouse_delta = {};
-    }
-
-    if (zoom) {
-      float3 target = camera_target(_camera);
-      auto s = to_spherical(_camera.position - target);
-      s.r = clamp(s.r + _mouse_delta.z * (1.0f + s.r), 1.0f / 255.0f, kMaxCameraDistance);
-      _camera.position = target + from_spherical(s);
-      _camera.direction = normalize(target - _camera.position);
-      _mouse_delta.z = 0.0f;
-    }
-
-    if (movement) {
-      float3 direction = _camera.direction;
-      float3 side = cross(direction, kWorldUp);
-      _camera.position += (move_fwd * direction + move_side * side) * _move_speed;
-    }
+    bool camera_changed = false;
+    bool has_mouse_xy = (_mouse_delta.x != 0.0f) || (_mouse_delta.y != 0.0f);
 
     if (scheduled.active) {
       scheduled.active = false;
       _camera.position = scheduled.pos;
-      _camera.direction = normalize(scheduled.center - scheduled.pos);
-      movement = true;
+      float3 view = scheduled.center - scheduled.pos;
+      _camera.direction = normalize_safe(view, normalize_safe(_camera.direction, kWorldForward));
+      _orbit_pivot = scheduled.center;
+      _orbit_distance = clamp(length(_orbit_pivot - _camera.position), kMinCameraDistance, kMaxCameraDistance);
+      _pivot_initialized = true;
+      _move_velocity = {};
+      _move_scale_distance = max(_orbit_distance, 4.0f);
+      camera_changed = true;
     }
 
-    if (movement || rotation || zoom) {
+    const bool shift_pressed = is_shift_pressed();
+    const bool ctrl_pressed = is_ctrl_pressed();
+    const bool left_pressed = (mouse_buttons & MouseLeft) != 0u;
+    const bool middle_pressed = (mouse_buttons & MouseMiddle) != 0u;
+    const bool right_pressed = (mouse_buttons & MouseRight) != 0u;
+
+    if (has_mouse_xy && middle_pressed) {
+      ensure_pivot_initialized();
+      if (shift_pressed) {
+        apply_pan(_mouse_delta.x, _mouse_delta.y);
+      } else if (ctrl_pressed) {
+        apply_dolly(_mouse_delta.y * _drag_dolly_speed);
+      } else {
+        apply_orbit(_mouse_delta.x, _mouse_delta.y);
+      }
+      camera_changed = true;
+    } else if (has_mouse_xy && (left_pressed || right_pressed)) {
+      apply_look(_mouse_delta.x, _mouse_delta.y);
+      sync_pivot_to_view_direction();
+      camera_changed = true;
+    }
+
+    if (_mouse_delta.z != 0.0f) {
+      ensure_pivot_initialized();
+      const float zoom_factor = expf(-_mouse_delta.z * _scroll_zoom_speed);
+      _orbit_distance = clamp(_orbit_distance * zoom_factor, kMinCameraDistance, kMaxCameraDistance);
+      float3 forward = normalize_safe(_orbit_pivot - _camera.position, normalize_safe(_camera.direction, kWorldForward));
+      _camera.position = _orbit_pivot - forward * _orbit_distance;
+      _camera.direction = normalize_safe(_orbit_pivot - _camera.position, forward);
+      camera_changed = true;
+    }
+
+    if (apply_keyboard_movement(dt_sec, shift_pressed, ctrl_pressed)) {
+      camera_changed = true;
+    }
+
+    _mouse_delta = {};
+
+    if (camera_changed) {
+      clamp_position(_camera.position);
       build_camera(_camera, _camera.position, _camera.direction, kWorldUp, _camera.film_size, get_camera_fov(_camera));
       return true;
     }
@@ -87,11 +83,11 @@ struct CameraController {
 
   void handle_scroll(float scroll) {
 #if (ETX_PLATFORM_APPLE)
-    float kScrollScaleFactor = -1.0f / 256.0f;
+    constexpr float kScrollScaleFactor = -1.0f / 32.0f;
 #else
-    float kScrollScaleFactor = 1.0f / 256.0f;
+    constexpr float kScrollScaleFactor = 1.0f / 32.0f;
 #endif
-    _mouse_delta.z = kScrollScaleFactor * scroll;
+    _mouse_delta.z += kScrollScaleFactor * scroll;
   }
 
   void handle_event(const sapp_event* e) {
@@ -112,7 +108,6 @@ struct CameraController {
       }
 
       case SAPP_EVENTTYPE_MOUSE_DOWN: {
-        _mouse_delta = {};
         if (e->mouse_button == SAPP_MOUSEBUTTON_LEFT)
           mouse_buttons = mouse_buttons | MouseLeft;
         if (e->mouse_button == SAPP_MOUSEBUTTON_MIDDLE)
@@ -133,7 +128,16 @@ struct CameraController {
       }
 
       case SAPP_EVENTTYPE_MOUSE_MOVE: {
-        _mouse_delta = {e->mouse_dx, e->mouse_dy};
+        _mouse_delta.x += e->mouse_dx;
+        _mouse_delta.y += e->mouse_dy;
+        break;
+      }
+
+      case SAPP_EVENTTYPE_UNFOCUSED: {
+        _keys.clear();
+        _mouse_delta = {};
+        mouse_buttons = 0;
+        _move_velocity = {};
         break;
       }
 
@@ -153,12 +157,192 @@ struct CameraController {
     MouseRight = 1u << 2u,
   };
 
+  bool is_shift_pressed() const {
+    return _keys.count(SAPP_KEYCODE_LEFT_SHIFT) || _keys.count(SAPP_KEYCODE_RIGHT_SHIFT);
+  }
+
+  bool is_ctrl_pressed() const {
+    return _keys.count(SAPP_KEYCODE_LEFT_CONTROL) || _keys.count(SAPP_KEYCODE_RIGHT_CONTROL);
+  }
+
+  static void clamp_position(float3& p) {
+    p.x = clamp(p.x, -kMaxCameraDistance, kMaxCameraDistance);
+    p.y = clamp(p.y, -kMaxCameraDistance, kMaxCameraDistance);
+    p.z = clamp(p.z, -kMaxCameraDistance, kMaxCameraDistance);
+  }
+
+  static float3 normalize_safe(const float3& v, const float3& fallback) {
+    const float len = length(v);
+    if (len < kEpsilon) {
+      return fallback;
+    }
+    return v / len;
+  }
+
+  float estimate_navigation_scale() const {
+    // Keep movement meaningful even when orbit distance is tiny:
+    // use coarse world-space cues as additional scale hints.
+    float scale = 4.0f;
+    scale = max(scale, length(_camera.position) * 0.125f);
+
+    const float dir_y = _camera.direction.y;
+    if (fabsf(dir_y) > 1.0e-3f) {
+      const float t_to_ground_plane = (-_camera.position.y) / dir_y;
+      if (t_to_ground_plane > 0.0f) {
+        scale = max(scale, t_to_ground_plane * 0.5f);
+      }
+    }
+
+    return scale;
+  }
+
+  void ensure_pivot_initialized() {
+    if (_pivot_initialized == false) {
+      const float3 direction = normalize_safe(_camera.direction, kWorldForward);
+      float default_distance = _camera.focal_distance;
+      if (default_distance <= kMinCameraDistance) {
+        default_distance = 4.0f;
+      }
+      _orbit_distance = clamp(default_distance, kMinCameraDistance, kMaxCameraDistance);
+      _orbit_pivot = _camera.position + direction * _orbit_distance;
+      _pivot_initialized = true;
+      return;
+    }
+
+    _orbit_distance = clamp(length(_orbit_pivot - _camera.position), kMinCameraDistance, kMaxCameraDistance);
+  }
+
+  void sync_pivot_to_view_direction() {
+    ensure_pivot_initialized();
+    const float3 direction = normalize_safe(_camera.direction, kWorldForward);
+    _orbit_pivot = _camera.position + direction * _orbit_distance;
+  }
+
+  void apply_look(float dx, float dy) {
+    auto s = to_spherical(normalize_safe(_camera.direction, kWorldForward));
+    s.phi += dx * _look_speed;
+    s.theta = clamp(s.theta - dy * _look_speed, -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
+    _camera.direction = normalize_safe(from_spherical(s), kWorldForward);
+  }
+
+  void apply_orbit(float dx, float dy) {
+    float3 offset = _camera.position - _orbit_pivot;
+    if (length(offset) < kEpsilon) {
+      offset = -normalize_safe(_camera.direction, kWorldForward) * _orbit_distance;
+    }
+
+    auto s = to_spherical(offset);
+    s.r = clamp(s.r, kMinCameraDistance, kMaxCameraDistance);
+    s.phi += dx * _orbit_speed;
+    s.theta = clamp(s.theta + dy * _orbit_speed, -kHalfPi + kPi / 180.0f, kHalfPi - kPi / 180.0f);
+    _orbit_distance = s.r;
+    _camera.position = _orbit_pivot + from_spherical(s);
+    _camera.direction = normalize_safe(_orbit_pivot - _camera.position, normalize_safe(_camera.direction, kWorldForward));
+  }
+
+  void apply_pan(float dx, float dy) {
+    const float3 forward = normalize_safe(_orbit_pivot - _camera.position, normalize_safe(_camera.direction, kWorldForward));
+    float3 side = cross(kWorldUp, forward);
+    if (length(side) < kEpsilon) {
+      side = cross(kWorldRight, forward);
+    }
+    side = normalize_safe(side, kWorldRight);
+    const float3 up = normalize_safe(cross(forward, side), kWorldUp);
+    const float pan_scale = _pan_speed * max(_orbit_distance, 1.0f);
+    const float3 delta = (dy * up + dx * side) * pan_scale;
+    _camera.position += delta;
+    _orbit_pivot += delta;
+    _camera.direction = normalize_safe(_orbit_pivot - _camera.position, forward);
+  }
+
+  void apply_dolly(float offset) {
+    _orbit_distance = clamp(_orbit_distance + offset * max(_orbit_distance, 1.0f), kMinCameraDistance, kMaxCameraDistance);
+    const float3 forward = normalize_safe(_orbit_pivot - _camera.position, normalize_safe(_camera.direction, kWorldForward));
+    _camera.position = _orbit_pivot - forward * _orbit_distance;
+    _camera.direction = normalize_safe(_orbit_pivot - _camera.position, forward);
+  }
+
+  bool apply_keyboard_movement(float dt_sec, bool shift_pressed, bool ctrl_pressed) {
+    const float move_fwd = float(_keys.count(SAPP_KEYCODE_W)) - float(_keys.count(SAPP_KEYCODE_S));
+    const float move_side = float(_keys.count(SAPP_KEYCODE_D)) - float(_keys.count(SAPP_KEYCODE_A));
+    const float move_up = float(_keys.count(SAPP_KEYCODE_E)) - float(_keys.count(SAPP_KEYCODE_Q));
+
+    float3 target_velocity = {};
+    if ((move_fwd != 0.0f) || (move_side != 0.0f) || (move_up != 0.0f)) {
+      const float3 forward = normalize_safe(_camera.direction, kWorldForward);
+      float3 right = cross(forward, kWorldUp);
+      if (length(right) < kEpsilon) {
+        right = _camera.side;
+      }
+      right = normalize_safe(right, kWorldRight);
+
+      float3 move_direction = move_fwd * forward + move_side * right + move_up * kWorldUp;
+      const float dir_len = length(move_direction);
+      if (dir_len > 1.0f) {
+        move_direction /= dir_len;
+      }
+
+      const float distance_ref = _pivot_initialized ? _orbit_distance : max(_camera.focal_distance, 4.0f);
+      const float target_move_scale = max(distance_ref, estimate_navigation_scale());
+
+      const float scale_response_up = 20.0f;
+      const float scale_response_down = 2.0f;
+      const float scale_response = (target_move_scale > _move_scale_distance) ? scale_response_up : scale_response_down;
+      const float scale_alpha = (dt_sec > 0.0f) ? (1.0f - expf(-scale_response * dt_sec)) : 1.0f;
+      _move_scale_distance += (target_move_scale - _move_scale_distance) * scale_alpha;
+
+      float speed = _base_move_speed * max(1.0f, _move_scale_distance * 0.25f);
+      if (shift_pressed && (ctrl_pressed == false)) {
+        speed *= _fast_move_multiplier;
+      } else if (ctrl_pressed && (shift_pressed == false)) {
+        speed *= _slow_move_multiplier;
+      }
+
+      target_velocity = move_direction * speed;
+    }
+
+    float alpha = (dt_sec > 0.0f) ? (1.0f - expf(-_movement_response * dt_sec)) : 1.0f;
+    _move_velocity += (target_velocity - _move_velocity) * alpha;
+
+    if (length(_move_velocity) < _min_velocity) {
+      _move_velocity = {};
+      return false;
+    }
+
+    const float3 delta = _move_velocity * dt_sec;
+    if (length(delta) < _min_translation) {
+      return false;
+    }
+
+    _camera.position += delta;
+    if (_pivot_initialized) {
+      _orbit_pivot += delta;
+    }
+    return true;
+  }
+
   Camera& _camera;
   std::unordered_set<uint32_t> _keys;
   float3 _mouse_delta = {};
   uint32_t mouse_buttons = 0;
-  float _move_speed = 1.0f / 100.0f;
-  float _rotation_speed = 1.0f / 32.0f;
+  float3 _move_velocity = {};
+  float3 _orbit_pivot = {};
+  float _orbit_distance = 4.0f;
+  float _move_scale_distance = 4.0f;
+  bool _pivot_initialized = false;
+
+  float _base_move_speed = 2.5f;
+  float _fast_move_multiplier = 3.0f;
+  float _slow_move_multiplier = 0.2f;
+  float _movement_response = 18.0f;
+  float _min_velocity = 1.0e-4f;
+  float _min_translation = 1.0e-6f;
+
+  float _look_speed = 0.0025f;
+  float _orbit_speed = 0.0030f;
+  float _pan_speed = 0.0030f;
+  float _drag_dolly_speed = 0.015f;
+  float _scroll_zoom_speed = 0.8f;
 
   struct {
     float3 pos;
