@@ -2,7 +2,7 @@
 # error Do not include this file directly
 #endif
 
-ETX_GPU_CODE float4x4 operator*(const float4x4& m1, const float4x4& m2) {
+ETX_SHARED_INLINE float4x4 operator*(const float4x4& m1, const float4x4& m2) {
   float4 srca0 = m1.col[0];
   float4 srca1 = m1.col[1];
   float4 srca2 = m1.col[2];
@@ -20,7 +20,7 @@ ETX_GPU_CODE float4x4 operator*(const float4x4& m1, const float4x4& m2) {
   return result;
 }
 
-ETX_GPU_CODE float3 operator*(const float3x3& m, const float3& v) {
+ETX_SHARED_INLINE float3 operator*(const float3x3& m, const float3& v) {
   return float3{
     m.col[0].x * v.x + m.col[1].x * v.y + m.col[2].x * v.z,
     m.col[0].y * v.x + m.col[1].y * v.y + m.col[2].y * v.z,
@@ -28,7 +28,7 @@ ETX_GPU_CODE float3 operator*(const float3x3& m, const float3& v) {
   };
 }
 
-ETX_GPU_CODE float4 operator*(const float4x4& m, const float4& v) {
+ETX_SHARED_INLINE float4 operator*(const float4x4& m, const float4& v) {
   return float4{
     m.col[0].x * v.x + m.col[1].x * v.y + m.col[2].x * v.z + m.col[3].x * v.w,
     m.col[0].y * v.x + m.col[1].y * v.y + m.col[2].y * v.z + m.col[3].y * v.w,
@@ -37,7 +37,7 @@ ETX_GPU_CODE float4 operator*(const float4x4& m, const float4& v) {
   };
 }
 
-ETX_GPU_CODE float4x4 inverse(const float4x4& m) {
+ETX_SHARED_INLINE float4x4 inverse(const float4x4& m) {
   float coef00 = m.col[2].z * m.col[3].w - m.col[3].z * m.col[2].w;
   float coef02 = m.col[1].z * m.col[3].w - m.col[3].z * m.col[1].w;
   float coef03 = m.col[1].z * m.col[2].w - m.col[2].z * m.col[1].w;
@@ -88,7 +88,7 @@ ETX_GPU_CODE float4x4 inverse(const float4x4& m) {
   return inverse;
 }
 
-ETX_GPU_CODE float4x4 look_at(const float3& origin, const float3& target, const float3& up) {
+ETX_SHARED_INLINE float4x4 look_at(const float3& origin, const float3& target, const float3& up) {
   auto f = normalize(target - origin);
   auto s = normalize(cross(f, up));
   auto u = cross(s, f);
@@ -110,7 +110,7 @@ ETX_GPU_CODE float4x4 look_at(const float3& origin, const float3& target, const 
   return result;
 }
 
-ETX_GPU_CODE float4x4 perspective(float fov, uint32_t width, uint32_t height, float z_near, float z_far) {
+ETX_SHARED_INLINE float4x4 perspective(float fov, uint32_t width, uint32_t height, float z_near, float z_far) {
   ETX_ASSERT(width > 0);
   ETX_ASSERT(height > 0);
   ETX_ASSERT(fov > 0);
@@ -127,7 +127,7 @@ ETX_GPU_CODE float4x4 perspective(float fov, uint32_t width, uint32_t height, fl
   return result;
 }
 
-ETX_GPU_CODE float4x4 transform_matrix(const float3& translation, const float4& quaterion, const float3& scale) {
+ETX_SHARED_INLINE float4x4 transform_matrix(const float3& translation, const float4& quaterion, const float3& scale) {
   float4x4 result = {};
 
   float xx = quaterion.x * quaterion.x;

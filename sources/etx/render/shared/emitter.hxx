@@ -46,15 +46,15 @@ struct ETX_ALIGNED EmitterProfile {
     : cls(c) {
   }
 
-  ETX_GPU_CODE bool is_distant() const {
+  ETX_SHARED_INLINE bool is_distant() const {
     return !is_local();
   }
 
-  ETX_GPU_CODE bool is_local() const {
+  ETX_SHARED_INLINE bool is_local() const {
     return (cls == Class::Area);
   }
 
-  ETX_GPU_CODE bool is_delta() const {
+  ETX_SHARED_INLINE bool is_delta() const {
     return (cls == Class::Directional);
   }
 };
@@ -75,15 +75,15 @@ struct Emitter {
   float pad0 = 0.0f;
   float pad1 = 0.0f;
 
-  ETX_GPU_CODE bool is_distant() const {
+  ETX_SHARED_INLINE bool is_distant() const {
     return is_local() == false;
   }
 
-  ETX_GPU_CODE bool is_local() const {
+  ETX_SHARED_INLINE bool is_local() const {
     return (cls == EmitterProfile::Class::Area);
   }
 
-  ETX_GPU_CODE bool is_delta() const {
+  ETX_SHARED_INLINE bool is_delta() const {
     return (cls == EmitterProfile::Class::Directional);
   }
 };

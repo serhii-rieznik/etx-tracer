@@ -10,7 +10,7 @@ struct ConductorMaterial {
   RefractiveIndex int_ior;
 };
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
@@ -68,7 +68,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
@@ -103,7 +103,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   return result;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
@@ -125,12 +125,12 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   return result;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
   float2 roughness = evaluate_roughness(mtl, tex, scene);
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
-ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
 }
 

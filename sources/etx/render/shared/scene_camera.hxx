@@ -2,14 +2,14 @@
 
 namespace etx {
 
-ETX_GPU_CODE float2 get_center_uv(const uint2& pixel, const uint2& dim) {
+ETX_SHARED_INLINE float2 get_center_uv(const uint2& pixel, const uint2& dim) {
   return {
     (float(pixel.x) + 0.5f) / float(dim.x) * 2.0f - 1.0f,
     (float(pixel.y) + 0.5f) / float(dim.y) * 2.0f - 1.0f,
   };
 }
 
-ETX_GPU_CODE float2 get_jittered_uv(Sampler& smp, const uint2& pixel, const uint2& dim) {
+ETX_SHARED_INLINE float2 get_jittered_uv(Sampler& smp, const uint2& pixel, const uint2& dim) {
   float sample_radius = 0.5f;
   return {
     (float(pixel.x) + 0.5f + sample_radius * (smp.next() * 2.0f - 1.0f)) / float(dim.x) * 2.0f - 1.0f,
@@ -17,13 +17,13 @@ ETX_GPU_CODE float2 get_jittered_uv(Sampler& smp, const uint2& pixel, const uint
   };
 }
 
-ETX_GPU_CODE float film_pdf_out(const Camera& camera, const float3& to_point) {
+ETX_SHARED_INLINE float film_pdf_out(const Camera& camera, const float3& to_point) {
   auto w_i = normalize(to_point - camera.position);
   float cos_t = dot(w_i, camera.direction);
   return 1.0f / fabsf(camera.area * cos_t * cos_t * cos_t);
 }
 
-ETX_GPU_CODE Ray generate_ray(const Scene& scene, const Camera& camera, const float2& uv, const float2& sensor_sample_rnd) {
+ETX_SHARED_INLINE Ray generate_ray(const Scene& scene, const Camera& camera, const float2& uv, const float2& sensor_sample_rnd) {
   ETX_CHECK_FINITE(uv);
 
   if (camera.cls == Camera::Class::Equirectangular) {
@@ -61,7 +61,7 @@ ETX_GPU_CODE Ray generate_ray(const Scene& scene, const Camera& camera, const fl
   return {origin, w_o, fmaxf(t_near, kRayEpsilon), t_far};
 }
 
-ETX_GPU_CODE CameraSample evaluate_film(const Scene& scene, const Camera& camera, const float3& world_point, const float3& lens_point) {
+ETX_SHARED_INLINE CameraSample evaluate_film(const Scene& scene, const Camera& camera, const float3& world_point, const float3& lens_point) {
   if (camera.cls == Camera::Class::Equirectangular) {
     // TODO : implelemt for Equirectangular camera
     return {};
@@ -103,7 +103,7 @@ ETX_GPU_CODE CameraSample evaluate_film(const Scene& scene, const Camera& camera
   return result;
 }
 
-ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const Camera& camera, const float3& from_point) {
+ETX_SHARED_INLINE CameraSample sample_film(Sampler& smp, const Scene& scene, const Camera& camera, const float3& from_point) {
   if (camera.cls == Camera::Class::Equirectangular) {
     // TODO : implelemt for Equirectangular camera
     return {};
@@ -127,7 +127,7 @@ ETX_GPU_CODE CameraSample sample_film(Sampler& smp, const Scene& scene, const Ca
   return evaluate_film(scene, camera, from_point, lens_point);
 }
 
-ETX_GPU_CODE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& camera, const Ray& out_ray) {
+ETX_SHARED_INLINE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& camera, const Ray& out_ray) {
   float cos_t = dot(out_ray.d, camera.direction);
   CameraEval result = {};
   result.normal = camera.direction;
@@ -135,7 +135,7 @@ ETX_GPU_CODE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& cam
   return result;
 }
 
-ETX_GPU_CODE float3 clamp_view_direction_away_from_up(const float3& view_direction, const float3& up_vector, float min_cosine_threshold) {
+ETX_SHARED_INLINE float3 clamp_view_direction_away_from_up(const float3& view_direction, const float3& up_vector, float min_cosine_threshold) {
   constexpr float kAngleOffsetDegrees = 0.01f;
   constexpr float kAngleOffsetRadians = kAngleOffsetDegrees * kPi / 180.0f;
 

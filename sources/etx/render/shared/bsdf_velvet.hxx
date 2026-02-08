@@ -8,7 +8,7 @@ struct VelvetMaterial {
   SampledImage roughness;
 };
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   float3 w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);
 
@@ -26,7 +26,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE float lambda_velvet_l(float r, float x) {
+ETX_SHARED_INLINE float lambda_velvet_l(float r, float x) {
   x = fmaxf(x, 0.0f);
   auto lerp_x = [](float a, float b, float t) {
     return sqr(1.0f - t) * a + (1.0f - sqr(1.0f - t)) * b;
@@ -41,25 +41,25 @@ ETX_GPU_CODE float lambda_velvet_l(float r, float x) {
   return q;
 }
 
-ETX_GPU_CODE float lambda_velvet(float r, float cos_t) {
+ETX_SHARED_INLINE float lambda_velvet(float r, float cos_t) {
   if (cos_t < 0.5f)
     return expf(lambda_velvet_l(r, cos_t));
 
   return expf(2.0f * lambda_velvet_l(r, 0.5f) - lambda_velvet_l(r, 1.0f - cos_t));
 }
 
-ETX_GPU_CODE float fresnel_approximate(float f0, float f90, float cos_t) {
+ETX_SHARED_INLINE float fresnel_approximate(float f0, float f90, float cos_t) {
   return f0 + (f90 - f0) * powf(fmaxf(1.0f - cos_t, 0.0f), 5.0f);
 }
 
-ETX_GPU_CODE float diffuse_burley(float alpha, float n_dot_i, float n_dot_o, float m_dot_o) {
+ETX_SHARED_INLINE float diffuse_burley(float alpha, float n_dot_i, float n_dot_o, float m_dot_o) {
   float f90 = 0.5f + 2.0f * alpha * m_dot_o * m_dot_o;
   float lightScatter = fresnel_approximate(1.0f, f90, n_dot_o);
   float viewScatter = fresnel_approximate(1.0f, f90, n_dot_i);
   return lightScatter * viewScatter * kInvPi;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
   float n_dot_o = fmaxf(0.0f, dot(w_o, frame.nrm));
@@ -107,7 +107,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   return eval;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   if (frame.entering_material() == false)
     return 0.0f;
@@ -115,11 +115,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   return 1.0f / kDoublePi;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
-ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 

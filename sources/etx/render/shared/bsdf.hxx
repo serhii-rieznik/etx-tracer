@@ -18,7 +18,7 @@ enum class PathSource : uint32_t {
 };
 
 struct BSDFData : public Vertex {
-  ETX_GPU_CODE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi)
+  ETX_SHARED_INLINE BSDFData(SpectralQuery spect, uint32_t medium, PathSource ps, const Vertex& av, const float3& awi)
     : Vertex(av)
     , w_i(awi)
     , spectrum_sample(spect)
@@ -26,16 +26,16 @@ struct BSDFData : public Vertex {
     , current_medium(medium) {
   }
 
-  ETX_GPU_CODE float3 front_fracing_normal() const {
+  ETX_SHARED_INLINE float3 front_fracing_normal() const {
     return dot(nrm, w_i) < 0.0f ? nrm : -nrm;
   }
 
-  ETX_GPU_CODE LocalFrame get_normal_frame() const {
+  ETX_SHARED_INLINE LocalFrame get_normal_frame() const {
     bool entering_material = dot(nrm, w_i) < 0.0f;
     return entering_material ? LocalFrame{tan, btn, nrm, LocalFrame::EnteringMaterial} : LocalFrame{-tan, -btn, -nrm, 0u};
   }
 
-  ETX_GPU_CODE LocalFrame get_normal_frame(const Material& mtl) const {
+  ETX_SHARED_INLINE LocalFrame get_normal_frame(const Material& mtl) const {
     bool entering_material = dot(nrm, w_i) < 0.0f;
     if (mtl.two_sided && (entering_material == false)) {
       return LocalFrame{-tan, -btn, -nrm, LocalFrame::EnteringMaterial};
@@ -52,7 +52,7 @@ struct BSDFData : public Vertex {
 struct BSDFEval {
   BSDFEval() = default;
 
-  ETX_GPU_CODE BSDFEval(const SpectralQuery q, float power)
+  ETX_SHARED_INLINE BSDFEval(const SpectralQuery q, float power)
     : func(q, power)
     , bsdf(q, power) {
   }
@@ -62,7 +62,7 @@ struct BSDFEval {
   float pdf = 0.0f;
   float eta = 1.0f;
 
-  ETX_GPU_CODE bool valid() const {
+  ETX_SHARED_INLINE bool valid() const {
     return (pdf > 0.0f);
   }
 };
@@ -88,11 +88,11 @@ struct BSDFSample {
 
   BSDFSample() = default;
 
-  ETX_GPU_CODE BSDFSample(const SpectralQuery& q)
+  ETX_SHARED_INLINE BSDFSample(const SpectralQuery& q)
     : weight(q, 0.0f) {
   }
 
-  ETX_GPU_CODE BSDFSample(const float3& a_w_o, const SpectralResponse& a_weight, float a_pdf, float a_eta, uint32_t props, uint32_t medium)
+  ETX_SHARED_INLINE BSDFSample(const float3& a_w_o, const SpectralResponse& a_weight, float a_pdf, float a_eta, uint32_t props, uint32_t medium)
     : weight(a_weight)
     , w_o(a_w_o)
     , pdf(a_pdf)
@@ -101,19 +101,19 @@ struct BSDFSample {
     , medium_index(medium) {
   }
 
-  ETX_GPU_CODE bool valid() const {
+  ETX_SHARED_INLINE bool valid() const {
     return pdf > 0.0f;
   }
 
-  ETX_GPU_CODE bool invalid() const {
+  ETX_SHARED_INLINE bool invalid() const {
     return (pdf <= 0.0f);
   }
 
-  ETX_GPU_CODE bool is_diffuse() const {
+  ETX_SHARED_INLINE bool is_diffuse() const {
     return (properties & Diffuse) != 0;
   }
 
-  ETX_GPU_CODE bool is_delta() const {
+  ETX_SHARED_INLINE bool is_delta() const {
     return (properties & Delta) == Delta;
   }
 };
@@ -128,12 +128,12 @@ struct NormalDistribution {
     float pdf = 0.0f;
   };
 
-  ETX_GPU_CODE NormalDistribution(const LocalFrame& f, const float2& alpha)
+  ETX_SHARED_INLINE NormalDistribution(const LocalFrame& f, const float2& alpha)
     : _frame(f)
     , _alpha{fmaxf(kMinAlpha, alpha.x), fmaxf(kMinAlpha, alpha.y)} {
   }
 
-  [[nodiscard]] ETX_GPU_CODE float3 sample(Sampler& smp, const float3& in_w_i) const {
+  [[nodiscard]] ETX_SHARED_INLINE float3 sample(Sampler& smp, const float3& in_w_i) const {
     auto w_i = _frame.to_local(-in_w_i);
     auto v_h = normalize(float3{_alpha.x * w_i.x, _alpha.y * w_i.y, w_i.z});
 
@@ -153,7 +153,7 @@ struct NormalDistribution {
     return _frame.from_local(local_m);
   }
 
-  [[nodiscard]] ETX_GPU_CODE Eval evaluate(const float3& in_m, const float3& in_w_i, const float3& in_w_o) const {
+  [[nodiscard]] ETX_SHARED_INLINE Eval evaluate(const float3& in_m, const float3& in_w_i, const float3& in_w_o) const {
     auto local_w_i = _frame.to_local(-in_w_i);
     if (local_w_i.z <= kEpsilon) {
       return {};
@@ -178,7 +178,7 @@ struct NormalDistribution {
     return result;
   }
 
-  [[nodiscard]] ETX_GPU_CODE float pdf(const float3& in_m, const float3& in_w_i, const float3& in_w_o) const {
+  [[nodiscard]] ETX_SHARED_INLINE float pdf(const float3& in_m, const float3& in_w_i, const float3& in_w_o) const {
     auto local_w_i = _frame.to_local(-in_w_i);
     if (local_w_i.z <= kEpsilon) {
       return 0.0f;
@@ -196,14 +196,14 @@ struct NormalDistribution {
   }
 
  private:
-  ETX_GPU_CODE float lambda_local(const float2& alpha, const float3& w) const {
+  ETX_SHARED_INLINE float lambda_local(const float2& alpha, const float3& w) const {
     float a = sqrtf(alpha.x * alpha.y);
     float n_dot_w = fabsf(w.z);
     return 0.5f * (sqrtf(a + (1.0f - a) * n_dot_w * n_dot_w) / n_dot_w - 1.0f);
   }
 
   // G1
-  ETX_GPU_CODE float visibility_local(const float2& alpha, const float3& m, const float3& w) const {
+  ETX_SHARED_INLINE float visibility_local(const float2& alpha, const float3& m, const float3& w) const {
     float xy_alpha_2 = sqr(alpha.x * w.x) + sqr(alpha.y * w.y);
     if (xy_alpha_2 == 0.0f) {
       return 1.0f;
@@ -220,12 +220,12 @@ struct NormalDistribution {
   }
 
   // G
-  ETX_GPU_CODE float visibility_term_local(const float2& alpha, const float3& m, const float3& w_i, const float3& w_o) const {
+  ETX_SHARED_INLINE float visibility_term_local(const float2& alpha, const float3& m, const float3& w_i, const float3& w_o) const {
     return visibility_local(alpha, m, w_i) * visibility_local(alpha, m, w_o);
   }
 
   // D
-  ETX_GPU_CODE float normal_distribution_local(const float2& alpha, const float3& m) const {
+  ETX_SHARED_INLINE float normal_distribution_local(const float2& alpha, const float3& m) const {
     float alpha_uv = alpha.x * alpha.y;
     float result = 1.0f / (kPi * alpha_uv * sqr(sqr(m.x / alpha.x) + sqr(m.y / alpha.y) + sqr(m.z)));
     ETX_VALIDATE(result);
@@ -237,7 +237,7 @@ struct NormalDistribution {
   float2 _alpha = {};
 };
 
-ETX_GPU_CODE float fix_shading_normal(const float3& n_g, const float3& n_s, const float3& w_i, const float3& w_o) {
+ETX_SHARED_INLINE float fix_shading_normal(const float3& n_g, const float3& n_s, const float3& w_i, const float3& w_o) {
   float w_i_g = dot(w_i, n_g);
   float w_i_s = dot(w_i, n_s);
   float w_o_g = dot(w_o, n_g);
@@ -254,7 +254,7 @@ inline complex complex_div_conj(const complex& a, const complex& b) {
   return complex(num.real() / denom, num.imag() / denom);
 }
 
-ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
+ETX_SHARED_INLINE auto reflectance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
   struct result {
     complex rs, rp;
   };
@@ -275,7 +275,7 @@ ETX_GPU_CODE auto reflectance(const complex& ext_ior, const complex& cos_theta_i
   return result{rs, rp};
 }
 
-ETX_GPU_CODE auto transmittance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
+ETX_SHARED_INLINE auto transmittance(const complex& ext_ior, const complex& cos_theta_i, const complex& int_ior, const complex& cos_theta_j) {
   struct result {
     complex ts, tp;
   };
@@ -296,7 +296,7 @@ ETX_GPU_CODE auto transmittance(const complex& ext_ior, const complex& cos_theta
   return result{ts, tp};
 }
 
-ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_ior, const complex& int_ior) {
+ETX_SHARED_INLINE float fresnel_generic(const float cos_theta_i, const complex& ext_ior, const complex& int_ior) {
   auto sin_theta_o_squared = sqr(ext_ior / int_ior) * (1.0f - cos_theta_i * cos_theta_i);
   auto cos_theta_o = sqrt(1.0f - sin_theta_o_squared);
   ETX_VALIDATE(cos_theta_o);
@@ -304,7 +304,7 @@ ETX_GPU_CODE float fresnel_generic(const float cos_theta_i, const complex& ext_i
   return 0.5f * (complex_norm(rsrp.rs) + complex_norm(rsrp.rp));
 }
 
-ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
+ETX_SHARED_INLINE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
   constexpr complex i = {0.0f, 1.0f};
 
   if (cos_theta_0 == 0.0f)
@@ -345,7 +345,7 @@ ETX_GPU_CODE float fresnel_thinfilm(float wavelength, const float cos_theta_0, c
   return complex_abs(1.0f - ratio * 0.5f * (tp + ts));
 }
 
-ETX_GPU_CODE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
+ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
   const Thinfilm::Eval& thinfilm) {
   ETX_ASSERT(spect.wavelength == ext_ior.wavelength);
   ETX_ASSERT(spect.wavelength == int_ior.wavelength);

@@ -37,11 +37,11 @@ struct ETX_ALIGNED Medium {
     float3 pos = {};
     float sampled_medium_t = {};
 
-    ETX_GPU_CODE bool sampled_medium() const {
+    ETX_SHARED_INLINE bool sampled_medium() const {
       return sampled_medium_t > 0.0f;
     }
 
-    ETX_GPU_CODE bool valid() const {
+    ETX_SHARED_INLINE bool valid() const {
       return weight.valid();
     }
   };

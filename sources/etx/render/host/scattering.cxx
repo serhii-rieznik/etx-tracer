@@ -65,7 +65,7 @@ struct TransmittanceTable {
     }
   }
 
-  ETX_GPU_CODE float lookup(float optical_depth) const {
+  ETX_SHARED_INLINE float lookup(float optical_depth) const {
     if (optical_depth <= 0.0f) {
       return 1.0f;
     }
@@ -98,7 +98,7 @@ struct DensityTable {
     }
   }
 
-  ETX_GPU_CODE DensityPair lookup(float height) const {
+  ETX_SHARED_INLINE DensityPair lookup(float height) const {
     if (height <= 0.0f) {
       return {1.0f, 1.0f};
     }

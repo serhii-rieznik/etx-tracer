@@ -21,11 +21,11 @@ struct ETX_ALIGNED RayInfo {
   float G1 = 0.0f;
   float pad = 0.0f;
 
-  ETX_GPU_CODE RayInfo(const float3& w, const float2& alpha) {
+  ETX_SHARED_INLINE RayInfo(const float3& w, const float2& alpha) {
     updateDirection(w, alpha);
   }
 
-  ETX_GPU_CODE void updateDirection(const float3& in_w, const float2& alpha) {
+  ETX_SHARED_INLINE void updateDirection(const float3& in_w, const float2& alpha) {
     w = in_w;
 
     if (w.z > 0.9999f) {
@@ -50,7 +50,7 @@ struct ETX_ALIGNED RayInfo {
     Lambda = 0.5f * (-1.0f + ((a > 0) ? 1.0f : -1.0f) * sqrtf(1.0f + 1.0f / (a * a)));
   }
 
-  ETX_GPU_CODE void updateHeight(const float& in_h) {
+  ETX_SHARED_INLINE void updateHeight(const float& in_h) {
     h = in_h;
     ETX_ASSERT(isfinite(h));
 
@@ -68,11 +68,11 @@ struct ETX_ALIGNED RayInfo {
   }
 };
 
-ETX_GPU_CODE float invC1(const float U) {
+ETX_SHARED_INLINE float invC1(const float U) {
   return max(-1.0f, min(1.0f, 2.0f * U - 1.0f));
 }
 
-ETX_GPU_CODE float sampleHeight(const RayInfo& ray, const float U) {
+ETX_SHARED_INLINE float sampleHeight(const RayInfo& ray, const float U) {
   if (ray.w.z > 0.9999f)
     return kMaxFloat;
 
@@ -102,7 +102,7 @@ ETX_GPU_CODE float sampleHeight(const RayInfo& ray, const float U) {
   return result;
 }
 
-ETX_GPU_CODE float D_ggx(const float3& wm, const float2& alpha) {
+ETX_SHARED_INLINE float D_ggx(const float3& wm, const float2& alpha) {
   if (wm.z <= kEpsilon)
     return 0.0f;
 
@@ -125,7 +125,7 @@ ETX_GPU_CODE float D_ggx(const float3& wm, const float2& alpha) {
   return P22 / (wm.z * wm.z * wm.z * wm.z);
 }
 
-ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const float2& alpha) {
+ETX_SHARED_INLINE float2 sampleP22_11(const float theta_i, const float2& rnd, const float2& alpha) {
   float2 slope = {};
 
   if (theta_i < 0.0001f) {
@@ -174,7 +174,7 @@ ETX_GPU_CODE float2 sampleP22_11(const float theta_i, const float2& rnd, const f
   return slope;
 }
 
-ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float2& alpha) {
+ETX_SHARED_INLINE float3 sampleVNDF(Sampler& smp, const float3& wi, const float2& alpha) {
   // sample D_wi
   // stretch to match configuration with alpha=1.0
   const float3 wi_11 = normalize(float3{alpha.x * wi.x, alpha.y * wi.y, wi.z});
@@ -204,7 +204,7 @@ ETX_GPU_CODE float3 sampleVNDF(Sampler& smp, const float3& wi, const float2& alp
   return normalize(float3{-slope.x, -slope.y, 1.0f});
 }
 
-ETX_GPU_CODE SpectralResponse phase_function_reflection(SpectralQuery spect, const RayInfo& ray, const float3& wo, const float2& alpha, const RefractiveIndexSample& ext_ior,
+ETX_SHARED_INLINE SpectralResponse phase_function_reflection(SpectralQuery spect, const RayInfo& ray, const float3& wo, const float2& alpha, const RefractiveIndexSample& ext_ior,
   const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
   if (ray.w.z > 0.9999f)
     return {spect, 0.0f};
@@ -238,7 +238,7 @@ ETX_GPU_CODE SpectralResponse phase_function_reflection(SpectralQuery spect, con
   return f * d;
 }
 
-ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, const float2& slope_rnd, const float3& wi, const float2& alpha, const RefractiveIndexSample& ext_ior,
+ETX_SHARED_INLINE float3 samplePhaseFunction_conductor(SpectralQuery spect, const float2& slope_rnd, const float3& wi, const float2& alpha, const RefractiveIndexSample& ext_ior,
   const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm, SpectralResponse& weight) {
   // sample D_wi
   // stretch to match configuration with alpha=1.0
@@ -271,14 +271,14 @@ ETX_GPU_CODE float3 samplePhaseFunction_conductor(SpectralQuery spect, const flo
 }
 
 // MIS weights for bidirectional path tracing on the microsurface
-ETX_GPU_CODE float MISweight_conductor(const float3& wi, const float3& wo, const float2& alpha) {
+ETX_SHARED_INLINE float MISweight_conductor(const float3& wi, const float3& wo, const float2& alpha) {
   if (wi.x == -wo.x && wi.y == -wo.y && wi.z == -wo.z)
     return 1.0f;
   const float3 wh = normalize(wi + wo);
   return D_ggx((wh.z > 0) ? wh : -wh, alpha);
 }
 
-ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const float2& alpha, const RefractiveIndexSample& ext_ior,
+ETX_SHARED_INLINE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const float2& alpha, const RefractiveIndexSample& ext_ior,
   const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
   if (wi.z <= 0 || wo.z <= 0)
     return {spect, 0.0f};
@@ -352,21 +352,21 @@ ETX_GPU_CODE SpectralResponse eval_conductor(SpectralQuery spect, Sampler& smp, 
   return 0.5f * singleScattering + multipleScattering;
 }
 
-ETX_GPU_CODE float abgam(float x) {
+ETX_SHARED_INLINE float abgam(float x) {
   constexpr float gam[] = {1.0f / 12.0f, 1.0f / 30.0f, 53.0f / 210.0f, 195.0f / 371.0f, 22999.0f / 22737.0f, 29944523.0f / 19733142.0f, 109535241009.0f / 48264275462.0f};
   constexpr float kHalfLogDoublePi = 0.918938518f;  // 0.5f * logf(kDoublePi)
   return kHalfLogDoublePi - x + (x - 0.5f) * logf(x) + gam[0] / (x + gam[1] / (x + gam[2] / (x + gam[3] / (x + gam[4] / (x + gam[5] / (x + gam[6] / x))))));
 }
 
-ETX_GPU_CODE float gamma(float x) {
+ETX_SHARED_INLINE float gamma(float x) {
   return expf(abgam(x + 5.0f)) / (x * (x + 1.0f) * (x + 2.0f) * (x + 3.0f) * (x + 4.0f));
 }
 
-ETX_GPU_CODE float beta(float m, float n) {
+ETX_SHARED_INLINE float beta(float m, float n) {
   return gamma(m) * gamma(n) / gamma(m + n);
 }
 
-ETX_GPU_CODE float3 refract(const float3& wi, const float3& wm, const float eta) {
+ETX_SHARED_INLINE float3 refract(const float3& wi, const float3& wm, const float eta) {
   const float cos_theta_i = dot(wi, wm);
   const float cos_theta_t2 = 1.0f - (1.0f - cos_theta_i * cos_theta_i) / (eta * eta);
   const float cos_theta_t = -sqrtf(max(0.0f, cos_theta_t2));
@@ -374,7 +374,7 @@ ETX_GPU_CODE float3 refract(const float3& wi, const float3& wm, const float eta)
 }
 
 // by convention, ray is always outside
-ETX_GPU_CODE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery spect, const RayInfo& ray, const float3& wo, const bool reflection,
+ETX_SHARED_INLINE SpectralResponse evalPhaseFunction_dielectric(const SpectralQuery spect, const RayInfo& ray, const float3& wo, const bool reflection,
   const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm, const float2& alpha) {
   if (ray.w.z > 0.9999f)
     return {spect, 0.0f};
@@ -410,8 +410,8 @@ struct DielectricSample {
   bool reflection = {};
 };
 
-ETX_GPU_CODE DielectricSample samplePhaseFunction_dielectric(const SpectralQuery spect, const float2& rnd_slope, const float rnd_reflection, const float3& wi, const float2& alpha,
-  const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
+ETX_SHARED_INLINE DielectricSample samplePhaseFunction_dielectric(const SpectralQuery spect, const float2& rnd_slope, const float rnd_reflection, const float3& wi,
+  const float2& alpha, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
   // stretch to match configuration with alpha=1.0
   const float3 wi_11 = normalize(float3{alpha.x * wi.x, alpha.y * wi.y, wi.z});
 
@@ -451,7 +451,7 @@ ETX_GPU_CODE DielectricSample samplePhaseFunction_dielectric(const SpectralQuery
 }
 
 // MIS weights for bidirectional path tracing on the microsurface
-ETX_GPU_CODE float MISweight_dielectric(const float3& wi, const float3& wo, const bool reflection, const float eta, const float2& alpha) {
+ETX_SHARED_INLINE float MISweight_dielectric(const float3& wi, const float3& wo, const bool reflection, const float eta, const float2& alpha) {
   if (reflection) {
     if (wi.x == -wo.x && wi.y == -wo.y && wi.z == -wo.z)
       return 1.0f;
@@ -463,7 +463,7 @@ ETX_GPU_CODE float MISweight_dielectric(const float3& wi, const float3& wo, cons
   }
 }
 
-ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const bool wo_outside, const float2& alpha,
+ETX_SHARED_INLINE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const bool wo_outside, const float2& alpha,
   const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const Thinfilm::Eval& thinfilm) {
   if ((wi.z <= 0) || (wo.z <= 0 && wo_outside) || (wo.z >= 0 && !wo_outside))
     return {spect, 0.0f};
@@ -554,7 +554,7 @@ ETX_GPU_CODE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler
   return 0.5f * singleScattering + multipleScattering;
 }
 
-ETX_GPU_CODE float3 samplePhaseFunction_diffuse(Sampler& smp, const float3& wm) {
+ETX_SHARED_INLINE float3 samplePhaseFunction_diffuse(Sampler& smp, const float3& wm) {
   float r1 = 2.0f * smp.next() - 1.0f;
   float r2 = 2.0f * smp.next() - 1.0f;
 
@@ -577,7 +577,7 @@ ETX_GPU_CODE float3 samplePhaseFunction_diffuse(Sampler& smp, const float3& wm) 
   return x * basis.u + y * basis.v + z * wm;
 }
 
-ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const float3& wo, const float2& alpha, const SpectralResponse& albedo) {
+ETX_SHARED_INLINE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const float3& wo, const float2& alpha, const SpectralResponse& albedo) {
   RayInfo ray_shadowing = {wo, alpha};
 
   RayInfo ray = {-wi, alpha};
@@ -628,7 +628,7 @@ ETX_GPU_CODE SpectralResponse eval_diffuse(Sampler& smp, const float3& wi, const
   return res;
 }
 
-ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2& alpha) {
+ETX_SHARED_INLINE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2& alpha) {
   // init
   RayInfo ray = {-wi, alpha};
   ray.updateHeight(1.0f);
@@ -657,7 +657,7 @@ ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2&
   return ray.w;
 }
 
-ETX_GPU_CODE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2& alpha, const SpectralResponse& albedo, SpectralResponse& energy) {
+ETX_SHARED_INLINE float3 sample_diffuse(Sampler& smp, const float3& wi, const float2& alpha, const SpectralResponse& albedo, SpectralResponse& energy) {
   energy = {albedo, 1.0f};
 
   // init

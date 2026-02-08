@@ -98,7 +98,7 @@ struct Image {
   Format format = Format::Undefined;
   uint32_t data_size = 0u;
 
-  ETX_GPU_CODE Gather gather(const float2& in_uv) const {
+  ETX_SHARED_INLINE Gather gather(const float2& in_uv) const {
     float2 uv = in_uv * fsize;
     auto x0 = tex_coord_u(uv.x, fsize.x);
     auto y0 = tex_coord_v(uv.y, fsize.y);
@@ -122,7 +122,7 @@ struct Image {
     return {p00, p01, p10, p11, row_0, row_1};
   }
 
-  ETX_GPU_CODE float4 evaluate(const float2& in_uv, float* pdf) const {
+  ETX_SHARED_INLINE float4 evaluate(const float2& in_uv, float* pdf) const {
     auto g = gather(in_uv);
 
     if (pdf) {
@@ -137,17 +137,17 @@ struct Image {
     return g.p00 + g.p01 + g.p10 + g.p11;
   }
 
-  ETX_GPU_CODE float evaluate_alpha(const float2& in_uv) const {
+  ETX_SHARED_INLINE float evaluate_alpha(const float2& in_uv) const {
     auto g = gather(in_uv);
     return g.p00.w + g.p01.w + g.p10.w + g.p11.w;
   }
 
-  static ETX_GPU_CODE bool is_compressed_bc_format(Format format) {
+  static ETX_SHARED_INLINE bool is_compressed_bc_format(Format format) {
     return format == Format::BC1 || format == Format::BC1_SRGB || format == Format::BC2 || format == Format::BC2_SRGB || format == Format::BC3 || format == Format::BC3_SRGB ||
            format == Format::BC4 || format == Format::BC5 || format == Format::BC6H || format == Format::BC6H_SIGNED || format == Format::BC7 || format == Format::BC7_SRGB;
   }
 
-  static ETX_GPU_CODE uint32_t get_bc_block_size(Format format) {
+  static ETX_SHARED_INLINE uint32_t get_bc_block_size(Format format) {
     switch (format) {
       case Format::BC1:
       case Format::BC1_SRGB:
@@ -168,15 +168,15 @@ struct Image {
     }
   }
 
-  static ETX_GPU_CODE bool is_bc_srgb_format(Format format) {
+  static ETX_SHARED_INLINE bool is_bc_srgb_format(Format format) {
     return format == Format::BC1_SRGB || format == Format::BC2_SRGB || format == Format::BC3_SRGB || format == Format::BC7_SRGB;
   }
 
-  static ETX_GPU_CODE bool is_bc_signed_format(Format format) {
+  static ETX_SHARED_INLINE bool is_bc_signed_format(Format format) {
     return format == Format::BC6H_SIGNED;
   }
 
-  static ETX_GPU_CODE void decompress_bc_to_rgba(Format format, const uint8_t* block_data, uint8_t decompressed_rgba[64], bool is_signed = false) {
+  static ETX_SHARED_INLINE void decompress_bc_to_rgba(Format format, const uint8_t* block_data, uint8_t decompressed_rgba[64], bool is_signed = false) {
     float decompressed_float[48] = {};
 
     switch (format) {
@@ -234,7 +234,7 @@ struct Image {
     }
   }
 
-  ETX_GPU_CODE float4 decompress_bc_pixel(uint32_t pixel_index) const {
+  ETX_SHARED_INLINE float4 decompress_bc_pixel(uint32_t pixel_index) const {
     uint32_t pixel_x = pixel_index % isize.x;
     uint32_t pixel_y = pixel_index / isize.x;
 
@@ -305,7 +305,7 @@ struct Image {
     return result;
   }
 
-  ETX_GPU_CODE float4 pixel(uint32_t i) const {
+  ETX_SHARED_INLINE float4 pixel(uint32_t i) const {
     ETX_ASSERT(format != Format::Undefined);
 
     if (format == Format::RGBA8)
@@ -319,12 +319,12 @@ struct Image {
     return pixels.f32[i];
   }
 
-  ETX_GPU_CODE float4 pixel(uint32_t x, uint32_t y) const {
+  ETX_SHARED_INLINE float4 pixel(uint32_t x, uint32_t y) const {
     uint32_t i = min(x + y * isize.x, isize.x * isize.y - 1u);
     return pixel(i);
   }
 
-  ETX_GPU_CODE float3 evaluate_normal(const float2& uv, float scale) const {
+  ETX_SHARED_INLINE float3 evaluate_normal(const float2& uv, float scale) const {
     float4 value = evaluate(uv, nullptr);
     return {
       scale * (value.x * 2.0f - 1.0f),
@@ -333,7 +333,7 @@ struct Image {
     };
   }
 
-  ETX_GPU_CODE float2 sample(const float2& rnd, float& image_pdf, uint2& location, float4& eval) const {
+  ETX_SHARED_INLINE float2 sample(const float2& rnd, float& image_pdf, uint2& location, float4& eval) const {
     float y_pdf = 0.0f;
     location.y = y_distribution.sample(rnd.y, y_pdf);
 
@@ -364,31 +364,31 @@ struct Image {
     return uv;
   }
 
-  ETX_GPU_CODE float2 sample(const float2& rnd) const {
+  ETX_SHARED_INLINE float2 sample(const float2& rnd) const {
     float image_pdf = 0.0f;
     uint2 location = {};
     float4 eval = {};
     return sample(rnd, image_pdf, location, eval);
   }
 
-  ETX_GPU_CODE float tex_coord_repeat(float u, float size) const {
+  ETX_SHARED_INLINE float tex_coord_repeat(float u, float size) const {
     auto x = fmodf(u, size);
     return x < 0.0f ? (x + size) : x;
   }
 
-  ETX_GPU_CODE float tex_coord_clamp(float u, float size) const {
+  ETX_SHARED_INLINE float tex_coord_clamp(float u, float size) const {
     return clamp(u, 0.0f, nextafterf(size, 0.0f));
   }
 
-  ETX_GPU_CODE float tex_coord_u(float u, float size) const {
+  ETX_SHARED_INLINE float tex_coord_u(float u, float size) const {
     return (options & RepeatU) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
   }
 
-  ETX_GPU_CODE float tex_coord_v(float u, float size) const {
+  ETX_SHARED_INLINE float tex_coord_v(float u, float size) const {
     return (options & RepeatV) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
   }
 
-  ETX_GPU_CODE float4 read(const float2& uv) const {
+  ETX_SHARED_INLINE float4 read(const float2& uv) const {
     auto x0 = tex_coord_u(uv.x - 0.0f, fsize.x);
     auto x1 = tex_coord_u(uv.x + 1.0f, fsize.x);
     auto y0 = tex_coord_v(uv.y - 0.0f, fsize.y);

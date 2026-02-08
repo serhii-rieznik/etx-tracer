@@ -30,7 +30,7 @@ struct ETX_ALIGNED Camera {
   float pad[3] ETX_INIT({});
 };
 
-ETX_GPU_CODE float3 camera_target(ETX_IN(Camera, camera)) {
+ETX_SHARED_INLINE float3 camera_target(ETX_IN(Camera, camera)) {
   return camera.position + camera.direction;
 }
 

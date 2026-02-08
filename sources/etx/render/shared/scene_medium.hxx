@@ -4,12 +4,12 @@ namespace etx {
 
 namespace {
 
-ETX_GPU_CODE constexpr float medium_gamma(int n) {
+ETX_SHARED_INLINE constexpr float medium_gamma(int n) {
   constexpr auto e = kEpsilon * 0.5f;
   return (n * e) / (1.0f - n * e);
 }
 
-ETX_GPU_CODE bool medium_bounds(const Medium& medium, const float3& in_pos, const float3& in_dir, float max_t, float& t_min, float& t_max) {
+ETX_SHARED_INLINE bool medium_bounds(const Medium& medium, const float3& in_pos, const float3& in_dir, float max_t, float& t_min, float& t_max) {
   constexpr float g3 = 1.0f + 2.0f * medium_gamma(3);
 
   float pos[3] = {in_pos.x, in_pos.y, in_pos.z};
@@ -40,7 +40,7 @@ ETX_GPU_CODE bool medium_bounds(const Medium& medium, const float3& in_pos, cons
   return true;
 }
 
-ETX_GPU_CODE bool medium_intersects_bounds(const Medium& medium, const float3& in_pos, const float3& in_direction, const float in_max_t, float3& medium_pos, float3& medium_dir,
+ETX_SHARED_INLINE bool medium_intersects_bounds(const Medium& medium, const float3& in_pos, const float3& in_direction, const float in_max_t, float3& medium_pos, float3& medium_dir,
   float& t_min, float& t_max, float3& world_dir_normalized, float3& bbox_size) {
   if (in_max_t >= kMaxFloat) {
     return false;
@@ -74,7 +74,7 @@ ETX_GPU_CODE bool medium_intersects_bounds(const Medium& medium, const float3& i
 
 }  // namespace
 
-ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, const float rnd,
+ETX_SHARED_INLINE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, const float rnd,
   SpectralResponse& pdf) {
   if (spect.spectral()) {
     pdf = {spect, 1.0f};
@@ -92,7 +92,7 @@ ETX_GPU_CODE uint32_t sample_spectrum_component(const SpectralQuery spect, const
   return 2u - uint32_t(rnd < pdf.integrated.x + pdf.integrated.y) - uint32_t(rnd < pdf.integrated.x);
 }
 
-ETX_GPU_CODE SpectralResponse calculate_albedo(const SpectralQuery spect, const SpectralResponse& scattering, const SpectralResponse& extinction) {
+ETX_SHARED_INLINE SpectralResponse calculate_albedo(const SpectralQuery spect, const SpectralResponse& scattering, const SpectralResponse& extinction) {
   SpectralResponse albedo = {spect, extinction.value > 0.0f ? (scattering.value / extinction.value) : 0.0f};
   albedo.integrated.x = extinction.integrated.x > 0.0f ? (scattering.integrated.x / extinction.integrated.x) : 0.0f;
   albedo.integrated.y = extinction.integrated.y > 0.0f ? (scattering.integrated.y / extinction.integrated.y) : 0.0f;
@@ -100,13 +100,13 @@ ETX_GPU_CODE SpectralResponse calculate_albedo(const SpectralQuery spect, const 
   return albedo;
 }
 
-ETX_GPU_CODE float phase_function(const float3& w_i, const float3& w_o, const float g) {
+ETX_SHARED_INLINE float phase_function(const float3& w_i, const float3& w_o, const float g) {
   float cos_t = dot(w_i, w_o);
   float d = 1.0f + g * g - 2.0f * g * cos_t;
   return (1.0f / (4.0f * kPi)) * (1.0f - g * g) / (d * sqrtf(d));
 }
 
-ETX_GPU_CODE float3 sample_phase_function(const float3& w_i, const float g, const float2& smp_rnd) {
+ETX_SHARED_INLINE float3 sample_phase_function(const float3& w_i, const float g, const float2& smp_rnd) {
   float cos_theta = 0.0f;
   if (fabsf(g) < 1e-3f) {
     cos_theta = 1.0f - 2.0f * smp_rnd.x;
@@ -122,25 +122,25 @@ ETX_GPU_CODE float3 sample_phase_function(const float3& w_i, const float g, cons
   return (basis.u * cosf(phi) + basis.v * sinf(phi)) * sin_theta - w_i * cos_theta;
 }
 
-ETX_GPU_CODE SpectralResponse medium_absorption(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
+ETX_SHARED_INLINE SpectralResponse medium_absorption(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
   if ((medium.absorption_index == kInvalidIndex) || (medium.absorption_index >= scene.spectrums.count)) {
     return {spect, 0.0f};
   }
   return scene.spectrums[medium.absorption_index](spect);
 }
 
-ETX_GPU_CODE SpectralResponse medium_scattering(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
+ETX_SHARED_INLINE SpectralResponse medium_scattering(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
   if ((medium.scattering_index == kInvalidIndex) || (medium.scattering_index >= scene.spectrums.count)) {
     return {spect, 0.0f};
   }
   return scene.spectrums[medium.scattering_index](spect);
 }
 
-ETX_GPU_CODE SpectralResponse medium_extinction(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
+ETX_SHARED_INLINE SpectralResponse medium_extinction(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
   return medium_absorption(scene, medium, spect) + medium_scattering(scene, medium, spect);
 }
 
-ETX_GPU_CODE Medium::Instance make_medium_instance(const Scene& scene, const Medium& medium, const SpectralQuery spect, uint32_t index) {
+ETX_SHARED_INLINE Medium::Instance make_medium_instance(const Scene& scene, const Medium& medium, const SpectralQuery spect, uint32_t index) {
   Medium::Instance result = {};
   result.extinction = medium_extinction(scene, medium, spect);
   result.anisotropy = medium.phase_function_g;
@@ -148,11 +148,11 @@ ETX_GPU_CODE Medium::Instance make_medium_instance(const Scene& scene, const Med
   return result;
 }
 
-ETX_GPU_CODE SpectralResponse medium_transmittance(const Medium::Instance& instance, float distance) {
+ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Medium::Instance& instance, float distance) {
   return spectrum_exp(instance.extinction * (-distance));
 }
 
-ETX_GPU_CODE SpectralResponse medium_transmittance(const Scene& scene, const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction,
+ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Scene& scene, const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction,
   float distance) {
   switch (medium.cls) {
     case Medium::Class::Homogeneous:
@@ -212,7 +212,7 @@ ETX_GPU_CODE SpectralResponse medium_transmittance(const Scene& scene, const Med
   }
 }
 
-ETX_GPU_CODE Medium::Sample sample_medium(const Scene& scene, const Medium& medium, const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos,
+ETX_SHARED_INLINE Medium::Sample sample_medium(const Scene& scene, const Medium& medium, const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos,
   const float3& w_i, float max_t) {
   ETX_CRITICAL(max_t > 0.0f);
 
@@ -343,11 +343,11 @@ ETX_GPU_CODE Medium::Sample sample_medium(const Scene& scene, const Medium& medi
   }
 }
 
-ETX_GPU_CODE float medium_phase_function(const Medium& medium, const float3& w_i, const float3& w_o) {
+ETX_SHARED_INLINE float medium_phase_function(const Medium& medium, const float3& w_i, const float3& w_o) {
   return phase_function(w_i, w_o, medium.phase_function_g);
 }
 
-ETX_GPU_CODE float3 medium_sample_phase_function(const Medium& medium, const float2& smp_rnd, const float3& w_i) {
+ETX_SHARED_INLINE float3 medium_sample_phase_function(const Medium& medium, const float2& smp_rnd, const float3& w_i) {
   return sample_phase_function(w_i, medium.phase_function_g, smp_rnd);
 }
 

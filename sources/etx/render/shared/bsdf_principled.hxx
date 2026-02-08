@@ -13,7 +13,7 @@ struct PrincipledMaterial {
 #define WOMP_DEBUG_PRINCIPLED_BSDF        0
 #define WOMP_DEBUG_PRINCIPLED_BSDF_ENTITY metalness
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& in_mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& in_mtl, const Scene& scene, Sampler& smp) {
   auto m_local = in_mtl;
   auto metalness = evaluate_metalness(m_local, data.tex, scene);
   auto transmission = evaluate_transmission(m_local, data.tex, scene);
@@ -52,7 +52,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& in_mtl, con
   }
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& in_mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& in_mtl, const Scene& scene, Sampler& smp) {
   auto m_local = in_mtl;
   auto metalness = evaluate_metalness(m_local, data.tex, scene);
   auto transmission = evaluate_transmission(m_local, data.tex, scene);
@@ -89,7 +89,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Ma
   }
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& in_mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& in_mtl, const Scene& scene, Sampler& smp) {
 #if (WOMP_DEBUG_PRINCIPLED_BSDF)
   return max(0.0f, dot(data.front_fracing_normal(), w_o) * kInvPi);
 #endif
@@ -116,11 +116,11 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& 
   }
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return false;
 }
 
-ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 

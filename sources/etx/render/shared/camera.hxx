@@ -20,7 +20,7 @@ struct ETX_ALIGNED CameraSample {
   float pdf_area ETX_EMPTY_INIT;
   float pdf_dir_out ETX_EMPTY_INIT;
 
-  ETX_GPU_CODE bool valid() const {
+  ETX_SHARED_INLINE bool valid() const {
     return (pdf_dir > 0.0f) && (weight > 0.0f);
   }
 };

@@ -207,7 +207,7 @@ struct CPUDebugIntegratorImpl : public Task {
     return true;
   }
 
-  static ETX_GPU_CODE RefractiveIndexSample make_ior_sample(const SpectralQuery q, SpectralDistribution::Class cls, const SpectralDistribution& eta,
+  static ETX_SHARED_INLINE RefractiveIndexSample make_ior_sample(const SpectralQuery q, SpectralDistribution::Class cls, const SpectralDistribution& eta,
     const SpectralDistribution& k) {
     RefractiveIndexSample s = {};
     s.cls = cls;

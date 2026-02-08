@@ -17,11 +17,11 @@ enum class NoiseFunction : uint32_t {
 
 namespace {
 
-ETX_GPU_CODE float fade(float t) {
+ETX_SHARED_INLINE float fade(float t) {
   return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
 }
 
-ETX_GPU_CODE uint32_t hash3d(uint32_t x, uint32_t y, uint32_t z, uint32_t seed) {
+ETX_SHARED_INLINE uint32_t hash3d(uint32_t x, uint32_t y, uint32_t z, uint32_t seed) {
   uint32_t h = seed;
   h ^= x;
   h ^= y << 8u;
@@ -35,14 +35,14 @@ ETX_GPU_CODE uint32_t hash3d(uint32_t x, uint32_t y, uint32_t z, uint32_t seed) 
   return h;
 }
 
-ETX_GPU_CODE float gradient3d(uint32_t hash, float x, float y, float z) {
+ETX_SHARED_INLINE float gradient3d(uint32_t hash, float x, float y, float z) {
   uint32_t h = hash & 15u;
   float u = h < 8u ? x : y;
   float v = h < 4u ? y : (h == 12u || h == 14u ? x : z);
   return ((h & 1u) == 0u ? u : -u) + ((h & 2u) == 0u ? v : -v);
 }
 
-ETX_GPU_CODE float perlin_noise_3d(const float3& pos, uint32_t seed) {
+ETX_SHARED_INLINE float perlin_noise_3d(const float3& pos, uint32_t seed) {
   int32_t i = static_cast<int32_t>(floorf(pos.x));
   int32_t j = static_cast<int32_t>(floorf(pos.y));
   int32_t k = static_cast<int32_t>(floorf(pos.z));
@@ -82,7 +82,7 @@ ETX_GPU_CODE float perlin_noise_3d(const float3& pos, uint32_t seed) {
   return lerp(c000, c001, w);
 }
 
-ETX_GPU_CODE float3 random_point_in_cell(uint32_t cell_x, uint32_t cell_y, uint32_t cell_z, uint32_t point_index, uint32_t seed) {
+ETX_SHARED_INLINE float3 random_point_in_cell(uint32_t cell_x, uint32_t cell_y, uint32_t cell_z, uint32_t point_index, uint32_t seed) {
   uint32_t h = hash3d(cell_x, cell_y, cell_z, seed + point_index);
   float x = (h & 0xFFFFu) / 65536.0f;
   h = h * 0x9e3779b9u;
@@ -92,7 +92,7 @@ ETX_GPU_CODE float3 random_point_in_cell(uint32_t cell_x, uint32_t cell_y, uint3
   return float3{x, y, z};
 }
 
-ETX_GPU_CODE float worley_noise_3d(const float3& pos, uint32_t seed) {
+ETX_SHARED_INLINE float worley_noise_3d(const float3& pos, uint32_t seed) {
   int32_t cell_x = static_cast<int32_t>(floorf(pos.x));
   int32_t cell_y = static_cast<int32_t>(floorf(pos.y));
   int32_t cell_z = static_cast<int32_t>(floorf(pos.z));
@@ -140,7 +140,7 @@ ETX_GPU_CODE float worley_noise_3d(const float3& pos, uint32_t seed) {
   return sqrtf(min_dist2_sq) - sqrtf(min_dist1_sq);
 }
 
-ETX_GPU_CODE float voronoi_noise_3d(const float3& pos, uint32_t seed) {
+ETX_SHARED_INLINE float voronoi_noise_3d(const float3& pos, uint32_t seed) {
   int32_t cell_x = static_cast<int32_t>(floorf(pos.x));
   int32_t cell_y = static_cast<int32_t>(floorf(pos.y));
   int32_t cell_z = static_cast<int32_t>(floorf(pos.z));
@@ -178,7 +178,7 @@ ETX_GPU_CODE float voronoi_noise_3d(const float3& pos, uint32_t seed) {
   return sqrtf(min_dist_sq);
 }
 
-ETX_GPU_CODE float lattice_noise_3d(const float3& pos, uint32_t seed) {
+ETX_SHARED_INLINE float lattice_noise_3d(const float3& pos, uint32_t seed) {
   int32_t cell_x = static_cast<int32_t>(floorf(pos.x));
   int32_t cell_y = static_cast<int32_t>(floorf(pos.y));
   int32_t cell_z = static_cast<int32_t>(floorf(pos.z));
@@ -206,7 +206,7 @@ ETX_GPU_CODE float lattice_noise_3d(const float3& pos, uint32_t seed) {
   return sqrtf(min_dist_sq);
 }
 
-ETX_GPU_CODE float fbm_noise_3d(const float3& pos, NoiseFunction noise_type, uint32_t seed, float scale, uint32_t octaves, float lacunarity, float persistence, float power) {
+ETX_SHARED_INLINE float fbm_noise_3d(const float3& pos, NoiseFunction noise_type, uint32_t seed, float scale, uint32_t octaves, float lacunarity, float persistence, float power) {
   float value = 0.0f;
   float amplitude = 1.0f;
   float frequency = scale;
@@ -279,7 +279,7 @@ struct ETX_ALIGNED DensityGrid {
   uint3 dimensions = {};
   NoiseParameters noise = {};
 
-  ETX_GPU_CODE float sample_texture_3d(const float3& local_coord) const {
+  ETX_SHARED_INLINE float sample_texture_3d(const float3& local_coord) const {
     if ((local_coord.x < 0.0f) || (local_coord.y < 0.0f) || (local_coord.z < 0.0f) || (local_coord.x >= 1.0f) || (local_coord.y >= 1.0f) || (local_coord.z >= 1.0f)) {
       return 0.0f;
     }
@@ -315,7 +315,7 @@ struct ETX_ALIGNED DensityGrid {
     return lerp(d_bottom, d_top, dz);
   }
 
-  ETX_GPU_CODE float sample_noise(const float3& local_coord, const BoundingBox& bounds) const {
+  ETX_SHARED_INLINE float sample_noise(const float3& local_coord, const BoundingBox& bounds) const {
     float3 world_pos = bounds.from_local(local_coord) + noise.offset;
     float3 bbox_size = bounds.p_max - bounds.p_min;
     float max_dimension = max(bbox_size.x, max(bbox_size.y, bbox_size.z));
@@ -341,7 +341,7 @@ struct ETX_ALIGNED DensityGrid {
     return saturate(n);
   }
 
-  ETX_GPU_CODE float sample(const float3& local_coord, const BoundingBox& bounds) const {
+  ETX_SHARED_INLINE float sample(const float3& local_coord, const BoundingBox& bounds) const {
     float value = 0.0f;
     if (type == Type::NoiseFunction) {
       value = sample_noise(local_coord, bounds);
@@ -353,7 +353,7 @@ struct ETX_ALIGNED DensityGrid {
     return value;
   }
 
-  ETX_GPU_CODE bool has_data() const {
+  ETX_SHARED_INLINE bool has_data() const {
     return (type == Type::NoiseFunction) || (density.count > 0);
   }
 };

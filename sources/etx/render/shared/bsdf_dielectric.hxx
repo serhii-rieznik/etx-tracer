@@ -12,7 +12,7 @@ struct ThinfilmMaterial {
   uint32_t ext_medium = kInvalidIndex;
 };
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
   auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
   auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
@@ -40,19 +40,19 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return {data.spectrum_sample, 0.0f};
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   return 0.0f;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
   return true;
 }
 
-ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 
@@ -71,7 +71,7 @@ struct DielectricMaterial {
   uint32_t ext_medium = kInvalidIndex;
 };
 
-ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
   auto w_i = local_frame.to_local(-data.w_i);
 
@@ -145,7 +145,7 @@ ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const 
   return result;
 }
 
-ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
 
   auto w_i = local_frame.to_local(-data.w_i);
@@ -194,7 +194,7 @@ ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const
   return eval;
 }
 
-ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
 
   auto w_i = local_frame.to_local(-data.w_i);
@@ -249,12 +249,12 @@ ETX_GPU_CODE float pdf(const BSDFData& data, const float3& in_w_o, const Materia
   return result;
 }
 
-ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
   auto roughness = evaluate_roughness(mtl, tex, scene);
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
-ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
 }
 

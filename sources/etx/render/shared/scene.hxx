@@ -125,48 +125,48 @@ struct ETX_ALIGNED Scene {
   bool sample_lights_from_distribution() const {
     return (options.light_sampling == LightSampling::FromDistribution) || (options.light_sampling == LightSampling::RIS_FromDistribution);
   }
-  ETX_GPU_CODE bool strategy_enabled(uint32_t flag) const {
+  ETX_SHARED_INLINE bool strategy_enabled(uint32_t flag) const {
     return (options.strategy_flags & flag) != 0u;
   }
 };
 
-ETX_GPU_CODE float collimation_to_exponent(float normalized) {
+ETX_SHARED_INLINE float collimation_to_exponent(float normalized) {
   float t = saturate(normalized);
   float denom = sqr(sqr(1.0f - t));
   return 1.0f / fmaxf(kEpsilon, denom);
 }
 
-ETX_GPU_CODE float3 lerp_pos(const Scene& scene, const Triangle& t, const float3& bc) {
+ETX_SHARED_INLINE float3 lerp_pos(const Scene& scene, const Triangle& t, const float3& bc) {
   return scene.vertices.pos[t.i[0]] * bc.x +  //
          scene.vertices.pos[t.i[1]] * bc.y +  //
          scene.vertices.pos[t.i[2]] * bc.z;   //
 }
 
-ETX_GPU_CODE float3 lerp_normal(const Scene& scene, const Triangle& t, const float3& bc) {
+ETX_SHARED_INLINE float3 lerp_normal(const Scene& scene, const Triangle& t, const float3& bc) {
   return normalize(scene.vertices.nrm[t.i[0]] * bc.x +  //
                    scene.vertices.nrm[t.i[1]] * bc.y +  //
                    scene.vertices.nrm[t.i[2]] * bc.z);  //
 }
 
-ETX_GPU_CODE float3 lerp_tangent(const Scene& scene, const Triangle& t, const float3& bc) {
+ETX_SHARED_INLINE float3 lerp_tangent(const Scene& scene, const Triangle& t, const float3& bc) {
   return normalize(scene.vertices.tan[t.i[0]] * bc.x +  //
                    scene.vertices.tan[t.i[1]] * bc.y +  //
                    scene.vertices.tan[t.i[2]] * bc.z);  //
 }
 
-ETX_GPU_CODE float3 lerp_bitangent(const Scene& scene, const Triangle& t, const float3& bc) {
+ETX_SHARED_INLINE float3 lerp_bitangent(const Scene& scene, const Triangle& t, const float3& bc) {
   return normalize(scene.vertices.btn[t.i[0]] * bc.x +  //
                    scene.vertices.btn[t.i[1]] * bc.y +  //
                    scene.vertices.btn[t.i[2]] * bc.z);  //
 }
 
-ETX_GPU_CODE float2 lerp_uv(const Scene& scene, const Triangle& t, const float3& b) {
+ETX_SHARED_INLINE float2 lerp_uv(const Scene& scene, const Triangle& t, const float3& b) {
   return scene.vertices.tex[t.i[0]] * b.x +  //
          scene.vertices.tex[t.i[1]] * b.y +  //
          scene.vertices.tex[t.i[2]] * b.z;   //
 }
 
-ETX_GPU_CODE void lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc, Vertex& vertex) {
+ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc, Vertex& vertex) {
   const uint32_t i0 = t.i[0];
   const uint32_t i1 = t.i[1];
   const uint32_t i2 = t.i[2];
@@ -183,13 +183,13 @@ ETX_GPU_CODE void lerp_vertex(const Scene& scene, const Triangle& t, const float
   vertex.btn = normalize(btn * (dot(btn, b0) > 0.0f ? 1.0f : -1.0f));
 }
 
-ETX_GPU_CODE Vertex lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc) {
+ETX_SHARED_INLINE Vertex lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc) {
   Vertex vertex = {};
   lerp_vertex(scene, t, bc, vertex);
   return vertex;
 }
 
-ETX_GPU_CODE void orthogonalize(Vertex& v) {
+ETX_SHARED_INLINE void orthogonalize(Vertex& v) {
   auto b = v.btn;
   v.nrm = normalize(v.nrm);
   v.tan = normalize(v.tan - dot(v.tan, v.nrm) * v.nrm);
@@ -197,7 +197,7 @@ ETX_GPU_CODE void orthogonalize(Vertex& v) {
   v.btn = v.btn * (dot(b, v.btn) > 0.0f ? 1.0f : -1.0f);
 }
 
-ETX_GPU_CODE float3 barycentrics(const Scene& scene, const Triangle& t, const float3& p) {
+ETX_SHARED_INLINE float3 barycentrics(const Scene& scene, const Triangle& t, const float3& p) {
   const float3& a = scene.vertices.pos[t.i[0]];
   const float3& b = scene.vertices.pos[t.i[1]];
   const float3& c = scene.vertices.pos[t.i[2]];
@@ -218,17 +218,17 @@ ETX_GPU_CODE float3 barycentrics(const Scene& scene, const Triangle& t, const fl
   return {1.0f - u - v, u, v};
 }
 
-ETX_GPU_CODE bool valid_barycentrics(const float3& p) {
+ETX_SHARED_INLINE bool valid_barycentrics(const float3& p) {
   return (p.x >= 0.0f) && (p.x <= 1.0f) &&  //
          (p.y >= 0.0f) && (p.y <= 1.0f) &&  //
          (p.z >= 0.0f) && (p.z <= 1.0f);
 }
 
-ETX_GPU_CODE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
+ETX_SHARED_INLINE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
   return position - dot(position - origin, normal) * normal;
 }
 
-ETX_GPU_CODE float3 shading_pos(const Scene& scene, const Triangle& t, const float3& bc, const float3& w_o) {
+ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& t, const float3& bc, const float3& w_o) {
   const float3& g0 = scene.vertices.pos[t.i[0]];
   const float3& g1 = scene.vertices.pos[t.i[1]];
   const float3& g2 = scene.vertices.pos[t.i[2]];
@@ -246,7 +246,7 @@ ETX_GPU_CODE float3 shading_pos(const Scene& scene, const Triangle& t, const flo
   return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
 }
 
-ETX_GPU_CODE float3 orient_normals_to_hemisphere(float3 n_s, const float3& n_g, const float3& v) {
+ETX_SHARED_INLINE float3 orient_normals_to_hemisphere(float3 n_s, const float3& n_g, const float3& v) {
   constexpr uint32_t kMaxAttempts = 16u;
   const float i_dot_g = dot(v, n_g);
 
@@ -260,7 +260,7 @@ ETX_GPU_CODE float3 orient_normals_to_hemisphere(float3 n_s, const float3& n_g, 
   return n_s;
 }
 
-ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
+ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
   float3 bc = barycentrics(base.barycentric);
   const auto& tri = scene.triangles[base.triangle_index];
   Intersection result_intersection = {};
@@ -287,7 +287,7 @@ ETX_GPU_CODE Intersection make_intersection(const Scene& scene, const float3& w_
   return result_intersection;
 }
 
-ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
+ETX_SHARED_INLINE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
   float max_t = throughput.maximum();
   if (max_t == 0.0f)
     return false;
@@ -308,7 +308,7 @@ ETX_GPU_CODE bool random_continue(uint32_t path_length, uint32_t start_path_leng
   return true;
 }
 
-ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {
+ETX_SHARED_INLINE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {
   if (spect.spectral()) {
     auto scale = rgb_response(spect, {value.x, value.y, value.z});
     ETX_VALIDATE(scale);
@@ -321,7 +321,7 @@ ETX_GPU_CODE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralRespo
   return response;
 }
 
-ETX_GPU_CODE float4 sample_whole_image(const SampledImage& img, const float2& uv, const Scene& scene) {
+ETX_SHARED_INLINE float4 sample_whole_image(const SampledImage& img, const float2& uv, const Scene& scene) {
   if (img.image_index == kInvalidIndex) {
     return img.value;
   }
@@ -330,7 +330,7 @@ ETX_GPU_CODE float4 sample_whole_image(const SampledImage& img, const float2& uv
   return img.value * eval;
 }
 
-ETX_GPU_CODE float evaluate_image(const SampledImage& img, const float2& uv, const Scene& scene, const float default_value) {
+ETX_SHARED_INLINE float evaluate_image(const SampledImage& img, const float2& uv, const Scene& scene, const float default_value) {
   float result = default_value;
   if ((img.image_index == kInvalidIndex) || (img.channel >= 4u)) {
     return result;
@@ -341,19 +341,19 @@ ETX_GPU_CODE float evaluate_image(const SampledImage& img, const float2& uv, con
   return data[img.channel];
 }
 
-ETX_GPU_CODE float evaluate_metalness(const Material& material, const float2& uv, const Scene& scene) {
+ETX_SHARED_INLINE float evaluate_metalness(const Material& material, const float2& uv, const Scene& scene) {
   return material.metalness.value.x * evaluate_image(material.metalness, uv, scene, 1.0f);
 }
 
-ETX_GPU_CODE float2 evaluate_roughness(const Material& material, const float2& uv, const Scene& scene) {
+ETX_SHARED_INLINE float2 evaluate_roughness(const Material& material, const float2& uv, const Scene& scene) {
   return float2{material.roughness.value.x, material.roughness.value.y} * evaluate_image(material.roughness, uv, scene, 1.0f);
 }
 
-ETX_GPU_CODE float evaluate_transmission(const Material& material, const float2& uv, const Scene& scene) {
+ETX_SHARED_INLINE float evaluate_transmission(const Material& material, const float2& uv, const Scene& scene) {
   return material.transmission.value.x * evaluate_image(material.transmission, uv, scene, 1.0f);
 }
 
-ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, float* image_pdf) {
+ETX_SHARED_INLINE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, float* image_pdf) {
   if (image_pdf) {
     *image_pdf = 0.0f;
   }
@@ -369,7 +369,7 @@ ETX_GPU_CODE SpectralResponse apply_image(SpectralQuery spect, const SpectralIma
   return apply_rgb(spect, result, eval, scene);
 }
 
-ETX_GPU_CODE RefractiveIndexSample evaluate_refractive_index(const Scene& scene, const RefractiveIndex& ri, const SpectralQuery q) {
+ETX_SHARED_INLINE RefractiveIndexSample evaluate_refractive_index(const Scene& scene, const RefractiveIndex& ri, const SpectralQuery q) {
   RefractiveIndexSample result = {};
   result.cls = ri.cls;
   result.eta = (ri.eta_index == kInvalidIndex) ? SpectralResponse(q, 1.0f) : scene.spectrums[ri.eta_index](q);

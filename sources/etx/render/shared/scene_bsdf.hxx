@@ -4,11 +4,11 @@ namespace etx {
 
 #define ETX_DECLARE_BSDF(Class)                                                                                  \
   namespace Class##BSDF {                                                                                        \
-    ETX_GPU_CODE BSDFSample sample(const BSDFData&, const Material&, const Scene&, Sampler&);                    \
-    ETX_GPU_CODE BSDFEval evaluate(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&); \
-    ETX_GPU_CODE float pdf(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&);         \
-    ETX_GPU_CODE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);                          \
-    ETX_GPU_CODE SpectralResponse albedo(const BSDFData&, const Material&, const Scene&, Sampler&);              \
+    ETX_SHARED_INLINE BSDFSample sample(const BSDFData&, const Material&, const Scene&, Sampler&);                    \
+    ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&); \
+    ETX_SHARED_INLINE float pdf(const BSDFData&, const float3& w_o, const Material&, const Scene&, Sampler&);         \
+    ETX_SHARED_INLINE bool is_delta(const Material&, const float2&, const Scene&, Sampler&);                          \
+    ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData&, const Material&, const Scene&, Sampler&);              \
   }
 
 ETX_DECLARE_BSDF(Diffuse);
@@ -53,7 +53,7 @@ ETX_DECLARE_BSDF(Void);
 
 namespace bsdf {
 
-[[nodiscard]] ETX_GPU_CODE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::sample(data, mtl, scene, smp);
 #endif
@@ -61,7 +61,7 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_SAMPLE);
 }
 
-[[nodiscard]] ETX_GPU_CODE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::evaluate(data, mtl, scene, smp);
 #endif
@@ -69,7 +69,7 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_EVALUATE);
 }
 
-[[nodiscard]] ETX_GPU_CODE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::pdf(data, mtl, scene, smp);
 #endif
@@ -77,7 +77,7 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_PDF);
 }
 
-[[nodiscard]] ETX_GPU_CODE float reverse_pdf(const BSDFData& in_data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_SHARED_INLINE float reverse_pdf(const BSDFData& in_data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   float3 w_o = -in_data.w_i;
   BSDFData data = in_data;
   data.w_i = -in_w_o;
@@ -89,14 +89,14 @@ namespace bsdf {
   ALL_CASES(CASE_IMPL_PDF);
 }
 
-[[nodiscard]] ETX_GPU_CODE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::is_delta(mtl, tex, scene, smp);
 #endif
   ALL_CASES(CASE_IMPL_IS_DELTA);
 }
 
-[[nodiscard]] ETX_GPU_CODE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+[[nodiscard]] ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::albedo(data, mtl, scene, smp);
 #endif
@@ -107,7 +107,7 @@ namespace bsdf {
 #undef CASE_IMPL
 }  // namespace bsdf
 
-ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfilm& film, const float2& uv, const Scene& scene, Sampler& smp) {
   if (film.max_thickness * film.min_thickness <= 0.0f) {
     return {{}, 0.0f};
   }
@@ -125,7 +125,7 @@ ETX_GPU_CODE Thinfilm::Eval evaluate_thinfilm(SpectralQuery spect, const Thinfil
   return {evaluate_refractive_index(scene, film.ior, spect), wavelengths, thickness};
 }
 
-ETX_GPU_CODE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
   if (mat.cls == Material::Class::Void) {
     return true;
   }

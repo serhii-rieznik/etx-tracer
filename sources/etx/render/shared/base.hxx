@@ -61,42 +61,42 @@ struct ETX_ALIGNED ArrayView {
 
   ArrayView() = default;
 
-  ETX_GPU_CODE ArrayView(const T* p, uint64_t c)
+  ETX_SHARED_INLINE ArrayView(const T* p, uint64_t c)
     : a(p)
     , count(c) {
   }
 
-  ETX_GPU_CODE const T& operator[](uint64_t i) const {
+  ETX_SHARED_INLINE const T& operator[](uint64_t i) const {
     ETX_ASSERT_GREATER(count, 0llu);
     ETX_ASSERT(a != nullptr);
     ETX_ASSERT_LESS(i, count);
     return a[i];
   }
 
-  ETX_GPU_CODE const T* begin() const {
+  ETX_SHARED_INLINE const T* begin() const {
     ETX_ASSERT_GREATER(count, 0llu);
     ETX_ASSERT(a != nullptr);
     return a;
   }
 
-  ETX_GPU_CODE const T* end() const {
+  ETX_SHARED_INLINE const T* end() const {
     ETX_ASSERT_GREATER(count, 0llu);
     ETX_ASSERT(a != nullptr);
     return a + count;
   }
 
-  ETX_GPU_CODE uint64_t size() const {
+  ETX_SHARED_INLINE uint64_t size() const {
     return count;
   }
 };
 
 template <class T>
-ETX_GPU_CODE ArrayView<T> make_array_view(void* p, uint64_t count) {
+ETX_SHARED_INLINE ArrayView<T> make_array_view(void* p, uint64_t count) {
   return {reinterpret_cast<T*>(p), count};
 }
 
 template <class T>
-ETX_GPU_CODE ArrayView<T> make_array_view(uint64_t p, uint64_t count) {
+ETX_SHARED_INLINE ArrayView<T> make_array_view(uint64_t p, uint64_t count) {
   return {reinterpret_cast<T*>(p), count};
 }
 

@@ -2,12 +2,12 @@
 
 namespace etx {
 
-ETX_GPU_CODE float emitter_pdf_area_local(const Emitter& em, const Scene& scene) {
+ETX_SHARED_INLINE float emitter_pdf_area_local(const Emitter& em, const Scene& scene) {
   ETX_ASSERT(em.is_local());
   return 1.0f / em.triangle_area;
 }
 
-ETX_GPU_CODE uint32_t emitter_external_medium_index(const Scene& scene, const Emitter& em_inst) {
+ETX_SHARED_INLINE uint32_t emitter_external_medium_index(const Scene& scene, const Emitter& em_inst) {
   if (em_inst.cls == EmitterProfile::Class::Area) {
     if (em_inst.triangle_index >= scene.triangles.count) {
       return kInvalidIndex;
@@ -23,7 +23,7 @@ ETX_GPU_CODE uint32_t emitter_external_medium_index(const Scene& scene, const Em
   return profile.medium_index;
 }
 
-ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
+ETX_SHARED_INLINE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
   float& pdf_area, float& pdf_dir, float& pdf_dir_out, const Scene& scene) {
   const auto& em = scene.emitter_profiles[em_inst.profile];
   ETX_ASSERT(em_inst.is_local());
@@ -52,7 +52,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst,
   return apply_image(spect, em.emission, uv, scene, nullptr);
 }
 
-ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
+ETX_SHARED_INLINE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
   float& pdf_dir_out, const Scene& scene) {
   const auto& em = scene.emitter_profiles[em_inst.profile];
   pdf_dir = 0.0f;
@@ -127,7 +127,7 @@ ETX_GPU_CODE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const
   }
 }
 
-ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
+ETX_SHARED_INLINE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir,
   const Scene& scene) {
   const auto& em = scene.emitter_profiles[em_inst.profile];
   ETX_ASSERT(em_inst.is_distant());
@@ -167,7 +167,7 @@ ETX_GPU_CODE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, 
   }
 }
 
-ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spect, const float3& from_point, const Scene& scene, const float2& smp) {
+ETX_SHARED_INLINE EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spect, const float3& from_point, const Scene& scene, const float2& smp) {
   const auto& em = scene.emitter_profiles[em_inst.profile];
   EmitterSample result;
   switch (em_inst.cls) {
@@ -242,14 +242,14 @@ ETX_GPU_CODE EmitterSample emitter_sample_in(const Emitter& em_inst, const Spect
   return result;
 }
 
-ETX_GPU_CODE float emitter_discrete_pdf(const Emitter& emitter, const Distribution& dist) {
+ETX_SHARED_INLINE float emitter_discrete_pdf(const Emitter& emitter, const Distribution& dist) {
   if (dist.total_weight == 0.0f) {
     return 0.0f;
   }
   return (emitter.spectrum_weight * emitter.additional_weight) / dist.total_weight;
 }
 
-ETX_GPU_CODE float emitter_ris_candidate_weight(const EmitterSample& emitter_sample, const EmitterSampleQuery& query) {
+ETX_SHARED_INLINE float emitter_ris_candidate_weight(const EmitterSample& emitter_sample, const EmitterSampleQuery& query) {
   float radiance_weight = emitter_sample.value.luminance();
   if (radiance_weight <= 0.0f) {
     return 0.0f;
@@ -276,7 +276,7 @@ ETX_GPU_CODE float emitter_ris_candidate_weight(const EmitterSample& emitter_sam
   return radiance_weight * distance_weight * (emitter_orientation / sqrtf(len_sq)) * source_alignment;
 }
 
-ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, const EmitterSampleQuery& query, Sampler& smp) {
+ETX_SHARED_INLINE EmitterSample sample_emitter(const Scene& scene, const EmitterSampleQuery& query, Sampler& smp) {
   if ((scene.emitter_instances.count == 0) || (scene.emitters_distribution.values.count == 0)) {
     return {};
   }
@@ -352,7 +352,7 @@ ETX_GPU_CODE EmitterSample sample_emitter(const Scene& scene, const EmitterSampl
   return sample;
 }
 
-ETX_GPU_CODE const EmitterSample sample_emission(const Scene& scene, SpectralQuery spect, Sampler& smp) {
+ETX_SHARED_INLINE const EmitterSample sample_emission(const Scene& scene, SpectralQuery spect, Sampler& smp) {
   if ((scene.emitter_instances.count == 0) || (scene.emitters_distribution.values.count == 0)) {
     return {};
   }

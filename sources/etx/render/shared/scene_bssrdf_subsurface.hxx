@@ -14,7 +14,7 @@ struct Gather {
   float total_weight;
 };
 
-ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, float& albedo, float& extinction, float& scattering) {
+ETX_SHARED_INLINE void remap_channel(float color, const float scattering_distances, float& albedo, float& extinction, float& scattering) {
   constexpr float a = 1.826052378200f;
   constexpr float b = 4.985111943850f + 0.12735595943800f;
   constexpr float c = 1.096861024240f;
@@ -37,13 +37,13 @@ ETX_GPU_CODE void remap_channel(float color, const float scattering_distances, f
   ETX_VALIDATE(scattering);
 }
 
-ETX_GPU_CODE void remap(const float3& color, const float3& scattering_distances, float3& albedo, float3& extinction, float3& scattering) {
+ETX_SHARED_INLINE void remap(const float3& color, const float3& scattering_distances, float3& albedo, float3& extinction, float3& scattering) {
   remap_channel(color.x, scattering_distances.x, albedo.x, extinction.x, scattering.x);
   remap_channel(color.y, scattering_distances.y, albedo.y, extinction.y, scattering.y);
   remap_channel(color.z, scattering_distances.z, albedo.z, extinction.z, scattering.z);
 }
 
-ETX_GPU_CODE float sample_s_r(float rnd) {
+ETX_SHARED_INLINE float sample_s_r(float rnd) {
   if (rnd < 0.25f) {
     rnd = fminf(4.0f * rnd, 1.0f - kEpsilon);
     return logf(1.0f / (1.0f - rnd));
@@ -53,7 +53,7 @@ ETX_GPU_CODE float sample_s_r(float rnd) {
   return 3.0f * logf(1.0f / (1.0f - rnd));
 }
 
-ETX_GPU_CODE SpectralResponse evaluate(const SpectralQuery spect, const Scene& scene, const Intersection& data, const SubsurfaceMaterial& m, float radius) {
+ETX_SHARED_INLINE SpectralResponse evaluate(const SpectralQuery spect, const Scene& scene, const Intersection& data, const SubsurfaceMaterial& m, float radius) {
   auto sd = apply_image(spect, m, data.tex, scene, nullptr);
   ETX_VALIDATE(sd);
 
@@ -86,7 +86,7 @@ struct Sample {
   }
 };
 
-ETX_GPU_CODE Sample sample(SpectralQuery spect, const Scene& scene, const Vertex& data, const SubsurfaceMaterial& mtl, const uint32_t direction, Sampler& smp) {
+ETX_SHARED_INLINE Sample sample(SpectralQuery spect, const Scene& scene, const Vertex& data, const SubsurfaceMaterial& mtl, const uint32_t direction, Sampler& smp) {
   SpectralResponse sampled_distance = apply_image(spect, mtl, data.tex, scene, nullptr);
   uint32_t channel = uint32_t(sampled_distance.component_count() * smp.next());
   float scattering_distance = sampled_distance.component(channel);
@@ -137,7 +137,7 @@ ETX_GPU_CODE Sample sample(SpectralQuery spect, const Scene& scene, const Vertex
   return result;
 }
 
-ETX_GPU_CODE float geometric_weigth(const float3& nrm, const Sample& smp) {
+ETX_SHARED_INLINE float geometric_weigth(const float3& nrm, const Sample& smp) {
   float pdf_t = smp.basis_prob.x * fabsf(dot(nrm, smp.u));
   float pdf_b = smp.basis_prob.y * fabsf(dot(nrm, smp.v));
   float pdf_n = smp.basis_prob.z * fabsf(dot(nrm, smp.w));

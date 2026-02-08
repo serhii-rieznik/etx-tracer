@@ -40,28 +40,28 @@ struct ETX_ALIGNED VCMOptions {
     options = (options & (~option)) | (enabled ? option : 0u);
   }
 
-  ETX_GPU_CODE bool connect_to_camera() const {
+  ETX_SHARED_INLINE bool connect_to_camera() const {
     return options & ConnectToCamera;
   }
-  ETX_GPU_CODE bool direct_hit() const {
+  ETX_SHARED_INLINE bool direct_hit() const {
     return options & DirectHit;
   }
-  ETX_GPU_CODE bool connect_to_light() const {
+  ETX_SHARED_INLINE bool connect_to_light() const {
     return options & ConnectToLight;
   }
-  ETX_GPU_CODE bool connect_vertices() const {
+  ETX_SHARED_INLINE bool connect_vertices() const {
     return options & ConnectVertices;
   }
-  ETX_GPU_CODE bool enable_mis() const {
+  ETX_SHARED_INLINE bool enable_mis() const {
     return options & EnableMis;
   }
-  ETX_GPU_CODE bool merge_vertices() const {
+  ETX_SHARED_INLINE bool merge_vertices() const {
     return enable_merging() && (options & MergeVertices);
   }
-  ETX_GPU_CODE bool enable_merging() const {
+  ETX_SHARED_INLINE bool enable_merging() const {
     return options & EnableMerging;
   }
-  ETX_GPU_CODE bool smooth_kernel() const {
+  ETX_SHARED_INLINE bool smooth_kernel() const {
     return kernel == Epanechnikov;
   }
 
@@ -119,31 +119,31 @@ struct ETX_ALIGNED VCMPathState {
   uint32_t global_index = 0u;
   uint32_t flags = 0u;
 
-  ETX_GPU_CODE bool delta_emitter() const {
+  ETX_SHARED_INLINE bool delta_emitter() const {
     return (flags & DeltaEmitter) == DeltaEmitter;
   }
 
-  ETX_GPU_CODE bool local_emitter() const {
+  ETX_SHARED_INLINE bool local_emitter() const {
     return (flags & LocalEmitter) == LocalEmitter;
   }
 
-  ETX_GPU_CODE bool should_continue_ray() const {
+  ETX_SHARED_INLINE bool should_continue_ray() const {
     return (flags & ContinueRay) == ContinueRay;
   }
 
-  ETX_GPU_CODE bool ray_action_set() const {
+  ETX_SHARED_INLINE bool ray_action_set() const {
     return (flags & RayActionSet) == RayActionSet;
   }
 
-  ETX_GPU_CODE void set_flags(uint32_t f, bool enable) {
+  ETX_SHARED_INLINE void set_flags(uint32_t f, bool enable) {
     flags = enable ? (flags | f) : (flags & (~f));
   }
 
-  ETX_GPU_CODE void clear_ray_action() {
+  ETX_SHARED_INLINE void clear_ray_action() {
     set_flags(RayActionSet | ContinueRay, false);
   }
 
-  ETX_GPU_CODE void continue_ray(bool cont) {
+  ETX_SHARED_INLINE void continue_ray(bool cont) {
     set_flags(ContinueRay, cont);
     set_flags(RayActionSet, true);
   }
@@ -154,7 +154,7 @@ constexpr uint64_t kVCMPathStateSize = sizeof(VCMPathState);
 struct ETX_ALIGNED VCMLightVertex {
   VCMLightVertex() = default;
 
-  ETX_GPU_CODE VCMLightVertex(const VCMPathState& s, const Intersection& i, uint32_t index)
+  ETX_SHARED_INLINE VCMLightVertex(const VCMPathState& s, const Intersection& i, uint32_t index)
     : throughput(s.throughput)
     , w_i(s.ray.d)
     , d_vcm(s.d_vcm)
@@ -191,7 +191,7 @@ struct ETX_ALIGNED VCMLightVertex {
   uint32_t path_length = 0;
   uint32_t path_index = 0;
 
-  ETX_GPU_CODE Vertex vertex(const Scene& s) const {
+  ETX_SHARED_INLINE Vertex vertex(const Scene& s) const {
     return lerp_vertex(s, s.triangles[triangle_index], bc);
   }
 };
@@ -203,19 +203,19 @@ struct VCMLightPath {
   uint32_t pixel_index ETX_EMPTY_INIT;
 };
 
-ETX_GPU_CODE bool vcm_can_extend_path(const Scene& scene, const VCMPathState& state) {
+ETX_SHARED_INLINE bool vcm_can_extend_path(const Scene& scene, const VCMPathState& state) {
   return (state.total_path_depth + 1 <= scene.options.max_path_length);
 }
 
-ETX_GPU_CODE bool vcm_medium_explicit(const Scene& scene, const VCMPathState& state) {
+ETX_SHARED_INLINE bool vcm_medium_explicit(const Scene& scene, const VCMPathState& state) {
   return (state.medium_index != kInvalidIndex) && scene.mediums[state.medium_index].enable_explicit_connections;
 }
 
-ETX_GPU_CODE SpectralResponse vcm_transmittance(const Raytracing& rt, const Scene& scene, VCMPathState& state, const float3& origin, const float3& target) {
+ETX_SHARED_INLINE SpectralResponse vcm_transmittance(const Raytracing& rt, const Scene& scene, VCMPathState& state, const float3& origin, const float3& target) {
   return rt.trace_transmittance(state.spect, scene, origin, target, {.index = state.medium_index}, state.sampler);
 }
 
-ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source, const VCMOptions& options, VCMPathState& state, const VCMIteration& it,
+ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_source, const VCMOptions& options, VCMPathState& state, const VCMIteration& it,
   const Intersection& intersection, const BSDFData& bsdf_data, const BSDFSample& bsdf_sample, bool subsurface_sample) {
   if (state.total_path_depth + 1 > scene.options.max_path_length)
     return false;
@@ -282,7 +282,7 @@ ETX_GPU_CODE bool vcm_next_ray(const Scene& scene, const PathSource path_source,
   return true;
 }
 
-ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const Intersection& intersection) {
+ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const Intersection& intersection) {
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;
@@ -307,7 +307,7 @@ ETX_GPU_CODE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter
   return weight * (state.throughput * radiance);
 }
 
-ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
+ETX_SHARED_INLINE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
   VCMPathState state = {};
   state.sampler.init(index, it.iteration);
   state.spect = scene.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
@@ -348,7 +348,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene
   return state;
 }
 
-ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const uint32_t index, const Scene& scene, const Camera& camera, const VCMIteration& it,
+ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, const uint32_t index, const Scene& scene, const Camera& camera, const VCMIteration& it,
   const SpectralQuery spect) {
   VCMPathState state = {};
   state.global_index = index;
@@ -376,7 +376,7 @@ ETX_GPU_CODE VCMPathState vcm_generate_camera_state(const uint2& coord, const ui
   return state;
 }
 
-ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t) {
+ETX_SHARED_INLINE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t) {
   if (state.medium_index == kInvalidIndex)
     return {};
 
@@ -387,7 +387,7 @@ ETX_GPU_CODE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathS
   return medium_sample;
 }
 
-ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const VCMIteration& it, const VCMOptions& /*options*/,
+ETX_SHARED_INLINE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const VCMIteration& it, const VCMOptions& /*options*/,
   const PathSource path_source, VCMPathState& state, const float2& rnd_phase) {
   // Fold pending boundary segment (if any) plus medium segment (no cosine) before recurrences
   bool apply_fold = true;
@@ -433,7 +433,7 @@ ETX_GPU_CODE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sa
   return random_continue(state.total_path_depth, scene.options.random_path_termination, state.eta, state.sampler, state.throughput);
 }
 
-ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state) {
   const auto& mat = scene.materials[intersection.material_index];
   if (mat.cls != Material::Class::Boundary)
     return false;
@@ -448,7 +448,7 @@ ETX_GPU_CODE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource 
   return true;
 }
 
-ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE void vcm_update_light_vcm(const Intersection& intersection, VCMPathState& state) {
   if ((state.total_path_depth > 0) || state.local_emitter()) {
     state.d_vcm *= sqr(state.path_distance + intersection.t);
   }
@@ -460,7 +460,7 @@ ETX_GPU_CODE void vcm_update_light_vcm(const Intersection& intersection, VCMPath
   state.path_distance = 0.0f;
 }
 
-ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration, const VCMOptions& options,
+ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration, const VCMOptions& options,
   bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
   if ((options.connect_to_camera() == false) || (state.total_path_depth + 2 > scene.options.max_path_length) || (state.total_path_depth + 2 < scene.options.min_path_length)) {
     return {};
@@ -534,7 +534,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const 
   return tr * scatter * state.throughput * camera_sample.weight * weight;
 }
 
-ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
   if (options.direct_hit() == false)
     return;
 
@@ -586,7 +586,7 @@ ETX_GPU_CODE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& opti
   }
 }
 
-ETX_GPU_CODE void vcm_update_camera_vcm(const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE void vcm_update_camera_vcm(const Intersection& intersection, VCMPathState& state) {
   float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
   state.d_vcm *= sqr(state.path_distance + intersection.t) / cos_to_prev;
   state.d_vc /= cos_to_prev;
@@ -594,7 +594,7 @@ ETX_GPU_CODE void vcm_update_camera_vcm(const Intersection& intersection, VCMPat
   state.path_distance = 0.0f;
 }
 
-ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
   if ((options.direct_hit() == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
@@ -605,7 +605,7 @@ ETX_GPU_CODE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& op
   state.gathered += vcm_get_radiance(scene, emitter_instance, state, options, intersection);
 }
 
-ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
+ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
   const Intersection* isect, const float3& medium_pos, const Raytracing& rt, VCMPathState& state) {
   if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.options.max_path_length) || (state.total_path_depth + 1 < scene.options.min_path_length))
     return {state.spect, 0.0f};
@@ -675,7 +675,7 @@ ETX_GPU_CODE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCM
   return tr * state.throughput * scatter * emitter_sample.value * (weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
 }  // namespace etx
 
-ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
+ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Scene& scene, const SpectralQuery& spect, VCMPathState& state, const VCMLightVertex& light_vertex, const VCMOptions& options,
   bool camera_at_medium, const Intersection* camera_isect, const float3& medium_pos, float vm_weight, uint32_t state_medium, float3& target_position, SpectralResponse& value) {
   Vertex light_v = light_vertex.is_medium ? Vertex{} : light_vertex.vertex(scene);
   target_position = light_vertex.is_medium ? light_vertex.pos : light_v.pos;
@@ -767,7 +767,7 @@ ETX_GPU_CODE bool vcm_connect_to_light_vertex(const Scene& scene, const Spectral
   return true;
 }
 
-ETX_GPU_CODE SpectralResponse vcm_connect_to_light_path(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightPath>& light_paths,
+ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light_path(const Scene& scene, const VCMIteration& iteration, const ArrayView<VCMLightPath>& light_paths,
   const ArrayView<VCMLightVertex>& light_vertices, const VCMOptions& options, bool camera_at_medium, const Intersection* isect, const float3& medium_pos, const Raytracing& rt,
   VCMPathState& state) {
   if (options.connect_vertices() == false)
@@ -822,16 +822,16 @@ struct ETX_ALIGNED VCMSpatialGridData {
   float radius_squared ETX_EMPTY_INIT;
   float inv_radius_squared ETX_EMPTY_INIT;
 
-  ETX_GPU_CODE uint32_t cell_index(int32_t x, int32_t y, int32_t z) const {
+  ETX_SHARED_INLINE uint32_t cell_index(int32_t x, int32_t y, int32_t z) const {
     return ((x * 73856093u) ^ (y * 19349663) ^ (z * 83492791)) & hash_table_mask;
   }
 
-  ETX_GPU_CODE uint32_t position_to_index(const float3& pos) const {
+  ETX_SHARED_INLINE uint32_t position_to_index(const float3& pos) const {
     auto m = floor((pos - bounding_box.p_min) / cell_size);
     return cell_index(static_cast<int32_t>(m.x), static_cast<int32_t>(m.y), static_cast<int32_t>(m.z));
   }
 
-  ETX_GPU_CODE float3 gather_index(const Scene& scene, const Intersection& intersection, const VCMOptions& options, float vc_weight, uint32_t index, VCMPathState& state) const {
+  ETX_SHARED_INLINE float3 gather_index(const Scene& scene, const Intersection& intersection, const VCMOptions& options, float vc_weight, uint32_t index, VCMPathState& state) const {
     const auto& mat = scene.materials[intersection.material_index];
 
     const auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
@@ -888,7 +888,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
     return merged;
   }
 
-  ETX_GPU_CODE float3 gather(const Scene& scene, VCMPathState& state, const VCMOptions& options, const Intersection& intersection, float vc_weight) const {
+  ETX_SHARED_INLINE float3 gather(const Scene& scene, VCMPathState& state, const VCMOptions& options, const Intersection& intersection, float vc_weight) const {
     if (positions.count == 0) {
       return {};
     }
@@ -929,7 +929,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
   }
 };
 
-ETX_GPU_CODE bool vcm_camera_step(const Scene& scene, const VCMIteration& iteration, const VCMOptions& options, const ArrayView<VCMLightPath>& light_paths,
+ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& iteration, const VCMOptions& options, const ArrayView<VCMLightPath>& light_paths,
   const ArrayView<VCMLightVertex>& light_vertices, VCMPathState& state, const Raytracing& rt, const VCMSpatialGridData& spatial_grid) {
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
@@ -1092,7 +1092,7 @@ struct ETX_ALIGNED LightStepResult {
   bool continue_tracing = false;
 };
 
-ETX_GPU_CODE LightStepResult vcm_light_step(const Scene& scene, const Camera& camera, const VCMIteration& iteration, const VCMOptions& options, const uint32_t path_index,
+ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camera& camera, const VCMIteration& iteration, const VCMOptions& options, const uint32_t path_index,
   VCMPathState& state, const Raytracing& rt) {
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);

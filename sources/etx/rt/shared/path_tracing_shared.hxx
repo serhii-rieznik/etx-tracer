@@ -51,7 +51,7 @@ inline SpectralResponse safe_mul(const SpectralResponse& a, const SpectralRespon
            : SpectralResponse{a.as_query(), {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}};
 }
 
-ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
+ETX_SHARED_INLINE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
   constexpr uint32_t kMaxIterations = 1024u;
 
   const auto& mat = scene.materials[in_intersection.material_index];
@@ -139,7 +139,7 @@ ETX_GPU_CODE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, con
   return GatherResult::Failed;
 }
 
-ETX_GPU_CODE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
+ETX_SHARED_INLINE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
   const auto& mat = scene.materials[in_intersection.material_index];
   const auto& sss = mat.subsurface;
 
@@ -213,7 +213,7 @@ ETX_GPU_CODE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, con
 }
 
 template <class RT>
-ETX_GPU_CODE GatherResult gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
+ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
   const auto& mtl = scene.materials[in_intersection.material_index].subsurface;
 
   switch (mtl.cls) {
@@ -228,7 +228,7 @@ ETX_GPU_CODE GatherResult gather(SpectralQuery spect, const Scene& scene, const 
 
 float2 sample_blue_noise(const uint2& pixel, const uint32_t total_samples, const uint32_t current_sample, uint32_t dimension);
 
-ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Camera& camera, const Film& film, const uint2& px, const uint32_t pixel_index, const uint32_t iteration,
+ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera& camera, const Film& film, const uint2& px, const uint32_t pixel_index, const uint32_t iteration,
   const bool spectral, const bool use_blue_noise) {
   PTRayPayload payload = {};
   payload.iteration = iteration;
@@ -249,7 +249,7 @@ ETX_GPU_CODE PTRayPayload make_ray_payload(const Scene& scene, const Camera& cam
   return payload;
 }
 
-ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload& payload, float max_t) {
+ETX_SHARED_INLINE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload& payload, float max_t) {
   if (payload.medium == kInvalidIndex) {
     return {};
   }
@@ -260,7 +260,7 @@ ETX_GPU_CODE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload
   return medium_sample;
 }
 
-ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const Raytracing& rt, PTRayPayload& payload) {
+ETX_SHARED_INLINE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const Raytracing& rt, PTRayPayload& payload) {
   const auto& medium = scene.mediums[payload.medium];
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
@@ -292,7 +292,7 @@ ETX_GPU_CODE void handle_sampled_medium(const Scene& scene, const Medium::Sample
   ETX_CHECK_FINITE(payload.ray.d);
 }
 
-ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersection& intersection, const Raytracing& rt, const Material& mat, const uint32_t medium,
+ETX_SHARED_INLINE SpectralResponse evaluate_light(const Scene& scene, const Intersection& intersection, const Raytracing& rt, const Material& mat, const uint32_t medium,
   const SpectralQuery spect, const EmitterSample& emitter_sample, Sampler& smp, bool mis) {
   if (emitter_sample.pdf_dir == 0.0f) {
     return {spect, 0.0f};
@@ -319,7 +319,7 @@ ETX_GPU_CODE SpectralResponse evaluate_light(const Scene& scene, const Intersect
   return bsdf_eval.bsdf * emitter_sample.value * tr * wscale;
 }
 
-ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, PTRayPayload& payload) {
+ETX_SHARED_INLINE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, PTRayPayload& payload) {
   if ((scene.strategy_enabled(Scene::Strategy::DirectHit) == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
@@ -348,7 +348,7 @@ ETX_GPU_CODE void handle_direct_emitter(const Scene& scene, const Triangle& tri,
   }
 }
 
-ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const Raytracing& rt, PTRayPayload& payload) {
+ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& intersection, const Raytracing& rt, PTRayPayload& payload) {
   const auto& tri = scene.triangles[intersection.triangle_index];
   const auto& mat = scene.materials[intersection.material_index];
 
@@ -465,7 +465,7 @@ ETX_GPU_CODE bool handle_hit_ray(const Scene& scene, const Intersection& interse
   return random_continue(payload.path_length, scene.options.random_path_termination, payload.eta, payload.smp, payload.throughput);
 }  // namespace etx
 
-ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
+ETX_SHARED_INLINE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
   for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
     const auto& emitter_instance = scene.emitter_instances[scene.environment_emitters.emitters[ie]];
     float pdf_emitter_area = 0.0f;
@@ -486,7 +486,7 @@ ETX_GPU_CODE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
   }
 }
 
-ETX_GPU_CODE bool run_path_iteration(const Scene& scene, const Raytracing& rt, PTRayPayload& payload) {
+ETX_SHARED_INLINE bool run_path_iteration(const Scene& scene, const Raytracing& rt, PTRayPayload& payload) {
   if (payload.path_length > rt.scene().options.max_path_length)
     return false;
 

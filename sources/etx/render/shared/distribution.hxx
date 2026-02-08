@@ -14,7 +14,7 @@ struct ETX_ALIGNED Distribution {
   ArrayView<Entry> values ETX_EMPTY_INIT;
   float total_weight ETX_EMPTY_INIT;
 
-  ETX_GPU_CODE uint32_t sample(float rnd, float& pdf) const {
+  ETX_SHARED_INLINE uint32_t sample(float rnd, float& pdf) const {
     if ((values.count == 0) || (values.a == nullptr)) {
       pdf = 0.0f;
       return kInvalidIndex;
@@ -24,7 +24,7 @@ struct ETX_ALIGNED Distribution {
     return index;
   }
 
-  ETX_GPU_CODE uint32_t sample(float rnd) const {
+  ETX_SHARED_INLINE uint32_t sample(float rnd) const {
     if ((values.count == 0) || (values.a == nullptr)) {
       return kInvalidIndex;
     }
@@ -41,7 +41,7 @@ struct ETX_ALIGNED Distribution {
     return b;
   }
 
-  static ETX_GPU_CODE Distribution build(Distribution::Entry* entries, uint32_t count) {
+  static ETX_SHARED_INLINE Distribution build(Distribution::Entry* entries, uint32_t count) {
     float total_weight = 0.0f;
     for (uint32_t i = 0; i < count; ++i) {
       entries[i].cdf = total_weight;
