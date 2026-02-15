@@ -1,22 +1,23 @@
 ﻿#pragma once
 
 #include <etx/render/interop/interop.hxx>
+#include <etx/render/interop/gpu_abi_constants.hxx>
 
 namespace etx {
 
 struct ETX_ALIGNED EmitterProfile {
   enum class Class : uint32_t {
-    Area,
-    Environment,
-    Directional,
+    Area = EmitterClass::Area,
+    Environment = EmitterClass::Environment,
+    Directional = EmitterClass::Directional,
 
     Undefined = kInvalidIndex,
   };
 
   struct Meta {
     enum : uint32_t {
-      None = 0u,
-      Atmosphere = 1u << 0u,
+      None = EmitterProfileMeta::None,
+      Atmosphere = EmitterProfileMeta::Atmosphere,
     };
   };
 

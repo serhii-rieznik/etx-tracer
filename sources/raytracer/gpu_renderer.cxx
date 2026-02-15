@@ -1,89 +1,83 @@
 #include "gpu_renderer.hxx"
+#include <interop/gpu_abi_constants.hxx>
 #include <interop/gpu_rt_shared.hxx>
+#include <interop/sampler_policy.hxx>
 #include <etx/core/profiler.hxx>
 #include <etx/rhi/rhi.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
+#include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_representation.hxx>
+#include <etx/render/shared/density_grid.hxx>
+#include <bluenoise.hxx>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <type_traits>
+#include "gpu_renderer_abi_static_asserts.hxx"
 
 namespace etx {
 namespace {
 constexpr uint32_t kInvalidDescriptorIndex = ~0u;
 
-constexpr uint32_t kShaderTriangleStride = 32u;
-constexpr uint32_t kShaderMaterialStride = 272u;
-constexpr uint32_t kShaderMaterialScatteringSpectrumOffset = 16u;
-constexpr uint32_t kShaderSpectralDistributionStride = 3552u;
-constexpr uint32_t kShaderSpectralDistributionIntegratedOffset = 0u;
-constexpr uint32_t kShaderSceneGlobalsVertexCountOffset = 0u;
-constexpr uint32_t kShaderSceneGlobalsTriangleCountOffset = 4u;
-constexpr uint32_t kShaderSceneGlobalsBoundingSphereRadiusOffset = 44u;
+constexpr uint32_t kBlueNoiseTileSize = kSamplerBlueNoiseTileSize;
+constexpr uint32_t kBlueNoiseSampleCount = kSamplerBlueNoiseSampleCount;
+constexpr uint32_t kBlueNoiseDimensionCount = kSamplerBlueNoiseDimensionCount;
 
-static_assert(std::is_standard_layout_v<float2>, "float2 must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<float2>, "float2 must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(float2) == 8u, "float2 size changed; update GPU upload ABI");
+uint32_t normalize_blue_noise_target_samples(uint32_t value) {
+  uint32_t result = value;
+  if (result == 0u) {
+    result = 1u;
+  }
+  if (result > kBlueNoiseSampleCount) {
+    result = kBlueNoiseSampleCount;
+  }
 
-static_assert(std::is_standard_layout_v<float3>, "float3 must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<float3>, "float3 must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(float3) == 12u, "float3 size changed; update GPU upload ABI");
+  result -= 1u;
+  result |= (result >> 1u);
+  result |= (result >> 2u);
+  result |= (result >> 4u);
+  result |= (result >> 8u);
+  result |= (result >> 16u);
+  result += 1u;
+  return result;
+}
 
-static_assert(std::is_standard_layout_v<Triangle>, "Triangle must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<Triangle>, "Triangle must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(Triangle) == kShaderTriangleStride, "Triangle size changed; update GPU shader decode stride");
-static_assert(offsetof(Triangle, i) == 0u, "Triangle::i offset changed; update GPU shader decode");
-static_assert(offsetof(Triangle, material_index) == 12u, "Triangle::material_index offset changed; update GPU shader decode");
-static_assert(offsetof(Triangle, geo_n) == 16u, "Triangle::geo_n offset changed; update GPU shader decode");
-static_assert(offsetof(Triangle, emitter_index) == 28u, "Triangle::emitter_index offset changed; update GPU shader decode");
+uint32_t blue_noise_table_index(uint32_t x, uint32_t y, uint32_t sample_index, uint32_t dimension) {
+  return (((sample_index * kBlueNoiseDimensionCount) + dimension) * kBlueNoiseTileSize + y) * kBlueNoiseTileSize + x;
+}
 
-static_assert(std::is_standard_layout_v<Mesh>, "Mesh must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<Mesh>, "Mesh must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(Mesh) == 32u, "Mesh size changed; update GPU upload ABI");
+bool build_blue_noise_table_data(uint32_t target_samples, std::vector<uint8_t>& table_data) {
+  target_samples = normalize_blue_noise_target_samples(target_samples);
 
-static_assert(std::is_standard_layout_v<EmitterProfile>, "EmitterProfile must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<EmitterProfile>, "EmitterProfile must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(EmitterProfile) == 80u, "EmitterProfile size changed; update GPU upload ABI");
+  const uint64_t table_size_u64 = static_cast<uint64_t>(kBlueNoiseTileSize) * static_cast<uint64_t>(kBlueNoiseTileSize) * static_cast<uint64_t>(kBlueNoiseSampleCount) *
+                                  static_cast<uint64_t>(kBlueNoiseDimensionCount);
+  if (table_size_u64 > std::numeric_limits<size_t>::max()) {
+    return false;
+  }
 
-static_assert(std::is_standard_layout_v<Emitter>, "Emitter must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<Emitter>, "Emitter must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(Emitter) == 32u, "Emitter size changed; update GPU upload ABI");
+  const size_t table_size = static_cast<size_t>(table_size_u64);
+  table_data.assign(table_size, uint8_t(0u));
 
-static_assert(std::is_standard_layout_v<Material>, "Material must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<Material>, "Material must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(Material) == kShaderMaterialStride, "Material size changed; update GPU shader decode stride");
-static_assert(offsetof(Material, scattering) == kShaderMaterialScatteringSpectrumOffset, "Material::scattering offset changed; update GPU shader decode");
+  for (uint32_t sample_index = 0u; sample_index < kBlueNoiseSampleCount; ++sample_index) {
+    for (uint32_t y = 0u; y < kBlueNoiseTileSize; ++y) {
+      for (uint32_t x = 0u; x < kBlueNoiseTileSize; ++x) {
+        const ::BNSampler sampler = ::BNSampler(x, y, target_samples, sample_index);
+        for (uint32_t dimension = 0u; dimension < kBlueNoiseDimensionCount; ++dimension) {
+          const float sample_value = sampler.get(dimension);
+          uint32_t quantized = static_cast<uint32_t>(sample_value * static_cast<float>(kBlueNoiseSampleCount));
+          if (quantized > 255u) {
+            quantized = 255u;
+          }
+          const uint32_t index = blue_noise_table_index(x, y, sample_index, dimension);
+          table_data[index] = static_cast<uint8_t>(quantized);
+        }
+      }
+    }
+  }
 
-static_assert(std::is_standard_layout_v<SpectralImage>, "SpectralImage must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<SpectralImage>, "SpectralImage must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(SpectralImage) == 16u, "SpectralImage size changed; update material ABI");
-static_assert(offsetof(SpectralImage, spectrum_index) == 0u, "SpectralImage::spectrum_index offset changed; update material ABI");
-static_assert(offsetof(SpectralImage, image_index) == 4u, "SpectralImage::image_index offset changed; update material ABI");
-
-static_assert(std::is_standard_layout_v<SampledImage>, "SampledImage must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<SampledImage>, "SampledImage must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(SampledImage) == 32u, "SampledImage size changed; update material ABI");
-static_assert(offsetof(SampledImage, value) == 0u, "SampledImage::value offset changed; update material ABI");
-static_assert(offsetof(SampledImage, image_index) == 16u, "SampledImage::image_index offset changed; update material ABI");
-static_assert(offsetof(SampledImage, channel) == 20u, "SampledImage::channel offset changed; update material ABI");
-
-static_assert(std::is_standard_layout_v<Thinfilm>, "Thinfilm must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<Thinfilm>, "Thinfilm must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(Thinfilm) == 32u, "Thinfilm size changed; update material ABI");
-
-static_assert(std::is_standard_layout_v<RefractiveIndex>, "RefractiveIndex must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<RefractiveIndex>, "RefractiveIndex must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(RefractiveIndex) == 16u, "RefractiveIndex size changed; update material/spectrum ABI");
-
-static_assert(std::is_standard_layout_v<SpectralDistribution>, "SpectralDistribution must stay standard layout for GPU upload ABI");
-static_assert(std::is_trivially_copyable_v<SpectralDistribution>, "SpectralDistribution must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(SpectralDistribution) == kShaderSpectralDistributionStride, "SpectralDistribution size changed; update GPU shader decode stride");
-static_assert(offsetof(SpectralDistribution, integrated_value) == kShaderSpectralDistributionIntegratedOffset,
-  "SpectralDistribution::integrated_value offset changed; update GPU shader decode");
-
-static_assert(offsetof(GPUSceneGlobals, vertex_count) == kShaderSceneGlobalsVertexCountOffset, "GPUSceneGlobals::vertex_count offset changed; update GPU shader decode");
-static_assert(offsetof(GPUSceneGlobals, triangle_count) == kShaderSceneGlobalsTriangleCountOffset, "GPUSceneGlobals::triangle_count offset changed; update GPU shader decode");
-static_assert(offsetof(GPUSceneGlobals, bounding_sphere_radius) == kShaderSceneGlobalsBoundingSphereRadiusOffset,
-  "GPUSceneGlobals::bounding_sphere_radius offset changed; update GPU shader decode");
+  return true;
+}
 
 GPUScene make_invalid_gpu_scene() {
   return {
@@ -108,30 +102,31 @@ GPUScene make_invalid_gpu_scene() {
 
 void destroy_linear_scene_buffer(RHIDevice& device, RHIBindlessHandle& buffer, uint64_t& buffer_size, uint32_t& descriptor_index) {
   ETX_PROFILER_NAMED_SCOPE("gpu_rt_destroy_linear_scene_buffer");
-
-  if (buffer.valid()) {
-    device.destroy_buffer(buffer);
-  }
+  device.destroy_buffer(buffer);
   buffer = {};
   buffer_size = 0;
   descriptor_index = kInvalidDescriptorIndex;
 }
 
 template <typename T>
-void upload_or_update_linear_scene_buffer(RHIDevice& device, const T* data, size_t count, RHIBufferUsage usage, RHIBindlessHandle& buffer, uint64_t& buffer_size,
-  uint32_t& descriptor_index) {
+bool upload_or_update_linear_scene_buffer(RHIDevice& device, const T* data, size_t count, RHIBufferUsage usage, RHIBindlessHandle& buffer, uint64_t& buffer_size,
+  uint32_t& descriptor_index, const char* buffer_name) {
   ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_or_update_linear_scene_buffer");
 
   if ((data == nullptr) || (count == 0u)) {
     destroy_linear_scene_buffer(device, buffer, buffer_size, descriptor_index);
-    return;
+    return true;
   }
 
   const uint64_t required_size = static_cast<uint64_t>(count) * sizeof(T);
   if (buffer.valid() && (buffer_size == required_size)) {
-    device.update_buffer(buffer, data, required_size);
+    const RHIResult update_result = device.update_buffer(buffer, data, required_size);
+    if (update_result != RHIResult::Success) {
+      log::error("GPU RT: failed to update '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(update_result));
+      return false;
+    }
     descriptor_index = get_bindless_descriptor_index(buffer);
-    return;
+    return true;
   }
 
   RHIBufferDesc desc = {};
@@ -140,105 +135,413 @@ void upload_or_update_linear_scene_buffer(RHIDevice& device, const T* data, size
 
   auto result = device.create_buffer(desc);
   if ((result.result != RHIResult::Success) || (result.handle.valid() == false)) {
+    log::error("GPU RT: failed to create '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(result.result));
     descriptor_index = buffer.valid() ? get_bindless_descriptor_index(buffer) : kInvalidDescriptorIndex;
-    return;
+    return false;
   }
 
-  device.update_buffer(result.handle, data, required_size);
+  const RHIResult update_result = device.update_buffer(result.handle, data, required_size);
+  if (update_result != RHIResult::Success) {
+    log::error("GPU RT: failed to upload '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(update_result));
+    const RHIResult destroy_result = device.destroy_buffer(result.handle);
+    if (destroy_result != RHIResult::Success) {
+      log::error("GPU RT: failed to cleanup temporary '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(destroy_result));
+    }
+    descriptor_index = buffer.valid() ? get_bindless_descriptor_index(buffer) : kInvalidDescriptorIndex;
+    return false;
+  }
+
   if (buffer.valid()) {
-    device.destroy_buffer(buffer);
+    const RHIResult destroy_result = device.destroy_buffer(buffer);
+    if (destroy_result != RHIResult::Success) {
+      log::error("GPU RT: failed to destroy previous '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(destroy_result));
+      const RHIResult cleanup_result = device.destroy_buffer(result.handle);
+      if (cleanup_result != RHIResult::Success) {
+        log::warning("GPU RT: failed to cleanup replacement '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(cleanup_result));
+      }
+      descriptor_index = get_bindless_descriptor_index(buffer);
+      return false;
+    }
   }
 
   buffer = result.handle;
   buffer_size = required_size;
   descriptor_index = get_bindless_descriptor_index(buffer);
+  return true;
 }
 
-struct PackedEmitterData {
-  std::vector<Triangle> triangles;
-  std::vector<Emitter> emitter_instances;
+uint64_t align_up_u64(uint64_t value, uint64_t alignment) {
+  const uint64_t a = (alignment == 0u) ? 1u : alignment;
+  return ((value + a - 1u) / a) * a;
+}
+
+uint32_t append_aligned_bytes(std::vector<uint8_t>& blob, const void* data, uint64_t byte_size, uint64_t alignment = 16u) {
+  if ((data == nullptr) || (byte_size == 0u)) {
+    return kInvalidIndex;
+  }
+
+  const uint64_t aligned_offset = align_up_u64(static_cast<uint64_t>(blob.size()), alignment);
+  if (aligned_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    log::error("GPU RT: packed blob offset overflow (%llu)", aligned_offset);
+    return kInvalidIndex;
+  }
+  if (aligned_offset > blob.size()) {
+    blob.resize(static_cast<size_t>(aligned_offset), 0u);
+  }
+
+  if (aligned_offset > (std::numeric_limits<uint64_t>::max() - byte_size)) {
+    log::error("GPU RT: packed blob size overflow (offset=%llu, size=%llu)", aligned_offset, byte_size);
+    return kInvalidIndex;
+  }
+
+  const uint64_t end_offset = aligned_offset + byte_size;
+  ETX_ASSERT(end_offset >= aligned_offset);
+  if (end_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    log::error("GPU RT: packed blob exceeds 32-bit offset range (%llu)", end_offset);
+    return kInvalidIndex;
+  }
+
+  const size_t old_size = blob.size();
+  blob.resize(static_cast<size_t>(end_offset), 0u);
+  std::memcpy(blob.data() + old_size, data, static_cast<size_t>(byte_size));
+  return static_cast<uint32_t>(aligned_offset);
+}
+
+template <typename T>
+uint32_t append_aligned_array(std::vector<uint8_t>& blob, const T* data, size_t count, uint64_t alignment = alignof(T)) {
+  if (count > (std::numeric_limits<uint64_t>::max() / sizeof(T))) {
+    log::error("GPU RT: packed array size overflow (count=%llu, stride=%llu)", static_cast<uint64_t>(count), static_cast<uint64_t>(sizeof(T)));
+    return kInvalidIndex;
+  }
+  return append_aligned_bytes(blob, data, static_cast<uint64_t>(count) * sizeof(T), alignment);
+}
+
+constexpr uint64_t kSceneBlobChunkSizeBytes = 512ull * 1024ull * 1024ull;
+
+struct ChunkedPayloadLocation {
+  uint32_t chunk_index = kInvalidIndex;
+  uint32_t offset = kInvalidIndex;
 };
 
-float safe_spectrum_luminance(const SceneData& scene_data, uint32_t spectrum_index) {
-  if (spectrum_index >= static_cast<uint32_t>(scene_data.spectrum_values.size())) {
-    return 0.0f;
+struct ChunkedBlobPayloadBuilder {
+  uint64_t chunk_size = kSceneBlobChunkSizeBytes;
+  std::vector<uint8_t> payload_blob = {};
+  std::vector<RHIChunkedBufferRange> chunk_ranges = {};
+  std::vector<uint64_t> chunk_capacities = {};
+
+  bool append(const void* data, uint64_t byte_size, uint64_t alignment, ChunkedPayloadLocation& location) {
+    location = {};
+    if ((data == nullptr) || (byte_size == 0u)) {
+      return true;
+    }
+
+    uint64_t required_chunk_capacity = chunk_size;
+    if (required_chunk_capacity < byte_size) {
+      required_chunk_capacity = byte_size;
+    }
+
+    if (required_chunk_capacity > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+      log::error("GPU RT: chunk capacity exceeds 32-bit local offset range (%llu)", required_chunk_capacity);
+      return false;
+    }
+
+    uint32_t target_chunk_index = kInvalidIndex;
+    uint64_t aligned_offset = 0u;
+    uint64_t chunk_start_offset = 0u;
+
+    if (chunk_ranges.empty() == false) {
+      const uint32_t last_chunk_index = static_cast<uint32_t>(chunk_ranges.size() - 1u);
+      const uint64_t last_chunk_capacity = chunk_capacities[last_chunk_index];
+      const auto& last_chunk_range = chunk_ranges[last_chunk_index];
+      const uint64_t last_chunk_size = last_chunk_range.size;
+      const uint64_t candidate_offset = align_up_u64(last_chunk_size, alignment);
+      if ((candidate_offset <= last_chunk_capacity) && ((last_chunk_capacity - candidate_offset) >= byte_size)) {
+        target_chunk_index = last_chunk_index;
+        aligned_offset = candidate_offset;
+        chunk_start_offset = last_chunk_range.offset;
+      }
+    }
+
+    if (target_chunk_index == kInvalidIndex) {
+      chunk_start_offset = static_cast<uint64_t>(payload_blob.size());
+      chunk_ranges.push_back({.offset = chunk_start_offset, .size = 0u});
+      chunk_capacities.push_back(required_chunk_capacity);
+
+      target_chunk_index = static_cast<uint32_t>(chunk_ranges.size() - 1u);
+      aligned_offset = 0u;
+    }
+
+    if (aligned_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+      log::error("GPU RT: chunk local offset exceeds 32-bit range (%llu)", aligned_offset);
+      return false;
+    }
+
+    auto& chunk_range = chunk_ranges[target_chunk_index];
+    if (aligned_offset > chunk_range.size) {
+      const uint64_t aligned_write_offset = chunk_start_offset + aligned_offset;
+      if (aligned_write_offset > static_cast<uint64_t>(payload_blob.size())) {
+        payload_blob.resize(static_cast<size_t>(aligned_write_offset), 0u);
+      }
+    }
+
+    if (aligned_offset > (std::numeric_limits<uint64_t>::max() - byte_size)) {
+      log::error("GPU RT: chunk payload range overflow (offset=%llu size=%llu)", aligned_offset, byte_size);
+      return false;
+    }
+
+    const uint64_t end_offset = aligned_offset + byte_size;
+    if (end_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+      log::error("GPU RT: chunk payload exceeds 32-bit local range (%llu)", end_offset);
+      return false;
+    }
+
+    const uint64_t chunk_capacity = chunk_capacities[target_chunk_index];
+    if (end_offset > chunk_capacity) {
+      log::error("GPU RT: chunk payload exceeds chunk capacity (end=%llu capacity=%llu)", end_offset, chunk_capacity);
+      return false;
+    }
+
+    const uint64_t global_dst_offset = chunk_start_offset + aligned_offset;
+    const uint64_t global_end_offset = chunk_start_offset + end_offset;
+    if (global_end_offset > static_cast<uint64_t>(payload_blob.size())) {
+      payload_blob.resize(static_cast<size_t>(global_end_offset), 0u);
+    }
+    std::memcpy(payload_blob.data() + static_cast<size_t>(global_dst_offset), data, static_cast<size_t>(byte_size));
+    chunk_range.size = end_offset;
+
+    location.chunk_index = target_chunk_index;
+    location.offset = static_cast<uint32_t>(aligned_offset);
+    return true;
   }
-  return scene_data.spectrum_values[spectrum_index].luminance();
+};
+
+uint32_t packed_image_pixel_stride(const Image& image) {
+  if (image.format == Image::Format::RGBA32F) {
+    return sizeof(float4);
+  }
+  if (image.format == Image::Format::RGBA8) {
+    return sizeof(ubyte4);
+  }
+  if (Image::is_compressed_bc_format(image.format)) {
+    return Image::get_bc_block_size(image.format);
+  }
+  return 0u;
 }
 
-PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
+using PackedChunkedBlobBuildResult = RHIChunkedBufferUploadData;
+
+PackedChunkedBlobBuildResult build_packed_images_blob(const SceneData& scene_data) {
   ETX_PROFILER_SCOPE();
 
-  PackedEmitterData result = {};
-  result.triangles = scene_data.triangles;
+  PackedChunkedBlobBuildResult result = {};
+  GPUImageBlobHeader header = {};
+  const uint64_t image_count_u64 = scene_data.images.array_size();
+  if (image_count_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    log::error("GPU RT: image count exceeds 32-bit ABI limit (%llu)", image_count_u64);
+    result.success = false;
+    return result;
+  }
 
-  {
-    ETX_PROFILER_NAMED_SCOPE("gpu_rt_reset_triangle_emitter_indices");
-    for (auto& tri : result.triangles) {
-      tri.emitter_index = kInvalidIndex;
+  header.image_count = static_cast<uint32_t>(image_count_u64);
+  result.metadata = std::vector<uint8_t>(sizeof(GPUImageBlobHeader), 0u);
+  std::vector<::Image> packed_images(header.image_count);
+  ChunkedBlobPayloadBuilder payload_builder = {};
+
+  const auto* images = scene_data.images.as_array();
+  for (uint32_t i = 0u; i < header.image_count; ++i) {
+    const auto& src = images[i];
+    auto& dst = packed_images[i];
+
+    // Copy stable interop fields from host image and patch blob-local fields below.
+    dst = static_cast<const ::Image&>(src);
+
+    dst.x_entries_stride = (src.x_distributions_storage.valid() && (src.isize.x > 0u)) ? (src.isize.x + 1u) : 0u;
+    dst.x_distribution_count = (src.x_distributions_storage.valid()) ? src.isize.y : 0u;
+    dst.y_entries_count = src.y_distribution_storage.valid() ? (src.isize.y + 1u) : 0u;
+    dst.y_distribution_total_weight = src.y_distribution.total_weight;
+    dst.pixel_data_stride = packed_image_pixel_stride(src);
+
+    dst.pixel_data_offset = kInvalidIndex;
+    dst.x_distribution_entries_offset = kInvalidIndex;
+    dst.y_distribution_entries_offset = kInvalidIndex;
+    dst.pixel_data_chunk_index = kInvalidIndex;
+    dst.x_distribution_chunk_index = kInvalidIndex;
+    dst.y_distribution_chunk_index = kInvalidIndex;
+
+    if (src.data.valid()) {
+      const void* ptr = scene_data.buffer_pool.map(src.data);
+      ChunkedPayloadLocation payload_location = {};
+      const bool append_success = payload_builder.append(ptr, src.data.byte_size, 16u, payload_location);
+      if (append_success == false) {
+        log::error("GPU RT: failed to pack image payload for index %u", i);
+        result.success = false;
+        return result;
+      }
+
+      dst.pixel_data_offset = payload_location.offset;
+      dst.pixel_data_chunk_index = payload_location.chunk_index;
+      if ((src.data.byte_size > 0u) && (dst.pixel_data_offset == kInvalidIndex)) {
+        log::error("GPU RT: failed to pack image payload for index %u", i);
+        result.success = false;
+        return result;
+      }
+    }
+
+    if (src.x_distributions_storage.valid()) {
+      const void* ptr = scene_data.buffer_pool.map(src.x_distributions_storage);
+      ChunkedPayloadLocation payload_location = {};
+      const bool append_success = payload_builder.append(ptr, src.x_distributions_storage.byte_size, alignof(Distribution::Entry), payload_location);
+      if (append_success == false) {
+        log::error("GPU RT: failed to pack image x-distribution payload for index %u", i);
+        result.success = false;
+        return result;
+      }
+
+      dst.x_distribution_entries_offset = payload_location.offset;
+      dst.x_distribution_chunk_index = payload_location.chunk_index;
+      if ((src.x_distributions_storage.byte_size > 0u) && (dst.x_distribution_entries_offset == kInvalidIndex)) {
+        log::error("GPU RT: failed to pack image x-distribution payload for index %u", i);
+        result.success = false;
+        return result;
+      }
+    }
+
+    if (src.y_distribution_storage.valid()) {
+      const void* ptr = scene_data.buffer_pool.map(src.y_distribution_storage);
+      ChunkedPayloadLocation payload_location = {};
+      const bool append_success = payload_builder.append(ptr, src.y_distribution_storage.byte_size, alignof(Distribution::Entry), payload_location);
+      if (append_success == false) {
+        log::error("GPU RT: failed to pack image y-distribution payload for index %u", i);
+        result.success = false;
+        return result;
+      }
+
+      dst.y_distribution_entries_offset = payload_location.offset;
+      dst.y_distribution_chunk_index = payload_location.chunk_index;
+      if ((src.y_distribution_storage.byte_size > 0u) && (dst.y_distribution_entries_offset == kInvalidIndex)) {
+        log::error("GPU RT: failed to pack image y-distribution payload for index %u", i);
+        result.success = false;
+        return result;
+      }
     }
   }
 
-  {
-    ETX_PROFILER_NAMED_SCOPE("gpu_rt_pack_non_area_emitters");
-    for (uint32_t i = 0u; i < static_cast<uint32_t>(scene_data.emitter_profiles.size()); ++i) {
-      const auto& profile = scene_data.emitter_profiles[i];
-      if (profile.cls == EmitterProfile::Class::Area) {
-        continue;
-      }
-
-      Emitter emitter(profile.cls);
-      emitter.profile = i;
-      emitter.triangle_index = kInvalidIndex;
-      emitter.spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? safe_spectrum_luminance(scene_data, profile.emission.spectrum_index) : 0.0f;
-      emitter.additional_weight = (profile.cls == EmitterProfile::Class::Directional) ? kPi : (4.0f * kPi);
-      result.emitter_instances.push_back(emitter);
-    }
+  header.images_offset = append_aligned_array(result.metadata, packed_images.data(), packed_images.size(), alignof(::Image));
+  if ((packed_images.empty() == false) && (header.images_offset == kInvalidIndex)) {
+    log::error("GPU RT: failed to pack image descriptors");
+    result.success = false;
+    return result;
   }
 
-  {
-    ETX_PROFILER_NAMED_SCOPE("gpu_rt_pack_area_emitters");
-    for (uint32_t tri_index = 0u; tri_index < static_cast<uint32_t>(scene_data.triangles.size()); ++tri_index) {
-      const Triangle& tri = scene_data.triangles[tri_index];
-      if (tri.emitter_index == kInvalidIndex) {
-        continue;
-      }
-      if (tri.emitter_index >= static_cast<uint32_t>(scene_data.emitter_profiles.size())) {
-        continue;
-      }
-
-      const auto& profile = scene_data.emitter_profiles[tri.emitter_index];
-      if (profile.cls != EmitterProfile::Class::Area) {
-        continue;
-      }
-
-      Emitter emitter(EmitterProfile::Class::Area);
-      emitter.profile = tri.emitter_index;
-      emitter.triangle_index = tri_index;
-
-      if ((tri.material_index < static_cast<uint32_t>(scene_data.materials.size())) && (tri.i[0] < scene_data.vertices.pos.size()) && (tri.i[1] < scene_data.vertices.pos.size()) &&
-          (tri.i[2] < scene_data.vertices.pos.size())) {
-        const auto& mtl = scene_data.materials[tri.material_index];
-        emitter.spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? safe_spectrum_luminance(scene_data, profile.emission.spectrum_index) : 0.0f;
-
-        const float3& v0 = scene_data.vertices.pos[tri.i[0]];
-        const float3& v1 = scene_data.vertices.pos[tri.i[1]];
-        const float3& v2 = scene_data.vertices.pos[tri.i[2]];
-        float triangle_area = 0.5f * length(cross(v1 - v0, v2 - v0));
-
-        emitter.triangle_area = triangle_area;
-        emitter.additional_weight = (mtl.two_sided ? 2.0f : 1.0f) * triangle_area * kPi;
-      }
-
-      result.emitter_instances.push_back(emitter);
-      result.triangles[tri_index].emitter_index = static_cast<uint32_t>(result.emitter_instances.size() - 1u);
-    }
+  if (payload_builder.chunk_ranges.size() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+    log::error("GPU RT: image chunk count exceeds 32-bit ABI limit (%llu)", static_cast<uint64_t>(payload_builder.chunk_ranges.size()));
+    result.success = false;
+    return result;
   }
 
+  header.data_chunk_count = static_cast<uint32_t>(payload_builder.chunk_ranges.size());
+  if (header.data_chunk_count > 0u) {
+    std::vector<uint32_t> placeholder_chunk_indices(header.data_chunk_count, kInvalidDescriptorIndex);
+    header.data_chunk_indices_offset = append_aligned_array(result.metadata, placeholder_chunk_indices.data(), placeholder_chunk_indices.size(), alignof(uint32_t));
+    if (header.data_chunk_indices_offset == kInvalidIndex) {
+      log::error("GPU RT: failed to pack image chunk descriptors table");
+      result.success = false;
+      return result;
+    }
+  } else {
+    header.data_chunk_indices_offset = kInvalidIndex;
+  }
+
+  result.chunk_indices_offset = header.data_chunk_indices_offset;
+  result.payload_data = std::move(payload_builder.payload_blob);
+  result.payload_chunk_ranges = std::move(payload_builder.chunk_ranges);
+  std::memcpy(result.metadata.data(), &header, sizeof(header));
   return result;
 }
 
-GPUSceneGlobals build_scene_globals(const SceneData& scene_data, const std::vector<Emitter>& emitter_instances) {
+PackedChunkedBlobBuildResult build_packed_mediums_blob(const SceneData& scene_data) {
+  ETX_PROFILER_SCOPE();
+
+  PackedChunkedBlobBuildResult result = {};
+  GPUMediumBlobHeader header = {};
+  const uint64_t medium_count_u64 = scene_data.mediums.array_size();
+  if (medium_count_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    log::error("GPU RT: medium count exceeds 32-bit ABI limit (%llu)", medium_count_u64);
+    result.success = false;
+    return result;
+  }
+
+  header.medium_count = static_cast<uint32_t>(medium_count_u64);
+  result.metadata = std::vector<uint8_t>(sizeof(GPUMediumBlobHeader), 0u);
+  std::vector<::Medium> packed_mediums(header.medium_count);
+  ChunkedBlobPayloadBuilder payload_builder = {};
+
+  const auto* mediums = scene_data.mediums.as_array();
+  for (uint32_t i = 0u; i < header.medium_count; ++i) {
+    const auto& src = mediums[i];
+    auto& dst = packed_mediums[i];
+
+    // Copy stable interop fields from host medium and patch blob-local fields below.
+    dst = static_cast<const ::Medium&>(src);
+
+    dst.grid.density_data_offset = kInvalidIndex;
+    dst.grid.density_data_chunk_index = kInvalidIndex;
+    dst.grid.density_count = static_cast<uint32_t>(src.density_data.byte_size / sizeof(float));
+
+    if (src.density_data.valid()) {
+      const void* ptr = scene_data.buffer_pool.map(src.density_data);
+      ChunkedPayloadLocation payload_location = {};
+      const bool append_success = payload_builder.append(ptr, src.density_data.byte_size, alignof(float), payload_location);
+      if (append_success == false) {
+        log::error("GPU RT: failed to pack medium density payload for index %u", i);
+        result.success = false;
+        return result;
+      }
+
+      dst.grid.density_data_offset = payload_location.offset;
+      dst.grid.density_data_chunk_index = payload_location.chunk_index;
+      if ((src.density_data.byte_size > 0u) && (dst.grid.density_data_offset == kInvalidIndex)) {
+        log::error("GPU RT: failed to pack medium density payload for index %u", i);
+        result.success = false;
+        return result;
+      }
+    }
+  }
+
+  header.mediums_offset = append_aligned_array(result.metadata, packed_mediums.data(), packed_mediums.size(), alignof(::Medium));
+  if ((packed_mediums.empty() == false) && (header.mediums_offset == kInvalidIndex)) {
+    log::error("GPU RT: failed to pack medium descriptors");
+    result.success = false;
+    return result;
+  }
+
+  if (payload_builder.chunk_ranges.size() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+    log::error("GPU RT: medium chunk count exceeds 32-bit ABI limit (%llu)", static_cast<uint64_t>(payload_builder.chunk_ranges.size()));
+    result.success = false;
+    return result;
+  }
+
+  header.data_chunk_count = static_cast<uint32_t>(payload_builder.chunk_ranges.size());
+  if (header.data_chunk_count > 0u) {
+    std::vector<uint32_t> placeholder_chunk_indices(header.data_chunk_count, kInvalidDescriptorIndex);
+    header.data_chunk_indices_offset = append_aligned_array(result.metadata, placeholder_chunk_indices.data(), placeholder_chunk_indices.size(), alignof(uint32_t));
+    if (header.data_chunk_indices_offset == kInvalidIndex) {
+      log::error("GPU RT: failed to pack medium chunk descriptors table");
+      result.success = false;
+      return result;
+    }
+  } else {
+    header.data_chunk_indices_offset = kInvalidIndex;
+  }
+
+  result.chunk_indices_offset = header.data_chunk_indices_offset;
+  result.payload_data = std::move(payload_builder.payload_blob);
+  result.payload_chunk_ranges = std::move(payload_builder.chunk_ranges);
+  std::memcpy(result.metadata.data(), &header, sizeof(header));
+  return result;
+}
+
+GPUSceneGlobals build_scene_globals(const SceneData& scene_data, const PackedEmitterData& packed_emitters) {
   ETX_PROFILER_SCOPE();
 
   BoundingBox bbox = {};
@@ -254,8 +557,8 @@ GPUSceneGlobals build_scene_globals(const SceneData& scene_data, const std::vect
   globals.vertex_count = static_cast<uint32_t>(scene_data.vertices.pos.size());
   globals.triangle_count = static_cast<uint32_t>(scene_data.triangles.size());
   globals.mesh_count = static_cast<uint32_t>(scene_data.meshes.size());
-  globals.emitter_profile_count = static_cast<uint32_t>(scene_data.emitter_profiles.size());
-  globals.emitter_instance_count = static_cast<uint32_t>(emitter_instances.size());
+  globals.emitter_profile_count = static_cast<uint32_t>(packed_emitters.emitter_profiles.size());
+  globals.emitter_instance_count = static_cast<uint32_t>(packed_emitters.emitter_instances.size());
 
   globals.bounding_sphere_center = sphere_center;
   globals.bounding_sphere_radius = sphere_radius;
@@ -274,21 +577,33 @@ GPUSceneGlobals build_scene_globals(const SceneData& scene_data, const std::vect
   globals.default_conductor_eta = scene_data.defaults.conductor_eta;
   globals.default_conductor_k = scene_data.defaults.conductor_k;
 
-  {
-    ETX_PROFILER_NAMED_SCOPE("gpu_rt_collect_environment_emitters");
-    uint32_t environment_count = 0u;
-    for (uint32_t i = 0, e = static_cast<uint32_t>(emitter_instances.size()); i < e; ++i) {
-      const auto& emitter = emitter_instances[i];
-      const bool is_environment = (emitter.cls == EmitterProfile::Class::Environment);
-      const bool is_directional = (emitter.cls == EmitterProfile::Class::Directional);
-      if ((is_environment || is_directional) && (environment_count < GPUSceneGlobals::MaxEnvironmentEmitters)) {
-        globals.environment_emitters[environment_count++] = i;
-      }
-    }
-    globals.environment_emitter_count = environment_count;
+  globals.environment_emitter_count = packed_emitters.environment_emitters.count;
+  for (uint32_t i = 0u; i < packed_emitters.environment_emitters.count; ++i) {
+    globals.environment_emitters[i] = packed_emitters.environment_emitters.emitters[i];
   }
 
   return globals;
+}
+
+GPUSceneOptions build_scene_options(const SceneData& scene_data) {
+  GPUSceneOptions options = {};
+  options.min_path_length = scene_data.options.min_path_length;
+  options.max_path_length = scene_data.options.max_path_length;
+  options.samples = scene_data.options.samples;
+  options.random_path_termination = scene_data.options.random_path_termination;
+  options.noise_threshold = scene_data.options.noise_threshold;
+  options.radiance_clamp = scene_data.options.radiance_clamp;
+  options.strategy_flags = scene_data.options.strategy_flags;
+  options.light_sampling = static_cast<uint32_t>(scene_data.options.light_sampling);
+
+  uint32_t properties_flags = 0u;
+  for (uint32_t i = 0u; i < Scene::Properties::Count; ++i) {
+    if (scene_data.options.properties[i]) {
+      properties_flags |= (1u << i);
+    }
+  }
+  options.properties_flags = properties_flags;
+  return options;
 }
 }  // namespace
 
@@ -341,11 +656,6 @@ void GPURaytracingRenderer::reload_shaders(RHIContext& ctx) {
   create_pipelines(ctx);
 }
 
-void GPURaytracingRenderer::set_scene_updates_locked(bool locked) {
-  ETX_PROFILER_SCOPE();
-  _scene_updates_locked = locked;
-}
-
 void GPURaytracingRenderer::destroy_scene_buffers(RHIContext& ctx) {
   ETX_PROFILER_SCOPE();
 
@@ -360,17 +670,63 @@ void GPURaytracingRenderer::destroy_scene_buffers(RHIContext& ctx) {
   destroy_linear_scene_buffer(device, _emitter_instances_buffer, _emitter_instances_buffer_size, _gpu_scene.emitter_instances);
   destroy_linear_scene_buffer(device, _materials_buffer, _materials_buffer_size, _gpu_scene.materials);
   destroy_linear_scene_buffer(device, _spectrums_buffer, _spectrums_buffer_size, _gpu_scene.spectrums);
-  destroy_linear_scene_buffer(device, _scene_globals_buffer, _scene_globals_buffer_size, _gpu_scene.scene_globals);
-
+  device.destroy_chunked_buffer(_images_blob_state);
   _gpu_scene.images = kInvalidDescriptorIndex;
+  device.destroy_chunked_buffer(_mediums_blob_state);
   _gpu_scene.mediums = kInvalidDescriptorIndex;
-  _gpu_scene.emitters_distribution = kInvalidDescriptorIndex;
-  _gpu_scene.scene_options = kInvalidDescriptorIndex;
+  destroy_linear_scene_buffer(device, _scene_globals_buffer, _scene_globals_buffer_size, _gpu_scene.scene_globals);
+  destroy_linear_scene_buffer(device, _scene_options_buffer, _scene_options_buffer_size, _gpu_scene.scene_options);
+  destroy_linear_scene_buffer(device, _emitters_distribution_buffer, _emitters_distribution_buffer_size, _gpu_scene.emitters_distribution);
+}
+
+void GPURaytracingRenderer::destroy_blue_noise_buffer(RHIContext& ctx) {
+  ETX_PROFILER_SCOPE();
+
+  auto& device = ctx.device();
+  destroy_linear_scene_buffer(device, _blue_noise_buffer, _blue_noise_buffer_size, _blue_noise_buffer_descriptor_index);
+  _blue_noise_target_samples = 0u;
+}
+
+bool GPURaytracingRenderer::update_blue_noise_buffer(RHIContext& ctx, const SceneRepresentation& scene) {
+  ETX_PROFILER_SCOPE();
+
+  const bool blue_noise_enabled = scene.data().options.properties[Scene::Properties::BlueNoise];
+  if (blue_noise_enabled == false) {
+    if (_blue_noise_buffer.valid()) {
+      destroy_blue_noise_buffer(ctx);
+    } else {
+      _blue_noise_target_samples = 0u;
+    }
+    return true;
+  }
+
+  const uint32_t target_samples = normalize_blue_noise_target_samples(scene.data().options.samples);
+  const bool needs_upload = (_blue_noise_buffer.valid() == false) || (_blue_noise_target_samples != target_samples);
+  if (needs_upload == false) {
+    return true;
+  }
+
+  std::vector<uint8_t> table_data = {};
+  if (build_blue_noise_table_data(target_samples, table_data) == false) {
+    log::error("GPU RT: failed to build blue noise table");
+    return false;
+  }
+
+  auto& device = ctx.device();
+  const RHIBufferUsage blue_noise_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
+  const bool upload_success = upload_or_update_linear_scene_buffer(device, table_data.data(), table_data.size(), blue_noise_usage, _blue_noise_buffer,
+    _blue_noise_buffer_size, _blue_noise_buffer_descriptor_index, "blue_noise");
+  if (upload_success == false) {
+    log::error("GPU RT: failed to upload blue noise table");
+    return false;
+  }
+
+  _blue_noise_target_samples = target_samples;
+  return true;
 }
 
 void GPURaytracingRenderer::destroy_acceleration_structures(RHIContext& ctx) {
   ETX_PROFILER_SCOPE();
-
   auto& device = ctx.device();
 
   if (_tlas.valid()) {
@@ -399,31 +755,34 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if ((_initialized == false) || (_pipeline.valid() == false))
     return;
 
-  SceneHashes new_hashes = {};
+  auto& device = ctx.device();
+
+  const bool scene_check_requested = consume_scene_update_request();
+
+  SceneHashes new_hashes = _current_scene_hashes;
   UpdateFlags changes = {};
   bool scene_changed = false;
-  if (_scene_updates_locked == false) {
+  if (scene_check_requested) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_scene_hashes_and_changes");
     new_hashes = scene.data().compute_hashes();
     changes = new_hashes.compare(_current_scene_hashes);
     scene_changed = changes.any();
-  } else {
-    new_hashes = _current_scene_hashes;
   }
 
   const auto& camera = scene.camera();
   const uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
   const bool camera_changed = (new_camera_hash != _current_camera_hash);
 
-  bool geometry_structure_changed = changes[UpdateFlags::AnyGeometryStructure];
-  bool needs_full_rebuild = (_scene_updates_locked == false) && (_scene_dirty || geometry_structure_changed);
-  const bool needs_scene_data_reupload = (_scene_updates_locked == false) && scene_changed && (geometry_structure_changed == false);
+  const bool geometry_structure_changed = changes[UpdateFlags::AnyGeometryStructure];
+  bool needs_full_rebuild = scene_check_requested && geometry_structure_changed;
+  const bool needs_scene_data_reupload = scene_check_requested && scene_changed && (geometry_structure_changed == false);
+  bool scene_data_update_success = true;
 
   if (needs_scene_data_reupload && (_vertex_positions_buffer.valid() == false)) {
     needs_full_rebuild = true;
   }
 
-  if (scene_changed || camera_changed || ((_scene_updates_locked == false) && _scene_dirty)) {
+  if (scene_changed || camera_changed) {
     _frame_index = 0u;
     _sample_index = 0u;
   }
@@ -432,47 +791,81 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_full_rebuild_resources");
     destroy_scene_buffers(ctx);
     destroy_acceleration_structures(ctx);
-    _scene_dirty = false;
   }
 
   if (_tlas.valid() == false) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_build_acceleration_structures");
-    build_acceleration_structures(ctx, scene);
+    scene_data_update_success = build_acceleration_structures(ctx, scene);
   } else if (needs_scene_data_reupload) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_scene_update");
-    update_scene_data_partial(ctx, scene, changes);
+    const bool update_success = update_scene_data_partial(ctx, scene, changes);
+    if (update_success == false) {
+      log::error("GPU RT: partial scene update failed");
+      scene_data_update_success = false;
+    }
   }
 
   if (_tlas.valid() == false) {
     return;
   }
 
-  if (_scene_updates_locked == false) {
+  if (scene_changed && (scene_data_update_success == false)) {
+    log::error("GPU RT: scene data update failed, skipping frame to retry with current hashes");
+    request_scene_update();
+    return;
+  }
+
+  if (scene_check_requested && scene_data_update_success) {
     _current_scene_hashes = new_hashes;
   }
   _current_camera_hash = new_camera_hash;
+
+  {
+    ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_camera");
+    const RHIBufferUsage camera_buffer_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
+    const bool camera_upload_success =
+      upload_or_update_linear_scene_buffer(device, &camera, size_t(1), camera_buffer_usage, _camera_buffer, _camera_buffer_size, _camera_buffer_descriptor_index, "camera");
+    if (camera_upload_success == false) {
+      log::error("GPU RT: failed to upload camera buffer");
+      return;
+    }
+  }
+
+  if (update_blue_noise_buffer(ctx, scene) == false) {
+    log::warning("GPU RT: blue noise buffer is unavailable, falling back to white noise");
+  }
 
   uint2 current_dim = scene.camera().film_size;
   if (_output_dimensions.x != current_dim.x || _output_dimensions.y != current_dim.y) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_recreate_output_texture");
     if (_output_texture.valid()) {
-      ctx.device().destroy_texture(_output_texture);
+      device.destroy_texture(_output_texture);
     }
     RHITextureDesc desc = {};
     desc.width = current_dim.x;
     desc.height = current_dim.y;
     desc.format = RHITextureFormat::R32G32B32A32_FLOAT;
     desc.usage = RHITextureUsage::Storage | RHITextureUsage::Sampled | RHITextureUsage::TransferSrc;
-    _output_texture = ctx.device().create_texture(desc).handle;
+    auto output_texture_result = device.create_texture(desc);
+    if ((output_texture_result.result != RHIResult::Success) || (output_texture_result.handle.valid() == false)) {
+      log::error("GPU RT: failed to create output texture (%u)", static_cast<uint32_t>(output_texture_result.result));
+      return;
+    }
+    _output_texture = output_texture_result.handle;
     _output_dimensions = current_dim;
   }
 
+  if (_sample_index > 0u) {
+    return;
+  }
+
   GPURTConstants constants = {
-    .camera = scene.camera(),
+    .camera_buffer_index = _camera_buffer_descriptor_index,
     .as_index = get_bindless_descriptor_index(_tlas),
     .output_image_index = get_bindless_descriptor_index(_output_texture),
     .frame_index = _frame_index,
     .sample_index = _sample_index,
+    .blue_noise_buffer_index = _blue_noise_buffer_descriptor_index,
     .scene = _gpu_scene,
   };
 
@@ -497,13 +890,20 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   ETX_PROFILER_SCOPE();
 
   auto& device = ctx.device();
+  const RHIResult wait_result = ctx.wait_idle();
+  if (wait_result != RHIResult::Success) {
+    log::warning("GPU RT: wait_idle failed during cleanup (%u)", static_cast<uint32_t>(wait_result));
+  }
+
   if (_pipeline.value != 0) {
     device.destroy_pipeline(_pipeline);
     _pipeline = {};
   }
 
   destroy_scene_buffers(ctx);
+  destroy_blue_noise_buffer(ctx);
   destroy_acceleration_structures(ctx);
+  destroy_linear_scene_buffer(device, _camera_buffer, _camera_buffer_size, _camera_buffer_descriptor_index);
 
   if (_output_texture.valid()) {
     device.destroy_texture(_output_texture);
@@ -511,12 +911,11 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   }
 
   _initialized = false;
-  _scene_dirty = false;
-  _scene_updates_locked = false;
   _current_scene_hashes = {};
   _current_camera_hash = 0;
   _frame_index = 0u;
   _sample_index = 0u;
+  request_scene_update();
 }
 
 void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
@@ -525,21 +924,42 @@ void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
 
 void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
-
-  _scene_dirty = true;
-  _current_scene_hashes = {};
-  _current_camera_hash = 0;
-  _frame_index = 0u;
-  _sample_index = 0u;
+  Renderer::on_scene_changed(scene);
 }
 
-void GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene) {
+bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
 
   auto& device = ctx.device();
-
-  // 1. Create BLAS
   const auto& s = scene.data();
+
+  if (s.vertices.pos.empty() || s.triangles.empty()) {
+    log::warning("GPU RT: cannot build acceleration structures for an empty scene");
+    return false;
+  }
+
+  std::vector<RHIBindlessHandle> new_blas = {};
+  std::vector<RHIBindlessHandle> new_blas_buffers = {};
+  RHIBindlessHandle new_vertex_positions_buffer = {};
+  RHIBindlessHandle new_tlas = {};
+
+  auto cleanup_failed_build = [&]() {
+    for (auto as_handle : new_blas) {
+      device.destroy_acceleration_structure(as_handle);
+    }
+    new_blas.clear();
+
+    if (new_tlas.valid()) {
+      device.destroy_acceleration_structure(new_tlas);
+      new_tlas = {};
+    }
+
+    for (auto buffer_handle : new_blas_buffers) {
+      device.destroy_buffer(buffer_handle);
+    }
+    new_blas_buffers.clear();
+    new_vertex_positions_buffer = {};
+  };
 
   std::vector<uint32_t> indices;
   RHIBufferDesc vb_desc = {};
@@ -554,9 +974,20 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     vb_desc.size = s.vertices.pos.size() * sizeof(float3);
     vb_desc.usage = RHIBufferUsage::Vertex | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::TransferDst;
     vb_res = device.create_buffer(vb_desc);
-    device.update_buffer(vb_res.handle, s.vertices.pos.data(), vb_desc.size);
-    _blas_buffers.push_back(vb_res.handle);
-    _vertex_positions_buffer = vb_res.handle;
+    if ((vb_res.result != RHIResult::Success) || (vb_res.handle.valid() == false)) {
+      log::error("GPU RT: failed to create vertex buffer for BLAS (%u)", static_cast<uint32_t>(vb_res.result));
+      cleanup_failed_build();
+      return false;
+    }
+    const RHIResult vb_update_result = device.update_buffer(vb_res.handle, s.vertices.pos.data(), vb_desc.size);
+    if (vb_update_result != RHIResult::Success) {
+      log::error("GPU RT: failed to upload vertex buffer for BLAS (%u)", static_cast<uint32_t>(vb_update_result));
+      device.destroy_buffer(vb_res.handle);
+      cleanup_failed_build();
+      return false;
+    }
+    new_blas_buffers.push_back(vb_res.handle);
+    new_vertex_positions_buffer = vb_res.handle;
 
     // Index Buffer (Repack from Triangle to uint32 stream)
     indices.reserve(s.triangles.size() * 3);
@@ -569,8 +1000,19 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     ib_desc.size = indices.size() * sizeof(uint32_t);
     ib_desc.usage = RHIBufferUsage::Index | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::TransferDst;
     ib_res = device.create_buffer(ib_desc);
-    device.update_buffer(ib_res.handle, indices.data(), ib_desc.size);
-    _blas_buffers.push_back(ib_res.handle);
+    if ((ib_res.result != RHIResult::Success) || (ib_res.handle.valid() == false)) {
+      log::error("GPU RT: failed to create index buffer for BLAS (%u)", static_cast<uint32_t>(ib_res.result));
+      cleanup_failed_build();
+      return false;
+    }
+    const RHIResult ib_update_result = device.update_buffer(ib_res.handle, indices.data(), ib_desc.size);
+    if (ib_update_result != RHIResult::Success) {
+      log::error("GPU RT: failed to upload index buffer for BLAS (%u)", static_cast<uint32_t>(ib_update_result));
+      device.destroy_buffer(ib_res.handle);
+      cleanup_failed_build();
+      return false;
+    }
+    new_blas_buffers.push_back(ib_res.handle);
   }
 
   RHIAccelerationStructureGeometry geometry = {};
@@ -588,34 +1030,19 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   blas_desc.geometry_count = 1;
   blas_desc.geometries = &geometry;
 
-  auto blas_result = device.create_acceleration_structure(blas_desc);  // This creates the backing buffer for AS
-  if (blas_result.result != RHIResult::Success) {
-    log::error("Failed to create BLAS");
-    return;
+  auto blas_result = device.create_acceleration_structure(blas_desc);
+  if ((blas_result.result != RHIResult::Success) || (blas_result.handle.valid() == false)) {
+    log::error("GPU RT: failed to create BLAS (%u)", static_cast<uint32_t>(blas_result.result));
+    cleanup_failed_build();
+    return false;
   }
-  _blas.push_back(blas_result.handle);
-
-  // TODO: Query AS build size from RHI
-  uint64_t scratch_size = 64 * 1024 * 1024;
-  RHIBufferDesc scratch_desc = {};
-  scratch_desc.size = scratch_size;
-  scratch_desc.usage = RHIBufferUsage::Storage | RHIBufferUsage::ShaderDeviceAddress;  // VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-  auto scratch_res = device.create_buffer(scratch_desc);
-  _blas_buffers.push_back(scratch_res.handle);
+  new_blas.push_back(blas_result.handle);
 
   RHIAccelerationStructureBuildDesc build_desc = {};
   build_desc.as_handle = blas_result.handle;
   build_desc.type = RHIAccelerationStructureType::BottomLevel;
   build_desc.geometry_count = 1;
   build_desc.geometries = &geometry;
-
-  auto cmd = ctx.get_command_buffer();
-  {
-    ETX_PROFILER_NAMED_SCOPE("gpu_rt_build_blas");
-    ctx.command_buffer_begin(cmd);
-    ctx.cmd_build_acceleration_structure(cmd, build_desc, scratch_res.handle, 0);
-    ctx.cmd_buffer_barrier(cmd, scratch_res.handle, RHIResourceState::AccelerationStructure, RHIResourceState::AccelerationStructure);
-  }
 
   // 2. Create TLAS
   // Create Instance Buffer
@@ -631,45 +1058,105 @@ void GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
 
   RHIBufferDesc inst_buf_desc = {};
   inst_buf_desc.size = sizeof(RHIAccelerationStructureInstance);
-  inst_buf_desc.usage = RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::TransferDst;  // Input to build
-  // Wait, usually it's `VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR`
+  inst_buf_desc.usage = RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::TransferDst;
   auto inst_res = device.create_buffer(inst_buf_desc);
-  device.update_buffer(inst_res.handle, &instance, sizeof(instance));
-  _blas_buffers.push_back(inst_res.handle);
+  if ((inst_res.result != RHIResult::Success) || (inst_res.handle.valid() == false)) {
+    log::error("GPU RT: failed to create TLAS instance buffer (%u)", static_cast<uint32_t>(inst_res.result));
+    cleanup_failed_build();
+    return false;
+  }
+  const RHIResult inst_update_result = device.update_buffer(inst_res.handle, &instance, sizeof(instance));
+  if (inst_update_result != RHIResult::Success) {
+    log::error("GPU RT: failed to upload TLAS instance buffer (%u)", static_cast<uint32_t>(inst_update_result));
+    device.destroy_buffer(inst_res.handle);
+    cleanup_failed_build();
+    return false;
+  }
+  new_blas_buffers.push_back(inst_res.handle);
 
   RHIAccelerationStructureDesc tlas_desc = {};
   tlas_desc.type = RHIAccelerationStructureType::TopLevel;
   tlas_desc.instance_count = 1;
 
   auto tlas_result = device.create_acceleration_structure(tlas_desc);
-  _tlas = tlas_result.handle;
+  if ((tlas_result.result != RHIResult::Success) || (tlas_result.handle.valid() == false)) {
+    log::error("GPU RT: failed to create TLAS (%u)", static_cast<uint32_t>(tlas_result.result));
+    cleanup_failed_build();
+    return false;
+  }
+  new_tlas = tlas_result.handle;
+
+  const uint64_t blas_scratch_size = device.get_acceleration_structure_build_scratch_size(blas_result.handle);
+  if (blas_scratch_size == 0u) {
+    log::error("GPU RT: failed to query BLAS scratch size");
+    cleanup_failed_build();
+    return false;
+  }
+
+  const uint64_t tlas_scratch_size = device.get_acceleration_structure_build_scratch_size(new_tlas);
+  if (tlas_scratch_size == 0u) {
+    log::error("GPU RT: failed to query TLAS scratch size");
+    cleanup_failed_build();
+    return false;
+  }
+
+  const uint64_t scratch_size = (blas_scratch_size > tlas_scratch_size) ? blas_scratch_size : tlas_scratch_size;
+  RHIBufferDesc scratch_desc = {};
+  scratch_desc.size = scratch_size;
+  scratch_desc.usage = RHIBufferUsage::Storage | RHIBufferUsage::ShaderDeviceAddress;
+  auto scratch_res = device.create_buffer(scratch_desc);
+  if ((scratch_res.result != RHIResult::Success) || (scratch_res.handle.valid() == false)) {
+    log::error("GPU RT: failed to create AS scratch buffer (%u)", static_cast<uint32_t>(scratch_res.result));
+    cleanup_failed_build();
+    return false;
+  }
+  new_blas_buffers.push_back(scratch_res.handle);
 
   RHIAccelerationStructureBuildDesc tlas_build_desc = {};
-  tlas_build_desc.as_handle = _tlas;
+  tlas_build_desc.as_handle = new_tlas;
   tlas_build_desc.type = RHIAccelerationStructureType::TopLevel;
   tlas_build_desc.instance_count = 1;
   tlas_build_desc.instance_buffer = inst_res.handle;
 
-  // Re-use scratch buffer (assuming enough size and barriers)
+  auto cmd = ctx.get_command_buffer();
+  if (cmd.valid() == false) {
+    log::error("GPU RT: failed to get command buffer for AS build");
+    cleanup_failed_build();
+    return false;
+  }
+  {
+    ETX_PROFILER_NAMED_SCOPE("gpu_rt_build_blas");
+    ctx.command_buffer_begin(cmd);
+    ctx.cmd_build_acceleration_structure(cmd, build_desc, scratch_res.handle, 0);
+    ctx.cmd_buffer_barrier(cmd, scratch_res.handle, RHIResourceState::AccelerationStructure, RHIResourceState::AccelerationStructure);
+  }
+
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_build_tlas");
-    ctx.cmd_build_acceleration_structure(cmd, tlas_build_desc, scratch_res.handle, 32 * 1024 * 1024);  // Offset 32MB just in case
+    ctx.cmd_build_acceleration_structure(cmd, tlas_build_desc, scratch_res.handle, 0);
     ctx.command_buffer_end(cmd);
     ctx.submit_command_buffer({cmd});
   }
 
-  {
-    ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_scene_after_as_build");
-    upload_scene_data(ctx, scene, _vertex_positions_buffer);
+  _vertex_positions_buffer = new_vertex_positions_buffer;
+  _blas = std::move(new_blas);
+  _blas_buffers = std::move(new_blas_buffers);
+  _tlas = new_tlas;
+  _gpu_scene.vertex_positions = get_bindless_descriptor_index(_vertex_positions_buffer);
+
+  ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_scene_after_as_build");
+  const bool upload_success = upload_scene_data(ctx, scene, _vertex_positions_buffer);
+  if (upload_success == false) {
+    log::error("GPU RT: failed to upload scene data after AS build");
   }
+  return upload_success;
 }
 
-void GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer) {
+bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer) {
   ETX_PROFILER_SCOPE();
 
   auto& device = ctx.device();
   const auto& data = scene.data();
-
   _gpu_scene = make_invalid_gpu_scene();
 
   if (vertex_positions_buffer.valid()) {
@@ -683,88 +1170,177 @@ void GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
     packed_emitters = build_packed_emitters(data);
   }
 
+  bool upload_success = true;
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_vertex_and_geometry_buffers");
-    upload_or_update_linear_scene_buffer(device, data.vertices.nrm.data(), data.vertices.nrm.size(), scene_buffer_usage, _vertex_normals_buffer, _vertex_normals_buffer_size,
-      _gpu_scene.vertex_normals);
-    upload_or_update_linear_scene_buffer(device, data.vertices.tan.data(), data.vertices.tan.size(), scene_buffer_usage, _vertex_tangents_buffer, _vertex_tangents_buffer_size,
-      _gpu_scene.vertex_tangents);
-    upload_or_update_linear_scene_buffer(device, data.vertices.btn.data(), data.vertices.btn.size(), scene_buffer_usage, _vertex_bitangents_buffer, _vertex_bitangents_buffer_size,
-      _gpu_scene.vertex_bitangents);
-    upload_or_update_linear_scene_buffer(device, data.vertices.tex.data(), data.vertices.tex.size(), scene_buffer_usage, _vertex_texcoords_buffer, _vertex_texcoords_buffer_size,
-      _gpu_scene.vertex_texcoords);
-    upload_or_update_linear_scene_buffer(device, packed_emitters.triangles.data(), packed_emitters.triangles.size(), scene_buffer_usage, _triangles_buffer, _triangles_buffer_size,
-      _gpu_scene.triangles);
-    upload_or_update_linear_scene_buffer(device, data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes);
+    upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.nrm.data(), data.vertices.nrm.size(), scene_buffer_usage, _vertex_normals_buffer,
+                       _vertex_normals_buffer_size, _gpu_scene.vertex_normals, "vertex_normals") &&
+                     upload_success;
+    upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.tan.data(), data.vertices.tan.size(), scene_buffer_usage, _vertex_tangents_buffer,
+                       _vertex_tangents_buffer_size, _gpu_scene.vertex_tangents, "vertex_tangents") &&
+                     upload_success;
+    upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.btn.data(), data.vertices.btn.size(), scene_buffer_usage, _vertex_bitangents_buffer,
+                       _vertex_bitangents_buffer_size, _gpu_scene.vertex_bitangents, "vertex_bitangents") &&
+                     upload_success;
+    upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.tex.data(), data.vertices.tex.size(), scene_buffer_usage, _vertex_texcoords_buffer,
+                       _vertex_texcoords_buffer_size, _gpu_scene.vertex_texcoords, "vertex_texcoords") &&
+                     upload_success;
+    upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.triangles.data(), packed_emitters.triangles.size(), scene_buffer_usage, _triangles_buffer,
+                       _triangles_buffer_size, _gpu_scene.triangles, "triangles") &&
+                     upload_success;
+    upload_success =
+      upload_or_update_linear_scene_buffer(device, data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes, "meshes") &&
+      upload_success;
   }
 
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_material_and_emitter_buffers");
-    upload_or_update_linear_scene_buffer(device, data.emitter_profiles.data(), data.emitter_profiles.size(), scene_buffer_usage, _emitter_profiles_buffer,
-      _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles);
-    upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage, _emitter_instances_buffer,
-      _emitter_instances_buffer_size, _gpu_scene.emitter_instances);
-    upload_or_update_linear_scene_buffer(device, data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size, _gpu_scene.materials);
-    upload_or_update_linear_scene_buffer(device, data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size,
-      _gpu_scene.spectrums);
+    upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_profiles.data(), packed_emitters.emitter_profiles.size(), scene_buffer_usage,
+                       _emitter_profiles_buffer, _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles, "emitter_profiles") &&
+                     upload_success;
+    upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage,
+                       _emitter_instances_buffer, _emitter_instances_buffer_size, _gpu_scene.emitter_instances, "emitter_instances") &&
+                     upload_success;
+    upload_success = upload_or_update_linear_scene_buffer(device, data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size,
+                       _gpu_scene.materials, "materials") &&
+                     upload_success;
+    upload_success = upload_or_update_linear_scene_buffer(device, data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer,
+                       _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
+                     upload_success;
+  }
+
+  {
+    ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_images");
+    auto images_blob = build_packed_images_blob(data);
+    if (images_blob.success) {
+      const bool image_upload_success = device.upload_or_update_chunked_buffer(images_blob, scene_buffer_usage, _images_blob_state, "images_blob");
+      if (image_upload_success) {
+        _gpu_scene.images = _images_blob_state.metadata_descriptor_index;
+      }
+      upload_success = image_upload_success && upload_success;
+    } else {
+      log::error("GPU RT: failed to build packed image blob");
+      upload_success = false;
+    }
+  }
+
+  {
+    ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_mediums");
+    auto mediums_blob = build_packed_mediums_blob(data);
+    if (mediums_blob.success) {
+      const bool medium_upload_success = device.upload_or_update_chunked_buffer(mediums_blob, scene_buffer_usage, _mediums_blob_state, "mediums_blob");
+      if (medium_upload_success) {
+        _gpu_scene.mediums = _mediums_blob_state.metadata_descriptor_index;
+      }
+      upload_success = medium_upload_success && upload_success;
+    } else {
+      log::error("GPU RT: failed to build packed medium blob");
+      upload_success = false;
+    }
   }
 
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_scene_globals");
-    GPUSceneGlobals globals = build_scene_globals(data, packed_emitters.emitter_instances);
-    upload_or_update_linear_scene_buffer(device, &globals, size_t(1), scene_buffer_usage, _scene_globals_buffer, _scene_globals_buffer_size, _gpu_scene.scene_globals);
+    GPUSceneGlobals globals = build_scene_globals(data, packed_emitters);
+    upload_success = upload_or_update_linear_scene_buffer(device, &globals, size_t(1), scene_buffer_usage, _scene_globals_buffer, _scene_globals_buffer_size,
+                       _gpu_scene.scene_globals, "scene_globals") &&
+                     upload_success;
   }
 
-  // TODO: upload packed images metadata and raw image/distribution tables.
-  // TODO: upload packed mediums metadata and density grids.
-  // TODO: upload packed emitters distribution data.
-  // TODO: upload packed scene options buffer.
+  {
+    ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_scene_options");
+    GPUSceneOptions options = build_scene_options(data);
+    upload_success = upload_or_update_linear_scene_buffer(device, &options, size_t(1), scene_buffer_usage, _scene_options_buffer, _scene_options_buffer_size,
+                       _gpu_scene.scene_options, "scene_options") &&
+                     upload_success;
+  }
+
+  {
+    ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_emitters_distribution");
+    auto emitters_distribution = build_packed_emitter_distribution(packed_emitters);
+    upload_success = upload_or_update_linear_scene_buffer(device, emitters_distribution.data(), emitters_distribution.size(), scene_buffer_usage, _emitters_distribution_buffer,
+                       _emitters_distribution_buffer_size, _gpu_scene.emitters_distribution, "emitters_distribution") &&
+                     upload_success;
+  }
+
+  return upload_success;
 }
 
-void GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes) {
+bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes) {
   ETX_PROFILER_SCOPE();
 
   auto& device = ctx.device();
   const auto& data = scene.data();
   const RHIBufferUsage scene_buffer_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
+  bool upload_success = true;
 
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_direct_buffer_updates");
     if (changes[UpdateFlags::VerticesNrm]) {
-      upload_or_update_linear_scene_buffer(device, data.vertices.nrm.data(), data.vertices.nrm.size(), scene_buffer_usage, _vertex_normals_buffer, _vertex_normals_buffer_size,
-        _gpu_scene.vertex_normals);
+      upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.nrm.data(), data.vertices.nrm.size(), scene_buffer_usage, _vertex_normals_buffer,
+                         _vertex_normals_buffer_size, _gpu_scene.vertex_normals, "vertex_normals") &&
+                       upload_success;
     }
     if (changes[UpdateFlags::VerticesTan]) {
-      upload_or_update_linear_scene_buffer(device, data.vertices.tan.data(), data.vertices.tan.size(), scene_buffer_usage, _vertex_tangents_buffer, _vertex_tangents_buffer_size,
-        _gpu_scene.vertex_tangents);
+      upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.tan.data(), data.vertices.tan.size(), scene_buffer_usage, _vertex_tangents_buffer,
+                         _vertex_tangents_buffer_size, _gpu_scene.vertex_tangents, "vertex_tangents") &&
+                       upload_success;
     }
     if (changes[UpdateFlags::VerticesBtn]) {
-      upload_or_update_linear_scene_buffer(device, data.vertices.btn.data(), data.vertices.btn.size(), scene_buffer_usage, _vertex_bitangents_buffer,
-        _vertex_bitangents_buffer_size, _gpu_scene.vertex_bitangents);
+      upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.btn.data(), data.vertices.btn.size(), scene_buffer_usage, _vertex_bitangents_buffer,
+                         _vertex_bitangents_buffer_size, _gpu_scene.vertex_bitangents, "vertex_bitangents") &&
+                       upload_success;
     }
     if (changes[UpdateFlags::VerticesTex]) {
-      upload_or_update_linear_scene_buffer(device, data.vertices.tex.data(), data.vertices.tex.size(), scene_buffer_usage, _vertex_texcoords_buffer, _vertex_texcoords_buffer_size,
-        _gpu_scene.vertex_texcoords);
+      upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.tex.data(), data.vertices.tex.size(), scene_buffer_usage, _vertex_texcoords_buffer,
+                         _vertex_texcoords_buffer_size, _gpu_scene.vertex_texcoords, "vertex_texcoords") &&
+                       upload_success;
     }
     if (changes[UpdateFlags::Meshes]) {
-      upload_or_update_linear_scene_buffer(device, data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes);
+      upload_success = upload_or_update_linear_scene_buffer(device, data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size,
+                         _gpu_scene.meshes, "meshes") &&
+                       upload_success;
     }
     if (changes[UpdateFlags::Materials]) {
-      upload_or_update_linear_scene_buffer(device, data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size,
-        _gpu_scene.materials);
+      upload_success = upload_or_update_linear_scene_buffer(device, data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size,
+                         _gpu_scene.materials, "materials") &&
+                       upload_success;
     }
     if (changes[UpdateFlags::Spectra]) {
-      upload_or_update_linear_scene_buffer(device, data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size,
-        _gpu_scene.spectrums);
+      upload_success = upload_or_update_linear_scene_buffer(device, data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer,
+                         _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
+                       upload_success;
     }
-    if (changes[UpdateFlags::Emitters]) {
-      upload_or_update_linear_scene_buffer(device, data.emitter_profiles.data(), data.emitter_profiles.size(), scene_buffer_usage, _emitter_profiles_buffer,
-        _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles);
+    if (changes[UpdateFlags::Images]) {
+      auto images_blob = build_packed_images_blob(data);
+      if (images_blob.success) {
+        const bool image_upload_success = device.upload_or_update_chunked_buffer(images_blob, scene_buffer_usage, _images_blob_state, "images_blob");
+        if (image_upload_success) {
+          _gpu_scene.images = _images_blob_state.metadata_descriptor_index;
+        }
+        upload_success = image_upload_success && upload_success;
+      } else {
+        log::error("GPU RT: failed to build packed image blob");
+        upload_success = false;
+      }
+    }
+    if (changes[UpdateFlags::Mediums]) {
+      auto mediums_blob = build_packed_mediums_blob(data);
+      if (mediums_blob.success) {
+        const bool medium_upload_success = device.upload_or_update_chunked_buffer(mediums_blob, scene_buffer_usage, _mediums_blob_state, "mediums_blob");
+        if (medium_upload_success) {
+          _gpu_scene.mediums = _mediums_blob_state.metadata_descriptor_index;
+        }
+        upload_success = medium_upload_success && upload_success;
+      } else {
+        log::error("GPU RT: failed to build packed medium blob");
+        upload_success = false;
+      }
     }
   }
 
-  const bool packed_emitters_changed = changes[UpdateFlags::Emitters] || changes[UpdateFlags::Materials] || changes[UpdateFlags::Spectra];
-  const bool scene_globals_changed = changes[UpdateFlags::Meshes] || changes[UpdateFlags::Emitters] || changes[UpdateFlags::Defaults];
+  const bool packed_emitters_changed = changes[UpdateFlags::Triangles] || changes[UpdateFlags::Emitters] || changes[UpdateFlags::Materials] || changes[UpdateFlags::Spectra];
+  const bool scene_globals_changed = changes[UpdateFlags::Triangles] || changes[UpdateFlags::Meshes] || changes[UpdateFlags::Emitters] || changes[UpdateFlags::Defaults];
 
   PackedEmitterData packed_emitters = {};
   if (packed_emitters_changed || scene_globals_changed) {
@@ -774,22 +1350,45 @@ void GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
 
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_dependent_buffer_updates");
-    if (changes[UpdateFlags::Emitters]) {
-      upload_or_update_linear_scene_buffer(device, packed_emitters.triangles.data(), packed_emitters.triangles.size(), scene_buffer_usage, _triangles_buffer,
-        _triangles_buffer_size, _gpu_scene.triangles);
+    if (changes[UpdateFlags::Triangles] || changes[UpdateFlags::Emitters]) {
+      upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.triangles.data(), packed_emitters.triangles.size(), scene_buffer_usage, _triangles_buffer,
+                         _triangles_buffer_size, _gpu_scene.triangles, "triangles") &&
+                       upload_success;
     }
 
     if (packed_emitters_changed) {
-      upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage,
-        _emitter_instances_buffer, _emitter_instances_buffer_size, _gpu_scene.emitter_instances);
+      upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_profiles.data(), packed_emitters.emitter_profiles.size(), scene_buffer_usage,
+                         _emitter_profiles_buffer, _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles, "emitter_profiles") &&
+                       upload_success;
+
+      upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage,
+                         _emitter_instances_buffer, _emitter_instances_buffer_size, _gpu_scene.emitter_instances, "emitter_instances") &&
+                       upload_success;
+
+      auto emitters_distribution = build_packed_emitter_distribution(packed_emitters);
+      upload_success = upload_or_update_linear_scene_buffer(device, emitters_distribution.data(), emitters_distribution.size(), scene_buffer_usage, _emitters_distribution_buffer,
+                         _emitters_distribution_buffer_size, _gpu_scene.emitters_distribution, "emitters_distribution") &&
+                       upload_success;
     }
   }
 
   if (scene_globals_changed) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_update_scene_globals");
-    GPUSceneGlobals globals = build_scene_globals(data, packed_emitters.emitter_instances);
-    upload_or_update_linear_scene_buffer(device, &globals, size_t(1), scene_buffer_usage, _scene_globals_buffer, _scene_globals_buffer_size, _gpu_scene.scene_globals);
+    GPUSceneGlobals globals = build_scene_globals(data, packed_emitters);
+    upload_success = upload_or_update_linear_scene_buffer(device, &globals, size_t(1), scene_buffer_usage, _scene_globals_buffer, _scene_globals_buffer_size,
+                       _gpu_scene.scene_globals, "scene_globals") &&
+                     upload_success;
   }
+
+  if (changes[UpdateFlags::Options]) {
+    ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_update_scene_options");
+    GPUSceneOptions options = build_scene_options(data);
+    upload_success = upload_or_update_linear_scene_buffer(device, &options, size_t(1), scene_buffer_usage, _scene_options_buffer, _scene_options_buffer_size,
+                       _gpu_scene.scene_options, "scene_options") &&
+                     upload_success;
+  }
+
+  return upload_success;
 }
 
 }  // namespace etx

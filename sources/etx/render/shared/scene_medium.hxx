@@ -1,78 +1,40 @@
 #pragma once
 
+#include <etx/render/shared/medium.hxx>
+
 namespace etx {
 
-namespace {
+struct MediumTransmittanceSharedContext {
+  const Medium* medium = nullptr;
+  BoundingBox bounds = {};
+  Sampler* sampler = nullptr;
+};
 
-ETX_SHARED_INLINE constexpr float medium_gamma(int n) {
-  constexpr auto e = kEpsilon * 0.5f;
-  return (n * e) / (1.0f - n * e);
+ETX_SHARED_INLINE float medium_transmittance_shared_rnd(ETX_INOUT(MediumTransmittanceSharedContext, context)) {
+  ETX_ASSERT(context.sampler != nullptr);
+  return context.sampler->next();
 }
 
-ETX_SHARED_INLINE bool medium_bounds(const Medium& medium, const float3& in_pos, const float3& in_dir, float max_t, float& t_min, float& t_max) {
-  constexpr float g3 = 1.0f + 2.0f * medium_gamma(3);
-
-  float pos[3] = {in_pos.x, in_pos.y, in_pos.z};
-  float dir[3] = {in_dir.x, in_dir.y, in_dir.z};
-
-  t_min = 0.0f;
-  t_max = max_t;
-  for (int i = 0; i < 3; ++i) {
-    float t_near = (0.0f - pos[i]) / dir[i];
-    float t_far = (1.0f - pos[i]) / dir[i];
-
-    if (t_near > t_far) {
-      float t = t_far;
-      t_far = t_near;
-      t_near = t;
-    }
-
-    t_far *= g3;
-
-    t_min = t_near > t_min ? t_near : t_min;
-    ETX_CHECK_FINITE(t_min);
-    t_max = t_far < t_max ? t_far : t_max;
-    ETX_CHECK_FINITE(t_max);
-    if (t_min > t_max)
-      return false;
-  }
-
-  return true;
+ETX_SHARED_INLINE float medium_transmittance_shared_density(ETX_INOUT(MediumTransmittanceSharedContext, context), ETX_IN(float3, local_pos)) {
+  ETX_ASSERT(context.medium != nullptr);
+  return context.medium->sample_density(local_pos, context.bounds);
 }
 
-ETX_SHARED_INLINE bool medium_intersects_bounds(const Medium& medium, const float3& in_pos, const float3& in_direction, const float in_max_t, float3& medium_pos, float3& medium_dir,
-  float& t_min, float& t_max, float3& world_dir_normalized, float3& bbox_size) {
-  if (in_max_t >= kMaxFloat) {
-    return false;
+ETX_SHARED_INLINE SpectralResponse medium_transmittance_shared_to_spectral_response(ETX_IN(::SpectralResponse, response)) {
+  SpectralQuery query = {response.wavelength, response.flags};
+  if (::spectral_response_is_spectral(response)) {
+    return {query, response.value};
   }
-
-  medium_pos = medium.bounds.to_local(in_pos);
-  ETX_CHECK_FINITE(medium_pos);
-
-  float3 end_pos = in_pos + in_direction * in_max_t;
-  ETX_CHECK_FINITE(end_pos);
-  float3 medium_end_pos = medium.bounds.to_local(end_pos);
-  ETX_CHECK_FINITE(medium_end_pos);
-
-  medium_dir = medium_end_pos - medium_pos;
-  float d_len = dot(medium_dir, medium_dir);
-  constexpr float kTreshold = kRayEpsilon * kRayEpsilon;
-  if (d_len <= kTreshold) {
-    return false;
-  }
-
-  medium_dir *= 1.0f / sqrtf(d_len);
-  ETX_CHECK_FINITE(medium_dir);
-
-  world_dir_normalized = normalize(in_direction);
-  bbox_size = medium.bounds.p_max - medium.bounds.p_min;
-
-  float segment = length(medium_end_pos - medium_pos);
-  ETX_CHECK_FINITE(segment);
-  return medium_bounds(medium, medium_pos, medium_dir, segment, t_min, t_max);
+  return {query, response.integrated};
 }
 
-}  // namespace
+#define ETX_MEDIUM_SHARED_CONTEXT_TYPE MediumTransmittanceSharedContext
+#define ETX_MEDIUM_SHARED_RND(context) medium_transmittance_shared_rnd(context)
+#define ETX_MEDIUM_SHARED_DENSITY(context, local_pos) medium_transmittance_shared_density(context, local_pos)
+#include <etx/render/interop/medium_transmittance_shared.hxx>
+#undef ETX_MEDIUM_SHARED_DENSITY
+#undef ETX_MEDIUM_SHARED_RND
+#undef ETX_MEDIUM_SHARED_CONTEXT_TYPE
 
 ETX_SHARED_INLINE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, const float rnd,
   SpectralResponse& pdf) {
@@ -140,70 +102,37 @@ ETX_SHARED_INLINE SpectralResponse medium_extinction(const Scene& scene, const M
   return medium_absorption(scene, medium, spect) + medium_scattering(scene, medium, spect);
 }
 
-ETX_SHARED_INLINE Medium::Instance make_medium_instance(const Scene& scene, const Medium& medium, const SpectralQuery spect, uint32_t index) {
-  Medium::Instance result = {};
+ETX_SHARED_INLINE MediumInstance make_medium_instance(const Scene& scene, const Medium& medium, const SpectralQuery spect, uint32_t index) {
+  MediumInstance result = {};
   result.extinction = medium_extinction(scene, medium, spect);
   result.anisotropy = medium.phase_function_g;
   result.index = index;
   return result;
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Medium::Instance& instance, float distance) {
-  return spectrum_exp(instance.extinction * (-distance));
-}
-
-ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Scene& scene, const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction,
-  float distance) {
+ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Scene& scene, const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos,
+  const float3& direction, float distance) {
   switch (medium.cls) {
-    case Medium::Class::Homogeneous:
-      return spectrum_exp(medium_extinction(scene, medium, spect) * (-distance));
+    case Medium::Homogeneous: {
+      const ::SpectralResponse extinction = static_cast<const ::SpectralResponse&>(medium_extinction(scene, medium, spect));
+      const ::SpectralResponse transmittance = medium_shared_transmittance_homogeneous_spectral(extinction, distance);
+      return medium_transmittance_shared_to_spectral_response(transmittance);
+    }
 
-    case Medium::Class::Heterogeneous: {
+    case Medium::Heterogeneous: {
       SpectralResponse base_extinction = medium_extinction(scene, medium, spect);
       float max_sigma = base_extinction.maximum();
       if (max_sigma <= 0.0f) {
         return {spect, 1.0f};
       }
 
-      float3 medium_pos = pos;
-      float3 medium_dir = direction;
-      float t_min = 0.0f;
-      float t_max = 0.0f;
-      float3 world_dir_normalized = {};
-      float3 bbox_size = {};
-      if (medium_intersects_bounds(medium, pos, direction, distance, medium_pos, medium_dir, t_min, t_max, world_dir_normalized, bbox_size) == false) {
-        return {spect, 1.0f};
-      }
-      const float rr_threshold = 0.1f;
-      SpectralResponse transmittance = {spect, 1.0f};
-
-      float t_world = 0.0f;
-      while (true) {
-        t_world += -logf(1.0f - smp.next()) / max_sigma;
-        float3 world_pos_at_t = pos + world_dir_normalized * t_world;
-        float3 local_pos = medium.bounds.to_local(world_pos_at_t);
-        float t_local_along_dir = dot(local_pos - medium_pos, medium_dir);
-        if (t_local_along_dir >= (t_max - t_min)) {
-          break;
-        }
-
-        float density_value = medium.grid.sample(local_pos, medium.bounds);
-        SpectralResponse extinction_at_point = base_extinction * density_value;
-        SpectralResponse weight = SpectralResponse{spect, 1.0f} - extinction_at_point / max_sigma;
-        transmittance *= spectrum_max(0.0f, weight);
-        ETX_VALIDATE(transmittance);
-
-        float transmittance_max = transmittance.maximum();
-        if (transmittance_max < rr_threshold) {
-          float p = clamp(transmittance_max, 0.01f, 0.95f);
-          if (smp.next() > p) {
-            return {spect, 0.0f};
-          }
-          transmittance *= 1.0f / p;
-          ETX_VALIDATE(transmittance);
-        }
-      }
-      return transmittance;
+      MediumTransmittanceSharedContext context = {};
+      context.medium = &medium;
+      context.bounds = medium.bounds;
+      context.sampler = &smp;
+      const ::SpectralResponse transmittance = medium_shared_transmittance_heterogeneous_spectral(static_cast<const ::SpectralResponse&>(base_extinction), pos, direction, distance,
+        medium.bounds.p_min, medium.bounds.p_max, context, static_cast<const ::SpectralQuery&>(spect));
+      return medium_transmittance_shared_to_spectral_response(transmittance);
     }
 
     default:
@@ -212,8 +141,8 @@ ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Scene& scene, cons
   }
 }
 
-ETX_SHARED_INLINE Medium::Sample sample_medium(const Scene& scene, const Medium& medium, const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos,
-  const float3& w_i, float max_t) {
+ETX_SHARED_INLINE MediumSample sample_medium(const Scene& scene, const Medium& medium, const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp,
+  const float3& pos, const float3& w_i, float max_t) {
   ETX_CRITICAL(max_t > 0.0f);
 
   SpectralResponse scattering_value = medium_scattering(scene, medium, spect);
@@ -226,7 +155,7 @@ ETX_SHARED_INLINE Medium::Sample sample_medium(const Scene& scene, const Medium&
   ETX_VALIDATE(albedo);
 
   switch (medium.cls) {
-    case Medium::Class::Homogeneous: {
+    case Medium::Homogeneous: {
       float t = 0.0f;
       SpectralResponse pdf = {};
       while (t < kRayEpsilon) {
@@ -245,9 +174,9 @@ ETX_SHARED_INLINE Medium::Sample sample_medium(const Scene& scene, const Medium&
       pdf *= sampled_medium ? tr * extinction_value : tr;
 
       if (pdf.is_zero())
-        return {{spect, 0.0f}};
+        return {spectral_response_make(spect, 0.0f)};
 
-      Medium::Sample result = {};
+      MediumSample result = {};
       result.pos = pos + w_i * t;
       result.sampled_medium_t = sampled_medium ? t : 0.0f;
       result.weight = (sampled_medium ? tr * scattering_value : tr) / pdf.sum();
@@ -255,27 +184,23 @@ ETX_SHARED_INLINE Medium::Sample sample_medium(const Scene& scene, const Medium&
       return result;
     }
 
-    case Medium::Class::Heterogeneous: {
+    case Medium::Heterogeneous: {
       float max_sigma = extinction_value.maximum();
-      if ((max_sigma <= 0.0f) || (medium.grid.has_data() == false)) {
-        Medium::Sample result = {};
-        result.weight = {spect, 1.0f};
-        result.pos = pos + w_i * max_t;
+      if ((max_sigma <= 0.0f) || (medium.has_grid_data() == false)) {
+        MediumSample result = {};
+        result.weight = spectral_response_make(spect, 0.0f), result.pos = pos + w_i * max_t;
         result.sampled_medium_t = 0.0f;
         return result;
       }
 
-      float3 medium_pos = {};
-      float3 medium_dir = {};
-      float t_min = 0.0f;
-      float t_max = 0.0f;
-      float3 world_dir_normalized = {};
-      float3 bbox_size = {};
-      if (medium_intersects_bounds(medium, pos, w_i, max_t, medium_pos, medium_dir, t_min, t_max, world_dir_normalized, bbox_size) == false) {
-        Medium::Sample result = {};
-        result.weight = {spect, 1.0f};
-        result.pos = pos + w_i * max_t;
-        result.sampled_medium_t = 0.0f;
+      const BoundingBox bounds_box = medium.bounds;
+      MediumSharedIntersection medium_intersection = {};
+      if (medium_shared_intersects_bounds(bounds_box.p_min, bounds_box.p_max, pos, w_i, max_t, medium_intersection) == false) {
+        MediumSample result = {
+          .weight = spectral_response_make(spect, 1.0f),
+          .pos = pos + w_i * max_t,
+          .sampled_medium_t = 0.0f,
+        };
         return result;
       }
 
@@ -285,24 +210,24 @@ ETX_SHARED_INLINE Medium::Sample sample_medium(const Scene& scene, const Medium&
       SpectralResponse transmittance = {spect, 1.0f};
       const float rr_threshold = 0.1f;
       float t_world = 0.0f;
-      float segment_length = t_max - t_min;
+      float segment_length = medium_intersection.t_max - medium_intersection.t_min;
 
       while (true) {
         t_world += -logf(1.0f - smp.next()) / max_sigma;
-        float3 world_pos_at_t = pos + world_dir_normalized * t_world;
-        float3 local_pos = medium.bounds.to_local(world_pos_at_t);
-        float t_local_along_dir = dot(local_pos - medium_pos, medium_dir);
+        float3 world_pos_at_t = pos + medium_intersection.world_dir_normalized * t_world;
+        float3 local_pos = medium_shared_bounds_to_local(world_pos_at_t, bounds_box.p_min, bounds_box.p_max);
+        float t_local_along_dir = dot(local_pos - medium_intersection.medium_pos, medium_intersection.medium_dir);
         if (t_local_along_dir >= segment_length) {
           pdf *= transmittance;
-          Medium::Sample result = {};
-          result.pos = pos + world_dir_normalized * min(t_world, max_t);
+          MediumSample result = {};
+          result.pos = pos + medium_intersection.world_dir_normalized * min(t_world, max_t);
           result.sampled_medium_t = 0.0f;
           result.weight = pdf.is_zero() ? SpectralResponse{spect, 0.0f} : transmittance / pdf.sum();
           ETX_VALIDATE(result.weight);
           return result;
         }
 
-        float density_value = medium.grid.sample(local_pos, medium.bounds);
+        float density_value = medium.sample_density(local_pos, bounds_box);
         SpectralResponse extinction_at_point = extinction_value * density_value;
         float sigma_t_channel = extinction_at_point.component(channel);
 
@@ -310,10 +235,10 @@ ETX_SHARED_INLINE Medium::Sample sample_medium(const Scene& scene, const Medium&
           SpectralResponse scattering_at_point = scattering_value * density_value;
           pdf *= transmittance * extinction_at_point;
           if (pdf.is_zero()) {
-            return {{spect, 0.0f}};
+            return {spectral_response_make(spect, 0.0f)};
           }
 
-          Medium::Sample result = {};
+          MediumSample result = {};
           result.pos = world_pos_at_t;
           result.sampled_medium_t = t_world;
           result.weight = (transmittance * scattering_at_point) / pdf.sum();
@@ -329,7 +254,7 @@ ETX_SHARED_INLINE Medium::Sample sample_medium(const Scene& scene, const Medium&
         if (transmittance_max < rr_threshold) {
           float p = fminf(fmaxf(transmittance_max, 0.01f), 0.95f);
           if (smp.next() > p) {
-            return {{spect, 0.0f}};
+            return {spectral_response_make(spect, 0.0f)};
           }
           transmittance *= 1.0f / p;
           ETX_VALIDATE(transmittance);

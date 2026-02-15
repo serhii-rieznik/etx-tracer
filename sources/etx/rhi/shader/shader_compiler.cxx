@@ -35,6 +35,58 @@ constexpr std::array<std::string_view, 6> default_shader_search_paths = {
   "../../sources",
 };
 
+void append_unique_existing_directory(std::vector<std::string>& directories, const std::filesystem::path& input_path) {
+  if (input_path.empty()) {
+    return;
+  }
+
+  std::error_code ec;
+  const std::filesystem::path normalized_path = input_path.lexically_normal();
+  if ((std::filesystem::exists(normalized_path, ec) == false) || (ec.value() != 0)) {
+    return;
+  }
+
+  const std::filesystem::path absolute_path = std::filesystem::absolute(normalized_path, ec);
+  const std::string directory = (ec.value() == 0) ? absolute_path.string() : normalized_path.string();
+  if (directory.empty()) {
+    return;
+  }
+
+  for (const auto& existing_directory : directories) {
+    if (existing_directory == directory) {
+      return;
+    }
+  }
+
+  directories.push_back(directory);
+}
+
+std::vector<std::string> build_shader_include_directories(const std::string& source_name) {
+  std::vector<std::string> include_directories = {};
+
+  if (source_name.empty() == false) {
+    std::filesystem::path source_path(source_name);
+    if (source_path.has_parent_path()) {
+      std::filesystem::path root = source_path.parent_path();
+      for (uint32_t depth = 0; (depth < 8u) && (root.empty() == false); ++depth) {
+        append_unique_existing_directory(include_directories, root);
+
+        const std::filesystem::path parent = root.parent_path();
+        if (parent.empty() || (parent == root)) {
+          break;
+        }
+        root = parent;
+      }
+    }
+  }
+
+  for (const auto path : default_shader_search_paths) {
+    append_unique_existing_directory(include_directories, std::filesystem::path(std::string(path)));
+  }
+
+  return include_directories;
+}
+
 std::string resolve_shader_file_path(const std::string& filename) {
   if (filename.empty()) {
     return {};
@@ -94,112 +146,6 @@ bool contains_include_directive(const std::string& source) {
   return false;
 }
 
-std::string_view trim_preprocess_line(std::string_view line) {
-  while (line.empty() == false && (line.front() == ' ' || line.front() == '\t' || line.front() == '\r')) {
-    line.remove_prefix(1);
-  }
-  while (line.empty() == false && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
-    line.remove_suffix(1);
-  }
-  return line;
-}
-
-bool is_suppressible_preprocess_line(std::string_view line) {
-  static constexpr std::string_view angled_include_advisory = "with <angled> include; use \"quotes\" instead";
-  line = trim_preprocess_line(line);
-  return line.find(angled_include_advisory) != std::string_view::npos;
-}
-
-std::string_view first_quoted_token(std::string_view line) {
-  line = trim_preprocess_line(line);
-  size_t begin = line.find('"');
-  if (begin == std::string_view::npos) {
-    return {};
-  }
-  size_t end = line.find('"', begin + 1);
-  if (end == std::string_view::npos || end <= begin + 1) {
-    return {};
-  }
-  return line.substr(begin + 1, end - begin - 1);
-}
-
-bool is_angled_include_advisory_triplet(std::string_view line0, std::string_view line1, std::string_view line2) {
-  line0 = trim_preprocess_line(line0);
-  line1 = trim_preprocess_line(line1);
-  line2 = trim_preprocess_line(line2);
-
-  if (line0.rfind("#include <", 0) != 0) {
-    return false;
-  }
-  size_t include_begin = line0.find('<');
-  size_t include_end = line0.rfind('>');
-  if (include_begin == std::string_view::npos || include_end == std::string_view::npos || include_end <= include_begin + 1) {
-    return false;
-  }
-  std::string_view include_path = line0.substr(include_begin + 1, include_end - include_begin - 1);
-
-  if (line1.empty() || line1.front() != '^' || line1.find('~') == std::string_view::npos) {
-    return false;
-  }
-
-  std::string_view suggested_path = first_quoted_token(line2);
-  if (suggested_path.empty()) {
-    return false;
-  }
-
-  return suggested_path == include_path;
-}
-
-std::string filter_preprocess_diagnostics(const std::string& diagnostics) {
-  std::vector<std::string_view> lines;
-  lines.reserve(16);
-  size_t pos = 0;
-  while (pos < diagnostics.size()) {
-    size_t line_end = diagnostics.find('\n', pos);
-    if (line_end == std::string::npos) {
-      line_end = diagnostics.size();
-    }
-
-    std::string_view line(diagnostics.data() + pos, line_end - pos);
-    while (line.empty() == false && line.back() == '\r') {
-      line.remove_suffix(1);
-    }
-    lines.push_back(line);
-
-    pos = line_end;
-    if (pos < diagnostics.size() && diagnostics[pos] == '\n') {
-      ++pos;
-    }
-  }
-
-  std::vector<uint8_t> suppress(lines.size(), 0);
-  for (size_t i = 0; i < lines.size(); ++i) {
-    if (is_suppressible_preprocess_line(lines[i])) {
-      suppress[i] = 1;
-    }
-  }
-
-  for (size_t i = 0; (i + 2) < lines.size(); ++i) {
-    if (is_angled_include_advisory_triplet(lines[i], lines[i + 1], lines[i + 2])) {
-      suppress[i + 0] = 1;
-      suppress[i + 1] = 1;
-      suppress[i + 2] = 1;
-      i += 2;
-    }
-  }
-
-  std::string filtered;
-  for (size_t i = 0; i < lines.size(); ++i) {
-    if (suppress[i] == 0) {
-      if (filtered.empty() == false) {
-        filtered.push_back('\n');
-      }
-      filtered.append(lines[i].data(), lines[i].size());
-    }
-  }
-
-  return filtered;
-}
 }  // namespace
 
 class CustomIncludeHandler : public IDxcIncludeHandler {
@@ -260,7 +206,7 @@ struct ShaderCompiler::Impl {
 
   // Helper method
   std::vector<std::wstring> build_dxc_arguments(const std::string& entry_point, RHIShaderStage stage, const std::unordered_map<std::string, std::string>& defines,
-    bool for_preprocessing = false);
+    const std::vector<std::string>& include_directories, bool for_preprocessing = false);
 };
 
 // File-scope global variables for DXC
@@ -440,6 +386,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
         p->Release();
       }
     });
+  const std::vector<std::string> include_directories = build_shader_include_directories(source_name);
 
   if (include_handler == nullptr) {
     result.result = RHIResult::OutOfMemory;
@@ -465,7 +412,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     };
 
     // Preprocess arguments (entry point doesn't matter for preprocessing usually, but we need one)
-    auto preprocess_args = _impl->build_dxc_arguments(entry_points[0].entry_point, entry_points[0].stage, defines, true);
+    auto preprocess_args = _impl->build_dxc_arguments(entry_points[0].entry_point, entry_points[0].stage, defines, include_directories, true);
     std::vector<const wchar_t*> preprocess_args_ptr;
     for (const auto& arg : preprocess_args) {
       preprocess_args_ptr.push_back(arg.c_str());
@@ -497,15 +444,13 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       }
     }
 
-    const std::string filtered_preprocess_diagnostics = filter_preprocess_diagnostics(preprocess_diagnostics);
-
-    if (filtered_preprocess_diagnostics.empty() == false) {
-      log::warning("Shader preprocessing diagnostics [%s]:\n%s", source_name.empty() ? "<memory>" : source_name.c_str(), filtered_preprocess_diagnostics.c_str());
+    if (preprocess_diagnostics.empty() == false) {
+      log::warning("Shader preprocessing diagnostics [%s]:\n%s", source_name.empty() ? "<memory>" : source_name.c_str(), preprocess_diagnostics.c_str());
     }
 
-    if (FAILED(preprocess_status) && (filtered_preprocess_diagnostics.empty() == false)) {
+    if (FAILED(preprocess_status) && (preprocess_diagnostics.empty() == false)) {
       result.result = RHIResult::ValidationError;
-      result.error_message = filtered_preprocess_diagnostics;
+      result.error_message = preprocess_diagnostics;
       return result;
     }
 
@@ -564,7 +509,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       continue;
     }
 
-    std::vector<std::wstring> arguments = _impl->build_dxc_arguments(ep.entry_point, ep.stage, defines, false);
+    std::vector<std::wstring> arguments = _impl->build_dxc_arguments(ep.entry_point, ep.stage, defines, include_directories, false);
     if (arguments.empty()) {
       result.result = RHIResult::InvalidArgument;
       result.error_message = "Unsupported shader stage for DXC compilation";
@@ -855,7 +800,7 @@ void unload_dxc_dll_global() {
 }
 
 std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::string& entry_point, RHIShaderStage stage,
-  const std::unordered_map<std::string, std::string>& defines, bool for_preprocessing) {
+  const std::unordered_map<std::string, std::string>& defines, const std::vector<std::string>& include_directories, bool for_preprocessing) {
   std::vector<std::wstring> arguments;
 
   std::wstring profile;
@@ -911,7 +856,7 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
     }
     std::wstring define_wstr = string_to_wstring(define_str);
     arguments.push_back(L"-D");
-    arguments.push_back(define_wstr.c_str());
+    arguments.push_back(define_wstr);
   }
 
   static const std::vector<std::pair<std::string, std::string>> default_defines = {{"VULKAN", "1"}, {"SPIRV", "1"}, {"BINDLESS", "1"}};
@@ -920,7 +865,19 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
     std::string define_str = key + "=" + value;
     std::wstring define_wstr = string_to_wstring(define_str);
     arguments.push_back(L"-D");
-    arguments.push_back(define_wstr.c_str());
+    arguments.push_back(define_wstr);
+  }
+
+  for (const auto& include_directory : include_directories) {
+    if (include_directory.empty()) {
+      continue;
+    }
+
+    const std::wstring include_directory_wstr = string_to_wstring(include_directory);
+    if (include_directory_wstr.empty() == false) {
+      arguments.push_back(L"-I");
+      arguments.push_back(include_directory_wstr);
+    }
   }
 
   return arguments;
@@ -975,8 +932,7 @@ HRESULT STDMETHODCALLTYPE CustomIncludeHandler::LoadSource(LPCWSTR pFilename, ID
   std::string full_path = find_include_file(filename);
 
   if (full_path.empty()) {
-    log::error("Include file not found: %s", filename.c_str());
-    return E_FAIL;
+    return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
   }
 
   std::error_code ec;

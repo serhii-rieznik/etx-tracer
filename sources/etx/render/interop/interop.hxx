@@ -7,7 +7,7 @@
 # define ETX_OUT(type, name)   type& name
 # define ETX_INOUT(type, name) type& name
 # define ETX_ALIGNED           alignas(16)
-# define ETX_INIT(expr)        = expr
+# define ETX_INIT(...)         = __VA_ARGS__
 # define ETX_STATIC_CONST      constexpr
 
 #else
@@ -17,7 +17,7 @@
 # define ETX_OUT(type, name)   out type name
 # define ETX_INOUT(type, name) inout type name
 # define ETX_ALIGNED           /* */
-# define ETX_INIT(expr)        /* */
+# define ETX_INIT(...)         /* */
 # define ETX_STATIC_CONST      static const
 
 #endif

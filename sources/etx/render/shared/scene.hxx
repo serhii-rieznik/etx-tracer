@@ -2,6 +2,7 @@
 
 #include <etx/core/profiler.hxx>
 
+#include <etx/render/interop/gpu_abi_constants.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/render/shared/image.hxx>
@@ -25,12 +26,12 @@ struct ETX_ALIGNED Scene {
 
   struct Properties {
     enum : uint32_t {
-      Committed,
-      Spectral,
-      MultipleImportanceSampling,
-      BlueNoise,
+      Committed = SceneProperty::Committed,
+      Spectral = SceneProperty::Spectral,
+      MultipleImportanceSampling = SceneProperty::MultipleImportanceSampling,
+      BlueNoise = SceneProperty::BlueNoise,
 
-      Count,
+      Count = SceneProperty::Count,
     };
   };
 
@@ -73,8 +74,7 @@ struct ETX_ALIGNED Scene {
   ArrayView<SpectralDistribution> spectrums ETX_EMPTY_INIT;
 
   struct EnvironmentEmitters {
-    constexpr static const uint32_t kMaxCount = 63;
-    uint32_t emitters[kMaxCount] ETX_EMPTY_INIT;
+    uint32_t emitters[SceneLimits::MaxEnvironmentEmitters] ETX_EMPTY_INIT;
     uint32_t count ETX_EMPTY_INIT;
   } environment_emitters ETX_EMPTY_INIT;
 
@@ -309,15 +309,8 @@ ETX_SHARED_INLINE bool random_continue(uint32_t path_length, uint32_t start_path
 }
 
 ETX_SHARED_INLINE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {
-  if (spect.spectral()) {
-    auto scale = rgb_response(spect, {value.x, value.y, value.z});
-    ETX_VALIDATE(scale);
-    response *= scale;
-    ETX_VALIDATE(response);
-  } else {
-    response.integrated *= float3{value.x, value.y, value.z};
-  }
-
+  response = spectral_response_apply_rgb_scale(spect, response, float3{value.x, value.y, value.z});
+  ETX_VALIDATE(response);
   return response;
 }
 

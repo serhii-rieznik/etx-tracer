@@ -719,7 +719,7 @@ uint32_t SceneRepresentation::add_medium(const char* name) {
   uint32_t absorption_index = _private->data.add_spectrum(absorption_spectrum);
   uint32_t scattering_index = _private->data.add_spectrum(scattering_spectrum);
   std::string id = name && name[0] ? name : ("medium-" + std::to_string(_private->data.mediums.array_size()));
-  return _private->data.mediums.add(Medium::Class::Homogeneous, id, nullptr, absorption_index, scattering_index, 0.0f, true);
+  return _private->data.mediums.add(Medium::Homogeneous, id, nullptr, absorption_index, scattering_index, 0.0f, true);
 }
 
 std::string SceneRepresentation::rename_medium(uint32_t index, const char* name) {
@@ -1603,12 +1603,12 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (medium.enable_explicit_connections == false) {
       materials_stream << "enclosed 1\n";
     }
-    if (medium.grid.type == DensityGrid::Type::NoiseFunction) {
-      materials_stream << "noise type " << static_cast<uint32_t>(medium.grid.noise_type) << " scale " << medium.grid.noise.scale << " octaves " << medium.grid.noise.octaves
-                       << " lacunarity " << medium.grid.noise.lacunarity << " persistence " << medium.grid.noise.persistence << " seed " << medium.grid.noise.seed << " power "
-                       << medium.grid.noise.power << " sharpness " << medium.grid.noise.sharpness << " offset " << medium.grid.noise.offset.x << " " << medium.grid.noise.offset.y
-                       << " " << medium.grid.noise.offset.z << " border_fade " << medium.grid.noise.enable_border_fade << " border_fade_distance "
-                       << medium.grid.noise.border_fade_distance << "\n";
+    if (medium.grid_type_enum() == DensityGrid::Type::NoiseFunction) {
+      materials_stream << "noise type " << static_cast<uint32_t>(medium.noise_type_enum()) << " scale " << medium.grid.noise_scale << " octaves " << medium.grid.noise_octaves
+                       << " lacunarity " << medium.grid.noise_lacunarity << " persistence " << medium.grid.noise_persistence << " seed " << medium.grid.noise_seed << " power "
+                       << medium.grid.noise_power << " sharpness " << medium.grid.noise_sharpness << " offset " << medium.grid.noise_offset.x << " " << medium.grid.noise_offset.y
+                       << " " << medium.grid.noise_offset.z << " border_fade " << medium.grid.noise_enable_border_fade << " border_fade_distance "
+                       << medium.grid.noise_border_fade_distance << "\n";
     }
     materials_stream << "\n";
   }

@@ -4,13 +4,13 @@
 #include <etx/render/shared/medium.hxx>
 namespace etx {
 
+struct BufferPool;
+
 struct MediumPool {
   using Mapping = std::unordered_map<std::string, uint32_t>;
 
-  MediumPool(std::vector<Medium>&, std::vector<MediumStorage>&);
+  MediumPool(std::vector<Medium>&, BufferPool&);
   ~MediumPool();
-
-  std::vector<MediumStorage>& storage();
 
   void init(uint32_t capacity);
   void cleanup();

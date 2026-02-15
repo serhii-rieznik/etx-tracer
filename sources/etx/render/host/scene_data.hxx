@@ -9,6 +9,7 @@
 #include <etx/render/shared/distribution.hxx>
 
 #include <etx/render/host/tasks.hxx>
+#include <etx/render/host/buffer_pool.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
 namespace etx {
@@ -74,6 +75,7 @@ struct SceneHashes {
   uint64_t vertices_btn_hash = 0;
   uint64_t vertices_tex_hash = 0;
   uint64_t triangles_hash = 0;
+  uint64_t triangle_indices_hash = 0;
   uint64_t meshes_hash = 0;
   uint64_t materials_hash = 0;
   uint64_t spectra_hash = 0;
@@ -106,7 +108,7 @@ struct SceneHashes {
     result[UpdateFlags::AnyGeometry] = result[UpdateFlags::VerticesPos] || result[UpdateFlags::VerticesNrm] || result[UpdateFlags::VerticesTan] ||
                                        result[UpdateFlags::VerticesBtn] || result[UpdateFlags::VerticesTex] || result[UpdateFlags::Triangles] || result[UpdateFlags::Meshes];
 
-    result[UpdateFlags::AnyGeometryStructure] = result[UpdateFlags::VerticesPos] || result[UpdateFlags::Triangles];
+    result[UpdateFlags::AnyGeometryStructure] = result[UpdateFlags::VerticesPos] || (triangle_indices_hash != existing.triangle_indices_hash);
 
     result[UpdateFlags::AnyGeometryAttributes] =
       result[UpdateFlags::VerticesNrm] || result[UpdateFlags::VerticesTan] || result[UpdateFlags::VerticesBtn] || result[UpdateFlags::VerticesTex];
@@ -142,10 +144,9 @@ struct SceneData {
   std::vector<EmitterProfile> emitter_profiles;
   std::vector<SpectralDistribution> spectrum_values;
   std::vector<Image> images_vector;
-  std::vector<ImageStorage> images_storage_vector;
   std::vector<Medium> mediums_vector;
-  std::vector<MediumStorage> mediums_storage_vector;
 
+  BufferPool buffer_pool;
   ImagePool images;
   MediumPool mediums;
   MaterialMapping material_mapping;

@@ -34,7 +34,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
     result.weight = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
     result.weight *= (1.0f - fr) / (1.0f - f);
     result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
-    result.medium_index = frame.entering_material() ? mtl.int_medium : mtl.ext_medium;
+    result.medium_index = local_frame_entering_material(frame) ? mtl.int_medium : mtl.ext_medium;
   }
 
   return result;
@@ -73,7 +73,7 @@ struct DielectricMaterial {
 
 ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
-  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(local_frame, -data.w_i);
 
   bool in_outside = LocalFrame::cos_theta(w_i) > 0;
   float direction_scale = in_outside ? 1.0f : -1.0f;
@@ -139,7 +139,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
     result.medium_index = in_outside ? mtl.int_medium : mtl.ext_medium;
   }
 
-  result.w_o = normalize(local_frame.from_local(result.w_o));
+  result.w_o = normalize(local_frame_from_local(local_frame, result.w_o));
   result.pdf = pdf(data, result.w_o, mtl, scene, smp);
   ETX_VALIDATE(result.pdf);
   return result;
@@ -148,11 +148,11 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
 ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
 
-  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(local_frame, -data.w_i);
   if (fabsf(LocalFrame::cos_theta(w_i)) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
-  auto w_o = local_frame.to_local(in_w_o);
+  auto w_o = local_frame_to_local(local_frame, in_w_o);
   if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
@@ -197,11 +197,11 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
 ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
 
-  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(local_frame, -data.w_i);
   if (fabsf(LocalFrame::cos_theta(w_i)) <= kEpsilon)
     return 0.0f;
 
-  auto w_o = local_frame.to_local(in_w_o);
+  auto w_o = local_frame_to_local(local_frame, in_w_o);
   if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
     return 0.0f;
 

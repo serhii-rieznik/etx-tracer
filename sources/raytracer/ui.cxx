@@ -871,7 +871,6 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ctx.button_size = 32.0f;
   ctx.input_size = 64.0f;
   ctx.has_integrator = (_current_integrator != nullptr);
-  ctx.scene_locked = data.scene_locked;
 
   _frame_count++;
   _last_fps_update_time += data.dt;
@@ -883,7 +882,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
 
   ctx.emitter_primary_instance.clear();
 
-  ctx.with_window = [&](uint32_t flag, const char* title, bool disable_when_locked, std::function<void()>&& body) {
+  ctx.with_window = [&](uint32_t flag, const char* title, std::function<void()>&& body) {
     if ((_ui_setup & flag) == 0)
       return;
 
@@ -891,13 +890,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     float target_width = char_width * 30.0f + ImGui::GetStyle().WindowPadding.x * 2.0f;
     ImGui::SetNextWindowSize(ImVec2(target_width, 0.0f), ImGuiCond_Always);
     if (ImGui::Begin(title, nullptr, kWindowFlags | ImGuiWindowFlags_NoResize)) {
-      if (disable_when_locked && ctx.scene_locked) {
-        ImGui::BeginDisabled();
-      }
       body();
-      if (disable_when_locked && ctx.scene_locked) {
-        ImGui::EndDisabled();
-      }
     }
     ImGui::End();
   };
@@ -944,7 +937,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
 
   validate_selections(scene_rep);
 
-  build_main_menu_bar(data.recent_files, ctx.scene_locked);
+  build_main_menu_bar(data.recent_files);
   build_toolbar(ctx);
   build_scene_objects_window(scene_rep, ctx);
   build_properties_window(scene_rep, scene_rep.camera(), ctx, data);
@@ -1299,21 +1292,19 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
     return false;
   }
 
-  bool has_density_grid = m.grid.has_data();
-  bool recompute_extinction = false;
   bool changed = false;
 
   ImGui::Text("Medium Type");
   const char* medium_type_names[] = {"Homogeneous", "Heterogeneous (Noise)"};
-  int32_t medium_type_idx = (m.cls == Medium::Class::Heterogeneous) ? 1 : 0;
+  int32_t medium_type_idx = (m.cls == Medium::Heterogeneous) ? 1 : 0;
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (ImGui::Combo("##medium_type", &medium_type_idx, medium_type_names, 2)) {
     if (medium_type_idx == 0) {
-      m.cls = Medium::Class::Homogeneous;
+      m.cls = Medium::Homogeneous;
       changed = true;
     } else {
-      m.cls = Medium::Class::Heterogeneous;
-      m.grid.type = DensityGrid::Type::NoiseFunction;
+      m.cls = Medium::Heterogeneous;
+      m.set_grid_type(DensityGrid::Type::NoiseFunction);
       changed = true;
     }
   }
@@ -1322,14 +1313,12 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (spectrum_picker(scene_rep, "Absorption##medium_absorption", m.absorption_index, true, true)) {
     changed = true;
-    recompute_extinction = true;
   }
 
   ImGui::Text("Scattering");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   if (spectrum_picker(scene_rep, "Scattering##medium_scattering", m.scattering_index, true, true)) {
     changed = true;
-    recompute_extinction = true;
   }
 
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -1343,63 +1332,64 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
     changed = true;
   }
 
-  if (m.cls == Medium::Class::Heterogeneous) {
-    if (m.grid.type == DensityGrid::Type::Texture3D) {
+  if (m.cls == Medium::Heterogeneous) {
+    if (m.grid_type_enum() == DensityGrid::Type::Texture3D) {
       ImGui::Text("Density grid (3D Texture)");
       ImGui::Text("%u x %u x %u", m.grid.dimensions.x, m.grid.dimensions.y, m.grid.dimensions.z);
       ImGui::Text("Bounds");
-      ImGui::Text("min (%.3f, %.3f, %.3f)  max (%.3f, %.3f, %.3f)", m.bounds.p_min.x, m.bounds.p_min.y, m.bounds.p_min.z, m.bounds.p_max.x, m.bounds.p_max.y, m.bounds.p_max.z);
-    } else if (m.grid.type == DensityGrid::Type::NoiseFunction) {
+      ImGui::Text(
+        "min (%.3f, %.3f, %.3f)  max (%.3f, %.3f, %.3f)", m.bounds.p_min.x, m.bounds.p_min.y, m.bounds.p_min.z, m.bounds.p_max.x, m.bounds.p_max.y, m.bounds.p_max.z);
+    } else if (m.grid_type_enum() == DensityGrid::Type::NoiseFunction) {
       ImGui::Text("Density grid (Noise Function)");
       ImGui::Text("Noise Type");
       const char* noise_names[] = {"Perlin", "Worley", "Billow", "Voronoi", "Lattice", "Uniform"};
-      int32_t noise_idx = static_cast<int32_t>(m.grid.noise_type);
+      int32_t noise_idx = static_cast<int32_t>(m.noise_type_enum());
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       if (ImGui::Combo("##medium_noise_type", &noise_idx, noise_names, static_cast<int32_t>(NoiseFunction::Count))) {
-        m.grid.noise_type = static_cast<NoiseFunction>(noise_idx);
+        m.set_noise_type(static_cast<NoiseFunction>(noise_idx));
         changed = true;
       }
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_scale", &m.grid.noise.scale, 0.01f, 100.0f, "Scale: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      if (ImGui::SliderFloat("##medium_noise_scale", &m.grid.noise_scale, 0.01f, 100.0f, "Scale: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderInt("##medium_noise_octaves", reinterpret_cast<int32_t*>(&m.grid.noise.octaves), 1, 16, "Octaves: %d", ImGuiSliderFlags_AlwaysClamp)) {
+      if (ImGui::SliderInt("##medium_noise_octaves", reinterpret_cast<int32_t*>(&m.grid.noise_octaves), 1, 16, "Octaves: %d", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_lacunarity", &m.grid.noise.lacunarity, 1.0f, 4.0f, "Lacunarity: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      if (ImGui::SliderFloat("##medium_noise_lacunarity", &m.grid.noise_lacunarity, 1.0f, 4.0f, "Lacunarity: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_persistence", &m.grid.noise.persistence, 0.01f, 1.0f, "Persistence: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      if (ImGui::SliderFloat("##medium_noise_persistence", &m.grid.noise_persistence, 0.01f, 1.0f, "Persistence: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::InputInt("##medium_noise_seed", reinterpret_cast<int32_t*>(&m.grid.noise.seed))) {
+      if (ImGui::InputInt("##medium_noise_seed", reinterpret_cast<int32_t*>(&m.grid.noise_seed))) {
         changed = true;
       }
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_power", &m.grid.noise.power, 0.1f, 10.0f, "Power: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      if (ImGui::SliderFloat("##medium_noise_power", &m.grid.noise_power, 0.1f, 10.0f, "Power: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_sharpness", &m.grid.noise.sharpness, 0.1f, 10.0f, "Sharpness: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      if (ImGui::SliderFloat("##medium_noise_sharpness", &m.grid.noise_sharpness, 0.1f, 10.0f, "Sharpness: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
       ImGui::Text("Offset");
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::DragFloat3("##medium_noise_offset", &m.grid.noise.offset.x, 0.1f, -100.0f, 100.0f, "%.2f")) {
+      if (ImGui::DragFloat3("##medium_noise_offset", &m.grid.noise_offset.x, 0.1f, -100.0f, 100.0f, "%.2f")) {
         changed = true;
       }
-      bool border_fade_enabled = m.grid.noise.enable_border_fade != 0u;
+      bool border_fade_enabled = m.grid.noise_enable_border_fade != 0u;
       if (ImGui::Checkbox("Border Fade", &border_fade_enabled)) {
-        m.grid.noise.enable_border_fade = border_fade_enabled ? 1u : 0u;
+        m.grid.noise_enable_border_fade = border_fade_enabled ? 1u : 0u;
         changed = true;
       }
       if (border_fade_enabled) {
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        if (ImGui::SliderFloat("##medium_noise_border_fade_distance", &m.grid.noise.border_fade_distance, 0.01f, 0.5f, "Fade Distance: %.3f", ImGuiSliderFlags_AlwaysClamp)) {
+        if (ImGui::SliderFloat("##medium_noise_border_fade_distance", &m.grid.noise_border_fade_distance, 0.01f, 0.5f, "Fade Distance: %.3f", ImGuiSliderFlags_AlwaysClamp)) {
           changed = true;
         }
       }
@@ -1433,7 +1423,7 @@ void UI::reload_scene() {
   }
 }
 
-void UI::build_main_menu_bar(const std::vector<std::string>& recent_files, bool scene_locked) {
+void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("etx-tracer")) {
       if (ImGui::MenuItem("CPU Raytracer", nullptr, _current_renderer_mode == RendererMode::CPURaytracing)) {
@@ -1459,13 +1449,13 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files, bool 
     }
 
     if (ImGui::BeginMenu("Scene", true)) {
-      if (ImGui::MenuItem("Open...", "Ctrl+O", false, !scene_locked)) {
+      if (ImGui::MenuItem("Open...", "Ctrl+O", false, true)) {
         select_scene_file();
       }
-      if (ImGui::MenuItem("Reload Scene", "Ctrl+R", false, !scene_locked)) {
+      if (ImGui::MenuItem("Reload Scene", "Ctrl+R", false, true)) {
         reload_scene();
       }
-      if (ImGui::MenuItem("Reload Geometry and Materials", "Ctrl+G", false, !scene_locked)) {
+      if (ImGui::MenuItem("Reload Geometry and Materials", "Ctrl+G", false, true)) {
         reload_geometry();
       }
 
@@ -1494,10 +1484,10 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files, bool 
       }
 
       ImGui::Separator();
-      if (ImGui::MenuItem("Save", nullptr, false, !scene_locked)) {
+      if (ImGui::MenuItem("Save", nullptr, false, true)) {
         save_scene_file();
       }
-      if (ImGui::MenuItem("Save as...", nullptr, false, !scene_locked)) {
+      if (ImGui::MenuItem("Save as...", nullptr, false, true)) {
         save_scene_file_as();
       }
       ImGui::EndMenu();
@@ -1676,10 +1666,10 @@ void UI::build_toolbar(const BuildContext& ctx) {
     ImGui::SameLine(0.0f, ctx.wpadding.x);
 
     {
-      ImGui::PushStyleColor(ImGuiCol_Button, ctx.scene_locked ? kToolbarTerminateColor : kToolbarLaunchColor);
-      if (ImGui::Button(ctx.scene_locked ? "  Unlock Scene  " : "  Lock Scene  ", {0.0f, ctx.button_size})) {
-        if (callbacks.scene_updates_locked_changed) {
-          callbacks.scene_updates_locked_changed(!ctx.scene_locked);
+      ImGui::PushStyleColor(ImGuiCol_Button, kToolbarLaunchColor);
+      if (ImGui::Button("  Notify Scene Change  ", {0.0f, ctx.button_size})) {
+        if (callbacks.scene_update_requested) {
+          callbacks.scene_update_requested();
         }
       }
       ImGui::PopStyleColor();
@@ -1778,7 +1768,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
 void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
   const float kDefaultListHeight = 5.0f * ImGui::GetTextLineHeightWithSpacing();
 
-  ctx.with_window(UIObjects, "Scene Objects", true, [&]() {
+  ctx.with_window(UIObjects, "Scene Objects", [&]() {
     auto draw_history_button = [&](const char* label, bool enabled, int32_t step) {
       ImGui::PushStyleColor(ImGuiCol_Button, kHistoryButtonBaseColor);
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kHistoryButtonHoverColor);
@@ -2077,7 +2067,7 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
   }
 
   std::string properties_window_name = properties_title + "###properties";
-  ctx.with_window(UIProperties, properties_window_name.c_str(), true, [&]() {
+  ctx.with_window(UIProperties, properties_window_name.c_str(), [&]() {
     switch (_selection.kind) {
       case SelectionKind::Material: {
         build_material_selection_properties(scene_rep, ctx, data);
@@ -2703,8 +2693,12 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
     build_camera(camera, pos, camera.direction, kWorldUp, camera.film_size, fov);
 
-    if (callbacks.camera_changed && scene_rep.data().cameras[camera_index].active) {
-      callbacks.camera_changed(viewport, 1u << pixel_size);
+    if (scene_rep.data().cameras[camera_index].active) {
+      if (callbacks.camera_changed) {
+        callbacks.camera_changed(viewport, 1u << pixel_size);
+      }
+    } else if (callbacks.scene_settings_changed) {
+      callbacks.scene_settings_changed();
     }
   }
 }
@@ -2741,6 +2735,8 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
 
   bool spectral_changed = ImGui::Checkbox("Spectral rendering", scene_rep.data().options.properties + Scene::Properties::Spectral);
   scene_settings_changed = scene_settings_changed || spectral_changed;
+  bool blue_noise_changed = ImGui::Checkbox("Blue Noise", scene_rep.data().options.properties + Scene::Properties::BlueNoise);
+  scene_settings_changed = scene_settings_changed || blue_noise_changed;
 
   ImGui::Separator();
   if (labeled_control("Noise Threshold (experimental)", [&]() {
@@ -2838,11 +2834,6 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
 
   bool mis_changed = ImGui::Checkbox("Multiple Importance Sampling", scene_rep.data().options.properties + Scene::Properties::MultipleImportanceSampling);
   if (mis_changed && callbacks.scene_settings_changed) {
-    callbacks.scene_settings_changed();
-  }
-
-  bool blue_noise_changed = ImGui::Checkbox("Blue Noise", scene_rep.data().options.properties + Scene::Properties::BlueNoise);
-  if (blue_noise_changed && callbacks.scene_settings_changed) {
     callbacks.scene_settings_changed();
   }
 

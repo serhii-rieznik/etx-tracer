@@ -64,6 +64,7 @@ struct VKAccelerationStructureData {
   VkAccelerationStructureKHR acceleration_structure = VK_NULL_HANDLE;
   RHIBindlessHandle buffer = {};
   RHIAccelerationStructureDesc desc = {};
+  uint64_t build_scratch_size = 0;
 };
 
 template <typename T, typename Key>
@@ -267,6 +268,7 @@ struct VKDevice {
   RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc);
   RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle);
   uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle);
+  uint64_t get_acceleration_structure_build_scratch_size(RHIBindlessHandle as_handle);
 
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
@@ -294,6 +296,7 @@ struct VKDevice {
 
   void set_current_frame_index(uint32_t index);
   void reset_staging_buffer_for_frame(uint32_t frame_index);
+  void process_deferred_destruction(uint32_t frame_index);
 
  private:
   class Impl;

@@ -80,13 +80,14 @@ struct RTApplication {
   void on_view_scene(uint32_t direction);
   void on_clear_recent_files();
   void on_camera_activated(uint32_t camera_index);
-  void on_scene_updates_locked_changed(bool locked);
+  void on_scene_update_requested();
   void on_reload_shaders_selected();
 
  private:
   void add_to_recent(const std::string&);
   void save_options();
   void update_camera_to_fit_scene(const float3& view_direction);
+  void notify_scene_might_have_changed();
 
  private:
   TaskScheduler scheduler;
@@ -105,7 +106,6 @@ struct RTApplication {
   Options _options;
   std::vector<std::string> _recent_files = {};
   std::string _current_scene_file = {};
-  bool _scene_updates_locked = false;
   TimeMeasure time_measure = {};
   TimeMeasure scene_commit_time = {};
 };

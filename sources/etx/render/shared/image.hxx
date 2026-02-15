@@ -1,6 +1,8 @@
 ﻿#pragma once
 
+#include <etx/render/interop/image.hxx>
 #include <etx/render/shared/distribution.hxx>
+#include <etx/render/shared/buffer_view.hxx>
 #include <etx/render/shared/spectrum.hxx>
 
 extern "C" {
@@ -16,57 +18,7 @@ extern "C" {
 
 namespace etx {
 
-struct ImageStorage {
-  // Raw pixel data storage
-  std::vector<uint8_t> data;
-
-  // Distribution data storage
-  std::vector<Distribution::Entry> x_distributions_storage;
-  std::vector<Distribution::Entry> y_distribution_storage;
-  std::vector<Distribution> x_distributions;
-
-  // Clear all storage
-  void clear() {
-    data.clear();
-    x_distributions_storage.clear();
-    y_distribution_storage.clear();
-    x_distributions.clear();
-  }
-};
-
-struct Image {
-  enum class Format : uint32_t {
-    Undefined,
-    RGBA32F,
-    RGBA8,
-    // Compressed BC formats - always available for sampling support
-    // Loading behavior controlled by ETX_STORE_COMPRESSED_BC flag
-    BC1,
-    BC1_SRGB,
-    BC2,
-    BC2_SRGB,
-    BC3,
-    BC3_SRGB,
-    BC4,
-    BC5,
-    BC6H,
-    BC6H_SIGNED,
-    BC7,
-    BC7_SRGB,
-  };
-
-  enum : uint32_t {
-    Regular = 0u,
-    BuildSamplingTable = 1u << 0u,
-    RepeatU = 1u << 1u,
-    RepeatV = 1u << 2u,
-    SkipSRGBConversion = 1u << 3u,
-    HasAlphaChannel = 1u << 4u,
-    UniformSamplingTable = 1u << 5u,
-
-    Committed = 1u << 6u,
-  };
-
+struct Image : public ::Image {
   struct Gather {
     float4 p00 = {};
     float4 p01 = {};
@@ -89,14 +41,15 @@ struct Image {
 
   // View to y distribution data (points to external storage)
   Distribution y_distribution = {};
-  float2 fsize = {};
-  float2 offset = {};
-  float2 scale = {1.0f, 1.0f};
-  uint2 isize = {};
-  float normalization = 0.0f;
-  uint32_t options = 0;
-  Format format = Format::Undefined;
-  uint32_t data_size = 0u;
+
+  // Backing buffer references for CPU-side storage.
+  BufferHandle pixel_buffer = {};
+  BufferHandle distribution_buffer = {};
+
+  BufferView data = {};
+  BufferView x_distributions_storage = {};
+  BufferView y_distribution_storage = {};
+  BufferView x_distributions_buffer = {};
 
   ETX_SHARED_INLINE Gather gather(const float2& in_uv) const {
     float2 uv = in_uv * fsize;
@@ -343,22 +296,10 @@ struct Image {
 
     const auto& x0 = x_distribution.values[location.x];
     const auto& x1 = x_distribution.values[min(location.x + 1u, uint32_t(x_distribution.values.count) - 1u)];
-    float dx = (rnd.x - x0.cdf);
-    if (x1.cdf - x0.cdf > 0.0f) {
-      dx /= (x1.cdf - x0.cdf);
-    }
-
     const auto& y0 = y_distribution.values[location.y];
     const auto& y1 = y_distribution.values[min(location.y + 1u, uint32_t(y_distribution.values.count) - 1u)];
-    float dy = (rnd.y - y0.cdf);
-    if (y1.cdf - y0.cdf > 0.0f) {
-      dy /= (y1.cdf - y0.cdf);
-    }
 
-    float2 uv = {
-      (float(location.x) + dx) / fsize.x,
-      (float(location.y) + dy) / fsize.y,
-    };
+    float2 uv = ::image_sample_uv_from_distribution(rnd, location, fsize, x0.cdf, x1.cdf, y0.cdf, y1.cdf);
 
     eval = evaluate(uv, &image_pdf);
     return uv;
@@ -372,20 +313,19 @@ struct Image {
   }
 
   ETX_SHARED_INLINE float tex_coord_repeat(float u, float size) const {
-    auto x = fmodf(u, size);
-    return x < 0.0f ? (x + size) : x;
+    return ::image_tex_coord_repeat(u, size);
   }
 
   ETX_SHARED_INLINE float tex_coord_clamp(float u, float size) const {
-    return clamp(u, 0.0f, nextafterf(size, 0.0f));
+    return ::image_tex_coord_clamp(u, size);
   }
 
   ETX_SHARED_INLINE float tex_coord_u(float u, float size) const {
-    return (options & RepeatU) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
+    return ::image_tex_coord_u(u, size, options);
   }
 
   ETX_SHARED_INLINE float tex_coord_v(float u, float size) const {
-    return (options & RepeatV) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
+    return ::image_tex_coord_v(u, size, options);
   }
 
   ETX_SHARED_INLINE float4 read(const float2& uv) const {

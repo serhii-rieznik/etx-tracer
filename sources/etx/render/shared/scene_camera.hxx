@@ -26,39 +26,19 @@ ETX_SHARED_INLINE float film_pdf_out(const Camera& camera, const float3& to_poin
 ETX_SHARED_INLINE Ray generate_ray(const Scene& scene, const Camera& camera, const float2& uv, const float2& sensor_sample_rnd) {
   ETX_CHECK_FINITE(uv);
 
-  if (camera.cls == Camera::Class::Equirectangular) {
-    return {camera.position, from_spherical(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat};
-  }
-
-  float3 origin = camera.position;
-  float3 direction = camera.direction;
-  ETX_CHECK_FINITE(direction);
-  float3 s = uv.x * camera.side;
-  ETX_CHECK_FINITE(s);
-  float3 u = uv.y * camera.up / camera.aspect;
-  ETX_CHECK_FINITE(u);
-  float3 w_o = normalize(camera.tan_half_fov * (s + u) + direction);
-  ETX_CHECK_FINITE(w_o);
-
+  float2 sensor_sample = {};
   if ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
-    float2 sensor_sample = {};
     if (camera.lens_image == kInvalidIndex) {
-      sensor_sample = sample_disk(sensor_sample_rnd);
+      sensor_sample = ::sample_disk(sensor_sample_rnd);
     } else {
       sensor_sample = scene.images[camera.lens_image].sample(sensor_sample_rnd) * 2.0f - 1.0f;
     }
-    sensor_sample *= camera.lens_radius;
-    origin = origin + camera.side * sensor_sample.x + camera.up * sensor_sample.y;
-    float focal_plane_distance = camera.focal_distance / dot(w_o, direction);
-    float3 p = camera.position + focal_plane_distance * w_o;
-    w_o = normalize(p - origin);
-    ETX_CHECK_FINITE(w_o);
   }
 
-  float cos_t = dot(w_o, direction);
-  float t_near = camera.clip_near > 0.0f ? camera.clip_near / cos_t : kRayEpsilon;
-  float t_far = camera.clip_far > 0.0f ? camera.clip_far / cos_t : kMaxFloat;
-  return {origin, w_o, fmaxf(t_near, kRayEpsilon), t_far};
+  Ray ray = ::camera_generate_ray(camera, uv, sensor_sample);
+  ETX_CHECK_FINITE(ray.o);
+  ETX_CHECK_FINITE(ray.d);
+  return ray;
 }
 
 ETX_SHARED_INLINE CameraSample evaluate_film(const Scene& scene, const Camera& camera, const float3& world_point, const float3& lens_point) {
@@ -112,7 +92,7 @@ ETX_SHARED_INLINE CameraSample sample_film(Sampler& smp, const Scene& scene, con
   float2 sensor_sample = {};
   if ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
     if (camera.lens_image == kInvalidIndex) {
-      sensor_sample = sample_disk(smp.next_2d());
+      sensor_sample = ::sample_disk(smp.next_2d());
     } else {
       float pdf = {};
       uint2 location = {};

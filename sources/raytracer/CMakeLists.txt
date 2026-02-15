@@ -29,7 +29,7 @@ else()
 endif()
 
 target_link_libraries(raytracer
-  PRIVATE imgui sokol etx-core etx-render etx-rt etx-util etx-rhi tinyexr stb_image
+  PRIVATE imgui sokol etx-core etx-render etx-rt etx-util etx-rhi tinyexr stb_image bluenoise
 )
 
 target_include_directories(raytracer

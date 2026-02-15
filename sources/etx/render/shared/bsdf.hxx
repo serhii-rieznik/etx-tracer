@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <etx/render/shared/material.hxx>
 #include <etx/render/shared/sampler.hxx>
@@ -134,7 +134,7 @@ struct NormalDistribution {
   }
 
   [[nodiscard]] ETX_SHARED_INLINE float3 sample(Sampler& smp, const float3& in_w_i) const {
-    auto w_i = _frame.to_local(-in_w_i);
+    auto w_i = local_frame_to_local(_frame, -in_w_i);
     auto v_h = normalize(float3{_alpha.x * w_i.x, _alpha.y * w_i.y, w_i.z});
 
     float v_h_len = v_h.x * v_h.x + v_h.y * v_h.y;
@@ -150,17 +150,17 @@ struct NormalDistribution {
     float3 n_h = t1 * u + t2 * v + sqrtf(max(0.0f, 1.0f - t1 * t1 - t2 * t2)) * v_h;
     float3 local_m = normalize(float3{_alpha.x * n_h.x, _alpha.y * n_h.y, n_h.z});
 
-    return _frame.from_local(local_m);
+    return local_frame_from_local(_frame, local_m);
   }
 
   [[nodiscard]] ETX_SHARED_INLINE Eval evaluate(const float3& in_m, const float3& in_w_i, const float3& in_w_o) const {
-    auto local_w_i = _frame.to_local(-in_w_i);
+    auto local_w_i = local_frame_to_local(_frame, -in_w_i);
     if (local_w_i.z <= kEpsilon) {
       return {};
     }
 
-    auto local_w_o = _frame.to_local(in_w_o);
-    auto local_m = _frame.to_local(in_m);
+    auto local_w_o = local_frame_to_local(_frame, in_w_o);
+    auto local_m = local_frame_to_local(_frame, in_m);
 
     Eval result = {};
     result.visibility = visibility_term_local(_alpha, local_m, local_w_i, local_w_o);
@@ -179,12 +179,12 @@ struct NormalDistribution {
   }
 
   [[nodiscard]] ETX_SHARED_INLINE float pdf(const float3& in_m, const float3& in_w_i, const float3& in_w_o) const {
-    auto local_w_i = _frame.to_local(-in_w_i);
+    auto local_w_i = local_frame_to_local(_frame, -in_w_i);
     if (local_w_i.z <= kEpsilon) {
       return 0.0f;
     }
 
-    auto local_m = _frame.to_local(in_m);
+    auto local_m = local_frame_to_local(_frame, in_m);
 
     float g1 = visibility_local(_alpha, local_m, local_w_i);
     ETX_VALIDATE(g1);
@@ -347,8 +347,10 @@ ETX_SHARED_INLINE float fresnel_thinfilm(float wavelength, const float cos_theta
 
 ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
   const ThinFilmEval& thinfilm) {
-  ETX_ASSERT(spect.wavelength == ext_ior.wavelength);
-  ETX_ASSERT(spect.wavelength == int_ior.wavelength);
+  ETX_ASSERT(spect.wavelength == ext_ior.eta.wavelength);
+  ETX_ASSERT(spect.wavelength == ext_ior.k.wavelength);
+  ETX_ASSERT(spect.wavelength == int_ior.eta.wavelength);
+  ETX_ASSERT(spect.wavelength == int_ior.k.wavelength);
 
   cos_theta = fabsf(cos_theta);
 

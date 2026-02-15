@@ -132,9 +132,7 @@ struct IntegratorThread {
   void restart();
 
   void reset_scene_hashes();
-
-  void set_scene_updates_locked(bool locked);
-  bool scene_updates_locked() const;
+  void request_scene_check();
 
  private:
   ETX_DECLARE_PIMPL(IntegratorThread, 1024);

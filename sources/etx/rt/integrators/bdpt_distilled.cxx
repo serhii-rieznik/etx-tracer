@@ -16,7 +16,7 @@ struct BDPTPathVertex {
   };
 
   Intersection intersection = {};
-  Medium::Instance medium = {};
+  MediumInstance medium = {};
 
   struct {
     float from_prev = 0.0f;
@@ -35,7 +35,7 @@ struct BDPTPathVertex {
     , cls(c) {
   }
 
-  BDPTPathVertex(const float3& medium_sample_pos, const float3& a_w_i, const Medium::Instance m)
+  BDPTPathVertex(const float3& medium_sample_pos, const float3& a_w_i, const MediumInstance m)
     : cls(Class::Medium)
     , medium(m) {
     intersection.pos = medium_sample_pos;
@@ -63,7 +63,7 @@ struct BDPTPathVertex {
   }
 
   bool is_medium_interaction() const {
-    return (cls == Class::Medium) && medium.valid();
+    return (cls == Class::Medium) && medium_instance_valid(medium);
   }
 
   static bool safe_normalize(const float3& to_vertex, const float3& from_vertex, float3& n) {
@@ -144,7 +144,7 @@ struct BDPTPathVertex {
         const auto& img = scene.images[em.emission.image_index];
         bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
         ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
-        float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x, projection);
+        float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x, static_cast<uint32_t>(projection));
 
         float sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
         if (projection == ProjectionType::EqualArea) {
@@ -401,19 +401,20 @@ struct BDPTDistilledImpl : public Task {
   }
 
   void handle_medium(const EmitterSample& emitter_sample, const bool first_interaction, const bool explicit_connections, const float3& medium_sample_pos,
-    const Medium::Instance& medium_instance, Payload& payload, Ray& ray, Sampler& smp, BDPTPathData& path_data, BDPTPathVertex& curr, BDPTPathVertex& prev) const {
+    const MediumInstance& medium_instance, Payload& payload, Ray& ray, Sampler& smp, BDPTPathData& path_data, BDPTPathVertex& curr, BDPTPathVertex& prev) const {
     const auto& scene = rt.scene();
 
-    ETX_ASSERT(medium_instance.valid());
+    ETX_ASSERT(medium_instance_valid(medium_instance));
 
-    float2 rnd_bsdf = smp.next_2d();
-    float2 rnd_em_sample = smp.next_2d();
-    float2 rnd_support = smp.next_2d();
-    if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4);
-    }
+    const uint32_t interaction_index = first_interaction ? 1u : 2u;
+    SamplerPolicy sampler_policy = {
+      .enable_blue_noise = enable_blue_noise ? 1u : 0u,
+    };
+    const SamplerStreamSamples2D interaction_samples =
+      sample_interaction_streams_2d(smp, sampler_policy, static_cast<uint32_t>(payload.mode), interaction_index, payload.pixel, scene.options.samples, payload.iteration);
+    const float2 rnd_bsdf = interaction_samples.bsdf;
+    const float2 rnd_em_sample = interaction_samples.connection;
+    const float2 rnd_support = interaction_samples.support;
 
     float3 w_o = sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
     float pdf_fwd = phase_function(ray.d, w_o, medium_instance.anisotropy);
@@ -446,14 +447,15 @@ struct BDPTDistilledImpl : public Task {
     BDPTPathData& path_data, BDPTPathVertex& curr, BDPTPathVertex& prev, GBuffer& gbuffer, bool subsurface_exit) const {
     const auto& scene = rt.scene();
 
-    float2 rnd_bsdf = smp.next_2d();
-    float2 rnd_em_sample = smp.next_2d();
-    float2 rnd_support = smp.next_2d();
-    if ((payload.mode == PathSource::Camera) && first_interaction && enable_blue_noise) {
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4);
-    }
+    const uint32_t interaction_index = first_interaction ? 1u : 2u;
+    SamplerPolicy sampler_policy = {
+      .enable_blue_noise = enable_blue_noise ? 1u : 0u,
+    };
+    const SamplerStreamSamples2D interaction_samples =
+      sample_interaction_streams_2d(smp, sampler_policy, static_cast<uint32_t>(payload.mode), interaction_index, payload.pixel, scene.options.samples, payload.iteration);
+    const float2 rnd_bsdf = interaction_samples.bsdf;
+    const float2 rnd_em_sample = interaction_samples.connection;
+    const float2 rnd_support = interaction_samples.support;
 
     if (scene.materials[a_intersection.material_index].cls == MaterialClass::Boundary) {
       const auto& m = scene.materials[a_intersection.material_index];
@@ -485,7 +487,7 @@ struct BDPTDistilledImpl : public Task {
 
     uint32_t material_index = a_intersection.material_index;
 
-    Medium::Instance medium_instance = {
+    MediumInstance medium_instance = {
       .index = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium_index,
     };
 
@@ -567,24 +569,24 @@ struct BDPTDistilledImpl : public Task {
     Break,
   };
 
-  StepResult regular_step(const Ray& ray, Sampler& smp, Intersection& intersection, Medium::Sample& medium_sample, Payload& payload) const {
+  StepResult regular_step(const Ray& ray, Sampler& smp, Intersection& intersection, MediumSample& medium_sample, Payload& payload) const {
     const auto& scene = rt.scene();
     bool found_intersection = rt.trace(scene, ray, intersection, smp);
 
     if (payload.medium_index != kInvalidIndex) {
       const auto& m = scene.mediums[payload.medium_index];
       medium_sample = sample_medium(scene, m, payload.spect, payload.throughput, smp, ray.o, ray.d, found_intersection ? intersection.t : kMaxFloat);
-      payload.throughput *= medium_sample.weight;
+      spectral_response_mul_assign(payload.throughput, medium_sample.weight);
       ETX_VALIDATE(payload.throughput);
     }
 
-    if (medium_sample.sampled_medium())
+    if (medium_sample_sampled_medium(medium_sample))
       return StepResult::SampledMedium;
 
     return found_intersection ? StepResult::IntersectionFound : StepResult::Nothing;
   }
 
-  Medium::Instance subsurface_to_medium_instance(const uint32_t subsurface_material, const Payload& payload, const Intersection& intersection) const {
+  MediumInstance subsurface_to_medium_instance(const uint32_t subsurface_material, const Payload& payload, const Intersection& intersection) const {
     const auto& scene = rt.scene();
     const auto& mat = scene.materials[subsurface_material];
     auto color = apply_image(payload.spect, mat.scattering, intersection.tex, scene, nullptr);
@@ -612,7 +614,7 @@ struct BDPTDistilledImpl : public Task {
 
     const auto& mat = scene.materials[subsurface_material];
 
-    Medium::Instance medium_instance = {
+    MediumInstance medium_instance = {
       .index = mat.int_medium,
     };
 
@@ -684,7 +686,7 @@ struct BDPTDistilledImpl : public Task {
     uint32_t subsurface_material = kInvalidIndex;
 
     Intersection intersection = {};
-    Medium::Sample medium_sample = {};
+    MediumSample medium_sample = {};
     for (uint32_t path_length = 0; running() && (path_length < scene.options.max_path_length);) {
       prev = curr;
 
@@ -708,7 +710,7 @@ struct BDPTDistilledImpl : public Task {
       if (step == StepResult::SampledMedium) {
         ETX_CRITICAL(payload.medium_index != kInvalidIndex);
         const auto& medium = scene.mediums[payload.medium_index];
-        const Medium::Instance medium_inst = make_medium_instance(scene, medium, payload.spect, payload.medium_index);
+        const MediumInstance medium_inst = make_medium_instance(scene, medium, payload.spect, payload.medium_index);
         handle_medium(emitter_sample, first_interaction, medium.enable_explicit_connections, medium_sample.pos, medium_inst, payload, ray, smp, path_data, curr, prev);
         should_break = false;
       } else if (step == StepResult::IntersectionFound) {

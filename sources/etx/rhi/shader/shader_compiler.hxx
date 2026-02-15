@@ -4,8 +4,8 @@
 #include <etx/rhi/rhi_types.hxx>
 namespace etx {
 
-constexpr size_t MAX_SHADER_FILE_SIZE = 10 * 1024 * 1024;
-constexpr size_t MAX_SHADER_SOURCE_SIZE = 5 * 1024 * 1024;
+constexpr size_t MAX_SHADER_FILE_SIZE = 16 * 1024 * 1024;
+constexpr size_t MAX_SHADER_SOURCE_SIZE = 16 * 1024 * 1024;
 
 struct ShaderCompilationResult {
   RHIResult result = RHIResult::Success;

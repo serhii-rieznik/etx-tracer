@@ -27,7 +27,7 @@ struct IntegratorThreadImpl {
   Integrator* integrator = nullptr;
   Integrator::State latest_state = Integrator::State::Stopped;
   Integrator::Status latest_status = {};
-  std::atomic<bool> scene_updates_locked = {false};
+  std::atomic<bool> scene_check_requested = {true};
 
   IntegratorThreadImpl(SceneRepresentation& scene_rep, Raytracing& rt)
     : scene_representation(scene_rep)
@@ -48,20 +48,27 @@ struct IntegratorThreadImpl {
   void reset_scene_hashes() {
     current_scene_hashes = {};
     current_camera_hash = 0;
+    scene_check_requested.store(true);
+  }
+
+  void request_scene_check() {
+    scene_check_requested.store(true);
   }
 
   void check_and_commit_scene_changes() {
-    scene_representation.data().images.load_images(raytracing.scheduler());
-
-    SceneHashes new_hashes = {};
+    const bool has_pending_scene_check = scene_check_requested.exchange(false);
+    SceneHashes new_hashes = current_scene_hashes;
     UpdateFlags changes = {};
-    if (scene_updates_locked.load() == false) {
+
+    if (has_pending_scene_check) {
+      scene_representation.data().images.load_images(raytracing.scheduler());
       new_hashes = scene_representation.data().compute_hashes();
       changes = new_hashes.compare(current_scene_hashes);
+      current_scene_hashes = new_hashes;
     }
 
     const auto& camera = scene_representation.camera();
-    uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
+    const uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
 
     if (changes.any() || (current_camera_hash != new_camera_hash)) {
       if ((integrator != nullptr) && (latest_state == Integrator::State::Running)) {
@@ -70,7 +77,6 @@ struct IntegratorThreadImpl {
       }
 
       raytracing.commit(scene_representation.data(), scene_representation.camera(), changes);
-      current_scene_hashes = new_hashes;
       current_camera_hash = new_camera_hash;
 
       if (integrator != nullptr) {
@@ -183,12 +189,8 @@ void IntegratorThread::reset_scene_hashes() {
   _private->reset_scene_hashes();
 }
 
-void IntegratorThread::set_scene_updates_locked(bool locked) {
-  _private->scene_updates_locked.store(locked);
-}
-
-bool IntegratorThread::scene_updates_locked() const {
-  return _private->scene_updates_locked.load();
+void IntegratorThread::request_scene_check() {
+  _private->request_scene_check();
 }
 
 void IntegratorThread::update() {

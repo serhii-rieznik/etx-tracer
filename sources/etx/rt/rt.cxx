@@ -2,6 +2,8 @@
 #include <etx/rt/rt.hxx>
 
 #include <etx/render/host/film.hxx>
+#include <etx/render/host/buffer_pool.hxx>
+#include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/shared/sampler.hxx>
 
@@ -20,7 +22,11 @@ struct RaytracingImpl {
   struct InternalSceneData {
     Camera camera = {};
     Distribution emitters_distribution = {};
-    std::vector<Distribution::Entry> emitters_distribution_storage = {};
+    BufferPool emitters_distribution_buffer_pool = {};
+    BufferHandle emitters_distribution_buffer = {};
+    BufferView emitters_distribution_storage = {};
+    std::vector<uint32_t> active_emitter_indices = {};
+    Scene::EnvironmentEmitters environment_emitters = {};
     std::vector<EmitterProfile> emitter_profiles = {};
     std::vector<Emitter> emitter_instances = {};
     std::vector<Triangle> triangles = {};
@@ -34,10 +40,16 @@ struct RaytracingImpl {
     const auto version_minor = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_MINOR);
     const auto version_patch = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_PATCH);
     log::warning("Embree version: %u.%u.%u", version_major, version_minor, version_patch);
+    internal_data.emitters_distribution_buffer = internal_data.emitters_distribution_buffer_pool.create(0u, "rt_emitters_distribution");
   }
 
   ~RaytracingImpl() {
     release_host_scene();
+    if (internal_data.emitters_distribution_buffer.valid()) {
+      internal_data.emitters_distribution_buffer_pool.destroy(internal_data.emitters_distribution_buffer);
+      internal_data.emitters_distribution_buffer = {};
+      internal_data.emitters_distribution_storage = {};
+    }
 
     if (rt_device) {
       rtcReleaseDevice(rt_device);
@@ -100,7 +112,6 @@ struct RaytracingImpl {
     ETX_PROFILER_SCOPE();
     if (update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Emitters]) {
       ETX_PROFILER_NAMED_SCOPE("update_triangles_and_emitters");
-      update_triangles_internal(scene_data);
       update_emitters_internal(scene_data);
     }
 
@@ -110,132 +121,50 @@ struct RaytracingImpl {
 
     if (update_flags[UpdateFlags::Emitters] || update_flags[UpdateFlags::AnyMaterials] || update_flags[UpdateFlags::Triangles]) {
       ETX_PROFILER_NAMED_SCOPE("build_emitters_distribution");
-      build_emitters_distribution(scene_data);
+      build_emitters_distribution();
     }
 
     update_all_scene_views(scene_data);
   }
 
-  void build_emitters_distribution(const SceneData& scene_data) {
+  void build_emitters_distribution() {
     ETX_PROFILER_SCOPE();
-    auto bbox = scene_data.compute_bounding_volumes();
-    float3 bounding_sphere_center = 0.5f * (bbox.p_min + bbox.p_max);
-    float bounding_sphere_radius = length(bbox.p_max - bounding_sphere_center);
+    scene.environment_emitters = internal_data.environment_emitters;
 
-    scene.environment_emitters.count = 0;
-
-    for (uint32_t i = 0; i < internal_data.emitter_profiles.size(); ++i) {
-      auto& profile = internal_data.emitter_profiles[i];
-      if (profile.cls == EmitterProfile::Class::Directional) {
-        profile.directional.equivalent_disk_size = 2.0f * std::tan(profile.directional.angular_size / 2.0f);
-        profile.directional.angular_size_cosine = std::cos(profile.directional.angular_size / 2.0f);
-      }
+    const uint32_t active_count = static_cast<uint32_t>(internal_data.active_emitter_indices.size());
+    internal_data.emitters_distribution_buffer_pool.reset(internal_data.emitters_distribution_buffer);
+    internal_data.emitters_distribution_storage =
+      internal_data.emitters_distribution_buffer_pool.allocate_elements<Distribution::Entry>(internal_data.emitters_distribution_buffer, static_cast<uint64_t>(active_count) + 1u);
+    auto* entries = internal_data.emitters_distribution_buffer_pool.map<Distribution::Entry>(internal_data.emitters_distribution_storage);
+    if (entries == nullptr) {
+      internal_data.emitters_distribution = {};
+      scene.emitters_distribution = {};
+      log::error("Failed to allocate emitters distribution storage");
+      return;
     }
 
-    std::vector<uint32_t> active_emitter_indices;
-    active_emitter_indices.reserve(internal_data.emitter_instances.size());
-
-    for (uint32_t i = 0; i < internal_data.emitter_instances.size(); ++i) {
-      auto& emitter = internal_data.emitter_instances[i];
-      const auto& profile = internal_data.emitter_profiles[emitter.profile];
-
-      float spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
-      emitter.spectrum_weight = spectrum_weight;
-
-      if ((profile.cls == EmitterProfile::Class::Directional) || (profile.cls == EmitterProfile::Class::Environment)) {
-        float additional_weight = kPi * bounding_sphere_radius * bounding_sphere_radius;
-        emitter.additional_weight = additional_weight;
-      }
-      float total_weight = emitter.spectrum_weight * emitter.additional_weight;
-      if (total_weight > 0.0f) {
-        active_emitter_indices.push_back(i);
-      }
+    const uint32_t written_count = fill_packed_emitter_distribution_entries(internal_data.emitter_instances, internal_data.active_emitter_indices, entries, active_count);
+    if (written_count != active_count) {
+      internal_data.emitters_distribution = {};
+      scene.emitters_distribution = {};
+      log::error("Failed to write emitters distribution entries");
+      return;
     }
 
-    for (uint32_t emitter_idx : active_emitter_indices) {
-      const auto& emitter = internal_data.emitter_instances[emitter_idx];
-      if (emitter.cls == EmitterProfile::Class::Directional || emitter.cls == EmitterProfile::Class::Environment) {
-        if (scene.environment_emitters.count < Scene::EnvironmentEmitters::kMaxCount) {
-          scene.environment_emitters.emitters[scene.environment_emitters.count++] = emitter_idx;
-        }
-      }
-    }
-
-    uint32_t active_count = static_cast<uint32_t>(active_emitter_indices.size());
-    internal_data.emitters_distribution_storage.resize(active_count + 1);
-
-    auto* entries = internal_data.emitters_distribution_storage.data();
-    for (uint32_t i = 0; i < active_count; ++i) {
-      uint32_t emitter_idx = active_emitter_indices[i];
-      const auto& emitter = internal_data.emitter_instances[emitter_idx];
-      float total_weight = emitter.spectrum_weight * emitter.additional_weight;
-      entries[i] = {total_weight, 0.0f, 0.0f, emitter_idx};
-    }
-
-    internal_data.emitters_distribution = Distribution::build(entries, active_count);
+    internal_data.emitters_distribution = Distribution::build(entries, active_count, internal_data.emitters_distribution_buffer, internal_data.emitters_distribution_storage);
 
     scene.emitters_distribution = internal_data.emitters_distribution;
 
     log::info("Built emitters distribution for %u emitters (%u active)", static_cast<uint32_t>(internal_data.emitter_instances.size()), active_count);
   }
 
-  void update_triangles_internal(const SceneData& scene_data) {
-    internal_data.triangles = scene_data.triangles;
-    for (auto& tri : internal_data.triangles) {
-      tri.emitter_index = kInvalidIndex;
-    }
-  }
-
   void update_emitters_internal(const SceneData& scene_data) {
-    internal_data.emitter_instances.clear();
-    internal_data.emitter_profiles.clear();
-
-    // Copy all emitter profiles directly (maintains same indices)
-    internal_data.emitter_profiles = scene_data.emitter_profiles;
-
-    // Create emitter instances for non-area emitters (directional, environment)
-    for (uint32_t i = 0; i < scene_data.emitter_profiles.size(); ++i) {
-      const auto& profile = scene_data.emitter_profiles[i];
-      if (profile.cls != EmitterProfile::Class::Area) {
-        Emitter& emitter = internal_data.emitter_instances.emplace_back(profile.cls);
-        emitter.profile = i;  // Direct index since we copied profiles with same ordering
-        emitter.triangle_index = kInvalidIndex;
-        emitter.spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
-        emitter.additional_weight = (profile.cls == EmitterProfile::Class::Directional) ? kPi : (4.0f * kPi);
-      }
-    }
-
-    // Create emitter instances for area emitters (one per triangle that references the profile)
-    for (size_t tri_index = 0; tri_index < scene_data.triangles.size(); ++tri_index) {
-      const Triangle& tri = scene_data.triangles[tri_index];
-      if (tri.emitter_index != kInvalidIndex && tri.emitter_index < scene_data.emitter_profiles.size()) {
-        const auto& profile = scene_data.emitter_profiles[tri.emitter_index];
-        if (profile.cls == EmitterProfile::Class::Area) {
-          // Create emitter instance for this triangle
-          Emitter& emitter = internal_data.emitter_instances.emplace_back(EmitterProfile::Class::Area);
-          emitter.profile = tri.emitter_index;  // Direct index since we copied profiles with same ordering
-          emitter.triangle_index = static_cast<uint32_t>(tri_index);
-
-          // Calculate triangle area and weights
-          if (tri.material_index < scene_data.materials.size()) {
-            const Material& mtl = scene_data.materials[tri.material_index];
-            float spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
-
-            const float3& v0 = scene_data.vertices.pos[tri.i[0]];
-            const float3& v1 = scene_data.vertices.pos[tri.i[1]];
-            const float3& v2 = scene_data.vertices.pos[tri.i[2]];
-            float triangle_area = 0.5f * length(cross(v1 - v0, v2 - v0));
-
-            emitter.triangle_area = triangle_area;
-            emitter.spectrum_weight = spectrum_weight;
-            emitter.additional_weight = (mtl.two_sided ? 2.0f : 1.0f) * triangle_area * kPi;
-          }
-
-          // Update internal triangle to point to instance
-          internal_data.triangles[tri_index].emitter_index = static_cast<uint32_t>(internal_data.emitter_instances.size() - 1);
-        }
-      }
-    }
+    auto packed_emitters = build_packed_emitters(scene_data);
+    internal_data.triangles = std::move(packed_emitters.triangles);
+    internal_data.emitter_profiles = std::move(packed_emitters.emitter_profiles);
+    internal_data.emitter_instances = std::move(packed_emitters.emitter_instances);
+    internal_data.active_emitter_indices = std::move(packed_emitters.active_emitter_indices);
+    internal_data.environment_emitters = packed_emitters.environment_emitters;
   }
 
   void build_host_scene(const Scene& s) {
@@ -473,7 +402,7 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
   return true;
 }
 
-SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const Medium::Instance& medium,
+SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const MediumInstance& medium,
   Sampler& smp) const {
   ETX_ASSERT(_private != nullptr);
 
@@ -554,10 +483,10 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
   float current_t = 0.0f;
   float3 origin = p0;
   SpectralResponse result = {spect, 1.0f};
-  Medium::Instance current_medium = medium;
+  MediumInstance current_medium = medium;
   for (uint32_t i = 0; i < context.intersection_count; ++i) {
     const auto& intersection = context.intersections[i];
-    if (current_medium.valid()) {
+    if (medium_instance_valid(current_medium)) {
       float dt = fmaxf(0.0f, intersection.t - current_t);
 
       if (current_medium.index != kInvalidIndex) {
@@ -565,7 +494,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
         result *= medium_transmittance(scene, m, spect, smp, origin, direction, dt);
         ETX_VALIDATE(result);
       } else {
-        result *= medium_transmittance(current_medium, dt);
+        spectral_response_mul_assign(result, medium_transmittance(current_medium, dt));
         ETX_VALIDATE(result);
       }
     }

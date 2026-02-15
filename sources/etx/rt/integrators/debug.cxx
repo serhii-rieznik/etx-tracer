@@ -3,7 +3,6 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 
-#include <etx/render/host/rnd_sampler.hxx>
 #include <etx/render/host/film.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/scene_bsdf.hxx>

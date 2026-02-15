@@ -106,6 +106,7 @@ struct MTDevice {
   RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc);
   RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle);
   uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle);
+  uint64_t get_acceleration_structure_build_scratch_size(RHIBindlessHandle as_handle);
 
   RHIMemoryStats get_memory_statistics() const;
 

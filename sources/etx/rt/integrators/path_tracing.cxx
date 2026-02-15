@@ -2,7 +2,6 @@
 
 #include <etx/render/shared/base.hxx>
 #include <etx/render/shared/bsdf.hxx>
-#include <etx/render/host/rnd_sampler.hxx>
 #include <etx/render/host/film.hxx>
 
 #include <etx/rt/integrators/path_tracing.hxx>

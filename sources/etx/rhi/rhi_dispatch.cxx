@@ -1,6 +1,9 @@
 #include <etx/rhi/rhi.hxx>
+#include <etx/core/log.hxx>
 #include <utility>
 #include <new>
+#include <cstring>
+#include <limits>
 
 #if defined(ETX_PLATFORM_WINDOWS)
 # include <etx/rhi/vulkan/vk_rhi.hxx>
@@ -19,6 +22,70 @@ using BackendDevice = MTDevice;
 #endif
 
 namespace etx {
+
+namespace {
+constexpr uint32_t kInvalidDescriptorIndex = ~0u;
+
+void destroy_linear_chunked_buffer(RHIDevice& device, RHIBindlessHandle& buffer, uint64_t& buffer_size, uint32_t& descriptor_index) {
+  device.destroy_buffer(buffer);
+  buffer = {};
+  buffer_size = 0u;
+  descriptor_index = kInvalidDescriptorIndex;
+}
+
+bool upload_or_update_linear_chunked_buffer(RHIDevice& device, const void* data, uint64_t size, RHIBufferUsage usage, RHIBindlessHandle& buffer, uint64_t& buffer_size,
+  uint32_t& descriptor_index, const char* buffer_name) {
+  if ((data == nullptr) || (size == 0u)) {
+    destroy_linear_chunked_buffer(device, buffer, buffer_size, descriptor_index);
+    return true;
+  }
+
+  const uint64_t required_size = size;
+  if ((buffer.valid()) && (buffer_size == required_size)) {
+    const RHIResult update_result = device.update_buffer(buffer, data, required_size);
+    if (update_result != RHIResult::Success) {
+      log::error("RHI: failed to update '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(update_result));
+      return false;
+    }
+    descriptor_index = get_bindless_descriptor_index(buffer);
+    return true;
+  }
+
+  RHIBufferDesc desc = {};
+  desc.size = required_size;
+  desc.usage = usage;
+
+  const RHICreateBindlessResult create_result = device.create_buffer(desc);
+  if ((create_result.result != RHIResult::Success) || (create_result.handle.valid() == false)) {
+    log::error("RHI: failed to create '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(create_result.result));
+    descriptor_index = buffer.valid() ? get_bindless_descriptor_index(buffer) : kInvalidDescriptorIndex;
+    return false;
+  }
+
+  const RHIResult upload_result = device.update_buffer(create_result.handle, data, required_size);
+  if (upload_result != RHIResult::Success) {
+    log::error("RHI: failed to upload '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(upload_result));
+    device.destroy_buffer(create_result.handle);
+    descriptor_index = buffer.valid() ? get_bindless_descriptor_index(buffer) : kInvalidDescriptorIndex;
+    return false;
+  }
+
+  if (buffer.valid()) {
+    const RHIResult destroy_result = device.destroy_buffer(buffer);
+    if (destroy_result != RHIResult::Success) {
+      log::error("RHI: failed to destroy previous '%s' buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(destroy_result));
+      device.destroy_buffer(create_result.handle);
+      descriptor_index = get_bindless_descriptor_index(buffer);
+      return false;
+    }
+  }
+
+  buffer = create_result.handle;
+  buffer_size = required_size;
+  descriptor_index = get_bindless_descriptor_index(buffer);
+  return true;
+}
+}  // namespace
 
 static BackendContext* backend_context(void* impl) {
   return static_cast<BackendContext*>(impl);
@@ -41,6 +108,9 @@ RHICreateResult<RHISemaphore> RHIDevice::create_semaphore() {
 }
 
 RHIResult RHIDevice::destroy_semaphore(RHISemaphore semaphore) {
+  if (semaphore.valid() == false) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_semaphore(semaphore);
 }
 
@@ -53,7 +123,112 @@ RHIResult RHIDevice::update_buffer(RHIBindlessHandle buffer, const void* data, u
 }
 
 RHIResult RHIDevice::destroy_buffer(RHIBindlessHandle buffer) {
+  if (buffer.valid() == false) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_buffer(buffer);
+}
+
+bool RHIDevice::upload_or_update_chunked_buffer(const RHIChunkedBufferUploadData& data, RHIBufferUsage usage, RHIChunkedBufferState& state, const char* buffer_name) {
+  if (data.success == false) {
+    return false;
+  }
+
+  const size_t required_chunk_count = data.payload_chunk_ranges.size();
+  for (size_t i = 0u; i < required_chunk_count; ++i) {
+    const auto& range = data.payload_chunk_ranges[i];
+    if (range.offset > static_cast<uint64_t>(data.payload_data.size())) {
+      log::error("RHI: invalid chunk range offset for '%s' (%llu)", (buffer_name != nullptr) ? buffer_name : "unknown", range.offset);
+      return false;
+    }
+    if (range.size > (static_cast<uint64_t>(data.payload_data.size()) - range.offset)) {
+      log::error("RHI: invalid chunk range size for '%s' (offset=%llu, size=%llu, payload=%llu)", (buffer_name != nullptr) ? buffer_name : "unknown", range.offset,
+        range.size, static_cast<uint64_t>(data.payload_data.size()));
+      return false;
+    }
+  }
+
+  std::vector<RHIBindlessHandle> new_chunk_buffers(required_chunk_count);
+  std::vector<uint64_t> new_chunk_buffer_sizes(required_chunk_count, 0u);
+  RHIBindlessHandle new_metadata_buffer = {};
+  uint64_t new_metadata_buffer_size = 0u;
+  uint32_t new_metadata_descriptor_index = kInvalidDescriptorIndex;
+
+  auto cleanup_new_state = [&]() {
+    for (auto chunk_buffer : new_chunk_buffers) {
+      destroy_buffer(chunk_buffer);
+    }
+    destroy_linear_chunked_buffer(*this, new_metadata_buffer, new_metadata_buffer_size, new_metadata_descriptor_index);
+  };
+
+  for (size_t i = 0u; i < required_chunk_count; ++i) {
+    const auto& range = data.payload_chunk_ranges[i];
+    const void* chunk_data = nullptr;
+    if (range.size > 0u) {
+      chunk_data = data.payload_data.data() + static_cast<size_t>(range.offset);
+    }
+
+    uint32_t chunk_descriptor_index = kInvalidDescriptorIndex;
+    const bool chunk_upload_success = upload_or_update_linear_chunked_buffer(
+      *this, chunk_data, range.size, usage, new_chunk_buffers[i], new_chunk_buffer_sizes[i], chunk_descriptor_index, buffer_name);
+    if (chunk_upload_success == false) {
+      cleanup_new_state();
+      return false;
+    }
+  }
+
+  auto metadata = data.metadata;
+  if ((required_chunk_count > 0u) && (data.chunk_indices_offset != kInvalidDescriptorIndex)) {
+    const uint64_t table_offset = static_cast<uint64_t>(data.chunk_indices_offset);
+    const uint64_t table_size = static_cast<uint64_t>(required_chunk_count) * sizeof(uint32_t);
+    if (table_offset > (std::numeric_limits<uint64_t>::max() - table_size)) {
+      log::error("RHI: chunk indices table for '%s' overflows metadata range", (buffer_name != nullptr) ? buffer_name : "unknown");
+      cleanup_new_state();
+      return false;
+    }
+    const uint64_t table_end = table_offset + table_size;
+    if (table_end > static_cast<uint64_t>(metadata.size())) {
+      log::error("RHI: chunk indices table for '%s' is out of metadata range", (buffer_name != nullptr) ? buffer_name : "unknown");
+      cleanup_new_state();
+      return false;
+    }
+
+    for (size_t i = 0u; i < required_chunk_count; ++i) {
+      const uint32_t chunk_descriptor_index = get_bindless_descriptor_index(new_chunk_buffers[i]);
+      const uint64_t descriptor_offset = table_offset + (static_cast<uint64_t>(i) * sizeof(uint32_t));
+      std::memcpy(metadata.data() + static_cast<size_t>(descriptor_offset), &chunk_descriptor_index, sizeof(uint32_t));
+    }
+  }
+
+  const void* metadata_ptr = (metadata.empty() == false) ? metadata.data() : nullptr;
+  const bool metadata_upload_success = upload_or_update_linear_chunked_buffer(*this, metadata_ptr, static_cast<uint64_t>(metadata.size()), usage, new_metadata_buffer,
+    new_metadata_buffer_size, new_metadata_descriptor_index, buffer_name);
+  if (metadata_upload_success == false) {
+    cleanup_new_state();
+    return false;
+  }
+
+  for (auto chunk_buffer : state.chunk_buffers) {
+    destroy_buffer(chunk_buffer);
+  }
+  destroy_linear_chunked_buffer(*this, state.metadata_buffer, state.metadata_buffer_size, state.metadata_descriptor_index);
+
+  state.chunk_buffers = std::move(new_chunk_buffers);
+  state.chunk_buffer_sizes = std::move(new_chunk_buffer_sizes);
+  state.metadata_buffer = new_metadata_buffer;
+  state.metadata_buffer_size = new_metadata_buffer_size;
+  state.metadata_descriptor_index = new_metadata_descriptor_index;
+
+  return true;
+}
+
+void RHIDevice::destroy_chunked_buffer(RHIChunkedBufferState& state) {
+  for (auto chunk_buffer : state.chunk_buffers) {
+    destroy_buffer(chunk_buffer);
+  }
+  state.chunk_buffers.clear();
+  state.chunk_buffer_sizes.clear();
+  destroy_linear_chunked_buffer(*this, state.metadata_buffer, state.metadata_buffer_size, state.metadata_descriptor_index);
 }
 
 RHICreateBindlessResult RHIDevice::create_texture(const RHITextureDesc& desc) {
@@ -65,6 +240,9 @@ RHIResult RHIDevice::update_texture(RHIBindlessHandle texture, const void* data,
 }
 
 RHIResult RHIDevice::destroy_texture(RHIBindlessHandle texture) {
+  if (texture.valid() == false) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_texture(texture);
 }
 
@@ -73,6 +251,9 @@ RHICreateBindlessResult RHIDevice::create_sampler(const RHISamplerDesc& desc) {
 }
 
 RHIResult RHIDevice::destroy_sampler(RHIBindlessHandle sampler) {
+  if (sampler.valid() == false) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_sampler(sampler);
 }
 
@@ -81,11 +262,18 @@ RHICreateBindlessResult RHIDevice::create_acceleration_structure(const RHIAccele
 }
 
 RHIResult RHIDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) {
+  if (as_handle.valid() == false) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_acceleration_structure(as_handle);
 }
 
 uint64_t RHIDevice::get_acceleration_structure_device_address(RHIBindlessHandle as_handle) {
   return backend_device(_impl)->get_acceleration_structure_device_address(as_handle);
+}
+
+uint64_t RHIDevice::get_acceleration_structure_build_scratch_size(RHIBindlessHandle as_handle) {
+  return backend_device(_impl)->get_acceleration_structure_build_scratch_size(as_handle);
 }
 
 RHICreatePipelineResult RHIDevice::create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc) {
@@ -105,6 +293,9 @@ RHIResult RHIDevice::reload_compute_pipeline(RHIPipeline pipeline, const RHIComp
 }
 
 RHIResult RHIDevice::destroy_pipeline(RHIPipeline pipeline) {
+  if (pipeline.valid() == false) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_pipeline(pipeline);
 }
 

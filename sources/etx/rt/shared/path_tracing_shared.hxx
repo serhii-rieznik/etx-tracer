@@ -1,6 +1,7 @@
 #pragma once
 
 #include <etx/render/interop/interop.hxx>
+#include <etx/render/interop/sampler_policy.hxx>
 #include <etx/render/shared/scene.hxx>
 
 namespace etx {
@@ -224,6 +225,36 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
 
 float2 sample_blue_noise(const uint2& pixel, const uint32_t total_samples, const uint32_t current_sample, uint32_t dimension);
 
+struct ETX_ALIGNED SamplerStreamSamples2D {
+  float2 bsdf = {};
+  float2 connection = {};
+  float2 support = {};
+};
+
+ETX_SHARED_INLINE SamplerStreamSamples2D sample_interaction_streams_2d(Sampler& smp, ETX_IN(SamplerPolicy, policy), uint32_t path_source, uint32_t interaction_index,
+  const uint2& pixel, const uint32_t total_samples, const uint32_t current_sample) {
+  SamplerStreamSamples2D result = {
+    .bsdf = smp.next_2d(),
+    .connection = smp.next_2d(),
+    .support = smp.next_2d(),
+  };
+
+  const bool use_blue_noise_for_interaction = sampler_use_blue_noise_for_interaction(policy, path_source, interaction_index, current_sample);
+  if (use_blue_noise_for_interaction && sampler_stream_supports_blue_noise(policy, kSamplerStreamBSDF)) {
+    result.bsdf = sample_blue_noise(pixel, total_samples, current_sample, sampler_stream_dimension_base(kSamplerStreamBSDF));
+  }
+
+  if (use_blue_noise_for_interaction && sampler_stream_supports_blue_noise(policy, kSamplerStreamConnection)) {
+    result.connection = sample_blue_noise(pixel, total_samples, current_sample, sampler_stream_dimension_base(kSamplerStreamConnection));
+  }
+
+  if (use_blue_noise_for_interaction && sampler_stream_supports_blue_noise(policy, kSamplerStreamSupport)) {
+    result.support = sample_blue_noise(pixel, total_samples, current_sample, sampler_stream_dimension_base(kSamplerStreamSupport));
+  }
+
+  return result;
+}
+
 ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera& camera, const Film& film, const uint2& px, const uint32_t pixel_index, const uint32_t iteration,
   const bool spectral, const bool use_blue_noise) {
   PTRayPayload payload = {};
@@ -245,18 +276,18 @@ ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera
   return payload;
 }
 
-ETX_SHARED_INLINE Medium::Sample try_sampling_medium(const Scene& scene, PTRayPayload& payload, float max_t) {
+ETX_SHARED_INLINE MediumSample try_sampling_medium(const Scene& scene, PTRayPayload& payload, float max_t) {
   if (payload.medium == kInvalidIndex) {
     return {};
   }
 
   auto medium_sample = sample_medium(scene, scene.mediums[payload.medium], payload.spect, payload.throughput, payload.smp, payload.ray.o, payload.ray.d, max_t);
-  payload.throughput *= medium_sample.weight;
+  spectral_response_mul_assign(payload.throughput, medium_sample.weight);
   ETX_VALIDATE(payload.throughput);
   return medium_sample;
 }
 
-ETX_SHARED_INLINE void handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const Raytracing& rt, PTRayPayload& payload) {
+ETX_SHARED_INLINE void handle_sampled_medium(const Scene& scene, const MediumSample& medium_sample, const Raytracing& rt, PTRayPayload& payload) {
   const auto& medium = scene.mediums[payload.medium];
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
@@ -365,15 +396,14 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
     payload.view_albedo = bsdf::albedo(bsdf_data, mat, scene, payload.smp);
   }
 
-  float2 rnd_bsdf = payload.smp.next_2d();
-  float2 rnd_em_sample = payload.smp.next_2d();
-  float2 rnd_support = payload.smp.next_2d();
-
-  if (payload.use_blue_noise && (payload.path_length == 1)) {
-    rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0);
-    rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2);
-    rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4);
-  }
+  SamplerPolicy sampler_policy = {
+    .enable_blue_noise = payload.use_blue_noise ? 1u : 0u,
+  };
+  const SamplerStreamSamples2D interaction_samples =
+    sample_interaction_streams_2d(payload.smp, sampler_policy, kSamplerPathSourceCamera, payload.path_length, payload.pixel, rt.scene().options.samples, payload.iteration);
+  const float2 rnd_bsdf = interaction_samples.bsdf;
+  const float2 rnd_em_sample = interaction_samples.connection;
+  const float2 rnd_support = interaction_samples.support;
 
   payload.smp.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, payload.smp);
@@ -491,9 +521,9 @@ ETX_SHARED_INLINE bool run_path_iteration(const Scene& scene, const Raytracing& 
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, payload.ray, intersection, payload.smp);
 
-  Medium::Sample medium_sample = try_sampling_medium(scene, payload, found_intersection ? intersection.t : kMaxFloat);
+  MediumSample medium_sample = try_sampling_medium(scene, payload, found_intersection ? intersection.t : kMaxFloat);
 
-  if (medium_sample.sampled_medium()) {
+  if (medium_sample_sampled_medium(medium_sample)) {
     handle_sampled_medium(scene, medium_sample, rt, payload);
     return random_continue(payload.path_length, scene.options.random_path_termination, payload.eta, payload.smp, payload.throughput);
   }

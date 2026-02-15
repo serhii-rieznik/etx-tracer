@@ -377,18 +377,18 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
   return state;
 }
 
-ETX_SHARED_INLINE Medium::Sample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t) {
+ETX_SHARED_INLINE MediumSample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t) {
   if (state.medium_index == kInvalidIndex)
     return {};
 
   auto medium_sample = sample_medium(scene, scene.mediums[state.medium_index], state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
-  state.throughput *= medium_sample.weight;
+  spectral_response_mul_assign(state.throughput, medium_sample.weight);
 
   ETX_VALIDATE(state.throughput);
   return medium_sample;
 }
 
-ETX_SHARED_INLINE bool vcm_handle_sampled_medium(const Scene& scene, const Medium::Sample& medium_sample, const VCMIteration& it, const VCMOptions& /*options*/,
+ETX_SHARED_INLINE bool vcm_handle_sampled_medium(const Scene& scene, const MediumSample& medium_sample, const VCMIteration& it, const VCMOptions& /*options*/,
   const PathSource path_source, VCMPathState& state, const float2& rnd_phase) {
   // Fold pending boundary segment (if any) plus medium segment (no cosine) before recurrences
   bool apply_fold = true;
@@ -896,7 +896,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
       return {};
     }
 
-    if (bounding_box.contains(intersection.pos) == false) {
+    if (bounding_box_contains(bounding_box, intersection.pos) == false) {
       return {};
     }
 
@@ -936,21 +936,19 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   const ArrayView<VCMLightVertex>& light_vertices, VCMPathState& state, const Raytracing& rt, const VCMSpatialGridData& spatial_grid) {
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
+  SamplerPolicy sampler_policy = {
+    .enable_blue_noise = options.blue_noise ? 1u : 0u,
+  };
 
   // Try sampling medium BEFORE allocating per-event samples to match BDPT ordering
-  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
-  if (medium_sample.sampled_medium()) {
+  MediumSample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
+  if (medium_sample_sampled_medium(medium_sample)) {
     // Allocate samples AFTER medium sampling to match BDPT
-    float2 rnd_bsdf = state.sampler.next_2d();        // BSDF/phase function sampling
-    float2 rnd_connection = state.sampler.next_2d();  // Light/camera connections
-    float2 rnd_support = state.sampler.next_2d();     // Support operations
-
-    // Override with blue noise for first camera interaction (limit early iterations for parity with BDPT)
-    if (options.blue_noise && (state.total_path_depth == 1) && (iteration.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 0);
-      rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 2);
-      rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 4);
-    }
+    const SamplerStreamSamples2D interaction_samples = sample_interaction_streams_2d(
+      state.sampler, sampler_policy, kSamplerPathSourceCamera, state.total_path_depth, state.pixel_coord, scene.options.samples, iteration.iteration);
+    const float2 rnd_bsdf = interaction_samples.bsdf;
+    const float2 rnd_connection = interaction_samples.connection;
+    const float2 rnd_support = interaction_samples.support;
     // Fold pending boundary + medium segment before connections
     float seg = state.path_distance + medium_sample.sampled_medium_t;
     state.d_vcm *= sqr(seg);
@@ -1018,16 +1016,11 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
 
   // Allocate samples AFTER confirming no medium event to match BDPT
-  float2 rnd_bsdf = state.sampler.next_2d();        // BSDF sampling
-  float2 rnd_connection = state.sampler.next_2d();  // Connections
-  float2 rnd_support = state.sampler.next_2d();     // Support
-
-  // Override with blue noise for first camera interaction (limit early iterations for parity with BDPT)
-  if (options.blue_noise && (state.total_path_depth == 1) && (iteration.iteration < 256u)) {
-    rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 0);
-    rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 2);
-    rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 4);
-  }
+  const SamplerStreamSamples2D interaction_samples = sample_interaction_streams_2d(
+    state.sampler, sampler_policy, kSamplerPathSourceCamera, state.total_path_depth, state.pixel_coord, scene.options.samples, iteration.iteration);
+  const float2 rnd_bsdf = interaction_samples.bsdf;
+  const float2 rnd_connection = interaction_samples.connection;
+  const float2 rnd_support = interaction_samples.support;
 
   // Use fixed sample allocation for BSDF sampling
   state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
@@ -1101,8 +1094,8 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
   LightStepResult result = {};
-  Medium::Sample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
-  if (medium_sample.sampled_medium()) {
+  MediumSample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
+  if (medium_sample_sampled_medium(medium_sample)) {
     // Allocate samples AFTER medium sampling to match BDPT
     float2 rnd_bsdf = state.sampler.next_2d();        // Phase function sampling
     float2 rnd_connection = state.sampler.next_2d();  // Camera connection

@@ -19,6 +19,9 @@ void CPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
 
 void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) {
   Renderer::update_camera(scene, frame_data.dt);
+  if (consume_scene_update_request()) {
+    _integrator_thread.request_scene_check();
+  }
   _integrator_thread.update();
 
   const auto film_layer_data = _raytracing.film().layer(frame_data.view_parameters.view_layer, _raytracing.scene());
@@ -60,11 +63,7 @@ void CPURaytracingRenderer::on_camera_become_steady(SceneRepresentation& scene) 
 }
 
 void CPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
-  _integrator_thread.reset_scene_hashes();
-  _raytracing.film().clear(Film::ClearEverything);
-  if (_integrator_thread.running()) {
-    _integrator_thread.restart();
-  }
+  Renderer::on_scene_changed(scene);
 }
 
 Integrator* CPURaytracingRenderer::current_integrator() const {

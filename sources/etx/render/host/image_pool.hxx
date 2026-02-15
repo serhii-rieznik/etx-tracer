@@ -6,11 +6,11 @@
 #include <etx/render/shared/image.hxx>
 namespace etx {
 
-struct ImagePool {
-  ImagePool(std::vector<Image>&, std::vector<ImageStorage>&);
-  ~ImagePool();
+struct BufferPool;
 
-  std::vector<ImageStorage>& storage();
+struct ImagePool {
+  ImagePool(std::vector<Image>&, BufferPool&);
+  ~ImagePool();
 
   void init(uint32_t capacity);
   void cleanup();
@@ -38,7 +38,7 @@ struct ImagePool {
   const Image* as_array() const;
   const uint64_t array_size() const;
 
-  ETX_DECLARE_PIMPL(ImagePool, 384);
+  ETX_DECLARE_PIMPL(ImagePool, 448);
 };
 
 }  // namespace etx

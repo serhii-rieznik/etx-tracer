@@ -2,6 +2,7 @@
 #include <etx/core/environment.hxx>
 
 #include <etx/render/host/medium_pool.hxx>
+#include <etx/render/host/buffer_pool.hxx>
 #include <etx/render/shared/medium.hxx>
 #include <etx/render/shared/math.hxx>
 
@@ -9,21 +10,19 @@
 namespace etx {
 
 struct MediumPoolImpl {
-  MediumPoolImpl(std::vector<Medium>& external_mediums, std::vector<MediumStorage>& external_storage)
+  MediumPoolImpl(std::vector<Medium>& external_mediums, BufferPool& external_buffer_pool)
     : mediums(external_mediums)
-    , storage(external_storage) {
+    , buffer_pool(external_buffer_pool) {
   }
 
   void init(uint32_t capacity) {
     mediums.reserve(capacity);
-    storage.reserve(capacity);
     mapping.reserve(capacity);
   }
 
   void cleanup() {
     remove_all();
     mapping.clear();
-    storage.clear();
   }
 
   uint32_t add(Medium::Class cls, const std::string& id, const char* volume_file, uint32_t absorption_index, uint32_t scattering_index, float g, bool explicit_connections) {
@@ -34,10 +33,9 @@ struct MediumPoolImpl {
 
     uint32_t handle = static_cast<uint32_t>(mediums.size());
     mediums.emplace_back();
-    storage.emplace_back();
 
     Medium& medium = mediums[handle];
-    MediumStorage& medium_storage = storage[handle];
+    medium.density_buffer = buffer_pool.create(0u, "medium_density");
     medium.cls = cls;
     medium.absorption_index = absorption_index;
     medium.scattering_index = scattering_index;
@@ -56,18 +54,18 @@ struct MediumPoolImpl {
         for (auto& f : density) {
           f /= max_density;
         }
-        medium.grid.type = DensityGrid::Type::Texture3D;
-        medium.grid.density.count = density.size();
-        medium_storage.density_data.assign(density.begin(), density.end());
-        medium.density_view = {medium_storage.density_data.data(), medium_storage.density_data.size()};
-        medium.grid.density = medium.density_view;  // Point grid density to the view
+        medium.set_grid_type(DensityGrid::Type::Texture3D);
+        medium.density_data = buffer_pool.allocate_elements<float>(medium.density_buffer, density.size(), alignof(float));
+        buffer_pool.write(medium.density_data, density.data(), density.size() * sizeof(float));
+        medium.density_view = {buffer_pool.map<float>(medium.density_data), density.size()};
+        ETX_CRITICAL(medium.density_view.a != nullptr);
         medium.grid.dimensions = dimensions;
-        medium.cls = Medium::Class::Heterogeneous;
+        medium.cls = Medium::Heterogeneous;
       } else {
-        medium.cls = Medium::Class::Homogeneous;
+        medium.cls = Medium::Homogeneous;
       }
     } else {
-      medium.grid.type = DensityGrid::Type::Texture3D;
+      medium.set_grid_type(DensityGrid::Type::Texture3D);
     }
 
     mapping[id] = handle;
@@ -137,19 +135,17 @@ struct MediumPoolImpl {
 
   void remove_all() {
     for (auto& medium : mediums) {
+      buffer_pool.destroy(medium.density_buffer);
       free_medium(medium);
     }
-    for (auto& medium_storage : storage) {
-      medium_storage.clear();
-    }
     mediums.clear();
-    storage.clear();
     mapping.clear();
   }
 
   void free_medium(Medium& m) {
     m.density_view = {};
-    m.grid.density = {};
+    m.density_data = {};
+    m.density_buffer = {};
     m = {};
   }
 
@@ -226,12 +222,12 @@ struct MediumPoolImpl {
   }
 
   std::vector<Medium>& mediums;
-  std::vector<MediumStorage>& storage;
+  BufferPool& buffer_pool;
   MediumPool::Mapping mapping;
 };
 
-MediumPool::MediumPool(std::vector<Medium>& external_mediums, std::vector<MediumStorage>& external_storage) {
-  ETX_PIMPL_CREATE(MediumPool, Impl, external_mediums, external_storage);
+MediumPool::MediumPool(std::vector<Medium>& external_mediums, BufferPool& buffer_pool) {
+  ETX_PIMPL_CREATE(MediumPool, Impl, external_mediums, buffer_pool);
 }
 
 MediumPool::~MediumPool() {
@@ -239,10 +235,6 @@ MediumPool::~MediumPool() {
 }
 
 ETX_PIMPL_IMPLEMENT(MediumPool, Impl);
-
-std::vector<MediumStorage>& MediumPool::storage() {
-  return _private->storage;
-}
 
 void MediumPool::init(uint32_t capacity) {
   _private->init(capacity);
@@ -266,9 +258,9 @@ uint32_t MediumPool::add_noise(Medium::Class cls, const std::string& id, NoiseFu
 
   uint32_t handle = static_cast<uint32_t>(_private->mediums.size());
   _private->mediums.emplace_back();
-  _private->storage.emplace_back();
 
   Medium& medium = _private->mediums[handle];
+  medium.density_buffer = _private->buffer_pool.create(0u, "medium_density");
   medium.cls = cls;
   medium.absorption_index = absorption_index;
   medium.scattering_index = scattering_index;
@@ -276,19 +268,19 @@ uint32_t MediumPool::add_noise(Medium::Class cls, const std::string& id, NoiseFu
   medium.enable_explicit_connections = explicit_connections;
   medium.bounds = BoundingBox{{-1.0f, -1.0f, -1.0f}, 0.0f, {1.0f, 1.0f, 1.0f}, 0.0f};
 
-  medium.grid.type = DensityGrid::Type::NoiseFunction;
-  medium.grid.noise_type = noise_type;
-  medium.grid.noise.scale = noise_scale;
-  medium.grid.noise.octaves = noise_octaves;
-  medium.grid.noise.lacunarity = noise_lacunarity;
-  medium.grid.noise.persistence = noise_persistence;
-  medium.grid.noise.seed = noise_seed;
-  medium.grid.noise.power = noise_power;
-  medium.grid.noise.sharpness = 1.0f;
-  medium.grid.noise.offset = noise_offset;
-  medium.grid.noise.enable_border_fade = 0u;
-  medium.grid.noise.border_fade_distance = 0.1f;
-  medium.cls = Medium::Class::Heterogeneous;
+  medium.set_grid_type(DensityGrid::Type::NoiseFunction);
+  medium.set_noise_type(noise_type);
+  medium.grid.noise_scale = noise_scale;
+  medium.grid.noise_octaves = noise_octaves;
+  medium.grid.noise_lacunarity = noise_lacunarity;
+  medium.grid.noise_persistence = noise_persistence;
+  medium.grid.noise_seed = noise_seed;
+  medium.grid.noise_power = noise_power;
+  medium.grid.noise_sharpness = 1.0f;
+  medium.grid.noise_offset = noise_offset;
+  medium.grid.noise_enable_border_fade = 0u;
+  medium.grid.noise_border_fade_distance = 0.1f;
+  medium.cls = Medium::Heterogeneous;
 
   _private->mapping[id] = handle;
   return handle;

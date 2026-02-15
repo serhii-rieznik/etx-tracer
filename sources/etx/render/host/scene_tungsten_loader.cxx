@@ -1310,7 +1310,7 @@ void load_tungsten_media(const nlohmann::json& js, SceneData& data) {
     SpectralDistribution s_a = json_to_rgb_spectrum(m["sigma_a"], 0.0f);
     SpectralDistribution s_s = json_to_rgb_spectrum(m["sigma_s"], 0.0f);
 
-    data.add_medium(Medium::Class::Homogeneous, name.c_str(), nullptr, s_a, s_s, g, true);
+    data.add_medium(Medium::Homogeneous, name.c_str(), nullptr, s_a, s_s, g, true);
     ++loaded;
   }
 }

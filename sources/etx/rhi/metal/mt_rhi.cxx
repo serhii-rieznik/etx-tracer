@@ -238,6 +238,10 @@ RHICreateResult<RHISemaphore> MTDevice::create_semaphore() {
 }
 
 RHIResult MTDevice::destroy_semaphore(RHISemaphore semaphore) {
+  if (semaphore.invalid()) {
+    return RHIResult::Success;
+  }
+
   log::warning("Metal RHI: destroy_semaphore not implemented");
   return RHIResult::NotImplemented;
 }
@@ -268,21 +272,37 @@ RHICreatePipelineResult MTDevice::create_compute_pipeline(const RHIComputePipeli
 }
 
 RHIResult MTDevice::destroy_buffer(RHIBuffer buffer) {
+  if (buffer.valid() == false) {
+    return RHIResult::Success;
+  }
+
   log::warning("Metal RHI: destroy_buffer not implemented");
   return RHIResult::NotImplemented;
 }
 
 RHIResult MTDevice::destroy_texture(RHITexture texture) {
+  if (texture.valid() == false) {
+    return RHIResult::Success;
+  }
+
   log::warning("Metal RHI: destroy_texture not implemented");
   return RHIResult::NotImplemented;
 }
 
 RHIResult MTDevice::destroy_sampler(RHISampler sampler) {
+  if (sampler.valid() == false) {
+    return RHIResult::Success;
+  }
+
   log::warning("Metal RHI: destroy_sampler not implemented");
   return RHIResult::NotImplemented;
 }
 
 RHIResult MTDevice::destroy_pipeline(RHIPipeline pipeline) {
+  if (pipeline.valid() == false) {
+    return RHIResult::Success;
+  }
+
   log::warning("Metal RHI: destroy_pipeline not implemented");
   return RHIResult::NotImplemented;
 }
@@ -520,12 +540,22 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
 }
 
 RHIResult MTDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) {
+  if (as_handle.valid() == false) {
+    return RHIResult::Success;
+  }
+
   log::warning("Metal RHI: destroy_acceleration_structure not implemented");
   return RHIResult::NotImplemented;
 }
 
 uint64_t MTDevice::get_acceleration_structure_device_address(RHIBindlessHandle as_handle) {
   log::warning("Metal RHI: get_acceleration_structure_device_address not implemented");
+  return 0;
+}
+
+uint64_t MTDevice::get_acceleration_structure_build_scratch_size(RHIBindlessHandle as_handle) {
+  (void)as_handle;
+  log::warning("Metal RHI: get_acceleration_structure_build_scratch_size not implemented");
   return 0;
 }
 

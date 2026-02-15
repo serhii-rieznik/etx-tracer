@@ -1,4 +1,4 @@
-﻿namespace etx {
+namespace etx {
 
 namespace VelvetBSDF {
 
@@ -109,7 +109,7 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
 
 ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame();
-  if (frame.entering_material() == false)
+  if (local_frame_entering_material(frame) == false)
     return 0.0f;
 
   return 1.0f / kDoublePi;

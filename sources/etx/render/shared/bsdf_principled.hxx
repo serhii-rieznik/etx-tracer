@@ -1,4 +1,4 @@
-﻿namespace etx {
+namespace etx {
 
 namespace PrincipledBSDF {
 
@@ -29,7 +29,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& in_mtl
   result.medium_index = in_mtl.ext_medium;
   result.pdf = max(0.0f, local_w_o.z);
   result.weight = {data.spectrum_sample, WOMP_DEBUG_PRINCIPLED_BSDF_ENTITY};
-  result.w_o = frame.from_local(local_w_o);
+  result.w_o = local_frame_from_local(frame, local_w_o);
   return result;
 #endif
 

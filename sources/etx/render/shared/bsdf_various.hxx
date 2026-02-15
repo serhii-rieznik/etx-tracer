@@ -1,4 +1,4 @@
-﻿namespace etx {
+namespace etx {
 
 namespace VoidBSDF {
 
@@ -72,7 +72,7 @@ ETX_SHARED_INLINE BSDFEval diffuse_layer(const BSDFData& data, const float3& loc
 
 ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
-  auto local_w_i = frame.to_local(-data.w_i);
+  auto local_w_i = local_frame_to_local(frame, -data.w_i);
   auto roughness = evaluate_roughness(mtl, data.tex, scene);
 
   BSDFSample result = {};
@@ -95,18 +95,18 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
     result.pdf = dl.pdf;
   }
 
-  result.w_o = frame.from_local(local_w_o);
+  result.w_o = local_frame_from_local(frame, local_w_o);
   return result;
 }
 
 ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
-  auto local_w_o = frame.to_local(in_w_o);
+  auto local_w_o = local_frame_to_local(frame, in_w_o);
 
   if (local_w_o.z <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
-  auto local_w_i = frame.to_local(-data.w_i);
+  auto local_w_i = local_frame_to_local(frame, -data.w_i);
   return diffuse_layer(data, local_w_i, local_w_o, mtl, scene, smp);
 }
 
@@ -155,7 +155,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
     result.w_o = -w_o;
     result.pdf = n_dot_o * kInvPi * (tr_value / total);
     result.properties = BSDFSample::Diffuse | BSDFSample::Transmission | BSDFSample::MediumChanged;
-    result.medium_index = frame.entering_material() ? mtl.int_medium : mtl.ext_medium;
+    result.medium_index = local_frame_entering_material(frame) ? mtl.int_medium : mtl.ext_medium;
     result.weight = tr;
   } else {
     result.eta = 1.0f;

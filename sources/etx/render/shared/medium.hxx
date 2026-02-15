@@ -1,62 +1,55 @@
 #pragma once
 
+#include <etx/render/interop/medium.hxx>
 #include <etx/render/shared/spectrum.hxx>
+#include <etx/render/shared/buffer_view.hxx>
 #include <etx/render/shared/sampler.hxx>
 #include <etx/render/shared/density_grid.hxx>
 
 namespace etx {
 
-struct MediumStorage {
-  // Density grid storage - raw data for heterogeneous mediums
-  std::vector<float> density_data;
+using MediumInstance = ::MediumInstance;
+using MediumSample = ::MediumSample;
 
-  // Clear all storage
-  void clear() {
-    density_data.clear();
-  }
-};
-
-struct ETX_ALIGNED Medium {
-  enum class Class : uint16_t {
-    Homogeneous,
-    Heterogeneous,
-  };
-
-  struct ETX_ALIGNED Instance {
-    SpectralResponse extinction;
-    float anisotropy = 0.0f;
-    uint32_t index = kInvalidIndex;
-
-    bool valid() const {
-      return (index != kInvalidIndex) || (extinction.maximum() > 0.0f);
-    }
-  };
-
-  struct ETX_ALIGNED Sample {
-    SpectralResponse weight = {};
-    float3 pos = {};
-    float sampled_medium_t = {};
-
-    ETX_SHARED_INLINE bool sampled_medium() const {
-      return sampled_medium_t > 0.0f;
-    }
-
-    ETX_SHARED_INLINE bool valid() const {
-      return weight.valid();
-    }
-  };
-
-  // View to density data (points to external storage)
+struct ETX_ALIGNED Medium : public ::Medium {
   ArrayView<float> density_view;
+  BufferHandle density_buffer = {};
+  BufferView density_data = {};
 
-  // Other medium properties (small data, kept in view)
-  DensityGrid grid = {};
-  BoundingBox bounds = {};
-  Class cls = Class::Homogeneous;
-  uint16_t enable_explicit_connections = true;
-  uint32_t absorption_index = kInvalidIndex;
-  uint32_t scattering_index = kInvalidIndex;
-  float phase_function_g = 0.0f;
+  ETX_SHARED_INLINE DensityGrid::Type grid_type_enum() const {
+    const auto type = static_cast<DensityGrid::Type>(grid.type);
+    if ((type != DensityGrid::Type::Texture3D) && (type != DensityGrid::Type::NoiseFunction)) {
+      return DensityGrid::Type::Texture3D;
+    }
+    return type;
+  }
+
+  ETX_SHARED_INLINE void set_grid_type(DensityGrid::Type type) {
+    grid.type = static_cast<uint32_t>(type);
+  }
+
+  ETX_SHARED_INLINE NoiseFunction noise_type_enum() const {
+    if (grid.noise_type >= static_cast<uint32_t>(NoiseFunction::Count)) {
+      return NoiseFunction::Perlin;
+    }
+    return static_cast<NoiseFunction>(grid.noise_type);
+  }
+
+  ETX_SHARED_INLINE void set_noise_type(NoiseFunction type) {
+    grid.noise_type = static_cast<uint32_t>(type);
+  }
+
+  ETX_SHARED_INLINE bool has_grid_data() const {
+    DensityGrid density_grid = {};
+    density_grid.density = density_view;
+    return density_grid.has_data(grid);
+  }
+
+  ETX_SHARED_INLINE float sample_density(const float3& local_coord, const BoundingBox& bounds) const {
+    DensityGrid density_grid = {};
+    density_grid.density = density_view;
+    return density_grid.sample(local_coord, bounds, grid);
+  }
 };
 
 }  // namespace etx

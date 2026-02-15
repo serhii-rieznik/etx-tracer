@@ -61,8 +61,6 @@ void RTApplication::init() {
     cpu_renderer.init(render_context.get_context(), scene);
     raster_renderer.init(render_context.get_context(), scene);
     gpu_renderer.init(render_context.get_context(), scene);
-    cpu_renderer.integrator_thread().set_scene_updates_locked(_scene_updates_locked);
-    gpu_renderer.set_scene_updates_locked(_scene_updates_locked);
   }
 
   RendererMode mode = RendererMode::CPURaytracing;
@@ -110,7 +108,7 @@ void RTApplication::init() {
     ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
     ui.callbacks.clear_recent_files = std::bind(&RTApplication::on_clear_recent_files, this);
     ui.callbacks.camera_activated = std::bind(&RTApplication::on_camera_activated, this, std::placeholders::_1);
-    ui.callbacks.scene_updates_locked_changed = std::bind(&RTApplication::on_scene_updates_locked_changed, this, std::placeholders::_1);
+    ui.callbacks.scene_update_requested = std::bind(&RTApplication::on_scene_update_requested, this);
     ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
   }
 
@@ -244,7 +242,6 @@ void RTApplication::frame() {
     .recent_files = _recent_files,
     .film = film,
     .dt = render_frame_data.dt,
-    .scene_locked = _scene_updates_locked,
   };
 
   {
@@ -336,7 +333,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return;
   }
 
-  cpu_renderer.integrator_thread().reset_scene_hashes();
+  notify_scene_might_have_changed();
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_scene_sync_integrator_settings");
@@ -544,44 +541,54 @@ void RTApplication::on_reload_geometry_selected() {
 
 void RTApplication::on_options_changed() {
   ETX_PROFILER_SCOPE();
+  notify_scene_might_have_changed();
   cpu_renderer.restart();
 }
 
 void RTApplication::on_material_added() {
   scene.add_material(nullptr);
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_material_renamed(uint32_t index, const std::string& name) {
   scene.rename_material(index, name.c_str());
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_material_changed(uint32_t index) {
   scene.create_area_emitters_from_materials();
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_medium_added() {
   scene.add_medium(nullptr);
   scene.update_medium_bounds();
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
   scene.rename_medium(index, name.c_str());
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
   scene.update_medium_bounds();
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index) {
   scene.set_mesh_material(mesh_index, material_index);
   scene.create_area_emitters_from_materials();
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_mesh_renamed(uint32_t index, const std::string& name) {
   scene.rename_mesh(index, name.c_str());
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_emitter_added(uint32_t type) {
@@ -604,10 +611,13 @@ void RTApplication::on_emitter_added(uint32_t type) {
       break;
     }
   }
+
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_emitter_rebuild(uint32_t index) {
   scene.rebuild_atmosphere_emitter(index);
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
@@ -621,6 +631,7 @@ void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
 }
 
 void RTApplication::on_scene_settings_changed() {
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_denoise_selected() {
@@ -678,11 +689,15 @@ void RTApplication::on_camera_activated(uint32_t camera_index) {
   cpu_renderer.restart();
 }
 
-void RTApplication::on_scene_updates_locked_changed(bool locked) {
+void RTApplication::notify_scene_might_have_changed() {
+  cpu_renderer.on_scene_changed(scene);
+  raster_renderer.on_scene_changed(scene);
+  gpu_renderer.on_scene_changed(scene);
+}
+
+void RTApplication::on_scene_update_requested() {
   ETX_PROFILER_SCOPE();
-  _scene_updates_locked = locked;
-  cpu_renderer.integrator_thread().set_scene_updates_locked(locked);
-  gpu_renderer.set_scene_updates_locked(locked);
+  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_reload_shaders_selected() {

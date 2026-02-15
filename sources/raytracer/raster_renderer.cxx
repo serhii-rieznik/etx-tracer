@@ -34,6 +34,7 @@ void RasterizationRenderer::cleanup(RHIContext& ctx) {
 }
 
 void RasterizationRenderer::on_scene_changed(SceneRepresentation& scene) {
+  Renderer::on_scene_changed(scene);
 }
 
 void RasterizationRenderer::create_pipeline() {

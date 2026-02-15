@@ -1,6 +1,11 @@
 #pragma once
+#include <etx/render/interop/projection.hxx>
 
 namespace etx {
+
+ETX_SHARED_INLINE uint32_t environment_projection_mode(bool is_atmosphere) {
+  return (is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION) ? Projection::EqualArea : Projection::Equirectangular;
+}
 
 ETX_SHARED_INLINE float emitter_pdf_area_local(const Emitter& em, const Scene& scene) {
   ETX_ASSERT(em.is_local());
@@ -76,14 +81,9 @@ ETX_SHARED_INLINE SpectralResponse emitter_get_radiance(const Emitter& em_inst, 
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
-      ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
-      float2 uv = direction_to_uv(query.direction, img.offset, img.scale.x, projection);
-
-      auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
-      if (projection == ProjectionType::EqualArea) {
-        float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
-        sin_t = sin_theta;
-      }
+      uint32_t projection_mode = environment_projection_mode(is_atmosphere);
+      float2 uv = direction_to_uv(query.direction, img.offset, img.scale.x, projection_mode);
+      float sin_t = projection_sin_theta_for_pdf(uv, projection_mode);
 
       auto image_pdf = 0.0f;
       auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
@@ -145,14 +145,9 @@ ETX_SHARED_INLINE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_i
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
-      ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
-      float2 uv = direction_to_uv(in_direction, img.offset, 1.0f, projection);
-
-      auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
-      if (projection == ProjectionType::EqualArea) {
-        float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
-        sin_t = sin_theta;
-      }
+      uint32_t projection_mode = environment_projection_mode(is_atmosphere);
+      float2 uv = direction_to_uv(in_direction, img.offset, 1.0f, projection_mode);
+      float sin_t = projection_sin_theta_for_pdf(uv, projection_mode);
 
       auto image_pdf = 0.0f;
       auto eval = apply_image(spect, em.emission, uv, scene, &image_pdf);
@@ -210,20 +205,16 @@ ETX_SHARED_INLINE EmitterSample emitter_sample_in(const Emitter& em_inst, const 
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
-      ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
+      uint32_t projection_mode = environment_projection_mode(is_atmosphere);
       float pdf_image = 0.0f;
       uint2 image_location = {};
       float4 image_value = {};
       float2 uv = img.sample(smp, pdf_image, image_location, image_value);
 
-      float sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
-      if (projection == ProjectionType::EqualArea) {
-        float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
-        sin_t = sin_theta;
-      }
+      float sin_t = projection_sin_theta_for_pdf(uv, projection_mode);
 
       result.image_uv = uv;
-      result.direction = uv_to_direction(result.image_uv, img.offset, img.scale.x, projection);
+      result.direction = uv_to_direction(result.image_uv, img.offset, img.scale.x, projection_mode);
       result.normal = -result.direction;
       result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
       result.pdf_dir = pdf_image / (2.0f * kPi * kPi * sin_t);
@@ -403,7 +394,7 @@ ETX_SHARED_INLINE const EmitterSample sample_emission(const Scene& scene, Spectr
     case EmitterProfile::Class::Environment: {
       const auto& img = scene.images[em.emission.image_index];
       bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
-      ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
+      uint32_t projection_mode = environment_projection_mode(is_atmosphere);
       float pdf_image = 0.0f;
       uint2 image_location = {};
       float4 image_value = {};
@@ -412,13 +403,9 @@ ETX_SHARED_INLINE const EmitterSample sample_emission(const Scene& scene, Spectr
         return {};
       }
 
-      auto sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
-      if (projection == ProjectionType::EqualArea) {
-        float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
-        sin_t = sin_theta;
-      }
+      float sin_t = projection_sin_theta_for_pdf(uv, projection_mode);
 
-      auto d = -uv_to_direction(uv, img.offset, img.scale.x, projection);
+      auto d = -uv_to_direction(uv, img.offset, img.scale.x, projection_mode);
       auto basis = orthonormal_basis(d);
       auto disk_sample = sample_disk(smp.next_2d());
 

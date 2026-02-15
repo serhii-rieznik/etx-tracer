@@ -25,7 +25,6 @@ struct UI {
     const std::vector<std::string>& recent_files;
     const Film& film;
     float dt = 0.0f;
-    bool scene_locked = false;
   };
 
   UI() = default;
@@ -48,14 +47,13 @@ struct UI {
   struct BuildContext {
     std::vector<int32_t> emitter_primary_instance;
     std::function<const char*(uint32_t)> material_name_from_index;
-    std::function<void(uint32_t, const char*, bool, std::function<void()>&&)> with_window;
+    std::function<void(uint32_t, const char*, std::function<void()>&&)> with_window;
     float2 wpadding = {};
     float2 fpadding = {};
     float text_size = {};
     float button_size = {};
     float input_size = {};
     bool has_integrator = false;
-    bool scene_locked = false;
   };
 
   ViewParameters view_options() const;
@@ -94,7 +92,7 @@ struct UI {
     std::function<void(Integrator::Type)> integrator_selected;
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
-    std::function<void(bool)> scene_updates_locked_changed;
+    std::function<void()> scene_update_requested;
   } callbacks;
 
  private:
@@ -140,7 +138,7 @@ struct UI {
   bool can_navigate_back() const;
   bool can_navigate_forward() const;
 
-  void build_main_menu_bar(const std::vector<std::string>& recent_files, bool scene_locked);
+  void build_main_menu_bar(const std::vector<std::string>& recent_files);
   void build_toolbar(const BuildContext& ctx);
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx, const FrameData& data);

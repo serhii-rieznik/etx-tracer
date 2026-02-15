@@ -1,4 +1,4 @@
-﻿namespace etx {
+namespace etx {
 
 namespace ConductorBSDF {
 
@@ -14,7 +14,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
-  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(local_frame, -data.w_i);
   auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
   auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
@@ -64,7 +64,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
     ETX_VALIDATE(result.pdf);
   }
 
-  result.w_o = normalize(local_frame.from_local(result.w_o));
+  result.w_o = normalize(local_frame_from_local(local_frame, result.w_o));
   return result;
 }
 
@@ -72,11 +72,11 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
-  auto w_o = local_frame.to_local(in_w_o);
+  auto w_o = local_frame_to_local(local_frame, in_w_o);
   if (w_o.z <= kEpsilon) {
     return {data.spectrum_sample, 0.0f};
   }
-  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(local_frame, -data.w_i);
   if (w_i.z <= kEpsilon) {
     return {data.spectrum_sample, 0.0f};
   }
@@ -107,11 +107,11 @@ ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Ma
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
-  auto w_o = local_frame.to_local(in_w_o);
+  auto w_o = local_frame_to_local(local_frame, in_w_o);
   if (w_o.z <= kEpsilon) {
     return 0.0f;
   }
-  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(local_frame, -data.w_i);
   if (w_i.z <= kEpsilon) {
     return 0.0f;
   }

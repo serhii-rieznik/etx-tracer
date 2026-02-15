@@ -424,6 +424,7 @@ void VKContext::begin_frame() {
 
   {
     ETX_PROFILER_NAMED_SCOPE("reset");
+    _impl->device.process_deferred_destruction(_impl->current_frame);
     _impl->device.set_current_frame_index(_impl->current_frame);
     _impl->device.reset_staging_buffer_for_frame(_impl->current_frame);
     etx_vk_call(vkResetCommandPool(_impl->device.get_vk_device(), _impl->device.get_vk_command_pool(_impl->current_frame), VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));

@@ -4,12 +4,9 @@
 #include "camera.hxx"
 #include "spectrum.hxx"
 #include "material.hxx"
+#include "gpu_abi_constants.hxx"
 
 struct ETX_ALIGNED GPUSceneGlobals {
-  enum : uint32_t {
-    MaxEnvironmentEmitters = 63u,
-  };
-
   uint32_t vertex_count;
   uint32_t triangle_count;
   uint32_t mesh_count;
@@ -29,7 +26,7 @@ struct ETX_ALIGNED GPUSceneGlobals {
   float3 bounding_box_max;
   float pad3;
 
-  uint32_t environment_emitters[MaxEnvironmentEmitters];
+  uint32_t environment_emitters[SceneLimits::MaxEnvironmentEmitters];
   uint32_t environment_emitters_pad;
 
   uint32_t default_black_spectrum;
@@ -46,8 +43,37 @@ struct ETX_ALIGNED GPUSceneGlobals {
   uint32_t default_conductor_eta;
   uint32_t default_conductor_k;
   uint32_t defaults_pad0;
+};
 
-  // TODO: add packed scene options once GPU options ABI is finalized.
+struct ETX_ALIGNED GPUSceneOptions {
+  uint32_t min_path_length;
+  uint32_t max_path_length;
+  uint32_t samples;
+  uint32_t random_path_termination;
+
+  float noise_threshold;
+  float radiance_clamp;
+  uint32_t strategy_flags;
+  uint32_t light_sampling;
+
+  uint32_t properties_flags;
+  uint32_t pad0;
+  uint32_t pad1;
+  uint32_t pad2;
+};
+
+struct ETX_ALIGNED GPUImageBlobHeader {
+  uint32_t image_count;
+  uint32_t images_offset;
+  uint32_t data_chunk_count;
+  uint32_t data_chunk_indices_offset;
+};
+
+struct ETX_ALIGNED GPUMediumBlobHeader {
+  uint32_t medium_count;
+  uint32_t mediums_offset;
+  uint32_t data_chunk_count;
+  uint32_t data_chunk_indices_offset;
 };
 
 struct ETX_ALIGNED GPUScene {
@@ -65,24 +91,32 @@ struct ETX_ALIGNED GPUScene {
   uint32_t materials;
   uint32_t spectrums;
 
-  // TODO: Image contains pointer-based views and nested distributions. Split into packed image metadata + raw tables.
+  // Packed image metadata blob: GPUImageBlobHeader + ::Image[] + uint32_t[data_chunk_count] descriptor indices.
   uint32_t images;
 
-  // TODO: Medium contains pointer-based density views. Split into packed medium metadata + density grids.
+  // Packed medium metadata blob: GPUMediumBlobHeader + ::Medium[] + uint32_t[data_chunk_count] descriptor indices.
   uint32_t mediums;
 
-  // TODO: Distribution contains ArrayView pointer; upload packed Distribution::Entry[] and compact metadata.
+  // Packed Distribution::Entry[] (active emitters + sentinel).
   uint32_t emitters_distribution;
 
-  // TODO: Replace bool-based Scene::Options layout with packed uint flags/options for GPU ABI stability.
   uint32_t scene_options;
 };
 
 #if defined(__cplusplus)
 static_assert(std::is_standard_layout_v<GPUSceneGlobals>, "GPUSceneGlobals must stay standard layout for C++/HLSL interop");
+static_assert(std::is_standard_layout_v<GPUSceneOptions>, "GPUSceneOptions must stay standard layout for C++/HLSL interop");
+static_assert(std::is_standard_layout_v<GPUImageBlobHeader>, "GPUImageBlobHeader must stay standard layout for C++/HLSL interop");
+static_assert(std::is_standard_layout_v<GPUMediumBlobHeader>, "GPUMediumBlobHeader must stay standard layout for C++/HLSL interop");
 static_assert(std::is_standard_layout_v<GPUScene>, "GPUScene must stay standard layout for C++/HLSL interop");
 static_assert(alignof(GPUSceneGlobals) == 16, "GPUSceneGlobals alignment must match HLSL packing");
+static_assert(alignof(GPUSceneOptions) == 16, "GPUSceneOptions alignment must match HLSL packing");
+static_assert(alignof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader alignment must match HLSL packing");
+static_assert(alignof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader alignment must match HLSL packing");
 static_assert(alignof(GPUScene) == 16, "GPUScene alignment must match HLSL packing");
 static_assert(sizeof(GPUSceneGlobals) == 384, "GPUSceneGlobals size changed; update shared ABI");
+static_assert(sizeof(GPUSceneOptions) == 48, "GPUSceneOptions size changed; update shared ABI");
+static_assert(sizeof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader size changed; update shared ABI");
+static_assert(sizeof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader size changed; update shared ABI");
 static_assert(sizeof(GPUScene) == 64, "GPUScene size changed; update shared ABI");
 #endif

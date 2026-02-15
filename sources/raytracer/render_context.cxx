@@ -3,6 +3,7 @@
 #include <etx/core/profiler.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/render/host/tasks.hxx>
+#include <etx/render/host/buffer_pool.hxx>
 #include <etx/render/host/image_pool.hxx>
 
 #include <etx/rhi/rhi.hxx>
@@ -22,7 +23,7 @@ namespace etx {
 struct RenderContextImpl {
   RenderContextImpl(TaskScheduler& s)
     : scheduler(s)
-    , image_pool(images, images_storage) {
+    , image_pool(images, buffer_pool) {
   }
 
   TaskScheduler& scheduler;
@@ -35,7 +36,7 @@ struct RenderContextImpl {
 
   RHITexture reference_texture = {};
   std::vector<Image> images;
-  std::vector<ImageStorage> images_storage;
+  BufferPool buffer_pool;
   ImagePool image_pool;
   uint32_t reference_image_handle = kInvalidIndex;
 

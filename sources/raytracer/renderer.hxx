@@ -80,6 +80,18 @@ struct Renderer {
   }
 
   virtual void on_scene_changed(SceneRepresentation& scene) {
+    (void)scene;
+    request_scene_update();
+  }
+
+  void request_scene_update() {
+    _scene_update_requested = true;
+  }
+
+  bool consume_scene_update_request() {
+    const bool result = _scene_update_requested;
+    _scene_update_requested = false;
+    return result;
   }
 
   virtual const char* name() const = 0;
@@ -108,6 +120,7 @@ struct Renderer {
   uint2 _output_dimensions = {};
   RHITexture _output_texture = {};
   bool last_camera_update_state = false;
+  bool _scene_update_requested = true;
 };
 
 }  // namespace etx

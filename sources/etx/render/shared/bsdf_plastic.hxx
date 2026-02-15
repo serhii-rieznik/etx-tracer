@@ -14,11 +14,11 @@ struct PlasticMaterial {
 ETX_SHARED_INLINE SpectralResponse specular_func(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = data.get_normal_frame(mtl);
 
-  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(local_frame, -data.w_i);
   if (LocalFrame::cos_theta(w_i) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
-  auto w_o = local_frame.to_local(in_w_o);
+  auto w_o = local_frame_to_local(local_frame, in_w_o);
   if (LocalFrame::cos_theta(w_o) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
@@ -37,11 +37,11 @@ ETX_SHARED_INLINE SpectralResponse specular_func(const BSDFData& data, const flo
 ETX_SHARED_INLINE float specular_pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
   LocalFrame local_frame = data.get_normal_frame(mtl);
 
-  auto w_i = local_frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(local_frame, -data.w_i);
   if (LocalFrame::cos_theta(w_i) <= kEpsilon)
     return 0.0f;
 
-  auto w_o = local_frame.to_local(in_w_o);
+  auto w_o = local_frame_to_local(local_frame, in_w_o);
   if (LocalFrame::cos_theta(w_o) <= kEpsilon)
     return 0.0f;
 
@@ -86,7 +86,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   auto f = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), ext_ior, int_ior, thinfilm);
   auto fr = f.monochromatic();
 
-  auto w_i = frame.to_local(-data.w_i);
+  auto w_i = local_frame_to_local(frame, -data.w_i);
   if (w_i.z <= kEpsilon)
     return {data.spectrum_sample};
 
@@ -100,7 +100,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   }
 
   if (sample_diffuse) {
-    in_w_o = frame.from_local(sample_cosine_distribution(smp.next_2d(), 1.0f));
+    in_w_o = local_frame_from_local(frame, sample_cosine_distribution(smp.next_2d(), 1.0f));
   }
 
   auto eval = evaluate(data, in_w_o, mtl, scene, smp);
@@ -130,8 +130,8 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
   auto fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 
-  auto local_w_i = frame.to_local(-data.w_i);
-  auto local_w_o = frame.to_local(w_o);
+  auto local_w_i = local_frame_to_local(frame, -data.w_i);
+  auto local_w_o = local_frame_to_local(frame, w_o);
 
   auto diff_layer = DiffuseBSDF::diffuse_layer(data, local_w_i, local_w_o, mtl, scene, smp);
   auto spec_layer = specular_func(data, w_o, mtl, scene, smp);

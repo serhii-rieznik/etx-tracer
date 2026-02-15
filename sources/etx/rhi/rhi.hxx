@@ -5,6 +5,7 @@
 #include <etx/rhi/rhi_bindless.hxx>
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <vector>
 
@@ -31,6 +32,27 @@ struct RHIMemoryStats {
   uint64_t gpu_driver_budget_bytes = 0;
 };
 
+struct RHIChunkedBufferRange {
+  uint64_t offset = 0;
+  uint64_t size = 0;
+};
+
+struct RHIChunkedBufferUploadData {
+  std::vector<uint8_t> metadata = {};
+  std::vector<uint8_t> payload_data = {};
+  std::vector<RHIChunkedBufferRange> payload_chunk_ranges = {};
+  uint32_t chunk_indices_offset = ~0u;
+  bool success = true;
+};
+
+struct RHIChunkedBufferState {
+  std::vector<RHIBindlessHandle> chunk_buffers = {};
+  std::vector<uint64_t> chunk_buffer_sizes = {};
+  RHIBindlessHandle metadata_buffer = {};
+  uint64_t metadata_buffer_size = 0;
+  uint32_t metadata_descriptor_index = ~0u;
+};
+
 struct RHIDevice {
   RHIDevice() = default;
   explicit RHIDevice(void* impl)
@@ -47,6 +69,8 @@ struct RHIDevice {
   RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc);
   RHIResult update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset = 0);
   RHIResult destroy_buffer(RHIBindlessHandle buffer);
+  bool upload_or_update_chunked_buffer(const RHIChunkedBufferUploadData& data, RHIBufferUsage usage, RHIChunkedBufferState& state, const char* buffer_name = nullptr);
+  void destroy_chunked_buffer(RHIChunkedBufferState& state);
 
   RHICreateBindlessResult create_texture(const RHITextureDesc& desc);
   RHIResult update_texture(RHIBindlessHandle texture, const void* data, uint32_t mip_level = 0, uint32_t array_layer = 0);
@@ -58,6 +82,7 @@ struct RHIDevice {
   RHICreateBindlessResult create_acceleration_structure(const RHIAccelerationStructureDesc& desc);
   RHIResult destroy_acceleration_structure(RHIBindlessHandle as_handle);
   uint64_t get_acceleration_structure_device_address(RHIBindlessHandle as_handle);
+  uint64_t get_acceleration_structure_build_scratch_size(RHIBindlessHandle as_handle);
 
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);

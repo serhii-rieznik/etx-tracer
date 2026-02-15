@@ -3,10 +3,57 @@
 #include <etx/core/core.hxx>
 
 namespace etx {
+namespace {
+
+uint64_t hash_payload_view(const BufferPool& buffer_pool, BufferView view, uint64_t seed) {
+  uint64_t result = seed;
+  result = etx_hash64_continue(&view, sizeof(view), result);
+  if (view.valid() == false) {
+    return result;
+  }
+
+  const void* ptr = buffer_pool.map(view);
+  if (ptr == nullptr) {
+    return result;
+  }
+  return etx_hash64_continue(ptr, view.byte_size, result);
+}
+
+uint64_t hash_images_struct_and_payload(const SceneData& scene_data) {
+  uint64_t result = 0u;
+  for (const auto& image : scene_data.images_vector) {
+    const ::Image& interop_image = static_cast<const ::Image&>(image);
+    result = etx_hash64_continue(&interop_image, sizeof(::Image), result);
+    result = hash_payload_view(scene_data.buffer_pool, image.data, result);
+    result = hash_payload_view(scene_data.buffer_pool, image.x_distributions_storage, result);
+    result = hash_payload_view(scene_data.buffer_pool, image.y_distribution_storage, result);
+  }
+  return result;
+}
+
+uint64_t hash_mediums_struct_and_payload(const SceneData& scene_data) {
+  uint64_t result = 0u;
+  for (const auto& medium : scene_data.mediums_vector) {
+    const ::Medium& interop_medium = static_cast<const ::Medium&>(medium);
+    result = etx_hash64_continue(&interop_medium, sizeof(::Medium), result);
+    result = hash_payload_view(scene_data.buffer_pool, medium.density_data, result);
+  }
+  return result;
+}
+
+uint64_t hash_triangle_indices(const std::vector<Triangle>& triangles) {
+  uint64_t result = 0u;
+  for (const auto& tri : triangles) {
+    result = etx_hash64_continue(tri.i, sizeof(tri.i), result);
+  }
+  return result;
+}
+
+}  // namespace
 
 SceneData::SceneData(TaskScheduler& s)
-  : images(images_vector, images_storage_vector)
-  , mediums(mediums_vector, mediums_storage_vector)
+  : images(images_vector, buffer_pool)
+  , mediums(mediums_vector, buffer_pool)
   , scheduler(s) {
 }
 
@@ -85,10 +132,6 @@ SceneHashes SceneData::compute_hashes() const {
   // Emitter data
   tasks.emplace_back(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile), &result.emitter_profiles_hash);
 
-  // Resource data - hash structs only for now
-  tasks.emplace_back(images_vector.data(), images_vector.size() * sizeof(Image), &result.images_hash);
-  tasks.emplace_back(mediums_vector.data(), mediums_vector.size() * sizeof(Medium), &result.mediums_hash);
-
   // Non-ArrayView scene data
   tasks.emplace_back(&pixel_filter, sizeof(PixelFilter), &result.pixel_filter_hash);
   tasks.emplace_back(&defaults, sizeof(Scene::Defaults), &result.defaults_hash);
@@ -101,12 +144,17 @@ SceneHashes SceneData::compute_hashes() const {
     }
   });
 
+  result.images_hash = hash_images_struct_and_payload(*this);
+  result.mediums_hash = hash_mediums_struct_and_payload(*this);
+  result.triangle_indices_hash = hash_triangle_indices(triangles);
+
   return result;
 }
 
 void SceneData::clear(TaskScheduler& scheduler) {
   images.remove_all();
   mediums.remove_all();
+  buffer_pool.clear();
   vertices.pos.clear();
   vertices.nrm.clear();
   vertices.tan.clear();
@@ -118,7 +166,6 @@ void SceneData::clear(TaskScheduler& scheduler) {
   emitter_profiles.clear();
   spectrum_values.clear();
   images_vector.clear();
-  images_storage_vector.clear();
   mediums_vector.clear();
   spectrum_names.clear();
   material_mapping.clear();
@@ -286,9 +333,9 @@ void SceneData::build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_inde
 
   if (atmosphere_emitter.emission.image_index != kInvalidIndex) {
     images.load_images(scheduler);
-    const auto& img = images.get(atmosphere_emitter.emission.image_index);
-    auto& img_storage = images_storage_vector[atmosphere_emitter.emission.image_index];
-    auto ptr = reinterpret_cast<float4*>(img_storage.data.data());
+    auto& img = images_vector[atmosphere_emitter.emission.image_index];
+    auto ptr = buffer_pool.map<float4>(img.data);
+    ETX_CRITICAL(ptr != nullptr);
     scattering::generate_sky_image(atmosphere_emitter.atmosphere.scattering, img.isize, light_sources, extinction_data, ptr, scattering_spectrums, scheduler);
     images.rebuild_sampling_table(atmosphere_emitter.emission.image_index, scheduler);
   }
@@ -319,13 +366,12 @@ void SceneData::rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_in
       sun_emitter.emission.image_index = add_image(sun_buffer.data(), kSunImageDimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       images.load_images(scheduler);
     } else {
-      const auto& img = images_vector[sun_emitter.emission.image_index];
-      auto& img_storage = images_storage_vector[sun_emitter.emission.image_index];
+      auto& img = images_vector[sun_emitter.emission.image_index];
       if ((img.isize.x != kSunImageDimensions.x) || (img.isize.y != kSunImageDimensions.y)) {
         sun_emitter.emission.image_index = add_image(sun_buffer.data(), kSunImageDimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
         images.load_images(scheduler);
       } else {
-        memcpy(img_storage.data.data(), sun_buffer.data(), sun_buffer.size() * sizeof(float4));
+        buffer_pool.write(img.data, sun_buffer.data(), sun_buffer.size() * sizeof(float4));
         images.rebuild_sampling_table(sun_emitter.emission.image_index, scheduler);
       }
     }
