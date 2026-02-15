@@ -1,20 +1,24 @@
 #include <etx/rhi/shader/shader_compiler.hxx>
 
 #include <etx/core/log.hxx>
+#include <etx/core/platform.hxx>
+#include <etx/core/environment.hxx>
 #include <array>
+#include <codecvt>
+#include <locale>
 #include <string_view>
 #include <vector>
 
-#if !defined(WIN32_LEAN_AND_MEAN)
-# define WIN32_LEAN_AND_MEAN
+#if (ETX_PLATFORM_WINDOWS)
+# if !defined(WIN32_LEAN_AND_MEAN)
+#  define WIN32_LEAN_AND_MEAN
+# endif
+# include <windows.h>
+#else
+# include <dlfcn.h>
 #endif
 
-#include <windows.h>
-#include <comdef.h>
-
 #include <dxc/dxcapi.h>
-#include <wrl.h>
-using namespace Microsoft::WRL;
 
 namespace etx {
 
@@ -25,6 +29,180 @@ void unload_dxc_dll_global();
 RHIResult initialize_dxc_interfaces_global();
 
 namespace {
+
+template <typename T>
+class DxcComPtr {
+ public:
+  DxcComPtr() = default;
+
+  DxcComPtr(const DxcComPtr& other)
+    : _ptr(other._ptr) {
+    internal_add_ref();
+  }
+
+  DxcComPtr(DxcComPtr&& other) noexcept
+    : _ptr(other._ptr) {
+    other._ptr = nullptr;
+  }
+
+  ~DxcComPtr() {
+    internal_release();
+  }
+
+  DxcComPtr& operator=(const DxcComPtr& other) {
+    if (this == &other) {
+      return *this;
+    }
+
+    T* new_ptr = other._ptr;
+    if (new_ptr != nullptr) {
+      new_ptr->AddRef();
+    }
+
+    internal_release();
+    _ptr = new_ptr;
+    return *this;
+  }
+
+  DxcComPtr& operator=(DxcComPtr&& other) noexcept {
+    if (this == &other) {
+      return *this;
+    }
+
+    internal_release();
+    _ptr = other._ptr;
+    other._ptr = nullptr;
+    return *this;
+  }
+
+  T* Get() const {
+    return _ptr;
+  }
+
+  T** GetAddressOf() {
+    return &_ptr;
+  }
+
+  T** ReleaseAndGetAddressOf() {
+    Reset();
+    return &_ptr;
+  }
+
+  T* Detach() {
+    T* result = _ptr;
+    _ptr = nullptr;
+    return result;
+  }
+
+  void Reset() {
+    internal_release();
+    _ptr = nullptr;
+  }
+
+  T* operator->() const {
+    return _ptr;
+  }
+
+  explicit operator bool() const {
+    return _ptr != nullptr;
+  }
+
+ private:
+  void internal_add_ref() {
+    if (_ptr != nullptr) {
+      _ptr->AddRef();
+    }
+  }
+
+  void internal_release() {
+    if (_ptr != nullptr) {
+      _ptr->Release();
+      _ptr = nullptr;
+    }
+  }
+
+  T* _ptr = nullptr;
+};
+
+#if (ETX_PLATFORM_WINDOWS)
+using DxcLibraryHandle = HMODULE;
+#else
+using DxcLibraryHandle = void*;
+#endif
+
+DxcLibraryHandle load_dxc_library(const char* path) {
+#if (ETX_PLATFORM_WINDOWS)
+  return LoadLibraryA(path);
+#else
+  return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+#endif
+}
+
+void* load_dxc_symbol(DxcLibraryHandle library, const char* symbol_name) {
+#if (ETX_PLATFORM_WINDOWS)
+  return reinterpret_cast<void*>(GetProcAddress(library, symbol_name));
+#else
+  return dlsym(library, symbol_name);
+#endif
+}
+
+void unload_dxc_library(DxcLibraryHandle library) {
+#if (ETX_PLATFORM_WINDOWS)
+  FreeLibrary(library);
+#else
+  dlclose(library);
+#endif
+}
+
+std::wstring utf8_to_wstring(const std::string& value) {
+  if (value.empty()) {
+    return {};
+  }
+
+#if (ETX_PLATFORM_WINDOWS)
+  int size_needed = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0);
+  std::wstring wstr(size_needed, 0);
+  MultiByteToWideChar(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), wstr.data(), size_needed);
+  return wstr;
+#else
+  try {
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+    return converter.from_bytes(value);
+  } catch (const std::exception&) {
+    std::wstring fallback;
+    fallback.reserve(value.size());
+    for (unsigned char ch : value) {
+      fallback.push_back(static_cast<wchar_t>(ch));
+    }
+    return fallback;
+  }
+#endif
+}
+
+std::string wstring_to_utf8(const std::wstring& value) {
+  if (value.empty()) {
+    return {};
+  }
+
+#if (ETX_PLATFORM_WINDOWS)
+  int size_needed = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+  std::string str(size_needed, 0);
+  WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), str.data(), size_needed, nullptr, nullptr);
+  return str;
+#else
+  try {
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+    return converter.to_bytes(value);
+  } catch (const std::exception&) {
+    std::string fallback;
+    fallback.reserve(value.size());
+    for (wchar_t ch : value) {
+      fallback.push_back((ch >= 0 && ch <= 0x7F) ? static_cast<char>(ch) : '?');
+    }
+    return fallback;
+  }
+#endif
+}
 
 constexpr std::array<std::string_view, 6> default_shader_search_paths = {
   "./sources/etx/render",
@@ -150,7 +328,7 @@ bool contains_include_directive(const std::string& source) {
 
 class CustomIncludeHandler : public IDxcIncludeHandler {
  public:
-  CustomIncludeHandler(Microsoft::WRL::ComPtr<IDxcUtils> dxc_utils, std::string shader_directory);
+  CustomIncludeHandler(DxcComPtr<IDxcUtils> dxc_utils, std::string shader_directory);
   ~CustomIncludeHandler();
 
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** ppvObject) override;
@@ -160,9 +338,9 @@ class CustomIncludeHandler : public IDxcIncludeHandler {
   HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR pFilename, IDxcBlob** ppIncludeSource) override;
 
  private:
-  Microsoft::WRL::ComPtr<IDxcUtils> _dxc_utils;
+  DxcComPtr<IDxcUtils> _dxc_utils;
   std::string _shader_directory;
-  std::unordered_map<std::string, Microsoft::WRL::ComPtr<IDxcBlobEncoding>> _include_cache;
+  std::unordered_map<std::string, DxcComPtr<IDxcBlobEncoding>> _include_cache;
   std::mutex _include_cache_mutex;
   std::atomic<ULONG> _ref_count = 1;
 
@@ -201,8 +379,8 @@ struct ShaderCompiler::Impl {
   std::unordered_map<ShaderVariantKey, ShaderCompilationResult, ShaderVariantKeyHash> shader_cache;
   std::mutex cache_mutex;
 
-  ComPtr<IDxcUtils> dxc_utils;
-  ComPtr<IDxcCompiler3> dxc_compiler;
+  DxcComPtr<IDxcUtils> dxc_utils;
+  DxcComPtr<IDxcCompiler3> dxc_compiler;
 
   // Helper method
   std::vector<std::wstring> build_dxc_arguments(const std::string& entry_point, RHIShaderStage stage, const std::unordered_map<std::string, std::string>& defines,
@@ -211,10 +389,12 @@ struct ShaderCompiler::Impl {
 
 // File-scope global variables for DXC
 std::mutex global_init_mutex;
-Microsoft::WRL::ComPtr<IDxcUtils> global_dxc_utils;
-Microsoft::WRL::ComPtr<IDxcCompiler3> global_dxc_compiler;
-HMODULE global_dxc_dll = nullptr;
+DxcComPtr<IDxcUtils> global_dxc_utils;
+DxcComPtr<IDxcCompiler3> global_dxc_compiler;
+DxcLibraryHandle global_dxc_dll = nullptr;
+#if (ETX_PLATFORM_WINDOWS)
 std::atomic<bool> global_com_initialized{false};
+#endif
 std::mutex global_dll_mutex;
 DxcCreateInstanceProc global_dxc_create_instance = nullptr;
 
@@ -233,7 +413,8 @@ ShaderCompiler& ShaderCompiler::instance() {
       return;
     }
 
-    // Initialize COM
+#if (ETX_PLATFORM_WINDOWS)
+    // DXC uses COM on Windows only.
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hr) && (hr != RPC_E_CHANGED_MODE)) {
       log::error("Failed to initialize COM: 0x%08X", static_cast<uint32_t>(hr));
@@ -245,15 +426,18 @@ ShaderCompiler& ShaderCompiler::instance() {
     if ((hr != RPC_E_CHANGED_MODE)) {
       global_com_initialized.store(true, std::memory_order_release);
     }
+#endif
 
     // Initialize DXC interfaces
     RHIResult init_result = initialize_dxc_interfaces_global();
     if (init_result != RHIResult::Success) {
       log::error("Failed to initialize DXC interfaces");
+#if (ETX_PLATFORM_WINDOWS)
       if (global_com_initialized.load(std::memory_order_acquire)) {
         CoUninitialize();
         global_com_initialized.store(false, std::memory_order_release);
       }
+#endif
       unload_dxc_dll_global();
       init_failed = true;
       return;
@@ -280,13 +464,15 @@ void ShaderCompiler::shutdown() {
   global_dxc_utils.Reset();
   global_dxc_compiler.Reset();
 
+#if (ETX_PLATFORM_WINDOWS)
   if (global_com_initialized.load(std::memory_order_acquire)) {
     CoUninitialize();
     global_com_initialized.store(false, std::memory_order_release);
   }
+#endif
 
   if (global_dxc_dll) {
-    FreeLibrary(global_dxc_dll);
+    unload_dxc_library(global_dxc_dll);
     global_dxc_dll = nullptr;
     global_dxc_create_instance = nullptr;
   }
@@ -397,8 +583,8 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
   // Preprocess once
   std::string preprocessed_source;
   {
-    ComPtr<IDxcBlobEncoding> source_blob;
-    HRESULT hr = _impl->dxc_utils->CreateBlob(hlsl_source.data(), static_cast<uint32_t>(hlsl_source.size()), CP_UTF8, &source_blob);
+    DxcComPtr<IDxcBlobEncoding> source_blob;
+    HRESULT hr = _impl->dxc_utils->CreateBlob(hlsl_source.data(), static_cast<uint32_t>(hlsl_source.size()), DXC_CP_UTF8, source_blob.ReleaseAndGetAddressOf());
     if (FAILED(hr)) {
       result.result = RHIResult::ValidationError;
       result.error_message = "Failed to create DXC source blob";
@@ -418,9 +604,10 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       preprocess_args_ptr.push_back(arg.c_str());
     }
 
-    ComPtr<IDxcResult> preprocess_result;
+    DxcComPtr<IDxcResult> preprocess_result;
+    preprocess_result.Reset();
     hr = _impl->dxc_compiler->Compile(&dxc_buffer, preprocess_args_ptr.data(), static_cast<uint32_t>(preprocess_args_ptr.size()), include_handler.get(),
-      IID_PPV_ARGS(&preprocess_result));
+      IID_PPV_ARGS(preprocess_result.GetAddressOf()));
     if (FAILED(hr)) {
       result.result = RHIResult::ValidationError;
       result.error_message = "Preprocessing compilation failed";
@@ -437,8 +624,9 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
     std::string preprocess_diagnostics;
     {
-      ComPtr<IDxcBlobUtf8> preprocess_errors;
-      hr = preprocess_result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&preprocess_errors), nullptr);
+      DxcComPtr<IDxcBlobUtf8> preprocess_errors;
+      preprocess_errors.Reset();
+      hr = preprocess_result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(preprocess_errors.GetAddressOf()), nullptr);
       if (SUCCEEDED(hr) && preprocess_errors && preprocess_errors->GetStringLength() > 0) {
         preprocess_diagnostics.assign(preprocess_errors->GetStringPointer(), preprocess_errors->GetStringLength());
       }
@@ -454,8 +642,9 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       return result;
     }
 
-    ComPtr<IDxcBlobUtf8> canonical_hlsl_blob;
-    hr = preprocess_result->GetOutput(DXC_OUT_HLSL, IID_PPV_ARGS(&canonical_hlsl_blob), nullptr);
+    DxcComPtr<IDxcBlobUtf8> canonical_hlsl_blob;
+    canonical_hlsl_blob.Reset();
+    hr = preprocess_result->GetOutput(DXC_OUT_HLSL, IID_PPV_ARGS(canonical_hlsl_blob.GetAddressOf()), nullptr);
     if (FAILED(hr)) {
       result.result = RHIResult::ValidationError;
       result.error_message = "Failed to get preprocessed HLSL";
@@ -528,7 +717,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       .Encoding = DXC_CP_UTF8,
     };
 
-    Microsoft::WRL::ComPtr<IDxcResult> compile_result = {};
+    DxcComPtr<IDxcResult> compile_result = {};
     HRESULT hr = _impl->dxc_compiler->Compile(&source_buffer, arguments_ptr.data(), (uint32_t)arguments_ptr.size(), nullptr, IID_PPV_ARGS(compile_result.GetAddressOf()));
 
     ShaderCompilationResult entry_result = {
@@ -546,7 +735,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       } else if (FAILED(compile_status)) {
         entry_result.result = RHIResult::ValidationError;
       }
-      Microsoft::WRL::ComPtr<IDxcBlobUtf8> errors;
+      DxcComPtr<IDxcBlobUtf8> errors;
       compile_result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(errors.GetAddressOf()), nullptr);
       if (errors && errors->GetStringLength() > 0) {
         entry_result.error_message = errors->GetStringPointer();
@@ -563,7 +752,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       return result;
     }
 
-    Microsoft::WRL::ComPtr<IDxcBlob> shader_obj;
+    DxcComPtr<IDxcBlob> shader_obj;
     HRESULT object_hr = compile_result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(shader_obj.GetAddressOf()), nullptr);
     if (FAILED(object_hr) || !shader_obj || shader_obj->GetBufferPointer() == nullptr || shader_obj->GetBufferSize() == 0) {
       result.result = RHIResult::ValidationError;
@@ -604,12 +793,14 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 RHIResult initialize_dxc_interfaces_global() {
   HRESULT hr;
 
+  global_dxc_utils.Reset();
   hr = global_dxc_create_instance(CLSID_DxcUtils, IID_PPV_ARGS(global_dxc_utils.GetAddressOf()));
   if (FAILED(hr)) {
     log::error("Failed to create DXC utils: 0x%08X", static_cast<uint32_t>(hr));
     return RHIResult::ValidationError;
   }
 
+  global_dxc_compiler.Reset();
   hr = global_dxc_create_instance(CLSID_DxcCompiler, IID_PPV_ARGS(global_dxc_compiler.GetAddressOf()));
   if (FAILED(hr)) {
     log::error("Failed to create DXC compiler: 0x%08X", static_cast<uint32_t>(hr));
@@ -692,35 +883,83 @@ RHIResult load_dxc_dll_global() {
     return RHIResult::Success;
   }
 
-  const char* dll_names[] = {"dxcompiler.dll", "dxc.dll", "dxil.dll"};
-
-  std::vector<std::string> search_paths = {
-    "",
-    "bin\\",
-    "..\\bin\\",
-    ".\\bin\\",
+  auto append_with_separator = [](std::vector<std::string>& paths, std::string path, char separator) {
+    if (path.empty()) {
+      return;
+    }
+    if (path.back() != '\\' && path.back() != '/') {
+      path.push_back(separator);
+    }
+    paths.push_back(std::move(path));
   };
 
-  std::vector<std::string> system_paths = {
+#if (ETX_PLATFORM_WINDOWS)
+  constexpr char path_list_separator = ';';
+  constexpr char path_separator = '\\';
+  const char* library_names[] = {"dxcompiler.dll", "dxc.dll", "dxil.dll"};
+  std::vector<std::string> search_paths = {
+    "",
+    ".\\",
+    "bin\\",
+    ".\\bin\\",
+    "..\\bin\\",
+  };
+  const std::vector<std::string> system_paths = {
     "C:\\Program Files\\Microsoft DirectX Shader Compiler\\",
     "C:\\Program Files (x86)\\Microsoft DirectX Shader Compiler\\",
     "C:\\Windows\\System32\\",
     "C:\\Windows\\SysWOW64\\",
   };
-  search_paths.insert(search_paths.end(), system_paths.begin(), system_paths.end());
+#elif (ETX_PLATFORM_APPLE)
+  constexpr char path_list_separator = ':';
+  constexpr char path_separator = '/';
+  const char* library_names[] = {"libdxcompiler.dylib"};
+  std::vector<std::string> search_paths = {
+    "",
+    "./",
+    "bin/",
+    "./bin/",
+    "../bin/",
+  };
+  const std::vector<std::string> system_paths = {
+    "/opt/homebrew/lib/",
+    "/usr/local/lib/",
+    "/usr/lib/",
+    "/opt/dxc/lib/",
+  };
+#else
+  constexpr char path_list_separator = ':';
+  constexpr char path_separator = '/';
+  const char* library_names[] = {"libdxcompiler.so"};
+  std::vector<std::string> search_paths = {
+    "",
+    "./",
+    "bin/",
+    "./bin/",
+    "../bin/",
+  };
+  const std::vector<std::string> system_paths = {
+    "/usr/local/lib/",
+    "/usr/lib/",
+    "/opt/dxc/lib/",
+  };
+#endif
+
+  const char* data_folder = env().data_folder();
+  if (data_folder && data_folder[0] != '\0') {
+    append_with_separator(search_paths, std::string(data_folder), path_separator);
+    append_with_separator(search_paths, std::string(data_folder) + "bin", path_separator);
+  }
 
   const char* path_env = getenv("PATH");
   if (path_env) {
     std::string path_str(path_env);
     size_t begin = 0;
     while (begin <= path_str.size()) {
-      size_t separator = path_str.find(';', begin);
+      size_t separator = path_str.find(path_list_separator, begin);
       std::string entry = (separator == std::string::npos) ? path_str.substr(begin) : path_str.substr(begin, separator - begin);
       if (entry.empty() == false) {
-        if (entry.back() != '\\' && entry.back() != '/') {
-          entry.push_back('\\');
-        }
-        search_paths.push_back(std::move(entry));
+        append_with_separator(search_paths, std::move(entry), path_separator);
       }
 
       if (separator == std::string::npos) {
@@ -732,55 +971,54 @@ RHIResult load_dxc_dll_global() {
 
   const char* dxc_path_env = getenv("DXC_PATH");
   if (dxc_path_env) {
-    search_paths.push_back(std::string(dxc_path_env) + "\\");
+    std::string dxc_path(dxc_path_env);
+    append_with_separator(search_paths, dxc_path, path_separator);
+    append_with_separator(search_paths, dxc_path + "lib", path_separator);
+    append_with_separator(search_paths, dxc_path + "bin", path_separator);
   }
 
-  for (const char* dll_name : dll_names) {
-    global_dxc_dll = LoadLibraryA(dll_name);
-    if (global_dxc_dll) {
-      break;
-    }
+  search_paths.insert(search_paths.end(), system_paths.begin(), system_paths.end());
 
-    std::string bin_path = std::string("bin\\") + dll_name;
-    global_dxc_dll = LoadLibraryA(bin_path.c_str());
+  for (const char* library_name : library_names) {
+    global_dxc_dll = load_dxc_library(library_name);
     if (global_dxc_dll) {
       break;
     }
 
     for (const std::string& search_path : search_paths) {
-      if (search_path.empty() || search_path == "bin\\")
+      if (search_path.empty()) {
         continue;
+      }
 
-      std::string full_path = search_path + dll_name;
-      global_dxc_dll = LoadLibraryA(full_path.c_str());
+      std::string full_path = search_path + library_name;
+      global_dxc_dll = load_dxc_library(full_path.c_str());
       if (global_dxc_dll) {
         break;
       }
     }
 
-    if (global_dxc_dll)
+    if (global_dxc_dll) {
       break;
+    }
   }
 
   if (global_dxc_dll == nullptr) {
-    log::error("Failed to load DXC DLL. DirectX Shader Compiler was not found.");
-    log::error("DXC should have been installed automatically during the build process.");
-    log::error("Please ensure the build completed successfully and DXC was copied to the bin folder.");
-    log::error("");
+    log::error("Failed to load DXC runtime library.");
+    log::error("DirectX Shader Compiler was not found in known runtime search paths.");
+    log::error("Set DXC_PATH to a valid DXC installation prefix if needed.");
     log::error("If DXC is missing, try:");
-    log::error("1. Rebuild the project (CMake will download and install DXC)");
-    log::error("2. Check that bin/dxcompiler.dll exists");
-    log::error("3. Manually download from: https://github.com/microsoft/DirectXShaderCompiler/releases");
+    log::error("1. Reconfigure CMake so FindDXC resolves include/library paths");
+    log::error("2. Check that DXC runtime library is available near the executable");
+    log::error("3. Set DXC_PATH to the DXC install folder");
 
     return RHIResult::NotImplemented;
   }
 
-  global_dxc_create_instance = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(global_dxc_dll, "DxcCreateInstance"));
+  global_dxc_create_instance = reinterpret_cast<DxcCreateInstanceProc>(load_dxc_symbol(global_dxc_dll, "DxcCreateInstance"));
   if (global_dxc_create_instance == nullptr) {
-    log::error("Failed to get DxcCreateInstance function from DXC DLL");
-    log::error("The loaded DLL may not be a valid DXC installation.");
+    log::error("Failed to resolve DxcCreateInstance in loaded DXC library.");
     if (global_dxc_dll) {
-      FreeLibrary(global_dxc_dll);
+      unload_dxc_library(global_dxc_dll);
       global_dxc_dll = nullptr;
     }
     global_dxc_create_instance = nullptr;
@@ -793,7 +1031,7 @@ RHIResult load_dxc_dll_global() {
 void unload_dxc_dll_global() {
   std::lock_guard<std::mutex> lock(global_dll_mutex);
   if (global_dxc_dll) {
-    FreeLibrary(global_dxc_dll);
+    unload_dxc_library(global_dxc_dll);
     global_dxc_dll = nullptr;
     global_dxc_create_instance = nullptr;
   }
@@ -820,7 +1058,7 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
   }
 
   if (for_preprocessing == false) {
-    std::wstring entry_wstr(entry_point.begin(), entry_point.end());
+    std::wstring entry_wstr = utf8_to_wstring(entry_point);
 
     arguments.emplace_back(L"-T");
     arguments.emplace_back(profile.c_str());
@@ -840,21 +1078,12 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
     arguments.emplace_back(L"-P");
   }
 
-  auto string_to_wstring = [](const std::string& str) -> std::wstring {
-    if (str.empty())
-      return L"";
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), nullptr, 0);
-    std::wstring wstr(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), &wstr[0], size_needed);
-    return wstr;
-  };
-
   for (const auto& [key, value] : defines) {
     std::string define_str = key;
     if (!value.empty()) {
       define_str += "=" + value;
     }
-    std::wstring define_wstr = string_to_wstring(define_str);
+    std::wstring define_wstr = utf8_to_wstring(define_str);
     arguments.push_back(L"-D");
     arguments.push_back(define_wstr);
   }
@@ -863,7 +1092,7 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
 
   for (const auto& [key, value] : default_defines) {
     std::string define_str = key + "=" + value;
-    std::wstring define_wstr = string_to_wstring(define_str);
+    std::wstring define_wstr = utf8_to_wstring(define_str);
     arguments.push_back(L"-D");
     arguments.push_back(define_wstr);
   }
@@ -883,7 +1112,7 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
   return arguments;
 }
 
-CustomIncludeHandler::CustomIncludeHandler(Microsoft::WRL::ComPtr<IDxcUtils> dxc_utils, std::string shader_directory)
+CustomIncludeHandler::CustomIncludeHandler(DxcComPtr<IDxcUtils> dxc_utils, std::string shader_directory)
   : _dxc_utils(dxc_utils) {
   if (shader_directory.empty() == false) {
     std::error_code ec;
@@ -974,8 +1203,8 @@ HRESULT STDMETHODCALLTYPE CustomIncludeHandler::LoadSource(LPCWSTR pFilename, ID
     return E_FAIL;
   }
 
-  ComPtr<IDxcBlobEncoding> blob;
-  HRESULT hr = _dxc_utils->CreateBlob(content.data(), static_cast<uint32_t>(content.size()), DXC_CP_UTF8, &blob);
+  DxcComPtr<IDxcBlobEncoding> blob;
+  HRESULT hr = _dxc_utils->CreateBlob(content.data(), static_cast<uint32_t>(content.size()), DXC_CP_UTF8, blob.ReleaseAndGetAddressOf());
 
   if (FAILED(hr)) {
     log::error("Failed to create include blob for: %s", full_path.c_str());
@@ -1060,13 +1289,7 @@ std::string CustomIncludeHandler::find_include_file(const std::string& filename)
 }
 
 std::string CustomIncludeHandler::wstring_to_string(const std::wstring& wstr) {
-  if (wstr.empty())
-    return "";
-
-  int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
-  std::string str(size_needed, 0);
-  WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &str[0], size_needed, nullptr, nullptr);
-  return str;
+  return wstring_to_utf8(wstr);
 }
 
 std::string ShaderCompiler::read_file_content(const std::string& file_path, std::string& error_message) {

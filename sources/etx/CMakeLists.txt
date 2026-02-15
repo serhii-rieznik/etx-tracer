@@ -89,6 +89,9 @@ create_library(rhi)
 target_link_libraries(etx-rhi PRIVATE etx-core imgui sokol)
 target_compile_definitions(etx-rhi PRIVATE ETX_RHI_INTERNAL=1)
 target_include_directories(etx-rhi PUBLIC "${CMAKE_SOURCE_DIR}/sources/etx/render")
+if(DXC_INCLUDE_DIR)
+  target_include_directories(etx-rhi PRIVATE "${DXC_INCLUDE_DIR}")
+endif()
 
 # Add Vulkan dependency for Windows
 if(WIN32)
@@ -113,4 +116,3 @@ if (WIN32)
   configure_file("${EMBREE_BIN_DIR}/embree4.dll" "${root_folder}/bin/" COPYONLY)
   configure_file("${EMBREE_BIN_DIR}/tbb12.dll" "${root_folder}/bin/" COPYONLY)
 endif()
-

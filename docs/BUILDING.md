@@ -8,7 +8,7 @@ Most of external libraries will be located directly in the source code, to reduc
 These libraries and tools you have to install by yourself:
 - CMake
 - [Intel Embree](https://www.embree.org/) for CPU ray-tracing
-- [DirectX Shader Compiler (DXC)](https://github.com/microsoft/DirectXShaderCompiler) for HLSL-to-SPIR-V compilation (automatically downloaded by CMake if not found)
+- [DirectX Shader Compiler (DXC)](https://github.com/microsoft/DirectXShaderCompiler) for HLSL-to-SPIR-V compilation
 
 ## Building for Windows
 Windows is the only one platform, which is completely supported at the moment.
@@ -19,7 +19,7 @@ Windows is the only one platform, which is completely supported at the moment.
 ### DXC (DirectX Shader Compiler)
 DXC is required for compiling HLSL shaders to SPIR-V for Vulkan. CMake will automatically:
 1. Check if DXC is already installed on your system
-2. If not found, download the latest DXC release from GitHub
+2. If not found on Windows, download a DXC release from GitHub
 3. Copy DXC binaries to the `bin` folder for runtime usage
 
 You can also install DXC manually using:
@@ -27,7 +27,20 @@ You can also install DXC manually using:
 - Chocolatey: `choco install directxshadercompiler`
 - Or download directly from [GitHub releases](https://github.com/microsoft/DirectXShaderCompiler/releases)
 
-If you have DXC installed in a custom location, you can set the `DXC_PATH` environment variable.
+If DXC is installed in a custom location, set `DXC_PATH` to the installation prefix (the folder that contains `bin/`, `lib/`, and `include/`).
+
+You can also vendor DXC directly in this repo. CMake now auto-prefers `thirdparty/dxc` with platform folders, for example:
+- `thirdparty/dxc/macos-arm64/include/dxc/dxcapi.h`
+- `thirdparty/dxc/macos-arm64/lib/libdxcompiler.dylib`
+- optional: `thirdparty/dxc/macos-arm64/lib/libdxil.dylib`
+- optional: `thirdparty/dxc/macos-arm64/bin/dxc`
+
+Other recognized folder names include:
+- macOS: `macos`, `darwin`, `macos-arm64`, `darwin-arm64`
+- Windows: `windows`, `win`, `windows-x64`, `win-x64`
+- Linux: `linux`, `linux-x64`
+
+When DXC is found (system, `DXC_PATH`, or vendored path), the build copies required DXC binaries to `bin/` for distribution.
 
 After that generating and building a project should be as simple as creating a folder for build files and calling CMake, something like:
 ```cmake
@@ -38,6 +51,11 @@ cmake -G "Visual Studio 17 2022" -DEMBREE_LOCATION=path/to/embree ..
 
 ## Building for macOS 
 Currently macOS platform is not completely supported, however there are steps towards it.
+
+Required extra step for shaders:
+- Install/build DXC locally and either:
+  - place it under `thirdparty/dxc/<platform-folder>/` (auto-discovered), or
+  - set `DXC_PATH` to its installation prefix.
 
 ## Built-in dependencies
 These libraries are included into the source code in `thirdparty` folder:
@@ -50,4 +68,3 @@ These libraries are included into the source code in `thirdparty` folder:
 - [tinyexr](https://github.com/syoyo/tinyexr) - tiny OpenEXR image loader/saver library
 - [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) - tiny but powerful single file wavefront obj loader
 - [nanovdb](https://developer.nvidia.com/nanovdb) - the library for loading volumetric data
-
