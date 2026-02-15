@@ -14,6 +14,10 @@
 #  define WIN32_LEAN_AND_MEAN
 # endif
 # include <windows.h>
+# include <unknwn.h>
+# include <objidl.h>
+# include <oleauto.h>
+# include <combaseapi.h>
 #else
 # include <dlfcn.h>
 #endif
@@ -1102,7 +1106,7 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
       continue;
     }
 
-    const std::wstring include_directory_wstr = string_to_wstring(include_directory);
+    const std::wstring include_directory_wstr = utf8_to_wstring(include_directory);
     if (include_directory_wstr.empty() == false) {
       arguments.push_back(L"-I");
       arguments.push_back(include_directory_wstr);

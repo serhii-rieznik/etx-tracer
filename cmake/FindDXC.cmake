@@ -4,6 +4,7 @@
 # This module defines the following variables:
 #   DXC_EXECUTABLE      - Path to dxc executable (if found)
 #   DXC_LIBRARY         - Path to DXC runtime library (if found)
+#   DXC_IMPORT_LIBRARY  - Path to DXC import library on Windows (optional)
 #   DXC_INCLUDE_DIR     - Path to directory containing dxc/dxcapi.h
 #   DXC_ROOT            - Root folder containing include/lib/bin for resolved DXC
 #   DXC_FOUND           - True if DXC was found or installed
@@ -102,6 +103,7 @@ endif()
 if(WIN32)
     set(DXC_LIBRARY_NAMES dxcompiler.dll)
     set(DXC_EXECUTABLE_NAMES dxc.exe)
+    set(DXC_IMPORT_LIBRARY_NAMES dxcompiler.lib)
 elseif(APPLE)
     set(DXC_LIBRARY_NAMES libdxcompiler.dylib)
     set(DXC_EXECUTABLE_NAMES dxc)
@@ -110,29 +112,88 @@ else() # Linux
     set(DXC_EXECUTABLE_NAMES dxc)
 endif()
 
-# Find DXC include directory
-find_path(DXC_INCLUDE_DIR
+# Resolve vendored DXC first to avoid mixing headers and runtime libraries from different installs.
+set(_DXC_RESOLVED_FROM_VENDOR FALSE)
+find_path(_DXC_VENDOR_INCLUDE_DIR
     NAMES dxc/dxcapi.h
-    PATHS ${DXC_SEARCH_PATHS}
+    PATHS ${DXC_VENDOR_PATHS}
     PATH_SUFFIXES include Include inc
-    DOC "DXC include directory"
+    NO_DEFAULT_PATH
 )
-
-# Find DXC library
-find_file(DXC_LIBRARY
+find_file(_DXC_VENDOR_LIBRARY
     NAMES ${DXC_LIBRARY_NAMES}
-    PATHS ${DXC_SEARCH_PATHS}
+    PATHS ${DXC_VENDOR_PATHS}
     PATH_SUFFIXES "" bin lib lib64
-    DOC "DXC compiler library"
+    NO_DEFAULT_PATH
+)
+if(WIN32)
+    find_file(_DXC_VENDOR_IMPORT_LIBRARY
+        NAMES ${DXC_IMPORT_LIBRARY_NAMES}
+        PATHS ${DXC_VENDOR_PATHS}
+        PATH_SUFFIXES "" bin lib lib64
+        NO_DEFAULT_PATH
+    )
+endif()
+find_program(_DXC_VENDOR_EXECUTABLE
+    NAMES ${DXC_EXECUTABLE_NAMES}
+    PATHS ${DXC_VENDOR_PATHS}
+    PATH_SUFFIXES "" bin
+    NO_DEFAULT_PATH
 )
 
-# Find DXC executable
-find_program(DXC_EXECUTABLE
-    NAMES ${DXC_EXECUTABLE_NAMES}
-    PATHS ${DXC_SEARCH_PATHS}
-    PATH_SUFFIXES "" bin
-    DOC "DXC compiler executable"
-)
+if(_DXC_VENDOR_INCLUDE_DIR AND _DXC_VENDOR_LIBRARY)
+    set(DXC_INCLUDE_DIR "${_DXC_VENDOR_INCLUDE_DIR}" CACHE PATH "DXC include directory" FORCE)
+    set(DXC_LIBRARY "${_DXC_VENDOR_LIBRARY}" CACHE FILEPATH "DXC compiler library" FORCE)
+    if(WIN32)
+        if(_DXC_VENDOR_IMPORT_LIBRARY)
+            set(DXC_IMPORT_LIBRARY "${_DXC_VENDOR_IMPORT_LIBRARY}" CACHE FILEPATH "DXC compiler import library" FORCE)
+        else()
+            unset(DXC_IMPORT_LIBRARY CACHE)
+            set(DXC_IMPORT_LIBRARY "")
+        endif()
+    endif()
+    if(_DXC_VENDOR_EXECUTABLE)
+        set(DXC_EXECUTABLE "${_DXC_VENDOR_EXECUTABLE}" CACHE FILEPATH "DXC compiler executable" FORCE)
+    else()
+        unset(DXC_EXECUTABLE CACHE)
+        set(DXC_EXECUTABLE "")
+    endif()
+    set(_DXC_RESOLVED_FROM_VENDOR TRUE)
+endif()
+
+if(NOT _DXC_RESOLVED_FROM_VENDOR)
+    # Find DXC include directory
+    find_path(DXC_INCLUDE_DIR
+        NAMES dxc/dxcapi.h
+        PATHS ${DXC_SEARCH_PATHS}
+        PATH_SUFFIXES include Include inc
+        DOC "DXC include directory"
+    )
+
+    # Find DXC library
+    find_file(DXC_LIBRARY
+        NAMES ${DXC_LIBRARY_NAMES}
+        PATHS ${DXC_SEARCH_PATHS}
+        PATH_SUFFIXES "" bin lib lib64
+        DOC "DXC compiler library"
+    )
+    if(WIN32)
+        find_file(DXC_IMPORT_LIBRARY
+            NAMES ${DXC_IMPORT_LIBRARY_NAMES}
+            PATHS ${DXC_SEARCH_PATHS}
+            PATH_SUFFIXES "" bin lib lib64
+            DOC "DXC compiler import library"
+        )
+    endif()
+
+    # Find DXC executable
+    find_program(DXC_EXECUTABLE
+        NAMES ${DXC_EXECUTABLE_NAMES}
+        PATHS ${DXC_SEARCH_PATHS}
+        PATH_SUFFIXES "" bin
+        DOC "DXC compiler executable"
+    )
+endif()
 
 # Check if we found DXC
 if(DXC_LIBRARY AND DXC_INCLUDE_DIR)
@@ -289,11 +350,28 @@ endif()
 # Create imported targets
 if(DXC_FOUND)
     if(NOT TARGET DXC::Compiler)
-        add_library(DXC::Compiler SHARED IMPORTED)
-        set_target_properties(DXC::Compiler PROPERTIES
-            IMPORTED_LOCATION "${DXC_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${DXC_INCLUDE_DIR}"
-        )
+        if(WIN32)
+            if(DXC_IMPORT_LIBRARY)
+                add_library(DXC::Compiler SHARED IMPORTED)
+                set_target_properties(DXC::Compiler PROPERTIES
+                    IMPORTED_LOCATION "${DXC_LIBRARY}"
+                    IMPORTED_IMPLIB "${DXC_IMPORT_LIBRARY}"
+                    INTERFACE_INCLUDE_DIRECTORIES "${DXC_INCLUDE_DIR}"
+                )
+            else()
+                add_library(DXC::Compiler UNKNOWN IMPORTED)
+                set_target_properties(DXC::Compiler PROPERTIES
+                    IMPORTED_LOCATION "${DXC_LIBRARY}"
+                    INTERFACE_INCLUDE_DIRECTORIES "${DXC_INCLUDE_DIR}"
+                )
+            endif()
+        else()
+            add_library(DXC::Compiler SHARED IMPORTED)
+            set_target_properties(DXC::Compiler PROPERTIES
+                IMPORTED_LOCATION "${DXC_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${DXC_INCLUDE_DIR}"
+            )
+        endif()
     endif()
 
     if(NOT TARGET DXC::DXC AND DXC_EXECUTABLE)
