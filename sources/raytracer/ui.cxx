@@ -10,7 +10,7 @@
 #include <etx/render/shared/scene_medium.hxx>
 
 #include "ui.hxx"
-#include "camera_controller.hxx"
+#include <etx/engine/camera_controller.hxx>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -1337,8 +1337,7 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
       ImGui::Text("Density grid (3D Texture)");
       ImGui::Text("%u x %u x %u", m.grid.dimensions.x, m.grid.dimensions.y, m.grid.dimensions.z);
       ImGui::Text("Bounds");
-      ImGui::Text(
-        "min (%.3f, %.3f, %.3f)  max (%.3f, %.3f, %.3f)", m.bounds.p_min.x, m.bounds.p_min.y, m.bounds.p_min.z, m.bounds.p_max.x, m.bounds.p_max.y, m.bounds.p_max.z);
+      ImGui::Text("min (%.3f, %.3f, %.3f)  max (%.3f, %.3f, %.3f)", m.bounds.p_min.x, m.bounds.p_min.y, m.bounds.p_min.z, m.bounds.p_max.x, m.bounds.p_max.y, m.bounds.p_max.z);
     } else if (m.grid_type_enum() == DensityGrid::Type::NoiseFunction) {
       ImGui::Text("Density grid (Noise Function)");
       ImGui::Text("Noise Type");

@@ -30,10 +30,7 @@ static VkFormat convert_rhi_format_to_vk(RHITextureFormat format) {
       return VK_FORMAT_B8G8R8A8_SRGB;
     case RHITextureFormat::D32_FLOAT:
       return VK_FORMAT_D32_SFLOAT;
-    case RHITextureFormat::D24_UNORM_S8_UINT:
-      return VK_FORMAT_D24_UNORM_S8_UINT;
-    case RHITextureFormat::D32_FLOAT_S8_UINT:
-      return VK_FORMAT_D32_SFLOAT_S8_UINT;
+
     case RHITextureFormat::B8G8R8A8_UNORM:
       return VK_FORMAT_B8G8R8A8_UNORM;
     default:
@@ -78,10 +75,7 @@ static RHITextureFormat vk_format_to_rhi(VkFormat format) {
       return RHITextureFormat::B8G8R8A8_SRGB;
     case VK_FORMAT_D32_SFLOAT:
       return RHITextureFormat::D32_FLOAT;
-    case VK_FORMAT_D24_UNORM_S8_UINT:
-      return RHITextureFormat::D24_UNORM_S8_UINT;
-    case VK_FORMAT_D32_SFLOAT_S8_UINT:
-      return RHITextureFormat::D32_FLOAT_S8_UINT;
+
     case VK_FORMAT_B8G8R8A8_UNORM:
       return RHITextureFormat::B8G8R8A8_UNORM;
     default:

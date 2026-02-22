@@ -5,6 +5,7 @@
 #include <etx/render/host/buffer_pool.hxx>
 #include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_data.hxx>
+#include <etx/render/interop/hit_policy.hxx>
 #include <etx/render/shared/sampler.hxx>
 
 #include <embree4/rtcore.h>
@@ -282,14 +283,18 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
     }
 
     const auto& mat = ctx->scene->materials[tri.material_index];
-    if (mat.cls == MaterialClass::Void) {
+
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    bool alpha_rejected = alpha_test_pass(mat, tri, barycentrics({u, v}), *ctx->scene, *ctx->smp);
+    HitPolicyDecision hit_policy =
+      hit_policy_evaluate(HitPolicyMode::KeepBoundaryHit, mat.cls, alpha_rejected, false, mat.int_medium, mat.ext_medium);
+    if (hit_policy.action == HitPolicyAction::Ignore) {
       *args->valid = 0;
       return;
     }
 
-    float u = RTCHitN_u(args->hit, args->N, 0);
-    float v = RTCHitN_v(args->hit, args->N, 0);
-    if (alpha_test_pass(mat, tri, barycentrics({u, v}), *ctx->scene, *ctx->smp)) {
+    if (hit_policy.action != HitPolicyAction::CommitSurface) {
       *args->valid = 0;
       return;
     }
@@ -334,12 +339,15 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     const auto& scene = *ctx->scene;
     const auto& mat = ctx->scene->materials[tri.material_index];
 
-    if (mat.cls == MaterialClass::Void) {
+    bool alpha_rejected = alpha_test_pass(mat, tri, bc, scene, *ctx->smp);
+    HitPolicyDecision hit_policy =
+      hit_policy_evaluate(HitPolicyMode::KeepBoundaryHit, mat.cls, alpha_rejected, false, mat.int_medium, mat.ext_medium);
+    if (hit_policy.action == HitPolicyAction::Ignore) {
       *args->valid = 0;
       return;
     }
 
-    if (alpha_test_pass(mat, tri, bc, scene, *ctx->smp)) {
+    if (hit_policy.action != HitPolicyAction::CommitSurface) {
       *args->valid = 0;
       return;
     }
@@ -376,15 +384,18 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
     const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
     const auto& tri = ctx->scene->triangles[triangle_index];
     const auto& mat = ctx->scene->materials[tri.material_index];
-    if (mat.cls == MaterialClass::Void) {
+    const auto& scene = *ctx->scene;
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    bool alpha_rejected = alpha_test_pass(mat, tri, barycentrics({u, v}), scene, *ctx->smp);
+    HitPolicyDecision hit_policy =
+      hit_policy_evaluate(HitPolicyMode::KeepBoundaryHit, mat.cls, alpha_rejected, false, mat.int_medium, mat.ext_medium);
+    if (hit_policy.action == HitPolicyAction::Ignore) {
       *args->valid = 0;
       return;
     }
-    const auto& scene = *ctx->scene;
 
-    float u = RTCHitN_u(args->hit, args->N, 0);
-    float v = RTCHitN_v(args->hit, args->N, 0);
-    if (alpha_test_pass(mat, tri, barycentrics({u, v}), scene, *ctx->smp)) {
+    if (hit_policy.action != HitPolicyAction::CommitSurface) {
       *args->valid = 0;
       return;
     }
@@ -429,15 +440,23 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     const auto v = RTCHitN_v(args->hit, args->N, 0);
     const auto& tri = ctx->scene.triangles[triangle_index];
     const auto& mat = ctx->scene.materials[tri.material_index];
-    if (mat.cls == MaterialClass::Void) {
+    bool alpha_rejected = alpha_test_pass(mat, tri, barycentrics({u, v}), ctx->scene, ctx->smp);
+    HitPolicyDecision hit_policy =
+      hit_policy_evaluate(HitPolicyMode::MediumTransmittance, mat.cls, alpha_rejected, false, mat.int_medium, mat.ext_medium);
+    if (hit_policy.action == HitPolicyAction::Ignore) {
       *args->valid = 0;
       return;
     }
-    if (alpha_test_pass(mat, tri, barycentrics({u, v}), ctx->scene, ctx->smp)) {
+    if (hit_policy.action == HitPolicyAction::Occlude) {
+      ctx->occlusion_found = 1u;
+      *args->valid = -1;
+      return;
+    }
+    if (hit_policy.action != HitPolicyAction::TransitionMedium) {
       *args->valid = 0;
       return;
     }
-    if ((mat.cls != MaterialClass::Boundary) || (ctx->intersection_count + 1u >= kIntersectionBufferSize)) {
+    if ((ctx->intersection_count + 1u) >= kIntersectionBufferSize) {
       ctx->occlusion_found = 1u;
       *args->valid = -1;
       return;

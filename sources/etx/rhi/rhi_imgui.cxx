@@ -26,7 +26,22 @@ RHIResult RHIImGui::setup(RHIContext& context, const RHIImGuiDesc& desc) {
 
   if (ImGui::GetCurrentContext() == nullptr) {
     ImGui::CreateContext();
-    ImGui::StyleColorsDark();
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 4.0f;
+    style.ChildRounding = 4.0f;
+    style.FrameRounding = 4.0f;
+    style.GrabRounding = 4.0f;
+    style.PopupRounding = 4.0f;
+    style.ScrollbarRounding = 4.0f;
+    style.TabRounding = 4.0f;
+
+    style.WindowPadding = ImVec2(8.0f, 8.0f);
+    style.FramePadding = ImVec2(5.0f, 4.0f);
+    style.ItemSpacing = ImVec2(8.0f, 4.0f);
+    style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
+
+    set_theme(_desc.theme);
 
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = _desc.ini_filename.c_str();
@@ -52,6 +67,116 @@ void RHIImGui::shutdown() {
   destroy_resources();
   _initialized = false;
   _context = nullptr;
+}
+
+void RHIImGui::set_theme(RHIImGuiTheme theme) {
+  _desc.theme = theme;
+  if (ImGui::GetCurrentContext() == nullptr) {
+    return;
+  }
+
+  ImGuiStyle& style = ImGui::GetStyle();
+  ImVec4* colors = style.Colors;
+
+  if (theme == RHIImGuiTheme::Dark) {
+    colors[ImGuiCol_Text] = ImVec4(0.92f, 0.92f, 0.94f, 1.00f);
+    colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.12f, 0.14f, 1.00f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.12f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.10f, 0.12f, 0.94f);
+    colors[ImGuiCol_Border] = ImVec4(0.15f, 0.18f, 0.22f, 1.00f);
+    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.13f, 0.15f, 0.18f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.16f, 0.22f, 0.30f, 1.00f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.20f, 0.28f, 0.38f, 1.00f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.10f, 0.12f, 0.14f, 1.00f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.18f, 0.28f, 0.42f, 1.00f);
+    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.00f, 0.00f, 0.00f, 0.51f);
+    colors[ImGuiCol_MenuBarBg] = ImVec4(0.12f, 0.14f, 0.16f, 1.00f);
+    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.02f, 0.02f, 0.02f, 0.53f);
+    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.18f, 0.28f, 0.42f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.24f, 0.34f, 0.48f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_CheckMark] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.65f, 0.55f, 0.25f, 1.00f);
+    colors[ImGuiCol_Button] = ImVec4(0.18f, 0.28f, 0.42f, 1.00f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.24f, 0.34f, 0.48f, 1.00f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_Header] = ImVec4(0.18f, 0.28f, 0.42f, 1.00f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.24f, 0.34f, 0.48f, 1.00f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_Separator] = ImVec4(0.15f, 0.18f, 0.22f, 1.00f);
+    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.24f, 0.34f, 0.48f, 1.00f);
+    colors[ImGuiCol_SeparatorActive] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_ResizeGrip] = ImVec4(0.18f, 0.28f, 0.42f, 1.00f);
+    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.24f, 0.34f, 0.48f, 1.00f);
+    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_Tab] = ImVec4(0.12f, 0.16f, 0.22f, 1.00f);
+    colors[ImGuiCol_TabHovered] = ImVec4(0.24f, 0.34f, 0.48f, 1.00f);
+    colors[ImGuiCol_TabActive] = ImVec4(0.18f, 0.28f, 0.42f, 1.00f);
+    colors[ImGuiCol_TabUnfocused] = ImVec4(0.10f, 0.12f, 0.14f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.12f, 0.18f, 0.26f, 1.00f);
+    colors[ImGuiCol_PlotLines] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.65f, 0.55f, 0.25f, 1.00f);
+    colors[ImGuiCol_PlotHistogram] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
+    colors[ImGuiCol_PlotHistogramHovered] = ImVec4(0.65f, 0.55f, 0.25f, 1.00f);
+    colors[ImGuiCol_TextSelectedBg] = ImVec4(0.24f, 0.34f, 0.48f, 1.00f);
+    colors[ImGuiCol_DragDropTarget] = ImVec4(0.55f, 0.45f, 0.20f, 0.90f);
+    colors[ImGuiCol_NavHighlight] = ImVec4(0.24f, 0.34f, 0.48f, 1.00f);
+    colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
+    colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
+    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.20f, 0.20f, 0.20f, 0.35f);
+  } else {
+    colors[ImGuiCol_Text] = ImVec4(0.15f, 0.15f, 0.18f, 1.00f);
+    colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.52f, 1.00f);
+    colors[ImGuiCol_WindowBg] = ImVec4(0.95f, 0.95f, 0.97f, 1.00f);
+    colors[ImGuiCol_ChildBg] = ImVec4(0.92f, 0.92f, 0.94f, 1.00f);
+    colors[ImGuiCol_PopupBg] = ImVec4(0.98f, 0.98f, 0.99f, 0.94f);
+    colors[ImGuiCol_Border] = ImVec4(0.80f, 0.82f, 0.85f, 1.00f);
+    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    colors[ImGuiCol_FrameBg] = ImVec4(0.85f, 0.88f, 0.92f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.75f, 0.82f, 0.90f, 1.00f);
+    colors[ImGuiCol_FrameBgActive] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_TitleBg] = ImVec4(0.88f, 0.90f, 0.93f, 1.00f);
+    colors[ImGuiCol_TitleBgActive] = ImVec4(0.70f, 0.80f, 0.92f, 1.00f);
+    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(1.00f, 1.00f, 1.00f, 0.51f);
+    colors[ImGuiCol_MenuBarBg] = ImVec4(0.92f, 0.92f, 0.94f, 1.00f);
+    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.98f, 0.98f, 0.98f, 0.53f);
+    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.75f, 0.82f, 0.90f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_CheckMark] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_SliderGrab] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.92f, 0.85f, 0.50f, 1.00f);
+    colors[ImGuiCol_Button] = ImVec4(0.75f, 0.82f, 0.90f, 1.00f);
+    colors[ImGuiCol_ButtonHovered] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_ButtonActive] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_Header] = ImVec4(0.75f, 0.82f, 0.90f, 1.00f);
+    colors[ImGuiCol_HeaderHovered] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_HeaderActive] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_Separator] = ImVec4(0.80f, 0.82f, 0.85f, 1.00f);
+    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_SeparatorActive] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_ResizeGrip] = ImVec4(0.75f, 0.82f, 0.90f, 1.00f);
+    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_Tab] = ImVec4(0.85f, 0.88f, 0.92f, 1.00f);
+    colors[ImGuiCol_TabHovered] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_TabActive] = ImVec4(0.70f, 0.80f, 0.92f, 1.00f);
+    colors[ImGuiCol_TabUnfocused] = ImVec4(0.92f, 0.92f, 0.94f, 1.00f);
+    colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.85f, 0.88f, 0.92f, 1.00f);
+    colors[ImGuiCol_PlotLines] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.92f, 0.85f, 0.50f, 1.00f);
+    colors[ImGuiCol_PlotHistogram] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
+    colors[ImGuiCol_PlotHistogramHovered] = ImVec4(0.92f, 0.85f, 0.50f, 1.00f);
+    colors[ImGuiCol_TextSelectedBg] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_DragDropTarget] = ImVec4(0.85f, 0.78f, 0.45f, 0.90f);
+    colors[ImGuiCol_NavHighlight] = ImVec4(0.65f, 0.75f, 0.88f, 1.00f);
+    colors[ImGuiCol_NavWindowingHighlight] = ImVec4(0.10f, 0.10f, 0.10f, 0.70f);
+    colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.20f, 0.20f, 0.20f, 0.20f);
+    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
+  }
 }
 
 void RHIImGui::new_frame(const RHIImGuiFrameDesc& desc) {
@@ -116,9 +241,9 @@ RHIResult RHIImGui::create_resources() {
       return ib_result.result;
     }
     _vertices[i].buffer = vb_result.handle;
-    _vertices[i].data.resize(vb_desc.size);
+    _vertices[i].capacity = vb_desc.size;
     _indices[i].buffer = ib_result.handle;
-    _indices[i].data.resize(ib_desc.size);
+    _indices[i].capacity = ib_desc.size;
   }
 
   auto font_result = create_font_texture();
@@ -316,7 +441,7 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
 
   auto& device = _context->device();
 
-  if (required_vb_size > vertices.data.size()) {
+  if (required_vb_size > vertices.capacity) {
     if (vertices.buffer.valid()) {
       device.destroy_buffer(vertices.buffer);
     }
@@ -328,10 +453,10 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
       return res.result;
 
     vertices.buffer = res.handle;
-    vertices.data.resize(new_size);
+    vertices.capacity = new_size;
   }
 
-  if (required_ib_size > indices.data.size()) {
+  if (required_ib_size > indices.capacity) {
     if (indices.buffer.valid()) {
       device.destroy_buffer(indices.buffer);
     }
@@ -342,21 +467,22 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
     if (res.result != RHIResult::Success)
       return res.result;
     indices.buffer = res.handle;
-    indices.data.resize(new_size);
+    indices.capacity = new_size;
   }
 
   size_t vb_offset = 0;
   size_t ib_offset = 0;
   for (int i = 0; i < draw_data->CmdListsCount; ++i) {
     const ImDrawList* cmd_list = draw_data->CmdLists[i];
-    memcpy(vertices.data.data() + vb_offset, cmd_list->VtxBuffer.Data, cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
-    vb_offset += cmd_list->VtxBuffer.Size * sizeof(ImDrawVert);
-    memcpy(indices.data.data() + ib_offset, cmd_list->IdxBuffer.Data, cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
-    ib_offset += cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx);
-  }
 
-  device.update_buffer(vertices.buffer, vertices.data.data(), required_vb_size);
-  device.update_buffer(indices.buffer, indices.data.data(), required_ib_size);
+    size_t v_size = cmd_list->VtxBuffer.Size * sizeof(ImDrawVert);
+    device.update_buffer(vertices.buffer, cmd_list->VtxBuffer.Data, v_size, vb_offset);
+    vb_offset += v_size;
+
+    size_t i_size = cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx);
+    device.update_buffer(indices.buffer, cmd_list->IdxBuffer.Data, i_size, ib_offset);
+    ib_offset += i_size;
+  }
 
   return RHIResult::Success;
 }

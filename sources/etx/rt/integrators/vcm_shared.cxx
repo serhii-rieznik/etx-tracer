@@ -1,5 +1,5 @@
 #include <etx/rt/integrators/vcm_spatial_grid.hxx>
-#include <etx/util/options.hxx>
+#include <etx/engine/options.hxx>
 #include <etx/render/shared/scene.hxx>
 
 namespace etx {

@@ -142,8 +142,8 @@ bool RHIDevice::upload_or_update_chunked_buffer(const RHIChunkedBufferUploadData
       return false;
     }
     if (range.size > (static_cast<uint64_t>(data.payload_data.size()) - range.offset)) {
-      log::error("RHI: invalid chunk range size for '%s' (offset=%llu, size=%llu, payload=%llu)", (buffer_name != nullptr) ? buffer_name : "unknown", range.offset,
-        range.size, static_cast<uint64_t>(data.payload_data.size()));
+      log::error("RHI: invalid chunk range size for '%s' (offset=%llu, size=%llu, payload=%llu)", (buffer_name != nullptr) ? buffer_name : "unknown", range.offset, range.size,
+        static_cast<uint64_t>(data.payload_data.size()));
       return false;
     }
   }
@@ -169,8 +169,8 @@ bool RHIDevice::upload_or_update_chunked_buffer(const RHIChunkedBufferUploadData
     }
 
     uint32_t chunk_descriptor_index = kInvalidDescriptorIndex;
-    const bool chunk_upload_success = upload_or_update_linear_chunked_buffer(
-      *this, chunk_data, range.size, usage, new_chunk_buffers[i], new_chunk_buffer_sizes[i], chunk_descriptor_index, buffer_name);
+    const bool chunk_upload_success =
+      upload_or_update_linear_chunked_buffer(*this, chunk_data, range.size, usage, new_chunk_buffers[i], new_chunk_buffer_sizes[i], chunk_descriptor_index, buffer_name);
     if (chunk_upload_success == false) {
       cleanup_new_state();
       return false;
@@ -390,6 +390,14 @@ void RHIContext::submit_command_buffer(const RHISubmitInfo& info) {
   backend_context(_impl)->submit_command_buffer(info);
 }
 
+void RHIContext::submit_frame_command_buffer(RHICommandBuffer cmd) {
+  RHISubmitInfo submit_info = {};
+  submit_info.command_buffer = cmd;
+  submit_info.wait_semaphores.push_back(get_image_acquired_semaphore());
+  submit_info.signal_semaphores.push_back(get_render_complete_semaphore());
+  submit_command_buffer(submit_info);
+}
+
 void RHIContext::program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func) {
   backend_context(_impl)->program_command_buffer(cmd, std::move(func));
 }
@@ -465,6 +473,10 @@ void RHIContext::cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHan
 
 void RHIContext::cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level) {
   backend_context(_impl)->cmd_copy_texture_to_buffer(cmd, src, dst, width, height, mip_level);
+}
+
+void RHIContext::cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture) {
+  backend_context(_impl)->cmd_generate_mipmaps(cmd, texture);
 }
 
 void RHIContext::cmd_set_debug_name(RHICommandBuffer cmd, const char* name) {

@@ -10,9 +10,8 @@
 #include <etx/render/shared/math.hxx>
 #undef ETX_RENDER_BASE_INCLUDED
 
-#define ETX_FORCE_VALIDATION          0
-#define ETX_DISABLE_VALIDATION        0
-#define ETX_USE_EQUAL_AREA_PROJECTION 1
+#define ETX_FORCE_VALIDATION   0
+#define ETX_DISABLE_VALIDATION 0
 
 #if (ETX_DISABLE_VALIDATION == 0) && (ETX_DEBUG || ETX_FORCE_VALIDATION)
 

@@ -141,6 +141,7 @@ struct VKStagingBuffer {
 struct VKDevice::Impl {
   std::atomic<uint64_t> gpu_allocated_bytes = {0};
   bool memory_budget_supported = false;
+  bool fill_mode_non_solid_supported = false;
 
   Impl(const RHIInitInfo& info);
   ~Impl();
@@ -652,8 +653,12 @@ bool VKDevice::Impl::initialize_device() {
   }
 
   VkPhysicalDeviceFeatures device_features = {};
+  VkPhysicalDeviceFeatures physical_device_features = {};
+  vkGetPhysicalDeviceFeatures(physical_device, &physical_device_features);
   device_features.samplerAnisotropy = VK_TRUE;
   device_features.shaderInt64 = VK_TRUE;
+  fill_mode_non_solid_supported = (physical_device_features.fillModeNonSolid == VK_TRUE);
+  device_features.fillModeNonSolid = fill_mode_non_solid_supported ? VK_TRUE : VK_FALSE;
 
   VkPhysicalDeviceBufferDeviceAddressFeatures buffer_device_address_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
   buffer_device_address_features.bufferDeviceAddress = VK_TRUE;
@@ -669,6 +674,13 @@ bool VKDevice::Impl::initialize_device() {
 
   VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
   descriptor_indexing_features.pNext = &ray_query_features;
+  descriptor_indexing_features.shaderInputAttachmentArrayNonUniformIndexing = VK_TRUE;
+  descriptor_indexing_features.shaderUniformTexelBufferArrayNonUniformIndexing = VK_TRUE;
+  descriptor_indexing_features.shaderStorageTexelBufferArrayNonUniformIndexing = VK_TRUE;
+  descriptor_indexing_features.shaderUniformBufferArrayNonUniformIndexing = VK_TRUE;
+  descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+  descriptor_indexing_features.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
+  descriptor_indexing_features.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
   descriptor_indexing_features.runtimeDescriptorArray = VK_TRUE;
   descriptor_indexing_features.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
   descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
@@ -1082,7 +1094,11 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   vertex_input.pVertexAttributeDescriptions = vertex_attributes.data();
 
   VkPipelineInputAssemblyStateCreateInfo input_assembly = {VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-  input_assembly.topology = desc.primitive_topology == RHIPrimitiveTopology::TriangleList ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+  if (desc.primitive_topology == RHIPrimitiveTopology::LineList) {
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+  } else {
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  }
   input_assembly.primitiveRestartEnable = VK_FALSE;
 
   VkPipelineViewportStateCreateInfo viewport_state = {VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -1091,21 +1107,25 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
 
   VkPipelineRasterizationStateCreateInfo rasterizer = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
   rasterizer.depthClampEnable = desc.rasterization.depth_clamp_enable ? VK_TRUE : VK_FALSE;
-  rasterizer.rasterizerDiscardEnable = VK_FALSE;
-  rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+  rasterizer.rasterizerDiscardEnable = desc.rasterization.rasterizer_discard_enable ? VK_TRUE : VK_FALSE;
+  if (desc.rasterization.wireframe_enable && (fill_mode_non_solid_supported == false)) {
+    log::warning("Vulkan: Wireframe pipeline requested, but fillModeNonSolid is not supported. Falling back to filled triangles.");
+  }
+  bool use_wireframe = desc.rasterization.wireframe_enable && fill_mode_non_solid_supported;
+  rasterizer.polygonMode = use_wireframe ? VK_POLYGON_MODE_LINE : VK_POLYGON_MODE_FILL;
   rasterizer.lineWidth = desc.rasterization.line_width;
   rasterizer.cullMode = VK_CULL_MODE_NONE;
   rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
   rasterizer.depthBiasEnable = VK_FALSE;
 
-  VkPipelineDepthStencilStateCreateInfo depth_stencil = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-  depth_stencil.depthTestEnable = desc.depth_stencil.depth_test_enable ? VK_TRUE : VK_FALSE;
-  depth_stencil.depthWriteEnable = desc.depth_stencil.depth_write_enable ? VK_TRUE : VK_FALSE;
-  depth_stencil.depthCompareOp = convert_compare_op(desc.depth_stencil.depth_compare_op);
-  depth_stencil.depthBoundsTestEnable = desc.depth_stencil.depth_bounds_test_enable ? VK_TRUE : VK_FALSE;
-  depth_stencil.minDepthBounds = desc.depth_stencil.min_depth_bounds;
-  depth_stencil.maxDepthBounds = desc.depth_stencil.max_depth_bounds;
-  depth_stencil.stencilTestEnable = VK_FALSE;
+  VkPipelineDepthStencilStateCreateInfo depth_state = {VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+  depth_state.depthTestEnable = desc.depth_state.depth_test_enable ? VK_TRUE : VK_FALSE;
+  depth_state.depthWriteEnable = desc.depth_state.depth_write_enable ? VK_TRUE : VK_FALSE;
+  depth_state.depthCompareOp = convert_compare_op(desc.depth_state.depth_compare_op);
+  depth_state.depthBoundsTestEnable = desc.depth_state.depth_bounds_test_enable ? VK_TRUE : VK_FALSE;
+  depth_state.minDepthBounds = desc.depth_state.min_depth_bounds;
+  depth_state.maxDepthBounds = desc.depth_state.max_depth_bounds;
+  depth_state.stencilTestEnable = VK_FALSE;
 
   VkPipelineMultisampleStateCreateInfo multisampling = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
   multisampling.sampleShadingEnable = VK_FALSE;
@@ -1147,13 +1167,12 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   }
 
   VkFormat depth_format = convert_rhi_format_to_vk(desc.depth_format);
-  VkFormat stencil_format = (depth_format == VK_FORMAT_D24_UNORM_S8_UINT || depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT) ? depth_format : VK_FORMAT_UNDEFINED;
 
   VkPipelineRenderingCreateInfo rendering_info = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
   rendering_info.colorAttachmentCount = static_cast<uint32_t>(color_formats.size());
   rendering_info.pColorAttachmentFormats = color_formats.data();
   rendering_info.depthAttachmentFormat = depth_format;
-  rendering_info.stencilAttachmentFormat = stencil_format;
+  rendering_info.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
 
   VkGraphicsPipelineCreateInfo pipeline_info = {VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
   pipeline_info.pNext = &rendering_info;
@@ -1164,7 +1183,7 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   pipeline_info.pViewportState = &viewport_state;
   pipeline_info.pRasterizationState = &rasterizer;
   pipeline_info.pMultisampleState = &multisampling;
-  pipeline_info.pDepthStencilState = &depth_stencil;
+  pipeline_info.pDepthStencilState = &depth_state;
   pipeline_info.pColorBlendState = &color_blending;
   pipeline_info.pDynamicState = &dynamic_state_info;
   pipeline_info.layout = layout;
@@ -1353,7 +1372,7 @@ RHIResult VKDevice::Impl::create_vulkan_texture(const RHITextureDesc& desc, VkIm
     vk_usage |= VK_IMAGE_USAGE_STORAGE_BIT;
   if (usage_flags & static_cast<TextureUsage>(RHITextureUsage::ColorAttachment))
     vk_usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-  if (usage_flags & static_cast<TextureUsage>(RHITextureUsage::DepthStencilAttachment))
+  if (usage_flags & static_cast<TextureUsage>(RHITextureUsage::DepthAttachment))
     vk_usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
   if (usage_flags & static_cast<TextureUsage>(RHITextureUsage::TransferSrc))
     vk_usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -1409,11 +1428,8 @@ RHIResult VKDevice::Impl::create_vulkan_image_view(const RHITextureDesc& desc, V
   view_info.subresourceRange.baseArrayLayer = 0;
   view_info.subresourceRange.layerCount = desc.array_layers;
 
-  if (desc.format == RHITextureFormat::D32_FLOAT || desc.format == RHITextureFormat::D24_UNORM_S8_UINT || desc.format == RHITextureFormat::D32_FLOAT_S8_UINT) {
+  if (desc.format == RHITextureFormat::D32_FLOAT) {
     view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    if (desc.format == RHITextureFormat::D24_UNORM_S8_UINT || desc.format == RHITextureFormat::D32_FLOAT_S8_UINT) {
-      view_info.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
-    }
   }
 
   if (etx_vk_call(vkCreateImageView(device, &view_info, nullptr, &out_view)) != VK_SUCCESS) {

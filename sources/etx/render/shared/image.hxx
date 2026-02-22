@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <etx/render/interop/image.hxx>
+#include <etx/render/interop/image_filter_shared.hxx>
 #include <etx/render/shared/distribution.hxx>
 #include <etx/render/shared/buffer_view.hxx>
 #include <etx/render/shared/spectrum.hxx>
@@ -17,6 +18,22 @@ extern "C" {
 #define ETX_STORE_COMPRESSED_BC 0
 
 namespace etx {
+
+struct Image;
+
+struct ImageSampleSharedCPUContext {
+  const Image& image;
+};
+
+ETX_SHARED_INLINE uint32_t image_sample_shared_cpu_y_count(ETX_IN(ImageSampleSharedCPUContext, context));
+ETX_SHARED_INLINE uint32_t image_sample_shared_cpu_x_count(ETX_IN(ImageSampleSharedCPUContext, context), uint32_t y_index);
+ETX_SHARED_INLINE float2 image_sample_shared_cpu_image_fsize(ETX_IN(ImageSampleSharedCPUContext, context));
+ETX_SHARED_INLINE uint32_t image_sample_shared_cpu_sample_y(ETX_INOUT(ImageSampleSharedCPUContext, context), float rnd, ETX_OUT(float, pdf));
+ETX_SHARED_INLINE uint32_t image_sample_shared_cpu_sample_x(ETX_INOUT(ImageSampleSharedCPUContext, context), uint32_t y_index, float rnd, ETX_OUT(float, pdf));
+ETX_SHARED_INLINE float image_sample_shared_cpu_cdf_y(ETX_IN(ImageSampleSharedCPUContext, context), uint32_t y_index);
+ETX_SHARED_INLINE float image_sample_shared_cpu_cdf_x(ETX_IN(ImageSampleSharedCPUContext, context), uint32_t y_index, uint32_t x_index);
+ETX_SHARED_INLINE bool image_sample_shared_distribution(
+  ETX_INOUT(ImageSampleSharedCPUContext, context), ETX_IN(float2, rnd), ETX_OUT(float, image_pdf), ETX_OUT(uint2, location), ETX_OUT(float2, uv));
 
 struct Image : public ::Image {
   struct Gather {
@@ -52,27 +69,18 @@ struct Image : public ::Image {
   BufferView x_distributions_buffer = {};
 
   ETX_SHARED_INLINE Gather gather(const float2& in_uv) const {
-    float2 uv = in_uv * fsize;
-    auto x0 = tex_coord_u(uv.x, fsize.x);
-    auto y0 = tex_coord_v(uv.y, fsize.y);
-    float dx = x0 - floorf(x0);
-    float dy = y0 - floorf(y0);
+    ImageFilterSharedAddress sample = image_filter_shared_address(in_uv, fsize, isize, options);
 
-    uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.y - 1u);
-    uint32_t row_1 = clamp(row_0 + 1u, 0u, isize.y - 1u);
-    uint32_t col_0 = clamp(static_cast<uint32_t>(x0), 0u, isize.x - 1u);
-    uint32_t col_1 = clamp(col_0 + 1u, 0u, isize.x - 1u);
-
-    const auto& p00 = pixel(col_0, row_0) * (1.0f - dx) * (1.0f - dy);
+    const auto& p00 = pixel(sample.col_0, sample.row_0) * (1.0f - sample.dx) * (1.0f - sample.dy);
     ETX_VALIDATE(p00);
-    const auto& p01 = pixel(col_1, row_0) * (dx) * (1.0f - dy);
+    const auto& p01 = pixel(sample.col_1, sample.row_0) * (sample.dx) * (1.0f - sample.dy);
     ETX_VALIDATE(p01);
-    const auto& p10 = pixel(col_0, row_1) * (1.0f - dx) * (dy);
+    const auto& p10 = pixel(sample.col_0, sample.row_1) * (1.0f - sample.dx) * (sample.dy);
     ETX_VALIDATE(p10);
-    const auto& p11 = pixel(col_1, row_1) * (dx) * (dy);
+    const auto& p11 = pixel(sample.col_1, sample.row_1) * (sample.dx) * (sample.dy);
     ETX_VALIDATE(p11);
 
-    return {p00, p01, p10, p11, row_0, row_1};
+    return {p00, p01, p10, p11, sample.row_0, sample.row_1};
   }
 
   ETX_SHARED_INLINE float4 evaluate(const float2& in_uv, float* pdf) const {
@@ -287,20 +295,10 @@ struct Image : public ::Image {
   }
 
   ETX_SHARED_INLINE float2 sample(const float2& rnd, float& image_pdf, uint2& location, float4& eval) const {
-    float y_pdf = 0.0f;
-    location.y = y_distribution.sample(rnd.y, y_pdf);
-
-    float x_pdf = 0.0f;
-    const auto& x_distribution = x_distributions[location.y];
-    location.x = x_distribution.sample(rnd.x, x_pdf);
-
-    const auto& x0 = x_distribution.values[location.x];
-    const auto& x1 = x_distribution.values[min(location.x + 1u, uint32_t(x_distribution.values.count) - 1u)];
-    const auto& y0 = y_distribution.values[location.y];
-    const auto& y1 = y_distribution.values[min(location.y + 1u, uint32_t(y_distribution.values.count) - 1u)];
-
-    float2 uv = ::image_sample_uv_from_distribution(rnd, location, fsize, x0.cdf, x1.cdf, y0.cdf, y1.cdf);
-
+    ImageSampleSharedCPUContext context = {*this};
+    float2 uv = rnd;
+    bool sampled = image_sample_shared_distribution(context, rnd, image_pdf, location, uv);
+    (void)sampled;
     eval = evaluate(uv, &image_pdf);
     return uv;
   }
@@ -312,35 +310,74 @@ struct Image : public ::Image {
     return sample(rnd, image_pdf, location, eval);
   }
 
-  ETX_SHARED_INLINE float tex_coord_repeat(float u, float size) const {
-    return ::image_tex_coord_repeat(u, size);
-  }
-
-  ETX_SHARED_INLINE float tex_coord_clamp(float u, float size) const {
-    return ::image_tex_coord_clamp(u, size);
-  }
-
-  ETX_SHARED_INLINE float tex_coord_u(float u, float size) const {
-    return ::image_tex_coord_u(u, size, options);
-  }
-
-  ETX_SHARED_INLINE float tex_coord_v(float u, float size) const {
-    return ::image_tex_coord_v(u, size, options);
-  }
-
   ETX_SHARED_INLINE float4 read(const float2& uv) const {
-    auto x0 = tex_coord_u(uv.x - 0.0f, fsize.x);
-    auto x1 = tex_coord_u(uv.x + 1.0f, fsize.x);
-    auto y0 = tex_coord_v(uv.y - 0.0f, fsize.y);
-    auto y1 = tex_coord_v(uv.y + 1.0f, fsize.y);
-    float dx = x0 - floorf(x0);
-    float dy = y0 - floorf(y0);
-    const auto& p00 = pixel(uint32_t(x0), uint32_t(y0)) * (1.0f - dx) * (1.0f - dy);
-    const auto& p01 = pixel(uint32_t(x1), uint32_t(y0)) * (dx) * (1.0f - dy);
-    const auto& p10 = pixel(uint32_t(x0), uint32_t(y1)) * (1.0f - dx) * (dy);
-    const auto& p11 = pixel(uint32_t(x1), uint32_t(y1)) * (dx) * (dy);
-    return p00 + p01 + p10 + p11;
+    if ((isize.x == 0u) || (isize.y == 0u)) {
+      return float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    float2 normalized_uv = {
+      (fsize.x > 0.0f) ? (uv.x / fsize.x) : 0.0f,
+      (fsize.y > 0.0f) ? (uv.y / fsize.y) : 0.0f,
+    };
+    ImageFilterSharedAddress sample = image_filter_shared_address(normalized_uv, fsize, isize, options);
+
+    float4 p00 = pixel(sample.col_0, sample.row_0);
+    float4 p01 = pixel(sample.col_1, sample.row_0);
+    float4 p10 = pixel(sample.col_0, sample.row_1);
+    float4 p11 = pixel(sample.col_1, sample.row_1);
+    return image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
   }
 };
+
+ETX_SHARED_INLINE uint32_t image_sample_shared_cpu_y_count(ETX_IN(ImageSampleSharedCPUContext, context)) {
+  return static_cast<uint32_t>(context.image.y_distribution.values.count);
+}
+
+ETX_SHARED_INLINE uint32_t image_sample_shared_cpu_x_count(ETX_IN(ImageSampleSharedCPUContext, context), uint32_t y_index) {
+  ETX_ASSERT(y_index < context.image.x_distributions.count);
+  return static_cast<uint32_t>(context.image.x_distributions[y_index].values.count);
+}
+
+ETX_SHARED_INLINE float2 image_sample_shared_cpu_image_fsize(ETX_IN(ImageSampleSharedCPUContext, context)) {
+  return context.image.fsize;
+}
+
+ETX_SHARED_INLINE uint32_t image_sample_shared_cpu_sample_y(ETX_INOUT(ImageSampleSharedCPUContext, context), float rnd, ETX_OUT(float, pdf)) {
+  return context.image.y_distribution.sample(rnd, pdf);
+}
+
+ETX_SHARED_INLINE uint32_t image_sample_shared_cpu_sample_x(ETX_INOUT(ImageSampleSharedCPUContext, context), uint32_t y_index, float rnd, ETX_OUT(float, pdf)) {
+  ETX_ASSERT(y_index < context.image.x_distributions.count);
+  return context.image.x_distributions[y_index].sample(rnd, pdf);
+}
+
+ETX_SHARED_INLINE float image_sample_shared_cpu_cdf_y(ETX_IN(ImageSampleSharedCPUContext, context), uint32_t y_index) {
+  ETX_ASSERT(y_index < context.image.y_distribution.values.count);
+  return context.image.y_distribution.values[y_index].cdf;
+}
+
+ETX_SHARED_INLINE float image_sample_shared_cpu_cdf_x(ETX_IN(ImageSampleSharedCPUContext, context), uint32_t y_index, uint32_t x_index) {
+  ETX_ASSERT(y_index < context.image.x_distributions.count);
+  ETX_ASSERT(x_index < context.image.x_distributions[y_index].values.count);
+  return context.image.x_distributions[y_index].values[x_index].cdf;
+}
+
+#define ETX_IMAGE_SAMPLE_SHARED_CONTEXT_TYPE ImageSampleSharedCPUContext
+#define ETX_IMAGE_SAMPLE_SHARED_Y_COUNT(context) image_sample_shared_cpu_y_count(context)
+#define ETX_IMAGE_SAMPLE_SHARED_X_COUNT(context, y_index) image_sample_shared_cpu_x_count(context, y_index)
+#define ETX_IMAGE_SAMPLE_SHARED_IMAGE_FSIZE(context) image_sample_shared_cpu_image_fsize(context)
+#define ETX_IMAGE_SAMPLE_SHARED_SAMPLE_Y(context, rnd, pdf) image_sample_shared_cpu_sample_y(context, rnd, pdf)
+#define ETX_IMAGE_SAMPLE_SHARED_SAMPLE_X(context, y_index, rnd, pdf) image_sample_shared_cpu_sample_x(context, y_index, rnd, pdf)
+#define ETX_IMAGE_SAMPLE_SHARED_CDF_Y(context, y_index) image_sample_shared_cpu_cdf_y(context, y_index)
+#define ETX_IMAGE_SAMPLE_SHARED_CDF_X(context, y_index, x_index) image_sample_shared_cpu_cdf_x(context, y_index, x_index)
+#include <etx/render/interop/image_sample_shared.hxx>
+#undef ETX_IMAGE_SAMPLE_SHARED_CDF_X
+#undef ETX_IMAGE_SAMPLE_SHARED_CDF_Y
+#undef ETX_IMAGE_SAMPLE_SHARED_SAMPLE_X
+#undef ETX_IMAGE_SAMPLE_SHARED_SAMPLE_Y
+#undef ETX_IMAGE_SAMPLE_SHARED_IMAGE_FSIZE
+#undef ETX_IMAGE_SAMPLE_SHARED_X_COUNT
+#undef ETX_IMAGE_SAMPLE_SHARED_Y_COUNT
+#undef ETX_IMAGE_SAMPLE_SHARED_CONTEXT_TYPE
 
 }  // namespace etx

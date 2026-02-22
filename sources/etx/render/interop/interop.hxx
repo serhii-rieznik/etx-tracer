@@ -8,17 +8,23 @@
 # define ETX_INOUT(type, name) type& name
 # define ETX_ALIGNED           alignas(16)
 # define ETX_INIT(...)         = __VA_ARGS__
-# define ETX_STATIC_CONST      constexpr
+# define ETX_ZERO(type) \
+   {                    \
+   }
+# define ETX_ZERO_INIT(type, name) type name = ETX_ZERO(type)
+# define ETX_STATIC_CONST          constexpr
 
 #else
 
-# define ETX_SHARED_INLINE     inline
-# define ETX_IN(type, name)    in type name
-# define ETX_OUT(type, name)   out type name
-# define ETX_INOUT(type, name) inout type name
-# define ETX_ALIGNED           /* */
-# define ETX_INIT(...)         /* */
-# define ETX_STATIC_CONST      static const
+# define ETX_SHARED_INLINE         inline
+# define ETX_IN(type, name)        in type name
+# define ETX_OUT(type, name)       out type name
+# define ETX_INOUT(type, name)     inout type name
+# define ETX_ALIGNED               /* */
+# define ETX_INIT(...)             /* */
+# define ETX_ZERO(type)            (type)0
+# define ETX_ZERO_INIT(type, name) type name = ETX_ZERO(type)
+# define ETX_STATIC_CONST          static const
 
 #endif
 

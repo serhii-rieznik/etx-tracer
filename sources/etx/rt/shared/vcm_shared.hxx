@@ -508,8 +508,8 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
   }
 
   float len = length(camera_sample.position - origin);
-  float cos_t = fabsf(dot(camera_sample.direction, camera.direction));
-  float3 clip_pos = origin + camera_sample.direction * fmaxf(0.0f, len - camera.clip_near / cos_t);
+  float direction_scale = camera_clip_direction_scale(camera, camera_sample.direction);
+  float3 clip_pos = origin + camera_sample.direction * fmaxf(0.0f, len - camera.clip_near / direction_scale);
   auto tr = vcm_transmittance(rt, scene, state, origin, clip_pos);
   if (tr.is_zero()) {
     return {};
@@ -549,8 +549,14 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions&
   float sum_pdf_dir_out = 0.0f;
   float sum_pdf_dir = 0.0f;
 
-  for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-    const auto& emitter_instance = scene.emitter_instances[scene.environment_emitters.emitters[ie]];
+  uint32_t environment_emitter_count = environment_emitter_shared_count(scene);
+  for (uint32_t ie = 0; ie < environment_emitter_count; ++ie) {
+    uint32_t emitter_index = kInvalidIndex;
+    if (environment_emitter_shared_try_load_index(scene, ie, emitter_index) == false) {
+      continue;
+    }
+
+    const auto& emitter_instance = scene.emitter_instances[emitter_index];
 
     EmitterRadianceQuery q = {
       .direction = state.ray.d,
@@ -573,7 +579,7 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions&
   }
 
   if (accumulated_value.maximum() > kEpsilon) {
-    float inv_count = (scene.environment_emitters.count > 0u) ? (1.0f / float(scene.environment_emitters.count)) : 0.0f;
+    float inv_count = (environment_emitter_count > 0u) ? (1.0f / float(environment_emitter_count)) : 0.0f;
     sum_pdf_dir *= inv_count;
     sum_pdf_dir_out *= inv_count;
     float w_camera_sum = state.d_vcm * sum_pdf_dir + state.d_vc * sum_pdf_dir_out;

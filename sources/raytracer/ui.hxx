@@ -1,6 +1,6 @@
 #pragma once
 
-#include <etx/util/options.hxx>
+#include <etx/engine/options.hxx>
 #include <etx/render/shared/base.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 #include <etx/render/host/scene_representation.hxx>

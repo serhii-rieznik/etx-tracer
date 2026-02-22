@@ -3,6 +3,9 @@
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/interop/gpu_abi_constants.hxx>
+#include <etx/render/interop/material_scattering_shared.hxx>
+#include <etx/render/interop/surface_point_shared.hxx>
+#include <etx/render/interop/scene_math_shared.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/render/shared/image.hxx>
@@ -130,40 +133,47 @@ struct ETX_ALIGNED Scene {
   }
 };
 
+struct ImageSceneAccessCPUDesc {
+  float2 fsize = {};
+  uint2 size = {};
+  uint32_t options = 0u;
+  uint32_t pixel_data_offset = kInvalidIndex;
+  uint32_t pixel_data_stride = 0u;
+  uint32_t pixel_data_chunk_index = kInvalidIndex;
+  uint32_t x_distribution_entries_offset = kInvalidIndex;
+  uint32_t y_distribution_entries_offset = kInvalidIndex;
+  uint32_t x_entries_stride = 0u;
+  uint32_t x_distribution_count = 0u;
+  uint32_t y_entries_count = 0u;
+  uint32_t x_distribution_chunk_index = kInvalidIndex;
+  uint32_t y_distribution_chunk_index = kInvalidIndex;
+  uint32_t image_index = kInvalidIndex;
+};
+
+ETX_SHARED_INLINE bool try_load_scene_image_access(const Scene& scene, uint32_t image_index, ImageSceneAccessCPUDesc& image_access);
+
 ETX_SHARED_INLINE float collimation_to_exponent(float normalized) {
-  float t = saturate(normalized);
-  float denom = sqr(sqr(1.0f - t));
-  return 1.0f / fmaxf(kEpsilon, denom);
+  return scene_math_shared_collimation_to_exponent(normalized);
 }
 
 ETX_SHARED_INLINE float3 lerp_pos(const Scene& scene, const Triangle& t, const float3& bc) {
-  return scene.vertices.pos[t.i[0]] * bc.x +  //
-         scene.vertices.pos[t.i[1]] * bc.y +  //
-         scene.vertices.pos[t.i[2]] * bc.z;   //
+  return surface_point_shared_lerp_float3(scene.vertices.pos[t.i[0]], scene.vertices.pos[t.i[1]], scene.vertices.pos[t.i[2]], bc);
 }
 
 ETX_SHARED_INLINE float3 lerp_normal(const Scene& scene, const Triangle& t, const float3& bc) {
-  return normalize(scene.vertices.nrm[t.i[0]] * bc.x +  //
-                   scene.vertices.nrm[t.i[1]] * bc.y +  //
-                   scene.vertices.nrm[t.i[2]] * bc.z);  //
+  return normalize(surface_point_shared_lerp_float3(scene.vertices.nrm[t.i[0]], scene.vertices.nrm[t.i[1]], scene.vertices.nrm[t.i[2]], bc));
 }
 
 ETX_SHARED_INLINE float3 lerp_tangent(const Scene& scene, const Triangle& t, const float3& bc) {
-  return normalize(scene.vertices.tan[t.i[0]] * bc.x +  //
-                   scene.vertices.tan[t.i[1]] * bc.y +  //
-                   scene.vertices.tan[t.i[2]] * bc.z);  //
+  return normalize(surface_point_shared_lerp_float3(scene.vertices.tan[t.i[0]], scene.vertices.tan[t.i[1]], scene.vertices.tan[t.i[2]], bc));
 }
 
 ETX_SHARED_INLINE float3 lerp_bitangent(const Scene& scene, const Triangle& t, const float3& bc) {
-  return normalize(scene.vertices.btn[t.i[0]] * bc.x +  //
-                   scene.vertices.btn[t.i[1]] * bc.y +  //
-                   scene.vertices.btn[t.i[2]] * bc.z);  //
+  return normalize(surface_point_shared_lerp_float3(scene.vertices.btn[t.i[0]], scene.vertices.btn[t.i[1]], scene.vertices.btn[t.i[2]], bc));
 }
 
 ETX_SHARED_INLINE float2 lerp_uv(const Scene& scene, const Triangle& t, const float3& b) {
-  return scene.vertices.tex[t.i[0]] * b.x +  //
-         scene.vertices.tex[t.i[1]] * b.y +  //
-         scene.vertices.tex[t.i[2]] * b.z;   //
+  return surface_point_shared_lerp_float2(scene.vertices.tex[t.i[0]], scene.vertices.tex[t.i[1]], scene.vertices.tex[t.i[2]], b);
 }
 
 ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc, Vertex& vertex) {
@@ -171,16 +181,9 @@ ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const 
   const uint32_t i1 = t.i[1];
   const uint32_t i2 = t.i[2];
 
-  vertex.pos = scene.vertices.pos[i0] * bc.x + scene.vertices.pos[i1] * bc.y + scene.vertices.pos[i2] * bc.z;
-  vertex.nrm = normalize(scene.vertices.nrm[i0] * bc.x + scene.vertices.nrm[i1] * bc.y + scene.vertices.nrm[i2] * bc.z);
-  vertex.tex = scene.vertices.tex[i0] * bc.x + scene.vertices.tex[i1] * bc.y + scene.vertices.tex[i2] * bc.z;
-
-  const auto t0 = scene.vertices.tan[i0] * bc.x + scene.vertices.tan[i1] * bc.y + scene.vertices.tan[i2] * bc.z;
-  vertex.tan = normalize(t0 - dot(t0, vertex.nrm) * vertex.nrm);
-
-  const auto b0 = scene.vertices.btn[i0] * bc.x + scene.vertices.btn[i1] * bc.y + scene.vertices.btn[i2] * bc.z;
-  auto btn = cross(vertex.nrm, vertex.tan);
-  vertex.btn = normalize(btn * (dot(btn, b0) > 0.0f ? 1.0f : -1.0f));
+  surface_point_shared_interpolate_vertex(scene.vertices.pos[i0], scene.vertices.pos[i1], scene.vertices.pos[i2], scene.vertices.nrm[i0], scene.vertices.nrm[i1],
+    scene.vertices.nrm[i2], scene.vertices.tan[i0], scene.vertices.tan[i1], scene.vertices.tan[i2], scene.vertices.btn[i0], scene.vertices.btn[i1],
+    scene.vertices.btn[i2], scene.vertices.tex[i0], scene.vertices.tex[i1], scene.vertices.tex[i2], bc, true, true, vertex.pos, vertex.nrm, vertex.tan, vertex.btn, vertex.tex);
 }
 
 ETX_SHARED_INLINE Vertex lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc) {
@@ -190,11 +193,8 @@ ETX_SHARED_INLINE Vertex lerp_vertex(const Scene& scene, const Triangle& t, cons
 }
 
 ETX_SHARED_INLINE void orthogonalize(Vertex& v) {
-  auto b = v.btn;
   v.nrm = normalize(v.nrm);
-  v.tan = normalize(v.tan - dot(v.tan, v.nrm) * v.nrm);
-  v.btn = normalize(cross(v.nrm, v.tan));
-  v.btn = v.btn * (dot(b, v.btn) > 0.0f ? 1.0f : -1.0f);
+  surface_point_shared_orthogonalize_frame(v.nrm, v.tan, v.btn, v.tan, v.btn);
 }
 
 ETX_SHARED_INLINE float3 barycentrics(const Scene& scene, const Triangle& t, const float3& p) {
@@ -225,7 +225,7 @@ ETX_SHARED_INLINE bool valid_barycentrics(const float3& p) {
 }
 
 ETX_SHARED_INLINE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
-  return position - dot(position - origin, normal) * normal;
+  return scene_math_shared_shading_pos_project(position, origin, normal);
 }
 
 ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& t, const float3& bc, const float3& w_o) {
@@ -235,29 +235,13 @@ ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& t, cons
   const float3& n0 = scene.vertices.nrm[t.i[0]];
   const float3& n1 = scene.vertices.nrm[t.i[1]];
   const float3& n2 = scene.vertices.nrm[t.i[2]];
-  const float3 geo_pos = g0 * bc.x + g1 * bc.y + g2 * bc.z;
-  const float3 sh_normal = normalize(n0 * bc.x + n1 * bc.y + n2 * bc.z);
-  const float direction = (dot(sh_normal, w_o) >= 0.0f) ? +1.0f : -1.0f;
-  const float3 p0 = shading_pos_project(geo_pos, g0, direction * n0);
-  const float3 p1 = shading_pos_project(geo_pos, g1, direction * n1);
-  const float3 p2 = shading_pos_project(geo_pos, g2, direction * n2);
-  const float3 sh_pos = p0 * bc.x + p1 * bc.y + p2 * bc.z;
-  bool convex = dot(sh_pos - geo_pos, sh_normal) * direction > 0.0f;
-  return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
+  return scene_math_shared_shading_pos(g0, g1, g2, n0, n1, n2, t.geo_n, bc, w_o);
 }
 
 ETX_SHARED_INLINE float3 orient_normals_to_hemisphere(float3 n_s, const float3& n_g, const float3& v) {
-  constexpr uint32_t kMaxAttempts = 16u;
-  const float i_dot_g = dot(v, n_g);
-
-  float i_dot_s = dot(v, n_s);
-  for (uint32_t i = 0; ((i_dot_s * i_dot_g) <= kEpsilon) && (i < kMaxAttempts); ++i) {
-    n_s = normalize(8.0 * n_s + n_g);
-    ETX_ASSERT(is_valid_vector(n_s));
-    i_dot_s = dot(v, n_s);
-  }
-
-  return n_s;
+  const float3 result = scene_math_shared_orient_normals_to_hemisphere(n_s, n_g, v);
+  ETX_ASSERT(is_valid_vector(result));
+  return result;
 }
 
 ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
@@ -274,14 +258,17 @@ ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float
 
   const auto& mat = scene.materials[result_intersection.material_index];
   if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > kEpsilon)) {
-    auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
-    result_intersection.nrm = normalize(result_intersection.tan * sampled_normal.x + result_intersection.btn * sampled_normal.y + result_intersection.nrm * sampled_normal.z);
-    result_intersection.nrm = orient_normals_to_hemisphere(result_intersection.nrm, tri.geo_n, w_i);
-    ETX_ASSERT(is_valid_vector(result_intersection.nrm));
-    result_intersection.tan = orthonormalize(result_intersection.nrm, result_intersection.tan);
-    ETX_ASSERT(is_valid_vector(result_intersection.tan));
-    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan));
-    ETX_ASSERT(is_valid_vector(result_intersection.btn));
+    ImageSceneAccessCPUDesc image_access = {};
+    if (try_load_scene_image_access(scene, mat.normal_image_index, image_access)) {
+      auto sampled_normal = scene.images[image_access.image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
+      result_intersection.nrm = normalize(result_intersection.tan * sampled_normal.x + result_intersection.btn * sampled_normal.y + result_intersection.nrm * sampled_normal.z);
+      result_intersection.nrm = orient_normals_to_hemisphere(result_intersection.nrm, tri.geo_n, w_i);
+      ETX_ASSERT(is_valid_vector(result_intersection.nrm));
+      result_intersection.tan = orthonormalize(result_intersection.nrm, result_intersection.tan);
+      ETX_ASSERT(is_valid_vector(result_intersection.tan));
+      result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan));
+      ETX_ASSERT(is_valid_vector(result_intersection.btn));
+    }
   }
 
   return result_intersection;
@@ -309,29 +296,102 @@ ETX_SHARED_INLINE bool random_continue(uint32_t path_length, uint32_t start_path
 }
 
 ETX_SHARED_INLINE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {
-  response = spectral_response_apply_rgb_scale(spect, response, float3{value.x, value.y, value.z});
+  const ::SpectralResponse shared_response =
+    ::material_scattering_shared_apply_spectral(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(response), float3{value.x, value.y, value.z}, true);
+  SpectralQuery response_query{shared_response.wavelength, shared_response.flags};
+  response =
+    ::spectral_response_is_spectral(shared_response) ? SpectralResponse{response_query, shared_response.value} : SpectralResponse{response_query, shared_response.integrated};
   ETX_VALIDATE(response);
   return response;
 }
 
-ETX_SHARED_INLINE float4 sample_whole_image(const SampledImage& img, const float2& uv, const Scene& scene) {
-  if (img.image_index == kInvalidIndex) {
-    return img.value;
+struct ImageSceneAccessCPUContext {
+  const Scene& scene;
+};
+
+ETX_SHARED_INLINE bool image_scene_access_shared_cpu_has_images(ETX_IN(ImageSceneAccessCPUContext, context)) {
+  return context.scene.images.count > 0u;
+}
+
+ETX_SHARED_INLINE bool image_scene_access_shared_cpu_load_desc(
+  ETX_IN(ImageSceneAccessCPUContext, context), uint32_t image_index, ETX_OUT(ImageSceneAccessCPUDesc, image_access)) {
+  if (image_index >= context.scene.images.count) {
+    return false;
   }
 
-  float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
-  return img.value * eval;
+  const auto& image = context.scene.images[image_index];
+  image_access.fsize = image.fsize;
+  image_access.size = image.isize;
+  image_access.options = image.options;
+  image_access.pixel_data_offset = image.pixel_data_offset;
+  image_access.pixel_data_stride = image.pixel_data_stride;
+  image_access.pixel_data_chunk_index = image.pixel_data_chunk_index;
+  image_access.x_distribution_entries_offset = image.x_distribution_entries_offset;
+  image_access.y_distribution_entries_offset = image.y_distribution_entries_offset;
+  image_access.x_entries_stride = image.x_entries_stride;
+  image_access.x_distribution_count = image.x_distribution_count;
+  image_access.y_entries_count = image.y_entries_count;
+  image_access.x_distribution_chunk_index = image.x_distribution_chunk_index;
+  image_access.y_distribution_chunk_index = image.y_distribution_chunk_index;
+  image_access.image_index = image_index;
+  return true;
+}
+
+ETX_SHARED_INLINE uint32_t image_scene_access_shared_cpu_chunk_descriptor(ETX_IN(ImageSceneAccessCPUContext, context), uint32_t chunk_index) {
+  (void)context;
+  return chunk_index;
+}
+
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_CONTEXT_TYPE ImageSceneAccessCPUContext
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_DESC_TYPE ImageSceneAccessCPUDesc
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_HAS_IMAGES(context) image_scene_access_shared_cpu_has_images(context)
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_LOAD_DESC(context, image_index, image_access) image_scene_access_shared_cpu_load_desc(context, image_index, image_access)
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_CHUNK_DESCRIPTOR(context, chunk_index) image_scene_access_shared_cpu_chunk_descriptor(context, chunk_index)
+#include <etx/render/interop/image_scene_access_shared.hxx>
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_CHUNK_DESCRIPTOR
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_LOAD_DESC
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_HAS_IMAGES
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_DESC_TYPE
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_CONTEXT_TYPE
+
+ETX_SHARED_INLINE bool try_load_scene_image_access(const Scene& scene, uint32_t image_index, ImageSceneAccessCPUDesc& image_access) {
+  ImageSceneAccessCPUContext access_context = {scene};
+  return image_scene_access_shared_try_load_desc(access_context, image_index, image_access);
+}
+
+struct ImageEvaluateCPUSharedContext {
+  const Scene& scene;
+};
+
+ETX_SHARED_INLINE bool image_evaluate_shared_cpu_try_evaluate_image_rgba(
+  ETX_IN(ImageEvaluateCPUSharedContext, context), uint32_t image_index, ETX_IN(float2, uv), ETX_OUT(float, image_pdf), ETX_OUT(float4, image_value)) {
+  image_pdf = 0.0f;
+  image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
+
+  ImageSceneAccessCPUDesc image_access = {};
+  if (try_load_scene_image_access(context.scene, image_index, image_access) == false) {
+    return false;
+  }
+
+  image_value = context.scene.images[image_access.image_index].evaluate(uv, &image_pdf);
+  return true;
+}
+
+#define ETX_IMAGE_EVALUATE_SHARED_CONTEXT_TYPE ImageEvaluateCPUSharedContext
+#define ETX_IMAGE_EVALUATE_SHARED_TRY_EVALUATE_IMAGE_RGBA(context, image_index, uv, image_pdf, image_value) \
+  image_evaluate_shared_cpu_try_evaluate_image_rgba(context, image_index, uv, image_pdf, image_value)
+#include <etx/render/interop/image_evaluate_shared.hxx>
+#undef ETX_IMAGE_EVALUATE_SHARED_TRY_EVALUATE_IMAGE_RGBA
+#undef ETX_IMAGE_EVALUATE_SHARED_CONTEXT_TYPE
+
+ETX_SHARED_INLINE float4 sample_whole_image(const SampledImage& img, const float2& uv, const Scene& scene) {
+  ImageEvaluateCPUSharedContext context = {scene};
+  return image_evaluate_shared_sample_whole_or_default(context, img.image_index, uv, img.value);
 }
 
 ETX_SHARED_INLINE float evaluate_image(const SampledImage& img, const float2& uv, const Scene& scene, const float default_value) {
-  float result = default_value;
-  if ((img.image_index == kInvalidIndex) || (img.channel >= 4u)) {
-    return result;
-  }
-
-  float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
-  const float* data = reinterpret_cast<const float*>(&eval);
-  return data[img.channel];
+  ImageEvaluateCPUSharedContext context = {scene};
+  return image_evaluate_shared_sample_channel_or_default(context, img.image_index, img.channel, uv, default_value);
 }
 
 ETX_SHARED_INLINE float evaluate_metalness(const Material& material, const float2& uv, const Scene& scene) {
@@ -347,7 +407,7 @@ ETX_SHARED_INLINE float evaluate_transmission(const Material& material, const fl
 }
 
 ETX_SHARED_INLINE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, float* image_pdf) {
-  if (image_pdf) {
+  if (image_pdf != nullptr) {
     *image_pdf = 0.0f;
   }
 
@@ -357,9 +417,22 @@ ETX_SHARED_INLINE SpectralResponse apply_image(SpectralQuery spect, const Spectr
     return result;
   }
 
-  float4 eval = scene.images[img.image_index].evaluate(uv, image_pdf);
+  ImageEvaluateCPUSharedContext context = {scene};
+  float local_image_pdf = 0.0f;
+  float4 eval = float4(1.0f, 1.0f, 1.0f, 1.0f);
+  if (image_evaluate_shared_try_evaluate_rgba(context, img.image_index, uv, local_image_pdf, eval) == false) {
+    return result;
+  }
+
+  if (image_pdf != nullptr) {
+    *image_pdf = local_image_pdf;
+  }
+
   ETX_VALIDATE(eval);
-  return apply_rgb(spect, result, eval, scene);
+  const ::SpectralResponse shared_response =
+    ::material_scattering_shared_apply_spectral(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(result), float3{eval.x, eval.y, eval.z}, true);
+  SpectralQuery response_query{shared_response.wavelength, shared_response.flags};
+  return ::spectral_response_is_spectral(shared_response) ? SpectralResponse{response_query, shared_response.value} : SpectralResponse{response_query, shared_response.integrated};
 }
 
 ETX_SHARED_INLINE RefractiveIndexSample evaluate_refractive_index(const Scene& scene, const RefractiveIndex& ri, const SpectralQuery q) {

@@ -4,7 +4,7 @@
 #include <etx/rhi/rhi_types.hxx>
 
 #include "render_context.hxx"
-#include "camera_controller.hxx"
+#include <etx/engine/camera_controller.hxx>
 
 #include <memory>
 

@@ -127,12 +127,12 @@ static VkImageLayout rhi_state_to_vk_layout(RHIResourceState state, bool is_dept
       return VK_IMAGE_LAYOUT_GENERAL;
     case RHIResourceState::ColorAttachment:
       return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    case RHIResourceState::DepthStencilAttachment:
-      return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    case RHIResourceState::DepthAttachment:
+      return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     case RHIResourceState::Present:
       return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     default:
-      return is_depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      return is_depth ? VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
   }
 }
 
@@ -701,6 +701,12 @@ void VKContext::cmd_copy_texture_to_buffer(RHICommandBuffer cmd_handle, RHIBindl
     cmd->copy_texture_to_buffer(src, dst, width, height, mip_level);
 }
 
+void VKContext::cmd_generate_mipmaps(RHICommandBuffer cmd_handle, RHIBindlessHandle texture) {
+  VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
+  if (cmd)
+    cmd->generate_mipmaps(texture);
+}
+
 void VKContext::cmd_set_debug_name(RHICommandBuffer cmd_handle, const char* name) {
   VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
   if (cmd)
@@ -1066,7 +1072,7 @@ void VKCommandBuffer::texture_barrier(RHIBindlessHandle texture, RHIResourceStat
       break;
     case RHIResourceState::ShaderReadOnly:
       src_access = VK_ACCESS_SHADER_READ_BIT;
-      src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+      src_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       break;
     case RHIResourceState::TransferSrc:
       src_access = VK_ACCESS_TRANSFER_READ_BIT;
@@ -1097,7 +1103,7 @@ void VKCommandBuffer::texture_barrier(RHIBindlessHandle texture, RHIResourceStat
     case RHIResourceState::ShaderReadOnly:
       new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
       dst_access = VK_ACCESS_SHADER_READ_BIT;
-      dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+      dst_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       break;
     case RHIResourceState::ColorAttachment:
       new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -1130,12 +1136,8 @@ void VKCommandBuffer::texture_barrier(RHIBindlessHandle texture, RHIResourceStat
   barrier.subresourceRange.baseArrayLayer = 0;
   barrier.subresourceRange.layerCount = 1;
 
-  if (texture_data.desc.format == RHITextureFormat::D32_FLOAT || texture_data.desc.format == RHITextureFormat::D24_UNORM_S8_UINT ||
-      texture_data.desc.format == RHITextureFormat::D32_FLOAT_S8_UINT) {
+  if (texture_data.desc.format == RHITextureFormat::D32_FLOAT) {
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    if (texture_data.desc.format == RHITextureFormat::D24_UNORM_S8_UINT || texture_data.desc.format == RHITextureFormat::D32_FLOAT_S8_UINT) {
-      barrier.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
-    }
   }
 
   barrier.oldLayout = old_layout;
@@ -1240,12 +1242,12 @@ void VKCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHIBind
     clear_value.depthStencil = {1.0f, 0};
 
     depth_attachment_info.imageView = texture_data.image_view;
-    depth_attachment_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth_attachment_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     depth_attachment_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depth_attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depth_attachment_info.clearValue = clear_value;
 
-    ensure_texture_layout(depth_attachment, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    ensure_texture_layout(depth_attachment, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
   }
 
   VkRenderingInfo rendering_info = {VK_STRUCTURE_TYPE_RENDERING_INFO};
@@ -1374,10 +1376,18 @@ void VKCommandBuffer::set_scissor(const RHIRect& scissor) {
 }
 void VKCommandBuffer::set_scissor_from_viewport(const RHIViewport& viewport) {
   RHIRect scissor = {};
-  scissor.x = static_cast<int32_t>(viewport.x);
-  scissor.y = static_cast<int32_t>(viewport.y);
-  scissor.width = static_cast<uint32_t>(viewport.width);
-  scissor.height = static_cast<uint32_t>(viewport.height);
+  if (viewport.height < 0.0f) {
+    // Negative height = Y-flipped viewport; scissor origin is at (y + height), extent uses abs(height).
+    scissor.x = static_cast<int32_t>(viewport.x);
+    scissor.y = static_cast<int32_t>(viewport.y + viewport.height);
+    scissor.width = static_cast<uint32_t>(viewport.width);
+    scissor.height = static_cast<uint32_t>(-viewport.height);
+  } else {
+    scissor.x = static_cast<int32_t>(viewport.x);
+    scissor.y = static_cast<int32_t>(viewport.y);
+    scissor.width = static_cast<uint32_t>(viewport.width);
+    scissor.height = static_cast<uint32_t>(viewport.height);
+  }
   set_scissor(scissor);
 }
 
@@ -1411,6 +1421,10 @@ void VKCommandBuffer::set_pipeline(RHIPipeline pipeline) {
     current_pipeline_layout = device->get_bindless_pipeline_layout();
     current_bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
     vkCmdBindPipeline(command_buffer, current_bind_point, compute_pipeline_data->pipeline);
+    VkDescriptorSet bindless_set = context->get_bindless_manager()->get_descriptor_set();
+    if (bindless_set != VK_NULL_HANDLE) {
+      vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, current_pipeline_layout, 0, 1, &bindless_set, 0, nullptr);
+    }
     return;
   }
 
@@ -1623,6 +1637,93 @@ void VKCommandBuffer::copy_texture_to_buffer(RHIBindlessHandle src, RHIBindlessH
   copy_region.imageExtent = {width, height, 1};
 
   vkCmdCopyImageToBuffer(command_buffer, vk_src_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_dst_buffer, 1, &copy_region);
+}
+
+void VKCommandBuffer::generate_mipmaps(RHIBindlessHandle texture) {
+  if (command_buffer == VK_NULL_HANDLE) {
+    log::error("Cannot generate mipmaps: command buffer not initialized");
+    return;
+  }
+
+  VkImage vk_image = device->get_vk_image_from_bindless(texture);
+  if (vk_image == VK_NULL_HANDLE) {
+    log::error("Cannot generate mipmaps: invalid texture handle");
+    return;
+  }
+
+  const VKTextureData* tex = device->get_texture_data(texture);
+  if (tex == nullptr) {
+    log::error("Cannot generate mipmaps: texture data not found");
+    return;
+  }
+
+  uint32_t mip_width = tex->desc.width;
+  uint32_t mip_height = tex->desc.height;
+  uint32_t mip_count = 1;
+  while ((mip_width > 1) || (mip_height > 1)) {
+    mip_width = (mip_width > 1) ? (mip_width / 2) : 1;
+    mip_height = (mip_height > 1) ? (mip_height / 2) : 1;
+    mip_count++;
+  }
+
+  if (mip_count <= 1) {
+    return;
+  }
+
+  // Transition mip 0 to TRANSFER_SRC
+  ensure_texture_layout(texture, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+  mip_width = tex->desc.width;
+  mip_height = tex->desc.height;
+
+  for (uint32_t i = 1; i < mip_count; ++i) {
+    uint32_t dst_w = (mip_width > 1) ? (mip_width / 2) : 1;
+    uint32_t dst_h = (mip_height > 1) ? (mip_height / 2) : 1;
+
+    // Transition destination mip to TRANSFER_DST
+    VkImageMemoryBarrier dst_barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    dst_barrier.image = vk_image;
+    dst_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    dst_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    dst_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i, 1, 0, 1};
+    dst_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    dst_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    dst_barrier.srcAccessMask = 0;
+    dst_barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &dst_barrier);
+
+    VkImageBlit blit = {};
+    blit.srcOffsets[0] = {0, 0, 0};
+    blit.srcOffsets[1] = {static_cast<int32_t>(mip_width), static_cast<int32_t>(mip_height), 1};
+    blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
+    blit.dstOffsets[0] = {0, 0, 0};
+    blit.dstOffsets[1] = {static_cast<int32_t>(dst_w), static_cast<int32_t>(dst_h), 1};
+    blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
+    vkCmdBlitImage(command_buffer, vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+
+    // Transition destination mip to TRANSFER_SRC for the next iteration
+    dst_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    dst_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    dst_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    dst_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &dst_barrier);
+
+    mip_width = dst_w;
+    mip_height = dst_h;
+  }
+
+  // Transition all mip levels to SHADER_READ_ONLY
+  VkImageMemoryBarrier final_barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  final_barrier.image = vk_image;
+  final_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  final_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  final_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mip_count, 0, 1};
+  final_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  final_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  final_barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  final_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+    &final_barrier);
 }
 
 void VKCommandBuffer::set_debug_name(const char* name) {

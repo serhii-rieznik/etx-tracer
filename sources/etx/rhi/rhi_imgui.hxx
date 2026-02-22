@@ -12,6 +12,11 @@ namespace etx {
 
 struct RHIContext;
 
+enum class RHIImGuiTheme {
+  Dark,
+  Light,
+};
+
 struct RHIImGuiDesc {
   uint32_t max_vertices = 65536;
   RHITextureFormat color_format = RHITextureFormat::B8G8R8A8_SRGB;
@@ -20,6 +25,7 @@ struct RHIImGuiDesc {
   std::string ini_filename = {};
   bool no_default_font = false;
   bool write_alpha_channel = false;
+  RHIImGuiTheme theme = RHIImGuiTheme::Dark;
 };
 
 struct RHIImGuiFrameDesc {
@@ -48,29 +54,24 @@ struct RHIImGui {
     return _pipeline;
   }
 
+  void set_theme(RHIImGuiTheme theme);
+
  private:
   float _cur_dpi_scale = 1.0f;
 
   static ImGuiKey map_keycode(uint32_t key_code);
   static void update_modifiers(uint32_t modifiers);
 
-  struct VertexBuffer {
-    std::vector<uint8_t> data;
+  struct BufferData {
+    uint64_t capacity = 0;
     RHIBindlessHandle buffer = {};
-    bool dirty = false;
-  };
-
-  struct IndexBuffer {
-    std::vector<uint8_t> data;
-    RHIBindlessHandle buffer = {};
-    bool dirty = false;
   };
 
   RHIContext* _context = nullptr;
   RHIImGuiDesc _desc = {};
 
-  VertexBuffer _vertices[kRHIMaxFrames] = {};
-  IndexBuffer _indices[kRHIMaxFrames] = {};
+  BufferData _vertices[kRHIMaxFrames] = {};
+  BufferData _indices[kRHIMaxFrames] = {};
   RHIBindlessHandle _font_texture = {};
   RHIPipeline _pipeline = {};
 

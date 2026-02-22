@@ -6,7 +6,7 @@
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/shared/scattering.hxx>
 #include <etx/rt/integrators/integrator.hxx>
-#include <etx/util/options.hxx>
+#include <etx/engine/options.hxx>
 namespace etx {
 
 struct IORDatabase;

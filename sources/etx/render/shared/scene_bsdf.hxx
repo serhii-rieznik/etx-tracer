@@ -1,5 +1,4 @@
 #pragma once
-
 namespace etx {
 
 #define ETX_DECLARE_BSDF(Class)                                                                                       \
@@ -125,22 +124,65 @@ ETX_SHARED_INLINE ThinFilmEval evaluate_thinfilm(SpectralQuery spect, const Thin
   return {evaluate_refractive_index(scene, film.ior, spect), wavelengths, thickness};
 }
 
-ETX_SHARED_INLINE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
-  if (mat.cls == MaterialClass::Void) {
-    return true;
+struct AlphaTestSharedCPUContext {
+  const Material& material;
+  const Triangle& triangle;
+  const Scene& scene;
+  Sampler& sampler;
+  float3 barycentric;
+};
+
+ETX_SHARED_INLINE uint32_t alpha_test_shared_cpu_material_class(ETX_IN(AlphaTestSharedCPUContext, context)) {
+  return context.material.cls;
+}
+
+ETX_SHARED_INLINE float alpha_test_shared_cpu_material_opacity(ETX_IN(AlphaTestSharedCPUContext, context)) {
+  return context.material.opacity;
+}
+
+ETX_SHARED_INLINE uint32_t alpha_test_shared_cpu_scattering_image_index(ETX_IN(AlphaTestSharedCPUContext, context)) {
+  return context.material.scattering.image_index;
+}
+
+ETX_SHARED_INLINE bool alpha_test_shared_cpu_image_has_alpha(ETX_IN(AlphaTestSharedCPUContext, context), uint32_t image_index) {
+  ImageSceneAccessCPUContext access_context = {context.scene};
+  return image_scene_access_shared_has_alpha(access_context, image_index);
+}
+
+ETX_SHARED_INLINE float alpha_test_shared_cpu_evaluate_alpha(ETX_IN(AlphaTestSharedCPUContext, context), uint32_t image_index) {
+  ImageSceneAccessCPUContext access_context = {context.scene};
+  ImageSceneAccessCPUDesc image_access = {};
+  if (image_scene_access_shared_try_load_desc(access_context, image_index, image_access) == false) {
+    return 1.0f;
   }
 
-  float material_alpha = mat.opacity;
-  float alpha_diffuse = 1.0f;
-  if (mat.scattering.image_index != kInvalidIndex) {
-    auto uv = lerp_uv(scene, t, bc);
-    const auto& img = scene.images[mat.scattering.image_index];
-    if (img.options & Image::HasAlphaChannel) {
-      alpha_diffuse = img.evaluate_alpha(uv);
-    }
-  }
-  float alpha_test_value = alpha_diffuse * material_alpha;
-  return (alpha_test_value <= smp.next());
+  float2 uv = lerp_uv(context.scene, context.triangle, context.barycentric);
+  return context.scene.images[image_access.image_index].evaluate_alpha(uv);
+}
+
+ETX_SHARED_INLINE float alpha_test_shared_cpu_rnd(ETX_INOUT(AlphaTestSharedCPUContext, context)) {
+  return context.sampler.next();
+}
+
+#define ETX_ALPHA_TEST_SHARED_CONTEXT_TYPE AlphaTestSharedCPUContext
+#define ETX_ALPHA_TEST_SHARED_MATERIAL_CLASS(context) alpha_test_shared_cpu_material_class(context)
+#define ETX_ALPHA_TEST_SHARED_MATERIAL_OPACITY(context) alpha_test_shared_cpu_material_opacity(context)
+#define ETX_ALPHA_TEST_SHARED_SCATTERING_IMAGE_INDEX(context) alpha_test_shared_cpu_scattering_image_index(context)
+#define ETX_ALPHA_TEST_SHARED_IMAGE_HAS_ALPHA(context, image_index) alpha_test_shared_cpu_image_has_alpha(context, image_index)
+#define ETX_ALPHA_TEST_SHARED_EVALUATE_ALPHA(context, image_index) alpha_test_shared_cpu_evaluate_alpha(context, image_index)
+#define ETX_ALPHA_TEST_SHARED_RND(context) alpha_test_shared_cpu_rnd(context)
+#include <etx/render/interop/alpha_test_shared.hxx>
+#undef ETX_ALPHA_TEST_SHARED_RND
+#undef ETX_ALPHA_TEST_SHARED_EVALUATE_ALPHA
+#undef ETX_ALPHA_TEST_SHARED_IMAGE_HAS_ALPHA
+#undef ETX_ALPHA_TEST_SHARED_SCATTERING_IMAGE_INDEX
+#undef ETX_ALPHA_TEST_SHARED_MATERIAL_OPACITY
+#undef ETX_ALPHA_TEST_SHARED_MATERIAL_CLASS
+#undef ETX_ALPHA_TEST_SHARED_CONTEXT_TYPE
+
+ETX_SHARED_INLINE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
+  AlphaTestSharedCPUContext context = {mat, t, scene, smp, bc};
+  return alpha_test_shared_pass(context);
 }
 
 }  // namespace etx

@@ -327,49 +327,65 @@ ETX_SHARED_INLINE void print_value<::SpectralResponse>(const char* name, const :
 
 struct Spectrums;
 
+ETX_SHARED_INLINE float3 spectrum_access_shared_cpu_integrated(ETX_IN(::SpectralDistribution, distribution), uint32_t spectrum_index) {
+  (void)spectrum_index;
+  return distribution.integrated_value;
+}
+
+ETX_SHARED_INLINE uint32_t spectrum_access_shared_cpu_entry_count(ETX_IN(::SpectralDistribution, distribution), uint32_t spectrum_index) {
+  (void)spectrum_index;
+  return distribution.spectral_entry_count;
+}
+
+ETX_SHARED_INLINE float spectrum_access_shared_cpu_entry_wavelength(ETX_IN(::SpectralDistribution, distribution), uint32_t spectrum_index, uint32_t entry_index) {
+  (void)spectrum_index;
+  return distribution.spectral_entries[entry_index].wavelength;
+}
+
+ETX_SHARED_INLINE float spectrum_access_shared_cpu_entry_power(ETX_IN(::SpectralDistribution, distribution), uint32_t spectrum_index, uint32_t entry_index) {
+  (void)spectrum_index;
+  return distribution.spectral_entries[entry_index].power;
+}
+
+#define ETX_SPECTRUM_ACCESS_SHARED_CONTEXT_TYPE ::SpectralDistribution
+#define ETX_SPECTRUM_ACCESS_SHARED_INTEGRATED(context, spectrum_index) spectrum_access_shared_cpu_integrated(context, spectrum_index)
+#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_COUNT(context, spectrum_index) spectrum_access_shared_cpu_entry_count(context, spectrum_index)
+#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_WAVELENGTH(context, spectrum_index, entry_index) spectrum_access_shared_cpu_entry_wavelength(context, spectrum_index, entry_index)
+#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_POWER(context, spectrum_index, entry_index) spectrum_access_shared_cpu_entry_power(context, spectrum_index, entry_index)
+#define ETX_SPECTRUM_ACCESS_SHARED_QUERY_TYPE ::SpectralQuery
+#define ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_TYPE ::SpectralResponse
+#define ETX_SPECTRUM_ACCESS_SHARED_QUERY_IS_SPECTRAL(query) ::spectral_query_is_spectral(query)
+#define ETX_SPECTRUM_ACCESS_SHARED_QUERY_WAVELENGTH(query) query.wavelength
+#define ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_MAKE_SCALAR(query, value) ::spectral_response_make(query, value)
+#define ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_MAKE_INTEGRATED(query, value) ::spectral_response_make(query, value)
+#include <etx/render/interop/spectrum_access_shared.hxx>
+#undef ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_MAKE_INTEGRATED
+#undef ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_MAKE_SCALAR
+#undef ETX_SPECTRUM_ACCESS_SHARED_QUERY_WAVELENGTH
+#undef ETX_SPECTRUM_ACCESS_SHARED_QUERY_IS_SPECTRAL
+#undef ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_TYPE
+#undef ETX_SPECTRUM_ACCESS_SHARED_QUERY_TYPE
+#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_POWER
+#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_WAVELENGTH
+#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_COUNT
+#undef ETX_SPECTRUM_ACCESS_SHARED_INTEGRATED
+#undef ETX_SPECTRUM_ACCESS_SHARED_CONTEXT_TYPE
+
 struct SpectralDistribution : public ::SpectralDistribution {
   constexpr static const float3 kRGBLuminanceScale = {0.817660332f, 1.05418909f, 1.09945524f};
 
  public:  // device
   ETX_SHARED_INLINE SpectralResponse query(const SpectralQuery q) const {
-    if (q.spectral() == false) {
-      return SpectralResponse{q, integrated_value};
+    if (q.spectral()) {
+      ETX_ASSERT(q.valid());
     }
 
-    ETX_ASSERT(q.valid());
-
-    auto lower_bound = [this](float wavelength) {
-      uint32_t b = 0;
-      uint32_t e = spectral_entry_count;
-      do {
-        uint32_t m = b + (e - b) / 2;
-        if (spectral_entries[m].wavelength > wavelength) {
-          e = m;
-        } else {
-          b = m;
-        }
-      } while ((e - b) > 1);
-      return b;
-    };
-
-    uint32_t i = lower_bound(q.wavelength);
-    if (i >= spectral_entry_count) {
-      return {q, 0.0f};
-    }
-
-    if ((i == 0) && (q.wavelength < spectral_entries[i].wavelength)) {
-      return {q, 0.0f};
-    }
-
-    if ((i + 1 == spectral_entry_count) && (q.wavelength > spectral_entries[i].wavelength)) {
-      return {q, 0.0f};
-    }
-
-    uint32_t j = min(i + 1u, spectral_entry_count - 1);
-    float t = (i == j) ? 0.0f : (q.wavelength - spectral_entries[i].wavelength) / (spectral_entries[j].wavelength - spectral_entries[i].wavelength);
-    float p = lerp(spectral_entries[i].power, spectral_entries[j].power, t);
-    ETX_VALIDATE(p);
-    return SpectralResponse{q, p};
+    const ::SpectralResponse shared_response = spectrum_access_shared_query(static_cast<const ::SpectralDistribution&>(*this), 0u, static_cast<const ::SpectralQuery&>(q));
+    SpectralQuery response_query{shared_response.wavelength, shared_response.flags};
+    SpectralResponse result =
+      ::spectral_response_is_spectral(shared_response) ? SpectralResponse{response_query, shared_response.value} : SpectralResponse{response_query, shared_response.integrated};
+    ETX_VALIDATE(result);
+    return result;
   }
 
   ETX_SHARED_INLINE SpectralResponse operator()(const SpectralQuery q) const {

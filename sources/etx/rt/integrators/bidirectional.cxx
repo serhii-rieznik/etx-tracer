@@ -131,61 +131,6 @@ struct PathVertex {
     return pdf_area;
   }
 
-  static float emitter_sample_pdf(const Emitter& em_inst, const float3& in_direction, const Scene& scene) {
-    const auto& em = scene.emitter_profiles[em_inst.profile];
-
-    float pdf_discrete = emitter_discrete_pdf(em_inst, scene.emitters_distribution);
-
-    switch (em_inst.cls) {
-      case EmitterProfile::Class::Area: {
-        return pdf_discrete * emitter_pdf_area_local(em_inst, scene);
-      }
-
-      case EmitterProfile::Class::Directional: {
-        float cosine_threshold = em.directional.angular_size > 0.0f ? em.directional.angular_size_cosine : 1.0f;
-        return direction_matches(in_direction, em.directional.direction, cosine_threshold) ? pdf_discrete : 0.0f;
-      }
-
-      case EmitterProfile::Class::Environment: {
-        const auto& img = scene.images[em.emission.image_index];
-        bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
-        ProjectionType projection = is_atmosphere && ETX_USE_EQUAL_AREA_PROJECTION ? ProjectionType::EqualArea : ProjectionType::Equirectangular;
-        float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x, static_cast<uint32_t>(projection));
-
-        float sin_t = fmaxf(kEpsilon, sinf(uv.y * kPi));
-        if (projection == ProjectionType::EqualArea) {
-          float sin_theta = fmaxf(kEpsilon, fabsf(2.0f * uv.y - 1.0f));
-          sin_t = sin_theta;
-        }
-
-        float image_pdf = 0.0f;
-        img.evaluate(uv, &image_pdf);
-        return pdf_discrete * image_pdf / (2.0f * kPi * kPi * sin_t);
-      }
-
-      default:
-        ETX_FAIL("Unknown emitter class");
-        return 0.0f;
-    }
-  }
-
-  static float2 pdf_for_environment_emitter(SpectralQuery spect, const float3& w_i, const PathVertex& target_vertex, const Scene& scene) {
-    if (scene.environment_emitters.count == 0)
-      return {};
-
-    float pdf_dir = 0.0f;
-    for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-      const auto& emitter_instance = scene.emitter_instances[scene.environment_emitters.emitters[ie]];
-      pdf_dir += emitter_sample_pdf(emitter_instance, w_i, scene);
-    }
-
-    float w_o_dot_n = target_vertex.is_surface_interaction() ? fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_i)) : 1.0f;
-    float pdf_area = w_o_dot_n / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
-    pdf_dir = pdf_dir / float(scene.environment_emitters.count);
-
-    return {pdf_area, pdf_dir};
-  }
-
   static float convert_solid_angle_pdf_to_area(float pdf_dir, const PathVertex& from_vertex, const PathVertex& to_vertex) {
     if ((pdf_dir == 0.0f) || to_vertex.is_environment_emitter()) {
       return pdf_dir;
@@ -384,7 +329,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     const auto& emitter_instance = scene.emitter_instances[em.emitter_index];
-    prev.pdf.from_prev = PathVertex::emitter_sample_pdf(emitter_instance, -em.direction, scene);
+    prev.pdf.from_prev = emitter_sample_pdf(emitter_instance, -em.direction, scene);
     ETX_VALIDATE(prev.pdf.from_prev);
 
     curr.pdf.from_prev = em.pdf_area;
@@ -1051,7 +996,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     const auto& emitter_instance = scene.emitter_instances[sampled_light_vertex.intersection.emitter_index];
-    float p_sample = PathVertex::emitter_sample_pdf(emitter_instance, emitter_sample.direction, scene);
+    float p_sample = emitter_sample_pdf(emitter_instance, emitter_sample.direction, scene);
     ETX_VALIDATE(p_sample);
     float from_emitter = PathVertex::pdf_from_emitter(spect, sampled_light_vertex, z_curr, scene);
     ETX_VALIDATE(from_emitter);
@@ -1229,7 +1174,7 @@ struct CPUBidirectionalImpl : public Task {
         mis_weight = z_prev.connectible ? power_heuristic(z_prev.pdf.bsdf_sample_next, p_connect) : 1.0f;
         ETX_VALIDATE(mis_weight);
       } else {
-        float p_sample = PathVertex::emitter_sample_pdf(emitter_instance, -z_curr.intersection.w_i, scene);
+        float p_sample = emitter_sample_pdf(emitter_instance, -z_curr.intersection.w_i, scene);
         ETX_VALIDATE(p_sample);
         float p_from = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
         ETX_VALIDATE(p_from);
@@ -1286,7 +1231,7 @@ struct CPUBidirectionalImpl : public Task {
 
     float mis_weight = 1.0f;
     if (enable_mis && (path_data.camera_path_length() > 1u) && (mode != Mode::PathTracing)) {
-      auto [p_from, p_sample] = PathVertex::pdf_for_environment_emitter(spect, z_curr.intersection.w_i, z_prev, scene);
+      auto [p_from, p_sample] = emitter_environment_pdf(z_curr.intersection.w_i, z_prev.is_surface_interaction(), z_prev.intersection.triangle_index, scene);
       mis_weight = mis_weight_direct_hit(z_curr, z_prev, path_data, p_sample, p_from);
     }
 
@@ -1355,9 +1300,9 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     float len = length(camera_sample.position - y_curr.intersection.pos);
-    float cos_t = fabsf(dot(camera_sample.direction, camera.direction));
-    float near_extent = (camera.clip_near > 0.0f) ? camera.clip_near / cos_t : 0.0f;
-    float far_extent = (camera.clip_far > 0.0f) ? camera.clip_far / cos_t : kMaxFloat;
+    float direction_scale = camera_clip_direction_scale(camera, camera_sample.direction);
+    float near_extent = (camera.clip_near > 0.0f) ? camera.clip_near / direction_scale : 0.0f;
+    float far_extent = (camera.clip_far > 0.0f) ? camera.clip_far / direction_scale : kMaxFloat;
     if ((len < near_extent) || (len > far_extent)) {
       return {spect, 0.0f};
     }

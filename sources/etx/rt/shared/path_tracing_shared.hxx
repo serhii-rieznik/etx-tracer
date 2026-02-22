@@ -492,8 +492,14 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
 }  // namespace etx
 
 ETX_SHARED_INLINE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
-  for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
-    const auto& emitter_instance = scene.emitter_instances[scene.environment_emitters.emitters[ie]];
+  uint32_t environment_emitter_count = environment_emitter_shared_count(scene);
+  for (uint32_t ie = 0; ie < environment_emitter_count; ++ie) {
+    uint32_t emitter_index = kInvalidIndex;
+    if (environment_emitter_shared_try_load_index(scene, ie, emitter_index) == false) {
+      continue;
+    }
+
+    const auto& emitter_instance = scene.emitter_instances[emitter_index];
     float pdf_emitter_area = 0.0f;
     float pdf_emitter_dir = 0.0f;
     float pdf_emitter_dir_out = 0.0f;

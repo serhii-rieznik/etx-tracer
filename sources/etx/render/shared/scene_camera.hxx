@@ -1,138 +1,75 @@
 #pragma once
+#include <etx/render/shared/scene_camera_policy.hxx>
+#include <etx/render/interop/camera_shared.hxx>
+#include <etx/render/interop/camera_film_shared.hxx>
+
+#define ETX_CAMERA_PRIMARY_RAY_SHARED_CONTEXT_TYPE CameraLensSampleSharedCPUContext
+#include <etx/render/interop/camera_primary_ray_shared.hxx>
+#undef ETX_CAMERA_PRIMARY_RAY_SHARED_CONTEXT_TYPE
 
 namespace etx {
 
 ETX_SHARED_INLINE float2 get_center_uv(const uint2& pixel, const uint2& dim) {
-  return {
-    (float(pixel.x) + 0.5f) / float(dim.x) * 2.0f - 1.0f,
-    (float(pixel.y) + 0.5f) / float(dim.y) * 2.0f - 1.0f,
-  };
+  return camera_shared_center_uv(pixel, dim);
 }
 
 ETX_SHARED_INLINE float2 get_jittered_uv(Sampler& smp, const uint2& pixel, const uint2& dim) {
-  float sample_radius = 0.5f;
-  return {
-    (float(pixel.x) + 0.5f + sample_radius * (smp.next() * 2.0f - 1.0f)) / float(dim.x) * 2.0f - 1.0f,
-    (float(pixel.y) + 0.5f + sample_radius * (smp.next() * 2.0f - 1.0f)) / float(dim.y) * 2.0f - 1.0f,
-  };
+  float2 jitter = {smp.next(), smp.next()};
+  return camera_shared_jittered_uv(pixel, dim, jitter);
 }
 
 ETX_SHARED_INLINE float film_pdf_out(const Camera& camera, const float3& to_point) {
-  auto w_i = normalize(to_point - camera.position);
-  float cos_t = dot(w_i, camera.direction);
-  return 1.0f / fabsf(camera.area * cos_t * cos_t * cos_t);
+  return camera_shared_film_pdf_out(camera, to_point);
+}
+
+ETX_SHARED_INLINE float camera_clip_direction_scale(const Camera& camera, const float3& direction_to_camera) {
+  return camera_shared_clip_direction_scale(camera, direction_to_camera);
 }
 
 ETX_SHARED_INLINE Ray generate_ray(const Scene& scene, const Camera& camera, const float2& uv, const float2& sensor_sample_rnd) {
   ETX_CHECK_FINITE(uv);
 
-  float2 sensor_sample = {};
-  if ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
-    if (camera.lens_image == kInvalidIndex) {
-      sensor_sample = ::sample_disk(sensor_sample_rnd);
-    } else {
-      sensor_sample = scene.images[camera.lens_image].sample(sensor_sample_rnd) * 2.0f - 1.0f;
-    }
-  }
-
-  Ray ray = ::camera_generate_ray(camera, uv, sensor_sample);
+  CameraLensSampleSharedCPUContext lens_context = {scene};
+  Ray ray = camera_primary_ray_shared_generate(lens_context, camera, uv, sensor_sample_rnd);
   ETX_CHECK_FINITE(ray.o);
   ETX_CHECK_FINITE(ray.d);
   return ray;
 }
 
 ETX_SHARED_INLINE CameraSample evaluate_film(const Scene& scene, const Camera& camera, const float3& world_point, const float3& lens_point) {
-  if (camera.cls == Camera::Class::Equirectangular) {
-    // TODO : implelemt for Equirectangular camera
-    return {};
-  }
-
-  CameraSample result;
-  result.position = lens_point;
-  result.direction = result.position - world_point;
-  result.normal = camera.direction;
-
-  float cos_t = -dot(result.direction, result.normal);
-  if (cos_t < 0.0f) {
-    return {};
-  }
-
-  float distance_squared = dot(result.direction, result.direction);
-  float distance = sqrtf(distance_squared);
-  result.direction /= distance;
-  cos_t /= distance;
-
-  float focal_plane_distance = ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) ? camera.focal_distance : 1.0f;
-  float3 focus_point = result.position - result.direction * (focal_plane_distance / cos_t);
-
-  auto projected = camera.view_proj * float4{focus_point.x, focus_point.y, focus_point.z, 1.0f};
-  result.uv = {projected.x / projected.w, projected.y / projected.w};
-  if ((projected.w <= 0.0f) || (result.uv.x < -1.0f) || (result.uv.y < -1.0f) || (result.uv.x > 1.0f) || (result.uv.y > 1.0f)) {
-    return {};
-  }
-
-  float lens_area = (camera.lens_radius > kEpsilon) ? kPi * sqr(camera.lens_radius) : 1.0f;
-
-  result.pdf_area = 1.0f / lens_area;
-  result.pdf_dir = result.pdf_area * distance_squared / cos_t;
-  result.pdf_dir_out = 1.0f / (camera.area * lens_area * cos_t * cos_t * cos_t);
-
-  float importance = result.pdf_dir_out / cos_t;
-  result.weight = importance / result.pdf_dir;
-
+  (void)scene;
+  CameraFilmSampleShared shared = camera_film_shared_evaluate(camera, world_point, lens_point);
+  CameraSample result = {};
+  camera_film_shared_unpack_sample(
+    shared, result.position, result.normal, result.direction, result.uv, result.weight, result.pdf_dir, result.pdf_area, result.pdf_dir_out);
   return result;
 }
 
 ETX_SHARED_INLINE CameraSample sample_film(Sampler& smp, const Scene& scene, const Camera& camera, const float3& from_point) {
   if (camera.cls == Camera::Class::Equirectangular) {
-    // TODO : implelemt for Equirectangular camera
-    return {};
+    (void)smp;
+    return evaluate_film(scene, camera, from_point, camera.position);
   }
 
-  float2 sensor_sample = {};
-  if ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
-    if (camera.lens_image == kInvalidIndex) {
-      sensor_sample = ::sample_disk(smp.next_2d());
-    } else {
-      float pdf = {};
-      uint2 location = {};
-      float4 value = {};
-      sensor_sample = scene.images[camera.lens_image].sample(smp.next_2d(), pdf, location, value);
-      sensor_sample = sensor_sample * 2.0f - 1.0f;
-    }
-    sensor_sample *= camera.lens_radius;
+  float3 lens_point = camera.position;
+  if (camera_lens_sample_shared_enabled(camera.lens_radius, camera.focal_distance)) {
+    float2 sensor_sample_rnd = smp.next_2d();
+    CameraLensSampleSharedCPUContext lens_context = {scene};
+    lens_point = camera_primary_ray_shared_lens_point(lens_context, camera, sensor_sample_rnd);
   }
-
-  float3 lens_point = camera.position + sensor_sample.x * camera.side + sensor_sample.y * camera.up;
   return evaluate_film(scene, camera, from_point, lens_point);
 }
 
 ETX_SHARED_INLINE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& camera, const Ray& out_ray) {
-  float cos_t = dot(out_ray.d, camera.direction);
+  (void)spect;
+  CameraFilmEvalShared shared = camera_film_shared_evaluate_out(camera, out_ray);
   CameraEval result = {};
-  result.normal = camera.direction;
-  result.pdf_dir = (camera.cls == Camera::Class::Equirectangular) ? 1.0f : 1.0f / (camera.area * cos_t * cos_t * cos_t);
+  camera_film_shared_unpack_eval(shared, result.normal, result.pdf_dir);
   return result;
 }
 
 ETX_SHARED_INLINE float3 clamp_view_direction_away_from_up(const float3& view_direction, const float3& up_vector, float min_cosine_threshold) {
-  constexpr float kAngleOffsetDegrees = 0.01f;
-  constexpr float kAngleOffsetRadians = kAngleOffsetDegrees * kPi / 180.0f;
-
-  float3 view_dir = normalize(view_direction);
-  const float up_dot = fabsf(dot(view_dir, up_vector));
-
-  if (up_dot > min_cosine_threshold) {
-    float3 right = cross(view_dir, up_vector);
-    if (length(right) < kEpsilon) {
-      right = cross(view_dir, kWorldRight);
-    }
-    right = normalize(right);
-    const float3 offset = right * kAngleOffsetRadians;
-    view_dir = normalize(view_dir + offset);
-  }
-
-  return view_dir;
+  return camera_shared_clamp_view_direction_away_from_up(view_direction, up_vector, kWorldRight, min_cosine_threshold);
 }
 
 }  // namespace etx

@@ -170,6 +170,7 @@ struct RHIContext {
   RHICommandBuffer get_command_buffer();
   void destroy_command_buffer(RHICommandBuffer cmd);
   void submit_command_buffer(const RHISubmitInfo& info);
+  void submit_frame_command_buffer(RHICommandBuffer cmd);
 
   void program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func);
 
@@ -200,6 +201,7 @@ struct RHIContext {
   void cmd_copy_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0);
   void cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
   void cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
+  void cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture);
 
   void cmd_set_debug_name(RHICommandBuffer cmd, const char* name);
 

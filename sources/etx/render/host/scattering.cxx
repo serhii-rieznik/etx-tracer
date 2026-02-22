@@ -422,7 +422,7 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
       float theta = (1.0f - v) * kPi - kHalfPi;
       float phi = u * kDoublePi - kPi;  // 0 to 1 -> -π to π
       float3 direction;
-      if (ETX_USE_EQUAL_AREA_PROJECTION) {
+      {
         float v_mapped = v * 2.0f - 1.0f;
         theta = asinf(fmaxf(-1.0f, fminf(1.0f, -v_mapped)));
       }
@@ -434,17 +434,7 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
       // Gather average color of the upper hemisphere
       // Weighted in the way that top pixels contribute more
       // Not physically correct, but looks nice
-      float weight = 0.0f;
-      if (ETX_USE_EQUAL_AREA_PROJECTION) {
-        if (theta > 0.0f) {
-          weight = sinf(theta);
-        }
-      } else {
-        float sin_theta = sinf(theta);
-        if (sin_theta > 0.0f) {
-          weight = sin_theta;
-        }
-      }
+      float weight = (theta > 0.0f) ? sinf(theta) : 0.0f;
       if (weight > 0.0f) {
         w += weight;
         avg += rgb * weight;

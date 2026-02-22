@@ -309,15 +309,8 @@ void RenderContext::end_frame() {
     ETX_PROFILER_NAMED_SCOPE("render_context_submit_and_present");
     _private->rhi_context.cmd_end_render_pass(_private->rhi_cmd);
     _private->rhi_context.command_buffer_end(_private->rhi_cmd);
-    auto acquired_sem = _private->rhi_context.get_image_acquired_semaphore();
-    auto render_complete_sem = _private->rhi_context.get_render_complete_semaphore();
 
-    RHISubmitInfo submit_info = {};
-    submit_info.command_buffer = _private->rhi_cmd;
-    submit_info.wait_semaphores.push_back(acquired_sem);
-    submit_info.signal_semaphores.push_back(render_complete_sem);
-
-    _private->rhi_context.submit_command_buffer(submit_info);
+    _private->rhi_context.submit_frame_command_buffer(_private->rhi_cmd);
     _private->rhi_context.present();
   }
   _private->rhi_cmd = {};

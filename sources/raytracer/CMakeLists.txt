@@ -6,7 +6,6 @@ set(RAYTRACER_SHARED_SOURCES
   render_context.hxx
   render_context.cxx
   options.hxx
-  camera_controller.hxx
   gpu_renderer.hxx
   gpu_renderer.cxx
   raster_renderer.cxx
@@ -29,7 +28,7 @@ else()
 endif()
 
 target_link_libraries(raytracer
-  PRIVATE imgui sokol etx-core etx-render etx-rt etx-util etx-rhi tinyexr stb_image bluenoise
+  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi tinyexr stb_image bluenoise
 )
 
 target_include_directories(raytracer

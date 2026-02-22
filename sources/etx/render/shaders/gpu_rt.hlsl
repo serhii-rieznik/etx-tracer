@@ -4,44 +4,13 @@
 
 #include "gpu_rt_shared.hlsl"
 
-float3x3 basis_from_normal(float3 n) {
-  float3 up = (abs(n.z) < 0.999f) ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
-  float3 t = normalize(cross(up, n));
-  float3 b = cross(n, t);
-  return float3x3(t, b, n);
-}
-
-float3x3 basis_from_tangent_frame(float3 normal, float3 tangent_hint, float3 bitangent_hint) {
-  float3 t = tangent_hint - dot(tangent_hint, normal) * normal;
-  float tangent_length2 = dot(t, t);
-  if (tangent_length2 > 1.0e-8f) {
-    t *= rsqrt(tangent_length2);
-  } else {
-    float3 up = (abs(normal.z) < 0.999f) ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
-    t = normalize(cross(up, normal));
-  }
-
-  float3 b = normalize(cross(normal, t));
-  if (dot(b, bitangent_hint) < 0.0f) {
-    b = -b;
-  }
-
-  return float3x3(t, b, normal);
-}
-
-float3 sample_cosine_hemisphere(float2 u) {
-  float r = sqrt(u.x);
-  float phi = 6.28318530718f * u.y;
-  float x = r * cos(phi);
-  float y = r * sin(phi);
-  float z = sqrt(saturate(1.0f - x * x - y * y));
-  return float3(x, y, z);
-}
-
 float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 normal, float3 tangent_hint, float3 bitangent_hint, float radius, uint2 pixel, uint seed) {
   float occluded = 0.0f;
-  float frame_strength = dot(tangent_hint, tangent_hint) * dot(bitangent_hint, bitangent_hint);
-  float3x3 basis = (frame_strength > 0.0f) ? basis_from_tangent_frame(normal, tangent_hint, bitangent_hint) : basis_from_normal(normal);
+  float3 normal_vector = float3(0.0f, 0.0f, 0.0f);
+  float3 basis_tangent = float3(0.0f, 0.0f, 0.0f);
+  float3 basis_bitangent = float3(0.0f, 0.0f, 0.0f);
+  scene_math_shared_build_sampling_frame(normal, tangent_hint, bitangent_hint, normal_vector, basis_tangent, basis_bitangent);
+
   const uint dimension_base = sampler_stream_dimension_base(kSamplerStreamBSDF);
   const uint sample_count = load_scene_options_samples();
 
@@ -57,11 +26,11 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
       u = float2(rnd01(seed), rnd01(seed));
     }
 
-    float3 local_dir = sample_cosine_hemisphere(u);
-    float3 world_dir = normalize(mul(local_dir, basis));
+    float3 local_dir = sample_cosine_distribution(u, 0.0f);
+    float3 world_dir = scene_math_shared_local_to_world(normal_vector, basis_tangent, basis_bitangent, local_dir);
 
     RayDesc ray;
-    ray.Origin = position + normal * 0.002f;
+    ray.Origin = position + normal_vector * 0.002f;
     ray.Direction = world_dir;
     ray.TMin = 0.001f;
     ray.TMax = radius;
@@ -83,14 +52,12 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
     return;
 
   ByteAddressBuffer camera_buffer = bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)];
-  uint2 film_size = load_camera_film_size(camera_buffer);
+  GPUABIAccessSharedContext camera_access_context = make_gpu_abi_access_shared_context(camera_buffer);
+  uint2 film_size = gpu_abi_access_shared_camera_film_size(camera_access_context);
   if (any(dtid.xy >= film_size))
     return;
 
-  float2 pixel = float2(dtid.xy) + 0.5f;
-  float2 uv = pixel / float2(film_size);
-  float2 ndc = uv * 2.0f - 1.0f;
-  ndc.y = -ndc.y;
+  float2 ndc = camera_primary_ray_shared_primary_uv(dtid.xy, film_size);
   uint pixel_index = dtid.x + dtid.y * film_size.x;
   uint seed = sampler_random_seed(pixel_index, constants.sample_index);
   bool spectral_mode = scene_uses_spectral_mode();
@@ -101,35 +68,15 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
   float spectral_pdf = spectral_query_sampling_pdf(spectral_query);
   float spectral_weight = (spectral_pdf > 0.0f) ? (1.0f / spectral_pdf) : 0.0f;
 
-  Camera camera;
-  camera.position = load_camera_position(camera_buffer);
-  camera.cls = load_camera_class(camera_buffer);
-  camera.direction = load_camera_direction(camera_buffer);
-  camera.aspect = load_camera_aspect(camera_buffer);
-  camera.side = load_camera_side(camera_buffer);
-  camera.tan_half_fov = load_camera_tan_half_fov(camera_buffer);
-  camera.up = load_camera_up(camera_buffer);
-  camera.lens_radius = load_camera_lens_radius(camera_buffer);
-  camera.focal_distance = load_camera_focal_distance(camera_buffer);
-  camera.clip_near = load_camera_clip_near(camera_buffer);
-  camera.clip_far = load_camera_clip_far(camera_buffer);
-  camera.lens_image = load_camera_lens_image(camera_buffer);
-  camera.medium_index = load_camera_medium_index(camera_buffer);
+  Camera camera = load_camera(camera_buffer);
 
-  float2 sensor_sample = float2(0.0f, 0.0f);
-  if ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
-    float2 lens_rnd = sample_primary_hybrid_2d(dtid.xy, constants.sample_index, kSamplerStreamSupport, seed);
-    if (camera.lens_image == kInvalidIndex) {
-      sensor_sample = sample_disk(lens_rnd);
-    } else {
-      float lens_image_pdf = 0.0f;
-      uint2 lens_location = uint2(0u, 0u);
-      float4 lens_eval = float4(1.0f, 1.0f, 1.0f, 1.0f);
-      sensor_sample = sample_image_uv(camera.lens_image, lens_rnd, lens_image_pdf, lens_location, lens_eval) * 2.0f - 1.0f;
-    }
+  float2 lens_rnd = float2(0.0f, 0.0f);
+  if (camera_lens_sample_shared_enabled(camera.lens_radius, camera.focal_distance)) {
+    lens_rnd = sample_primary_hybrid_2d(dtid.xy, constants.sample_index, kSamplerStreamSupport, seed);
   }
 
-  Ray ray_data = camera_generate_ray(camera, ndc, sensor_sample);
+  CameraLensSampleSharedGPUContext lens_context = {constants.scene.images};
+  Ray ray_data = camera_primary_ray_shared_generate(lens_context, camera, ndc, lens_rnd);
   float3 ray_dir = ray_data.d;
 
   RayDesc ray;
@@ -150,10 +97,12 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
   if (has_geometry_buffers) {
     ByteAddressBuffer triangle_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)];
     ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+    SceneGlobalsGPUSharedContext scene_globals_context = make_scene_globals_gpu_shared_context(scene_globals);
     const bool has_material_buffer = constants.scene.materials != kInvalidIndex;
     ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(has_material_buffer ? constants.scene.materials : constants.scene.triangles)];
-    uint vertex_count = scene_globals.Load(0u);
-    uint triangle_count = scene_globals.Load(4u);
+    GPUABIAccessSharedContext material_access_context = make_gpu_abi_access_shared_context(material_buffer);
+    uint vertex_count = scene_globals_shared_vertex_count(scene_globals_context);
+    uint triangle_count = scene_globals_shared_triangle_count(scene_globals_context);
     const bool has_texcoords = constants.scene.vertex_texcoords != kInvalidIndex;
 
     q.TraceRayInline(as, RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, ray);
@@ -194,25 +143,32 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
 
       uint material_class = kInvalidIndex;
       if (has_material_buffer) {
-        material_class = load_material_class(material_buffer, tri.material_index);
+        material_class = gpu_abi_access_shared_material_class(material_access_context, tri.material_index);
       }
 
-      if (material_class == MaterialClass::Void) {
+      bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
+      bool entering_surface = dot(tri.geo_n, ray_dir) < 0.0f;
+      uint int_medium = kInvalidIndex;
+      uint ext_medium = kInvalidIndex;
+      if (has_material_buffer) {
+        int_medium = gpu_abi_access_shared_material_int_medium(material_access_context, tri.material_index);
+        ext_medium = gpu_abi_access_shared_material_ext_medium(material_access_context, tri.material_index);
+      }
+
+      HitPolicyDecision hit_policy =
+        hit_policy_evaluate(HitPolicyMode::SkipBoundaryWithMediumTransition, material_class, alpha_rejected, entering_surface, int_medium, ext_medium);
+      if (hit_policy.action == HitPolicyAction::Ignore) {
         continue;
       }
 
-      if (material_class == MaterialClass::Boundary) {
-        bool entering_surface = dot(tri.geo_n, ray_dir) < 0.0f;
-        uint boundary_medium = entering_surface ? load_material_int_medium(material_buffer, tri.material_index) : load_material_ext_medium(material_buffer, tri.material_index);
-        ray_medium_index = boundary_medium;
+      if (hit_policy.action == HitPolicyAction::TransitionMedium) {
+        ray_medium_index = hit_policy.medium_index;
         continue;
       }
 
-      if (alpha_test_pass(tri.material_index, candidate_uv, seed)) {
-        continue;
+      if (hit_policy.action == HitPolicyAction::CommitSurface) {
+        q.CommitNonOpaqueTriangleHit();
       }
-
-      q.CommitNonOpaqueTriangleHit();
     }
   } else {
     q.TraceRayInline(as, RAY_FLAG_NONE, 0xFF, ray);
@@ -254,10 +210,11 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
       ByteAddressBuffer bitangent_buffer = bindless_buffers[NonUniformResourceIndex(bitangent_buffer_index)];
       ByteAddressBuffer texcoord_buffer = bindless_buffers[NonUniformResourceIndex(texcoord_buffer_index)];
       ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+      SceneGlobalsGPUSharedContext scene_globals_context = make_scene_globals_gpu_shared_context(scene_globals);
 
-      uint vertex_count = scene_globals.Load(0u);
-      uint triangle_count = scene_globals.Load(4u);
-      float bounding_sphere_radius = asfloat(scene_globals.Load(44u));
+      uint vertex_count = scene_globals_shared_vertex_count(scene_globals_context);
+      uint triangle_count = scene_globals_shared_triangle_count(scene_globals_context);
+      float bounding_sphere_radius = scene_globals_shared_bounding_sphere_radius(scene_globals_context);
 
       uint triangle_index = q.CommittedPrimitiveIndex();
       if (triangle_index < triangle_count) {
@@ -274,7 +231,7 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
           float ao = evaluate_ao(as, surface_point.vertex.pos, surface_point.geo_normal, surface_point.vertex.tan, surface_point.vertex.btn, ao_radius, dtid.xy, seed);
 
           if (spectral_mode) {
-            float3 fallback_color = default_ao_shading(surface_point.vertex.nrm, ao);
+            float3 fallback_color = scene_math_shared_default_ao_shading(surface_point.vertex.nrm, ao);
             SpectralResponse fallback_response = spectral_response_make(spectral_query, luminance(fallback_color));
             SpectralResponse shaded_spectral = evaluate_material_scattering_spectral(tri.material_index, hit_uv, ao, spectral_query, fallback_response);
             bool local_emission_visible = dot(tri.geo_n, ray_dir) < 0.0f;
@@ -286,7 +243,7 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
             float3 shaded = spectral_response_to_rgb(shaded_spectral) * spectral_weight;
             color = float4(max(shaded, float3(0.0f, 0.0f, 0.0f)), 1.0f);
           } else {
-            float3 shaded = default_ao_shading(surface_point.vertex.nrm, ao);
+            float3 shaded = scene_math_shared_default_ao_shading(surface_point.vertex.nrm, ao);
             shaded = apply_image_integrated_or_fallback(tri.material_index, hit_uv, ao, shaded);
             bool local_emission_visible = dot(tri.geo_n, ray_dir) < 0.0f;
             if ((tri.emitter_index != kInvalidIndex) && local_emission_visible) {

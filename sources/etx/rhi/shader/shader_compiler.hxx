@@ -44,7 +44,7 @@ struct ShaderCompiler {
 
   // Singleton access
   static ShaderCompiler& instance();
-  static void shutdown();
+  void shutdown();
 
   RHIResult initialize();
   bool is_initialized() const;

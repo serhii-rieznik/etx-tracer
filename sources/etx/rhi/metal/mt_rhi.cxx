@@ -205,6 +205,12 @@ void MTContext::cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHand
   _impl->command_buffer.copy_texture_to_buffer(src, dst, width, height, mip_level);
 }
 
+void MTContext::cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture) {
+  (void)cmd;
+  (void)texture;
+  log::warning("Metal RHI: cmd_generate_mipmaps not implemented");
+}
+
 void MTContext::cmd_set_debug_name(RHICommandBuffer cmd, const char* name) {
   (void)cmd;
   _impl->command_buffer.set_debug_name(name);

@@ -4,13 +4,21 @@
 
 #include <interop/geometry.hxx>
 #include <interop/gpu_abi_constants.hxx>
+#include <interop/hit_policy.hxx>
 #include <interop/image.hxx>
+#include <interop/image_filter_shared.hxx>
 #include <interop/material.hxx>
+#include <interop/material_scattering_shared.hxx>
 #include <interop/projection.hxx>
+#include <interop/camera_shared.hxx>
+#include <interop/camera_film_shared.hxx>
+#include <interop/scene_resource_shared.hxx>
 #include <interop/distribution.hxx>
 #include <interop/sampler_policy.hxx>
 #include <interop/sampler.hxx>
 #include <interop/medium_density_shared.hxx>
+#include <interop/surface_point_shared.hxx>
+#include <interop/scene_math_shared.hxx>
 
 float rnd01(inout uint state) {
   return sampler_next_random(state);
@@ -97,338 +105,212 @@ TriangleData load_triangle(ByteAddressBuffer buffer, uint triangle_index) {
   return result;
 }
 
-uint load_material_scattering_spectrum_index(ByteAddressBuffer buffer, uint material_index) {
-  uint base_offset = material_index * kMaterialStride;
-  return buffer.Load(base_offset + kMaterialScatteringSpectrumIndexOffset);
+struct GPUABIAccessSharedContext {
+  ByteAddressBuffer buffer;
+};
+
+uint gpu_abi_access_shared_load_u32(GPUABIAccessSharedContext context, uint byte_offset) {
+  return context.buffer.Load(byte_offset);
 }
 
-uint load_material_scattering_image_index(ByteAddressBuffer buffer, uint material_index) {
-  uint base_offset = material_index * kMaterialStride;
-  return buffer.Load(base_offset + kMaterialScatteringImageIndexOffset);
+float gpu_abi_access_shared_load_f32(GPUABIAccessSharedContext context, uint byte_offset) {
+  return asfloat(context.buffer.Load(byte_offset));
 }
 
-uint load_material_class(ByteAddressBuffer buffer, uint material_index) {
-  uint base_offset = material_index * kMaterialStride;
-  return buffer.Load(base_offset + kMaterialClassOffset);
+float3 gpu_abi_access_shared_load_f32x3(GPUABIAccessSharedContext context, uint byte_offset) {
+  return load_float3_at_offset(context.buffer, byte_offset);
 }
 
-uint load_material_int_medium(ByteAddressBuffer buffer, uint material_index) {
-  uint base_offset = material_index * kMaterialStride;
-  return buffer.Load(base_offset + kMaterialIntMediumOffset);
+uint2 gpu_abi_access_shared_load_u32x2(GPUABIAccessSharedContext context, uint byte_offset) {
+  return context.buffer.Load2(byte_offset);
 }
 
-uint load_material_ext_medium(ByteAddressBuffer buffer, uint material_index) {
-  uint base_offset = material_index * kMaterialStride;
-  return buffer.Load(base_offset + kMaterialExtMediumOffset);
+#define ETX_GPU_ABI_ACCESS_SHARED_CONTEXT_TYPE GPUABIAccessSharedContext
+#define ETX_GPU_ABI_ACCESS_SHARED_LOAD_U32(context, byte_offset) gpu_abi_access_shared_load_u32(context, byte_offset)
+#define ETX_GPU_ABI_ACCESS_SHARED_LOAD_F32(context, byte_offset) gpu_abi_access_shared_load_f32(context, byte_offset)
+#define ETX_GPU_ABI_ACCESS_SHARED_LOAD_F32X3(context, byte_offset) gpu_abi_access_shared_load_f32x3(context, byte_offset)
+#define ETX_GPU_ABI_ACCESS_SHARED_LOAD_U32X2(context, byte_offset) gpu_abi_access_shared_load_u32x2(context, byte_offset)
+#include <interop/gpu_abi_access_shared.hxx>
+#undef ETX_GPU_ABI_ACCESS_SHARED_LOAD_U32X2
+#undef ETX_GPU_ABI_ACCESS_SHARED_LOAD_F32X3
+#undef ETX_GPU_ABI_ACCESS_SHARED_LOAD_F32
+#undef ETX_GPU_ABI_ACCESS_SHARED_LOAD_U32
+#undef ETX_GPU_ABI_ACCESS_SHARED_CONTEXT_TYPE
+
+GPUABIAccessSharedContext make_gpu_abi_access_shared_context(ByteAddressBuffer buffer) {
+  GPUABIAccessSharedContext context;
+  context.buffer = buffer;
+  return context;
 }
 
-float load_material_opacity(ByteAddressBuffer buffer, uint material_index) {
-  uint base_offset = material_index * kMaterialStride;
-  return asfloat(buffer.Load(base_offset + kMaterialOpacityOffset));
+struct SpectrumAccessGPUSharedContext {
+  ByteAddressBuffer buffer;
+};
+
+float3 spectrum_access_shared_gpu_integrated(SpectrumAccessGPUSharedContext context, uint spectrum_index) {
+  uint base_offset = spectrum_index * kSpectralDistributionStride;
+  return asfloat(context.buffer.Load3(base_offset + kSpectralDistributionIntegratedOffset));
 }
 
-uint load_emitter_class(ByteAddressBuffer buffer, uint emitter_index) {
-  uint base_offset = emitter_index * kEmitterStride;
-  return buffer.Load(base_offset + kEmitterClassOffset);
+uint spectrum_access_shared_gpu_entry_count(SpectrumAccessGPUSharedContext context, uint spectrum_index) {
+  uint base_offset = spectrum_index * kSpectralDistributionStride;
+  return context.buffer.Load(base_offset + kSpectralDistributionEntryCountOffset);
 }
 
-uint load_emitter_profile_index(ByteAddressBuffer buffer, uint emitter_index) {
-  uint base_offset = emitter_index * kEmitterStride;
-  return buffer.Load(base_offset + kEmitterProfileOffset);
+float spectrum_access_shared_gpu_entry_wavelength(SpectrumAccessGPUSharedContext context, uint spectrum_index, uint entry_index) {
+  uint base_offset = spectrum_index * kSpectralDistributionStride + kSpectralDistributionEntriesOffset + entry_index * kSpectralDistributionEntryStride;
+  return asfloat(context.buffer.Load(base_offset + 0u));
 }
 
-uint load_emitter_emission_spectrum_index(ByteAddressBuffer buffer, uint emitter_profile_index) {
-  uint base_offset = emitter_profile_index * kEmitterProfileStride;
-  return buffer.Load(base_offset + kEmitterProfileEmissionSpectrumIndexOffset);
+float spectrum_access_shared_gpu_entry_power(SpectrumAccessGPUSharedContext context, uint spectrum_index, uint entry_index) {
+  uint base_offset = spectrum_index * kSpectralDistributionStride + kSpectralDistributionEntriesOffset + entry_index * kSpectralDistributionEntryStride;
+  return asfloat(context.buffer.Load(base_offset + 4u));
 }
 
-uint load_emitter_emission_image_index(ByteAddressBuffer buffer, uint emitter_profile_index) {
-  uint base_offset = emitter_profile_index * kEmitterProfileStride;
-  return buffer.Load(base_offset + kEmitterProfileEmissionImageIndexOffset);
-}
-
-uint load_emitter_profile_class(ByteAddressBuffer buffer, uint emitter_profile_index) {
-  uint base_offset = emitter_profile_index * kEmitterProfileStride;
-  return buffer.Load(base_offset + kEmitterProfileClassOffset);
-}
-
-uint load_emitter_profile_meta(ByteAddressBuffer buffer, uint emitter_profile_index) {
-  uint base_offset = emitter_profile_index * kEmitterProfileStride;
-  return buffer.Load(base_offset + kEmitterProfileMetaOffset);
-}
-
-float3 load_emitter_profile_direction(ByteAddressBuffer buffer, uint emitter_profile_index) {
-  uint base_offset = emitter_profile_index * kEmitterProfileStride;
-  return load_float3_at_offset(buffer, base_offset + kEmitterProfileDirectionalDirectionOffset);
-}
-
-float load_emitter_profile_angular_size_cosine(ByteAddressBuffer buffer, uint emitter_profile_index) {
-  uint base_offset = emitter_profile_index * kEmitterProfileStride;
-  return asfloat(buffer.Load(base_offset + kEmitterProfileDirectionalAngularSizeCosineOffset));
-}
+#define ETX_SPECTRUM_ACCESS_SHARED_CONTEXT_TYPE SpectrumAccessGPUSharedContext
+#define ETX_SPECTRUM_ACCESS_SHARED_INTEGRATED(context, spectrum_index) spectrum_access_shared_gpu_integrated(context, spectrum_index)
+#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_COUNT(context, spectrum_index) spectrum_access_shared_gpu_entry_count(context, spectrum_index)
+#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_WAVELENGTH(context, spectrum_index, entry_index) spectrum_access_shared_gpu_entry_wavelength(context, spectrum_index, entry_index)
+#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_POWER(context, spectrum_index, entry_index) spectrum_access_shared_gpu_entry_power(context, spectrum_index, entry_index)
+#include <interop/spectrum_access_shared.hxx>
+#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_POWER
+#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_WAVELENGTH
+#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_COUNT
+#undef ETX_SPECTRUM_ACCESS_SHARED_INTEGRATED
+#undef ETX_SPECTRUM_ACCESS_SHARED_CONTEXT_TYPE
 
 float3 load_spectrum_integrated_value(ByteAddressBuffer buffer, uint spectrum_index) {
-  uint base_offset = spectrum_index * kSpectralDistributionStride;
-  return asfloat(buffer.Load3(base_offset + kSpectralDistributionIntegratedOffset));
-}
-
-uint load_spectrum_entry_count(ByteAddressBuffer buffer, uint spectrum_index) {
-  uint base_offset = spectrum_index * kSpectralDistributionStride;
-  return buffer.Load(base_offset + kSpectralDistributionEntryCountOffset);
-}
-
-float load_spectrum_entry_wavelength(ByteAddressBuffer buffer, uint spectrum_index, uint entry_index) {
-  uint base_offset = spectrum_index * kSpectralDistributionStride + kSpectralDistributionEntriesOffset + entry_index * kSpectralDistributionEntryStride;
-  return asfloat(buffer.Load(base_offset + 0u));
-}
-
-float load_spectrum_entry_power(ByteAddressBuffer buffer, uint spectrum_index, uint entry_index) {
-  uint base_offset = spectrum_index * kSpectralDistributionStride + kSpectralDistributionEntriesOffset + entry_index * kSpectralDistributionEntryStride;
-  return asfloat(buffer.Load(base_offset + 4u));
+  SpectrumAccessGPUSharedContext context = {buffer};
+  return spectrum_access_shared_integrated(context, spectrum_index);
 }
 
 SpectralResponse load_spectrum_response(ByteAddressBuffer buffer, uint spectrum_index, SpectralQuery spect) {
-  if (spectral_query_is_spectral(spect) == false) {
-    return spectral_response_make(spect, load_spectrum_integrated_value(buffer, spectrum_index));
-  }
-
-  uint entry_count = load_spectrum_entry_count(buffer, spectrum_index);
-  if (entry_count == 0u) {
-    return spectral_response_make(spect, 0.0f);
-  }
-
-  uint begin = 0u;
-  uint end = entry_count;
-  while ((end - begin) > 1u) {
-    uint middle = begin + (end - begin) / 2u;
-    float middle_wavelength = load_spectrum_entry_wavelength(buffer, spectrum_index, middle);
-    if (middle_wavelength > spect.wavelength) {
-      end = middle;
-    } else {
-      begin = middle;
-    }
-  }
-
-  uint i = begin;
-  if (i >= entry_count) {
-    return spectral_response_make(spect, 0.0f);
-  }
-
-  float wi = load_spectrum_entry_wavelength(buffer, spectrum_index, i);
-  if ((i == 0u) && (spect.wavelength < wi)) {
-    return spectral_response_make(spect, 0.0f);
-  }
-
-  if (((i + 1u) == entry_count) && (spect.wavelength > wi)) {
-    return spectral_response_make(spect, 0.0f);
-  }
-
-  uint j = min(i + 1u, entry_count - 1u);
-  float wj = load_spectrum_entry_wavelength(buffer, spectrum_index, j);
-  float pi = load_spectrum_entry_power(buffer, spectrum_index, i);
-  float pj = load_spectrum_entry_power(buffer, spectrum_index, j);
-  float t = (i == j) ? 0.0f : (spect.wavelength - wi) / (wj - wi);
-  return spectral_response_make(spect, lerp(pi, pj, t));
+  SpectrumAccessGPUSharedContext context = {buffer};
+  return spectrum_access_shared_query(context, spectrum_index, spect);
 }
 
-float3 load_camera_position(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load3(kCameraPositionOffset));
+Camera load_camera(ByteAddressBuffer camera_buffer) {
+  GPUABIAccessSharedContext context = make_gpu_abi_access_shared_context(camera_buffer);
+  ETX_ZERO_INIT(Camera, camera);
+  camera.position = gpu_abi_access_shared_camera_position(context);
+  camera.cls = gpu_abi_access_shared_camera_class(context);
+  camera.direction = gpu_abi_access_shared_camera_direction(context);
+  camera.aspect = gpu_abi_access_shared_camera_aspect(context);
+  camera.side = gpu_abi_access_shared_camera_side(context);
+  camera.tan_half_fov = gpu_abi_access_shared_camera_tan_half_fov(context);
+  camera.up = gpu_abi_access_shared_camera_up(context);
+  camera.lens_radius = gpu_abi_access_shared_camera_lens_radius(context);
+  camera.focal_distance = gpu_abi_access_shared_camera_focal_distance(context);
+  camera.clip_near = gpu_abi_access_shared_camera_clip_near(context);
+  camera.clip_far = gpu_abi_access_shared_camera_clip_far(context);
+  camera.lens_image = gpu_abi_access_shared_camera_lens_image(context);
+  camera.medium_index = gpu_abi_access_shared_camera_medium_index(context);
+  return camera;
 }
 
-uint load_camera_class(ByteAddressBuffer camera_buffer) {
-  return camera_buffer.Load(kCameraClassOffset);
+struct SceneOptionsGPUSharedContext {
+  uint scene_options_descriptor_index;
+};
+
+bool scene_options_shared_gpu_has_data(SceneOptionsGPUSharedContext context) {
+  return context.scene_options_descriptor_index != kInvalidIndex;
 }
 
-float3 load_camera_direction(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load3(kCameraDirectionOffset));
+uint scene_options_shared_gpu_load_u32(SceneOptionsGPUSharedContext context, uint byte_offset) {
+  ByteAddressBuffer scene_options_buffer = bindless_buffers[NonUniformResourceIndex(context.scene_options_descriptor_index)];
+  return scene_options_buffer.Load(byte_offset);
 }
 
-float load_camera_aspect(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load(kCameraAspectOffset));
-}
+#define ETX_SCENE_OPTIONS_SHARED_CONTEXT_TYPE SceneOptionsGPUSharedContext
+#define ETX_SCENE_OPTIONS_SHARED_HAS_DATA(context) scene_options_shared_gpu_has_data(context)
+#define ETX_SCENE_OPTIONS_SHARED_LOAD_U32(context, byte_offset) scene_options_shared_gpu_load_u32(context, byte_offset)
+#include <interop/scene_options_shared.hxx>
+#undef ETX_SCENE_OPTIONS_SHARED_LOAD_U32
+#undef ETX_SCENE_OPTIONS_SHARED_HAS_DATA
+#undef ETX_SCENE_OPTIONS_SHARED_CONTEXT_TYPE
 
-float3 load_camera_side(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load3(kCameraSideOffset));
-}
-
-float load_camera_tan_half_fov(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load(kCameraTanHalfFovOffset));
-}
-
-float3 load_camera_up(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load3(kCameraUpOffset));
-}
-
-uint2 load_camera_film_size(ByteAddressBuffer camera_buffer) {
-  return camera_buffer.Load2(kCameraFilmSizeOffset);
-}
-
-float load_camera_lens_radius(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load(kCameraLensRadiusOffset));
-}
-
-float load_camera_focal_distance(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load(kCameraFocalDistanceOffset));
-}
-
-float load_camera_clip_near(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load(kCameraClipNearOffset));
-}
-
-float load_camera_clip_far(ByteAddressBuffer camera_buffer) {
-  return asfloat(camera_buffer.Load(kCameraClipFarOffset));
-}
-
-uint load_camera_lens_image(ByteAddressBuffer camera_buffer) {
-  return camera_buffer.Load(kCameraLensImageOffset);
-}
-
-uint load_camera_medium_index(ByteAddressBuffer camera_buffer) {
-  return camera_buffer.Load(kCameraMediumIndexOffset);
+SceneOptionsGPUSharedContext make_scene_options_gpu_shared_context(uint scene_options_descriptor_index) {
+  SceneOptionsGPUSharedContext context;
+  context.scene_options_descriptor_index = scene_options_descriptor_index;
+  return context;
 }
 
 uint load_scene_options_samples() {
-  if (constants.scene.scene_options == kInvalidIndex) {
-    return 1u;
-  }
-
-  ByteAddressBuffer scene_options_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_options)];
-  uint result = scene_options_buffer.Load(kSceneOptionsSamplesOffset);
-  if (result == 0u) {
-    return 1u;
-  }
-  return result;
+  SceneOptionsGPUSharedContext context = make_scene_options_gpu_shared_context(constants.scene.scene_options);
+  return scene_options_shared_samples(context);
 }
 
 uint load_scene_options_properties_flags() {
-  if (constants.scene.scene_options == kInvalidIndex) {
-    return 0u;
-  }
-
-  ByteAddressBuffer scene_options_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_options)];
-  return scene_options_buffer.Load(kSceneOptionsPropertiesFlagsOffset);
+  SceneOptionsGPUSharedContext context = make_scene_options_gpu_shared_context(constants.scene.scene_options);
+  return scene_options_shared_properties_flags(context);
 }
 
 bool scene_uses_spectral_mode() {
-  return (load_scene_options_properties_flags() & (1u << SceneProperty::Spectral)) != 0u;
+  SceneOptionsGPUSharedContext context = make_scene_options_gpu_shared_context(constants.scene.scene_options);
+  return scene_options_shared_uses_spectral_mode(context);
 }
 
-uint load_scene_globals_environment_emitter_count(ByteAddressBuffer scene_globals) {
-  return scene_globals.Load(kSceneGlobalsEnvironmentEmitterCountOffset);
+struct SceneGlobalsGPUSharedContext {
+  ByteAddressBuffer scene_globals;
+};
+
+uint scene_globals_gpu_shared_load_u32(SceneGlobalsGPUSharedContext context, uint byte_offset) {
+  return context.scene_globals.Load(byte_offset);
 }
 
-uint load_scene_globals_environment_emitter(ByteAddressBuffer scene_globals, uint index) {
-  return scene_globals.Load(kSceneGlobalsEnvironmentEmittersOffset + index * 4u);
+float scene_globals_gpu_shared_load_f32(SceneGlobalsGPUSharedContext context, uint byte_offset) {
+  return asfloat(context.scene_globals.Load(byte_offset));
 }
 
-uint load_scene_globals_emitter_profile_count(ByteAddressBuffer scene_globals) {
-  return scene_globals.Load(kSceneGlobalsEmitterProfileCountOffset);
-}
+#define ETX_SCENE_GLOBALS_SHARED_CONTEXT_TYPE SceneGlobalsGPUSharedContext
+#define ETX_SCENE_GLOBALS_SHARED_LOAD_U32(context, byte_offset) scene_globals_gpu_shared_load_u32(context, byte_offset)
+#define ETX_SCENE_GLOBALS_SHARED_LOAD_F32(context, byte_offset) scene_globals_gpu_shared_load_f32(context, byte_offset)
+#include <interop/scene_globals_shared.hxx>
+#undef ETX_SCENE_GLOBALS_SHARED_LOAD_F32
+#undef ETX_SCENE_GLOBALS_SHARED_LOAD_U32
+#undef ETX_SCENE_GLOBALS_SHARED_CONTEXT_TYPE
 
-uint load_scene_globals_emitter_instance_count(ByteAddressBuffer scene_globals) {
-  return scene_globals.Load(kSceneGlobalsEmitterInstanceCountOffset);
+SceneGlobalsGPUSharedContext make_scene_globals_gpu_shared_context(ByteAddressBuffer scene_globals) {
+  SceneGlobalsGPUSharedContext context;
+  context.scene_globals = scene_globals;
+  return context;
 }
 
 bool has_material_spectrum_buffers() {
-  return (constants.scene.materials != kInvalidIndex) && (constants.scene.spectrums != kInvalidIndex);
+  return scene_resource_shared_has_material_spectrum_buffers(constants.scene.materials, constants.scene.spectrums);
 }
+
+bool material_scattering_access_shared_gpu_has_required_scene_buffers(uint context) {
+  return has_material_spectrum_buffers();
+}
+
+uint material_scattering_access_shared_gpu_load_scattering_spectrum_index(uint context, uint material_index) {
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(material_buffer);
+  return gpu_abi_access_shared_material_scattering_spectrum_index(access_context, material_index);
+}
+
+uint material_scattering_access_shared_gpu_load_scattering_image_index(uint context, uint material_index) {
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(material_buffer);
+  return gpu_abi_access_shared_material_scattering_image_index(access_context, material_index);
+}
+
+#define ETX_MATERIAL_SCATTERING_ACCESS_SHARED_CONTEXT_TYPE uint
+#define ETX_MATERIAL_SCATTERING_ACCESS_SHARED_HAS_REQUIRED_SCENE_BUFFERS(context) material_scattering_access_shared_gpu_has_required_scene_buffers(context)
+#define ETX_MATERIAL_SCATTERING_ACCESS_SHARED_LOAD_SCATTERING_SPECTRUM_INDEX(context, material_index) \
+  material_scattering_access_shared_gpu_load_scattering_spectrum_index(context, material_index)
+#define ETX_MATERIAL_SCATTERING_ACCESS_SHARED_LOAD_SCATTERING_IMAGE_INDEX(context, material_index) \
+  material_scattering_access_shared_gpu_load_scattering_image_index(context, material_index)
+#include <interop/material_scattering_access_shared.hxx>
+#undef ETX_MATERIAL_SCATTERING_ACCESS_SHARED_LOAD_SCATTERING_IMAGE_INDEX
+#undef ETX_MATERIAL_SCATTERING_ACCESS_SHARED_LOAD_SCATTERING_SPECTRUM_INDEX
+#undef ETX_MATERIAL_SCATTERING_ACCESS_SHARED_HAS_REQUIRED_SCENE_BUFFERS
+#undef ETX_MATERIAL_SCATTERING_ACCESS_SHARED_CONTEXT_TYPE
 
 bool try_load_material_scattering_state(uint material_index, out uint scattering_spectrum_index, out uint scattering_image_index) {
-  scattering_spectrum_index = kInvalidIndex;
-  scattering_image_index = kInvalidIndex;
-  if (has_material_spectrum_buffers() == false) {
-    return false;
-  }
-
-  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
-  scattering_spectrum_index = load_material_scattering_spectrum_index(material_buffer, material_index);
-  scattering_image_index = load_material_scattering_image_index(material_buffer, material_index);
-  return scattering_spectrum_index != kInvalidIndex;
-}
-
-uint image_blob_image_count(ByteAddressBuffer image_blob) {
-  return image_blob.Load(kImageBlobHeaderImageCountOffset);
-}
-
-uint image_blob_images_offset(ByteAddressBuffer image_blob) {
-  return image_blob.Load(kImageBlobHeaderImagesOffset);
-}
-
-uint image_blob_data_chunk_count(ByteAddressBuffer image_blob) {
-  return image_blob.Load(kImageBlobHeaderDataChunkCountOffset);
-}
-
-uint image_blob_data_chunk_indices_offset(ByteAddressBuffer image_blob) {
-  return image_blob.Load(kImageBlobHeaderDataChunkIndicesOffset);
-}
-
-uint image_desc_base_offset(ByteAddressBuffer image_blob, uint image_index) {
-  uint images_offset = image_blob_images_offset(image_blob);
-  return images_offset + image_index * kImageDescStride;
-}
-
-uint image_desc_format(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescFormatOffset);
-}
-
-uint2 image_desc_size(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load2(image_desc_offset + kImageDescISizeOffset);
-}
-
-float2 image_desc_fsize(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return asfloat(image_blob.Load2(image_desc_offset + kImageDescFSizeOffset));
-}
-
-float2 image_desc_uv_offset(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return asfloat(image_blob.Load2(image_desc_offset + kImageDescOffsetOffset));
-}
-
-float2 image_desc_uv_scale(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return asfloat(image_blob.Load2(image_desc_offset + kImageDescScaleOffset));
-}
-
-uint image_desc_options(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescOptionsOffset);
-}
-
-uint image_desc_pixel_data_offset(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescPixelDataOffset);
-}
-
-uint image_desc_x_distribution_entries_offset(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescXDistributionEntriesOffset);
-}
-
-uint image_desc_y_distribution_entries_offset(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescYDistributionEntriesOffset);
-}
-
-uint image_desc_x_entries_stride(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescXEntriesStrideOffset);
-}
-
-uint image_desc_x_distribution_count(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescXDistributionCountOffset);
-}
-
-uint image_desc_y_entries_count(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescYEntriesCountOffset);
-}
-
-uint image_desc_pixel_data_stride(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescPixelDataStrideOffset);
-}
-
-uint image_desc_pixel_data_chunk_index(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescPixelDataChunkIndexOffset);
-}
-
-uint image_desc_x_distribution_chunk_index(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescXDistributionChunkIndexOffset);
-}
-
-uint image_desc_y_distribution_chunk_index(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  return image_blob.Load(image_desc_offset + kImageDescYDistributionChunkIndexOffset);
+  uint context = 0u;
+  return material_scattering_access_shared_try_load(context, material_index, scattering_spectrum_index, scattering_image_index);
 }
 
 struct ImageDescAccess {
@@ -451,82 +333,53 @@ struct ImageDescAccess {
   uint y_distribution_chunk_index;
 };
 
-ImageDescAccess load_image_desc_access(ByteAddressBuffer image_blob, uint image_desc_offset) {
-  ImageDescAccess result;
-  result.desc_offset = image_desc_offset;
-  result.format = image_desc_format(image_blob, image_desc_offset);
-  result.size = image_desc_size(image_blob, image_desc_offset);
-  result.fsize = image_desc_fsize(image_blob, image_desc_offset);
-  result.uv_offset = image_desc_uv_offset(image_blob, image_desc_offset);
-  result.uv_scale = image_desc_uv_scale(image_blob, image_desc_offset);
-  result.options = image_desc_options(image_blob, image_desc_offset);
-  result.pixel_data_offset = image_desc_pixel_data_offset(image_blob, image_desc_offset);
-  result.x_distribution_entries_offset = image_desc_x_distribution_entries_offset(image_blob, image_desc_offset);
-  result.y_distribution_entries_offset = image_desc_y_distribution_entries_offset(image_blob, image_desc_offset);
-  result.x_entries_stride = image_desc_x_entries_stride(image_blob, image_desc_offset);
-  result.x_distribution_count = image_desc_x_distribution_count(image_blob, image_desc_offset);
-  result.y_entries_count = image_desc_y_entries_count(image_blob, image_desc_offset);
-  result.pixel_data_stride = image_desc_pixel_data_stride(image_blob, image_desc_offset);
-  result.pixel_data_chunk_index = image_desc_pixel_data_chunk_index(image_blob, image_desc_offset);
-  result.x_distribution_chunk_index = image_desc_x_distribution_chunk_index(image_blob, image_desc_offset);
-  result.y_distribution_chunk_index = image_desc_y_distribution_chunk_index(image_blob, image_desc_offset);
-  return result;
+#define ETX_IMAGE_BLOB_ACCESS_SHARED_CONTEXT_TYPE ByteAddressBuffer
+#define ETX_IMAGE_BLOB_ACCESS_SHARED_DESC_TYPE ImageDescAccess
+#define ETX_IMAGE_BLOB_ACCESS_SHARED_LOAD_U32(context, byte_offset) context.Load(byte_offset)
+#define ETX_IMAGE_BLOB_ACCESS_SHARED_LOAD_U32X2(context, byte_offset) context.Load2(byte_offset)
+#define ETX_IMAGE_BLOB_ACCESS_SHARED_LOAD_F32X2(context, byte_offset) asfloat(context.Load2(byte_offset))
+#include <interop/image_blob_access_shared.hxx>
+#undef ETX_IMAGE_BLOB_ACCESS_SHARED_LOAD_F32X2
+#undef ETX_IMAGE_BLOB_ACCESS_SHARED_LOAD_U32X2
+#undef ETX_IMAGE_BLOB_ACCESS_SHARED_LOAD_U32
+#undef ETX_IMAGE_BLOB_ACCESS_SHARED_DESC_TYPE
+#undef ETX_IMAGE_BLOB_ACCESS_SHARED_CONTEXT_TYPE
+
+struct ImageSceneAccessGPUContext {
+  uint images_descriptor_index;
+};
+
+bool image_scene_access_shared_gpu_has_images(ImageSceneAccessGPUContext context) {
+  return scene_resource_shared_is_available(context.images_descriptor_index);
 }
 
-bool try_load_image_desc_access(ByteAddressBuffer image_blob, uint image_index, out ImageDescAccess image_access) {
-  image_access = (ImageDescAccess)0;
-  uint image_count = image_blob_image_count(image_blob);
-  if (image_index >= image_count) {
-    return false;
-  }
-
-  uint image_desc_offset = image_desc_base_offset(image_blob, image_index);
-  image_access = load_image_desc_access(image_blob, image_desc_offset);
-  return true;
+bool image_scene_access_shared_gpu_load_desc(ImageSceneAccessGPUContext context, uint image_index, out ImageDescAccess image_access) {
+  ByteAddressBuffer image_blob = bindless_buffers[NonUniformResourceIndex(context.images_descriptor_index)];
+  return image_blob_access_shared_try_load_desc(image_blob, image_index, image_access);
 }
 
-uint image_chunk_descriptor_index(ByteAddressBuffer image_blob, uint chunk_index) {
-  uint data_chunk_count = image_blob_data_chunk_count(image_blob);
-  uint data_chunk_indices_offset = image_blob_data_chunk_indices_offset(image_blob);
-
-  if ((chunk_index == kInvalidIndex) || (chunk_index >= data_chunk_count) || (data_chunk_indices_offset == kInvalidIndex)) {
-    return kInvalidIndex;
-  }
-
-  return image_blob.Load(data_chunk_indices_offset + chunk_index * 4u);
+uint image_scene_access_shared_gpu_chunk_descriptor(ImageSceneAccessGPUContext context, uint chunk_index) {
+  ByteAddressBuffer image_blob = bindless_buffers[NonUniformResourceIndex(context.images_descriptor_index)];
+  return image_blob_access_shared_chunk_descriptor_index(image_blob, chunk_index);
 }
 
-uint medium_blob_medium_count(ByteAddressBuffer medium_blob) {
-  return medium_blob.Load(kMediumBlobHeaderMediumCountOffset);
-}
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_CONTEXT_TYPE ImageSceneAccessGPUContext
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_DESC_TYPE ImageDescAccess
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_HAS_IMAGES(context) image_scene_access_shared_gpu_has_images(context)
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_LOAD_DESC(context, image_index, image_access) image_scene_access_shared_gpu_load_desc(context, image_index, image_access)
+#define ETX_IMAGE_SCENE_ACCESS_SHARED_CHUNK_DESCRIPTOR(context, chunk_index) image_scene_access_shared_gpu_chunk_descriptor(context, chunk_index)
+#include <interop/image_scene_access_shared.hxx>
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_CHUNK_DESCRIPTOR
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_LOAD_DESC
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_HAS_IMAGES
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_DESC_TYPE
+#undef ETX_IMAGE_SCENE_ACCESS_SHARED_CONTEXT_TYPE
 
-uint medium_blob_mediums_offset(ByteAddressBuffer medium_blob) {
-  return medium_blob.Load(kMediumBlobHeaderMediumsOffset);
-}
-
-uint medium_desc_base_offset(ByteAddressBuffer medium_blob, uint medium_index) {
-  uint mediums_offset = medium_blob_mediums_offset(medium_blob);
-  return mediums_offset + medium_index * kMediumStride;
-}
-
-uint medium_blob_data_chunk_count(ByteAddressBuffer medium_blob) {
-  return medium_blob.Load(kMediumBlobHeaderDataChunkCountOffset);
-}
-
-uint medium_blob_data_chunk_indices_offset(ByteAddressBuffer medium_blob) {
-  return medium_blob.Load(kMediumBlobHeaderDataChunkIndicesOffset);
-}
-
-uint medium_chunk_descriptor_index(ByteAddressBuffer medium_blob, uint chunk_index) {
-  uint data_chunk_count = medium_blob_data_chunk_count(medium_blob);
-  uint data_chunk_indices_offset = medium_blob_data_chunk_indices_offset(medium_blob);
-
-  if ((chunk_index == kInvalidIndex) || (chunk_index >= data_chunk_count) || (data_chunk_indices_offset == kInvalidIndex)) {
-    return kInvalidIndex;
-  }
-
-  return medium_blob.Load(data_chunk_indices_offset + chunk_index * 4u);
-}
+#define ETX_MEDIUM_BLOB_ACCESS_SHARED_CONTEXT_TYPE ByteAddressBuffer
+#define ETX_MEDIUM_BLOB_ACCESS_SHARED_LOAD_U32(context, byte_offset) context.Load(byte_offset)
+#include <interop/medium_blob_access_shared.hxx>
+#undef ETX_MEDIUM_BLOB_ACCESS_SHARED_LOAD_U32
+#undef ETX_MEDIUM_BLOB_ACCESS_SHARED_CONTEXT_TYPE
 
 struct MediumBlobAccess {
   MediumDensitySharedGrid grid;
@@ -538,30 +391,74 @@ struct MediumBlobAccess {
   uint scattering_spectrum_index;
 };
 
+uint medium_extinction_shared_gpu_load_absorption_index(uint context, MediumBlobAccess medium_access) {
+  return medium_access.absorption_spectrum_index;
+}
+
+uint medium_extinction_shared_gpu_load_scattering_index(uint context, MediumBlobAccess medium_access) {
+  return medium_access.scattering_spectrum_index;
+}
+
+bool medium_extinction_shared_gpu_can_sample_spectrum(uint context, uint spectrum_index) {
+  return scene_resource_shared_can_sample_spectrum(constants.scene.spectrums, spectrum_index);
+}
+
+float3 medium_extinction_shared_gpu_load_spectrum_integrated(uint context, uint spectrum_index) {
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
+  return load_spectrum_integrated_value(spectrum_buffer, spectrum_index);
+}
+
+SpectralResponse medium_extinction_shared_gpu_load_spectrum_spectral(uint context, uint spectrum_index, SpectralQuery spect) {
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
+  return load_spectrum_response(spectrum_buffer, spectrum_index, spect);
+}
+
+#define ETX_MEDIUM_EXTINCTION_SHARED_CONTEXT_TYPE uint
+#define ETX_MEDIUM_EXTINCTION_SHARED_ACCESS_TYPE MediumBlobAccess
+#define ETX_MEDIUM_EXTINCTION_SHARED_LOAD_ABSORPTION_INDEX(context, medium_access) medium_extinction_shared_gpu_load_absorption_index(context, medium_access)
+#define ETX_MEDIUM_EXTINCTION_SHARED_LOAD_SCATTERING_INDEX(context, medium_access) medium_extinction_shared_gpu_load_scattering_index(context, medium_access)
+#define ETX_MEDIUM_EXTINCTION_SHARED_CAN_SAMPLE_SPECTRUM(context, spectrum_index) medium_extinction_shared_gpu_can_sample_spectrum(context, spectrum_index)
+#define ETX_MEDIUM_EXTINCTION_SHARED_LOAD_SPECTRUM_INTEGRATED(context, spectrum_index) medium_extinction_shared_gpu_load_spectrum_integrated(context, spectrum_index)
+#define ETX_MEDIUM_EXTINCTION_SHARED_LOAD_SPECTRUM_SPECTRAL(context, spectrum_index, spect) \
+  medium_extinction_shared_gpu_load_spectrum_spectral(context, spectrum_index, spect)
+#define ETX_MEDIUM_EXTINCTION_SHARED_SPECTRAL_RESPONSE_TYPE SpectralResponse
+#define ETX_MEDIUM_EXTINCTION_SHARED_SPECTRAL_QUERY_TYPE SpectralQuery
+#define ETX_MEDIUM_EXTINCTION_SHARED_SPECTRAL_ZERO(spect) spectral_response_zero(spect)
+#define ETX_MEDIUM_EXTINCTION_SHARED_SPECTRAL_ADD(a, b) spectral_response_add(a, b)
+#include <interop/medium_extinction_shared.hxx>
+#undef ETX_MEDIUM_EXTINCTION_SHARED_SPECTRAL_ADD
+#undef ETX_MEDIUM_EXTINCTION_SHARED_SPECTRAL_ZERO
+#undef ETX_MEDIUM_EXTINCTION_SHARED_SPECTRAL_QUERY_TYPE
+#undef ETX_MEDIUM_EXTINCTION_SHARED_SPECTRAL_RESPONSE_TYPE
+#undef ETX_MEDIUM_EXTINCTION_SHARED_LOAD_SPECTRUM_SPECTRAL
+#undef ETX_MEDIUM_EXTINCTION_SHARED_LOAD_SPECTRUM_INTEGRATED
+#undef ETX_MEDIUM_EXTINCTION_SHARED_CAN_SAMPLE_SPECTRUM
+#undef ETX_MEDIUM_EXTINCTION_SHARED_LOAD_SCATTERING_INDEX
+#undef ETX_MEDIUM_EXTINCTION_SHARED_LOAD_ABSORPTION_INDEX
+#undef ETX_MEDIUM_EXTINCTION_SHARED_ACCESS_TYPE
+#undef ETX_MEDIUM_EXTINCTION_SHARED_CONTEXT_TYPE
+
+#define ETX_MEDIUM_ACCESS_SHARED_CONTEXT_TYPE ByteAddressBuffer
+#define ETX_MEDIUM_ACCESS_SHARED_ACCESS_TYPE MediumBlobAccess
+#define ETX_MEDIUM_ACCESS_SHARED_LOAD_U32(context, byte_offset) context.Load(byte_offset)
+#define ETX_MEDIUM_ACCESS_SHARED_LOAD_U16(context, byte_offset) load_u16(context, byte_offset)
+#define ETX_MEDIUM_ACCESS_SHARED_LOAD_U32X3(context, byte_offset) context.Load3(byte_offset)
+#define ETX_MEDIUM_ACCESS_SHARED_LOAD_F32(context, byte_offset) asfloat(context.Load(byte_offset))
+#define ETX_MEDIUM_ACCESS_SHARED_LOAD_F32X3(context, byte_offset) asfloat(context.Load3(byte_offset))
+#define ETX_MEDIUM_ACCESS_SHARED_CHUNK_DESCRIPTOR_INDEX(context, chunk_index) medium_blob_access_shared_chunk_descriptor_index(context, chunk_index)
+#include <interop/medium_access_shared.hxx>
+#undef ETX_MEDIUM_ACCESS_SHARED_CHUNK_DESCRIPTOR_INDEX
+#undef ETX_MEDIUM_ACCESS_SHARED_LOAD_F32X3
+#undef ETX_MEDIUM_ACCESS_SHARED_LOAD_F32
+#undef ETX_MEDIUM_ACCESS_SHARED_LOAD_U32X3
+#undef ETX_MEDIUM_ACCESS_SHARED_LOAD_U16
+#undef ETX_MEDIUM_ACCESS_SHARED_LOAD_U32
+#undef ETX_MEDIUM_ACCESS_SHARED_ACCESS_TYPE
+#undef ETX_MEDIUM_ACCESS_SHARED_CONTEXT_TYPE
+
 MediumBlobAccess load_medium_blob_access(ByteAddressBuffer medium_blob, uint medium_desc_offset) {
-  MediumBlobAccess result;
-  result.grid.dimensions = medium_blob.Load3(medium_desc_offset + kMediumGridDimensionsOffset);
-  result.grid.type = medium_blob.Load(medium_desc_offset + kMediumGridTypeOffset);
-  result.grid.noise_type = medium_blob.Load(medium_desc_offset + kMediumGridNoiseTypeOffset);
-  result.grid.density_data_offset = medium_blob.Load(medium_desc_offset + kMediumGridDensityDataOffsetOffset);
-  result.grid.density_count = medium_blob.Load(medium_desc_offset + kMediumGridDensityCountOffset);
-  result.grid.noise_seed = medium_blob.Load(medium_desc_offset + kMediumGridNoiseSeedOffset);
-  result.grid.noise_offset = asfloat(medium_blob.Load3(medium_desc_offset + kMediumGridNoiseOffsetOffset));
-  result.grid.noise_enable_border_fade = medium_blob.Load(medium_desc_offset + kMediumGridNoiseEnableBorderFadeOffset);
-  result.grid.noise_octaves = medium_blob.Load(medium_desc_offset + kMediumGridNoiseOctavesOffset);
-  result.grid.noise_scale = asfloat(medium_blob.Load(medium_desc_offset + kMediumGridNoiseScaleOffset));
-  result.grid.noise_lacunarity = asfloat(medium_blob.Load(medium_desc_offset + kMediumGridNoiseLacunarityOffset));
-  result.grid.noise_persistence = asfloat(medium_blob.Load(medium_desc_offset + kMediumGridNoisePersistenceOffset));
-  result.grid.noise_power = asfloat(medium_blob.Load(medium_desc_offset + kMediumGridNoisePowerOffset));
-  result.grid.noise_sharpness = asfloat(medium_blob.Load(medium_desc_offset + kMediumGridNoiseSharpnessOffset));
-  result.grid.noise_border_fade_distance = asfloat(medium_blob.Load(medium_desc_offset + kMediumGridNoiseBorderFadeDistanceOffset));
-  result.grid.density_data_chunk_index = medium_blob.Load(medium_desc_offset + kMediumGridDensityDataChunkIndexOffset);
-  result.bounds_min = asfloat(medium_blob.Load3(medium_desc_offset + kMediumBoundsMinOffset));
-  result.bounds_max = asfloat(medium_blob.Load3(medium_desc_offset + kMediumBoundsMaxOffset));
-  result.absorption_spectrum_index = medium_blob.Load(medium_desc_offset + kMediumAbsorptionIndexOffset);
-  result.scattering_spectrum_index = medium_blob.Load(medium_desc_offset + kMediumScatteringIndexOffset);
-  result.medium_class = load_u16(medium_blob, medium_desc_offset + kMediumClassOffset);
-  result.density_payload_descriptor_index = medium_chunk_descriptor_index(medium_blob, result.grid.density_data_chunk_index);
+  ETX_ZERO_INIT(MediumBlobAccess, result);
+  medium_access_shared_load(medium_blob, medium_desc_offset, result);
   return result;
 }
 
@@ -572,49 +469,37 @@ bool try_get_medium_desc_offset(uint medium_index, out uint medium_desc_offset) 
   }
 
   ByteAddressBuffer medium_blob = bindless_buffers[NonUniformResourceIndex(constants.scene.mediums)];
-  uint medium_count = medium_blob_medium_count(medium_blob);
-  if (medium_index >= medium_count) {
-    return false;
-  }
-
-  uint mediums_offset = medium_blob_mediums_offset(medium_blob);
-  if (mediums_offset == kInvalidIndex) {
-    return false;
-  }
-
-  medium_desc_offset = medium_desc_base_offset(medium_blob, medium_index);
-  return true;
+  return medium_blob_access_shared_try_get_desc_offset(medium_blob, medium_index, medium_desc_offset);
 }
 
-float medium_texture_density_value(ByteAddressBuffer payload_buffer, uint density_offset, uint density_count, uint3 dimensions, uint x, uint y, uint z) {
+struct MediumTextureSampleGPUSharedContext {
+  ByteAddressBuffer payload_buffer;
+  uint density_offset;
+  uint density_count;
+};
+
+float medium_texture_sample_gpu_shared_density(MediumTextureSampleGPUSharedContext context, uint3 dimensions, uint x, uint y, uint z) {
   uint index = x + y * dimensions.x + z * dimensions.x * dimensions.y;
-  if (index >= density_count) {
+  if (index >= context.density_count) {
     return 0.0f;
   }
-  return asfloat(payload_buffer.Load(density_offset + index * 4u));
+  return asfloat(context.payload_buffer.Load(context.density_offset + index * 4u));
 }
 
-float medium_sample_texture_3d(ByteAddressBuffer medium_blob, MediumBlobAccess medium_access, float3 local_coord) {
-  uint3 dimensions = medium_access.grid.dimensions;
-  MediumDensitySharedTextureSample3D sample = (MediumDensitySharedTextureSample3D)0;
-  if (medium_density_shared_prepare_texture_sample_3d(local_coord, dimensions, sample) == false) {
-    return 0.0f;
-  }
+#define ETX_MEDIUM_TEXTURE_SAMPLE_SHARED_CONTEXT_TYPE MediumTextureSampleGPUSharedContext
+#define ETX_MEDIUM_TEXTURE_SAMPLE_SHARED_DENSITY(context, dimensions, x, y, z) medium_texture_sample_gpu_shared_density(context, dimensions, x, y, z)
+#include <interop/medium_texture_sample_shared.hxx>
+#undef ETX_MEDIUM_TEXTURE_SAMPLE_SHARED_DENSITY
+#undef ETX_MEDIUM_TEXTURE_SAMPLE_SHARED_CONTEXT_TYPE
 
+float medium_sample_texture_3d(MediumBlobAccess medium_access, float3 local_coord) {
   if ((medium_access.grid.density_count == 0u) || (medium_access.grid.density_data_offset == kInvalidIndex) || (medium_access.density_payload_descriptor_index == kInvalidIndex)) {
     return 0.0f;
   }
 
   ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(medium_access.density_payload_descriptor_index)];
-  float d000 = medium_texture_density_value(payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count, dimensions, sample.ix, sample.iy, sample.iz);
-  float d001 = medium_texture_density_value(payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count, dimensions, sample.nx, sample.iy, sample.iz);
-  float d010 = medium_texture_density_value(payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count, dimensions, sample.ix, sample.ny, sample.iz);
-  float d011 = medium_texture_density_value(payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count, dimensions, sample.nx, sample.ny, sample.iz);
-  float d100 = medium_texture_density_value(payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count, dimensions, sample.ix, sample.iy, sample.nz);
-  float d101 = medium_texture_density_value(payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count, dimensions, sample.nx, sample.iy, sample.nz);
-  float d110 = medium_texture_density_value(payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count, dimensions, sample.ix, sample.ny, sample.nz);
-  float d111 = medium_texture_density_value(payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count, dimensions, sample.nx, sample.ny, sample.nz);
-  return medium_density_shared_trilerp(d000, d001, d010, d011, d100, d101, d110, d111, sample.dx, sample.dy, sample.dz);
+  MediumTextureSampleGPUSharedContext context = {payload_buffer, medium_access.grid.density_data_offset, medium_access.grid.density_count};
+  return medium_texture_sample_shared_3d(context, local_coord, medium_access.grid.dimensions);
 }
 
 float medium_sample_noise(MediumBlobAccess medium_access, float3 local_coord) {
@@ -623,138 +508,238 @@ float medium_sample_noise(MediumBlobAccess medium_access, float3 local_coord) {
     medium_access.grid.noise_offset, medium_access.grid.noise_enable_border_fade, medium_access.grid.noise_border_fade_distance);
 }
 
-float medium_sample_density(ByteAddressBuffer medium_blob, MediumBlobAccess medium_access, float3 local_coord) {
-  float value = 0.0f;
-  if (medium_access.grid.type == MediumGridType::NoiseFunction) {
-    value = medium_sample_noise(medium_access, local_coord);
-  } else if (medium_access.grid.type == MediumGridType::Texture3D) {
-    value = medium_sample_texture_3d(medium_blob, medium_access, local_coord);
-  }
+struct MediumGridPolicyGPUSharedContext {
+  MediumBlobAccess medium_access;
+};
 
-  return medium_density_shared_apply_shape(value, medium_access.grid.noise_power, medium_access.grid.noise_sharpness);
+MediumDensitySharedGrid medium_grid_policy_gpu_shared_grid(MediumGridPolicyGPUSharedContext context) {
+  return context.medium_access.grid;
+}
+
+float medium_grid_policy_gpu_shared_sample_noise(MediumGridPolicyGPUSharedContext context, float3 local_coord) {
+  return medium_sample_noise(context.medium_access, local_coord);
+}
+
+float medium_grid_policy_gpu_shared_sample_texture(MediumGridPolicyGPUSharedContext context, float3 local_coord) {
+  return medium_sample_texture_3d(context.medium_access, local_coord);
+}
+
+bool medium_grid_policy_gpu_shared_texture_ready(MediumGridPolicyGPUSharedContext context) {
+  return (context.medium_access.grid.density_data_offset != kInvalidIndex) && (context.medium_access.density_payload_descriptor_index != kInvalidIndex);
+}
+
+#define ETX_MEDIUM_GRID_POLICY_SHARED_CONTEXT_TYPE MediumGridPolicyGPUSharedContext
+#define ETX_MEDIUM_GRID_POLICY_SHARED_GRID(context) medium_grid_policy_gpu_shared_grid(context)
+#define ETX_MEDIUM_GRID_POLICY_SHARED_SAMPLE_NOISE(context, local_coord) medium_grid_policy_gpu_shared_sample_noise(context, local_coord)
+#define ETX_MEDIUM_GRID_POLICY_SHARED_SAMPLE_TEXTURE(context, local_coord) medium_grid_policy_gpu_shared_sample_texture(context, local_coord)
+#define ETX_MEDIUM_GRID_POLICY_SHARED_TEXTURE_READY(context) medium_grid_policy_gpu_shared_texture_ready(context)
+#include <interop/medium_grid_policy_shared.hxx>
+#undef ETX_MEDIUM_GRID_POLICY_SHARED_TEXTURE_READY
+#undef ETX_MEDIUM_GRID_POLICY_SHARED_SAMPLE_TEXTURE
+#undef ETX_MEDIUM_GRID_POLICY_SHARED_SAMPLE_NOISE
+#undef ETX_MEDIUM_GRID_POLICY_SHARED_GRID
+#undef ETX_MEDIUM_GRID_POLICY_SHARED_CONTEXT_TYPE
+
+float medium_sample_density(MediumBlobAccess medium_access, float3 local_coord) {
+  MediumGridPolicyGPUSharedContext context = {medium_access};
+  return medium_grid_policy_shared_sample_density(context, local_coord);
 }
 
 bool medium_has_grid_data(MediumBlobAccess medium_access) {
-  if (medium_density_shared_has_grid_data(medium_access.grid.type, medium_access.grid.dimensions, medium_access.grid.density_count) == false) {
-    return false;
-  }
-
-  if (medium_access.grid.type == MediumGridType::NoiseFunction) {
-    return true;
-  }
-
-  return (medium_access.grid.density_data_offset != kInvalidIndex) && (medium_access.density_payload_descriptor_index != kInvalidIndex);
+  MediumGridPolicyGPUSharedContext context = {medium_access};
+  return medium_grid_policy_shared_has_grid_data(context);
 }
 
-struct MediumTransmittanceGPUSharedContext {
-  ByteAddressBuffer medium_blob;
+struct MediumDensityRandomGPUSharedContext {
   MediumBlobAccess medium_access;
   uint seed;
 };
 
-float medium_transmittance_gpu_shared_rnd(inout MediumTransmittanceGPUSharedContext context) {
+float medium_density_random_gpu_shared_rnd(inout MediumDensityRandomGPUSharedContext context) {
   return rnd01(context.seed);
 }
 
-float medium_transmittance_gpu_shared_density(inout MediumTransmittanceGPUSharedContext context, float3 local_pos) {
-  return medium_sample_density(context.medium_blob, context.medium_access, local_pos);
+float medium_density_random_gpu_shared_density(inout MediumDensityRandomGPUSharedContext context, float3 local_pos) {
+  return medium_sample_density(context.medium_access, local_pos);
 }
 
-#define ETX_MEDIUM_SHARED_CONTEXT_TYPE MediumTransmittanceGPUSharedContext
-#define ETX_MEDIUM_SHARED_RND(context) medium_transmittance_gpu_shared_rnd(context)
-#define ETX_MEDIUM_SHARED_DENSITY(context, local_pos) medium_transmittance_gpu_shared_density(context, local_pos)
+uint medium_sample_shared_gpu_load_medium_class(MediumDensityRandomGPUSharedContext context) {
+  return context.medium_access.medium_class;
+}
+
+bool medium_sample_shared_gpu_has_grid_data(MediumDensityRandomGPUSharedContext context) {
+  return medium_has_grid_data(context.medium_access);
+}
+
+float3 medium_sample_shared_gpu_bounds_min(MediumDensityRandomGPUSharedContext context) {
+  return context.medium_access.bounds_min;
+}
+
+float3 medium_sample_shared_gpu_bounds_max(MediumDensityRandomGPUSharedContext context) {
+  return context.medium_access.bounds_max;
+}
+
+#define ETX_MEDIUM_SHARED_CONTEXT_TYPE MediumDensityRandomGPUSharedContext
+#define ETX_MEDIUM_SHARED_RND(context) medium_density_random_gpu_shared_rnd(context)
+#define ETX_MEDIUM_SHARED_DENSITY(context, local_pos) medium_density_random_gpu_shared_density(context, local_pos)
 #include <interop/medium_transmittance_shared.hxx>
 #undef ETX_MEDIUM_SHARED_DENSITY
 #undef ETX_MEDIUM_SHARED_RND
 #undef ETX_MEDIUM_SHARED_CONTEXT_TYPE
 
-float3 medium_segment_transmittance_integrated(uint medium_index, float3 origin, float3 direction, float distance, inout uint seed) {
-  if ((distance <= 0.0f) || (constants.scene.spectrums == kInvalidIndex)) {
-    return float3(1.0f, 1.0f, 1.0f);
-  }
+#define ETX_MEDIUM_SAMPLE_SHARED_CONTEXT_TYPE MediumDensityRandomGPUSharedContext
+#define ETX_MEDIUM_SAMPLE_SHARED_RND(context) medium_density_random_gpu_shared_rnd(context)
+#define ETX_MEDIUM_SAMPLE_SHARED_DENSITY(context, local_pos) medium_density_random_gpu_shared_density(context, local_pos)
+#define ETX_MEDIUM_SAMPLE_SHARED_LOAD_MEDIUM_CLASS(context) medium_sample_shared_gpu_load_medium_class(context)
+#define ETX_MEDIUM_SAMPLE_SHARED_HAS_GRID_DATA(context) medium_sample_shared_gpu_has_grid_data(context)
+#define ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MIN(context) medium_sample_shared_gpu_bounds_min(context)
+#define ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MAX(context) medium_sample_shared_gpu_bounds_max(context)
+#include <interop/medium_sample_shared.hxx>
+#undef ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MAX
+#undef ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MIN
+#undef ETX_MEDIUM_SAMPLE_SHARED_HAS_GRID_DATA
+#undef ETX_MEDIUM_SAMPLE_SHARED_LOAD_MEDIUM_CLASS
+#undef ETX_MEDIUM_SAMPLE_SHARED_DENSITY
+#undef ETX_MEDIUM_SAMPLE_SHARED_RND
+#undef ETX_MEDIUM_SAMPLE_SHARED_CONTEXT_TYPE
 
+MediumSample sample_medium_gpu(
+  MediumBlobAccess medium_access, SpectralQuery spect, SpectralResponse throughput, SpectralResponse scattering_value, SpectralResponse absorption_value, float3 pos, float3 w_i,
+  float max_t, inout uint seed) {
+  MediumDensityRandomGPUSharedContext context;
+  context.medium_access = medium_access;
+  context.seed = seed;
+  MediumSample result = medium_sample_shared_sample(context, spect, throughput, scattering_value, absorption_value, pos, w_i, max_t);
+  seed = context.seed;
+  return result;
+}
+
+struct MediumSegmentTransmittanceGPUSharedContext {
+  uint seed;
+};
+
+bool medium_segment_transmittance_shared_gpu_has_required_scene_buffers(MediumSegmentTransmittanceGPUSharedContext context) {
+  return scene_resource_shared_has_medium_spectrum_buffers(constants.scene.mediums, constants.scene.spectrums);
+}
+
+bool medium_segment_transmittance_shared_gpu_try_load_access(MediumSegmentTransmittanceGPUSharedContext context, uint medium_index, out MediumBlobAccess medium_access) {
+  medium_access = ETX_ZERO(MediumBlobAccess);
   uint medium_desc_offset = kInvalidIndex;
   if (try_get_medium_desc_offset(medium_index, medium_desc_offset) == false) {
-    return float3(1.0f, 1.0f, 1.0f);
+    return false;
   }
 
   ByteAddressBuffer medium_blob = bindless_buffers[NonUniformResourceIndex(constants.scene.mediums)];
-  MediumBlobAccess medium_access = load_medium_blob_access(medium_blob, medium_desc_offset);
-  uint medium_class = medium_access.medium_class;
-  if ((medium_class != Medium::Homogeneous) && (medium_class != Medium::Heterogeneous)) {
-    return float3(1.0f, 1.0f, 1.0f);
-  }
-  uint absorption_index = medium_access.absorption_spectrum_index;
-  uint scattering_index = medium_access.scattering_spectrum_index;
+  medium_access = load_medium_blob_access(medium_blob, medium_desc_offset);
+  return true;
+}
 
-  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
-  float3 extinction = float3(0.0f, 0.0f, 0.0f);
-  if (absorption_index != kInvalidIndex) {
-    extinction += load_spectrum_integrated_value(spectrum_buffer, absorption_index);
-  }
-  if (scattering_index != kInvalidIndex) {
-    extinction += load_spectrum_integrated_value(spectrum_buffer, scattering_index);
-  }
+uint medium_segment_transmittance_shared_gpu_load_medium_class(MediumSegmentTransmittanceGPUSharedContext context, MediumBlobAccess medium_access) {
+  return medium_access.medium_class;
+}
 
-  if (medium_class == Medium::Homogeneous) {
-    return medium_shared_transmittance_homogeneous_integrated(extinction, distance);
-  }
-  if (medium_has_grid_data(medium_access) == false) {
-    return float3(1.0f, 1.0f, 1.0f);
-  }
+bool medium_segment_transmittance_shared_gpu_has_grid_data(MediumSegmentTransmittanceGPUSharedContext context, MediumBlobAccess medium_access) {
+  return medium_has_grid_data(medium_access);
+}
 
-  MediumTransmittanceGPUSharedContext context;
-  context.medium_blob = medium_blob;
-  context.medium_access = medium_access;
+float3 medium_segment_transmittance_shared_gpu_load_extinction_integrated(MediumSegmentTransmittanceGPUSharedContext context, MediumBlobAccess medium_access) {
+  return medium_extinction_shared_load_integrated(0u, medium_access);
+}
+
+SpectralResponse medium_segment_transmittance_shared_gpu_load_extinction_spectral(
+  MediumSegmentTransmittanceGPUSharedContext context, MediumBlobAccess medium_access, SpectralQuery spect) {
+  return medium_extinction_shared_load_spectral(0u, medium_access, spect);
+}
+
+float3 medium_segment_transmittance_shared_gpu_transmittance_homogeneous_integrated(
+  MediumSegmentTransmittanceGPUSharedContext context, MediumBlobAccess medium_access, float3 extinction, float distance) {
+  return medium_shared_transmittance_homogeneous_integrated(extinction, distance);
+}
+
+SpectralResponse medium_segment_transmittance_shared_gpu_transmittance_homogeneous_spectral(
+  MediumSegmentTransmittanceGPUSharedContext context, MediumBlobAccess medium_access, SpectralResponse extinction, float distance, SpectralQuery spect) {
+  return medium_shared_transmittance_homogeneous_spectral(extinction, distance);
+}
+
+float3 medium_segment_transmittance_shared_gpu_transmittance_heterogeneous_integrated(
+  inout MediumSegmentTransmittanceGPUSharedContext context, MediumBlobAccess medium_access, float3 extinction, float3 origin, float3 direction, float distance) {
+  MediumDensityRandomGPUSharedContext medium_context;
+  medium_context.medium_access = medium_access;
+  medium_context.seed = context.seed;
+  float3 transmittance =
+    medium_shared_transmittance_heterogeneous_integrated(extinction, origin, direction, distance, medium_access.bounds_min, medium_access.bounds_max, medium_context);
+  context.seed = medium_context.seed;
+  return transmittance;
+}
+
+SpectralResponse medium_segment_transmittance_shared_gpu_transmittance_heterogeneous_spectral(
+  inout MediumSegmentTransmittanceGPUSharedContext context, MediumBlobAccess medium_access, SpectralResponse extinction, float3 origin, float3 direction, float distance,
+  SpectralQuery spect) {
+  MediumDensityRandomGPUSharedContext medium_context;
+  medium_context.medium_access = medium_access;
+  medium_context.seed = context.seed;
+  SpectralResponse transmittance =
+    medium_shared_transmittance_heterogeneous_spectral(extinction, origin, direction, distance, medium_access.bounds_min, medium_access.bounds_max, medium_context, spect);
+  context.seed = medium_context.seed;
+  return transmittance;
+}
+
+SpectralResponse medium_segment_transmittance_shared_gpu_spectral_one(SpectralQuery spect) {
+  return spectral_response_make(spect, 1.0f);
+}
+
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_CONTEXT_TYPE MediumSegmentTransmittanceGPUSharedContext
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_ACCESS_TYPE MediumBlobAccess
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_SPECTRAL_RESPONSE_TYPE SpectralResponse
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_SPECTRAL_QUERY_TYPE SpectralQuery
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_HAS_REQUIRED_SCENE_BUFFERS(context) medium_segment_transmittance_shared_gpu_has_required_scene_buffers(context)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRY_LOAD_ACCESS(context, medium_index, medium_access) \
+  medium_segment_transmittance_shared_gpu_try_load_access(context, medium_index, medium_access)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_LOAD_MEDIUM_CLASS(context, medium_access) \
+  medium_segment_transmittance_shared_gpu_load_medium_class(context, medium_access)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_HAS_GRID_DATA(context, medium_access) medium_segment_transmittance_shared_gpu_has_grid_data(context, medium_access)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_LOAD_EXTINCTION_INTEGRATED(context, medium_access) \
+  medium_segment_transmittance_shared_gpu_load_extinction_integrated(context, medium_access)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_LOAD_EXTINCTION_SPECTRAL(context, medium_access, spect) \
+  medium_segment_transmittance_shared_gpu_load_extinction_spectral(context, medium_access, spect)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRANSMITTANCE_HOMOGENEOUS_INTEGRATED(context, medium_access, extinction, distance) \
+  medium_segment_transmittance_shared_gpu_transmittance_homogeneous_integrated(context, medium_access, extinction, distance)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRANSMITTANCE_HOMOGENEOUS_SPECTRAL(context, medium_access, extinction, distance, spect) \
+  medium_segment_transmittance_shared_gpu_transmittance_homogeneous_spectral(context, medium_access, extinction, distance, spect)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRANSMITTANCE_HETEROGENEOUS_INTEGRATED(context, medium_access, extinction, origin, direction, distance) \
+  medium_segment_transmittance_shared_gpu_transmittance_heterogeneous_integrated(context, medium_access, extinction, origin, direction, distance)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRANSMITTANCE_HETEROGENEOUS_SPECTRAL(context, medium_access, extinction, origin, direction, distance, spect) \
+  medium_segment_transmittance_shared_gpu_transmittance_heterogeneous_spectral(context, medium_access, extinction, origin, direction, distance, spect)
+#define ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_SPECTRAL_ONE(spect) medium_segment_transmittance_shared_gpu_spectral_one(spect)
+#include <interop/medium_segment_transmittance_shared.hxx>
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_SPECTRAL_ONE
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRANSMITTANCE_HETEROGENEOUS_SPECTRAL
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRANSMITTANCE_HETEROGENEOUS_INTEGRATED
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRANSMITTANCE_HOMOGENEOUS_SPECTRAL
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRANSMITTANCE_HOMOGENEOUS_INTEGRATED
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_LOAD_EXTINCTION_SPECTRAL
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_LOAD_EXTINCTION_INTEGRATED
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_HAS_GRID_DATA
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_LOAD_MEDIUM_CLASS
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_TRY_LOAD_ACCESS
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_HAS_REQUIRED_SCENE_BUFFERS
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_SPECTRAL_QUERY_TYPE
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_SPECTRAL_RESPONSE_TYPE
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_ACCESS_TYPE
+#undef ETX_MEDIUM_SEGMENT_TRANSMITTANCE_SHARED_CONTEXT_TYPE
+
+float3 medium_segment_transmittance_integrated(uint medium_index, float3 origin, float3 direction, float distance, inout uint seed) {
+  MediumSegmentTransmittanceGPUSharedContext context;
   context.seed = seed;
-  float3 transmittance = medium_shared_transmittance_heterogeneous_integrated(
-    extinction, origin, direction, distance, medium_access.bounds_min, medium_access.bounds_max, context);
+  float3 transmittance = medium_segment_transmittance_shared_integrated(context, medium_index, origin, direction, distance);
   seed = context.seed;
   return transmittance;
 }
 
 SpectralResponse medium_segment_transmittance_spectral(uint medium_index, float3 origin, float3 direction, float distance, SpectralQuery spect, inout uint seed) {
-  SpectralResponse one = spectral_response_make(spect, 1.0f);
-  if ((distance <= 0.0f) || (constants.scene.spectrums == kInvalidIndex)) {
-    return one;
-  }
-
-  uint medium_desc_offset = kInvalidIndex;
-  if (try_get_medium_desc_offset(medium_index, medium_desc_offset) == false) {
-    return one;
-  }
-
-  ByteAddressBuffer medium_blob = bindless_buffers[NonUniformResourceIndex(constants.scene.mediums)];
-  MediumBlobAccess medium_access = load_medium_blob_access(medium_blob, medium_desc_offset);
-  uint medium_class = medium_access.medium_class;
-  if ((medium_class != Medium::Homogeneous) && (medium_class != Medium::Heterogeneous)) {
-    return one;
-  }
-  uint absorption_index = medium_access.absorption_spectrum_index;
-  uint scattering_index = medium_access.scattering_spectrum_index;
-
-  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
-  SpectralResponse extinction = spectral_response_make(spect, 0.0f);
-  if (absorption_index != kInvalidIndex) {
-    extinction = spectral_response_add(extinction, load_spectrum_response(spectrum_buffer, absorption_index, spect));
-  }
-  if (scattering_index != kInvalidIndex) {
-    extinction = spectral_response_add(extinction, load_spectrum_response(spectrum_buffer, scattering_index, spect));
-  }
-
-  if (medium_class == Medium::Homogeneous) {
-    return medium_shared_transmittance_homogeneous_spectral(extinction, distance);
-  }
-  if (medium_has_grid_data(medium_access) == false) {
-    return one;
-  }
-
-  MediumTransmittanceGPUSharedContext context;
-  context.medium_blob = medium_blob;
-  context.medium_access = medium_access;
+  MediumSegmentTransmittanceGPUSharedContext context;
   context.seed = seed;
-  SpectralResponse transmittance = medium_shared_transmittance_heterogeneous_spectral(
-    extinction, origin, direction, distance, medium_access.bounds_min, medium_access.bounds_max, context, spect);
+  SpectralResponse transmittance = medium_segment_transmittance_shared_spectral(context, medium_index, origin, direction, distance, spect);
   seed = context.seed;
   return transmittance;
 }
@@ -772,22 +757,126 @@ DistributionEntry load_distribution_entry(ByteAddressBuffer payload_buffer, uint
   return result;
 }
 
+struct DistributionSharedGPUContext {
+  ByteAddressBuffer payload_buffer;
+  uint entries_base_offset;
+};
+
+DistributionSharedGPUContext make_distribution_shared_gpu_context(ByteAddressBuffer payload_buffer, uint entries_base_offset) {
+  DistributionSharedGPUContext context;
+  context.payload_buffer = payload_buffer;
+  context.entries_base_offset = entries_base_offset;
+  return context;
+}
+
+float distribution_shared_gpu_cdf(DistributionSharedGPUContext context, uint index) {
+  DistributionEntry entry = load_distribution_entry(context.payload_buffer, context.entries_base_offset + index * kDistributionEntryStride);
+  return entry.cdf;
+}
+
+float distribution_shared_gpu_pdf(DistributionSharedGPUContext context, uint index) {
+  DistributionEntry entry = load_distribution_entry(context.payload_buffer, context.entries_base_offset + index * kDistributionEntryStride);
+  return entry.pdf;
+}
+
+#define ETX_DISTRIBUTION_SHARED_CONTEXT_TYPE DistributionSharedGPUContext
+#define ETX_DISTRIBUTION_SHARED_CDF(context, index) distribution_shared_gpu_cdf(context, index)
+#define ETX_DISTRIBUTION_SHARED_PDF(context, index) distribution_shared_gpu_pdf(context, index)
+#include <interop/distribution_sample_shared.hxx>
+#undef ETX_DISTRIBUTION_SHARED_PDF
+#undef ETX_DISTRIBUTION_SHARED_CDF
+#undef ETX_DISTRIBUTION_SHARED_CONTEXT_TYPE
+
 uint sample_distribution(ByteAddressBuffer payload_buffer, uint entries_base_offset, uint count, float rnd, out float pdf) {
-  if (count == 0u) {
-    pdf = 0.0f;
-    return kInvalidIndex;
+  DistributionSharedGPUContext context = make_distribution_shared_gpu_context(payload_buffer, entries_base_offset);
+  return distribution_shared_sample(context, count, rnd, pdf);
+}
+
+struct ImageSampleSharedGPUContext {
+  ByteAddressBuffer x_payload_buffer;
+  ByteAddressBuffer y_payload_buffer;
+  uint x_distribution_entries_offset;
+  uint y_distribution_entries_offset;
+  uint x_entries_stride;
+  uint x_distribution_count;
+  uint y_count;
+  float2 fsize;
+};
+
+ImageSampleSharedGPUContext make_image_sample_shared_gpu_context(
+  ByteAddressBuffer x_payload_buffer, ByteAddressBuffer y_payload_buffer, ImageDescAccess image_access, uint y_count) {
+  ImageSampleSharedGPUContext context;
+  context.x_payload_buffer = x_payload_buffer;
+  context.y_payload_buffer = y_payload_buffer;
+  context.x_distribution_entries_offset = image_access.x_distribution_entries_offset;
+  context.y_distribution_entries_offset = image_access.y_distribution_entries_offset;
+  context.x_entries_stride = image_access.x_entries_stride;
+  context.x_distribution_count = image_access.x_distribution_count;
+  context.y_count = y_count;
+  context.fsize = image_access.fsize;
+  return context;
+}
+
+uint image_sample_shared_gpu_y_count(ImageSampleSharedGPUContext context) {
+  return context.y_count;
+}
+
+uint image_sample_shared_gpu_x_count(ImageSampleSharedGPUContext context, uint y_index) {
+  if ((y_index >= context.x_distribution_count) || (context.x_entries_stride == 0u)) {
+    return 0u;
   }
 
-  DistributionSearchRange search = distribution_search_begin(count);
-  while (distribution_search_active(search)) {
-    uint middle = distribution_search_middle(search);
-    DistributionEntry middle_entry = load_distribution_entry(payload_buffer, entries_base_offset + middle * kDistributionEntryStride);
-    distribution_search_update(search, middle, middle_entry.cdf, rnd);
-  }
+  return context.x_entries_stride - 1u;
+}
 
-  DistributionEntry result = load_distribution_entry(payload_buffer, entries_base_offset + search.begin * kDistributionEntryStride);
-  pdf = result.pdf;
-  return search.begin;
+float2 image_sample_shared_gpu_image_fsize(ImageSampleSharedGPUContext context) {
+  return context.fsize;
+}
+
+uint image_sample_shared_gpu_sample_y(inout ImageSampleSharedGPUContext context, float rnd, out float pdf) {
+  return sample_distribution(context.y_payload_buffer, context.y_distribution_entries_offset, context.y_count, rnd, pdf);
+}
+
+uint image_sample_shared_gpu_sample_x(inout ImageSampleSharedGPUContext context, uint y_index, float rnd, out float pdf) {
+  uint row_base_offset = context.x_distribution_entries_offset + y_index * context.x_entries_stride * kDistributionEntryStride;
+  uint x_count = image_sample_shared_gpu_x_count(context, y_index);
+  return sample_distribution(context.x_payload_buffer, row_base_offset, x_count, rnd, pdf);
+}
+
+float image_sample_shared_gpu_cdf_y(ImageSampleSharedGPUContext context, uint y_index) {
+  uint y_offset = context.y_distribution_entries_offset + y_index * kDistributionEntryStride;
+  DistributionEntry entry = load_distribution_entry(context.y_payload_buffer, y_offset);
+  return entry.cdf;
+}
+
+float image_sample_shared_gpu_cdf_x(ImageSampleSharedGPUContext context, uint y_index, uint x_index) {
+  uint row_base_offset = context.x_distribution_entries_offset + y_index * context.x_entries_stride * kDistributionEntryStride;
+  uint x_offset = row_base_offset + x_index * kDistributionEntryStride;
+  DistributionEntry entry = load_distribution_entry(context.x_payload_buffer, x_offset);
+  return entry.cdf;
+}
+
+#define ETX_IMAGE_SAMPLE_SHARED_CONTEXT_TYPE ImageSampleSharedGPUContext
+#define ETX_IMAGE_SAMPLE_SHARED_Y_COUNT(context) image_sample_shared_gpu_y_count(context)
+#define ETX_IMAGE_SAMPLE_SHARED_X_COUNT(context, y_index) image_sample_shared_gpu_x_count(context, y_index)
+#define ETX_IMAGE_SAMPLE_SHARED_IMAGE_FSIZE(context) image_sample_shared_gpu_image_fsize(context)
+#define ETX_IMAGE_SAMPLE_SHARED_SAMPLE_Y(context, rnd, pdf) image_sample_shared_gpu_sample_y(context, rnd, pdf)
+#define ETX_IMAGE_SAMPLE_SHARED_SAMPLE_X(context, y_index, rnd, pdf) image_sample_shared_gpu_sample_x(context, y_index, rnd, pdf)
+#define ETX_IMAGE_SAMPLE_SHARED_CDF_Y(context, y_index) image_sample_shared_gpu_cdf_y(context, y_index)
+#define ETX_IMAGE_SAMPLE_SHARED_CDF_X(context, y_index, x_index) image_sample_shared_gpu_cdf_x(context, y_index, x_index)
+#include <interop/image_sample_shared.hxx>
+#undef ETX_IMAGE_SAMPLE_SHARED_CDF_X
+#undef ETX_IMAGE_SAMPLE_SHARED_CDF_Y
+#undef ETX_IMAGE_SAMPLE_SHARED_SAMPLE_X
+#undef ETX_IMAGE_SAMPLE_SHARED_SAMPLE_Y
+#undef ETX_IMAGE_SAMPLE_SHARED_IMAGE_FSIZE
+#undef ETX_IMAGE_SAMPLE_SHARED_X_COUNT
+#undef ETX_IMAGE_SAMPLE_SHARED_Y_COUNT
+#undef ETX_IMAGE_SAMPLE_SHARED_CONTEXT_TYPE
+
+float2 sample_image_uv_fallback(uint image_index, float2 fallback_uv, out float4 eval) {
+  eval = evaluate_image(image_index, fallback_uv);
+  return fallback_uv;
 }
 
 float2 sample_image_uv(uint image_index, float2 rnd, out float image_pdf, out uint2 location, out float4 eval) {
@@ -795,70 +884,62 @@ float2 sample_image_uv(uint image_index, float2 rnd, out float image_pdf, out ui
   location = uint2(0u, 0u);
   eval = float4(1.0f, 1.0f, 1.0f, 1.0f);
 
-  if (constants.scene.images == kInvalidIndex) {
-    return rnd;
-  }
-
-  ByteAddressBuffer image_blob = bindless_buffers[NonUniformResourceIndex(constants.scene.images)];
-  ImageDescAccess image_access = (ImageDescAccess)0;
-  if (try_load_image_desc_access(image_blob, image_index, image_access) == false) {
-    return rnd;
-  }
-
-  if ((image_access.fsize.x <= 0.0f) || (image_access.fsize.y <= 0.0f) || (image_access.x_entries_stride == 0u) || (image_access.x_distribution_count == 0u) ||
-      (image_access.y_entries_count == 0u) || (image_access.x_distribution_entries_offset == kInvalidIndex) || (image_access.y_distribution_entries_offset == kInvalidIndex) ||
-      (image_access.x_distribution_chunk_index == kInvalidIndex) || (image_access.y_distribution_chunk_index == kInvalidIndex)) {
-    float2 fallback_uv = rnd;
-    eval = evaluate_image(image_index, fallback_uv);
-    return fallback_uv;
-  }
-
-  uint x_payload_descriptor_index = image_chunk_descriptor_index(image_blob, image_access.x_distribution_chunk_index);
-  uint y_payload_descriptor_index = image_chunk_descriptor_index(image_blob, image_access.y_distribution_chunk_index);
-  if ((x_payload_descriptor_index == kInvalidIndex) || (y_payload_descriptor_index == kInvalidIndex)) {
-    float2 fallback_uv = rnd;
-    eval = evaluate_image(image_index, fallback_uv);
-    return fallback_uv;
+  ImageSceneAccessGPUContext access_context = {constants.scene.images};
+  ETX_ZERO_INIT(ImageDescAccess, image_access);
+  uint x_payload_descriptor_index = kInvalidIndex;
+  uint y_payload_descriptor_index = kInvalidIndex;
+  uint y_count = 0u;
+  if (image_scene_access_shared_try_load_distribution_payload_descriptors(
+        access_context, image_index, image_access, x_payload_descriptor_index, y_payload_descriptor_index, y_count) == false) {
+    return sample_image_uv_fallback(image_index, rnd, eval);
   }
 
   ByteAddressBuffer x_payload_buffer = bindless_buffers[NonUniformResourceIndex(x_payload_descriptor_index)];
   ByteAddressBuffer y_payload_buffer = bindless_buffers[NonUniformResourceIndex(y_payload_descriptor_index)];
 
-  uint y_count = (image_access.y_entries_count > 0u) ? (image_access.y_entries_count - 1u) : 0u;
-  uint x_count = (image_access.x_entries_stride > 0u) ? (image_access.x_entries_stride - 1u) : 0u;
-  if ((y_count == 0u) || (x_count == 0u)) {
-    float2 fallback_uv = rnd;
-    eval = evaluate_image(image_index, fallback_uv);
-    return fallback_uv;
+  ImageSampleSharedGPUContext sample_context = make_image_sample_shared_gpu_context(x_payload_buffer, y_payload_buffer, image_access, y_count);
+
+  float2 uv = rnd;
+  bool sampled = image_sample_shared_distribution(sample_context, rnd, image_pdf, location, uv);
+  if (sampled == false) {
+    return sample_image_uv_fallback(image_index, rnd, eval);
   }
 
-  float y_pdf = 0.0f;
-  location.y = sample_distribution(y_payload_buffer, image_access.y_distribution_entries_offset, y_count, rnd.y, y_pdf);
-  if ((location.y == kInvalidIndex) || (location.y >= image_access.x_distribution_count)) {
-    float2 fallback_uv = rnd;
-    eval = evaluate_image(image_index, fallback_uv);
-    return fallback_uv;
-  }
-
-  uint row_base_offset = image_access.x_distribution_entries_offset + location.y * image_access.x_entries_stride * kDistributionEntryStride;
-  float x_pdf = 0.0f;
-  location.x = sample_distribution(x_payload_buffer, row_base_offset, x_count, rnd.x, x_pdf);
-  if (location.x == kInvalidIndex) {
-    float2 fallback_uv = rnd;
-    eval = evaluate_image(image_index, fallback_uv);
-    return fallback_uv;
-  }
-
-  DistributionEntry x0 = load_distribution_entry(x_payload_buffer, row_base_offset + location.x * kDistributionEntryStride);
-  DistributionEntry x1 = load_distribution_entry(x_payload_buffer, row_base_offset + min(location.x + 1u, x_count - 1u) * kDistributionEntryStride);
-  DistributionEntry y0 = load_distribution_entry(y_payload_buffer, image_access.y_distribution_entries_offset + location.y * kDistributionEntryStride);
-  DistributionEntry y1 = load_distribution_entry(y_payload_buffer, image_access.y_distribution_entries_offset + min(location.y + 1u, y_count - 1u) * kDistributionEntryStride);
-
-  float2 uv = image_sample_uv_from_distribution(rnd, location, image_access.fsize, x0.cdf, x1.cdf, y0.cdf, y1.cdf);
   eval = evaluate_image(image_index, uv);
-  image_pdf = x_pdf * y_pdf;
   return uv;
 }
+
+struct CameraLensSampleSharedGPUContext {
+  uint images_descriptor_index;
+};
+
+bool camera_lens_sample_shared_gpu_try_sample_image_uv(
+  CameraLensSampleSharedGPUContext context, uint lens_image, float2 rnd, out float2 image_uv) {
+  image_uv = float2(0.0f, 0.0f);
+
+  ImageSceneAccessGPUContext access_context = {context.images_descriptor_index};
+  ETX_ZERO_INIT(ImageDescAccess, image_access);
+  if (image_scene_access_shared_try_load_desc(access_context, lens_image, image_access) == false) {
+    return false;
+  }
+
+  float image_pdf = 0.0f;
+  uint2 image_location = uint2(0u, 0u);
+  float4 image_eval = float4(1.0f, 1.0f, 1.0f, 1.0f);
+  image_uv = sample_image_uv(lens_image, rnd, image_pdf, image_location, image_eval);
+  return true;
+}
+
+#define ETX_CAMERA_LENS_SAMPLE_SHARED_CONTEXT_TYPE CameraLensSampleSharedGPUContext
+#define ETX_CAMERA_LENS_SAMPLE_SHARED_TRY_SAMPLE_IMAGE_UV(context, lens_image, rnd, image_uv) \
+  camera_lens_sample_shared_gpu_try_sample_image_uv(context, lens_image, rnd, image_uv)
+#include <interop/camera_lens_sample_shared.hxx>
+#undef ETX_CAMERA_LENS_SAMPLE_SHARED_TRY_SAMPLE_IMAGE_UV
+#undef ETX_CAMERA_LENS_SAMPLE_SHARED_CONTEXT_TYPE
+
+#define ETX_CAMERA_PRIMARY_RAY_SHARED_CONTEXT_TYPE CameraLensSampleSharedGPUContext
+#include <interop/camera_primary_ray_shared.hxx>
+#undef ETX_CAMERA_PRIMARY_RAY_SHARED_CONTEXT_TYPE
 
 float4 load_image_pixel(ByteAddressBuffer payload_buffer, uint format, uint byte_offset) {
   if (format == (uint)Image::Format::RGBA32F) {
@@ -879,69 +960,132 @@ float4 load_image_pixel(ByteAddressBuffer payload_buffer, uint format, uint byte
 }
 
 float4 evaluate_image(uint image_index, float2 uv) {
-  if (constants.scene.images == kInvalidIndex) {
-    return float4(1.0f, 1.0f, 1.0f, 1.0f);
-  }
-
-  ByteAddressBuffer image_blob = bindless_buffers[NonUniformResourceIndex(constants.scene.images)];
-  ImageDescAccess image_access = (ImageDescAccess)0;
-  if (try_load_image_desc_access(image_blob, image_index, image_access) == false) {
-    return float4(1.0f, 1.0f, 1.0f, 1.0f);
-  }
-
-  if ((image_access.pixel_data_offset == kInvalidIndex) || (image_access.pixel_data_stride == 0u) || (image_access.size.x == 0u) || (image_access.size.y == 0u)) {
-    return float4(1.0f, 1.0f, 1.0f, 1.0f);
-  }
-
-  uint payload_descriptor_index = image_chunk_descriptor_index(image_blob, image_access.pixel_data_chunk_index);
-  if (payload_descriptor_index == kInvalidIndex) {
+  ImageSceneAccessGPUContext access_context = {constants.scene.images};
+  ETX_ZERO_INIT(ImageDescAccess, image_access);
+  uint payload_descriptor_index = kInvalidIndex;
+  if (image_scene_access_shared_try_load_pixel_payload_descriptor(access_context, image_index, image_access, payload_descriptor_index) == false) {
     return float4(1.0f, 1.0f, 1.0f, 1.0f);
   }
 
   ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(payload_descriptor_index)];
+  ImageFilterSharedAddress sample = image_filter_shared_address(uv, image_access.fsize, image_access.size, image_access.options);
 
-  float2 image_uv = uv * image_access.fsize;
-  float x0 = image_tex_coord_u(image_uv.x, image_access.fsize.x, image_access.options);
-  float y0 = image_tex_coord_v(image_uv.y, image_access.fsize.y, image_access.options);
-
-  float dx = x0 - floor(x0);
-  float dy = y0 - floor(y0);
-
-  uint row_0 = clamp(uint(y0), 0u, image_access.size.y - 1u);
-  uint row_1 = clamp(row_0 + 1u, 0u, image_access.size.y - 1u);
-  uint col_0 = clamp(uint(x0), 0u, image_access.size.x - 1u);
-  uint col_1 = clamp(col_0 + 1u, 0u, image_access.size.x - 1u);
-
-  uint pixel_offset_00 = image_access.pixel_data_offset + ((row_0 * image_access.size.x + col_0) * image_access.pixel_data_stride);
-  uint pixel_offset_01 = image_access.pixel_data_offset + ((row_0 * image_access.size.x + col_1) * image_access.pixel_data_stride);
-  uint pixel_offset_10 = image_access.pixel_data_offset + ((row_1 * image_access.size.x + col_0) * image_access.pixel_data_stride);
-  uint pixel_offset_11 = image_access.pixel_data_offset + ((row_1 * image_access.size.x + col_1) * image_access.pixel_data_stride);
+  uint pixel_offset_00 = image_access.pixel_data_offset + ((sample.row_0 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
+  uint pixel_offset_01 = image_access.pixel_data_offset + ((sample.row_0 * image_access.size.x + sample.col_1) * image_access.pixel_data_stride);
+  uint pixel_offset_10 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
+  uint pixel_offset_11 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_1) * image_access.pixel_data_stride);
 
   float4 p00 = load_image_pixel(payload_buffer, image_access.format, pixel_offset_00);
   float4 p01 = load_image_pixel(payload_buffer, image_access.format, pixel_offset_01);
   float4 p10 = load_image_pixel(payload_buffer, image_access.format, pixel_offset_10);
   float4 p11 = load_image_pixel(payload_buffer, image_access.format, pixel_offset_11);
 
-  return p00 * (1.0f - dx) * (1.0f - dy) + p01 * dx * (1.0f - dy) + p10 * (1.0f - dx) * dy + p11 * dx * dy;
+  return image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
 }
+
+bool image_evaluate_shared_gpu_try_evaluate_image_rgba(uint context, uint image_index, float2 uv, out float image_pdf, out float4 image_value) {
+  image_pdf = 0.0f;
+  image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
+
+  ImageSceneAccessGPUContext access_context = {constants.scene.images};
+  ETX_ZERO_INIT(ImageDescAccess, image_access);
+  if (image_scene_access_shared_try_load_desc(access_context, image_index, image_access) == false) {
+    return false;
+  }
+
+  image_value = evaluate_image(image_index, uv);
+  return true;
+}
+
+#define ETX_IMAGE_EVALUATE_SHARED_CONTEXT_TYPE uint
+#define ETX_IMAGE_EVALUATE_SHARED_TRY_EVALUATE_IMAGE_RGBA(context, image_index, uv, image_pdf, image_value) \
+  image_evaluate_shared_gpu_try_evaluate_image_rgba(context, image_index, uv, image_pdf, image_value)
+#include <interop/image_evaluate_shared.hxx>
+#undef ETX_IMAGE_EVALUATE_SHARED_TRY_EVALUATE_IMAGE_RGBA
+#undef ETX_IMAGE_EVALUATE_SHARED_CONTEXT_TYPE
 
 bool image_has_alpha_channel(uint image_index) {
-  if (constants.scene.images == kInvalidIndex) {
-    return false;
-  }
-
-  ByteAddressBuffer image_blob = bindless_buffers[NonUniformResourceIndex(constants.scene.images)];
-  ImageDescAccess image_access = (ImageDescAccess)0;
-  if (try_load_image_desc_access(image_blob, image_index, image_access) == false) {
-    return false;
-  }
-
-  return (image_access.options & Image::HasAlphaChannel) != 0u;
+  ImageSceneAccessGPUContext access_context = {constants.scene.images};
+  return image_scene_access_shared_has_alpha(access_context, image_index);
 }
 
-float3 make_barycentrics(float2 bary) {
-  return float3(1.0f - bary.x - bary.y, bary.x, bary.y);
+struct AlphaTestSharedGPUContext {
+  uint material_index;
+  float2 uv;
+  uint seed;
+};
+
+uint alpha_test_shared_gpu_material_class(AlphaTestSharedGPUContext context) {
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(material_buffer);
+  return gpu_abi_access_shared_material_class(access_context, context.material_index);
 }
+
+float alpha_test_shared_gpu_material_opacity(AlphaTestSharedGPUContext context) {
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(material_buffer);
+  return gpu_abi_access_shared_material_opacity(access_context, context.material_index);
+}
+
+uint alpha_test_shared_gpu_scattering_image_index(AlphaTestSharedGPUContext context) {
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(material_buffer);
+  return gpu_abi_access_shared_material_scattering_image_index(access_context, context.material_index);
+}
+
+bool alpha_test_shared_gpu_image_has_alpha(AlphaTestSharedGPUContext context, uint image_index) {
+  return image_has_alpha_channel(image_index);
+}
+
+float alpha_test_shared_gpu_evaluate_alpha(AlphaTestSharedGPUContext context, uint image_index) {
+  return image_evaluate_shared_sample_channel_or_default(0u, image_index, 3u, context.uv, 1.0f);
+}
+
+float alpha_test_shared_gpu_rnd(inout AlphaTestSharedGPUContext context) {
+  return rnd01(context.seed);
+}
+
+#define ETX_ALPHA_TEST_SHARED_CONTEXT_TYPE AlphaTestSharedGPUContext
+#define ETX_ALPHA_TEST_SHARED_MATERIAL_CLASS(context) alpha_test_shared_gpu_material_class(context)
+#define ETX_ALPHA_TEST_SHARED_MATERIAL_OPACITY(context) alpha_test_shared_gpu_material_opacity(context)
+#define ETX_ALPHA_TEST_SHARED_SCATTERING_IMAGE_INDEX(context) alpha_test_shared_gpu_scattering_image_index(context)
+#define ETX_ALPHA_TEST_SHARED_IMAGE_HAS_ALPHA(context, image_index) alpha_test_shared_gpu_image_has_alpha(context, image_index)
+#define ETX_ALPHA_TEST_SHARED_EVALUATE_ALPHA(context, image_index) alpha_test_shared_gpu_evaluate_alpha(context, image_index)
+#define ETX_ALPHA_TEST_SHARED_RND(context) alpha_test_shared_gpu_rnd(context)
+#include <interop/alpha_test_shared.hxx>
+#undef ETX_ALPHA_TEST_SHARED_RND
+#undef ETX_ALPHA_TEST_SHARED_EVALUATE_ALPHA
+#undef ETX_ALPHA_TEST_SHARED_IMAGE_HAS_ALPHA
+#undef ETX_ALPHA_TEST_SHARED_SCATTERING_IMAGE_INDEX
+#undef ETX_ALPHA_TEST_SHARED_MATERIAL_OPACITY
+#undef ETX_ALPHA_TEST_SHARED_MATERIAL_CLASS
+#undef ETX_ALPHA_TEST_SHARED_CONTEXT_TYPE
+
+bool alpha_test_access_shared_gpu_has_required_scene_buffers(uint context) {
+  return scene_resource_shared_is_available(constants.scene.materials);
+}
+
+AlphaTestSharedGPUContext alpha_test_access_shared_gpu_make_alpha_context(uint context, uint material_index, float2 uv, uint seed) {
+  ETX_ZERO_INIT(AlphaTestSharedGPUContext, alpha_context);
+  alpha_context.material_index = material_index;
+  alpha_context.uv = uv;
+  alpha_context.seed = seed;
+  return alpha_context;
+}
+
+#define ETX_ALPHA_TEST_ACCESS_SHARED_CONTEXT_TYPE uint
+#define ETX_ALPHA_TEST_ACCESS_SHARED_ALPHA_CONTEXT_TYPE AlphaTestSharedGPUContext
+#define ETX_ALPHA_TEST_ACCESS_SHARED_HAS_REQUIRED_SCENE_BUFFERS(context) alpha_test_access_shared_gpu_has_required_scene_buffers(context)
+#define ETX_ALPHA_TEST_ACCESS_SHARED_MAKE_ALPHA_CONTEXT(context, material_index, uv, seed) alpha_test_access_shared_gpu_make_alpha_context(context, material_index, uv, seed)
+#define ETX_ALPHA_TEST_ACCESS_SHARED_PASS(alpha_context) alpha_test_shared_pass(alpha_context)
+#define ETX_ALPHA_TEST_ACCESS_SHARED_ALPHA_CONTEXT_SEED(alpha_context) alpha_context.seed
+#include <interop/alpha_test_access_shared.hxx>
+#undef ETX_ALPHA_TEST_ACCESS_SHARED_ALPHA_CONTEXT_SEED
+#undef ETX_ALPHA_TEST_ACCESS_SHARED_PASS
+#undef ETX_ALPHA_TEST_ACCESS_SHARED_MAKE_ALPHA_CONTEXT
+#undef ETX_ALPHA_TEST_ACCESS_SHARED_HAS_REQUIRED_SCENE_BUFFERS
+#undef ETX_ALPHA_TEST_ACCESS_SHARED_ALPHA_CONTEXT_TYPE
+#undef ETX_ALPHA_TEST_ACCESS_SHARED_CONTEXT_TYPE
 
 struct SurfacePoint {
   float3 barycentrics;
@@ -952,49 +1096,45 @@ struct SurfacePoint {
 SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBuffer normal_buffer, ByteAddressBuffer tangent_buffer, ByteAddressBuffer bitangent_buffer,
   ByteAddressBuffer texcoord_buffer, bool has_surface_frame, bool has_texcoords, TriangleData tri, float2 bary, float3 ray_dir) {
   SurfacePoint result;
-  result.barycentrics = make_barycentrics(bary);
+  result.barycentrics = surface_point_shared_barycentrics(bary);
 
   float3 p0 = load_float3(position_buffer, tri.i.x);
   float3 p1 = load_float3(position_buffer, tri.i.y);
   float3 p2 = load_float3(position_buffer, tri.i.z);
-  result.vertex.pos = p0 * result.barycentrics.x + p1 * result.barycentrics.y + p2 * result.barycentrics.z;
 
   float3 n0 = load_float3(normal_buffer, tri.i.x);
   float3 n1 = load_float3(normal_buffer, tri.i.y);
   float3 n2 = load_float3(normal_buffer, tri.i.z);
-  result.vertex.nrm = normalize(n0 * result.barycentrics.x + n1 * result.barycentrics.y + n2 * result.barycentrics.z);
 
+  float3 tangent_0 = float3(0.0f, 0.0f, 0.0f);
+  float3 tangent_1 = float3(0.0f, 0.0f, 0.0f);
+  float3 tangent_2 = float3(0.0f, 0.0f, 0.0f);
+  float3 bitangent_0 = float3(0.0f, 0.0f, 0.0f);
+  float3 bitangent_1 = float3(0.0f, 0.0f, 0.0f);
+  float3 bitangent_2 = float3(0.0f, 0.0f, 0.0f);
   if (has_surface_frame) {
-    float3 t0 = load_float3(tangent_buffer, tri.i.x);
-    float3 t1 = load_float3(tangent_buffer, tri.i.y);
-    float3 t2 = load_float3(tangent_buffer, tri.i.z);
-    result.vertex.tan = t0 * result.barycentrics.x + t1 * result.barycentrics.y + t2 * result.barycentrics.z;
-
-    float3 b0 = load_float3(bitangent_buffer, tri.i.x);
-    float3 b1 = load_float3(bitangent_buffer, tri.i.y);
-    float3 b2 = load_float3(bitangent_buffer, tri.i.z);
-    result.vertex.btn = b0 * result.barycentrics.x + b1 * result.barycentrics.y + b2 * result.barycentrics.z;
-  } else {
-    result.vertex.tan = float3(0.0f, 0.0f, 0.0f);
-    result.vertex.btn = float3(0.0f, 0.0f, 0.0f);
+    tangent_0 = load_float3(tangent_buffer, tri.i.x);
+    tangent_1 = load_float3(tangent_buffer, tri.i.y);
+    tangent_2 = load_float3(tangent_buffer, tri.i.z);
+    bitangent_0 = load_float3(bitangent_buffer, tri.i.x);
+    bitangent_1 = load_float3(bitangent_buffer, tri.i.y);
+    bitangent_2 = load_float3(bitangent_buffer, tri.i.z);
   }
 
+  float2 texcoord_0 = float2(0.0f, 0.0f);
+  float2 texcoord_1 = float2(0.0f, 0.0f);
+  float2 texcoord_2 = float2(0.0f, 0.0f);
   if (has_texcoords) {
-    float2 t0 = load_float2(texcoord_buffer, tri.i.x);
-    float2 t1 = load_float2(texcoord_buffer, tri.i.y);
-    float2 t2 = load_float2(texcoord_buffer, tri.i.z);
-    result.vertex.tex = t0 * result.barycentrics.x + t1 * result.barycentrics.y + t2 * result.barycentrics.z;
-  } else {
-    result.vertex.tex = float2(0.0f, 0.0f);
+    texcoord_0 = load_float2(texcoord_buffer, tri.i.x);
+    texcoord_1 = load_float2(texcoord_buffer, tri.i.y);
+    texcoord_2 = load_float2(texcoord_buffer, tri.i.z);
   }
 
-  result.geo_normal = normalize(tri.geo_n);
-  if (dot(result.geo_normal, ray_dir) > 0.0f) {
-    result.geo_normal = -result.geo_normal;
-  }
-  if (dot(result.vertex.nrm, result.geo_normal) < 0.0f) {
-    result.vertex.nrm = -result.vertex.nrm;
-  }
+  surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1,
+    texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex.pos, result.vertex.nrm, result.vertex.tan, result.vertex.btn, result.vertex.tex);
+
+  result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
+  result.vertex.nrm = surface_point_shared_orient_shading_normal(result.vertex.nrm, result.geo_normal);
 
   return result;
 }
@@ -1003,91 +1143,67 @@ float2 interpolate_uv_from_barycentrics(ByteAddressBuffer texcoord_buffer, Trian
   float2 t0 = load_float2(texcoord_buffer, tri.i.x);
   float2 t1 = load_float2(texcoord_buffer, tri.i.y);
   float2 t2 = load_float2(texcoord_buffer, tri.i.z);
-  return t0 * bc.x + t1 * bc.y + t2 * bc.z;
+  return surface_point_shared_lerp_float2(t0, t1, t2, bc);
 }
 
 float2 interpolate_uv(ByteAddressBuffer texcoord_buffer, TriangleData tri, float2 bary) {
-  return interpolate_uv_from_barycentrics(texcoord_buffer, tri, make_barycentrics(bary));
+  return interpolate_uv_from_barycentrics(texcoord_buffer, tri, surface_point_shared_barycentrics(bary));
 }
 
 bool alpha_test_pass(uint material_index, float2 uv, inout uint seed) {
-  if (constants.scene.materials == kInvalidIndex) {
-    return false;
-  }
-
-  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
-  uint material_class = load_material_class(material_buffer, material_index);
-  if ((material_class == MaterialClass::Void) || (material_class == MaterialClass::Boundary)) {
-    return true;
-  }
-
-  float material_alpha = load_material_opacity(material_buffer, material_index);
-  float alpha_diffuse = 1.0f;
-  uint scattering_image_index = load_material_scattering_image_index(material_buffer, material_index);
-  if ((scattering_image_index != kInvalidIndex) && image_has_alpha_channel(scattering_image_index)) {
-    alpha_diffuse = evaluate_image(scattering_image_index, uv).w;
-  }
-
-  float alpha_test_value = alpha_diffuse * material_alpha;
-  return alpha_test_value <= rnd01(seed);
+  uint context = 0u;
+  return alpha_test_access_shared_pass(context, material_index, uv, seed);
 }
 
-float3 default_ao_shading(float3 hit_normal, float ao) {
-  float n_dot_up = saturate(dot(hit_normal, float3(0.0f, 1.0f, 0.0f)));
-  float3 base = lerp(float3(0.35f, 0.37f, 0.42f), float3(0.85f, 0.87f, 0.9f), n_dot_up);
-  return base * ao;
+bool material_scattering_evaluate_shared_gpu_try_load_state(uint context, uint material_index, out uint scattering_spectrum_index, out uint scattering_image_index) {
+  return try_load_material_scattering_state(material_index, scattering_spectrum_index, scattering_image_index);
 }
+
+float3 material_scattering_evaluate_shared_gpu_load_spectrum_integrated(uint context, uint scattering_spectrum_index) {
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
+  return load_spectrum_integrated_value(spectrum_buffer, scattering_spectrum_index);
+}
+
+SpectralResponse material_scattering_evaluate_shared_gpu_load_spectrum_spectral(uint context, uint scattering_spectrum_index, SpectralQuery spect) {
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
+  return load_spectrum_response(spectrum_buffer, scattering_spectrum_index, spect);
+}
+
+bool material_scattering_evaluate_shared_gpu_can_apply_image(uint context, uint scattering_image_index) {
+  return scene_resource_shared_can_apply_image(constants.scene.images, scattering_image_index);
+}
+
+float3 material_scattering_evaluate_shared_gpu_evaluate_image_rgb(uint context, uint scattering_image_index, float2 uv) {
+  return evaluate_image(scattering_image_index, uv).xyz;
+}
+
+#define ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_CONTEXT_TYPE uint
+#define ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_TRY_LOAD_STATE(context, material_index, scattering_spectrum_index, scattering_image_index) \
+  material_scattering_evaluate_shared_gpu_try_load_state(context, material_index, scattering_spectrum_index, scattering_image_index)
+#define ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_LOAD_SPECTRUM_INTEGRATED(context, scattering_spectrum_index) \
+  material_scattering_evaluate_shared_gpu_load_spectrum_integrated(context, scattering_spectrum_index)
+#define ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_LOAD_SPECTRUM_SPECTRAL(context, scattering_spectrum_index, spect) \
+  material_scattering_evaluate_shared_gpu_load_spectrum_spectral(context, scattering_spectrum_index, spect)
+#define ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_CAN_APPLY_IMAGE(context, scattering_image_index) \
+  material_scattering_evaluate_shared_gpu_can_apply_image(context, scattering_image_index)
+#define ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_EVALUATE_IMAGE_RGB(context, scattering_image_index, uv) \
+  material_scattering_evaluate_shared_gpu_evaluate_image_rgb(context, scattering_image_index, uv)
+#include <interop/material_scattering_evaluate_shared.hxx>
+#undef ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_EVALUATE_IMAGE_RGB
+#undef ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_CAN_APPLY_IMAGE
+#undef ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_LOAD_SPECTRUM_SPECTRAL
+#undef ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_LOAD_SPECTRUM_INTEGRATED
+#undef ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_TRY_LOAD_STATE
+#undef ETX_MATERIAL_SCATTERING_EVALUATE_SHARED_CONTEXT_TYPE
 
 SpectralResponse evaluate_material_scattering_spectral(uint material_index, float2 uv, float ao, SpectralQuery spect, SpectralResponse fallback_value) {
-  uint scattering_spectrum_index = kInvalidIndex;
-  uint scattering_image_index = kInvalidIndex;
-  if (try_load_material_scattering_state(material_index, scattering_spectrum_index, scattering_image_index) == false) {
-    return fallback_value;
-  }
-
-  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
-  SpectralResponse result = load_spectrum_response(spectrum_buffer, scattering_spectrum_index, spect);
-  if ((scattering_image_index != kInvalidIndex) && (constants.scene.images != kInvalidIndex)) {
-    float4 image_eval = evaluate_image(scattering_image_index, uv);
-    result = spectral_response_apply_rgb_scale(spect, result, image_eval.xyz);
-  }
-
-  result = spectral_response_mul(result, ao);
-  return spectral_response_clamp_non_negative(result);
+  uint context = 0u;
+  return material_scattering_evaluate_shared_spectral(context, material_index, uv, ao, spect, fallback_value);
 }
 
 float3 apply_image_integrated_or_fallback(uint material_index, float2 uv, float ao, float3 fallback_color) {
-  uint scattering_spectrum_index = kInvalidIndex;
-  uint scattering_image_index = kInvalidIndex;
-  if (try_load_material_scattering_state(material_index, scattering_spectrum_index, scattering_image_index) == false) {
-    return fallback_color;
-  }
-
-  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
-  float3 scattering_integrated = load_spectrum_integrated_value(spectrum_buffer, scattering_spectrum_index);
-  float3 result = spectral_rgb_clamp_non_negative(scattering_integrated);
-
-  if ((scattering_image_index != kInvalidIndex) && (constants.scene.images != kInvalidIndex)) {
-    float4 image_eval = evaluate_image(scattering_image_index, uv);
-    result *= image_eval.xyz;
-  }
-
-  return spectral_rgb_clamp_non_negative(result) * ao;
-}
-
-bool try_load_emitter_scene_state(out uint emitter_instance_count, out uint emitter_profile_count) {
-  emitter_instance_count = 0u;
-  emitter_profile_count = 0u;
-
-  if ((constants.scene.emitter_instances == kInvalidIndex) || (constants.scene.emitter_profiles == kInvalidIndex) || (constants.scene.spectrums == kInvalidIndex) ||
-      (constants.scene.scene_globals == kInvalidIndex)) {
-    return false;
-  }
-
-  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-  emitter_instance_count = load_scene_globals_emitter_instance_count(scene_globals);
-  emitter_profile_count = load_scene_globals_emitter_profile_count(scene_globals);
-  return true;
+  uint context = 0u;
+  return material_scattering_evaluate_shared_integrated_or_fallback(context, material_index, uv, ao, fallback_color);
 }
 
 struct EmitterEmissionAccess {
@@ -1101,107 +1217,173 @@ struct EmitterEmissionAccess {
   float emitter_angular_size_cosine;
 };
 
-bool try_load_emitter_emission_access(uint emitter_index, out EmitterEmissionAccess access) {
-  access = (EmitterEmissionAccess)0;
-  access.emitter_class = EmitterClass::Area;
-  access.emitter_profile_index = kInvalidIndex;
-  access.emitter_profile_class = EmitterClass::Area;
-  access.emitter_profile_meta = 0u;
-  access.emission_spectrum_index = kInvalidIndex;
-  access.emission_image_index = kInvalidIndex;
-  access.emitter_direction = float3(0.0f, 0.0f, 1.0f);
-  access.emitter_angular_size_cosine = -1.0f;
-
-  uint emitter_instance_count = 0u;
-  uint emitter_profile_count = 0u;
-  if (try_load_emitter_scene_state(emitter_instance_count, emitter_profile_count) == false) {
-    return false;
-  }
-  if (emitter_index >= emitter_instance_count) {
-    return false;
-  }
-
-  ByteAddressBuffer emitter_instance_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_instances)];
-  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
-
-  access.emitter_class = load_emitter_class(emitter_instance_buffer, emitter_index);
-  access.emitter_profile_index = load_emitter_profile_index(emitter_instance_buffer, emitter_index);
-  if (access.emitter_profile_index >= emitter_profile_count) {
-    return false;
-  }
-
-  access.emission_spectrum_index = load_emitter_emission_spectrum_index(emitter_profile_buffer, access.emitter_profile_index);
-  access.emission_image_index = load_emitter_emission_image_index(emitter_profile_buffer, access.emitter_profile_index);
-  if (access.emission_spectrum_index == kInvalidIndex) {
-    return false;
-  }
-
-  access.emitter_profile_class = load_emitter_profile_class(emitter_profile_buffer, access.emitter_profile_index);
-  access.emitter_profile_meta = load_emitter_profile_meta(emitter_profile_buffer, access.emitter_profile_index);
-  access.emitter_direction = load_emitter_profile_direction(emitter_profile_buffer, access.emitter_profile_index);
-  access.emitter_angular_size_cosine = load_emitter_profile_angular_size_cosine(emitter_profile_buffer, access.emitter_profile_index);
-  return true;
+bool emitter_emission_shared_gpu_has_required_scene_buffers(uint context) {
+  return scene_resource_shared_has_emitter_buffers(
+    constants.scene.emitter_instances, constants.scene.emitter_profiles, constants.scene.spectrums, constants.scene.scene_globals);
 }
 
-bool emitter_emission_access_accepts_direction(EmitterEmissionAccess access, float3 direction) {
-  return dot(normalize(direction), normalize(access.emitter_direction)) >= access.emitter_angular_size_cosine;
+uint emitter_emission_shared_gpu_load_emitter_instance_count(uint context) {
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+  SceneGlobalsGPUSharedContext globals_context = make_scene_globals_gpu_shared_context(scene_globals);
+  return scene_globals_shared_emitter_instance_count(globals_context);
+}
+
+uint emitter_emission_shared_gpu_load_emitter_profile_count(uint context) {
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+  SceneGlobalsGPUSharedContext globals_context = make_scene_globals_gpu_shared_context(scene_globals);
+  return scene_globals_shared_emitter_profile_count(globals_context);
+}
+
+uint emitter_emission_shared_gpu_load_instance_class(uint context, uint emitter_index) {
+  ByteAddressBuffer emitter_instance_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_instances)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_instance_buffer);
+  return gpu_abi_access_shared_emitter_class(access_context, emitter_index);
+}
+
+uint emitter_emission_shared_gpu_load_instance_profile_index(uint context, uint emitter_index) {
+  ByteAddressBuffer emitter_instance_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_instances)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_instance_buffer);
+  return gpu_abi_access_shared_emitter_profile_index(access_context, emitter_index);
+}
+
+uint emitter_emission_shared_gpu_load_profile_emission_spectrum_index(uint context, uint emitter_profile_index) {
+  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_profile_buffer);
+  return gpu_abi_access_shared_emitter_emission_spectrum_index(access_context, emitter_profile_index);
+}
+
+uint emitter_emission_shared_gpu_load_profile_emission_image_index(uint context, uint emitter_profile_index) {
+  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_profile_buffer);
+  return gpu_abi_access_shared_emitter_emission_image_index(access_context, emitter_profile_index);
+}
+
+uint emitter_emission_shared_gpu_load_profile_class(uint context, uint emitter_profile_index) {
+  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_profile_buffer);
+  return gpu_abi_access_shared_emitter_profile_class(access_context, emitter_profile_index);
+}
+
+uint emitter_emission_shared_gpu_load_profile_meta(uint context, uint emitter_profile_index) {
+  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_profile_buffer);
+  return gpu_abi_access_shared_emitter_profile_meta(access_context, emitter_profile_index);
+}
+
+float3 emitter_emission_shared_gpu_load_profile_direction(uint context, uint emitter_profile_index) {
+  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_profile_buffer);
+  return gpu_abi_access_shared_emitter_profile_direction(access_context, emitter_profile_index);
+}
+
+float emitter_emission_shared_gpu_load_profile_angular_size_cosine(uint context, uint emitter_profile_index) {
+  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
+  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_profile_buffer);
+  return gpu_abi_access_shared_emitter_profile_angular_size_cosine(access_context, emitter_profile_index);
+}
+
+#define ETX_EMITTER_EMISSION_SHARED_CONTEXT_TYPE uint
+#define ETX_EMITTER_EMISSION_SHARED_ACCESS_TYPE EmitterEmissionAccess
+#define ETX_EMITTER_EMISSION_SHARED_HAS_REQUIRED_SCENE_BUFFERS(context) emitter_emission_shared_gpu_has_required_scene_buffers(context)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_EMITTER_INSTANCE_COUNT(context) emitter_emission_shared_gpu_load_emitter_instance_count(context)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_EMITTER_PROFILE_COUNT(context) emitter_emission_shared_gpu_load_emitter_profile_count(context)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_INSTANCE_CLASS(context, emitter_index) emitter_emission_shared_gpu_load_instance_class(context, emitter_index)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_INSTANCE_PROFILE_INDEX(context, emitter_index) emitter_emission_shared_gpu_load_instance_profile_index(context, emitter_index)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_EMISSION_SPECTRUM_INDEX(context, emitter_profile_index) \
+  emitter_emission_shared_gpu_load_profile_emission_spectrum_index(context, emitter_profile_index)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_EMISSION_IMAGE_INDEX(context, emitter_profile_index) \
+  emitter_emission_shared_gpu_load_profile_emission_image_index(context, emitter_profile_index)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_CLASS(context, emitter_profile_index) emitter_emission_shared_gpu_load_profile_class(context, emitter_profile_index)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_META(context, emitter_profile_index) emitter_emission_shared_gpu_load_profile_meta(context, emitter_profile_index)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_DIRECTION(context, emitter_profile_index) emitter_emission_shared_gpu_load_profile_direction(context, emitter_profile_index)
+#define ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_ANGULAR_SIZE_COSINE(context, emitter_profile_index) \
+  emitter_emission_shared_gpu_load_profile_angular_size_cosine(context, emitter_profile_index)
+#include <interop/emitter_emission_shared.hxx>
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_ANGULAR_SIZE_COSINE
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_DIRECTION
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_META
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_CLASS
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_EMISSION_IMAGE_INDEX
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_PROFILE_EMISSION_SPECTRUM_INDEX
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_INSTANCE_PROFILE_INDEX
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_INSTANCE_CLASS
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_EMITTER_PROFILE_COUNT
+#undef ETX_EMITTER_EMISSION_SHARED_LOAD_EMITTER_INSTANCE_COUNT
+#undef ETX_EMITTER_EMISSION_SHARED_HAS_REQUIRED_SCENE_BUFFERS
+#undef ETX_EMITTER_EMISSION_SHARED_ACCESS_TYPE
+#undef ETX_EMITTER_EMISSION_SHARED_CONTEXT_TYPE
+
+bool try_load_emitter_scene_state(out uint emitter_instance_count, out uint emitter_profile_count) {
+  uint context = 0u;
+  return emitter_emission_shared_try_load_scene_state(context, emitter_instance_count, emitter_profile_count);
+}
+
+bool try_load_emitter_emission_access(uint emitter_index, out EmitterEmissionAccess access) {
+  uint context = 0u;
+  return emitter_emission_shared_try_load_access(context, emitter_index, access);
 }
 
 bool try_load_local_emission_access(uint emitter_index, out EmitterEmissionAccess access) {
-  if (try_load_emitter_emission_access(emitter_index, access) == false) {
-    return false;
-  }
-
-  return access.emitter_class == EmitterClass::Area;
+  uint context = 0u;
+  return emitter_emission_shared_try_load_local_access(context, emitter_index, access);
 }
 
 bool try_load_distant_emission_access(uint emitter_index, float3 direction, out EmitterEmissionAccess access) {
-  if (try_load_emitter_emission_access(emitter_index, access) == false) {
-    return false;
-  }
-  if (access.emitter_class == EmitterClass::Area) {
-    return false;
-  }
-
-  if ((access.emitter_class == EmitterClass::Directional) && (access.emitter_profile_class == EmitterClass::Directional)) {
-    if (emitter_emission_access_accepts_direction(access, direction) == false) {
-      return false;
-    }
-  }
-
-  return true;
+  uint context = 0u;
+  return emitter_emission_shared_try_load_distant_access(context, emitter_index, direction, access);
 }
 
-float3 evaluate_emission_integrated_source(uint emission_spectrum_index, uint emission_image_index, float2 uv) {
-  if ((constants.scene.spectrums == kInvalidIndex) || (emission_spectrum_index == kInvalidIndex)) {
-    return float3(0.0f, 0.0f, 0.0f);
-  }
+bool emission_source_shared_gpu_can_sample_spectrum(uint context, uint emission_spectrum_index) {
+  return scene_resource_shared_can_sample_spectrum(constants.scene.spectrums, emission_spectrum_index);
+}
 
+float3 emission_source_shared_gpu_load_spectrum_integrated(uint context, uint emission_spectrum_index) {
   ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
-  float3 result = spectral_rgb_clamp_non_negative(load_spectrum_integrated_value(spectrum_buffer, emission_spectrum_index));
-  if ((emission_image_index != kInvalidIndex) && (constants.scene.images != kInvalidIndex)) {
-    result *= evaluate_image(emission_image_index, uv).xyz;
-  }
-  return spectral_rgb_clamp_non_negative(result);
+  return load_spectrum_integrated_value(spectrum_buffer, emission_spectrum_index);
+}
+
+SpectralResponse emission_source_shared_gpu_load_spectrum_spectral(uint context, uint emission_spectrum_index, SpectralQuery spect) {
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
+  return load_spectrum_response(spectrum_buffer, emission_spectrum_index, spect);
+}
+
+bool emission_source_shared_gpu_can_apply_image(uint context, uint emission_image_index) {
+  return scene_resource_shared_can_apply_image(constants.scene.images, emission_image_index);
+}
+
+float3 emission_source_shared_gpu_evaluate_image_rgb(uint context, uint emission_image_index, float2 uv) {
+  float4 image_value = image_evaluate_shared_sample_whole_or_default(context, emission_image_index, uv, float4(1.0f, 1.0f, 1.0f, 1.0f));
+  return image_value.xyz;
+}
+
+#define ETX_EMISSION_SOURCE_SHARED_CONTEXT_TYPE uint
+#define ETX_EMISSION_SOURCE_SHARED_CAN_SAMPLE_SPECTRUM(context, emission_spectrum_index) emission_source_shared_gpu_can_sample_spectrum(context, emission_spectrum_index)
+#define ETX_EMISSION_SOURCE_SHARED_LOAD_SPECTRUM_INTEGRATED(context, emission_spectrum_index) \
+  emission_source_shared_gpu_load_spectrum_integrated(context, emission_spectrum_index)
+#define ETX_EMISSION_SOURCE_SHARED_LOAD_SPECTRUM_SPECTRAL(context, emission_spectrum_index, spect) \
+  emission_source_shared_gpu_load_spectrum_spectral(context, emission_spectrum_index, spect)
+#define ETX_EMISSION_SOURCE_SHARED_CAN_APPLY_IMAGE(context, emission_image_index) emission_source_shared_gpu_can_apply_image(context, emission_image_index)
+#define ETX_EMISSION_SOURCE_SHARED_EVALUATE_IMAGE_RGB(context, emission_image_index, uv) emission_source_shared_gpu_evaluate_image_rgb(context, emission_image_index, uv)
+#include <interop/emission_source_shared.hxx>
+#undef ETX_EMISSION_SOURCE_SHARED_EVALUATE_IMAGE_RGB
+#undef ETX_EMISSION_SOURCE_SHARED_CAN_APPLY_IMAGE
+#undef ETX_EMISSION_SOURCE_SHARED_LOAD_SPECTRUM_SPECTRAL
+#undef ETX_EMISSION_SOURCE_SHARED_LOAD_SPECTRUM_INTEGRATED
+#undef ETX_EMISSION_SOURCE_SHARED_CAN_SAMPLE_SPECTRUM
+#undef ETX_EMISSION_SOURCE_SHARED_CONTEXT_TYPE
+
+float3 evaluate_emission_integrated_source(uint emission_spectrum_index, uint emission_image_index, float2 uv) {
+  uint context = 0u;
+  return emission_source_shared_evaluate_integrated(context, emission_spectrum_index, emission_image_index, uv);
 }
 
 SpectralResponse evaluate_emission_spectral_source(uint emission_spectrum_index, uint emission_image_index, float2 uv, SpectralQuery spect) {
-  SpectralResponse zero_value = spectral_response_zero(spect);
-  if ((constants.scene.spectrums == kInvalidIndex) || (emission_spectrum_index == kInvalidIndex)) {
-    return zero_value;
-  }
-
-  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
-  SpectralResponse result = load_spectrum_response(spectrum_buffer, emission_spectrum_index, spect);
-  if ((emission_image_index != kInvalidIndex) && (constants.scene.images != kInvalidIndex)) {
-    float4 image_eval = evaluate_image(emission_image_index, uv);
-    result = spectral_response_apply_rgb_scale(spect, result, image_eval.xyz);
-  }
-  return spectral_response_clamp_non_negative(result);
+  uint context = 0u;
+  return emission_source_shared_evaluate_spectral(context, emission_spectrum_index, emission_image_index, uv, spect);
 }
 
 float3 evaluate_local_emission_integrated(uint emitter_index, float2 uv) {
-  EmitterEmissionAccess access = (EmitterEmissionAccess)0;
+  ETX_ZERO_INIT(EmitterEmissionAccess, access);
   if (try_load_local_emission_access(emitter_index, access) == false) {
     return float3(0.0f, 0.0f, 0.0f);
   }
@@ -1211,7 +1393,7 @@ float3 evaluate_local_emission_integrated(uint emitter_index, float2 uv) {
 
 SpectralResponse evaluate_local_emission_spectral(uint emitter_index, float2 uv, SpectralQuery spect) {
   SpectralResponse zero_value = spectral_response_zero(spect);
-  EmitterEmissionAccess access = (EmitterEmissionAccess)0;
+  ETX_ZERO_INIT(EmitterEmissionAccess, access);
   if (try_load_local_emission_access(emitter_index, access) == false) {
     return zero_value;
   }
@@ -1219,75 +1401,123 @@ SpectralResponse evaluate_local_emission_spectral(uint emitter_index, float2 uv,
   return evaluate_emission_spectral_source(access.emission_spectrum_index, access.emission_image_index, uv, spect);
 }
 
-uint environment_projection_mode(uint emitter_profile_meta) {
-  bool is_atmosphere = (emitter_profile_meta & EmitterProfileMeta::Atmosphere) != 0u;
-  return is_atmosphere ? Projection::EqualArea : Projection::Equirectangular;
+bool environment_emission_uv_shared_gpu_is_environment_class(uint emitter_class) {
+  return emitter_class == EmitterClass::Environment;
 }
 
-float2 environment_emission_uv(uint emitter_class, uint emitter_profile_meta, uint emission_image_index, float3 direction) {
-  if (emitter_class != EmitterClass::Environment) {
-    return float2(0.5f, 0.5f);
+bool environment_emission_uv_shared_gpu_is_directional_class(uint emitter_class) {
+  return emitter_class == EmitterClass::Directional;
+}
+
+bool environment_emission_uv_shared_gpu_try_load_image_params(uint context, uint emission_image_index, out float2 image_offset, out float image_u_scale) {
+  image_offset = float2(0.0f, 0.0f);
+  image_u_scale = 1.0f;
+  ImageSceneAccessGPUContext access_context = {constants.scene.images};
+  ETX_ZERO_INIT(ImageDescAccess, image_access);
+  if (image_scene_access_shared_try_load_desc(access_context, emission_image_index, image_access) == false) {
+    return false;
   }
 
-  float2 image_offset = float2(0.0f, 0.0f);
-  float image_u_scale = 1.0f;
-  if ((constants.scene.images != kInvalidIndex) && (emission_image_index != kInvalidIndex)) {
-    ByteAddressBuffer image_blob = bindless_buffers[NonUniformResourceIndex(constants.scene.images)];
-    ImageDescAccess image_access = (ImageDescAccess)0;
-    if (try_load_image_desc_access(image_blob, emission_image_index, image_access)) {
-      image_offset = image_access.uv_offset;
-      image_u_scale = image_access.uv_scale.x;
-    }
-  }
+  image_offset = image_access.uv_offset;
+  image_u_scale = image_access.uv_scale.x;
+  return true;
+}
 
-  uint projection_mode = environment_projection_mode(emitter_profile_meta);
-  return direction_to_uv(normalize(direction), image_offset, image_u_scale, projection_mode);
+#define ETX_ENVIRONMENT_EMISSION_UV_SHARED_CONTEXT_TYPE uint
+#define ETX_ENVIRONMENT_EMISSION_UV_SHARED_IS_ENVIRONMENT_CLASS(emitter_class) environment_emission_uv_shared_gpu_is_environment_class(emitter_class)
+#define ETX_ENVIRONMENT_EMISSION_UV_SHARED_IS_DIRECTIONAL_CLASS(emitter_class) environment_emission_uv_shared_gpu_is_directional_class(emitter_class)
+#define ETX_ENVIRONMENT_EMISSION_UV_SHARED_TRY_LOAD_IMAGE_PARAMS(context, emission_image_index, image_offset, image_u_scale) \
+  environment_emission_uv_shared_gpu_try_load_image_params(context, emission_image_index, image_offset, image_u_scale)
+#include <interop/environment_emission_uv_shared.hxx>
+#undef ETX_ENVIRONMENT_EMISSION_UV_SHARED_TRY_LOAD_IMAGE_PARAMS
+#undef ETX_ENVIRONMENT_EMISSION_UV_SHARED_IS_DIRECTIONAL_CLASS
+#undef ETX_ENVIRONMENT_EMISSION_UV_SHARED_IS_ENVIRONMENT_CLASS
+#undef ETX_ENVIRONMENT_EMISSION_UV_SHARED_CONTEXT_TYPE
+
+float2 environment_emission_uv(uint emitter_class, uint emitter_profile_meta, uint emission_image_index, float3 emitter_direction, float emitter_angular_size_cosine, float3 direction) {
+  uint context = 0u;
+  return environment_emission_uv_shared(
+    context, emitter_class, emitter_profile_meta, emission_image_index, emitter_direction, emitter_angular_size_cosine, direction);
 }
 
 float3 evaluate_distant_emission_integrated(uint emitter_index, float3 direction) {
-  EmitterEmissionAccess access = (EmitterEmissionAccess)0;
+  ETX_ZERO_INIT(EmitterEmissionAccess, access);
   if (try_load_distant_emission_access(emitter_index, direction, access) == false) {
     return float3(0.0f, 0.0f, 0.0f);
   }
 
-  float2 uv = environment_emission_uv(access.emitter_class, access.emitter_profile_meta, access.emission_image_index, direction);
+  float2 uv = environment_emission_uv(
+    access.emitter_class, access.emitter_profile_meta, access.emission_image_index, access.emitter_direction, access.emitter_angular_size_cosine, direction);
   return evaluate_emission_integrated_source(access.emission_spectrum_index, access.emission_image_index, uv);
 }
 
 SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 direction, SpectralQuery spect) {
   SpectralResponse zero_value = spectral_response_zero(spect);
-  EmitterEmissionAccess access = (EmitterEmissionAccess)0;
+  ETX_ZERO_INIT(EmitterEmissionAccess, access);
   if (try_load_distant_emission_access(emitter_index, direction, access) == false) {
     return zero_value;
   }
 
-  float2 uv = environment_emission_uv(access.emitter_class, access.emitter_profile_meta, access.emission_image_index, direction);
+  float2 uv = environment_emission_uv(
+    access.emitter_class, access.emitter_profile_meta, access.emission_image_index, access.emitter_direction, access.emitter_angular_size_cosine, direction);
   return evaluate_emission_spectral_source(access.emission_spectrum_index, access.emission_image_index, uv, spect);
 }
 
-bool try_select_environment_emitter_random(inout uint seed, out uint emitter_index, out uint emitter_count) {
-  emitter_index = kInvalidIndex;
-  emitter_count = 0u;
+struct EnvironmentEmitterSelectGPUSharedContext {
+  uint seed;
+};
 
-  if (constants.scene.scene_globals == kInvalidIndex) {
-    return false;
-  }
+bool environment_emitter_select_shared_gpu_has_scene_globals(ETX_IN(EnvironmentEmitterSelectGPUSharedContext, context)) {
+  return constants.scene.scene_globals != kInvalidIndex;
+}
 
+uint environment_emitter_select_shared_gpu_load_emitter_instance_count(ETX_IN(EnvironmentEmitterSelectGPUSharedContext, context)) {
   ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-  uint emitter_instance_count = load_scene_globals_emitter_instance_count(scene_globals);
-  emitter_count = min(load_scene_globals_environment_emitter_count(scene_globals), SceneLimits::MaxEnvironmentEmitters);
-  if (emitter_count == 0u) {
-    return false;
-  }
+  SceneGlobalsGPUSharedContext globals_context = make_scene_globals_gpu_shared_context(scene_globals);
+  return scene_globals_shared_emitter_instance_count(globals_context);
+}
 
-  uint selected = min(uint(rnd01(seed) * float(emitter_count)), emitter_count - 1u);
-  emitter_index = load_scene_globals_environment_emitter(scene_globals, selected);
-  if (emitter_index >= emitter_instance_count) {
-    emitter_index = kInvalidIndex;
-    return false;
-  }
+uint environment_emitter_select_shared_gpu_load_environment_emitter_count(ETX_IN(EnvironmentEmitterSelectGPUSharedContext, context)) {
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+  SceneGlobalsGPUSharedContext globals_context = make_scene_globals_gpu_shared_context(scene_globals);
+  return scene_globals_shared_environment_emitter_count(globals_context);
+}
 
-  return true;
+uint environment_emitter_select_shared_gpu_load_environment_emitter(ETX_IN(EnvironmentEmitterSelectGPUSharedContext, context), uint index) {
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+  SceneGlobalsGPUSharedContext globals_context = make_scene_globals_gpu_shared_context(scene_globals);
+  return scene_globals_shared_environment_emitter(globals_context, index);
+}
+
+uint environment_emitter_select_shared_gpu_max_count(ETX_IN(EnvironmentEmitterSelectGPUSharedContext, context)) {
+  return SceneLimits::MaxEnvironmentEmitters;
+}
+
+float environment_emitter_select_shared_gpu_rnd(ETX_INOUT(EnvironmentEmitterSelectGPUSharedContext, context)) {
+  return rnd01(context.seed);
+}
+
+#define ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_CONTEXT_TYPE EnvironmentEmitterSelectGPUSharedContext
+#define ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_HAS_SCENE_GLOBALS(context) environment_emitter_select_shared_gpu_has_scene_globals(context)
+#define ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_LOAD_EMITTER_INSTANCE_COUNT(context) environment_emitter_select_shared_gpu_load_emitter_instance_count(context)
+#define ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_LOAD_ENVIRONMENT_EMITTER_COUNT(context) environment_emitter_select_shared_gpu_load_environment_emitter_count(context)
+#define ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_LOAD_ENVIRONMENT_EMITTER(context, index) environment_emitter_select_shared_gpu_load_environment_emitter(context, index)
+#define ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_MAX_COUNT(context) environment_emitter_select_shared_gpu_max_count(context)
+#define ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_RND(context) environment_emitter_select_shared_gpu_rnd(context)
+#include <interop/environment_emitter_select_shared.hxx>
+#undef ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_RND
+#undef ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_MAX_COUNT
+#undef ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_LOAD_ENVIRONMENT_EMITTER
+#undef ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_LOAD_ENVIRONMENT_EMITTER_COUNT
+#undef ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_LOAD_EMITTER_INSTANCE_COUNT
+#undef ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_HAS_SCENE_GLOBALS
+#undef ETX_ENVIRONMENT_EMITTER_SELECT_SHARED_CONTEXT_TYPE
+
+bool try_select_environment_emitter_random(inout uint seed, out uint emitter_index, out uint emitter_count) {
+  EnvironmentEmitterSelectGPUSharedContext context = {seed};
+  bool result = environment_emitter_select_shared_try_select_random(context, emitter_index, emitter_count);
+  seed = context.seed;
+  return result;
 }
 
 float3 sample_distant_emission_integrated_random(float3 direction, inout uint seed) {

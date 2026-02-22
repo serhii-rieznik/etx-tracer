@@ -105,15 +105,13 @@ enum class RHITextureFormat : uint32_t {
   R8G8B8A8_SRGB,
   B8G8R8A8_SRGB,
   D32_FLOAT,
-  D24_UNORM_S8_UINT,
-  D32_FLOAT_S8_UINT,
 };
 
 enum class RHITextureUsage : uint32_t {
   Sampled = 1u << 0u,
   Storage = 1u << 1u,
   ColorAttachment = 1u << 2u,
-  DepthStencilAttachment = 1u << 3u,
+  DepthAttachment = 1u << 3u,
   TransferSrc = 1u << 4u,
   TransferDst = 1u << 5u,
 };
@@ -161,6 +159,7 @@ enum class RHISamplerType : uint32_t {
 
 enum class RHIPrimitiveTopology : uint32_t {
   TriangleList = 0,
+  LineList = 1,
 };
 
 enum class RHIVertexFormat : uint32_t {
@@ -192,11 +191,12 @@ struct RHIRasterizationState {
   float depth_bias_clamp = 0.0f;
   float depth_bias_slope_factor = 0.0f;
   float line_width = 1.0f;
+  bool wireframe_enable = false;
 };
 
-struct RHIDepthStencilState {
-  bool depth_test_enable = true;
-  bool depth_write_enable = true;
+struct RHIDepthState {
+  bool depth_test_enable = false;
+  bool depth_write_enable = false;
   RHICompareOp depth_compare_op = RHICompareOp::Less;
   bool depth_bounds_test_enable = false;
   float min_depth_bounds = 0.0f;
@@ -243,7 +243,7 @@ enum class RHIResourceState : uint32_t {
   Undefined = 0,
   General = 1,
   ColorAttachment = 2,
-  DepthStencilAttachment = 3,
+  DepthAttachment = 3,
   ShaderReadOnly = 4,
   TransferSrc = 5,
   TransferDst = 6,
@@ -380,7 +380,7 @@ struct RHIGraphicsPipelineDesc {
   RHIShaderDesc vertex_shader = {};
   RHIShaderDesc fragment_shader = {};
   RHIRasterizationState rasterization = {};
-  RHIDepthStencilState depth_stencil = {};
+  RHIDepthState depth_state = {};
   RHIBlendState blend = {};
 
   uint32_t vertex_attribute_count = 0;
