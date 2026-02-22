@@ -25,9 +25,21 @@ struct OceanParameters {
   float stitch_transition_cells = 8.0f;
   float mip_color_mix = 0.35f;
   float mip_color_enable = 0.0f;
-  int32_t normal_map_visualize_mode = 0;
-  bool normal_map_shading_enable = true;
-  float normal_map_scale = 1.0f;
+  int32_t surface_normal_visualize_mode = 0;
+  bool surface_normal_shading_enable = true;
+  float surface_normal_strength = 1.0f;
+  bool physical_render_mode = true;
+  float water_ior = 1.333f;
+  float3 absorption_coeff_rgb = {0.28f, 0.06f, 0.02f};
+  float3 scattering_coeff_rgb = {0.01f, 0.03f, 0.06f};
+  float env_reflection_intensity = 1.0f;
+  float optical_depth_m = 8.0f;
+  float unresolved_slope_roughness = 0.04f;
+  float specular_aa_strength = 0.35f;
+  float refract_distortion_scale = 0.02f;
+  bool sun_lighting_enable = true;
+  float3 sun_direction = {0.35f, 0.65f, 0.67f};
+  float3 sun_radiance = {12.0f, 11.5f, 10.5f};
   bool wireframe_enable = false;
   float3 wireframe_color = {0.05f, 0.05f, 0.05f};
   int32_t solo_cascade = -1;
@@ -40,11 +52,12 @@ struct OceanParameters {
 struct Ocean {
   static constexpr uint32_t k_cascade_count = 3;
 
-  void init(RHIContext& rhi);
+  void init(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format);
   void cleanup(RHIContext& rhi);
   void update(RHIContext& rhi, RHICommandBuffer cmd, float time, const float3& camera_position, const float3& camera_direction, float fov, uint32_t viewport_width,
     uint32_t viewport_height);
-  void draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float3& camera_position, RHITexture envmap_texture);
+  void draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position, RHITexture envmap_texture,
+    RHITexture scene_opaque_color_texture, uint32_t viewport_width, uint32_t viewport_height);
 
   OceanParameters& parameters() {
     return _parameters;
@@ -90,6 +103,12 @@ struct Ocean {
     return (index < k_cascade_count) ? _resolved_cascade_rms[index] : 0.0f;
   }
 
+  void effective_cascade_weights(float* out_weights) const;
+
+  RHITexture displacement_texture(uint32_t index) const {
+    return (index < k_cascade_count) ? _displacement_map[index] : RHITexture{};
+  }
+
   bool valid() const {
     return _pipeline.valid();
   }
@@ -106,7 +125,9 @@ struct Ocean {
   RHIPipeline _fft_pipeline;
   RHIPipeline _assemble_pipeline;
   RHITexture _displacement_map[3];
-  RHITexture _normal_map[3];
+  RHITexture _surface_derivative_u_map[3];
+  RHITexture _surface_derivative_v_map[3];
+  RHITexture _slope_metric_map[3];
   RHITexture _h0_texture[3];
   RHITexture _ht_texture[3];
   RHITexture _dxdz_texture[3];

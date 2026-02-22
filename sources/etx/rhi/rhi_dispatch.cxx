@@ -350,6 +350,10 @@ RHITextureFormat RHIContext::get_swapchain_format() const {
   return backend_context(_impl)->get_swapchain_format();
 }
 
+RHIExtent2D RHIContext::get_swapchain_extent() const {
+  return backend_context(_impl)->get_swapchain_extent_rhi();
+}
+
 void RHIContext::begin_frame() {
   backend_context(_impl)->begin_frame();
 }

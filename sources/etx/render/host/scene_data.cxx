@@ -336,7 +336,7 @@ void SceneData::build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_inde
     auto& img = images_vector[atmosphere_emitter.emission.image_index];
     auto ptr = buffer_pool.map<float4>(img.data);
     ETX_CRITICAL(ptr != nullptr);
-    scattering::generate_sky_image(atmosphere_emitter.atmosphere.scattering, img.isize, light_sources, extinction_data, ptr, scattering_spectrums, scheduler);
+    scattering::generate_sky_image(atmosphere_emitter.atmosphere.scattering, img.isize, light_sources, extinction_data, ptr, scheduler);
     images.rebuild_sampling_table(atmosphere_emitter.emission.image_index, scheduler);
   }
 
@@ -354,8 +354,8 @@ void SceneData::rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_in
     auto& sun_emitter = emitter_profiles[sun_idx];
 
     std::vector<float4> sun_buffer(kSunImageDimensions.x * kSunImageDimensions.y, float4{0.0f, 0.0f, 0.0f, 0.0f});
-    scattering::generate_sun_image(atmosphere_emitter.atmosphere.scattering, kSunImageDimensions, sun_emitter.directional.direction, sun_emitter.directional.angular_size,
-      sun_buffer.data(), scattering_spectrums, scheduler);
+    scattering::generate_sun_image(
+      atmosphere_emitter.atmosphere.scattering, kSunImageDimensions, sun_emitter.directional.direction, sun_emitter.directional.angular_size, sun_buffer.data(), scheduler);
 
     char tmp_path[2048] = {};
     std::string filename = std::string("sun_") + std::to_string(sun_image_counter++) + ".hdr";

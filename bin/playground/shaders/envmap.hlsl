@@ -39,5 +39,6 @@ float4 PSMain(VSOutput input) : SV_Target0 {
 
   Texture2D envmap = bindless_textures[NonUniformResourceIndex(pushConstants.envmapIndex)];
   SamplerState s = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];
-  return envmap.SampleLevel(s, float2(u, v), 0.0f);
+  float3 color = envmap.SampleLevel(s, float2(u, v), 0.0f).rgb;
+  return float4(color, 1.0f);
 }

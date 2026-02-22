@@ -27,6 +27,7 @@ struct MTContext {
   void resize_swapchain(uint32_t width, uint32_t height);
   RHITexture get_current_swapchain_texture();
   RHITextureFormat get_swapchain_format() const;
+  RHIExtent2D get_swapchain_extent_rhi() const;
 
   void begin_frame();
   void present();

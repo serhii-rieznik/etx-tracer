@@ -227,6 +227,7 @@ struct VKContext::Impl {
   std::vector<VkImage> swapchain_images;
   std::vector<VkImageView> swapchain_image_views;
   std::vector<RHITexture> swapchain_textures;
+  std::vector<RHIResourceState> swapchain_image_states;
   VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
   VkExtent2D swapchain_extent = {0, 0};
   uint32_t current_swapchain_image = 0;
@@ -374,6 +375,13 @@ RHITextureFormat VKContext::get_swapchain_format() const {
   return vk_format_to_rhi(_impl->swapchain_format);
 }
 
+RHIExtent2D VKContext::get_swapchain_extent_rhi() const {
+  RHIExtent2D result = {};
+  result.width = _impl->swapchain_extent.width;
+  result.height = _impl->swapchain_extent.height;
+  return result;
+}
+
 void VKContext::present() {
   VkSemaphore wait_semaphore = _impl->device.get_vk_semaphore(_impl->render_finished_semaphores[_impl->current_frame]);
   VkPresentInfoKHR present_info = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
@@ -432,38 +440,47 @@ void VKContext::begin_frame() {
   }
 
   VkResult result = VK_SUCCESS;
-  {
-    ETX_PROFILER_NAMED_SCOPE("vkAcquireNextImageKHR");
-    result = etx_vk_call(vkAcquireNextImageKHR(_impl->device.get_vk_device(), _impl->swapchain, UINT64_MAX,
-      _impl->device.get_vk_semaphore(_impl->image_available_semaphores[_impl->current_frame]), VK_NULL_HANDLE, &_impl->current_swapchain_image));
-  }
+  bool retry_acquire = true;
+  while (retry_acquire) {
+    retry_acquire = false;
 
-  if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
-    ETX_PROFILER_NAMED_SCOPE("Re-create swapchain");
-    if (!_impl->in_flight_fences.empty()) {
-      etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
+    {
+      ETX_PROFILER_NAMED_SCOPE("vkAcquireNextImageKHR");
+      result = etx_vk_call(vkAcquireNextImageKHR(_impl->device.get_vk_device(), _impl->swapchain, UINT64_MAX,
+        _impl->device.get_vk_semaphore(_impl->image_available_semaphores[_impl->current_frame]), VK_NULL_HANDLE, &_impl->current_swapchain_image));
     }
 
-    _impl->destroy_swapchain();
+    if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
+      ETX_PROFILER_NAMED_SCOPE("Re-create swapchain");
+      if (_impl->in_flight_fences.empty() == false) {
+        etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
+      }
 
-    VkSurfaceCapabilitiesKHR capabilities;
-    if (etx_vk_call(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_impl->device.get_vk_physical_device(), _impl->surface, &capabilities)) != VK_SUCCESS) {
-      return;
-    }
+      _impl->destroy_swapchain();
 
-    VkExtent2D new_extent = _impl->choose_swap_extent(capabilities, _impl->width, _impl->height);
+      VkSurfaceCapabilitiesKHR capabilities;
+      if (etx_vk_call(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_impl->device.get_vk_physical_device(), _impl->surface, &capabilities)) != VK_SUCCESS) {
+        return;
+      }
 
-    _impl->width = new_extent.width;
-    _impl->height = new_extent.height;
+      VkExtent2D new_extent = _impl->choose_swap_extent(capabilities, _impl->width, _impl->height);
 
-    if (_impl->create_swapchain(new_extent.width, new_extent.height)) {
-      _impl->create_sync_objects();
-    } else {
+      _impl->width = new_extent.width;
+      _impl->height = new_extent.height;
+
+      if (_impl->create_swapchain(new_extent.width, new_extent.height)) {
+        _impl->create_sync_objects();
+        retry_acquire = true;
+        continue;
+      }
+
       log::error("Failed to recreate swapchain during acquire");
       return;
     }
-  } else if (result != VK_SUCCESS) {
-    return;
+
+    if (result != VK_SUCCESS) {
+      return;
+    }
   }
 
   {
@@ -953,12 +970,48 @@ void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState 
 }
 void VKCommandBuffer::ensure_texture_layout(RHIBindlessHandle texture, VkImageLayout required_layout) {
   if (context->is_swapchain_texture(texture)) {
+    RHIResourceState current_state = context->get_swapchain_texture_state(texture);
+    RHIResourceState target_state = RHIResourceState::Undefined;
+
+    switch (required_layout) {
+      case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+        target_state = RHIResourceState::Present;
+        break;
+      case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+        target_state = RHIResourceState::ColorAttachment;
+        break;
+      case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+        target_state = RHIResourceState::TransferSrc;
+        break;
+      case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+        target_state = RHIResourceState::TransferDst;
+        break;
+      case VK_IMAGE_LAYOUT_GENERAL:
+        target_state = RHIResourceState::General;
+        break;
+      case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+        target_state = RHIResourceState::ShaderReadOnly;
+        break;
+      default:
+        target_state = RHIResourceState::Undefined;
+        break;
+    }
+
+    if ((target_state == RHIResourceState::Undefined) || (current_state == target_state)) {
+      return;
+    }
+
+    VkImage vk_image = context->get_bindless_manager()->get_vk_image(texture);
+    if (vk_image == VK_NULL_HANDLE) {
+      return;
+    }
+
     VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.oldLayout = (current_state == RHIResourceState::Undefined) ? VK_IMAGE_LAYOUT_UNDEFINED : rhi_state_to_vk_layout(current_state, false);
     barrier.newLayout = required_layout;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = context->get_bindless_manager()->get_vk_image(texture);
+    barrier.image = vk_image;
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
@@ -966,35 +1019,77 @@ void VKCommandBuffer::ensure_texture_layout(RHIBindlessHandle texture, VkImageLa
     barrier.subresourceRange.layerCount = 1;
 
     VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    switch (required_layout) {
-      case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        break;
-      case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        barrier.dstAccessMask = 0;
+    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    VkAccessFlags src_access = 0;
+    VkAccessFlags dst_access = 0;
+
+    switch (current_state) {
+      case RHIResourceState::ColorAttachment:
+        src_access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
         src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
         break;
-      case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+      case RHIResourceState::TransferSrc:
+        src_access = VK_ACCESS_TRANSFER_READ_BIT;
+        src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         break;
-      case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+      case RHIResourceState::TransferDst:
+        src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+        src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        break;
+      case RHIResourceState::General:
+        src_access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        src_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        break;
+      case RHIResourceState::ShaderReadOnly:
+        src_access = VK_ACCESS_SHADER_READ_BIT;
+        src_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        break;
+      case RHIResourceState::Present:
+        src_access = 0;
+        src_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
         break;
       default:
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = 0;
+        src_access = 0;
+        src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         break;
     }
 
+    switch (target_state) {
+      case RHIResourceState::ColorAttachment:
+        dst_access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        break;
+      case RHIResourceState::Present:
+        dst_access = 0;
+        dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        break;
+      case RHIResourceState::TransferDst:
+        dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+        dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        break;
+      case RHIResourceState::TransferSrc:
+        dst_access = VK_ACCESS_TRANSFER_READ_BIT;
+        dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        break;
+      case RHIResourceState::General:
+        dst_access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        break;
+      case RHIResourceState::ShaderReadOnly:
+        dst_access = VK_ACCESS_SHADER_READ_BIT;
+        dst_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        break;
+      default:
+        dst_access = 0;
+        dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        break;
+    }
+
+    barrier.srcAccessMask = src_access;
+    barrier.dstAccessMask = dst_access;
+
     vkCmdPipelineBarrier(command_buffer, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    context->set_swapchain_texture_state(texture, target_state);
     return;
   }
 
@@ -1837,6 +1932,7 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
   etx_vk_call(vkGetSwapchainImagesKHR(device.get_vk_device(), swapchain, &image_count, swapchain_images.data()));
 
   swapchain_image_views.resize(image_count);
+  swapchain_image_states.assign(image_count, RHIResourceState::Undefined);
   for (uint32_t i = 0; i < image_count; i++) {
     VkImageViewCreateInfo view_info = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     view_info.image = swapchain_images[i];
@@ -1857,16 +1953,13 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
     }
   }
 
-  if (!register_swapchain_textures_with_bindless()) {
+  swapchain_format = surface_format.format;
+  swapchain_extent = extent;
+
+  if (register_swapchain_textures_with_bindless() == false) {
     log::error("Failed to register swapchain textures with bindless manager");
     return false;
   }
-
-  swapchain_format = surface_format.format;
-  swapchain_extent = extent;
-
-  swapchain_format = surface_format.format;
-  swapchain_extent = extent;
 
   return true;
 }
@@ -1939,6 +2032,7 @@ void VKContext::Impl::destroy_swapchain() {
   swapchain_images.clear();
   swapchain_image_views.clear();
   swapchain_textures.clear();
+  swapchain_image_states.clear();
   swapchain_format = VK_FORMAT_UNDEFINED;
   swapchain_extent = {0, 0};
   current_swapchain_image = 0;
@@ -2060,6 +2154,29 @@ VkImageView VKContext::get_swapchain_image_view(RHIBindlessHandle handle) const 
 
 VkExtent2D VKContext::get_swapchain_extent() const {
   return _impl->swapchain_extent;
+}
+
+RHIResourceState VKContext::get_swapchain_texture_state(RHIBindlessHandle handle) const {
+  for (size_t i = 0; i < _impl->swapchain_textures.size(); ++i) {
+    if (_impl->swapchain_textures[i] == handle) {
+      if (i < _impl->swapchain_image_states.size()) {
+        return _impl->swapchain_image_states[i];
+      }
+      break;
+    }
+  }
+  return RHIResourceState::Undefined;
+}
+
+void VKContext::set_swapchain_texture_state(RHIBindlessHandle handle, RHIResourceState state) {
+  for (size_t i = 0; i < _impl->swapchain_textures.size(); ++i) {
+    if (_impl->swapchain_textures[i] == handle) {
+      if (i < _impl->swapchain_image_states.size()) {
+        _impl->swapchain_image_states[i] = state;
+      }
+      return;
+    }
+  }
 }
 
 void VKCommandBuffer::build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {

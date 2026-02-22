@@ -72,6 +72,13 @@ RHITextureFormat MTContext::get_swapchain_format() const {
   return RHITextureFormat::B8G8R8A8_SRGB;
 }
 
+RHIExtent2D MTContext::get_swapchain_extent_rhi() const {
+  RHIExtent2D result = {};
+  result.width = _impl->width;
+  result.height = _impl->height;
+  return result;
+}
+
 void MTContext::present() {
   log::warning("Metal RHI: present not implemented");
 }

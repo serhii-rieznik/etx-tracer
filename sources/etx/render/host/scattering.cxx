@@ -16,6 +16,10 @@ namespace scattering {
 
 namespace {
 
+void log_gpu_placeholder(const char* function_name) {
+  log::warning("Atmosphere GPU path placeholder: `%s` is not implemented yet", function_name);
+}
+
 float rayleigh(float l) {
   l /= 100.0f;
   float l2 = l * l;
@@ -156,6 +160,17 @@ float3 density_derivative(float height_above_surface) {
   return density_and_derivative(height_above_surface).derivative;
 }
 
+void clear_spectral_powers(SpectralDistribution& value) {
+  if (value.spectral_entry_count == 0u) {
+    value = SpectralDistribution::constant(0.0f);
+  }
+
+  value.integrated_value = {};
+  for (uint32_t i = 0; i < value.spectral_entry_count; ++i) {
+    value.spectral_entries[i].power = 0.0f;
+  }
+}
+
 float2 precomputed_params_to_uv(const float2& params) {
   float u = sqr(params.x * 0.5f + 0.5f);
   float v = sqrtf(saturate(params.y / kAtmosphereRadius));
@@ -219,8 +234,8 @@ float3 optical_length(const float3& origin, const float3& direction, float total
   return result;
 }
 
-void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const OpticalDepthData& extinction, const float3& view_direction,
-  const std::vector<LightSource>& light_sources, const Parameters& parameters, SpectralDistribution& result) {
+void radiance_spectrum_at_direction(const OpticalDepthData& extinction, const float3& view_direction, const std::vector<LightSource>& light_sources,
+  const Parameters& parameters, SpectralDistribution& result) {
   const float3 origin = {0.0f, kPlanetRadius + parameters.altitude, 0.0f};
   float height_above_surface = length(origin) - kPlanetRadius;
 
@@ -233,10 +248,7 @@ void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const 
   float3 view_optical_path = {};
   float3 current_density = density(height_above_surface);
 
-  result.spectral_entry_count = WavelengthCount;
-  for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
-    result.spectral_entries[i].power = 0;
-  }
+  clear_spectral_powers(result);
 
   float t = 0.0f;
   float to_space = distance_to_sphere(origin, view_direction, {}, kOuterSphereSize);
@@ -268,9 +280,10 @@ void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const 
       const float phase_m = phase_mie(l_dot_v, parameters.anisotropy);
 
       for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
-        float r = spectrums.rayleigh.spectral_entries[i].power;
-        float m = spectrums.mie.spectral_entries[i].power;
-        float o = spectrums.ozone.spectral_entries[i].power;
+        float wavelength = result.spectral_entries[i].wavelength;
+        float r = rayleigh(wavelength);
+        float m = mie(wavelength);
+        float o = ozone_absorption(wavelength);
 
         float transmittance_r = g_transmittance_table.lookup(r * total_optical_path.x);
         float transmittance_m = g_transmittance_table.lookup(m * total_optical_path.y);
@@ -292,13 +305,16 @@ void radiance_spectrum_at_direction(const ScatteringSpectrums& spectrums, const 
   }
 }
 
-void extinction_spectrum_at_direction(const ScatteringSpectrums& spectrums, const float3& view_direction, const float3& next_direction, const Parameters& parameters,
-  SpectralDistribution& result) {
+void extinction_spectrum_at_direction(const float3& view_direction, const float3& next_direction, const Parameters& parameters, SpectralDistribution& result) {
   const float3 origin = {0.0f, kPlanetRadius + parameters.altitude, 0.0f};
   float to_space = distance_to_sphere(origin, view_direction, {}, kOuterSphereSize);
 
+  if (result.spectral_entry_count == 0u) {
+    result = SpectralDistribution::constant(0.0f);
+  }
+
   if (distance_to_sphere(origin, next_direction, {}, kPlanetRadius) > 0.0f) {
-    result = spectrums.black;
+    clear_spectral_powers(result);
     return;
   }
 
@@ -323,9 +339,10 @@ void extinction_spectrum_at_direction(const ScatteringSpectrums& spectrums, cons
   }
 
   for (uint32_t i = 0; i < result.spectral_entry_count; ++i) {
-    float r = spectrums.rayleigh.spectral_entries[i].power;
-    float m = spectrums.mie.spectral_entries[i].power;
-    float o = spectrums.ozone.spectral_entries[i].power;
+    float wavelength = result.spectral_entries[i].wavelength;
+    float r = rayleigh(wavelength);
+    float m = mie(wavelength);
+    float o = ozone_absorption(wavelength);
 
     float transmittance_r = g_transmittance_table.lookup(r * view_optical_path.x);
     float transmittance_m = g_transmittance_table.lookup(m * view_optical_path.y);
@@ -400,7 +417,7 @@ void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepth
 }
 
 void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources, const OpticalDepthData& extinction, float4* buffer,
-  const ScatteringSpectrums& spectrums, TaskScheduler& scheduler) {
+  TaskScheduler& scheduler) {
   log::info("Generating sky image %u x %u...", dimensions.x, dimensions.y);
 
   auto t0 = std::chrono::steady_clock::now();
@@ -412,7 +429,7 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
   scheduler.execute(dimensions.x * dimensions.y, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
     float3 avg = {};
     float w = 0.0f;
-    SpectralDistribution radiance = spectrums.black;
+    SpectralDistribution radiance = SpectralDistribution::constant(0.0f);
     for (uint32_t i = begin; i < end; ++i) {
       uint32_t x = i % dimensions.x;
       uint32_t y = i / dimensions.x;
@@ -427,7 +444,7 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
         theta = asinf(fmaxf(-1.0f, fminf(1.0f, -v_mapped)));
       }
       direction = from_spherical(phi, theta);
-      radiance_spectrum_at_direction(spectrums, extinction, direction, light_sources, parameters, radiance);
+      radiance_spectrum_at_direction(extinction, direction, light_sources, parameters, radiance);
       float3 xyz = radiance.integrate_to_xyz();
       float3 rgb = max({}, xyz_to_rgb(xyz));
       // Poor man multiple scattering
@@ -466,18 +483,16 @@ void generate_sky_image(const Parameters& parameters, const uint2& dimensions, c
 }
 
 void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer,
-  const ScatteringSpectrums& spectrums, TaskScheduler& scheduler) {
+  TaskScheduler& scheduler) {
   auto t0 = std::chrono::steady_clock::now();
 
   log::info("Generating Sun image %u x %u...", dimensions.x, dimensions.y);
 
   auto basis = orthonormal_basis(light_direction);
   float tan_half_fov = tanf(0.5f * angular_size);
-  float solid_angle = kDoublePi * (1.0f - cosf(0.5f * angular_size));
-
   scheduler.execute(dimensions.x * dimensions.y,
-    [&parameters, &dimensions, &basis, light_direction, solid_angle, tan_half_fov, buffer, &spectrums](uint32_t begin, uint32_t end, uint32_t thread_id) {
-      SpectralDistribution radiance = spectrums.black;
+    [&parameters, &dimensions, &basis, light_direction, tan_half_fov, buffer](uint32_t begin, uint32_t end, uint32_t thread_id) {
+      SpectralDistribution radiance = SpectralDistribution::constant(0.0f);
       for (uint32_t i = begin; i < end; ++i) {
         uint32_t x = i % dimensions.x;
         uint32_t y = i / dimensions.x;
@@ -486,7 +501,7 @@ void generate_sun_image(const Parameters& parameters, const uint2& dimensions, c
         float v1 = float(y + 1.5f) / float(dimensions.y) * 2.0f - 1.0f;
         float3 d0 = normalize(tan_half_fov * (u * basis.u + v0 * basis.v) + light_direction);
         float3 d1 = normalize(tan_half_fov * (u * basis.u + v1 * basis.v) + light_direction);
-        extinction_spectrum_at_direction(spectrums, d0, d1, parameters, radiance);
+        extinction_spectrum_at_direction(d0, d1, parameters, radiance);
         float darkening = (1.0f - 0.6f * (1.0f - fmaxf(0.0f, 1.0f - (u * u + v0 * v0))));
         float3 xyz = darkening * radiance.integrate_to_xyz();
         float3 rgb = max({}, xyz_to_rgb(xyz));
@@ -499,6 +514,58 @@ void generate_sun_image(const Parameters& parameters, const uint2& dimensions, c
   char path[2048] = {};
   env().file_in_tmp("sun.hdr", path, sizeof(path));
   stbi_write_hdr(path, dimensions.x, dimensions.y, 4, &buffer->x);
+}
+
+bool gpu_init(RHIContext& rhi, GpuContext& context) {
+  (void)rhi;
+  (void)context;
+  log_gpu_placeholder("scattering::gpu_init");
+  return false;
+}
+
+bool gpu_reload_shaders(RHIContext& rhi, GpuContext& context) {
+  (void)rhi;
+  (void)context;
+  log_gpu_placeholder("scattering::gpu_reload_shaders");
+  return false;
+}
+
+void gpu_cleanup(RHIContext& rhi, GpuContext& context) {
+  (void)rhi;
+  context.initialized = false;
+}
+
+bool gpu_precompute_optical_depth_texture(RHIContext& rhi, const GpuOpticalDepthRequest& request, GpuContext& context) {
+  (void)rhi;
+  (void)request;
+  (void)context;
+  log_gpu_placeholder("scattering::gpu_precompute_optical_depth_texture");
+  return false;
+}
+
+bool gpu_generate_sky_image(RHIContext& rhi, const GpuSkyRequest& request, GpuContext& context) {
+  (void)rhi;
+  (void)request;
+  (void)context;
+  log_gpu_placeholder("scattering::gpu_generate_sky_image");
+  return false;
+}
+
+bool gpu_generate_sun_image(RHIContext& rhi, const GpuSunRequest& request, GpuContext& context) {
+  (void)rhi;
+  (void)request;
+  (void)context;
+  log_gpu_placeholder("scattering::gpu_generate_sun_image");
+  return false;
+}
+
+bool gpu_download_sky_image(RHIContext& rhi, std::vector<float4>& out_pixels, uint2& out_dimensions, GpuContext& context) {
+  (void)rhi;
+  (void)context;
+  out_pixels.clear();
+  out_dimensions = {};
+  log_gpu_placeholder("scattering::gpu_download_sky_image");
+  return false;
 }
 
 }  // namespace scattering

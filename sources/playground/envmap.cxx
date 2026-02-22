@@ -8,7 +8,7 @@
 
 namespace etx {
 
-bool EnvMap::setup(RHIContext& rhi) {
+bool EnvMap::setup(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format) {
   std::string hdr_path = env().file_in_data("playground/hdr/envmap.hdr");
   std::vector<uint8_t> hdr_data;
   uint2 hdr_dims = {};
@@ -55,8 +55,8 @@ bool EnvMap::setup(RHIContext& rhi) {
   p_desc.depth_state.depth_write_enable = false;
   p_desc.primitive_topology = RHIPrimitiveTopology::TriangleList;
   p_desc.color_attachment_count = 1;
-  p_desc.color_formats[0] = rhi.get_swapchain_format();
-  p_desc.depth_format = RHITextureFormat::D32_FLOAT;
+  p_desc.color_formats[0] = color_format;
+  p_desc.depth_format = depth_format;
   auto p_result = rhi.device().create_graphics_pipeline(p_desc);
   if (p_result.result != RHIResult::Success) {
     log::error("Failed to create envmap pipeline");

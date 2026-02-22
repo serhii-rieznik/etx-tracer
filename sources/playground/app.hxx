@@ -37,13 +37,21 @@ struct PlaygroundApp {
   void process_event(const sapp_event* e);
 
  private:
+  void recreate_scene_targets(uint32_t width, uint32_t height);
+  void sync_scene_targets_to_swapchain_extent();
+  bool recreate_tonemap_pipeline();
+  void sync_swapchain_dependent_resources();
+
   RHIContext _rhi;
   RHIImGui _imgui;
   RHIPipeline _pipeline;
   RHIPipeline _compute_pipeline;
+  RHIPipeline _tonemap_pipeline;
   RHIBindlessHandle _vertex_buffer;
   RHIBindlessHandle _index_buffer;
   RHIBindlessHandle _test_storage_texture;
+  RHITexture _scene_opaque_color_buffer;
+  RHITexture _scene_color_buffer;
   RHITexture _depth_buffer;
 
   EnvMap _envmap;
@@ -51,7 +59,13 @@ struct PlaygroundApp {
 
   uint32_t _width = 0;
   uint32_t _height = 0;
+  uint32_t _render_width = 0;
+  uint32_t _render_height = 0;
   float _time = 0.0f;
+  float _tonemap_exposure = 1.0f;
+  bool _scene_opaque_color_initialized = false;
+  bool _scene_color_initialized = false;
+  RHITextureFormat _swapchain_color_format = RHITextureFormat::Undefined;
 
   Camera _camera = {};
   CameraController _camera_controller;

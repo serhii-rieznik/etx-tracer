@@ -8,7 +8,7 @@
 namespace etx {
 
 struct EnvMap {
-  bool setup(RHIContext& rhi);
+  bool setup(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format);
   void draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& inv_view_proj);
   void cleanup(RHIContext& rhi);
 

@@ -302,6 +302,11 @@ struct RHIRect {
   uint32_t height = 0;
 };
 
+struct RHIExtent2D {
+  uint32_t width = 0;
+  uint32_t height = 0;
+};
+
 struct RHIDispatchDesc {
   uint32_t group_count_x = 1;
   uint32_t group_count_y = 1;

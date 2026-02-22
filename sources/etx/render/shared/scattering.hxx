@@ -5,6 +5,7 @@
 #include <etx/render/shared/image.hxx>
 
 namespace etx {
+struct RHIContext;
 
 namespace scattering {
 
@@ -63,15 +64,45 @@ struct LightSource {
   float intensity_scale = {};
 };
 
+struct GpuContext {
+  bool initialized = false;
+};
+
+struct GpuOpticalDepthRequest {
+  Parameters atmosphere = {};
+  uint2 dimensions = {OpticalDepthData::kWidth, OpticalDepthData::kHeight};
+};
+
+struct GpuSkyRequest {
+  Parameters atmosphere = {};
+  uint2 dimensions = {};
+  const std::vector<LightSource>* light_sources = nullptr;
+};
+
+struct GpuSunRequest {
+  Parameters atmosphere = {};
+  uint2 dimensions = {};
+  float3 light_direction = {};
+  float angular_size = 0.0f;
+};
+
 void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepthData& extinction);
 
 OpticalDepthData precompute_optical_depth(TaskScheduler& scheduler);
 
 void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources, const OpticalDepthData& extinction, float4* buffer,
-  const ScatteringSpectrums& spectrums, TaskScheduler& scheduler);
+  TaskScheduler& scheduler);
 
-void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer,
-  const ScatteringSpectrums& spectrums, TaskScheduler& scheduler);
+void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer, TaskScheduler& scheduler);
+
+bool gpu_init(RHIContext& rhi, GpuContext& context);
+bool gpu_reload_shaders(RHIContext& rhi, GpuContext& context);
+void gpu_cleanup(RHIContext& rhi, GpuContext& context);
+
+bool gpu_precompute_optical_depth_texture(RHIContext& rhi, const GpuOpticalDepthRequest& request, GpuContext& context);
+bool gpu_generate_sky_image(RHIContext& rhi, const GpuSkyRequest& request, GpuContext& context);
+bool gpu_generate_sun_image(RHIContext& rhi, const GpuSunRequest& request, GpuContext& context);
+bool gpu_download_sky_image(RHIContext& rhi, std::vector<float4>& out_pixels, uint2& out_dimensions, GpuContext& context);
 
 }  // namespace scattering
 }  // namespace etx
