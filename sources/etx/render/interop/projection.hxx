@@ -10,12 +10,10 @@ struct Projection {
   };
 };
 
-#if defined(__cplusplus)
-static_assert(static_cast<uint32_t>(ProjectionType::Equirectangular) == Projection::Equirectangular,
+ETX_STATIC_ASSERT((ETX_ENUM_U32_TO_UINT32(ProjectionType::Equirectangular) == Projection::Equirectangular),
   "Projection::Equirectangular changed; update ProjectionType::Equirectangular to keep CPU/GPU projection ABI aligned");
-static_assert(static_cast<uint32_t>(ProjectionType::EqualArea) == Projection::EqualArea,
+ETX_STATIC_ASSERT((ETX_ENUM_U32_TO_UINT32(ProjectionType::EqualArea) == Projection::EqualArea),
   "Projection::EqualArea changed; update ProjectionType::EqualArea to keep CPU/GPU projection ABI aligned");
-#endif
 
 ETX_SHARED_INLINE uint32_t projection_environment_mode(bool is_atmosphere) {
   return is_atmosphere ? Projection::EqualArea : Projection::Equirectangular;

@@ -34,6 +34,9 @@ struct OceanComputePushConstants {
     uint inH0Index;
     uint outHtIndex;     // ht_Dx_Dz
     uint outDxDzIndex;   // to store Choppy X and Z
+    uint outDerivSpec0Index;
+    uint outDerivSpec1Index;
+    uint outDerivSpec2Index;
     uint N;
     uint seed;
     float L;
@@ -50,9 +53,10 @@ struct OceanComputePushConstants {
     float kMinSoft;
     float kMaxSoft;
     float choppiness;
-    float maxSteepness;
 };
 [[vk::push_constant]] OceanComputePushConstants pushConstants;
+
+static const float k_surface_tension_over_density = 7.28e-5;
 
 float dispersionOmega(float k_len, float water_depth) {
     if (k_len <= 1e-6) {
@@ -60,7 +64,8 @@ float dispersionOmega(float k_len, float water_depth) {
     }
     float safe_depth = max(water_depth, 1e-3);
     float kh = k_len * safe_depth;
-    return sqrt(9.81 * k_len * tanh(kh));
+    float restoring = (9.81 * k_len) + (k_surface_tension_over_density * k_len * k_len * k_len);
+    return sqrt(max(restoring * tanh(kh), 0.0));
 }
 
 float dispersionDOmegaDK(float k_len, float water_depth, float omega) {
@@ -72,8 +77,11 @@ float dispersionDOmegaDK(float k_len, float water_depth, float omega) {
     float tanh_kh = tanh(kh);
     float sech_kh = 1.0 / cosh(kh);
     float sech2_kh = sech_kh * sech_kh;
-    float term = tanh_kh + (kh * sech2_kh);
-    return 0.5 * 9.81 * term / omega;
+    float k2 = k_len * k_len;
+    float restoring = (9.81 * k_len) + (k_surface_tension_over_density * k_len * k2);
+    float restoring_dk = 9.81 + (3.0 * k_surface_tension_over_density * k2);
+    float omega_sq_dk = (restoring_dk * tanh_kh) + (restoring * safe_depth * sech2_kh);
+    return 0.5 * omega_sq_dk / omega;
 }
 
 float jonswapFrequencySpectrum(float omega, float wind_speed, float jonswap_gamma) {
@@ -105,7 +113,7 @@ float directionalSpreadingWeight(float2 k, float2 wind_dir, float directional_sp
     float2 k_normalized = k / k_len;
     float k_dot_w = dot(k_normalized, wind_dir);
     float forward = pow(max(0.0, k_dot_w), spread);
-    float backward = 0.05 * pow(max(0.0, -k_dot_w), spread);
+    float backward = 0.0 * pow(max(0.0, -k_dot_w), spread); // Remove trailing waves for sharper choppiness
     return forward + backward;
 }
 
@@ -137,6 +145,17 @@ float oceanWaveSpectrum(float2 k, float2 wind_dir, float wind_speed, float water
     float depth_attenuation = tanh(kh);
     depth_attenuation *= depth_attenuation;
     float spectral_density_k = s_omega * (d_omega_d_k / max(k_len, 1e-6)) * directional * depth_attenuation;
+    float gravity_restoring = 9.81 * k_len;
+    float capillary_restoring = k_surface_tension_over_density * k_len * k_len * k_len;
+    float omega_p = (0.877 * 9.81) / max(wind_speed, 0.1);
+    float omega_ratio = omega / max(omega_p, 1e-6);
+    float capillary_gate = smoothstep(2.0, 5.0, omega_ratio);
+    float capillary_boost = sqrt((gravity_restoring + capillary_restoring) / max(gravity_restoring, 1e-6));
+    capillary_boost = min(capillary_boost, 2.0);
+    float micro_scale_m = 0.004;
+    float micro_damp = 1.0 / (1.0 + pow(k_len * micro_scale_m, 4.0));
+    float short_wave_boost = 1.0 + ((capillary_boost - 1.0) * capillary_gate * micro_damp);
+    spectral_density_k *= short_wave_boost;
     return amplitude * spectral_density_k;
 }
 
@@ -214,6 +233,9 @@ void UpdateSpectrum(uint3 id : SV_DispatchThreadID) {
     RWTexture2D<float4> inH0 = bindless_storage_textures[NonUniformResourceIndex(pushConstants.inH0Index)];
     RWTexture2D<float4> outHt = bindless_storage_textures[NonUniformResourceIndex(pushConstants.outHtIndex)];
     RWTexture2D<float4> outDxDz = bindless_storage_textures[NonUniformResourceIndex(pushConstants.outDxDzIndex)];
+    RWTexture2D<float4> outDerivSpec0 = bindless_storage_textures[NonUniformResourceIndex(pushConstants.outDerivSpec0Index)];
+    RWTexture2D<float4> outDerivSpec1 = bindless_storage_textures[NonUniformResourceIndex(pushConstants.outDerivSpec1Index)];
+    RWTexture2D<float4> outDerivSpec2 = bindless_storage_textures[NonUniformResourceIndex(pushConstants.outDerivSpec2Index)];
     float L = pushConstants.L;
     float time = pushConstants.time;
     
@@ -243,19 +265,22 @@ void UpdateSpectrum(uint3 id : SV_DispatchThreadID) {
         float2 i_k_x = float2(0.0, -k.x / k_len);
         float2 i_k_y = float2(0.0, -k.y / k_len);
 
-        float choppiness = max(0.0, pushConstants.choppiness);
-        float max_steepness = max(pushConstants.maxSteepness, 0.05);
-        float mode_steepness = choppiness * k_len * length(h_k_t);
-        float steepness_scale = 1.0;
-        if (mode_steepness > max_steepness) {
-            steepness_scale = max_steepness / mode_steepness;
-        }
-
-        dx = complexMultiply(i_k_x, h_k_t) * steepness_scale;
-        dz = complexMultiply(i_k_y, h_k_t) * steepness_scale;
+        dx = complexMultiply(i_k_x, h_k_t);
+        dz = complexMultiply(i_k_y, h_k_t);
     }
     
     outHt[id.xy] = float4(h_k_t.x, h_k_t.y, 0.0, 0.0);
     outDxDz[id.xy] = float4(dx.x, dx.y, dz.x, dz.y);
-}
 
+    float2 d_op_x = float2(0.0, k.x);
+    float2 d_op_z = float2(0.0, k.y);
+    float2 du_x = complexMultiply(d_op_x, dx);
+    float2 du_y = complexMultiply(d_op_x, h_k_t);
+    float2 du_z = complexMultiply(d_op_x, dz);
+    float2 dv_x = complexMultiply(d_op_z, dx);
+    float2 dv_y = complexMultiply(d_op_z, h_k_t);
+    float2 dv_z = complexMultiply(d_op_z, dz);
+    outDerivSpec0[id.xy] = float4(du_x.x, du_x.y, du_y.x, du_y.y);
+    outDerivSpec1[id.xy] = float4(du_z.x, du_z.y, dv_x.x, dv_x.y);
+    outDerivSpec2[id.xy] = float4(dv_y.x, dv_y.y, dv_z.x, dv_z.y);
+}

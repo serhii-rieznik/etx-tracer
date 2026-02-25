@@ -15,8 +15,9 @@ static constexpr uint32_t k_max_clipmap_instances = 16u + (12u * (k_max_clipmap_
 static constexpr uint32_t k_unculled_lod_levels = 1u;
 static constexpr float k_frustum_cull_guard = 1.1f;
 static constexpr float k_planar_patch_radius_scale = 1.41421356237f;
-static constexpr float k_focus_min_downward_y = -0.05f;
+static constexpr float k_min_projected_cell_pixels = 5.0f;
 static constexpr float k_max_wave_steepness = 0.85f;
+static constexpr float k_surface_tension_over_density = 7.28e-5f;
 static constexpr uint32_t k_cascade_rng_seed[Ocean::k_cascade_count] = {0x9e3779b9u, 0x7f4a7c15u, 0x94d049bbu};
 static constexpr float k_cascade_length_ratio_min = 2.0f;
 static constexpr float k_cascade_length_min[Ocean::k_cascade_count] = {20.0f, 10.0f, 5.0f};
@@ -92,8 +93,7 @@ struct OceanRenderSettings {
 
 static_assert(sizeof(OceanRenderSettings) == 352u, "OceanRenderSettings layout must match ocean.hlsl");
 
-static bool patch_visible_in_frustum(const float3& patch_center, float patch_radius, const float3& camera_position, const float3& camera_right,
-  const float3& camera_up,
+static bool patch_visible_in_frustum(const float3& patch_center, float patch_radius, const float3& camera_position, const float3& camera_right, const float3& camera_up,
   const float3& camera_forward, float tan_half_fov, float aspect, float cull_guard_scale) {
   float3 rel = patch_center - camera_position;
   float view_x = dot(rel, camera_right);
@@ -117,6 +117,31 @@ static bool patch_visible_in_frustum(const float3& patch_center, float patch_rad
   return true;
 }
 
+static uint32_t calculate_min_active_clipmap_level(float camera_height, float base_patch_size, uint32_t patch_resolution, float fov, uint32_t viewport_height,
+  uint32_t clipmap_levels) {
+  if ((clipmap_levels == 0u) || (patch_resolution == 0u) || (viewport_height == 0u)) {
+    return 0u;
+  }
+
+  float tan_half_fov = tanf(0.5f * fov);
+  if (tan_half_fov <= 1.0e-6f) {
+    return 0u;
+  }
+
+  float base_cell_size = base_patch_size / static_cast<float>(patch_resolution);
+  float surface_distance = max(fabsf(camera_height), 1.0e-3f);
+  float focal_pixels_y = (0.5f * static_cast<float>(viewport_height)) / tan_half_fov;
+  float cell_pixels = (base_cell_size * focal_pixels_y) / surface_distance;
+
+  uint32_t min_active_level = 0u;
+  while (((min_active_level + 1u) < clipmap_levels) && (cell_pixels < k_min_projected_cell_pixels)) {
+    cell_pixels *= 2.0f;
+    ++min_active_level;
+  }
+
+  return min_active_level;
+}
+
 static float dispersion_omega(float k_len, float water_depth) {
   if (k_len <= 1.0e-6f) {
     return 0.0f;
@@ -124,7 +149,8 @@ static float dispersion_omega(float k_len, float water_depth) {
   float safe_depth = max(water_depth, 1.0e-3f);
   float gravity = 9.81f;
   float kh = k_len * safe_depth;
-  return sqrtf(gravity * k_len * tanhf(kh));
+  float restoring = (gravity * k_len) + (k_surface_tension_over_density * k_len * k_len * k_len);
+  return sqrtf(max(restoring * tanhf(kh), 0.0f));
 }
 
 static float dispersion_domega_dk(float k_len, float water_depth, float omega) {
@@ -137,8 +163,11 @@ static float dispersion_domega_dk(float k_len, float water_depth, float omega) {
   float tanh_kh = tanhf(kh);
   float sech_kh = 1.0f / coshf(kh);
   float sech2_kh = sech_kh * sech_kh;
-  float term = tanh_kh + (kh * sech2_kh);
-  return 0.5f * gravity * term / omega;
+  float k2 = k_len * k_len;
+  float restoring = (gravity * k_len) + (k_surface_tension_over_density * k_len * k2);
+  float restoring_dk = gravity + (3.0f * k_surface_tension_over_density * k2);
+  float omega_sq_dk = (restoring_dk * tanh_kh) + (restoring * safe_depth * sech2_kh);
+  return 0.5f * omega_sq_dk / omega;
 }
 
 static float jonswap_frequency_spectrum(float omega, float wind_speed, float jonswap_gamma) {
@@ -171,12 +200,22 @@ static float directional_spreading_weight(const float2& k, const float2& wind_di
   float2 k_normalized = k / k_len;
   float k_dot_w = dot(k_normalized, wind_dir);
   float forward = powf(max(0.0f, k_dot_w), spread);
-  float backward = 0.05f * powf(max(0.0f, -k_dot_w), spread);
+  float backward = 0.0 * powf(max(0.0f, -k_dot_w), spread);
   return forward + backward;
 }
 
-static float ocean_wave_spectrum(
-  const float2& k, const float2& wind_dir, float wind_speed, float water_depth, float jonswap_gamma, float directional_spread, float amplitude_gain) {
+static float smooth_step(float edge0, float edge1, float x) {
+  float delta = edge1 - edge0;
+  if (fabsf(delta) <= 1.0e-8f) {
+    return (x >= edge1) ? 1.0f : 0.0f;
+  }
+  float t = (x - edge0) / delta;
+  t = min(1.0f, max(0.0f, t));
+  return t * t * (3.0f - (2.0f * t));
+}
+
+static float ocean_wave_spectrum(const float2& k, const float2& wind_dir, float wind_speed, float water_depth, float jonswap_gamma, float directional_spread,
+  float amplitude_gain) {
   float k_len = length(k);
   if (k_len <= 1.0e-6f) {
     return 0.0f;
@@ -206,17 +245,19 @@ static float ocean_wave_spectrum(
   depth_attenuation *= depth_attenuation;
 
   float spectral_density_k = s_omega * (d_omega_d_k / max(k_len, 1.0e-6f)) * directional * depth_attenuation;
+  float gravity = 9.81f;
+  float omega_p = (0.877f * gravity) / max(wind_speed, 0.1f);
+  float omega_ratio = omega / max(omega_p, 1.0e-6f);
+  float capillary_gate = smooth_step(2.0f, 5.0f, omega_ratio);
+  float gravity_restoring = gravity * k_len;
+  float capillary_restoring = k_surface_tension_over_density * k_len * k_len * k_len;
+  float capillary_boost = sqrtf((gravity_restoring + capillary_restoring) / max(gravity_restoring, 1.0e-6f));
+  capillary_boost = min(capillary_boost, 2.0f);
+  float micro_scale_m = 0.004f;
+  float micro_damp = 1.0f / (1.0f + powf(k_len * micro_scale_m, 4.0f));
+  float short_wave_boost = 1.0f + ((capillary_boost - 1.0f) * capillary_gate * micro_damp);
+  spectral_density_k *= short_wave_boost;
   return amplitude_gain * spectral_density_k;
-}
-
-static float smooth_step(float edge0, float edge1, float x) {
-  float delta = edge1 - edge0;
-  if (fabsf(delta) <= 1.0e-8f) {
-    return (x >= edge1) ? 1.0f : 0.0f;
-  }
-  float t = (x - edge0) / delta;
-  t = min(1.0f, max(0.0f, t));
-  return t * t * (3.0f - (2.0f * t));
 }
 
 static float spectrum_band_weight(float k_len, float k_min, float k_max, float k_min_soft, float k_max_soft) {
@@ -235,9 +276,8 @@ static float spectrum_band_weight(float k_len, float k_min, float k_max, float k
   return weight;
 }
 
-static float estimate_base_rms_height(
-  uint32_t resolution, float cascade_length, const float2& wind_dir, float wind_speed, float water_depth, float jonswap_gamma, float directional_spread,
-  float k_min, float k_max, float k_min_soft, float k_max_soft) {
+static float estimate_base_rms_height(uint32_t resolution, float cascade_length, const float2& wind_dir, float wind_speed, float water_depth, float jonswap_gamma,
+  float directional_spread, float k_min, float k_max, float k_min_soft, float k_max_soft) {
   if ((resolution == 0u) || (cascade_length <= 1.0e-6f)) {
     return 0.0f;
   }
@@ -271,8 +311,7 @@ static float estimate_base_rms_height(
   return static_cast<float>(sqrt(variance));
 }
 
-static void calculate_cascade_band_limits(
-  const OceanParameters& parameters, float* out_k_min, float* out_k_max, float* out_k_min_soft, float* out_k_max_soft) {
+static void calculate_cascade_band_limits(const OceanParameters& parameters, float* out_k_min, float* out_k_max, float* out_k_min_soft, float* out_k_max_soft) {
   constexpr float k_unbounded_max = 1.0e30f;
   float k_step[Ocean::k_cascade_count] = {0.0f, 0.0f, 0.0f};
   for (uint32_t c = 0; c < Ocean::k_cascade_count; ++c) {
@@ -371,6 +410,9 @@ static bool spectrum_parameters_changed(const OceanParameters& current, const Oc
   if (fabsf(current.significant_wave_height - previous.significant_wave_height) > epsilon) {
     return true;
   }
+  if (fabsf(current.cascade_detail_boost - previous.cascade_detail_boost) > epsilon) {
+    return true;
+  }
   for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
     if (fabsf(current.cascade_lengths[i] - previous.cascade_lengths[i]) > epsilon) {
       return true;
@@ -382,6 +424,56 @@ static bool spectrum_parameters_changed(const OceanParameters& current, const Oc
   return false;
 }
 
+static void apply_cascade_detail_boost(const OceanParameters& parameters, float* io_rms) {
+  if (io_rms == nullptr) {
+    return;
+  }
+
+  float detail_boost = max(parameters.cascade_detail_boost, 0.0f);
+  if (fabsf(detail_boost - 1.0f) <= 1.0e-6f) {
+    return;
+  }
+
+  float min_length = 1.0e30f;
+  float max_length = 0.0f;
+  for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
+    float cascade_length = max(parameters.cascade_lengths[i], 1.0e-3f);
+    min_length = min(min_length, cascade_length);
+    max_length = max(max_length, cascade_length);
+  }
+
+  float log_range = logf(max(max_length, 1.0e-3f)) - logf(max(min_length, 1.0e-3f));
+  if (fabsf(log_range) <= 1.0e-6f) {
+    for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
+      io_rms[i] *= detail_boost;
+    }
+    return;
+  }
+
+  float pre_boost_rms_sq = 0.0f;
+  float post_boost_rms_sq = 0.0f;
+  float boosted_rms[Ocean::k_cascade_count] = {0.0f, 0.0f, 0.0f};
+  for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
+    float cascade_length = max(parameters.cascade_lengths[i], 1.0e-3f);
+    float rank_t = (logf(max_length) - logf(cascade_length)) / log_range;
+    rank_t = min(max(rank_t, 0.0f), 1.0f);
+    float cascade_boost = powf(detail_boost, rank_t);
+    float base_rms = max(io_rms[i], 0.0f);
+    boosted_rms[i] = base_rms * cascade_boost;
+    pre_boost_rms_sq += (base_rms * base_rms);
+    post_boost_rms_sq += (boosted_rms[i] * boosted_rms[i]);
+  }
+
+  float preserve_total_scale = 1.0f;
+  if ((parameters.significant_wave_height_enable) && (pre_boost_rms_sq > 1.0e-12f) && (post_boost_rms_sq > 1.0e-12f)) {
+    preserve_total_scale = sqrtf(pre_boost_rms_sq / post_boost_rms_sq);
+  }
+
+  for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
+    io_rms[i] = boosted_rms[i] * preserve_total_scale;
+  }
+}
+
 static void calculate_effective_cascade_weights(const OceanParameters& parameters, float* out_weights) {
   bool use_neutral_physical_mixing = (parameters.significant_wave_height_enable) && (parameters.debug_cascade_overrides_enable == false);
   if (use_neutral_physical_mixing) {
@@ -391,7 +483,6 @@ static void calculate_effective_cascade_weights(const OceanParameters& parameter
     return;
   }
 
-  float weight_sum_sq = 0.0f;
   for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
     float weight = max(0.0f, parameters.cascade_render_weight[i]);
     if (parameters.cascade_enable[i] == false) {
@@ -401,37 +492,20 @@ static void calculate_effective_cascade_weights(const OceanParameters& parameter
       weight = 0.0f;
     }
     out_weights[i] = weight;
-    weight_sum_sq += (weight * weight);
-  }
-
-  if (weight_sum_sq > 1.0f) {
-    float normalize_scale = 1.0f / sqrtf(weight_sum_sq);
-    for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
-      out_weights[i] *= normalize_scale;
-    }
   }
 }
 
 static bool enforce_cascade_length_constraints(OceanParameters& parameters) {
   bool changed = false;
-  float length_0 = min(k_cascade_length_max, max(k_cascade_length_min[0], parameters.cascade_lengths[0]));
-  float max_length_1 = min(k_cascade_length_max / k_cascade_length_ratio_min, length_0 / k_cascade_length_ratio_min);
-  float length_1 = min(max_length_1, max(k_cascade_length_min[1], parameters.cascade_lengths[1]));
-  float max_length_2 = min((k_cascade_length_max / k_cascade_length_ratio_min) / k_cascade_length_ratio_min, length_1 / k_cascade_length_ratio_min);
-  float length_2 = min(max_length_2, max(k_cascade_length_min[2], parameters.cascade_lengths[2]));
 
-  if (fabsf(parameters.cascade_lengths[0] - length_0) > 1.0e-6f) {
-    parameters.cascade_lengths[0] = length_0;
-    changed = true;
+  for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
+    float length = min(k_cascade_length_max, max(k_cascade_length_min[i], parameters.cascade_lengths[i]));
+    if (fabsf(parameters.cascade_lengths[i] - length) > 1.0e-6f) {
+      parameters.cascade_lengths[i] = length;
+      changed = true;
+    }
   }
-  if (fabsf(parameters.cascade_lengths[1] - length_1) > 1.0e-6f) {
-    parameters.cascade_lengths[1] = length_1;
-    changed = true;
-  }
-  if (fabsf(parameters.cascade_lengths[2] - length_2) > 1.0e-6f) {
-    parameters.cascade_lengths[2] = length_2;
-    changed = true;
-  }
+
   return changed;
 }
 
@@ -440,6 +514,7 @@ static void calculate_target_cascade_rms(uint32_t fft_resolution, const OceanPar
     for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
       out_rms[i] = max(0.0f, parameters.cascade_amplitudes[i]);
     }
+    apply_cascade_detail_boost(parameters, out_rms);
     return;
   }
 
@@ -460,11 +535,11 @@ static void calculate_target_cascade_rms(uint32_t fft_resolution, const OceanPar
   float base_cascade_rms[Ocean::k_cascade_count] = {0.0f, 0.0f, 0.0f};
   float base_total_rms_sq = 0.0f;
   for (uint32_t c = 0; c < Ocean::k_cascade_count; ++c) {
-    float base_rms = estimate_base_rms_height(fft_resolution, parameters.cascade_lengths[c], wind_dir, parameters.wind_speed, parameters.water_depth,
-      parameters.jonswap_gamma, parameters.directional_spread, cascade_k_min[c], cascade_k_max[c], cascade_k_min_soft[c], cascade_k_max_soft[c]);
+    float base_rms = estimate_base_rms_height(fft_resolution, parameters.cascade_lengths[c], wind_dir, parameters.wind_speed, parameters.water_depth, parameters.jonswap_gamma,
+      parameters.directional_spread, cascade_k_min[c], cascade_k_max[c], cascade_k_min_soft[c], cascade_k_max_soft[c]);
     if ((std::isfinite(base_rms) == false) || (base_rms <= 1.0e-6f)) {
-      base_rms = estimate_base_rms_height(fft_resolution, parameters.cascade_lengths[c], wind_dir, parameters.wind_speed, parameters.water_depth,
-        parameters.jonswap_gamma, parameters.directional_spread, 0.0f, 1.0e30f, 0.0f, 0.0f);
+      base_rms = estimate_base_rms_height(fft_resolution, parameters.cascade_lengths[c], wind_dir, parameters.wind_speed, parameters.water_depth, parameters.jonswap_gamma,
+        parameters.directional_spread, 0.0f, 1.0e30f, 0.0f, 0.0f);
     }
     if ((std::isfinite(base_rms) == false) || (base_rms <= 1.0e-6f)) {
       base_rms = 0.0f;
@@ -485,9 +560,10 @@ static void calculate_target_cascade_rms(uint32_t fft_resolution, const OceanPar
   for (uint32_t i = 0; i < Ocean::k_cascade_count; ++i) {
     out_rms[i] = base_cascade_rms[i] * rms_scale;
   }
+  apply_cascade_detail_boost(parameters, out_rms);
 }
 
-void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format) {
+void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format, uint32_t sample_count) {
   const int M = static_cast<int>(_patch_resolution);
   ETX_ASSERT(_clipmap_levels <= k_max_clipmap_levels);
   _h0_generated = false;
@@ -631,6 +707,7 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
     p_desc.color_attachment_count = 1;
     p_desc.color_formats[0] = color_format;
     p_desc.depth_format = depth_format;
+    p_desc.sample_count = sample_count;
 
     auto p_result = rhi.device().create_graphics_pipeline(p_desc);
     if (p_result.result != RHIResult::Success) {
@@ -726,8 +803,8 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
     surface_derivative_desc.usage = RHITextureUsage::Sampled | RHITextureUsage::Storage;
 #else
     surface_derivative_desc.mip_levels = calculate_mip_levels(tex_desc.width, tex_desc.height);
-    surface_derivative_desc.usage = RHITextureUsage::Sampled | RHITextureUsage::Storage | RHITextureUsage::ColorAttachment | RHITextureUsage::TransferSrc |
-                                    RHITextureUsage::TransferDst;
+    surface_derivative_desc.usage =
+      RHITextureUsage::Sampled | RHITextureUsage::Storage | RHITextureUsage::ColorAttachment | RHITextureUsage::TransferSrc | RHITextureUsage::TransferDst;
 #endif
 
     for (uint32_t i = 0; i < k_cascade_count; ++i) {
@@ -738,8 +815,14 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
       _h0_texture[i] = rhi.device().create_texture(tex_desc).handle;
       _ht_texture[i] = rhi.device().create_texture(tex_desc).handle;
       _dxdz_texture[i] = rhi.device().create_texture(tex_desc).handle;
+      _deriv_spec_0_texture[i] = rhi.device().create_texture(tex_desc).handle;
+      _deriv_spec_1_texture[i] = rhi.device().create_texture(tex_desc).handle;
+      _deriv_spec_2_texture[i] = rhi.device().create_texture(tex_desc).handle;
       _ht_pingpong[i] = rhi.device().create_texture(tex_desc).handle;
       _dxdz_pingpong[i] = rhi.device().create_texture(tex_desc).handle;
+      _deriv_spec_0_pingpong[i] = rhi.device().create_texture(tex_desc).handle;
+      _deriv_spec_1_pingpong[i] = rhi.device().create_texture(tex_desc).handle;
+      _deriv_spec_2_pingpong[i] = rhi.device().create_texture(tex_desc).handle;
     }
   } else {
     log::error("Ocean: Failed to compile shaders:\n%s", compilation.error_message.c_str());
@@ -796,10 +879,22 @@ void Ocean::cleanup(RHIContext& rhi) {
       rhi.device().destroy_texture(_ht_texture[i]);
     if (_dxdz_texture[i].valid())
       rhi.device().destroy_texture(_dxdz_texture[i]);
+    if (_deriv_spec_0_texture[i].valid())
+      rhi.device().destroy_texture(_deriv_spec_0_texture[i]);
+    if (_deriv_spec_1_texture[i].valid())
+      rhi.device().destroy_texture(_deriv_spec_1_texture[i]);
+    if (_deriv_spec_2_texture[i].valid())
+      rhi.device().destroy_texture(_deriv_spec_2_texture[i]);
     if (_ht_pingpong[i].valid())
       rhi.device().destroy_texture(_ht_pingpong[i]);
     if (_dxdz_pingpong[i].valid())
       rhi.device().destroy_texture(_dxdz_pingpong[i]);
+    if (_deriv_spec_0_pingpong[i].valid())
+      rhi.device().destroy_texture(_deriv_spec_0_pingpong[i]);
+    if (_deriv_spec_1_pingpong[i].valid())
+      rhi.device().destroy_texture(_deriv_spec_1_pingpong[i]);
+    if (_deriv_spec_2_pingpong[i].valid())
+      rhi.device().destroy_texture(_deriv_spec_2_pingpong[i]);
   }
   _has_previous_spectrum_parameters = false;
   _h0_generated = false;
@@ -811,8 +906,8 @@ void Ocean::cleanup(RHIContext& rhi) {
   }
 }
 
-void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const float3& camera_position, const float3& camera_direction, float fov,
-  uint32_t viewport_width, uint32_t viewport_height) {
+void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const float3& camera_position, const float3& camera_direction, float fov, uint32_t viewport_width,
+  uint32_t viewport_height) {
   if ((valid() == false) || (_h0_pipeline.valid() == false) || (_displacement_map[0].valid() == false)) {
     return;
   }
@@ -846,41 +941,9 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       view_forward = {0.0f, 0.0f, -1.0f};
     }
 
-    float3 cam_forward_xz = {view_forward.x, 0.0f, view_forward.z};
-    float cam_forward_xz_len_sq = dot(cam_forward_xz, cam_forward_xz);
-    if (cam_forward_xz_len_sq > 1.0e-6f) {
-      cam_forward_xz = normalize(cam_forward_xz);
-    } else {
-      cam_forward_xz = {0.0f, 0.0f, 1.0f};
-    }
-
-    float focus_max_distance = max(0.0f, _parameters.lod_forward_bias);
-    float2 focus_offset = {0.0f, 0.0f};
-    if ((view_forward.y < k_focus_min_downward_y) && (focus_max_distance > 0.0f)) {
-      float t_to_water = -camera_position.y / view_forward.y;
-      if (t_to_water > 0.0f) {
-        float3 focus_world = camera_position + (view_forward * t_to_water);
-        float2 focus_delta = {focus_world.x - camera_position.x, focus_world.z - camera_position.z};
-        float focus_delta_len_sq = dot(focus_delta, focus_delta);
-        if (focus_delta_len_sq > 1.0e-6f) {
-          float focus_delta_len = sqrtf(focus_delta_len_sq);
-          float clamped_focus_distance = min(focus_delta_len, focus_max_distance);
-          focus_offset = focus_delta * (clamped_focus_distance / focus_delta_len);
-        }
-      }
-    }
-    float focus_offset_len_sq = dot(focus_offset, focus_offset);
-    if (focus_offset_len_sq > 1.0e-12f) {
-      float focus_offset_len = sqrtf(focus_offset_len_sq);
-      float max_focus_offset = _base_patch_size;
-      if (focus_offset_len > max_focus_offset) {
-        focus_offset = focus_offset * (max_focus_offset / focus_offset_len);
-      }
-    }
-
     float base_grid_size = _base_patch_size / static_cast<float>(_patch_resolution);
-    float center_x = camera_position.x + focus_offset.x;
-    float center_z = camera_position.z + focus_offset.y;
+    float center_x = camera_position.x;
+    float center_z = camera_position.z;
     float snapped_center_x = floorf(center_x / base_grid_size) * base_grid_size;
     float snapped_center_z = floorf(center_z / base_grid_size) * base_grid_size;
     float snapped_camera_x = floorf(camera_position.x / base_grid_size) * base_grid_size;
@@ -898,18 +961,19 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
 
     float aspect = (viewport_height > 0u) ? (static_cast<float>(viewport_width) / static_cast<float>(viewport_height)) : 1.0f;
     float tan_half_fov = tanf(0.5f * fov);
+    uint32_t min_active_lod = calculate_min_active_clipmap_level(camera_position.y, _base_patch_size, _patch_resolution, fov, viewport_height, _clipmap_levels);
 
     ClipmapInstance visible_instances[k_max_clipmap_instances] = {};
     uint32_t visible_instance_count = 0;
-    for (uint32_t l = 0; l < _clipmap_levels; ++l) {
+    for (uint32_t l = min_active_lod; l < _clipmap_levels; ++l) {
       float scale = _base_patch_size * static_cast<float>(1u << l);
       float half_scale = 0.5f * scale;
       float planar_radius = (half_scale + horizontal_displacement_margin) * k_planar_patch_radius_scale;
       float patch_radius = sqrtf((planar_radius * planar_radius) + (vertical_displacement_margin * vertical_displacement_margin));
-      bool keep_full_ring = (l < k_unculled_lod_levels);
+      bool keep_full_ring = (l < (min_active_lod + k_unculled_lod_levels));
       for (int x = -2; x <= 1; ++x) {
         for (int z = -2; z <= 1; ++z) {
-          if ((l > 0u) && (x >= -1) && (x <= 0) && (z >= -1) && (z <= 0)) {
+          if ((l > min_active_lod) && (x >= -1) && (x <= 0) && (z >= -1) && (z <= 0)) {
             continue;
           }
           float world_center_x = ((static_cast<float>(x) + 0.5f) * scale) + snapped_camera_x + _clipmap_center_offset.x;
@@ -917,8 +981,7 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
           float3 patch_center = {world_center_x, 0.0f, world_center_z};
           bool patch_visible = keep_full_ring;
           if (patch_visible == false) {
-            patch_visible =
-              patch_visible_in_frustum(patch_center, patch_radius, camera_position, view_right, view_up, view_forward, tan_half_fov, aspect, k_frustum_cull_guard);
+            patch_visible = patch_visible_in_frustum(patch_center, patch_radius, camera_position, view_right, view_up, view_forward, tan_half_fov, aspect, k_frustum_cull_guard);
           }
           if ((patch_visible) && (visible_instance_count < _instance_capacity)) {
             visible_instances[visible_instance_count++] = {static_cast<float>(x) * scale, static_cast<float>(z) * scale, scale, static_cast<float>(l)};
@@ -928,11 +991,12 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
     }
 
     if (visible_instance_count == 0u) {
-      float scale = _base_patch_size;
-      visible_instances[0] = {-1.0f * scale, -1.0f * scale, scale, 0.0f};
-      visible_instances[1] = {0.0f * scale, -1.0f * scale, scale, 0.0f};
-      visible_instances[2] = {-1.0f * scale, 0.0f * scale, scale, 0.0f};
-      visible_instances[3] = {0.0f * scale, 0.0f * scale, scale, 0.0f};
+      float scale = _base_patch_size * static_cast<float>(1u << min_active_lod);
+      float level = static_cast<float>(min_active_lod);
+      visible_instances[0] = {-1.0f * scale, -1.0f * scale, scale, level};
+      visible_instances[1] = {0.0f * scale, -1.0f * scale, scale, level};
+      visible_instances[2] = {-1.0f * scale, 0.0f * scale, scale, level};
+      visible_instances[3] = {0.0f * scale, 0.0f * scale, scale, level};
       visible_instance_count = 4u;
     }
 
@@ -967,8 +1031,14 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       rhi.cmd_texture_barrier(cmd, _h0_texture[i], RHIResourceState::Undefined, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _ht_texture[i], RHIResourceState::Undefined, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _dxdz_texture[i], RHIResourceState::Undefined, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_texture[i], RHIResourceState::Undefined, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_texture[i], RHIResourceState::Undefined, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_texture[i], RHIResourceState::Undefined, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _ht_pingpong[i], RHIResourceState::Undefined, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _dxdz_pingpong[i], RHIResourceState::Undefined, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_pingpong[i], RHIResourceState::Undefined, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_pingpong[i], RHIResourceState::Undefined, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_pingpong[i], RHIResourceState::Undefined, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _displacement_map[i], RHIResourceState::Undefined, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _surface_derivative_u_map[i], RHIResourceState::Undefined, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _surface_derivative_v_map[i], RHIResourceState::Undefined, RHIResourceState::General);
@@ -981,6 +1051,12 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       rhi.cmd_texture_barrier(cmd, _surface_derivative_u_map[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _surface_derivative_v_map[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _slope_metric_map[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_texture[i], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_texture[i], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_texture[i], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_pingpong[i], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_pingpong[i], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_pingpong[i], RHIResourceState::General, RHIResourceState::General);
     }
   }
 
@@ -992,6 +1068,9 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       uint32_t inH0Index;
       uint32_t outHtIndex;    // ht_Dx_Dz
       uint32_t outDxDzIndex;  // to store Choppy X and Z
+      uint32_t outDerivSpec0Index;
+      uint32_t outDerivSpec1Index;
+      uint32_t outDerivSpec2Index;
       uint32_t N;
       uint32_t seed;
       float L;
@@ -1008,7 +1087,6 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       float kMinSoft;
       float kMaxSoft;
       float choppiness;
-      float maxSteepness;
     };
 
     float cascade_k_min[k_cascade_count] = {0.0f, 0.0f, 0.0f};
@@ -1033,12 +1111,11 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
         continue;
       }
 
-      float base_rms_height =
-        estimate_base_rms_height(_fft_resolution, _parameters.cascade_lengths[c], wind_dir, _parameters.wind_speed, _parameters.water_depth,
-          _parameters.jonswap_gamma, _parameters.directional_spread, cascade_k_min[c], cascade_k_max[c], cascade_k_min_soft[c], cascade_k_max_soft[c]);
+      float base_rms_height = estimate_base_rms_height(_fft_resolution, _parameters.cascade_lengths[c], wind_dir, _parameters.wind_speed, _parameters.water_depth,
+        _parameters.jonswap_gamma, _parameters.directional_spread, cascade_k_min[c], cascade_k_max[c], cascade_k_min_soft[c], cascade_k_max_soft[c]);
       if ((std::isfinite(base_rms_height) == false) || (base_rms_height <= 1.0e-6f)) {
-        base_rms_height = estimate_base_rms_height(_fft_resolution, _parameters.cascade_lengths[c], wind_dir, _parameters.wind_speed,
-          _parameters.water_depth, _parameters.jonswap_gamma, _parameters.directional_spread, 0.0f, 1.0e30f, 0.0f, 0.0f);
+        base_rms_height = estimate_base_rms_height(_fft_resolution, _parameters.cascade_lengths[c], wind_dir, _parameters.wind_speed, _parameters.water_depth,
+          _parameters.jonswap_gamma, _parameters.directional_spread, 0.0f, 1.0e30f, 0.0f, 0.0f);
       }
       if ((std::isfinite(base_rms_height) == false) || (base_rms_height <= 1.0e-6f)) {
         base_rms_height = 1.0e-3f;
@@ -1058,6 +1135,9 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
     for (uint32_t c = 0; c < k_cascade_count; ++c) {
       OceanComputePushConstants pc = {};
       pc.outH0Index = get_bindless_descriptor_index(_h0_texture[c]);
+      pc.outDerivSpec0Index = 0u;
+      pc.outDerivSpec1Index = 0u;
+      pc.outDerivSpec2Index = 0u;
       pc.N = TESS;
       pc.seed = k_cascade_rng_seed[c];
       pc.L = _parameters.cascade_lengths[c];
@@ -1073,8 +1153,6 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       pc.kMinSoft = cascade_k_min_soft[c];
       pc.kMaxSoft = cascade_k_max_soft[c];
       pc.choppiness = _parameters.choppiness;
-      pc.maxSteepness = k_max_wave_steepness;
-
       rhi.cmd_push_constants(cmd, &pc, sizeof(OceanComputePushConstants), 0);
 
       RHIDispatchDesc dispatch = {};
@@ -1095,6 +1173,9 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       uint32_t inH0Index;
       uint32_t outHtIndex;    // ht_Dx_Dz
       uint32_t outDxDzIndex;  // to store Choppy X and Z
+      uint32_t outDerivSpec0Index;
+      uint32_t outDerivSpec1Index;
+      uint32_t outDerivSpec2Index;
       uint32_t N;
       uint32_t seed;
       float L;
@@ -1111,7 +1192,6 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       float kMinSoft;
       float kMaxSoft;
       float choppiness;
-      float maxSteepness;
     };
 
     float scaled_time = time * _parameters.time_scale;
@@ -1120,6 +1200,9 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       pc.inH0Index = get_bindless_descriptor_index(_h0_texture[c]);
       pc.outHtIndex = get_bindless_descriptor_index(_ht_texture[c]);
       pc.outDxDzIndex = get_bindless_descriptor_index(_dxdz_texture[c]);
+      pc.outDerivSpec0Index = get_bindless_descriptor_index(_deriv_spec_0_texture[c]);
+      pc.outDerivSpec1Index = get_bindless_descriptor_index(_deriv_spec_1_texture[c]);
+      pc.outDerivSpec2Index = get_bindless_descriptor_index(_deriv_spec_2_texture[c]);
       pc.N = TESS;
       pc.seed = 0u;
       pc.L = _parameters.cascade_lengths[c];
@@ -1135,8 +1218,6 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       pc.kMinSoft = 0.0f;
       pc.kMaxSoft = 0.0f;
       pc.choppiness = _parameters.choppiness;
-      pc.maxSteepness = k_max_wave_steepness;
-
       rhi.cmd_push_constants(cmd, &pc, sizeof(OceanComputePushConstants), 0);
 
       RHIDispatchDesc dispatch = {};
@@ -1146,6 +1227,9 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       rhi.cmd_dispatch(cmd, dispatch);
       rhi.cmd_texture_barrier(cmd, _ht_texture[c], RHIResourceState::General, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _dxdz_texture[c], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_texture[c], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_texture[c], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_texture[c], RHIResourceState::General, RHIResourceState::General);
     }
   }
 
@@ -1166,65 +1250,46 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
     dispatch.group_count_y = dispatch_group_count_y;
     dispatch.group_count_z = 1;
 
+    auto run_fft_2d = [&](RHITexture src_tex, RHITexture ping_tex, FFTPushConstants& io_fft_pc) -> bool {
+      bool pingpong_local = false;
+      io_fft_pc.direction = 0;
+      for (uint32_t i = 0; i < io_fft_pc.log2N; ++i) {
+        io_fft_pc.pass = i;
+        io_fft_pc.inTexIndex = get_bindless_descriptor_index((pingpong_local == false) ? src_tex : ping_tex);
+        io_fft_pc.outTexIndex = get_bindless_descriptor_index((pingpong_local == false) ? ping_tex : src_tex);
+        pingpong_local = (pingpong_local == false);
+        rhi.cmd_push_constants(cmd, &io_fft_pc, sizeof(FFTPushConstants), 0);
+        rhi.cmd_dispatch(cmd, dispatch);
+        rhi.cmd_texture_barrier(cmd, src_tex, RHIResourceState::General, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, ping_tex, RHIResourceState::General, RHIResourceState::General);
+      }
+
+      io_fft_pc.direction = 1;
+      for (uint32_t i = 0; i < io_fft_pc.log2N; ++i) {
+        io_fft_pc.pass = i;
+        io_fft_pc.inTexIndex = get_bindless_descriptor_index((pingpong_local == false) ? src_tex : ping_tex);
+        io_fft_pc.outTexIndex = get_bindless_descriptor_index((pingpong_local == false) ? ping_tex : src_tex);
+        pingpong_local = (pingpong_local == false);
+        rhi.cmd_push_constants(cmd, &io_fft_pc, sizeof(FFTPushConstants), 0);
+        rhi.cmd_dispatch(cmd, dispatch);
+        rhi.cmd_texture_barrier(cmd, src_tex, RHIResourceState::General, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, ping_tex, RHIResourceState::General, RHIResourceState::General);
+      }
+
+      return pingpong_local;
+    };
+
     for (uint32_t c = 0; c < k_cascade_count; ++c) {
       rhi.cmd_set_pipeline(cmd, _fft_pipeline);
       FFTPushConstants fft_pc = {};
       fft_pc.N = TESS;
       fft_pc.log2N = fft_log2_n;
 
-      // Perform FFT on Ht
-      bool pingpong = false;
-      // Horizontal
-      fft_pc.direction = 0;
-      for (uint32_t i = 0; i < fft_pc.log2N; ++i) {
-        fft_pc.pass = i;
-        fft_pc.inTexIndex = get_bindless_descriptor_index((pingpong == false) ? _ht_texture[c] : _ht_pingpong[c]);
-        fft_pc.outTexIndex = get_bindless_descriptor_index((pingpong == false) ? _ht_pingpong[c] : _ht_texture[c]);
-        pingpong = (pingpong == false);
-        rhi.cmd_push_constants(cmd, &fft_pc, sizeof(FFTPushConstants), 0);
-        rhi.cmd_dispatch(cmd, dispatch);
-        rhi.cmd_texture_barrier(cmd, _ht_texture[c], RHIResourceState::General, RHIResourceState::General);
-        rhi.cmd_texture_barrier(cmd, _ht_pingpong[c], RHIResourceState::General, RHIResourceState::General);
-      }
-      // Vertical
-      fft_pc.direction = 1;
-      for (uint32_t i = 0; i < fft_pc.log2N; ++i) {
-        fft_pc.pass = i;
-        fft_pc.inTexIndex = get_bindless_descriptor_index((pingpong == false) ? _ht_texture[c] : _ht_pingpong[c]);
-        fft_pc.outTexIndex = get_bindless_descriptor_index((pingpong == false) ? _ht_pingpong[c] : _ht_texture[c]);
-        pingpong = (pingpong == false);
-        rhi.cmd_push_constants(cmd, &fft_pc, sizeof(FFTPushConstants), 0);
-        rhi.cmd_dispatch(cmd, dispatch);
-        rhi.cmd_texture_barrier(cmd, _ht_texture[c], RHIResourceState::General, RHIResourceState::General);
-        rhi.cmd_texture_barrier(cmd, _ht_pingpong[c], RHIResourceState::General, RHIResourceState::General);
-      }
-
-      // Perform FFT on DxDz
-      bool pingpong_dxdz = false;
-      // Horizontal
-      fft_pc.direction = 0;
-      for (uint32_t i = 0; i < fft_pc.log2N; ++i) {
-        fft_pc.pass = i;
-        fft_pc.inTexIndex = get_bindless_descriptor_index((pingpong_dxdz == false) ? _dxdz_texture[c] : _dxdz_pingpong[c]);
-        fft_pc.outTexIndex = get_bindless_descriptor_index((pingpong_dxdz == false) ? _dxdz_pingpong[c] : _dxdz_texture[c]);
-        pingpong_dxdz = (pingpong_dxdz == false);
-        rhi.cmd_push_constants(cmd, &fft_pc, sizeof(FFTPushConstants), 0);
-        rhi.cmd_dispatch(cmd, dispatch);
-        rhi.cmd_texture_barrier(cmd, _dxdz_texture[c], RHIResourceState::General, RHIResourceState::General);
-        rhi.cmd_texture_barrier(cmd, _dxdz_pingpong[c], RHIResourceState::General, RHIResourceState::General);
-      }
-      // Vertical
-      fft_pc.direction = 1;
-      for (uint32_t i = 0; i < fft_pc.log2N; ++i) {
-        fft_pc.pass = i;
-        fft_pc.inTexIndex = get_bindless_descriptor_index((pingpong_dxdz == false) ? _dxdz_texture[c] : _dxdz_pingpong[c]);
-        fft_pc.outTexIndex = get_bindless_descriptor_index((pingpong_dxdz == false) ? _dxdz_pingpong[c] : _dxdz_texture[c]);
-        pingpong_dxdz = (pingpong_dxdz == false);
-        rhi.cmd_push_constants(cmd, &fft_pc, sizeof(FFTPushConstants), 0);
-        rhi.cmd_dispatch(cmd, dispatch);
-        rhi.cmd_texture_barrier(cmd, _dxdz_texture[c], RHIResourceState::General, RHIResourceState::General);
-        rhi.cmd_texture_barrier(cmd, _dxdz_pingpong[c], RHIResourceState::General, RHIResourceState::General);
-      }
+      bool pingpong = run_fft_2d(_ht_texture[c], _ht_pingpong[c], fft_pc);
+      bool pingpong_dxdz = run_fft_2d(_dxdz_texture[c], _dxdz_pingpong[c], fft_pc);
+      bool pingpong_deriv_0 = run_fft_2d(_deriv_spec_0_texture[c], _deriv_spec_0_pingpong[c], fft_pc);
+      bool pingpong_deriv_1 = run_fft_2d(_deriv_spec_1_texture[c], _deriv_spec_1_pingpong[c], fft_pc);
+      bool pingpong_deriv_2 = run_fft_2d(_deriv_spec_2_texture[c], _deriv_spec_2_pingpong[c], fft_pc);
 
       // Assemble Displacements and Surface Derivatives
       if (_assemble_pipeline.valid()) {
@@ -1232,6 +1297,9 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
         struct AssemblePushConstants {
           uint32_t inHtIndex;
           uint32_t inDxDzIndex;
+          uint32_t inDerivSpec0Index;
+          uint32_t inDerivSpec1Index;
+          uint32_t inDerivSpec2Index;
           uint32_t outDispIndex;
           uint32_t outDerivUIndex;
           uint32_t outDerivVIndex;
@@ -1244,12 +1312,15 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
         // Final FFT results are in the ping-pong toggled texture
         assemble_pc.inHtIndex = get_bindless_descriptor_index((pingpong == false) ? _ht_texture[c] : _ht_pingpong[c]);
         assemble_pc.inDxDzIndex = get_bindless_descriptor_index((pingpong_dxdz == false) ? _dxdz_texture[c] : _dxdz_pingpong[c]);
+        assemble_pc.inDerivSpec0Index = get_bindless_descriptor_index((pingpong_deriv_0 == false) ? _deriv_spec_0_texture[c] : _deriv_spec_0_pingpong[c]);
+        assemble_pc.inDerivSpec1Index = get_bindless_descriptor_index((pingpong_deriv_1 == false) ? _deriv_spec_1_texture[c] : _deriv_spec_1_pingpong[c]);
+        assemble_pc.inDerivSpec2Index = get_bindless_descriptor_index((pingpong_deriv_2 == false) ? _deriv_spec_2_texture[c] : _deriv_spec_2_pingpong[c]);
         assemble_pc.outDispIndex = get_bindless_descriptor_index(_displacement_map[c]);
         assemble_pc.outDerivUIndex = get_bindless_descriptor_index(_surface_derivative_u_map[c]);
         assemble_pc.outDerivVIndex = get_bindless_descriptor_index(_surface_derivative_v_map[c]);
         assemble_pc.outSlopeMetricIndex = get_bindless_descriptor_index(_slope_metric_map[c]);
         assemble_pc.N = TESS;
-        assemble_pc.lambda = _parameters.choppiness;
+        assemble_pc.lambda = -_parameters.choppiness;
         assemble_pc.L = _parameters.cascade_lengths[c];
 
         rhi.cmd_push_constants(cmd, &assemble_pc, sizeof(AssemblePushConstants), 0);
@@ -1270,7 +1341,7 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
 }
 
 void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position, RHITexture envmap_texture,
-  RHITexture scene_opaque_color_texture, uint32_t viewport_width, uint32_t viewport_height) {
+  bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, uint32_t viewport_width, uint32_t viewport_height) {
   uint32_t frame_index = rhi.get_current_frame_index();
   RHIBindlessHandle frame_instance_buffer = _instance_buffer[frame_index];
   RHIBindlessHandle frame_settings_buffer = _settings_buffer[frame_index];
@@ -1302,7 +1373,7 @@ void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_pro
   render_settings.stitch_transition_cells = _parameters.stitch_transition_cells;
   render_settings.mip_color_mix = _parameters.mip_color_mix;
   render_settings.mip_color_enable = _parameters.mip_color_enable;
-  render_settings._padding0 = 0.0f;
+  render_settings._padding0 = envmap_equal_area_mapping ? 1.0f : 0.0f;
   render_settings.cascade_lengths = {_parameters.cascade_lengths[0], _parameters.cascade_lengths[1], _parameters.cascade_lengths[2], 0.0f};
   float cascade_weight[3] = {0.0f, 0.0f, 0.0f};
   calculate_effective_cascade_weights(_parameters, cascade_weight);
@@ -1311,8 +1382,8 @@ void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_pro
   int32_t surface_normal_visualize_mode = max(0, min(_parameters.surface_normal_visualize_mode, 7));
   render_settings.debug_view = {draw_wireframe ? 1.0f : 0.0f, static_cast<float>(_patch_resolution), 0.0f, static_cast<float>(_clipmap_levels - 1)};
   float surface_normal_strength = min(max(0.0f, _parameters.surface_normal_strength), 1.0f);
-  render_settings.surface_normal_controls =
-    {_parameters.surface_normal_shading_enable ? 1.0f : 0.0f, surface_normal_strength, static_cast<float>(surface_normal_visualize_mode), 0.0f};
+  render_settings.surface_normal_controls = {_parameters.surface_normal_shading_enable ? 1.0f : 0.0f, surface_normal_strength, static_cast<float>(surface_normal_visualize_mode),
+    0.0f};
   render_settings.wireframe_color = {_parameters.wireframe_color.x, _parameters.wireframe_color.y, _parameters.wireframe_color.z, 1.0f};
   float inv_w = (viewport_width > 0u) ? (1.0f / static_cast<float>(viewport_width)) : 0.0f;
   float inv_h = (viewport_height > 0u) ? (1.0f / static_cast<float>(viewport_height)) : 0.0f;
@@ -1325,14 +1396,13 @@ void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_pro
   }
   render_settings.water_optics_0 = {_parameters.water_ior, _parameters.env_reflection_intensity, _parameters.refract_distortion_scale,
     _parameters.physical_render_mode ? 1.0f : 0.0f};
-  render_settings.water_optics_1 = {
-    max(0.0f, _parameters.optical_depth_m), min(max(_parameters.unresolved_slope_roughness, 0.0f), 1.0f), max(_parameters.specular_aa_strength, 0.0f), 0.0f};
-  render_settings.water_absorption = {
-    max(0.0f, _parameters.absorption_coeff_rgb.x), max(0.0f, _parameters.absorption_coeff_rgb.y), max(0.0f, _parameters.absorption_coeff_rgb.z), 0.0f};
-  render_settings.water_scattering = {
-    max(0.0f, _parameters.scattering_coeff_rgb.x), max(0.0f, _parameters.scattering_coeff_rgb.y), max(0.0f, _parameters.scattering_coeff_rgb.z), 0.0f};
-  render_settings.sun_direction_enable = {
-    _parameters.sun_direction.x, _parameters.sun_direction.y, _parameters.sun_direction.z, _parameters.sun_lighting_enable ? 1.0f : 0.0f};
+  render_settings.water_optics_1 = {max(0.0f, _parameters.optical_depth_m), min(max(_parameters.unresolved_slope_roughness, 0.0f), 1.0f),
+    max(_parameters.specular_aa_strength, 0.0f), 0.0f};
+  render_settings.water_absorption = {max(0.0f, _parameters.absorption_coeff_rgb.x), max(0.0f, _parameters.absorption_coeff_rgb.y), max(0.0f, _parameters.absorption_coeff_rgb.z),
+    0.0f};
+  render_settings.water_scattering = {max(0.0f, _parameters.scattering_coeff_rgb.x), max(0.0f, _parameters.scattering_coeff_rgb.y), max(0.0f, _parameters.scattering_coeff_rgb.z),
+    0.0f};
+  render_settings.sun_direction_enable = {_parameters.sun_direction.x, _parameters.sun_direction.y, _parameters.sun_direction.z, _parameters.sun_lighting_enable ? 1.0f : 0.0f};
   render_settings.sun_radiance = {_parameters.sun_radiance.x, _parameters.sun_radiance.y, _parameters.sun_radiance.z, 0.0f};
   rhi.device().update_buffer(frame_settings_buffer, &render_settings, sizeof(OceanRenderSettings));
 

@@ -11,6 +11,7 @@ namespace etx {
 
 struct IORDatabase;
 struct SceneData;
+struct RHIContext;
 
 struct SceneRepresentation {
   using MaterialMapping = std::unordered_map<std::string, uint32_t>;
@@ -56,6 +57,7 @@ struct SceneRepresentation {
   uint32_t add_directional_emitter(const float3& direction, const float3& color, float angular_diameter_degrees, uint32_t medium_index);
   void add_atmosphere_emitter(const AtmosphereEmitterParameters& params);
   void rebuild_atmosphere_emitter(uint32_t emitter_index);
+  void set_scattering_rhi(RHIContext& rhi);
   void create_area_emitters_from_materials();
   bool delete_emitter(uint32_t emitter_index);
 

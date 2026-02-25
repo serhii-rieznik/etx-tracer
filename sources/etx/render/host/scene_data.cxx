@@ -1,6 +1,7 @@
 #include <etx/render/host/scene_data.hxx>
 
 #include <etx/core/core.hxx>
+#include <etx/core/log.hxx>
 
 namespace etx {
 namespace {
@@ -312,7 +313,7 @@ uint32_t SceneData::add_atmosphere_emitter(const AtmosphereEmitterParameters& pa
   return atmosphere_emitter_index;
 }
 
-void SceneData::build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_index) {
+void SceneData::build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_index, RHIContext& rhi, scattering::GpuContext& gpu_context) {
   auto& atmosphere_emitter = emitter_profiles[atmosphere_emitter_index];
 
   std::vector<uint32_t> sun_emitter_indices;
@@ -336,31 +337,32 @@ void SceneData::build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_inde
     auto& img = images_vector[atmosphere_emitter.emission.image_index];
     auto ptr = buffer_pool.map<float4>(img.data);
     ETX_CRITICAL(ptr != nullptr);
-    scattering::generate_sky_image(atmosphere_emitter.atmosphere.scattering, img.isize, light_sources, extinction_data, ptr, scheduler);
-    images.rebuild_sampling_table(atmosphere_emitter.emission.image_index, scheduler);
+    if (scattering::generate_sky_image(rhi, gpu_context, atmosphere_emitter.atmosphere.scattering, img.isize, light_sources, ptr) == false) {
+      log::error("Failed to generate atmosphere sky image on GPU for emitter %u", atmosphere_emitter_index);
+    } else {
+      images.rebuild_sampling_table(atmosphere_emitter.emission.image_index, scheduler);
+    }
   }
 
-  rebuild_sun_images_for_atmosphere(atmosphere_emitter_index, sun_emitter_indices);
+  rebuild_sun_images_for_atmosphere(atmosphere_emitter_index, sun_emitter_indices, rhi, gpu_context);
 }
 
-void SceneData::rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_index, const std::vector<uint32_t>& sun_emitter_indices) {
+void SceneData::rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_index, const std::vector<uint32_t>& sun_emitter_indices, RHIContext& rhi,
+  scattering::GpuContext& gpu_context) {
   auto& atmosphere_emitter = emitter_profiles[atmosphere_emitter_index];
 
   constexpr uint2 kSunImageDimensions = uint2{128u, 128u};
-
-  static uint32_t sun_image_counter = 0;
 
   for (uint32_t sun_idx : sun_emitter_indices) {
     auto& sun_emitter = emitter_profiles[sun_idx];
 
     std::vector<float4> sun_buffer(kSunImageDimensions.x * kSunImageDimensions.y, float4{0.0f, 0.0f, 0.0f, 0.0f});
-    scattering::generate_sun_image(
-      atmosphere_emitter.atmosphere.scattering, kSunImageDimensions, sun_emitter.directional.direction, sun_emitter.directional.angular_size, sun_buffer.data(), scheduler);
-
-    char tmp_path[2048] = {};
-    std::string filename = std::string("sun_") + std::to_string(sun_image_counter++) + ".hdr";
-    env().file_in_tmp(filename.c_str(), tmp_path, sizeof(tmp_path));
-    stbi_write_hdr(tmp_path, kSunImageDimensions.x, kSunImageDimensions.y, 4, reinterpret_cast<const float*>(&sun_buffer[0]));
+    if (scattering::generate_sun_image(
+          rhi, gpu_context, atmosphere_emitter.atmosphere.scattering, kSunImageDimensions, sun_emitter.directional.direction, sun_emitter.directional.angular_size,
+          sun_buffer.data()) == false) {
+      log::error("Failed to generate atmosphere sun image on GPU for emitter %u", sun_idx);
+      continue;
+    }
 
     if (sun_emitter.emission.image_index == kInvalidIndex) {
       sun_emitter.emission.image_index = add_image(sun_buffer.data(), kSunImageDimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
@@ -378,7 +380,7 @@ void SceneData::rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_in
   }
 }
 
-void SceneData::rebuild_atmosphere_emitter(uint32_t emitter_index) {
+void SceneData::rebuild_atmosphere_emitter(uint32_t emitter_index, RHIContext& rhi, scattering::GpuContext& gpu_context) {
   if (emitter_index >= emitter_profiles.size()) {
     return;
   }
@@ -399,7 +401,7 @@ void SceneData::rebuild_atmosphere_emitter(uint32_t emitter_index) {
   }
 
   if (atmosphere_emitter_index != kInvalidIndex) {
-    build_atmosphere_and_sun_images(atmosphere_emitter_index);
+    build_atmosphere_and_sun_images(atmosphere_emitter_index, rhi, gpu_context);
   }
 }
 

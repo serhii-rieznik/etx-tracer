@@ -1,20 +1,15 @@
 #pragma once
 
-#include <etx/render/host/tasks.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/image.hxx>
 
+#include <etx/rhi/rhi.hxx>
+
 namespace etx {
+
 struct RHIContext;
 
 namespace scattering {
-
-struct ETX_ALIGNED ScatteringSpectrums {
-  SpectralDistribution rayleigh = {};
-  SpectralDistribution mie = {};
-  SpectralDistribution ozone = {};
-  SpectralDistribution black = {};
-};
 
 struct OpticalDepthData {
   static constexpr uint32_t kWidth = ETX_DEBUG ? 128u : 1024u;
@@ -65,44 +60,53 @@ struct LightSource {
 };
 
 struct GpuContext {
+  RHIPipeline optical_depth_pipeline = {};
+  RHIPipeline sky_pipeline = {};
+  RHIPipeline sky_finalize_pipeline = {};
+  RHIPipeline sun_pipeline = {};
+  RHITexture optical_depth_texture = {};
+  RHIResourceState optical_depth_texture_state = RHIResourceState::Undefined;
+  RHIBuffer sky_light_input_buffer = {};
+  RHIBuffer sky_spectrum_input_buffer = {};
+  uint32_t sky_input_buffer_capacity = 0u;
   bool initialized = false;
 };
 
-struct GpuOpticalDepthRequest {
-  Parameters atmosphere = {};
-  uint2 dimensions = {OpticalDepthData::kWidth, OpticalDepthData::kHeight};
-};
-
-struct GpuSkyRequest {
-  Parameters atmosphere = {};
-  uint2 dimensions = {};
-  const std::vector<LightSource>* light_sources = nullptr;
-};
-
-struct GpuSunRequest {
-  Parameters atmosphere = {};
-  uint2 dimensions = {};
-  float3 light_direction = {};
-  float angular_size = 0.0f;
-};
-
-void init(TaskScheduler& scheduler, ScatteringSpectrums& spectrums, OpticalDepthData& extinction);
-
-OpticalDepthData precompute_optical_depth(TaskScheduler& scheduler);
-
-void generate_sky_image(const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources, const OpticalDepthData& extinction, float4* buffer,
-  TaskScheduler& scheduler);
-
-void generate_sun_image(const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size, float4* buffer, TaskScheduler& scheduler);
+SpectralDistribution rayleigh_spectrum();
+SpectralDistribution mie_spectrum();
+SpectralDistribution ozone_spectrum();
 
 bool gpu_init(RHIContext& rhi, GpuContext& context);
-bool gpu_reload_shaders(RHIContext& rhi, GpuContext& context);
+
 void gpu_cleanup(RHIContext& rhi, GpuContext& context);
 
-bool gpu_precompute_optical_depth_texture(RHIContext& rhi, const GpuOpticalDepthRequest& request, GpuContext& context);
-bool gpu_generate_sky_image(RHIContext& rhi, const GpuSkyRequest& request, GpuContext& context);
-bool gpu_generate_sun_image(RHIContext& rhi, const GpuSunRequest& request, GpuContext& context);
-bool gpu_download_sky_image(RHIContext& rhi, std::vector<float4>& out_pixels, uint2& out_dimensions, GpuContext& context);
+bool gpu_precompute_optical_depth(RHIContext& rhi, GpuContext& context);
+
+bool gpu_record_generate_sky_raw(RHIContext& rhi, RHICommandBuffer cmd, GpuContext& context, const Parameters& parameters, const uint2& dimensions,
+  const std::vector<LightSource>& light_sources, RHITexture output_texture, RHIResourceState& output_texture_state);
+
+bool gpu_generate_sky(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources,
+  RHITexture output_texture, RHIResourceState& output_texture_state);
+
+bool gpu_create_sky_texture(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources,
+  RHITexture& out_texture, RHIResourceState& out_texture_state);
+
+bool generate_sky_image(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources, float4* buffer);
+
+bool generate_sun_image(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const float3& light_direction, const float angular_size,
+  float4* buffer);
+
+bool gpu_record_generate_sun(RHIContext& rhi, RHICommandBuffer cmd, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const float3& light_direction,
+  float angular_size, RHITexture output_texture, RHIResourceState& output_texture_state);
+
+bool gpu_generate_sun(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const float3& light_direction, float angular_size,
+  RHITexture output_texture, RHIResourceState& output_texture_state);
+
+bool gpu_create_sun_texture(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const float3& light_direction, float angular_size,
+  RHITexture& out_texture, RHIResourceState& out_texture_state);
+
+bool gpu_generate_sun_image(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const float3& light_direction, float angular_size,
+  std::vector<float4>& out_pixels);
 
 }  // namespace scattering
 }  // namespace etx

@@ -10,16 +10,16 @@ namespace etx {
 struct OceanParameters {
   float wind_direction_x = 1.0f;
   float wind_direction_y = 0.0f;
-  float wind_speed = 10.5f;
-  float water_depth = 700.0f;
-  float jonswap_gamma = 3.2f;
-  float directional_spread = 4.0f;
+  float wind_speed = 8.0f;
+  float water_depth = 250.0f;
+  float jonswap_gamma = 1.25f;
+  float directional_spread = 3.0f;
   bool significant_wave_height_enable = true;
-  float significant_wave_height = 2.8f;
+  float significant_wave_height = 4.0f;
   bool debug_cascade_overrides_enable = false;
   float time_scale = 1.0f;
-  float choppiness = 1.35f;
-  float lod_forward_bias = 0.0f;
+  float choppiness = 4.0f;
+  float cascade_detail_boost = 4.0f;
   bool lock_lods = false;
   bool spectral_band_limit_enable = true;
   float stitch_transition_cells = 8.0f;
@@ -34,30 +34,31 @@ struct OceanParameters {
   float3 scattering_coeff_rgb = {0.01f, 0.03f, 0.06f};
   float env_reflection_intensity = 1.0f;
   float optical_depth_m = 8.0f;
-  float unresolved_slope_roughness = 0.04f;
+  float unresolved_slope_roughness = 0.025f;
   float specular_aa_strength = 0.35f;
   float refract_distortion_scale = 0.02f;
   bool sun_lighting_enable = true;
   float3 sun_direction = {0.35f, 0.65f, 0.67f};
+  float sun_brightness = 12.0f;
   float3 sun_radiance = {12.0f, 11.5f, 10.5f};
   bool wireframe_enable = false;
   float3 wireframe_color = {0.05f, 0.05f, 0.05f};
   int32_t solo_cascade = -1;
   bool cascade_enable[3] = {true, true, true};
   float cascade_render_weight[3] = {1.0f, 1.0f, 1.0f};
-  float cascade_lengths[3] = {320.0f, 80.0f, 20.0f};
+  float cascade_lengths[3] = {521.0f, 137.0f, 31.0f};
   float cascade_amplitudes[3] = {0.50f, 0.18f, 0.06f};
 };
 
 struct Ocean {
   static constexpr uint32_t k_cascade_count = 3;
 
-  void init(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format);
+  void init(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format, uint32_t sample_count = 1u);
   void cleanup(RHIContext& rhi);
   void update(RHIContext& rhi, RHICommandBuffer cmd, float time, const float3& camera_position, const float3& camera_direction, float fov, uint32_t viewport_width,
     uint32_t viewport_height);
   void draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position, RHITexture envmap_texture,
-    RHITexture scene_opaque_color_texture, uint32_t viewport_width, uint32_t viewport_height);
+    bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, uint32_t viewport_width, uint32_t viewport_height);
 
   OceanParameters& parameters() {
     return _parameters;
@@ -75,6 +76,12 @@ struct Ocean {
     return _patch_resolution;
   }
 
+  void set_patch_resolution(uint32_t value) {
+    if (value > 0u) {
+      _patch_resolution = value;
+    }
+  }
+
   uint32_t clipmap_levels() const {
     return _clipmap_levels;
   }
@@ -85,6 +92,12 @@ struct Ocean {
 
   uint32_t fft_resolution() const {
     return _fft_resolution;
+  }
+
+  void set_fft_resolution(uint32_t value) {
+    if ((value > 0u) && (((value & (value - 1u)) == 0u))) {
+      _fft_resolution = value;
+    }
   }
 
   float base_vertex_spacing() const {
@@ -131,8 +144,14 @@ struct Ocean {
   RHITexture _h0_texture[3];
   RHITexture _ht_texture[3];
   RHITexture _dxdz_texture[3];
+  RHITexture _deriv_spec_0_texture[3];
+  RHITexture _deriv_spec_1_texture[3];
+  RHITexture _deriv_spec_2_texture[3];
   RHITexture _ht_pingpong[3];
   RHITexture _dxdz_pingpong[3];
+  RHITexture _deriv_spec_0_pingpong[3];
+  RHITexture _deriv_spec_1_pingpong[3];
+  RHITexture _deriv_spec_2_pingpong[3];
   uint32_t _index_count = 0;
   uint32_t _instance_count = 0;
   uint32_t _instance_capacity = 0;

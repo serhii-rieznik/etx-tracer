@@ -23,7 +23,6 @@
 #include <etx/render/host/scene_tungsten_loader.hxx>
 
 #include <tinyexr.hxx>
-#include <stb_image_write.hxx>
 
 #include <mikktspace.h>
 namespace etx {
@@ -112,6 +111,9 @@ struct SceneRepresentationImpl {
   SceneData data;
   Camera active_camera;
   std::mutex mt;
+  RHIContext* rhi = nullptr;
+  scattering::GpuContext scattering_gpu = {};
+  bool scattering_gpu_ready = false;
 
   const IORDatabase& ior_database;
 
@@ -139,12 +141,14 @@ struct SceneRepresentationImpl {
     , ior_database(db) {
     data.images.init(1024u);
     data.mediums.init(1024u);
-    scattering::init(scheduler, data.scattering_spectrums, data.extinction_data);
     build_camera(active_camera, {5.0f, 5.0f, 5.0f}, normalize(float3{0.0f, 0.0f, 0.0f} - float3{5.0f, 5.0f, 5.0f}), kWorldUp, {1280u, 720u}, 26.99f);
   }
 
   ~SceneRepresentationImpl() {
     cleanup();
+    if ((rhi != nullptr) && scattering_gpu.initialized) {
+      scattering::gpu_cleanup(*rhi, scattering_gpu);
+    }
     data.images.cleanup();
     data.mediums.cleanup();
   }
@@ -152,9 +156,9 @@ struct SceneRepresentationImpl {
   void init_default_values() {
     data.defaults.black_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
     data.defaults.white_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
-    data.defaults.rayleigh_spectrum = data.add_spectrum(data.scattering_spectrums.rayleigh);
-    data.defaults.mie_spectrum = data.add_spectrum(data.scattering_spectrums.mie);
-    data.defaults.ozone_spectrum = data.add_spectrum(data.scattering_spectrums.ozone);
+    data.defaults.rayleigh_spectrum = data.add_spectrum(scattering::rayleigh_spectrum());
+    data.defaults.mie_spectrum = data.add_spectrum(scattering::mie_spectrum());
+    data.defaults.ozone_spectrum = data.add_spectrum(scattering::ozone_spectrum());
     data.defaults.dielectric_eta = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
     data.defaults.conductor_eta = data.add_spectrum(SpectralDistribution::constant(0.0f));
     data.defaults.conductor_k = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
@@ -478,6 +482,8 @@ struct SceneRepresentationImpl {
   void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
   void add_atmosphere_emitter(const AtmosphereEmitterParameters& params);
   void rebuild_atmosphere_emitter(uint32_t emitter_index);
+  void set_scattering_rhi(RHIContext& rhi_context);
+  bool ensure_scattering_gpu_context();
   void generate_pixel_sampler_image();
 
   void create_area_emitters_from_materials();
@@ -804,13 +810,69 @@ void SceneRepresentation::rebuild_atmosphere_emitter(uint32_t emitter_index) {
   _private->rebuild_atmosphere_emitter(emitter_index);
 }
 
+void SceneRepresentation::set_scattering_rhi(RHIContext& rhi) {
+  _private->set_scattering_rhi(rhi);
+}
+
+void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
+  if ((rhi == &rhi_context) && scattering_gpu_ready) {
+    return;
+  }
+
+  if ((rhi != nullptr) && scattering_gpu.initialized) {
+    scattering::gpu_cleanup(*rhi, scattering_gpu);
+  }
+
+  rhi = &rhi_context;
+  scattering_gpu = {};
+  scattering_gpu_ready = false;
+}
+
+bool SceneRepresentationImpl::ensure_scattering_gpu_context() {
+  if (rhi == nullptr) {
+    log::error("SceneRepresentation atmosphere generation requires an RHI context. Call SceneRepresentation::set_scattering_rhi() first.");
+    return false;
+  }
+
+  if (scattering_gpu_ready) {
+    return true;
+  }
+
+  if ((scattering_gpu.initialized == false) && (scattering::gpu_init(*rhi, scattering_gpu) == false)) {
+    log::error("Failed to initialize GPU atmosphere scattering context");
+    return false;
+  }
+
+  if (scattering::gpu_precompute_optical_depth(*rhi, scattering_gpu) == false) {
+    log::error("Failed to precompute GPU atmosphere optical depth");
+    if (scattering_gpu.initialized) {
+      scattering::gpu_cleanup(*rhi, scattering_gpu);
+    }
+    scattering_gpu = {};
+    return false;
+  }
+
+  scattering_gpu_ready = true;
+  return true;
+}
+
 void SceneRepresentationImpl::add_atmosphere_emitter(const AtmosphereEmitterParameters& params) {
   uint32_t emitter_index = data.add_atmosphere_emitter(params);
-  data.build_atmosphere_and_sun_images(emitter_index);
+  if (ensure_scattering_gpu_context() == false) {
+    return;
+  }
+
+  ETX_ASSERT(rhi != nullptr);
+  data.build_atmosphere_and_sun_images(emitter_index, *rhi, scattering_gpu);
 }
 
 void SceneRepresentationImpl::rebuild_atmosphere_emitter(uint32_t emitter_index) {
-  data.rebuild_atmosphere_emitter(emitter_index);
+  if (ensure_scattering_gpu_context() == false) {
+    return;
+  }
+
+  ETX_ASSERT(rhi != nullptr);
+  data.rebuild_atmosphere_emitter(emitter_index, *rhi, scattering_gpu);
 }
 
 template <class T>

@@ -1,6 +1,15 @@
 #pragma once
 
+#include <cstddef>
+
 #include <etx/render/interop/spectrum.hxx>
+#include <etx/render/interop/gpu_abi_constants.hxx>
+
+ETX_STATIC_ASSERT((sizeof(::SpectralDistribution) == kSpectralDistributionStride), "SpectralDistribution ABI size mismatch");
+ETX_STATIC_ASSERT((offsetof(::SpectralDistribution, integrated_value) == kSpectralDistributionIntegratedOffset), "SpectralDistribution.integrated_value ABI mismatch");
+ETX_STATIC_ASSERT((offsetof(::SpectralDistribution, spectral_entry_count) == kSpectralDistributionEntryCountOffset), "SpectralDistribution.spectral_entry_count ABI mismatch");
+ETX_STATIC_ASSERT((offsetof(::SpectralDistribution, spectral_entries) == kSpectralDistributionEntriesOffset), "SpectralDistribution.spectral_entries ABI mismatch");
+ETX_STATIC_ASSERT((sizeof(::SpectralDistribution::Entry) == kSpectralDistributionEntryStride), "SpectralDistribution::Entry ABI size mismatch");
 
 namespace etx {
 

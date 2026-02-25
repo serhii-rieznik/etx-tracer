@@ -1131,7 +1131,7 @@ SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBu
   }
 
   surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1,
-    texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex.pos, result.vertex.nrm, result.vertex.tan, result.vertex.btn, result.vertex.tex);
+    texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
 
   result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
   result.vertex.nrm = surface_point_shared_orient_shading_normal(result.vertex.nrm, result.geo_normal);

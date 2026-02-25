@@ -218,15 +218,22 @@ struct VKContext {
   void cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
 
   void cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc);
+  void cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count);
+  void cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage);
 
   void cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0);
 
   void cmd_copy_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0);
   void cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
   void cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
+  void cmd_resolve_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height);
   void cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture);
 
   void cmd_set_debug_name(RHICommandBuffer cmd, const char* name);
+
+  bool supports_timestamps() const;
+  double timestamp_period_ns() const;
+  RHIResult read_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count, uint64_t* out_values);
 
   VkDevice get_vk_device() const;
   VkCommandPool get_vk_command_pool(uint32_t index) const;
@@ -260,6 +267,7 @@ struct VKDevice {
 
   RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc);
   RHIResult update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset = 0);
+  RHIResult read_buffer(RHIBindlessHandle buffer, void* data, uint64_t size, uint64_t offset = 0);
   RHIResult destroy_buffer(RHIBindlessHandle buffer);
 
   RHICreateBindlessResult create_texture(const RHITextureDesc& desc);
@@ -297,6 +305,10 @@ struct VKDevice {
   VkInstance get_vk_instance() const;
   VkQueue get_graphics_queue() const;
   VkCommandPool get_vk_command_pool(uint32_t index) const;
+  bool supports_timestamps() const;
+  bool supports_timestamp_stage(RHITimestampStage stage) const;
+  uint32_t timestamp_valid_bits() const;
+  double timestamp_period_ns() const;
 
   void set_current_frame_index(uint32_t index);
   void reset_staging_buffer_for_frame(uint32_t frame_index);
@@ -380,6 +392,8 @@ struct VKCommandBuffer {
   VkCommandBuffer get_vk_command_buffer() const;
   bool is_recording() const;
   bool is_submitted() const;
+  uint32_t command_pool_index() const;
+  bool uses_timestamps() const;
 
   void begin();
   void end();
@@ -408,27 +422,36 @@ struct VKCommandBuffer {
   void draw_indexed(const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
 
   void dispatch(const RHIDispatchDesc& desc);
+  void reset_timestamps(uint32_t first_query, uint32_t query_count);
+  void write_timestamp(uint32_t query_index, RHITimestampStage stage);
+  RHIResult read_timestamps(uint32_t first_query, uint32_t query_count, uint64_t* out_values) const;
 
   void build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0);
 
   void copy_buffer(RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0);
   void copy_buffer_to_texture(RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
   void copy_texture_to_buffer(RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
+  void resolve_texture(RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height);
   void generate_mipmaps(RHIBindlessHandle texture);
 
   void set_debug_name(const char* name);
 
   void ensure_texture_layout(RHIBindlessHandle texture, VkImageLayout required_layout);
   void set_scissor_from_viewport(const RHIViewport& viewport);
+  bool ensure_timestamp_query_pool();
 
  private:
   VKContext* context = nullptr;
   VKDevice* device = nullptr;
   VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+  VkQueryPool timestamp_query_pool = VK_NULL_HANDLE;
+  static constexpr uint32_t kTimestampQueryCount = 64u;
   bool _in_render_pass = false;
   bool _is_recording = false;
   bool _submitted = false;
+  bool _timestamps_used = false;
   bool _rendering_to_swapchain = false;
+  uint32_t _command_pool_index = 0u;
   uint32_t _render_pass_depth = 0;
 
   std::vector<RHITexture> current_color_attachments;

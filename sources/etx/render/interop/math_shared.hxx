@@ -5,16 +5,12 @@
 #include "geometry.hxx"
 #include "ray.hxx"
 
-#if defined(__cplusplus)
-# include <cstring>
-#endif
-
-enum class ProjectionType : uint32_t {
+ETX_ENUM_U32(ProjectionType) {
   Equirectangular = 0u,
   EqualArea = 1u,
 };
 
-enum class InteractionType : uint32_t {
+ETX_ENUM_U32(InteractionType) {
   Surface = 0u,
   Medium = 1u,
 
@@ -23,9 +19,7 @@ enum class InteractionType : uint32_t {
 
 ETX_STATIC_CONST uint32_t kProjectionEqualArea = 1u;
 
-#if defined(__cplusplus)
-static_assert(static_cast<uint32_t>(ProjectionType::EqualArea) == kProjectionEqualArea, "ProjectionType::EqualArea must match kProjectionEqualArea");
-#endif
+ETX_STATIC_ASSERT((ETX_ENUM_U32_TO_UINT32(ProjectionType::EqualArea) == kProjectionEqualArea), "ProjectionType::EqualArea must match kProjectionEqualArea");
 
 struct SphericalCoordinates {
   float phi ETX_INIT(0.0f);
@@ -80,23 +74,30 @@ struct ETX_ALIGNED IntersectionBase {
   float t ETX_INIT(kMaxFloat);
 };
 
-struct ETX_ALIGNED Intersection
-#if defined(__cplusplus)
-  : public Vertex {
-#else
-{
+struct ETX_ALIGNED Intersection {
   float3 pos ETX_INIT({});
   float3 nrm ETX_INIT({});
   float3 tan ETX_INIT({});
   float3 btn ETX_INIT({});
   float2 tex ETX_INIT({});
-#endif
   float3 barycentric ETX_INIT({});
   uint32_t triangle_index ETX_INIT(kInvalidIndex);
   float3 w_i ETX_INIT({});
   float t ETX_INIT(0.0f);
   uint32_t material_index ETX_INIT(kInvalidIndex);
   uint32_t emitter_index ETX_INIT(kInvalidIndex);
+
+#if (ETX_CPP)
+  ETX_SHARED_INLINE operator Vertex() const {
+    Vertex result = {};
+    result.pos = pos;
+    result.nrm = nrm;
+    result.tan = tan;
+    result.btn = btn;
+    result.tex = tex;
+    return result;
+  }
+#endif
 };
 
 struct OrthonormalBasis {
@@ -207,9 +208,9 @@ ETX_SHARED_INLINE float3 orthogonalize(ETX_IN(float3, t), ETX_IN(float3, b), ETX
 }
 
 ETX_SHARED_INLINE float to_float(uint32_t value) {
-#if defined(__cplusplus)
+#if (ETX_CPP)
   float result = 0.0f;
-  std::memcpy(&result, &value, sizeof(float));
+  ETX_STD memcpy(&result, &value, sizeof(float));
   return result;
 #else
   return asfloat(value);
@@ -217,9 +218,9 @@ ETX_SHARED_INLINE float to_float(uint32_t value) {
 }
 
 ETX_SHARED_INLINE float to_float(int32_t value) {
-#if defined(__cplusplus)
+#if (ETX_CPP)
   float result = 0.0f;
-  std::memcpy(&result, &value, sizeof(float));
+  ETX_STD memcpy(&result, &value, sizeof(float));
   return result;
 #else
   return asfloat(value);
@@ -227,9 +228,9 @@ ETX_SHARED_INLINE float to_float(int32_t value) {
 }
 
 ETX_SHARED_INLINE uint32_t to_uint(float value) {
-#if defined(__cplusplus)
+#if (ETX_CPP)
   uint32_t result = 0u;
-  std::memcpy(&result, &value, sizeof(float));
+  ETX_STD memcpy(&result, &value, sizeof(float));
   return result;
 #else
   return asuint(value);
@@ -237,9 +238,9 @@ ETX_SHARED_INLINE uint32_t to_uint(float value) {
 }
 
 ETX_SHARED_INLINE int32_t to_int(float value) {
-#if defined(__cplusplus)
+#if (ETX_CPP)
   int32_t result = 0;
-  std::memcpy(&result, &value, sizeof(float));
+  ETX_STD memcpy(&result, &value, sizeof(float));
   return result;
 #else
   return asint(value);
@@ -364,7 +365,7 @@ ETX_SHARED_INLINE float quaternion_to_yaw_rotation_offset(ETX_IN(float4, quat)) 
   return -yaw / kDoublePi;
 }
 
-#if defined(__cplusplus)
+#if (ETX_CPP)
 ETX_SHARED_INLINE uint64_t next_power_of_two(uint64_t value) {
   value--;
   value |= value >> 1llu;
@@ -449,7 +450,7 @@ ETX_SHARED_INLINE bool direction_matches(ETX_IN(float3, ideal), ETX_IN(float3, a
   return dot(i, a) >= min(kDefaultThreshold, cosine_threshold);
 }
 
-#if defined(__cplusplus)
+#if (ETX_CPP)
 namespace etx {
 using ::balance_heuristic;
 using ::barycentrics;

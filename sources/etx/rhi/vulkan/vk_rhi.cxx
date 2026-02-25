@@ -375,6 +375,28 @@ RHITextureFormat VKContext::get_swapchain_format() const {
   return vk_format_to_rhi(_impl->swapchain_format);
 }
 
+static VkPipelineStageFlagBits rhi_timestamp_stage_to_vk(RHITimestampStage stage) {
+  switch (stage) {
+    case RHITimestampStage::TopOfPipe:
+      return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    case RHITimestampStage::BottomOfPipe:
+      return VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+    case RHITimestampStage::ComputeShader:
+      return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    case RHITimestampStage::AllCommands:
+      return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    default:
+      return VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+  }
+}
+
+static bool rhi_timestamp_query_range_valid(uint32_t first_query, uint32_t query_count, uint32_t max_query_count) {
+  if ((query_count == 0u) || (first_query >= max_query_count)) {
+    return false;
+  }
+  return (query_count <= (max_query_count - first_query));
+}
+
 RHIExtent2D VKContext::get_swapchain_extent_rhi() const {
   RHIExtent2D result = {};
   result.width = _impl->swapchain_extent.width;
@@ -414,7 +436,23 @@ RHIResult VKContext::wait_idle() {
     return RHIResult::InvalidHandle;
   }
 
-  return etx_vk_call(vkDeviceWaitIdle(_impl->device.get_vk_device())) == VK_SUCCESS ? RHIResult::Success : RHIResult::ValidationError;
+  if (etx_vk_call(vkDeviceWaitIdle(_impl->device.get_vk_device())) != VK_SUCCESS) {
+    return RHIResult::ValidationError;
+  }
+
+  std::vector<RHICommandBuffer> command_buffer_handles = _impl->command_buffer_pool.get_all_keys();
+  for (const RHICommandBuffer command_buffer_handle : command_buffer_handles) {
+    VKCommandBuffer* command_buffer = _impl->command_buffer_pool.get_data_ptr(command_buffer_handle);
+    if (command_buffer == nullptr) {
+      continue;
+    }
+    if (command_buffer->is_recording()) {
+      continue;
+    }
+    command_buffer->set_submitted(false);
+  }
+
+  return RHIResult::Success;
 }
 
 void VKContext::begin_frame() {
@@ -436,7 +474,29 @@ void VKContext::begin_frame() {
     _impl->device.set_current_frame_index(_impl->current_frame);
     _impl->device.reset_staging_buffer_for_frame(_impl->current_frame);
     etx_vk_call(vkResetCommandPool(_impl->device.get_vk_device(), _impl->device.get_vk_command_pool(_impl->current_frame), VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
-    _impl->command_buffer_pool.clear();
+    std::vector<RHICommandBuffer> command_buffer_handles = _impl->command_buffer_pool.get_all_keys();
+    for (const RHICommandBuffer command_buffer_handle : command_buffer_handles) {
+      VKCommandBuffer* pooled_command_buffer = _impl->command_buffer_pool.get_data_ptr(command_buffer_handle);
+      if (pooled_command_buffer == nullptr) {
+        continue;
+      }
+
+      const bool same_pool = (pooled_command_buffer->command_pool_index() == _impl->current_frame);
+      if (same_pool == false) {
+        continue;
+      }
+
+      if (pooled_command_buffer->uses_timestamps()) {
+        continue;
+      }
+
+      const uint32_t pooled_index = _impl->command_buffer_pool.get_index(command_buffer_handle);
+      if (pooled_index == UINT32_MAX) {
+        continue;
+      }
+      _impl->command_buffer_pool.free_index(pooled_index);
+      _impl->command_buffer_pool.remove_handle(command_buffer_handle);
+    }
   }
 
   VkResult result = VK_SUCCESS;
@@ -693,6 +753,20 @@ void VKContext::cmd_dispatch(RHICommandBuffer cmd_handle, const RHIDispatchDesc&
     cmd->dispatch(desc);
 }
 
+void VKContext::cmd_reset_timestamps(RHICommandBuffer cmd_handle, uint32_t first_query, uint32_t query_count) {
+  VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
+  if (cmd != nullptr) {
+    cmd->reset_timestamps(first_query, query_count);
+  }
+}
+
+void VKContext::cmd_write_timestamp(RHICommandBuffer cmd_handle, uint32_t query_index, RHITimestampStage stage) {
+  VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
+  if (cmd != nullptr) {
+    cmd->write_timestamp(query_index, stage);
+  }
+}
+
 void VKContext::cmd_build_acceleration_structure(RHICommandBuffer cmd_handle, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer,
   uint64_t scratch_offset) {
   VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
@@ -718,6 +792,13 @@ void VKContext::cmd_copy_texture_to_buffer(RHICommandBuffer cmd_handle, RHIBindl
     cmd->copy_texture_to_buffer(src, dst, width, height, mip_level);
 }
 
+void VKContext::cmd_resolve_texture(RHICommandBuffer cmd_handle, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height) {
+  VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
+  if (cmd) {
+    cmd->resolve_texture(src, dst, width, height);
+  }
+}
+
 void VKContext::cmd_generate_mipmaps(RHICommandBuffer cmd_handle, RHIBindlessHandle texture) {
   VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
   if (cmd)
@@ -728,6 +809,22 @@ void VKContext::cmd_set_debug_name(RHICommandBuffer cmd_handle, const char* name
   VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
   if (cmd)
     cmd->set_debug_name(name);
+}
+
+bool VKContext::supports_timestamps() const {
+  return _impl->device.supports_timestamps();
+}
+
+double VKContext::timestamp_period_ns() const {
+  return _impl->device.timestamp_period_ns();
+}
+
+RHIResult VKContext::read_timestamps(RHICommandBuffer cmd_handle, uint32_t first_query, uint32_t query_count, uint64_t* out_values) {
+  VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
+  if (cmd == nullptr) {
+    return RHIResult::InvalidHandle;
+  }
+  return cmd->read_timestamps(first_query, query_count, out_values);
 }
 
 VkDevice VKContext::get_vk_device() const {
@@ -752,6 +849,8 @@ VKCommandBuffer::VKCommandBuffer() {
 void VKCommandBuffer::initialize(VKContext* ctx, uint32_t pool_index) {
   context = ctx;
   device = ctx->get_device();
+  _command_pool_index = pool_index;
+  _timestamps_used = false;
   VkCommandBufferAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
   alloc_info.commandPool = ctx->get_vk_command_pool(pool_index);
   alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -759,7 +858,11 @@ void VKCommandBuffer::initialize(VKContext* ctx, uint32_t pool_index) {
   etx_vk_call(vkAllocateCommandBuffers(ctx->get_vk_device(), &alloc_info, &command_buffer));
 }
 
-VKCommandBuffer::VKCommandBuffer(VKCommandBuffer&& other) noexcept {
+VKCommandBuffer::VKCommandBuffer(VKCommandBuffer&& other) noexcept
+  : context(nullptr)
+  , device(nullptr)
+  , command_buffer(VK_NULL_HANDLE)
+  , timestamp_query_pool(VK_NULL_HANDLE) {
   *this = std::move(other);
 }
 
@@ -769,9 +872,13 @@ VKCommandBuffer& VKCommandBuffer::operator=(VKCommandBuffer&& other) noexcept {
     context = other.context;
     device = other.device;
     command_buffer = other.command_buffer;
+    timestamp_query_pool = other.timestamp_query_pool;
     _in_render_pass = other._in_render_pass;
     _is_recording = other._is_recording;
     _submitted = other._submitted;
+    _timestamps_used = other._timestamps_used;
+    _rendering_to_swapchain = other._rendering_to_swapchain;
+    _command_pool_index = other._command_pool_index;
     _render_pass_depth = other._render_pass_depth;
 
     current_color_attachments = std::move(other.current_color_attachments);
@@ -782,13 +889,30 @@ VKCommandBuffer& VKCommandBuffer::operator=(VKCommandBuffer&& other) noexcept {
     current_bind_point = other.current_bind_point;
     current_pipeline_layout = other.current_pipeline_layout;
 
+    other.context = nullptr;
+    other.device = nullptr;
     other.command_buffer = VK_NULL_HANDLE;
+    other.timestamp_query_pool = VK_NULL_HANDLE;
+    other._in_render_pass = false;
     other._is_recording = false;
+    other._submitted = false;
+    other._timestamps_used = false;
+    other._rendering_to_swapchain = false;
+    other._command_pool_index = 0u;
+    other._render_pass_depth = 0u;
   }
   return *this;
 }
 
 void VKCommandBuffer::destroy_resources() {
+  if ((command_buffer != VK_NULL_HANDLE) && (context != nullptr) && (_is_recording == false) && (_submitted == false)) {
+    vkResetCommandBuffer(command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
+    _submitted = false;
+  }
+  if ((timestamp_query_pool != VK_NULL_HANDLE) && (context != nullptr)) {
+    vkDestroyQueryPool(context->get_vk_device(), timestamp_query_pool, nullptr);
+    timestamp_query_pool = VK_NULL_HANDLE;
+  }
 }
 
 bool VKCommandBuffer::is_initialized() const {
@@ -807,6 +931,14 @@ bool VKCommandBuffer::is_submitted() const {
   return _submitted;
 }
 
+uint32_t VKCommandBuffer::command_pool_index() const {
+  return _command_pool_index;
+}
+
+bool VKCommandBuffer::uses_timestamps() const {
+  return _timestamps_used;
+}
+
 VKCommandBuffer::~VKCommandBuffer() {
   destroy_resources();
 }
@@ -814,6 +946,7 @@ VKCommandBuffer::~VKCommandBuffer() {
 void VKCommandBuffer::reset() {
   _is_recording = false;
   _submitted = false;
+  _timestamps_used = false;
   _render_pass_depth = 0;
   _in_render_pass = false;
   current_pipeline = {};
@@ -850,6 +983,7 @@ void VKCommandBuffer::begin() {
 
   _is_recording = true;
   _submitted = false;
+  _timestamps_used = false;
   _in_render_pass = false;
   _render_pass_depth = 0;
   _in_render_pass = false;
@@ -887,6 +1021,7 @@ void VKCommandBuffer::reset_internal_state() {
   _in_render_pass = false;
   _is_recording = false;
   _submitted = false;
+  _timestamps_used = false;
 }
 
 void VKCommandBuffer::set_submitted(bool value) {
@@ -1644,6 +1779,125 @@ void VKCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
   vkCmdDispatch(command_buffer, desc.group_count_x, desc.group_count_y, desc.group_count_z);
 }
 
+void VKCommandBuffer::reset_timestamps(uint32_t first_query, uint32_t query_count) {
+  if (command_buffer == VK_NULL_HANDLE) {
+    log::error("Cannot reset timestamps: command buffer not initialized");
+    return;
+  }
+  if (_is_recording == false) {
+    log::error("Cannot reset timestamps: command buffer is not recording");
+    return;
+  }
+  if (ensure_timestamp_query_pool() == false) {
+    return;
+  }
+  _timestamps_used = true;
+  if (rhi_timestamp_query_range_valid(first_query, query_count, kTimestampQueryCount) == false) {
+    log::error("Invalid timestamp query range: first=%u count=%u (max=%u)", first_query, query_count, kTimestampQueryCount);
+    return;
+  }
+
+  vkCmdResetQueryPool(command_buffer, timestamp_query_pool, first_query, query_count);
+}
+
+void VKCommandBuffer::write_timestamp(uint32_t query_index, RHITimestampStage stage) {
+  if (command_buffer == VK_NULL_HANDLE) {
+    log::error("Cannot write timestamp: command buffer not initialized");
+    return;
+  }
+  if (_is_recording == false) {
+    log::error("Cannot write timestamp: command buffer is not recording");
+    return;
+  }
+  if (ensure_timestamp_query_pool() == false) {
+    return;
+  }
+  if (query_index >= kTimestampQueryCount) {
+    log::error("Invalid timestamp query index %u (max=%u)", query_index, kTimestampQueryCount);
+    return;
+  }
+  _timestamps_used = true;
+
+  RHITimestampStage effective_stage = stage;
+  if ((device != nullptr) && (device->supports_timestamp_stage(stage) == false)) {
+    if ((stage == RHITimestampStage::ComputeShader) || (stage == RHITimestampStage::AllCommands)) {
+      log::warning("Timestamp stage %u is not supported on this device; falling back to BottomOfPipe", static_cast<uint32_t>(stage));
+      effective_stage = RHITimestampStage::BottomOfPipe;
+    } else {
+      log::error("Timestamp stage %u is not supported on this device", static_cast<uint32_t>(stage));
+      return;
+    }
+  }
+
+  VkPipelineStageFlagBits vk_stage = rhi_timestamp_stage_to_vk(effective_stage);
+  vkCmdWriteTimestamp(command_buffer, vk_stage, timestamp_query_pool, query_index);
+}
+
+bool VKCommandBuffer::ensure_timestamp_query_pool() {
+  if (timestamp_query_pool != VK_NULL_HANDLE) {
+    return true;
+  }
+
+  if ((command_buffer == VK_NULL_HANDLE) || (context == nullptr) || (device == nullptr)) {
+    return false;
+  }
+
+  if (device->supports_timestamps() == false) {
+    return false;
+  }
+
+  VkQueryPoolCreateInfo query_pool_info = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+  query_pool_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+  query_pool_info.queryCount = kTimestampQueryCount;
+  if (etx_vk_call(vkCreateQueryPool(context->get_vk_device(), &query_pool_info, nullptr, &timestamp_query_pool)) != VK_SUCCESS) {
+    timestamp_query_pool = VK_NULL_HANDLE;
+    return false;
+  }
+
+  return true;
+}
+
+RHIResult VKCommandBuffer::read_timestamps(uint32_t first_query, uint32_t query_count, uint64_t* out_values) const {
+  if (out_values == nullptr) {
+    return RHIResult::InvalidArgument;
+  }
+  if (rhi_timestamp_query_range_valid(first_query, query_count, kTimestampQueryCount) == false) {
+    return RHIResult::InvalidArgument;
+  }
+  if ((context == nullptr) || (device == nullptr) || (timestamp_query_pool == VK_NULL_HANDLE)) {
+    return RHIResult::UnsupportedFeature;
+  }
+
+  VkResult result = vkGetQueryPoolResults(context->get_vk_device(), timestamp_query_pool, first_query, query_count, sizeof(uint64_t) * query_count, out_values, sizeof(uint64_t),
+    VK_QUERY_RESULT_64_BIT);
+  if (result != VK_SUCCESS) {
+    if (result == VK_NOT_READY) {
+      return RHIResult::NotReady;
+    }
+    log::error("Failed to read Vulkan timestamp queries: %s", vk_error_to_string(result));
+    return RHIResult::DeviceLost;
+  }
+
+  const uint32_t valid_bits = device->timestamp_valid_bits();
+  if ((valid_bits > 0u) && (valid_bits < 64u)) {
+    const uint64_t wrap_value = (1ULL << valid_bits);
+    const uint64_t mask = wrap_value - 1ULL;
+
+    uint64_t wrap_offset = 0ULL;
+    uint64_t previous_masked = 0ULL;
+    for (uint32_t i = 0u; i < query_count; ++i) {
+      const uint64_t masked_value = (out_values[i] & mask);
+      if ((i > 0u) && (masked_value < previous_masked)) {
+        wrap_offset += wrap_value;
+      }
+      out_values[i] = masked_value + wrap_offset;
+      previous_masked = masked_value;
+    }
+  }
+
+  return RHIResult::Success;
+}
+
 void VKCommandBuffer::copy_buffer(RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset, uint64_t dst_offset) {
   if (command_buffer == VK_NULL_HANDLE) {
     log::error("Cannot copy buffer: command buffer not initialized");
@@ -1732,6 +1986,65 @@ void VKCommandBuffer::copy_texture_to_buffer(RHIBindlessHandle src, RHIBindlessH
   copy_region.imageExtent = {width, height, 1};
 
   vkCmdCopyImageToBuffer(command_buffer, vk_src_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_dst_buffer, 1, &copy_region);
+}
+
+void VKCommandBuffer::resolve_texture(RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height) {
+  if (command_buffer == VK_NULL_HANDLE) {
+    log::error("Cannot resolve texture: command buffer not initialized");
+    return;
+  }
+
+  if (_is_recording == false) {
+    log::error("Cannot resolve texture: command buffer is not recording");
+    return;
+  }
+
+  if (_in_render_pass) {
+    log::error("Cannot resolve texture while a render pass is active");
+    return;
+  }
+
+  const VKTextureData* src_texture = device->get_texture_data(src);
+  const VKTextureData* dst_texture = device->get_texture_data(dst);
+  if ((src_texture == nullptr) || (dst_texture == nullptr)) {
+    log::error("Cannot resolve texture: invalid source or destination texture");
+    return;
+  }
+
+  if (src_texture->desc.format != dst_texture->desc.format) {
+    log::error("Cannot resolve texture: source and destination formats do not match");
+    return;
+  }
+
+  if (src_texture->desc.sample_count <= 1u) {
+    log::error("Cannot resolve texture: source texture is not multisampled");
+    return;
+  }
+
+  if (dst_texture->desc.sample_count != 1u) {
+    log::error("Cannot resolve texture: destination texture must be single-sampled");
+    return;
+  }
+
+  VkImage vk_src_image = src_texture->image;
+  VkImage vk_dst_image = dst_texture->image;
+  if ((vk_src_image == VK_NULL_HANDLE) || (vk_dst_image == VK_NULL_HANDLE)) {
+    log::error("Cannot resolve texture: source or destination image handle is invalid");
+    return;
+  }
+
+  ensure_texture_layout(src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  ensure_texture_layout(dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+  VkImageResolve resolve_region = {};
+  resolve_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  resolve_region.srcSubresource.mipLevel = 0;
+  resolve_region.srcSubresource.baseArrayLayer = 0;
+  resolve_region.srcSubresource.layerCount = 1;
+  resolve_region.dstSubresource = resolve_region.srcSubresource;
+  resolve_region.extent = {width, height, 1u};
+
+  vkCmdResolveImage(command_buffer, vk_src_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_dst_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &resolve_region);
 }
 
 void VKCommandBuffer::generate_mipmaps(RHIBindlessHandle texture) {
@@ -2053,14 +2366,17 @@ VkSurfaceFormatKHR VKContext::Impl::choose_swap_surface_format(const std::vector
 
 VkPresentModeKHR VKContext::Impl::choose_swap_present_mode(const std::vector<VkPresentModeKHR>& available_present_modes) {
   for (const auto& present_mode : available_present_modes) {
-    if (present_mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR)
-      return present_mode;
-    if (present_mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+    if (present_mode == VK_PRESENT_MODE_FIFO_KHR) {
       return present_mode;
     }
   }
 
-  return VK_PRESENT_MODE_FIFO_KHR;
+  if (available_present_modes.empty()) {
+    log::warning("No Vulkan present modes reported; falling back to FIFO");
+    return VK_PRESENT_MODE_FIFO_KHR;
+  }
+  log::warning("Vulkan FIFO present mode not reported; using first available mode");
+  return available_present_modes[0];
 }
 
 bool VKContext::Impl::register_swapchain_textures_with_bindless() {

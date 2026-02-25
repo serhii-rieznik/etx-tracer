@@ -68,6 +68,7 @@ struct RHIDevice {
 
   RHICreateBindlessResult create_buffer(const RHIBufferDesc& desc);
   RHIResult update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset = 0);
+  RHIResult read_buffer(RHIBindlessHandle buffer, void* data, uint64_t size, uint64_t offset = 0);
   RHIResult destroy_buffer(RHIBindlessHandle buffer);
   bool upload_or_update_chunked_buffer(const RHIChunkedBufferUploadData& data, RHIBufferUsage usage, RHIChunkedBufferState& state, const char* buffer_name = nullptr);
   void destroy_chunked_buffer(RHIChunkedBufferState& state);
@@ -196,15 +197,22 @@ struct RHIContext {
   void cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
 
   void cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc);
+  void cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count);
+  void cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage = RHITimestampStage::AllCommands);
 
   void cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0);
 
   void cmd_copy_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset = 0, uint64_t dst_offset = 0);
   void cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
   void cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
+  void cmd_resolve_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height);
   void cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture);
 
   void cmd_set_debug_name(RHICommandBuffer cmd, const char* name);
+
+  bool supports_timestamps() const;
+  double timestamp_period_ns() const;
+  RHIResult read_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count, uint64_t* out_values);
 
  private:
   static constexpr size_t kBackendStorageSize = 64;

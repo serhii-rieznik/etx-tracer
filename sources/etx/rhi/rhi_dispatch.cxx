@@ -122,6 +122,10 @@ RHIResult RHIDevice::update_buffer(RHIBindlessHandle buffer, const void* data, u
   return backend_device(_impl)->update_buffer(buffer, data, size, offset);
 }
 
+RHIResult RHIDevice::read_buffer(RHIBindlessHandle buffer, void* data, uint64_t size, uint64_t offset) {
+  return backend_device(_impl)->read_buffer(buffer, data, size, offset);
+}
+
 RHIResult RHIDevice::destroy_buffer(RHIBindlessHandle buffer) {
   if (buffer.valid() == false) {
     return RHIResult::Success;
@@ -463,6 +467,14 @@ void RHIContext::cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc)
   backend_context(_impl)->cmd_dispatch(cmd, desc);
 }
 
+void RHIContext::cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count) {
+  backend_context(_impl)->cmd_reset_timestamps(cmd, first_query, query_count);
+}
+
+void RHIContext::cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage) {
+  backend_context(_impl)->cmd_write_timestamp(cmd, query_index, stage);
+}
+
 void RHIContext::cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
   backend_context(_impl)->cmd_build_acceleration_structure(cmd, desc, scratch_buffer, scratch_offset);
 }
@@ -479,12 +491,28 @@ void RHIContext::cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHan
   backend_context(_impl)->cmd_copy_texture_to_buffer(cmd, src, dst, width, height, mip_level);
 }
 
+void RHIContext::cmd_resolve_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height) {
+  backend_context(_impl)->cmd_resolve_texture(cmd, src, dst, width, height);
+}
+
 void RHIContext::cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture) {
   backend_context(_impl)->cmd_generate_mipmaps(cmd, texture);
 }
 
 void RHIContext::cmd_set_debug_name(RHICommandBuffer cmd, const char* name) {
   backend_context(_impl)->cmd_set_debug_name(cmd, name);
+}
+
+bool RHIContext::supports_timestamps() const {
+  return backend_context(_impl)->supports_timestamps();
+}
+
+double RHIContext::timestamp_period_ns() const {
+  return backend_context(_impl)->timestamp_period_ns();
+}
+
+RHIResult RHIContext::read_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count, uint64_t* out_values) {
+  return backend_context(_impl)->read_timestamps(cmd, first_query, query_count, out_values);
 }
 
 }  // namespace etx

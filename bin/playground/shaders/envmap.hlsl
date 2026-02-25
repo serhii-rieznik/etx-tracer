@@ -3,7 +3,8 @@
 struct PushConstants {
   uint envmapIndex;
   uint samplerIndex;
-  uint2 pad;
+  uint mappingMode;
+  uint pad;
   column_major float4x4 invViewProj;
 };
 
@@ -33,9 +34,10 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   float4 world = mul(pushConstants.invViewProj, float4(input.ndc, 1.0f, 1.0f));
   float3 dir = normalize(world.xyz / world.w);
 
-  // Equirectangular mapping
+  // mappingMode = 0 : equirectangular, mappingMode = 1 : equal-area (Lambert cylindrical)
   float u = atan2(dir.z, dir.x) / (2.0f * kPi) + 0.5f;
-  float v = acos(clamp(dir.y, -1.0f, 1.0f)) / kPi;
+  float y = clamp(dir.y, -1.0f, 1.0f);
+  float v = (pushConstants.mappingMode == 1u) ? (0.5f * (1.0f - y)) : (acos(y) / kPi);
 
   Texture2D envmap = bindless_textures[NonUniformResourceIndex(pushConstants.envmapIndex)];
   SamplerState s = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];

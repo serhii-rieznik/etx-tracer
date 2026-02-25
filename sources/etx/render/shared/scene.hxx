@@ -183,7 +183,17 @@ ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const 
 
   surface_point_shared_interpolate_vertex(scene.vertices.pos[i0], scene.vertices.pos[i1], scene.vertices.pos[i2], scene.vertices.nrm[i0], scene.vertices.nrm[i1],
     scene.vertices.nrm[i2], scene.vertices.tan[i0], scene.vertices.tan[i1], scene.vertices.tan[i2], scene.vertices.btn[i0], scene.vertices.btn[i1],
-    scene.vertices.btn[i2], scene.vertices.tex[i0], scene.vertices.tex[i1], scene.vertices.tex[i2], bc, true, true, vertex.pos, vertex.nrm, vertex.tan, vertex.btn, vertex.tex);
+    scene.vertices.btn[i2], scene.vertices.tex[i0], scene.vertices.tex[i1], scene.vertices.tex[i2], bc, true, true, vertex);
+}
+
+ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc, Intersection& vertex) {
+  const uint32_t i0 = t.i[0];
+  const uint32_t i1 = t.i[1];
+  const uint32_t i2 = t.i[2];
+
+  surface_point_shared_interpolate_vertex(scene.vertices.pos[i0], scene.vertices.pos[i1], scene.vertices.pos[i2], scene.vertices.nrm[i0], scene.vertices.nrm[i1],
+    scene.vertices.nrm[i2], scene.vertices.tan[i0], scene.vertices.tan[i1], scene.vertices.tan[i2], scene.vertices.btn[i0], scene.vertices.btn[i1],
+    scene.vertices.btn[i2], scene.vertices.tex[i0], scene.vertices.tex[i1], scene.vertices.tex[i2], bc, true, true, vertex);
 }
 
 ETX_SHARED_INLINE Vertex lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc) {

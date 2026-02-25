@@ -1,6 +1,42 @@
 #pragma once
 
 #if defined(__cplusplus)
+# define ETX_CPP 1
+#else
+# define ETX_CPP 0
+#endif
+
+#if defined(__HLSL_VERSION)
+# define ETX_HLSL 1
+#else
+# define ETX_HLSL 0
+#endif
+
+#if (ETX_CPP)
+# define ETX_STD std::
+#else
+# define ETX_STD
+#endif
+
+#if (ETX_CPP)
+# define ETX_ENUM_U32(name)           enum class name : uint32_t
+# define ETX_ENUM_U32_TO_UINT32(value) static_cast<uint32_t>(value)
+# define ETX_STATIC_ASSERT(cond, msg) static_assert((cond), msg)
+#else
+# define ETX_ENUM_U32(name)           enum name
+# define ETX_ENUM_U32_TO_UINT32(value) (value)
+# define ETX_STATIC_ASSERT(cond, msg)
+#endif
+
+#if (ETX_CPP)
+# include <cmath>
+# include <complex>
+# include <cstring>
+# include <cstdio>
+# include <cstdint>
+#endif
+
+#if (ETX_CPP)
 
 # define ETX_SHARED_INLINE     inline
 # define ETX_IN(type, name)    const type& name
@@ -44,8 +80,7 @@ ETX_STATIC_CONST float kDeltaAlphaTreshold = 1.0e-4f;
 ETX_STATIC_CONST float kGoldenRatio = 1.6180339887498948482f;
 ETX_STATIC_CONST uint32_t kInvalidIndex = ~0u;
 
-#if defined(__cplusplus)
-# include <stdint.h>
+#if (ETX_CPP)
 # include <etx/render/shared/base.hxx>
 
 using complex = std::complex<float>;
@@ -76,31 +111,31 @@ ETX_SHARED_INLINE void print_value(const char* name, const T& v, const char* fil
 
 template <>
 ETX_SHARED_INLINE void print_value<bool>(const char* name, const bool& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%s) at %s [%u]\n", name, v ? "true" : "false", filename, line);
+  ETX_STD printf("Validation failed: %s (%s) at %s [%u]\n", name, v ? "true" : "false", filename, line);
 }
 
 template <>
 ETX_SHARED_INLINE void print_value<float>(const char* name, const float& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f) at %s [%u]\n", name, v, filename, line);
+  ETX_STD printf("Validation failed: %s (%f) at %s [%u]\n", name, v, filename, line);
 }
 
 template <>
 ETX_SHARED_INLINE void print_value<float2>(const char* name, const float2& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f) at %s [%u]\n", name, v.x, v.y, filename, line);
+  ETX_STD printf("Validation failed: %s (%f %f) at %s [%u]\n", name, v.x, v.y, filename, line);
 }
 
 template <>
 ETX_SHARED_INLINE void print_value<float3>(const char* name, const float3& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, filename, line);
+  ETX_STD printf("Validation failed: %s (%f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, filename, line);
 }
 
 template <>
 ETX_SHARED_INLINE void print_value<float4>(const char* name, const float4& v, const char* filename, uint32_t line) {
-  printf("Validation failed: %s (%f %f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, v.w, filename, line);
+  ETX_STD printf("Validation failed: %s (%f %f %f %f) at %s [%u]\n", name, v.x, v.y, v.z, v.w, filename, line);
 }
 
 ETX_SHARED_INLINE bool isfinite(complex t) {
-  return isfinite(t.real()) && isfinite(t.imag());
+  return ETX_STD isfinite(t.real()) && ETX_STD isfinite(t.imag());
 }
 
 ETX_SHARED_INLINE bool value_is_correct(const complex& v) {

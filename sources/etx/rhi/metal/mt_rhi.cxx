@@ -192,6 +192,20 @@ void MTContext::cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc) 
   _impl->command_buffer.dispatch(desc);
 }
 
+void MTContext::cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count) {
+  (void)cmd;
+  (void)first_query;
+  (void)query_count;
+  log::warning("Metal RHI: cmd_reset_timestamps not implemented");
+}
+
+void MTContext::cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage) {
+  (void)cmd;
+  (void)query_index;
+  (void)stage;
+  log::warning("Metal RHI: cmd_write_timestamp not implemented");
+}
+
 void MTContext::cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
   (void)cmd;
   _impl->command_buffer.build_acceleration_structure(desc, scratch_buffer, scratch_offset);
@@ -212,6 +226,15 @@ void MTContext::cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHand
   _impl->command_buffer.copy_texture_to_buffer(src, dst, width, height, mip_level);
 }
 
+void MTContext::cmd_resolve_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height) {
+  (void)cmd;
+  (void)src;
+  (void)dst;
+  (void)width;
+  (void)height;
+  log::warning("Metal RHI: cmd_resolve_texture not implemented");
+}
+
 void MTContext::cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture) {
   (void)cmd;
   (void)texture;
@@ -221,6 +244,22 @@ void MTContext::cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle tex
 void MTContext::cmd_set_debug_name(RHICommandBuffer cmd, const char* name) {
   (void)cmd;
   _impl->command_buffer.set_debug_name(name);
+}
+
+bool MTContext::supports_timestamps() const {
+  return false;
+}
+
+double MTContext::timestamp_period_ns() const {
+  return 0.0;
+}
+
+RHIResult MTContext::read_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count, uint64_t* out_values) {
+  (void)cmd;
+  (void)first_query;
+  (void)query_count;
+  (void)out_values;
+  return RHIResult::NotImplemented;
 }
 
 RHISemaphore MTContext::get_image_acquired_semaphore() {
@@ -322,6 +361,11 @@ RHIResult MTDevice::destroy_pipeline(RHIPipeline pipeline) {
 
 RHIResult MTDevice::update_buffer(RHIBuffer buffer, const void* data, uint64_t size, uint64_t offset) {
   log::warning("Metal RHI: update_buffer not implemented");
+  return RHIResult::NotImplemented;
+}
+
+RHIResult MTDevice::read_buffer(RHIBuffer buffer, void* data, uint64_t size, uint64_t offset) {
+  log::warning("Metal RHI: read_buffer not implemented");
   return RHIResult::NotImplemented;
 }
 

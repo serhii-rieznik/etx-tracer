@@ -47,6 +47,22 @@ ETX_SHARED_INLINE void surface_point_shared_interpolate_vertex(
   }
 }
 
+ETX_SHARED_INLINE void surface_point_shared_interpolate_vertex(
+  ETX_IN(float3, pos_0), ETX_IN(float3, pos_1), ETX_IN(float3, pos_2), ETX_IN(float3, nrm_0), ETX_IN(float3, nrm_1), ETX_IN(float3, nrm_2), ETX_IN(float3, tan_0),
+  ETX_IN(float3, tan_1), ETX_IN(float3, tan_2), ETX_IN(float3, btn_0), ETX_IN(float3, btn_1), ETX_IN(float3, btn_2), ETX_IN(float2, tex_0), ETX_IN(float2, tex_1),
+  ETX_IN(float2, tex_2), ETX_IN(float3, bc), bool has_surface_frame, bool has_texcoords, ETX_OUT(Vertex, vertex)) {
+  surface_point_shared_interpolate_vertex(pos_0, pos_1, pos_2, nrm_0, nrm_1, nrm_2, tan_0, tan_1, tan_2, btn_0, btn_1, btn_2, tex_0, tex_1, tex_2, bc, has_surface_frame,
+    has_texcoords, vertex.pos, vertex.nrm, vertex.tan, vertex.btn, vertex.tex);
+}
+
+ETX_SHARED_INLINE void surface_point_shared_interpolate_vertex(
+  ETX_IN(float3, pos_0), ETX_IN(float3, pos_1), ETX_IN(float3, pos_2), ETX_IN(float3, nrm_0), ETX_IN(float3, nrm_1), ETX_IN(float3, nrm_2), ETX_IN(float3, tan_0),
+  ETX_IN(float3, tan_1), ETX_IN(float3, tan_2), ETX_IN(float3, btn_0), ETX_IN(float3, btn_1), ETX_IN(float3, btn_2), ETX_IN(float2, tex_0), ETX_IN(float2, tex_1),
+  ETX_IN(float2, tex_2), ETX_IN(float3, bc), bool has_surface_frame, bool has_texcoords, ETX_INOUT(Intersection, intersection)) {
+  surface_point_shared_interpolate_vertex(pos_0, pos_1, pos_2, nrm_0, nrm_1, nrm_2, tan_0, tan_1, tan_2, btn_0, btn_1, btn_2, tex_0, tex_1, tex_2, bc, has_surface_frame,
+    has_texcoords, intersection.pos, intersection.nrm, intersection.tan, intersection.btn, intersection.tex);
+}
+
 ETX_SHARED_INLINE float3 surface_point_shared_orient_geo_normal(ETX_IN(float3, geo_normal), ETX_IN(float3, ray_direction)) {
   float3 result = normalize(geo_normal);
   if (dot(result, ray_direction) > 0.0f) {

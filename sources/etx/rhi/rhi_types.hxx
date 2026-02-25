@@ -12,6 +12,7 @@ enum class RHIResult : uint32_t {
   ValidationError,
   InvalidArgument,
   NotImplemented,
+  NotReady,
 };
 
 struct RHIResultInfo {
@@ -102,6 +103,7 @@ enum class RHITextureFormat : uint32_t {
   R32G32_FLOAT,
   R32G32B32_FLOAT,
   R32G32B32A32_FLOAT,
+  R16G16B16A16_FLOAT,
   R8G8B8A8_SRGB,
   B8G8R8A8_SRGB,
   D32_FLOAT,
@@ -258,6 +260,13 @@ enum class RHIResourceType : uint32_t {
   AccelerationStructure = 3,
 };
 
+enum class RHITimestampStage : uint32_t {
+  TopOfPipe = 0,
+  BottomOfPipe = 1,
+  ComputeShader = 2,
+  AllCommands = 3,
+};
+
 inline constexpr uint32_t kRHIBindlessDescriptorIndexBits = 32;
 inline constexpr uint32_t kRHIBindlessGenerationBits = 30;
 inline constexpr uint32_t kRHIBindlessResourceTypeBits = 2;
@@ -341,6 +350,7 @@ struct RHITextureDesc {
   uint32_t depth = 1;
   uint32_t mip_levels = 1;
   uint32_t array_layers = 1;
+  uint32_t sample_count = 1;
   RHITextureFormat format = RHITextureFormat::R8G8B8A8_UNORM;
   RHITextureUsage usage = RHITextureUsage::Sampled;
   bool host_visible = false;
@@ -398,6 +408,7 @@ struct RHIGraphicsPipelineDesc {
   uint32_t color_attachment_count = 1;
   RHITextureFormat color_formats[8] = {};
   RHITextureFormat depth_format = RHITextureFormat::Undefined;
+  uint32_t sample_count = 1;
 };
 
 struct RHIComputePipelineDesc {

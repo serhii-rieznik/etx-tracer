@@ -93,6 +93,36 @@ float displacement_sample_step(float cascade_lengths[3], float cascade_weights[3
   return max(min_step, 1.0e-3f);
 }
 
+float3 top_surface_normal_from_tangent_basis(float3 dPdu, float3 dPdv) {
+  float det_xz = (dPdu.x * dPdv.z) - (dPdv.x * dPdu.z);
+  if (abs(det_xz) > 1.0e-8f) {
+    float inv_det_xz = 1.0f / det_xz;
+    float dYdX = ((dPdu.y * dPdv.z) - (dPdv.y * dPdu.z)) * inv_det_xz;
+    float dYdZ = ((dPdv.y * dPdu.x) - (dPdu.y * dPdv.x)) * inv_det_xz;
+    float3 n = float3(-dYdX, 1.0f, -dYdZ);
+    float n2 = dot(n, n);
+    if (n2 > 1.0e-12f) {
+      n *= rsqrt(n2);
+      if (n.y < 0.0f) {
+        n = -n;
+      }
+      return n;
+    }
+  }
+
+  float3 n = cross(dPdv, dPdu);
+  float n2 = dot(n, n);
+  if (n2 > 1.0e-12f) {
+    n *= rsqrt(n2);
+    if (n.y < 0.0f) {
+      n = -n;
+    }
+    return n;
+  }
+
+  return float3(0.0f, 1.0f, 0.0f);
+}
+
 float3 displacement_geometric_normal(float2 world_xz, float cascade_lengths[3], float cascade_weights[3]) {
   float h = displacement_sample_step(cascade_lengths, cascade_weights);
   float2 offset_x = float2(h, 0.0f);
@@ -105,14 +135,7 @@ float3 displacement_geometric_normal(float2 world_xz, float cascade_lengths[3], 
 
   float3 tangent_x = p_x_plus - p_x_minus;
   float3 tangent_z = p_z_plus - p_z_minus;
-  float3 n = cross(tangent_z, tangent_x);
-  float n2 = dot(n, n);
-  if (n2 > 1.0e-12f) {
-    n *= rsqrt(n2);
-  } else {
-    n = float3(0.0f, 1.0f, 0.0f);
-  }
-  return n;
+  return top_surface_normal_from_tangent_basis(tangent_x, tangent_z);
 }
 
 float3 reconstruct_surface_normal(
@@ -169,13 +192,7 @@ float3 reconstruct_surface_normal(
     has_surface_data = true;
   }
 
-  float3 n = cross(dPdv, dPdu);
-  float n2 = dot(n, n);
-  if (n2 > 1.0e-12f) {
-    return n * rsqrt(n2);
-  }
-
-  return float3(0.0f, 1.0f, 0.0f);
+  return top_surface_normal_from_tangent_basis(dPdu, dPdv);
 }
 
 float sample_filtered_slope_energy(
@@ -187,7 +204,6 @@ float sample_filtered_slope_energy(
   float cascade_weights[3]) {
   SamplerState repeat_sampler = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];
   float accum = 0.0f;
-  float weight_sum = 0.0f;
   for (int i = 0; i < 3; ++i) {
     if (settings.slopeMetricIndex[i] == 0u) {
       continue;
@@ -201,13 +217,10 @@ float sample_filtered_slope_energy(
     float2 uv_ddy = surface_xz_ddy / cascade_lengths[i];
     Texture2D slopeTex = bindless_textures[NonUniformResourceIndex(settings.slopeMetricIndex[i])];
     float slope_energy = slopeTex.SampleGrad(repeat_sampler, uv, uv_ddx, uv_ddy).x;
-    accum += max(slope_energy, 0.0f) * weight;
-    weight_sum += weight;
+    float weight_sq = weight * weight;
+    accum += max(slope_energy, 0.0f) * weight_sq;
   }
-  if (weight_sum > 1.0e-6f) {
-    return accum / weight_sum;
-  }
-  return 0.0f;
+  return max(accum, 0.0f);
 }
 
 float normal_angle_error_radians(float3 a, float3 b) {
@@ -254,11 +267,12 @@ float3 beer_lambert(float3 sigma_a, float distance_m) {
   return exp(-max(sigma_a, 0.0f) * safe_distance);
 }
 
-float2 sample_equirect_uv(float3 dir) {
+float2 sample_env_uv(float3 dir, bool equal_area_mapping) {
   float inv_pi = 1.0f / 3.14159265f;
   float inv_two_pi = 0.5f * inv_pi;
   float u = (atan2(dir.z, dir.x) * inv_two_pi) + 0.5f;
-  float v = acos(clamp(dir.y, -1.0f, 1.0f)) * inv_pi;
+  float y = clamp(dir.y, -1.0f, 1.0f);
+  float v = equal_area_mapping ? (0.5f * (1.0f - y)) : (acos(y) * inv_pi);
   return float2(u, v);
 }
 
@@ -548,12 +562,8 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   float3 waterRefractColor = float3(0.01f, 0.05f, 0.1f);
   bool has_scene_refraction = false;
   if (physical_render_mode) {
-    float vertical_optical_depth_m = max(settings.waterOptics1.x, 0.0f);
-    float cos_theta_t = transmitted_cos_theta(NdotV, water_ior);
-    float optical_path_m = vertical_optical_depth_m / max(cos_theta_t, 1.0e-3f);
-    float3 beam_transmittance = beer_lambert(sigma_t, optical_path_m);
-    float3 inscatter_color = scatter_albedo * (1.0f - beam_transmittance);
-    waterRefractColor = saturate(inscatter_color);
+    // Keep volume refraction dark until we have an actual lighting source (scene color or env sample).
+    waterRefractColor = float3(0.0f, 0.0f, 0.0f);
   }
   float3 waterReflectColor = float3(0.5f, 0.6f, 0.8f) * env_reflection_intensity;
   float3 direct_specular = float3(0.0f, 0.0f, 0.0f);
@@ -596,7 +606,9 @@ float4 PSMain(VSOutput input) : SV_Target0 {
         }
 
         float3 beam_transmittance = beer_lambert(sigma_t, thickness_m);
-        waterRefractColor = saturate((scene_color * beam_transmittance) + (scatter_albedo * (1.0f - beam_transmittance)));
+        float3 scatter_source = max(scene_color, 0.0f);
+        float3 inscatter_color = scatter_albedo * scatter_source * (1.0f - beam_transmittance);
+        waterRefractColor = max((scene_color * beam_transmittance) + inscatter_color, 0.0f);
         has_scene_refraction = true;
       }
     }
@@ -604,9 +616,10 @@ float4 PSMain(VSOutput input) : SV_Target0 {
 
   if (settings.envmapIndex != 0) {
     Texture2D envTex = bindless_textures[NonUniformResourceIndex(settings.envmapIndex)];
+    bool envmap_equal_area_mapping = (settings._padding0 > 0.5f);
     SamplerState envSampler = bindless_samplers[NonUniformResourceIndex(settings.envSamplerIndex)];
     float3 R = reflect(-V, N);
-    float2 uv = sample_equirect_uv(R);
+    float2 uv = sample_env_uv(R, envmap_equal_area_mapping);
     waterReflectColor = envTex.Sample(envSampler, uv).rgb * env_reflection_intensity;
     if (physical_render_mode) {
       float safe_ior = max(water_ior, 1.0f + 1.0e-4f);
@@ -618,10 +631,12 @@ float4 PSMain(VSOutput input) : SV_Target0 {
         float cos_theta_t = max(transmitted_cos_theta(NdotV, water_ior), 1.0e-3f);
         float optical_path_m = vertical_optical_depth_m / cos_theta_t;
         float3 beam_transmittance = beer_lambert(sigma_t, optical_path_m);
-        float2 refract_uv = sample_equirect_uv(normalize(Tdir));
+        float2 refract_uv = sample_env_uv(normalize(Tdir), envmap_equal_area_mapping);
         if (has_scene_refraction == false) {
           float3 transmitted_source = envTex.Sample(envSampler, refract_uv).rgb;
-          waterRefractColor = saturate((transmitted_source * beam_transmittance) + (scatter_albedo * (1.0f - beam_transmittance)));
+          float3 scatter_source = max(transmitted_source, 0.0f);
+          float3 inscatter_color = scatter_albedo * scatter_source * (1.0f - beam_transmittance);
+          waterRefractColor = max((transmitted_source * beam_transmittance) + inscatter_color, 0.0f);
         }
       }
     }

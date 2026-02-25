@@ -50,6 +50,7 @@ void RTApplication::init() {
   {
     ETX_PROFILER_NAMED_SCOPE("app_init_render_context_and_ior");
     render_context.init();
+    scene.set_scattering_rhi(render_context.get_context());
     std::string ior_folder = env().file_in_data("./spectrum/");
     _ior_database.load(ior_folder.c_str());
   }

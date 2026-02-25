@@ -115,14 +115,6 @@ void Environment::setup(const char* executable_path) {
   snprintf(_env.tmp_folder, sizeof(_env.tmp_folder), "%stmp%c", _env.data_folder, kDelimiter);
   normalize_path(_env.tmp_folder);
   clear_tmp_folder();
-
-  static bool cleanup_registered = false;
-  if (cleanup_registered == false) {
-    cleanup_registered = true;
-    atexit([]() {
-      env().clear_tmp_folder();
-    });
-  }
 }
 
 const char* Environment::current_directory() const {

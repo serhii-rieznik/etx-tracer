@@ -13,6 +13,22 @@
 #include <vulkan/vulkan.h>
 namespace etx {
 
+static VkSampleCountFlagBits convert_sample_count_to_vk(uint32_t sample_count) {
+  switch (sample_count) {
+    case 1u:
+      return VK_SAMPLE_COUNT_1_BIT;
+    case 2u:
+      return VK_SAMPLE_COUNT_2_BIT;
+    case 4u:
+      return VK_SAMPLE_COUNT_4_BIT;
+    case 8u:
+      return VK_SAMPLE_COUNT_8_BIT;
+    default:
+      log::warning("Vulkan: unsupported sample count %u, falling back to 1x", sample_count);
+      return VK_SAMPLE_COUNT_1_BIT;
+  }
+}
+
 struct VKStagingBuffer {
   VkBuffer buffer = VK_NULL_HANDLE;
   VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -1129,7 +1145,7 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
 
   VkPipelineMultisampleStateCreateInfo multisampling = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
   multisampling.sampleShadingEnable = VK_FALSE;
-  multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  multisampling.rasterizationSamples = convert_sample_count_to_vk((desc.sample_count > 0u) ? desc.sample_count : 1u);
 
   VkPipelineColorBlendAttachmentState color_blend_attachment = {};
   color_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -1360,7 +1376,7 @@ RHIResult VKDevice::Impl::create_vulkan_texture(const RHITextureDesc& desc, VkIm
   image_info.extent.depth = desc.depth;
   image_info.mipLevels = desc.mip_levels;
   image_info.arrayLayers = desc.array_layers;
-  image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+  image_info.samples = convert_sample_count_to_vk((desc.sample_count > 0u) ? desc.sample_count : 1u);
   image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
 
   using TextureUsage = std::underlying_type<RHITextureUsage>::type;
@@ -2283,6 +2299,51 @@ RHIResult VKDevice::update_buffer(RHIBindlessHandle buffer_handle, const void* d
   return submit_result;
 }
 
+RHIResult VKDevice::read_buffer(RHIBindlessHandle buffer_handle, void* data, uint64_t size, uint64_t offset) {
+  uint32_t index = _impl->buffers.get_index(buffer_handle);
+  if (index == UINT32_MAX) {
+    log::error("Buffer handle not found: %llu", buffer_handle);
+    return RHIResult::InvalidHandle;
+  }
+
+  const auto& buffer_data = _impl->buffers.get_data(index);
+  const uint64_t buffer_size = buffer_data.desc.size;
+
+  if (size == 0u) {
+    return RHIResult::Success;
+  }
+  if ((data == nullptr) && (size > 0u)) {
+    log::error("Buffer read received null destination pointer for non-zero size (%llu)", size);
+    return RHIResult::InvalidArgument;
+  }
+  if (offset > buffer_size) {
+    log::error("Buffer read offset out of range (offset=%llu, buffer_size=%llu)", offset, buffer_size);
+    return RHIResult::InvalidArgument;
+  }
+  if (size > (buffer_size - offset)) {
+    log::error("Buffer read range out of bounds (offset=%llu, size=%llu, buffer_size=%llu)", offset, size, buffer_size);
+    return RHIResult::InvalidArgument;
+  }
+  if (buffer_data.desc.host_visible == false) {
+    log::error("Buffer read requires a host-visible buffer");
+    return RHIResult::UnsupportedFeature;
+  }
+
+  void* mapped_ptr = nullptr;
+  auto mapped_it = _impl->mapped_buffer_ptrs.find(buffer_handle);
+  if (mapped_it == _impl->mapped_buffer_ptrs.end()) {
+    if (etx_vk_call(vkMapMemory(_impl->device, buffer_data.memory, 0, VK_WHOLE_SIZE, 0, &mapped_ptr)) != VK_SUCCESS) {
+      return RHIResult::ValidationError;
+    }
+    _impl->mapped_buffer_ptrs[buffer_handle] = mapped_ptr;
+  } else {
+    mapped_ptr = mapped_it->second;
+  }
+
+  memcpy(data, static_cast<const uint8_t*>(mapped_ptr) + offset, size);
+  return RHIResult::Success;
+}
+
 RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void* data, uint32_t mip_level, uint32_t array_layer) {
   uint32_t index = _impl->textures.get_index(texture_handle);
   if (index == UINT32_MAX) {
@@ -2650,6 +2711,53 @@ VkQueue VKDevice::get_graphics_queue() const {
 
 VkCommandPool VKDevice::get_vk_command_pool(uint32_t index) const {
   return _impl->command_pools[index];
+}
+
+bool VKDevice::supports_timestamps() const {
+  return (timestamp_valid_bits() > 0u);
+}
+
+bool VKDevice::supports_timestamp_stage(RHITimestampStage stage) const {
+  if (supports_timestamps() == false) {
+    return false;
+  }
+  if (_impl == nullptr) {
+    return false;
+  }
+
+  switch (stage) {
+    case RHITimestampStage::TopOfPipe:
+    case RHITimestampStage::BottomOfPipe:
+      return true;
+    case RHITimestampStage::ComputeShader:
+    case RHITimestampStage::AllCommands:
+      return (_impl->properties.limits.timestampComputeAndGraphics != 0u);
+    default:
+      return false;
+  }
+}
+
+uint32_t VKDevice::timestamp_valid_bits() const {
+  if ((_impl == nullptr) || (_impl->physical_device == VK_NULL_HANDLE)) {
+    return 0u;
+  }
+
+  uint32_t queue_family_count = 0u;
+  vkGetPhysicalDeviceQueueFamilyProperties(_impl->physical_device, &queue_family_count, nullptr);
+  if ((queue_family_count == 0u) || (_impl->graphics_queue_family >= queue_family_count)) {
+    return 0u;
+  }
+
+  std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
+  vkGetPhysicalDeviceQueueFamilyProperties(_impl->physical_device, &queue_family_count, queue_families.data());
+  return queue_families[_impl->graphics_queue_family].timestampValidBits;
+}
+
+double VKDevice::timestamp_period_ns() const {
+  if (_impl == nullptr) {
+    return 0.0;
+  }
+  return static_cast<double>(_impl->properties.limits.timestampPeriod);
 }
 
 void VKDevice::set_current_frame_index(uint32_t index) {

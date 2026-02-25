@@ -1083,7 +1083,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "rayleigh")) {
-      s_t = data.scattering_spectrums.rayleigh;
+      s_t = scattering::rayleigh_spectrum();
 
       float scale = 1.0f;
       char buffer[kDataBufferSize] = {};
@@ -1098,7 +1098,7 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "mie")) {
-      s_t = data.scattering_spectrums.mie;
+      s_t = scattering::mie_spectrum();
 
       float scale = 1.0f;
       char buffer[kDataBufferSize] = {};

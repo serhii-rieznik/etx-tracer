@@ -786,6 +786,8 @@ std::string ShaderCompiler::get_error_description(RHIResult result) {
       return "Out of memory";
     case RHIResult::ValidationError:
       return "Validation error";
+    case RHIResult::NotReady:
+      return "Not ready";
     default:
       return "Unknown error";
   }
