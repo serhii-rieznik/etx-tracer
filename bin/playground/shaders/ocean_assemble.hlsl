@@ -13,7 +13,6 @@ struct AssemblePushConstants {
     uint outSlopeMetricIndex;
     uint N;
     float lambda; // choppiness
-    float L;
 };
 [[vk::push_constant]] AssemblePushConstants assemblePc;
 

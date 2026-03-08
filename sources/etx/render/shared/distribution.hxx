@@ -6,35 +6,21 @@
 
 namespace etx {
 
-struct DistributionSharedCPUContext {
-  ArrayView<DistributionEntry> values ETX_EMPTY_INIT;
-};
-
-ETX_SHARED_INLINE float distribution_shared_cpu_cdf(ETX_IN(DistributionSharedCPUContext, context), uint32_t index) {
-  return context.values[index].cdf;
-}
-
-ETX_SHARED_INLINE float distribution_shared_cpu_pdf(ETX_IN(DistributionSharedCPUContext, context), uint32_t index) {
-  return context.values[index].pdf;
-}
-
-#define ETX_DISTRIBUTION_SHARED_CONTEXT_TYPE DistributionSharedCPUContext
-#define ETX_DISTRIBUTION_SHARED_CDF(context, index) distribution_shared_cpu_cdf(context, index)
-#define ETX_DISTRIBUTION_SHARED_PDF(context, index) distribution_shared_cpu_pdf(context, index)
-#include <etx/render/interop/distribution_sample_shared.hxx>
-#undef ETX_DISTRIBUTION_SHARED_PDF
-#undef ETX_DISTRIBUTION_SHARED_CDF
-#undef ETX_DISTRIBUTION_SHARED_CONTEXT_TYPE
-
 ETX_SHARED_INLINE uint32_t sample_distribution(ETX_IN(ArrayView<DistributionEntry>, values), float rnd, ETX_OUT(float, pdf)) {
   if ((values.count == 0) || (values.a == nullptr)) {
     pdf = 0.0f;
     return kInvalidIndex;
   }
 
-  DistributionSharedCPUContext context = {};
-  context.values = values;
-  return distribution_shared_sample(context, static_cast<uint32_t>(values.count), rnd, pdf);
+  DistributionSearchRange search = distribution_search_begin(static_cast<uint32_t>(values.count));
+  while (distribution_search_active(search)) {
+    uint32_t middle = distribution_search_middle(search);
+    float middle_cdf = values[middle].cdf;
+    distribution_search_update(search, middle, middle_cdf, rnd);
+  }
+
+  pdf = values[search.begin].pdf;
+  return search.begin;
 }
 
 ETX_SHARED_INLINE uint32_t sample_distribution(ETX_IN(ArrayView<DistributionEntry>, values), float rnd) {

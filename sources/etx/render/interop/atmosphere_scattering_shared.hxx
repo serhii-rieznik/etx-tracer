@@ -31,6 +31,13 @@ struct ETX_ALIGNED AtmosphereSkyGpuParameters {
   uint32_t pad2 ETX_INIT(0u);
 };
 
+struct AtmosphereSkyPassFlags {
+  enum : uint32_t {
+    PrimaryScattering = 1u << 0u,
+    SecondaryScattering = 1u << 1u,
+  };
+};
+
 struct ETX_ALIGNED AtmosphereSkyGpuLight {
   float3 direction ETX_INIT({});
   float angular_size ETX_INIT(0.0f);
@@ -178,6 +185,10 @@ ETX_SHARED_INLINE float scattering_sky_average_weight(ETX_IN(float3, direction))
 
 ETX_SHARED_INLINE float3 scattering_sky_apply_approx_multiple_scattering(ETX_IN(float3, rgb), ETX_IN(float3, average_color)) {
   return rgb + kDoublePi * average_color * rgb + average_color;
+}
+
+ETX_SHARED_INLINE float3 scattering_sky_approx_multiple_scattering_only(ETX_IN(float3, rgb), ETX_IN(float3, average_color)) {
+  return kDoublePi * average_color * rgb + average_color;
 }
 
 ETX_SHARED_INLINE float scattering_sun_disk_darkening(float u, float v) {

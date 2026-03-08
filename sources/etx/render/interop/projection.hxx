@@ -27,12 +27,16 @@ ETX_SHARED_INLINE float2 projection_environment_direction_to_uv(ETX_IN(float3, d
 ETX_SHARED_INLINE float projection_sin_theta_for_pdf(ETX_IN(float2, uv), uint32_t projection) {
   float sin_theta = max(kEpsilon, sin(uv.y * kPi));
   if (projection == Projection::EqualArea) {
-    sin_theta = max(kEpsilon, abs(2.0f * uv.y - 1.0f));
+    sin_theta = 1.0f;
   }
   return sin_theta;
 }
 
 ETX_SHARED_INLINE float projection_environment_image_pdf_to_solid_angle(float image_pdf, ETX_IN(float2, uv), uint32_t projection) {
+  if (projection == Projection::EqualArea) {
+    return image_pdf / (4.0f * kPi);
+  }
+
   float sin_theta = projection_sin_theta_for_pdf(uv, projection);
   return image_pdf / (2.0f * kPi * kPi * sin_theta);
 }

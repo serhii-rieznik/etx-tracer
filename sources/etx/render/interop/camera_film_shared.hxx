@@ -47,12 +47,11 @@ ETX_SHARED_INLINE void camera_film_shared_unpack_eval(ETX_IN(CameraFilmEvalShare
 
 ETX_SHARED_INLINE float4 camera_film_shared_project(ETX_IN(float4x4, matrix), ETX_IN(float4, projected_point)) {
 #if defined(__cplusplus)
-  return float4{
-    dot(matrix.col[0], projected_point),
-    dot(matrix.col[1], projected_point),
-    dot(matrix.col[2], projected_point),
-    dot(matrix.col[3], projected_point),
-  };
+  return float4(
+    matrix.col[0].x * projected_point.x + matrix.col[1].x * projected_point.y + matrix.col[2].x * projected_point.z + matrix.col[3].x * projected_point.w,
+    matrix.col[0].y * projected_point.x + matrix.col[1].y * projected_point.y + matrix.col[2].y * projected_point.z + matrix.col[3].y * projected_point.w,
+    matrix.col[0].z * projected_point.x + matrix.col[1].z * projected_point.y + matrix.col[2].z * projected_point.z + matrix.col[3].z * projected_point.w,
+    matrix.col[0].w * projected_point.x + matrix.col[1].w * projected_point.y + matrix.col[2].w * projected_point.z + matrix.col[3].w * projected_point.w);
 #else
   return mul(matrix, projected_point);
 #endif

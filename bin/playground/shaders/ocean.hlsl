@@ -56,6 +56,23 @@ struct OceanRenderSettings {
   float4 waterScattering;
   float4 sunDirectionEnable;
   float4 sunRadiance;
+  column_major float4x4 prevViewProj;
+  uint waveThicknessMinIndex;
+  uint waveThicknessMaxIndex;
+  uint waveThicknessSamplerIndex;
+  uint _padding1;
+  uint foamHistoryIndex;
+  uint foamDetailIndex;
+  uint foamSamplerIndex;
+  uint aerationDetailIndex;
+  float4 waveThicknessControls;
+  float4 foamControls0;
+  float4 foamControls1;
+  float4 foamControls2;
+  float4 foamColor;
+  float4 foamTemporalControls;
+  float4 foamDetailControls;
+  float4 foamFlowControls;
 };
 
 float3 sample_displacement_field(float2 world_xz, float cascade_lengths[3], float cascade_weights[3]) {
@@ -195,7 +212,16 @@ float3 reconstruct_surface_normal(
   return top_surface_normal_from_tangent_basis(dPdu, dPdv);
 }
 
-float sample_filtered_slope_energy(
+float smoothstep_range(float edge0, float edge1, float x) {
+  float delta = edge1 - edge0;
+  if (abs(delta) <= 1.0e-8f) {
+    return (x >= edge1) ? 1.0f : 0.0f;
+  }
+  float t = saturate((x - edge0) / delta);
+  return t * t * (3.0f - (2.0f * t));
+}
+
+float3 sample_filtered_slope_metrics(
   float2 surface_xz,
   float2 surface_xz_ddx,
   float2 surface_xz_ddy,
@@ -203,7 +229,10 @@ float sample_filtered_slope_energy(
   float cascade_lengths[3],
   float cascade_weights[3]) {
   SamplerState repeat_sampler = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];
-  float accum = 0.0f;
+  float slope_accum = 0.0f;
+  float area_accum = 0.0f;
+  float ny_accum = 0.0f;
+  float weight_accum = 0.0f;
   for (int i = 0; i < 3; ++i) {
     if (settings.slopeMetricIndex[i] == 0u) {
       continue;
@@ -216,11 +245,31 @@ float sample_filtered_slope_energy(
     float2 uv_ddx = surface_xz_ddx / cascade_lengths[i];
     float2 uv_ddy = surface_xz_ddy / cascade_lengths[i];
     Texture2D slopeTex = bindless_textures[NonUniformResourceIndex(settings.slopeMetricIndex[i])];
-    float slope_energy = slopeTex.SampleGrad(repeat_sampler, uv, uv_ddx, uv_ddy).x;
+    float4 metric_sample = slopeTex.SampleGrad(repeat_sampler, uv, uv_ddx, uv_ddy);
     float weight_sq = weight * weight;
-    accum += max(slope_energy, 0.0f) * weight_sq;
+    slope_accum += max(metric_sample.x, 0.0f) * weight_sq;
+    area_accum += max(metric_sample.y, 0.0f) * weight;
+    ny_accum += metric_sample.z * weight;
+    weight_accum += weight;
   }
-  return max(accum, 0.0f);
+
+  float area_avg = 1.0f;
+  float ny_avg = 1.0f;
+  if (weight_accum > 1.0e-6f) {
+    area_avg = area_accum / weight_accum;
+    ny_avg = ny_accum / weight_accum;
+  }
+  return float3(max(slope_accum, 0.0f), area_avg, ny_avg);
+}
+
+float sample_filtered_slope_energy(
+  float2 surface_xz,
+  float2 surface_xz_ddx,
+  float2 surface_xz_ddy,
+  OceanRenderSettings settings,
+  float cascade_lengths[3],
+  float cascade_weights[3]) {
+  return sample_filtered_slope_metrics(surface_xz, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights).x;
 }
 
 float normal_angle_error_radians(float3 a, float3 b) {
@@ -329,6 +378,142 @@ float3 reconstruct_world_position_from_uv_depth(float2 uv, float depth, float4x4
   float4 world = mul(inv_view_proj, float4(ndc_xy, depth, 1.0f));
   float inv_w = (abs(world.w) > 1.0e-6f) ? (1.0f / world.w) : 0.0f;
   return world.xyz * inv_w;
+}
+
+float sample_wave_thickness_meters(float2 screen_uv, OceanRenderSettings settings, out bool has_wave_thickness) {
+  has_wave_thickness = false;
+  if ((settings.waveThicknessMinIndex == 0u) || (settings.waveThicknessMaxIndex == 0u)) {
+    return 0.0f;
+  }
+
+  SamplerState thickness_sampler = bindless_samplers[NonUniformResourceIndex(settings.waveThicknessSamplerIndex)];
+  Texture2D min_tex = bindless_textures[NonUniformResourceIndex(settings.waveThicknessMinIndex)];
+  Texture2D max_tex = bindless_textures[NonUniformResourceIndex(settings.waveThicknessMaxIndex)];
+  float min_depth_m = min_tex.SampleLevel(thickness_sampler, screen_uv, 0.0f).x;
+  float max_depth_m = max_tex.SampleLevel(thickness_sampler, screen_uv, 0.0f).x;
+  bool valid_min = (min_depth_m < 1.0e30f);
+  bool valid_max = (max_depth_m > 0.0f);
+  float thickness_m = max(max_depth_m - min_depth_m, 0.0f);
+  if ((valid_min) && (valid_max) && (thickness_m > 1.0e-5f)) {
+    has_wave_thickness = true;
+  } else {
+    thickness_m = 0.0f;
+  }
+  return min(thickness_m, 256.0f);
+}
+
+bool clip_to_screen_uv(float4 clip_pos, out float2 out_uv) {
+  out_uv = float2(0.0f, 0.0f);
+  if (abs(clip_pos.w) <= 1.0e-6f) {
+    return false;
+  }
+  float inv_w = 1.0f / clip_pos.w;
+  float2 ndc_xy = clip_pos.xy * inv_w;
+  if ((ndc_xy.x < -1.0f) || (ndc_xy.x > 1.0f) || (ndc_xy.y < -1.0f) || (ndc_xy.y > 1.0f)) {
+    return false;
+  }
+  out_uv = float2((ndc_xy.x * 0.5f) + 0.5f, 0.5f - (ndc_xy.y * 0.5f));
+  return true;
+}
+
+float sample_reprojected_foam_history(float3 world_pos, OceanRenderSettings settings, out bool has_history) {
+  has_history = false;
+  if (settings.foamHistoryIndex == 0u) {
+    return 0.0f;
+  }
+
+  float2 prev_uv = float2(0.0f, 0.0f);
+  float4 prev_clip = mul(settings.prevViewProj, float4(world_pos, 1.0f));
+  if (clip_to_screen_uv(prev_clip, prev_uv) == false) {
+    return 0.0f;
+  }
+
+  SamplerState foam_sampler = bindless_samplers[NonUniformResourceIndex(settings.foamSamplerIndex)];
+  Texture2D foam_history_tex = bindless_textures[NonUniformResourceIndex(settings.foamHistoryIndex)];
+  float history = saturate(foam_history_tex.SampleLevel(foam_sampler, prev_uv, 0.0f).x);
+  has_history = true;
+  return history;
+}
+
+float sample_detail_texture(float2 world_xz, float2 world_xz_ddx, float2 world_xz_ddy, uint texture_index, OceanRenderSettings settings) {
+  if (texture_index == 0u) {
+    return 1.0f;
+  }
+  SamplerState repeat_sampler = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];
+  Texture2D detail_tex = bindless_textures[NonUniformResourceIndex(texture_index)];
+  float2 wind_dir = settings.foamFlowControls.xy;
+  float wind_len2 = dot(wind_dir, wind_dir);
+  if (wind_len2 > 1.0e-8f) {
+    wind_dir *= rsqrt(wind_len2);
+  } else {
+    wind_dir = float2(1.0f, 0.0f);
+  }
+  float time_s = settings.foamFlowControls.z;
+  float scroll_speed = max(settings.foamFlowControls.w, 0.0f);
+  float2 flow_offset = wind_dir * time_s * scroll_speed;
+
+  float scale_1 = max(settings.foamDetailControls.x, 1.0e-4f);
+  float scale_2 = max(settings.foamDetailControls.y, 1.0e-4f);
+  float mix_amount = saturate(settings.foamDetailControls.z);
+  float contrast = max(settings.foamDetailControls.w, 0.0f);
+
+  float2 uv0 = (world_xz * scale_1) + flow_offset;
+  float2 uv1 = (float2(-world_xz.y, world_xz.x) * scale_2) - (flow_offset * 1.73f);
+  float2 uv0_ddx = world_xz_ddx * scale_1;
+  float2 uv0_ddy = world_xz_ddy * scale_1;
+  float2 uv1_ddx = float2(-world_xz_ddx.y, world_xz_ddx.x) * scale_2;
+  float2 uv1_ddy = float2(-world_xz_ddy.y, world_xz_ddy.x) * scale_2;
+  float n0 = detail_tex.SampleGrad(repeat_sampler, uv0, uv0_ddx, uv0_ddy).x;
+  float n1 = detail_tex.SampleGrad(repeat_sampler, uv1, uv1_ddx, uv1_ddy).x;
+  float detail = lerp(n0, n1, mix_amount);
+  float centered = (detail * 2.0f) - 1.0f;
+  float shaped = saturate((centered * contrast * 0.5f) + 0.5f);
+  return shaped;
+}
+
+float sample_foam_detail_texture(float2 world_xz, float2 world_xz_ddx, float2 world_xz_ddy, OceanRenderSettings settings) {
+  return sample_detail_texture(world_xz, world_xz_ddx, world_xz_ddy, settings.foamDetailIndex, settings);
+}
+
+float sample_aeration_detail_texture(float2 world_xz, float2 world_xz_ddx, float2 world_xz_ddy, OceanRenderSettings settings) {
+  return sample_detail_texture(world_xz, world_xz_ddx, world_xz_ddy, settings.aerationDetailIndex, settings);
+}
+
+float evaluate_foam_mask(
+  float wave_thickness_m,
+  bool has_wave_thickness,
+  float slope_energy,
+  float area_mag,
+  float slope_metric_ny,
+  OceanRenderSettings settings) {
+  if (settings.foamControls0.x <= 0.5f) {
+    return 0.0f;
+  }
+
+  float foam_strength = max(settings.foamControls0.y, 0.0f);
+  float slope_start = max(settings.foamControls0.z, 0.0f);
+  float slope_end = max(settings.foamControls0.w, slope_start + 1.0e-5f);
+  float thickness_start = max(settings.foamControls1.x, 0.0f);
+  float thickness_end = max(settings.foamControls1.y, thickness_start + 1.0e-5f);
+
+  float slope_term = smoothstep_range(slope_start, slope_end, slope_energy);
+  float thickness_term = has_wave_thickness ? smoothstep_range(thickness_start, thickness_end, wave_thickness_m) : 0.0f;
+  float compression_term = smoothstep_range(1.00f, 0.65f, area_mag);
+  float foldover_term = smoothstep_range(0.20f, -0.05f, slope_metric_ny);
+  float crest_term = smoothstep_range(0.85f, 0.35f, slope_metric_ny);
+  float structural_term = max(max(compression_term, foldover_term), crest_term * 0.75f);
+  float thickness_gate = max(thickness_term, structural_term * 0.5f);
+  float foam_seed = max(slope_term * thickness_gate, structural_term * 0.65f);
+  return saturate(foam_seed * foam_strength);
+}
+
+float accumulate_foam_history(float current_seed, float previous_history, bool has_previous_history, OceanRenderSettings settings) {
+  float decay = saturate(settings.foamTemporalControls.x);
+  float gain = max(settings.foamTemporalControls.y, 0.0f);
+  float bias = max(settings.foamTemporalControls.z, 0.0f);
+  float prev_term = has_previous_history ? saturate((previous_history * decay) - bias) : 0.0f;
+  float curr_term = saturate(current_seed * gain);
+  return saturate(max(curr_term, prev_term));
 }
 
 VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
@@ -527,6 +712,18 @@ float4 PSMain(VSOutput input) : SV_Target0 {
     return float4(fallback_vis, 1.0f);
   }
 
+  float2 screen_uv = screen_uv_from_svpos(input.position, settings.screenSize);
+  bool has_wave_thickness = false;
+  float wave_thickness_m = sample_wave_thickness_meters(screen_uv, settings, has_wave_thickness);
+  float wave_thickness_path_scale = max(settings.waveThicknessControls.x, 0.0f);
+  uint water_debug_visualize_mode = min((uint)round(max(settings.waveThicknessControls.y, 0.0f)), 2u);
+  if (water_debug_visualize_mode == 1u) {
+    float debug_max_m = max(settings.waveThicknessControls.z, 1.0e-3f);
+    float vis_t = has_wave_thickness ? (wave_thickness_m / debug_max_m) : 0.0f;
+    float3 color = has_wave_thickness ? heat_color(vis_t) : float3(0.0f, 0.0f, 0.0f);
+    return float4(color, 1.0f);
+  }
+
   if (surface_normal_shading_enable == false) {
     N = geom_n;
   } else {
@@ -542,13 +739,51 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   float refract_distortion_scale = max(settings.waterOptics0.z, 0.0f);
   float f0 = ior_to_f0(water_ior);
   float fresnel = schlick_fresnel(f0, NdotV);
-  float3 sigma_a = max(settings.waterAbsorption.xyz, 0.0f);
-  float3 sigma_s = max(settings.waterScattering.xyz, 0.0f);
-  float3 sigma_t = sigma_a + sigma_s;
-  float3 scatter_albedo = sigma_s / max(sigma_t, 1.0e-4f);
+  float3 sigma_a_base = max(settings.waterAbsorption.xyz, 0.0f);
+  float3 sigma_s_base = max(settings.waterScattering.xyz, 0.0f);
   float base_unresolved_roughness = min(max(settings.waterOptics1.y, 0.0f), 1.0f);
   float specular_aa_strength = max(settings.waterOptics1.z, 0.0f);
-  float slope_energy = sample_filtered_slope_energy(input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights);
+  float3 slope_metrics = sample_filtered_slope_metrics(input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights);
+  float slope_energy = slope_metrics.x;
+  float slope_area_mag = slope_metrics.y;
+  float slope_metric_ny = slope_metrics.z;
+  float foam_mask = evaluate_foam_mask(wave_thickness_m, has_wave_thickness, slope_energy, slope_area_mag, slope_metric_ny, settings);
+  if (water_debug_visualize_mode == 2u) {
+    return float4(heat_color(foam_mask), 1.0f);
+  }
+  float foam_surface_coverage = saturate(settings.foamControls1.z);
+  float2 foam_world_xz_ddx = ddx(input.worldPos.xz);
+  float2 foam_world_xz_ddy = ddy(input.worldPos.xz);
+  float foam_detail = sample_foam_detail_texture(input.worldPos.xz, foam_world_xz_ddx, foam_world_xz_ddy, settings);
+  float aeration_detail = sample_aeration_detail_texture(input.worldPos.xz, foam_world_xz_ddx, foam_world_xz_ddy, settings);
+  float foam_detail_mix = saturate(settings.foamDetailControls.z);
+  float bubble_tex = foam_detail;
+  float bubble_fill = smoothstep_range(0.28f, 0.72f, bubble_tex);
+  float bubble_rim = smoothstep_range(0.70f, 0.97f, bubble_tex);
+  float bubble_alpha = saturate((bubble_fill * 0.35f) + (bubble_rim * 0.95f));
+  float bubble_alpha_shaped = bubble_alpha * bubble_alpha;
+  bubble_alpha_shaped = lerp(bubble_alpha_shaped, sqrt(max(bubble_alpha_shaped, 0.0f)), foam_detail_mix);
+  float foam_surface_seed = saturate(foam_mask * foam_surface_coverage);
+  float bubble_alpha_aa = max(fwidth(bubble_alpha_shaped), 1.0f / 255.0f);
+  float foam_alpha_threshold = saturate(settings.foamColor.w);
+  float bubble_threshold_hi = min(max(foam_alpha_threshold + 0.28f, 0.0f), 0.995f);
+  float bubble_threshold_lo = min(max(foam_alpha_threshold - 0.32f, 0.0f), 0.995f);
+  float bubble_threshold = lerp(bubble_threshold_hi, bubble_threshold_lo, foam_surface_seed);
+  float bubble_coverage = smoothstep(bubble_threshold - bubble_alpha_aa, bubble_threshold + bubble_alpha_aa, bubble_alpha_shaped);
+  float foam_surface_intensity = foam_surface_seed * foam_surface_seed;
+  foam_surface_intensity = foam_surface_intensity * (3.0f - (2.0f * foam_surface_intensity));
+  float foam_surface_mask = saturate(bubble_coverage * foam_surface_intensity);
+  float3 foam_albedo = max(settings.foamColor.xyz, 0.0f);
+  float foam_aeration_scatter_scale = max(settings.foamControls2.z, 0.0f);
+  float foam_aeration_absorption_scale = max(settings.foamControls2.w, 0.0f);
+  float foam_thickness_norm = has_wave_thickness ? saturate(wave_thickness_m / max(settings.foamControls1.y, 1.0e-3f)) : 0.0f;
+  float aeration_pattern = smoothstep_range(0.15f, 0.95f, aeration_detail);
+  float foam_optical_mask = max((foam_mask * lerp(0.10f, 0.45f, aeration_pattern)), foam_surface_mask);
+  float aeration_density = foam_optical_mask * lerp(0.4f, 1.0f, foam_thickness_norm);
+  float3 sigma_a = sigma_a_base + (foam_aeration_absorption_scale * aeration_density);
+  float3 sigma_s = sigma_s_base + (foam_albedo * (foam_aeration_scatter_scale * aeration_density));
+  float3 sigma_t = sigma_a + sigma_s;
+  float3 scatter_albedo = sigma_s / max(sigma_t, 1.0e-4f);
   float slope_alpha = sqrt(max(slope_energy * 0.02f, 0.0f));
   float3 dNdx = ddx(N);
   float3 dNdy = ddy(N);
@@ -571,7 +806,6 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   if ((physical_render_mode) && (settings.sceneColorIndex != 0u)) {
     Texture2D sceneTex = bindless_textures[NonUniformResourceIndex(settings.sceneColorIndex)];
     SamplerState sceneSampler = bindless_samplers[NonUniformResourceIndex(settings.sceneSamplerIndex)];
-    float2 screen_uv = screen_uv_from_svpos(input.position, settings.screenSize);
     float4 scene_center_sample = sceneTex.Sample(sceneSampler, screen_uv);
     float scene_depth = saturate(scene_center_sample.a);
     float water_depth = saturate(input.position.z);
@@ -591,6 +825,7 @@ float4 PSMain(VSOutput input) : SV_Target0 {
 
         float3 scene_color = scene_center_sample.rgb;
         float thickness_m = thickness_center_m;
+        float extra_wave_path_m = has_wave_thickness ? (wave_thickness_m * wave_thickness_path_scale) : 0.0f;
         if (has_refract_hit) {
           float3 hit_world_refract = reconstruct_world_position_from_uv_depth(sample_uv, refract_depth, settings.invViewProj);
           float3 hit_delta_refract = hit_world_refract - input.worldPos;
@@ -604,6 +839,7 @@ float4 PSMain(VSOutput input) : SV_Target0 {
             thickness_m = lerp(thickness_center_m, thickness_refract_m, distortion_confidence);
           }
         }
+        thickness_m += extra_wave_path_m;
 
         float3 beam_transmittance = beer_lambert(sigma_t, thickness_m);
         float3 scatter_source = max(scene_color, 0.0f);
@@ -630,6 +866,9 @@ float4 PSMain(VSOutput input) : SV_Target0 {
         float vertical_optical_depth_m = max(settings.waterOptics1.x, 0.0f);
         float cos_theta_t = max(transmitted_cos_theta(NdotV, water_ior), 1.0e-3f);
         float optical_path_m = vertical_optical_depth_m / cos_theta_t;
+        if (has_wave_thickness) {
+          optical_path_m += wave_thickness_m * wave_thickness_path_scale;
+        }
         float3 beam_transmittance = beer_lambert(sigma_t, optical_path_m);
         float2 refract_uv = sample_env_uv(normalize(Tdir), envmap_equal_area_mapping);
         if (has_scene_refraction == false) {
@@ -655,8 +894,49 @@ float4 PSMain(VSOutput input) : SV_Target0 {
       }
     }
   }
-  
+
+  float foam_specular_suppression = saturate(settings.foamControls1.w);
+  float foam_specular_keep = 1.0f - (foam_surface_mask * foam_specular_suppression);
+  waterReflectColor *= foam_specular_keep;
+  direct_specular *= foam_specular_keep;
+
   float3 color = (waterRefractColor * (1.0f - fresnel)) + (waterReflectColor * fresnel) + direct_specular;
+  if (foam_surface_mask > 0.0f) {
+    float foam_diffuse_gain = max(settings.foamControls2.x, 0.0f);
+    float foam_backlight_gain = max(settings.foamControls2.y, 0.0f);
+    float3 foam_lighting = float3(0.15f, 0.18f, 0.20f);
+    if (settings.envmapIndex != 0u) {
+      Texture2D envTexFoam = bindless_textures[NonUniformResourceIndex(settings.envmapIndex)];
+      SamplerState envSamplerFoam = bindless_samplers[NonUniformResourceIndex(settings.envSamplerIndex)];
+      bool envmap_equal_area_mapping = (settings._padding0 > 0.5f);
+      float2 foam_env_uv = sample_env_uv(N, envmap_equal_area_mapping);
+      foam_lighting = envTexFoam.Sample(envSamplerFoam, foam_env_uv).rgb * max(settings.waterOptics0.y, 0.0f);
+    }
+
+    float3 foam_diffuse = foam_lighting * foam_diffuse_gain;
+    float3 foam_backlight = float3(0.0f, 0.0f, 0.0f);
+    if (settings.sunDirectionEnable.w > 0.5f) {
+      float3 L_foam = settings.sunDirectionEnable.xyz;
+      float L2_foam = dot(L_foam, L_foam);
+      if (L2_foam > 1.0e-8f) {
+        L_foam *= rsqrt(L2_foam);
+        float NdotL_foam = saturate(dot(N, L_foam));
+        float VdotNegL = saturate(dot(V, -L_foam));
+        float3 sun_radiance_foam = max(settings.sunRadiance.xyz, 0.0f);
+        foam_diffuse += sun_radiance_foam * (NdotL_foam * foam_diffuse_gain * (1.0f / 3.14159265f));
+        float backlight_gate = saturate((1.0f - NdotL_foam) * (0.35f + (0.65f * foam_thickness_norm)));
+        foam_backlight = sun_radiance_foam * (VdotNegL * backlight_gate * foam_backlight_gain);
+      }
+    }
+
+    float bubble_density_tint = lerp(0.82f, 1.05f, bubble_fill);
+    float bubble_rim_boost = lerp(0.95f, 1.35f, bubble_rim);
+    float3 bubble_albedo = foam_albedo * bubble_density_tint;
+    float3 foam_surface_color = ((bubble_albedo * foam_diffuse) * bubble_rim_boost) + (bubble_albedo * foam_backlight * (1.0f - fresnel));
+    float foam_blend_mask = foam_surface_mask;
+    color = lerp(color, foam_surface_color, foam_blend_mask);
+  }
+
   uint mip_level = min((uint)input.mipLevel, 5u);
   float3 mip_color = get_mip_color(mip_level);
   float mip_mix = saturate(settings.mipColorMix * settings.mipColorEnable);
@@ -667,4 +947,28 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   }
 
   return float4(color, 1.0);
+}
+
+float4 PSFoamHistory(VSOutput input) : SV_Target0 {
+  ByteAddressBuffer settingsBuffer = bindless_buffers[NonUniformResourceIndex(pushConstants.settingsBufferIndex)];
+  OceanRenderSettings settings = settingsBuffer.Load<OceanRenderSettings>(0);
+
+  float cascade_lengths[3] = {settings.cascadeLengths.x, settings.cascadeLengths.y, settings.cascadeLengths.z};
+  float cascade_weights[3] = {settings.cascadeWeights.x, settings.cascadeWeights.y, settings.cascadeWeights.z};
+  float2 surface_xz_ddx = ddx(input.surfaceXZ);
+  float2 surface_xz_ddy = ddy(input.surfaceXZ);
+  float2 screen_uv = screen_uv_from_svpos(input.position, settings.screenSize);
+
+  bool has_wave_thickness = false;
+  float wave_thickness_m = sample_wave_thickness_meters(screen_uv, settings, has_wave_thickness);
+  float3 slope_metrics = sample_filtered_slope_metrics(input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights);
+  float current_seed = evaluate_foam_mask(wave_thickness_m, has_wave_thickness, slope_metrics.x, slope_metrics.y, slope_metrics.z, settings);
+
+  float history = current_seed;
+  return float4(history, 0.0f, 0.0f, 1.0f);
+}
+
+float4 PSThickness(VSOutput input) : SV_Target0 {
+  float depth_m = length(pushConstants.cameraPos.xyz - input.worldPos);
+  return float4(depth_m, 0.0f, 0.0f, 1.0f);
 }

@@ -16,6 +16,17 @@ namespace scattering {
 
 namespace {
 
+uint32_t atmosphere_sky_pass_flags(const Parameters& parameters) {
+  uint32_t result = 0u;
+  if (parameters.primary_scattering != 0u) {
+    result |= AtmosphereSkyPassFlags::PrimaryScattering;
+  }
+  if (parameters.secondary_scattering != 0u) {
+    result |= AtmosphereSkyPassFlags::SecondaryScattering;
+  }
+  return result;
+}
+
 void gpu_reset_context_handles(GpuContext& context) {
   context.optical_depth_pipeline = {};
   context.sky_pipeline = {};
@@ -955,6 +966,7 @@ bool gpu_record_generate_sky_raw(RHIContext& rhi, RHICommandBuffer cmd, GpuConte
   pc.width = dimensions.x;
   pc.height = dimensions.y;
   pc.light_count = gpu_light_count;
+  pc.pass_flags = atmosphere_sky_pass_flags(parameters);
   pc.atmosphere_altitude = gpu_parameters.altitude;
   pc.atmosphere_anisotropy = gpu_parameters.anisotropy;
   pc.atmosphere_rayleigh_scale = gpu_parameters.rayleigh_scale;
@@ -1032,6 +1044,7 @@ bool gpu_generate_sky(RHIContext& rhi, GpuContext& context, const Parameters& pa
     pc.width = dimensions.x;
     pc.height = dimensions.y;
     pc.light_count = sky_inputs.light_count;
+    pc.pass_flags = atmosphere_sky_pass_flags(parameters);
     pc.atmosphere_altitude = sky_inputs.parameters.altitude;
     pc.atmosphere_anisotropy = sky_inputs.parameters.anisotropy;
     pc.atmosphere_rayleigh_scale = sky_inputs.parameters.rayleigh_scale;

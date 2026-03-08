@@ -50,13 +50,13 @@ ETX_STATIC_CONST uint32_t kEmitterStride = 32u;
 ETX_STATIC_CONST uint32_t kEmitterClassOffset = 0u;
 ETX_STATIC_CONST uint32_t kEmitterProfileOffset = 4u;
 
-ETX_STATIC_CONST uint32_t kEmitterProfileStride = 80u;
+ETX_STATIC_CONST uint32_t kEmitterProfileStride = 96u;
 ETX_STATIC_CONST uint32_t kEmitterProfileEmissionSpectrumIndexOffset = 0u;
 ETX_STATIC_CONST uint32_t kEmitterProfileEmissionImageIndexOffset = 4u;
 ETX_STATIC_CONST uint32_t kEmitterProfileClassOffset = 16u;
 ETX_STATIC_CONST uint32_t kEmitterProfileDirectionalDirectionOffset = 20u;
 ETX_STATIC_CONST uint32_t kEmitterProfileDirectionalAngularSizeCosineOffset = 40u;
-ETX_STATIC_CONST uint32_t kEmitterProfileMetaOffset = 76u;
+ETX_STATIC_CONST uint32_t kEmitterProfileMetaOffset = 84u;
 
 ETX_STATIC_CONST uint32_t kSpectralDistributionStride = 3552u;
 ETX_STATIC_CONST uint32_t kSpectralDistributionIntegratedOffset = 0u;

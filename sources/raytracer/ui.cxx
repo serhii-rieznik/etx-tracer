@@ -2088,8 +2088,11 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
         if (_selection.index >= 0 && _selection.index < int32_t(_camera_mapping.size())) {
           uint32_t camera_index = _camera_mapping.at(_selection.index);
           if (camera_index < scene_rep.data().cameras.size()) {
-            auto& selected_camera = scene_rep.data().cameras[camera_index].cam;
-            build_camera_selection_properties(scene_rep, selected_camera, camera_index, ctx, data);
+            Camera* selected_camera = &scene_rep.data().cameras[camera_index].cam;
+            if (scene_rep.data().cameras[camera_index].active) {
+              selected_camera = &scene_rep.mutable_camera();
+            }
+            build_camera_selection_properties(scene_rep, *selected_camera, camera_index, ctx, data);
           }
         }
         break;
@@ -2379,15 +2382,6 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
         }
         changed = true;
       }
-
-      if (emitter.reference_emitter_index != kInvalidIndex && emitter.reference_emitter_index < scene_rep.data().emitter_profiles.size() &&
-          scene_rep.data().emitter_profiles[emitter.reference_emitter_index].cls == EmitterProfile::Class::Environment) {
-        if (ImGui::Button("Rebuild Atmosphere", ImVec2(-1.0f, 0.0f))) {
-          if (callbacks.emitter_rebuild) {
-            callbacks.emitter_rebuild(emitter_index);
-          }
-        }
-      }
     }
   }
 
@@ -2402,18 +2396,30 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
       ImGui::Spacing();
 
       if (ImGui::CollapsingHeader("Atmosphere Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::DragFloat("##altitude", &sky_emitter.atmosphere.scattering.altitude, 10.0f, 100.0f, 100000.0f, "Altitude: %.0f m");
-        ImGui::SliderFloat("##anisotropy", &sky_emitter.atmosphere.scattering.anisotropy, -0.999f, 0.999f, "Anisotropy: %.3f", ImGuiSliderFlags_None);
-        ImGui::DragFloat("##rayleigh", &sky_emitter.atmosphere.scattering.rayleigh_scale, 0.0f, 0.0f, 10.0f, "Rayleigh: %.3f");
-        ImGui::DragFloat("##mie", &sky_emitter.atmosphere.scattering.mie_scale, 0.0f, 0.0f, 10.0f, "Mie: %.3f");
-        ImGui::DragFloat("##ozone", &sky_emitter.atmosphere.scattering.ozone_scale, 0.0f, 0.0f, 10.0f, "Ozone: %.3f");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        if (ImGui::Button("Rebuild Atmosphere", ImVec2(-1.0f, 0.0f))) {
-          if (callbacks.emitter_rebuild) {
-            callbacks.emitter_rebuild(emitter_index);
-          }
+        if (ImGui::DragFloat("##altitude", &sky_emitter.atmosphere.scattering.altitude, 10.0f, 100.0f, 100000.0f, "Altitude: %.0f m")) {
+          changed = true;
+        }
+        if (ImGui::SliderFloat("##anisotropy", &sky_emitter.atmosphere.scattering.anisotropy, -0.999f, 0.999f, "Anisotropy: %.3f", ImGuiSliderFlags_None)) {
+          changed = true;
+        }
+        if (ImGui::DragFloat("##rayleigh", &sky_emitter.atmosphere.scattering.rayleigh_scale, 0.0f, 0.0f, 10.0f, "Rayleigh: %.3f")) {
+          changed = true;
+        }
+        if (ImGui::DragFloat("##mie", &sky_emitter.atmosphere.scattering.mie_scale, 0.0f, 0.0f, 10.0f, "Mie: %.3f")) {
+          changed = true;
+        }
+        if (ImGui::DragFloat("##ozone", &sky_emitter.atmosphere.scattering.ozone_scale, 0.0f, 0.0f, 10.0f, "Ozone: %.3f")) {
+          changed = true;
+        }
+        bool primary_scattering = sky_emitter.atmosphere.scattering.primary_scattering != 0u;
+        if (ImGui::Checkbox("Primary Scattering", &primary_scattering)) {
+          sky_emitter.atmosphere.scattering.primary_scattering = primary_scattering ? 1u : 0u;
+          changed = true;
+        }
+        bool secondary_scattering = sky_emitter.atmosphere.scattering.secondary_scattering != 0u;
+        if (ImGui::Checkbox("Secondary Scattering", &secondary_scattering)) {
+          sky_emitter.atmosphere.scattering.secondary_scattering = secondary_scattering ? 1u : 0u;
+          changed = true;
         }
       }
     }
@@ -2550,6 +2556,10 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
 void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx, const FrameData& data) {
   // bool film_changed = false;
   bool camera_changed = false;
+  bool camera_is_active = false;
+  if (camera_index < scene_rep.data().cameras.size()) {
+    camera_is_active = scene_rep.data().cameras[camera_index].active;
+  }
 
   uint2 viewport = camera.film_size;
   float3 pos = camera.position;
@@ -2692,7 +2702,8 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
     build_camera(camera, pos, camera.direction, kWorldUp, camera.film_size, fov);
 
-    if (scene_rep.data().cameras[camera_index].active) {
+    if (camera_is_active) {
+      scene_rep.data().cameras[camera_index].cam = camera;
       if (callbacks.camera_changed) {
         callbacks.camera_changed(viewport, 1u << pixel_size);
       }

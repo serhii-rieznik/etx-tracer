@@ -1,44 +1,9 @@
 #include "bindless.hlsl"
 
+#include <access/spectrum_access_gpu.hxx>
 #include <interop/gpu_abi_constants.hxx>
 #include <interop/spectrum.hxx>
 #include <interop/atmosphere_scattering_shared.hxx>
-
-struct SpectrumAccessGPUSharedContext {
-  ByteAddressBuffer buffer;
-};
-
-float3 spectrum_access_shared_gpu_integrated(SpectrumAccessGPUSharedContext context, uint spectrum_index) {
-  uint base_offset = spectrum_index * kSpectralDistributionStride;
-  return asfloat(context.buffer.Load3(base_offset + kSpectralDistributionIntegratedOffset));
-}
-
-uint spectrum_access_shared_gpu_entry_count(SpectrumAccessGPUSharedContext context, uint spectrum_index) {
-  uint base_offset = spectrum_index * kSpectralDistributionStride;
-  return context.buffer.Load(base_offset + kSpectralDistributionEntryCountOffset);
-}
-
-float spectrum_access_shared_gpu_entry_wavelength(SpectrumAccessGPUSharedContext context, uint spectrum_index, uint entry_index) {
-  uint base_offset = spectrum_index * kSpectralDistributionStride + kSpectralDistributionEntriesOffset + entry_index * kSpectralDistributionEntryStride;
-  return asfloat(context.buffer.Load(base_offset + 0u));
-}
-
-float spectrum_access_shared_gpu_entry_power(SpectrumAccessGPUSharedContext context, uint spectrum_index, uint entry_index) {
-  uint base_offset = spectrum_index * kSpectralDistributionStride + kSpectralDistributionEntriesOffset + entry_index * kSpectralDistributionEntryStride;
-  return asfloat(context.buffer.Load(base_offset + 4u));
-}
-
-#define ETX_SPECTRUM_ACCESS_SHARED_CONTEXT_TYPE SpectrumAccessGPUSharedContext
-#define ETX_SPECTRUM_ACCESS_SHARED_INTEGRATED(context, spectrum_index) spectrum_access_shared_gpu_integrated(context, spectrum_index)
-#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_COUNT(context, spectrum_index) spectrum_access_shared_gpu_entry_count(context, spectrum_index)
-#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_WAVELENGTH(context, spectrum_index, entry_index) spectrum_access_shared_gpu_entry_wavelength(context, spectrum_index, entry_index)
-#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_POWER(context, spectrum_index, entry_index) spectrum_access_shared_gpu_entry_power(context, spectrum_index, entry_index)
-#include <interop/spectrum_access_shared.hxx>
-#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_POWER
-#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_WAVELENGTH
-#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_COUNT
-#undef ETX_SPECTRUM_ACCESS_SHARED_INTEGRATED
-#undef ETX_SPECTRUM_ACCESS_SHARED_CONTEXT_TYPE
 
 [[vk::push_constant]] AtmosphereSkyPushConstants constants;
 
@@ -79,24 +44,24 @@ float atmosphere_sky_spectral_step_value(float wavelength, float emission_power,
   return total_transmittance * dt * scattering_coeff * emission_power;
 }
 
-float3 atmosphere_sky_integrate_light_step_xyz(SpectrumAccessGPUSharedContext spectra_context, AtmosphereSkyGpuLight light, float3 total_optical_path, float3 density_scale,
+float3 atmosphere_sky_integrate_light_step_xyz(SpectrumAccessGPUContext spectra_context, AtmosphereSkyGpuLight light, float3 total_optical_path, float3 density_scale,
   float3 current_density, float phase_r, float phase_m, float dt) {
-  uint entry_count = spectrum_access_shared_gpu_entry_count(spectra_context, light.emission_spectrum_index);
+  uint entry_count = spectrum_access_entry_count(spectra_context, light.emission_spectrum_index);
   if (entry_count < 2u) {
     return float3(0.0f, 0.0f, 0.0f);
   }
 
   float3 xyz_result = float3(0.0f, 0.0f, 0.0f);
 
-  float prev_wavelength = spectrum_access_shared_gpu_entry_wavelength(spectra_context, light.emission_spectrum_index, 0u);
-  float prev_emission = spectrum_access_shared_gpu_entry_power(spectra_context, light.emission_spectrum_index, 0u) * light.intensity_scale;
+  float prev_wavelength = spectrum_access_entry_wavelength(spectra_context, light.emission_spectrum_index, 0u);
+  float prev_emission = spectrum_access_entry_power(spectra_context, light.emission_spectrum_index, 0u) * light.intensity_scale;
   float prev_value =
     atmosphere_sky_spectral_step_value(prev_wavelength, prev_emission, total_optical_path, density_scale, current_density, phase_r, phase_m, dt);
   float3 prev_xyz = spectral_response_to_xyz(spectral_response_make(prev_wavelength, prev_value));
 
   for (uint entry_index = 1u; entry_index < entry_count; ++entry_index) {
-    float wavelength = spectrum_access_shared_gpu_entry_wavelength(spectra_context, light.emission_spectrum_index, entry_index);
-    float emission = spectrum_access_shared_gpu_entry_power(spectra_context, light.emission_spectrum_index, entry_index) * light.intensity_scale;
+    float wavelength = spectrum_access_entry_wavelength(spectra_context, light.emission_spectrum_index, entry_index);
+    float emission = spectrum_access_entry_power(spectra_context, light.emission_spectrum_index, entry_index) * light.intensity_scale;
     float value = atmosphere_sky_spectral_step_value(wavelength, emission, total_optical_path, density_scale, current_density, phase_r, phase_m, dt);
     float3 xyz = spectral_response_to_xyz(spectral_response_make(wavelength, value));
 
@@ -109,6 +74,12 @@ float3 atmosphere_sky_integrate_light_step_xyz(SpectrumAccessGPUSharedContext sp
 }
 
 float3 atmosphere_sky_radiance_xyz(AtmosphereSkyPushConstants constants, float3 view_direction) {
+  bool has_primary_scattering = (constants.pass_flags & AtmosphereSkyPassFlags::PrimaryScattering) != 0u;
+  bool has_secondary_scattering = (constants.pass_flags & AtmosphereSkyPassFlags::SecondaryScattering) != 0u;
+  if ((has_primary_scattering == false) && (has_secondary_scattering == false)) {
+    return float3(0.0f, 0.0f, 0.0f);
+  }
+
   if (constants.light_count == 0u) {
     return float3(0.0f, 0.0f, 0.0f);
   }
@@ -122,8 +93,8 @@ float3 atmosphere_sky_radiance_xyz(AtmosphereSkyPushConstants constants, float3 
   float t = 0.0f;
 
   ByteAddressBuffer lights_buffer = bindless_buffers[NonUniformResourceIndex(constants.lights_buffer_index)];
-  SpectrumAccessGPUSharedContext spectra_context;
-  spectra_context.buffer = bindless_buffers[NonUniformResourceIndex(constants.spectra_buffer_index)];
+  ByteAddressBuffer spectra_buffer = bindless_buffers[NonUniformResourceIndex(constants.spectra_buffer_index)];
+  SpectrumAccessGPUContext spectra_context = make_spectrum_access_gpu_context(spectra_buffer, constants.spectra_buffer_index);
 
   while (t < to_space) {
     float dt = scattering_calculate_step_size_direct(t, to_space, origin, view_direction);
@@ -193,6 +164,14 @@ void sky_finalize_main(uint3 dtid : SV_DispatchThreadID) {
 
   float4 current = bindless_storage_textures[NonUniformResourceIndex(constants.output_texture_index)][int2(dtid.xy)];
   float3 average_color = float3(constants.average_color_x, constants.average_color_y, constants.average_color_z);
-  float3 rgb = scattering_sky_apply_approx_multiple_scattering(current.xyz, average_color);
+  float3 rgb = current.xyz;
+  bool has_primary_scattering = (constants.pass_flags & AtmosphereSkyPassFlags::PrimaryScattering) != 0u;
+  bool has_secondary_scattering = (constants.pass_flags & AtmosphereSkyPassFlags::SecondaryScattering) != 0u;
+  if (has_secondary_scattering) {
+    rgb = (has_primary_scattering ? scattering_sky_apply_approx_multiple_scattering(rgb, average_color)
+                                  : scattering_sky_approx_multiple_scattering_only(rgb, average_color));
+  } else if (has_primary_scattering == false) {
+    rgb = float3(0.0f, 0.0f, 0.0f);
+  }
   bindless_storage_textures[NonUniformResourceIndex(constants.output_texture_index)][int2(dtid.xy)] = float4(rgb, current.w);
 }

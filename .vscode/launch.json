@@ -3,7 +3,7 @@
     "configurations": [
         {
             "name": "Debug Raytracer (Windows)",
-            "type": "cppdbg",
+            "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/raytracer.exe",
             "args": [],
@@ -16,19 +16,11 @@
                 }
             ],
             "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
             "preLaunchTask": "build"
         },
         {
             "name": "Release Raytracer (Windows)",
-            "type": "cppdbg",
+            "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/raytracer.exe",
             "args": [],
@@ -41,14 +33,6 @@
                 }
             ],
             "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
             "preLaunchTask": "build-release"
         },
         {
@@ -114,7 +98,7 @@
         },
         {
             "name": "Debug Raytracer RHI (Windows)",
-            "type": "cppdbg",
+            "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/raytracer-rhi.exe",
             "args": [],
@@ -127,19 +111,11 @@
                 }
             ],
             "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
             "preLaunchTask": "build-rhi"
         },
         {
             "name": "Release Raytracer RHI (Windows)",
-            "type": "cppdbg",
+            "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/raytracer-rhi.exe",
             "args": [],
@@ -152,14 +128,6 @@
                 }
             ],
             "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
             "preLaunchTask": "build-rhi-release"
         },
         {
@@ -225,7 +193,7 @@
         },
         {
             "name": "Debug Playground (Windows)",
-            "type": "cppdbg",
+            "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/playground.exe",
             "args": [],
@@ -238,19 +206,11 @@
                 }
             ],
             "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
             "preLaunchTask": "build-playground"
         },
         {
             "name": "Release Playground (Windows)",
-            "type": "cppdbg",
+            "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/bin/playground.exe",
             "args": [],
@@ -263,14 +223,6 @@
                 }
             ],
             "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
             "preLaunchTask": "build-playground-release"
         },
         {

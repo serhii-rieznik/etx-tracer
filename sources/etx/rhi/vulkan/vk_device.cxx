@@ -2177,7 +2177,7 @@ RHIResult VKDevice::destroy_sampler(RHIBindlessHandle sampler_handle) {
 }
 
 RHIResult VKDevice::destroy_pipeline(RHIPipeline pipeline_handle) {
-  if (pipeline_handle.valid() == false)
+  if ((pipeline_handle.valid() == false) || (_impl == nullptr))
     return RHIResult::Success;
 
   uint32_t compute_index = _impl->compute_pipelines.get_index(pipeline_handle);

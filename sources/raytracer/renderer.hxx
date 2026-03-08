@@ -37,6 +37,7 @@ struct Renderer {
     (void)ctx;
     ETX_CRITICAL(_camera_controller == nullptr);
     _camera_controller.reset(new CameraController(scene.mutable_camera()));
+    _camera_controller->enable_inertia = false;
   }
 
   virtual void update_camera(SceneRepresentation& scene, float dt) {
@@ -44,6 +45,7 @@ struct Renderer {
 
     bool camera_updated = _camera_controller->update(dt);
     if (camera_updated) {
+      scene.store_active_camera();
       on_camera_changed(scene);
     } else if (camera_updated != last_camera_update_state) {
       on_camera_become_steady(scene);

@@ -111,6 +111,9 @@ RHIResult RHIDevice::destroy_semaphore(RHISemaphore semaphore) {
   if (semaphore.valid() == false) {
     return RHIResult::Success;
   }
+  if (_impl == nullptr) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_semaphore(semaphore);
 }
 
@@ -128,6 +131,9 @@ RHIResult RHIDevice::read_buffer(RHIBindlessHandle buffer, void* data, uint64_t 
 
 RHIResult RHIDevice::destroy_buffer(RHIBindlessHandle buffer) {
   if (buffer.valid() == false) {
+    return RHIResult::Success;
+  }
+  if (_impl == nullptr) {
     return RHIResult::Success;
   }
   return backend_device(_impl)->destroy_buffer(buffer);
@@ -247,6 +253,9 @@ RHIResult RHIDevice::destroy_texture(RHIBindlessHandle texture) {
   if (texture.valid() == false) {
     return RHIResult::Success;
   }
+  if (_impl == nullptr) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_texture(texture);
 }
 
@@ -258,6 +267,9 @@ RHIResult RHIDevice::destroy_sampler(RHIBindlessHandle sampler) {
   if (sampler.valid() == false) {
     return RHIResult::Success;
   }
+  if (_impl == nullptr) {
+    return RHIResult::Success;
+  }
   return backend_device(_impl)->destroy_sampler(sampler);
 }
 
@@ -267,6 +279,9 @@ RHICreateBindlessResult RHIDevice::create_acceleration_structure(const RHIAccele
 
 RHIResult RHIDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) {
   if (as_handle.valid() == false) {
+    return RHIResult::Success;
+  }
+  if (_impl == nullptr) {
     return RHIResult::Success;
   }
   return backend_device(_impl)->destroy_acceleration_structure(as_handle);
@@ -298,6 +313,9 @@ RHIResult RHIDevice::reload_compute_pipeline(RHIPipeline pipeline, const RHIComp
 
 RHIResult RHIDevice::destroy_pipeline(RHIPipeline pipeline) {
   if (pipeline.valid() == false) {
+    return RHIResult::Success;
+  }
+  if (_impl == nullptr) {
     return RHIResult::Success;
   }
   return backend_device(_impl)->destroy_pipeline(pipeline);

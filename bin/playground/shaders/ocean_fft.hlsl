@@ -40,7 +40,7 @@ void FFTMain(uint3 id : SV_DispatchThreadID) {
     uint other = (fftPc.direction == 0) ? id.y : id.x;
     
     uint p = fftPc.pass;
-    uint half_len = 1 << p;
+    uint half_len = 1u << p;
     uint len = half_len << 1;
     uint group = k / len;
     uint t = k % half_len;

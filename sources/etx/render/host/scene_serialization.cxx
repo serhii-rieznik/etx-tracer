@@ -1383,6 +1383,18 @@ struct SceneSerializationImpl {
         scattering_params.ozone_scale = val;
       }
     }
+    if (get_param(material, "primary-scattering")) {
+      uint32_t val = 0u;
+      if (sscanf(_data_buffer, "%u", &val) == 1) {
+        scattering_params.primary_scattering = val;
+      }
+    }
+    if (get_param(material, "secondary-scattering")) {
+      uint32_t val = 0u;
+      if (sscanf(_data_buffer, "%u", &val) == 1) {
+        scattering_params.secondary_scattering = val;
+      }
+    }
 
     AtmosphereEmitterParameters params{{scattering_params}, quality, env_spectrum};
     data.add_atmosphere_emitter(params);

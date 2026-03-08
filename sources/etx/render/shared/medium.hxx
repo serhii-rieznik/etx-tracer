@@ -11,7 +11,21 @@ namespace etx {
 using MediumInstance = ::MediumInstance;
 using MediumSample = ::MediumSample;
 
-struct ETX_ALIGNED Medium : public ::Medium {
+struct ETX_ALIGNED Medium {
+  using Class = ::Medium::Class;
+  enum : uint16_t {
+    Homogeneous = ::Medium::Homogeneous,
+    Heterogeneous = ::Medium::Heterogeneous,
+  };
+
+  MediumGrid grid = {};
+  BoundingBox bounds = {};
+  uint32_t absorption_index = kInvalidIndex;
+  uint32_t scattering_index = kInvalidIndex;
+  float phase_function_g = 0.0f;
+  uint16_t enable_explicit_connections = 1u;
+  Class cls = Homogeneous;
+
   ArrayView<float> density_view;
   BufferHandle density_buffer = {};
   BufferView density_data = {};

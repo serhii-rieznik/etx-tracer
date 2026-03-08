@@ -5,6 +5,7 @@
 #include <etx/core/profiler.hxx>
 #include <etx/rhi/rhi.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
+#include <etx/render/host/gpu_asset_descriptor.hxx>
 #include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/shared/density_grid.hxx>
@@ -315,19 +316,6 @@ struct ChunkedBlobPayloadBuilder {
   }
 };
 
-uint32_t packed_image_pixel_stride(const Image& image) {
-  if (image.format == Image::Format::RGBA32F) {
-    return sizeof(float4);
-  }
-  if (image.format == Image::Format::RGBA8) {
-    return sizeof(ubyte4);
-  }
-  if (Image::is_compressed_bc_format(image.format)) {
-    return Image::get_bc_block_size(image.format);
-  }
-  return 0u;
-}
-
 using PackedChunkedBlobBuildResult = RHIChunkedBufferUploadData;
 
 PackedChunkedBlobBuildResult build_packed_images_blob(const SceneData& scene_data) {
@@ -352,21 +340,9 @@ PackedChunkedBlobBuildResult build_packed_images_blob(const SceneData& scene_dat
     const auto& src = images[i];
     auto& dst = packed_images[i];
 
-    // Copy stable interop fields from host image and patch blob-local fields below.
-    dst = static_cast<const ::Image&>(src);
-
-    dst.x_entries_stride = (src.x_distributions_storage.valid() && (src.isize.x > 0u)) ? (src.isize.x + 1u) : 0u;
-    dst.x_distribution_count = (src.x_distributions_storage.valid()) ? src.isize.y : 0u;
-    dst.y_entries_count = src.y_distribution_storage.valid() ? (src.isize.y + 1u) : 0u;
-    dst.y_distribution_total_weight = src.y_distribution.total_weight;
-    dst.pixel_data_stride = packed_image_pixel_stride(src);
-
-    dst.pixel_data_offset = kInvalidIndex;
-    dst.x_distribution_entries_offset = kInvalidIndex;
-    dst.y_distribution_entries_offset = kInvalidIndex;
-    dst.pixel_data_chunk_index = kInvalidIndex;
-    dst.x_distribution_chunk_index = kInvalidIndex;
-    dst.y_distribution_chunk_index = kInvalidIndex;
+    PackedPayloadLocation pixel_payload = {};
+    PackedPayloadLocation x_distribution_payload = {};
+    PackedPayloadLocation y_distribution_payload = {};
 
     if (src.data.valid()) {
       const void* ptr = scene_data.buffer_pool.map(src.data);
@@ -378,9 +354,9 @@ PackedChunkedBlobBuildResult build_packed_images_blob(const SceneData& scene_dat
         return result;
       }
 
-      dst.pixel_data_offset = payload_location.offset;
-      dst.pixel_data_chunk_index = payload_location.chunk_index;
-      if ((src.data.byte_size > 0u) && (dst.pixel_data_offset == kInvalidIndex)) {
+      pixel_payload.offset = payload_location.offset;
+      pixel_payload.chunk_index = payload_location.chunk_index;
+      if ((src.data.byte_size > 0u) && (pixel_payload.offset == kInvalidIndex)) {
         log::error("GPU RT: failed to pack image payload for index %u", i);
         result.success = false;
         return result;
@@ -397,9 +373,9 @@ PackedChunkedBlobBuildResult build_packed_images_blob(const SceneData& scene_dat
         return result;
       }
 
-      dst.x_distribution_entries_offset = payload_location.offset;
-      dst.x_distribution_chunk_index = payload_location.chunk_index;
-      if ((src.x_distributions_storage.byte_size > 0u) && (dst.x_distribution_entries_offset == kInvalidIndex)) {
+      x_distribution_payload.offset = payload_location.offset;
+      x_distribution_payload.chunk_index = payload_location.chunk_index;
+      if ((src.x_distributions_storage.byte_size > 0u) && (x_distribution_payload.offset == kInvalidIndex)) {
         log::error("GPU RT: failed to pack image x-distribution payload for index %u", i);
         result.success = false;
         return result;
@@ -416,14 +392,16 @@ PackedChunkedBlobBuildResult build_packed_images_blob(const SceneData& scene_dat
         return result;
       }
 
-      dst.y_distribution_entries_offset = payload_location.offset;
-      dst.y_distribution_chunk_index = payload_location.chunk_index;
-      if ((src.y_distribution_storage.byte_size > 0u) && (dst.y_distribution_entries_offset == kInvalidIndex)) {
+      y_distribution_payload.offset = payload_location.offset;
+      y_distribution_payload.chunk_index = payload_location.chunk_index;
+      if ((src.y_distribution_storage.byte_size > 0u) && (y_distribution_payload.offset == kInvalidIndex)) {
         log::error("GPU RT: failed to pack image y-distribution payload for index %u", i);
         result.success = false;
         return result;
       }
     }
+
+    dst = make_gpu_image_descriptor(src, pixel_payload, x_distribution_payload, y_distribution_payload);
   }
 
   header.images_offset = append_aligned_array(result.metadata, packed_images.data(), packed_images.size(), alignof(::Image));
@@ -481,12 +459,7 @@ PackedChunkedBlobBuildResult build_packed_mediums_blob(const SceneData& scene_da
     const auto& src = mediums[i];
     auto& dst = packed_mediums[i];
 
-    // Copy stable interop fields from host medium and patch blob-local fields below.
-    dst = static_cast<const ::Medium&>(src);
-
-    dst.grid.density_data_offset = kInvalidIndex;
-    dst.grid.density_data_chunk_index = kInvalidIndex;
-    dst.grid.density_count = static_cast<uint32_t>(src.density_data.byte_size / sizeof(float));
+    PackedPayloadLocation density_payload = {};
 
     if (src.density_data.valid()) {
       const void* ptr = scene_data.buffer_pool.map(src.density_data);
@@ -498,14 +471,16 @@ PackedChunkedBlobBuildResult build_packed_mediums_blob(const SceneData& scene_da
         return result;
       }
 
-      dst.grid.density_data_offset = payload_location.offset;
-      dst.grid.density_data_chunk_index = payload_location.chunk_index;
-      if ((src.density_data.byte_size > 0u) && (dst.grid.density_data_offset == kInvalidIndex)) {
+      density_payload.offset = payload_location.offset;
+      density_payload.chunk_index = payload_location.chunk_index;
+      if ((src.density_data.byte_size > 0u) && (density_payload.offset == kInvalidIndex)) {
         log::error("GPU RT: failed to pack medium density payload for index %u", i);
         result.success = false;
         return result;
       }
     }
+
+    dst = make_gpu_medium_descriptor(src, density_payload);
   }
 
   header.mediums_offset = append_aligned_array(result.metadata, packed_mediums.data(), packed_mediums.size(), alignof(::Medium));

@@ -745,6 +745,15 @@ void SceneRepresentation::update_active_camera() {
   }
 }
 
+void SceneRepresentation::store_active_camera() {
+  auto it = std::find_if(_private->data.cameras.begin(), _private->data.cameras.end(), [](const auto& e) {
+    return e.active;
+  });
+  if (it != _private->data.cameras.end()) {
+    it->cam = _private->active_camera;
+  }
+}
+
 std::string SceneRepresentation::rename_mesh(uint32_t index, const char* name) {
   return rename_entry(_private->data.mesh_mapping, index, name, "mesh-");
 }
@@ -1581,6 +1590,12 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "rayleigh " << scattering.rayleigh_scale << "\n";
     materials_stream << "mie " << scattering.mie_scale << "\n";
     materials_stream << "ozone " << scattering.ozone_scale << "\n";
+    if (scattering.primary_scattering == 0u) {
+      materials_stream << "primary-scattering 0\n";
+    }
+    if (scattering.secondary_scattering == 0u) {
+      materials_stream << "secondary-scattering 0\n";
+    }
     materials_stream << "quality " << env_profile.atmosphere.quality << "\n";
     materials_stream << "color " << env_color.x << " " << env_color.y << " " << env_color.z << "\n";
     materials_stream << "\n";

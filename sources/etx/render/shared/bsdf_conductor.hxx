@@ -10,11 +10,29 @@ struct ConductorMaterial {
   RefractiveIndex int_ior;
 };
 
+ETX_SHARED_INLINE float conductor_pdf(ETX_IN(float3, w_i), ETX_IN(float3, w_o), ETX_IN(float2, roughness)) {
+  float3 half_vector = w_o + w_i;
+  float half_vector_length_sq = dot(half_vector, half_vector);
+  if (half_vector_length_sq <= kEpsilon) {
+    return 0.0f;
+  }
+
+  half_vector *= 1.0f / sqrt(half_vector_length_sq);
+
+  external::RayInfo ray = {w_i, roughness};
+  float result = external::D_ggx(half_vector, roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
+  ETX_VALIDATE(result);
+  return result;
+}
+
 ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
   auto w_i = local_frame_to_local(local_frame, -data.w_i);
+  if (w_i.z <= kEpsilon) {
+    return {data.spectrum_sample};
+  }
   auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
   auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
@@ -58,11 +76,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   result.weight *= apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
   ETX_VALIDATE(result.weight);
 
-  {
-    external::RayInfo ray = {w_i, roughness};
-    result.pdf = external::D_ggx(normalize(result.w_o + w_i), roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + result.w_o.z;
-    ETX_VALIDATE(result.pdf);
-  }
+  result.pdf = conductor_pdf(w_i, result.w_o, roughness);
 
   result.w_o = normalize(local_frame_from_local(local_frame, result.w_o));
   return result;
@@ -82,8 +96,6 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
   }
 
   float2 roughness = evaluate_roughness(mtl, data.tex, scene);
-  auto alpha_x = roughness.x;
-  auto alpha_y = roughness.y;
   auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
   auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
   auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
@@ -95,11 +107,7 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
   ETX_VALIDATE(result.bsdf);
   result.func = result.bsdf / w_o.z;
   ETX_VALIDATE(result.func);
-  {
-    external::RayInfo ray = {w_i, roughness};
-    result.pdf = external::D_ggx(normalize(w_o + w_i), roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
-    ETX_VALIDATE(result.pdf);
-  }
+  result.pdf = conductor_pdf(w_i, w_o, roughness);
   return result;
 }
 
@@ -117,12 +125,7 @@ ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Ma
   }
 
   float2 roughness = evaluate_roughness(mtl, data.tex, scene);
-  auto alpha_x = roughness.x;
-  auto alpha_y = roughness.y;
-  external::RayInfo ray = {w_i, roughness};
-  float result = external::D_ggx(normalize(w_o + w_i), roughness) / (1.0f + ray.Lambda) / (4.0f * w_i.z) + w_o.z;
-  ETX_VALIDATE(result);
-  return result;
+  return conductor_pdf(w_i, w_o, roughness);
 }
 
 ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {

@@ -1,8 +1,61 @@
 #pragma once
 #include <etx/render/interop/projection.hxx>
-#include <etx/render/shared/scene_emitters_policy.hxx>
+#include <etx/render/access/emitter_access_cpu.hxx>
 
 namespace etx {
+
+ETX_SHARED_INLINE bool scene_has_environment_emitter_state(const Scene& scene) {
+  return (scene.emitter_instances.count > 0u) && (scene.environment_emitters.count > 0u);
+}
+
+ETX_SHARED_INLINE bool try_load_emitter_scene_state_shared(const Scene& scene, uint32_t& emitter_instance_count, uint32_t& emitter_profile_count) {
+  EmitterAccessCPUContext context = make_emitter_access_cpu_context(scene);
+  return emitter_access_try_load_scene_state(context, emitter_instance_count, emitter_profile_count);
+}
+
+ETX_SHARED_INLINE bool try_load_emitter_instance_count_shared(const Scene& scene, uint32_t& emitter_instance_count) {
+  uint32_t emitter_profile_count = 0u;
+  return try_load_emitter_scene_state_shared(scene, emitter_instance_count, emitter_profile_count);
+}
+
+ETX_SHARED_INLINE uint32_t environment_emitter_shared_count(const Scene& scene) {
+  if (scene_has_environment_emitter_state(scene) == false) {
+    return 0u;
+  }
+
+  return min(static_cast<uint32_t>(scene.environment_emitters.count), uint32_t(SceneLimits::MaxEnvironmentEmitters));
+}
+
+ETX_SHARED_INLINE bool environment_emitter_shared_try_load_index(const Scene& scene, uint32_t local_index, uint32_t& emitter_index) {
+  emitter_index = kInvalidIndex;
+  uint32_t emitter_count = environment_emitter_shared_count(scene);
+  if (local_index >= emitter_count) {
+    return false;
+  }
+
+  emitter_index = scene.environment_emitters.emitters[local_index];
+  if (emitter_index >= scene.emitter_instances.count) {
+    emitter_index = kInvalidIndex;
+    return false;
+  }
+
+  return true;
+}
+
+ETX_SHARED_INLINE bool try_select_environment_emitter_random(const Scene& scene, Sampler& smp, uint32_t& emitter_index, uint32_t& emitter_count) {
+  emitter_index = kInvalidIndex;
+  emitter_count = environment_emitter_shared_count(scene);
+  if (emitter_count == 0u) {
+    return false;
+  }
+
+  uint32_t selected = uint32_t(smp.next() * float(emitter_count));
+  if (selected >= emitter_count) {
+    selected = emitter_count - 1u;
+  }
+
+  return environment_emitter_shared_try_load_index(scene, selected, emitter_index);
+}
 
 ETX_SHARED_INLINE float emitter_pdf_area_local(const Emitter& em, const Scene& scene) {
   ETX_ASSERT(em.is_local());
@@ -10,13 +63,15 @@ ETX_SHARED_INLINE float emitter_pdf_area_local(const Emitter& em, const Scene& s
 }
 
 ETX_SHARED_INLINE uint32_t emitter_external_medium_index(const Scene& scene, const Emitter& em_inst) {
-  return emitter_external_medium_index_shared(scene, em_inst);
+  EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+  return emitter_access_external_medium_index(access_context, em_inst);
 }
 
 ETX_SHARED_INLINE SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
   float& pdf_area, float& pdf_dir, float& pdf_dir_out, const Scene& scene) {
-  EmitterEmissionCPUSharedAccess emission_access = {};
-  if (try_load_local_emitter_emission_access_from_instance_shared(scene, em_inst, emission_access) == false) {
+  EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+  EmitterAccess emission_access = {};
+  if (emitter_access_try_load_local_from_instance(access_context, em_inst, emission_access) == false) {
     return {spect, 0.0f};
   }
 
@@ -43,22 +98,23 @@ ETX_SHARED_INLINE SpectralResponse emitter_evaluate_out_local(const Emitter& em_
   pdf_dir_out = pdf_dir * pdf_area;
   ETX_ASSERT(pdf_dir_out > 0.0f);
 
-  return evaluate_emission_spectral_source(scene, emission_access.emission_spectrum_index, emission_access.emission_image_index, uv, spect);
+  return emitter_access_evaluate_spectral_source(access_context, emission_access.emission_spectrum_index, emission_access.emission_image_index, uv, spect);
 }
 
 ETX_SHARED_INLINE SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
   float& pdf_dir_out, const Scene& scene) {
-  EmitterEmissionCPUSharedAccess emission_access = {};
+  EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+  EmitterAccess emission_access = {};
   pdf_dir = 0.0f;
   pdf_area = 0.0f;
   pdf_dir_out = 0.0f;
-  if (try_load_emitter_emission_access_from_instance_shared(scene, em_inst, emission_access) == false) {
+  if (emitter_access_try_load_from_instance(access_context, em_inst, emission_access) == false) {
     return {spect, 0.0f};
   }
 
   switch (emission_access.emitter_class) {
     case EmitterClass::Directional: {
-      bool accepts_direction = emitter_emission_shared_accepts_direction(query.direction, emission_access.emitter_direction, emission_access.emitter_angular_size_cosine);
+      bool accepts_direction = emitter_access_accepts_direction(query.direction, emission_access.emitter_direction, emission_access.emitter_angular_size_cosine);
       if ((query.directly_visible == false) || (emission_access.emitter_angular_size_cosine >= 1.0f) || (accepts_direction == false)) {
         return {spect, 0.0f};
       }
@@ -73,17 +129,15 @@ ETX_SHARED_INLINE SpectralResponse emitter_get_radiance(const Emitter& em_inst, 
         equivalent_disk_size = 2.0f * (sin_half_angle / emission_access.emitter_angular_size_cosine);
       }
       float2 uv = disk_uv(emission_access.emitter_direction, query.direction, equivalent_disk_size, emission_access.emitter_angular_size_cosine);
-      SpectralResponse directional_spectrum = evaluate_emission_spectrum_spectral(scene, emission_access.emission_spectrum_index, spect);
+      SpectralResponse directional_spectrum = emitter_access_load_spectrum_spectral(access_context, emission_access.emission_spectrum_index, spect);
       SpectralResponse direct_scale = 1.0f / (directional_spectrum * kDoublePi * (1.0f - emission_access.emitter_angular_size_cosine));
-      return evaluate_emission_spectral_source(scene, emission_access.emission_spectrum_index, emission_access.emission_image_index, uv, spect) * direct_scale;
+      return emitter_access_evaluate_spectral_source(access_context, emission_access.emission_spectrum_index, emission_access.emission_image_index, uv, spect) * direct_scale;
     }
 
     case EmitterClass::Environment: {
-      bool is_atmosphere = emitter_emission_shared_is_atmosphere(emission_access.emitter_profile_meta);
+      bool is_atmosphere = emitter_access_is_atmosphere(emission_access.emitter_profile_meta);
       uint32_t projection_mode = projection_environment_mode(is_atmosphere);
-      EnvironmentEmissionUVSharedCPUContext uv_context = {scene};
-      float2 uv = environment_emission_uv_shared(uv_context, emission_access.emitter_class, emission_access.emitter_profile_meta, emission_access.emission_image_index,
-                                                 emission_access.emitter_direction, emission_access.emitter_angular_size_cosine, query.direction);
+      float2 uv = emitter_access_environment_uv(access_context, emission_access, query.direction);
 
       auto image_pdf = 0.0f;
       SpectralImage emission_image = {};
@@ -120,7 +174,7 @@ ETX_SHARED_INLINE SpectralResponse emitter_get_radiance(const Emitter& em_inst, 
         }
       }
 
-      return evaluate_emission_spectral_source(scene, emission_access.emission_spectrum_index, emission_access.emission_image_index, query.uv, spect);
+      return emitter_access_evaluate_spectral_source(access_context, emission_access.emission_spectrum_index, emission_access.emission_image_index, query.uv, spect);
     }
 
     default: {
@@ -134,10 +188,11 @@ ETX_SHARED_INLINE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_i
   const Scene& scene) {
   ETX_ASSERT(em_inst.is_distant());
 
-  EmitterEmissionCPUSharedAccess emission_access = {};
+  EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+  EmitterAccess emission_access = {};
   pdf_area = 0.0f;
   pdf_dir = 0.0f;
-  if (try_load_distant_emitter_emission_access_from_instance_shared(scene, em_inst, in_direction, emission_access) == false) {
+  if (emitter_access_try_load_distant_from_instance(access_context, em_inst, in_direction, emission_access) == false) {
     return {spect, 0.0f};
   }
   pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
@@ -145,18 +200,14 @@ ETX_SHARED_INLINE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_i
   switch (emission_access.emitter_class) {
     case EmitterClass::Directional: {
       pdf_dir = 1.0f;
-      EnvironmentEmissionUVSharedCPUContext uv_context = {scene};
-      float2 uv = environment_emission_uv_shared(uv_context, emission_access.emitter_class, emission_access.emitter_profile_meta, emission_access.emission_image_index,
-                                                 emission_access.emitter_direction, emission_access.emitter_angular_size_cosine, in_direction);
-      return evaluate_emission_spectral_source(scene, emission_access.emission_spectrum_index, emission_access.emission_image_index, uv, spect);
+      float2 uv = emitter_access_environment_uv(access_context, emission_access, in_direction);
+      return emitter_access_evaluate_spectral_source(access_context, emission_access.emission_spectrum_index, emission_access.emission_image_index, uv, spect);
     }
 
     case EmitterClass::Environment: {
-      bool is_atmosphere = emitter_emission_shared_is_atmosphere(emission_access.emitter_profile_meta);
+      bool is_atmosphere = emitter_access_is_atmosphere(emission_access.emitter_profile_meta);
       uint32_t projection_mode = projection_environment_mode(is_atmosphere);
-      EnvironmentEmissionUVSharedCPUContext uv_context = {scene};
-      float2 uv = environment_emission_uv_shared(uv_context, emission_access.emitter_class, emission_access.emitter_profile_meta, emission_access.emission_image_index,
-                                                 emission_access.emitter_direction, emission_access.emitter_angular_size_cosine, in_direction);
+      float2 uv = emitter_access_environment_uv(access_context, emission_access, in_direction);
 
       auto image_pdf = 0.0f;
       SpectralImage emission_image = {};
@@ -176,8 +227,9 @@ ETX_SHARED_INLINE SpectralResponse emitter_evaluate_out_dist(const Emitter& em_i
 
 ETX_SHARED_INLINE EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spect, const float3& from_point, const Scene& scene, const float2& smp) {
   EmitterSample result = {};
-  EmitterEmissionCPUSharedAccess emission_access = {};
-  if (try_load_emitter_emission_access_from_instance_shared(scene, em_inst, emission_access) == false) {
+  EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+  EmitterAccess emission_access = {};
+  if (emitter_access_try_load_from_instance(access_context, em_inst, emission_access) == false) {
     result.medium_index = emitter_external_medium_index(scene, em_inst);
     return result;
   }
@@ -223,18 +275,17 @@ ETX_SHARED_INLINE EmitterSample emitter_sample_in(const Emitter& em_inst, const 
       result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
       result.normal = emission_access.emitter_direction * (-1.0f);
       result.value =
-        evaluate_emission_spectral_source(scene, emission_access.emission_spectrum_index, emission_access.emission_image_index, disk_sample * 0.5f + 0.5f, spect);
+        emitter_access_evaluate_spectral_source(access_context, emission_access.emission_spectrum_index, emission_access.emission_image_index, disk_sample * 0.5f + 0.5f, spect);
       break;
     }
 
     case EmitterClass::Environment: {
-      ImageSceneAccessCPUDesc image_access = {};
-      if (try_load_scene_image_access(scene, emission_access.emission_image_index, image_access) == false) {
+      if ((emission_access.emission_image_index == kInvalidIndex) || (emission_access.emission_image_index >= scene.images.count)) {
         break;
       }
 
-      const auto& img = scene.images[image_access.image_index];
-      bool is_atmosphere = emitter_emission_shared_is_atmosphere(emission_access.emitter_profile_meta);
+      const auto& img = scene.images[emission_access.emission_image_index];
+      bool is_atmosphere = emitter_access_is_atmosphere(emission_access.emitter_profile_meta);
       uint32_t projection_mode = projection_environment_mode(is_atmosphere);
       float pdf_image = 0.0f;
       uint2 image_location = {};
@@ -248,7 +299,7 @@ ETX_SHARED_INLINE EmitterSample emitter_sample_in(const Emitter& em_inst, const 
       result.pdf_dir = projection_environment_image_pdf_to_solid_angle(pdf_image, uv, projection_mode);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir_out = result.pdf_area * result.pdf_dir;
-      result.value = apply_rgb(spect, evaluate_emission_spectrum_spectral(scene, emission_access.emission_spectrum_index, spect), image_value, scene);
+      result.value = apply_rgb(spect, emitter_access_load_spectrum_spectral(access_context, emission_access.emission_spectrum_index, spect), image_value, scene);
       break;
     }
 
@@ -269,8 +320,9 @@ ETX_SHARED_INLINE float emitter_discrete_pdf(const Emitter& emitter, const Distr
 }
 
 ETX_SHARED_INLINE float emitter_sample_pdf(const Emitter& em_inst, ETX_IN(float3, in_direction), const Scene& scene) {
-  EmitterEmissionCPUSharedAccess emission_access = {};
-  if (try_load_emitter_emission_access_from_instance_shared(scene, em_inst, emission_access) == false) {
+  EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+  EmitterAccess emission_access = {};
+  if (emitter_access_try_load_from_instance(access_context, em_inst, emission_access) == false) {
     return 0.0f;
   }
 
@@ -282,24 +334,21 @@ ETX_SHARED_INLINE float emitter_sample_pdf(const Emitter& em_inst, ETX_IN(float3
     }
 
     case EmitterClass::Directional: {
-      bool accepts_direction = emitter_emission_shared_accepts_direction(in_direction, emission_access.emitter_direction, emission_access.emitter_angular_size_cosine);
+      bool accepts_direction = emitter_access_accepts_direction(in_direction, emission_access.emitter_direction, emission_access.emitter_angular_size_cosine);
       return accepts_direction ? pdf_discrete : 0.0f;
     }
 
     case EmitterClass::Environment: {
-      bool is_atmosphere = emitter_emission_shared_is_atmosphere(emission_access.emitter_profile_meta);
+      bool is_atmosphere = emitter_access_is_atmosphere(emission_access.emitter_profile_meta);
       uint32_t projection_mode = projection_environment_mode(is_atmosphere);
-      EnvironmentEmissionUVSharedCPUContext uv_context = {scene};
-      float2 uv = environment_emission_uv_shared(uv_context, emission_access.emitter_class, emission_access.emitter_profile_meta, emission_access.emission_image_index,
-                                                 emission_access.emitter_direction, emission_access.emitter_angular_size_cosine, in_direction);
+      float2 uv = emitter_access_environment_uv(access_context, emission_access, in_direction);
 
       float image_pdf = 0.0f;
-      ImageSceneAccessCPUDesc image_access = {};
-      if (try_load_scene_image_access(scene, emission_access.emission_image_index, image_access) == false) {
+      if ((emission_access.emission_image_index == kInvalidIndex) || (emission_access.emission_image_index >= scene.images.count)) {
         return 0.0f;
       }
 
-      const auto& img = scene.images[image_access.image_index];
+      const auto& img = scene.images[emission_access.emission_image_index];
       img.evaluate(uv, &image_pdf);
       return pdf_discrete * projection_environment_image_pdf_to_solid_angle(image_pdf, uv, projection_mode);
     }
@@ -416,8 +465,9 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(const Scene& scene, const Emitter
         }
       }
 
-      EmitterEmissionCPUSharedAccess emission_access = {};
-      if (try_load_emitter_emission_access_shared(scene, emitter_index, emission_access) == false) {
+      EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+      EmitterAccess emission_access = {};
+      if (emitter_access_try_load(access_context, emitter_index, emission_access) == false) {
         continue;
       }
 
@@ -469,8 +519,9 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(const Scene& scene, const Emitter
     }
   }
 
-  EmitterEmissionCPUSharedAccess emission_access = {};
-  if (try_load_emitter_emission_access_shared(scene, emitter_index, emission_access) == false) {
+  EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+  EmitterAccess emission_access = {};
+  if (emitter_access_try_load(access_context, emitter_index, emission_access) == false) {
     return {};
   }
 
@@ -480,6 +531,7 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(const Scene& scene, const Emitter
   sample.emitter_index = emitter_index;
   sample.triangle_index = emitter.triangle_index;
   sample.is_delta = emitter.is_delta();
+  sample.is_distant = emitter.is_distant();
   return sample;
 }
 
@@ -502,8 +554,9 @@ ETX_SHARED_INLINE const EmitterSample sample_emission(const Scene& scene, Spectr
     return {};
   }
 
-  EmitterEmissionCPUSharedAccess emission_access = {};
-  if (try_load_emitter_emission_access_shared(scene, result.emitter_index, emission_access) == false) {
+  EmitterAccessCPUContext access_context = make_emitter_access_cpu_context(scene);
+  EmitterAccess emission_access = {};
+  if (emitter_access_try_load(access_context, result.emitter_index, emission_access) == false) {
     return {};
   }
 
@@ -545,18 +598,17 @@ ETX_SHARED_INLINE const EmitterSample sample_emission(const Scene& scene, Spectr
       result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (pos_sample.x * basis.u + pos_sample.y * basis.v - direction_to_scene);
       result.origin += result.direction * distance_to_sphere(result.origin, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
       result.value =
-        evaluate_emission_spectral_source(scene, emission_access.emission_spectrum_index, emission_access.emission_image_index, dir_sample * 0.5f + 0.5f, spect);
+        emitter_access_evaluate_spectral_source(access_context, emission_access.emission_spectrum_index, emission_access.emission_image_index, dir_sample * 0.5f + 0.5f, spect);
       break;
     }
 
     case EmitterProfile::Class::Environment: {
-      ImageSceneAccessCPUDesc image_access = {};
-      if (try_load_scene_image_access(scene, emission_access.emission_image_index, image_access) == false) {
+      if ((emission_access.emission_image_index == kInvalidIndex) || (emission_access.emission_image_index >= scene.images.count)) {
         return {};
       }
 
-      const auto& img = scene.images[image_access.image_index];
-      bool is_atmosphere = emitter_emission_shared_is_atmosphere(emission_access.emitter_profile_meta);
+      const auto& img = scene.images[emission_access.emission_image_index];
+      bool is_atmosphere = emitter_access_is_atmosphere(emission_access.emitter_profile_meta);
       uint32_t projection_mode = projection_environment_mode(is_atmosphere);
       float pdf_image = 0.0f;
       uint2 image_location = {};
@@ -575,7 +627,7 @@ ETX_SHARED_INLINE const EmitterSample sample_emission(const Scene& scene, Spectr
       result.normal = result.direction;
       result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - result.direction);
       result.origin += result.direction * distance_to_sphere(result.origin, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
-      result.value = apply_rgb(spect, evaluate_emission_spectrum_spectral(scene, emission_access.emission_spectrum_index, spect), image_value, scene);
+      result.value = apply_rgb(spect, emitter_access_load_spectrum_spectral(access_context, emission_access.emission_spectrum_index, spect), image_value, scene);
       result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
       result.pdf_dir = projection_environment_image_pdf_to_solid_angle(pdf_image, uv, projection_mode);
       result.pdf_dir_out = result.pdf_area * result.pdf_dir;

@@ -11,6 +11,8 @@
 #include <vector>
 #include <string>
 #include <cstring>
+#include <cstdio>
+#include <filesystem>
 
 #include <etx/render/interop/geometry.hxx>
 #include <etx/render/shared/scattering.hxx>
@@ -32,6 +34,8 @@ static constexpr uint2 k_sky_envmap_dimensions = {1024u, 512u};
 static constexpr uint2 k_sun_sprite_dimensions = {256u, 256u};
 static constexpr float k_sun_angular_size_radians = 0.53f * (kPi / 180.0f);
 static constexpr float k_sun_temperature_kelvin = 5800.0f;
+static constexpr int32_t k_ocean_obj_export_default_size_m = 100;
+static constexpr uint32_t k_ocean_obj_export_grid_resolution = 1001u;
 enum GpuTimingQueryIndex : uint32_t {
   k_gpu_timing_query_frame_begin = 0u,
   k_gpu_timing_query_after_sun_sky_regen = 1u,
@@ -104,6 +108,210 @@ static bool texture_format_is_srgb(RHITextureFormat format) {
   return (format == RHITextureFormat::R8G8B8A8_SRGB) || (format == RHITextureFormat::B8G8R8A8_SRGB);
 }
 
+struct OceanExportDisplacementTexel {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+  float w = 0.0f;
+};
+
+static_assert(sizeof(OceanExportDisplacementTexel) == 16u, "Ocean export texel layout must match R32G32B32A32_FLOAT");
+
+struct OceanExportTextureData {
+  uint32_t width = 0u;
+  uint32_t height = 0u;
+  std::vector<OceanExportDisplacementTexel> texels = {};
+};
+
+struct OceanExportVertex {
+  float x = 0.0f;
+  float y = 0.0f;
+  float z = 0.0f;
+};
+
+static float wrap_repeat_coordinate(float value) {
+  float wrapped = value - floorf(value);
+  if (wrapped < 0.0f) {
+    wrapped += 1.0f;
+  }
+  return wrapped;
+}
+
+static uint32_t wrap_repeat_index(int32_t index, uint32_t dimension) {
+  if (dimension == 0u) {
+    return 0u;
+  }
+
+  int32_t dim = static_cast<int32_t>(dimension);
+  int32_t wrapped = index % dim;
+  if (wrapped < 0) {
+    wrapped += dim;
+  }
+  return static_cast<uint32_t>(wrapped);
+}
+
+static float3 sample_ocean_export_displacement_texture(const OceanExportTextureData& texture_data, const float2& uv) {
+  if ((texture_data.width == 0u) || (texture_data.height == 0u) || texture_data.texels.empty()) {
+    return {0.0f, 0.0f, 0.0f};
+  }
+
+  float u = wrap_repeat_coordinate(uv.x);
+  float v = wrap_repeat_coordinate(uv.y);
+  float x = (u * static_cast<float>(texture_data.width)) - 0.5f;
+  float y = (v * static_cast<float>(texture_data.height)) - 0.5f;
+
+  int32_t x0 = static_cast<int32_t>(floorf(x));
+  int32_t y0 = static_cast<int32_t>(floorf(y));
+  int32_t x1 = x0 + 1;
+  int32_t y1 = y0 + 1;
+
+  float tx = x - floorf(x);
+  float ty = y - floorf(y);
+
+  uint32_t ix0 = wrap_repeat_index(x0, texture_data.width);
+  uint32_t iy0 = wrap_repeat_index(y0, texture_data.height);
+  uint32_t ix1 = wrap_repeat_index(x1, texture_data.width);
+  uint32_t iy1 = wrap_repeat_index(y1, texture_data.height);
+
+  const OceanExportDisplacementTexel& s00 = texture_data.texels[iy0 * texture_data.width + ix0];
+  const OceanExportDisplacementTexel& s10 = texture_data.texels[iy0 * texture_data.width + ix1];
+  const OceanExportDisplacementTexel& s01 = texture_data.texels[iy1 * texture_data.width + ix0];
+  const OceanExportDisplacementTexel& s11 = texture_data.texels[iy1 * texture_data.width + ix1];
+
+  float3 a = {lerp(s00.x, s10.x, tx), lerp(s00.y, s10.y, tx), lerp(s00.z, s10.z, tx)};
+  float3 b = {lerp(s01.x, s11.x, tx), lerp(s01.y, s11.y, tx), lerp(s01.z, s11.z, tx)};
+  return {lerp(a.x, b.x, ty), lerp(a.y, b.y, ty), lerp(a.z, b.z, ty)};
+}
+
+static float3 sample_ocean_export_displacement_field(const OceanExportTextureData texture_data[Ocean::k_cascade_count], const float cascade_lengths[Ocean::k_cascade_count],
+  const float cascade_weights[Ocean::k_cascade_count], const float2& world_xz) {
+  float3 displacement = {0.0f, 0.0f, 0.0f};
+  for (uint32_t i = 0u; i < Ocean::k_cascade_count; ++i) {
+    if (cascade_weights[i] <= 0.0f) {
+      continue;
+    }
+    if ((texture_data[i].width == 0u) || (texture_data[i].height == 0u)) {
+      continue;
+    }
+    float cascade_length = max(cascade_lengths[i], 1.0e-6f);
+    float2 uv = {world_xz.x / cascade_length, world_xz.y / cascade_length};
+    float3 sample = sample_ocean_export_displacement_texture(texture_data[i], uv);
+    displacement += sample * cascade_weights[i];
+  }
+  return displacement;
+}
+
+static bool write_ocean_surface_obj_file(const char* file_name, const OceanExportTextureData texture_data[Ocean::k_cascade_count], const float cascade_lengths[Ocean::k_cascade_count],
+  const float cascade_weights[Ocean::k_cascade_count], float area_size_m, uint32_t grid_resolution, const float3& center, std::string& out_error) {
+  if ((file_name == nullptr) || (file_name[0] == '\0')) {
+    out_error = "Invalid output path";
+    return false;
+  }
+  if (grid_resolution < 2u) {
+    out_error = "Grid resolution must be at least 2";
+    return false;
+  }
+
+  FILE* file = fopen(file_name, "wb");
+  if (file == nullptr) {
+    out_error = "Failed to open OBJ file for writing";
+    return false;
+  }
+
+  setvbuf(file, nullptr, _IOFBF, 1u << 20u);
+
+  const uint64_t vertex_count_u64 = static_cast<uint64_t>(grid_resolution) * static_cast<uint64_t>(grid_resolution);
+  if (vertex_count_u64 > static_cast<uint64_t>(0xFFFFFFFFu)) {
+    fclose(file);
+    out_error = "Grid resolution is too large";
+    return false;
+  }
+
+  std::vector<OceanExportVertex> vertices = {};
+  vertices.resize(static_cast<size_t>(vertex_count_u64));
+
+  float half_extent = 0.5f * area_size_m;
+  float denom = static_cast<float>(grid_resolution - 1u);
+  for (uint32_t z = 0u; z < grid_resolution; ++z) {
+    float z_lerp = static_cast<float>(z) / denom;
+    float world_z = center.z + lerp(-half_extent, half_extent, z_lerp);
+    for (uint32_t x = 0u; x < grid_resolution; ++x) {
+      float x_lerp = static_cast<float>(x) / denom;
+      float world_x = center.x + lerp(-half_extent, half_extent, x_lerp);
+      float2 world_xz = {world_x, world_z};
+      float3 displacement = sample_ocean_export_displacement_field(texture_data, cascade_lengths, cascade_weights, world_xz);
+      OceanExportVertex& vertex = vertices[static_cast<size_t>(z) * static_cast<size_t>(grid_resolution) + x];
+      vertex.x = world_x + displacement.x;
+      vertex.y = displacement.y;
+      vertex.z = world_z + displacement.z;
+    }
+  }
+
+  std::vector<OceanExportVertex> normals = {};
+  normals.resize(static_cast<size_t>(vertex_count_u64));
+  for (uint32_t z = 0u; z < grid_resolution; ++z) {
+    uint32_t z_prev = (z > 0u) ? (z - 1u) : z;
+    uint32_t z_next = ((z + 1u) < grid_resolution) ? (z + 1u) : z;
+    for (uint32_t x = 0u; x < grid_resolution; ++x) {
+      uint32_t x_prev = (x > 0u) ? (x - 1u) : x;
+      uint32_t x_next = ((x + 1u) < grid_resolution) ? (x + 1u) : x;
+
+      const OceanExportVertex& p_left = vertices[static_cast<size_t>(z) * static_cast<size_t>(grid_resolution) + x_prev];
+      const OceanExportVertex& p_right = vertices[static_cast<size_t>(z) * static_cast<size_t>(grid_resolution) + x_next];
+      const OceanExportVertex& p_down = vertices[static_cast<size_t>(z_prev) * static_cast<size_t>(grid_resolution) + x];
+      const OceanExportVertex& p_up = vertices[static_cast<size_t>(z_next) * static_cast<size_t>(grid_resolution) + x];
+
+      float3 tangent_x = {p_right.x - p_left.x, p_right.y - p_left.y, p_right.z - p_left.z};
+      float3 tangent_z = {p_up.x - p_down.x, p_up.y - p_down.y, p_up.z - p_down.z};
+      float3 normal = cross(tangent_z, tangent_x);
+      float normal_len2 = dot(normal, normal);
+      if (normal_len2 > 1.0e-20f) {
+        normal *= (1.0f / sqrtf(normal_len2));
+      } else {
+        normal = {0.0f, 1.0f, 0.0f};
+      }
+      if (normal.y < 0.0f) {
+        normal = -normal;
+      }
+
+      OceanExportVertex& out_normal = normals[static_cast<size_t>(z) * static_cast<size_t>(grid_resolution) + x];
+      out_normal.x = normal.x;
+      out_normal.y = normal.y;
+      out_normal.z = normal.z;
+    }
+  }
+
+  fprintf(file, "# ETX playground ocean export\n");
+  fprintf(file, "# area_size_m %.6f\n", area_size_m);
+  fprintf(file, "# grid_resolution %u\n", grid_resolution);
+  fprintf(file, "# vertex_count %llu\n", static_cast<unsigned long long>(vertex_count_u64));
+  fprintf(file, "# triangle_count %llu\n",
+    static_cast<unsigned long long>(2u * static_cast<uint64_t>(grid_resolution - 1u) * static_cast<uint64_t>(grid_resolution - 1u)));
+
+  for (uint64_t i = 0u; i < vertex_count_u64; ++i) {
+    const OceanExportVertex& vertex = vertices[static_cast<size_t>(i)];
+    fprintf(file, "v %.9g %.9g %.9g\n", vertex.x, vertex.y, vertex.z);
+  }
+  for (uint64_t i = 0u; i < vertex_count_u64; ++i) {
+    const OceanExportVertex& normal = normals[static_cast<size_t>(i)];
+    fprintf(file, "vn %.9g %.9g %.9g\n", normal.x, normal.y, normal.z);
+  }
+
+  for (uint32_t z = 0u; (z + 1u) < grid_resolution; ++z) {
+    for (uint32_t x = 0u; (x + 1u) < grid_resolution; ++x) {
+      uint32_t v00 = (z * grid_resolution) + x + 1u;
+      uint32_t v10 = v00 + 1u;
+      uint32_t v01 = ((z + 1u) * grid_resolution) + x + 1u;
+      uint32_t v11 = v01 + 1u;
+      fprintf(file, "f %u//%u %u//%u %u//%u\n", v00, v00, v01, v01, v11, v11);
+      fprintf(file, "f %u//%u %u//%u %u//%u\n", v00, v00, v11, v11, v10, v10);
+    }
+  }
+
+  fclose(file);
+  return true;
+}
+
 struct PlaygroundUiChanges {
   bool sky_parameters_changed = false;
   bool msaa_sample_count_changed = false;
@@ -112,9 +320,15 @@ struct PlaygroundUiChanges {
   uint32_t patch_resolution = 128u;
   bool fft_resolution_changed = false;
   uint32_t fft_resolution = 256u;
+  bool simulation_paused_changed = false;
+  bool simulation_paused = false;
+  bool ocean_obj_export_size_changed = false;
+  int32_t ocean_obj_export_size_m = k_ocean_obj_export_default_size_m;
+  bool ocean_obj_export_requested = false;
 };
 
-static PlaygroundUiChanges draw_ocean_control_panel(Ocean& ocean, uint32_t current_msaa_sample_count) {
+static PlaygroundUiChanges draw_ocean_control_panel(Ocean& ocean, uint32_t current_msaa_sample_count, bool simulation_paused, bool ocean_obj_export_request_pending,
+  bool ocean_obj_export_last_result_valid, bool ocean_obj_export_last_result_success, int32_t ocean_obj_export_size_m, const char* ocean_obj_export_status) {
   OceanParameters& parameters = ocean.parameters();
   bool spectrum_parameters_changed = false;
   bool sky_parameters_changed = false;
@@ -122,6 +336,8 @@ static PlaygroundUiChanges draw_ocean_control_panel(Ocean& ocean, uint32_t curre
   result.msaa_sample_count = current_msaa_sample_count;
   result.patch_resolution = ocean.patch_resolution();
   result.fft_resolution = ocean.fft_resolution();
+  result.simulation_paused = simulation_paused;
+  result.ocean_obj_export_size_m = ocean_obj_export_size_m;
 
   ImGui::SetNextWindowPos(ImVec2(12.0f, 12.0f), ImGuiCond_Once);
   ImGui::SetNextWindowSize(ImVec2(430.0f, 720.0f), ImGuiCond_Once);
@@ -140,6 +356,37 @@ static PlaygroundUiChanges draw_ocean_control_panel(Ocean& ocean, uint32_t curre
 
   ImGui::SetNextItemOpen(false, ImGuiCond_FirstUseEver);
   if (ImGui::CollapsingHeader("Simulation")) {
+    bool ui_simulation_paused = result.simulation_paused;
+    if (ImGui::Checkbox("Pause simulation", &ui_simulation_paused)) {
+      result.simulation_paused = ui_simulation_paused;
+      result.simulation_paused_changed = true;
+    }
+    ImGui::TextUnformatted("OBJ export freezes simulation and captures the next frame.");
+    if (ocean_obj_export_request_pending) {
+      ImGui::TextUnformatted("OBJ export: scheduled for next frame");
+    }
+    int32_t export_size_m = result.ocean_obj_export_size_m;
+    if (ImGui::InputInt("Export size (m)", &export_size_m)) {
+      export_size_m = max(export_size_m, 1);
+      result.ocean_obj_export_size_m = export_size_m;
+      result.ocean_obj_export_size_changed = true;
+    }
+    ImGui::Text("OBJ export target: %d x %d m, %u x %u vertices (~%.2f M tris)", result.ocean_obj_export_size_m, result.ocean_obj_export_size_m,
+      k_ocean_obj_export_grid_resolution, k_ocean_obj_export_grid_resolution,
+      (2.0f * static_cast<float>(k_ocean_obj_export_grid_resolution - 1u) * static_cast<float>(k_ocean_obj_export_grid_resolution - 1u)) / 1000000.0f);
+    if (ImGui::Button("Export Water Mesh OBJ (Next Frame)")) {
+      result.ocean_obj_export_requested = true;
+      result.simulation_paused = true;
+      result.simulation_paused_changed = true;
+    }
+    if ((ocean_obj_export_last_result_valid) && (ocean_obj_export_status != nullptr) && (ocean_obj_export_status[0] != '\0')) {
+      if (ocean_obj_export_last_result_success) {
+        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.45f, 1.0f), "Last export: %s", ocean_obj_export_status);
+      } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "Last export failed: %s", ocean_obj_export_status);
+      }
+    }
+    ImGui::Separator();
     ImGui::SliderFloat("Time scale", &parameters.time_scale, 0.0f, 4.0f, "%.3f");
     if (ImGui::SliderFloat("Wind dir X", &parameters.wind_direction_x, -1.0f, 1.0f, "%.3f")) {
       spectrum_parameters_changed = true;
@@ -266,6 +513,29 @@ static PlaygroundUiChanges draw_ocean_control_panel(Ocean& ocean, uint32_t curre
     ImGui::SliderFloat("Unresolved slope roughness", &parameters.unresolved_slope_roughness, 0.0f, 0.5f, "%.4f");
     ImGui::SliderFloat("Specular AA strength", &parameters.specular_aa_strength, 0.0f, 4.0f, "%.3f");
     ImGui::SliderFloat("Refraction distortion scale", &parameters.refract_distortion_scale, 0.0f, 0.25f, "%.4f");
+    ImGui::SliderFloat("Wave thickness path scale", &parameters.wave_thickness_path_scale, 0.0f, 4.0f, "%.3f");
+    bool foam_enable = parameters.foam_enable;
+    if (ImGui::Checkbox("Enable aeration / foam", &foam_enable)) {
+      parameters.foam_enable = foam_enable;
+    }
+    ImGui::SliderFloat("Foam strength", &parameters.foam_strength, 0.0f, 4.0f, "%.3f");
+    ImGui::SliderFloat("Foam slope start", &parameters.foam_slope_start, 0.0f, 16.0f, "%.3f");
+    ImGui::SliderFloat("Foam slope end", &parameters.foam_slope_end, 0.0f, 32.0f, "%.3f");
+    ImGui::SliderFloat("Foam thickness start (m)", &parameters.foam_thickness_start_m, 0.0f, 2.0f, "%.3f");
+    ImGui::SliderFloat("Foam thickness end (m)", &parameters.foam_thickness_end_m, 0.0f, 4.0f, "%.3f");
+    ImGui::SliderFloat("Foam surface coverage", &parameters.foam_surface_coverage, 0.0f, 1.0f, "%.3f");
+    ImGui::SliderFloat("Foam spec suppression", &parameters.foam_specular_suppression, 0.0f, 1.0f, "%.3f");
+    ImGui::SliderFloat("Foam diffuse gain", &parameters.foam_diffuse_gain, 0.0f, 4.0f, "%.3f");
+    ImGui::SliderFloat("Foam backlight gain", &parameters.foam_backlight_gain, 0.0f, 4.0f, "%.3f");
+    ImGui::SliderFloat("Foam aeration scatter", &parameters.foam_aeration_scatter_scale, 0.0f, 32.0f, "%.3f");
+    ImGui::SliderFloat("Foam aeration absorb", &parameters.foam_aeration_absorption_scale, 0.0f, 4.0f, "%.3f");
+    ImGui::ColorEdit3("Foam albedo", &parameters.foam_albedo.x);
+    ImGui::SliderFloat("Foam detail scale 1", &parameters.foam_detail_scale_1, 0.01f, 2.0f, "%.4f");
+    ImGui::SliderFloat("Foam detail scale 2", &parameters.foam_detail_scale_2, 0.01f, 4.0f, "%.4f");
+    ImGui::SliderFloat("Foam detail mix", &parameters.foam_detail_mix, 0.0f, 1.0f, "%.3f");
+    ImGui::SliderFloat("Foam detail contrast", &parameters.foam_detail_contrast, 0.0f, 4.0f, "%.3f");
+    ImGui::SliderFloat("Foam alpha threshold", &parameters.foam_alpha_threshold, 0.0f, 1.0f, "%.3f");
+    ImGui::SliderFloat("Foam detail scroll", &parameters.foam_detail_scroll_speed, 0.0f, 2.0f, "%.3f");
     bool sun_lighting_enable = parameters.sun_lighting_enable;
     if (ImGui::Checkbox("Enable sun lighting", &sun_lighting_enable)) {
       parameters.sun_lighting_enable = sun_lighting_enable;
@@ -327,6 +597,12 @@ static PlaygroundUiChanges draw_ocean_control_panel(Ocean& ocean, uint32_t curre
     if (ImGui::Combo("Surface normal view", &surface_normal_visualize_mode, surface_normal_visualize_items, 8)) {
       parameters.surface_normal_visualize_mode = max(0, min(surface_normal_visualize_mode, 7));
     }
+    const char* water_debug_visualize_items[] = {"Off", "Wave thickness", "Foam mask"};
+    int water_debug_visualize_mode = parameters.water_debug_visualize_mode;
+    if (ImGui::Combo("Water debug view", &water_debug_visualize_mode, water_debug_visualize_items, 3)) {
+      parameters.water_debug_visualize_mode = max(0, min(water_debug_visualize_mode, 2));
+    }
+    ImGui::SliderFloat("Wave thickness debug max (m)", &parameters.wave_thickness_debug_max_m, 0.05f, 20.0f, "%.3f");
     ImGui::TextUnformatted("Debug heatmaps: Ref error (deg), Mip drift (deg), Foldover risk (magenta).");
     ImGui::TextUnformatted("Numeric stats require GPU readback support (not wired yet).");
     bool surface_normal_shading_enable = parameters.surface_normal_shading_enable;
@@ -495,6 +771,186 @@ void PlaygroundApp::draw_gpu_timing_window() {
   ImGui::End();
 }
 
+void PlaygroundApp::destroy_ocean_obj_export_buffers() {
+  for (uint32_t i = 0u; i < Ocean::k_cascade_count; ++i) {
+    if (_ocean_obj_export.displacement_readback_buffers[i].valid()) {
+      _rhi.device().destroy_buffer(_ocean_obj_export.displacement_readback_buffers[i]);
+      _ocean_obj_export.displacement_readback_buffers[i] = {};
+    }
+  }
+  _ocean_obj_export.capture_recorded = false;
+  _ocean_obj_export.fft_resolution = 0u;
+  _ocean_obj_export.pending_output_path.clear();
+}
+
+bool PlaygroundApp::record_ocean_obj_export_capture(RHICommandBuffer cmd) {
+  _ocean_obj_export.last_result_valid = false;
+  _ocean_obj_export.last_result_success = false;
+  _ocean_obj_export.last_output_path.clear();
+  _ocean_obj_export.last_error.clear();
+
+  destroy_ocean_obj_export_buffers();
+
+  if (_ocean.valid() == false) {
+    _ocean_obj_export.last_result_valid = true;
+    _ocean_obj_export.last_result_success = false;
+    _ocean_obj_export.last_error = "Ocean renderer is not initialized";
+    return false;
+  }
+  if (cmd.valid() == false) {
+    _ocean_obj_export.last_result_valid = true;
+    _ocean_obj_export.last_result_success = false;
+    _ocean_obj_export.last_error = "Invalid command buffer for export capture";
+    return false;
+  }
+
+  _ocean_obj_export.area_size_m = static_cast<float>(max(_ocean_obj_export_size_m, 1));
+  _ocean_obj_export.grid_resolution = k_ocean_obj_export_grid_resolution;
+  _ocean_obj_export.center = _camera.position;
+  _ocean_obj_export.fft_resolution = _ocean.fft_resolution();
+  if (_ocean_obj_export.fft_resolution == 0u) {
+    _ocean_obj_export.last_result_valid = true;
+    _ocean_obj_export.last_result_success = false;
+    _ocean_obj_export.last_error = "FFT resolution is zero";
+    return false;
+  }
+
+  const OceanParameters& ocean_parameters = _ocean.parameters();
+  for (uint32_t i = 0u; i < Ocean::k_cascade_count; ++i) {
+    _ocean_obj_export.cascade_lengths[i] = ocean_parameters.cascade_lengths[i];
+    _ocean_obj_export.cascade_weights[i] = 0.0f;
+  }
+  _ocean.effective_cascade_weights(_ocean_obj_export.cascade_weights);
+
+  char relative_path_buffer[256] = {};
+  uint32_t export_serial = _ocean_obj_export.serial + 1u;
+  _ocean_obj_export.serial = export_serial;
+  snprintf(relative_path_buffer, sizeof(relative_path_buffer), "ocean_exports/ocean_surface_%04u.obj", export_serial);
+
+  char output_path_buffer[2048] = {};
+  env().file_in_tmp(relative_path_buffer, output_path_buffer, sizeof(output_path_buffer));
+  _ocean_obj_export.pending_output_path = output_path_buffer;
+
+  uint64_t texel_count = static_cast<uint64_t>(_ocean_obj_export.fft_resolution) * static_cast<uint64_t>(_ocean_obj_export.fft_resolution);
+  uint64_t readback_buffer_size = texel_count * sizeof(OceanExportDisplacementTexel);
+  RHIBufferDesc readback_buffer_desc = {};
+  readback_buffer_desc.size = readback_buffer_size;
+  readback_buffer_desc.usage = RHIBufferUsage::TransferDst;
+  readback_buffer_desc.host_visible = true;
+
+  for (uint32_t i = 0u; i < Ocean::k_cascade_count; ++i) {
+    RHITexture displacement_texture = _ocean.displacement_texture(i);
+    if (displacement_texture.valid() == false) {
+      _ocean_obj_export.last_result_valid = true;
+      _ocean_obj_export.last_result_success = false;
+      _ocean_obj_export.last_error = "Missing ocean displacement texture";
+      destroy_ocean_obj_export_buffers();
+      return false;
+    }
+
+    auto create_result = _rhi.device().create_buffer(readback_buffer_desc);
+    if (create_result.result != RHIResult::Success) {
+      _ocean_obj_export.last_result_valid = true;
+      _ocean_obj_export.last_result_success = false;
+      _ocean_obj_export.last_error = "Failed to allocate readback buffer";
+      destroy_ocean_obj_export_buffers();
+      return false;
+    }
+    _ocean_obj_export.displacement_readback_buffers[i] = create_result.handle;
+
+    _rhi.cmd_texture_barrier(cmd, displacement_texture, RHIResourceState::ShaderReadOnly, RHIResourceState::TransferSrc);
+    _rhi.cmd_copy_texture_to_buffer(cmd, displacement_texture, _ocean_obj_export.displacement_readback_buffers[i], _ocean_obj_export.fft_resolution,
+      _ocean_obj_export.fft_resolution, 0u);
+    _rhi.cmd_texture_barrier(cmd, displacement_texture, RHIResourceState::TransferSrc, RHIResourceState::ShaderReadOnly);
+  }
+
+  _ocean_obj_export.capture_recorded = true;
+  log::info("Ocean OBJ export scheduled: %s", _ocean_obj_export.pending_output_path.c_str());
+  return true;
+}
+
+void PlaygroundApp::finalize_ocean_obj_export_capture() {
+  if (_ocean_obj_export.capture_recorded == false) {
+    return;
+  }
+
+  RHIResult wait_result = _rhi.wait_idle();
+  if (wait_result != RHIResult::Success) {
+    _ocean_obj_export.last_result_valid = true;
+    _ocean_obj_export.last_result_success = false;
+    _ocean_obj_export.last_error = "GPU wait_idle failed before export readback";
+    destroy_ocean_obj_export_buffers();
+    return;
+  }
+
+  if (_ocean_obj_export.fft_resolution == 0u) {
+    _ocean_obj_export.last_result_valid = true;
+    _ocean_obj_export.last_result_success = false;
+    _ocean_obj_export.last_error = "Invalid FFT resolution for export";
+    destroy_ocean_obj_export_buffers();
+    return;
+  }
+
+  const uint64_t texel_count = static_cast<uint64_t>(_ocean_obj_export.fft_resolution) * static_cast<uint64_t>(_ocean_obj_export.fft_resolution);
+  const uint64_t readback_size = texel_count * sizeof(OceanExportDisplacementTexel);
+  OceanExportTextureData texture_data[Ocean::k_cascade_count] = {};
+
+  for (uint32_t i = 0u; i < Ocean::k_cascade_count; ++i) {
+    if (_ocean_obj_export.displacement_readback_buffers[i].valid() == false) {
+      _ocean_obj_export.last_result_valid = true;
+      _ocean_obj_export.last_result_success = false;
+      _ocean_obj_export.last_error = "Missing readback buffer during export finalize";
+      destroy_ocean_obj_export_buffers();
+      return;
+    }
+
+    texture_data[i].width = _ocean_obj_export.fft_resolution;
+    texture_data[i].height = _ocean_obj_export.fft_resolution;
+    texture_data[i].texels.resize(static_cast<size_t>(texel_count));
+
+    RHIResult read_result = _rhi.device().read_buffer(_ocean_obj_export.displacement_readback_buffers[i], texture_data[i].texels.data(), readback_size, 0u);
+    if (read_result != RHIResult::Success) {
+      _ocean_obj_export.last_result_valid = true;
+      _ocean_obj_export.last_result_success = false;
+      _ocean_obj_export.last_error = "Failed to read displacement buffer";
+      destroy_ocean_obj_export_buffers();
+      return;
+    }
+  }
+
+  std::filesystem::path output_path = _ocean_obj_export.pending_output_path;
+  std::error_code filesystem_error = {};
+  std::filesystem::path output_parent = output_path.parent_path();
+  if (output_parent.empty() == false) {
+    std::filesystem::create_directories(output_parent, filesystem_error);
+    if (filesystem_error.value() != 0) {
+      _ocean_obj_export.last_result_valid = true;
+      _ocean_obj_export.last_result_success = false;
+      _ocean_obj_export.last_error = "Failed to create output directory";
+      destroy_ocean_obj_export_buffers();
+      return;
+    }
+  }
+
+  std::string write_error = {};
+  bool write_success = write_ocean_surface_obj_file(_ocean_obj_export.pending_output_path.c_str(), texture_data, _ocean_obj_export.cascade_lengths,
+    _ocean_obj_export.cascade_weights, _ocean_obj_export.area_size_m, _ocean_obj_export.grid_resolution, _ocean_obj_export.center, write_error);
+  _ocean_obj_export.last_result_valid = true;
+  _ocean_obj_export.last_result_success = write_success;
+
+  if (write_success) {
+    _ocean_obj_export.last_output_path = _ocean_obj_export.pending_output_path;
+    _ocean_obj_export.last_error.clear();
+    log::info("Ocean OBJ export completed: %s", env().to_project_relative(_ocean_obj_export.last_output_path).c_str());
+  } else {
+    _ocean_obj_export.last_output_path.clear();
+    _ocean_obj_export.last_error = write_error;
+    log::error("Ocean OBJ export failed: %s", write_error.c_str());
+  }
+
+  destroy_ocean_obj_export_buffers();
+}
+
 void PlaygroundApp::recreate_scene_targets(uint32_t width, uint32_t height) {
   if ((width == 0u) || (height == 0u)) {
     return;
@@ -531,6 +987,24 @@ void PlaygroundApp::recreate_scene_targets(uint32_t width, uint32_t height) {
     _rhi.device().destroy_texture(_scene_color_msaa_buffer);
     _scene_color_msaa_buffer = {};
   }
+  if (_ocean_wave_thickness_min_buffer.valid()) {
+    _rhi.device().destroy_texture(_ocean_wave_thickness_min_buffer);
+    _ocean_wave_thickness_min_buffer = {};
+  }
+  if (_ocean_wave_thickness_max_buffer.valid()) {
+    _rhi.device().destroy_texture(_ocean_wave_thickness_max_buffer);
+    _ocean_wave_thickness_max_buffer = {};
+  }
+  _ocean_wave_thickness_min_state = RHIResourceState::Undefined;
+  _ocean_wave_thickness_max_state = RHIResourceState::Undefined;
+  for (uint32_t i = 0u; i < 2u; ++i) {
+    if (_ocean_foam_history_buffer[i].valid()) {
+      _rhi.device().destroy_texture(_ocean_foam_history_buffer[i]);
+      _ocean_foam_history_buffer[i] = {};
+    }
+    _ocean_foam_history_state[i] = RHIResourceState::Undefined;
+  }
+  _ocean_foam_history_write_index = 0u;
 
   RHITextureDesc scene_color_desc = {};
   scene_color_desc.width = width;
@@ -550,6 +1024,40 @@ void PlaygroundApp::recreate_scene_targets(uint32_t width, uint32_t height) {
   } else {
     log::error("Failed to recreate scene final HDR color texture: %u", scene_color_result.result);
   }
+
+  RHITextureDesc ocean_wave_thickness_desc = {};
+  ocean_wave_thickness_desc.width = width;
+  ocean_wave_thickness_desc.height = height;
+  ocean_wave_thickness_desc.format = RHITextureFormat::R32_FLOAT;
+  ocean_wave_thickness_desc.usage = RHITextureUsage::ColorAttachment | RHITextureUsage::Sampled;
+  auto wave_thickness_min_result = _rhi.device().create_texture(ocean_wave_thickness_desc);
+  if (wave_thickness_min_result.result == RHIResult::Success) {
+    _ocean_wave_thickness_min_buffer = wave_thickness_min_result.handle;
+  } else {
+    log::error("Failed to recreate ocean wave thickness MIN texture: %u", wave_thickness_min_result.result);
+  }
+  auto wave_thickness_max_result = _rhi.device().create_texture(ocean_wave_thickness_desc);
+  if (wave_thickness_max_result.result == RHIResult::Success) {
+    _ocean_wave_thickness_max_buffer = wave_thickness_max_result.handle;
+  } else {
+    log::error("Failed to recreate ocean wave thickness MAX texture: %u", wave_thickness_max_result.result);
+  }
+
+  RHITextureDesc ocean_foam_history_desc = {};
+  ocean_foam_history_desc.width = width;
+  ocean_foam_history_desc.height = height;
+  ocean_foam_history_desc.format = RHITextureFormat::R8_UNORM;
+  ocean_foam_history_desc.usage = RHITextureUsage::ColorAttachment | RHITextureUsage::Sampled;
+  for (uint32_t i = 0u; i < 2u; ++i) {
+    auto foam_history_result = _rhi.device().create_texture(ocean_foam_history_desc);
+    if (foam_history_result.result == RHIResult::Success) {
+      _ocean_foam_history_buffer[i] = foam_history_result.handle;
+    } else {
+      log::error("Failed to recreate ocean foam history texture[%u]: %u", i, foam_history_result.result);
+    }
+    _ocean_foam_history_state[i] = RHIResourceState::Undefined;
+  }
+  _ocean_foam_history_write_index = 0u;
 
   if (_scene_msaa_sample_count > 1u) {
     RHITextureDesc scene_color_msaa_desc = scene_color_desc;
@@ -606,12 +1114,18 @@ void PlaygroundApp::sync_scene_targets_to_swapchain_extent() {
   const bool missing_scene_opaque_color = (_scene_opaque_color_buffer.valid() == false);
   const bool missing_scene_color = (_scene_color_buffer.valid() == false);
   const bool missing_depth = (_depth_buffer.valid() == false);
+  const bool missing_ocean_wave_thickness_min = (_ocean_wave_thickness_min_buffer.valid() == false);
+  const bool missing_ocean_wave_thickness_max = (_ocean_wave_thickness_max_buffer.valid() == false);
+  const bool missing_ocean_foam_history_0 = (_ocean_foam_history_buffer[0].valid() == false);
+  const bool missing_ocean_foam_history_1 = (_ocean_foam_history_buffer[1].valid() == false);
   const bool msaa_enabled = (_scene_msaa_sample_count > 1u);
   const bool missing_scene_opaque_color_msaa = msaa_enabled && (_scene_opaque_color_msaa_buffer.valid() == false);
   const bool missing_scene_color_msaa = msaa_enabled && (_scene_color_msaa_buffer.valid() == false);
   const bool missing_depth_msaa = msaa_enabled && (_depth_msaa_buffer.valid() == false);
 
   if ((extent_changed == false) && (missing_scene_opaque_color == false) && (missing_scene_color == false) && (missing_depth == false) &&
+      (missing_ocean_wave_thickness_min == false) && (missing_ocean_wave_thickness_max == false) && (missing_ocean_foam_history_0 == false) &&
+      (missing_ocean_foam_history_1 == false) &&
       (missing_scene_opaque_color_msaa == false) && (missing_scene_color_msaa == false) && (missing_depth_msaa == false)) {
     return;
   }
@@ -1268,6 +1782,7 @@ void PlaygroundApp::init() {
 void PlaygroundApp::cleanup() {
   ETX_PROFILER_SCOPE();
   _rhi.wait_idle();
+  destroy_ocean_obj_export_buffers();
   for (uint32_t i = 0u; i < k_gpu_timing_pending_frame_count; ++i) {
     GpuTimingPendingFrame& pending = _gpu_timing_pending_frames[i];
     if (pending.valid && pending.command_buffer.valid()) {
@@ -1331,6 +1846,23 @@ void PlaygroundApp::cleanup() {
   if (_scene_color_msaa_buffer.valid()) {
     _rhi.device().destroy_texture(_scene_color_msaa_buffer);
   }
+  if (_ocean_wave_thickness_min_buffer.valid()) {
+    _rhi.device().destroy_texture(_ocean_wave_thickness_min_buffer);
+    _ocean_wave_thickness_min_buffer = {};
+    _ocean_wave_thickness_min_state = RHIResourceState::Undefined;
+  }
+  if (_ocean_wave_thickness_max_buffer.valid()) {
+    _rhi.device().destroy_texture(_ocean_wave_thickness_max_buffer);
+    _ocean_wave_thickness_max_buffer = {};
+    _ocean_wave_thickness_max_state = RHIResourceState::Undefined;
+  }
+  for (uint32_t i = 0u; i < 2u; ++i) {
+    if (_ocean_foam_history_buffer[i].valid()) {
+      _rhi.device().destroy_texture(_ocean_foam_history_buffer[i]);
+      _ocean_foam_history_buffer[i] = {};
+    }
+    _ocean_foam_history_state[i] = RHIResourceState::Undefined;
+  }
   if (_depth_buffer.valid()) {
     _rhi.device().destroy_texture(_depth_buffer);
   }
@@ -1382,6 +1914,20 @@ void PlaygroundApp::frame() {
   RHICommandBuffer cmd = _rhi.get_command_buffer();
   _rhi.command_buffer_begin(cmd);
 
+  bool record_ocean_obj_export_this_frame = false;
+  if (_ocean_obj_export.request_next_frame) {
+    _ocean_obj_export.request_next_frame = false;
+    _simulation_paused = true;
+    if (_ocean.valid()) {
+      record_ocean_obj_export_this_frame = true;
+    } else {
+      _ocean_obj_export.last_result_valid = true;
+      _ocean_obj_export.last_result_success = false;
+      _ocean_obj_export.last_output_path.clear();
+      _ocean_obj_export.last_error = "Ocean renderer is not initialized";
+    }
+  }
+
   auto write_gpu_timestamp = [&](uint32_t query_index) {
     if (_gpu_timing_supported) {
       _rhi.cmd_write_timestamp(cmd, query_index, RHITimestampStage::AllCommands);
@@ -1402,7 +1948,9 @@ void PlaygroundApp::frame() {
   write_gpu_timestamp(k_gpu_timing_query_after_sun_sky_regen);
 
   float frame_delta_time = static_cast<float>(sapp_frame_duration());
-  _time += frame_delta_time;
+  if (_simulation_paused == false) {
+    _time += frame_delta_time;
+  }
 
   if (frame_delta_time > 0.0f) {
     _fps_counter_accumulated_time += frame_delta_time;
@@ -1427,6 +1975,9 @@ void PlaygroundApp::frame() {
 
   if (_ocean.valid()) {
     _ocean.update(_rhi, cmd, _time, _camera.position, _camera.direction, kPi / 4.0f, render_width, render_height);
+  }
+  if (record_ocean_obj_export_this_frame) {
+    record_ocean_obj_export_capture(cmd);
   }
   write_gpu_timestamp(k_gpu_timing_query_after_ocean_update);
 
@@ -1525,6 +2076,36 @@ void PlaygroundApp::frame() {
     }
   };
 
+  auto render_ocean_wave_thickness_prepass = [&]() {
+    if ((_ocean.valid() == false) || (_ocean_wave_thickness_min_buffer.valid() == false) || (_ocean_wave_thickness_max_buffer.valid() == false)) {
+      return;
+    }
+
+    _rhi.cmd_texture_barrier(cmd, _ocean_wave_thickness_min_buffer, _ocean_wave_thickness_min_state, RHIResourceState::ColorAttachment);
+    _ocean_wave_thickness_min_state = RHIResourceState::ColorAttachment;
+    float wave_thickness_min_clear[4] = {kMaxFloat, 0.0f, 0.0f, 0.0f};
+    RHIResourceState wave_thickness_min_final_state = RHIResourceState::ShaderReadOnly;
+    _rhi.cmd_begin_render_pass(cmd, 1, &_ocean_wave_thickness_min_buffer, wave_thickness_min_clear, {}, &wave_thickness_min_final_state);
+    set_viewport_and_scissor();
+    _ocean.draw_wave_thickness_prepass(_rhi, cmd, view_proj, inv_view_proj, _camera.position, false, render_width, render_height);
+    _rhi.cmd_end_render_pass(cmd);
+    _ocean_wave_thickness_min_state = wave_thickness_min_final_state;
+
+    _rhi.cmd_texture_barrier(cmd, _ocean_wave_thickness_max_buffer, _ocean_wave_thickness_max_state, RHIResourceState::ColorAttachment);
+    _ocean_wave_thickness_max_state = RHIResourceState::ColorAttachment;
+    float wave_thickness_max_clear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    RHIResourceState wave_thickness_max_final_state = RHIResourceState::ShaderReadOnly;
+    _rhi.cmd_begin_render_pass(cmd, 1, &_ocean_wave_thickness_max_buffer, wave_thickness_max_clear, {}, &wave_thickness_max_final_state);
+    set_viewport_and_scissor();
+    _ocean.draw_wave_thickness_prepass(_rhi, cmd, view_proj, inv_view_proj, _camera.position, true, render_width, render_height);
+    _rhi.cmd_end_render_pass(cmd);
+    _ocean_wave_thickness_max_state = wave_thickness_max_final_state;
+  };
+
+  render_ocean_wave_thickness_prepass();
+
+  RHITexture ocean_foam_history_shading_texture = {};
+
   if (hdr_path_available && msaa_enabled) {
     RHIResourceState opaque_msaa_old_state = _scene_opaque_color_msaa_initialized ? RHIResourceState::TransferSrc : RHIResourceState::Undefined;
     _rhi.cmd_texture_barrier(cmd, _scene_opaque_color_msaa_buffer, opaque_msaa_old_state, RHIResourceState::ColorAttachment);
@@ -1557,8 +2138,8 @@ void PlaygroundApp::frame() {
     draw_env_and_buoy();
     if (_ocean.valid()) {
       set_viewport_and_scissor();
-      _ocean.draw(_rhi, cmd, view_proj, inv_view_proj, _camera.position, _envmap.texture(), _envmap.uses_equal_area_mapping(), _scene_opaque_color_buffer, render_width,
-        render_height);
+      _ocean.draw(_rhi, cmd, view_proj, inv_view_proj, _camera.position, _envmap.texture(), _envmap.uses_equal_area_mapping(), _scene_opaque_color_buffer,
+        _ocean_wave_thickness_min_buffer, _ocean_wave_thickness_max_buffer, ocean_foam_history_shading_texture, render_width, render_height);
     }
     _rhi.cmd_end_render_pass(cmd);
     write_gpu_timestamp(k_gpu_timing_query_after_scene_pass);
@@ -1587,8 +2168,8 @@ void PlaygroundApp::frame() {
     draw_env_and_buoy();
     if (_ocean.valid()) {
       set_viewport_and_scissor();
-      _ocean.draw(_rhi, cmd, view_proj, inv_view_proj, _camera.position, _envmap.texture(), _envmap.uses_equal_area_mapping(), _scene_opaque_color_buffer, render_width,
-        render_height);
+      _ocean.draw(_rhi, cmd, view_proj, inv_view_proj, _camera.position, _envmap.texture(), _envmap.uses_equal_area_mapping(), _scene_opaque_color_buffer,
+        _ocean_wave_thickness_min_buffer, _ocean_wave_thickness_max_buffer, ocean_foam_history_shading_texture, render_width, render_height);
     }
     _rhi.cmd_end_render_pass(cmd);
     write_gpu_timestamp(k_gpu_timing_query_after_scene_pass);
@@ -1600,7 +2181,8 @@ void PlaygroundApp::frame() {
     draw_env_and_buoy();
     if (_ocean.valid()) {
       set_viewport_and_scissor();
-      _ocean.draw(_rhi, cmd, view_proj, inv_view_proj, _camera.position, _envmap.texture(), _envmap.uses_equal_area_mapping(), {}, render_width, render_height);
+      _ocean.draw(_rhi, cmd, view_proj, inv_view_proj, _camera.position, _envmap.texture(), _envmap.uses_equal_area_mapping(), {}, _ocean_wave_thickness_min_buffer,
+        _ocean_wave_thickness_max_buffer, ocean_foam_history_shading_texture, render_width, render_height);
     }
     write_gpu_timestamp(k_gpu_timing_query_after_opaque_pass);
     write_gpu_timestamp(k_gpu_timing_query_after_opaque_resolve);
@@ -1616,9 +2198,27 @@ void PlaygroundApp::frame() {
     .dpi_scale = sapp_dpi_scale(),
   };
   _imgui.new_frame(imgui_frame_desc);
-  PlaygroundUiChanges ui_changes = draw_ocean_control_panel(_ocean, _scene_msaa_sample_count);
+  const char* ocean_obj_export_status = nullptr;
+  if (_ocean_obj_export.last_result_valid) {
+    if (_ocean_obj_export.last_result_success) {
+      ocean_obj_export_status = _ocean_obj_export.last_output_path.c_str();
+    } else {
+      ocean_obj_export_status = _ocean_obj_export.last_error.c_str();
+    }
+  }
+  PlaygroundUiChanges ui_changes = draw_ocean_control_panel(_ocean, _scene_msaa_sample_count, _simulation_paused, _ocean_obj_export.request_next_frame,
+    _ocean_obj_export.last_result_valid, _ocean_obj_export.last_result_success, _ocean_obj_export_size_m, ocean_obj_export_status);
   if (ui_changes.sky_parameters_changed) {
     _sun_sky_dirty = true;
+  }
+  if (ui_changes.simulation_paused_changed) {
+    _simulation_paused = ui_changes.simulation_paused;
+  }
+  if (ui_changes.ocean_obj_export_size_changed) {
+    _ocean_obj_export_size_m = max(ui_changes.ocean_obj_export_size_m, 1);
+  }
+  if (ui_changes.ocean_obj_export_requested) {
+    _ocean_obj_export.request_next_frame = true;
   }
   if (ui_changes.msaa_sample_count_changed) {
     _pending_scene_msaa_sample_count = ui_changes.msaa_sample_count;
@@ -1676,6 +2276,9 @@ void PlaygroundApp::frame() {
 
   _rhi.submit_frame_command_buffer(cmd);
   enqueue_gpu_timing_request(cmd);
+  if (_ocean_obj_export.capture_recorded) {
+    finalize_ocean_obj_export_capture();
+  }
   _rhi.present();
 }
 

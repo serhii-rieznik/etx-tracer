@@ -98,8 +98,8 @@ struct ImagePoolImpl {
     }
 
     if (img.y_distribution.values.a != nullptr && img.y_distribution.values.count > 0) {
-      image.y_distribution_storage = buffer_pool.allocate_elements<Distribution::Entry>(image.distribution_buffer, img.y_distribution.values.count + 1u,
-        alignof(Distribution::Entry));
+      image.y_distribution_storage =
+        buffer_pool.allocate_elements<Distribution::Entry>(image.distribution_buffer, img.y_distribution.values.count + 1u, alignof(Distribution::Entry));
       auto* y_entries = buffer_pool.map<Distribution::Entry>(image.y_distribution_storage);
       ETX_CRITICAL(y_entries != nullptr);
       std::copy(img.y_distribution.values.a, img.y_distribution.values.a + img.y_distribution.values.count + 1u, y_entries);
@@ -507,34 +507,43 @@ struct ImagePoolImpl {
     img.y_distribution.values_buffer = img.distribution_buffer;
     img.y_distribution.values_storage = img.y_distribution_storage;
 
-    std::atomic<float> total_weight = {0.0f};
-    scheduler.execute(img.isize.y, [&img, x_entries_base, y_entries_base, x_distributions_base, uniform_sampling, &total_weight, x_entries_per_row](uint32_t begin, uint32_t end,
-                              uint32_t) {
-      for (uint32_t y = begin; y < end; ++y) {
-        float v = (float(y) + 0.5f) / img.fsize.y;
-        float row_value = 0.0f;
+    std::vector<float> thread_total_weights(scheduler.max_thread_count(), 0.0f);
+    scheduler.execute(img.isize.y,
+      [&img, x_entries_base, y_entries_base, x_distributions_base, uniform_sampling, &thread_total_weights, x_entries_per_row](uint32_t begin, uint32_t end,
+        uint32_t thread_id) {
+        ETX_ASSERT(thread_id < thread_total_weights.size());
+        float local_total_weight = 0.0f;
+        for (uint32_t y = begin; y < end; ++y) {
+          float v = (float(y) + 0.5f) / img.fsize.y;
+          float row_value = 0.0f;
 
-        auto* x_entries = x_entries_base + y * x_entries_per_row;
-        for (uint32_t x = 0; x < img.isize.x; ++x) {
-          float u = (float(x) + 0.5f) / img.fsize.x;
-          float4 px = img.read(img.fsize * float2{u, v});
-          float lum = luminance(to_float3(px));
-          row_value += lum;
-          x_entries[x] = {lum, 0.0f, 0.0f};
+          auto* x_entries = x_entries_base + y * x_entries_per_row;
+          for (uint32_t x = 0; x < img.isize.x; ++x) {
+            float u = (float(x) + 0.5f) / img.fsize.x;
+            float4 px = img.read(img.fsize * float2{u, v});
+            float lum = luminance(to_float3(px));
+            row_value += lum;
+            x_entries[x] = {lum, 0.0f, 0.0f};
+          }
+
+          auto& dist = x_distributions_base[y];
+          dist = Distribution::build(x_entries, img.isize.x, dist.values_buffer, dist.values_storage);
+
+          float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
+          row_value *= row_weight;
+          local_total_weight += row_value;
+
+          y_entries_base[y] = {row_value, 0.0f, 0.0f};
         }
 
-        auto& dist = x_distributions_base[y];
-        dist = Distribution::build(x_entries, img.isize.x, dist.values_buffer, dist.values_storage);
-
-        float row_weight = uniform_sampling ? 1.0f : std::sin(v * kPi);
-        row_value *= row_weight;
-        total_weight = total_weight + row_value;
-
-        y_entries_base[y] = {row_value, 0.0f, 0.0f};
-      }
-    });
+        thread_total_weights[thread_id] += local_total_weight;
+      });
 
     img.y_distribution = Distribution::build(y_entries_base, img.isize.y, img.y_distribution.values_buffer, img.y_distribution.values_storage);
+    float total_weight = 0.0f;
+    for (float thread_weight : thread_total_weights) {
+      total_weight += thread_weight;
+    }
     img.normalization = total_weight / (img.fsize.x * img.fsize.y);
   }
 
@@ -549,7 +558,7 @@ struct ImagePoolImpl {
     img.offset = {};
     img.scale = {1.0f, 1.0f};
     img.isize = {};
-    img.normalization = 0.0f;
+    img.normalization = 1.0f;
     img.options = 0;
     img.format = Image::Format::Undefined;
     img.data_size = 0u;

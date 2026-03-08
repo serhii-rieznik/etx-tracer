@@ -166,10 +166,8 @@ ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittanc
   return ETX_MEDIUM_SHARED_SPECTRAL_EXP(ETX_MEDIUM_SHARED_SPECTRAL_MUL(extinction_non_negative, -distance));
 }
 
-#if defined(ETX_MEDIUM_SHARED_CONTEXT_TYPE) && defined(ETX_MEDIUM_SHARED_RND) && defined(ETX_MEDIUM_SHARED_DENSITY)
-
 ETX_SHARED_INLINE float3 medium_shared_transmittance_heterogeneous_integrated(ETX_IN(float3, base_extinction), ETX_IN(float3, origin), ETX_IN(float3, direction),
-  float distance, ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_INOUT(ETX_MEDIUM_SHARED_CONTEXT_TYPE, context)) {
+  float distance, ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_INOUT(MediumSharedContext, context)) {
   float3 extinction = max(base_extinction, float3(0.0f, 0.0f, 0.0f));
   float max_sigma = max(extinction.x, max(extinction.y, extinction.z));
   if (max_sigma <= 0.0f) {
@@ -187,7 +185,7 @@ ETX_SHARED_INLINE float3 medium_shared_transmittance_heterogeneous_integrated(ET
   const float rr_threshold = 0.1f;
   const uint32_t max_delta_tracking_steps = 4096u;
   for (uint32_t step = 0u; step < max_delta_tracking_steps; ++step) {
-    float random_value = min(ETX_MEDIUM_SHARED_RND(context), 1.0f - kEpsilon);
+    float random_value = min(medium_shared_rnd(context), 1.0f - kEpsilon);
     t_world += -medium_shared_log(1.0f - random_value) / max_sigma;
 
     float3 world_pos_at_t = origin + intersection.world_dir_normalized * t_world;
@@ -197,7 +195,7 @@ ETX_SHARED_INLINE float3 medium_shared_transmittance_heterogeneous_integrated(ET
       break;
     }
 
-    float density_value = ETX_MEDIUM_SHARED_DENSITY(context, local_pos);
+    float density_value = medium_shared_density(context, local_pos);
     float3 extinction_at_point = extinction * density_value;
     float3 weight = float3(1.0f, 1.0f, 1.0f) - (extinction_at_point / max_sigma);
     transmittance *= max(weight, float3(0.0f, 0.0f, 0.0f));
@@ -205,7 +203,7 @@ ETX_SHARED_INLINE float3 medium_shared_transmittance_heterogeneous_integrated(ET
     float transmittance_max = max(transmittance.x, max(transmittance.y, transmittance.z));
     if (transmittance_max < rr_threshold) {
       float p = clamp(transmittance_max, 0.01f, 0.95f);
-      if (ETX_MEDIUM_SHARED_RND(context) > p) {
+      if (medium_shared_rnd(context) > p) {
         return float3(0.0f, 0.0f, 0.0f);
       }
       transmittance *= (1.0f / p);
@@ -217,7 +215,7 @@ ETX_SHARED_INLINE float3 medium_shared_transmittance_heterogeneous_integrated(ET
 
 ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittance_heterogeneous_spectral(
   ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE, base_extinction), ETX_IN(float3, origin), ETX_IN(float3, direction), float distance, ETX_IN(float3, bounds_min),
-  ETX_IN(float3, bounds_max), ETX_INOUT(ETX_MEDIUM_SHARED_CONTEXT_TYPE, context), ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_QUERY, spect)) {
+  ETX_IN(float3, bounds_max), ETX_INOUT(MediumSharedContext, context), ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_QUERY, spect)) {
   ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE one = ETX_MEDIUM_SHARED_SPECTRAL_MAKE(spect, 1.0f);
   ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE extinction = ETX_MEDIUM_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE(base_extinction);
   float max_sigma = ETX_MEDIUM_SHARED_SPECTRAL_MAXIMUM(extinction);
@@ -236,7 +234,7 @@ ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittanc
   const float rr_threshold = 0.1f;
   const uint32_t max_delta_tracking_steps = 4096u;
   for (uint32_t step = 0u; step < max_delta_tracking_steps; ++step) {
-    float random_value = min(ETX_MEDIUM_SHARED_RND(context), 1.0f - kEpsilon);
+    float random_value = min(medium_shared_rnd(context), 1.0f - kEpsilon);
     t_world += -medium_shared_log(1.0f - random_value) / max_sigma;
 
     float3 world_pos_at_t = origin + intersection.world_dir_normalized * t_world;
@@ -246,7 +244,7 @@ ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittanc
       break;
     }
 
-    float density_value = ETX_MEDIUM_SHARED_DENSITY(context, local_pos);
+    float density_value = medium_shared_density(context, local_pos);
     ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE extinction_at_point = ETX_MEDIUM_SHARED_SPECTRAL_MUL(extinction, density_value);
     ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE weight = ETX_MEDIUM_SHARED_SPECTRAL_SUB(one, ETX_MEDIUM_SHARED_SPECTRAL_DIV(extinction_at_point, max_sigma));
     weight = ETX_MEDIUM_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE(weight);
@@ -255,7 +253,7 @@ ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittanc
     float transmittance_max = ETX_MEDIUM_SHARED_SPECTRAL_MAXIMUM(transmittance);
     if (transmittance_max < rr_threshold) {
       float p = clamp(transmittance_max, 0.01f, 0.95f);
-      if (ETX_MEDIUM_SHARED_RND(context) > p) {
+      if (medium_shared_rnd(context) > p) {
         return ETX_MEDIUM_SHARED_SPECTRAL_MAKE(spect, 0.0f);
       }
       transmittance = ETX_MEDIUM_SHARED_SPECTRAL_MUL(transmittance, 1.0f / p);
@@ -264,8 +262,6 @@ ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittanc
 
   return transmittance;
 }
-
-#endif
 
 #undef ETX_MEDIUM_SHARED_SPECTRAL_MAKE
 #undef ETX_MEDIUM_SHARED_SPECTRAL_MAXIMUM

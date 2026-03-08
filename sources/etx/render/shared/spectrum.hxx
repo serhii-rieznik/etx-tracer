@@ -4,6 +4,7 @@
 
 #include <etx/render/interop/spectrum.hxx>
 #include <etx/render/interop/gpu_abi_constants.hxx>
+#include <etx/render/access/spectrum_access_cpu.hxx>
 
 ETX_STATIC_ASSERT((sizeof(::SpectralDistribution) == kSpectralDistributionStride), "SpectralDistribution ABI size mismatch");
 ETX_STATIC_ASSERT((offsetof(::SpectralDistribution, integrated_value) == kSpectralDistributionIntegratedOffset), "SpectralDistribution.integrated_value ABI mismatch");
@@ -71,6 +72,8 @@ struct Parameters {
   float rayleigh_scale = 1.0f;
   float mie_scale = 1.0f;
   float ozone_scale = 1.0f;
+  uint32_t primary_scattering = 1u;
+  uint32_t secondary_scattering = 1u;
 };
 
 }  // namespace scattering
@@ -336,50 +339,6 @@ ETX_SHARED_INLINE void print_value<::SpectralResponse>(const char* name, const :
 
 struct Spectrums;
 
-ETX_SHARED_INLINE float3 spectrum_access_shared_cpu_integrated(ETX_IN(::SpectralDistribution, distribution), uint32_t spectrum_index) {
-  (void)spectrum_index;
-  return distribution.integrated_value;
-}
-
-ETX_SHARED_INLINE uint32_t spectrum_access_shared_cpu_entry_count(ETX_IN(::SpectralDistribution, distribution), uint32_t spectrum_index) {
-  (void)spectrum_index;
-  return distribution.spectral_entry_count;
-}
-
-ETX_SHARED_INLINE float spectrum_access_shared_cpu_entry_wavelength(ETX_IN(::SpectralDistribution, distribution), uint32_t spectrum_index, uint32_t entry_index) {
-  (void)spectrum_index;
-  return distribution.spectral_entries[entry_index].wavelength;
-}
-
-ETX_SHARED_INLINE float spectrum_access_shared_cpu_entry_power(ETX_IN(::SpectralDistribution, distribution), uint32_t spectrum_index, uint32_t entry_index) {
-  (void)spectrum_index;
-  return distribution.spectral_entries[entry_index].power;
-}
-
-#define ETX_SPECTRUM_ACCESS_SHARED_CONTEXT_TYPE ::SpectralDistribution
-#define ETX_SPECTRUM_ACCESS_SHARED_INTEGRATED(context, spectrum_index) spectrum_access_shared_cpu_integrated(context, spectrum_index)
-#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_COUNT(context, spectrum_index) spectrum_access_shared_cpu_entry_count(context, spectrum_index)
-#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_WAVELENGTH(context, spectrum_index, entry_index) spectrum_access_shared_cpu_entry_wavelength(context, spectrum_index, entry_index)
-#define ETX_SPECTRUM_ACCESS_SHARED_ENTRY_POWER(context, spectrum_index, entry_index) spectrum_access_shared_cpu_entry_power(context, spectrum_index, entry_index)
-#define ETX_SPECTRUM_ACCESS_SHARED_QUERY_TYPE ::SpectralQuery
-#define ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_TYPE ::SpectralResponse
-#define ETX_SPECTRUM_ACCESS_SHARED_QUERY_IS_SPECTRAL(query) ::spectral_query_is_spectral(query)
-#define ETX_SPECTRUM_ACCESS_SHARED_QUERY_WAVELENGTH(query) query.wavelength
-#define ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_MAKE_SCALAR(query, value) ::spectral_response_make(query, value)
-#define ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_MAKE_INTEGRATED(query, value) ::spectral_response_make(query, value)
-#include <etx/render/interop/spectrum_access_shared.hxx>
-#undef ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_MAKE_INTEGRATED
-#undef ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_MAKE_SCALAR
-#undef ETX_SPECTRUM_ACCESS_SHARED_QUERY_WAVELENGTH
-#undef ETX_SPECTRUM_ACCESS_SHARED_QUERY_IS_SPECTRAL
-#undef ETX_SPECTRUM_ACCESS_SHARED_RESPONSE_TYPE
-#undef ETX_SPECTRUM_ACCESS_SHARED_QUERY_TYPE
-#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_POWER
-#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_WAVELENGTH
-#undef ETX_SPECTRUM_ACCESS_SHARED_ENTRY_COUNT
-#undef ETX_SPECTRUM_ACCESS_SHARED_INTEGRATED
-#undef ETX_SPECTRUM_ACCESS_SHARED_CONTEXT_TYPE
-
 struct SpectralDistribution : public ::SpectralDistribution {
   constexpr static const float3 kRGBLuminanceScale = {0.817660332f, 1.05418909f, 1.09945524f};
 
@@ -389,7 +348,8 @@ struct SpectralDistribution : public ::SpectralDistribution {
       ETX_ASSERT(q.valid());
     }
 
-    const ::SpectralResponse shared_response = spectrum_access_shared_query(static_cast<const ::SpectralDistribution&>(*this), 0u, static_cast<const ::SpectralQuery&>(q));
+    SpectrumAccessCPUContext access_context = make_spectrum_access_cpu_context(static_cast<const ::SpectralDistribution*>(this), 1u);
+    const ::SpectralResponse shared_response = spectrum_access_evaluate(access_context, 0u, static_cast<const ::SpectralQuery&>(q));
     SpectralQuery response_query{shared_response.wavelength, shared_response.flags};
     SpectralResponse result =
       ::spectral_response_is_spectral(shared_response) ? SpectralResponse{response_query, shared_response.value} : SpectralResponse{response_query, shared_response.integrated};

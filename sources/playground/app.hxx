@@ -23,6 +23,7 @@
 #include <sokol_app.h>
 
 #include <cstdint>
+#include <string>
 
 namespace etx {
 
@@ -58,6 +59,9 @@ struct PlaygroundApp {
   void poll_gpu_timing_results();
   void enqueue_gpu_timing_request(RHICommandBuffer cmd);
   void draw_gpu_timing_window();
+  void destroy_ocean_obj_export_buffers();
+  bool record_ocean_obj_export_capture(RHICommandBuffer cmd);
+  void finalize_ocean_obj_export_capture();
 
   RHIContext _rhi;
   RHIImGui _imgui;
@@ -74,6 +78,13 @@ struct PlaygroundApp {
   RHITexture _scene_opaque_color_msaa_buffer;
   RHITexture _scene_color_msaa_buffer;
   RHITexture _depth_msaa_buffer;
+  RHITexture _ocean_wave_thickness_min_buffer;
+  RHITexture _ocean_wave_thickness_max_buffer;
+  RHIResourceState _ocean_wave_thickness_min_state = RHIResourceState::Undefined;
+  RHIResourceState _ocean_wave_thickness_max_state = RHIResourceState::Undefined;
+  RHITexture _ocean_foam_history_buffer[2] = {};
+  RHIResourceState _ocean_foam_history_state[2] = {RHIResourceState::Undefined, RHIResourceState::Undefined};
+  uint32_t _ocean_foam_history_write_index = 0u;
   RHITexture _generated_sky_envmap_texture;
   RHIResourceState _generated_sky_envmap_texture_state = RHIResourceState::Undefined;
   RHITexture _generated_sun_texture;
@@ -100,6 +111,25 @@ struct PlaygroundApp {
   bool _ocean_patch_resolution_recreate_requested = false;
   uint32_t _pending_ocean_fft_resolution = 256u;
   bool _ocean_fft_resolution_recreate_requested = false;
+  bool _simulation_paused = false;
+  int32_t _ocean_obj_export_size_m = 100;
+  struct OceanObjExportState {
+    bool request_next_frame = false;
+    bool capture_recorded = false;
+    bool last_result_valid = false;
+    bool last_result_success = false;
+    uint32_t serial = 0u;
+    uint32_t fft_resolution = 0u;
+    uint32_t grid_resolution = 1001u;
+    float area_size_m = 100.0f;
+    float3 center = {0.0f, 0.0f, 0.0f};
+    float cascade_lengths[Ocean::k_cascade_count] = {0.0f, 0.0f, 0.0f};
+    float cascade_weights[Ocean::k_cascade_count] = {0.0f, 0.0f, 0.0f};
+    RHIBindlessHandle displacement_readback_buffers[Ocean::k_cascade_count] = {};
+    std::string pending_output_path = {};
+    std::string last_output_path = {};
+    std::string last_error = {};
+  } _ocean_obj_export = {};
   struct GpuTimingPendingFrame {
     bool valid = false;
     RHICommandBuffer command_buffer = {};

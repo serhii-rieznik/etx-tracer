@@ -36,34 +36,6 @@
 # define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE spectral_response_clamp_non_negative
 #endif
 
-#ifndef ETX_MEDIUM_SAMPLE_SHARED_CONTEXT_TYPE
-# error "ETX_MEDIUM_SAMPLE_SHARED_CONTEXT_TYPE must be defined before including medium_sample_shared.hxx"
-#endif
-
-#ifndef ETX_MEDIUM_SAMPLE_SHARED_RND
-# error "ETX_MEDIUM_SAMPLE_SHARED_RND must be defined before including medium_sample_shared.hxx"
-#endif
-
-#ifndef ETX_MEDIUM_SAMPLE_SHARED_DENSITY
-# error "ETX_MEDIUM_SAMPLE_SHARED_DENSITY must be defined before including medium_sample_shared.hxx"
-#endif
-
-#ifndef ETX_MEDIUM_SAMPLE_SHARED_LOAD_MEDIUM_CLASS
-# error "ETX_MEDIUM_SAMPLE_SHARED_LOAD_MEDIUM_CLASS must be defined before including medium_sample_shared.hxx"
-#endif
-
-#ifndef ETX_MEDIUM_SAMPLE_SHARED_HAS_GRID_DATA
-# error "ETX_MEDIUM_SAMPLE_SHARED_HAS_GRID_DATA must be defined before including medium_sample_shared.hxx"
-#endif
-
-#ifndef ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MIN
-# error "ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MIN must be defined before including medium_sample_shared.hxx"
-#endif
-
-#ifndef ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MAX
-# error "ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MAX must be defined before including medium_sample_shared.hxx"
-#endif
-
 ETX_SHARED_INLINE float medium_sample_shared_response_component(ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, value), uint32_t component_index) {
   if (ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_SPECTRAL(value)) {
     return value.value;
@@ -128,21 +100,21 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_zero_samp
   return result;
 }
 
-ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ETX_INOUT(ETX_MEDIUM_SAMPLE_SHARED_CONTEXT_TYPE, context),
+ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ETX_INOUT(MediumSharedContext, context),
   ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_QUERY, spect), ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, throughput),
   ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, scattering_value), ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, absorption_value), ETX_IN(float3, pos),
   ETX_IN(float3, w_i), float max_t) {
   ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE extinction_value = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_ADD(scattering_value, absorption_value);
   ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE albedo = medium_sample_shared_calculate_albedo(spect, scattering_value, extinction_value);
-  uint32_t medium_class = ETX_MEDIUM_SAMPLE_SHARED_LOAD_MEDIUM_CLASS(context);
+  uint32_t medium_class = context.medium_class;
 
   if (medium_class == ETX_MEDIUM_SAMPLE_SHARED_MEDIUM_TYPE::Homogeneous) {
     float t = 0.0f;
     ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE pdf = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE(spect, 0.0f);
     while (t < kRayEpsilon) {
-      uint32_t channel = medium_sample_shared_sample_spectrum_component(spect, albedo, throughput, ETX_MEDIUM_SAMPLE_SHARED_RND(context), pdf);
+      uint32_t channel = medium_sample_shared_sample_spectrum_component(spect, albedo, throughput, medium_shared_rnd(context), pdf);
       float sample_t = medium_sample_shared_response_component(extinction_value, channel);
-      t = (sample_t > 0.0f) ? (-medium_shared_log(1.0f - ETX_MEDIUM_SAMPLE_SHARED_RND(context)) / sample_t) : max_t;
+      t = (sample_t > 0.0f) ? (-medium_shared_log(1.0f - medium_shared_rnd(context)) / sample_t) : max_t;
     }
 
     t = min(t, max_t);
@@ -173,12 +145,12 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
 
   if (medium_class == ETX_MEDIUM_SAMPLE_SHARED_MEDIUM_TYPE::Heterogeneous) {
     float max_sigma = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAXIMUM(extinction_value);
-    if ((max_sigma <= 0.0f) || (ETX_MEDIUM_SAMPLE_SHARED_HAS_GRID_DATA(context) == false)) {
+    if ((max_sigma <= 0.0f) || (context.has_grid_data == 0u)) {
       return medium_sample_shared_zero_sample(spect, pos + w_i * max_t, 0.0f);
     }
 
-    float3 bounds_min = ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MIN(context);
-    float3 bounds_max = ETX_MEDIUM_SAMPLE_SHARED_BOUNDS_MAX(context);
+    float3 bounds_min = context.bounds_min;
+    float3 bounds_max = context.bounds_max;
     MediumSharedIntersection medium_intersection = medium_shared_zero_intersection();
     if (medium_shared_intersects_bounds(bounds_min, bounds_max, pos, w_i, max_t, medium_intersection) == false) {
       ETX_ZERO_INIT(ETX_MEDIUM_SAMPLE_SHARED_SAMPLE, result);
@@ -189,14 +161,14 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
     }
 
     ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE pdf = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE(spect, 0.0f);
-    uint32_t channel = medium_sample_shared_sample_spectrum_component(spect, albedo, throughput, ETX_MEDIUM_SAMPLE_SHARED_RND(context), pdf);
+    uint32_t channel = medium_sample_shared_sample_spectrum_component(spect, albedo, throughput, medium_shared_rnd(context), pdf);
 
     ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE transmittance = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE(spect, 1.0f);
     float t_world = 0.0f;
     float segment_length = medium_intersection.t_max - medium_intersection.t_min;
     const float rr_threshold = 0.1f;
     while (true) {
-      t_world += -medium_shared_log(1.0f - ETX_MEDIUM_SAMPLE_SHARED_RND(context)) / max_sigma;
+      t_world += -medium_shared_log(1.0f - medium_shared_rnd(context)) / max_sigma;
 
       float3 world_pos_at_t = pos + medium_intersection.world_dir_normalized * t_world;
       float3 local_pos = medium_shared_bounds_to_local(world_pos_at_t, bounds_min, bounds_max);
@@ -214,10 +186,10 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
         return result;
       }
 
-      float density_value = ETX_MEDIUM_SAMPLE_SHARED_DENSITY(context, local_pos);
+      float density_value = medium_shared_density(context, local_pos);
       ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE extinction_at_point = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(extinction_value, density_value);
       float sigma_t_channel = medium_sample_shared_response_component(extinction_at_point, channel);
-      if ((sigma_t_channel > 0.0f) && (ETX_MEDIUM_SAMPLE_SHARED_RND(context) < (sigma_t_channel / max_sigma))) {
+      if ((sigma_t_channel > 0.0f) && (medium_shared_rnd(context) < (sigma_t_channel / max_sigma))) {
         ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE scattering_at_point = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(scattering_value, density_value);
         pdf = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(pdf, ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(transmittance, extinction_at_point));
         if (ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_ZERO(pdf)) {
@@ -240,7 +212,7 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
       float transmittance_max = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAXIMUM(transmittance);
       if (transmittance_max < rr_threshold) {
         float p = clamp(transmittance_max, 0.01f, 0.95f);
-        if (ETX_MEDIUM_SAMPLE_SHARED_RND(context) > p) {
+        if (medium_shared_rnd(context) > p) {
           return medium_sample_shared_zero_sample(spect, world_pos_at_t, 0.0f);
         }
         transmittance = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(transmittance, 1.0f / p);

@@ -1,11 +1,14 @@
 #include "ocean.hxx"
 
 #include <etx/render/interop/geometry.hxx>
+#include <etx/render/host/image_loaders.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/core/core.hxx>
 
 #include <cmath>
+#include <cstring>
+#include <cstdio>
 #include <vector>
 
 namespace etx {
@@ -56,6 +59,195 @@ static uint32_t calculate_mip_levels(uint32_t width, uint32_t height) {
   return mip_levels;
 }
 
+static uint32_t hash_u32(uint32_t x) {
+  x ^= (x >> 16u);
+  x *= 0x7feb352du;
+  x ^= (x >> 15u);
+  x *= 0x846ca68bu;
+  x ^= (x >> 16u);
+  return x;
+}
+
+static float hash_to_unit_float(uint32_t x) {
+  uint32_t bits = hash_u32(x);
+  return static_cast<float>(bits & 0x00FFFFFFu) / static_cast<float>(0x01000000u);
+}
+
+static void save_debug_texture_r8_pgm(const char* file_name, uint32_t width, uint32_t height, const uint8_t* pixels) {
+  if ((file_name == nullptr) || (pixels == nullptr) || (width == 0u) || (height == 0u)) {
+    return;
+  }
+
+  FILE* file = fopen(file_name, "wb");
+  if (file == nullptr) {
+    log::error("Failed to open debug texture file: %s", file_name);
+    return;
+  }
+
+  int header_size = fprintf(file, "P5\n%u %u\n255\n", width, height);
+  if (header_size <= 0) {
+    fclose(file);
+    log::error("Failed to write PGM header: %s", file_name);
+    return;
+  }
+
+  size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
+  size_t written = fwrite(pixels, 1u, pixel_count, file);
+  fclose(file);
+  if (written != pixel_count) {
+    log::error("Failed to write PGM pixels: %s", file_name);
+  }
+}
+
+static void save_debug_texture_preview_ppm(const char* file_name, uint32_t width, uint32_t height, const uint8_t* pixels) {
+  if ((file_name == nullptr) || (pixels == nullptr) || (width == 0u) || (height == 0u)) {
+    return;
+  }
+
+  std::vector<uint8_t> rgb_pixels(width * height * 3u, 255u);
+  for (uint32_t i = 0u; i < (width * height); ++i) {
+    uint8_t v = pixels[i];
+    uint8_t rim = (v > 180u) ? 255u : 0u;
+    rgb_pixels[(i * 3u) + 0u] = static_cast<uint8_t>(min(255u, static_cast<uint32_t>(v) + 30u));
+    rgb_pixels[(i * 3u) + 1u] = static_cast<uint8_t>(min(255u, static_cast<uint32_t>(v) + 10u));
+    rgb_pixels[(i * 3u) + 2u] = static_cast<uint8_t>(min(255u, (static_cast<uint32_t>(v) / 2u) + (static_cast<uint32_t>(rim) / 3u)));
+  }
+
+  FILE* file = fopen(file_name, "wb");
+  if (file == nullptr) {
+    log::error("Failed to open debug preview texture file: %s", file_name);
+    return;
+  }
+
+  int header_size = fprintf(file, "P6\n%u %u\n255\n", width, height);
+  if (header_size <= 0) {
+    fclose(file);
+    log::error("Failed to write PPM header: %s", file_name);
+    return;
+  }
+
+  size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height) * 3u;
+  size_t written = fwrite(rgb_pixels.data(), 1u, pixel_count, file);
+  fclose(file);
+  if (written != pixel_count) {
+    log::error("Failed to write PPM pixels: %s", file_name);
+  }
+}
+
+static bool create_r8_texture_from_pixels(RHIContext& rhi, uint32_t width, uint32_t height, const uint8_t* pixels, RHITexture& out_texture, const char* debug_name) {
+  if ((pixels == nullptr) || (width == 0u) || (height == 0u)) {
+    log::error("Failed to create %s texture: invalid source pixels", (debug_name != nullptr) ? debug_name : "ocean detail");
+    return false;
+  }
+
+  RHITextureDesc tex_desc = {};
+  tex_desc.width = width;
+  tex_desc.height = height;
+  tex_desc.format = RHITextureFormat::R8_UNORM;
+  tex_desc.usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst;
+  auto tex_result = rhi.device().create_texture(tex_desc);
+  if (tex_result.result != RHIResult::Success) {
+    log::error("Failed to create %s texture", (debug_name != nullptr) ? debug_name : "ocean detail");
+    return false;
+  }
+
+  out_texture = tex_result.handle;
+  if (rhi.device().update_texture(out_texture, pixels) != RHIResult::Success) {
+    log::error("Failed to upload %s texture", (debug_name != nullptr) ? debug_name : "ocean detail");
+    rhi.device().destroy_texture(out_texture);
+    out_texture = {};
+    return false;
+  }
+
+  return true;
+}
+
+static bool file_exists_on_disk(const char* file_name) {
+  if (file_name == nullptr) {
+    return false;
+  }
+
+  FILE* file = fopen(file_name, "rb");
+  if (file == nullptr) {
+    return false;
+  }
+  fclose(file);
+  return true;
+}
+
+static bool load_r8_texture_from_file(RHIContext& rhi, const char* project_relative_path, RHITexture& out_texture, const char* debug_name) {
+  if (project_relative_path == nullptr) {
+    log::error("Failed to load %s texture: invalid path", (debug_name != nullptr) ? debug_name : "ocean detail");
+    return false;
+  }
+
+  std::vector<uint8_t> image_data;
+  uint2 image_dims = {};
+  Image::Format image_format = Image::Format::Undefined;
+  std::string loaded_from_path;
+  std::string candidate_paths[2] = {};
+  uint32_t candidate_count = 0u;
+  candidate_paths[candidate_count++] = project_relative_path;
+  if (((strncmp(project_relative_path, "bin/", 4u) == 0) || (strncmp(project_relative_path, "bin\\", 4u) == 0)) && (candidate_count < 2u)) {
+    candidate_paths[candidate_count++] = std::string(project_relative_path + 4);
+  }
+
+  for (uint32_t i = 0u; i < candidate_count; ++i) {
+    std::string resolved_path = env().resolve_to_absolute(candidate_paths[i]);
+    if (file_exists_on_disk(resolved_path.c_str()) == false) {
+      continue;
+    }
+    image_format = load_data(resolved_path.c_str(), image_data, image_dims);
+    if (image_format != Image::Format::Undefined) {
+      loaded_from_path = candidate_paths[i];
+      break;
+    }
+  }
+  if (image_format == Image::Format::Undefined) {
+    log::error("Failed to load %s texture from %s", (debug_name != nullptr) ? debug_name : "ocean detail", project_relative_path);
+    return false;
+  }
+  if (image_format != Image::Format::RGBA8) {
+    log::error("Unsupported %s texture format for %s (expected RGBA8-compatible image)", (debug_name != nullptr) ? debug_name : "ocean detail",
+      loaded_from_path.c_str());
+    return false;
+  }
+  if ((image_dims.x == 0u) || (image_dims.y == 0u)) {
+    log::error("Invalid %s texture dimensions for %s", (debug_name != nullptr) ? debug_name : "ocean detail", loaded_from_path.c_str());
+    return false;
+  }
+
+  size_t pixel_count = static_cast<size_t>(image_dims.x) * static_cast<size_t>(image_dims.y);
+  if (image_data.size() < (pixel_count * 4u)) {
+    log::error("Invalid %s texture data size for %s", (debug_name != nullptr) ? debug_name : "ocean detail", loaded_from_path.c_str());
+    return false;
+  }
+
+  bool alpha_varies = false;
+  for (size_t i = 0u; i < pixel_count; ++i) {
+    if (image_data[(i * 4u) + 3u] != 255u) {
+      alpha_varies = true;
+      break;
+    }
+  }
+
+  std::vector<uint8_t> r8_pixels(pixel_count, 0u);
+  for (size_t i = 0u; i < pixel_count; ++i) {
+    const uint8_t r = image_data[(i * 4u) + 0u];
+    const uint8_t g = image_data[(i * 4u) + 1u];
+    const uint8_t b = image_data[(i * 4u) + 2u];
+    const uint8_t a = image_data[(i * 4u) + 3u];
+    if (alpha_varies) {
+      r8_pixels[i] = a;
+    } else {
+      uint32_t luma = (static_cast<uint32_t>(r) * 54u) + (static_cast<uint32_t>(g) * 183u) + (static_cast<uint32_t>(b) * 19u);
+      r8_pixels[i] = static_cast<uint8_t>(min(luma >> 8u, 255u));
+    }
+  }
+
+  return create_r8_texture_from_pixels(rhi, image_dims.x, image_dims.y, r8_pixels.data(), out_texture, debug_name);
+}
+
 struct ClipmapInstance {
   float x_offset;
   float z_offset;
@@ -89,9 +281,26 @@ struct OceanRenderSettings {
   float4 water_scattering;
   float4 sun_direction_enable;
   float4 sun_radiance;
+  float4x4 prev_view_proj;
+  uint32_t wave_thickness_min_index;
+  uint32_t wave_thickness_max_index;
+  uint32_t wave_thickness_sampler_index;
+  uint32_t _padding1;
+  uint32_t foam_history_index;
+  uint32_t foam_detail_index;
+  uint32_t foam_sampler_index;
+  uint32_t aeration_detail_index;
+  float4 wave_thickness_controls;
+  float4 foam_controls_0;
+  float4 foam_controls_1;
+  float4 foam_controls_2;
+  float4 foam_color;
+  float4 foam_temporal_controls;
+  float4 foam_detail_controls;
+  float4 foam_flow_controls;
 };
 
-static_assert(sizeof(OceanRenderSettings) == 352u, "OceanRenderSettings layout must match ocean.hlsl");
+static_assert(sizeof(OceanRenderSettings) == 576u, "OceanRenderSettings layout must match ocean.hlsl");
 
 static bool patch_visible_in_frustum(const float3& patch_center, float patch_radius, const float3& camera_position, const float3& camera_right, const float3& camera_up,
   const float3& camera_forward, float tan_half_fov, float aspect, float cull_guard_scale) {
@@ -680,7 +889,9 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
   std::string shader_source = env().file_in_data("playground/shaders/ocean.hlsl");
   ShaderCompiler::ShaderEntryPoint vs = {"VSMain", RHIShaderStage::Vertex};
   ShaderCompiler::ShaderEntryPoint ps = {"PSMain", RHIShaderStage::Fragment};
-  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs, ps});
+  ShaderCompiler::ShaderEntryPoint ps_thickness = {"PSThickness", RHIShaderStage::Fragment};
+  ShaderCompiler::ShaderEntryPoint ps_foam_history = {"PSFoamHistory", RHIShaderStage::Fragment};
+  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs, ps, ps_thickness, ps_foam_history});
 
   if (compilation.result == RHIResult::Success) {
     RHIGraphicsPipelineDesc p_desc = {};
@@ -725,6 +936,59 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
       log::error("Failed to create ocean wireframe pipeline");
     }
     _wire_pipeline = wire_result.handle;
+
+    RHIGraphicsPipelineDesc thickness_desc = p_desc;
+    thickness_desc.fragment_shader.entry_point = "PSThickness";
+    thickness_desc.fragment_shader.spirv_data = compilation.binaries[2].spirv_data;
+    thickness_desc.fragment_shader.spirv_size = compilation.binaries[2].spirv_size;
+    thickness_desc.depth_state.depth_test_enable = false;
+    thickness_desc.depth_state.depth_write_enable = false;
+    thickness_desc.depth_format = RHITextureFormat::Undefined;
+    thickness_desc.sample_count = 1u;
+    thickness_desc.color_formats[0] = RHITextureFormat::R32_FLOAT;
+    thickness_desc.blend.blend_enable = true;
+    thickness_desc.blend.src_color_blend_factor = RHIBlendFactor::One;
+    thickness_desc.blend.dst_color_blend_factor = RHIBlendFactor::One;
+    thickness_desc.blend.src_alpha_blend_factor = RHIBlendFactor::One;
+    thickness_desc.blend.dst_alpha_blend_factor = RHIBlendFactor::One;
+    thickness_desc.blend.color_blend_op = RHIBlendOp::Min;
+    thickness_desc.blend.alpha_blend_op = RHIBlendOp::Min;
+
+    auto thickness_min_result = rhi.device().create_graphics_pipeline(thickness_desc);
+    if (thickness_min_result.result != RHIResult::Success) {
+      log::error("Failed to create ocean thickness MIN pipeline");
+    }
+    _thickness_min_pipeline = thickness_min_result.handle;
+
+    thickness_desc.blend.color_blend_op = RHIBlendOp::Max;
+    thickness_desc.blend.alpha_blend_op = RHIBlendOp::Max;
+    auto thickness_max_result = rhi.device().create_graphics_pipeline(thickness_desc);
+    if (thickness_max_result.result != RHIResult::Success) {
+      log::error("Failed to create ocean thickness MAX pipeline");
+    }
+    _thickness_max_pipeline = thickness_max_result.handle;
+
+    RHIGraphicsPipelineDesc foam_history_desc = p_desc;
+    foam_history_desc.fragment_shader.entry_point = "PSFoamHistory";
+    foam_history_desc.fragment_shader.spirv_data = compilation.binaries[3].spirv_data;
+    foam_history_desc.fragment_shader.spirv_size = compilation.binaries[3].spirv_size;
+    foam_history_desc.depth_state.depth_test_enable = false;
+    foam_history_desc.depth_state.depth_write_enable = false;
+    foam_history_desc.depth_format = RHITextureFormat::Undefined;
+    foam_history_desc.sample_count = 1u;
+    foam_history_desc.color_formats[0] = RHITextureFormat::R8_UNORM;
+    foam_history_desc.blend.blend_enable = true;
+    foam_history_desc.blend.src_color_blend_factor = RHIBlendFactor::One;
+    foam_history_desc.blend.dst_color_blend_factor = RHIBlendFactor::One;
+    foam_history_desc.blend.src_alpha_blend_factor = RHIBlendFactor::One;
+    foam_history_desc.blend.dst_alpha_blend_factor = RHIBlendFactor::One;
+    foam_history_desc.blend.color_blend_op = RHIBlendOp::Max;
+    foam_history_desc.blend.alpha_blend_op = RHIBlendOp::Max;
+    auto foam_history_result = rhi.device().create_graphics_pipeline(foam_history_desc);
+    if (foam_history_result.result != RHIResult::Success) {
+      log::error("Failed to create ocean foam history pipeline");
+    }
+    _foam_history_pipeline = foam_history_result.handle;
 
     // Compute Pipeline
     std::string compute_source = env().file_in_data("playground/shaders/ocean_compute.hlsl");
@@ -795,7 +1059,7 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
     tex_desc.height = TESS;
     tex_desc.array_layers = 1;
     tex_desc.format = RHITextureFormat::R32G32B32A32_FLOAT;
-    tex_desc.usage = RHITextureUsage::Sampled | RHITextureUsage::Storage;
+    tex_desc.usage = RHITextureUsage::Sampled | RHITextureUsage::Storage | RHITextureUsage::TransferSrc;
 
     RHITextureDesc surface_derivative_desc = tex_desc;
 #if defined(ETX_PLATFORM_APPLE)
@@ -824,17 +1088,35 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
       _deriv_spec_1_pingpong[i] = rhi.device().create_texture(tex_desc).handle;
       _deriv_spec_2_pingpong[i] = rhi.device().create_texture(tex_desc).handle;
     }
+
+    if (load_r8_texture_from_file(rhi, "bin/playground/textures/foam.png", _foam_detail_texture, "ocean foam detail") == false) {
+      log::error("Ocean foam texture will be disabled until bin/playground/textures/foam.png is available");
+    }
+    if (load_r8_texture_from_file(rhi, "bin/playground/textures/aeration.png", _aeration_detail_texture, "ocean aeration detail") == false) {
+      log::error("Ocean aeration texture will be disabled until bin/playground/textures/aeration.png is available");
+    }
   } else {
     log::error("Ocean: Failed to compile shaders:\n%s", compilation.error_message.c_str());
   }
 }
 
 void Ocean::cleanup(RHIContext& rhi) {
+  _has_previous_view_proj = false;
+  _last_update_time = 0.0f;
   if (_pipeline.valid()) {
     rhi.device().destroy_pipeline(_pipeline);
   }
   if (_wire_pipeline.valid()) {
     rhi.device().destroy_pipeline(_wire_pipeline);
+  }
+  if (_thickness_min_pipeline.valid()) {
+    rhi.device().destroy_pipeline(_thickness_min_pipeline);
+  }
+  if (_thickness_max_pipeline.valid()) {
+    rhi.device().destroy_pipeline(_thickness_max_pipeline);
+  }
+  if (_foam_history_pipeline.valid()) {
+    rhi.device().destroy_pipeline(_foam_history_pipeline);
   }
   if (_h0_pipeline.valid()) {
     rhi.device().destroy_pipeline(_h0_pipeline);
@@ -853,6 +1135,12 @@ void Ocean::cleanup(RHIContext& rhi) {
   }
   if (_index_buffer.valid()) {
     rhi.device().destroy_buffer(_index_buffer);
+  }
+  if (_foam_detail_texture.valid()) {
+    rhi.device().destroy_texture(_foam_detail_texture);
+  }
+  if (_aeration_detail_texture.valid()) {
+    rhi.device().destroy_texture(_aeration_detail_texture);
   }
   for (uint32_t i = 0; i < kRHIMaxFrames; ++i) {
     if (_instance_buffer[i].valid()) {
@@ -908,6 +1196,7 @@ void Ocean::cleanup(RHIContext& rhi) {
 
 void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const float3& camera_position, const float3& camera_direction, float fov, uint32_t viewport_width,
   uint32_t viewport_height) {
+  _last_update_time = time * _parameters.time_scale;
   if ((valid() == false) || (_h0_pipeline.valid() == false) || (_displacement_map[0].valid() == false)) {
     return;
   }
@@ -1103,7 +1392,10 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       wind_dir = wind_dir / sqrtf(wind_dir_len_sq);
     }
 
+    static constexpr float k_max_spectrum_amplitude = 1.0e16f;
     float cascade_spectrum_amplitude[k_cascade_count] = {0.0f, 0.0f, 0.0f};
+    bool spectrum_amplitude_clamped = false;
+    float max_unclamped_spectrum_amplitude = 0.0f;
     for (uint32_t c = 0; c < k_cascade_count; ++c) {
       float target_rms_height = target_cascade_rms[c];
       if (target_rms_height <= 0.0f) {
@@ -1129,7 +1421,16 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       if (std::isfinite(spectrum_amplitude) == false) {
         spectrum_amplitude = 0.0f;
       }
-      cascade_spectrum_amplitude[c] = min(spectrum_amplitude, 1.0e8f);
+      max_unclamped_spectrum_amplitude = max(max_unclamped_spectrum_amplitude, spectrum_amplitude);
+      if (spectrum_amplitude > k_max_spectrum_amplitude) {
+        spectrum_amplitude_clamped = true;
+      }
+      cascade_spectrum_amplitude[c] = min(spectrum_amplitude, k_max_spectrum_amplitude);
+    }
+
+    if (spectrum_amplitude_clamped) {
+      log::warning("Ocean: spectrum amplitude clamped (max requested %.3e, cap %.3e). Consider raising FFT resolution for large Hs.", max_unclamped_spectrum_amplitude,
+        k_max_spectrum_amplitude);
     }
 
     for (uint32_t c = 0; c < k_cascade_count; ++c) {
@@ -1306,7 +1607,6 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
           uint32_t outSlopeMetricIndex;
           uint32_t N;
           float lambda;
-          float L;
         } assemble_pc = {};
 
         // Final FFT results are in the ping-pong toggled texture
@@ -1321,7 +1621,6 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
         assemble_pc.outSlopeMetricIndex = get_bindless_descriptor_index(_slope_metric_map[c]);
         assemble_pc.N = TESS;
         assemble_pc.lambda = -_parameters.choppiness;
-        assemble_pc.L = _parameters.cascade_lengths[c];
 
         rhi.cmd_push_constants(cmd, &assemble_pc, sizeof(AssemblePushConstants), 0);
         rhi.cmd_dispatch(cmd, dispatch);
@@ -1340,20 +1639,12 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
   }
 }
 
-void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position, RHITexture envmap_texture,
-  bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, uint32_t viewport_width, uint32_t viewport_height) {
+void Ocean::prepare_render_draw_state(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position,
+  RHITexture envmap_texture, bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, RHITexture wave_thickness_min_texture,
+  RHITexture wave_thickness_max_texture, RHITexture foam_history_texture, uint32_t viewport_width, uint32_t viewport_height) {
   uint32_t frame_index = rhi.get_current_frame_index();
   RHIBindlessHandle frame_instance_buffer = _instance_buffer[frame_index];
   RHIBindlessHandle frame_settings_buffer = _settings_buffer[frame_index];
-  if ((valid() == false) || (_vertex_buffer.valid() == false) || (_index_buffer.valid() == false) || (frame_settings_buffer.valid() == false) ||
-      (frame_instance_buffer.valid() == false)) {
-    return;
-  }
-  bool draw_wireframe = _parameters.wireframe_enable;
-  if ((draw_wireframe) && (_wire_pipeline.valid() == false)) {
-    draw_wireframe = false;
-  }
-  rhi.cmd_set_pipeline(cmd, draw_wireframe ? _wire_pipeline : _pipeline);
 
   struct PushConstants {
     uint32_t vb_index;
@@ -1380,6 +1671,10 @@ void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_pro
   render_settings.cascade_weights = {cascade_weight[0], cascade_weight[1], cascade_weight[2], 0.0f};
   render_settings.clipmap_center_offset = {_clipmap_center_offset.x, _clipmap_center_offset.y, 0.0f, 0.0f};
   int32_t surface_normal_visualize_mode = max(0, min(_parameters.surface_normal_visualize_mode, 7));
+  bool draw_wireframe = _parameters.wireframe_enable;
+  if ((draw_wireframe) && (_wire_pipeline.valid() == false)) {
+    draw_wireframe = false;
+  }
   render_settings.debug_view = {draw_wireframe ? 1.0f : 0.0f, static_cast<float>(_patch_resolution), 0.0f, static_cast<float>(_clipmap_levels - 1)};
   float surface_normal_strength = min(max(0.0f, _parameters.surface_normal_strength), 1.0f);
   render_settings.surface_normal_controls = {_parameters.surface_normal_shading_enable ? 1.0f : 0.0f, surface_normal_strength, static_cast<float>(surface_normal_visualize_mode),
@@ -1404,6 +1699,42 @@ void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_pro
     0.0f};
   render_settings.sun_direction_enable = {_parameters.sun_direction.x, _parameters.sun_direction.y, _parameters.sun_direction.z, _parameters.sun_lighting_enable ? 1.0f : 0.0f};
   render_settings.sun_radiance = {_parameters.sun_radiance.x, _parameters.sun_radiance.y, _parameters.sun_radiance.z, 0.0f};
+  if (_has_previous_view_proj) {
+    render_settings.prev_view_proj = _previous_view_proj;
+  } else {
+    render_settings.prev_view_proj = view_proj;
+  }
+  int32_t water_debug_visualize_mode = max(0, min(_parameters.water_debug_visualize_mode, 2));
+  render_settings.wave_thickness_min_index = wave_thickness_min_texture.valid() ? get_bindless_descriptor_index(wave_thickness_min_texture) : 0u;
+  render_settings.wave_thickness_max_index = wave_thickness_max_texture.valid() ? get_bindless_descriptor_index(wave_thickness_max_texture) : 0u;
+  render_settings.wave_thickness_sampler_index = rhi.get_sampler_index(RHISamplerType::NearestClamp);
+  render_settings._padding1 = 0u;
+  render_settings.foam_history_index = foam_history_texture.valid() ? get_bindless_descriptor_index(foam_history_texture) : 0u;
+  render_settings.foam_detail_index = _foam_detail_texture.valid() ? get_bindless_descriptor_index(_foam_detail_texture) : 0u;
+  render_settings.foam_sampler_index = rhi.get_sampler_index(RHISamplerType::LinearClamp);
+  render_settings.aeration_detail_index = _aeration_detail_texture.valid() ? get_bindless_descriptor_index(_aeration_detail_texture) : 0u;
+  render_settings.wave_thickness_controls = {max(_parameters.wave_thickness_path_scale, 0.0f), static_cast<float>(water_debug_visualize_mode),
+    max(_parameters.wave_thickness_debug_max_m, 1.0e-3f), 0.0f};
+  render_settings.foam_controls_0 = {_parameters.foam_enable ? 1.0f : 0.0f, max(_parameters.foam_strength, 0.0f), max(_parameters.foam_slope_start, 0.0f),
+    max(_parameters.foam_slope_end, 0.0f)};
+  render_settings.foam_controls_1 = {max(_parameters.foam_thickness_start_m, 0.0f), max(_parameters.foam_thickness_end_m, 0.0f),
+    min(max(_parameters.foam_surface_coverage, 0.0f), 1.0f), min(max(_parameters.foam_specular_suppression, 0.0f), 1.0f)};
+  render_settings.foam_controls_2 = {max(_parameters.foam_diffuse_gain, 0.0f), max(_parameters.foam_backlight_gain, 0.0f),
+    max(_parameters.foam_aeration_scatter_scale, 0.0f), max(_parameters.foam_aeration_absorption_scale, 0.0f)};
+  render_settings.foam_color = {min(max(_parameters.foam_albedo.x, 0.0f), 4.0f), min(max(_parameters.foam_albedo.y, 0.0f), 4.0f),
+    min(max(_parameters.foam_albedo.z, 0.0f), 4.0f), min(max(_parameters.foam_alpha_threshold, 0.0f), 1.0f)};
+  render_settings.foam_temporal_controls = {min(max(_parameters.foam_history_decay, 0.0f), 1.0f), max(_parameters.foam_history_gain, 0.0f),
+    max(_parameters.foam_history_bias, 0.0f), 0.0f};
+  render_settings.foam_detail_controls = {max(_parameters.foam_detail_scale_1, 1.0e-4f), max(_parameters.foam_detail_scale_2, 1.0e-4f),
+    min(max(_parameters.foam_detail_mix, 0.0f), 1.0f), max(_parameters.foam_detail_contrast, 0.0f)};
+  float2 wind_dir = {_parameters.wind_direction_x, _parameters.wind_direction_y};
+  float wind_dir_len2 = dot(wind_dir, wind_dir);
+  if (wind_dir_len2 > 1.0e-8f) {
+    wind_dir /= sqrtf(wind_dir_len2);
+  } else {
+    wind_dir = {1.0f, 0.0f};
+  }
+  render_settings.foam_flow_controls = {wind_dir.x, wind_dir.y, _last_update_time, max(_parameters.foam_detail_scroll_speed, 0.0f)};
   rhi.device().update_buffer(frame_settings_buffer, &render_settings, sizeof(OceanRenderSettings));
 
   pc.vb_index = get_bindless_descriptor_index(_vertex_buffer);
@@ -1417,6 +1748,27 @@ void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_pro
   pc.vp_matrix = view_proj;
 
   rhi.cmd_push_constants(cmd, &pc, sizeof(PushConstants), 0);
+}
+
+void Ocean::draw_wave_thickness_prepass(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position,
+  bool max_blend_pass, uint32_t viewport_width, uint32_t viewport_height) {
+  uint32_t frame_index = rhi.get_current_frame_index();
+  RHIBindlessHandle frame_instance_buffer = _instance_buffer[frame_index];
+  RHIBindlessHandle frame_settings_buffer = _settings_buffer[frame_index];
+  if ((_vertex_buffer.valid() == false) || (_index_buffer.valid() == false) || (frame_settings_buffer.valid() == false) || (frame_instance_buffer.valid() == false)) {
+    return;
+  }
+
+  RHIPipeline pipeline = _thickness_min_pipeline;
+  if (max_blend_pass) {
+    pipeline = _thickness_max_pipeline;
+  }
+  if (pipeline.valid() == false) {
+    return;
+  }
+
+  rhi.cmd_set_pipeline(cmd, pipeline);
+  prepare_render_draw_state(rhi, cmd, view_proj, inv_view_proj, camera_position, {}, false, {}, {}, {}, {}, viewport_width, viewport_height);
 
   RHIIndexedDrawDesc draw = {
     .index_count = _index_count,
@@ -1424,6 +1776,58 @@ void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_pro
     .index_type = RHIIndexType::UInt32,
   };
   rhi.cmd_draw_indexed(cmd, draw, _index_buffer);
+}
+
+void Ocean::draw_foam_history_prepass(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position,
+  RHITexture wave_thickness_min_texture, RHITexture wave_thickness_max_texture, RHITexture prev_foam_history_texture, uint32_t viewport_width, uint32_t viewport_height) {
+  uint32_t frame_index = rhi.get_current_frame_index();
+  RHIBindlessHandle frame_instance_buffer = _instance_buffer[frame_index];
+  RHIBindlessHandle frame_settings_buffer = _settings_buffer[frame_index];
+  if ((_vertex_buffer.valid() == false) || (_index_buffer.valid() == false) || (frame_settings_buffer.valid() == false) || (frame_instance_buffer.valid() == false)) {
+    return;
+  }
+  if (_foam_history_pipeline.valid() == false) {
+    return;
+  }
+
+  rhi.cmd_set_pipeline(cmd, _foam_history_pipeline);
+  prepare_render_draw_state(rhi, cmd, view_proj, inv_view_proj, camera_position, {}, false, {}, wave_thickness_min_texture, wave_thickness_max_texture,
+    prev_foam_history_texture, viewport_width, viewport_height);
+
+  RHIIndexedDrawDesc draw = {
+    .index_count = _index_count,
+    .instance_count = _instance_count,
+    .index_type = RHIIndexType::UInt32,
+  };
+  rhi.cmd_draw_indexed(cmd, draw, _index_buffer);
+}
+
+void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position, RHITexture envmap_texture,
+  bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, RHITexture wave_thickness_min_texture, RHITexture wave_thickness_max_texture,
+  RHITexture foam_history_texture, uint32_t viewport_width, uint32_t viewport_height) {
+  uint32_t frame_index = rhi.get_current_frame_index();
+  RHIBindlessHandle frame_instance_buffer = _instance_buffer[frame_index];
+  RHIBindlessHandle frame_settings_buffer = _settings_buffer[frame_index];
+  if ((valid() == false) || (_vertex_buffer.valid() == false) || (_index_buffer.valid() == false) || (frame_settings_buffer.valid() == false) ||
+      (frame_instance_buffer.valid() == false)) {
+    return;
+  }
+  bool draw_wireframe = _parameters.wireframe_enable;
+  if ((draw_wireframe) && (_wire_pipeline.valid() == false)) {
+    draw_wireframe = false;
+  }
+  rhi.cmd_set_pipeline(cmd, draw_wireframe ? _wire_pipeline : _pipeline);
+  prepare_render_draw_state(rhi, cmd, view_proj, inv_view_proj, camera_position, envmap_texture, envmap_equal_area_mapping, scene_opaque_color_texture,
+    wave_thickness_min_texture, wave_thickness_max_texture, foam_history_texture, viewport_width, viewport_height);
+
+  RHIIndexedDrawDesc draw = {
+    .index_count = _index_count,
+    .instance_count = _instance_count,
+    .index_type = RHIIndexType::UInt32,
+  };
+  rhi.cmd_draw_indexed(cmd, draw, _index_buffer);
+  _previous_view_proj = view_proj;
+  _has_previous_view_proj = true;
 }
 
 void Ocean::effective_cascade_weights(float* out_weights) const {

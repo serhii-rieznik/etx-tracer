@@ -1,13 +1,35 @@
 #pragma once
-#include <etx/render/shared/scene_camera_policy.hxx>
 #include <etx/render/interop/camera_shared.hxx>
 #include <etx/render/interop/camera_film_shared.hxx>
 
-#define ETX_CAMERA_PRIMARY_RAY_SHARED_CONTEXT_TYPE CameraLensSampleSharedCPUContext
-#include <etx/render/interop/camera_primary_ray_shared.hxx>
-#undef ETX_CAMERA_PRIMARY_RAY_SHARED_CONTEXT_TYPE
-
 namespace etx {
+
+ETX_SHARED_INLINE bool camera_lens_sampling_enabled(const Camera& camera) {
+  return (camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon);
+}
+
+ETX_SHARED_INLINE float2 camera_sample_lens_uv(const Scene& scene, const Camera& camera, const float2& sensor_sample_rnd) {
+  if (camera_lens_sampling_enabled(camera) == false) {
+    return float2(0.0f, 0.0f);
+  }
+
+  if ((camera.lens_image == kInvalidIndex) || (camera.lens_image >= scene.images.count)) {
+    return sample_disk(sensor_sample_rnd);
+  }
+
+  float2 image_uv = scene.images[camera.lens_image].sample(sensor_sample_rnd);
+  return image_uv * 2.0f - 1.0f;
+}
+
+ETX_SHARED_INLINE float3 camera_lens_point(const Scene& scene, const Camera& camera, const float2& sensor_sample_rnd) {
+  float2 sensor_sample = camera_sample_lens_uv(scene, camera, sensor_sample_rnd) * camera.lens_radius;
+  return camera_film_shared_lens_point(camera, sensor_sample);
+}
+
+ETX_SHARED_INLINE Ray camera_generate_primary_ray(const Scene& scene, const Camera& camera, const float2& uv, const float2& sensor_sample_rnd) {
+  float2 sensor_sample = camera_sample_lens_uv(scene, camera, sensor_sample_rnd);
+  return camera_generate_ray(camera, uv, sensor_sample);
+}
 
 ETX_SHARED_INLINE float2 get_center_uv(const uint2& pixel, const uint2& dim) {
   return camera_shared_center_uv(pixel, dim);
@@ -29,8 +51,7 @@ ETX_SHARED_INLINE float camera_clip_direction_scale(const Camera& camera, const 
 ETX_SHARED_INLINE Ray generate_ray(const Scene& scene, const Camera& camera, const float2& uv, const float2& sensor_sample_rnd) {
   ETX_CHECK_FINITE(uv);
 
-  CameraLensSampleSharedCPUContext lens_context = {scene};
-  Ray ray = camera_primary_ray_shared_generate(lens_context, camera, uv, sensor_sample_rnd);
+  Ray ray = camera_generate_primary_ray(scene, camera, uv, sensor_sample_rnd);
   ETX_CHECK_FINITE(ray.o);
   ETX_CHECK_FINITE(ray.d);
   return ray;
@@ -52,10 +73,9 @@ ETX_SHARED_INLINE CameraSample sample_film(Sampler& smp, const Scene& scene, con
   }
 
   float3 lens_point = camera.position;
-  if (camera_lens_sample_shared_enabled(camera.lens_radius, camera.focal_distance)) {
+  if (camera_lens_sampling_enabled(camera)) {
     float2 sensor_sample_rnd = smp.next_2d();
-    CameraLensSampleSharedCPUContext lens_context = {scene};
-    lens_point = camera_primary_ray_shared_lens_point(lens_context, camera, sensor_sample_rnd);
+    lens_point = camera_lens_point(scene, camera, sensor_sample_rnd);
   }
   return evaluate_film(scene, camera, from_point, lens_point);
 }

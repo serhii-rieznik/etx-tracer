@@ -111,7 +111,11 @@ ETX_SHARED_INLINE ThinFilmEval evaluate_thinfilm(SpectralQuery spect, const Thin
     return {{}, 0.0f};
   }
 
-  float t = (film.thinkness_image == kInvalidIndex) ? 1.0f : scene.images[film.thinkness_image].evaluate(uv, nullptr).x;
+  float t = 1.0f;
+  if (film.thinkness_image != kInvalidIndex) {
+    ImageEvaluateCPUContext image_context = make_image_evaluate_cpu_context(scene);
+    t = image_evaluate_sample_channel_or_default(image_context, film.thinkness_image, 0u, uv, 1.0f);
+  }
   float thickness = lerp(film.min_thickness, film.max_thickness, t);
 
   float3 wavelengths = {spect.wavelength, spect.wavelength, spect.wavelength};
@@ -124,7 +128,7 @@ ETX_SHARED_INLINE ThinFilmEval evaluate_thinfilm(SpectralQuery spect, const Thin
   return {evaluate_refractive_index(scene, film.ior, spect), wavelengths, thickness};
 }
 
-struct AlphaTestSharedCPUContext {
+struct AlphaTestContext {
   const Material& material;
   const Triangle& triangle;
   const Scene& scene;
@@ -132,56 +136,40 @@ struct AlphaTestSharedCPUContext {
   float3 barycentric;
 };
 
-ETX_SHARED_INLINE uint32_t alpha_test_shared_cpu_material_class(ETX_IN(AlphaTestSharedCPUContext, context)) {
-  return context.material.cls;
+ETX_SHARED_INLINE uint32_t alpha_test_material_class(ETX_IN(AlphaTestContext, context)) {
+  const MaterialAccess access = material_access_cpu_make(context.material);
+  return access.material_class;
 }
 
-ETX_SHARED_INLINE float alpha_test_shared_cpu_material_opacity(ETX_IN(AlphaTestSharedCPUContext, context)) {
-  return context.material.opacity;
+ETX_SHARED_INLINE float alpha_test_material_opacity(ETX_IN(AlphaTestContext, context)) {
+  const MaterialAccess access = material_access_cpu_make(context.material);
+  return access.opacity;
 }
 
-ETX_SHARED_INLINE uint32_t alpha_test_shared_cpu_scattering_image_index(ETX_IN(AlphaTestSharedCPUContext, context)) {
-  return context.material.scattering.image_index;
+ETX_SHARED_INLINE uint32_t alpha_test_scattering_image_index(ETX_IN(AlphaTestContext, context)) {
+  const MaterialAccess access = material_access_cpu_make(context.material);
+  return access.scattering_image_index;
 }
 
-ETX_SHARED_INLINE bool alpha_test_shared_cpu_image_has_alpha(ETX_IN(AlphaTestSharedCPUContext, context), uint32_t image_index) {
-  ImageSceneAccessCPUContext access_context = {context.scene};
-  return image_scene_access_shared_has_alpha(access_context, image_index);
+ETX_SHARED_INLINE bool alpha_test_image_has_alpha(ETX_IN(AlphaTestContext, context), uint32_t image_index) {
+  ImageAccessCPUContext access_context = make_image_access_cpu_context(context.scene);
+  return image_access_has_alpha(access_context, image_index);
 }
 
-ETX_SHARED_INLINE float alpha_test_shared_cpu_evaluate_alpha(ETX_IN(AlphaTestSharedCPUContext, context), uint32_t image_index) {
-  ImageSceneAccessCPUContext access_context = {context.scene};
-  ImageSceneAccessCPUDesc image_access = {};
-  if (image_scene_access_shared_try_load_desc(access_context, image_index, image_access) == false) {
-    return 1.0f;
-  }
-
+ETX_SHARED_INLINE float alpha_test_evaluate_alpha(ETX_IN(AlphaTestContext, context), uint32_t image_index) {
   float2 uv = lerp_uv(context.scene, context.triangle, context.barycentric);
-  return context.scene.images[image_access.image_index].evaluate_alpha(uv);
+  ImageEvaluateCPUContext image_context = make_image_evaluate_cpu_context(context.scene);
+  return image_evaluate_sample_channel_or_default(image_context, image_index, 3u, uv, 1.0f);
 }
 
-ETX_SHARED_INLINE float alpha_test_shared_cpu_rnd(ETX_INOUT(AlphaTestSharedCPUContext, context)) {
+ETX_SHARED_INLINE float alpha_test_rnd(ETX_INOUT(AlphaTestContext, context)) {
   return context.sampler.next();
 }
 
-#define ETX_ALPHA_TEST_SHARED_CONTEXT_TYPE AlphaTestSharedCPUContext
-#define ETX_ALPHA_TEST_SHARED_MATERIAL_CLASS(context) alpha_test_shared_cpu_material_class(context)
-#define ETX_ALPHA_TEST_SHARED_MATERIAL_OPACITY(context) alpha_test_shared_cpu_material_opacity(context)
-#define ETX_ALPHA_TEST_SHARED_SCATTERING_IMAGE_INDEX(context) alpha_test_shared_cpu_scattering_image_index(context)
-#define ETX_ALPHA_TEST_SHARED_IMAGE_HAS_ALPHA(context, image_index) alpha_test_shared_cpu_image_has_alpha(context, image_index)
-#define ETX_ALPHA_TEST_SHARED_EVALUATE_ALPHA(context, image_index) alpha_test_shared_cpu_evaluate_alpha(context, image_index)
-#define ETX_ALPHA_TEST_SHARED_RND(context) alpha_test_shared_cpu_rnd(context)
 #include <etx/render/interop/alpha_test_shared.hxx>
-#undef ETX_ALPHA_TEST_SHARED_RND
-#undef ETX_ALPHA_TEST_SHARED_EVALUATE_ALPHA
-#undef ETX_ALPHA_TEST_SHARED_IMAGE_HAS_ALPHA
-#undef ETX_ALPHA_TEST_SHARED_SCATTERING_IMAGE_INDEX
-#undef ETX_ALPHA_TEST_SHARED_MATERIAL_OPACITY
-#undef ETX_ALPHA_TEST_SHARED_MATERIAL_CLASS
-#undef ETX_ALPHA_TEST_SHARED_CONTEXT_TYPE
 
 ETX_SHARED_INLINE bool alpha_test_pass(const Material& mat, const Triangle& t, const float3& bc, const Scene& scene, Sampler& smp) {
-  AlphaTestSharedCPUContext context = {mat, t, scene, smp, bc};
+  AlphaTestContext context = {mat, t, scene, smp, bc};
   return alpha_test_shared_pass(context);
 }
 

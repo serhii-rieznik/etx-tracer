@@ -17,60 +17,63 @@ enum class NoiseFunction : uint32_t {
   Count,
 };
 
-struct DensityTextureSampleSharedContext {
+struct ETX_ALIGNED MediumGrid {
+  uint3 dimensions = {};
+  uint32_t type = MediumGridType::Texture3D;
+
+  uint32_t noise_type = MediumNoiseType::Perlin;
+  uint32_t noise_seed = 0u;
+
+  float3 noise_offset = {};
+  uint32_t noise_enable_border_fade = 0u;
+
+  uint32_t noise_octaves = 1u;
+  float noise_scale = 1.0f;
+  float noise_lacunarity = 2.0f;
+  float noise_persistence = 0.5f;
+
+  float noise_power = 1.0f;
+  float noise_sharpness = 1.0f;
+  float noise_border_fade_distance = 0.1f;
+};
+
+struct MediumTextureSampleContext {
   ArrayView<float> density = {};
 };
 
-ETX_SHARED_INLINE float density_texture_sample_shared_density(
-  ETX_INOUT(DensityTextureSampleSharedContext, context), ETX_IN(uint3, dimensions), uint32_t x, uint32_t y, uint32_t z) {
+ETX_SHARED_INLINE float medium_texture_sample_density(
+  ETX_INOUT(MediumTextureSampleContext, context), ETX_IN(uint3, dimensions), uint32_t x, uint32_t y, uint32_t z) {
   uint32_t index = x + y * dimensions.x + z * dimensions.x * dimensions.y;
   return context.density[index];
 }
 
-#define ETX_MEDIUM_TEXTURE_SAMPLE_SHARED_CONTEXT_TYPE DensityTextureSampleSharedContext
-#define ETX_MEDIUM_TEXTURE_SAMPLE_SHARED_DENSITY(context, dimensions, x, y, z) density_texture_sample_shared_density(context, dimensions, x, y, z)
 #include <etx/render/interop/medium_texture_sample_shared.hxx>
-#undef ETX_MEDIUM_TEXTURE_SAMPLE_SHARED_DENSITY
-#undef ETX_MEDIUM_TEXTURE_SAMPLE_SHARED_CONTEXT_TYPE
 
-struct DensityGridPolicySharedContext {
-  ArrayView<float> density = {};
-  MediumDensitySharedGrid grid = {};
-  float3 bounds_min = {};
-  float3 bounds_max = {};
-};
+ETX_SHARED_INLINE float density_grid_sample_direct(
+  ETX_IN(ArrayView<float>, density), ETX_IN(MediumDensitySharedGrid, grid), ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_IN(float3, local_coord)) {
+  float value = 0.0f;
+  if (grid.type == MediumGridType::NoiseFunction) {
+    value = medium_density_shared_sample_noise(local_coord, bounds_min, bounds_max, grid.noise_type, grid.noise_scale, grid.noise_octaves, grid.noise_lacunarity,
+      grid.noise_persistence, grid.noise_seed, grid.noise_offset, grid.noise_enable_border_fade, grid.noise_border_fade_distance);
+  } else if (grid.type == MediumGridType::Texture3D) {
+    MediumTextureSampleContext texture_context = {density};
+    value = medium_texture_sample_shared_3d(texture_context, local_coord, grid.dimensions);
+  }
 
-ETX_SHARED_INLINE MediumDensitySharedGrid density_grid_policy_shared_grid(ETX_INOUT(DensityGridPolicySharedContext, context)) {
-  return context.grid;
+  return medium_density_shared_apply_shape(value, grid.noise_power, grid.noise_sharpness);
 }
 
-ETX_SHARED_INLINE float density_grid_policy_shared_sample_noise(ETX_INOUT(DensityGridPolicySharedContext, context), ETX_IN(float3, local_coord)) {
-  return medium_density_shared_sample_noise(local_coord, context.bounds_min, context.bounds_max, context.grid.noise_type, context.grid.noise_scale,
-    context.grid.noise_octaves, context.grid.noise_lacunarity, context.grid.noise_persistence, context.grid.noise_seed, context.grid.noise_offset,
-    context.grid.noise_enable_border_fade, context.grid.noise_border_fade_distance);
-}
+ETX_SHARED_INLINE bool density_grid_has_data_direct(ETX_IN(MediumDensitySharedGrid, grid), bool texture_ready) {
+  if (medium_density_shared_has_grid_data(grid.type, grid.dimensions, grid.density_count) == false) {
+    return false;
+  }
 
-ETX_SHARED_INLINE float density_grid_policy_shared_sample_texture(ETX_INOUT(DensityGridPolicySharedContext, context), ETX_IN(float3, local_coord)) {
-  DensityTextureSampleSharedContext texture_context = {context.density};
-  return medium_texture_sample_shared_3d(texture_context, local_coord, context.grid.dimensions);
-}
+  if (grid.type == MediumGridType::NoiseFunction) {
+    return true;
+  }
 
-ETX_SHARED_INLINE bool density_grid_policy_shared_texture_ready(ETX_INOUT(DensityGridPolicySharedContext, context)) {
-  (void)context;
-  return true;
+  return texture_ready;
 }
-
-#define ETX_MEDIUM_GRID_POLICY_SHARED_CONTEXT_TYPE DensityGridPolicySharedContext
-#define ETX_MEDIUM_GRID_POLICY_SHARED_GRID(context) density_grid_policy_shared_grid(context)
-#define ETX_MEDIUM_GRID_POLICY_SHARED_SAMPLE_NOISE(context, local_coord) density_grid_policy_shared_sample_noise(context, local_coord)
-#define ETX_MEDIUM_GRID_POLICY_SHARED_SAMPLE_TEXTURE(context, local_coord) density_grid_policy_shared_sample_texture(context, local_coord)
-#define ETX_MEDIUM_GRID_POLICY_SHARED_TEXTURE_READY(context) density_grid_policy_shared_texture_ready(context)
-#include <etx/render/interop/medium_grid_policy_shared.hxx>
-#undef ETX_MEDIUM_GRID_POLICY_SHARED_TEXTURE_READY
-#undef ETX_MEDIUM_GRID_POLICY_SHARED_SAMPLE_TEXTURE
-#undef ETX_MEDIUM_GRID_POLICY_SHARED_SAMPLE_NOISE
-#undef ETX_MEDIUM_GRID_POLICY_SHARED_GRID
-#undef ETX_MEDIUM_GRID_POLICY_SHARED_CONTEXT_TYPE
 
 struct ETX_ALIGNED DensityGrid {
   enum class Type : uint16_t {
@@ -85,7 +88,7 @@ struct ETX_ALIGNED DensityGrid {
     result.dimensions = grid.dimensions;
     result.type = grid.type;
     result.noise_type = grid.noise_type;
-    result.density_data_offset = grid.density_data_offset;
+    result.density_data_offset = kInvalidIndex;
     result.density_count = density_count_override;
     result.noise_seed = grid.noise_seed;
     result.noise_offset = grid.noise_offset;
@@ -97,33 +100,31 @@ struct ETX_ALIGNED DensityGrid {
     result.noise_power = grid.noise_power;
     result.noise_sharpness = grid.noise_sharpness;
     result.noise_border_fade_distance = grid.noise_border_fade_distance;
-    result.density_data_chunk_index = grid.density_data_chunk_index;
+    result.density_data_chunk_index = kInvalidIndex;
     return result;
   }
 
   ETX_SHARED_INLINE float sample_texture_3d(const float3& local_coord, const uint3& dimensions) const {
-    DensityTextureSampleSharedContext context = {density};
+    MediumTextureSampleContext context = {density};
     return medium_texture_sample_shared_3d(context, local_coord, dimensions);
   }
 
   ETX_SHARED_INLINE float sample_noise(const float3& local_coord, const BoundingBox& bounds, const MediumGrid& grid) const {
-    MediumDensitySharedGrid shared_grid = to_shared_grid(grid, grid.density_count);
+    MediumDensitySharedGrid shared_grid = to_shared_grid(grid, static_cast<uint32_t>(density.count));
     return medium_density_shared_sample_noise(local_coord, bounds.p_min, bounds.p_max, shared_grid.noise_type, shared_grid.noise_scale, shared_grid.noise_octaves,
       shared_grid.noise_lacunarity, shared_grid.noise_persistence, shared_grid.noise_seed, shared_grid.noise_offset, shared_grid.noise_enable_border_fade,
       shared_grid.noise_border_fade_distance);
   }
 
   ETX_SHARED_INLINE float sample(const float3& local_coord, const BoundingBox& bounds, const MediumGrid& grid) const {
-    MediumDensitySharedGrid shared_grid = to_shared_grid(grid, grid.density_count);
-    DensityGridPolicySharedContext context = {density, shared_grid, bounds.p_min, bounds.p_max};
-    return medium_grid_policy_shared_sample_density(context, local_coord);
+    MediumDensitySharedGrid shared_grid = to_shared_grid(grid, static_cast<uint32_t>(density.count));
+    return density_grid_sample_direct(density, shared_grid, bounds.p_min, bounds.p_max, local_coord);
   }
 
   ETX_SHARED_INLINE bool has_data(const MediumGrid& grid) const {
     uint32_t density_count = (density.count > 0ull) ? 1u : 0u;
     MediumDensitySharedGrid shared_grid = to_shared_grid(grid, density_count);
-    DensityGridPolicySharedContext context = {density, shared_grid};
-    return medium_grid_policy_shared_has_grid_data(context);
+    return density_grid_has_data_direct(shared_grid, true);
   }
 };
 

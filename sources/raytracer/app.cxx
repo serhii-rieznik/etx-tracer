@@ -23,6 +23,12 @@
 
 namespace etx {
 
+namespace {
+
+constexpr uint32_t kRecentFileLimit = 8u;
+
+}
+
 RTApplication::RTApplication()
   : rt(scheduler, film)
   , film(scheduler)
@@ -102,7 +108,6 @@ void RTApplication::init() {
     ui.callbacks.mesh_renamed = std::bind(&RTApplication::on_mesh_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
     ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
-    ui.callbacks.emitter_rebuild = std::bind(&RTApplication::on_emitter_rebuild, this, std::placeholders::_1);
     ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
     ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
@@ -115,10 +120,13 @@ void RTApplication::init() {
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_restore_recent_files");
-    for (uint32_t i = 0; i < 7; ++i) {
+    for (uint32_t i = 0; i < kRecentFileLimit; ++i) {
       const auto name = "recent-" + std::to_string(i);
       if (_options.has(name, Option::Class::String)) {
-        _recent_files.emplace_back(_options.get_string(name, {}));
+        const std::string restored_path = _options.get_string(name, {});
+        if (restored_path.empty() == false) {
+          add_to_recent(restored_path);
+        }
       }
     }
   }
@@ -172,16 +180,15 @@ void RTApplication::init() {
 void RTApplication::save_options() {
   ETX_PROFILER_SCOPE();
 
-  constexpr uint32_t kRecentLimit = 8u;
-  for (uint32_t idx = 0; idx < kRecentLimit; ++idx) {
+  for (uint32_t idx = 0; idx < kRecentFileLimit; ++idx) {
     _options.remove("recent-" + std::to_string(idx));
   }
   uint32_t i = 0;
   for (const auto& recent : _recent_files) {
-    _options.set_string("recent-" + std::to_string(i++), env().to_project_relative(recent), "Recent File");
+    _options.set_string("recent-" + std::to_string(i++), recent, "Recent File");
   }
   if (_current_scene_file.empty() == false) {
-    _options.set_string("scene", env().to_project_relative(_current_scene_file), "Scene");
+    _options.set_string("scene", _current_scene_file, "Scene");
   }
   _options.save_to_file(env().file_in_data("options.json"));
 }
@@ -288,21 +295,23 @@ void RTApplication::process_event(const sapp_event* e) {
 void RTApplication::add_to_recent(const std::string& value) {
   ETX_PROFILER_SCOPE();
 
-  constexpr uint32_t kMaxRecentFiles = 8u;
+  if (value.empty()) {
+    return;
+  }
 
-  auto relative_path = env().to_project_relative(value);
-  auto absolute_path = env().resolve_to_absolute(value);
+  const std::string absolute_path = env().resolve_to_absolute(value);
+  if (absolute_path.empty()) {
+    return;
+  }
 
   auto e = std::remove_if(_recent_files.begin(), _recent_files.end(), [&](const std::string& entry) {
     return env().resolve_to_absolute(entry) == absolute_path;
   });
   _recent_files.erase(e, _recent_files.end());
 
-  if (value.empty() == false) {
-    _recent_files.emplace_back(relative_path);
-  }
+  _recent_files.emplace_back(absolute_path);
 
-  if (_recent_files.size() > kMaxRecentFiles) {
+  if (_recent_files.size() > kRecentFileLimit) {
     _recent_files.erase(_recent_files.begin());
   }
 }
@@ -313,7 +322,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   _current_scene_file = env().resolve_to_absolute(file_name);
 
   cpu_renderer.stop();
-  _options.set_string("scene", env().to_project_relative(_current_scene_file), "Scene");
+  _options.set_string("scene", _current_scene_file, "Scene");
   save_options();
 
   log::warning("Loading scene %s...", _current_scene_file.c_str());
@@ -383,12 +392,12 @@ std::string RTApplication::save_scene_file(const std::string& file_name) {
     return {};
   }
 
-  _current_scene_file = saved_path;
+  _current_scene_file = env().resolve_to_absolute(saved_path);
   _options.set_string("scene", _current_scene_file, "Scene");
-  add_to_recent(saved_path);
+  add_to_recent(_current_scene_file);
   save_options();
 
-  return saved_path;
+  return _current_scene_file;
 }
 
 void RTApplication::on_referenece_image_selected(std::string file_name) {
@@ -475,7 +484,6 @@ void RTApplication::on_save_scene_file_selected(std::string file_name) {
     base += ".json";
   }
 
-  base = env().to_project_relative(base);
   std::string saved_path = save_scene_file(base);
   if (saved_path.empty() == false) {
     log::info("Scene saved to %s", saved_path.c_str());
@@ -589,11 +597,36 @@ void RTApplication::on_mesh_renamed(uint32_t index, const std::string& name) {
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
+  bool cpu_was_running = cpu_renderer.is_running();
+  bool atmosphere_related = false;
+  if (index < scene.data().emitter_profiles.size()) {
+    const auto& emitter = scene.data().emitter_profiles[index];
+    if ((emitter.cls == EmitterProfile::Class::Environment) && ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0)) {
+      atmosphere_related = true;
+    } else if ((emitter.cls == EmitterProfile::Class::Directional) && (emitter.reference_emitter_index != kInvalidIndex) &&
+               (emitter.reference_emitter_index < scene.data().emitter_profiles.size())) {
+      const auto& referenced = scene.data().emitter_profiles[emitter.reference_emitter_index];
+      atmosphere_related = (referenced.cls == EmitterProfile::Class::Environment) && ((referenced.meta & EmitterProfile::Meta::Atmosphere) != 0);
+    }
+
+    if (atmosphere_related) {
+      if (cpu_was_running) {
+        cpu_renderer.stop();
+      }
+      scene.rebuild_atmosphere_emitter(index);
+    }
+  }
+
   notify_scene_might_have_changed();
+  if (atmosphere_related && cpu_was_running) {
+    cpu_renderer.restart();
+  }
 }
 
 void RTApplication::on_emitter_added(uint32_t type) {
   ETX_PROFILER_SCOPE();
+  bool cpu_was_running = cpu_renderer.is_running();
+  bool atmosphere_related = false;
 
   switch (type) {
     case 0: {
@@ -605,6 +638,10 @@ void RTApplication::on_emitter_added(uint32_t type) {
       break;
     }
     case 2: {
+      atmosphere_related = true;
+      if (cpu_was_running) {
+        cpu_renderer.stop();
+      }
       scene.add_atmosphere_emitter({
         .scattering = {.altitude = 1000.0f, .anisotropy = 0.825f, .rayleigh_scale = 1.0f, .mie_scale = 1.0f, .ozone_scale = 1.0f},
         .quality = 0.125f,
@@ -614,11 +651,9 @@ void RTApplication::on_emitter_added(uint32_t type) {
   }
 
   notify_scene_might_have_changed();
-}
-
-void RTApplication::on_emitter_rebuild(uint32_t index) {
-  scene.rebuild_atmosphere_emitter(index);
-  notify_scene_might_have_changed();
+  if (atmosphere_related && cpu_was_running) {
+    cpu_renderer.restart();
+  }
 }
 
 void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {

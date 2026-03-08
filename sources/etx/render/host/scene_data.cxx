@@ -2,6 +2,7 @@
 
 #include <etx/core/core.hxx>
 #include <etx/core/log.hxx>
+#include <etx/render/host/gpu_asset_descriptor.hxx>
 
 namespace etx {
 namespace {
@@ -23,7 +24,7 @@ uint64_t hash_payload_view(const BufferPool& buffer_pool, BufferView view, uint6
 uint64_t hash_images_struct_and_payload(const SceneData& scene_data) {
   uint64_t result = 0u;
   for (const auto& image : scene_data.images_vector) {
-    const ::Image& interop_image = static_cast<const ::Image&>(image);
+    const ::Image interop_image = make_gpu_image_descriptor(image);
     result = etx_hash64_continue(&interop_image, sizeof(::Image), result);
     result = hash_payload_view(scene_data.buffer_pool, image.data, result);
     result = hash_payload_view(scene_data.buffer_pool, image.x_distributions_storage, result);
@@ -35,7 +36,7 @@ uint64_t hash_images_struct_and_payload(const SceneData& scene_data) {
 uint64_t hash_mediums_struct_and_payload(const SceneData& scene_data) {
   uint64_t result = 0u;
   for (const auto& medium : scene_data.mediums_vector) {
-    const ::Medium& interop_medium = static_cast<const ::Medium&>(medium);
+    const ::Medium interop_medium = make_gpu_medium_descriptor(medium);
     result = etx_hash64_continue(&interop_medium, sizeof(::Medium), result);
     result = hash_payload_view(scene_data.buffer_pool, medium.density_data, result);
   }
@@ -308,7 +309,7 @@ uint32_t SceneData::add_atmosphere_emitter(const AtmosphereEmitterParameters& pa
   e.atmosphere.scattering = params.scattering;
   e.atmosphere.quality = params.quality;
   e.meta = EmitterProfile::Meta::Atmosphere;
-  e.emission.image_index = add_image(image_buffer.data(), sky_image_dimensions, Image::BuildSamplingTable, {}, {1.0f, 1.0f});
+  e.emission.image_index = add_image(image_buffer.data(), sky_image_dimensions, Image::BuildSamplingTable | Image::UniformSamplingTable | Image::RepeatU, {}, {1.0f, 1.0f});
 
   return atmosphere_emitter_index;
 }
@@ -335,6 +336,7 @@ void SceneData::build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_inde
   if (atmosphere_emitter.emission.image_index != kInvalidIndex) {
     images.load_images(scheduler);
     auto& img = images_vector[atmosphere_emitter.emission.image_index];
+    img.options = img.options | Image::UniformSamplingTable | Image::RepeatU;
     auto ptr = buffer_pool.map<float4>(img.data);
     ETX_CRITICAL(ptr != nullptr);
     if (scattering::generate_sky_image(rhi, gpu_context, atmosphere_emitter.atmosphere.scattering, img.isize, light_sources, ptr) == false) {
