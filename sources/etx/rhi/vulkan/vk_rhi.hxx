@@ -174,6 +174,7 @@ struct VKContext {
   VKBindlessManager* get_bindless_manager();
 
   void initialize_for_headless();
+  bool has_swapchain() const;
 
   void create_swapchain(const void* native_window, uint32_t width, uint32_t height);
   void destroy_swapchain();
@@ -185,6 +186,7 @@ struct VKContext {
   RHIResult wait_idle();
 
   void begin_frame();
+  void end_frame();
   RHISemaphore get_image_acquired_semaphore();
   RHISemaphore get_render_complete_semaphore();
   uint32_t get_current_frame_index() const;

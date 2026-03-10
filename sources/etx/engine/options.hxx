@@ -108,14 +108,12 @@ struct Options {
   }
 
   bool remove(const std::string& id) {
-    auto it = std::find_if(options.begin(), options.end(), [&](const Option& opt) {
+    const size_t previous_size = options.size();
+    auto it = std::remove_if(options.begin(), options.end(), [&](const Option& opt) {
       return opt.id == id;
     });
-    if (it != options.end()) {
-      options.erase(it);
-      return true;
-    }
-    return false;
+    options.erase(it, options.end());
+    return options.size() != previous_size;
   }
 
   const Option& get(const std::string& id) const {

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <etx/render/access/medium_access_cpu.hxx>
 #include <etx/render/interop/medium_phase_shared.hxx>
 #include <etx/render/shared/medium.hxx>
 
@@ -63,22 +62,32 @@ ETX_SHARED_INLINE float3 sample_phase_function(const float3& w_i, const float g,
   return medium_phase_shared_sample_henyey_greenstein(w_i, g, smp_rnd);
 }
 
+ETX_SHARED_INLINE bool medium_supports_tracking(const Medium& medium) {
+  return (medium.cls == Medium::Homogeneous) || (medium.cls == Medium::Heterogeneous);
+}
+
+ETX_SHARED_INLINE bool medium_has_valid_spectrum(const Scene& scene, uint32_t spectrum_index) {
+  return (spectrum_index != kInvalidIndex) && (spectrum_index < static_cast<uint32_t>(scene.spectrums.count));
+}
+
+ETX_SHARED_INLINE SpectralResponse medium_load_spectrum_or_zero(const Scene& scene, uint32_t spectrum_index, const SpectralQuery spect) {
+  if (medium_has_valid_spectrum(scene, spectrum_index) == false) {
+    return {spect, 0.0f};
+  }
+
+  return scene.spectrums[spectrum_index](spect);
+}
+
 ETX_SHARED_INLINE SpectralResponse medium_absorption(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
-  MediumAccessCPUContext medium_context = make_medium_access_cpu_context(scene, &medium);
-  MediumAccess access = medium_access_cpu_make(medium);
-  return medium_access_load_absorption_spectral(medium_context, access, spect);
+  return medium_load_spectrum_or_zero(scene, medium.absorption_index, spect);
 }
 
 ETX_SHARED_INLINE SpectralResponse medium_scattering(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
-  MediumAccessCPUContext medium_context = make_medium_access_cpu_context(scene, &medium);
-  MediumAccess access = medium_access_cpu_make(medium);
-  return medium_access_load_scattering_spectral(medium_context, access, spect);
+  return medium_load_spectrum_or_zero(scene, medium.scattering_index, spect);
 }
 
 ETX_SHARED_INLINE SpectralResponse medium_extinction(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
-  MediumAccessCPUContext medium_context = make_medium_access_cpu_context(scene, &medium);
-  MediumAccess access = medium_access_cpu_make(medium);
-  return medium_access_load_extinction_spectral(medium_context, access, spect);
+  return medium_absorption(scene, medium, spect) + medium_scattering(scene, medium, spect);
 }
 
 ETX_SHARED_INLINE MediumInstance make_medium_instance(const Scene& scene, const Medium& medium, const SpectralQuery spect, uint32_t index) {
@@ -96,14 +105,12 @@ ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Scene& scene, cons
     return one;
   }
 
-  MediumAccessCPUContext medium_context = make_medium_access_cpu_context(scene, &medium);
-  MediumAccess access = medium_access_cpu_make(medium);
-  if (medium_access_supported_class(access.medium_class) == false) {
+  if (medium_supports_tracking(medium) == false) {
     return one;
   }
 
-  SpectralResponse extinction = medium_access_load_extinction_spectral(medium_context, access, spect);
-  if (access.medium_class == Medium::Homogeneous) {
+  SpectralResponse extinction = medium_extinction(scene, medium, spect);
+  if (medium.cls == Medium::Homogeneous) {
     const ::SpectralResponse transmittance = medium_shared_transmittance_homogeneous_spectral(static_cast<const ::SpectralResponse&>(extinction), distance);
     return medium_transmittance_shared_to_spectral_response(transmittance);
   }
@@ -122,11 +129,9 @@ ETX_SHARED_INLINE MediumSample sample_medium(const Scene& scene, const Medium& m
   const float3& pos, const float3& w_i, float max_t) {
   ETX_CRITICAL(max_t > 0.0f);
 
-  MediumAccessCPUContext medium_context = make_medium_access_cpu_context(scene, &medium);
-  MediumAccess access = medium_access_cpu_make(medium);
-  const SpectralResponse scattering_value = medium_access_load_scattering_spectral(medium_context, access, spect);
+  const SpectralResponse scattering_value = medium_scattering(scene, medium, spect);
   ETX_VALIDATE(scattering_value);
-  const SpectralResponse absorption_value = medium_access_load_absorption_spectral(medium_context, access, spect);
+  const SpectralResponse absorption_value = medium_absorption(scene, medium, spect);
   ETX_VALIDATE(absorption_value);
 
   MediumSharedContext context = make_medium_shared_context(medium, smp);

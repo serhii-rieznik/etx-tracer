@@ -84,6 +84,7 @@ struct RTApplication {
 
  private:
   void add_to_recent(const std::string&);
+  void ensure_gpu_renderer_initialized();
   void save_options();
   void update_camera_to_fit_scene(const float3& view_direction);
   void notify_scene_might_have_changed();
@@ -101,6 +102,7 @@ struct RTApplication {
   RasterizationRenderer raster_renderer;
   GPURaytracingRenderer gpu_renderer;
   Renderer* _active_renderer = nullptr;
+  bool _gpu_renderer_initialized = false;
 
   Options _options;
   std::vector<std::string> _recent_files = {};

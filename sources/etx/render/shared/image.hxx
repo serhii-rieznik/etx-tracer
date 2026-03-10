@@ -39,7 +39,7 @@ struct Image {
   float2 fsize = {};
   float2 offset = {};
   float2 scale = float2{1.0f, 1.0f};
-  float normalization = 1.0f;
+  float normalization = 0.0f;
 
   uint2 isize = {};
   uint32_t options = 0u;
@@ -79,18 +79,27 @@ struct Image {
   BufferView x_distributions_buffer = {};
 
   ETX_SHARED_INLINE Gather gather(const float2& in_uv) const {
-    ImageFilterSharedAddress sample = image_filter_shared_address(in_uv, fsize, isize, options);
+    float2 uv = in_uv * fsize;
+    float x0 = tex_coord_u(uv.x, fsize.x);
+    float y0 = tex_coord_v(uv.y, fsize.y);
+    float dx = x0 - floorf(x0);
+    float dy = y0 - floorf(y0);
 
-    const auto& p00 = pixel(sample.col_0, sample.row_0) * (1.0f - sample.dx) * (1.0f - sample.dy);
+    uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.y - 1u);
+    uint32_t row_1 = clamp(row_0 + 1u, 0u, isize.y - 1u);
+    uint32_t col_0 = clamp(static_cast<uint32_t>(x0), 0u, isize.x - 1u);
+    uint32_t col_1 = clamp(col_0 + 1u, 0u, isize.x - 1u);
+
+    const auto& p00 = pixel(col_0, row_0) * (1.0f - dx) * (1.0f - dy);
     ETX_VALIDATE(p00);
-    const auto& p01 = pixel(sample.col_1, sample.row_0) * (sample.dx) * (1.0f - sample.dy);
+    const auto& p01 = pixel(col_1, row_0) * (dx) * (1.0f - dy);
     ETX_VALIDATE(p01);
-    const auto& p10 = pixel(sample.col_0, sample.row_1) * (1.0f - sample.dx) * (sample.dy);
+    const auto& p10 = pixel(col_0, row_1) * (1.0f - dx) * (dy);
     ETX_VALIDATE(p10);
-    const auto& p11 = pixel(sample.col_1, sample.row_1) * (sample.dx) * (sample.dy);
+    const auto& p11 = pixel(col_1, row_1) * (dx) * (dy);
     ETX_VALIDATE(p11);
 
-    return {p00, p01, p10, p11, sample.row_0, sample.row_1};
+    return {p00, p01, p10, p11, row_0, row_1};
   }
 
   ETX_SHARED_INLINE float4 evaluate(const float2& in_uv, float* pdf) const {
@@ -101,8 +110,7 @@ struct Image {
       auto t = luminance(to_float3(g.p00 + g.p01)) * s_t;
       float s_b = ((options & UniformSamplingTable) || (isize.y == 1u) ? 1.0f : max(0.0f, sinf(kPi * saturate(in_uv.y + 1.0f / fsize.y))));
       auto b = luminance(to_float3(g.p10 + g.p11)) * s_b;
-      ETX_ASSERT((normalization != 0.0f) || ((normalization == 0.0f) && (t + b == 0.0f)));
-      *pdf = normalization > 0.0f ? (t + b) / normalization : 0.0f;
+      *pdf = (t + b) / normalization;
       ETX_VALIDATE(*pdf);
     }
 
@@ -306,9 +314,32 @@ struct Image {
   }
 
   ETX_SHARED_INLINE float2 sample(const float2& rnd, float& image_pdf, uint2& location, float4& eval) const {
-    float2 uv = rnd;
-    bool sampled = image_sample_distribution_cpu(*this, rnd, image_pdf, location, uv);
-    (void)sampled;
+    float y_pdf = 0.0f;
+    location.y = y_distribution.sample(rnd.y, y_pdf);
+
+    float x_pdf = 0.0f;
+    const auto& x_distribution = x_distributions[location.y];
+    location.x = x_distribution.sample(rnd.x, x_pdf);
+
+    const auto& x0 = x_distribution.values[location.x];
+    const auto& x1 = x_distribution.values[min(location.x + 1u, uint32_t(x_distribution.values.count) - 1u)];
+    float dx = (rnd.x - x0.cdf);
+    if ((x1.cdf - x0.cdf) > 0.0f) {
+      dx /= (x1.cdf - x0.cdf);
+    }
+
+    const auto& y0 = y_distribution.values[location.y];
+    const auto& y1 = y_distribution.values[min(location.y + 1u, uint32_t(y_distribution.values.count) - 1u)];
+    float dy = (rnd.y - y0.cdf);
+    if ((y1.cdf - y0.cdf) > 0.0f) {
+      dy /= (y1.cdf - y0.cdf);
+    }
+
+    float2 uv = {
+      (float(location.x) + dx) / fsize.x,
+      (float(location.y) + dy) / fsize.y,
+    };
+
     eval = evaluate(uv, &image_pdf);
     return uv;
   }
@@ -320,22 +351,35 @@ struct Image {
     return sample(rnd, image_pdf, location, eval);
   }
 
+  ETX_SHARED_INLINE float tex_coord_repeat(float u, float size) const {
+    float x = fmodf(u, size);
+    return x < 0.0f ? (x + size) : x;
+  }
+
+  ETX_SHARED_INLINE float tex_coord_clamp(float u, float size) const {
+    return clamp(u, 0.0f, nextafterf(size, 0.0f));
+  }
+
+  ETX_SHARED_INLINE float tex_coord_u(float u, float size) const {
+    return (options & RepeatU) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
+  }
+
+  ETX_SHARED_INLINE float tex_coord_v(float u, float size) const {
+    return (options & RepeatV) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
+  }
+
   ETX_SHARED_INLINE float4 read(const float2& uv) const {
-    if ((isize.x == 0u) || (isize.y == 0u)) {
-      return float4(0.0f, 0.0f, 0.0f, 0.0f);
-    }
-
-    float2 normalized_uv = {
-      (fsize.x > 0.0f) ? (uv.x / fsize.x) : 0.0f,
-      (fsize.y > 0.0f) ? (uv.y / fsize.y) : 0.0f,
-    };
-    ImageFilterSharedAddress sample = image_filter_shared_address(normalized_uv, fsize, isize, options);
-
-    float4 p00 = pixel(sample.col_0, sample.row_0);
-    float4 p01 = pixel(sample.col_1, sample.row_0);
-    float4 p10 = pixel(sample.col_0, sample.row_1);
-    float4 p11 = pixel(sample.col_1, sample.row_1);
-    return image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
+    float x0 = tex_coord_u(uv.x - 0.0f, fsize.x);
+    float x1 = tex_coord_u(uv.x + 1.0f, fsize.x);
+    float y0 = tex_coord_v(uv.y - 0.0f, fsize.y);
+    float y1 = tex_coord_v(uv.y + 1.0f, fsize.y);
+    float dx = x0 - floorf(x0);
+    float dy = y0 - floorf(y0);
+    const auto& p00 = pixel(uint32_t(x0), uint32_t(y0)) * (1.0f - dx) * (1.0f - dy);
+    const auto& p01 = pixel(uint32_t(x1), uint32_t(y0)) * (dx) * (1.0f - dy);
+    const auto& p10 = pixel(uint32_t(x0), uint32_t(y1)) * (1.0f - dx) * (dy);
+    const auto& p11 = pixel(uint32_t(x1), uint32_t(y1)) * (dx) * (dy);
+    return p00 + p01 + p10 + p11;
   }
 };
 

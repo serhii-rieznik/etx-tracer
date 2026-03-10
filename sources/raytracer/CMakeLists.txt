@@ -6,6 +6,12 @@ set(RAYTRACER_SHARED_SOURCES
   render_context.hxx
   render_context.cxx
   options.hxx
+  image_output.hxx
+  image_output.cxx
+  headless_render_context.hxx
+  headless_render_context.cxx
+  batch_mode.hxx
+  batch_mode.cxx
   gpu_renderer.hxx
   gpu_renderer.cxx
   raster_renderer.cxx

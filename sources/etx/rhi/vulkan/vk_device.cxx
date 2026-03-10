@@ -158,6 +158,7 @@ struct VKDevice::Impl {
   std::atomic<uint64_t> gpu_allocated_bytes = {0};
   bool memory_budget_supported = false;
   bool fill_mode_non_solid_supported = false;
+  bool headless = false;
 
   Impl(const RHIInitInfo& info);
   ~Impl();
@@ -438,6 +439,8 @@ struct VKDevice::Impl {
 };
 
 VKDevice::Impl::Impl(const RHIInitInfo& info) {
+  headless = info.headless;
+
   if (initialize_instance(info) == false) {
     log::error("Failed to initialize Vulkan instance");
     return;
@@ -509,12 +512,14 @@ bool VKDevice::Impl::initialize_instance(const RHIInitInfo& init_info) {
   app_info.apiVersion = VK_API_VERSION_1_3;
 
   std::vector<const char*> extensions = {
-    VK_KHR_SURFACE_EXTENSION_NAME,
     VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
-#if ETX_PLATFORM_WINDOWS
-    "VK_KHR_win32_surface",
-#endif
   };
+  if (init_info.headless == false) {
+    extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+#if ETX_PLATFORM_WINDOWS
+    extensions.push_back("VK_KHR_win32_surface");
+#endif
+  }
 
   if (check_instance_extension_support(extensions) == false) {
     log::error("Required instance extensions not supported");
@@ -644,7 +649,6 @@ bool VKDevice::Impl::initialize_device() {
   vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, available_device_extensions.data());
 
   std::vector<const char*> device_extensions = {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
     VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
     VK_KHR_MAINTENANCE_3_EXTENSION_NAME,
@@ -653,6 +657,9 @@ bool VKDevice::Impl::initialize_device() {
     VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
     VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
   };
+  if (headless == false) {
+    device_extensions.insert(device_extensions.begin(), VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+  }
 
   for (const auto& ext : available_device_extensions) {
     if (strcmp(ext.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0) {

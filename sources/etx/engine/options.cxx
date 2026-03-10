@@ -151,6 +151,7 @@ bool Options::load_from_file(const std::string& filename) {
     return false;
   }
 
+  options.clear();
   for (const auto& value : values) {
     auto& option = options.emplace_back();
     option.deserialize(static_cast<const void*>(&value));

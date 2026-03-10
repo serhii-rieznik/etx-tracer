@@ -942,19 +942,19 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   const ArrayView<VCMLightVertex>& light_vertices, VCMPathState& state, const Raytracing& rt, const VCMSpatialGridData& spatial_grid) {
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
-  SamplerPolicy sampler_policy = {
-    .enable_blue_noise = options.blue_noise ? 1u : 0u,
-  };
-
   // Try sampling medium BEFORE allocating per-event samples to match BDPT ordering
   MediumSample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
   if (medium_sample_sampled_medium(medium_sample)) {
     // Allocate samples AFTER medium sampling to match BDPT
-    const SamplerStreamSamples2D interaction_samples = sample_interaction_streams_2d(
-      state.sampler, sampler_policy, kSamplerPathSourceCamera, state.total_path_depth, state.pixel_coord, scene.options.samples, iteration.iteration);
-    const float2 rnd_bsdf = interaction_samples.bsdf;
-    const float2 rnd_connection = interaction_samples.connection;
-    const float2 rnd_support = interaction_samples.support;
+    float2 rnd_bsdf = state.sampler.next_2d();
+    float2 rnd_connection = state.sampler.next_2d();
+    float2 rnd_support = state.sampler.next_2d();
+
+    if (options.blue_noise && (state.total_path_depth == 1u) && (iteration.iteration < 256u)) {
+      rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 0u);
+      rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 2u);
+      rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 4u);
+    }
     // Fold pending boundary + medium segment before connections
     float seg = state.path_distance + medium_sample.sampled_medium_t;
     state.d_vcm *= sqr(seg);
@@ -1022,11 +1022,15 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   auto bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
 
   // Allocate samples AFTER confirming no medium event to match BDPT
-  const SamplerStreamSamples2D interaction_samples = sample_interaction_streams_2d(
-    state.sampler, sampler_policy, kSamplerPathSourceCamera, state.total_path_depth, state.pixel_coord, scene.options.samples, iteration.iteration);
-  const float2 rnd_bsdf = interaction_samples.bsdf;
-  const float2 rnd_connection = interaction_samples.connection;
-  const float2 rnd_support = interaction_samples.support;
+  float2 rnd_bsdf = state.sampler.next_2d();
+  float2 rnd_connection = state.sampler.next_2d();
+  float2 rnd_support = state.sampler.next_2d();
+
+  if (options.blue_noise && (state.total_path_depth == 1u) && (iteration.iteration < 256u)) {
+    rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 0u);
+    rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 2u);
+    rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 4u);
+  }
 
   // Use fixed sample allocation for BSDF sampling
   state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);

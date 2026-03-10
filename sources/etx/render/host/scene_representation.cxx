@@ -1910,6 +1910,12 @@ void SceneRepresentationImpl::generate_pixel_sampler_image() {
 }
 
 void SceneRepresentationImpl::setup_atmosphere_references() {
+  for (auto& profile : data.emitter_profiles) {
+    if (profile.cls == EmitterProfile::Class::Directional) {
+      profile.reference_emitter_index = kInvalidIndex;
+    }
+  }
+
   // Find atmosphere emitter (environment emitter with atmosphere meta)
   uint32_t atmosphere_emitter_index = kInvalidIndex;
   for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
@@ -2082,6 +2088,13 @@ bool SceneRepresentationImpl::delete_emitter(uint32_t emitter_index) {
 
   // Rebuild area emitters from materials (this will update triangle references)
   create_area_emitters_from_materials();
+
+  for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
+    const auto& current_profile = data.emitter_profiles[i];
+    if ((current_profile.cls == EmitterProfile::Class::Environment) && ((current_profile.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
+      rebuild_atmosphere_emitter(i);
+    }
+  }
 
   return true;
 }

@@ -1,11 +1,9 @@
 #include <etx/core/core.hxx>
 #include <etx/rt/rt.hxx>
+#include <etx/rt/scene_global.hxx>
 
 #include <etx/render/host/film.hxx>
-#include <etx/render/host/buffer_pool.hxx>
-#include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_data.hxx>
-#include <etx/render/interop/hit_policy.hxx>
 #include <etx/render/shared/sampler.hxx>
 
 #include <embree4/rtcore.h>
@@ -23,11 +21,7 @@ struct RaytracingImpl {
   struct InternalSceneData {
     Camera camera = {};
     Distribution emitters_distribution = {};
-    BufferPool emitters_distribution_buffer_pool = {};
-    BufferHandle emitters_distribution_buffer = {};
-    BufferView emitters_distribution_storage = {};
-    std::vector<uint32_t> active_emitter_indices = {};
-    Scene::EnvironmentEmitters environment_emitters = {};
+    std::vector<Distribution::Entry> emitters_distribution_storage = {};
     std::vector<EmitterProfile> emitter_profiles = {};
     std::vector<Emitter> emitter_instances = {};
     std::vector<Triangle> triangles = {};
@@ -41,16 +35,11 @@ struct RaytracingImpl {
     const auto version_minor = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_MINOR);
     const auto version_patch = rtcGetDeviceProperty(rt_device, RTC_DEVICE_PROPERTY_VERSION_PATCH);
     log::warning("Embree version: %u.%u.%u", version_major, version_minor, version_patch);
-    internal_data.emitters_distribution_buffer = internal_data.emitters_distribution_buffer_pool.create(0u, "rt_emitters_distribution");
   }
 
   ~RaytracingImpl() {
+    scene_global_clear(this);
     release_host_scene();
-    if (internal_data.emitters_distribution_buffer.valid()) {
-      internal_data.emitters_distribution_buffer_pool.destroy(internal_data.emitters_distribution_buffer);
-      internal_data.emitters_distribution_buffer = {};
-      internal_data.emitters_distribution_storage = {};
-    }
 
     if (rt_device) {
       rtcReleaseDevice(rt_device);
@@ -77,6 +66,7 @@ struct RaytracingImpl {
     }
     film.allocate(internal_data.camera.film_size);
     scene.options.properties[Scene::Properties::Committed] = true;
+    scene_global_publish(this, &scene);
   }
 
   void compute_scene_bounding_volumes(const SceneData& scene_data) {
@@ -113,6 +103,7 @@ struct RaytracingImpl {
     ETX_PROFILER_SCOPE();
     if (update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Emitters]) {
       ETX_PROFILER_NAMED_SCOPE("update_triangles_and_emitters");
+      update_triangles_internal(scene_data);
       update_emitters_internal(scene_data);
     }
 
@@ -122,50 +113,127 @@ struct RaytracingImpl {
 
     if (update_flags[UpdateFlags::Emitters] || update_flags[UpdateFlags::AnyMaterials] || update_flags[UpdateFlags::Triangles]) {
       ETX_PROFILER_NAMED_SCOPE("build_emitters_distribution");
-      build_emitters_distribution();
+      build_emitters_distribution(scene_data);
     }
 
     update_all_scene_views(scene_data);
   }
 
-  void build_emitters_distribution() {
+  void build_emitters_distribution(const SceneData& scene_data) {
     ETX_PROFILER_SCOPE();
-    scene.environment_emitters = internal_data.environment_emitters;
+    const auto bbox = scene_data.compute_bounding_volumes();
+    const float3 bounding_sphere_center = 0.5f * (bbox.p_min + bbox.p_max);
+    const float bounding_sphere_radius = length(bbox.p_max - bounding_sphere_center);
 
-    const uint32_t active_count = static_cast<uint32_t>(internal_data.active_emitter_indices.size());
-    internal_data.emitters_distribution_buffer_pool.reset(internal_data.emitters_distribution_buffer);
-    internal_data.emitters_distribution_storage =
-      internal_data.emitters_distribution_buffer_pool.allocate_elements<Distribution::Entry>(internal_data.emitters_distribution_buffer, static_cast<uint64_t>(active_count) + 1u);
-    auto* entries = internal_data.emitters_distribution_buffer_pool.map<Distribution::Entry>(internal_data.emitters_distribution_storage);
-    if (entries == nullptr) {
-      internal_data.emitters_distribution = {};
-      scene.emitters_distribution = {};
-      log::error("Failed to allocate emitters distribution storage");
-      return;
+    scene.environment_emitters.count = 0u;
+
+    for (uint32_t i = 0u; i < static_cast<uint32_t>(internal_data.emitter_profiles.size()); ++i) {
+      auto& profile = internal_data.emitter_profiles[i];
+      if (profile.cls == EmitterProfile::Class::Directional) {
+        profile.directional.equivalent_disk_size = 2.0f * std::tan(profile.directional.angular_size * 0.5f);
+        profile.directional.angular_size_cosine = std::cos(profile.directional.angular_size * 0.5f);
+      }
     }
 
-    const uint32_t written_count = fill_packed_emitter_distribution_entries(internal_data.emitter_instances, internal_data.active_emitter_indices, entries, active_count);
-    if (written_count != active_count) {
-      internal_data.emitters_distribution = {};
-      scene.emitters_distribution = {};
-      log::error("Failed to write emitters distribution entries");
-      return;
+    std::vector<uint32_t> active_emitter_indices = {};
+    active_emitter_indices.reserve(internal_data.emitter_instances.size());
+
+    for (uint32_t i = 0u; i < static_cast<uint32_t>(internal_data.emitter_instances.size()); ++i) {
+      auto& emitter = internal_data.emitter_instances[i];
+      const auto& profile = internal_data.emitter_profiles[emitter.profile];
+
+      const float spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
+      emitter.spectrum_weight = spectrum_weight;
+
+      if ((profile.cls == EmitterProfile::Class::Directional) || (profile.cls == EmitterProfile::Class::Environment)) {
+        const float additional_weight = kPi * bounding_sphere_radius * bounding_sphere_radius;
+        emitter.additional_weight = additional_weight;
+      }
+
+      const float total_weight = emitter.spectrum_weight * emitter.additional_weight;
+      if (total_weight > 0.0f) {
+        active_emitter_indices.push_back(i);
+      }
     }
 
-    internal_data.emitters_distribution = Distribution::build(entries, active_count, internal_data.emitters_distribution_buffer, internal_data.emitters_distribution_storage);
+    for (uint32_t emitter_idx : active_emitter_indices) {
+      const auto& emitter = internal_data.emitter_instances[emitter_idx];
+      if ((emitter.cls == EmitterProfile::Class::Directional) || (emitter.cls == EmitterProfile::Class::Environment)) {
+        if (scene.environment_emitters.count < SceneLimits::MaxEnvironmentEmitters) {
+          scene.environment_emitters.emitters[scene.environment_emitters.count++] = emitter_idx;
+        }
+      }
+    }
+
+    const uint32_t active_count = static_cast<uint32_t>(active_emitter_indices.size());
+    internal_data.emitters_distribution_storage.resize(static_cast<size_t>(active_count) + 1u);
+
+    auto* entries = internal_data.emitters_distribution_storage.data();
+    for (uint32_t i = 0u; i < active_count; ++i) {
+      const uint32_t emitter_idx = active_emitter_indices[i];
+      const auto& emitter = internal_data.emitter_instances[emitter_idx];
+      const float total_weight = emitter.spectrum_weight * emitter.additional_weight;
+      entries[i] = {total_weight, 0.0f, 0.0f, emitter_idx};
+    }
+
+    internal_data.emitters_distribution = Distribution::build(entries, active_count);
 
     scene.emitters_distribution = internal_data.emitters_distribution;
 
     log::info("Built emitters distribution for %u emitters (%u active)", static_cast<uint32_t>(internal_data.emitter_instances.size()), active_count);
   }
 
+  void update_triangles_internal(const SceneData& scene_data) {
+    internal_data.triangles = scene_data.triangles;
+    for (auto& tri : internal_data.triangles) {
+      tri.emitter_index = kInvalidIndex;
+    }
+  }
+
   void update_emitters_internal(const SceneData& scene_data) {
-    auto packed_emitters = build_packed_emitters(scene_data);
-    internal_data.triangles = std::move(packed_emitters.triangles);
-    internal_data.emitter_profiles = std::move(packed_emitters.emitter_profiles);
-    internal_data.emitter_instances = std::move(packed_emitters.emitter_instances);
-    internal_data.active_emitter_indices = std::move(packed_emitters.active_emitter_indices);
-    internal_data.environment_emitters = packed_emitters.environment_emitters;
+    internal_data.emitter_instances.clear();
+    internal_data.emitter_profiles.clear();
+
+    internal_data.emitter_profiles = scene_data.emitter_profiles;
+
+    for (uint32_t i = 0u; i < static_cast<uint32_t>(scene_data.emitter_profiles.size()); ++i) {
+      const auto& profile = scene_data.emitter_profiles[i];
+      if (profile.cls != EmitterProfile::Class::Area) {
+        Emitter& emitter = internal_data.emitter_instances.emplace_back(profile.cls);
+        emitter.profile = i;
+        emitter.triangle_index = kInvalidIndex;
+        emitter.spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
+        emitter.additional_weight = (profile.cls == EmitterProfile::Class::Directional) ? kPi : (4.0f * kPi);
+      }
+    }
+
+    for (size_t tri_index = 0u; tri_index < scene_data.triangles.size(); ++tri_index) {
+      const Triangle& tri = scene_data.triangles[tri_index];
+      if ((tri.emitter_index != kInvalidIndex) && (tri.emitter_index < scene_data.emitter_profiles.size())) {
+        const auto& profile = scene_data.emitter_profiles[tri.emitter_index];
+        if (profile.cls == EmitterProfile::Class::Area) {
+          Emitter& emitter = internal_data.emitter_instances.emplace_back(EmitterProfile::Class::Area);
+          emitter.profile = tri.emitter_index;
+          emitter.triangle_index = static_cast<uint32_t>(tri_index);
+
+          if (tri.material_index < scene_data.materials.size()) {
+            const Material& mtl = scene_data.materials[tri.material_index];
+            const float spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
+
+            const float3& v0 = scene_data.vertices.pos[tri.i[0]];
+            const float3& v1 = scene_data.vertices.pos[tri.i[1]];
+            const float3& v2 = scene_data.vertices.pos[tri.i[2]];
+            const float triangle_area = 0.5f * length(cross(v1 - v0, v2 - v0));
+
+            emitter.triangle_area = triangle_area;
+            emitter.spectrum_weight = spectrum_weight;
+            emitter.additional_weight = (mtl.two_sided ? 2.0f : 1.0f) * triangle_area * kPi;
+          }
+
+          internal_data.triangles[tri_index].emitter_index = static_cast<uint32_t>(internal_data.emitter_instances.size() - 1u);
+        }
+      }
+    }
   }
 
   void build_host_scene(const Scene& s) {
@@ -283,18 +351,14 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
     }
 
     const auto& mat = ctx->scene->materials[tri.material_index];
-
-    float u = RTCHitN_u(args->hit, args->N, 0);
-    float v = RTCHitN_v(args->hit, args->N, 0);
-    bool alpha_rejected = alpha_test_pass(mat, tri, barycentrics({u, v}), *ctx->scene, *ctx->smp);
-    HitPolicyDecision hit_policy =
-      hit_policy_evaluate(HitPolicyMode::KeepBoundaryHit, mat.cls, alpha_rejected, false, mat.int_medium, mat.ext_medium);
-    if (hit_policy.action == HitPolicyAction::Ignore) {
+    if (mat.cls == MaterialClass::Void) {
       *args->valid = 0;
       return;
     }
 
-    if (hit_policy.action != HitPolicyAction::CommitSurface) {
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    if (alpha_test_pass(mat, tri, barycentrics({u, v}), *ctx->scene, *ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -339,15 +403,12 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
     const auto& scene = *ctx->scene;
     const auto& mat = ctx->scene->materials[tri.material_index];
 
-    bool alpha_rejected = alpha_test_pass(mat, tri, bc, scene, *ctx->smp);
-    HitPolicyDecision hit_policy =
-      hit_policy_evaluate(HitPolicyMode::KeepBoundaryHit, mat.cls, alpha_rejected, false, mat.int_medium, mat.ext_medium);
-    if (hit_policy.action == HitPolicyAction::Ignore) {
+    if (mat.cls == MaterialClass::Void) {
       *args->valid = 0;
       return;
     }
 
-    if (hit_policy.action != HitPolicyAction::CommitSurface) {
+    if (alpha_test_pass(mat, tri, bc, scene, *ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -384,18 +445,14 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
     const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
     const auto& tri = ctx->scene->triangles[triangle_index];
     const auto& mat = ctx->scene->materials[tri.material_index];
-    const auto& scene = *ctx->scene;
-    float u = RTCHitN_u(args->hit, args->N, 0);
-    float v = RTCHitN_v(args->hit, args->N, 0);
-    bool alpha_rejected = alpha_test_pass(mat, tri, barycentrics({u, v}), scene, *ctx->smp);
-    HitPolicyDecision hit_policy =
-      hit_policy_evaluate(HitPolicyMode::KeepBoundaryHit, mat.cls, alpha_rejected, false, mat.int_medium, mat.ext_medium);
-    if (hit_policy.action == HitPolicyAction::Ignore) {
+    if (mat.cls == MaterialClass::Void) {
       *args->valid = 0;
       return;
     }
-
-    if (hit_policy.action != HitPolicyAction::CommitSurface) {
+    const auto& scene = *ctx->scene;
+    float u = RTCHitN_u(args->hit, args->N, 0);
+    float v = RTCHitN_v(args->hit, args->N, 0);
+    if (alpha_test_pass(mat, tri, barycentrics({u, v}), scene, *ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -440,23 +497,15 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     const auto v = RTCHitN_v(args->hit, args->N, 0);
     const auto& tri = ctx->scene.triangles[triangle_index];
     const auto& mat = ctx->scene.materials[tri.material_index];
-    bool alpha_rejected = alpha_test_pass(mat, tri, barycentrics({u, v}), ctx->scene, ctx->smp);
-    HitPolicyDecision hit_policy =
-      hit_policy_evaluate(HitPolicyMode::MediumTransmittance, mat.cls, alpha_rejected, false, mat.int_medium, mat.ext_medium);
-    if (hit_policy.action == HitPolicyAction::Ignore) {
+    if (mat.cls == MaterialClass::Void) {
       *args->valid = 0;
       return;
     }
-    if (hit_policy.action == HitPolicyAction::Occlude) {
-      ctx->occlusion_found = 1u;
-      *args->valid = -1;
-      return;
-    }
-    if (hit_policy.action != HitPolicyAction::TransitionMedium) {
+    if (alpha_test_pass(mat, tri, barycentrics({u, v}), ctx->scene, ctx->smp)) {
       *args->valid = 0;
       return;
     }
-    if ((ctx->intersection_count + 1u) >= kIntersectionBufferSize) {
+    if ((mat.cls != MaterialClass::Boundary) || ((ctx->intersection_count + 1u) >= kIntersectionBufferSize)) {
       ctx->occlusion_found = 1u;
       *args->valid = -1;
       return;

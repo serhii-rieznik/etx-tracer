@@ -256,25 +256,15 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
     }
   } else {
     if (spectral_mode) {
-      SpectralResponse distant_emission = sample_distant_emission_spectral_random(ray_dir, spectral_query, seed);
+      SpectralResponse distant_emission = evaluate_distant_emission_spectral_all(ray_dir, spectral_query);
       if (spectral_response_is_zero(distant_emission) == false) {
         SpectralResponse attenuated = spectral_response_mul(distant_emission, ray_transmittance_spectral);
         color = float4(max(spectral_response_to_rgb(attenuated) * spectral_weight, float3(0.0f, 0.0f, 0.0f)), 1.0f);
-      } else {
-        float t = 0.5f * (ray_dir.y + 1.0f);
-        float3 sky_color = lerp(float3(1.0f, 1.0f, 1.0f), float3(0.5f, 0.7f, 1.0f), t);
-        SpectralResponse sky_spectral = spectral_response_make(spectral_query, luminance(sky_color));
-        SpectralResponse attenuated = spectral_response_mul(sky_spectral, ray_transmittance_spectral);
-        color = float4(max(spectral_response_to_rgb(attenuated) * spectral_weight, float3(0.0f, 0.0f, 0.0f)), 1.0f);
       }
     } else {
-      float3 distant_emission = sample_distant_emission_integrated_random(ray_dir, seed);
+      float3 distant_emission = evaluate_distant_emission_integrated_all(ray_dir);
       if (dot(distant_emission, distant_emission) > 0.0f) {
         color = float4(distant_emission * ray_transmittance_integrated, 1.0f);
-      } else {
-        float t = 0.5f * (ray_dir.y + 1.0f);
-        float4 sky = lerp(float4(1.0f, 1.0f, 1.0f, 1.0f), float4(0.5f, 0.7f, 1.0f, 1.0f), t);
-        color = float4(sky.xyz * ray_transmittance_integrated, 1.0f);
       }
     }
   }

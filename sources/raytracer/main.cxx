@@ -3,10 +3,12 @@
 #include <etx/rhi/shader/shader_compiler.hxx>
 
 #include "app.hxx"
+#include "batch_mode.hxx"
 
+#include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
-#include <cstring>
 
 namespace etx {
 
@@ -15,6 +17,21 @@ extern "C" int main(int argc, char* argv[]) {
 
   init_platform();
   env().setup(argv[0]);
+
+  BatchRenderOptions batch_options = {};
+  std::string batch_message = {};
+  const BatchModeCommand batch_command = parse_batch_command_line(argc, argv, batch_options, batch_message);
+  if (batch_command == BatchModeCommand::Help) {
+    printf("%s", batch_message.c_str());
+    return 0;
+  }
+  if (batch_command == BatchModeCommand::Error) {
+    fprintf(stderr, "%s", batch_message.c_str());
+    return 1;
+  }
+  if (batch_command == BatchModeCommand::Run) {
+    return run_batch_render(batch_options);
+  }
 
   RTApplication rhi_app = {};
   sapp_desc desc = {};

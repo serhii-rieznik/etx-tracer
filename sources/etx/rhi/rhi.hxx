@@ -23,6 +23,7 @@ struct RHISubmitInfo {
 struct RHIInitInfo {
   RHIBackend backend = RHIBackend::Vulkan;
   bool enable_validation = false;
+  bool headless = false;
 };
 
 struct RHIMemoryStats {
@@ -151,6 +152,9 @@ struct RHIContext {
     return _bindless;
   }
 
+  void initialize_headless();
+  bool has_swapchain() const;
+
   void create_swapchain(const void* native_window, uint32_t width, uint32_t height);
   void destroy_swapchain();
   void resize_swapchain(uint32_t width, uint32_t height);
@@ -159,6 +163,7 @@ struct RHIContext {
   RHIExtent2D get_swapchain_extent() const;
 
   void begin_frame();
+  void end_frame();
   void present();
   RHIResult wait_idle();
 

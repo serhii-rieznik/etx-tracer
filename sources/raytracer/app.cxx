@@ -4,11 +4,10 @@
 
 #include <etx/render/shared/camera.hxx>
 #include <etx/rt/integrators/integrator.hxx>
+#include <etx/rt/scene_global.hxx>
 
 #include "app.hxx"
-
-#include <tinyexr.hxx>
-#include <stb_image_write.hxx>
+#include "image_output.hxx"
 
 #include <algorithm>
 #include <cstring>
@@ -47,6 +46,8 @@ RTApplication::~RTApplication() {
 void RTApplication::init() {
   ETX_PROFILER_SCOPE();
 
+  scene_global_init();
+
   {
     ETX_PROFILER_NAMED_SCOPE("app_load_options");
     std::string options_file = env().file_in_data("options.json");
@@ -67,7 +68,6 @@ void RTApplication::init() {
 
     cpu_renderer.init(render_context.get_context(), scene);
     raster_renderer.init(render_context.get_context(), scene);
-    gpu_renderer.init(render_context.get_context(), scene);
   }
 
   RendererMode mode = RendererMode::CPURaytracing;
@@ -193,6 +193,17 @@ void RTApplication::save_options() {
   _options.save_to_file(env().file_in_data("options.json"));
 }
 
+void RTApplication::ensure_gpu_renderer_initialized() {
+  ETX_PROFILER_SCOPE();
+
+  if (_gpu_renderer_initialized) {
+    return;
+  }
+
+  gpu_renderer.init(render_context.get_context(), scene);
+  _gpu_renderer_initialized = true;
+}
+
 void RTApplication::set_renderer_mode(RendererMode mode) {
   ETX_PROFILER_SCOPE();
 
@@ -218,8 +229,13 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   _options.set_string("renderer", renderer_name, "Renderer");
   save_options();
 
-  if (next_renderer == _active_renderer)
+  if (next_renderer == &gpu_renderer) {
+    ensure_gpu_renderer_initialized();
+  }
+
+  if (next_renderer == _active_renderer) {
     return;
+  }
 
   if (_active_renderer != nullptr) {
     _active_renderer->stop();
@@ -268,6 +284,19 @@ void RTApplication::frame() {
 
 void RTApplication::cleanup() {
   ETX_PROFILER_SCOPE();
+
+  if (_active_renderer != nullptr) {
+    _active_renderer->stop();
+  }
+
+  auto& ctx = render_context.get_context();
+  cpu_renderer.cleanup(ctx);
+  raster_renderer.cleanup(ctx);
+  if (_gpu_renderer_initialized) {
+    gpu_renderer.cleanup(ctx);
+  }
+
+  scene_global_deinit();
   render_context.cleanup();
 }
 
@@ -372,6 +401,7 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   ui.set_current_integrator(integrator);
 
   add_to_recent(_current_scene_file);
+  save_options();
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_scene_restart_cpu_renderer");
@@ -427,39 +457,11 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
 
   uint2 image_size = {scene.camera().film_size.x, scene.camera().film_size.y};
   const float4* output = cpu_renderer.film().layer(ui.view_options().view_layer, cpu_renderer.scene());
-
-  if (mode == SaveImageMode::TonemappedLDR) {
-    ETX_PROFILER_NAMED_SCOPE("app_save_tonemapped_ldr");
-    if (strlen(get_file_ext(file_name.c_str())) == 0) {
-      file_name += ".png";
-    }
-    float exposure = ui.view_options().exposure;
-    std::vector<ubyte4> tonemapped(image_size.x * image_size.y);
-    for (uint32_t i = 0, e = image_size.x * image_size.y; i < e; ++i) {
-      float3 tm = {
-        1.0f - expf(-exposure * output[i].x),
-        1.0f - expf(-exposure * output[i].y),
-        1.0f - expf(-exposure * output[i].z),
-      };
-      float3 gamma = linear_to_gamma(tm);
-      tonemapped[i].x = static_cast<uint8_t>(255.0f * saturate(gamma.x));
-      tonemapped[i].y = static_cast<uint8_t>(255.0f * saturate(gamma.y));
-      tonemapped[i].z = static_cast<uint8_t>(255.0f * saturate(gamma.z));
-      tonemapped[i].w = 255u;
-    }
-    if (stbi_write_png(file_name.c_str(), image_size.x, image_size.y, 4, tonemapped.data(), 0) != 1) {
-      log::error("Failed to save PNG image to %s", file_name.c_str());
-    }
-  } else {
-    ETX_PROFILER_NAMED_SCOPE("app_save_exr");
-    if (strlen(get_file_ext(file_name.c_str())) == 0) {
-      file_name += ".exr";
-    }
-    const char* error = nullptr;
-    if (SaveEXR(reinterpret_cast<const float*>(output), image_size.x, image_size.y, 4, false, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
-      log::error("Failed to save EXR image to %s: %s", file_name.c_str(), error);
-    }
-  }
+  ImageOutputParameters params = {
+    .mode = mode,
+    .exposure = ui.view_options().exposure,
+  };
+  save_image_to_file(file_name, output, image_size, params);
 }
 
 void RTApplication::on_scene_file_selected(std::string file_name) {

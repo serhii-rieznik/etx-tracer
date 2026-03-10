@@ -55,13 +55,23 @@ struct ETX_ALIGNED LocalFrame {
 };
 
 ETX_SHARED_INLINE float3 local_frame_to_local(ETX_IN(LocalFrame, local_frame), float3 v) {
+#if (ETX_CPP)
+  return float3(local_frame.tan.x * v.x + local_frame.tan.y * v.y + local_frame.tan.z * v.z, local_frame.btn.x * v.x + local_frame.btn.y * v.y + local_frame.btn.z * v.z,
+    local_frame.nrm.x * v.x + local_frame.nrm.y * v.y + local_frame.nrm.z * v.z);
+#else
   return float3(local_frame.tan.x * v.x + local_frame.btn.x * v.y + local_frame.nrm.x * v.z, local_frame.tan.y * v.x + local_frame.btn.y * v.y + local_frame.nrm.y * v.z,
     local_frame.tan.z * v.x + local_frame.btn.z * v.y + local_frame.nrm.z * v.z);
+#endif
 }
 
 ETX_SHARED_INLINE float3 local_frame_from_local(ETX_IN(LocalFrame, local_frame), float3 v) {
+#if (ETX_CPP)
+  return float3(local_frame.tan.x * v.x + local_frame.btn.x * v.y + local_frame.nrm.x * v.z, local_frame.tan.y * v.x + local_frame.btn.y * v.y + local_frame.nrm.y * v.z,
+    local_frame.tan.z * v.x + local_frame.btn.z * v.y + local_frame.nrm.z * v.z);
+#else
   return float3(local_frame.tan.x * v.x + local_frame.tan.y * v.y + local_frame.tan.z * v.z, local_frame.btn.x * v.x + local_frame.btn.y * v.y + local_frame.btn.z * v.z,
     local_frame.nrm.x * v.x + local_frame.nrm.y * v.y + local_frame.nrm.z * v.z);
+#endif
 }
 
 ETX_SHARED_INLINE bool local_frame_entering_material(ETX_IN(LocalFrame, local_frame)) {

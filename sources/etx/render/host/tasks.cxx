@@ -4,6 +4,7 @@
 #include <etx/render/host/tasks.hxx>
 
 #include <TaskScheduler.hxx>
+#include <mutex>
 
 #define ETX_ALWAYS_SINGLE_THREAD 0
 #define ETX_DEBUG_SINGLE_THREAD  0
@@ -49,6 +50,7 @@ struct TaskSchedulerImpl {
   ObjectIndexPool<TaskWrapper> task_pool;
   ObjectIndexPool<FunctionTask> function_task_pool;
   std::map<uint32_t, uint32_t> task_to_function;
+  std::mutex task_pool_lock;
 
   TaskSchedulerImpl() {
     task_pool.init(1024u);
@@ -89,21 +91,31 @@ void TaskScheduler::register_thread() {
 }
 
 Task::Handle TaskScheduler::schedule(uint64_t range, Task* t) {
-  auto handle = _private->task_pool.alloc(t, range, 1u);
-  auto& task_wrapper = _private->task_pool.get(handle);
-  _private->scheduler.AddTaskSetToPipe(&task_wrapper);
+  TaskWrapper* task_wrapper = nullptr;
+  uint32_t handle = Task::InvalidHandle;
+  {
+    std::scoped_lock lock(_private->task_pool_lock);
+    handle = _private->task_pool.alloc(t, range, 1u);
+    task_wrapper = &_private->task_pool.get(handle);
+  }
+  _private->scheduler.AddTaskSetToPipe(task_wrapper);
   return {handle};
 }
 
 Task::Handle TaskScheduler::schedule(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
-  auto func_task_handle = _private->function_task_pool.alloc(func);
-  auto& func_task = _private->function_task_pool.get(func_task_handle);
+  TaskWrapper* task = nullptr;
+  uint32_t task_handle = Task::InvalidHandle;
+  {
+    std::scoped_lock lock(_private->task_pool_lock);
+    const uint32_t func_task_handle = _private->function_task_pool.alloc(func);
+    auto& func_task = _private->function_task_pool.get(func_task_handle);
 
-  auto task_handle = _private->task_pool.alloc(&func_task, range, 1u);
-  auto& task = _private->task_pool.get(task_handle);
+    task_handle = _private->task_pool.alloc(&func_task, range, 1u);
+    task = &_private->task_pool.get(task_handle);
 
-  _private->task_to_function[task_handle] = func_task_handle;
-  _private->scheduler.AddTaskSetToPipe(&task);
+    _private->task_to_function[task_handle] = func_task_handle;
+  }
+  _private->scheduler.AddTaskSetToPipe(task);
 
   return {task_handle};
 }
@@ -127,8 +139,12 @@ bool TaskScheduler::completed(Task::Handle handle) {
     return true;
   }
 
-  auto& task_wrapper = _private->task_pool.get(handle.data);
-  return task_wrapper.executed && task_wrapper.GetIsComplete();
+  TaskWrapper* task_wrapper = nullptr;
+  {
+    std::scoped_lock lock(_private->task_pool_lock);
+    task_wrapper = &_private->task_pool.get(handle.data);
+  }
+  return task_wrapper->executed && task_wrapper->GetIsComplete();
 }
 
 void TaskScheduler::wait_task(const Task::Handle& handle) {
@@ -136,20 +152,27 @@ void TaskScheduler::wait_task(const Task::Handle& handle) {
     return;
   }
 
-  auto& task_wrapper = _private->task_pool.get(handle.data);
-  _private->scheduler.WaitforTask(&task_wrapper);
+  TaskWrapper* task_wrapper = nullptr;
+  {
+    std::scoped_lock lock(_private->task_pool_lock);
+    task_wrapper = &_private->task_pool.get(handle.data);
+  }
+  _private->scheduler.WaitforTask(task_wrapper);
 }
 
 void TaskScheduler::release(Task::Handle& handle) {
   if (handle.data == Task::InvalidHandle) {
     return;
   }
-  _private->task_pool.free(handle.data);
+  {
+    std::scoped_lock lock(_private->task_pool_lock);
+    _private->task_pool.free(handle.data);
 
-  auto func_task = _private->task_to_function.find(handle.data);
-  if (func_task != _private->task_to_function.end()) {
-    _private->function_task_pool.free(func_task->second);
-    _private->task_to_function.erase(func_task);
+    auto func_task = _private->task_to_function.find(handle.data);
+    if (func_task != _private->task_to_function.end()) {
+      _private->function_task_pool.free(func_task->second);
+      _private->task_to_function.erase(func_task);
+    }
   }
 
   handle.data = Task::InvalidHandle;
@@ -165,9 +188,13 @@ void TaskScheduler::restart(Task::Handle handle) {
     return;
   }
 
-  auto& task_wrapper = _private->task_pool.get(handle.data);
-  _private->scheduler.WaitforTask(&task_wrapper);
-  _private->scheduler.AddTaskSetToPipe(&task_wrapper);
+  TaskWrapper* task_wrapper = nullptr;
+  {
+    std::scoped_lock lock(_private->task_pool_lock);
+    task_wrapper = &_private->task_pool.get(handle.data);
+  }
+  _private->scheduler.WaitforTask(task_wrapper);
+  _private->scheduler.AddTaskSetToPipe(task_wrapper);
 }
 
 }  // namespace etx

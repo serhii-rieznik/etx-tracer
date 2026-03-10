@@ -138,27 +138,39 @@ struct ETX_ALIGNED Scene {
 #include <etx/render/access/material_access_cpu.hxx>
 
 ETX_SHARED_INLINE float collimation_to_exponent(float normalized) {
-  return scene_math_shared_collimation_to_exponent(normalized);
+  float t = saturate(normalized);
+  float denom = sqr(sqr(1.0f - t));
+  return 1.0f / fmaxf(kEpsilon, denom);
 }
 
 ETX_SHARED_INLINE float3 lerp_pos(const Scene& scene, const Triangle& t, const float3& bc) {
-  return surface_point_shared_lerp_float3(scene.vertices.pos[t.i[0]], scene.vertices.pos[t.i[1]], scene.vertices.pos[t.i[2]], bc);
+  return scene.vertices.pos[t.i[0]] * bc.x +  //
+         scene.vertices.pos[t.i[1]] * bc.y +  //
+         scene.vertices.pos[t.i[2]] * bc.z;   //
 }
 
 ETX_SHARED_INLINE float3 lerp_normal(const Scene& scene, const Triangle& t, const float3& bc) {
-  return normalize(surface_point_shared_lerp_float3(scene.vertices.nrm[t.i[0]], scene.vertices.nrm[t.i[1]], scene.vertices.nrm[t.i[2]], bc));
+  return normalize(scene.vertices.nrm[t.i[0]] * bc.x +  //
+                   scene.vertices.nrm[t.i[1]] * bc.y +  //
+                   scene.vertices.nrm[t.i[2]] * bc.z);  //
 }
 
 ETX_SHARED_INLINE float3 lerp_tangent(const Scene& scene, const Triangle& t, const float3& bc) {
-  return normalize(surface_point_shared_lerp_float3(scene.vertices.tan[t.i[0]], scene.vertices.tan[t.i[1]], scene.vertices.tan[t.i[2]], bc));
+  return normalize(scene.vertices.tan[t.i[0]] * bc.x +  //
+                   scene.vertices.tan[t.i[1]] * bc.y +  //
+                   scene.vertices.tan[t.i[2]] * bc.z);  //
 }
 
 ETX_SHARED_INLINE float3 lerp_bitangent(const Scene& scene, const Triangle& t, const float3& bc) {
-  return normalize(surface_point_shared_lerp_float3(scene.vertices.btn[t.i[0]], scene.vertices.btn[t.i[1]], scene.vertices.btn[t.i[2]], bc));
+  return normalize(scene.vertices.btn[t.i[0]] * bc.x +  //
+                   scene.vertices.btn[t.i[1]] * bc.y +  //
+                   scene.vertices.btn[t.i[2]] * bc.z);  //
 }
 
 ETX_SHARED_INLINE float2 lerp_uv(const Scene& scene, const Triangle& t, const float3& b) {
-  return surface_point_shared_lerp_float2(scene.vertices.tex[t.i[0]], scene.vertices.tex[t.i[1]], scene.vertices.tex[t.i[2]], b);
+  return scene.vertices.tex[t.i[0]] * b.x +  //
+         scene.vertices.tex[t.i[1]] * b.y +  //
+         scene.vertices.tex[t.i[2]] * b.z;   //
 }
 
 ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc, Vertex& vertex) {
@@ -166,19 +178,26 @@ ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const 
   const uint32_t i1 = t.i[1];
   const uint32_t i2 = t.i[2];
 
-  surface_point_shared_interpolate_vertex(scene.vertices.pos[i0], scene.vertices.pos[i1], scene.vertices.pos[i2], scene.vertices.nrm[i0], scene.vertices.nrm[i1],
-    scene.vertices.nrm[i2], scene.vertices.tan[i0], scene.vertices.tan[i1], scene.vertices.tan[i2], scene.vertices.btn[i0], scene.vertices.btn[i1],
-    scene.vertices.btn[i2], scene.vertices.tex[i0], scene.vertices.tex[i1], scene.vertices.tex[i2], bc, true, true, vertex);
+  vertex.pos = scene.vertices.pos[i0] * bc.x + scene.vertices.pos[i1] * bc.y + scene.vertices.pos[i2] * bc.z;
+  vertex.nrm = normalize(scene.vertices.nrm[i0] * bc.x + scene.vertices.nrm[i1] * bc.y + scene.vertices.nrm[i2] * bc.z);
+  vertex.tex = scene.vertices.tex[i0] * bc.x + scene.vertices.tex[i1] * bc.y + scene.vertices.tex[i2] * bc.z;
+
+  const auto t0 = scene.vertices.tan[i0] * bc.x + scene.vertices.tan[i1] * bc.y + scene.vertices.tan[i2] * bc.z;
+  vertex.tan = normalize(t0 - dot(t0, vertex.nrm) * vertex.nrm);
+
+  const auto b0 = scene.vertices.btn[i0] * bc.x + scene.vertices.btn[i1] * bc.y + scene.vertices.btn[i2] * bc.z;
+  auto btn = cross(vertex.nrm, vertex.tan);
+  vertex.btn = normalize(btn * (dot(btn, b0) > 0.0f ? 1.0f : -1.0f));
 }
 
 ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc, Intersection& vertex) {
-  const uint32_t i0 = t.i[0];
-  const uint32_t i1 = t.i[1];
-  const uint32_t i2 = t.i[2];
-
-  surface_point_shared_interpolate_vertex(scene.vertices.pos[i0], scene.vertices.pos[i1], scene.vertices.pos[i2], scene.vertices.nrm[i0], scene.vertices.nrm[i1],
-    scene.vertices.nrm[i2], scene.vertices.tan[i0], scene.vertices.tan[i1], scene.vertices.tan[i2], scene.vertices.btn[i0], scene.vertices.btn[i1],
-    scene.vertices.btn[i2], scene.vertices.tex[i0], scene.vertices.tex[i1], scene.vertices.tex[i2], bc, true, true, vertex);
+  Vertex result = {};
+  lerp_vertex(scene, t, bc, result);
+  vertex.pos = result.pos;
+  vertex.nrm = result.nrm;
+  vertex.tan = result.tan;
+  vertex.btn = result.btn;
+  vertex.tex = result.tex;
 }
 
 ETX_SHARED_INLINE Vertex lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc) {
@@ -188,8 +207,11 @@ ETX_SHARED_INLINE Vertex lerp_vertex(const Scene& scene, const Triangle& t, cons
 }
 
 ETX_SHARED_INLINE void orthogonalize(Vertex& v) {
+  auto b = v.btn;
   v.nrm = normalize(v.nrm);
-  surface_point_shared_orthogonalize_frame(v.nrm, v.tan, v.btn, v.tan, v.btn);
+  v.tan = normalize(v.tan - dot(v.tan, v.nrm) * v.nrm);
+  v.btn = normalize(cross(v.nrm, v.tan));
+  v.btn = v.btn * (dot(b, v.btn) > 0.0f ? 1.0f : -1.0f);
 }
 
 ETX_SHARED_INLINE float3 barycentrics(const Scene& scene, const Triangle& t, const float3& p) {
@@ -220,7 +242,7 @@ ETX_SHARED_INLINE bool valid_barycentrics(const float3& p) {
 }
 
 ETX_SHARED_INLINE float3 shading_pos_project(const float3& position, const float3& origin, const float3& normal) {
-  return scene_math_shared_shading_pos_project(position, origin, normal);
+  return position - dot(position - origin, normal) * normal;
 }
 
 ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& t, const float3& bc, const float3& w_o) {
@@ -230,13 +252,29 @@ ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& t, cons
   const float3& n0 = scene.vertices.nrm[t.i[0]];
   const float3& n1 = scene.vertices.nrm[t.i[1]];
   const float3& n2 = scene.vertices.nrm[t.i[2]];
-  return scene_math_shared_shading_pos(g0, g1, g2, n0, n1, n2, t.geo_n, bc, w_o);
+  const float3 geo_pos = g0 * bc.x + g1 * bc.y + g2 * bc.z;
+  const float3 sh_normal = normalize(n0 * bc.x + n1 * bc.y + n2 * bc.z);
+  const float direction = (dot(sh_normal, w_o) >= 0.0f) ? +1.0f : -1.0f;
+  const float3 p0 = shading_pos_project(geo_pos, g0, direction * n0);
+  const float3 p1 = shading_pos_project(geo_pos, g1, direction * n1);
+  const float3 p2 = shading_pos_project(geo_pos, g2, direction * n2);
+  const float3 sh_pos = p0 * bc.x + p1 * bc.y + p2 * bc.z;
+  bool convex = dot(sh_pos - geo_pos, sh_normal) * direction > 0.0f;
+  return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
 }
 
 ETX_SHARED_INLINE float3 orient_normals_to_hemisphere(float3 n_s, const float3& n_g, const float3& v) {
-  const float3 result = scene_math_shared_orient_normals_to_hemisphere(n_s, n_g, v);
-  ETX_ASSERT(is_valid_vector(result));
-  return result;
+  constexpr uint32_t kMaxAttempts = 16u;
+  const float i_dot_g = dot(v, n_g);
+
+  float i_dot_s = dot(v, n_s);
+  for (uint32_t i = 0u; ((i_dot_s * i_dot_g) <= kEpsilon) && (i < kMaxAttempts); ++i) {
+    n_s = normalize(8.0f * n_s + n_g);
+    ETX_ASSERT(is_valid_vector(n_s));
+    i_dot_s = dot(v, n_s);
+  }
+
+  return n_s;
 }
 
 ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
@@ -288,23 +326,36 @@ ETX_SHARED_INLINE bool random_continue(uint32_t path_length, uint32_t start_path
 }
 
 ETX_SHARED_INLINE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {
-  const ::SpectralResponse shared_response =
-    ::material_scattering_shared_apply_spectral(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(response), float3{value.x, value.y, value.z}, true);
-  SpectralQuery response_query{shared_response.wavelength, shared_response.flags};
-  response =
-    ::spectral_response_is_spectral(shared_response) ? SpectralResponse{response_query, shared_response.value} : SpectralResponse{response_query, shared_response.integrated};
-  ETX_VALIDATE(response);
+  if (spect.spectral()) {
+    SpectralResponse scale = rgb_response(spect, {value.x, value.y, value.z});
+    ETX_VALIDATE(scale);
+    response *= scale;
+    ETX_VALIDATE(response);
+  } else {
+    response.integrated *= float3{value.x, value.y, value.z};
+  }
+
   return response;
 }
 
 ETX_SHARED_INLINE float4 sample_whole_image(const SampledImage& img, const float2& uv, const Scene& scene) {
-  ImageEvaluateCPUContext context = make_image_evaluate_cpu_context(scene);
-  return image_evaluate_sample_whole_or_default(context, img.image_index, uv, img.value);
+  if (img.image_index == kInvalidIndex) {
+    return img.value;
+  }
+
+  float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
+  return img.value * eval;
 }
 
 ETX_SHARED_INLINE float evaluate_image(const SampledImage& img, const float2& uv, const Scene& scene, const float default_value) {
-  ImageEvaluateCPUContext context = make_image_evaluate_cpu_context(scene);
-  return image_evaluate_sample_channel_or_default(context, img.image_index, img.channel, uv, default_value);
+  float result = default_value;
+  if ((img.image_index == kInvalidIndex) || (img.channel >= 4u)) {
+    return result;
+  }
+
+  float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
+  const float* data = reinterpret_cast<const float*>(&eval);
+  return data[img.channel];
 }
 
 ETX_SHARED_INLINE float evaluate_metalness(const Material& material, const float2& uv, const Scene& scene) {
@@ -325,58 +376,22 @@ ETX_SHARED_INLINE SpectralResponse apply_image(SpectralQuery spect, const Spectr
   }
 
   ETX_ASSERT(img.spectrum_index < static_cast<uint32_t>(scene.spectrums.count));
-  SpectrumAccessCPUContext spectrum_context = make_spectrum_access_cpu_context(scene.spectrums.a, static_cast<uint32_t>(scene.spectrums.count));
-  const ::SpectralResponse shared_result = spectrum_access_evaluate(spectrum_context, img.spectrum_index, static_cast<const ::SpectralQuery&>(spect));
-  SpectralQuery result_query = {shared_result.wavelength, shared_result.flags};
-  SpectralResponse result =
-    ::spectral_response_is_spectral(shared_result) ? SpectralResponse{result_query, shared_result.value} : SpectralResponse{result_query, shared_result.integrated};
+  SpectralResponse result = scene.spectrums[img.spectrum_index](spect);
   ETX_VALIDATE(result);
   if (img.image_index == kInvalidIndex) {
     return result;
   }
 
-  ImageEvaluateCPUContext context = make_image_evaluate_cpu_context(scene);
-  float local_image_pdf = 0.0f;
-  float4 eval = float4(1.0f, 1.0f, 1.0f, 1.0f);
-  if (image_evaluate_try_rgba(context, img.image_index, uv, local_image_pdf, eval) == false) {
-    return result;
-  }
-
-  if (image_pdf != nullptr) {
-    *image_pdf = local_image_pdf;
-  }
-
+  float4 eval = scene.images[img.image_index].evaluate(uv, image_pdf);
   ETX_VALIDATE(eval);
-  const ::SpectralResponse shared_response =
-    ::material_scattering_shared_apply_spectral(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(result), float3{eval.x, eval.y, eval.z}, true);
-  SpectralQuery response_query{shared_response.wavelength, shared_response.flags};
-  return ::spectral_response_is_spectral(shared_response) ? SpectralResponse{response_query, shared_response.value} : SpectralResponse{response_query, shared_response.integrated};
+  return apply_rgb(spect, result, eval, scene);
 }
 
 ETX_SHARED_INLINE RefractiveIndexSample evaluate_refractive_index(const Scene& scene, const RefractiveIndex& ri, const SpectralQuery q) {
   RefractiveIndexSample result = {};
   result.cls = ri.cls;
-
-  SpectrumAccessCPUContext spectrum_context = make_spectrum_access_cpu_context(scene.spectrums.a, static_cast<uint32_t>(scene.spectrums.count));
-
-  if (ri.eta_index == kInvalidIndex) {
-    result.eta = SpectralResponse(q, 1.0f);
-  } else {
-    ETX_ASSERT(ri.eta_index < static_cast<uint32_t>(scene.spectrums.count));
-    const ::SpectralResponse shared_eta = spectrum_access_evaluate(spectrum_context, ri.eta_index, static_cast<const ::SpectralQuery&>(q));
-    SpectralQuery eta_query = {shared_eta.wavelength, shared_eta.flags};
-    result.eta = ::spectral_response_is_spectral(shared_eta) ? SpectralResponse{eta_query, shared_eta.value} : SpectralResponse{eta_query, shared_eta.integrated};
-  }
-
-  if (ri.k_index == kInvalidIndex) {
-    result.k = SpectralResponse(q, 0.0f);
-  } else {
-    ETX_ASSERT(ri.k_index < static_cast<uint32_t>(scene.spectrums.count));
-    const ::SpectralResponse shared_k = spectrum_access_evaluate(spectrum_context, ri.k_index, static_cast<const ::SpectralQuery&>(q));
-    SpectralQuery k_query = {shared_k.wavelength, shared_k.flags};
-    result.k = ::spectral_response_is_spectral(shared_k) ? SpectralResponse{k_query, shared_k.value} : SpectralResponse{k_query, shared_k.integrated};
-  }
-
+  result.eta = (ri.eta_index == kInvalidIndex) ? SpectralResponse(q, 1.0f) : scene.spectrums[ri.eta_index](q);
+  result.k = (ri.k_index == kInvalidIndex) ? SpectralResponse(q, 0.0f) : scene.spectrums[ri.k_index](q);
   return result;
 }
 

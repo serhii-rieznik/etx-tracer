@@ -311,6 +311,13 @@ VKBindlessManager* VKContext::get_bindless_manager() {
 
 void VKContext::initialize_for_headless() {
   _impl->initialize_bindless_manager();
+  if (_impl->in_flight_fences.empty()) {
+    _impl->create_sync_objects();
+  }
+}
+
+bool VKContext::has_swapchain() const {
+  return _impl->swapchain != VK_NULL_HANDLE;
 }
 
 void VKContext::create_swapchain(const void* native_window, uint32_t width, uint32_t height) {
@@ -405,6 +412,10 @@ RHIExtent2D VKContext::get_swapchain_extent_rhi() const {
 }
 
 void VKContext::present() {
+  if (_impl->swapchain == VK_NULL_HANDLE) {
+    return;
+  }
+
   VkSemaphore wait_semaphore = _impl->device.get_vk_semaphore(_impl->render_finished_semaphores[_impl->current_frame]);
   VkPresentInfoKHR present_info = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
   present_info.waitSemaphoreCount = 1;
@@ -428,7 +439,7 @@ void VKContext::present() {
     _impl->create_sync_objects();
   }
 
-  _impl->current_frame = (_impl->current_frame + 1) % kRHIMaxFrames;
+  end_frame();
 }
 
 RHIResult VKContext::wait_idle() {
@@ -457,11 +468,7 @@ RHIResult VKContext::wait_idle() {
 
 void VKContext::begin_frame() {
   ETX_PROFILER_SCOPE();
-  if (_impl->swapchain == VK_NULL_HANDLE) {
-    return;
-  }
-
-  {
+  if (_impl->in_flight_fences.empty() == false) {
     ETX_PROFILER_NAMED_SCOPE("vkWaitForFences");
     if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &_impl->in_flight_fences[_impl->current_frame], VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
       return;
@@ -497,6 +504,10 @@ void VKContext::begin_frame() {
       _impl->command_buffer_pool.free_index(pooled_index);
       _impl->command_buffer_pool.remove_handle(command_buffer_handle);
     }
+  }
+
+  if (_impl->swapchain == VK_NULL_HANDLE) {
+    return;
   }
 
   VkResult result = VK_SUCCESS;
@@ -550,11 +561,21 @@ void VKContext::begin_frame() {
 }
 
 RHISemaphore VKContext::get_image_acquired_semaphore() {
+  if (_impl->image_available_semaphores.empty()) {
+    return {};
+  }
   return _impl->image_available_semaphores[_impl->current_frame];
 }
 
 RHISemaphore VKContext::get_render_complete_semaphore() {
+  if (_impl->render_finished_semaphores.empty()) {
+    return {};
+  }
   return _impl->render_finished_semaphores[_impl->current_frame];
+}
+
+void VKContext::end_frame() {
+  _impl->current_frame = (_impl->current_frame + 1) % kRHIMaxFrames;
 }
 
 uint32_t VKContext::get_current_frame_index() const {
@@ -2278,7 +2299,12 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
 }
 
 void VKContext::Impl::create_sync_objects() {
+  if ((image_available_semaphores.empty() == false) || (render_finished_semaphores.empty() == false) || (in_flight_fences.empty() == false)) {
+    destroy_sync_objects();
+  }
+
   VkSemaphoreCreateInfo semaphore_info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+  (void)semaphore_info;
 
   VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;

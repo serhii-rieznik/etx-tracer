@@ -46,6 +46,13 @@ MTBindlessManager* MTContext::get_bindless_manager() {
   return &_impl->bindless_manager;
 }
 
+void MTContext::initialize_for_headless() {
+}
+
+bool MTContext::has_swapchain() const {
+  return _impl->native_window != nullptr;
+}
+
 void MTContext::create_swapchain(const void* native_window, uint32_t width, uint32_t height) {
   _impl->native_window = native_window;
   _impl->width = width;
@@ -89,6 +96,9 @@ RHIResult MTContext::wait_idle() {
 
 void MTContext::begin_frame() {
   _impl->current_frame = (_impl->current_frame + 1) % 2;
+}
+
+void MTContext::end_frame() {
 }
 
 uint32_t MTContext::get_current_frame_index() const {

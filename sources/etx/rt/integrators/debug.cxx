@@ -679,15 +679,20 @@ void CPUDebugIntegrator::update() {
   }
 
   rt.scheduler().wait_task(_private->current_task);
+  _private->status.last_iteration_time = _private->iteration_time.measure();
+  _private->status.total_time += _private->status.last_iteration_time;
+  _private->status.completed_iterations += 1u;
   rt.film().commit_iteration(_private->status.current_iteration, rt.scene());
 
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().release(_private->current_task);
     current_state = Integrator::State::Stopped;
+  } else if (_private->status.current_iteration + 1u >= rt.scene().options.samples) {
+    rt.scheduler().release(_private->current_task);
+    current_state = Integrator::State::Stopped;
   } else {
     _private->iteration_time = {};
-    _private->status.completed_iterations = _private->status.current_iteration + 1;
-    _private->status.current_iteration += 1;
+    _private->status.current_iteration += 1u;
     rt.scheduler().restart(_private->current_task);
   }
 }

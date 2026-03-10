@@ -843,3 +843,41 @@ SpectralResponse sample_distant_emission_spectral_random(float3 direction, Spect
   return spectral_response_mul(sample_value, float(emitter_count));
 }
 
+float3 evaluate_distant_emission_integrated_all(float3 direction) {
+  if (constants.scene.scene_globals == kInvalidIndex) {
+    return float3(0.0f, 0.0f, 0.0f);
+  }
+
+  uint emitter_instance_count = load_environment_emitter_instance_count();
+  uint emitter_count = min(load_environment_emitter_count(), SceneLimits::MaxEnvironmentEmitters);
+  float3 result = float3(0.0f, 0.0f, 0.0f);
+
+  for (uint i = 0u; i < emitter_count; ++i) {
+    uint emitter_index = load_environment_emitter(i);
+    if (emitter_index < emitter_instance_count) {
+      result += evaluate_distant_emission_integrated(emitter_index, direction);
+    }
+  }
+
+  return result;
+}
+
+SpectralResponse evaluate_distant_emission_spectral_all(float3 direction, SpectralQuery spect) {
+  SpectralResponse result = spectral_response_zero(spect);
+  if (constants.scene.scene_globals == kInvalidIndex) {
+    return result;
+  }
+
+  uint emitter_instance_count = load_environment_emitter_instance_count();
+  uint emitter_count = min(load_environment_emitter_count(), SceneLimits::MaxEnvironmentEmitters);
+
+  for (uint i = 0u; i < emitter_count; ++i) {
+    uint emitter_index = load_environment_emitter(i);
+    if (emitter_index < emitter_instance_count) {
+      result = spectral_response_add(result, evaluate_distant_emission_spectral(emitter_index, direction, spect));
+    }
+  }
+
+  return result;
+}
+

@@ -356,6 +356,14 @@ void RHIContext::create_swapchain(const void* native_window, uint32_t width, uin
   backend_context(_impl)->create_swapchain(native_window, width, height);
 }
 
+void RHIContext::initialize_headless() {
+  backend_context(_impl)->initialize_for_headless();
+}
+
+bool RHIContext::has_swapchain() const {
+  return backend_context(_impl)->has_swapchain();
+}
+
 void RHIContext::destroy_swapchain() {
   backend_context(_impl)->destroy_swapchain();
 }
@@ -378,6 +386,10 @@ RHIExtent2D RHIContext::get_swapchain_extent() const {
 
 void RHIContext::begin_frame() {
   backend_context(_impl)->begin_frame();
+}
+
+void RHIContext::end_frame() {
+  backend_context(_impl)->end_frame();
 }
 
 void RHIContext::present() {
@@ -419,7 +431,9 @@ void RHIContext::submit_command_buffer(const RHISubmitInfo& info) {
 void RHIContext::submit_frame_command_buffer(RHICommandBuffer cmd) {
   RHISubmitInfo submit_info = {};
   submit_info.command_buffer = cmd;
-  submit_info.wait_semaphores.push_back(get_image_acquired_semaphore());
+  if (has_swapchain()) {
+    submit_info.wait_semaphores.push_back(get_image_acquired_semaphore());
+  }
   submit_info.signal_semaphores.push_back(get_render_complete_semaphore());
   submit_command_buffer(submit_info);
 }

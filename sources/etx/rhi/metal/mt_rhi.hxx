@@ -22,6 +22,9 @@ struct MTContext {
   MTDevice* get_device();
   MTBindlessManager* get_bindless_manager();
 
+  void initialize_for_headless();
+  bool has_swapchain() const;
+
   void create_swapchain(const void* native_window, uint32_t width, uint32_t height);
   void destroy_swapchain();
   void resize_swapchain(uint32_t width, uint32_t height);
@@ -30,6 +33,7 @@ struct MTContext {
   RHIExtent2D get_swapchain_extent_rhi() const;
 
   void begin_frame();
+  void end_frame();
   void present();
   RHIResult wait_idle();
 

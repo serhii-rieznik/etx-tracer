@@ -2435,6 +2435,9 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     if (ImGui::Button("Delete Emitter", ImVec2(-1.0f, 0.0f))) {
       if (scene_rep.delete_emitter(emitter_index)) {
         set_selection(SelectionKind::Rendering, 0, false);
+        if (callbacks.scene_update_requested) {
+          callbacks.scene_update_requested();
+        }
       }
     }
     ImGui::PopStyleColor(3);

@@ -2,6 +2,8 @@
 #include <etx/render/host/film.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/shared/path_tracing_shared.hxx>
+#include <atomic>
+
 namespace etx {
 
 namespace {
@@ -129,6 +131,57 @@ struct PathVertex {
     }
 
     return pdf_area;
+  }
+
+  static float emitter_sample_pdf(const Emitter& em_inst, const float3& in_direction, const Scene& scene) {
+    const auto& em = scene.emitter_profiles[em_inst.profile];
+
+    float pdf_discrete = emitter_discrete_pdf(em_inst, scene.emitters_distribution);
+
+    switch (em_inst.cls) {
+      case EmitterProfile::Class::Area: {
+        return pdf_discrete * emitter_pdf_area_local(em_inst, scene);
+      }
+
+      case EmitterProfile::Class::Directional: {
+        float cosine_threshold = (em.directional.angular_size > 0.0f) ? em.directional.angular_size_cosine : 1.0f;
+        return direction_matches(in_direction, em.directional.direction, cosine_threshold) ? pdf_discrete : 0.0f;
+      }
+
+      case EmitterProfile::Class::Environment: {
+        const auto& img = scene.images[em.emission.image_index];
+        bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
+        uint32_t projection = projection_environment_mode(is_atmosphere);
+        float2 uv = direction_to_uv(in_direction, img.offset, img.scale.x, projection);
+
+        float image_pdf = 0.0f;
+        img.evaluate(uv, &image_pdf);
+        return pdf_discrete * projection_environment_image_pdf_to_solid_angle(image_pdf, uv, projection);
+      }
+
+      default: {
+        ETX_FAIL("Unknown emitter class");
+        return 0.0f;
+      }
+    }
+  }
+
+  static float2 pdf_for_environment_emitter(SpectralQuery spect, const float3& w_i, const PathVertex& target_vertex, const Scene& scene) {
+    if (scene.environment_emitters.count == 0u) {
+      return {};
+    }
+
+    float pdf_dir = 0.0f;
+    for (uint32_t ie = 0; ie < scene.environment_emitters.count; ++ie) {
+      const auto& emitter_instance = scene.emitter_instances[scene.environment_emitters.emitters[ie]];
+      pdf_dir += emitter_sample_pdf(emitter_instance, w_i, scene);
+    }
+
+    float w_o_dot_n = target_vertex.is_surface_interaction() ? fabsf(dot(scene.triangles[target_vertex.intersection.triangle_index].geo_n, w_i)) : 1.0f;
+    float pdf_area = w_o_dot_n / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+    pdf_dir = pdf_dir / float(scene.environment_emitters.count);
+
+    return {pdf_area, pdf_dir};
   }
 
   static float convert_solid_angle_pdf_to_area(float pdf_dir, const PathVertex& from_vertex, const PathVertex& to_vertex) {
@@ -329,7 +382,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     const auto& emitter_instance = scene.emitter_instances[em.emitter_index];
-    prev.pdf.from_prev = emitter_sample_pdf(emitter_instance, -em.direction, scene);
+    prev.pdf.from_prev = PathVertex::emitter_sample_pdf(emitter_instance, -em.direction, scene);
     ETX_VALIDATE(prev.pdf.from_prev);
 
     curr.pdf.from_prev = em.pdf_area;
@@ -442,15 +495,14 @@ struct CPUBidirectionalImpl : public Task {
 
     ETX_ASSERT(medium_instance_valid(medium_instance));
 
-    const uint32_t interaction_index = first_interaction ? 1u : 2u;
-    SamplerPolicy sampler_policy = {
-      .enable_blue_noise = enable_blue_noise ? 1u : 0u,
-    };
-    const SamplerStreamSamples2D interaction_samples =
-      sample_interaction_streams_2d(smp, sampler_policy, static_cast<uint32_t>(payload.mode), interaction_index, payload.pixel, scene.options.samples, payload.iteration);
-    const float2 rnd_bsdf = interaction_samples.bsdf;
-    const float2 rnd_em_sample = interaction_samples.connection;
-    const float2 rnd_support = interaction_samples.support;
+    float2 rnd_bsdf = smp.next_2d();
+    float2 rnd_em_sample = smp.next_2d();
+    float2 rnd_support = smp.next_2d();
+    if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0u);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2u);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4u);
+    }
 
     float3 w_o = sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
     float pdf_fwd = phase_function(ray.d, w_o, medium_instance.anisotropy);
@@ -486,15 +538,14 @@ struct CPUBidirectionalImpl : public Task {
     PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer, bool subsurface_exit) const {
     const auto& scene = rt.scene();
 
-    const uint32_t interaction_index = first_interaction ? 1u : 2u;
-    SamplerPolicy sampler_policy = {
-      .enable_blue_noise = enable_blue_noise ? 1u : 0u,
-    };
-    const SamplerStreamSamples2D interaction_samples =
-      sample_interaction_streams_2d(smp, sampler_policy, static_cast<uint32_t>(payload.mode), interaction_index, payload.pixel, scene.options.samples, payload.iteration);
-    const float2 rnd_bsdf = interaction_samples.bsdf;
-    const float2 rnd_em_sample = interaction_samples.connection;
-    const float2 rnd_support = interaction_samples.support;
+    float2 rnd_bsdf = smp.next_2d();
+    float2 rnd_em_sample = smp.next_2d();
+    float2 rnd_support = smp.next_2d();
+    if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0u);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2u);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4u);
+    }
 
     if (scene.materials[a_intersection.material_index].cls == MaterialClass::Boundary) {
       const auto& m = scene.materials[a_intersection.material_index];
@@ -996,7 +1047,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     const auto& emitter_instance = scene.emitter_instances[sampled_light_vertex.intersection.emitter_index];
-    float p_sample = emitter_sample_pdf(emitter_instance, emitter_sample.direction, scene);
+    float p_sample = PathVertex::emitter_sample_pdf(emitter_instance, emitter_sample.direction, scene);
     ETX_VALIDATE(p_sample);
     float from_emitter = PathVertex::pdf_from_emitter(spect, sampled_light_vertex, z_curr, scene);
     ETX_VALIDATE(from_emitter);
@@ -1174,7 +1225,7 @@ struct CPUBidirectionalImpl : public Task {
         mis_weight = z_prev.connectible ? power_heuristic(z_prev.pdf.bsdf_sample_next, p_connect) : 1.0f;
         ETX_VALIDATE(mis_weight);
       } else {
-        float p_sample = emitter_sample_pdf(emitter_instance, -z_curr.intersection.w_i, scene);
+        float p_sample = PathVertex::emitter_sample_pdf(emitter_instance, -z_curr.intersection.w_i, scene);
         ETX_VALIDATE(p_sample);
         float p_from = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, scene);
         ETX_VALIDATE(p_from);
@@ -1231,7 +1282,7 @@ struct CPUBidirectionalImpl : public Task {
 
     float mis_weight = 1.0f;
     if (enable_mis && (path_data.camera_path_length() > 1u) && (mode != Mode::PathTracing)) {
-      auto [p_from, p_sample] = emitter_environment_pdf(z_curr.intersection.w_i, z_prev.is_surface_interaction(), z_prev.intersection.triangle_index, scene);
+      auto [p_from, p_sample] = PathVertex::pdf_for_environment_emitter(spect, z_curr.intersection.w_i, z_prev, scene);
       mis_weight = mis_weight_direct_hit(z_curr, z_prev, path_data, p_sample, p_from);
     }
 
@@ -1419,7 +1470,7 @@ void CPUBidirectional::update() {
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().release(_private->current_task);
     current_state = Integrator::State::Stopped;
-  } else if (_private->status.current_iteration + 1u < rt.scene().options.samples) {
+  } else if (_private->status.current_iteration + 1u <= rt.scene().options.samples) {
     rt.scheduler().restart(_private->current_task);
   } else {
     rt.scheduler().release(_private->current_task);
