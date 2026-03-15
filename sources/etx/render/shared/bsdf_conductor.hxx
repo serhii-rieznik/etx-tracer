@@ -25,7 +25,7 @@ ETX_SHARED_INLINE float conductor_pdf(ETX_IN(float3, w_i), ETX_IN(float3, w_o), 
   return result;
 }
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
@@ -33,11 +33,11 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   if (w_i.z <= kEpsilon) {
     return {data.spectrum_sample};
   }
-  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
 
-  uint32_t delta_sample = is_delta(mtl, data.tex, scene, smp) ? BSDFSample::Delta : 0u;
+  uint32_t delta_sample = is_delta(mtl, data.tex, smp) ? BSDFSample::Delta : 0u;
 
   BSDFSample result;
   result.properties = BSDFSample::Reflection | delta_sample;
@@ -47,7 +47,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   result.weight = {data.spectrum_sample, 1.0f};
 
   // init
-  float2 roughness = evaluate_roughness(mtl, data.tex, scene);
+  float2 roughness = evaluate_roughness(mtl, data.tex);
   external::RayInfo ray = {-w_i, roughness};
   ray.updateHeight(1.0f);
 
@@ -73,7 +73,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   }
 
   result.w_o = ray.w;
-  result.weight *= apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  result.weight *= apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
   ETX_VALIDATE(result.weight);
 
   result.pdf = conductor_pdf(w_i, result.w_o, roughness);
@@ -82,7 +82,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
@@ -95,15 +95,15 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
     return {data.spectrum_sample, 0.0f};
   }
 
-  float2 roughness = evaluate_roughness(mtl, data.tex, scene);
-  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  float2 roughness = evaluate_roughness(mtl, data.tex);
+  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
 
   auto value = external::eval_conductor(data.spectrum_sample, smp, w_i, w_o, roughness, ext_ior, int_ior, thinfilm);
 
   BSDFEval result = {};
-  result.bsdf = value * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  result.bsdf = value * apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
   ETX_VALIDATE(result.bsdf);
   result.func = result.bsdf / w_o.z;
   ETX_VALIDATE(result.func);
@@ -111,7 +111,7 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
   return result;
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
   LocalFrame local_frame(frame);
@@ -124,17 +124,17 @@ ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Ma
     return 0.0f;
   }
 
-  float2 roughness = evaluate_roughness(mtl, data.tex, scene);
+  float2 roughness = evaluate_roughness(mtl, data.tex);
   return conductor_pdf(w_i, w_o, roughness);
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  float2 roughness = evaluate_roughness(mtl, tex, scene);
+ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, Sampler& smp) {
+  float2 roughness = evaluate_roughness(mtl, tex);
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
 }
 
 }  // namespace ConductorBSDF

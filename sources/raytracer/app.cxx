@@ -2,9 +2,9 @@
 #include <etx/core/environment.hxx>
 #include <etx/core/profiler.hxx>
 
+#include <etx/render/host/scene_global.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/rt/integrators/integrator.hxx>
-#include <etx/rt/scene_global.hxx>
 
 #include "app.hxx"
 #include "image_output.hxx"
@@ -447,7 +447,7 @@ void RTApplication::on_use_image_as_reference() {
   _options.set_string("ref", {}, "Reference");
   save_options();
 
-  const float4* data = cpu_renderer.film().layer(ViewLayer::Result, cpu_renderer.scene());
+  const float4* data = cpu_renderer.film().layer(ViewLayer::Result, cpu_renderer.scene().options.radiance_clamp);
   uint2 size = cpu_renderer.film().base_dimensions();
   render_context.set_reference_image(data, size);
 }
@@ -456,7 +456,7 @@ void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode 
   ETX_PROFILER_SCOPE();
 
   uint2 image_size = {scene.camera().film_size.x, scene.camera().film_size.y};
-  const float4* output = cpu_renderer.film().layer(ui.view_options().view_layer, cpu_renderer.scene());
+  const float4* output = cpu_renderer.film().layer(ui.view_options().view_layer, cpu_renderer.scene().options.radiance_clamp);
   ImageOutputParameters params = {
     .mode = mode,
     .exposure = ui.view_options().exposure,
@@ -674,7 +674,7 @@ void RTApplication::on_scene_settings_changed() {
 
 void RTApplication::on_denoise_selected() {
   ETX_PROFILER_SCOPE();
-  cpu_renderer.film().denoise(ui.view_options().view_layer, cpu_renderer.scene());
+  cpu_renderer.film().denoise(ui.view_options().view_layer, cpu_renderer.scene().options.radiance_clamp);
   ui.mutable_view_options().view_layer = ViewLayer::Denoised;
 }
 

@@ -66,40 +66,28 @@ ETX_SHARED_INLINE bool medium_supports_tracking(const Medium& medium) {
   return (medium.cls == Medium::Homogeneous) || (medium.cls == Medium::Heterogeneous);
 }
 
-ETX_SHARED_INLINE bool medium_has_valid_spectrum(const Scene& scene, uint32_t spectrum_index) {
-  return (spectrum_index != kInvalidIndex) && (spectrum_index < static_cast<uint32_t>(scene.spectrums.count));
+ETX_SHARED_INLINE SpectralResponse medium_absorption(const Medium& medium, const SpectralQuery spect) {
+  return medium_load_spectrum_or_zero(medium.absorption_index, spect);
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_load_spectrum_or_zero(const Scene& scene, uint32_t spectrum_index, const SpectralQuery spect) {
-  if (medium_has_valid_spectrum(scene, spectrum_index) == false) {
-    return {spect, 0.0f};
-  }
-
-  return scene.spectrums[spectrum_index](spect);
+ETX_SHARED_INLINE SpectralResponse medium_scattering(const Medium& medium, const SpectralQuery spect) {
+  return medium_load_spectrum_or_zero(medium.scattering_index, spect);
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_absorption(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
-  return medium_load_spectrum_or_zero(scene, medium.absorption_index, spect);
+ETX_SHARED_INLINE SpectralResponse medium_extinction(const Medium& medium, const SpectralQuery spect) {
+  return medium_absorption(medium, spect) + medium_scattering(medium, spect);
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_scattering(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
-  return medium_load_spectrum_or_zero(scene, medium.scattering_index, spect);
-}
-
-ETX_SHARED_INLINE SpectralResponse medium_extinction(const Scene& scene, const Medium& medium, const SpectralQuery spect) {
-  return medium_absorption(scene, medium, spect) + medium_scattering(scene, medium, spect);
-}
-
-ETX_SHARED_INLINE MediumInstance make_medium_instance(const Scene& scene, const Medium& medium, const SpectralQuery spect, uint32_t index) {
+ETX_SHARED_INLINE MediumInstance make_medium_instance(const Medium& medium, const SpectralQuery spect, uint32_t index) {
   MediumInstance result = {};
-  result.extinction = medium_extinction(scene, medium, spect);
+  result.extinction = medium_extinction(medium, spect);
   result.anisotropy = medium.phase_function_g;
   result.index = index;
   return result;
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Scene& scene, const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos,
-  const float3& direction, float distance) {
+ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction,
+  float distance) {
   SpectralResponse one = {spect, 1.0f};
   if (distance <= 0.0f) {
     return one;
@@ -109,7 +97,7 @@ ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Scene& scene, cons
     return one;
   }
 
-  SpectralResponse extinction = medium_extinction(scene, medium, spect);
+  SpectralResponse extinction = medium_extinction(medium, spect);
   if (medium.cls == Medium::Homogeneous) {
     const ::SpectralResponse transmittance = medium_shared_transmittance_homogeneous_spectral(static_cast<const ::SpectralResponse&>(extinction), distance);
     return medium_transmittance_shared_to_spectral_response(transmittance);
@@ -125,13 +113,13 @@ ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Scene& scene, cons
   return medium_transmittance_shared_to_spectral_response(transmittance);
 }
 
-ETX_SHARED_INLINE MediumSample sample_medium(const Scene& scene, const Medium& medium, const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp,
-  const float3& pos, const float3& w_i, float max_t) {
+ETX_SHARED_INLINE MediumSample sample_medium(const Medium& medium, const SpectralQuery spect, const SpectralResponse& throughput, Sampler& smp, const float3& pos,
+  const float3& w_i, float max_t) {
   ETX_CRITICAL(max_t > 0.0f);
 
-  const SpectralResponse scattering_value = medium_scattering(scene, medium, spect);
+  const SpectralResponse scattering_value = medium_scattering(medium, spect);
   ETX_VALIDATE(scattering_value);
-  const SpectralResponse absorption_value = medium_absorption(scene, medium, spect);
+  const SpectralResponse absorption_value = medium_absorption(medium, spect);
   ETX_VALIDATE(absorption_value);
 
   MediumSharedContext context = make_medium_shared_context(medium, smp);

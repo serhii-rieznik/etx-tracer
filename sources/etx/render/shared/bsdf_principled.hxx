@@ -13,13 +13,13 @@ struct PrincipledMaterial {
 #define WOMP_DEBUG_PRINCIPLED_BSDF        0
 #define WOMP_DEBUG_PRINCIPLED_BSDF_ENTITY metalness
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& in_mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& in_mtl, Sampler& smp) {
   auto m_local = in_mtl;
-  auto metalness = evaluate_metalness(m_local, data.tex, scene);
-  auto transmission = evaluate_transmission(m_local, data.tex, scene);
+  auto metalness = evaluate_metalness(m_local, data.tex);
+  auto transmission = evaluate_transmission(m_local, data.tex);
 
 #if (WOMP_DEBUG_PRINCIPLED_BSDF)
-  auto roughness = evaluate_roughness(m_local, data.tex, scene).x;
+  auto roughness = evaluate_roughness(m_local, data.tex).x;
 
   auto frame = data.get_normal_frame();
   auto local_w_o = sample_cosine_distribution(smp.next_2d(), 1.0f);
@@ -35,30 +35,30 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& in_mtl
 
   if (smp.next() < metalness) {
     m_local.int_ior.cls = SpectralDistribution::Conductor;
-    m_local.int_ior.eta_index = scene.defaults.conductor_eta;
-    m_local.int_ior.k_index = scene.defaults.conductor_k;
+    m_local.int_ior.eta_index = default_conductor_eta_index();
+    m_local.int_ior.k_index = default_conductor_k_index();
     m_local.scattering.image_index = kInvalidIndex;
-    return ConductorBSDF::sample(data, m_local, scene, smp);
+    return ConductorBSDF::sample(data, m_local, smp);
   } else {
     m_local.int_ior.cls = SpectralDistribution::Dielectric;
-    m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
+    m_local.int_ior.eta_index = default_dielectric_eta_index();
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;
     if (smp.next() < transmission) {
-      return DielectricBSDF::sample(data, m_local, scene, smp);
+      return DielectricBSDF::sample(data, m_local, smp);
     } else {
-      return PlasticBSDF::sample(data, m_local, scene, smp);
+      return PlasticBSDF::sample(data, m_local, smp);
     }
   }
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& in_mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& in_mtl, Sampler& smp) {
   auto m_local = in_mtl;
-  auto metalness = evaluate_metalness(m_local, data.tex, scene);
-  auto transmission = evaluate_transmission(m_local, data.tex, scene);
+  auto metalness = evaluate_metalness(m_local, data.tex);
+  auto transmission = evaluate_transmission(m_local, data.tex);
 
 #if (WOMP_DEBUG_PRINCIPLED_BSDF)
-  auto roughness = evaluate_roughness(m_local, data.tex, scene).x;
+  auto roughness = evaluate_roughness(m_local, data.tex).x;
   float o_dot_n = max(0.0f, dot(w_o, data.nrm) * kInvPi);
 
   BSDFEval eval = {};
@@ -72,56 +72,56 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
 
   if (smp.next() < metalness) {
     m_local.int_ior.cls = SpectralDistribution::Conductor;
-    m_local.int_ior.eta_index = scene.defaults.conductor_eta;
-    m_local.int_ior.k_index = scene.defaults.conductor_k;
+    m_local.int_ior.eta_index = default_conductor_eta_index();
+    m_local.int_ior.k_index = default_conductor_k_index();
     m_local.scattering.image_index = kInvalidIndex;
-    return ConductorBSDF::evaluate(data, w_o, m_local, scene, smp);
+    return ConductorBSDF::evaluate(data, w_o, m_local, smp);
   } else {
     m_local.int_ior.cls = SpectralDistribution::Dielectric;
-    m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
+    m_local.int_ior.eta_index = default_dielectric_eta_index();
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;
     if (smp.next() < transmission) {
-      return DielectricBSDF::evaluate(data, w_o, m_local, scene, smp);
+      return DielectricBSDF::evaluate(data, w_o, m_local, smp);
     } else {
-      return PlasticBSDF::evaluate(data, w_o, m_local, scene, smp);
+      return PlasticBSDF::evaluate(data, w_o, m_local, smp);
     }
   }
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& in_mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& in_mtl, Sampler& smp) {
 #if (WOMP_DEBUG_PRINCIPLED_BSDF)
   return max(0.0f, dot(data.front_fracing_normal(), w_o) * kInvPi);
 #endif
 
   auto m_local = in_mtl;
-  auto metalness = evaluate_metalness(m_local, data.tex, scene);
-  auto transmission = evaluate_transmission(m_local, data.tex, scene);
+  auto metalness = evaluate_metalness(m_local, data.tex);
+  auto transmission = evaluate_transmission(m_local, data.tex);
   if (smp.next() < metalness) {
     m_local.int_ior.cls = SpectralDistribution::Conductor;
-    m_local.int_ior.eta_index = scene.defaults.conductor_eta;
-    m_local.int_ior.k_index = scene.defaults.conductor_k;
+    m_local.int_ior.eta_index = default_conductor_eta_index();
+    m_local.int_ior.k_index = default_conductor_k_index();
     m_local.scattering.image_index = kInvalidIndex;
-    return ConductorBSDF::pdf(data, w_o, m_local, scene, smp);
+    return ConductorBSDF::pdf(data, w_o, m_local, smp);
   } else {
     m_local.int_ior.cls = SpectralDistribution::Dielectric;
-    m_local.int_ior.eta_index = scene.defaults.dielectric_eta;
+    m_local.int_ior.eta_index = default_dielectric_eta_index();
     m_local.int_ior.k_index = kInvalidIndex;
     m_local.reflectance.image_index = kInvalidIndex;
     if (smp.next() < transmission) {
-      return DielectricBSDF::pdf(data, w_o, m_local, scene, smp);
+      return DielectricBSDF::pdf(data, w_o, m_local, smp);
     } else {
-      return PlasticBSDF::pdf(data, w_o, m_local, scene, smp);
+      return PlasticBSDF::pdf(data, w_o, m_local, smp);
     }
   }
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
 }
 
 }  // namespace PrincipledBSDF

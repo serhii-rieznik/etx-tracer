@@ -1,6 +1,6 @@
 #include <etx/core/core.hxx>
+#include <etx/render/host/scene_global.hxx>
 #include <etx/rt/rt.hxx>
-#include <etx/rt/scene_global.hxx>
 
 #include <etx/render/host/film.hxx>
 #include <etx/render/host/scene_data.hxx>
@@ -358,7 +358,8 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
 
     float u = RTCHitN_u(args->hit, args->N, 0);
     float v = RTCHitN_v(args->hit, args->N, 0);
-    if (alpha_test_pass(mat, tri, barycentrics({u, v}), *ctx->scene, *ctx->smp)) {
+    float2 uv = lerp_uv(*ctx->scene, tri, barycentrics({u, v}));
+    if (alpha_test_pass(mat, uv, *ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -408,7 +409,8 @@ uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const Co
       return;
     }
 
-    if (alpha_test_pass(mat, tri, bc, scene, *ctx->smp)) {
+    float2 uv = lerp_uv(scene, tri, bc);
+    if (alpha_test_pass(mat, uv, *ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -452,7 +454,8 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
     const auto& scene = *ctx->scene;
     float u = RTCHitN_u(args->hit, args->N, 0);
     float v = RTCHitN_v(args->hit, args->N, 0);
-    if (alpha_test_pass(mat, tri, barycentrics({u, v}), scene, *ctx->smp)) {
+    float2 uv = lerp_uv(scene, tri, barycentrics({u, v}));
+    if (alpha_test_pass(mat, uv, *ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -501,7 +504,8 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       *args->valid = 0;
       return;
     }
-    if (alpha_test_pass(mat, tri, barycentrics({u, v}), ctx->scene, ctx->smp)) {
+    float2 uv = lerp_uv(ctx->scene, tri, barycentrics({u, v}));
+    if (alpha_test_pass(mat, uv, ctx->smp)) {
       *args->valid = 0;
       return;
     }
@@ -559,7 +563,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
       if (current_medium.index != kInvalidIndex) {
         const auto& m = scene.mediums[current_medium.index];
-        result *= medium_transmittance(scene, m, spect, smp, origin, direction, dt);
+        result *= medium_transmittance(m, spect, smp, origin, direction, dt);
         ETX_VALIDATE(result);
       } else {
         spectral_response_mul_assign(result, medium_transmittance(current_medium, dt));

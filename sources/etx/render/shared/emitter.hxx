@@ -2,6 +2,12 @@
 
 #include <etx/render/interop/interop.hxx>
 #include <etx/render/interop/gpu_abi_constants.hxx>
+#include <etx/render/interop/material.hxx>
+
+#if defined(__cplusplus)
+# include <cstddef>
+# include <type_traits>
+#endif
 
 namespace etx {
 
@@ -48,7 +54,7 @@ struct ETX_ALIGNED EmitterProfile {
   }
 
   ETX_SHARED_INLINE bool is_distant() const {
-    return !is_local();
+    return is_local() == false;
   }
 
   ETX_SHARED_INLINE bool is_local() const {

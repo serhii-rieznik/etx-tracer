@@ -165,7 +165,7 @@ struct CPUDebugIntegratorImpl : public Task {
       auto smp = Sampler(i, status.current_iteration);
       uint2 pixel = {};
       if (film.active_pixel(i, pixel)) {
-        float2 uv = film.sample(rt.scene(), status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
+        float2 uv = film.sample(status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
         float3 xyz = preview_pixel(smp, uv, pixel, i);
         rt.film().submit(xyz, {}, {}, pixel);
       }
@@ -500,7 +500,7 @@ struct CPUDebugIntegratorImpl : public Task {
 
       output = (band % 2 == 0 ? value_spectrum : value_rgb);
     } else {
-      auto ray = generate_ray(scene, camera, uv, smp.next_2d());
+      auto ray = generate_ray(camera, uv, smp.next_2d());
       if (rt.trace(scene, ray, intersection, smp)) {
         bool entering_material = dot(ray.d, intersection.nrm) < 0.0f;
 
@@ -555,19 +555,19 @@ struct CPUDebugIntegratorImpl : public Task {
           };
           case Mode::TransmittanceColor: {
             const auto& mat = scene.materials[intersection.material_index];
-            output = apply_image(spect, mat.scattering, intersection.tex, rt.scene(), nullptr).to_rgb();
+            output = apply_image(spect, mat.scattering, intersection.tex).to_rgb();
             break;
           };
           case Mode::ReflectanceColor: {
             const auto& mat = scene.materials[intersection.material_index];
-            output = apply_image(spect, mat.reflectance, intersection.tex, rt.scene(), nullptr).to_rgb();
+            output = apply_image(spect, mat.reflectance, intersection.tex).to_rgb();
             break;
           };
           case Mode::Fresnel: {
             const auto& mat = scene.materials[intersection.material_index];
-            auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, intersection.tex, scene, smp);
-            auto eta_i = evaluate_refractive_index(scene, entering_material ? mat.ext_ior : mat.int_ior, spect);
-            auto eta_o = evaluate_refractive_index(scene, entering_material ? mat.int_ior : mat.ext_ior, spect);
+            auto thinfilm = evaluate_thinfilm(spect, mat.thinfilm, intersection.tex, smp);
+            auto eta_i = evaluate_refractive_index(entering_material ? mat.ext_ior : mat.int_ior, spect);
+            auto eta_o = evaluate_refractive_index(entering_material ? mat.int_ior : mat.ext_ior, spect);
             SpectralResponse fr = fresnel::calculate(spect, dot(ray.d, intersection.nrm), eta_i, eta_o, thinfilm);
             output = fr.to_rgb();
             break;
@@ -682,7 +682,8 @@ void CPUDebugIntegrator::update() {
   _private->status.last_iteration_time = _private->iteration_time.measure();
   _private->status.total_time += _private->status.last_iteration_time;
   _private->status.completed_iterations += 1u;
-  rt.film().commit_iteration(_private->status.current_iteration, rt.scene());
+  const auto& scene = rt.scene();
+  rt.film().commit_iteration(_private->status.current_iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp);
 
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().release(_private->current_task);

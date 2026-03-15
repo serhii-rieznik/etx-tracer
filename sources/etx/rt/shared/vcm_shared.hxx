@@ -259,7 +259,7 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   } else {
     auto rev_sample_pdf = subsurface_sample                                      //
                             ? fabsf(dot(bsdf_data.w_i, intersection.nrm)) / kPi  //
-                            : bsdf::reverse_pdf(bsdf_data, bsdf_sample.w_o, mat, scene, state.sampler);
+                            : bsdf::reverse_pdf(bsdf_data, bsdf_sample.w_o, mat, state.sampler);
     ETX_VALIDATE(rev_sample_pdf);
 
     state.d_vc = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vc * rev_sample_pdf + state.d_vcm + it.vm_weight);
@@ -282,8 +282,7 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Scene& scene, const Emitter& emitter, const VCMPathState& state, const VCMOptions& options,
-  const Intersection& intersection) {
+ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const Intersection& intersection) {
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;
@@ -296,13 +295,13 @@ ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Scene& scene, const Em
     .directly_visible = state.total_path_depth == 1,
   };
 
-  SpectralResponse radiance = emitter_get_radiance(emitter, state.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
+  SpectralResponse radiance = emitter_get_radiance(emitter, state.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
 
   if (pdf_emitter_dir <= kEpsilon) {
     return {state.spect, 0.0f};
   }
 
-  float emitter_sample_pdf = emitter_discrete_pdf(emitter, scene.emitters_distribution);
+  float emitter_sample_pdf = emitter_discrete_pdf(emitter);
   float w_camera = state.d_vcm * pdf_emitter_area * emitter_sample_pdf + state.d_vc * (pdf_emitter_dir_out * emitter_sample_pdf);
   float weight = (options.enable_mis() && (state.total_path_depth > 1)) ? (1.0f / (1.0f + w_camera)) : 1.0f;
   return weight * (state.throughput * radiance);
@@ -314,7 +313,7 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_emitter_state(uint32_t index, const 
   state.spect = scene.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.global_index = index;
 
-  auto emitter_sample = sample_emission(scene, state.spect, state.sampler);
+  auto emitter_sample = sample_emission(state.spect, state.sampler);
   if (emitter_sample.pdf_dir <= 0.0f) {
     return state;
   }
@@ -360,7 +359,7 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
   state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
 
   state.uv = get_jittered_uv(state.sampler, coord, camera.film_size);
-  state.ray = generate_ray(scene, camera, state.uv, state.sampler.next_2d());
+  state.ray = generate_ray(camera, state.uv, state.sampler.next_2d());
   state.throughput = {state.spect, 1.0f};
   state.gathered = {state.spect, 0.0f};
   state.merged = {};
@@ -381,7 +380,7 @@ ETX_SHARED_INLINE MediumSample vcm_try_sampling_medium(const Scene& scene, VCMPa
   if (state.medium_index == kInvalidIndex)
     return {};
 
-  auto medium_sample = sample_medium(scene, scene.mediums[state.medium_index], state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
+  auto medium_sample = sample_medium(scene.mediums[state.medium_index], state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
   spectral_response_mul_assign(state.throughput, medium_sample.weight);
 
   ETX_VALIDATE(state.throughput);
@@ -468,7 +467,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
   }
 
   float3 sample_pos = camera_at_medium ? medium_pos : isect->pos;
-  auto camera_sample = sample_film(state.sampler, scene, camera, sample_pos);
+  auto camera_sample = sample_film(state.sampler, camera, sample_pos);
   if (camera_sample.pdf_dir <= 0.0f) {
     return {};
   }
@@ -487,12 +486,12 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
   if (camera_at_medium == false) {
     const auto& mat = scene.materials[isect->material_index];
     auto data = BSDFData{state.spect, state.medium_index, PathSource::Light, *isect, isect->w_i};
-    auto eval = bsdf::evaluate(data, w_o, mat, scene, state.sampler);
+    auto eval = bsdf::evaluate(data, w_o, mat, state.sampler);
     if (eval.valid() == false) {
       return {};
     }
     scatter = eval.bsdf;
-    reverse_pdf = bsdf::reverse_pdf(data, w_o, mat, scene, state.sampler);
+    reverse_pdf = bsdf::reverse_pdf(data, w_o, mat, state.sampler);
 
     const auto& tri = scene.triangles[isect->triangle_index];
     origin = shading_pos(scene, tri, isect->barycentric, w_o);
@@ -535,7 +534,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
   return tr * scatter * state.throughput * camera_sample.weight * weight;
 }
 
-ETX_SHARED_INLINE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
   if (options.direct_hit() == false)
     return;
 
@@ -549,14 +548,17 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions&
   float sum_pdf_dir_out = 0.0f;
   float sum_pdf_dir = 0.0f;
 
-  uint32_t environment_emitter_count = environment_emitter_shared_count(scene);
+  uint32_t environment_emitter_count = environment_emitter_shared_count();
   for (uint32_t ie = 0; ie < environment_emitter_count; ++ie) {
     uint32_t emitter_index = kInvalidIndex;
-    if (environment_emitter_shared_try_load_index(scene, ie, emitter_index) == false) {
+    if (environment_emitter_shared_try_load_index(ie, emitter_index) == false) {
       continue;
     }
 
-    const auto& emitter_instance = scene.emitter_instances[emitter_index];
+    Emitter emitter_instance = {};
+    if (try_load_emitter_instance(emitter_index, emitter_instance) == false) {
+      continue;
+    }
 
     EmitterRadianceQuery q = {
       .direction = state.ray.d,
@@ -566,11 +568,11 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const Scene& scene, const VCMOptions&
     float pdf_area = 0.0f;
     float pdf_dir = 0.0f;
     float pdf_dir_out = 0.0f;
-    SpectralResponse value = emitter_get_radiance(emitter_instance, state.spect, q, pdf_area, pdf_dir, pdf_dir_out, scene);
+    SpectralResponse value = emitter_get_radiance(emitter_instance, state.spect, q, pdf_area, pdf_dir, pdf_dir_out);
     ETX_VALIDATE(value);
 
     if (pdf_dir > kEpsilon) {
-      float pdf_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
+      float pdf_discrete = emitter_discrete_pdf(emitter_instance);
       sum_pdf_dir_out += pdf_dir_out * pdf_discrete;
       sum_pdf_dir += pdf_dir * pdf_discrete;
       accumulated_value += value;
@@ -608,8 +610,11 @@ ETX_SHARED_INLINE void vcm_handle_direct_hit(const Scene& scene, const VCMOption
   if ((state.total_path_depth > scene.options.max_path_length) || (state.total_path_depth < scene.options.min_path_length))
     return;
 
-  const auto& emitter_instance = scene.emitter_instances[intersection.emitter_index];
-  state.gathered += vcm_get_radiance(scene, emitter_instance, state, options, intersection);
+  Emitter emitter_instance = {};
+  if (try_load_emitter_instance(intersection.emitter_index, emitter_instance) == false) {
+    return;
+  }
+  state.gathered += vcm_get_radiance(emitter_instance, state, options, intersection);
 }
 
 ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
@@ -624,7 +629,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
     .source_position = sample_pos,
     .source_normal = camera_at_medium ? isect->nrm : float3{},
   };
-  auto emitter_sample = sample_emitter(scene, query, state.sampler);
+  auto emitter_sample = sample_emitter(scene.light_sampling_method(), query, state.sampler);
   if (emitter_sample.pdf_dir <= 0.0f)
     return {state.spect, 0.0f};
 
@@ -646,11 +651,11 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
   } else {
     const auto& mat = scene.materials[isect->material_index];
     BSDFData connection_data = {state.spect, state.medium_index, PathSource::Camera, *isect, isect->w_i};
-    BSDFEval connection_eval = bsdf::evaluate(connection_data, w_o, mat, scene, state.sampler);
+    BSDFEval connection_eval = bsdf::evaluate(connection_data, w_o, mat, state.sampler);
     if (connection_eval.valid() == false)
       return {state.spect, 0.0f};
     scatter = connection_eval.bsdf;
-    reverse_pdf = bsdf::reverse_pdf(connection_data, w_o, mat, scene, state.sampler);
+    reverse_pdf = bsdf::reverse_pdf(connection_data, w_o, mat, state.sampler);
     const auto& tri = scene.triangles[isect->triangle_index];
     origin = shading_pos(scene, tri, isect->barycentric, normalize(emitter_sample.origin - isect->pos));
     camera_factor = fabsf(dot(w_o, tri.geo_n));
@@ -668,7 +673,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
     } else {
       const auto& mat = scene.materials[isect->material_index];
       BSDFData data = {state.spect, state.medium_index, PathSource::Camera, *isect, isect->w_i};
-      float conn_pdf = bsdf::pdf(data, w_o, mat, scene, state.sampler);
+      float conn_pdf = bsdf::pdf(data, w_o, mat, state.sampler);
       ETX_VALIDATE(conn_pdf);
       w_light = conn_pdf / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
     }
@@ -718,12 +723,12 @@ ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Scene& scene, const Spe
     float w_dot_c = dot(camera_isect->nrm, w_o);
     const auto& mat = scene.materials[camera_isect->material_index];
     auto camera_data = BSDFData{spect, state_medium, PathSource::Camera, *camera_isect, camera_isect->w_i};
-    auto camera_bsdf = bsdf::evaluate(camera_data, w_o, mat, scene, state.sampler);
+    auto camera_bsdf = bsdf::evaluate(camera_data, w_o, mat, state.sampler);
     if (camera_bsdf.valid() == false)
       return false;
     camera_area_pdf = camera_bsdf.pdf * fabsf(w_dot_l) / distance_squared;
     ETX_VALIDATE(camera_area_pdf);
-    camera_rev_pdf = bsdf::reverse_pdf(camera_data, w_o, mat, scene, state.sampler);
+    camera_rev_pdf = bsdf::reverse_pdf(camera_data, w_o, mat, state.sampler);
     ETX_VALIDATE(camera_rev_pdf);
     camera_scatter = camera_bsdf.bsdf;
   }
@@ -748,7 +753,7 @@ ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Scene& scene, const Spe
     const auto& light_mat = scene.materials[light_vertex.material_index];
     const auto& light_tri = scene.triangles[light_vertex.triangle_index];
     auto light_data = BSDFData{spect, camera_at_medium ? light_vertex.medium_index : state_medium, PathSource::Light, light_v, light_vertex.w_i};
-    auto light_bsdf = bsdf::evaluate(light_data, -w_o, light_mat, scene, state.sampler);
+    auto light_bsdf = bsdf::evaluate(light_data, -w_o, light_mat, state.sampler);
     if (light_bsdf.valid() == false)
       return false;
     if (camera_at_medium) {
@@ -758,7 +763,7 @@ ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Scene& scene, const Spe
       light_area_pdf = light_bsdf.pdf * fabsf(w_dot_c) / distance_squared;
     }
     ETX_VALIDATE(light_area_pdf);
-    light_rev_pdf = bsdf::reverse_pdf(light_data, -w_o, light_mat, scene, state.sampler);
+    light_rev_pdf = bsdf::reverse_pdf(light_data, -w_o, light_mat, state.sampler);
     ETX_VALIDATE(light_rev_pdf);
     light_scatter = light_bsdf.bsdf * fix_shading_normal(light_tri.geo_n, light_data.nrm, light_data.w_i, -w_o);
   }
@@ -863,12 +868,12 @@ struct ETX_ALIGNED VCMSpatialGridData {
       }
 
       const float3 wi = w_in[j];
-      auto camera_bsdf = bsdf::evaluate(camera_data, -wi, mat, scene, state.sampler);
+      auto camera_bsdf = bsdf::evaluate(camera_data, -wi, mat, state.sampler);
       if (camera_bsdf.valid() == false) {
         continue;
       }
 
-      auto camera_rev_pdf = bsdf::reverse_pdf(camera_data, -wi, mat, scene, state.sampler);
+      auto camera_rev_pdf = bsdf::reverse_pdf(camera_data, -wi, mat, state.sampler);
 
       float w_light = d_vcm[j] * vc_weight + d_vm[j] * camera_bsdf.pdf;
       float w_camera = w_camera_base + state.d_vm * camera_rev_pdf;
@@ -1007,7 +1012,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   }
 
   if (found_intersection == false) {
-    vcm_cam_handle_miss(scene, options, intersection, state);
+    vcm_cam_handle_miss(options, intersection, state);
     return false;
   }
 
@@ -1034,7 +1039,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
 
   // Use fixed sample allocation for BSDF sampling
   state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
-  auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, state.sampler);
+  auto bsdf_sample = bsdf::sample(bsdf_data, mat, state.sampler);
   bool is_connectible = (bsdf_sample.properties & BSDFSample::Delta) == 0;  // Store connectibility like BDPT
   state.sampler.pop_fixed();
 
@@ -1199,7 +1204,7 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
 
   // Use fixed sample allocation for BSDF sampling
   state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
-  auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, state.sampler);
+  auto bsdf_sample = bsdf::sample(bsdf_data, mat, state.sampler);
   bool is_connectible = (bsdf_sample.properties & BSDFSample::Delta) == 0;  // Store connectibility like BDPT
   state.sampler.pop_fixed();
   ETX_VALIDATE(bsdf_sample.weight);

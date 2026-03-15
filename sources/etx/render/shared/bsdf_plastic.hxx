@@ -11,7 +11,7 @@ struct PlasticMaterial {
   RefractiveIndex int_ior;
 };
 
-ETX_SHARED_INLINE SpectralResponse specular_func(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE SpectralResponse specular_func(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
   LocalFrame local_frame = data.get_normal_frame(mtl);
 
   auto w_i = local_frame_to_local(local_frame, -data.w_i);
@@ -22,19 +22,19 @@ ETX_SHARED_INLINE SpectralResponse specular_func(const BSDFData& data, const flo
   if (LocalFrame::cos_theta(w_o) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
-  auto roughness = evaluate_roughness(mtl, data.tex, scene);
-  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
+  auto roughness = evaluate_roughness(mtl, data.tex);
+  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
   auto m_eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
 
   SpectralResponse value = external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, true, roughness, ext_ior, int_ior, thinfilm);
-  auto func = 2.0f * value * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  auto func = 2.0f * value * apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
   ETX_VALIDATE(func);
   return func;
 }
 
-ETX_SHARED_INLINE float specular_pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float specular_pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
   LocalFrame local_frame = data.get_normal_frame(mtl);
 
   auto w_i = local_frame_to_local(local_frame, -data.w_i);
@@ -45,10 +45,10 @@ ETX_SHARED_INLINE float specular_pdf(const BSDFData& data, const float3& in_w_o,
   if (LocalFrame::cos_theta(w_o) <= kEpsilon)
     return 0.0f;
 
-  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto roughness = evaluate_roughness(mtl, data.tex, scene);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto roughness = evaluate_roughness(mtl, data.tex);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
 
   float3 wh = normalize(w_o + w_i);
   float dwh_dwo = 1.0f / (4.0f * dot(w_o, wh));
@@ -73,16 +73,16 @@ ETX_SHARED_INLINE float specular_pdf(const BSDFData& data, const float3& in_w_o,
   return result;
 }
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
-  auto roughness = evaluate_roughness(mtl, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex);
   auto ggx = NormalDistribution(frame, roughness);
   auto m = ggx.sample(smp, data.w_i);
 
-  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
   auto f = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), ext_ior, int_ior, thinfilm);
   auto fr = f.monochromatic();
 
@@ -103,7 +103,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
     in_w_o = local_frame_from_local(frame, sample_cosine_distribution(smp.next_2d(), 1.0f));
   }
 
-  auto eval = evaluate(data, in_w_o, mtl, scene, smp);
+  auto eval = evaluate(data, in_w_o, mtl, smp);
 
   BSDFSample result = {};
   result.w_o = in_w_o;
@@ -114,7 +114,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
   float3 m = normalize(w_o - data.w_i);
 
@@ -125,17 +125,17 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
     return {data.spectrum_sample, 0.0f};
   }
 
-  auto eta_e = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto eta_i = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto eta_e = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto eta_i = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
   auto fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 
   auto local_w_i = local_frame_to_local(frame, -data.w_i);
   auto local_w_o = local_frame_to_local(frame, w_o);
 
-  auto diff_layer = DiffuseBSDF::diffuse_layer(data, local_w_i, local_w_o, mtl, scene, smp);
-  auto spec_layer = specular_func(data, w_o, mtl, scene, smp);
-  auto spec_pdf = specular_pdf(data, w_o, mtl, scene, smp);
+  auto diff_layer = DiffuseBSDF::diffuse_layer(data, local_w_i, local_w_o, mtl, smp);
+  auto spec_layer = specular_func(data, w_o, mtl, smp);
+  auto spec_pdf = specular_pdf(data, w_o, mtl, smp);
 
   BSDFEval result = {};
 
@@ -151,7 +151,7 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
   return result;
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
   float3 m = normalize(w_o - data.w_i);
@@ -162,25 +162,25 @@ ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Mater
     return 0.0f;
   }
 
-  auto eta_e = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto eta_i = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto eta_e = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto eta_i = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
   auto fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, m), eta_e, eta_i, thinfilm);
 
   float diff_pdf = kInvPi * n_dot_o;
-  float spec_pdf = specular_pdf(data, w_o, mtl, scene, smp);
+  float spec_pdf = specular_pdf(data, w_o, mtl, smp);
 
   float result = diff_pdf * (1.0f - fr).monochromatic() + spec_pdf;
   ETX_VALIDATE(result);
   return result;
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
 }
 
 }  // namespace PlasticBSDF

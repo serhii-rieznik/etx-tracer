@@ -62,15 +62,15 @@ ETX_SHARED_INLINE GatherResult gather_rw(SpectralQuery spect, const Scene& scene
   SpectralResponse albedo = {spect};
 
   if (mat.int_medium == kInvalidIndex) {
-    auto color = apply_image(spect, mat.scattering, in_intersection.tex, scene, nullptr);
-    auto distances = apply_image(spect, mat.subsurface, in_intersection.tex, scene, nullptr);
+    auto color = apply_image(spect, mat.scattering, in_intersection.tex);
+    auto distances = apply_image(spect, mat.subsurface, in_intersection.tex);
     remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
     remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
   } else {
     const Medium& medium = scene.mediums[mat.int_medium];
     anisotropy = medium.phase_function_g;
-    scattering = medium_scattering(scene, medium, spect);
-    auto absorption = medium_absorption(scene, medium, spect);
+    scattering = medium_scattering(medium, spect);
+    auto absorption = medium_absorption(medium, spect);
     extinction = scattering + absorption;
     albedo = calculate_albedo(spect, scattering, extinction);
   }
@@ -144,9 +144,9 @@ ETX_SHARED_INLINE GatherResult gather_cb(SpectralQuery spect, const Scene& scene
   const auto& sss = mat.subsurface;
 
   Sample ss_samples[kIntersectionDirections] = {
-    sample(spect, scene, in_intersection, sss, 0u, smp),
-    sample(spect, scene, in_intersection, sss, 1u, smp),
-    sample(spect, scene, in_intersection, sss, 2u, smp),
+    sample(spect, in_intersection, sss, 0u, smp),
+    sample(spect, in_intersection, sss, 1u, smp),
+    sample(spect, in_intersection, sss, 2u, smp),
   };
 
   IntersectionBase intersections[kTotalIntersections] = {};
@@ -163,7 +163,7 @@ ETX_SHARED_INLINE GatherResult gather_cb(SpectralQuery spect, const Scene& scene
     return GatherResult::Failed;
   }
 
-  SpectralResponse base_weight = apply_image(spect, mat.scattering, in_intersection.tex, scene, nullptr);
+  SpectralResponse base_weight = apply_image(spect, mat.scattering, in_intersection.tex);
 
   result = {};
   for (uint32_t i = 0; i < intersection_count; ++i) {
@@ -172,12 +172,12 @@ ETX_SHARED_INLINE GatherResult gather_cb(SpectralQuery spect, const Scene& scene
     auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
 
     float gw = geometric_weigth(out_intersection.nrm, ss_sample);
-    float pdf = evaluate(spect, scene, out_intersection, sss, ss_sample.sampled_radius).average();
+    float pdf = evaluate(spect, out_intersection, sss, ss_sample.sampled_radius).average();
     ETX_VALIDATE(pdf);
     if (pdf <= 0.0f)
       continue;
 
-    auto eval = evaluate(spect, scene, out_intersection, sss, length(out_intersection.pos - in_intersection.pos));
+    auto eval = evaluate(spect, out_intersection, sss, length(out_intersection.pos - in_intersection.pos));
     ETX_VALIDATE(eval);
 
     auto weight = base_weight * eval / pdf * gw;
@@ -231,8 +231,8 @@ ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera
   payload.smp.init(pixel_index, payload.iteration);
   payload.spect = spectral ? SpectralQuery::spectral_sample(payload.smp.next()) : SpectralQuery::sample();
 
-  float2 uv = film.sample(scene, iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, px, payload.smp.next_2d());
-  payload.ray = generate_ray(scene, camera, uv, payload.smp.next_2d());
+  float2 uv = film.sample(iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, px, payload.smp.next_2d());
+  payload.ray = generate_ray(camera, uv, payload.smp.next_2d());
   payload.throughput = {payload.spect, 1.0f};
   payload.accumulated = {payload.spect, 0.0f};
   payload.medium = camera.medium_index;
@@ -250,7 +250,7 @@ ETX_SHARED_INLINE MediumSample try_sampling_medium(const Scene& scene, PTRayPayl
     return {};
   }
 
-  auto medium_sample = sample_medium(scene, scene.mediums[payload.medium], payload.spect, payload.throughput, payload.smp, payload.ray.o, payload.ray.d, max_t);
+  auto medium_sample = sample_medium(scene.mediums[payload.medium], payload.spect, payload.throughput, payload.smp, payload.ray.o, payload.ray.d, max_t);
   spectral_response_mul_assign(payload.throughput, medium_sample.weight);
   ETX_VALIDATE(payload.throughput);
   return medium_sample;
@@ -267,7 +267,7 @@ ETX_SHARED_INLINE void handle_sampled_medium(const Scene& scene, const MediumSam
       .source_type = InteractionType::Medium,
       .source_position = medium_sample.pos,
     };
-    auto emitter_sample = sample_emitter(scene, query, payload.smp);
+    auto emitter_sample = sample_emitter(scene.light_sampling_method(), query, payload.smp);
     if (emitter_sample.pdf_dir > 0) {
       auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, {.index = payload.medium}, payload.smp);
       float phase_function = medium_phase_function(medium, payload.ray.d, emitter_sample.direction);
@@ -294,7 +294,7 @@ ETX_SHARED_INLINE SpectralResponse evaluate_light(const Scene& scene, const Inte
     return {spect, 0.0f};
   }
 
-  BSDFEval bsdf_eval = bsdf::evaluate({spect, medium, PathSource::Camera, intersection, intersection.w_i}, emitter_sample.direction, mat, scene, smp);
+  BSDFEval bsdf_eval = bsdf::evaluate({spect, medium, PathSource::Camera, intersection, intersection.w_i}, emitter_sample.direction, mat, smp);
   if (bsdf_eval.valid() == false) {
     return {spect, 0.0f};
   }
@@ -319,7 +319,10 @@ ETX_SHARED_INLINE void handle_direct_emitter(const Scene& scene, const Triangle&
   if ((scene.strategy_enabled(Scene::Strategy::DirectHit) == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
-  const auto& emitter_instance = scene.emitter_instances[intersection.emitter_index];
+  Emitter emitter_instance = {};
+  if (try_load_emitter_instance(intersection.emitter_index, emitter_instance) == false) {
+    return;
+  }
 
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
@@ -332,11 +335,11 @@ ETX_SHARED_INLINE void handle_direct_emitter(const Scene& scene, const Triangle&
     .directly_visible = payload.path_length == 1,
   };
 
-  auto e = emitter_get_radiance(emitter_instance, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
+  auto e = emitter_get_radiance(emitter_instance, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
 
   if (pdf_emitter_dir > 0.0f) {
     auto tr = rt.trace_transmittance(payload.spect, scene, payload.ray.o, intersection.pos, {.index = payload.medium}, payload.smp);
-    float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
+    float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance);
     bool no_weight = (scene.multiple_importance_sampling() == false) || q.directly_visible || (payload.mis_weight == false);
     auto weight = no_weight ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
     payload.accumulated += payload.throughput * e * tr * weight;
@@ -362,7 +365,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
 
   if (payload.path_length == 1) {
     payload.view_normal = intersection.nrm;
-    payload.view_albedo = bsdf::albedo(bsdf_data, mat, scene, payload.smp);
+    payload.view_albedo = bsdf::albedo(bsdf_data, mat, payload.smp);
   }
 
   float2 rnd_bsdf = payload.smp.next_2d();
@@ -376,7 +379,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   }
 
   payload.smp.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
-  auto bsdf_sample = bsdf::sample(bsdf_data, mat, scene, payload.smp);
+  auto bsdf_sample = bsdf::sample(bsdf_data, mat, payload.smp);
   payload.smp.pop_fixed();
 
   bool subsurface_path = (mat.subsurface_cls != SubsurfaceMaterial::Disabled) &&  //
@@ -413,7 +416,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
           .source_position = ss_gather.intersections[i].pos,
           .source_normal = ss_gather.intersections[i].nrm,
         };
-        auto local_sample = sample_emitter(scene, query, payload.smp);
+        auto local_sample = sample_emitter(scene.light_sampling_method(), query, payload.smp);
         SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, scene.materials[scene.defaults.subsurface_exit_material],  //
           payload.medium, payload.spect, local_sample, payload.smp, scene.multiple_importance_sampling());
         direct_light += ss_gather.weights[i] * light_value;
@@ -426,7 +429,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
         .source_position = intersection.pos,
         .source_normal = intersection.nrm,
       };
-      auto emitter_sample = sample_emitter(scene, query, payload.smp);
+      auto emitter_sample = sample_emitter(scene.light_sampling_method(), query, payload.smp);
       direct_light += evaluate_light(scene, intersection, rt, mat, payload.medium, payload.spect, emitter_sample, payload.smp, scene.multiple_importance_sampling());
       ETX_VALIDATE(direct_light);
     }
@@ -462,14 +465,18 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
 }  // namespace etx
 
 ETX_SHARED_INLINE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
-  uint32_t environment_emitter_count = environment_emitter_shared_count(scene);
+  uint32_t environment_emitter_count = environment_emitter_shared_count();
   for (uint32_t ie = 0; ie < environment_emitter_count; ++ie) {
     uint32_t emitter_index = kInvalidIndex;
-    if (environment_emitter_shared_try_load_index(scene, ie, emitter_index) == false) {
+    if (environment_emitter_shared_try_load_index(ie, emitter_index) == false) {
       continue;
     }
 
-    const auto& emitter_instance = scene.emitter_instances[emitter_index];
+    Emitter emitter_instance = {};
+    if (try_load_emitter_instance(emitter_index, emitter_instance) == false) {
+      continue;
+    }
+
     float pdf_emitter_area = 0.0f;
     float pdf_emitter_dir = 0.0f;
     float pdf_emitter_dir_out = 0.0f;
@@ -477,10 +484,10 @@ ETX_SHARED_INLINE void handle_missed_ray(const Scene& scene, PTRayPayload& paylo
       .direction = payload.ray.d,
       .directly_visible = payload.path_length == 1,
     };
-    auto e = emitter_get_radiance(emitter_instance, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out, scene);
+    auto e = emitter_get_radiance(emitter_instance, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
     ETX_VALIDATE(e);
     if ((pdf_emitter_dir > 0) && (e.is_zero() == false)) {
-      float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance, scene.emitters_distribution);
+      float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance);
       auto weight = ((payload.mis_weight == false) || q.directly_visible) ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
       payload.accumulated += payload.throughput * e * weight;
       ETX_VALIDATE(payload.accumulated);

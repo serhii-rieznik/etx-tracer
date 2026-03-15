@@ -52,8 +52,8 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
     return;
 
   ByteAddressBuffer camera_buffer = bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)];
-  GPUABIAccessSharedContext camera_access_context = make_gpu_abi_access_shared_context(camera_buffer);
-  uint2 film_size = gpu_abi_access_shared_camera_film_size(camera_access_context);
+  Camera camera = load_camera(camera_buffer);
+  uint2 film_size = camera.film_size;
   if (any(dtid.xy >= film_size))
     return;
 
@@ -67,8 +67,6 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
   }
   float spectral_pdf = spectral_query_sampling_pdf(spectral_query);
   float spectral_weight = (spectral_pdf > 0.0f) ? (1.0f / spectral_pdf) : 0.0f;
-
-  Camera camera = load_camera(camera_buffer);
 
   float2 lens_rnd = float2(0.0f, 0.0f);
   if (camera_lens_sampling_enabled(camera.lens_radius, camera.focal_distance)) {
@@ -96,10 +94,10 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
   if (has_geometry_buffers) {
     ByteAddressBuffer triangle_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)];
     ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-    SceneGlobalsGPUSharedContext scene_globals_context = make_scene_globals_gpu_shared_context(scene_globals);
+    SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(scene_globals);
     const bool has_material_buffer = constants.scene.materials != kInvalidIndex;
-    uint vertex_count = scene_globals_shared_vertex_count(scene_globals_context);
-    uint triangle_count = scene_globals_shared_triangle_count(scene_globals_context);
+    uint vertex_count = scene_globals_data.vertex_count;
+    uint triangle_count = scene_globals_data.triangle_count;
     const bool has_texcoords = constants.scene.vertex_texcoords != kInvalidIndex;
 
     q.TraceRayInline(as, RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, ray);
@@ -202,11 +200,11 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
       ByteAddressBuffer bitangent_buffer = bindless_buffers[NonUniformResourceIndex(bitangent_buffer_index)];
       ByteAddressBuffer texcoord_buffer = bindless_buffers[NonUniformResourceIndex(texcoord_buffer_index)];
       ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-      SceneGlobalsGPUSharedContext scene_globals_context = make_scene_globals_gpu_shared_context(scene_globals);
+      SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(scene_globals);
 
-      uint vertex_count = scene_globals_shared_vertex_count(scene_globals_context);
-      uint triangle_count = scene_globals_shared_triangle_count(scene_globals_context);
-      float bounding_sphere_radius = scene_globals_shared_bounding_sphere_radius(scene_globals_context);
+      uint vertex_count = scene_globals_data.vertex_count;
+      uint triangle_count = scene_globals_data.triangle_count;
+      float bounding_sphere_radius = scene_globals_data.bounding_sphere_radius;
 
       uint triangle_index = q.CommittedPrimitiveIndex();
       if (triangle_index < triangle_count) {
@@ -221,11 +219,23 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
 
           float ao_radius = max(0.1f, 0.05f * bounding_sphere_radius);
           float ao = evaluate_ao(as, surface_point.vertex.pos, surface_point.geo_normal, surface_point.vertex.tan, surface_point.vertex.btn, ao_radius, dtid.xy, seed);
+          MaterialAccessGPUContext material_context = {constants.scene.materials};
+          MaterialAccess material_access = ETX_ZERO(MaterialAccess);
+          bool has_material_scattering = material_access_try_load(material_context, tri.material_index, material_access) && material_access_has_scattering(material_access);
+          SpectralImage scattering_image = ETX_ZERO(SpectralImage);
+          if (has_material_scattering) {
+            scattering_image.spectrum_index = material_access.scattering_spectrum_index;
+            scattering_image.image_index = material_access.scattering_image_index;
+          }
 
           if (spectral_mode) {
             float3 fallback_color = scene_math_shared_default_ao_shading(surface_point.vertex.nrm, ao);
             SpectralResponse fallback_response = spectral_response_make(spectral_query, luminance(fallback_color));
-            SpectralResponse shaded_spectral = evaluate_material_scattering_spectral(tri.material_index, hit_uv, ao, spectral_query, fallback_response);
+            SpectralResponse shaded_spectral = fallback_response;
+            if (has_material_scattering) {
+              shaded_spectral = spectral_response_mul(apply_image(spectral_query, scattering_image, hit_uv), ao);
+              shaded_spectral = spectral_response_clamp_non_negative(shaded_spectral);
+            }
             bool local_emission_visible = dot(tri.geo_n, ray_dir) < 0.0f;
             if ((tri.emitter_index != kInvalidIndex) && local_emission_visible) {
               shaded_spectral = spectral_response_add(shaded_spectral, evaluate_local_emission_spectral(tri.emitter_index, hit_uv, spectral_query));
@@ -236,7 +246,10 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
             color = float4(max(shaded, float3(0.0f, 0.0f, 0.0f)), 1.0f);
           } else {
             float3 shaded = scene_math_shared_default_ao_shading(surface_point.vertex.nrm, ao);
-            shaded = apply_image_integrated_or_fallback(tri.material_index, hit_uv, ao, shaded);
+            if (has_material_scattering) {
+              SpectralQuery integrated_query = spectral_query_sample();
+              shaded = spectral_rgb_clamp_non_negative(apply_image(integrated_query, scattering_image, hit_uv).integrated) * ao;
+            }
             bool local_emission_visible = dot(tri.geo_n, ray_dir) < 0.0f;
             if ((tri.emitter_index != kInvalidIndex) && local_emission_visible) {
               shaded += evaluate_local_emission_integrated(tri.emitter_index, hit_uv);

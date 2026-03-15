@@ -2,11 +2,8 @@
 
 #include <access/emitter_access_shared.hxx>
 #include <access/image_access_gpu.hxx>
-#include <access/image_evaluate_gpu.hxx>
-#include <access/spectrum_access_gpu.hxx>
 #include <interop/gpu_abi_access_shared.hxx>
-#include <interop/scene_globals_shared.hxx>
-#include <interop/material_scattering_shared.hxx>
+#include <interop/scene_gpu_access_shared.hxx>
 
 struct EmitterAccessGPUContext {
   uint emitter_instances_descriptor_index;
@@ -37,10 +34,24 @@ bool emitter_access_try_load_scene_state(EmitterAccessGPUContext context, out ui
   }
 
   ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(context.scene_globals_descriptor_index)];
-  SceneGlobalsGPUSharedContext globals_context = make_scene_globals_gpu_shared_context(scene_globals);
-  emitter_instance_count = scene_globals_shared_emitter_instance_count(globals_context);
-  emitter_profile_count = scene_globals_shared_emitter_profile_count(globals_context);
+  SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(scene_globals);
+  emitter_instance_count = globals_data.emitter_instance_count;
+  emitter_profile_count = globals_data.emitter_profile_count;
   return (emitter_instance_count > 0u) && (emitter_profile_count > 0u);
+}
+
+bool emitter_access_try_load_environment_state(EmitterAccessGPUContext context, out uint emitter_instance_count, out uint environment_emitter_count) {
+  emitter_instance_count = 0u;
+  environment_emitter_count = 0u;
+  if ((context.scene_globals_descriptor_index == kInvalidIndex) || (context.emitter_instances_descriptor_index == kInvalidIndex)) {
+    return false;
+  }
+
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(context.scene_globals_descriptor_index)];
+  SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(scene_globals);
+  emitter_instance_count = globals_data.emitter_instance_count;
+  environment_emitter_count = min(globals_data.environment_emitter_count, SceneLimits::MaxEnvironmentEmitters);
+  return (emitter_instance_count > 0u) && (environment_emitter_count > 0u);
 }
 
 bool emitter_access_try_load_profile(EmitterAccessGPUContext context, uint emitter_profile_count, inout EmitterAccess access) {
@@ -49,13 +60,13 @@ bool emitter_access_try_load_profile(EmitterAccessGPUContext context, uint emitt
   }
 
   ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(context.emitter_profiles_descriptor_index)];
-  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_profile_buffer);
-  access.emission_spectrum_index = gpu_abi_access_shared_emitter_emission_spectrum_index(access_context, access.emitter_profile_index);
-  access.emission_image_index = gpu_abi_access_shared_emitter_emission_image_index(access_context, access.emitter_profile_index);
-  access.emitter_profile_class = gpu_abi_access_shared_emitter_profile_class(access_context, access.emitter_profile_index);
-  access.emitter_profile_meta = gpu_abi_access_shared_emitter_profile_meta(access_context, access.emitter_profile_index);
-  access.emitter_direction = gpu_abi_access_shared_emitter_profile_direction(access_context, access.emitter_profile_index);
-  access.emitter_angular_size_cosine = gpu_abi_access_shared_emitter_profile_angular_size_cosine(access_context, access.emitter_profile_index);
+  GPUEmitterProfileABIData profile_data = gpu_abi_load_emitter_profile(emitter_profile_buffer, access.emitter_profile_index);
+  access.emission_spectrum_index = profile_data.emission_spectrum_index;
+  access.emission_image_index = profile_data.emission_image_index;
+  access.emitter_profile_class = profile_data.emitter_profile_class;
+  access.emitter_profile_meta = profile_data.emitter_profile_meta;
+  access.emitter_direction = profile_data.emitter_direction;
+  access.emitter_angular_size_cosine = profile_data.emitter_angular_size_cosine;
   return access.emission_spectrum_index != kInvalidIndex;
 }
 
@@ -87,9 +98,9 @@ bool emitter_access_try_load(EmitterAccessGPUContext context, uint emitter_index
   }
 
   ByteAddressBuffer emitter_instance_buffer = bindless_buffers[NonUniformResourceIndex(context.emitter_instances_descriptor_index)];
-  GPUABIAccessSharedContext access_context = make_gpu_abi_access_shared_context(emitter_instance_buffer);
-  access.emitter_class = gpu_abi_access_shared_emitter_class(access_context, emitter_index);
-  access.emitter_profile_index = gpu_abi_access_shared_emitter_profile_index(access_context, emitter_index);
+  GPUEmitterInstanceABIData instance_data = gpu_abi_load_emitter_instance(emitter_instance_buffer, emitter_index);
+  access.emitter_class = instance_data.emitter_class;
+  access.emitter_profile_index = instance_data.emitter_profile_index;
   return emitter_access_try_load_profile(context, emitter_profile_count, access);
 }
 
@@ -134,60 +145,27 @@ float2 emitter_access_environment_uv(EmitterAccessGPUContext context, EmitterAcc
 }
 
 bool emitter_access_can_sample_spectrum(EmitterAccessGPUContext context, uint emission_spectrum_index) {
-  return scene_resource_shared_can_sample_spectrum(context.spectrums_descriptor_index, emission_spectrum_index);
+  return scene_gpu_can_sample_spectrum(context.spectrums_descriptor_index, emission_spectrum_index);
 }
 
-float3 emitter_access_load_spectrum_integrated(EmitterAccessGPUContext context, uint emission_spectrum_index) {
-  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(context.spectrums_descriptor_index)];
-  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index);
-  return spectrum_access_load_integrated(spectrum_context, emission_spectrum_index);
-}
+bool emitter_access_try_load_environment_emitter(EmitterAccessGPUContext context, uint local_index, out uint emitter_index) {
+  emitter_index = kInvalidIndex;
 
-SpectralResponse emitter_access_load_spectrum_spectral(EmitterAccessGPUContext context, uint emission_spectrum_index, SpectralQuery spect) {
-  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(context.spectrums_descriptor_index)];
-  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index);
-  return spectrum_access_evaluate(spectrum_context, emission_spectrum_index, spect);
-}
-
-bool emitter_access_can_apply_image(EmitterAccessGPUContext context, uint emission_image_index) {
-  ImageAccessGPUContext image_context = {context.images_descriptor_index};
-  return image_can_apply(image_context, emission_image_index);
-}
-
-float3 emitter_access_evaluate_image_rgb(EmitterAccessGPUContext context, uint emission_image_index, float2 uv) {
-  ImageEvaluateGPUContext image_context = make_image_evaluate_gpu_context(context.images_descriptor_index);
-  float4 image_value = image_evaluate_sample_whole_or_default(image_context, emission_image_index, uv, float4(1.0f, 1.0f, 1.0f, 1.0f));
-  return image_value.xyz;
-}
-
-float3 emitter_access_evaluate_integrated_source(EmitterAccessGPUContext context, uint emission_spectrum_index, uint emission_image_index, float2 uv) {
-  if (emitter_access_can_sample_spectrum(context, emission_spectrum_index) == false) {
-    return float3(0.0f, 0.0f, 0.0f);
+  uint emitter_instance_count = 0u;
+  uint environment_emitter_count = 0u;
+  if (emitter_access_try_load_environment_state(context, emitter_instance_count, environment_emitter_count) == false) {
+    return false;
+  }
+  if (local_index >= environment_emitter_count) {
+    return false;
   }
 
-  float3 result = emitter_access_load_spectrum_integrated(context, emission_spectrum_index);
-  bool apply_image = emitter_access_can_apply_image(context, emission_image_index);
-  float3 image_rgb = float3(1.0f, 1.0f, 1.0f);
-  if (apply_image) {
-    image_rgb = emitter_access_evaluate_image_rgb(context, emission_image_index, uv);
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(context.scene_globals_descriptor_index)];
+  emitter_index = scene_gpu_environment_emitter(scene_globals, local_index);
+  if (emitter_index >= emitter_instance_count) {
+    emitter_index = kInvalidIndex;
+    return false;
   }
 
-  return material_scattering_shared_apply_integrated_clamped_ao(result, image_rgb, apply_image, 1.0f);
-}
-
-SpectralResponse emitter_access_evaluate_spectral_source(
-  EmitterAccessGPUContext context, uint emission_spectrum_index, uint emission_image_index, float2 uv, SpectralQuery spect) {
-  SpectralResponse zero_value = spectral_response_zero(spect);
-  if (emitter_access_can_sample_spectrum(context, emission_spectrum_index) == false) {
-    return zero_value;
-  }
-
-  SpectralResponse result = emitter_access_load_spectrum_spectral(context, emission_spectrum_index, spect);
-  bool apply_image = emitter_access_can_apply_image(context, emission_image_index);
-  float3 image_rgb = float3(1.0f, 1.0f, 1.0f);
-  if (apply_image) {
-    image_rgb = emitter_access_evaluate_image_rgb(context, emission_image_index, uv);
-  }
-
-  return material_scattering_shared_apply_spectral_clamped_ao(spect, result, image_rgb, apply_image, 1.0f);
+  return true;
 }

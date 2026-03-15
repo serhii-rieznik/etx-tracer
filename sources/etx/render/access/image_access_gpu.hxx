@@ -1,6 +1,7 @@
 #pragma once
 
 #include <interop/gpu_abi_constants.hxx>
+#include <interop/scene_gpu_access_shared.hxx>
 #include <interop/image.hxx>
 
 struct ImageAccessGPUDesc {
@@ -100,7 +101,7 @@ uint image_access_gpu_blob_chunk_descriptor(ByteAddressBuffer buffer, uint chunk
 }
 
 bool image_access_gpu_has_images(ImageAccessGPUContext context) {
-  return scene_resource_shared_is_available(context.images_descriptor_index);
+  return scene_gpu_has_descriptor(context.images_descriptor_index);
 }
 
 bool image_access_gpu_load_desc(ImageAccessGPUContext context, uint image_index, out ImageAccessGPUDesc image_access) {

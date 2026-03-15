@@ -18,6 +18,10 @@ ETX_SHARED_INLINE BoundingBox medium_access_bounds(ETX_IN(MediumAccess, access))
   return result;
 }
 
+ETX_SHARED_INLINE bool medium_access_has_grid_data(ETX_IN(MediumAccess, access)) {
+  return medium_density_shared_has_grid_data(access.grid.type, access.grid.dimensions, access.grid.density_count);
+}
+
 ETX_SHARED_INLINE bool medium_access_supported_class(uint32_t medium_class) {
   return (medium_class == Medium::Homogeneous) || (medium_class == Medium::Heterogeneous);
 }

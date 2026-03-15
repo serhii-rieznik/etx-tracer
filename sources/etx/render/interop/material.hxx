@@ -3,8 +3,8 @@
 #include "interop.hxx"
 #include "spectrum.hxx"
 
-ETX_STATIC_CONST float3 kRGBWavelengths = make_float3(610.0f, 537.0f, 450.0f);
-ETX_STATIC_CONST float3 kRGBWavelengthsSpan = make_float3(45.0f, 47.0f, 23.5f);
+ETX_STATIC_CONST float3 kRGBWavelengths = float3(610.0f, 537.0f, 450.0f);
+ETX_STATIC_CONST float3 kRGBWavelengthsSpan = float3(45.0f, 47.0f, 23.5f);
 
 struct ETX_ALIGNED SpectralImage {
   uint32_t spectrum_index ETX_INIT(kInvalidIndex);

@@ -103,20 +103,3 @@ struct ETX_ALIGNED GPUScene {
   uint32_t scene_options;
 };
 
-#if defined(__cplusplus)
-static_assert(std::is_standard_layout_v<GPUSceneGlobals>, "GPUSceneGlobals must stay standard layout for C++/HLSL interop");
-static_assert(std::is_standard_layout_v<GPUSceneOptions>, "GPUSceneOptions must stay standard layout for C++/HLSL interop");
-static_assert(std::is_standard_layout_v<GPUImageBlobHeader>, "GPUImageBlobHeader must stay standard layout for C++/HLSL interop");
-static_assert(std::is_standard_layout_v<GPUMediumBlobHeader>, "GPUMediumBlobHeader must stay standard layout for C++/HLSL interop");
-static_assert(std::is_standard_layout_v<GPUScene>, "GPUScene must stay standard layout for C++/HLSL interop");
-static_assert(alignof(GPUSceneGlobals) == 16, "GPUSceneGlobals alignment must match HLSL packing");
-static_assert(alignof(GPUSceneOptions) == 16, "GPUSceneOptions alignment must match HLSL packing");
-static_assert(alignof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader alignment must match HLSL packing");
-static_assert(alignof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader alignment must match HLSL packing");
-static_assert(alignof(GPUScene) == 16, "GPUScene alignment must match HLSL packing");
-static_assert(sizeof(GPUSceneGlobals) == 384, "GPUSceneGlobals size changed; update shared ABI");
-static_assert(sizeof(GPUSceneOptions) == 48, "GPUSceneOptions size changed; update shared ABI");
-static_assert(sizeof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader size changed; update shared ABI");
-static_assert(sizeof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader size changed; update shared ABI");
-static_assert(sizeof(GPUScene) == 64, "GPUScene size changed; update shared ABI");
-#endif

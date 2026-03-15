@@ -2,7 +2,7 @@ namespace etx {
 
 namespace VoidBSDF {
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material&, const Scene&, Sampler&) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material&, Sampler&) {
   BSDFSample result;
   result.w_o = data.w_i;
   result.weight = {data.spectrum_sample, 0.0f};
@@ -13,19 +13,19 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material&, const
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3&, const Material&, const Scene&, Sampler&) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3&, const Material&, Sampler&) {
   return {data.spectrum_sample, 0.0f};
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData&, const float3&, const Material&, const Scene&, Sampler&) {
+ETX_SHARED_INLINE float pdf(const BSDFData&, const float3&, const Material&, Sampler&) {
   return 0.0f;
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material&, const float2&, const Scene&, Sampler&) {
+ETX_SHARED_INLINE bool is_delta(const Material&, const float2&, Sampler&) {
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material&, const Scene&, Sampler&) {
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material&, Sampler&) {
   return {data.spectrum_sample, 0.0f};
 }
 
@@ -33,16 +33,16 @@ ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material&,
 
 namespace DiffuseBSDF {
 
-ETX_SHARED_INLINE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_i, const float3& local_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval diffuse_layer(const BSDFData& data, const float3& local_w_i, const float3& local_w_o, const Material& mtl, Sampler& smp) {
   if (local_w_o.z <= 0.0f)
     return {data.spectrum_sample, 0.0f};
 
-  SpectralResponse diffuse = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+  SpectralResponse diffuse = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
 
   BSDFEval eval = {};
   eval.eta = 1.0f;
 
-  auto roughness = evaluate_roughness(mtl, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex);
   switch (mtl.diffuse_variation) {
     case 1: {
       eval.bsdf = external::eval_diffuse(smp, local_w_i, local_w_o, roughness, diffuse);
@@ -70,10 +70,10 @@ ETX_SHARED_INLINE BSDFEval diffuse_layer(const BSDFData& data, const float3& loc
   return eval;
 }
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
   auto local_w_i = local_frame_to_local(frame, -data.w_i);
-  auto roughness = evaluate_roughness(mtl, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex);
 
   BSDFSample result = {};
   result.eta = 1.0f;
@@ -81,7 +81,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
 
   float3 local_w_o = {};
   if (mtl.diffuse_variation == 1) {
-    SpectralResponse diffuse = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+    SpectralResponse diffuse = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
     local_w_o = external::sample_diffuse(smp, local_w_i, roughness, diffuse, result.weight);
     ETX_VALIDATE(result.weight);
     result.pdf = kInvPi * local_w_o.z;
@@ -89,7 +89,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   } else {
     float2 cos_rnd = smp.has_fixed() ? float2{smp.fixed_u, smp.fixed_v} : smp.next_2d();
     local_w_o = sample_cosine_distribution(cos_rnd, 1.0f);
-    auto dl = diffuse_layer(data, local_w_i, local_w_o, mtl, scene, smp);
+    auto dl = diffuse_layer(data, local_w_i, local_w_o, mtl, smp);
     result.weight = dl.pdf == 0.0f ? SpectralResponse{data.spectrum_sample, 0.0f} : dl.bsdf / dl.pdf;
     ETX_VALIDATE(result.weight);
     result.pdf = dl.pdf;
@@ -99,7 +99,7 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
   auto local_w_o = local_frame_to_local(frame, in_w_o);
 
@@ -107,10 +107,10 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
     return {data.spectrum_sample, 0.0f};
 
   auto local_w_i = local_frame_to_local(frame, -data.w_i);
-  return diffuse_layer(data, local_w_i, local_w_o, mtl, scene, smp);
+  return diffuse_layer(data, local_w_i, local_w_o, mtl, smp);
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
   float n_dot_o = dot(frame.nrm, w_o);
   if (n_dot_o <= kEpsilon)
@@ -121,22 +121,22 @@ ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Mater
   return result;
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
 }
 
 }  // namespace DiffuseBSDF
 
 namespace TranslucentBSDF {
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame();
-  auto tr = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
-  auto rf = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  auto tr = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
+  auto rf = apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
 
   float tr_value = tr.monochromatic();
   float rf_value = rf.monochromatic();
@@ -169,15 +169,15 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame();
   float n_dot_i = -dot(frame.nrm, data.w_i);
   float n_dot_o = dot(frame.nrm, w_o);
 
   bool reflection = n_dot_o * n_dot_i > 0.0f;
 
-  auto tr = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
-  auto rf = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  auto tr = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
+  auto rf = apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
 
   float tr_value = tr.monochromatic();
   float rf_value = rf.monochromatic();
@@ -197,48 +197,48 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
   return result;
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame();
   float n_dot_i = -dot(frame.nrm, data.w_i);
   float n_dot_o = dot(frame.nrm, w_o);
-  float tr_value = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr).monochromatic();
-  float rf_value = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr).monochromatic();
+  float tr_value = apply_image(data.spectrum_sample, mtl.scattering, data.tex).monochromatic();
+  float rf_value = apply_image(data.spectrum_sample, mtl.reflectance, data.tex).monochromatic();
   float total = tr_value + rf_value;
   bool reflection = n_dot_o * n_dot_i > 0.0f;
   return (total == 0.0f) ? 0.0f : kInvPi * fabsf(n_dot_o) * (reflection ? rf_value / total : tr_value / total);
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
 }
 
 }  // namespace TranslucentBSDF
 
 namespace MirrorBSDF {
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
 
   BSDFSample result;
   result.w_o = normalize(reflect(data.w_i, frame.nrm));
-  result.weight = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+  result.weight = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
   result.pdf = 1.0f;
   result.properties = BSDFSample::Delta | BSDFSample::Reflection;
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   BSDFEval result = {data.spectrum_sample, 0.0f};
 
   auto frame = data.get_normal_frame(mtl);
   const float3 ideal_w_o = normalize(reflect(data.w_i, frame.nrm));
   const float3 actual_w_o = normalize(w_o);
   if (direction_matches(ideal_w_o, actual_w_o, 1.0f)) {
-    result.func = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+    result.func = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
     result.bsdf = result.func;
     result.pdf = 1.0f;
   }
@@ -246,18 +246,18 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
   return result;
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame(mtl);
   const float3 ideal_w_o = normalize(reflect(data.w_i, frame.nrm));
   const float3 actual_w_o = normalize(w_o);
   return direction_matches(ideal_w_o, actual_w_o, 1.0f) ? 1.0f : 0.0f;
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
   return {data.spectrum_sample, 1.0f};
 }
 
@@ -265,7 +265,7 @@ ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& 
 
 namespace BoundaryBSDF {
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   bool entering_material = dot(data.nrm, data.w_i) < 0.0f;
 
   BSDFSample result;
@@ -277,19 +277,19 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   return {data.spectrum_sample, 0.0f};
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   return 0.0f;
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
   return {data.spectrum_sample, 1.0f};
 }
 

@@ -6,7 +6,6 @@
 namespace etx {
 
 struct TaskScheduler;
-struct Scene;
 
 struct FilmImpl;
 struct Film {
@@ -35,11 +34,11 @@ struct Film {
 
   void allocate(const uint2& dim);
 
-  float2 sample(const Scene& scene, const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const;
+  float2 sample(const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const;
 
   void submit(const float3& value, const float2& ndc_coord);
   void submit(const float3& value, const float3& normal, const float3& albedo, const uint2& pixel);
-  void commit_iteration(uint32_t sample_index, const Scene& scene);
+  void commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp);
 
   void clear(uint32_t clear_options);
 
@@ -47,8 +46,8 @@ struct Film {
   uint2 current_dimensions() const;  // current size of the film in pixels, accounting for pixel size
   uint2 base_dimensions() const;     // current size of the film in pixels, accounting for pixel size
 
-  float4* layer(uint32_t layer, const Scene& scene) const;
-  void denoise(uint32_t layer_to_denoise, const Scene& scene);
+  float4* layer(uint32_t layer, float radiance_clamp) const;
+  void denoise(uint32_t layer_to_denoise, float radiance_clamp);
 
   uint32_t pixel_size() const;
   void set_pixel_size(uint32_t size);

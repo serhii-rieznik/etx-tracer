@@ -3,11 +3,11 @@
 #include <etx/core/environment.hxx>
 #include <etx/core/log.hxx>
 #include <etx/render/host/film.hxx>
+#include <etx/render/host/scene_global.hxx>
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 #include <etx/rt/rt.hxx>
-#include <etx/rt/scene_global.hxx>
 
 #include "cpu_renderer.hxx"
 #include "headless_render_context.hxx"
@@ -245,11 +245,11 @@ bool run_cpu_batch_render(const BatchRenderOptions& options, BatchRenderSession&
 
   uint32_t output_layer = ViewLayer::Result;
   if (options.denoise) {
-    session.cpu_renderer.film().denoise(ViewLayer::Result, session.rt.scene());
+    session.cpu_renderer.film().denoise(ViewLayer::Result, session.rt.scene().options.radiance_clamp);
     output_layer = ViewLayer::Denoised;
   }
 
-  const float4* output = session.cpu_renderer.film().layer(output_layer, session.rt.scene());
+  const float4* output = session.cpu_renderer.film().layer(output_layer, session.rt.scene().options.radiance_clamp);
   const uint2 image_size = session.scene.camera().film_size;
   ImageOutputParameters output_params = {
     .mode = save_image_mode_from_file_name(options.output_file),

@@ -1,7 +1,9 @@
 #pragma once
 
+#include <interop/medium_density_shared.hxx>
 #include <access/medium_access_shared.hxx>
 #include <access/spectrum_access_gpu.hxx>
+#include <interop/scene_gpu_access_shared.hxx>
 
 struct MediumAccessGPUContext {
   uint mediums_descriptor_index;
@@ -82,11 +84,65 @@ bool medium_access_try_load(MediumAccessGPUContext context, uint medium_index, o
 
 bool medium_access_has_grid_data(MediumAccessGPUContext context, MediumAccess access) {
   (void)context;
-  return medium_density_shared_has_grid_data(access.grid.type, access.grid.dimensions, access.grid.density_count);
+  if (medium_access_has_grid_data(access) == false) {
+    return false;
+  }
+
+  if (access.grid.type == MediumGridType::NoiseFunction) {
+    return true;
+  }
+
+  return (access.grid.density_data_offset != kInvalidIndex) && (access.density_payload_descriptor_index != kInvalidIndex);
+}
+
+struct MediumTextureSampleContext {
+  ByteAddressBuffer payload_buffer;
+  uint density_offset;
+  uint density_count;
+};
+
+float medium_texture_sample_density(MediumTextureSampleContext context, uint3 dimensions, uint x, uint y, uint z) {
+  uint index = x + y * dimensions.x + z * dimensions.x * dimensions.y;
+  if (index >= context.density_count) {
+    return 0.0f;
+  }
+
+  return asfloat(context.payload_buffer.Load(context.density_offset + index * 4u));
+}
+
+#include <interop/medium_texture_sample_shared.hxx>
+
+float medium_access_sample_texture_3d(MediumAccessGPUContext context, MediumAccess access, float3 local_coord) {
+  (void)context;
+  if ((access.grid.density_count == 0u) || (access.grid.density_data_offset == kInvalidIndex) || (access.density_payload_descriptor_index == kInvalidIndex)) {
+    return 0.0f;
+  }
+
+  ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(access.density_payload_descriptor_index)];
+  MediumTextureSampleContext sample_context = {payload_buffer, access.grid.density_data_offset, access.grid.density_count};
+  return medium_texture_sample_shared_3d(sample_context, local_coord, access.grid.dimensions);
+}
+
+float medium_access_sample_noise(MediumAccessGPUContext context, MediumAccess access, float3 local_coord) {
+  (void)context;
+  return medium_density_shared_sample_noise(local_coord, access.bounds_min, access.bounds_max, access.grid.noise_type, access.grid.noise_scale, access.grid.noise_octaves,
+    access.grid.noise_lacunarity, access.grid.noise_persistence, access.grid.noise_seed, access.grid.noise_offset, access.grid.noise_enable_border_fade,
+    access.grid.noise_border_fade_distance);
+}
+
+float medium_access_sample_density(MediumAccessGPUContext context, MediumAccess access, float3 local_coord) {
+  float value = 0.0f;
+  if (access.grid.type == MediumGridType::NoiseFunction) {
+    value = medium_access_sample_noise(context, access, local_coord);
+  } else if (access.grid.type == MediumGridType::Texture3D) {
+    value = medium_access_sample_texture_3d(context, access, local_coord);
+  }
+
+  return medium_density_shared_apply_shape(value, access.grid.noise_power, access.grid.noise_sharpness);
 }
 
 bool medium_access_can_sample_spectrum(MediumAccessGPUContext context, uint spectrum_index) {
-  return scene_resource_shared_can_sample_spectrum(context.spectrums_descriptor_index, spectrum_index);
+  return scene_gpu_can_sample_spectrum(context.spectrums_descriptor_index, spectrum_index);
 }
 
 float3 medium_access_load_absorption_integrated(MediumAccessGPUContext context, MediumAccess access) {

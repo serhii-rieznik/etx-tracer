@@ -74,7 +74,8 @@ struct CPUPathTracingImpl : public Task {
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
     status.completed_iterations += 1u;
-    film.commit_iteration(status.current_iteration, rt.scene());
+    const auto& scene = rt.scene();
+    film.commit_iteration(status.current_iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp);
 
     if (current_state == Integrator::State::WaitingForCompletion) {
       current_state = Integrator::State::Stopped;

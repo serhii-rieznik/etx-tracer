@@ -8,11 +8,11 @@ struct VelvetMaterial {
   SampledImage roughness;
 };
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame();
   float3 w_o = sample_cosine_distribution(smp.next_2d(), frame.nrm, 0.0f);
 
-  auto eval = evaluate(data, w_o, mtl, scene, smp);
+  auto eval = evaluate(data, w_o, mtl, smp);
 
   BSDFSample result = {};
   result.w_o = w_o;
@@ -59,7 +59,7 @@ ETX_SHARED_INLINE float diffuse_burley(float alpha, float n_dot_i, float n_dot_o
   return lightScatter * viewScatter * kInvPi;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame();
 
   float n_dot_o = fmaxf(0.0f, dot(w_o, frame.nrm));
@@ -73,7 +73,7 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
   if ((m_dot_o <= kEpsilon) || (m_dot_i <= kEpsilon))
     return {data.spectrum_sample, 0.0f};
 
-  auto roughness = evaluate_roughness(mtl, data.tex, scene);
+  auto roughness = evaluate_roughness(mtl, data.tex);
   float specular_scale_base = 0.0f;
   float alpha = 0.5f * (roughness.x + roughness.y);
   if (alpha > kEpsilon) {
@@ -92,8 +92,8 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
     ETX_VALIDATE(specular_scale_base);
   }
 
-  auto diffuse = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
-  auto specular = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+  auto diffuse = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
+  auto specular = apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
 
   float diffuse_scale = diffuse_burley(alpha, n_dot_i, n_dot_o, m_dot_o);
 
@@ -107,7 +107,7 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, con
   return eval;
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame();
   if (local_frame_entering_material(frame) == false)
     return 0.0f;
@@ -115,12 +115,12 @@ ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Mater
   return 1.0f / kDoublePi;
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
 }
 
 }  // namespace VelvetBSDF

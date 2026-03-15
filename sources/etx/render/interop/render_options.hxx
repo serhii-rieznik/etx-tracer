@@ -63,12 +63,3 @@ struct ShaderConstants {
   uint32_t sample_count;
 };
 
-#if defined(__cplusplus)
-static_assert(std::is_standard_layout_v<ViewParameters>, "ViewParameters must stay standard layout for C++/HLSL interop");
-static_assert(std::is_standard_layout_v<RenderParameters>, "RenderParameters must stay standard layout for C++/HLSL interop");
-static_assert(sizeof(ViewParameters) == 16, "ViewParameters size changed; update shared ABI or padding");
-static_assert(sizeof(RenderParameters) == 48, "RenderParameters size changed; update shared ABI or padding");
-static_assert(offsetof(RenderParameters, dimensions) == 16, "RenderParameters::dimensions offset changed");
-static_assert(offsetof(RenderParameters, sample_count) == 32, "RenderParameters::sample_count offset changed");
-static_assert(sizeof(ShaderConstants) == 32, "ShaderConstants size changed; update shared ABI or padding");
-#endif

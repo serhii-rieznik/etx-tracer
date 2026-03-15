@@ -19,8 +19,6 @@ ETX_ENUM_U32(InteractionType) {
 
 ETX_STATIC_CONST uint32_t kProjectionEqualArea = 1u;
 
-ETX_STATIC_ASSERT((ETX_ENUM_U32_TO_UINT32(ProjectionType::EqualArea) == kProjectionEqualArea), "ProjectionType::EqualArea must match kProjectionEqualArea");
-
 struct SphericalCoordinates {
   float phi ETX_INIT(0.0f);
   float theta ETX_INIT(0.0f);

@@ -1,155 +1,94 @@
 #pragma once
 
+#include "camera.hxx"
 #include "gpu_abi_constants.hxx"
 
-struct GPUABIAccessSharedContext {
-  ByteAddressBuffer buffer;
+struct GPUMaterialABIData {
+  uint32_t material_class;
+  uint32_t int_medium_index;
+  uint32_t ext_medium_index;
+  uint32_t scattering_spectrum_index;
+  uint32_t scattering_image_index;
+  float opacity;
 };
 
-ETX_SHARED_INLINE GPUABIAccessSharedContext make_gpu_abi_access_shared_context(ByteAddressBuffer buffer) {
-  GPUABIAccessSharedContext context;
-  context.buffer = buffer;
-  return context;
+struct GPUEmitterInstanceABIData {
+  uint32_t emitter_class;
+  uint32_t emitter_profile_index;
+};
+
+struct GPUEmitterProfileABIData {
+  uint32_t emission_spectrum_index;
+  uint32_t emission_image_index;
+  uint32_t emitter_profile_class;
+  uint32_t emitter_profile_meta;
+  float3 emitter_direction;
+  float emitter_angular_size_cosine;
+};
+
+ETX_SHARED_INLINE uint32_t gpu_abi_load_u32(ByteAddressBuffer buffer, uint32_t byte_offset) {
+  return buffer.Load(byte_offset);
 }
 
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_load_u32(ETX_IN(GPUABIAccessSharedContext, context), uint32_t byte_offset) {
-  return context.buffer.Load(byte_offset);
+ETX_SHARED_INLINE float gpu_abi_load_f32(ByteAddressBuffer buffer, uint32_t byte_offset) {
+  return asfloat(buffer.Load(byte_offset));
 }
 
-ETX_SHARED_INLINE float gpu_abi_access_shared_load_f32(ETX_IN(GPUABIAccessSharedContext, context), uint32_t byte_offset) {
-  return asfloat(context.buffer.Load(byte_offset));
+ETX_SHARED_INLINE float3 gpu_abi_load_f32x3(ByteAddressBuffer buffer, uint32_t byte_offset) {
+  return asfloat(buffer.Load3(byte_offset));
 }
 
-ETX_SHARED_INLINE float3 gpu_abi_access_shared_load_f32x3(ETX_IN(GPUABIAccessSharedContext, context), uint32_t byte_offset) {
-  return asfloat(context.buffer.Load3(byte_offset));
+ETX_SHARED_INLINE uint2 gpu_abi_load_u32x2(ByteAddressBuffer buffer, uint32_t byte_offset) {
+  return buffer.Load2(byte_offset);
 }
 
-ETX_SHARED_INLINE uint2 gpu_abi_access_shared_load_u32x2(ETX_IN(GPUABIAccessSharedContext, context), uint32_t byte_offset) {
-  return context.buffer.Load2(byte_offset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_material_scattering_spectrum_index(ETX_IN(GPUABIAccessSharedContext, context), uint32_t material_index) {
+ETX_SHARED_INLINE GPUMaterialABIData gpu_abi_load_material(ByteAddressBuffer buffer, uint32_t material_index) {
   uint32_t base_offset = material_index * kMaterialStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kMaterialScatteringSpectrumIndexOffset);
+  GPUMaterialABIData result;
+  result.material_class = gpu_abi_load_u32(buffer, base_offset + kMaterialClassOffset);
+  result.int_medium_index = gpu_abi_load_u32(buffer, base_offset + kMaterialIntMediumOffset);
+  result.ext_medium_index = gpu_abi_load_u32(buffer, base_offset + kMaterialExtMediumOffset);
+  result.scattering_spectrum_index = gpu_abi_load_u32(buffer, base_offset + kMaterialScatteringSpectrumIndexOffset);
+  result.scattering_image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialScatteringImageIndexOffset);
+  result.opacity = gpu_abi_load_f32(buffer, base_offset + kMaterialOpacityOffset);
+  return result;
 }
 
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_material_scattering_image_index(ETX_IN(GPUABIAccessSharedContext, context), uint32_t material_index) {
-  uint32_t base_offset = material_index * kMaterialStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kMaterialScatteringImageIndexOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_material_class(ETX_IN(GPUABIAccessSharedContext, context), uint32_t material_index) {
-  uint32_t base_offset = material_index * kMaterialStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kMaterialClassOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_material_int_medium(ETX_IN(GPUABIAccessSharedContext, context), uint32_t material_index) {
-  uint32_t base_offset = material_index * kMaterialStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kMaterialIntMediumOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_material_ext_medium(ETX_IN(GPUABIAccessSharedContext, context), uint32_t material_index) {
-  uint32_t base_offset = material_index * kMaterialStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kMaterialExtMediumOffset);
-}
-
-ETX_SHARED_INLINE float gpu_abi_access_shared_material_opacity(ETX_IN(GPUABIAccessSharedContext, context), uint32_t material_index) {
-  uint32_t base_offset = material_index * kMaterialStride;
-  return gpu_abi_access_shared_load_f32(context, base_offset + kMaterialOpacityOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_emitter_class(ETX_IN(GPUABIAccessSharedContext, context), uint32_t emitter_index) {
+ETX_SHARED_INLINE GPUEmitterInstanceABIData gpu_abi_load_emitter_instance(ByteAddressBuffer buffer, uint32_t emitter_index) {
   uint32_t base_offset = emitter_index * kEmitterStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kEmitterClassOffset);
+  GPUEmitterInstanceABIData result;
+  result.emitter_class = gpu_abi_load_u32(buffer, base_offset + kEmitterClassOffset);
+  result.emitter_profile_index = gpu_abi_load_u32(buffer, base_offset + kEmitterProfileOffset);
+  return result;
 }
 
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_emitter_profile_index(ETX_IN(GPUABIAccessSharedContext, context), uint32_t emitter_index) {
-  uint32_t base_offset = emitter_index * kEmitterStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kEmitterProfileOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_emitter_emission_spectrum_index(ETX_IN(GPUABIAccessSharedContext, context), uint32_t emitter_profile_index) {
+ETX_SHARED_INLINE GPUEmitterProfileABIData gpu_abi_load_emitter_profile(ByteAddressBuffer buffer, uint32_t emitter_profile_index) {
   uint32_t base_offset = emitter_profile_index * kEmitterProfileStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kEmitterProfileEmissionSpectrumIndexOffset);
+  GPUEmitterProfileABIData result;
+  result.emission_spectrum_index = gpu_abi_load_u32(buffer, base_offset + kEmitterProfileEmissionSpectrumIndexOffset);
+  result.emission_image_index = gpu_abi_load_u32(buffer, base_offset + kEmitterProfileEmissionImageIndexOffset);
+  result.emitter_profile_class = gpu_abi_load_u32(buffer, base_offset + kEmitterProfileClassOffset);
+  result.emitter_profile_meta = gpu_abi_load_u32(buffer, base_offset + kEmitterProfileMetaOffset);
+  result.emitter_direction = gpu_abi_load_f32x3(buffer, base_offset + kEmitterProfileDirectionalDirectionOffset);
+  result.emitter_angular_size_cosine = gpu_abi_load_f32(buffer, base_offset + kEmitterProfileDirectionalAngularSizeCosineOffset);
+  return result;
 }
 
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_emitter_emission_image_index(ETX_IN(GPUABIAccessSharedContext, context), uint32_t emitter_profile_index) {
-  uint32_t base_offset = emitter_profile_index * kEmitterProfileStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kEmitterProfileEmissionImageIndexOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_emitter_profile_class(ETX_IN(GPUABIAccessSharedContext, context), uint32_t emitter_profile_index) {
-  uint32_t base_offset = emitter_profile_index * kEmitterProfileStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kEmitterProfileClassOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_emitter_profile_meta(ETX_IN(GPUABIAccessSharedContext, context), uint32_t emitter_profile_index) {
-  uint32_t base_offset = emitter_profile_index * kEmitterProfileStride;
-  return gpu_abi_access_shared_load_u32(context, base_offset + kEmitterProfileMetaOffset);
-}
-
-ETX_SHARED_INLINE float3 gpu_abi_access_shared_emitter_profile_direction(ETX_IN(GPUABIAccessSharedContext, context), uint32_t emitter_profile_index) {
-  uint32_t base_offset = emitter_profile_index * kEmitterProfileStride;
-  return gpu_abi_access_shared_load_f32x3(context, base_offset + kEmitterProfileDirectionalDirectionOffset);
-}
-
-ETX_SHARED_INLINE float gpu_abi_access_shared_emitter_profile_angular_size_cosine(ETX_IN(GPUABIAccessSharedContext, context), uint32_t emitter_profile_index) {
-  uint32_t base_offset = emitter_profile_index * kEmitterProfileStride;
-  return gpu_abi_access_shared_load_f32(context, base_offset + kEmitterProfileDirectionalAngularSizeCosineOffset);
-}
-
-ETX_SHARED_INLINE float3 gpu_abi_access_shared_camera_position(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32x3(context, kCameraPositionOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_camera_class(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_u32(context, kCameraClassOffset);
-}
-
-ETX_SHARED_INLINE float3 gpu_abi_access_shared_camera_direction(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32x3(context, kCameraDirectionOffset);
-}
-
-ETX_SHARED_INLINE float gpu_abi_access_shared_camera_aspect(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32(context, kCameraAspectOffset);
-}
-
-ETX_SHARED_INLINE float3 gpu_abi_access_shared_camera_side(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32x3(context, kCameraSideOffset);
-}
-
-ETX_SHARED_INLINE float gpu_abi_access_shared_camera_tan_half_fov(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32(context, kCameraTanHalfFovOffset);
-}
-
-ETX_SHARED_INLINE float3 gpu_abi_access_shared_camera_up(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32x3(context, kCameraUpOffset);
-}
-
-ETX_SHARED_INLINE uint2 gpu_abi_access_shared_camera_film_size(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_u32x2(context, kCameraFilmSizeOffset);
-}
-
-ETX_SHARED_INLINE float gpu_abi_access_shared_camera_lens_radius(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32(context, kCameraLensRadiusOffset);
-}
-
-ETX_SHARED_INLINE float gpu_abi_access_shared_camera_focal_distance(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32(context, kCameraFocalDistanceOffset);
-}
-
-ETX_SHARED_INLINE float gpu_abi_access_shared_camera_clip_near(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32(context, kCameraClipNearOffset);
-}
-
-ETX_SHARED_INLINE float gpu_abi_access_shared_camera_clip_far(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_f32(context, kCameraClipFarOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_camera_lens_image(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_u32(context, kCameraLensImageOffset);
-}
-
-ETX_SHARED_INLINE uint32_t gpu_abi_access_shared_camera_medium_index(ETX_IN(GPUABIAccessSharedContext, context)) {
-  return gpu_abi_access_shared_load_u32(context, kCameraMediumIndexOffset);
+ETX_SHARED_INLINE Camera gpu_abi_load_camera(ByteAddressBuffer buffer) {
+  ETX_ZERO_INIT(Camera, camera);
+  camera.position = gpu_abi_load_f32x3(buffer, kCameraPositionOffset);
+  camera.cls = gpu_abi_load_u32(buffer, kCameraClassOffset);
+  camera.direction = gpu_abi_load_f32x3(buffer, kCameraDirectionOffset);
+  camera.aspect = gpu_abi_load_f32(buffer, kCameraAspectOffset);
+  camera.side = gpu_abi_load_f32x3(buffer, kCameraSideOffset);
+  camera.tan_half_fov = gpu_abi_load_f32(buffer, kCameraTanHalfFovOffset);
+  camera.up = gpu_abi_load_f32x3(buffer, kCameraUpOffset);
+  camera.film_size = gpu_abi_load_u32x2(buffer, kCameraFilmSizeOffset);
+  camera.lens_radius = gpu_abi_load_f32(buffer, kCameraLensRadiusOffset);
+  camera.focal_distance = gpu_abi_load_f32(buffer, kCameraFocalDistanceOffset);
+  camera.clip_near = gpu_abi_load_f32(buffer, kCameraClipNearOffset);
+  camera.clip_far = gpu_abi_load_f32(buffer, kCameraClipFarOffset);
+  camera.lens_image = gpu_abi_load_u32(buffer, kCameraLensImageOffset);
+  camera.medium_index = gpu_abi_load_u32(buffer, kCameraMediumIndexOffset);
+  return camera;
 }

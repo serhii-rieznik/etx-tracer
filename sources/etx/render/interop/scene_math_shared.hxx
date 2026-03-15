@@ -16,14 +16,14 @@ ETX_SHARED_INLINE float3 scene_math_shared_shading_pos_project(ETX_IN(float3, po
 
 ETX_SHARED_INLINE float3 scene_math_shared_shading_pos(ETX_IN(float3, g0), ETX_IN(float3, g1), ETX_IN(float3, g2), ETX_IN(float3, n0), ETX_IN(float3, n1),
   ETX_IN(float3, n2), ETX_IN(float3, geo_normal), ETX_IN(float3, bc), ETX_IN(float3, w_o)) {
-  float3 geo_pos = surface_point_shared_lerp_float3(g0, g1, g2, bc);
-  float3 sh_normal = normalize(surface_point_shared_lerp_float3(n0, n1, n2, bc));
+  float3 geo_pos = g0 * bc.x + g1 * bc.y + g2 * bc.z;
+  float3 sh_normal = normalize(n0 * bc.x + n1 * bc.y + n2 * bc.z);
   float direction = (dot(sh_normal, w_o) >= 0.0f) ? 1.0f : -1.0f;
 
   float3 p0 = scene_math_shared_shading_pos_project(geo_pos, g0, direction * n0);
   float3 p1 = scene_math_shared_shading_pos_project(geo_pos, g1, direction * n1);
   float3 p2 = scene_math_shared_shading_pos_project(geo_pos, g2, direction * n2);
-  float3 sh_pos = surface_point_shared_lerp_float3(p0, p1, p2, bc);
+  float3 sh_pos = p0 * bc.x + p1 * bc.y + p2 * bc.z;
 
   bool convex = dot(sh_pos - geo_pos, sh_normal) * direction > 0.0f;
   return offset_ray((convex ? sh_pos : geo_pos), geo_normal * direction);

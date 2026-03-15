@@ -85,11 +85,6 @@ struct ETX_ALIGNED AtmosphereSunPushConstants {
   float atmosphere_ozone_scale ETX_INIT(0.0f);
 };
 
-ETX_STATIC_ASSERT((sizeof(AtmosphereSkyGpuParameters) == 32u), "AtmosphereSkyGpuParameters must stay 32 bytes");
-ETX_STATIC_ASSERT((sizeof(AtmosphereSkyGpuLight) == 32u), "AtmosphereSkyGpuLight must stay 32 bytes");
-ETX_STATIC_ASSERT((sizeof(AtmosphereSkyPushConstants) == 88u), "AtmosphereSkyPushConstants must stay 88 bytes");
-ETX_STATIC_ASSERT((sizeof(AtmosphereSunPushConstants) == 48u), "AtmosphereSunPushConstants must stay 48 bytes");
-
 ETX_SHARED_INLINE float scattering_distance_to_sphere(ETX_IN(float3, ray_origin), ETX_IN(float3, ray_direction), ETX_IN(float3, center), float radius) {
   float3 e = ray_origin - center;
   float b = dot(ray_direction, e);

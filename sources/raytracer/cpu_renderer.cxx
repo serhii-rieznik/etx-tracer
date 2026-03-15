@@ -24,7 +24,7 @@ void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   }
   _integrator_thread.update();
 
-  const auto film_layer_data = _raytracing.film().layer(frame_data.view_parameters.view_layer, _raytracing.scene());
+  const auto film_layer_data = _raytracing.film().layer(frame_data.view_parameters.view_layer, _raytracing.scene().options.radiance_clamp);
   update_image(ctx, film_layer_data);
 }
 

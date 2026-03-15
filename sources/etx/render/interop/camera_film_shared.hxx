@@ -18,33 +18,6 @@ struct ETX_ALIGNED CameraFilmEvalShared {
   float pdf_dir ETX_INIT({});
 };
 
-ETX_SHARED_INLINE CameraFilmSampleShared camera_film_shared_zero_sample() {
-  ETX_ZERO_INIT(CameraFilmSampleShared, result);
-  return result;
-}
-
-ETX_SHARED_INLINE CameraFilmEvalShared camera_film_shared_zero_eval() {
-  ETX_ZERO_INIT(CameraFilmEvalShared, result);
-  return result;
-}
-
-ETX_SHARED_INLINE void camera_film_shared_unpack_sample(ETX_IN(CameraFilmSampleShared, sample), ETX_OUT(float3, position), ETX_OUT(float3, normal),
-  ETX_OUT(float3, direction), ETX_OUT(float2, uv), ETX_OUT(float, weight), ETX_OUT(float, pdf_dir), ETX_OUT(float, pdf_area), ETX_OUT(float, pdf_dir_out)) {
-  position = sample.position;
-  normal = sample.normal;
-  direction = sample.direction;
-  uv = sample.uv;
-  weight = sample.weight;
-  pdf_dir = sample.pdf_dir;
-  pdf_area = sample.pdf_area;
-  pdf_dir_out = sample.pdf_dir_out;
-}
-
-ETX_SHARED_INLINE void camera_film_shared_unpack_eval(ETX_IN(CameraFilmEvalShared, sample), ETX_OUT(float3, normal), ETX_OUT(float, pdf_dir)) {
-  normal = sample.normal;
-  pdf_dir = sample.pdf_dir;
-}
-
 ETX_SHARED_INLINE float4 camera_film_shared_project(ETX_IN(float4x4, matrix), ETX_IN(float4, projected_point)) {
 #if defined(__cplusplus)
   return float4(
@@ -62,7 +35,7 @@ ETX_SHARED_INLINE float3 camera_film_shared_lens_point(ETX_IN(Camera, camera), E
 }
 
 ETX_SHARED_INLINE CameraFilmSampleShared camera_film_shared_evaluate(ETX_IN(Camera, camera), ETX_IN(float3, world_point), ETX_IN(float3, lens_point)) {
-  CameraFilmSampleShared result = camera_film_shared_zero_sample();
+  ETX_ZERO_INIT(CameraFilmSampleShared, result);
   if (camera.cls == Camera::Class::Equirectangular) {
     result.position = camera.position;
     result.normal = camera.direction;
@@ -92,12 +65,14 @@ ETX_SHARED_INLINE CameraFilmSampleShared camera_film_shared_evaluate(ETX_IN(Came
 
   float cos_t = -dot(result.direction, result.normal);
   if (cos_t < 0.0f) {
-    return camera_film_shared_zero_sample();
+    ETX_ZERO_INIT(CameraFilmSampleShared, zero_result);
+    return zero_result;
   }
 
   float distance_squared = dot(result.direction, result.direction);
   if (distance_squared <= kEpsilon) {
-    return camera_film_shared_zero_sample();
+    ETX_ZERO_INIT(CameraFilmSampleShared, zero_result);
+    return zero_result;
   }
 
   float distance = sqrt(distance_squared);
@@ -109,7 +84,8 @@ ETX_SHARED_INLINE CameraFilmSampleShared camera_film_shared_evaluate(ETX_IN(Came
   float4 projected = camera_film_shared_project(camera.view_proj, float4(focus_point.x, focus_point.y, focus_point.z, 1.0f));
   result.uv = float2(projected.x / projected.w, projected.y / projected.w);
   if ((projected.w <= 0.0f) || (result.uv.x < -1.0f) || (result.uv.y < -1.0f) || (result.uv.x > 1.0f) || (result.uv.y > 1.0f)) {
-    return camera_film_shared_zero_sample();
+    ETX_ZERO_INIT(CameraFilmSampleShared, zero_result);
+    return zero_result;
   }
 
   float lens_area = (camera.lens_radius > kEpsilon) ? kPi * camera.lens_radius * camera.lens_radius : 1.0f;
@@ -123,7 +99,7 @@ ETX_SHARED_INLINE CameraFilmSampleShared camera_film_shared_evaluate(ETX_IN(Came
 }
 
 ETX_SHARED_INLINE CameraFilmEvalShared camera_film_shared_evaluate_out(ETX_IN(Camera, camera), ETX_IN(Ray, out_ray)) {
-  CameraFilmEvalShared result = camera_film_shared_zero_eval();
+  ETX_ZERO_INIT(CameraFilmEvalShared, result);
   result.normal = camera.direction;
   if (camera.cls == Camera::Class::Equirectangular) {
     float2 uv = direction_to_uv(normalize(out_ray.d), float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);

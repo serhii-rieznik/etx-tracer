@@ -1,6 +1,6 @@
 #include <etx/core/core.hxx>
+#include <etx/render/host/scene_global.hxx>
 #include <etx/render/shared/scene.hxx>
-#include <etx/rt/scene_global.hxx>
 
 #include <atomic>
 #include <mutex>

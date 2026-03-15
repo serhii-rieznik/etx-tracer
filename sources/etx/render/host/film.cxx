@@ -93,7 +93,7 @@ struct FilmImpl {
     return dimensions.x * dimensions.y;
   }
 
-  void commit_iteration(const Scene& scene);
+  void commit_iteration(float radiance_clamp);
   void estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold);
 };
 
@@ -138,10 +138,10 @@ void Film::generate_filter_image(uint32_t filter, std::vector<float4>& data) {
   }
 }
 
-float2 Film::sample(const Scene& scene, const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const {
+float2 Film::sample(const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const {
   float2 jitter = rnd * 2.0f - 1.0f;
   if (sampler.image_index != kInvalidIndex) {
-    jitter = scene.images[sampler.image_index].sample(rnd) * 2.0f - 1.0f;
+    jitter = sample_image_uv(sampler.image_index, rnd) * 2.0f - 1.0f;
   }
   float u = (float(pixel.x) + 0.5f + sampler.radius * jitter.x) / float(_private->dimensions.x) * 2.0f - 1.0f;
   float v = (float(pixel.y) + 0.5f + sampler.radius * jitter.y) / float(_private->dimensions.y) * 2.0f - 1.0f;
@@ -308,7 +308,7 @@ void FilmImpl::estimate_noise(uint32_t sample_index, uint32_t total_samples, flo
 #endif
 }
 
-void FilmImpl::commit_iteration(const Scene& scene) {
+void FilmImpl::commit_iteration(float radiance_clamp) {
   auto int_data = internal_data.data();
   auto accumumlation = storage_buffers[StorageAccumulation].data();
   auto adaptive = storage_buffers[StorageAdaptive].data();
@@ -322,10 +322,10 @@ void FilmImpl::commit_iteration(const Scene& scene) {
     const uint32_t sample_count = idata.sample_count;
 
     // Apply radiance clamping to accumulated color before blending
-    if (scene.options.radiance_clamp > 0.0f) {
+    if (radiance_clamp > 0.0f) {
       float lum = luminance(idata.color);
-      if (lum > scene.options.radiance_clamp) {
-        idata.color *= scene.options.radiance_clamp / lum;
+      if (lum > radiance_clamp) {
+        idata.color *= radiance_clamp / lum;
       }
     }
 
@@ -348,9 +348,9 @@ void FilmImpl::commit_iteration(const Scene& scene) {
   }
 }
 
-void Film::commit_iteration(uint32_t sample_index, const Scene& scene) {
-  _private->commit_iteration(scene);
-  _private->estimate_noise(sample_index, scene.options.samples, scene.options.noise_threshold);
+void Film::commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp) {
+  _private->commit_iteration(radiance_clamp);
+  _private->estimate_noise(sample_index, total_samples, noise_threshold);
 }
 
 void Film::clear(uint32_t options) {
@@ -402,7 +402,7 @@ uint2 Film::current_dimensions() const {
   };
 }
 
-float4* Film::layer(uint32_t layer, const Scene& scene) const {
+float4* Film::layer(uint32_t layer, float radiance_clamp) const {
   ETX_PROFILER_SCOPE();
 
   const auto layer_ref = layer_info[layer].storage;
@@ -430,10 +430,10 @@ float4* Film::layer(uint32_t layer, const Scene& scene) const {
 
         // Clamp current iteration's color before blending
         float3 clamped_curr_color = curr.color;
-        if (scene.options.radiance_clamp > 0.0f) {
+        if (radiance_clamp > 0.0f) {
           float lum = luminance(clamped_curr_color);
-          if (lum > scene.options.radiance_clamp) {
-            clamped_curr_color *= scene.options.radiance_clamp / lum;
+          if (lum > radiance_clamp) {
+            clamped_curr_color *= radiance_clamp / lum;
           }
         }
 
@@ -471,8 +471,8 @@ float4* Film::layer(uint32_t layer, const Scene& scene) const {
   return output;
 }
 
-void Film::denoise(uint32_t layer_to_denoise, const Scene& scene) {
-  const auto source = layer(layer_to_denoise, scene);
+void Film::denoise(uint32_t layer_to_denoise, float radiance_clamp) {
+  const auto source = layer(layer_to_denoise, radiance_clamp);
   _private->denoiser.denoise(source, _private->storage_buffers[StorageDenoised].data());
 }
 

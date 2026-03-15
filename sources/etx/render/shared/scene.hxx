@@ -136,6 +136,7 @@ struct ETX_ALIGNED Scene {
 #include <etx/render/access/image_access_cpu.hxx>
 #include <etx/render/access/image_evaluate_cpu.hxx>
 #include <etx/render/access/material_access_cpu.hxx>
+#include <etx/render/access/medium_access_cpu.hxx>
 
 ETX_SHARED_INLINE float collimation_to_exponent(float normalized) {
   float t = saturate(normalized);
@@ -325,7 +326,7 @@ ETX_SHARED_INLINE bool random_continue(uint32_t path_length, uint32_t start_path
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value, const Scene& scene) {
+ETX_SHARED_INLINE SpectralResponse apply_rgb(const SpectralQuery spect, SpectralResponse response, const float4& value) {
   if (spect.spectral()) {
     SpectralResponse scale = rgb_response(spect, {value.x, value.y, value.z});
     ETX_VALIDATE(scale);
@@ -338,62 +339,32 @@ ETX_SHARED_INLINE SpectralResponse apply_rgb(const SpectralQuery spect, Spectral
   return response;
 }
 
-ETX_SHARED_INLINE float4 sample_whole_image(const SampledImage& img, const float2& uv, const Scene& scene) {
-  if (img.image_index == kInvalidIndex) {
-    return img.value;
-  }
+float4 sample_whole_image(const SampledImage& img, const float2& uv);
+float evaluate_image_channel(uint32_t image_index, uint32_t channel, const float2& uv, float default_value);
+bool image_has_alpha_channel(uint32_t image_index);
+float2 sample_image_uv(uint32_t image_index, const float2& rnd);
+float2 sample_image_uv(uint32_t image_index, const float2& rnd, float& pdf, uint2& location, float4& value);
+float evaluate_image(const SampledImage& img, const float2& uv, float default_value);
 
-  float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
-  return img.value * eval;
+ETX_SHARED_INLINE float evaluate_metalness(const Material& material, const float2& uv) {
+  return material.metalness.value.x * evaluate_image(material.metalness, uv, 1.0f);
 }
 
-ETX_SHARED_INLINE float evaluate_image(const SampledImage& img, const float2& uv, const Scene& scene, const float default_value) {
-  float result = default_value;
-  if ((img.image_index == kInvalidIndex) || (img.channel >= 4u)) {
-    return result;
-  }
-
-  float4 eval = scene.images[img.image_index].evaluate(uv, nullptr);
-  const float* data = reinterpret_cast<const float*>(&eval);
-  return data[img.channel];
+ETX_SHARED_INLINE float2 evaluate_roughness(const Material& material, const float2& uv) {
+  return float2{material.roughness.value.x, material.roughness.value.y} * evaluate_image(material.roughness, uv, 1.0f);
 }
 
-ETX_SHARED_INLINE float evaluate_metalness(const Material& material, const float2& uv, const Scene& scene) {
-  return material.metalness.value.x * evaluate_image(material.metalness, uv, scene, 1.0f);
+ETX_SHARED_INLINE float evaluate_transmission(const Material& material, const float2& uv) {
+  return material.transmission.value.x * evaluate_image(material.transmission, uv, 1.0f);
 }
 
-ETX_SHARED_INLINE float2 evaluate_roughness(const Material& material, const float2& uv, const Scene& scene) {
-  return float2{material.roughness.value.x, material.roughness.value.y} * evaluate_image(material.roughness, uv, scene, 1.0f);
-}
-
-ETX_SHARED_INLINE float evaluate_transmission(const Material& material, const float2& uv, const Scene& scene) {
-  return material.transmission.value.x * evaluate_image(material.transmission, uv, scene, 1.0f);
-}
-
-ETX_SHARED_INLINE SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, const Scene& scene, float* image_pdf) {
-  if (image_pdf != nullptr) {
-    *image_pdf = 0.0f;
-  }
-
-  ETX_ASSERT(img.spectrum_index < static_cast<uint32_t>(scene.spectrums.count));
-  SpectralResponse result = scene.spectrums[img.spectrum_index](spect);
-  ETX_VALIDATE(result);
-  if (img.image_index == kInvalidIndex) {
-    return result;
-  }
-
-  float4 eval = scene.images[img.image_index].evaluate(uv, image_pdf);
-  ETX_VALIDATE(eval);
-  return apply_rgb(spect, result, eval, scene);
-}
-
-ETX_SHARED_INLINE RefractiveIndexSample evaluate_refractive_index(const Scene& scene, const RefractiveIndex& ri, const SpectralQuery q) {
-  RefractiveIndexSample result = {};
-  result.cls = ri.cls;
-  result.eta = (ri.eta_index == kInvalidIndex) ? SpectralResponse(q, 1.0f) : scene.spectrums[ri.eta_index](q);
-  result.k = (ri.k_index == kInvalidIndex) ? SpectralResponse(q, 0.0f) : scene.spectrums[ri.k_index](q);
-  return result;
-}
+RefractiveIndexSample evaluate_refractive_index(const RefractiveIndex& ri, SpectralQuery q);
+uint32_t default_dielectric_eta_index();
+uint32_t default_conductor_eta_index();
+uint32_t default_conductor_k_index();
+SpectralResponse medium_load_spectrum_or_zero(uint32_t spectrum_index, SpectralQuery spect);
+SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, float& image_pdf);
+SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv);
 
 }  // namespace etx
 

@@ -27,7 +27,7 @@ ETX_SHARED_INLINE float camera_clip_direction_scale(const Camera& camera, const 
   return fabsf(dot(direction_to_camera, camera.direction));
 }
 
-ETX_SHARED_INLINE Ray generate_ray(const Scene& scene, const Camera& camera, const float2& uv, const float2& sensor_sample_rnd) {
+ETX_SHARED_INLINE Ray generate_ray(const Camera& camera, const float2& uv, const float2& sensor_sample_rnd) {
   ETX_CHECK_FINITE(uv);
 
   if (camera.cls == Camera::Class::Equirectangular) {
@@ -49,7 +49,7 @@ ETX_SHARED_INLINE Ray generate_ray(const Scene& scene, const Camera& camera, con
     if (camera.lens_image == kInvalidIndex) {
       sensor_sample = sample_disk(sensor_sample_rnd);
     } else {
-      sensor_sample = scene.images[camera.lens_image].sample(sensor_sample_rnd) * 2.0f - 1.0f;
+      sensor_sample = sample_image_uv(camera.lens_image, sensor_sample_rnd) * 2.0f - 1.0f;
     }
     sensor_sample *= camera.lens_radius;
     origin = origin + camera.side * sensor_sample.x + camera.up * sensor_sample.y;
@@ -65,7 +65,7 @@ ETX_SHARED_INLINE Ray generate_ray(const Scene& scene, const Camera& camera, con
   return {origin, w_o, fmaxf(t_near, kRayEpsilon), t_far};
 }
 
-ETX_SHARED_INLINE CameraSample evaluate_film(const Scene& scene, const Camera& camera, const float3& world_point, const float3& lens_point) {
+ETX_SHARED_INLINE CameraSample evaluate_film(const Camera& camera, const float3& world_point, const float3& lens_point) {
   if (camera.cls == Camera::Class::Equirectangular) {
     return {};
   }
@@ -106,7 +106,7 @@ ETX_SHARED_INLINE CameraSample evaluate_film(const Scene& scene, const Camera& c
   return result;
 }
 
-ETX_SHARED_INLINE CameraSample sample_film(Sampler& smp, const Scene& scene, const Camera& camera, const float3& from_point) {
+ETX_SHARED_INLINE CameraSample sample_film(Sampler& smp, const Camera& camera, const float3& from_point) {
   if (camera.cls == Camera::Class::Equirectangular) {
     return {};
   }
@@ -119,14 +119,13 @@ ETX_SHARED_INLINE CameraSample sample_film(Sampler& smp, const Scene& scene, con
       float pdf = 0.0f;
       uint2 location = {};
       float4 value = {};
-      sensor_sample = scene.images[camera.lens_image].sample(smp.next_2d(), pdf, location, value);
-      sensor_sample = sensor_sample * 2.0f - 1.0f;
+      sensor_sample = sample_image_uv(camera.lens_image, smp.next_2d(), pdf, location, value) * 2.0f - 1.0f;
     }
     sensor_sample *= camera.lens_radius;
   }
 
   float3 lens_point = camera.position + sensor_sample.x * camera.side + sensor_sample.y * camera.up;
-  return evaluate_film(scene, camera, from_point, lens_point);
+  return evaluate_film(camera, from_point, lens_point);
 }
 
 ETX_SHARED_INLINE CameraEval film_evaluate_out(SpectralQuery spect, const Camera& camera, const Ray& out_ray) {

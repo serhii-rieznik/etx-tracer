@@ -12,11 +12,11 @@ struct ThinfilmMaterial {
   uint32_t ext_medium = kInvalidIndex;
 };
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   auto frame = data.get_normal_frame();
-  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
   SpectralResponse fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, data.nrm), ext_ior, int_ior, thinfilm);
   float f = fr.monochromatic();
 
@@ -24,14 +24,14 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   if (smp.next() <= f) {
     result.w_o = normalize(reflect(data.w_i, frame.nrm));
     result.pdf = f;
-    result.weight = apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+    result.weight = apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
     result.weight *= fr / f;
     result.properties = BSDFSample::Delta | BSDFSample::Reflection;
     result.medium_index = data.current_medium;
   } else {
     result.w_o = data.w_i;
     result.pdf = 1.0f - f;
-    result.weight = apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+    result.weight = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
     result.weight *= (1.0f - fr) / (1.0f - f);
     result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
     result.medium_index = local_frame_entering_material(frame) ? mtl.int_medium : mtl.ext_medium;
@@ -40,20 +40,20 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   return {data.spectrum_sample, 0.0f};
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
   return 0.0f;
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
 }
 
 }  // namespace ThinfilmBSDF
@@ -71,22 +71,22 @@ struct DielectricMaterial {
   uint32_t ext_medium = kInvalidIndex;
 };
 
-ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
   auto w_i = local_frame_to_local(local_frame, -data.w_i);
 
   bool in_outside = LocalFrame::cos_theta(w_i) > 0;
   float direction_scale = in_outside ? 1.0f : -1.0f;
 
-  auto ext_ior = in_outside ? evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample) : evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto int_ior = in_outside ? evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample) : evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto ext_ior = in_outside ? evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample) : evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto int_ior = in_outside ? evaluate_refractive_index(mtl.int_ior, data.spectrum_sample) : evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
 
   BSDFSample result = {};
   result.weight = {data.spectrum_sample, 1.0f};
 
   // init
-  float2 roughness = evaluate_roughness(mtl, data.tex, scene);
+  float2 roughness = evaluate_roughness(mtl, data.tex);
   external::RayInfo ray = {-direction_scale * w_i, roughness};
   ray.updateHeight(1.0f);
   bool ray_outside = true;
@@ -124,28 +124,28 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, c
 
   result.w_o = direction_scale * (ray_outside ? ray.w : -ray.w);
 
-  uint32_t delta_sample = is_delta(mtl, data.tex, scene, smp) ? BSDFSample::Delta : 0u;
+  uint32_t delta_sample = is_delta(mtl, data.tex, smp) ? BSDFSample::Delta : 0u;
 
   if (LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(result.w_o) > 0.0f) {
     result.eta = 1.0f;
-    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.reflectance, data.tex, scene, nullptr);
+    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
     result.properties = BSDFSample::Reflection | delta_sample;
     result.medium_index = data.current_medium;
   } else {
     float eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
     result.eta = eta;
-    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.scattering, data.tex);
     result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged | delta_sample;
     result.medium_index = in_outside ? mtl.int_medium : mtl.ext_medium;
   }
 
   result.w_o = normalize(local_frame_from_local(local_frame, result.w_o));
-  result.pdf = pdf(data, result.w_o, mtl, scene, smp);
+  result.pdf = pdf(data, result.w_o, mtl, smp);
   ETX_VALIDATE(result.pdf);
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
 
   auto w_i = local_frame_to_local(local_frame, -data.w_i);
@@ -156,10 +156,10 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
   if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
     return {data.spectrum_sample, 0.0f};
 
-  auto roughness = evaluate_roughness(mtl, data.tex, scene);
-  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto roughness = evaluate_roughness(mtl, data.tex);
+  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
 
   bool forward_path = data.path_source == PathSource::Camera;
   float backward_scale = fabsf(1.0f / LocalFrame::cos_theta(w_i));
@@ -187,14 +187,14 @@ ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, 
   bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
 
   BSDFEval eval;
-  eval.func = (2.0f * value) * apply_image(data.spectrum_sample, reflection ? mtl.reflectance : mtl.scattering, data.tex, scene, nullptr);
+  eval.func = (2.0f * value) * apply_image(data.spectrum_sample, reflection ? mtl.reflectance : mtl.scattering, data.tex);
   ETX_VALIDATE(eval.func);
   eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
-  eval.pdf = pdf(data, in_w_o, mtl, scene, smp);
+  eval.pdf = pdf(data, in_w_o, mtl, smp);
   return eval;
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, const Scene& scene, Sampler& smp) {
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
   LocalFrame local_frame = {data.tan, data.btn, data.nrm};
 
   auto w_i = local_frame_to_local(local_frame, -data.w_i);
@@ -205,10 +205,10 @@ ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Ma
   if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
     return 0.0f;
 
-  auto roughness = evaluate_roughness(mtl, data.tex, scene);
-  auto ext_ior = evaluate_refractive_index(scene, mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(scene, mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, scene, smp);
+  auto roughness = evaluate_roughness(mtl, data.tex);
+  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
+  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
+  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
 
   const bool outside = LocalFrame::cos_theta(w_i) > 0;
   const bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
@@ -249,13 +249,13 @@ ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Ma
   return result;
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, const Scene& scene, Sampler& smp) {
-  auto roughness = evaluate_roughness(mtl, tex, scene);
+ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, Sampler& smp) {
+  auto roughness = evaluate_roughness(mtl, tex);
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
-ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, const Scene& scene, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex, scene, nullptr);
+ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
+  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
 }
 
 }  // namespace DielectricBSDF
