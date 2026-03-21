@@ -14,7 +14,7 @@ struct ETX_ALIGNED GPUSceneGlobals {
 
   uint32_t emitter_instance_count;
   uint32_t environment_emitter_count;
-  uint32_t pad0;
+  uint32_t active_emitter_count;
   uint32_t pad1;
 
   float3 bounding_sphere_center;
@@ -43,6 +43,11 @@ struct ETX_ALIGNED GPUSceneGlobals {
   uint32_t default_conductor_eta;
   uint32_t default_conductor_k;
   uint32_t defaults_pad0;
+
+  uint32_t pixel_filter_image_index;
+  float pixel_filter_radius;
+  uint32_t pixel_filter_pad0;
+  uint32_t pixel_filter_pad1;
 };
 
 struct ETX_ALIGNED GPUSceneOptions {
@@ -57,9 +62,9 @@ struct ETX_ALIGNED GPUSceneOptions {
   uint32_t light_sampling;
 
   uint32_t properties_flags;
+  uint32_t path_mode;
+  uint32_t random_seed;
   uint32_t pad0;
-  uint32_t pad1;
-  uint32_t pad2;
 };
 
 struct ETX_ALIGNED GPUImageBlobHeader {

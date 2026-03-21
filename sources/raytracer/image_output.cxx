@@ -3,6 +3,7 @@
 #include <etx/core/environment.hxx>
 #include <etx/core/log.hxx>
 
+#include <algorithm>
 #include <tinyexr.hxx>
 #include <stb_image.hxx>
 #include <stb_image_write.hxx>
@@ -18,6 +19,10 @@ namespace {
 float compare_space_value(float value) {
   const float clamped = fmaxf(value, 0.0f);
   return clamped / (1.0f + clamped);
+}
+
+float luminance_from_rgb(const float3& value) {
+  return dot(value, float3{0.2126f, 0.7152f, 0.0722f});
 }
 
 float3 heatmap_color(float t) {
@@ -50,6 +55,20 @@ float3 heatmap_color(float t) {
 
   const float local_t = (clamped_t - 0.95f) / 0.05f;
   return lerp(float3{1.0f, 0.0f, 0.0f}, float3{1.0f, 1.0f, 1.0f}, local_t);
+}
+
+float percentile_from_sorted_values(const std::vector<float>& sorted_values, float percentile) {
+  if (sorted_values.empty()) {
+    return 0.0f;
+  }
+
+  const float clamped_percentile = saturate(percentile);
+  const size_t max_index = sorted_values.size() - 1u;
+  const float scaled_index = clamped_percentile * static_cast<float>(max_index);
+  const size_t index_0 = static_cast<size_t>(scaled_index);
+  const size_t index_1 = min(index_0 + 1u, max_index);
+  const float t = scaled_index - static_cast<float>(index_0);
+  return lerp(sorted_values[index_0], sorted_values[index_1], t);
 }
 
 }  // namespace
@@ -179,11 +198,29 @@ bool compare_images(const float4* reference, const float4* result, const uint2& 
 
   double absolute_error_sum = 0.0;
   double squared_error_sum = 0.0;
+  double signed_error_sum = 0.0;
   double reference_energy_sum = 0.0;
+  double reference_luminance_sum = 0.0;
+  double result_luminance_sum = 0.0;
   float max_absolute_error = 0.0f;
+
+  double linear_absolute_error_sum = 0.0;
+  double linear_squared_error_sum = 0.0;
+  double linear_signed_error_sum = 0.0;
+  double linear_reference_energy_sum = 0.0;
+  double linear_reference_luminance_sum = 0.0;
+  double linear_result_luminance_sum = 0.0;
+  float linear_max_absolute_error = 0.0f;
   const double channel_count = 3.0 * static_cast<double>(image_size.x) * static_cast<double>(image_size.y);
+  const double pixel_count = static_cast<double>(image_size.x) * static_cast<double>(image_size.y);
+  std::vector<float> absolute_error_distribution = {};
+  std::vector<float> linear_absolute_error_distribution = {};
+  absolute_error_distribution.reserve(static_cast<size_t>(image_size.x) * static_cast<size_t>(image_size.y));
+  linear_absolute_error_distribution.reserve(static_cast<size_t>(image_size.x) * static_cast<size_t>(image_size.y));
 
   for (uint32_t i = 0u, e = image_size.x * image_size.y; i < e; ++i) {
+    const float3 reference_linear_rgb = {reference[i].x, reference[i].y, reference[i].z};
+    const float3 result_linear_rgb = {result[i].x, result[i].y, result[i].z};
     const float3 reference_rgb = {compare_space_value(reference[i].x), compare_space_value(reference[i].y), compare_space_value(reference[i].z)};
     const float3 result_rgb = {compare_space_value(result[i].x), compare_space_value(result[i].y), compare_space_value(result[i].z)};
     const float3 diff_rgb = {
@@ -191,22 +228,76 @@ bool compare_images(const float4* reference, const float4* result, const uint2& 
       fabsf(result_rgb.y - reference_rgb.y),
       fabsf(result_rgb.z - reference_rgb.z),
     };
+    const float3 signed_diff_rgb = {
+      result_rgb.x - reference_rgb.x,
+      result_rgb.y - reference_rgb.y,
+      result_rgb.z - reference_rgb.z,
+    };
+    const float3 linear_diff_rgb = {
+      fabsf(result_linear_rgb.x - reference_linear_rgb.x),
+      fabsf(result_linear_rgb.y - reference_linear_rgb.y),
+      fabsf(result_linear_rgb.z - reference_linear_rgb.z),
+    };
+    const float3 linear_signed_diff_rgb = {
+      result_linear_rgb.x - reference_linear_rgb.x,
+      result_linear_rgb.y - reference_linear_rgb.y,
+      result_linear_rgb.z - reference_linear_rgb.z,
+    };
     const float diff_value = fmaxf(diff_rgb.x, fmaxf(diff_rgb.y, diff_rgb.z));
+    const float linear_diff_value = fmaxf(linear_diff_rgb.x, fmaxf(linear_diff_rgb.y, linear_diff_rgb.z));
     const float3 diff_heatmap = heatmap_color(diff_value);
 
     difference_image[i] = {diff_heatmap.x, diff_heatmap.y, diff_heatmap.z, 1.0f};
 
     absolute_error_sum += diff_rgb.x + diff_rgb.y + diff_rgb.z;
     squared_error_sum += (diff_rgb.x * diff_rgb.x) + (diff_rgb.y * diff_rgb.y) + (diff_rgb.z * diff_rgb.z);
+    signed_error_sum += signed_diff_rgb.x + signed_diff_rgb.y + signed_diff_rgb.z;
     reference_energy_sum += (reference_rgb.x * reference_rgb.x) + (reference_rgb.y * reference_rgb.y) + (reference_rgb.z * reference_rgb.z);
+    reference_luminance_sum += luminance_from_rgb(reference_rgb);
+    result_luminance_sum += luminance_from_rgb(result_rgb);
     max_absolute_error = fmaxf(max_absolute_error, fmaxf(diff_rgb.x, fmaxf(diff_rgb.y, diff_rgb.z)));
+    absolute_error_distribution.push_back(diff_value);
+
+    linear_absolute_error_sum += linear_diff_rgb.x + linear_diff_rgb.y + linear_diff_rgb.z;
+    linear_squared_error_sum += (linear_diff_rgb.x * linear_diff_rgb.x) + (linear_diff_rgb.y * linear_diff_rgb.y) + (linear_diff_rgb.z * linear_diff_rgb.z);
+    linear_signed_error_sum += linear_signed_diff_rgb.x + linear_signed_diff_rgb.y + linear_signed_diff_rgb.z;
+    linear_reference_energy_sum += (reference_linear_rgb.x * reference_linear_rgb.x) + (reference_linear_rgb.y * reference_linear_rgb.y) +
+                                   (reference_linear_rgb.z * reference_linear_rgb.z);
+    linear_reference_luminance_sum += luminance_from_rgb(reference_linear_rgb);
+    linear_result_luminance_sum += luminance_from_rgb(result_linear_rgb);
+    linear_max_absolute_error = fmaxf(linear_max_absolute_error, linear_diff_value);
+    linear_absolute_error_distribution.push_back(linear_diff_value);
   }
+
+  std::sort(absolute_error_distribution.begin(), absolute_error_distribution.end());
+  std::sort(linear_absolute_error_distribution.begin(), linear_absolute_error_distribution.end());
 
   comparison.mean_absolute_error = static_cast<float>(absolute_error_sum / channel_count);
   comparison.root_mean_squared_error = static_cast<float>(sqrt(squared_error_sum / channel_count));
   comparison.relative_root_mean_squared_error = static_cast<float>(sqrt(squared_error_sum / fmax(reference_energy_sum, 1.0e-12)));
   comparison.max_absolute_error = max_absolute_error;
+  comparison.mean_signed_error = static_cast<float>(signed_error_sum / channel_count);
+  comparison.percentile_95_absolute_error = percentile_from_sorted_values(absolute_error_distribution, 0.95f);
+  comparison.percentile_99_absolute_error = percentile_from_sorted_values(absolute_error_distribution, 0.99f);
+  comparison.reference_mean_luminance = static_cast<float>(reference_luminance_sum / pixel_count);
+  comparison.result_mean_luminance = static_cast<float>(result_luminance_sum / pixel_count);
+  comparison.brightness_ratio = comparison.result_mean_luminance / fmaxf(comparison.reference_mean_luminance, 1.0e-12f);
+  comparison.brightness_relative_error =
+    (comparison.result_mean_luminance - comparison.reference_mean_luminance) / fmaxf(comparison.reference_mean_luminance, 1.0e-12f);
   comparison.similarity = 100.0f * (1.0f - saturate(comparison.root_mean_squared_error));
+
+  comparison.linear_mean_absolute_error = static_cast<float>(linear_absolute_error_sum / channel_count);
+  comparison.linear_root_mean_squared_error = static_cast<float>(sqrt(linear_squared_error_sum / channel_count));
+  comparison.linear_relative_root_mean_squared_error = static_cast<float>(sqrt(linear_squared_error_sum / fmax(linear_reference_energy_sum, 1.0e-12)));
+  comparison.linear_max_absolute_error = linear_max_absolute_error;
+  comparison.linear_mean_signed_error = static_cast<float>(linear_signed_error_sum / channel_count);
+  comparison.linear_percentile_95_absolute_error = percentile_from_sorted_values(linear_absolute_error_distribution, 0.95f);
+  comparison.linear_percentile_99_absolute_error = percentile_from_sorted_values(linear_absolute_error_distribution, 0.99f);
+  comparison.linear_reference_mean_luminance = static_cast<float>(linear_reference_luminance_sum / pixel_count);
+  comparison.linear_result_mean_luminance = static_cast<float>(linear_result_luminance_sum / pixel_count);
+  comparison.linear_brightness_ratio = comparison.linear_result_mean_luminance / fmaxf(comparison.linear_reference_mean_luminance, 1.0e-12f);
+  comparison.linear_brightness_relative_error =
+    (comparison.linear_result_mean_luminance - comparison.linear_reference_mean_luminance) / fmaxf(comparison.linear_reference_mean_luminance, 1.0e-12f);
 
   return true;
 }

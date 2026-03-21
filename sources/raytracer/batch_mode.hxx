@@ -12,8 +12,24 @@ struct BatchRenderOptions {
   std::string integrator = {};
   std::string renderer = "cpu";
   std::string compare_mode = {};
+  std::string gpu_compile_stage = {};
   uint32_t samples = 0u;
+  uint32_t max_path_length = 0u;
+  uint32_t random_seed = 0u;
+  uint32_t resolution_width = 0u;
+  uint32_t resolution_height = 0u;
+  uint32_t crop_x = 0u;
+  uint32_t crop_y = 0u;
+  uint32_t crop_width = 0u;
+  uint32_t crop_height = 0u;
+  uint32_t strategy_flags = 0u;
+  bool gpu_compile_only = false;
+  bool full_comparison = false;
   bool denoise = false;
+  bool override_random_seed = false;
+  bool override_resolution = false;
+  bool override_crop = false;
+  bool override_strategy_flags = false;
   float exposure = 1.0f;
 };
 

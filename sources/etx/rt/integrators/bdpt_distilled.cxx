@@ -275,8 +275,10 @@ struct BDPTDistilledImpl : public Task {
       if (film.active_pixel(i, pixel) == false)
         continue;
 
-      auto camera_smp = Sampler(i, status.current_iteration);
-      auto light_smp = Sampler(i, status.current_iteration);
+      const uint2 film_size = film.base_dimensions();
+      const uint32_t pixel_index = pixel.x + pixel.y * film_size.x;
+      auto camera_smp = Sampler(scene.sampler_seed(pixel_index, status.current_iteration));
+      auto light_smp = Sampler(scene.sampler_seed(pixel_index, status.current_iteration));
 
       SpectralQuery spect = scene.spectral() ? SpectralQuery::spectral_sample(light_smp.next()) : SpectralQuery::sample();
       build_emitter_path(light_smp, spect, path_data);
@@ -367,9 +369,10 @@ struct BDPTDistilledImpl : public Task {
     float2 rnd_em_sample = smp.next_2d();
     float2 rnd_support = smp.next_2d();
     if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0u);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2u);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4u);
+      const uint32_t sample_index = payload.iteration ^ rt.scene().options.random_seed;
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 0u);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 2u);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 4u);
     }
 
     float3 w_o = sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
@@ -407,9 +410,10 @@ struct BDPTDistilledImpl : public Task {
     float2 rnd_em_sample = smp.next_2d();
     float2 rnd_support = smp.next_2d();
     if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0u);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2u);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4u);
+      const uint32_t sample_index = payload.iteration ^ rt.scene().options.random_seed;
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 0u);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 2u);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 4u);
     }
 
     if (scene.materials[a_intersection.material_index].cls == MaterialClass::Boundary) {

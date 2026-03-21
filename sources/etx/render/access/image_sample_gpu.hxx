@@ -163,11 +163,12 @@ bool image_sample_try_sample(ImageSampleGPUContext context, uint image_index, fl
   ImageSampleGPUDistributionContext distribution_context =
     image_sample_gpu_make_distribution_context(x_payload_buffer, y_payload_buffer, image_access, y_count);
 
-  if (image_sample_gpu_distribution_sample(distribution_context, rnd, sample.pdf, sample.location, sample.uv) == false) {
+  float distribution_pdf = 0.0f;
+  if (image_sample_gpu_distribution_sample(distribution_context, rnd, distribution_pdf, sample.location, sample.uv) == false) {
     return false;
   }
+  (void)distribution_pdf;
 
   ImageEvaluateGPUContext evaluate_context = make_image_evaluate_gpu_context(context.images_descriptor_index);
-  sample.value = image_evaluate_gpu_rgba(evaluate_context, image_index, sample.uv);
-  return true;
+  return image_evaluate_try_rgba(evaluate_context, image_index, sample.uv, sample.pdf, sample.value);
 }

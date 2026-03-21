@@ -19,9 +19,7 @@ ETX_SHARED_INLINE ImageFilterSharedAddress image_filter_shared_address(ETX_IN(fl
 
   float2 image_uv = uv * fsize;
   float x0 = image_tex_coord_u(image_uv.x, fsize.x, options);
-  float x1 = image_tex_coord_u(image_uv.x + 1.0f, fsize.x, options);
   float y0 = image_tex_coord_v(image_uv.y, fsize.y, options);
-  float y1 = image_tex_coord_v(image_uv.y + 1.0f, fsize.y, options);
 
 #if defined(__cplusplus)
   result.dx = x0 - floorf(x0);
@@ -32,9 +30,9 @@ ETX_SHARED_INLINE ImageFilterSharedAddress image_filter_shared_address(ETX_IN(fl
 #endif
 
   result.row_0 = min(uint32_t(y0), size.y - 1u);
-  result.row_1 = min(uint32_t(y1), size.y - 1u);
+  result.row_1 = min(result.row_0 + 1u, size.y - 1u);
   result.col_0 = min(uint32_t(x0), size.x - 1u);
-  result.col_1 = min(uint32_t(x1), size.x - 1u);
+  result.col_1 = min(result.col_0 + 1u, size.x - 1u);
   return result;
 }
 

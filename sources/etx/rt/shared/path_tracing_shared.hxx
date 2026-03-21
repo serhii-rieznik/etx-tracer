@@ -228,7 +228,7 @@ ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera
   const bool spectral, const bool use_blue_noise) {
   PTRayPayload payload = {};
   payload.iteration = iteration;
-  payload.smp.init(pixel_index, payload.iteration);
+  payload.smp.init(pixel_index, payload.iteration ^ scene.options.random_seed);
   payload.spect = spectral ? SpectralQuery::spectral_sample(payload.smp.next()) : SpectralQuery::sample();
 
   float2 uv = film.sample(iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, px, payload.smp.next_2d());
@@ -373,9 +373,10 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   float2 rnd_support = payload.smp.next_2d();
 
   if (payload.use_blue_noise && (payload.path_length == 1u)) {
-    rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0u);
-    rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2u);
-    rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4u);
+    const uint32_t sample_index = payload.iteration ^ rt.scene().options.random_seed;
+    rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 0u);
+    rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 2u);
+    rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 4u);
   }
 
   payload.smp.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);

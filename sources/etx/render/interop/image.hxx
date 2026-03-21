@@ -79,7 +79,11 @@ ETX_SHARED_INLINE float image_tex_coord_clamp(float u, float size) {
 #if defined(__cplusplus)
   return clamp(u, 0.0f, nextafterf(size, 0.0f));
 #else
-  return clamp(u, 0.0f, max(0.0f, size - 1.0e-6f));
+  float max_u = 0.0f;
+  if (size > 0.0f) {
+    max_u = asfloat(asuint(size) - 1u);
+  }
+  return clamp(u, 0.0f, max_u);
 #endif
 }
 

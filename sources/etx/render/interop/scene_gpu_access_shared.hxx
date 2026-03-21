@@ -12,6 +12,8 @@ struct SceneGPUSharedOptions {
   uint32_t strategy_flags;
   uint32_t light_sampling;
   uint32_t properties_flags;
+  uint32_t path_mode;
+  uint32_t random_seed;
 };
 
 struct SceneGPUSharedGlobals {
@@ -20,7 +22,11 @@ struct SceneGPUSharedGlobals {
   uint32_t emitter_profile_count;
   uint32_t emitter_instance_count;
   uint32_t environment_emitter_count;
+  uint32_t active_emitter_count;
+  float3 bounding_sphere_center;
   float bounding_sphere_radius;
+  uint32_t pixel_filter_image_index;
+  float pixel_filter_radius;
 };
 
 ETX_SHARED_INLINE bool scene_gpu_has_descriptor(uint32_t descriptor_index) {
@@ -68,6 +74,8 @@ ETX_SHARED_INLINE SceneGPUSharedOptions scene_gpu_load_options(uint32_t scene_op
   result.strategy_flags = 0u;
   result.light_sampling = 0u;
   result.properties_flags = 0u;
+  result.path_mode = 0u;
+  result.random_seed = 0u;
 
   if (scene_gpu_has_descriptor(scene_options_descriptor_index) == false) {
     return result;
@@ -83,6 +91,8 @@ ETX_SHARED_INLINE SceneGPUSharedOptions scene_gpu_load_options(uint32_t scene_op
   result.strategy_flags = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsStrategyFlagsOffset);
   result.light_sampling = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsLightSamplingOffset);
   result.properties_flags = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsPropertiesFlagsOffset);
+  result.path_mode = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsPathModeOffset);
+  result.random_seed = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsRandomSeedOffset);
 
   if (result.samples == 0u) {
     result.samples = 1u;
@@ -102,7 +112,11 @@ ETX_SHARED_INLINE SceneGPUSharedGlobals scene_gpu_load_globals(ByteAddressBuffer
   result.emitter_profile_count = scene_gpu_load_u32(scene_globals, kSceneGlobalsEmitterProfileCountOffset);
   result.emitter_instance_count = scene_gpu_load_u32(scene_globals, kSceneGlobalsEmitterInstanceCountOffset);
   result.environment_emitter_count = scene_gpu_load_u32(scene_globals, kSceneGlobalsEnvironmentEmitterCountOffset);
+  result.active_emitter_count = scene_gpu_load_u32(scene_globals, kSceneGlobalsActiveEmitterCountOffset);
+  result.bounding_sphere_center = asfloat(scene_globals.Load3(kSceneGlobalsBoundingSphereCenterOffset));
   result.bounding_sphere_radius = scene_gpu_load_f32(scene_globals, kSceneGlobalsBoundingSphereRadiusOffset);
+  result.pixel_filter_image_index = scene_gpu_load_u32(scene_globals, kSceneGlobalsPixelFilterImageIndexOffset);
+  result.pixel_filter_radius = scene_gpu_load_f32(scene_globals, kSceneGlobalsPixelFilterRadiusOffset);
   return result;
 }
 

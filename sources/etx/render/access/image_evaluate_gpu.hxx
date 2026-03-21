@@ -53,6 +53,18 @@ float4 image_evaluate_gpu_rgba(ImageEvaluateGPUContext context, uint image_index
   return image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
 }
 
+float image_evaluate_gpu_row_weight(ImageAccessGPUDesc image_access, float uv_y) {
+  if (((image_access.options & Image::UniformSamplingTable) != 0u) || (image_access.size.y == 1u)) {
+    return 1.0f;
+  }
+
+  return max(0.0f, sin(kPi * saturate(uv_y)));
+}
+
+float image_evaluate_gpu_luminance(float3 value) {
+  return dot(value, float3(0.212671f, 0.715160f, 0.072169f));
+}
+
 bool image_evaluate_gpu_try_rgba(
   ImageEvaluateGPUContext context, uint image_index, float2 uv, out float image_pdf, out float4 image_value) {
   image_pdf = 0.0f;
@@ -60,11 +72,33 @@ bool image_evaluate_gpu_try_rgba(
 
   ImageAccessGPUContext access_context = {context.images_descriptor_index};
   ImageAccessGPUDesc image_access;
-  if (image_access_try_load(access_context, image_index, image_access) == false) {
+  uint payload_descriptor_index = kInvalidIndex;
+  if (image_access_try_load_pixel_payload(access_context, image_index, image_access, payload_descriptor_index) == false) {
     return false;
   }
 
-  image_value = image_evaluate_gpu_rgba(context, image_index, uv);
+  ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(payload_descriptor_index)];
+  ImageFilterSharedAddress sample = image_filter_shared_address(uv, image_access.fsize, image_access.size, image_access.options);
+
+  uint pixel_offset_00 = image_access.pixel_data_offset + ((sample.row_0 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
+  uint pixel_offset_01 = image_access.pixel_data_offset + ((sample.row_0 * image_access.size.x + sample.col_1) * image_access.pixel_data_stride);
+  uint pixel_offset_10 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
+  uint pixel_offset_11 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_1) * image_access.pixel_data_stride);
+
+  float4 p00 = image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, pixel_offset_00);
+  float4 p01 = image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, pixel_offset_01);
+  float4 p10 = image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, pixel_offset_10);
+  float4 p11 = image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, pixel_offset_11);
+  image_value = image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
+
+  if (image_access.normalization > 0.0f) {
+    float3 top_value = (p00 * (1.0f - sample.dx) * (1.0f - sample.dy) + p01 * sample.dx * (1.0f - sample.dy)).xyz;
+    float3 bottom_value = (p10 * (1.0f - sample.dx) * sample.dy + p11 * sample.dx * sample.dy).xyz;
+    float top_weight = image_evaluate_gpu_row_weight(image_access, uv.y + 0.0f / image_access.fsize.y);
+    float bottom_weight = image_evaluate_gpu_row_weight(image_access, uv.y + 1.0f / image_access.fsize.y);
+    image_pdf = (image_evaluate_gpu_luminance(top_value) * top_weight + image_evaluate_gpu_luminance(bottom_value) * bottom_weight) / image_access.normalization;
+  }
+
   return true;
 }
 

@@ -2,9 +2,10 @@
 
 #include <etx/render/host/scene_global.hxx>
 #include <etx/render/shared/scene.hxx>
-#include <etx/render/access/image_sample_cpu.hxx>
 
 namespace etx {
+
+#include <etx/render/access/image_sample_cpu.hxx>
 
 namespace {
 
@@ -266,8 +267,7 @@ SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const Spectra
   }
 }
 
-SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
-  float& pdf_dir_out) {
+SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir, float& pdf_dir_out) {
   const auto& scene = scene_global_get();
   const auto& em = scene.emitter_profiles[em_inst.profile];
   pdf_dir = 0.0f;
@@ -607,9 +607,8 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
 }
 
 SpectralResponse apply_image(SpectralQuery spect, const SpectralImage& img, const float2& uv, float& image_pdf) {
-  image_pdf = 0.0f;
-
   const auto& scene = scene_global_get();
+  image_pdf = 0.0f;
   ETX_ASSERT(img.spectrum_index < static_cast<uint32_t>(scene.spectrums.count));
   SpectralResponse result = scene.spectrums[img.spectrum_index](spect);
   ETX_VALIDATE(result);

@@ -35,6 +35,8 @@ RHIResult initialize_dxc_interfaces_global();
 
 namespace {
 
+constexpr bool kEnableShaderDebugInfo = false;
+
 #if (ETX_PLATFORM_WINDOWS)
 using DxcLibraryHandle = HMODULE;
 #else
@@ -957,6 +959,14 @@ void unload_dxc_dll_global() {
 std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::string& entry_point, RHIShaderStage stage,
   const std::unordered_map<std::string, std::string>& defines, const std::vector<std::string>& include_directories, bool for_preprocessing) {
   std::vector<std::wstring> arguments;
+  uint32_t optimization_level = 3u;
+  auto opt_it = defines.find("ETX_DXC_OPT_LEVEL");
+  if (opt_it != defines.end()) {
+    const char opt_char = opt_it->second.empty() ? '3' : opt_it->second[0];
+    if ((opt_char >= '0') && (opt_char <= '3')) {
+      optimization_level = static_cast<uint32_t>(opt_char - '0');
+    }
+  }
 
   std::wstring profile;
   switch (stage) {
@@ -988,14 +998,19 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
     arguments.emplace_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
     arguments.emplace_back(L"-fspv-extension=SPV_KHR_ray_query");
     arguments.emplace_back(L"-enable-16bit-types");
-    arguments.emplace_back(L"-O3");
-    arguments.emplace_back(L"-Zi");
-    arguments.emplace_back(L"-Qembed_debug");
+    arguments.emplace_back((optimization_level == 0u) ? L"-O0" : ((optimization_level == 1u) ? L"-O1" : ((optimization_level == 2u) ? L"-O2" : L"-O3")));
+    if constexpr (kEnableShaderDebugInfo) {
+      arguments.emplace_back(L"-Zi");
+      arguments.emplace_back(L"-Qembed_debug");
+    }
   } else {
     arguments.emplace_back(L"-P");
   }
 
   for (const auto& [key, value] : defines) {
+    if (key == "ETX_DXC_OPT_LEVEL") {
+      continue;
+    }
     std::string define_str = key;
     if (!value.empty()) {
       define_str += "=" + value;

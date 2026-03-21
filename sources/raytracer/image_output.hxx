@@ -17,6 +17,25 @@ struct ImageComparisonResult {
   float root_mean_squared_error = 0.0f;
   float relative_root_mean_squared_error = 0.0f;
   float max_absolute_error = 0.0f;
+  float mean_signed_error = 0.0f;
+  float percentile_95_absolute_error = 0.0f;
+  float percentile_99_absolute_error = 0.0f;
+  float reference_mean_luminance = 0.0f;
+  float result_mean_luminance = 0.0f;
+  float brightness_ratio = 0.0f;
+  float brightness_relative_error = 0.0f;
+
+  float linear_mean_absolute_error = 0.0f;
+  float linear_root_mean_squared_error = 0.0f;
+  float linear_relative_root_mean_squared_error = 0.0f;
+  float linear_max_absolute_error = 0.0f;
+  float linear_mean_signed_error = 0.0f;
+  float linear_percentile_95_absolute_error = 0.0f;
+  float linear_percentile_99_absolute_error = 0.0f;
+  float linear_reference_mean_luminance = 0.0f;
+  float linear_result_mean_luminance = 0.0f;
+  float linear_brightness_ratio = 0.0f;
+  float linear_brightness_relative_error = 0.0f;
 };
 
 bool save_image_to_file(const std::string& file_name, const float4* output, const uint2& image_size, const ImageOutputParameters& params);

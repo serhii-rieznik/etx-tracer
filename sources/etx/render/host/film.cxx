@@ -88,9 +88,19 @@ struct FilmImpl {
   uint32_t max_sample_count = 0u;
   uint32_t pixel_size = 1u;
   uint32_t target_pixel_size = 1u;
+  uint2 render_window_origin = {};
+  uint2 render_window_size = {};
 
   uint32_t total_pixel_count() const {
     return dimensions.x * dimensions.y;
+  }
+
+  uint2 active_dimensions() const {
+    if ((render_window_size.x == 0u) || (render_window_size.y == 0u)) {
+      return dimensions;
+    }
+
+    return render_window_size;
   }
 
   void commit_iteration(float radiance_clamp);
@@ -108,6 +118,14 @@ Film::~Film() {
 void Film::allocate(const uint2& dim) {
   if (_private->dimensions != dim) {
     _private->dimensions = {max(1u, dim.x), max(1u, dim.y)};
+    if ((_private->render_window_size.x > _private->dimensions.x) || (_private->render_window_size.y > _private->dimensions.y) ||
+        (_private->render_window_origin.x >= _private->dimensions.x) || (_private->render_window_origin.y >= _private->dimensions.y) ||
+        (_private->render_window_size.x > (_private->dimensions.x - _private->render_window_origin.x)) ||
+        (_private->render_window_size.y > (_private->dimensions.y - _private->render_window_origin.y))) {
+      _private->render_window_origin = {};
+      _private->render_window_size = _private->dimensions;
+    }
+
     for (auto& buffer : _private->storage_buffers) {
       buffer.clear();
       buffer.resize(1llu * _private->dimensions.x * _private->dimensions.y);
@@ -122,6 +140,23 @@ void Film::allocate(const uint2& dim) {
     _private->denoiser.allocate_buffers(albedo, normals, _private->dimensions);
   }
   clear(ClearEverything);
+}
+
+void Film::reset_render_window() {
+  _private->render_window_origin = {};
+  _private->render_window_size = _private->dimensions;
+  _private->active_pixels = current_pixel_count();
+}
+
+bool Film::set_render_window(const uint2& origin, const uint2& size) {
+  if ((size.x == 0u) || (size.y == 0u)) {
+    return false;
+  }
+
+  _private->render_window_origin = origin;
+  _private->render_window_size = size;
+  _private->active_pixels = current_pixel_count();
+  return true;
 }
 
 void Film::generate_filter_image(uint32_t filter, std::vector<float4>& data) {
@@ -482,7 +517,13 @@ uint32_t Film::total_pixel_count() const {
 }
 
 uint32_t Film::current_pixel_count() const {
-  uint2 dim = current_dimensions();
+  uint2 dim = _private->active_dimensions();
+  if (_private->pixel_size > 1u) {
+    dim = {
+      (dim.x + _private->pixel_size - 1u) / _private->pixel_size,
+      (dim.y + _private->pixel_size - 1u) / _private->pixel_size,
+    };
+  }
   return dim.x * dim.y;
 }
 
@@ -491,21 +532,32 @@ uint32_t Film::active_pixel_count() const {
 }
 
 bool Film::active_pixel(uint32_t index, uint2& location) const {
-  ETX_ASSERT(index < _private->total_pixel_count());
+  ETX_ASSERT(index < current_pixel_count());
 
   uint32_t linear_index = index;
   const uint2& film_size = _private->dimensions;
+  const uint2 render_window_origin = _private->render_window_origin;
+  const uint2 render_window_size = _private->active_dimensions();
+  const uint32_t render_window_origin_y = film_size.y - render_window_origin.y - render_window_size.y;
 
   if (_private->pixel_size > 1) {
-    uint2 dim = current_dimensions();
+    const uint2 dim = {
+      (render_window_size.x + _private->pixel_size - 1u) / _private->pixel_size,
+      (render_window_size.y + _private->pixel_size - 1u) / _private->pixel_size,
+    };
     uint2 a_location = {
-      (index % dim.x) * _private->pixel_size,
-      (index / dim.x) * _private->pixel_size,
+      render_window_origin.x + (index % dim.x) * _private->pixel_size,
+      render_window_origin_y + (index / dim.x) * _private->pixel_size,
     };
     a_location.x += rand() % _private->pixel_size;
     a_location.y += rand() % _private->pixel_size;
-    linear_index = min(a_location.x, film_size.x - 1u) + min(a_location.y, film_size.y - 1u) * film_size.x;
+    linear_index = min(a_location.x, render_window_origin.x + render_window_size.x - 1u) +
+                   min(a_location.y, render_window_origin_y + render_window_size.y - 1u) * film_size.x;
     ETX_ASSERT(linear_index < _private->total_pixel_count());
+  } else {
+    const uint32_t local_x = index % render_window_size.x;
+    const uint32_t local_y = index / render_window_size.x;
+    linear_index = (render_window_origin.x + local_x) + (render_window_origin_y + local_y) * film_size.x;
   }
 
   location = {

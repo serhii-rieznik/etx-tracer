@@ -1,6 +1,8 @@
 #pragma once
 
-#include "bindless.hlsl"
+#if !defined(ETX_GPU_RT_BINDLESS_ALREADY_INCLUDED)
+# include "bindless.hlsl"
+#endif
 
 #include <access/spectrum_access_gpu.hxx>
 #include <interop/geometry.hxx>
@@ -11,17 +13,33 @@
 #include <interop/image_filter_shared.hxx>
 #include <interop/material.hxx>
 #include <interop/projection.hxx>
+#include <interop/distribution.hxx>
 #include <interop/camera_shared.hxx>
 #include <interop/camera_film_shared.hxx>
 #include <interop/scene_gpu_access_shared.hxx>
 #include <access/image_access_gpu.hxx>
 #include <access/image_evaluate_gpu.hxx>
 #include <access/image_sample_gpu.hxx>
+#include <access/bsdf_resource_gpu.hxx>
 #include <interop/sampler_policy.hxx>
 #include <interop/sampler.hxx>
+#include <interop/bsdf_dispatch_shared.hxx>
 #include <interop/medium_density_shared.hxx>
+#include <interop/medium_phase_shared.hxx>
 #include <interop/surface_point_shared.hxx>
 #include <interop/scene_math_shared.hxx>
+
+static const uint kSceneStrategyDirectHit = 1u << 0u;
+static const uint kSceneStrategyConnectToLight = 1u << 1u;
+static const uint kSceneStrategyConnectToCamera = 1u << 2u;
+static const uint kSceneStrategyConnectVertices = 1u << 3u;
+static const uint kScenePathModePathTracing = 0u;
+static const uint kScenePathModeLightTracing = 1u;
+static const uint kScenePathModeBDPTFast = 2u;
+static const uint kSceneLightSamplingUniform = 0u;
+static const uint kSceneLightSamplingFromDistribution = 1u;
+static const uint kSceneLightSamplingRISUniform = 2u;
+static const uint kSceneLightSamplingRISFromDistribution = 3u;
 
 float rnd01(inout uint state) {
   return sampler_next_random(state);
@@ -47,15 +65,23 @@ uint blue_noise_table_index(uint2 pixel, uint sample_index, uint dimension) {
   return (((wrapped_sample * kSamplerBlueNoiseDimensionCount) + wrapped_dimension) * kSamplerBlueNoiseTileSize + y) * kSamplerBlueNoiseTileSize + x;
 }
 
+uint load_scene_options_random_seed() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return options.random_seed;
+}
+
+uint scene_random_seed(uint value_0, uint value_1) {
+  return sampler_random_seed(value_0, value_1 ^ load_scene_options_random_seed());
+}
+
 float sample_blue_noise_value(uint2 pixel, uint sample_index, uint dimension) {
   if (constants.blue_noise_buffer_index == kInvalidIndex) {
     return 0.5f;
   }
 
   ByteAddressBuffer blue_noise_table = bindless_buffers[NonUniformResourceIndex(constants.blue_noise_buffer_index)];
-  uint index = blue_noise_table_index(pixel, sample_index, dimension);
-  uint value = load_u8(blue_noise_table, index);
-  return (float(value) + 0.5f) * (1.0f / float(kSamplerBlueNoiseSampleCount));
+  uint index = blue_noise_table_index(pixel, sample_index ^ load_scene_options_random_seed(), dimension);
+  return asfloat(blue_noise_table.Load(index * 4u));
 }
 
 bool sample_use_blue_noise_primary(uint current_sample, uint stream) {
@@ -110,6 +136,25 @@ TriangleData load_triangle(ByteAddressBuffer buffer, uint triangle_index) {
 
 #include <access/material_access_gpu.hxx>
 
+BSDFResourceContext make_scene_bsdf_resource_gpu_context() {
+  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums);
+}
+
+bool try_load_material_full(uint material_index, out Material material) {
+  MaterialAccessGPUContext material_context = {constants.scene.materials};
+  return material_access_try_load_full(material_context, material_index, material);
+}
+
+BSDFData make_surface_bsdf_data(Vertex vertex, SpectralQuery spect, uint medium_index, float3 incoming_direction) {
+  return bsdf_data_make(vertex, spect, medium_index, PathSource::Camera, incoming_direction);
+}
+
+Sampler make_bsdf_sampler(uint seed) {
+  Sampler result = ETX_ZERO(Sampler);
+  result.seed = seed;
+  return result;
+}
+
 Camera load_camera(ByteAddressBuffer camera_buffer) {
   return gpu_abi_load_camera(camera_buffer);
 }
@@ -119,14 +164,65 @@ uint load_scene_options_samples() {
   return options.samples;
 }
 
+uint load_scene_options_min_path_length() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return options.min_path_length;
+}
+
 uint load_scene_options_properties_flags() {
   SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
   return options.properties_flags;
 }
 
+uint load_scene_options_max_path_length() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return options.max_path_length;
+}
+
+uint load_scene_options_random_path_termination() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return options.random_path_termination;
+}
+
+uint load_scene_options_strategy_flags() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return options.strategy_flags;
+}
+
+uint load_scene_options_light_sampling() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return options.light_sampling;
+}
+
+uint load_scene_options_path_mode() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return options.path_mode;
+}
+
 bool scene_uses_spectral_mode() {
   SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
   return scene_gpu_uses_spectral_mode(options);
+}
+
+bool scene_multiple_importance_sampling_enabled() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return (options.properties_flags & (1u << SceneProperty::MultipleImportanceSampling)) != 0u;
+}
+
+bool scene_strategy_enabled(uint flag) {
+  return (load_scene_options_strategy_flags() & flag) != 0u;
+}
+
+bool scene_path_mode_is_path_tracing() {
+  return load_scene_options_path_mode() == kScenePathModePathTracing;
+}
+
+bool scene_path_mode_is_light_tracing() {
+  return load_scene_options_path_mode() == kScenePathModeLightTracing;
+}
+
+bool scene_path_mode_uses_bdpt_fast() {
+  return load_scene_options_path_mode() == kScenePathModeBDPTFast;
 }
 
 #include <access/medium_access_gpu.hxx>
@@ -242,12 +338,87 @@ SpectralResponse medium_segment_transmittance_spectral(uint medium_index, float3
   return transmittance;
 }
 
+bool try_load_medium_access(uint medium_index, out MediumAccess medium_access) {
+  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  return medium_access_try_load(access_context, medium_index, medium_access);
+}
+
+SpectralResponse gpu_medium_scattering(MediumAccess medium_access, SpectralQuery spect) {
+  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  return medium_access_load_scattering_spectral(access_context, medium_access, spect);
+}
+
+SpectralResponse gpu_medium_absorption(MediumAccess medium_access, SpectralQuery spect) {
+  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  return medium_access_load_absorption_spectral(access_context, medium_access, spect);
+}
+
+float gpu_medium_phase_function(MediumAccess medium_access, float3 incoming_direction, float3 outgoing_direction) {
+  return medium_phase_shared_henyey_greenstein(incoming_direction, outgoing_direction, medium_access.phase_function_g);
+}
+
+float3 gpu_medium_sample_phase_function(MediumAccess medium_access, float2 sample_random, float3 incoming_direction) {
+  return medium_phase_shared_sample_henyey_greenstein(incoming_direction, medium_access.phase_function_g, sample_random);
+}
+
+MediumSample gpu_sample_medium(MediumAccess medium_access, SpectralQuery spect, SpectralResponse throughput, float3 pos, float3 incoming_direction, float max_t, inout uint seed) {
+  SpectralResponse scattering_value = gpu_medium_scattering(medium_access, spect);
+  SpectralResponse absorption_value = gpu_medium_absorption(medium_access, spect);
+  return sample_medium_gpu(medium_access, spect, throughput, scattering_value, absorption_value, pos, incoming_direction, max_t, seed);
+}
+
 bool camera_lens_sampling_enabled(float lens_radius, float focal_distance) {
   return (lens_radius > kEpsilon) && (focal_distance > kEpsilon);
 }
 
+bool gpu_random_continue(uint path_length, uint start_path_length, float eta_scale, inout uint seed, inout SpectralResponse throughput) {
+  float max_throughput = spectral_response_maximum(throughput);
+  if (max_throughput == 0.0f) {
+    return false;
+  }
+
+  if (path_length < start_path_length) {
+    return true;
+  }
+
+  float continuation = max_throughput * eta_scale * eta_scale;
+  if (isfinite(continuation) == false) {
+    return false;
+  }
+
+  float probability = clamp(continuation, 0.01f, 0.95f);
+  if (rnd01(seed) > probability) {
+    return false;
+  }
+
+  throughput = spectral_response_mul(throughput, 1.0f / probability);
+  return true;
+}
+
 float2 camera_primary_uv(uint2 pixel, uint2 film_size) {
   return camera_shared_flip_y(camera_shared_center_uv(pixel, film_size));
+}
+
+float2 camera_sample_film_uv(uint2 pixel, uint2 film_size, float2 uv_sample) {
+  float2 uv = camera_primary_uv(pixel, film_size);
+  if (constants.sample_index == 0u) {
+    return uv;
+  }
+
+  SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
+  float2 jitter = uv_sample * 2.0f - 1.0f;
+  if (scene_globals_data.pixel_filter_image_index != kInvalidIndex) {
+    ImageSampleGPUContext sample_context = make_image_sample_gpu_context(constants.scene.images);
+    ImageSampleAccess image_sample = image_sample_access_default(uv_sample);
+    if (image_sample_try_sample(sample_context, scene_globals_data.pixel_filter_image_index, uv_sample, image_sample)) {
+      jitter = image_sample.uv * 2.0f - 1.0f;
+    }
+  }
+
+  float2 filtered_uv = float2(
+    (float(pixel.x) + 0.5f + scene_globals_data.pixel_filter_radius * jitter.x) / float(film_size.x) * 2.0f - 1.0f,
+    (float(pixel.y) + 0.5f + scene_globals_data.pixel_filter_radius * jitter.y) / float(film_size.y) * 2.0f - 1.0f);
+  return camera_shared_flip_y(filtered_uv);
 }
 
 float2 camera_sample_lens_uv(Camera camera, float2 sensor_sample_rnd) {
@@ -367,6 +538,18 @@ struct SurfacePoint {
   float3 geo_normal;
 };
 
+struct TraceSurfaceResult {
+  uint hit;
+  uint medium_index;
+  uint triangle_index;
+  uint emitter_index;
+  float hit_t;
+  TriangleData tri;
+  SurfacePoint surface_point;
+  Material material;
+  SpectralResponse transmittance;
+};
+
 SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBuffer normal_buffer, ByteAddressBuffer tangent_buffer, ByteAddressBuffer bitangent_buffer,
   ByteAddressBuffer texcoord_buffer, bool has_surface_frame, bool has_texcoords, TriangleData tri, float2 bary, float3 ray_dir) {
   SurfacePoint result;
@@ -406,9 +589,9 @@ SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBu
 
   surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1,
     texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
+  result.vertex.nrm = scene_math_shared_orient_normals_to_hemisphere(result.vertex.nrm, tri.geo_n, ray_dir);
 
   result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
-  result.vertex.nrm = surface_point_shared_orient_shading_normal(result.vertex.nrm, result.geo_normal);
 
   return result;
 }
@@ -459,6 +642,111 @@ bool try_load_local_emission_access(uint emitter_index, out EmitterAccess access
 bool try_load_distant_emission_access(uint emitter_index, float3 direction, out EmitterAccess access) {
   EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
   return emitter_access_try_load_distant(context, emitter_index, direction, access);
+}
+
+[noinline] bool try_load_emitter_instance(uint emitter_index, out GPUEmitterInstanceABIData emitter_instance) {
+  emitter_instance = (GPUEmitterInstanceABIData)0;
+  EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
+  uint emitter_instance_count = 0u;
+  uint emitter_profile_count = 0u;
+  if (emitter_access_try_load_scene_state(context, emitter_instance_count, emitter_profile_count) == false) {
+    return false;
+  }
+  (void)emitter_profile_count;
+  if (emitter_index >= emitter_instance_count) {
+    return false;
+  }
+
+  ByteAddressBuffer emitter_instance_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_instances)];
+  emitter_instance = gpu_abi_load_emitter_instance(emitter_instance_buffer, emitter_index);
+  return true;
+}
+
+[noinline] bool try_load_emitter_profile(uint emitter_profile_index, out GPUEmitterProfileABIData emitter_profile) {
+  emitter_profile = (GPUEmitterProfileABIData)0;
+  EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
+  uint emitter_instance_count = 0u;
+  uint emitter_profile_count = 0u;
+  if (emitter_access_try_load_scene_state(context, emitter_instance_count, emitter_profile_count) == false) {
+    return false;
+  }
+  (void)emitter_instance_count;
+  if (emitter_profile_index >= emitter_profile_count) {
+    return false;
+  }
+
+  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
+  emitter_profile = gpu_abi_load_emitter_profile(emitter_profile_buffer, emitter_profile_index);
+  return true;
+}
+
+bool try_load_distribution_entry(uint entry_index, out DistributionEntry entry) {
+  entry = (DistributionEntry)0;
+  if (constants.scene.emitters_distribution == kInvalidIndex) {
+    return false;
+  }
+
+  ByteAddressBuffer distribution_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitters_distribution)];
+  uint base_offset = entry_index * kDistributionEntryStride;
+  entry.value = asfloat(distribution_buffer.Load(base_offset + 0u));
+  entry.pdf = asfloat(distribution_buffer.Load(base_offset + 4u));
+  entry.cdf = asfloat(distribution_buffer.Load(base_offset + 8u));
+  entry.reference = distribution_buffer.Load(base_offset + 12u);
+  return true;
+}
+
+[noinline] uint emitter_distribution_entry_count() {
+  if (constants.scene.emitters_distribution == kInvalidIndex) {
+    return 0u;
+  }
+
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+  SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(scene_globals);
+  return scene_globals_data.active_emitter_count;
+}
+
+bool emitter_distribution_has_values() {
+  return emitter_distribution_entry_count() > 0u;
+}
+
+[noinline] uint sample_emitter_distribution(inout uint seed, out float pdf_sample) {
+  pdf_sample = 0.0f;
+  uint entry_count = emitter_distribution_entry_count();
+  if (entry_count == 0u) {
+    return kInvalidIndex;
+  }
+
+  float rnd = rnd01(seed);
+  DistributionSearchRange search = distribution_search_begin(entry_count);
+  while (distribution_search_active(search)) {
+    uint middle = distribution_search_middle(search);
+    DistributionEntry middle_entry = (DistributionEntry)0;
+    try_load_distribution_entry(middle, middle_entry);
+    distribution_search_update(search, middle, middle_entry.cdf, rnd);
+  }
+
+  DistributionEntry selected_entry = (DistributionEntry)0;
+  if (try_load_distribution_entry(search.begin, selected_entry) == false) {
+    return kInvalidIndex;
+  }
+
+  pdf_sample = selected_entry.pdf;
+  return selected_entry.reference;
+}
+
+[noinline] float emitter_discrete_pdf(uint emitter_index) {
+  uint entry_count = emitter_distribution_entry_count();
+  for (uint entry_index = 0u; entry_index < entry_count; ++entry_index) {
+    DistributionEntry entry = (DistributionEntry)0;
+    if (try_load_distribution_entry(entry_index, entry) == false) {
+      return 0.0f;
+    }
+    if (entry.reference == emitter_index) {
+      return entry.pdf;
+    }
+  }
+
+  return 0.0f;
 }
 
 float3 evaluate_emission_integrated_source(uint emission_spectrum_index, uint emission_image_index, float2 uv) {
@@ -516,53 +804,7 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   return evaluate_emission_spectral_source(access.emission_spectrum_index, access.emission_image_index, uv, spect);
 }
 
-bool try_select_environment_emitter_random(inout uint seed, out uint emitter_index, out uint emitter_count) {
-  emitter_index = kInvalidIndex;
-  emitter_count = 0u;
-
-  EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
-  uint emitter_instance_count = 0u;
-  if (emitter_access_try_load_environment_state(context, emitter_instance_count, emitter_count) == false) {
-    return false;
-  }
-  (void)emitter_instance_count;
-
-  uint selected = uint(rnd01(seed) * float(emitter_count));
-  if (selected >= emitter_count) {
-    selected = emitter_count - 1u;
-  }
-
-  if (emitter_access_try_load_environment_emitter(context, selected, emitter_index) == false) {
-    return false;
-  }
-
-  return true;
-}
-
-float3 sample_distant_emission_integrated_random(float3 direction, inout uint seed) {
-  uint emitter_index = kInvalidIndex;
-  uint emitter_count = 0u;
-  if (try_select_environment_emitter_random(seed, emitter_index, emitter_count) == false) {
-    return float3(0.0f, 0.0f, 0.0f);
-  }
-
-  float3 sample_value = evaluate_distant_emission_integrated(emitter_index, direction);
-  return sample_value * float(emitter_count);
-}
-
-SpectralResponse sample_distant_emission_spectral_random(float3 direction, SpectralQuery spect, inout uint seed) {
-  SpectralResponse zero_value = spectral_response_zero(spect);
-  uint emitter_index = kInvalidIndex;
-  uint emitter_count = 0u;
-  if (try_select_environment_emitter_random(seed, emitter_index, emitter_count) == false) {
-    return zero_value;
-  }
-
-  SpectralResponse sample_value = evaluate_distant_emission_spectral(emitter_index, direction, spect);
-  return spectral_response_mul(sample_value, float(emitter_count));
-}
-
-float3 evaluate_distant_emission_integrated_all(float3 direction) {
+[noinline] float3 evaluate_distant_emission_integrated_all(float3 direction) {
   EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
   uint emitter_instance_count = 0u;
   uint emitter_count = 0u;
@@ -583,7 +825,216 @@ float3 evaluate_distant_emission_integrated_all(float3 direction) {
   return result;
 }
 
-SpectralResponse evaluate_distant_emission_spectral_all(float3 direction, SpectralQuery spect) {
+[noinline] bool trace_surface_path(
+  RaytracingAccelerationStructure as, RayDesc ray, SpectralQuery spect, inout uint medium_index, inout uint seed, out TraceSurfaceResult result) {
+  result.hit = 0u;
+  result.medium_index = medium_index;
+  result.triangle_index = kInvalidIndex;
+  result.emitter_index = kInvalidIndex;
+  result.hit_t = ray.TMax;
+  result.tri = (TriangleData)0;
+  result.surface_point = (SurfacePoint)0;
+  result.material = (Material)0;
+  result.transmittance = spectral_response_make(spect, 1.0f);
+
+  const bool has_geometry_buffers = (constants.scene.triangles != kInvalidIndex) && (constants.scene.vertex_positions != kInvalidIndex) &&
+                                    (constants.scene.vertex_normals != kInvalidIndex) && (constants.scene.scene_globals != kInvalidIndex);
+  if (has_geometry_buffers == false) {
+    return false;
+  }
+
+  ByteAddressBuffer triangle_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)];
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+  SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(scene_globals);
+  const bool has_material_buffer = constants.scene.materials != kInvalidIndex;
+  const bool has_texcoords = constants.scene.vertex_texcoords != kInvalidIndex;
+  uint vertex_count = scene_globals_data.vertex_count;
+  uint triangle_count = scene_globals_data.triangle_count;
+
+  RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q;
+  q.TraceRayInline(as, RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, ray);
+
+  float medium_segment_start_t = ray.TMin;
+  uint ray_medium_index = medium_index;
+  while (q.Proceed()) {
+    if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) {
+      continue;
+    }
+
+    uint candidate_triangle_index = q.CandidatePrimitiveIndex();
+    if (candidate_triangle_index >= triangle_count) {
+      continue;
+    }
+
+    float candidate_t = q.CandidateTriangleRayT();
+    if (candidate_t > medium_segment_start_t) {
+      float segment_distance = candidate_t - medium_segment_start_t;
+      float3 segment_origin = ray.Origin + ray.Direction * medium_segment_start_t;
+      SpectralResponse segment_transmittance = medium_segment_transmittance_spectral(ray_medium_index, segment_origin, ray.Direction, segment_distance, spect, seed);
+      result.transmittance = spectral_response_mul(result.transmittance, segment_transmittance);
+      medium_segment_start_t = candidate_t;
+    }
+
+    TriangleData tri = load_triangle(triangle_buffer, candidate_triangle_index);
+    bool valid_indices = (tri.i.x < vertex_count) && (tri.i.y < vertex_count) && (tri.i.z < vertex_count);
+    if (valid_indices == false) {
+      continue;
+    }
+
+    float2 candidate_bary = q.CandidateTriangleBarycentrics();
+    float2 candidate_uv = float2(0.0f, 0.0f);
+    if (has_texcoords) {
+      ByteAddressBuffer texcoord_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)];
+      candidate_uv = interpolate_uv(texcoord_buffer, tri, candidate_bary);
+    }
+
+    MaterialAccess material_access = ETX_ZERO(MaterialAccess);
+    if (has_material_buffer) {
+      MaterialAccessGPUContext material_context = {constants.scene.materials};
+      material_access_try_load(material_context, tri.material_index, material_access);
+    }
+
+    bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
+    bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
+    HitPolicyDecision hit_policy = hit_policy_evaluate(
+      HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface, material_access.int_medium_index, material_access.ext_medium_index);
+    if (hit_policy.action == HitPolicyAction::Ignore) {
+      continue;
+    }
+
+    if (hit_policy.action == HitPolicyAction::TransitionMedium) {
+      ray_medium_index = hit_policy.medium_index;
+      continue;
+    }
+
+    if (hit_policy.action == HitPolicyAction::CommitSurface) {
+      q.CommitNonOpaqueTriangleHit();
+    }
+  }
+
+  float medium_segment_end_t = (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? q.CommittedRayT() : ray.TMax;
+  if (medium_segment_end_t > medium_segment_start_t) {
+    float segment_distance = medium_segment_end_t - medium_segment_start_t;
+    float3 segment_origin = ray.Origin + ray.Direction * medium_segment_start_t;
+    SpectralResponse segment_transmittance = medium_segment_transmittance_spectral(ray_medium_index, segment_origin, ray.Direction, segment_distance, spect, seed);
+    result.transmittance = spectral_response_mul(result.transmittance, segment_transmittance);
+  }
+
+  medium_index = ray_medium_index;
+  result.medium_index = ray_medium_index;
+
+  if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+    return false;
+  }
+
+  const bool has_surface_frame_buffers = (constants.scene.vertex_tangents != kInvalidIndex) && (constants.scene.vertex_bitangents != kInvalidIndex);
+  uint tangent_buffer_index = constants.scene.vertex_positions;
+  uint bitangent_buffer_index = constants.scene.vertex_positions;
+  uint texcoord_buffer_index = constants.scene.vertex_positions;
+  if (has_surface_frame_buffers) {
+    tangent_buffer_index = constants.scene.vertex_tangents;
+    bitangent_buffer_index = constants.scene.vertex_bitangents;
+  }
+  if (has_texcoords) {
+    texcoord_buffer_index = constants.scene.vertex_texcoords;
+  }
+
+  ByteAddressBuffer position_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_positions)];
+  ByteAddressBuffer normal_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_normals)];
+  ByteAddressBuffer tangent_buffer = bindless_buffers[NonUniformResourceIndex(tangent_buffer_index)];
+  ByteAddressBuffer bitangent_buffer = bindless_buffers[NonUniformResourceIndex(bitangent_buffer_index)];
+  ByteAddressBuffer texcoord_buffer = bindless_buffers[NonUniformResourceIndex(texcoord_buffer_index)];
+
+  result.triangle_index = q.CommittedPrimitiveIndex();
+  result.hit_t = q.CommittedRayT();
+  result.tri = load_triangle(triangle_buffer, result.triangle_index);
+  float2 bary = q.CommittedTriangleBarycentrics();
+  result.surface_point =
+    load_surface_point(position_buffer, normal_buffer, tangent_buffer, bitangent_buffer, texcoord_buffer, has_surface_frame_buffers, has_texcoords, result.tri, bary, ray.Direction);
+  result.emitter_index = result.tri.emitter_index;
+  try_load_material_full(result.tri.material_index, result.material);
+  result.hit = 1u;
+  return true;
+}
+
+#if 0
+
+[noinline] bool trace_transmittance_to_point(
+  RaytracingAccelerationStructure as, float3 origin, float3 target, SpectralQuery spect, uint medium_index, inout uint seed, out SpectralResponse transmittance) {
+  transmittance = spectral_response_make(spect, 1.0f);
+  float3 delta = target - origin;
+  float distance = length(delta);
+  if (distance <= kRayEpsilon) {
+    return true;
+  }
+
+  RayDesc ray = (RayDesc)0;
+  ray.Origin = origin;
+  ray.Direction = delta / distance;
+  ray.TMin = kRayEpsilon;
+  ray.TMax = max(ray.TMin, distance - kRayEpsilon);
+
+  TraceSurfaceResult trace_result = (TraceSurfaceResult)0;
+  uint transmittance_medium = medium_index;
+  bool found_surface = trace_surface_path(as, ray, spect, transmittance_medium, seed, trace_result);
+  transmittance = trace_result.transmittance;
+  return found_surface == false;
+}
+
+[noinline] float3 surface_shading_position(TraceSurfaceResult surface_hit, float3 outgoing_direction) {
+  ByteAddressBuffer position_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_positions)];
+  ByteAddressBuffer normal_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_normals)];
+  float3 p0 = load_float3(position_buffer, surface_hit.tri.i.x);
+  float3 p1 = load_float3(position_buffer, surface_hit.tri.i.y);
+  float3 p2 = load_float3(position_buffer, surface_hit.tri.i.z);
+  float3 n0 = load_float3(normal_buffer, surface_hit.tri.i.x);
+  float3 n1 = load_float3(normal_buffer, surface_hit.tri.i.y);
+  float3 n2 = load_float3(normal_buffer, surface_hit.tri.i.z);
+  return scene_math_shared_shading_pos(
+    p0, p1, p2, n0, n1, n2, surface_hit.tri.geo_n, surface_hit.surface_point.barycentrics, outgoing_direction);
+}
+
+[noinline] BSDFEval gpu_evaluate_material_bsdf(
+  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  return bsdf_evaluate(context, data, outgoing_direction, material, sampler);
+}
+
+[noinline] SpectralResponse evaluate_direct_light(
+  RaytracingAccelerationStructure as, TraceSurfaceResult surface_hit, float3 incoming_direction, uint medium_index, SpectralQuery spect, GPUEmitterSample emitter_sample,
+  inout uint seed) {
+  SpectralResponse zero_value = spectral_response_zero(spect);
+  if (emitter_sample.pdf_dir <= 0.0f) {
+    return zero_value;
+  }
+
+  BSDFResourceContext bsdf_context = make_scene_bsdf_resource_gpu_context();
+  BSDFData bsdf_data = make_surface_bsdf_data(surface_hit.surface_point.vertex, spect, medium_index, incoming_direction);
+  Sampler bsdf_sampler = make_bsdf_sampler(seed);
+  BSDFEval bsdf_eval = gpu_evaluate_material_bsdf(bsdf_context, bsdf_data, emitter_sample.direction, surface_hit.material, bsdf_sampler);
+  seed = bsdf_sampler.seed;
+  if (bsdf_eval_valid(bsdf_eval) == false) {
+    return zero_value;
+  }
+
+  SpectralResponse transmittance = spectral_response_make(spect, 1.0f);
+  float3 shadow_origin = surface_shading_position(surface_hit, emitter_sample.direction);
+  if (trace_transmittance_to_point(as, shadow_origin, emitter_sample.origin, spect, medium_index, seed, transmittance) == false) {
+    return zero_value;
+  }
+
+  bool no_weight = (scene_multiple_importance_sampling_enabled() == false) || (emitter_sample.is_delta != 0u);
+  float weight = no_weight ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
+  float scale = weight / max(kEpsilon, emitter_sample.pdf_dir * emitter_sample.pdf_sample);
+  return spectral_response_mul(spectral_response_mul(spectral_response_mul(bsdf_eval.bsdf, emitter_sample.value), transmittance), scale);
+}
+
+#endif
+
+[noinline] SpectralResponse gpu_evaluate_local_emission_spectral(uint emitter_index, float2 uv, SpectralQuery spect) {
+  return evaluate_local_emission_spectral(emitter_index, uv, spect);
+}
+
+[noinline] SpectralResponse gpu_evaluate_distant_emission_spectral_all(float3 direction, SpectralQuery spect) {
   SpectralResponse result = spectral_response_zero(spect);
   EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
   uint emitter_instance_count = 0u;
@@ -601,5 +1052,64 @@ SpectralResponse evaluate_distant_emission_spectral_all(float3 direction, Spectr
   }
 
   return result;
+}
+
+bool gpu_bsdf_sample_supported_class(uint material_class) {
+  switch (material_class) {
+    case MaterialClass::Diffuse:
+    case MaterialClass::Plastic:
+    case MaterialClass::Conductor:
+    case MaterialClass::Dielectric:
+    case MaterialClass::Thinfilm:
+      return true;
+
+    default: {
+      return false;
+    }
+  }
+}
+
+bool gpu_valid_direction(float3 direction) {
+  float direction_length_sq = dot(direction, direction);
+  bool finite_components = all(isfinite(direction));
+  return finite_components && (direction_length_sq > 0.25f) && (direction_length_sq < 4.0f);
+}
+
+bool gpu_valid_spectral_response(SpectralResponse value) {
+  float3 rgb = spectral_response_to_rgb(value);
+  return all(isfinite(rgb));
+}
+
+[noinline] BSDFSample gpu_diffuse_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  return bsdf_diffuse_sample(context, data, material, sampler);
+}
+
+[noinline] BSDFSample gpu_plastic_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  return bsdf_plastic_sample(context, data, material, sampler);
+}
+
+[noinline] BSDFSample gpu_conductor_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  return bsdf_conductor_sample(context, data, material, sampler);
+}
+
+[noinline] BSDFSample gpu_dielectric_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  return bsdf_dielectric_sample(context, data, material, sampler);
+}
+
+[noinline] BSDFSample gpu_sample_material_bsdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  if (material.cls == MaterialClass::Diffuse) {
+    return gpu_diffuse_bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::Plastic) {
+    return gpu_plastic_bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::Conductor) {
+    return gpu_conductor_bsdf_sample(context, data, material, sampler);
+  }
+  if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Thinfilm)) {
+    return gpu_dielectric_bsdf_sample(context, data, material, sampler);
+  }
+
+  return bsdf_sample_zero(data.spectrum_sample);
 }
 

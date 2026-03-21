@@ -89,6 +89,10 @@ Order is a subject to change, but here are main things to do:
 This part of the description would be updated during the development of the project, at the moment there is nothing to build here.
 All updates will be located here: [BUILDING.md](docs/BUILDING.md)
 
+## Offline Comparison
+
+Offline CPU/GPU comparison workflow, command-line options, outputs, and report format are documented in [docs/OFFLINE_COMPARISON.md](docs/OFFLINE_COMPARISON.md).
+
 ## Sponsors
 
 This project is GitHub-sponsored by:

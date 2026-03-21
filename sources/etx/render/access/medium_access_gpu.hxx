@@ -68,6 +68,8 @@ void medium_access_gpu_load(MediumAccessGPUContext context, ByteAddressBuffer me
   access.medium_class = load_u16(medium_blob, medium_desc_offset + kMediumClassOffset);
   access.absorption_spectrum_index = medium_blob.Load(medium_desc_offset + kMediumAbsorptionIndexOffset);
   access.scattering_spectrum_index = medium_blob.Load(medium_desc_offset + kMediumScatteringIndexOffset);
+  access.phase_function_g = asfloat(medium_blob.Load(medium_desc_offset + kMediumPhaseFunctionGOffset));
+  access.enable_explicit_connections = medium_blob.Load(medium_desc_offset + kMediumEnableExplicitConnectionsOffset);
 }
 
 bool medium_access_try_load(MediumAccessGPUContext context, uint medium_index, out MediumAccess access) {

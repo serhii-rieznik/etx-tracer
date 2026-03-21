@@ -2,6 +2,7 @@
 
 #include <access/emitter_access_shared.hxx>
 #include <access/image_access_gpu.hxx>
+#include <access/material_access_gpu.hxx>
 #include <interop/gpu_abi_access_shared.hxx>
 #include <interop/scene_gpu_access_shared.hxx>
 
@@ -64,6 +65,7 @@ bool emitter_access_try_load_profile(EmitterAccessGPUContext context, uint emitt
   access.emission_spectrum_index = profile_data.emission_spectrum_index;
   access.emission_image_index = profile_data.emission_image_index;
   access.emitter_profile_class = profile_data.emitter_profile_class;
+  access.medium_index = profile_data.medium_index;
   access.emitter_profile_meta = profile_data.emitter_profile_meta;
   access.emitter_direction = profile_data.emitter_direction;
   access.emitter_angular_size_cosine = profile_data.emitter_angular_size_cosine;
@@ -168,4 +170,47 @@ bool emitter_access_try_load_environment_emitter(EmitterAccessGPUContext context
   }
 
   return true;
+}
+
+uint emitter_access_external_medium_index(EmitterAccessGPUContext context, uint emitter_index) {
+  uint emitter_instance_count = 0u;
+  uint emitter_profile_count = 0u;
+  if (emitter_access_try_load_scene_state(context, emitter_instance_count, emitter_profile_count) == false) {
+    return kInvalidIndex;
+  }
+  if (emitter_index >= emitter_instance_count) {
+    return kInvalidIndex;
+  }
+
+  ByteAddressBuffer emitter_instance_buffer = bindless_buffers[NonUniformResourceIndex(context.emitter_instances_descriptor_index)];
+  GPUEmitterInstanceABIData emitter_instance = gpu_abi_load_emitter_instance(emitter_instance_buffer, emitter_index);
+  if (emitter_instance.emitter_class == EmitterClass::Area) {
+    if (constants.scene.triangles == kInvalidIndex) {
+      return kInvalidIndex;
+    }
+
+    SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(context.scene_globals_descriptor_index)]);
+    if (emitter_instance.triangle_index >= globals_data.triangle_count) {
+      return kInvalidIndex;
+    }
+
+    ByteAddressBuffer triangle_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)];
+    uint triangle_offset = emitter_instance.triangle_index * kTriangleStride;
+    uint material_index = gpu_abi_load_u32(triangle_buffer, triangle_offset + 12u);
+    MaterialAccessGPUContext material_context = {constants.scene.materials};
+    MaterialAccess material_access = ETX_ZERO(MaterialAccess);
+    if (material_access_try_load(material_context, material_index, material_access) == false) {
+      return kInvalidIndex;
+    }
+
+    return material_access.ext_medium_index;
+  }
+
+  if (emitter_instance.emitter_profile_index >= emitter_profile_count) {
+    return kInvalidIndex;
+  }
+
+  ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(context.emitter_profiles_descriptor_index)];
+  GPUEmitterProfileABIData profile_data = gpu_abi_load_emitter_profile(emitter_profile_buffer, emitter_instance.emitter_profile_index);
+  return profile_data.medium_index;
 }

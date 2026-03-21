@@ -2,7 +2,6 @@
 #include <etx/render/host/film.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/shared/path_tracing_shared.hxx>
-#include <atomic>
 
 namespace etx {
 
@@ -300,8 +299,10 @@ struct CPUBidirectionalImpl : public Task {
       if (film.active_pixel(i, pixel) == false)
         continue;
 
-      auto camera_smp = Sampler(i, status.current_iteration);
-      auto light_smp = Sampler(i, status.current_iteration);
+      const uint2 film_size = film.base_dimensions();
+      const uint32_t pixel_index = pixel.x + pixel.y * film_size.x;
+      auto camera_smp = Sampler(scene.sampler_seed(pixel_index, status.current_iteration));
+      auto light_smp = Sampler(scene.sampler_seed(pixel_index, status.current_iteration));
 
       SpectralQuery spect = SpectralQuery::sample();
       if (mode != Mode::PathTracing) {
@@ -465,9 +466,10 @@ struct CPUBidirectionalImpl : public Task {
     float2 rnd_em_sample = smp.next_2d();
     float2 rnd_support = smp.next_2d();
     if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0u);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2u);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4u);
+      const uint32_t sample_index = payload.iteration ^ rt.scene().options.random_seed;
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 0u);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 2u);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 4u);
     }
 
     float3 w_o = sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
@@ -508,9 +510,10 @@ struct CPUBidirectionalImpl : public Task {
     float2 rnd_em_sample = smp.next_2d();
     float2 rnd_support = smp.next_2d();
     if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 0u);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 2u);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, payload.iteration, 4u);
+      const uint32_t sample_index = payload.iteration ^ rt.scene().options.random_seed;
+      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 0u);
+      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 2u);
+      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 4u);
     }
 
     if (scene.materials[a_intersection.material_index].cls == MaterialClass::Boundary) {
@@ -1153,7 +1156,8 @@ struct CPUBidirectionalImpl : public Task {
     return 0.0f;
   }
 
-  SpectralResponse direct_hit_area_emitter(const PathVertex& z_curr, const PathVertex& z_prev, PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
+  SpectralResponse direct_hit_area_emitter(
+    const PathVertex& z_curr, const PathVertex& z_prev, PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
     if ((force == false) && (enable_direct_hit == false))
       return {spect, 0.0f};
 
@@ -1170,11 +1174,12 @@ struct CPUBidirectionalImpl : public Task {
 
     const auto& emitter_instance = scene.emitter_instances[z_curr.intersection.emitter_index];
     ETX_ASSERT(emitter_instance.is_local());
+    const bool directly_visible = path_data.camera_path_length() <= 1u;
     EmitterRadianceQuery q = {
       .source_position = z_prev.intersection.pos,
       .target_position = z_curr.intersection.pos,
       .uv = z_curr.intersection.tex,
-      .directly_visible = path_data.camera_path_length() <= 1,
+      .directly_visible = directly_visible,
     };
 
     float pdf_dir = 0.0f;
@@ -1269,7 +1274,8 @@ struct CPUBidirectionalImpl : public Task {
     return accumulated_emitter_value * z_curr.throughput * mis_weight;
   }
 
-  SpectralResponse connect_camera_to_light(const PathVertex& z_curr, const PathVertex& z_prev, Sampler& smp, PathData& path_data, SpectralQuery spect) const {
+  SpectralResponse connect_camera_to_light(
+    const PathVertex& z_curr, const PathVertex& z_prev, Sampler& smp, PathData& path_data, SpectralQuery spect) const {
     const auto& scene = rt.scene();
 
     uint32_t connection_len = path_data.camera_path_length() + 1u;
@@ -1311,9 +1317,14 @@ struct CPUBidirectionalImpl : public Task {
     SpectralResponse emitter_throughput = emitter_sample.value / sampling_pdf;
     ETX_VALIDATE(emitter_throughput);
 
-    SpectralResponse tr = local_transmittance(spect, smp, z_curr, sampled_vertex.intersection.pos);
-    float weight = mis_weight_camera_to_light(z_curr, z_prev, path_data, spect, sampled_vertex, emitter_sample, sampling_pdf, bsdf_eval.pdf, smp);
+    float3 shadow_origin = z_curr.intersection.pos;
+    if (z_curr.is_surface_interaction()) {
+      const auto& tri = scene.triangles[z_curr.intersection.triangle_index];
+      shadow_origin = shading_pos(scene, tri, z_curr.intersection.barycentric, normalize(sampled_vertex.intersection.pos - z_curr.intersection.pos));
+    }
 
+    SpectralResponse tr = rt.trace_transmittance(spect, scene, shadow_origin, sampled_vertex.intersection.pos, z_curr.medium, smp);
+    float weight = mis_weight_camera_to_light(z_curr, z_prev, path_data, spect, sampled_vertex, emitter_sample, sampling_pdf, bsdf_eval.pdf, smp);
     return z_curr.throughput * bsdf_eval.bsdf * emitter_throughput * tr * weight;
   }
 

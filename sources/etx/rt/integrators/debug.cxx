@@ -162,11 +162,13 @@ struct CPUDebugIntegratorImpl : public Task {
     const auto& film = rt.film();
 
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-      auto smp = Sampler(i, status.current_iteration);
       uint2 pixel = {};
       if (film.active_pixel(i, pixel)) {
+        const uint2 film_size = film.base_dimensions();
+        const uint32_t pixel_index = pixel.x + pixel.y * film_size.x;
+        auto smp = Sampler(rt.scene().sampler_seed(pixel_index, status.current_iteration));
         float2 uv = film.sample(status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
-        float3 xyz = preview_pixel(smp, uv, pixel, i);
+        float3 xyz = preview_pixel(smp, uv, pixel, pixel_index);
         rt.film().submit(xyz, {}, {}, pixel);
       }
     }

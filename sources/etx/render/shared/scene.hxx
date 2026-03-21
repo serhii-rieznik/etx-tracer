@@ -52,6 +52,7 @@ struct ETX_ALIGNED Scene {
     uint32_t max_path_length = 65535u;
     uint32_t samples = 256u;
     uint32_t random_path_termination = 6u;
+    uint32_t random_seed = 0u;
     float noise_threshold = 0.0f;
     float radiance_clamp = 0.0f;
     uint32_t strategy_flags = 1u << 0u | 1u << 1u | 1u << 2u | 1u << 3u | 1u << 4u;  // DirectHit | ConnectToLight | ConnectToCamera | ConnectVertices | MergeVertices
@@ -130,6 +131,10 @@ struct ETX_ALIGNED Scene {
   }
   ETX_SHARED_INLINE bool strategy_enabled(uint32_t flag) const {
     return (options.strategy_flags & flag) != 0u;
+  }
+
+  ETX_SHARED_INLINE uint32_t sampler_seed(uint32_t value_0, uint32_t value_1) const {
+    return sampler_random_seed(value_0, value_1 ^ options.random_seed);
   }
 };
 

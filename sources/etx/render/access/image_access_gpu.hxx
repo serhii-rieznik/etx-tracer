@@ -10,6 +10,7 @@ struct ImageAccessGPUDesc {
   float2 fsize;
   float2 uv_offset;
   float2 uv_scale;
+  float normalization;
   uint options;
   uint pixel_data_offset;
   uint x_distribution_entries_offset;
@@ -17,6 +18,7 @@ struct ImageAccessGPUDesc {
   uint x_entries_stride;
   uint x_distribution_count;
   uint y_entries_count;
+  float y_distribution_total_weight;
   uint pixel_data_stride;
   uint pixel_data_chunk_index;
   uint x_distribution_chunk_index;
@@ -66,6 +68,7 @@ void image_access_gpu_blob_load_desc(ByteAddressBuffer buffer, uint image_desc_o
   desc.fsize = image_access_gpu_blob_load_f32x2(buffer, image_desc_offset + kImageDescFSizeOffset);
   desc.uv_offset = image_access_gpu_blob_load_f32x2(buffer, image_desc_offset + kImageDescOffsetOffset);
   desc.uv_scale = image_access_gpu_blob_load_f32x2(buffer, image_desc_offset + kImageDescScaleOffset);
+  desc.normalization = asfloat(image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescNormalizationOffset));
   desc.options = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescOptionsOffset);
   desc.pixel_data_offset = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescPixelDataOffset);
   desc.x_distribution_entries_offset = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescXDistributionEntriesOffset);
@@ -73,6 +76,7 @@ void image_access_gpu_blob_load_desc(ByteAddressBuffer buffer, uint image_desc_o
   desc.x_entries_stride = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescXEntriesStrideOffset);
   desc.x_distribution_count = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescXDistributionCountOffset);
   desc.y_entries_count = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescYEntriesCountOffset);
+  desc.y_distribution_total_weight = asfloat(image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescYDistributionTotalWeightOffset));
   desc.pixel_data_stride = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescPixelDataStrideOffset);
   desc.pixel_data_chunk_index = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescPixelDataChunkIndexOffset);
   desc.x_distribution_chunk_index = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescXDistributionChunkIndexOffset);

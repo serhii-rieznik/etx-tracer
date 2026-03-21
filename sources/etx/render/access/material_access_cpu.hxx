@@ -39,3 +39,14 @@ ETX_SHARED_INLINE bool material_access_try_load(
   access = material_access_cpu_make(context.scene->materials[material_index]);
   return true;
 }
+
+ETX_SHARED_INLINE bool material_access_try_load_full(
+  ETX_IN(MaterialAccessCPUContext, context), uint32_t material_index, ETX_OUT(Material, material)) {
+  material = {};
+  if (material_access_can_load(context, material_index) == false) {
+    return false;
+  }
+
+  material = context.scene->materials[material_index];
+  return true;
+}

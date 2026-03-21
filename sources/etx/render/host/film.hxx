@@ -33,6 +33,8 @@ struct Film {
   ~Film();
 
   void allocate(const uint2& dim);
+  void reset_render_window();
+  bool set_render_window(const uint2& origin, const uint2& size);
 
   float2 sample(const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const;
 

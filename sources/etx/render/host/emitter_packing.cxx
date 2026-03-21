@@ -59,6 +59,9 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
 
   PackedEmitterData result = {};
   result.triangles = scene_data.triangles;
+  const BoundingBox bbox = scene_data.compute_bounding_volumes();
+  const float3 bounding_sphere_center = 0.5f * (bbox.p_min + bbox.p_max);
+  const float bounding_sphere_radius = length(bbox.p_max - bounding_sphere_center);
 
   {
     ETX_PROFILER_NAMED_SCOPE("pack_emitters_reset_triangle_emitter_indices");
@@ -84,7 +87,9 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
       if (profile.emission.spectrum_index != kInvalidIndex) {
         emitter.spectrum_weight = safe_spectrum_luminance(scene_data, profile.emission.spectrum_index);
       }
-      emitter.additional_weight = (profile.cls == EmitterProfile::Class::Directional) ? kPi : (4.0f * kPi);
+      emitter.additional_weight =
+        ((profile.cls == EmitterProfile::Class::Directional) || (profile.cls == EmitterProfile::Class::Environment)) ? (kPi * bounding_sphere_radius * bounding_sphere_radius) :
+                                                                                                                          (4.0f * kPi);
       result.emitter_instances.push_back(emitter);
     }
   }
@@ -166,6 +171,8 @@ std::vector<Distribution::Entry> build_packed_emitter_distribution(const PackedE
   }
 
   Distribution::build(entries.data(), active_count);
+  entries[active_count].reference = kInvalidIndex;
+
   return entries;
 }
 

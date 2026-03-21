@@ -309,7 +309,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, cons
 
 ETX_SHARED_INLINE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
   VCMPathState state = {};
-  state.sampler.init(index, it.iteration);
+  state.sampler.init(index, it.iteration ^ scene.options.random_seed);
   state.spect = scene.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.global_index = index;
 
@@ -354,7 +354,7 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
   state.global_index = index;
   state.pixel_coord = coord;  // Store pixel coordinate for blue noise
 
-  state.sampler.init(state.global_index, it.iteration);
+  state.sampler.init(state.global_index, it.iteration ^ scene.options.random_seed);
   auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
 
@@ -956,9 +956,10 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
     float2 rnd_support = state.sampler.next_2d();
 
     if (options.blue_noise && (state.total_path_depth == 1u) && (iteration.iteration < 256u)) {
-      rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 0u);
-      rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 2u);
-      rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 4u);
+      const uint32_t sample_index = iteration.iteration ^ scene.options.random_seed;
+      rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, sample_index, 0u);
+      rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, sample_index, 2u);
+      rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, sample_index, 4u);
     }
     // Fold pending boundary + medium segment before connections
     float seg = state.path_distance + medium_sample.sampled_medium_t;
@@ -1032,9 +1033,10 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   float2 rnd_support = state.sampler.next_2d();
 
   if (options.blue_noise && (state.total_path_depth == 1u) && (iteration.iteration < 256u)) {
-    rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 0u);
-    rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 2u);
-    rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, iteration.iteration, 4u);
+    const uint32_t sample_index = iteration.iteration ^ scene.options.random_seed;
+    rnd_bsdf = sample_blue_noise(state.pixel_coord, scene.options.samples, sample_index, 0u);
+    rnd_connection = sample_blue_noise(state.pixel_coord, scene.options.samples, sample_index, 2u);
+    rnd_support = sample_blue_noise(state.pixel_coord, scene.options.samples, sample_index, 4u);
   }
 
   // Use fixed sample allocation for BSDF sampling

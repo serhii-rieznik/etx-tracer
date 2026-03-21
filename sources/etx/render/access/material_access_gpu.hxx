@@ -28,3 +28,14 @@ bool material_access_try_load(MaterialAccessGPUContext context, uint material_in
   access.opacity = material_data.opacity;
   return true;
 }
+
+bool material_access_try_load_full(MaterialAccessGPUContext context, uint material_index, out Material material) {
+  material = ETX_ZERO(Material);
+  if (material_access_can_load(context, material_index) == false) {
+    return false;
+  }
+
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(context.materials_descriptor_index)];
+  material = gpu_abi_load_material_full(material_buffer, material_index);
+  return true;
+}

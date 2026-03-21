@@ -64,6 +64,8 @@ struct SceneRepresentation {
 
   Camera& camera();
   const Camera& camera() const;
+  const IntegratorData& integrator_data() const;
+  void set_integrator_data(const IntegratorData&);
 
   bool valid() const;
 

@@ -5,6 +5,7 @@ struct ETX_ALIGNED EmitterAccess {
   uint32_t emitter_profile_index ETX_INIT(kInvalidIndex);
   uint32_t emitter_profile_class ETX_INIT(EmitterClass::Area);
   uint32_t emitter_profile_meta ETX_INIT(0u);
+  uint32_t medium_index ETX_INIT(kInvalidIndex);
   uint32_t emission_spectrum_index ETX_INIT(kInvalidIndex);
   uint32_t emission_image_index ETX_INIT(kInvalidIndex);
   float3 emitter_direction ETX_INIT(float3(0.0f, 0.0f, 1.0f));
@@ -16,7 +17,7 @@ ETX_SHARED_INLINE bool emitter_access_is_atmosphere(uint32_t emitter_profile_met
 }
 
 ETX_SHARED_INLINE bool emitter_access_accepts_direction(ETX_IN(float3, direction), ETX_IN(float3, emitter_direction), float angular_size_cosine) {
-  return dot(normalize(direction), normalize(emitter_direction)) >= angular_size_cosine;
+  return direction_matches(direction, emitter_direction, angular_size_cosine);
 }
 
 ETX_SHARED_INLINE bool emitter_access_is_local_class(uint32_t emitter_class) {

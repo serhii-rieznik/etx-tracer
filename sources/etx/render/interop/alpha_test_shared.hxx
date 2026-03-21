@@ -16,5 +16,11 @@ ETX_SHARED_INLINE bool alpha_test_shared_pass(ETX_INOUT(AlphaTestContext, contex
   }
 
   float alpha_test_value = alpha_diffuse * material_alpha;
+  if (alpha_test_value <= 0.0f) {
+    return true;
+  }
+  if (alpha_test_value >= 1.0f) {
+    return false;
+  }
   return alpha_test_value <= alpha_test_rnd(context);
 }

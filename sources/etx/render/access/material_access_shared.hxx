@@ -1,5 +1,7 @@
 #pragma once
 
+#include <interop/interop.hxx>
+
 struct ETX_ALIGNED MaterialAccess {
   uint32_t material_class ETX_INIT(kInvalidIndex);
   uint32_t int_medium_index ETX_INIT(kInvalidIndex);

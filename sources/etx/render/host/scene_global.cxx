@@ -13,23 +13,35 @@ std::mutex g_scene_global_lock = {};
 std::atomic<bool> g_scene_global_initialized = false;
 std::atomic<const void*> g_scene_global_owner = nullptr;
 std::atomic<const Scene*> g_scene_global_scene = nullptr;
+uint32_t g_scene_global_ref_count = 0u;
 
 }  // namespace
 
 void scene_global_init() {
   std::scoped_lock lock(g_scene_global_lock);
 
-  g_scene_global_owner.store(nullptr, std::memory_order_release);
-  g_scene_global_scene.store(nullptr, std::memory_order_release);
-  g_scene_global_initialized.store(true, std::memory_order_release);
+  if (g_scene_global_ref_count == 0u) {
+    g_scene_global_owner.store(nullptr, std::memory_order_release);
+    g_scene_global_scene.store(nullptr, std::memory_order_release);
+    g_scene_global_initialized.store(true, std::memory_order_release);
+  }
+
+  g_scene_global_ref_count += 1u;
 }
 
 void scene_global_deinit() {
   std::scoped_lock lock(g_scene_global_lock);
 
-  g_scene_global_scene.store(nullptr, std::memory_order_release);
-  g_scene_global_owner.store(nullptr, std::memory_order_release);
-  g_scene_global_initialized.store(false, std::memory_order_release);
+  if (g_scene_global_ref_count == 0u) {
+    return;
+  }
+
+  g_scene_global_ref_count -= 1u;
+  if (g_scene_global_ref_count == 0u) {
+    g_scene_global_scene.store(nullptr, std::memory_order_release);
+    g_scene_global_owner.store(nullptr, std::memory_order_release);
+    g_scene_global_initialized.store(false, std::memory_order_release);
+  }
 }
 
 void scene_global_publish(const void* owner, const Scene* scene) {

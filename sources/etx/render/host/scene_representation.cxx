@@ -116,6 +116,7 @@ struct SceneRepresentationImpl {
   bool scattering_gpu_ready = false;
 
   const IORDatabase& ior_database;
+  SceneRepresentation::IntegratorData integrator_data = {};
 
   bool load_illuminant_from_identifier(const char* identifier, SpectralDistribution& spd) const {
     if ((identifier == nullptr) || (identifier[0] == 0))
@@ -185,6 +186,7 @@ struct SceneRepresentationImpl {
 
   void cleanup() {
     data.clear(scheduler);
+    integrator_data = {};
 
     active_camera = {};
     active_camera.lens_image = kInvalidIndex;
@@ -770,6 +772,14 @@ const Camera& SceneRepresentation::camera() const {
   return _private->active_camera;
 }
 
+const SceneRepresentation::IntegratorData& SceneRepresentation::integrator_data() const {
+  return _private->integrator_data;
+}
+
+void SceneRepresentation::set_integrator_data(const IntegratorData& integrator_data) {
+  _private->integrator_data = integrator_data;
+}
+
 bool SceneRepresentation::valid() const {
   return true;
 }
@@ -892,6 +902,14 @@ inline void get_values(const std::vector<T>& a, T* ptr, uint64_t count) {
 }
 
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator) {
+  IntegratorData parsed_integrator_data = {};
+  IntegratorData* integrator_data = out_integrator;
+  if (integrator_data == nullptr) {
+    integrator_data = &parsed_integrator_data;
+  } else {
+    *integrator_data = {};
+  }
+
   char base_folder[2048] = {};
   get_file_folder(filename, base_folder, sizeof(base_folder));
 
@@ -950,9 +968,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
             return Integrator::Type::Debug;
           return Integrator::Type::PathTracing;
         };
-        if (out_integrator != nullptr) {
+        if (integrator_data != nullptr) {
           std::string t = itg.value("type", "");
-          out_integrator->selected = map_integrator(t);
+          integrator_data->selected = map_integrator(t);
         }
         if (itg.contains("min_bounces") && itg["min_bounces"].is_number_integer()) {
           _private->data.options.min_path_length = static_cast<uint32_t>(std::max<int64_t>(0, itg["min_bounces"].get<int64_t>()));
@@ -1095,25 +1113,25 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
           default_camera.direction = kWorldForward;
         }
       } else if ((key == "integrator") && obj.is_object()) {
-        if (out_integrator != nullptr) {
+        if (integrator_data != nullptr) {
           std::string selected_id_str;
           if (obj.contains("selected") && obj["selected"].is_string()) {
             selected_id_str = obj["selected"].get<std::string>();
-            out_integrator->selected = integrator_id_to_type(selected_id_str.c_str());
+            integrator_data->selected = integrator_id_to_type(selected_id_str.c_str());
           }
-          if (out_integrator->selected == Integrator::Type::Invalid) {
+          if (integrator_data->selected == Integrator::Type::Invalid) {
             if (obj.contains("type") && obj["type"].is_string()) {
-              out_integrator->selected = integrator_id_to_type(obj["type"].get<std::string>().c_str());
+              integrator_data->selected = integrator_id_to_type(obj["type"].get<std::string>().c_str());
             } else if (obj.contains("name") && obj["name"].is_string()) {
               std::string name = obj["name"].get<std::string>();
               if (name.find("Path Tracing") != std::string::npos) {
-                out_integrator->selected = Integrator::Type::PathTracing;
+                integrator_data->selected = Integrator::Type::PathTracing;
               } else if (name.find("Bidirectional") != std::string::npos) {
-                out_integrator->selected = Integrator::Type::Bidirectional;
+                integrator_data->selected = Integrator::Type::Bidirectional;
               } else if (name.find("VCM") != std::string::npos) {
-                out_integrator->selected = Integrator::Type::VCM;
+                integrator_data->selected = Integrator::Type::VCM;
               } else if (name.find("Debug") != std::string::npos) {
-                out_integrator->selected = Integrator::Type::Debug;
+                integrator_data->selected = Integrator::Type::Debug;
               }
             }
           }
@@ -1131,16 +1149,16 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
               if (options_array.is_array()) {
                 Options options;
                 if (options.deserialize_from_json(options_array)) {
-                  out_integrator->settings[type] = std::move(options);
+                  integrator_data->settings[type] = std::move(options);
                 }
               }
             }
           }
 
-          if (out_integrator->selected != Integrator::Type::Invalid && obj.contains("options") && obj["options"].is_array()) {
+          if ((integrator_data->selected != Integrator::Type::Invalid) && obj.contains("options") && obj["options"].is_array()) {
             Options options;
             if (options.deserialize_from_json(obj["options"])) {
-              out_integrator->settings[out_integrator->selected] = std::move(options);
+              integrator_data->settings[integrator_data->selected] = std::move(options);
             }
           }
         }
@@ -1150,6 +1168,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     }
     _private->data.json_file_name = filename;
   }
+
+  _private->integrator_data = *integrator_data;
 
   uint32_t load_result = SceneLoadFailed;
 

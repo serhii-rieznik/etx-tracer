@@ -50,8 +50,11 @@ struct CPUPathTracingImpl : public Task {
         continue;
       }
 
+      const uint2 film_size = film.base_dimensions();
+      const uint32_t pixel_index = pixel.x + pixel.y * film_size.x;
+
       pixels_processed++;
-      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, i, status.current_iteration, scene.spectral(), scene.blue_noise());
+      PTRayPayload payload = make_ray_payload(scene, camera, film, pixel, pixel_index, status.current_iteration, scene.spectral(), scene.blue_noise());
 
       while ((state->load() != Integrator::State::Stopped) && run_path_iteration(scene, rt, payload)) {
         ETX_VALIDATE(payload.accumulated);

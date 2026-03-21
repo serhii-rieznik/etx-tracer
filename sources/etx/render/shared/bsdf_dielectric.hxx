@@ -2,261 +2,50 @@ namespace etx {
 
 namespace ThinfilmBSDF {
 
-struct ThinfilmMaterial {
-  SpectralImage scattering;
-  SpectralImage reflectance;
-  Thinfilm thinfilm;
-  RefractiveIndex ext_ior;
-  RefractiveIndex int_ior;
-  uint32_t int_medium = kInvalidIndex;
-  uint32_t ext_medium = kInvalidIndex;
-};
-
 ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
-  auto frame = data.get_normal_frame();
-  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
-  SpectralResponse fr = fresnel::calculate(data.spectrum_sample, dot(data.w_i, data.nrm), ext_ior, int_ior, thinfilm);
-  float f = fr.monochromatic();
-
-  BSDFSample result = {};
-  if (smp.next() <= f) {
-    result.w_o = normalize(reflect(data.w_i, frame.nrm));
-    result.pdf = f;
-    result.weight = apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
-    result.weight *= fr / f;
-    result.properties = BSDFSample::Delta | BSDFSample::Reflection;
-    result.medium_index = data.current_medium;
-  } else {
-    result.w_o = data.w_i;
-    result.pdf = 1.0f - f;
-    result.weight = apply_image(data.spectrum_sample, mtl.scattering, data.tex);
-    result.weight *= (1.0f - fr) / (1.0f - f);
-    result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
-    result.medium_index = local_frame_entering_material(frame) ? mtl.int_medium : mtl.ext_medium;
-  }
-
-  return result;
+  return bsdf::detail::sample_interop(data, mtl, smp);
 }
 
 ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
-  return {data.spectrum_sample, 0.0f};
+  return bsdf::detail::evaluate_interop(data, w_o, mtl, smp);
 }
 
 ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
-  return 0.0f;
+  return bsdf::detail::pdf_interop(data, w_o, mtl, smp);
 }
 
-ETX_SHARED_INLINE bool is_delta(const Material& material, const float2& tex, Sampler& smp) {
-  return true;
+ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, Sampler& smp) {
+  return bsdf::detail::is_delta_interop(mtl, tex, smp);
 }
 
 ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
+  return bsdf::detail::albedo_interop(data, mtl, smp);
 }
 
 }  // namespace ThinfilmBSDF
 
 namespace DielectricBSDF {
 
-struct DielectricMaterial {
-  SpectralImage scattering;
-  SpectralImage reflectance;
-  SampledImage roughness;
-  Thinfilm thinfilm;
-  RefractiveIndex ext_ior;
-  RefractiveIndex int_ior;
-  uint32_t int_medium = kInvalidIndex;
-  uint32_t ext_medium = kInvalidIndex;
-};
-
 ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& mtl, Sampler& smp) {
-  LocalFrame local_frame = {data.tan, data.btn, data.nrm};
-  auto w_i = local_frame_to_local(local_frame, -data.w_i);
-
-  bool in_outside = LocalFrame::cos_theta(w_i) > 0;
-  float direction_scale = in_outside ? 1.0f : -1.0f;
-
-  auto ext_ior = in_outside ? evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample) : evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
-  auto int_ior = in_outside ? evaluate_refractive_index(mtl.int_ior, data.spectrum_sample) : evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
-
-  BSDFSample result = {};
-  result.weight = {data.spectrum_sample, 1.0f};
-
-  // init
-  float2 roughness = evaluate_roughness(mtl, data.tex);
-  external::RayInfo ray = {-direction_scale * w_i, roughness};
-  ray.updateHeight(1.0f);
-  bool ray_outside = true;
-
-  // random walk
-  uint32_t scattering_order = 0;
-  while (true) {
-    float sampled_height = sampleHeight(ray, smp.next());
-    if (sampled_height == kMaxFloat)
-      break;
-
-    ray.updateHeight(sampled_height);
-
-    // next direction
-    float2 rnd_slope = (scattering_order == 0) && smp.has_fixed() ? float2{smp.fixed_u, smp.fixed_v} : smp.next_2d();
-    float rnd_reflection = (scattering_order == 0) && smp.has_fixed() ? smp.fixed_w : smp.next();
-    auto sample = external::samplePhaseFunction_dielectric(data.spectrum_sample, rnd_slope, rnd_reflection, -ray.w, roughness,  //
-      (ray_outside ? ext_ior : int_ior), (ray_outside ? int_ior : ext_ior), thinfilm);
-
-    result.weight *= sample.weight;
-
-    if (sample.reflection) {
-      ray.updateDirection(sample.w_o, roughness);
-      ray.updateHeight(ray.h);
-    } else {
-      ray_outside = !ray_outside;
-      ray.updateDirection(-sample.w_o, roughness);
-      ray.updateHeight(-ray.h);
-    }
-
-    if (scattering_order++ > external::kScatteringOrderMax) {
-      return {data.spectrum_sample};
-    }
-  }
-
-  result.w_o = direction_scale * (ray_outside ? ray.w : -ray.w);
-
-  uint32_t delta_sample = is_delta(mtl, data.tex, smp) ? BSDFSample::Delta : 0u;
-
-  if (LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(result.w_o) > 0.0f) {
-    result.eta = 1.0f;
-    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.reflectance, data.tex);
-    result.properties = BSDFSample::Reflection | delta_sample;
-    result.medium_index = data.current_medium;
-  } else {
-    float eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
-    result.eta = eta;
-    result.weight = (result.weight / result.weight.monochromatic()) * apply_image(data.spectrum_sample, mtl.scattering, data.tex);
-    result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged | delta_sample;
-    result.medium_index = in_outside ? mtl.int_medium : mtl.ext_medium;
-  }
-
-  result.w_o = normalize(local_frame_from_local(local_frame, result.w_o));
-  result.pdf = pdf(data, result.w_o, mtl, smp);
-  ETX_VALIDATE(result.pdf);
-  return result;
+  return bsdf::detail::sample_interop(data, mtl, smp);
 }
 
-ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
-  LocalFrame local_frame = {data.tan, data.btn, data.nrm};
-
-  auto w_i = local_frame_to_local(local_frame, -data.w_i);
-  if (fabsf(LocalFrame::cos_theta(w_i)) <= kEpsilon)
-    return {data.spectrum_sample, 0.0f};
-
-  auto w_o = local_frame_to_local(local_frame, in_w_o);
-  if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
-    return {data.spectrum_sample, 0.0f};
-
-  auto roughness = evaluate_roughness(mtl, data.tex);
-  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
-
-  bool forward_path = data.path_source == PathSource::Camera;
-  float backward_scale = fabsf(1.0f / LocalFrame::cos_theta(w_i));
-
-  SpectralResponse value = {};
-  if (LocalFrame::cos_theta(w_i) > 0) {
-    if (LocalFrame::cos_theta(w_o) >= 0) {
-      value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, true, roughness, ext_ior, int_ior, thinfilm)
-                           : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, true, roughness, ext_ior, int_ior, thinfilm) * backward_scale;
-    } else {
-      value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, w_i, w_o, false, roughness, ext_ior, int_ior, thinfilm)
-                           : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, false, roughness, int_ior, ext_ior, thinfilm) * backward_scale;
-    }
-  } else if (LocalFrame::cos_theta(w_o) <= 0) {
-    value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, true, roughness, int_ior, ext_ior, thinfilm)
-                         : external::eval_dielectric(data.spectrum_sample, smp, -w_o, -w_i, true, roughness, int_ior, ext_ior, thinfilm) * backward_scale;
-  } else {
-    value = forward_path ? external::eval_dielectric(data.spectrum_sample, smp, -w_i, -w_o, false, roughness, int_ior, ext_ior, thinfilm)
-                         : external::eval_dielectric(data.spectrum_sample, smp, w_o, w_i, false, roughness, ext_ior, int_ior, thinfilm) * backward_scale;
-  }
-
-  if (value.is_zero())
-    return {data.spectrum_sample, 0.0f};
-
-  bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
-
-  BSDFEval eval;
-  eval.func = (2.0f * value) * apply_image(data.spectrum_sample, reflection ? mtl.reflectance : mtl.scattering, data.tex);
-  ETX_VALIDATE(eval.func);
-  eval.bsdf = eval.func * fabsf(LocalFrame::cos_theta(w_o));
-  eval.pdf = pdf(data, in_w_o, mtl, smp);
-  return eval;
+ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
+  return bsdf::detail::evaluate_interop(data, w_o, mtl, smp);
 }
 
-ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& in_w_o, const Material& mtl, Sampler& smp) {
-  LocalFrame local_frame = {data.tan, data.btn, data.nrm};
-
-  auto w_i = local_frame_to_local(local_frame, -data.w_i);
-  if (fabsf(LocalFrame::cos_theta(w_i)) <= kEpsilon)
-    return 0.0f;
-
-  auto w_o = local_frame_to_local(local_frame, in_w_o);
-  if (fabsf(LocalFrame::cos_theta(w_o)) <= kEpsilon)
-    return 0.0f;
-
-  auto roughness = evaluate_roughness(mtl, data.tex);
-  auto ext_ior = evaluate_refractive_index(mtl.ext_ior, data.spectrum_sample);
-  auto int_ior = evaluate_refractive_index(mtl.int_ior, data.spectrum_sample);
-  auto thinfilm = evaluate_thinfilm(data.spectrum_sample, mtl.thinfilm, data.tex, smp);
-
-  const bool outside = LocalFrame::cos_theta(w_i) > 0;
-  const bool reflection = LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(w_o) > 0.0f;
-
-  float3 wh = {};
-  float dwh_dwo = 0.0f;
-
-  if (reflection) {
-    wh = normalize(w_o + w_i);
-    dwh_dwo = 1.0f / (4.0f * dot(w_o, wh));
-  } else {
-    auto eta = outside  //
-                 ? spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta))
-                 : spectral_response_monochromatic(spectral_response_div(ext_ior.eta, int_ior.eta));
-    wh = normalize(w_i + w_o * eta);
-    float sqrt_denom = dot(w_i, wh) + eta * dot(w_o, wh);
-    dwh_dwo = sqr(eta) * dot(w_o, wh) / sqr(sqrt_denom);
-  }
-
-  wh *= (LocalFrame::cos_theta(wh) >= 0.0f) ? 1.0f : -1.0f;
-
-  external::RayInfo ray = {w_i * (outside ? 1.0f : -1.0f), roughness};
-
-  auto d_ggx = external::D_ggx(wh, roughness);
-  ETX_VALIDATE(d_ggx);
-
-  float prob = max(0.0f, dot(wh, ray.w) * d_ggx / ((1.0f + ray.Lambda) * LocalFrame::cos_theta(ray.w)));
-  ETX_VALIDATE(prob);
-
-  float f = fresnel::calculate(data.spectrum_sample, dot(w_i, wh), outside ? ext_ior : int_ior, outside ? int_ior : ext_ior, thinfilm).monochromatic();
-  ETX_VALIDATE(f);
-
-  prob *= reflection ? f : (1.0f - f);
-
-  float result = fabsf(prob * dwh_dwo) + fabsf(LocalFrame::cos_theta(w_o));
-  ETX_VALIDATE(result);
-
-  return result;
+ETX_SHARED_INLINE float pdf(const BSDFData& data, const float3& w_o, const Material& mtl, Sampler& smp) {
+  return bsdf::detail::pdf_interop(data, w_o, mtl, smp);
 }
 
 ETX_SHARED_INLINE bool is_delta(const Material& mtl, const float2& tex, Sampler& smp) {
-  auto roughness = evaluate_roughness(mtl, tex);
-  return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
+  return bsdf::detail::is_delta_interop(mtl, tex, smp);
 }
 
 ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData& data, const Material& mtl, Sampler& smp) {
-  return apply_image(data.spectrum_sample, mtl.scattering, data.tex);
+  return bsdf::detail::albedo_interop(data, mtl, smp);
 }
 
 }  // namespace DielectricBSDF
+
 }  // namespace etx

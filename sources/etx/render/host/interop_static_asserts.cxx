@@ -29,6 +29,7 @@ static_assert((offsetof(::SpectralDistribution, spectral_entry_count) == kSpectr
   "SpectralDistribution.spectral_entry_count ABI mismatch");
 static_assert((offsetof(::SpectralDistribution, spectral_entries) == kSpectralDistributionEntriesOffset), "SpectralDistribution.spectral_entries ABI mismatch");
 static_assert((sizeof(::SpectralDistribution::Entry) == kSpectralDistributionEntryStride), "SpectralDistribution::Entry ABI size mismatch");
+static_assert((sizeof(::DistributionEntry) == kDistributionEntryStride), "DistributionEntry ABI size mismatch");
 
 static_assert((ETX_ENUM_U32_TO_UINT32(ProjectionType::EqualArea) == kProjectionEqualArea), "ProjectionType::EqualArea must match kProjectionEqualArea");
 static_assert((ETX_ENUM_U32_TO_UINT32(ProjectionType::Equirectangular) == Projection::Equirectangular),
@@ -78,10 +79,14 @@ static_assert(sizeof(ShaderConstants) == 32, "ShaderConstants size changed; upda
 
 static_assert(std::is_standard_layout_v<GPURTConstants>, "GPURTConstants must stay standard layout for C++/HLSL interop");
 static_assert(alignof(GPURTConstants) == 16, "GPURTConstants alignment must match HLSL packing");
-static_assert(sizeof(GPURTConstants) == 96, "GPURTConstants size changed; update shared ABI or padding");
+static_assert(sizeof(GPURTConstants) == 112, "GPURTConstants size changed; update shared ABI or padding");
 static_assert(offsetof(GPURTConstants, as_index) == 4, "GPURTConstants::as_index offset changed");
 static_assert(offsetof(GPURTConstants, blue_noise_buffer_index) == 20, "GPURTConstants::blue_noise_buffer_index offset changed");
-static_assert(offsetof(GPURTConstants, scene) == 32, "GPURTConstants::scene offset changed");
+static_assert(offsetof(GPURTConstants, render_window_origin_x) == 32, "GPURTConstants::render_window_origin_x offset changed");
+static_assert(offsetof(GPURTConstants, render_window_origin_y) == 36, "GPURTConstants::render_window_origin_y offset changed");
+static_assert(offsetof(GPURTConstants, render_window_width) == 40, "GPURTConstants::render_window_width offset changed");
+static_assert(offsetof(GPURTConstants, render_window_height) == 44, "GPURTConstants::render_window_height offset changed");
+static_assert(offsetof(GPURTConstants, scene) == 48, "GPURTConstants::scene offset changed");
 
 static_assert(std::is_standard_layout_v<SpectralImage>, "SpectralImage must stay standard layout for C++/HLSL interop");
 static_assert(std::is_standard_layout_v<Material>, "Material must stay standard layout for C++/HLSL interop");
@@ -94,6 +99,7 @@ static_assert(offsetof(Material, cls) == kMaterialClassOffset, "Material::cls of
 static_assert(offsetof(Material, int_medium) == kMaterialIntMediumOffset, "Material::int_medium offset changed");
 static_assert(offsetof(Material, ext_medium) == kMaterialExtMediumOffset, "Material::ext_medium offset changed");
 static_assert(offsetof(Material, opacity) == kMaterialOpacityOffset, "Material::opacity offset changed");
+static_assert(offsetof(Material, emission_collimation) == kMaterialEmissionCollimationOffset, "Material::emission_collimation offset changed");
 
 static_assert(std::is_standard_layout_v<Camera>, "Camera must stay standard layout for C++/HLSL interop");
 static_assert(alignof(Camera) == 16, "Camera alignment must match HLSL packing");
@@ -114,6 +120,8 @@ static_assert(offsetof(Camera, clip_far) == kCameraClipFarOffset, "Camera::clip_
 static_assert(offsetof(Camera, lens_image) == kCameraLensImageOffset, "Camera::lens_image offset changed");
 static_assert(offsetof(Camera, medium_index) == kCameraMediumIndexOffset, "Camera::medium_index offset changed");
 static_assert(offsetof(Camera, view_proj) == 96, "Camera::view_proj offset changed");
+static_assert(offsetof(Camera, view_proj) == kCameraViewProjOffset, "Camera::view_proj offset changed");
+static_assert(offsetof(Camera, area) == kCameraAreaOffset, "Camera::area offset changed");
 
 static_assert(std::is_standard_layout_v<Image>, "Image must stay standard layout for C++/HLSL interop");
 static_assert(alignof(Image) == 16, "Image alignment must match HLSL packing");
@@ -121,6 +129,7 @@ static_assert(sizeof(Image) == kImageDescStride, "Image size changed; update sha
 static_assert(offsetof(Image, fsize) == kImageDescFSizeOffset, "Image::fsize offset changed");
 static_assert(offsetof(Image, offset) == kImageDescOffsetOffset, "Image::offset offset changed");
 static_assert(offsetof(Image, scale) == kImageDescScaleOffset, "Image::scale offset changed");
+static_assert(offsetof(Image, normalization) == kImageDescNormalizationOffset, "Image::normalization offset changed");
 static_assert(offsetof(Image, isize) == kImageDescISizeOffset, "Image::isize offset changed");
 static_assert(offsetof(Image, options) == kImageDescOptionsOffset, "Image::options offset changed");
 static_assert(offsetof(Image, format) == kImageDescFormatOffset, "Image::format offset changed");
@@ -132,6 +141,8 @@ static_assert(offsetof(Image, y_distribution_entries_offset) == kImageDescYDistr
 static_assert(offsetof(Image, x_entries_stride) == kImageDescXEntriesStrideOffset, "Image::x_entries_stride offset changed");
 static_assert(offsetof(Image, x_distribution_count) == kImageDescXDistributionCountOffset, "Image::x_distribution_count offset changed");
 static_assert(offsetof(Image, y_entries_count) == kImageDescYEntriesCountOffset, "Image::y_entries_count offset changed");
+static_assert(offsetof(Image, y_distribution_total_weight) == kImageDescYDistributionTotalWeightOffset,
+  "Image::y_distribution_total_weight offset changed");
 static_assert(offsetof(Image, pixel_data_stride) == kImageDescPixelDataStrideOffset, "Image::pixel_data_stride offset changed");
 static_assert(offsetof(Image, pixel_data_chunk_index) == kImageDescPixelDataChunkIndexOffset, "Image::pixel_data_chunk_index offset changed");
 static_assert(offsetof(Image, x_distribution_chunk_index) == kImageDescXDistributionChunkIndexOffset,
@@ -178,7 +189,7 @@ static_assert(alignof(GPUSceneOptions) == 16, "GPUSceneOptions alignment must ma
 static_assert(alignof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader alignment must match HLSL packing");
 static_assert(alignof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader alignment must match HLSL packing");
 static_assert(alignof(GPUScene) == 16, "GPUScene alignment must match HLSL packing");
-static_assert(sizeof(GPUSceneGlobals) == 384, "GPUSceneGlobals size changed; update shared ABI");
+static_assert(sizeof(GPUSceneGlobals) == 400, "GPUSceneGlobals size changed; update shared ABI");
 static_assert(sizeof(GPUSceneOptions) == 48, "GPUSceneOptions size changed; update shared ABI");
 static_assert(sizeof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader size changed; update shared ABI");
 static_assert(sizeof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader size changed; update shared ABI");
@@ -189,8 +200,12 @@ static_assert(offsetof(GPUSceneGlobals, emitter_profile_count) == kSceneGlobalsE
 static_assert(offsetof(GPUSceneGlobals, emitter_instance_count) == kSceneGlobalsEmitterInstanceCountOffset, "GPUSceneGlobals::emitter_instance_count offset changed");
 static_assert(offsetof(GPUSceneGlobals, environment_emitter_count) == kSceneGlobalsEnvironmentEmitterCountOffset,
   "GPUSceneGlobals::environment_emitter_count offset changed");
+static_assert(offsetof(GPUSceneGlobals, active_emitter_count) == kSceneGlobalsActiveEmitterCountOffset, "GPUSceneGlobals::active_emitter_count offset changed");
 static_assert(offsetof(GPUSceneGlobals, bounding_sphere_radius) == kSceneGlobalsBoundingSphereRadiusOffset, "GPUSceneGlobals::bounding_sphere_radius offset changed");
 static_assert(offsetof(GPUSceneGlobals, environment_emitters) == kSceneGlobalsEnvironmentEmittersOffset, "GPUSceneGlobals::environment_emitters offset changed");
+static_assert(offsetof(GPUSceneGlobals, pixel_filter_image_index) == kSceneGlobalsPixelFilterImageIndexOffset,
+  "GPUSceneGlobals::pixel_filter_image_index offset changed");
+static_assert(offsetof(GPUSceneGlobals, pixel_filter_radius) == kSceneGlobalsPixelFilterRadiusOffset, "GPUSceneGlobals::pixel_filter_radius offset changed");
 static_assert(offsetof(GPUSceneOptions, min_path_length) == kSceneOptionsMinPathLengthOffset, "GPUSceneOptions::min_path_length offset changed");
 static_assert(offsetof(GPUSceneOptions, max_path_length) == kSceneOptionsMaxPathLengthOffset, "GPUSceneOptions::max_path_length offset changed");
 static_assert(offsetof(GPUSceneOptions, samples) == kSceneOptionsSamplesOffset, "GPUSceneOptions::samples offset changed");
@@ -201,6 +216,8 @@ static_assert(offsetof(GPUSceneOptions, radiance_clamp) == kSceneOptionsRadiance
 static_assert(offsetof(GPUSceneOptions, strategy_flags) == kSceneOptionsStrategyFlagsOffset, "GPUSceneOptions::strategy_flags offset changed");
 static_assert(offsetof(GPUSceneOptions, light_sampling) == kSceneOptionsLightSamplingOffset, "GPUSceneOptions::light_sampling offset changed");
 static_assert(offsetof(GPUSceneOptions, properties_flags) == kSceneOptionsPropertiesFlagsOffset, "GPUSceneOptions::properties_flags offset changed");
+static_assert(offsetof(GPUSceneOptions, path_mode) == kSceneOptionsPathModeOffset, "GPUSceneOptions::path_mode offset changed");
+static_assert(offsetof(GPUSceneOptions, random_seed) == kSceneOptionsRandomSeedOffset, "GPUSceneOptions::random_seed offset changed");
 static_assert(offsetof(GPUImageBlobHeader, image_count) == kImageBlobHeaderImageCountOffset, "GPUImageBlobHeader::image_count offset changed");
 static_assert(offsetof(GPUImageBlobHeader, images_offset) == kImageBlobHeaderImagesOffset, "GPUImageBlobHeader::images_offset offset changed");
 static_assert(offsetof(GPUImageBlobHeader, data_chunk_count) == kImageBlobHeaderDataChunkCountOffset, "GPUImageBlobHeader::data_chunk_count offset changed");

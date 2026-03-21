@@ -154,6 +154,13 @@ bool VKBindlessManager::Impl::create_descriptor_set_layout() {
     bindings.push_back(as_binding);
   }
 
+  VkDescriptorSetLayoutBinding rw_buffer_binding = {};
+  rw_buffer_binding.binding = 5;
+  rw_buffer_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  rw_buffer_binding.descriptorCount = max_buffers;
+  rw_buffer_binding.stageFlags = VK_SHADER_STAGE_ALL;
+  bindings.push_back(rw_buffer_binding);
+
   VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
   VkDescriptorBindingFlags binding_flag_value = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
   std::vector<VkDescriptorBindingFlags> binding_flags_array(bindings.size(), binding_flag_value);
@@ -184,7 +191,7 @@ bool VKBindlessManager::Impl::create_descriptor_pool() {
 
   VkDescriptorPoolSize buffer_pool_size = {};
   buffer_pool_size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  buffer_pool_size.descriptorCount = max_buffers;
+  buffer_pool_size.descriptorCount = max_buffers * 2u;
   pool_sizes.push_back(buffer_pool_size);
 
   VkDescriptorPoolSize texture_pool_size = {};
@@ -374,6 +381,9 @@ void VKBindlessManager::Impl::update_descriptor_array(VkDescriptorType descripto
     case 4:
       max_descriptors = max_acceleration_structures;
       break;
+    case 5:
+      max_descriptors = max_buffers;
+      break;
     default:
       log::error("Invalid binding %u in update_descriptor_array", binding);
       return;
@@ -505,6 +515,7 @@ RHIResult VKBindlessManager::register_buffer(void* vk_buffer, RHIResourceType ty
   buffer_info.range = VK_WHOLE_SIZE;
 
   _impl->update_descriptor_array(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, descriptor_index, &buffer_info);
+  _impl->update_descriptor_array(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5, descriptor_index, &buffer_info);
 
   return RHIResult::Success;
 }
