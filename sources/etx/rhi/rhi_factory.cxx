@@ -8,7 +8,7 @@ namespace etx {
 #if defined(ETX_PLATFORM_WINDOWS)
 void create_vulkan_context(RHIContext& context, const RHIInitInfo& info);
 #elif defined(ETX_PLATFORM_APPLE)
-void create_metal_context(RHIContext& context, const RHIInitInfo& info);
+void create_vulkan_context(RHIContext& context, const RHIInitInfo& info);
 #endif
 
 RHIContext RHIContext::create(const RHIInitInfo& info) {
@@ -20,10 +20,10 @@ RHIContext RHIContext::create(const RHIInitInfo& info) {
   }
   create_vulkan_context(context, info);
 #elif defined(ETX_PLATFORM_APPLE)
-  if (info.backend != RHIBackend::Metal) {
-    log::warning("Requested backend %u on Apple platform; forcing Metal", static_cast<uint32_t>(info.backend));
+  if (info.backend != RHIBackend::Vulkan) {
+    log::warning("Requested backend %u on Apple platform during MoltenVK phase; forcing Vulkan", static_cast<uint32_t>(info.backend));
   }
-  create_metal_context(context, info);
+  create_vulkan_context(context, info);
 #else
   (void)info;
   log::error("Unsupported platform for RHIContext::create");

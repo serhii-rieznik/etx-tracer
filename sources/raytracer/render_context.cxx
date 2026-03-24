@@ -95,9 +95,6 @@ void RenderContext::init() {
   ETX_PROFILER_SCOPE();
 
   RHIBackend backend = RHIBackend::Vulkan;
-#if defined(ETX_PLATFORM_APPLE)
-  backend = RHIBackend::Metal;
-#endif
 
   RHIInitInfo info = {
     .backend = backend,

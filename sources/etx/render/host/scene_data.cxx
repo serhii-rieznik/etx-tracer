@@ -359,9 +359,8 @@ void SceneData::rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_in
     auto& sun_emitter = emitter_profiles[sun_idx];
 
     std::vector<float4> sun_buffer(kSunImageDimensions.x * kSunImageDimensions.y, float4{0.0f, 0.0f, 0.0f, 0.0f});
-    if (scattering::generate_sun_image(
-          rhi, gpu_context, atmosphere_emitter.atmosphere.scattering, kSunImageDimensions, sun_emitter.directional.direction, sun_emitter.directional.angular_size,
-          sun_buffer.data()) == false) {
+    if (scattering::generate_sun_image(rhi, gpu_context, atmosphere_emitter.atmosphere.scattering, kSunImageDimensions, sun_emitter.directional.direction,
+          sun_emitter.directional.angular_size, sun_buffer.data()) == false) {
       log::error("Failed to generate atmosphere sun image on GPU for emitter %u", sun_idx);
       continue;
     }

@@ -22,8 +22,7 @@
   result_value.transmittance = spectral_response_make(spect, 1.0f);
 
   uint seed = task.sampler_seed;
-  result_value.visible =
-    wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+  result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
   GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, task.path_index);
   if (wavefront_path_state_valid(state)) {
     state.sampler_seed = seed;
@@ -32,7 +31,7 @@
   wavefront_store_direct_light_result(resources.direct_light_result_buffer, dispatch_index, result_value);
 }
 
-[numthreads(64, 1, 1)] void wavefront_camera_connect_light_shadow_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(64, 1, 1)] void wavefront_camera_connect_light_shadow_main(uint3 dtid : SV_DispatchThreadID) {
   const uint dispatch_index = dtid.x;
 
   GPUWavefrontResources resources = wavefront_load_resources();
@@ -54,8 +53,7 @@
   result_value.transmittance = spectral_response_make(spect, 1.0f);
 
   uint seed = task.sampler_seed;
-  result_value.visible =
-    wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+  result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
   GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, task.path_index);
   if (wavefront_path_state_valid(state)) {
     state.sampler_seed = seed;
@@ -86,8 +84,7 @@
   result_value.transmittance = spectral_response_make(spect, 1.0f);
 
   uint seed = task.sampler_seed;
-  result_value.visible =
-    wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+  result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
   GPUWavefrontPathState state = wavefront_load_path_state(resources.light_state_buffer, task.path_index);
   if (wavefront_path_state_valid(state)) {
     state.sampler_seed = seed;

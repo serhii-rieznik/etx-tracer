@@ -19,8 +19,7 @@ ETX_SHARED_INLINE float bsdf_conductor_pdf_local(ETX_IN(float3, w_i), ETX_IN(flo
   return result;
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_conductor_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_conductor_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   float3 w_i = local_frame_to_local(frame, -data.w_i);
   if (w_i.z <= kEpsilon) {
@@ -52,8 +51,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_conductor_sample(
 
     float2 slope_rnd = ((scattering_order == 0u) && bsdf_sampler_has_fixed(sampler)) ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
     SpectralResponse weight = spectral_response_make(data.spectrum_sample, 1.0f);
-    ray = bsdf_external_ray_info_update_direction(
-      ray, bsdf_external_sample_phase_function_conductor(data.spectrum_sample, slope_rnd, -ray.w, roughness, ext_ior, int_ior, thinfilm, weight), roughness);
+    ray = bsdf_external_ray_info_update_direction(ray,
+      bsdf_external_sample_phase_function_conductor(data.spectrum_sample, slope_rnd, -ray.w, roughness, ext_ior, int_ior, thinfilm, weight), roughness);
     ray = bsdf_external_ray_info_update_height(ray, ray.h);
     result.weight = spectral_response_mul(result.weight, weight);
 
@@ -72,8 +71,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_conductor_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_conductor_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_conductor_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   float3 w_o = local_frame_to_local(frame, outgoing_direction);
   if (w_o.z <= kEpsilon) {
@@ -99,8 +98,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_conductor_evaluate(
   return result;
 }
 
-ETX_SHARED_INLINE float bsdf_conductor_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_conductor_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)sampler;
 
@@ -131,8 +130,7 @@ ETX_SHARED_INLINE bool bsdf_conductor_is_delta_with_context(ETX_IN(BSDFResourceC
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_conductor_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_conductor_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
 }

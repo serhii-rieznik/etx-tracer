@@ -33,6 +33,13 @@ struct RHIMemoryStats {
   uint64_t gpu_driver_budget_bytes = 0;
 };
 
+struct RHICapabilities {
+  bool supports_swapchain = false;
+  bool supports_bindless = false;
+  bool supports_timestamps = false;
+  bool supports_ray_tracing = false;
+};
+
 struct RHIChunkedBufferRange {
   uint64_t offset = 0;
   uint64_t size = 0;
@@ -173,6 +180,7 @@ struct RHIContext {
   uint32_t get_current_frame_index() const;
 
   uint32_t get_sampler_index(RHISamplerType type) const;
+  RHICapabilities capabilities() const;
 
   RHICommandBuffer get_command_buffer();
   void destroy_command_buffer(RHICommandBuffer cmd);

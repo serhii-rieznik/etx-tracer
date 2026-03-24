@@ -1156,8 +1156,7 @@ struct CPUBidirectionalImpl : public Task {
     return 0.0f;
   }
 
-  SpectralResponse direct_hit_area_emitter(
-    const PathVertex& z_curr, const PathVertex& z_prev, PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
+  SpectralResponse direct_hit_area_emitter(const PathVertex& z_curr, const PathVertex& z_prev, PathData& path_data, SpectralQuery spect, Sampler& smp, bool force) const {
     if ((force == false) && (enable_direct_hit == false))
       return {spect, 0.0f};
 
@@ -1274,8 +1273,7 @@ struct CPUBidirectionalImpl : public Task {
     return accumulated_emitter_value * z_curr.throughput * mis_weight;
   }
 
-  SpectralResponse connect_camera_to_light(
-    const PathVertex& z_curr, const PathVertex& z_prev, Sampler& smp, PathData& path_data, SpectralQuery spect) const {
+  SpectralResponse connect_camera_to_light(const PathVertex& z_curr, const PathVertex& z_prev, Sampler& smp, PathData& path_data, SpectralQuery spect) const {
     const auto& scene = rt.scene();
 
     uint32_t connection_len = path_data.camera_path_length() + 1u;

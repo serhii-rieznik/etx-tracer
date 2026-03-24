@@ -5,21 +5,18 @@ function(etx_build_pack target folder)
   endif()
 
   file(GLOB_RECURSE hxx_sources "${folder}/*.hxx")
+  list(REMOVE_DUPLICATES hxx_sources)
   list(APPEND sources ${hxx_sources})
 
   file(GLOB_RECURSE cxx_sources "${folder}/*.cxx")
+  list(REMOVE_DUPLICATES cxx_sources)
   list(APPEND sources ${cxx_sources})
   
-  if (WIN32)
+  if (WIN32 OR APPLE)
     file(GLOB_RECURSE metal_sources "${folder}/metal/*.*")
     list(REMOVE_ITEM sources ${metal_sources})
     list(REMOVE_ITEM hxx_sources ${metal_sources})
     list(REMOVE_ITEM cxx_sources ${metal_sources})
-  elseif(APPLE)
-    file(GLOB_RECURSE vulkan_sources "${folder}/vulkan/*.*")
-    list(REMOVE_ITEM sources ${vulkan_sources})
-    list(REMOVE_ITEM hxx_sources ${vulkan_sources})
-    list(REMOVE_ITEM cxx_sources ${vulkan_sources})
   endif()
 
   source_group(TREE "${folder}/../" FILES ${sources})
@@ -94,10 +91,10 @@ if(DXC_INCLUDE_DIR)
   target_include_directories(etx-rhi PRIVATE "${DXC_INCLUDE_DIR}")
 endif()
 
-# Add Vulkan dependency for Windows
-if(WIN32)
+# Add Vulkan dependency for desktop Vulkan backends
+if(WIN32 OR APPLE)
   find_package(Vulkan REQUIRED)
-  target_link_libraries(etx-rhi PRIVATE Vulkan::Vulkan)
+  target_link_libraries(etx-rhi PUBLIC Vulkan::Vulkan)
   target_include_directories(etx-rhi PRIVATE ${Vulkan_INCLUDE_DIRS})
 endif()
 

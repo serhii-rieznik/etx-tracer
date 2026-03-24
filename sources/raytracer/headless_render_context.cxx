@@ -8,9 +8,6 @@ void HeadlessRenderContext::init() {
     .enable_validation = ETX_DEBUG,
     .headless = true,
   };
-#if defined(ETX_PLATFORM_APPLE)
-  info.backend = RHIBackend::Metal;
-#endif
 
   _context = RHIContext::create(info);
   if (_context.valid()) {

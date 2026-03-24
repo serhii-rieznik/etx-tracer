@@ -201,8 +201,9 @@ static float3 sample_ocean_export_displacement_field(const OceanExportTextureDat
   return displacement;
 }
 
-static bool write_ocean_surface_obj_file(const char* file_name, const OceanExportTextureData texture_data[Ocean::k_cascade_count], const float cascade_lengths[Ocean::k_cascade_count],
-  const float cascade_weights[Ocean::k_cascade_count], float area_size_m, uint32_t grid_resolution, const float3& center, std::string& out_error) {
+static bool write_ocean_surface_obj_file(const char* file_name, const OceanExportTextureData texture_data[Ocean::k_cascade_count],
+  const float cascade_lengths[Ocean::k_cascade_count], const float cascade_weights[Ocean::k_cascade_count], float area_size_m, uint32_t grid_resolution, const float3& center,
+  std::string& out_error) {
   if ((file_name == nullptr) || (file_name[0] == '\0')) {
     out_error = "Invalid output path";
     return false;
@@ -285,8 +286,7 @@ static bool write_ocean_surface_obj_file(const char* file_name, const OceanExpor
   fprintf(file, "# area_size_m %.6f\n", area_size_m);
   fprintf(file, "# grid_resolution %u\n", grid_resolution);
   fprintf(file, "# vertex_count %llu\n", static_cast<unsigned long long>(vertex_count_u64));
-  fprintf(file, "# triangle_count %llu\n",
-    static_cast<unsigned long long>(2u * static_cast<uint64_t>(grid_resolution - 1u) * static_cast<uint64_t>(grid_resolution - 1u)));
+  fprintf(file, "# triangle_count %llu\n", static_cast<unsigned long long>(2u * static_cast<uint64_t>(grid_resolution - 1u) * static_cast<uint64_t>(grid_resolution - 1u)));
 
   for (uint64_t i = 0u; i < vertex_count_u64; ++i) {
     const OceanExportVertex& vertex = vertices[static_cast<size_t>(i)];
@@ -371,8 +371,8 @@ static PlaygroundUiChanges draw_ocean_control_panel(Ocean& ocean, uint32_t curre
       result.ocean_obj_export_size_m = export_size_m;
       result.ocean_obj_export_size_changed = true;
     }
-    ImGui::Text("OBJ export target: %d x %d m, %u x %u vertices (~%.2f M tris)", result.ocean_obj_export_size_m, result.ocean_obj_export_size_m,
-      k_ocean_obj_export_grid_resolution, k_ocean_obj_export_grid_resolution,
+    ImGui::Text("OBJ export target: %d x %d m, %u x %u vertices (~%.2f M tris)", result.ocean_obj_export_size_m, result.ocean_obj_export_size_m, k_ocean_obj_export_grid_resolution,
+      k_ocean_obj_export_grid_resolution,
       (2.0f * static_cast<float>(k_ocean_obj_export_grid_resolution - 1u) * static_cast<float>(k_ocean_obj_export_grid_resolution - 1u)) / 1000000.0f);
     if (ImGui::Button("Export Water Mesh OBJ (Next Frame)")) {
       result.ocean_obj_export_requested = true;
@@ -1125,8 +1125,7 @@ void PlaygroundApp::sync_scene_targets_to_swapchain_extent() {
 
   if ((extent_changed == false) && (missing_scene_opaque_color == false) && (missing_scene_color == false) && (missing_depth == false) &&
       (missing_ocean_wave_thickness_min == false) && (missing_ocean_wave_thickness_max == false) && (missing_ocean_foam_history_0 == false) &&
-      (missing_ocean_foam_history_1 == false) &&
-      (missing_scene_opaque_color_msaa == false) && (missing_scene_color_msaa == false) && (missing_depth_msaa == false)) {
+      (missing_ocean_foam_history_1 == false) && (missing_scene_opaque_color_msaa == false) && (missing_scene_color_msaa == false) && (missing_depth_msaa == false)) {
     return;
   }
 
@@ -1624,16 +1623,18 @@ void PlaygroundApp::init() {
   _height = static_cast<uint32_t>(sapp_height());
 
   RHIInitInfo info = {
-#if defined(ETX_PLATFORM_APPLE)
-    .backend = RHIBackend::Metal,
-#else
     .backend = RHIBackend::Vulkan,
-#endif
     .enable_validation = true,
   };
 
   _rhi = RHIContext::create(info);
-  _rhi.create_swapchain(sapp_win32_get_hwnd(), _width, _height);
+  const void* native_window = nullptr;
+#if ETX_PLATFORM_WINDOWS
+  native_window = sapp_win32_get_hwnd();
+#elif defined(__APPLE__)
+  native_window = sapp_macos_get_window();
+#endif
+  _rhi.create_swapchain(native_window, _width, _height);
   _scene_msaa_sample_count = k_default_scene_msaa_sample_count;
   _pending_scene_msaa_sample_count = _scene_msaa_sample_count;
   _scene_msaa_recreate_requested = false;
@@ -1983,6 +1984,9 @@ void PlaygroundApp::frame() {
 
   if (_envmap.valid()) {
     _envmap.prepare_texture_for_sampling(_rhi, cmd);
+    if ((_generated_sky_envmap_texture.valid()) && (_envmap.texture() == _generated_sky_envmap_texture)) {
+      _generated_sky_envmap_texture_state = _envmap.texture_state();
+    }
   }
   if ((_generated_sun_texture.valid()) && (_generated_sun_texture_state != RHIResourceState::ShaderReadOnly)) {
     _rhi.cmd_texture_barrier(cmd, _generated_sun_texture, _generated_sun_texture_state, RHIResourceState::ShaderReadOnly);

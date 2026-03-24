@@ -418,9 +418,8 @@ Vertex wavefront_interpolate_vertex(TriangleData tri, float3 barycentrics) {
     texcoord_2 = load_float2(texcoord_buffer, tri.i.z);
   }
 
-  surface_point_shared_interpolate_vertex(
-    p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1, texcoord_2, barycentrics, has_surface_frame,
-    has_texcoords, result);
+  surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1, texcoord_2,
+    barycentrics, has_surface_frame, has_texcoords, result);
   return result;
 }
 
@@ -535,8 +534,8 @@ SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary,
     texcoord_2 = load_float2(bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)], tri.i.z);
   }
 
-  surface_point_shared_interpolate_vertex(position_0, position_1, position_2, normal_0, normal_1, normal_2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1,
-    bitangent_2, texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
+  surface_point_shared_interpolate_vertex(position_0, position_1, position_2, normal_0, normal_1, normal_2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2,
+    texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
 
   result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
   return result;
@@ -550,8 +549,8 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
   result.hit_t = ray.TMax;
   result.transmittance = spectral_response_make(spect, 1.0f);
 
-  bool has_geometry_buffers = (constants.scene.triangles != kInvalidIndex) && (constants.scene.vertex_positions != kInvalidIndex) && (constants.scene.vertex_normals != kInvalidIndex)
-                              && (constants.scene.scene_globals != kInvalidIndex);
+  bool has_geometry_buffers = (constants.scene.triangles != kInvalidIndex) && (constants.scene.vertex_positions != kInvalidIndex) &&
+                              (constants.scene.vertex_normals != kInvalidIndex) && (constants.scene.scene_globals != kInvalidIndex);
   if (has_geometry_buffers == false) {
     return false;
   }
@@ -606,8 +605,8 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
 
     bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
     bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
-    HitPolicyDecision hit_policy = hit_policy_evaluate(
-      HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface, material_access.int_medium_index, material_access.ext_medium_index);
+    HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface,
+      material_access.int_medium_index, material_access.ext_medium_index);
     if (hit_policy.action == HitPolicyAction::Ignore) {
       continue;
     }
@@ -781,10 +780,9 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
     float2 disk_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));
     sample_value.direction = direction_to_scene;
     sample_value.normal = direction_to_scene;
-    sample_value.origin = globals_data.bounding_sphere_center +
-                          globals_data.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - direction_to_scene);
-    sample_value.origin += sample_value.direction *
-                           distance_to_sphere(sample_value.origin, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
+    sample_value.origin = globals_data.bounding_sphere_center + globals_data.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - direction_to_scene);
+    sample_value.origin +=
+      sample_value.direction * distance_to_sphere(sample_value.origin, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
     sample_value.pdf_dir = 1.0f;
     sample_value.pdf_area = 1.0f / (kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius);
     sample_value.pdf_dir_out = sample_value.pdf_area;
@@ -811,8 +809,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
   sample_value.normal = sample_value.direction;
   OrthonormalBasis basis = orthonormal_basis(sample_value.direction);
   float2 disk_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));
-  sample_value.origin = globals_data.bounding_sphere_center +
-                        globals_data.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - sample_value.direction);
+  sample_value.origin = globals_data.bounding_sphere_center + globals_data.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - sample_value.direction);
   sample_value.origin +=
     sample_value.direction * distance_to_sphere(sample_value.origin, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
   sample_value.pdf_dir = projection_environment_image_pdf_to_solid_angle(image_sample.pdf, image_sample.uv, projection);
@@ -859,8 +856,7 @@ void wavefront_write_vertex(bool from_camera, uint path_index, GPUWavefrontPathS
   vertex.eta_scale = state.eta_scale;
   vertex.path_length = state.path_length;
   vertex.pixel_index = state.pixel_index;
-  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Surface |
-                 (from_camera ? GPUWavefrontVertexFlags::From_camera : GPUWavefrontVertexFlags::From_light);
+  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Surface | (from_camera ? GPUWavefrontVertexFlags::From_camera : GPUWavefrontVertexFlags::From_light);
 
   uint descriptor_index = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
   wavefront_store_path_vertex(descriptor_index, vertex_slot, vertex);
@@ -912,7 +908,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   }
 }
 
-[numthreads(8, 8, 1)] void wavefront_init_camera_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(8, 8, 1)] void wavefront_init_camera_main(uint3 dtid : SV_DispatchThreadID) {
   if (constants.camera_buffer_index == kInvalidIndex) {
     return;
   }
@@ -931,9 +927,8 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   }
   float2 film_sample_rnd = float2(rnd01(seed), rnd01(seed));
   float2 uv = camera_sample_film_uv(dtid.xy, camera.film_size, film_sample_rnd);
-  float2 lens_rnd = camera_lens_sampling_enabled(camera.lens_radius, camera.focal_distance) ?
-                      sample_primary_hybrid_2d(dtid.xy, constants.sample_index, kSamplerStreamSupport, seed) :
-                      float2(0.0f, 0.0f);
+  float2 lens_rnd = camera_lens_sampling_enabled(camera.lens_radius, camera.focal_distance) ? sample_primary_hybrid_2d(dtid.xy, constants.sample_index, kSamplerStreamSupport, seed)
+                                                                                            : float2(0.0f, 0.0f);
   GPUWavefrontPathState state = (GPUWavefrontPathState)0;
   state.ray = camera_generate_primary_ray(camera, uv, lens_rnd);
   state.throughput = spectral_response_make(spect, 1.0f);
@@ -1002,7 +997,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   }
 }
 
-[numthreads(1, 1, 1)] void wavefront_reset_queues_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(1, 1, 1)] void wavefront_reset_queues_main(uint3 dtid : SV_DispatchThreadID) {
   if ((dtid.x != 0u) || (dtid.y != 0u) || (dtid.z != 0u)) {
     return;
   }
@@ -1070,7 +1065,7 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   wavefront_trace_path(true, dtid.x);
 }
 
-[numthreads(64, 1, 1)] void wavefront_trace_light_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(64, 1, 1)] void wavefront_trace_light_main(uint3 dtid : SV_DispatchThreadID) {
   wavefront_trace_path(false, dtid.x);
 }
 
@@ -1130,10 +1125,9 @@ void wavefront_camera_direct_light_prepare_stage(uint dispatch_index) {
     return;
   }
 
-  float mis_weight = ((scene_multiple_importance_sampling_enabled() == false) || (emitter_sample.is_delta != 0u)) ? 1.0f :
-                                                                 power_heuristic(sampling_pdf, bsdf_eval.pdf);
-  SpectralResponse contribution = spectral_response_mul(spectral_response_mul(state.throughput, bsdf_eval.bsdf),
-    spectral_response_mul(emitter_sample.value, mis_weight / max(kEpsilon, sampling_pdf)));
+  float mis_weight = ((scene_multiple_importance_sampling_enabled() == false) || (emitter_sample.is_delta != 0u)) ? 1.0f : power_heuristic(sampling_pdf, bsdf_eval.pdf);
+  SpectralResponse contribution =
+    spectral_response_mul(spectral_response_mul(state.throughput, bsdf_eval.bsdf), spectral_response_mul(emitter_sample.value, mis_weight / max(kEpsilon, sampling_pdf)));
   if (gpu_valid_spectral_response(contribution) == false) {
     return;
   }
@@ -1178,8 +1172,7 @@ void wavefront_camera_direct_light_shadow_stage(uint dispatch_index) {
   result_value.transmittance = spectral_response_make(spect, 1.0f);
 
   uint seed = scene_random_seed(task.pixel_index, (constants.sample_index * 33u) + constants.path_iteration + 1u);
-  result_value.visible =
-    wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+  result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
   wavefront_store_direct_light_result(resources.direct_light_result_buffer, dispatch_index, result_value);
 }
 
@@ -1229,9 +1222,9 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
   if (wavefront_hit_is_miss(hit)) {
     if (from_camera && scene_strategy_enabled(kSceneStrategyDirectHit) && (state.path_length >= load_scene_options_min_path_length()) &&
         (state.path_length <= load_scene_options_max_path_length())) {
-      wavefront_film_add(
-        state.pixel_index, spectral_response_to_rgb(spectral_response_mul(state.throughput, gpu_evaluate_distant_emission_spectral_all(state.ray.d, state.spect))) *
-                             wavefront_spectral_weight(state.spect));
+      wavefront_film_add(state.pixel_index,
+        spectral_response_to_rgb(spectral_response_mul(state.throughput, gpu_evaluate_distant_emission_spectral_all(state.ray.d, state.spect))) *
+          wavefront_spectral_weight(state.spect));
     }
     state.flags = 0u;
     wavefront_store_path_state(state_descriptor, path_index, state);
@@ -1324,7 +1317,7 @@ void wavefront_surface_continue(bool from_camera, uint dispatch_index) {
   wavefront_surface_continue(true, dtid.x);
 }
 
-[numthreads(64, 1, 1)] void wavefront_surface_light_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(64, 1, 1)] void wavefront_surface_light_main(uint3 dtid : SV_DispatchThreadID) {
   wavefront_surface_classify(false, dtid.x);
   wavefront_surface_continue(false, dtid.x);
 }

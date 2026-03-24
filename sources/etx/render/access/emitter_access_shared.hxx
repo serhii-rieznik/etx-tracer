@@ -24,8 +24,8 @@ ETX_SHARED_INLINE bool emitter_access_is_local_class(uint32_t emitter_class) {
   return emitter_class == EmitterClass::Area;
 }
 
-ETX_SHARED_INLINE bool emitter_access_accepts_distant(
-  uint32_t emitter_class, uint32_t emitter_profile_class, ETX_IN(float3, direction), ETX_IN(float3, emitter_direction), float emitter_angular_size_cosine) {
+ETX_SHARED_INLINE bool emitter_access_accepts_distant(uint32_t emitter_class, uint32_t emitter_profile_class, ETX_IN(float3, direction), ETX_IN(float3, emitter_direction),
+  float emitter_angular_size_cosine) {
   if (emitter_access_is_local_class(emitter_class)) {
     return false;
   }
@@ -40,9 +40,8 @@ ETX_SHARED_INLINE bool emitter_access_accepts_distant(
   return true;
 }
 
-ETX_SHARED_INLINE float2 emitter_access_shared_environment_uv(
-  uint32_t emitter_class, uint32_t emitter_profile_meta, ETX_IN(float2, image_offset), float image_u_scale, ETX_IN(float3, emitter_direction),
-  float emitter_angular_size_cosine, ETX_IN(float3, direction)) {
+ETX_SHARED_INLINE float2 emitter_access_shared_environment_uv(uint32_t emitter_class, uint32_t emitter_profile_meta, ETX_IN(float2, image_offset), float image_u_scale,
+  ETX_IN(float3, emitter_direction), float emitter_angular_size_cosine, ETX_IN(float3, direction)) {
   if (emitter_class == EmitterClass::Directional) {
     float equivalent_disk_size = 0.0f;
     if (emitter_angular_size_cosine > kEpsilon) {

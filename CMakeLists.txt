@@ -32,6 +32,43 @@ add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
 set(root_folder ${CMAKE_CURRENT_LIST_DIR})
 
+if (APPLE)
+  set(ETX_VULKAN_SDK_HINTS "")
+
+  if (DEFINED ENV{VULKAN_SDK} AND (NOT "$ENV{VULKAN_SDK}" STREQUAL ""))
+    list(APPEND ETX_VULKAN_SDK_HINTS "$ENV{VULKAN_SDK}")
+  endif()
+
+  file(GLOB ETX_VULKAN_SDK_CANDIDATES LIST_DIRECTORIES true "$ENV{HOME}/VulkanSDK/*")
+  list(SORT ETX_VULKAN_SDK_CANDIDATES COMPARE NATURAL ORDER DESCENDING)
+  foreach(candidate IN LISTS ETX_VULKAN_SDK_CANDIDATES)
+    list(APPEND ETX_VULKAN_SDK_HINTS "${candidate}/macOS" "${candidate}")
+  endforeach()
+
+  list(APPEND ETX_VULKAN_SDK_HINTS
+    "/Applications/VulkanSDK/macOS"
+    "/Applications/VulkanSDK"
+    "/opt/homebrew"
+    "/usr/local"
+  )
+  list(REMOVE_DUPLICATES ETX_VULKAN_SDK_HINTS)
+
+  foreach(candidate IN LISTS ETX_VULKAN_SDK_HINTS)
+    if (EXISTS "${candidate}/include/vulkan/vulkan.h")
+      if (EXISTS "${candidate}/lib/libvulkan.dylib")
+        set(VULKAN_SDK "${candidate}" CACHE PATH "Path to the Vulkan SDK" FORCE)
+        set(Vulkan_ROOT "${candidate}" CACHE PATH "Path to the Vulkan SDK root" FORCE)
+        message(STATUS "Using macOS Vulkan SDK hint: ${candidate}")
+        break()
+      endif()
+    endif()
+  endforeach()
+
+  if (NOT DEFINED VULKAN_SDK AND NOT DEFINED Vulkan_ROOT)
+    message(STATUS "No macOS Vulkan SDK detected automatically; set VULKAN_SDK to a LunarG macOS Vulkan SDK root that includes MoltenVK")
+  endif()
+endif()
+
 # Find or install DXC
 find_package(DXC REQUIRED)
 

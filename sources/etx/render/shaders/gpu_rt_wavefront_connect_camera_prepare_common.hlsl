@@ -75,20 +75,19 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
     wavefront_connect_camera_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.current_vertex.medium_index, -input_value.camera_sample.direction);
   reverse_data.path_source = PathSource::Camera;
   float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
-  float previous_from_current_dir = wavefront_connect_camera_stage_bsdf_pdf(
-    wavefront_connect_camera_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
-  float previous_from_current = wavefront_path_vertex_is_infinite_emitter(input_value.previous_vertex) ?
-    previous_from_current_dir :
-    wavefront_convert_solid_angle_pdf_to_area(previous_from_current_dir, input_value.current_vertex.position, input_value.previous_vertex.position,
-      wavefront_path_vertex_is_surface(input_value.previous_vertex), input_value.previous_vertex.normal);
+  float previous_from_current_dir =
+    wavefront_connect_camera_stage_bsdf_pdf(wavefront_connect_camera_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
+  float previous_from_current = wavefront_path_vertex_is_infinite_emitter(input_value.previous_vertex)
+                                  ? previous_from_current_dir
+                                  : wavefront_convert_solid_angle_pdf_to_area(previous_from_current_dir, input_value.current_vertex.position, input_value.previous_vertex.position,
+                                      wavefront_path_vertex_is_surface(input_value.previous_vertex), input_value.previous_vertex.normal);
 
   if (scene_path_mode_uses_bdpt_fast()) {
     if (input_value.path_meta.light_path_length == 0u) {
       return 1.0f;
     }
 
-    GPUWavefrontPathVertex emitter_root =
-      wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, 0u));
+    GPUWavefrontPathVertex emitter_root = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, 0u));
     if (wavefront_path_vertex_valid(emitter_root) == false) {
       return 1.0f;
     }
@@ -143,10 +142,10 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
     return false;
   }
 
-  input_value.current_vertex = wavefront_load_path_vertex(
-    input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.light_path_length));
-  input_value.previous_vertex = wavefront_load_path_vertex(
-    input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.light_path_length - 1u));
+  input_value.current_vertex =
+    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.light_path_length));
+  input_value.previous_vertex =
+    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.light_path_length - 1u));
   if ((wavefront_path_vertex_valid(input_value.current_vertex) == false) || (wavefront_path_vertex_valid(input_value.previous_vertex) == false)) {
     return false;
   }
@@ -203,8 +202,7 @@ void wavefront_clear_connect_camera_task(uint dispatch_index) {
   }
 }
 
-void wavefront_store_connect_camera_prepare_task(
-  uint dispatch_index, WavefrontConnectCameraPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), inout Sampler sampler) {
+void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontConnectCameraPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), inout Sampler sampler) {
   input_value.state.sampler_seed = sampler.seed;
   wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
 
@@ -220,7 +218,8 @@ void wavefront_store_connect_camera_prepare_task(
   float mis_weight = wavefront_connect_camera_weight(input_value, sampler);
   input_value.state.sampler_seed = sampler.seed;
   wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
-  SpectralResponse contribution = spectral_response_mul(input_value.current_vertex.throughput, spectral_response_mul(bsdf_eval.bsdf, input_value.camera_sample.weight * mis_weight));
+  SpectralResponse contribution =
+    spectral_response_mul(input_value.current_vertex.throughput, spectral_response_mul(bsdf_eval.bsdf, input_value.camera_sample.weight * mis_weight));
   if (wavefront_connect_camera_valid_spectral_response(contribution) == false) {
     return;
   }

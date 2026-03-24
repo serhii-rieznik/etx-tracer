@@ -16,11 +16,10 @@ ETX_SHARED_INLINE float emitter_pdf_area_local(const Emitter& em) {
 
 uint32_t emitter_external_medium_index(const Emitter& em_inst);
 
-SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
-  float& pdf_area, float& pdf_dir, float& pdf_dir_out);
+SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction, float& pdf_area,
+  float& pdf_dir, float& pdf_dir_out);
 
-SpectralResponse emitter_get_radiance(const Emitter& em_inst, SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir,
-  float& pdf_dir_out);
+SpectralResponse emitter_get_radiance(const Emitter& em_inst, SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir, float& pdf_dir_out);
 
 SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir);
 bool emitter_distribution_has_values();

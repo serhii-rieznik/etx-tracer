@@ -208,8 +208,7 @@ static bool load_r8_texture_from_file(RHIContext& rhi, const char* project_relat
     return false;
   }
   if (image_format != Image::Format::RGBA8) {
-    log::error("Unsupported %s texture format for %s (expected RGBA8-compatible image)", (debug_name != nullptr) ? debug_name : "ocean detail",
-      loaded_from_path.c_str());
+    log::error("Unsupported %s texture format for %s (expected RGBA8-compatible image)", (debug_name != nullptr) ? debug_name : "ocean detail", loaded_from_path.c_str());
     return false;
   }
   if ((image_dims.x == 0u) || (image_dims.y == 0u)) {
@@ -1640,8 +1639,8 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
 }
 
 void Ocean::prepare_render_draw_state(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position,
-  RHITexture envmap_texture, bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, RHITexture wave_thickness_min_texture,
-  RHITexture wave_thickness_max_texture, RHITexture foam_history_texture, uint32_t viewport_width, uint32_t viewport_height) {
+  RHITexture envmap_texture, bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, RHITexture wave_thickness_min_texture, RHITexture wave_thickness_max_texture,
+  RHITexture foam_history_texture, uint32_t viewport_width, uint32_t viewport_height) {
   uint32_t frame_index = rhi.get_current_frame_index();
   RHIBindlessHandle frame_instance_buffer = _instance_buffer[frame_index];
   RHIBindlessHandle frame_settings_buffer = _settings_buffer[frame_index];
@@ -1719,10 +1718,10 @@ void Ocean::prepare_render_draw_state(RHIContext& rhi, RHICommandBuffer cmd, con
     max(_parameters.foam_slope_end, 0.0f)};
   render_settings.foam_controls_1 = {max(_parameters.foam_thickness_start_m, 0.0f), max(_parameters.foam_thickness_end_m, 0.0f),
     min(max(_parameters.foam_surface_coverage, 0.0f), 1.0f), min(max(_parameters.foam_specular_suppression, 0.0f), 1.0f)};
-  render_settings.foam_controls_2 = {max(_parameters.foam_diffuse_gain, 0.0f), max(_parameters.foam_backlight_gain, 0.0f),
-    max(_parameters.foam_aeration_scatter_scale, 0.0f), max(_parameters.foam_aeration_absorption_scale, 0.0f)};
-  render_settings.foam_color = {min(max(_parameters.foam_albedo.x, 0.0f), 4.0f), min(max(_parameters.foam_albedo.y, 0.0f), 4.0f),
-    min(max(_parameters.foam_albedo.z, 0.0f), 4.0f), min(max(_parameters.foam_alpha_threshold, 0.0f), 1.0f)};
+  render_settings.foam_controls_2 = {max(_parameters.foam_diffuse_gain, 0.0f), max(_parameters.foam_backlight_gain, 0.0f), max(_parameters.foam_aeration_scatter_scale, 0.0f),
+    max(_parameters.foam_aeration_absorption_scale, 0.0f)};
+  render_settings.foam_color = {min(max(_parameters.foam_albedo.x, 0.0f), 4.0f), min(max(_parameters.foam_albedo.y, 0.0f), 4.0f), min(max(_parameters.foam_albedo.z, 0.0f), 4.0f),
+    min(max(_parameters.foam_alpha_threshold, 0.0f), 1.0f)};
   render_settings.foam_temporal_controls = {min(max(_parameters.foam_history_decay, 0.0f), 1.0f), max(_parameters.foam_history_gain, 0.0f),
     max(_parameters.foam_history_bias, 0.0f), 0.0f};
   render_settings.foam_detail_controls = {max(_parameters.foam_detail_scale_1, 1.0e-4f), max(_parameters.foam_detail_scale_2, 1.0e-4f),
@@ -1791,8 +1790,8 @@ void Ocean::draw_foam_history_prepass(RHIContext& rhi, RHICommandBuffer cmd, con
   }
 
   rhi.cmd_set_pipeline(cmd, _foam_history_pipeline);
-  prepare_render_draw_state(rhi, cmd, view_proj, inv_view_proj, camera_position, {}, false, {}, wave_thickness_min_texture, wave_thickness_max_texture,
-    prev_foam_history_texture, viewport_width, viewport_height);
+  prepare_render_draw_state(rhi, cmd, view_proj, inv_view_proj, camera_position, {}, false, {}, wave_thickness_min_texture, wave_thickness_max_texture, prev_foam_history_texture,
+    viewport_width, viewport_height);
 
   RHIIndexedDrawDesc draw = {
     .index_count = _index_count,
@@ -1817,8 +1816,8 @@ void Ocean::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_pro
     draw_wireframe = false;
   }
   rhi.cmd_set_pipeline(cmd, draw_wireframe ? _wire_pipeline : _pipeline);
-  prepare_render_draw_state(rhi, cmd, view_proj, inv_view_proj, camera_position, envmap_texture, envmap_equal_area_mapping, scene_opaque_color_texture,
-    wave_thickness_min_texture, wave_thickness_max_texture, foam_history_texture, viewport_width, viewport_height);
+  prepare_render_draw_state(rhi, cmd, view_proj, inv_view_proj, camera_position, envmap_texture, envmap_equal_area_mapping, scene_opaque_color_texture, wave_thickness_min_texture,
+    wave_thickness_max_texture, foam_history_texture, viewport_width, viewport_height);
 
   RHIIndexedDrawDesc draw = {
     .index_count = _index_count,

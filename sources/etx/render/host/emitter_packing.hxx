@@ -14,8 +14,8 @@ struct PackedEmitterData {
 
 PackedEmitterData build_packed_emitters(const SceneData& scene_data);
 
-uint32_t fill_packed_emitter_distribution_entries(const std::vector<Emitter>& emitter_instances, const std::vector<uint32_t>& active_emitter_indices,
-  Distribution::Entry* entries, uint32_t entry_capacity);
+uint32_t fill_packed_emitter_distribution_entries(const std::vector<Emitter>& emitter_instances, const std::vector<uint32_t>& active_emitter_indices, Distribution::Entry* entries,
+  uint32_t entry_capacity);
 
 std::vector<Distribution::Entry> build_packed_emitter_distribution(const PackedEmitterData& packed_emitters);
 

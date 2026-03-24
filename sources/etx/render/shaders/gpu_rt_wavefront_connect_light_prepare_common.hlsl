@@ -97,8 +97,8 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, out Wavefro
 
   input_value.camera_vertex =
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
-  input_value.camera_previous_vertex = wavefront_load_path_vertex(
-    input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
+  input_value.camera_previous_vertex =
+    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
   input_value.light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.light_vertex_length));
   input_value.light_previous_vertex =
     wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.light_vertex_length - 1u));
@@ -136,9 +136,8 @@ void wavefront_store_connect_light_prepare_task(uint dispatch_index, WavefrontCo
   spect.flags = input_value.camera_vertex.throughput.flags;
 
   Sampler light_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 17u)));
-  BSDFData light_data = bsdf_data_make(
-    wavefront_make_connect_vertex(input_value.light_vertex.position, input_value.light_vertex.normal, input_value.light_vertex.texcoord), spect, input_value.light_vertex.medium_index,
-    PathSource::Light, input_value.light_vertex.w_i);
+  BSDFData light_data = bsdf_data_make(wavefront_make_connect_vertex(input_value.light_vertex.position, input_value.light_vertex.normal, input_value.light_vertex.texcoord), spect,
+    input_value.light_vertex.medium_index, PathSource::Light, input_value.light_vertex.w_i);
   BSDFEval light_eval = bsdf_evaluate(make_scene_bsdf_resource_gpu_context(), light_data, direction_to_camera, input_value.light_material, light_sampler);
   if (bsdf_eval_valid(light_eval) == false) {
     return;
@@ -149,32 +148,28 @@ void wavefront_store_connect_light_prepare_task(uint dispatch_index, WavefrontCo
     return;
   }
 
-  BSDFData camera_reverse_data = bsdf_data_make(
-    wavefront_make_connect_vertex(input_value.camera_vertex.position, input_value.camera_vertex.normal, input_value.camera_vertex.texcoord), spect,
-    input_value.camera_vertex.medium_index, PathSource::Camera, direction_to_camera);
+  BSDFData camera_reverse_data =
+    bsdf_data_make(wavefront_make_connect_vertex(input_value.camera_vertex.position, input_value.camera_vertex.normal, input_value.camera_vertex.texcoord), spect,
+      input_value.camera_vertex.medium_index, PathSource::Camera, direction_to_camera);
   Sampler camera_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 1u) ^ (constants.path_iteration + 31u)));
   float3 camera_prev_direction = normalize(input_value.camera_previous_vertex.position - input_value.camera_vertex.position);
-  float z_prev_pdf_dir =
-    wavefront_connect_light_stage_camera_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), camera_reverse_data, camera_prev_direction, input_value.camera_material, camera_reverse_sampler);
-  float z_prev_pdf = wavefront_convert_solid_angle_pdf_to_area(
-    z_prev_pdf_dir, input_value.camera_vertex.position, input_value.camera_previous_vertex.position, wavefront_path_vertex_is_surface(input_value.camera_previous_vertex),
-    input_value.camera_previous_vertex.normal);
+  float z_prev_pdf_dir = wavefront_connect_light_stage_camera_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), camera_reverse_data, camera_prev_direction,
+    input_value.camera_material, camera_reverse_sampler);
+  float z_prev_pdf = wavefront_convert_solid_angle_pdf_to_area(z_prev_pdf_dir, input_value.camera_vertex.position, input_value.camera_previous_vertex.position,
+    wavefront_path_vertex_is_surface(input_value.camera_previous_vertex), input_value.camera_previous_vertex.normal);
 
-  float y_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(
-    camera_eval.pdf, input_value.camera_vertex.position, input_value.light_vertex.position, wavefront_path_vertex_is_surface(input_value.light_vertex),
-    input_value.light_vertex.normal);
+  float y_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(camera_eval.pdf, input_value.camera_vertex.position, input_value.light_vertex.position,
+    wavefront_path_vertex_is_surface(input_value.light_vertex), input_value.light_vertex.normal);
 
-  BSDFData light_reverse_data = bsdf_data_make(
-    wavefront_make_connect_vertex(input_value.light_vertex.position, input_value.light_vertex.normal, input_value.light_vertex.texcoord), spect, input_value.light_vertex.medium_index,
-    PathSource::Light, -direction_to_camera);
+  BSDFData light_reverse_data = bsdf_data_make(wavefront_make_connect_vertex(input_value.light_vertex.position, input_value.light_vertex.normal, input_value.light_vertex.texcoord),
+    spect, input_value.light_vertex.medium_index, PathSource::Light, -direction_to_camera);
   Sampler light_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 3u) ^ (constants.path_iteration + 43u)));
   float3 light_prev_direction = normalize(input_value.light_previous_vertex.position - input_value.light_vertex.position);
   float y_prev_pdf_dir = bsdf_pdf(make_scene_bsdf_resource_gpu_context(), light_reverse_data, light_prev_direction, input_value.light_material, light_reverse_sampler);
   float y_prev_pdf = wavefront_vertex_to_vertex_area_pdf(y_prev_pdf_dir, input_value.light_vertex, input_value.light_previous_vertex);
 
-  float z_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(
-    light_eval.pdf, input_value.light_vertex.position, input_value.camera_vertex.position, wavefront_path_vertex_is_surface(input_value.camera_vertex),
-    input_value.camera_vertex.normal);
+  float z_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(light_eval.pdf, input_value.light_vertex.position, input_value.camera_vertex.position,
+    wavefront_path_vertex_is_surface(input_value.camera_vertex), input_value.camera_vertex.normal);
 
   float weight = wavefront_connect_light_weight(input_value, z_curr_pdf, z_prev_pdf, y_curr_pdf, y_prev_pdf);
   SpectralResponse contribution = spectral_response_mul(input_value.camera_vertex.throughput, spectral_response_mul(connection, weight * geometry_term));

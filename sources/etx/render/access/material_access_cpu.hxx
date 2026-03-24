@@ -29,8 +29,7 @@ ETX_SHARED_INLINE MaterialAccess material_access_cpu_make(ETX_IN(Material, mater
   return result;
 }
 
-ETX_SHARED_INLINE bool material_access_try_load(
-  ETX_IN(MaterialAccessCPUContext, context), uint32_t material_index, ETX_OUT(MaterialAccess, access)) {
+ETX_SHARED_INLINE bool material_access_try_load(ETX_IN(MaterialAccessCPUContext, context), uint32_t material_index, ETX_OUT(MaterialAccess, access)) {
   access = {};
   if (material_access_can_load(context, material_index) == false) {
     return false;
@@ -40,8 +39,7 @@ ETX_SHARED_INLINE bool material_access_try_load(
   return true;
 }
 
-ETX_SHARED_INLINE bool material_access_try_load_full(
-  ETX_IN(MaterialAccessCPUContext, context), uint32_t material_index, ETX_OUT(Material, material)) {
+ETX_SHARED_INLINE bool material_access_try_load_full(ETX_IN(MaterialAccessCPUContext, context), uint32_t material_index, ETX_OUT(Material, material)) {
   material = {};
   if (material_access_can_load(context, material_index) == false) {
     return false;

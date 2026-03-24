@@ -41,8 +41,8 @@ ETX_SHARED_INLINE bool scene_gpu_has_medium_spectrum_buffers(uint32_t mediums_de
   return scene_gpu_has_descriptor(mediums_descriptor_index) && scene_gpu_has_descriptor(spectrums_descriptor_index);
 }
 
-ETX_SHARED_INLINE bool scene_gpu_has_emitter_buffers(
-  uint32_t emitter_instances_descriptor_index, uint32_t emitter_profiles_descriptor_index, uint32_t spectrums_descriptor_index, uint32_t scene_globals_descriptor_index) {
+ETX_SHARED_INLINE bool scene_gpu_has_emitter_buffers(uint32_t emitter_instances_descriptor_index, uint32_t emitter_profiles_descriptor_index, uint32_t spectrums_descriptor_index,
+  uint32_t scene_globals_descriptor_index) {
   return scene_gpu_has_descriptor(emitter_instances_descriptor_index) && scene_gpu_has_descriptor(emitter_profiles_descriptor_index) &&
          scene_gpu_has_descriptor(spectrums_descriptor_index) && scene_gpu_has_descriptor(scene_globals_descriptor_index);
 }

@@ -93,16 +93,12 @@ ETX_SHARED_INLINE float3 spectral_xyz(uint32_t index) {
 }
 
 ETX_SHARED_INLINE float3 spectral_xyz_to_rgb(ETX_IN(float3, xyz)) {
-  return make_float3(
-    3.24045420f * xyz.x - 1.5371385f * xyz.y - 0.4985314f * xyz.z,
-    -0.9692660f * xyz.x + 1.8760108f * xyz.y + 0.0415560f * xyz.z,
+  return make_float3(3.24045420f * xyz.x - 1.5371385f * xyz.y - 0.4985314f * xyz.z, -0.9692660f * xyz.x + 1.8760108f * xyz.y + 0.0415560f * xyz.z,
     0.05564340f * xyz.x - 0.2040259f * xyz.y + 1.0572252f * xyz.z);
 }
 
 ETX_SHARED_INLINE float3 spectral_rgb_to_xyz(ETX_IN(float3, rgb)) {
-  return make_float3(
-    0.4124564f * rgb.x + 0.3575760f * rgb.y + 0.1804375f * rgb.z,
-    0.2126729f * rgb.x + 0.7151521f * rgb.y + 0.0721750f * rgb.z,
+  return make_float3(0.4124564f * rgb.x + 0.3575760f * rgb.y + 0.1804375f * rgb.z, 0.2126729f * rgb.x + 0.7151521f * rgb.y + 0.0721750f * rgb.z,
     0.0193339f * rgb.x + 0.1191920f * rgb.y + 0.9503041f * rgb.z);
 }
 
@@ -177,7 +173,9 @@ ETX_SHARED_INLINE SpectralResponse spectral_distribution_query(ETX_IN(SpectralDi
   }
 
   uint32_t j = min(i + 1u, distribution.spectral_entry_count - 1u);
-  float t = (i == j) ? 0.0f : (query.wavelength - distribution.spectral_entries[i].wavelength) / (distribution.spectral_entries[j].wavelength - distribution.spectral_entries[i].wavelength);
+  float t = (i == j)
+              ? 0.0f
+              : (query.wavelength - distribution.spectral_entries[i].wavelength) / (distribution.spectral_entries[j].wavelength - distribution.spectral_entries[i].wavelength);
   float power = distribution.spectral_entries[i].power + (distribution.spectral_entries[j].power - distribution.spectral_entries[i].power) * t;
   return spectral_response_make(query, power);
 }

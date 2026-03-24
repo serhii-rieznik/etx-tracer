@@ -95,8 +95,7 @@ bool gpu_create_and_upload_storage_buffer(RHIContext& rhi, const void* data, uin
 bool gpu_prepare_sky_input_buffers(RHIContext& rhi, const Parameters& parameters, const std::vector<LightSource>& light_sources, GpuSkyInputBuffers& out_buffers) {
   gpu_cleanup_sky_input_buffers(rhi, out_buffers);
 
-  out_buffers.parameters =
-    scattering_make_gpu_parameters(parameters.altitude, parameters.anisotropy, parameters.rayleigh_scale, parameters.mie_scale, parameters.ozone_scale);
+  out_buffers.parameters = scattering_make_gpu_parameters(parameters.altitude, parameters.anisotropy, parameters.rayleigh_scale, parameters.mie_scale, parameters.ozone_scale);
 
   if (light_sources.empty()) {
     return true;
@@ -222,8 +221,7 @@ bool gpu_upload_sky_input_cache(RHIContext& rhi, GpuContext& context, const Para
     gpu_spectra.push_back(light.emission_spectrum);
   }
 
-  const RHIResult lights_update_result =
-    rhi.device().update_buffer(context.sky_light_input_buffer, gpu_lights.data(), uint64_t(gpu_lights.size()) * sizeof(AtmosphereSkyGpuLight));
+  const RHIResult lights_update_result = rhi.device().update_buffer(context.sky_light_input_buffer, gpu_lights.data(), uint64_t(gpu_lights.size()) * sizeof(AtmosphereSkyGpuLight));
   if (lights_update_result != RHIResult::Success) {
     log::error("Failed to upload cached atmosphere sky light buffer (%u)", static_cast<uint32_t>(lights_update_result));
     return false;
@@ -682,7 +680,8 @@ SpectralDistribution ozone_spectrum() {
   return SpectralDistribution::from_samples(o_samples.data(), o_samples.size());
 }
 
-bool generate_sky_image(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources, float4* buffer) {
+bool generate_sky_image(RHIContext& rhi, GpuContext& context, const Parameters& parameters, const uint2& dimensions, const std::vector<LightSource>& light_sources,
+  float4* buffer) {
   if (buffer == nullptr) {
     log::error("Invalid output buffer for atmosphere sky image generation");
     return false;

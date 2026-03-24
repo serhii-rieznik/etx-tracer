@@ -27,8 +27,7 @@ ETX_SHARED_INLINE bool bsdf_gpu_supported_class(uint32_t material_class) {
   }
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   switch (material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_sample(context, data, material, sampler);
@@ -55,8 +54,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_sample(
   }
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   switch (material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_evaluate(context, data, outgoing_direction, material, sampler);
@@ -83,8 +82,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_evaluate(
   }
 }
 
-ETX_SHARED_INLINE float bsdf_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   switch (material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_pdf(context, data, outgoing_direction, material, sampler);
@@ -111,8 +110,8 @@ ETX_SHARED_INLINE float bsdf_pdf(
   }
 }
 
-ETX_SHARED_INLINE float bsdf_reverse_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, input_data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_reverse_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, input_data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   float3 reverse_w_o = -input_data.w_i;
   BSDFData reverse_data = input_data;
   reverse_data.w_i = -outgoing_direction;
@@ -146,8 +145,7 @@ ETX_SHARED_INLINE bool bsdf_is_delta(ETX_IN(Material, material), ETX_IN(float2, 
   }
 }
 
-ETX_SHARED_INLINE bool bsdf_is_delta_with_context(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE bool bsdf_is_delta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {
   switch (material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_is_delta(material, tex, sampler);
@@ -174,8 +172,7 @@ ETX_SHARED_INLINE bool bsdf_is_delta_with_context(
   }
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   switch (material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_albedo(context, data, material, sampler);

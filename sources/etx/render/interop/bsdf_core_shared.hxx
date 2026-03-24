@@ -32,8 +32,7 @@ struct BSDFData {
   uint32_t current_medium ETX_INIT(kInvalidIndex);
 };
 
-ETX_SHARED_INLINE BSDFData bsdf_data_make(
-  ETX_IN(Vertex, vertex), ETX_IN(SpectralQuery, spect), uint32_t medium_index, uint32_t source, ETX_IN(float3, incoming_direction)) {
+ETX_SHARED_INLINE BSDFData bsdf_data_make(ETX_IN(Vertex, vertex), ETX_IN(SpectralQuery, spect), uint32_t medium_index, uint32_t source, ETX_IN(float3, incoming_direction)) {
   BSDFData result = ETX_ZERO(BSDFData);
   result.pos = vertex.pos;
   result.nrm = vertex.nrm;
@@ -193,8 +192,7 @@ ETX_SHARED_INLINE float bsdf_normal_distribution_local(ETX_IN(float2, alpha), ET
   return result;
 }
 
-ETX_SHARED_INLINE float3 bsdf_normal_distribution_sample(
-  ETX_IN(LocalFrame, frame), ETX_IN(float2, alpha_value), ETX_INOUT(Sampler, sampler), ETX_IN(float3, incoming_direction)) {
+ETX_SHARED_INLINE float3 bsdf_normal_distribution_sample(ETX_IN(LocalFrame, frame), ETX_IN(float2, alpha_value), ETX_INOUT(Sampler, sampler), ETX_IN(float3, incoming_direction)) {
   float2 alpha = float2(max(kBSDFNormalDistributionMinAlpha, alpha_value.x), max(kBSDFNormalDistributionMinAlpha, alpha_value.y));
   float3 w_i = local_frame_to_local(frame, -incoming_direction);
   float3 v_h = normalize(float3(alpha.x * w_i.x, alpha.y * w_i.y, w_i.z));
@@ -214,8 +212,8 @@ ETX_SHARED_INLINE float3 bsdf_normal_distribution_sample(
   return local_frame_from_local(frame, local_m);
 }
 
-ETX_SHARED_INLINE BSDFNormalDistributionEval bsdf_normal_distribution_evaluate(
-  ETX_IN(LocalFrame, frame), ETX_IN(float2, alpha_value), ETX_IN(float3, in_m), ETX_IN(float3, incoming_direction), ETX_IN(float3, outgoing_direction)) {
+ETX_SHARED_INLINE BSDFNormalDistributionEval bsdf_normal_distribution_evaluate(ETX_IN(LocalFrame, frame), ETX_IN(float2, alpha_value), ETX_IN(float3, in_m),
+  ETX_IN(float3, incoming_direction), ETX_IN(float3, outgoing_direction)) {
   float2 alpha = float2(max(kBSDFNormalDistributionMinAlpha, alpha_value.x), max(kBSDFNormalDistributionMinAlpha, alpha_value.y));
   float3 local_w_i = local_frame_to_local(frame, -incoming_direction);
   if (local_w_i.z <= kEpsilon) {
@@ -234,8 +232,8 @@ ETX_SHARED_INLINE BSDFNormalDistributionEval bsdf_normal_distribution_evaluate(
   return result;
 }
 
-ETX_SHARED_INLINE float bsdf_normal_distribution_pdf(
-  ETX_IN(LocalFrame, frame), ETX_IN(float2, alpha_value), ETX_IN(float3, in_m), ETX_IN(float3, incoming_direction), ETX_IN(float3, outgoing_direction)) {
+ETX_SHARED_INLINE float bsdf_normal_distribution_pdf(ETX_IN(LocalFrame, frame), ETX_IN(float2, alpha_value), ETX_IN(float3, in_m), ETX_IN(float3, incoming_direction),
+  ETX_IN(float3, outgoing_direction)) {
   float2 alpha = float2(max(kBSDFNormalDistributionMinAlpha, alpha_value.x), max(kBSDFNormalDistributionMinAlpha, alpha_value.y));
   float3 local_w_i = local_frame_to_local(frame, -incoming_direction);
   if (local_w_i.z <= kEpsilon) {
@@ -249,8 +247,8 @@ ETX_SHARED_INLINE float bsdf_normal_distribution_pdf(
   return g1 * d * s;
 }
 
-ETX_SHARED_INLINE float bsdf_fix_shading_normal(
-  ETX_IN(float3, geo_normal), ETX_IN(float3, shading_normal), ETX_IN(float3, incoming_direction), ETX_IN(float3, outgoing_direction)) {
+ETX_SHARED_INLINE float bsdf_fix_shading_normal(ETX_IN(float3, geo_normal), ETX_IN(float3, shading_normal), ETX_IN(float3, incoming_direction),
+  ETX_IN(float3, outgoing_direction)) {
   float incoming_geo = dot(incoming_direction, geo_normal);
   float incoming_shading = dot(incoming_direction, shading_normal);
   float outgoing_geo = dot(outgoing_direction, geo_normal);

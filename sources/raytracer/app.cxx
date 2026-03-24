@@ -57,7 +57,16 @@ void RTApplication::init() {
   {
     ETX_PROFILER_NAMED_SCOPE("app_init_render_context_and_ior");
     render_context.init();
+    if (render_context.get_context().valid() == false) {
+      log::error("Failed to initialize rendering context");
+      return;
+    }
     scene.set_scattering_rhi(render_context.get_context());
+    _gpu_renderer_supported = render_context.get_context().capabilities().supports_ray_tracing;
+    ui.set_gpu_renderer_available(_gpu_renderer_supported);
+    if (_gpu_renderer_supported == false) {
+      log::warning("GPU ray tracing is not supported by the active RHI backend; falling back to CPU or raster rendering");
+    }
     std::string ior_folder = env().file_in_data("./spectrum/");
     _ior_database.load(ior_folder.c_str());
   }
@@ -196,6 +205,11 @@ void RTApplication::save_options() {
 void RTApplication::ensure_gpu_renderer_initialized() {
   ETX_PROFILER_SCOPE();
 
+  if (_gpu_renderer_supported == false) {
+    log::warning("GPU ray tracing is unavailable for the active RHI backend");
+    return;
+  }
+
   if (_gpu_renderer_initialized) {
     return;
   }
@@ -206,6 +220,11 @@ void RTApplication::ensure_gpu_renderer_initialized() {
 
 void RTApplication::set_renderer_mode(RendererMode mode) {
   ETX_PROFILER_SCOPE();
+
+  if ((mode == RendererMode::GPURaytracing) && (_gpu_renderer_supported == false)) {
+    log::warning("GPU ray tracing is unavailable for the active RHI backend; using CPU ray tracing instead");
+    mode = RendererMode::CPURaytracing;
+  }
 
   Renderer* next_renderer = nullptr;
   std::string renderer_name;

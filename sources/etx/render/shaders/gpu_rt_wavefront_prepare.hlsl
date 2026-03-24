@@ -23,7 +23,7 @@
   }
 }
 
-[numthreads(1, 1, 1)] void wavefront_swap_queues_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(1, 1, 1)] void wavefront_swap_queues_main(uint3 dtid : SV_DispatchThreadID) {
   if ((dtid.x != 0u) || (dtid.y != 0u) || (dtid.z != 0u)) {
     return;
   }
@@ -45,6 +45,5 @@
   uint pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
   float4 value = wavefront_film_load(pixel_index);
   float sample_count = float(max(1u, constants.sample_index + 1u));
-  bindless_storage_textures[NonUniformResourceIndex(constants.output_image_index)][output_pixel] =
-    float4(max(value.xyz / sample_count, float3(0.0f, 0.0f, 0.0f)), 1.0f);
+  bindless_storage_textures[NonUniformResourceIndex(constants.output_image_index)][output_pixel] = float4(max(value.xyz / sample_count, float3(0.0f, 0.0f, 0.0f)), 1.0f);
 }

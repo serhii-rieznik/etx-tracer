@@ -34,11 +34,10 @@ ETX_SHARED_INLINE float bsdf_velvet_diffuse_burley(float alpha, float n_dot_i, f
   return light_scatter * view_scatter * kInvPi;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler));
+ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler));
 
-ETX_SHARED_INLINE BSDFSample bsdf_velvet_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_velvet_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data);
   float3 sampled_direction = sample_cosine_distribution(bsdf_sampler_next_2d(sampler), frame.nrm, 0.0f);
   BSDFEval eval = bsdf_velvet_evaluate(context, data, sampled_direction, material, sampler);
@@ -53,8 +52,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_velvet_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
 
   LocalFrame frame = bsdf_data_get_normal_frame(data);
@@ -97,8 +96,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluate(
   return result;
 }
 
-ETX_SHARED_INLINE float bsdf_velvet_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_velvet_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)outgoing_direction;
   (void)material;
@@ -119,8 +118,7 @@ ETX_SHARED_INLINE bool bsdf_velvet_is_delta(ETX_IN(Material, material), ETX_IN(f
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_velvet_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_velvet_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }

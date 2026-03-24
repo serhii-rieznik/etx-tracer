@@ -1435,7 +1435,8 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
           callbacks.renderer_selected(RendererMode::Rasterization);
         }
       }
-      if (ImGui::MenuItem("GPU Raytracer", nullptr, _current_renderer_mode == RendererMode::GPURaytracing)) {
+      const char* gpu_renderer_label = _gpu_renderer_available ? "GPU Raytracer" : "GPU Raytracer (Unavailable)";
+      if (ImGui::MenuItem(gpu_renderer_label, nullptr, _current_renderer_mode == RendererMode::GPURaytracing, _gpu_renderer_available)) {
         if (callbacks.renderer_selected) {
           callbacks.renderer_selected(RendererMode::GPURaytracing);
         }
@@ -2869,10 +2870,14 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
 void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   ImGui::Text("Renderer Mode:");
   full_width_item();
-  const char* renderer_modes[] = {"CPU Raytracing", "Rasterization", "GPU Raytracing"};
+  const char* renderer_modes[] = {"CPU Raytracing", "Rasterization", _gpu_renderer_available ? "GPU Raytracing" : "GPU Raytracing (Unavailable)"};
   int current_mode = static_cast<int>(_current_renderer_mode);
   if (ImGui::Combo("##renderer_mode", &current_mode, renderer_modes, IM_ARRAYSIZE(renderer_modes))) {
-    _current_renderer_mode = static_cast<RendererMode>(current_mode);
+    RendererMode selected_mode = static_cast<RendererMode>(current_mode);
+    if ((selected_mode == RendererMode::GPURaytracing) && (_gpu_renderer_available == false)) {
+      selected_mode = RendererMode::CPURaytracing;
+    }
+    _current_renderer_mode = selected_mode;
     if (callbacks.renderer_selected) {
       callbacks.renderer_selected(_current_renderer_mode);
     }

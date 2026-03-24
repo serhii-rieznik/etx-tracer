@@ -15,11 +15,11 @@ struct OceanPushConstants {
 OceanPushConstants pushConstants;
 
 struct VSOutput {
-  float4 position : SV_Position;
-  float3 worldPos : WORLD_POS;
-  float3 geomNormal : TEXCOORD2;
-  float2 uv : TEXCOORD;
-  float2 surfaceXZ : TEXCOORD3;
+  float4 position                : SV_Position;
+  float3 worldPos                : WORLD_POS;
+  float3 geomNormal              : TEXCOORD2;
+  float2 uv                      : TEXCOORD;
+  float2 surfaceXZ               : TEXCOORD3;
   nointerpolation float mipLevel : TEXCOORD1;
 };
 
@@ -155,18 +155,8 @@ float3 displacement_geometric_normal(float2 world_xz, float cascade_lengths[3], 
   return top_surface_normal_from_tangent_basis(tangent_x, tangent_z);
 }
 
-float3 reconstruct_surface_normal(
-  float2 surface_xz,
-  float2 surface_xz_ddx,
-  float2 surface_xz_ddy,
-  OceanRenderSettings settings,
-  float cascade_lengths[3],
-  float cascade_weights[3],
-  int cascade_filter,
-  bool use_cascade_weights,
-  float surface_normal_strength,
-  bool sample_mip0,
-  out bool has_surface_data) {
+float3 reconstruct_surface_normal(float2 surface_xz, float2 surface_xz_ddx, float2 surface_xz_ddy, OceanRenderSettings settings, float cascade_lengths[3], float cascade_weights[3],
+  int cascade_filter, bool use_cascade_weights, float surface_normal_strength, bool sample_mip0, out bool has_surface_data) {
   float3 base_dPdu = float3(1.0f, 0.0f, 0.0f);
   float3 base_dPdv = float3(0.0f, 0.0f, 1.0f);
   float3 dPdu = base_dPdu;
@@ -221,12 +211,7 @@ float smoothstep_range(float edge0, float edge1, float x) {
   return t * t * (3.0f - (2.0f * t));
 }
 
-float3 sample_filtered_slope_metrics(
-  float2 surface_xz,
-  float2 surface_xz_ddx,
-  float2 surface_xz_ddy,
-  OceanRenderSettings settings,
-  float cascade_lengths[3],
+float3 sample_filtered_slope_metrics(float2 surface_xz, float2 surface_xz_ddx, float2 surface_xz_ddy, OceanRenderSettings settings, float cascade_lengths[3],
   float cascade_weights[3]) {
   SamplerState repeat_sampler = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];
   float slope_accum = 0.0f;
@@ -262,12 +247,7 @@ float3 sample_filtered_slope_metrics(
   return float3(max(slope_accum, 0.0f), area_avg, ny_avg);
 }
 
-float sample_filtered_slope_energy(
-  float2 surface_xz,
-  float2 surface_xz_ddx,
-  float2 surface_xz_ddy,
-  OceanRenderSettings settings,
-  float cascade_lengths[3],
+float sample_filtered_slope_energy(float2 surface_xz, float2 surface_xz_ddx, float2 surface_xz_ddy, OceanRenderSettings settings, float cascade_lengths[3],
   float cascade_weights[3]) {
   return sample_filtered_slope_metrics(surface_xz, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights).x;
 }
@@ -479,13 +459,7 @@ float sample_aeration_detail_texture(float2 world_xz, float2 world_xz_ddx, float
   return sample_detail_texture(world_xz, world_xz_ddx, world_xz_ddy, settings.aerationDetailIndex, settings);
 }
 
-float evaluate_foam_mask(
-  float wave_thickness_m,
-  bool has_wave_thickness,
-  float slope_energy,
-  float area_mag,
-  float slope_metric_ny,
-  OceanRenderSettings settings) {
+float evaluate_foam_mask(float wave_thickness_m, bool has_wave_thickness, float slope_energy, float area_mag, float slope_metric_ny, OceanRenderSettings settings) {
   if (settings.foamControls0.x <= 0.5f) {
     return 0.0f;
   }
@@ -519,7 +493,7 @@ float accumulate_foam_history(float current_seed, float previous_history, bool h
 VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
   ByteAddressBuffer vb = bindless_buffers[NonUniformResourceIndex(pushConstants.vbIndex)];
   Vertex v = vb.Load<Vertex>(vertexId * 56);
-  
+
   ByteAddressBuffer instanceBuffer = bindless_buffers[NonUniformResourceIndex(pushConstants.instanceBufferIndex)];
   ClipmapInstance inst = instanceBuffer.Load<ClipmapInstance>(instanceId * 16);
   ByteAddressBuffer settingsBuffer = bindless_buffers[NonUniformResourceIndex(pushConstants.settingsBufferIndex)];
@@ -581,7 +555,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
   float3 disp = sample_displacement_field(base_xz, cascade_lengths, cascade_weights);
 
   worldPos += disp;
-  
+
   VSOutput output;
   output.position = mul(pushConstants.vpMatrix, float4(worldPos, 1.0f));
   output.worldPos = worldPos;
@@ -593,11 +567,16 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
 }
 
 float3 get_mip_color(uint mip_level) {
-  if (mip_level == 0u) return float3(1.0f, 0.25f, 0.2f);
-  if (mip_level == 1u) return float3(1.0f, 0.65f, 0.2f);
-  if (mip_level == 2u) return float3(0.95f, 0.9f, 0.25f);
-  if (mip_level == 3u) return float3(0.2f, 0.85f, 0.3f);
-  if (mip_level == 4u) return float3(0.2f, 0.55f, 1.0f);
+  if (mip_level == 0u)
+    return float3(1.0f, 0.25f, 0.2f);
+  if (mip_level == 1u)
+    return float3(1.0f, 0.65f, 0.2f);
+  if (mip_level == 2u)
+    return float3(0.95f, 0.9f, 0.25f);
+  if (mip_level == 3u)
+    return float3(0.2f, 0.85f, 0.3f);
+  if (mip_level == 4u)
+    return float3(0.2f, 0.55f, 1.0f);
   return float3(0.75f, 0.3f, 1.0f);
 }
 
@@ -625,9 +604,8 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   bool has_combined_surface_normal = false;
   float3 mapped_n = geom_n;
   if (surface_normal_strength > 0.0f) {
-    mapped_n = reconstruct_surface_normal(
-      input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights, -1, true, surface_normal_strength,
-      false, has_combined_surface_normal);
+    mapped_n = reconstruct_surface_normal(input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights, -1, true, surface_normal_strength, false,
+      has_combined_surface_normal);
     if (has_combined_surface_normal == false) {
       mapped_n = geom_n;
     }
@@ -635,16 +613,15 @@ float4 PSMain(VSOutput input) : SV_Target0 {
 
   if (surface_normal_debug_mode > 0u) {
     bool has_debug_surface_normal = false;
-    float3 debug_normal = reconstruct_surface_normal(
-      input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights, -1, true, 1.0f, false, has_debug_surface_normal);
+    float3 debug_normal =
+      reconstruct_surface_normal(input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights, -1, true, 1.0f, false, has_debug_surface_normal);
     if (has_debug_surface_normal == false) {
       debug_normal = geom_n;
     }
     if ((surface_normal_debug_mode >= 2u) && (surface_normal_debug_mode <= 4u)) {
       uint cascade_index = surface_normal_debug_mode - 2u;
-      debug_normal = reconstruct_surface_normal(
-        input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights, (int)cascade_index, false, 1.0f,
-        false, has_debug_surface_normal);
+      debug_normal = reconstruct_surface_normal(input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights, (int)cascade_index, false, 1.0f, false,
+        has_debug_surface_normal);
       if (has_debug_surface_normal == false) {
         debug_normal = float3(0.0f, 1.0f, 0.0f);
       }
@@ -667,8 +644,8 @@ float4 PSMain(VSOutput input) : SV_Target0 {
 
     if (surface_normal_debug_mode == 6u) {
       bool has_mip0_surface_normal = false;
-      float3 mip0_normal = reconstruct_surface_normal(
-        input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights, -1, true, 1.0f, true, has_mip0_surface_normal);
+      float3 mip0_normal =
+        reconstruct_surface_normal(input.surfaceXZ, surface_xz_ddx, surface_xz_ddy, settings, cascade_lengths, cascade_weights, -1, true, 1.0f, true, has_mip0_surface_normal);
       if (has_mip0_surface_normal == false) {
         mip0_normal = geom_n;
       }
@@ -731,7 +708,7 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   }
 
   float3 V = normalize(pushConstants.cameraPos.xyz - input.worldPos);
-  
+
   float NdotV = saturate(dot(N, V));
   bool physical_render_mode = (settings.waterOptics0.w > 0.5f);
   float water_ior = settings.waterOptics0.x;
@@ -793,7 +770,7 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   float spec_aa_alpha = max(spec_aa_roughness * spec_aa_roughness, 1.0e-6f);
   float ggx_alpha = min(max(max(base_alpha, slope_alpha), spec_aa_alpha), 0.36f);
   float effective_roughness = sqrt(ggx_alpha);
-  
+
   float3 waterRefractColor = float3(0.01f, 0.05f, 0.1f);
   bool has_scene_refraction = false;
   if (physical_render_mode) {
@@ -880,7 +857,7 @@ float4 PSMain(VSOutput input) : SV_Target0 {
       }
     }
   }
-  
+
   if (settings.sunDirectionEnable.w > 0.5f) {
     float3 L = settings.sunDirectionEnable.xyz;
     float L2 = dot(L, L);

@@ -2,26 +2,26 @@
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 
-#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE 1
-#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC 2
-#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR 3
+#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE    1
+#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC    2
+#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR  3
 #define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
-  #include <interop/bsdf_various_shared.hxx>
-  #define ETX_STAGE_BSDF_CLASS MaterialClass::Diffuse
-  #define ETX_STAGE_BSDF_EVAL bsdf_diffuse_evaluate
-  #define ETX_STAGE_BSDF_PDF bsdf_diffuse_pdf
+# include <interop/bsdf_various_shared.hxx>
+# define ETX_STAGE_BSDF_CLASS MaterialClass::Diffuse
+# define ETX_STAGE_BSDF_EVAL  bsdf_diffuse_evaluate
+# define ETX_STAGE_BSDF_PDF   bsdf_diffuse_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
-  #include <interop/bsdf_plastic_shared.hxx>
-  #define ETX_STAGE_BSDF_CLASS MaterialClass::Plastic
-  #define ETX_STAGE_BSDF_EVAL bsdf_plastic_evaluate
-  #define ETX_STAGE_BSDF_PDF bsdf_plastic_pdf
+# include <interop/bsdf_plastic_shared.hxx>
+# define ETX_STAGE_BSDF_CLASS MaterialClass::Plastic
+# define ETX_STAGE_BSDF_EVAL  bsdf_plastic_evaluate
+# define ETX_STAGE_BSDF_PDF   bsdf_plastic_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
-  #include <interop/bsdf_conductor_shared.hxx>
-  #define ETX_STAGE_BSDF_CLASS MaterialClass::Conductor
-  #define ETX_STAGE_BSDF_EVAL bsdf_conductor_evaluate
-  #define ETX_STAGE_BSDF_PDF bsdf_conductor_pdf
+# include <interop/bsdf_conductor_shared.hxx>
+# define ETX_STAGE_BSDF_CLASS MaterialClass::Conductor
+# define ETX_STAGE_BSDF_EVAL  bsdf_conductor_evaluate
+# define ETX_STAGE_BSDF_PDF   bsdf_conductor_pdf
 #endif
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
@@ -29,8 +29,7 @@
   (void)dtid;
 }
 #else
-BSDFEval wavefront_direct_light_stage_bsdf_eval(
-  BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+BSDFEval wavefront_direct_light_stage_bsdf_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_EVAL(context, data, outgoing_direction, material, sampler);
 }
 
@@ -38,7 +37,7 @@ float wavefront_direct_light_stage_bsdf_pdf(BSDFResourceContext context, BSDFDat
   return ETX_STAGE_BSDF_PDF(context, data, outgoing_direction, material, sampler);
 }
 
-#include "gpu_rt_wavefront_direct_light_prepare_common.hlsl"
+# include "gpu_rt_wavefront_direct_light_prepare_common.hlsl"
 
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
   WavefrontDirectLightPrepareInput input_value = (WavefrontDirectLightPrepareInput)0;

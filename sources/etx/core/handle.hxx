@@ -18,8 +18,8 @@ union Handle {
 
   uint64_t value = kInvalidHandleValue;
   struct {
-    uint64_t cls : ClsBits;
-    uint64_t index : IndexBits;
+    uint64_t cls        : ClsBits;
+    uint64_t index      : IndexBits;
     uint64_t generation : GenBits;
   };
 

@@ -3,15 +3,12 @@
 #include "camera.hxx"
 
 ETX_SHARED_INLINE float2 camera_shared_center_uv(ETX_IN(uint2, pixel), ETX_IN(uint2, dim)) {
-  return float2(
-    (float(pixel.x) + 0.5f) / float(dim.x) * 2.0f - 1.0f,
-    (float(pixel.y) + 0.5f) / float(dim.y) * 2.0f - 1.0f);
+  return float2((float(pixel.x) + 0.5f) / float(dim.x) * 2.0f - 1.0f, (float(pixel.y) + 0.5f) / float(dim.y) * 2.0f - 1.0f);
 }
 
 ETX_SHARED_INLINE float2 camera_shared_jittered_uv(ETX_IN(uint2, pixel), ETX_IN(uint2, dim), ETX_IN(float2, rnd)) {
   float sample_radius = 0.5f;
-  return float2(
-    (float(pixel.x) + 0.5f + sample_radius * (rnd.x * 2.0f - 1.0f)) / float(dim.x) * 2.0f - 1.0f,
+  return float2((float(pixel.x) + 0.5f + sample_radius * (rnd.x * 2.0f - 1.0f)) / float(dim.x) * 2.0f - 1.0f,
     (float(pixel.y) + 0.5f + sample_radius * (rnd.y * 2.0f - 1.0f)) / float(dim.y) * 2.0f - 1.0f);
 }
 
@@ -44,8 +41,8 @@ ETX_SHARED_INLINE float camera_shared_clip_direction_scale(ETX_IN(Camera, camera
   return max(kEpsilon, abs(dot(direction_to_camera, camera.direction)));
 }
 
-ETX_SHARED_INLINE float3 camera_shared_clamp_view_direction_away_from_up(
-  ETX_IN(float3, view_direction), ETX_IN(float3, up_vector), ETX_IN(float3, fallback_right_vector), float min_cosine_threshold) {
+ETX_SHARED_INLINE float3 camera_shared_clamp_view_direction_away_from_up(ETX_IN(float3, view_direction), ETX_IN(float3, up_vector), ETX_IN(float3, fallback_right_vector),
+  float min_cosine_threshold) {
   float angle_offset_degrees = 0.01f;
   float angle_offset_radians = angle_offset_degrees * kPi / 180.0f;
 

@@ -19,11 +19,7 @@ float4 image_evaluate_gpu_load_pixel(ByteAddressBuffer payload_buffer, uint form
 
   if (format == (uint)Image::Format::RGBA8) {
     uint packed_rgba = payload_buffer.Load(byte_offset);
-    float4 result = float4(
-      float((packed_rgba >> 0u) & 0xFFu),
-      float((packed_rgba >> 8u) & 0xFFu),
-      float((packed_rgba >> 16u) & 0xFFu),
-      float((packed_rgba >> 24u) & 0xFFu));
+    float4 result = float4(float((packed_rgba >> 0u) & 0xFFu), float((packed_rgba >> 8u) & 0xFFu), float((packed_rgba >> 16u) & 0xFFu), float((packed_rgba >> 24u) & 0xFFu));
     return result * (1.0f / 255.0f);
   }
 
@@ -65,8 +61,7 @@ float image_evaluate_gpu_luminance(float3 value) {
   return dot(value, float3(0.212671f, 0.715160f, 0.072169f));
 }
 
-bool image_evaluate_gpu_try_rgba(
-  ImageEvaluateGPUContext context, uint image_index, float2 uv, out float image_pdf, out float4 image_value) {
+bool image_evaluate_gpu_try_rgba(ImageEvaluateGPUContext context, uint image_index, float2 uv, out float image_pdf, out float4 image_value) {
   image_pdf = 0.0f;
   image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
 

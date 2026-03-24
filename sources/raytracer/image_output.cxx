@@ -261,8 +261,8 @@ bool compare_images(const float4* reference, const float4* result, const uint2& 
     linear_absolute_error_sum += linear_diff_rgb.x + linear_diff_rgb.y + linear_diff_rgb.z;
     linear_squared_error_sum += (linear_diff_rgb.x * linear_diff_rgb.x) + (linear_diff_rgb.y * linear_diff_rgb.y) + (linear_diff_rgb.z * linear_diff_rgb.z);
     linear_signed_error_sum += linear_signed_diff_rgb.x + linear_signed_diff_rgb.y + linear_signed_diff_rgb.z;
-    linear_reference_energy_sum += (reference_linear_rgb.x * reference_linear_rgb.x) + (reference_linear_rgb.y * reference_linear_rgb.y) +
-                                   (reference_linear_rgb.z * reference_linear_rgb.z);
+    linear_reference_energy_sum +=
+      (reference_linear_rgb.x * reference_linear_rgb.x) + (reference_linear_rgb.y * reference_linear_rgb.y) + (reference_linear_rgb.z * reference_linear_rgb.z);
     linear_reference_luminance_sum += luminance_from_rgb(reference_linear_rgb);
     linear_result_luminance_sum += luminance_from_rgb(result_linear_rgb);
     linear_max_absolute_error = fmaxf(linear_max_absolute_error, linear_diff_value);
@@ -282,8 +282,7 @@ bool compare_images(const float4* reference, const float4* result, const uint2& 
   comparison.reference_mean_luminance = static_cast<float>(reference_luminance_sum / pixel_count);
   comparison.result_mean_luminance = static_cast<float>(result_luminance_sum / pixel_count);
   comparison.brightness_ratio = comparison.result_mean_luminance / fmaxf(comparison.reference_mean_luminance, 1.0e-12f);
-  comparison.brightness_relative_error =
-    (comparison.result_mean_luminance - comparison.reference_mean_luminance) / fmaxf(comparison.reference_mean_luminance, 1.0e-12f);
+  comparison.brightness_relative_error = (comparison.result_mean_luminance - comparison.reference_mean_luminance) / fmaxf(comparison.reference_mean_luminance, 1.0e-12f);
   comparison.similarity = 100.0f * (1.0f - saturate(comparison.root_mean_squared_error));
 
   comparison.linear_mean_absolute_error = static_cast<float>(linear_absolute_error_sum / channel_count);

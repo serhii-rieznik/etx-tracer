@@ -45,20 +45,18 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   if (from_camera && (state.path_length == 1u)) {
     if (sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamBSDF)) {
       uint bsdf_dimension = sampler_stream_dimension_base(kSamplerStreamBSDF);
-      bsdf_rnd = float2(
-        sample_blue_noise_value(state.pixel, constants.sample_index, bsdf_dimension + 0u),
+      bsdf_rnd = float2(sample_blue_noise_value(state.pixel, constants.sample_index, bsdf_dimension + 0u),
         sample_blue_noise_value(state.pixel, constants.sample_index, bsdf_dimension + 1u));
     }
     if (sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamConnection)) {
       uint connection_dimension = sampler_stream_dimension_base(kSamplerStreamConnection);
-      connection_rnd = float2(
-        sample_blue_noise_value(state.pixel, constants.sample_index, connection_dimension + 0u),
+      connection_rnd = float2(sample_blue_noise_value(state.pixel, constants.sample_index, connection_dimension + 0u),
         sample_blue_noise_value(state.pixel, constants.sample_index, connection_dimension + 1u));
     }
     if (sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamSupport)) {
       uint support_dimension = sampler_stream_dimension_base(kSamplerStreamSupport);
-      support_rnd =
-        float2(sample_blue_noise_value(state.pixel, constants.sample_index, support_dimension + 0u), sample_blue_noise_value(state.pixel, constants.sample_index, support_dimension + 1u));
+      support_rnd = float2(sample_blue_noise_value(state.pixel, constants.sample_index, support_dimension + 0u),
+        sample_blue_noise_value(state.pixel, constants.sample_index, support_dimension + 1u));
     }
   }
   state.film_uv = connection_rnd;
@@ -109,9 +107,8 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     current_vertex.flags |= GPUWavefrontVertexFlags::Delta;
   }
 
-  float reverse_bsdf_pdf = sample_valid ?
-    wavefront_surface_continue_stage_reverse_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), bsdf_data, bsdf_sample.w_o, material, bsdf_sampler) :
-    0.0f;
+  float reverse_bsdf_pdf =
+    sample_valid ? wavefront_surface_continue_stage_reverse_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), bsdf_data, bsdf_sample.w_o, material, bsdf_sampler) : 0.0f;
   previous_vertex.pdf_from_next = wavefront_vertex_to_vertex_area_pdf(reverse_bsdf_pdf, current_vertex, previous_vertex);
   if ((from_camera == false) && (state.path_length == 1u) && (previous_vertex.emitter_index != kInvalidIndex)) {
     GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;

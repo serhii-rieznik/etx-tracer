@@ -18,7 +18,7 @@ PushConstants pushConstants;
 
 struct VSOutput {
   float4 position : SV_Position;
-  float2 uv : TEXCOORD;
+  float2 uv       : TEXCOORD;
 };
 
 float3 sample_displacement_field(float2 world_xz) {
@@ -89,11 +89,11 @@ void compute_buoy_frame(out float3 out_center, out float3 out_x_axis, out float3
 
 VSOutput VSMain(uint vertexId : SV_VertexID) {
   VSOutput output;
-  
+
   // Access data through bindless buffer array
   ByteAddressBuffer vb = bindless_buffers[NonUniformResourceIndex(pushConstants.vertexBufferIndex)];
-  
-  // Load using shared ABI 
+
+  // Load using shared ABI
   Vertex v = vb.Load<Vertex>(vertexId * 56);
 
   float3 center = float3(0.0f, 0.0f, 0.0f);
@@ -108,7 +108,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID) {
 
   output.position = mul(pushConstants.vp, float4(world_pos, 1.0f));
   output.uv = v.tex;
-  
+
   return output;
 }
 

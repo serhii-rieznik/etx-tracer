@@ -6,13 +6,13 @@
 
 namespace etx {
 
-#define ETX_DECLARE_BSDF(Class)                                                                                       \
-  namespace Class##BSDF {                                                                                             \
-    ETX_SHARED_INLINE BSDFSample sample(const BSDFData&, const Material&, Sampler&);                                 \
-    ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData&, const float3& w_o, const Material&, Sampler&);             \
-    ETX_SHARED_INLINE float pdf(const BSDFData&, const float3& w_o, const Material&, Sampler&);                     \
-    ETX_SHARED_INLINE bool is_delta(const Material&, const float2&, Sampler&);                                       \
-    ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData&, const Material&, Sampler&);                           \
+#define ETX_DECLARE_BSDF(Class)                                                                         \
+  namespace Class##BSDF {                                                                               \
+    ETX_SHARED_INLINE BSDFSample sample(const BSDFData&, const Material&, Sampler&);                    \
+    ETX_SHARED_INLINE BSDFEval evaluate(const BSDFData&, const float3& w_o, const Material&, Sampler&); \
+    ETX_SHARED_INLINE float pdf(const BSDFData&, const float3& w_o, const Material&, Sampler&);         \
+    ETX_SHARED_INLINE bool is_delta(const Material&, const float2&, Sampler&);                          \
+    ETX_SHARED_INLINE SpectralResponse albedo(const BSDFData&, const Material&, Sampler&);              \
   }
 
 ETX_DECLARE_BSDF(Diffuse);

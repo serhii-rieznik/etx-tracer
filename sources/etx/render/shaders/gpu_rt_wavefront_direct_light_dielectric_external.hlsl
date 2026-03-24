@@ -40,8 +40,8 @@ ETX_SHARED_INLINE WavefrontDirectLightDielectricRayInfo wavefront_direct_light_d
   return result;
 }
 
-ETX_SHARED_INLINE WavefrontDirectLightDielectricRayInfo wavefront_direct_light_dielectric_ray_info_update_direction(
-  ETX_IN(WavefrontDirectLightDielectricRayInfo, ray), ETX_IN(float3, in_w), ETX_IN(float2, alpha)) {
+ETX_SHARED_INLINE WavefrontDirectLightDielectricRayInfo wavefront_direct_light_dielectric_ray_info_update_direction(ETX_IN(WavefrontDirectLightDielectricRayInfo, ray),
+  ETX_IN(float3, in_w), ETX_IN(float2, alpha)) {
   WavefrontDirectLightDielectricRayInfo result = wavefront_direct_light_dielectric_ray_info_make(in_w, alpha);
   result.h = ray.h;
   result.c1 = ray.c1;
@@ -49,8 +49,7 @@ ETX_SHARED_INLINE WavefrontDirectLightDielectricRayInfo wavefront_direct_light_d
   return result;
 }
 
-ETX_SHARED_INLINE WavefrontDirectLightDielectricRayInfo wavefront_direct_light_dielectric_ray_info_update_height(
-  ETX_IN(WavefrontDirectLightDielectricRayInfo, ray), float in_h) {
+ETX_SHARED_INLINE WavefrontDirectLightDielectricRayInfo wavefront_direct_light_dielectric_ray_info_update_height(ETX_IN(WavefrontDirectLightDielectricRayInfo, ray), float in_h) {
   WavefrontDirectLightDielectricRayInfo result = ray;
   result.h = in_h;
   result.c1 = min(1.0f, max(0.0f, 0.5f * (result.h + 1.0f)));
@@ -186,9 +185,8 @@ ETX_SHARED_INLINE float3 wavefront_direct_light_dielectric_refract(ETX_IN(float3
   return wm * (dot(wi, wm) / eta + cos_theta_t) - wi / eta;
 }
 
-ETX_SHARED_INLINE SpectralResponse wavefront_direct_light_dielectric_phase_function_reflection(ETX_IN(SpectralQuery, spect),
-  ETX_IN(WavefrontDirectLightDielectricRayInfo, ray), ETX_IN(float3, wo), ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior),
-  ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm)) {
+ETX_SHARED_INLINE SpectralResponse wavefront_direct_light_dielectric_phase_function_reflection(ETX_IN(SpectralQuery, spect), ETX_IN(WavefrontDirectLightDielectricRayInfo, ray),
+  ETX_IN(float3, wo), ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm)) {
   if (ray.w.z > 0.9999f) {
     return spectral_response_make(spect, 0.0f);
   }
@@ -214,9 +212,8 @@ ETX_SHARED_INLINE SpectralResponse wavefront_direct_light_dielectric_phase_funct
   return spectral_response_mul(f, d);
 }
 
-ETX_SHARED_INLINE SpectralResponse wavefront_direct_light_dielectric_eval_phase_function(ETX_IN(SpectralQuery, spect),
-  ETX_IN(WavefrontDirectLightDielectricRayInfo, ray), ETX_IN(float3, wo), bool reflection, ETX_IN(RefractiveIndexSample, ext_ior),
-  ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm), ETX_IN(float2, alpha)) {
+ETX_SHARED_INLINE SpectralResponse wavefront_direct_light_dielectric_eval_phase_function(ETX_IN(SpectralQuery, spect), ETX_IN(WavefrontDirectLightDielectricRayInfo, ray),
+  ETX_IN(float3, wo), bool reflection, ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm), ETX_IN(float2, alpha)) {
   if (ray.w.z > 0.9999f) {
     return spectral_response_make(spect, 0.0f);
   }
@@ -254,8 +251,7 @@ struct WavefrontDirectLightDielectricSample {
 };
 
 ETX_SHARED_INLINE WavefrontDirectLightDielectricSample wavefront_direct_light_dielectric_sample_phase_function(ETX_IN(SpectralQuery, spect), ETX_IN(float2, rnd_slope),
-  float rnd_reflection, ETX_IN(float3, wi), ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior),
-  ETX_IN(ThinfilmEval, thinfilm)) {
+  float rnd_reflection, ETX_IN(float3, wi), ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm)) {
   float3 wi_11 = normalize(float3(alpha.x * wi.x, alpha.y * wi.y, wi.z));
   float2 slope_11 = wavefront_direct_light_dielectric_sample_p22_11(acos(wi_11.z), rnd_slope, alpha);
 
@@ -300,9 +296,8 @@ ETX_SHARED_INLINE float wavefront_direct_light_dielectric_mis_weight(ETX_IN(floa
   return wavefront_direct_light_dielectric_d_ggx((wh.z > 0.0f) ? wh : -wh, alpha);
 }
 
-ETX_SHARED_INLINE SpectralResponse wavefront_direct_light_dielectric_eval(ETX_IN(SpectralQuery, spect), ETX_INOUT(Sampler, sampler), ETX_IN(float3, wi),
-  ETX_IN(float3, wo), bool wo_outside, ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior),
-  ETX_IN(ThinfilmEval, thinfilm)) {
+ETX_SHARED_INLINE SpectralResponse wavefront_direct_light_dielectric_eval(ETX_IN(SpectralQuery, spect), ETX_INOUT(Sampler, sampler), ETX_IN(float3, wi), ETX_IN(float3, wo),
+  bool wo_outside, ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm)) {
   if ((wi.z <= 0.0f) || ((wo.z <= 0.0f) && wo_outside) || ((wo.z >= 0.0f) && (wo_outside == false))) {
     return spectral_response_make(spect, 0.0f);
   }
@@ -326,14 +321,12 @@ ETX_SHARED_INLINE SpectralResponse wavefront_direct_light_dielectric_eval(ETX_IN
 
     current_scattering_order += 1;
     if (current_scattering_order == 1) {
-      SpectralResponse phase_function =
-        wavefront_direct_light_dielectric_eval_phase_function(spect, ray, wo, wo_outside, ext_ior, int_ior, thinfilm, alpha);
+      SpectralResponse phase_function = wavefront_direct_light_dielectric_eval_phase_function(spect, ray, wo, wo_outside, ext_ior, int_ior, thinfilm, alpha);
       float g2_g1 = 0.0f;
       if (wo_outside) {
         g2_g1 = (1.0f + (-ray.lambda_value - 1.0f)) / (1.0f + (-ray.lambda_value - 1.0f) + ray_shadowing.lambda_value);
       } else {
-        g2_g1 = (1.0f + (-ray.lambda_value - 1.0f)) *
-                wavefront_direct_light_dielectric_beta(1.0f + (-ray.lambda_value - 1.0f), 1.0f + ray_shadowing.lambda_value);
+        g2_g1 = (1.0f + (-ray.lambda_value - 1.0f)) * wavefront_direct_light_dielectric_beta(1.0f + (-ray.lambda_value - 1.0f), 1.0f + ray_shadowing.lambda_value);
       }
 
       if (isfinite(g2_g1)) {

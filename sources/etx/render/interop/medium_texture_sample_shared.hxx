@@ -2,8 +2,7 @@
 
 #include "medium_density_shared.hxx"
 
-ETX_SHARED_INLINE float medium_texture_sample_shared_3d(
-  ETX_INOUT(MediumTextureSampleContext, context), ETX_IN(float3, local_coord), ETX_IN(uint3, dimensions)) {
+ETX_SHARED_INLINE float medium_texture_sample_shared_3d(ETX_INOUT(MediumTextureSampleContext, context), ETX_IN(float3, local_coord), ETX_IN(uint3, dimensions)) {
   MediumDensitySharedTextureSample3D sample = medium_density_shared_zero_texture_sample_3d();
   if (medium_density_shared_prepare_texture_sample_3d(local_coord, dimensions, sample) == false) {
     return 0.0f;

@@ -36,8 +36,8 @@ struct ImageSampleGPUDistributionContext {
   float2 fsize;
 };
 
-ImageSampleGPUDistributionContext image_sample_gpu_make_distribution_context(
-  ByteAddressBuffer x_payload_buffer, ByteAddressBuffer y_payload_buffer, ImageAccessGPUDesc image_access, uint y_count) {
+ImageSampleGPUDistributionContext image_sample_gpu_make_distribution_context(ByteAddressBuffer x_payload_buffer, ByteAddressBuffer y_payload_buffer,
+  ImageAccessGPUDesc image_access, uint y_count) {
   ImageSampleGPUDistributionContext context;
   context.x_payload_buffer = x_payload_buffer;
   context.y_payload_buffer = y_payload_buffer;
@@ -160,8 +160,7 @@ bool image_sample_try_sample(ImageSampleGPUContext context, uint image_index, fl
 
   ByteAddressBuffer x_payload_buffer = bindless_buffers[NonUniformResourceIndex(x_payload_descriptor_index)];
   ByteAddressBuffer y_payload_buffer = bindless_buffers[NonUniformResourceIndex(y_payload_descriptor_index)];
-  ImageSampleGPUDistributionContext distribution_context =
-    image_sample_gpu_make_distribution_context(x_payload_buffer, y_payload_buffer, image_access, y_count);
+  ImageSampleGPUDistributionContext distribution_context = image_sample_gpu_make_distribution_context(x_payload_buffer, y_payload_buffer, image_access, y_count);
 
   float distribution_pdf = 0.0f;
   if (image_sample_gpu_distribution_sample(distribution_context, rnd, distribution_pdf, sample.location, sample.uv) == false) {

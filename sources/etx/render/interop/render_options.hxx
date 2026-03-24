@@ -62,4 +62,3 @@ struct ShaderConstants {
   uint32_t options;
   uint32_t sample_count;
 };
-

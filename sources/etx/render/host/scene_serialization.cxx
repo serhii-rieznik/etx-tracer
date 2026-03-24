@@ -1242,8 +1242,8 @@ struct SceneSerializationImpl {
       uint32_t absorption_index = data.add_spectrum(s_a);
       uint32_t scattering_index = data.add_spectrum(s_t);
 
-      uint32_t medium_handle = data.mediums.add_noise(Medium::Heterogeneous, name, noise_type, absorption_index, scattering_index, anisotropy, explicit_connections,
-        noise_scale, noise_octaves, noise_lacunarity, noise_persistence, noise_seed, noise_power, noise_offset);
+      uint32_t medium_handle = data.mediums.add_noise(Medium::Heterogeneous, name, noise_type, absorption_index, scattering_index, anisotropy, explicit_connections, noise_scale,
+        noise_octaves, noise_lacunarity, noise_persistence, noise_seed, noise_power, noise_offset);
       Medium& medium = data.mediums.get(medium_handle);
       medium.grid.noise_sharpness = noise_sharpness;
       medium.grid.noise_enable_border_fade = noise_border_fade;

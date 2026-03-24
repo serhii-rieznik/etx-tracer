@@ -4,6 +4,6 @@
   wavefront_surface_classify(true, dtid.x);
 }
 
-[numthreads(64, 1, 1)] void wavefront_camera_continue_finalize_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(64, 1, 1)] void wavefront_camera_continue_finalize_main(uint3 dtid : SV_DispatchThreadID) {
   wavefront_surface_continue_finalize(true, dtid.x);
 }

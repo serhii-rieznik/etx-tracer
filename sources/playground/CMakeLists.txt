@@ -38,6 +38,7 @@ set_target_properties(playground PROPERTIES
 )
 
 if (APPLE)
+  set_target_properties(playground PROPERTIES OUTPUT_NAME "playground_app")
   target_link_libraries(playground PRIVATE
     "-framework Foundation"
     "-framework QuartzCore"
@@ -48,10 +49,6 @@ if (APPLE)
     "-framework AppKit"
     )
   target_link_options(playground PRIVATE "-Wl,-rpath,@executable_path" "-Wl,-rpath,@loader_path")
-elseif (WIN32)
-  find_package(Vulkan REQUIRED)
-  target_link_libraries(playground PRIVATE Vulkan::Vulkan)
-  target_include_directories(playground PRIVATE ${Vulkan_INCLUDE_DIRS} "${CMAKE_SOURCE_DIR}/bin" "${CMAKE_SOURCE_DIR}/sources/etx/render")
 endif()
 
 if(MSVC)

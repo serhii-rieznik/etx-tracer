@@ -57,7 +57,8 @@ bool wavefront_sample_emitter_index(uint light_sampling_mode, inout uint seed, o
   return true;
 }
 
-bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_sample, SpectralQuery spect, float3 from_point, inout uint seed, out WavefrontEmitterSample sample_value) {
+bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_sample, SpectralQuery spect, float3 from_point, inout uint seed,
+  out WavefrontEmitterSample sample_value) {
   sample_value = (WavefrontEmitterSample)0;
   GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
   GPUEmitterProfileABIData emitter_profile = (GPUEmitterProfileABIData)0;
@@ -127,8 +128,8 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
       float equivalent_disk_size = 2.0f * (sin_half_angle / max(kEpsilon, emitter_profile.emitter_angular_size_cosine));
       OrthonormalBasis basis = orthonormal_basis(access.emitter_direction);
       disk_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));
-      sample_value.direction = normalize(
-        access.emitter_direction + basis.u * disk_sample.x * (0.5f * equivalent_disk_size) + basis.v * disk_sample.y * (0.5f * equivalent_disk_size));
+      sample_value.direction =
+        normalize(access.emitter_direction + basis.u * disk_sample.x * (0.5f * equivalent_disk_size) + basis.v * disk_sample.y * (0.5f * equivalent_disk_size));
     } else {
       sample_value.direction = normalize(access.emitter_direction);
     }
@@ -246,15 +247,14 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
     sample_value.direction =
       normalize(direction_to_scene + basis.u * direction_sample.x * (0.5f * equivalent_disk_size) + basis.v * direction_sample.y * (0.5f * equivalent_disk_size));
     sample_value.normal = direction_to_scene;
-    sample_value.origin = globals_data.bounding_sphere_center +
-                          globals_data.bounding_sphere_radius * (position_sample.x * basis.u + position_sample.y * basis.v - direction_to_scene);
-    sample_value.origin += sample_value.direction *
-                           distance_to_sphere(sample_value.origin, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
+    sample_value.origin =
+      globals_data.bounding_sphere_center + globals_data.bounding_sphere_radius * (position_sample.x * basis.u + position_sample.y * basis.v - direction_to_scene);
+    sample_value.origin +=
+      sample_value.direction * distance_to_sphere(sample_value.origin, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
     sample_value.pdf_dir = 1.0f;
     sample_value.pdf_area = 1.0f / (kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius);
     sample_value.pdf_dir_out = sample_value.pdf_area;
-    sample_value.value =
-      evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, direction_sample * 0.5f + 0.5f, spect);
+    sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, direction_sample * 0.5f + 0.5f, spect);
     sample_value.is_delta = 1u;
     sample_value.is_distant = 1u;
     return true;
@@ -277,8 +277,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
   sample_value.normal = sample_value.direction;
   OrthonormalBasis basis = orthonormal_basis(sample_value.direction);
   float2 disk_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));
-  sample_value.origin = globals_data.bounding_sphere_center +
-                        globals_data.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - sample_value.direction);
+  sample_value.origin = globals_data.bounding_sphere_center + globals_data.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - sample_value.direction);
   sample_value.origin +=
     sample_value.direction * distance_to_sphere(sample_value.origin, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
   sample_value.pdf_dir = projection_environment_image_pdf_to_solid_angle(image_sample.pdf, image_sample.uv, projection);

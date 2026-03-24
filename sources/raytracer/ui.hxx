@@ -42,6 +42,13 @@ struct UI {
     _current_renderer_mode = mode;
   }
 
+  void set_gpu_renderer_available(bool value) {
+    _gpu_renderer_available = value;
+    if ((_gpu_renderer_available == false) && (_current_renderer_mode == RendererMode::GPURaytracing)) {
+      _current_renderer_mode = RendererMode::CPURaytracing;
+    }
+  }
+
   bool handle_event(const sapp_event*);
 
   struct BuildContext {
@@ -157,6 +164,7 @@ struct UI {
  private:
   Integrator* _current_integrator = nullptr;
   RendererMode _current_renderer_mode = RendererMode::CPURaytracing;
+  bool _gpu_renderer_available = true;
 
   ArrayView<Integrator*> _integrators = {};
   ViewParameters _view_options = {

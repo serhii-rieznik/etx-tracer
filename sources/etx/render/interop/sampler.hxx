@@ -3,7 +3,7 @@
 #include "interop.hxx"
 
 #if defined(__cplusplus)
-#include <cstring>
+# include <cstring>
 #endif
 
 ETX_SHARED_INLINE uint32_t sampler_random_seed(uint32_t val0, uint32_t val1) {

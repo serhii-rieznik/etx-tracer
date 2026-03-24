@@ -4,7 +4,7 @@
   (void)dtid;
 }
 
-[numthreads(64, 1, 1)] void wavefront_light_connect_camera_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(64, 1, 1)] void wavefront_light_connect_camera_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
   const uint dispatch_index = dtid.x;
 
   GPUWavefrontResources resources = wavefront_load_resources();

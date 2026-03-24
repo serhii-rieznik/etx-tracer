@@ -108,8 +108,8 @@ struct MediumDensitySharedGrid {
   uint32_t density_data_chunk_index ETX_INIT(kInvalidIndex);
 };
 
-ETX_SHARED_INLINE bool medium_density_shared_prepare_texture_sample_3d(
-  ETX_IN(float3, local_coord), ETX_IN(uint3, dimensions), ETX_OUT(MediumDensitySharedTextureSample3D, sample)) {
+ETX_SHARED_INLINE bool medium_density_shared_prepare_texture_sample_3d(ETX_IN(float3, local_coord), ETX_IN(uint3, dimensions),
+  ETX_OUT(MediumDensitySharedTextureSample3D, sample)) {
   sample = medium_density_shared_zero_texture_sample_3d();
   if ((local_coord.x < 0.0f) || (local_coord.y < 0.0f) || (local_coord.z < 0.0f) || (local_coord.x >= 1.0f) || (local_coord.y >= 1.0f) || (local_coord.z >= 1.0f)) {
     return false;
@@ -136,8 +136,8 @@ ETX_SHARED_INLINE bool medium_density_shared_prepare_texture_sample_3d(
   return true;
 }
 
-ETX_SHARED_INLINE float medium_density_shared_trilerp(
-  float d000, float d001, float d010, float d011, float d100, float d101, float d110, float d111, float dx, float dy, float dz) {
+ETX_SHARED_INLINE float medium_density_shared_trilerp(float d000, float d001, float d010, float d011, float d100, float d101, float d110, float d111, float dx, float dy,
+  float dz) {
   float d_bottom = medium_density_shared_lerp(medium_density_shared_lerp(d000, d001, dx), medium_density_shared_lerp(d010, d011, dx), dy);
   float d_top = medium_density_shared_lerp(medium_density_shared_lerp(d100, d101, dx), medium_density_shared_lerp(d110, d111, dx), dy);
   return medium_density_shared_lerp(d_bottom, d_top, dz);
@@ -331,8 +331,8 @@ ETX_SHARED_INLINE float medium_density_shared_lattice_noise_3d(ETX_IN(float3, po
   return medium_density_shared_sqrt(min_dist_sq);
 }
 
-ETX_SHARED_INLINE float medium_density_shared_fbm_noise_3d(
-  ETX_IN(float3, pos), uint32_t noise_type, uint32_t seed, float scale, uint32_t octaves, float lacunarity, float persistence) {
+ETX_SHARED_INLINE float medium_density_shared_fbm_noise_3d(ETX_IN(float3, pos), uint32_t noise_type, uint32_t seed, float scale, uint32_t octaves, float lacunarity,
+  float persistence) {
   float value = 0.0f;
   float amplitude = 1.0f;
   float frequency = scale;
@@ -342,8 +342,7 @@ ETX_SHARED_INLINE float medium_density_shared_fbm_noise_3d(
 #if defined(__cplusplus)
   for (uint32_t i = 0u; i < octaves; ++i) {
 #else
-  [loop]
-  for (uint32_t i = 0u; i < octaves; ++i) {
+  [loop] for (uint32_t i = 0u; i < octaves; ++i) {
 #endif
     if (amplitude < amplitude_threshold) {
       break;
@@ -375,8 +374,8 @@ ETX_SHARED_INLINE float medium_density_shared_fbm_noise_3d(
   return saturate(normalized);
 }
 
-ETX_SHARED_INLINE float3 medium_density_shared_normalized_world_pos(
-  ETX_IN(float3, local_coord), ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_IN(float3, noise_offset)) {
+ETX_SHARED_INLINE float3 medium_density_shared_normalized_world_pos(ETX_IN(float3, local_coord), ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max),
+  ETX_IN(float3, noise_offset)) {
   float3 world_pos = medium_density_shared_bounds_from_local(local_coord, bounds_min, bounds_max) + noise_offset;
   float3 bbox_size = bounds_max - bounds_min;
   float max_dimension = max(bbox_size.x, max(bbox_size.y, bbox_size.z));
@@ -386,8 +385,7 @@ ETX_SHARED_INLINE float3 medium_density_shared_normalized_world_pos(
   return world_pos;
 }
 
-ETX_SHARED_INLINE float medium_density_shared_apply_border_fade(
-  float value, ETX_IN(float3, local_coord), uint32_t noise_enable_border_fade, float noise_border_fade_distance) {
+ETX_SHARED_INLINE float medium_density_shared_apply_border_fade(float value, ETX_IN(float3, local_coord), uint32_t noise_enable_border_fade, float noise_border_fade_distance) {
   if (noise_enable_border_fade == 0u) {
     return value;
   }
@@ -405,11 +403,10 @@ ETX_SHARED_INLINE float medium_density_shared_apply_border_fade(
 }
 
 ETX_SHARED_INLINE float medium_density_shared_sample_noise(ETX_IN(float3, local_coord), ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), uint32_t noise_type,
-  float noise_scale, uint32_t noise_octaves, float noise_lacunarity, float noise_persistence, uint32_t noise_seed, ETX_IN(float3, noise_offset),
-  uint32_t noise_enable_border_fade, float noise_border_fade_distance) {
+  float noise_scale, uint32_t noise_octaves, float noise_lacunarity, float noise_persistence, uint32_t noise_seed, ETX_IN(float3, noise_offset), uint32_t noise_enable_border_fade,
+  float noise_border_fade_distance) {
   float3 normalized_world_pos = medium_density_shared_normalized_world_pos(local_coord, bounds_min, bounds_max, noise_offset);
-  float value = medium_density_shared_fbm_noise_3d(
-    normalized_world_pos, noise_type, noise_seed, noise_scale, noise_octaves, noise_lacunarity, noise_persistence);
+  float value = medium_density_shared_fbm_noise_3d(normalized_world_pos, noise_type, noise_seed, noise_scale, noise_octaves, noise_lacunarity, noise_persistence);
   value = medium_density_shared_apply_border_fade(value, local_coord, noise_enable_border_fade, noise_border_fade_distance);
   return saturate(value);
 }

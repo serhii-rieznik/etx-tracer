@@ -15,8 +15,8 @@ ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_rgb(ETX_IN(SpectralQuery,
   return result;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(SpectralImage, image), ETX_IN(float2, uv), ETX_OUT(float, image_pdf)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(SpectralImage, image), ETX_IN(float2, uv),
+  ETX_OUT(float, image_pdf)) {
   image_pdf = 0.0f;
 
   SpectralResponse result = bsdf_resource_load_spectrum(context, image.spectrum_index, spect);
@@ -32,14 +32,12 @@ ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(
   return bsdf_resource_apply_rgb(spect, result, image_value);
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(SpectralImage, image), ETX_IN(float2, uv)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(SpectralImage, image), ETX_IN(float2, uv)) {
   float image_pdf = 0.0f;
   return bsdf_resource_apply_image(context, spect, image, uv, image_pdf);
 }
 
-ETX_SHARED_INLINE float bsdf_resource_evaluate_sampled_image(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(SampledImage, image), ETX_IN(float2, uv), float default_value) {
+ETX_SHARED_INLINE float bsdf_resource_evaluate_sampled_image(ETX_IN(BSDFResourceContext, context), ETX_IN(SampledImage, image), ETX_IN(float2, uv), float default_value) {
   return bsdf_resource_image_sample_channel_or_default(context, image.image_index, image.channel, uv, default_value);
 }
 
@@ -56,8 +54,8 @@ ETX_SHARED_INLINE float bsdf_resource_evaluate_transmission(ETX_IN(BSDFResourceC
   return material.transmission.value.x * bsdf_resource_evaluate_sampled_image(context, material.transmission, uv, 1.0f);
 }
 
-ETX_SHARED_INLINE RefractiveIndexSample bsdf_resource_evaluate_refractive_index(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(RefractiveIndex, refractive_index), ETX_IN(SpectralQuery, query)) {
+ETX_SHARED_INLINE RefractiveIndexSample bsdf_resource_evaluate_refractive_index(ETX_IN(BSDFResourceContext, context), ETX_IN(RefractiveIndex, refractive_index),
+  ETX_IN(SpectralQuery, query)) {
   RefractiveIndexSample result = ETX_ZERO(RefractiveIndexSample);
   result.cls = refractive_index.cls;
   if (refractive_index.eta_index == kInvalidIndex) {
@@ -73,8 +71,8 @@ ETX_SHARED_INLINE RefractiveIndexSample bsdf_resource_evaluate_refractive_index(
   return result;
 }
 
-ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Thinfilm, film), ETX_IN(float2, uv), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Thinfilm, film), ETX_IN(float2, uv),
+  ETX_INOUT(Sampler, sampler)) {
   ThinfilmEval result = ETX_ZERO(ThinfilmEval);
   result.ior.cls = SpectralDistribution::Invalid;
   result.rgb_wavelengths = kRGBWavelengths;

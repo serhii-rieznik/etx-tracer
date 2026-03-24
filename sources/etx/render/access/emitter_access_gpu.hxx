@@ -14,9 +14,8 @@ struct EmitterAccessGPUContext {
   uint scene_globals_descriptor_index;
 };
 
-EmitterAccessGPUContext make_emitter_access_gpu_context(
-  uint emitter_instances_descriptor_index, uint emitter_profiles_descriptor_index, uint spectrums_descriptor_index, uint images_descriptor_index,
-  uint scene_globals_descriptor_index) {
+EmitterAccessGPUContext make_emitter_access_gpu_context(uint emitter_instances_descriptor_index, uint emitter_profiles_descriptor_index, uint spectrums_descriptor_index,
+  uint images_descriptor_index, uint scene_globals_descriptor_index) {
   EmitterAccessGPUContext context;
   context.emitter_instances_descriptor_index = emitter_instances_descriptor_index;
   context.emitter_profiles_descriptor_index = emitter_profiles_descriptor_index;
@@ -119,8 +118,7 @@ bool emitter_access_try_load_distant(EmitterAccessGPUContext context, uint emitt
     return false;
   }
 
-  return emitter_access_accepts_distant(
-    access.emitter_class, access.emitter_profile_class, direction, access.emitter_direction, access.emitter_angular_size_cosine);
+  return emitter_access_accepts_distant(access.emitter_class, access.emitter_profile_class, direction, access.emitter_direction, access.emitter_angular_size_cosine);
 }
 
 bool emitter_access_try_load_image_params(EmitterAccessGPUContext context, uint emission_image_index, out float2 image_offset, out float image_u_scale) {
@@ -142,8 +140,8 @@ float2 emitter_access_environment_uv(EmitterAccessGPUContext context, EmitterAcc
   float2 image_offset = float2(0.0f, 0.0f);
   float image_u_scale = 1.0f;
   emitter_access_try_load_image_params(context, access.emission_image_index, image_offset, image_u_scale);
-  return emitter_access_shared_environment_uv(
-    access.emitter_class, access.emitter_profile_meta, image_offset, image_u_scale, access.emitter_direction, access.emitter_angular_size_cosine, direction);
+  return emitter_access_shared_environment_uv(access.emitter_class, access.emitter_profile_meta, image_offset, image_u_scale, access.emitter_direction,
+    access.emitter_angular_size_cosine, direction);
 }
 
 bool emitter_access_can_sample_spectrum(EmitterAccessGPUContext context, uint emission_spectrum_index) {

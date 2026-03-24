@@ -42,15 +42,15 @@ ETX_SHARED_INLINE SpectralResponse medium_transmittance_shared_to_spectral_respo
 ETX_SHARED_INLINE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, const float rnd,
   SpectralResponse& pdf) {
   ::SpectralResponse shared_pdf = {};
-  uint32_t result = medium_sample_shared_sample_spectrum_component(
-    static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(albedo), static_cast<const ::SpectralResponse&>(throughput), rnd, shared_pdf);
+  uint32_t result = medium_sample_shared_sample_spectrum_component(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(albedo),
+    static_cast<const ::SpectralResponse&>(throughput), rnd, shared_pdf);
   pdf = medium_transmittance_shared_to_spectral_response(shared_pdf);
   return result;
 }
 
 ETX_SHARED_INLINE SpectralResponse calculate_albedo(const SpectralQuery spect, const SpectralResponse& scattering, const SpectralResponse& extinction) {
-  const ::SpectralResponse albedo = medium_sample_shared_calculate_albedo(
-    static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(scattering), static_cast<const ::SpectralResponse&>(extinction));
+  const ::SpectralResponse albedo = medium_sample_shared_calculate_albedo(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(scattering),
+    static_cast<const ::SpectralResponse&>(extinction));
   return medium_transmittance_shared_to_spectral_response(albedo);
 }
 
@@ -86,8 +86,7 @@ ETX_SHARED_INLINE MediumInstance make_medium_instance(const Medium& medium, cons
   return result;
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction,
-  float distance) {
+ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction, float distance) {
   SpectralResponse one = {spect, 1.0f};
   if (distance <= 0.0f) {
     return one;
@@ -123,9 +122,8 @@ ETX_SHARED_INLINE MediumSample sample_medium(const Medium& medium, const Spectra
   ETX_VALIDATE(absorption_value);
 
   MediumSharedContext context = make_medium_shared_context(medium, smp);
-  return medium_sample_shared_sample(
-    context, static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(throughput), static_cast<const ::SpectralResponse&>(scattering_value),
-    static_cast<const ::SpectralResponse&>(absorption_value), pos, w_i, max_t);
+  return medium_sample_shared_sample(context, static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(throughput),
+    static_cast<const ::SpectralResponse&>(scattering_value), static_cast<const ::SpectralResponse&>(absorption_value), pos, w_i, max_t);
 }
 
 ETX_SHARED_INLINE float medium_phase_function(const Medium& medium, const float3& w_i, const float3& w_o) {

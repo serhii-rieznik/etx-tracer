@@ -188,12 +188,12 @@ struct SpectralResponse : public ::SpectralResponse {
     return spectral_response_is_zero(*this);
   }
 
-#define SPECTRAL_OP(OP)                                                             \
-  ETX_SHARED_INLINE SpectralResponse& operator OP(const SpectralResponse & other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                                 \
-    integrated OP other.integrated;                                                 \
-    value OP other.value;                                                           \
-    return *this;                                                                   \
+#define SPECTRAL_OP(OP)                                                            \
+  ETX_SHARED_INLINE SpectralResponse& operator OP(const SpectralResponse& other) { \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                                \
+    integrated OP other.integrated;                                                \
+    value OP other.value;                                                          \
+    return *this;                                                                  \
   }
   SPECTRAL_OP(+=)
   SPECTRAL_OP(-=)
@@ -292,8 +292,7 @@ ETX_SHARED_INLINE SpectralResponse spectrum_min(float a, const SpectralResponse&
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_apply_rgb_scale(const SpectralQuery spect, const SpectralResponse& response, const float3& rgb) {
-  const ::SpectralResponse result =
-    ::spectral_response_apply_rgb_scale(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(response), rgb);
+  const ::SpectralResponse result = ::spectral_response_apply_rgb_scale(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(response), rgb);
   SpectralQuery result_query{result.wavelength, result.flags};
   return ::spectral_response_is_spectral(result) ? SpectralResponse{result_query, result.value} : SpectralResponse{result_query, result.integrated};
 }
@@ -392,7 +391,7 @@ struct SpectralDistribution : public ::SpectralDistribution {
   static SpectralDistribution::Class load_refractive_index(const char* file_name, SpectralDistribution& eta, SpectralDistribution& k, std::string& out_title);
 
  private:
-  friend struct RefractiveIndex;
+  friend struct ::RefractiveIndex;
 };
 
 using RefractiveIndex = ::RefractiveIndex;
@@ -428,4 +427,3 @@ SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb);
 void init(Spectrums&);
 
 }  // namespace etx
-

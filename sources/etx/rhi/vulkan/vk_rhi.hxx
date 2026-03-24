@@ -4,10 +4,14 @@
 # error "vk_rhi.hxx is an internal etx-rhi implementation header."
 #endif
 
-#ifdef ETX_PLATFORM_WINDOWS
+#if ETX_PLATFORM_WINDOWS
 # define VK_USE_PLATFORM_WIN32_KHR
 # include <vulkan/vulkan.h>
 # include <vulkan/vulkan_win32.h>
+#elif ETX_PLATFORM_APPLE
+# define VK_USE_PLATFORM_METAL_EXT
+# include <vulkan/vulkan.h>
+# include <vulkan/vulkan_metal.h>
 #else
 # error Unsupported platform
 #endif
@@ -191,6 +195,7 @@ struct VKContext {
   RHISemaphore get_render_complete_semaphore();
   uint32_t get_current_frame_index() const;
   uint32_t get_sampler_index(RHISamplerType type) const;
+  RHICapabilities capabilities() const;
 
   RHICommandBuffer get_command_buffer();
   void destroy_command_buffer(RHICommandBuffer cmd);
@@ -307,6 +312,8 @@ struct VKDevice {
   VkInstance get_vk_instance() const;
   VkQueue get_graphics_queue() const;
   VkCommandPool get_vk_command_pool(uint32_t index) const;
+  bool supports_bindless() const;
+  bool supports_ray_tracing() const;
   bool supports_timestamps() const;
   bool supports_timestamp_stage(RHITimestampStage stage) const;
   uint32_t timestamp_valid_bits() const;

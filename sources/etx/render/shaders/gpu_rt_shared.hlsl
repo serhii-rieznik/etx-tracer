@@ -248,9 +248,8 @@ float medium_shared_density(inout MediumSharedContext context, float3 local_pos)
 #include <interop/medium_transmittance_shared.hxx>
 #include <interop/medium_sample_shared.hxx>
 
-MediumSample sample_medium_gpu(
-  MediumAccess medium_access, SpectralQuery spect, SpectralResponse throughput, SpectralResponse scattering_value, SpectralResponse absorption_value, float3 pos, float3 w_i,
-  float max_t, inout uint seed) {
+MediumSample sample_medium_gpu(MediumAccess medium_access, SpectralQuery spect, SpectralResponse throughput, SpectralResponse scattering_value, SpectralResponse absorption_value,
+  float3 pos, float3 w_i, float max_t, inout uint seed) {
   MediumSharedContext context;
   context.access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
   context.medium_access = medium_access;
@@ -415,8 +414,7 @@ float2 camera_sample_film_uv(uint2 pixel, uint2 film_size, float2 uv_sample) {
     }
   }
 
-  float2 filtered_uv = float2(
-    (float(pixel.x) + 0.5f + scene_globals_data.pixel_filter_radius * jitter.x) / float(film_size.x) * 2.0f - 1.0f,
+  float2 filtered_uv = float2((float(pixel.x) + 0.5f + scene_globals_data.pixel_filter_radius * jitter.x) / float(film_size.x) * 2.0f - 1.0f,
     (float(pixel.y) + 0.5f + scene_globals_data.pixel_filter_radius * jitter.y) / float(film_size.y) * 2.0f - 1.0f);
   return camera_shared_flip_y(filtered_uv);
 }
@@ -587,8 +585,8 @@ SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBu
     texcoord_2 = load_float2(texcoord_buffer, tri.i.z);
   }
 
-  surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1,
-    texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
+  surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1, texcoord_2,
+    result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
   result.vertex.nrm = scene_math_shared_orient_normals_to_hemisphere(result.vertex.nrm, tri.geo_n, ray_dir);
 
   result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
@@ -625,8 +623,8 @@ bool alpha_test_pass(uint material_index, float2 uv, inout uint seed) {
 #include <access/emitter_access_gpu.hxx>
 
 EmitterAccessGPUContext make_scene_emitter_access_gpu_context() {
-  return make_emitter_access_gpu_context(
-    constants.scene.emitter_instances, constants.scene.emitter_profiles, constants.scene.spectrums, constants.scene.images, constants.scene.scene_globals);
+  return make_emitter_access_gpu_context(constants.scene.emitter_instances, constants.scene.emitter_profiles, constants.scene.spectrums, constants.scene.images,
+    constants.scene.scene_globals);
 }
 
 bool try_load_emitter_emission_access(uint emitter_index, out EmitterAccess access) {
@@ -662,7 +660,7 @@ bool try_load_distant_emission_access(uint emitter_index, float3 direction, out 
   return true;
 }
 
-[noinline] bool try_load_emitter_profile(uint emitter_profile_index, out GPUEmitterProfileABIData emitter_profile) {
+  [noinline] bool try_load_emitter_profile(uint emitter_profile_index, out GPUEmitterProfileABIData emitter_profile) {
   emitter_profile = (GPUEmitterProfileABIData)0;
   EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
   uint emitter_instance_count = 0u;
@@ -734,7 +732,7 @@ bool emitter_distribution_has_values() {
   return selected_entry.reference;
 }
 
-[noinline] float emitter_discrete_pdf(uint emitter_index) {
+  [noinline] float emitter_discrete_pdf(uint emitter_index) {
   uint entry_count = emitter_distribution_entry_count();
   for (uint entry_index = 0u; entry_index < entry_count; ++entry_index) {
     DistributionEntry entry = (DistributionEntry)0;
@@ -825,8 +823,8 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   return result;
 }
 
-[noinline] bool trace_surface_path(
-  RaytracingAccelerationStructure as, RayDesc ray, SpectralQuery spect, inout uint medium_index, inout uint seed, out TraceSurfaceResult result) {
+  [noinline] bool trace_surface_path(RaytracingAccelerationStructure as, RayDesc ray, SpectralQuery spect, inout uint medium_index, inout uint seed,
+    out TraceSurfaceResult result) {
   result.hit = 0u;
   result.medium_index = medium_index;
   result.triangle_index = kInvalidIndex;
@@ -896,8 +894,8 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
 
     bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
     bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
-    HitPolicyDecision hit_policy = hit_policy_evaluate(
-      HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface, material_access.int_medium_index, material_access.ext_medium_index);
+    HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface,
+      material_access.int_medium_index, material_access.ext_medium_index);
     if (hit_policy.action == HitPolicyAction::Ignore) {
       continue;
     }
@@ -949,8 +947,8 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   result.hit_t = q.CommittedRayT();
   result.tri = load_triangle(triangle_buffer, result.triangle_index);
   float2 bary = q.CommittedTriangleBarycentrics();
-  result.surface_point =
-    load_surface_point(position_buffer, normal_buffer, tangent_buffer, bitangent_buffer, texcoord_buffer, has_surface_frame_buffers, has_texcoords, result.tri, bary, ray.Direction);
+  result.surface_point = load_surface_point(position_buffer, normal_buffer, tangent_buffer, bitangent_buffer, texcoord_buffer, has_surface_frame_buffers, has_texcoords, result.tri,
+    bary, ray.Direction);
   result.emitter_index = result.tri.emitter_index;
   try_load_material_full(result.tri.material_index, result.material);
   result.hit = 1u;
@@ -1034,7 +1032,7 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   return evaluate_local_emission_spectral(emitter_index, uv, spect);
 }
 
-[noinline] SpectralResponse gpu_evaluate_distant_emission_spectral_all(float3 direction, SpectralQuery spect) {
+  [noinline] SpectralResponse gpu_evaluate_distant_emission_spectral_all(float3 direction, SpectralQuery spect) {
   SpectralResponse result = spectral_response_zero(spect);
   EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
   uint emitter_instance_count = 0u;
@@ -1084,7 +1082,7 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
   return bsdf_diffuse_sample(context, data, material, sampler);
 }
 
-[noinline] BSDFSample gpu_plastic_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  [noinline] BSDFSample gpu_plastic_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   return bsdf_plastic_sample(context, data, material, sampler);
 }
 
@@ -1092,7 +1090,7 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
   return bsdf_conductor_sample(context, data, material, sampler);
 }
 
-[noinline] BSDFSample gpu_dielectric_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  [noinline] BSDFSample gpu_dielectric_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   return bsdf_dielectric_sample(context, data, material, sampler);
 }
 
@@ -1112,4 +1110,3 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
 
   return bsdf_sample_zero(data.spectrum_sample);
 }
-

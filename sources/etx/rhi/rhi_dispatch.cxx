@@ -12,10 +12,10 @@ using BackendContext = VKContext;
 using BackendDevice = VKDevice;
 }  // namespace etx
 #elif defined(ETX_PLATFORM_APPLE)
-# include <etx/rhi/metal/mt_rhi.hxx>
+# include <etx/rhi/vulkan/vk_rhi.hxx>
 namespace etx {
-using BackendContext = MTContext;
-using BackendDevice = MTDevice;
+using BackendContext = VKContext;
+using BackendDevice = VKDevice;
 }  // namespace etx
 #else
 # error Unsupported platform for RHI dispatch
@@ -414,6 +414,10 @@ uint32_t RHIContext::get_current_frame_index() const {
 
 uint32_t RHIContext::get_sampler_index(RHISamplerType type) const {
   return backend_context(_impl)->get_sampler_index(type);
+}
+
+RHICapabilities RHIContext::capabilities() const {
+  return backend_context(_impl)->capabilities();
 }
 
 RHICommandBuffer RHIContext::get_command_buffer() {

@@ -76,8 +76,8 @@ struct BDPTPathVertex {
     return true;
   }
 
-  static float pdf_area(SpectralQuery spect, PathSource path_source, const BDPTPathVertex& prev, const BDPTPathVertex& curr, const BDPTPathVertex& next,
-    const Material* material, Sampler& smp) {
+  static float pdf_area(SpectralQuery spect, PathSource path_source, const BDPTPathVertex& prev, const BDPTPathVertex& curr, const BDPTPathVertex& next, const Material* material,
+    Sampler& smp) {
     ETX_CRITICAL(curr.is_surface_interaction() || curr.is_medium_interaction());
 
     float3 w_i = {};

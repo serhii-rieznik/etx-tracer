@@ -15,8 +15,7 @@ ETX_SHARED_INLINE ImageSampleCPUContext make_image_sample_cpu_context(const Scen
   return result;
 }
 
-ETX_SHARED_INLINE bool image_sample_try_sample(
-  ETX_IN(ImageSampleCPUContext, context), uint32_t image_index, ETX_IN(float2, rnd), ETX_OUT(ImageSampleAccess, sample)) {
+ETX_SHARED_INLINE bool image_sample_try_sample(ETX_IN(ImageSampleCPUContext, context), uint32_t image_index, ETX_IN(float2, rnd), ETX_OUT(ImageSampleAccess, sample)) {
   sample = image_sample_access_default(rnd);
   if (context.scene == nullptr) {
     return false;

@@ -6,11 +6,10 @@
 ETX_SHARED_INLINE bool bsdf_dielectric_is_delta(ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler));
 ETX_SHARED_INLINE bool bsdf_dielectric_is_delta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, tex));
 
-ETX_SHARED_INLINE float bsdf_dielectric_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler));
+ETX_SHARED_INLINE float bsdf_dielectric_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler));
 
-ETX_SHARED_INLINE BSDFSample bsdf_thinfilm_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_thinfilm_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data);
   RefractiveIndexSample ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
   RefractiveIndexSample int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
@@ -29,8 +28,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_thinfilm_sample(
     result.w_o = data.w_i;
     result.pdf = 1.0f - f;
     SpectralResponse one_minus_fr = spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), fr);
-    result.weight = spectral_response_mul(
-      bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex), spectral_response_div(one_minus_fr, 1.0f - f));
+    result.weight = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex), spectral_response_div(one_minus_fr, 1.0f - f));
     result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
     result.medium_index = local_frame_entering_material(frame) ? material.int_medium : material.ext_medium;
   }
@@ -39,8 +37,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_thinfilm_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_thinfilm_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_thinfilm_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)outgoing_direction;
   (void)material;
@@ -48,8 +46,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_thinfilm_evaluate(
   return bsdf_eval_zero(data.spectrum_sample);
 }
 
-ETX_SHARED_INLINE float bsdf_thinfilm_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_thinfilm_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)data;
   (void)outgoing_direction;
@@ -65,14 +63,12 @@ ETX_SHARED_INLINE bool bsdf_thinfilm_is_delta(ETX_IN(Material, material), ETX_IN
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_thinfilm_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_thinfilm_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_dielectric_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_dielectric_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame local_frame = ETX_ZERO(LocalFrame);
   local_frame.tan = data.tan;
   local_frame.btn = data.btn;
@@ -140,16 +136,14 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_sample(
 
   if ((LocalFrame::cos_theta(w_i) * LocalFrame::cos_theta(result.w_o)) > 0.0f) {
     result.eta = 1.0f;
-    result.weight = spectral_response_mul(
-      spectral_response_div(result.weight, spectral_response_monochromatic(result.weight)),
+    result.weight = spectral_response_mul(spectral_response_div(result.weight, spectral_response_monochromatic(result.weight)),
       bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex));
     result.properties = BSDFSample::Reflection | delta_sample;
     result.medium_index = data.current_medium;
   } else {
     float eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
     result.eta = eta;
-    result.weight = spectral_response_mul(
-      spectral_response_div(result.weight, spectral_response_monochromatic(result.weight)),
+    result.weight = spectral_response_mul(spectral_response_div(result.weight, spectral_response_monochromatic(result.weight)),
       bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex));
     result.properties = BSDFSample::Transmission | BSDFSample::MediumChanged | delta_sample;
     result.medium_index = in_outside ? material.int_medium : material.ext_medium;
@@ -160,8 +154,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_dielectric_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_dielectric_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   LocalFrame local_frame = ETX_ZERO(LocalFrame);
   local_frame.tan = data.tan;
   local_frame.btn = data.btn;
@@ -232,8 +226,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_dielectric_evaluate(
   return eval;
 }
 
-ETX_SHARED_INLINE float bsdf_dielectric_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_dielectric_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   LocalFrame local_frame = ETX_ZERO(LocalFrame);
   local_frame.tan = data.tan;
   local_frame.btn = data.btn;
@@ -263,8 +257,8 @@ ETX_SHARED_INLINE float bsdf_dielectric_pdf(
     wh = normalize(w_o + w_i);
     dwh_dwo = 1.0f / (4.0f * dot(w_o, wh));
   } else {
-    float eta = outside ? spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta))
-                        : spectral_response_monochromatic(spectral_response_div(ext_ior.eta, int_ior.eta));
+    float eta =
+      outside ? spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta)) : spectral_response_monochromatic(spectral_response_div(ext_ior.eta, int_ior.eta));
     wh = normalize(w_i + w_o * eta);
     float sqrt_denom = dot(w_i, wh) + eta * dot(w_o, wh);
     dwh_dwo = (eta * eta) * dot(w_o, wh) / (sqrt_denom * sqrt_denom);
@@ -305,8 +299,7 @@ ETX_SHARED_INLINE bool bsdf_dielectric_is_delta_with_context(ETX_IN(BSDFResource
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_dielectric_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_dielectric_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }

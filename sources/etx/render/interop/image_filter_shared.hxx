@@ -36,7 +36,6 @@ ETX_SHARED_INLINE ImageFilterSharedAddress image_filter_shared_address(ETX_IN(fl
   return result;
 }
 
-ETX_SHARED_INLINE float4 image_filter_shared_bilinear(
-  ETX_IN(float4, p00), ETX_IN(float4, p01), ETX_IN(float4, p10), ETX_IN(float4, p11), float dx, float dy) {
+ETX_SHARED_INLINE float4 image_filter_shared_bilinear(ETX_IN(float4, p00), ETX_IN(float4, p01), ETX_IN(float4, p10), ETX_IN(float4, p11), float dx, float dy) {
   return p00 * (1.0f - dx) * (1.0f - dy) + p01 * dx * (1.0f - dy) + p10 * (1.0f - dx) * dy + p11 * dx * dy;
 }

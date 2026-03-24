@@ -14,8 +14,8 @@ ETX_SHARED_INLINE float3 scene_math_shared_shading_pos_project(ETX_IN(float3, po
   return position - dot(position - origin, normal) * normal;
 }
 
-ETX_SHARED_INLINE float3 scene_math_shared_shading_pos(ETX_IN(float3, g0), ETX_IN(float3, g1), ETX_IN(float3, g2), ETX_IN(float3, n0), ETX_IN(float3, n1),
-  ETX_IN(float3, n2), ETX_IN(float3, geo_normal), ETX_IN(float3, bc), ETX_IN(float3, w_o)) {
+ETX_SHARED_INLINE float3 scene_math_shared_shading_pos(ETX_IN(float3, g0), ETX_IN(float3, g1), ETX_IN(float3, g2), ETX_IN(float3, n0), ETX_IN(float3, n1), ETX_IN(float3, n2),
+  ETX_IN(float3, geo_normal), ETX_IN(float3, bc), ETX_IN(float3, w_o)) {
   float3 geo_pos = g0 * bc.x + g1 * bc.y + g2 * bc.z;
   float3 sh_normal = normalize(n0 * bc.x + n1 * bc.y + n2 * bc.z);
   float direction = (dot(sh_normal, w_o) >= 0.0f) ? 1.0f : -1.0f;
@@ -29,8 +29,7 @@ ETX_SHARED_INLINE float3 scene_math_shared_shading_pos(ETX_IN(float3, g0), ETX_I
   return offset_ray((convex ? sh_pos : geo_pos), geo_normal * direction);
 }
 
-ETX_SHARED_INLINE float3 scene_math_shared_orient_normals_to_hemisphere(
-  ETX_IN(float3, shading_normal), ETX_IN(float3, geo_normal), ETX_IN(float3, view_direction)) {
+ETX_SHARED_INLINE float3 scene_math_shared_orient_normals_to_hemisphere(ETX_IN(float3, shading_normal), ETX_IN(float3, geo_normal), ETX_IN(float3, view_direction)) {
   const uint32_t max_attempts = 16u;
   float i_dot_g = dot(view_direction, geo_normal);
 
@@ -60,8 +59,7 @@ ETX_SHARED_INLINE void scene_math_shared_build_sampling_frame(ETX_IN(float3, nor
   }
 }
 
-ETX_SHARED_INLINE float3 scene_math_shared_local_to_world(
-  ETX_IN(float3, normal), ETX_IN(float3, tangent), ETX_IN(float3, bitangent), ETX_IN(float3, local_direction)) {
+ETX_SHARED_INLINE float3 scene_math_shared_local_to_world(ETX_IN(float3, normal), ETX_IN(float3, tangent), ETX_IN(float3, bitangent), ETX_IN(float3, local_direction)) {
   return normalize(tangent * local_direction.x + bitangent * local_direction.y + normal * local_direction.z);
 }
 

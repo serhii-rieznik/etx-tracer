@@ -87,9 +87,9 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
       if (profile.emission.spectrum_index != kInvalidIndex) {
         emitter.spectrum_weight = safe_spectrum_luminance(scene_data, profile.emission.spectrum_index);
       }
-      emitter.additional_weight =
-        ((profile.cls == EmitterProfile::Class::Directional) || (profile.cls == EmitterProfile::Class::Environment)) ? (kPi * bounding_sphere_radius * bounding_sphere_radius) :
-                                                                                                                          (4.0f * kPi);
+      emitter.additional_weight = ((profile.cls == EmitterProfile::Class::Directional) || (profile.cls == EmitterProfile::Class::Environment))
+                                    ? (kPi * bounding_sphere_radius * bounding_sphere_radius)
+                                    : (4.0f * kPi);
       result.emitter_instances.push_back(emitter);
     }
   }
@@ -138,8 +138,8 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
   return result;
 }
 
-uint32_t fill_packed_emitter_distribution_entries(const std::vector<Emitter>& emitter_instances, const std::vector<uint32_t>& active_emitter_indices,
-  Distribution::Entry* entries, uint32_t entry_capacity) {
+uint32_t fill_packed_emitter_distribution_entries(const std::vector<Emitter>& emitter_instances, const std::vector<uint32_t>& active_emitter_indices, Distribution::Entry* entries,
+  uint32_t entry_capacity) {
   const uint32_t active_count = static_cast<uint32_t>(active_emitter_indices.size());
   if ((entries == nullptr) || (entry_capacity < active_count)) {
     return 0u;
@@ -164,8 +164,7 @@ std::vector<Distribution::Entry> build_packed_emitter_distribution(const PackedE
   }
 
   std::vector<Distribution::Entry> entries(active_count + 1u);
-  const uint32_t written_count =
-    fill_packed_emitter_distribution_entries(packed_emitters.emitter_instances, packed_emitters.active_emitter_indices, entries.data(), active_count);
+  const uint32_t written_count = fill_packed_emitter_distribution_entries(packed_emitters.emitter_instances, packed_emitters.active_emitter_indices, entries.data(), active_count);
   if (written_count != active_count) {
     return {};
   }

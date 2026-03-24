@@ -3,36 +3,36 @@
 #include "medium_transmittance_shared.hxx"
 
 #if defined(__cplusplus)
-# define ETX_MEDIUM_SAMPLE_SHARED_MEDIUM_TYPE ::Medium
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE ::SpectralResponse
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_QUERY ::SpectralQuery
-# define ETX_MEDIUM_SAMPLE_SHARED_SAMPLE ::MediumSample
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_SPECTRAL ::spectral_response_is_spectral
-# define ETX_MEDIUM_SAMPLE_SHARED_QUERY_IS_SPECTRAL ::spectral_query_is_spectral
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE ::spectral_response_make
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_ADD ::spectral_response_add
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_SUB ::spectral_response_sub
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL ::spectral_response_mul
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_DIV ::spectral_response_div
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_EXP ::spectral_response_exp
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_ZERO ::spectral_response_is_zero
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAXIMUM ::spectral_response_maximum
+# define ETX_MEDIUM_SAMPLE_SHARED_MEDIUM_TYPE                 ::Medium
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE           ::SpectralResponse
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_QUERY              ::SpectralQuery
+# define ETX_MEDIUM_SAMPLE_SHARED_SAMPLE                      ::MediumSample
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_SPECTRAL        ::spectral_response_is_spectral
+# define ETX_MEDIUM_SAMPLE_SHARED_QUERY_IS_SPECTRAL           ::spectral_query_is_spectral
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE               ::spectral_response_make
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_ADD                ::spectral_response_add
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_SUB                ::spectral_response_sub
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL                ::spectral_response_mul
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_DIV                ::spectral_response_div
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_EXP                ::spectral_response_exp
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_ZERO            ::spectral_response_is_zero
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAXIMUM            ::spectral_response_maximum
 # define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE ::spectral_response_clamp_non_negative
 #else
-# define ETX_MEDIUM_SAMPLE_SHARED_MEDIUM_TYPE Medium
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE SpectralResponse
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_QUERY SpectralQuery
-# define ETX_MEDIUM_SAMPLE_SHARED_SAMPLE MediumSample
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_SPECTRAL spectral_response_is_spectral
-# define ETX_MEDIUM_SAMPLE_SHARED_QUERY_IS_SPECTRAL spectral_query_is_spectral
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE spectral_response_make
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_ADD spectral_response_add
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_SUB spectral_response_sub
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL spectral_response_mul
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_DIV spectral_response_div
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_EXP spectral_response_exp
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_ZERO spectral_response_is_zero
-# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAXIMUM spectral_response_maximum
+# define ETX_MEDIUM_SAMPLE_SHARED_MEDIUM_TYPE                 Medium
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE           SpectralResponse
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_QUERY              SpectralQuery
+# define ETX_MEDIUM_SAMPLE_SHARED_SAMPLE                      MediumSample
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_SPECTRAL        spectral_response_is_spectral
+# define ETX_MEDIUM_SAMPLE_SHARED_QUERY_IS_SPECTRAL           spectral_query_is_spectral
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE               spectral_response_make
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_ADD                spectral_response_add
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_SUB                spectral_response_sub
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL                spectral_response_mul
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_DIV                spectral_response_div
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_EXP                spectral_response_exp
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_ZERO            spectral_response_is_zero
+# define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAXIMUM            spectral_response_maximum
 # define ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE spectral_response_clamp_non_negative
 #endif
 
@@ -100,10 +100,9 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_zero_samp
   return result;
 }
 
-ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ETX_INOUT(MediumSharedContext, context),
-  ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_QUERY, spect), ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, throughput),
-  ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, scattering_value), ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, absorption_value), ETX_IN(float3, pos),
-  ETX_IN(float3, w_i), float max_t) {
+ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ETX_INOUT(MediumSharedContext, context), ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_QUERY, spect),
+  ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, throughput), ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, scattering_value),
+  ETX_IN(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE, absorption_value), ETX_IN(float3, pos), ETX_IN(float3, w_i), float max_t) {
   ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE extinction_value = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_ADD(scattering_value, absorption_value);
   ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE albedo = medium_sample_shared_calculate_albedo(spect, scattering_value, extinction_value);
   uint32_t medium_class = context.medium_class;
@@ -199,8 +198,7 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
         ETX_ZERO_INIT(ETX_MEDIUM_SAMPLE_SHARED_SAMPLE, result);
         result.pos = world_pos_at_t;
         result.sampled_medium_t = t_world;
-        result.weight = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_DIV(
-          ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(transmittance, scattering_at_point), medium_sample_shared_response_sum(pdf));
+        result.weight = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_DIV(ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(transmittance, scattering_at_point), medium_sample_shared_response_sum(pdf));
         return result;
       }
 

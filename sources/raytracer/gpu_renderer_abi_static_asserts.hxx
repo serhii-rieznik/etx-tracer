@@ -12,11 +12,9 @@ static_assert(std::is_standard_layout_v<GPUWavefrontPathState>, "GPUWavefrontPat
 static_assert(std::is_trivially_copyable_v<GPUWavefrontPathState>, "GPUWavefrontPathState must stay trivially copyable for GPU wavefront ABI");
 static_assert(sizeof(GPUWavefrontPathState) == kGPUWavefrontPathStateStride, "GPUWavefrontPathState size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, ray) == kGPUWavefrontPathStateRayOffset, "GPUWavefrontPathState::ray offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathState, throughput) == kGPUWavefrontPathStateThroughputOffset,
-  "GPUWavefrontPathState::throughput offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, throughput) == kGPUWavefrontPathStateThroughputOffset, "GPUWavefrontPathState::throughput offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, eta) == kGPUWavefrontPathStateEtaOffset, "GPUWavefrontPathState::eta offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathState, eta_scale) == kGPUWavefrontPathStateEtaScaleOffset,
-  "GPUWavefrontPathState::eta_scale offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, eta_scale) == kGPUWavefrontPathStateEtaScaleOffset, "GPUWavefrontPathState::eta_scale offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, forward_pdf) == kGPUWavefrontPathStateForwardPdfOffset,
   "GPUWavefrontPathState::forward_pdf offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, reverse_pdf) == kGPUWavefrontPathStateReversePdfOffset,
@@ -31,55 +29,41 @@ static_assert(offsetof(GPUWavefrontPathState, path_length) == kGPUWavefrontPathS
   "GPUWavefrontPathState::path_length offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, pixel_index) == kGPUWavefrontPathStatePixelIndexOffset,
   "GPUWavefrontPathState::pixel_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathState, flags) == kGPUWavefrontPathStateFlagsOffset,
-  "GPUWavefrontPathState::flags offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, flags) == kGPUWavefrontPathStateFlagsOffset, "GPUWavefrontPathState::flags offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, path_source) == kGPUWavefrontPathStatePathSourceOffset,
   "GPUWavefrontPathState::path_source offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, sampler_seed) == kGPUWavefrontPathStateSamplerSeedOffset,
   "GPUWavefrontPathState::sampler_seed offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathState, pixel) == kGPUWavefrontPathStatePixelOffset,
-  "GPUWavefrontPathState::pixel offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathState, spect) == kGPUWavefrontPathStateSpectralQueryOffset,
-  "GPUWavefrontPathState::spect offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathState, film_uv) == kGPUWavefrontPathStateFilmUvOffset,
-  "GPUWavefrontPathState::film_uv offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, pixel) == kGPUWavefrontPathStatePixelOffset, "GPUWavefrontPathState::pixel offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, spect) == kGPUWavefrontPathStateSpectralQueryOffset, "GPUWavefrontPathState::spect offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, film_uv) == kGPUWavefrontPathStateFilmUvOffset, "GPUWavefrontPathState::film_uv offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, last_vertex_index) == kGPUWavefrontPathStateLastVertexIndexOffset,
   "GPUWavefrontPathState::last_vertex_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathState, reserved0) == kGPUWavefrontPathStateReserved0Offset,
-  "GPUWavefrontPathState::reserved0 offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, reserved0) == kGPUWavefrontPathStateReserved0Offset, "GPUWavefrontPathState::reserved0 offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontHit>, "GPUWavefrontHit must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontHit>, "GPUWavefrontHit must stay trivially copyable for GPU wavefront ABI");
 static_assert(sizeof(GPUWavefrontHit) == kGPUWavefrontHitStride, "GPUWavefrontHit size changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontHit, transmittance) == kGPUWavefrontHitTransmittanceOffset,
-  "GPUWavefrontHit::transmittance offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontHit, transmittance) == kGPUWavefrontHitTransmittanceOffset, "GPUWavefrontHit::transmittance offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontHit, vertex) == kGPUWavefrontHitVertexOffset, "GPUWavefrontHit::vertex offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontHit, geo_normal) == kGPUWavefrontHitGeoNormalOffset,
-  "GPUWavefrontHit::geo_normal offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontHit, geo_normal) == kGPUWavefrontHitGeoNormalOffset, "GPUWavefrontHit::geo_normal offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontHit, hit_t) == kGPUWavefrontHitHitTOffset, "GPUWavefrontHit::hit_t offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontHit, triangle_index) == kGPUWavefrontHitTriangleIndexOffset,
-  "GPUWavefrontHit::triangle_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontHit, material_index) == kGPUWavefrontHitMaterialIndexOffset,
-  "GPUWavefrontHit::material_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontHit, emitter_index) == kGPUWavefrontHitEmitterIndexOffset,
-  "GPUWavefrontHit::emitter_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontHit, medium_index) == kGPUWavefrontHitMediumIndexOffset,
-  "GPUWavefrontHit::medium_index offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontHit, triangle_index) == kGPUWavefrontHitTriangleIndexOffset, "GPUWavefrontHit::triangle_index offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontHit, material_index) == kGPUWavefrontHitMaterialIndexOffset, "GPUWavefrontHit::material_index offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontHit, emitter_index) == kGPUWavefrontHitEmitterIndexOffset, "GPUWavefrontHit::emitter_index offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontHit, medium_index) == kGPUWavefrontHitMediumIndexOffset, "GPUWavefrontHit::medium_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontHit, flags) == kGPUWavefrontHitFlagsOffset, "GPUWavefrontHit::flags offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontHit, barycentric) == kGPUWavefrontHitBarycentricOffset,
-  "GPUWavefrontHit::barycentric offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontHit, barycentric) == kGPUWavefrontHitBarycentricOffset, "GPUWavefrontHit::barycentric offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontPathVertex>, "GPUWavefrontPathVertex must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontPathVertex>, "GPUWavefrontPathVertex must stay trivially copyable for GPU wavefront ABI");
 static_assert(sizeof(GPUWavefrontPathVertex) == kGPUWavefrontPathVertexStride, "GPUWavefrontPathVertex size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, throughput) == kGPUWavefrontPathVertexThroughputOffset,
   "GPUWavefrontPathVertex::throughput offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathVertex, position) == kGPUWavefrontPathVertexPositionOffset,
-  "GPUWavefrontPathVertex::position offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, position) == kGPUWavefrontPathVertexPositionOffset, "GPUWavefrontPathVertex::position offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, triangle_index) == kGPUWavefrontPathVertexTriangleIndexOffset,
   "GPUWavefrontPathVertex::triangle_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathVertex, normal) == kGPUWavefrontPathVertexNormalOffset,
-  "GPUWavefrontPathVertex::normal offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, normal) == kGPUWavefrontPathVertexNormalOffset, "GPUWavefrontPathVertex::normal offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, material_index) == kGPUWavefrontPathVertexMaterialIndexOffset,
   "GPUWavefrontPathVertex::material_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, geo_normal) == kGPUWavefrontPathVertexGeoNormalOffset,
@@ -89,22 +73,19 @@ static_assert(offsetof(GPUWavefrontPathVertex, medium_index) == kGPUWavefrontPat
 static_assert(offsetof(GPUWavefrontPathVertex, w_i) == kGPUWavefrontPathVertexWiOffset, "GPUWavefrontPathVertex::w_i offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, emitter_index) == kGPUWavefrontPathVertexEmitterIndexOffset,
   "GPUWavefrontPathVertex::emitter_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathVertex, texcoord) == kGPUWavefrontPathVertexTexcoordOffset,
-  "GPUWavefrontPathVertex::texcoord offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, texcoord) == kGPUWavefrontPathVertexTexcoordOffset, "GPUWavefrontPathVertex::texcoord offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, forward_pdf) == kGPUWavefrontPathVertexForwardPdfOffset,
   "GPUWavefrontPathVertex::forward_pdf offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, reverse_pdf) == kGPUWavefrontPathVertexReversePdfOffset,
   "GPUWavefrontPathVertex::reverse_pdf offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, sampled_bsdf_pdf) == kGPUWavefrontPathVertexSampledBsdfPdfOffset,
   "GPUWavefrontPathVertex::sampled_bsdf_pdf offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathVertex, eta_scale) == kGPUWavefrontPathVertexEtaScaleOffset,
-  "GPUWavefrontPathVertex::eta_scale offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, eta_scale) == kGPUWavefrontPathVertexEtaScaleOffset, "GPUWavefrontPathVertex::eta_scale offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, path_length) == kGPUWavefrontPathVertexPathLengthOffset,
   "GPUWavefrontPathVertex::path_length offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, pixel_index) == kGPUWavefrontPathVertexPixelIndexOffset,
   "GPUWavefrontPathVertex::pixel_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathVertex, flags) == kGPUWavefrontPathVertexFlagsOffset,
-  "GPUWavefrontPathVertex::flags offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, flags) == kGPUWavefrontPathVertexFlagsOffset, "GPUWavefrontPathVertex::flags offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, pdf_from_prev) == kGPUWavefrontPathVertexPdfFromPrevOffset,
   "GPUWavefrontPathVertex::pdf_from_prev offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, pdf_from_next) == kGPUWavefrontPathVertexPdfFromNextOffset,
@@ -113,8 +94,7 @@ static_assert(offsetof(GPUWavefrontPathVertex, pdf_accumulated) == kGPUWavefront
   "GPUWavefrontPathVertex::pdf_accumulated offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, pdf_history) == kGPUWavefrontPathVertexPdfHistoryOffset,
   "GPUWavefrontPathVertex::pdf_history offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathVertex, pdf_ratio) == kGPUWavefrontPathVertexPdfRatioOffset,
-  "GPUWavefrontPathVertex::pdf_ratio offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, pdf_ratio) == kGPUWavefrontPathVertexPdfRatioOffset, "GPUWavefrontPathVertex::pdf_ratio offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontPathMeta>, "GPUWavefrontPathMeta must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontPathMeta>, "GPUWavefrontPathMeta must stay trivially copyable for GPU wavefront ABI");
@@ -123,19 +103,16 @@ static_assert(offsetof(GPUWavefrontPathMeta, camera_path_length) == kGPUWavefron
   "GPUWavefrontPathMeta::camera_path_length offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathMeta, light_path_length) == kGPUWavefrontPathMetaLightPathLengthOffset,
   "GPUWavefrontPathMeta::light_path_length offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathMeta, flags) == kGPUWavefrontPathMetaFlagsOffset,
-  "GPUWavefrontPathMeta::flags offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathMeta, flags) == kGPUWavefrontPathMetaFlagsOffset, "GPUWavefrontPathMeta::flags offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathMeta, camera_mis_history) == kGPUWavefrontPathMetaCameraMisHistoryOffset,
   "GPUWavefrontPathMeta::camera_mis_history offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathMeta, light_mis_history) == kGPUWavefrontPathMetaLightMisHistoryOffset,
   "GPUWavefrontPathMeta::light_mis_history offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathMeta, from_delta) == kGPUWavefrontPathMetaFromDeltaOffset,
-  "GPUWavefrontPathMeta::from_delta offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathMeta, from_delta) == kGPUWavefrontPathMetaFromDeltaOffset, "GPUWavefrontPathMeta::from_delta offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontDirectLightSample>, "GPUWavefrontDirectLightSample must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontDirectLightSample>, "GPUWavefrontDirectLightSample must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontDirectLightSample) == kGPUWavefrontDirectLightSampleStride,
-  "GPUWavefrontDirectLightSample size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontDirectLightSample) == kGPUWavefrontDirectLightSampleStride, "GPUWavefrontDirectLightSample size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontDirectLightSample, value) == kGPUWavefrontDirectLightSampleValueOffset,
   "GPUWavefrontDirectLightSample::value offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontDirectLightSample, origin) == kGPUWavefrontDirectLightSampleOriginOffset,
@@ -161,8 +138,7 @@ static_assert(offsetof(GPUWavefrontDirectLightSample, flags) == kGPUWavefrontDir
 
 static_assert(std::is_standard_layout_v<GPUWavefrontDirectLightTask>, "GPUWavefrontDirectLightTask must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontDirectLightTask>, "GPUWavefrontDirectLightTask must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontDirectLightTask) == kGPUWavefrontDirectLightTaskStride,
-  "GPUWavefrontDirectLightTask size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontDirectLightTask) == kGPUWavefrontDirectLightTaskStride, "GPUWavefrontDirectLightTask size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontDirectLightTask, shadow_ray) == kGPUWavefrontDirectLightTaskShadowRayOffset,
   "GPUWavefrontDirectLightTask::shadow_ray offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontDirectLightTask, shadow_target) == kGPUWavefrontDirectLightTaskShadowTargetOffset,
@@ -184,8 +160,7 @@ static_assert(offsetof(GPUWavefrontDirectLightTask, sampler_seed) == kGPUWavefro
 
 static_assert(std::is_standard_layout_v<GPUWavefrontDirectLightResult>, "GPUWavefrontDirectLightResult must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontDirectLightResult>, "GPUWavefrontDirectLightResult must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontDirectLightResult) == kGPUWavefrontDirectLightResultStride,
-  "GPUWavefrontDirectLightResult size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontDirectLightResult) == kGPUWavefrontDirectLightResultStride, "GPUWavefrontDirectLightResult size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontDirectLightResult, transmittance) == kGPUWavefrontDirectLightResultTransmittanceOffset,
   "GPUWavefrontDirectLightResult::transmittance offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontDirectLightResult, visible) == kGPUWavefrontDirectLightResultVisibleOffset,
@@ -193,8 +168,7 @@ static_assert(offsetof(GPUWavefrontDirectLightResult, visible) == kGPUWavefrontD
 
 static_assert(std::is_standard_layout_v<GPUWavefrontConnectLightTask>, "GPUWavefrontConnectLightTask must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectLightTask>, "GPUWavefrontConnectLightTask must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontConnectLightTask) == kGPUWavefrontConnectLightTaskStride,
-  "GPUWavefrontConnectLightTask size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontConnectLightTask) == kGPUWavefrontConnectLightTaskStride, "GPUWavefrontConnectLightTask size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, shadow_ray) == kGPUWavefrontConnectLightTaskShadowRayOffset,
   "GPUWavefrontConnectLightTask::shadow_ray offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, shadow_target) == kGPUWavefrontConnectLightTaskShadowTargetOffset,
@@ -216,8 +190,7 @@ static_assert(offsetof(GPUWavefrontConnectLightTask, sampler_seed) == kGPUWavefr
 
 static_assert(std::is_standard_layout_v<GPUWavefrontConnectLightResult>, "GPUWavefrontConnectLightResult must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectLightResult>, "GPUWavefrontConnectLightResult must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontConnectLightResult) == kGPUWavefrontConnectLightResultStride,
-  "GPUWavefrontConnectLightResult size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontConnectLightResult) == kGPUWavefrontConnectLightResultStride, "GPUWavefrontConnectLightResult size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightResult, transmittance) == kGPUWavefrontConnectLightResultTransmittanceOffset,
   "GPUWavefrontConnectLightResult::transmittance offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightResult, visible) == kGPUWavefrontConnectLightResultVisibleOffset,
@@ -225,8 +198,7 @@ static_assert(offsetof(GPUWavefrontConnectLightResult, visible) == kGPUWavefront
 
 static_assert(std::is_standard_layout_v<GPUWavefrontConnectCameraTask>, "GPUWavefrontConnectCameraTask must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectCameraTask>, "GPUWavefrontConnectCameraTask must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontConnectCameraTask) == kGPUWavefrontConnectCameraTaskStride,
-  "GPUWavefrontConnectCameraTask size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontConnectCameraTask) == kGPUWavefrontConnectCameraTaskStride, "GPUWavefrontConnectCameraTask size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectCameraTask, shadow_ray) == kGPUWavefrontConnectCameraTaskShadowRayOffset,
   "GPUWavefrontConnectCameraTask::shadow_ray offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectCameraTask, shadow_target) == kGPUWavefrontConnectCameraTaskShadowTargetOffset,
@@ -248,8 +220,7 @@ static_assert(offsetof(GPUWavefrontConnectCameraTask, sampler_seed) == kGPUWavef
 
 static_assert(std::is_standard_layout_v<GPUWavefrontConnectCameraResult>, "GPUWavefrontConnectCameraResult must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectCameraResult>, "GPUWavefrontConnectCameraResult must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontConnectCameraResult) == kGPUWavefrontConnectCameraResultStride,
-  "GPUWavefrontConnectCameraResult size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontConnectCameraResult) == kGPUWavefrontConnectCameraResultStride, "GPUWavefrontConnectCameraResult size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectCameraResult, transmittance) == kGPUWavefrontConnectCameraResultTransmittanceOffset,
   "GPUWavefrontConnectCameraResult::transmittance offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectCameraResult, visible) == kGPUWavefrontConnectCameraResultVisibleOffset,
@@ -332,8 +303,7 @@ static_assert(offsetof(EmitterProfile, emission) == kEmitterProfileEmissionSpect
 static_assert(offsetof(EmitterProfile, cls) == kEmitterProfileClassOffset, "EmitterProfile::cls offset changed; update GPU shader decode");
 static_assert((offsetof(EmitterProfile, directional) + offsetof(EmitterProfile::DirectionalData, direction)) == kEmitterProfileDirectionalDirectionOffset,
   "EmitterProfile::directional.direction offset changed; update GPU shader decode");
-static_assert((offsetof(EmitterProfile, directional) + offsetof(EmitterProfile::DirectionalData, angular_size_cosine)) ==
-    kEmitterProfileDirectionalAngularSizeCosineOffset,
+static_assert((offsetof(EmitterProfile, directional) + offsetof(EmitterProfile::DirectionalData, angular_size_cosine)) == kEmitterProfileDirectionalAngularSizeCosineOffset,
   "EmitterProfile::directional.angular_size_cosine offset changed; update GPU shader decode");
 static_assert(offsetof(EmitterProfile, medium_index) == kEmitterProfileMediumIndexOffset, "EmitterProfile::medium_index offset changed; update GPU shader decode");
 static_assert(offsetof(EmitterProfile, meta) == kEmitterProfileMetaOffset, "EmitterProfile::meta offset changed; update GPU shader decode");
@@ -415,8 +385,7 @@ static_assert(offsetof(GPUSceneOptions, noise_threshold) == kSceneOptionsNoiseTh
 static_assert(offsetof(GPUSceneOptions, radiance_clamp) == kSceneOptionsRadianceClampOffset, "GPUSceneOptions::radiance_clamp offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneOptions, strategy_flags) == kSceneOptionsStrategyFlagsOffset, "GPUSceneOptions::strategy_flags offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneOptions, light_sampling) == kSceneOptionsLightSamplingOffset, "GPUSceneOptions::light_sampling offset changed; update GPU shader decode");
-static_assert(offsetof(GPUSceneOptions, properties_flags) == kSceneOptionsPropertiesFlagsOffset,
-  "GPUSceneOptions::properties_flags offset changed; update GPU shader decode");
+static_assert(offsetof(GPUSceneOptions, properties_flags) == kSceneOptionsPropertiesFlagsOffset, "GPUSceneOptions::properties_flags offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneOptions, path_mode) == kSceneOptionsPathModeOffset, "GPUSceneOptions::path_mode offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneOptions, random_seed) == kSceneOptionsRandomSeedOffset, "GPUSceneOptions::random_seed offset changed; update GPU shader decode");
 
@@ -436,10 +405,8 @@ static_assert(offsetof(Camera, medium_index) == kCameraMediumIndexOffset, "Camer
 static_assert(std::is_standard_layout_v<GPUImageBlobHeader>, "GPUImageBlobHeader must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<GPUImageBlobHeader>, "GPUImageBlobHeader must stay trivially copyable for GPU upload ABI");
 static_assert(sizeof(GPUImageBlobHeader) == 16u, "GPUImageBlobHeader size changed; update GPU image blob ABI");
-static_assert(offsetof(GPUImageBlobHeader, image_count) == kImageBlobHeaderImageCountOffset,
-  "GPUImageBlobHeader::image_count offset changed; update GPU image blob ABI");
-static_assert(offsetof(GPUImageBlobHeader, images_offset) == kImageBlobHeaderImagesOffset,
-  "GPUImageBlobHeader::images_offset offset changed; update GPU image blob ABI");
+static_assert(offsetof(GPUImageBlobHeader, image_count) == kImageBlobHeaderImageCountOffset, "GPUImageBlobHeader::image_count offset changed; update GPU image blob ABI");
+static_assert(offsetof(GPUImageBlobHeader, images_offset) == kImageBlobHeaderImagesOffset, "GPUImageBlobHeader::images_offset offset changed; update GPU image blob ABI");
 static_assert(offsetof(GPUImageBlobHeader, data_chunk_count) == kImageBlobHeaderDataChunkCountOffset,
   "GPUImageBlobHeader::data_chunk_count offset changed; update GPU image blob ABI");
 static_assert(offsetof(GPUImageBlobHeader, data_chunk_indices_offset) == kImageBlobHeaderDataChunkIndicesOffset,
@@ -456,16 +423,13 @@ static_assert(offsetof(::Image, options) == kImageDescOptionsOffset, "Image::opt
 static_assert(offsetof(::Image, format) == kImageDescFormatOffset, "Image::format offset changed; update GPU image blob ABI");
 static_assert(offsetof(::Image, pixel_data_offset) == kImageDescPixelDataOffset, "Image::pixel_data_offset offset changed; update GPU image blob ABI");
 static_assert(offsetof(::Image, pixel_data_stride) == kImageDescPixelDataStrideOffset, "Image::pixel_data_stride offset changed; update GPU image blob ABI");
-static_assert(offsetof(::Image, pixel_data_chunk_index) == kImageDescPixelDataChunkIndexOffset,
-  "Image::pixel_data_chunk_index offset changed; update GPU image blob ABI");
+static_assert(offsetof(::Image, pixel_data_chunk_index) == kImageDescPixelDataChunkIndexOffset, "Image::pixel_data_chunk_index offset changed; update GPU image blob ABI");
 
 static_assert(std::is_standard_layout_v<GPUMediumBlobHeader>, "GPUMediumBlobHeader must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<GPUMediumBlobHeader>, "GPUMediumBlobHeader must stay trivially copyable for GPU upload ABI");
 static_assert(sizeof(GPUMediumBlobHeader) == 16u, "GPUMediumBlobHeader size changed; update GPU medium blob ABI");
-static_assert(offsetof(GPUMediumBlobHeader, medium_count) == kMediumBlobHeaderMediumCountOffset,
-  "GPUMediumBlobHeader::medium_count offset changed; update GPU medium blob ABI");
-static_assert(offsetof(GPUMediumBlobHeader, mediums_offset) == kMediumBlobHeaderMediumsOffset,
-  "GPUMediumBlobHeader::mediums_offset offset changed; update GPU medium blob ABI");
+static_assert(offsetof(GPUMediumBlobHeader, medium_count) == kMediumBlobHeaderMediumCountOffset, "GPUMediumBlobHeader::medium_count offset changed; update GPU medium blob ABI");
+static_assert(offsetof(GPUMediumBlobHeader, mediums_offset) == kMediumBlobHeaderMediumsOffset, "GPUMediumBlobHeader::mediums_offset offset changed; update GPU medium blob ABI");
 static_assert(offsetof(GPUMediumBlobHeader, data_chunk_count) == kMediumBlobHeaderDataChunkCountOffset,
   "GPUMediumBlobHeader::data_chunk_count offset changed; update GPU medium blob ABI");
 static_assert(offsetof(GPUMediumBlobHeader, data_chunk_indices_offset) == kMediumBlobHeaderDataChunkIndicesOffset,
@@ -477,32 +441,26 @@ static_assert(std::is_standard_layout_v<::Medium>, "Interop Medium must stay sta
 static_assert(std::is_trivially_copyable_v<::Medium>, "Interop Medium must stay trivially copyable for GPU upload ABI");
 static_assert(sizeof(::Medium) == 128u, "Interop Medium size changed; update GPU medium blob ABI");
 static_assert(sizeof(::Medium) == kMediumStride, "Medium stride changed; update GPU shader decode");
-static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, dimensions)) == kMediumGridDimensionsOffset,
-  "Medium::grid.dimensions offset changed; update GPU shader decode");
-static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, type)) == kMediumGridTypeOffset,
-  "Medium::grid.type offset changed; update GPU shader decode");
-static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_type)) == kMediumGridNoiseTypeOffset,
-  "Medium::grid.noise_type offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, dimensions)) == kMediumGridDimensionsOffset, "Medium::grid.dimensions offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, type)) == kMediumGridTypeOffset, "Medium::grid.type offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_type)) == kMediumGridNoiseTypeOffset, "Medium::grid.noise_type offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, density_data_offset)) == kMediumGridDensityDataOffsetOffset,
   "Medium::grid.density_data_offset offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, density_count)) == kMediumGridDensityCountOffset,
   "Medium::grid.density_count offset changed; update GPU shader decode");
-static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_seed)) == kMediumGridNoiseSeedOffset,
-  "Medium::grid.noise_seed offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_seed)) == kMediumGridNoiseSeedOffset, "Medium::grid.noise_seed offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_offset)) == kMediumGridNoiseOffsetOffset,
   "Medium::grid.noise_offset offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_enable_border_fade)) == kMediumGridNoiseEnableBorderFadeOffset,
   "Medium::grid.noise_enable_border_fade offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_octaves)) == kMediumGridNoiseOctavesOffset,
   "Medium::grid.noise_octaves offset changed; update GPU shader decode");
-static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_scale)) == kMediumGridNoiseScaleOffset,
-  "Medium::grid.noise_scale offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_scale)) == kMediumGridNoiseScaleOffset, "Medium::grid.noise_scale offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_lacunarity)) == kMediumGridNoiseLacunarityOffset,
   "Medium::grid.noise_lacunarity offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_persistence)) == kMediumGridNoisePersistenceOffset,
   "Medium::grid.noise_persistence offset changed; update GPU shader decode");
-static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_power)) == kMediumGridNoisePowerOffset,
-  "Medium::grid.noise_power offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_power)) == kMediumGridNoisePowerOffset, "Medium::grid.noise_power offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_sharpness)) == kMediumGridNoiseSharpnessOffset,
   "Medium::grid.noise_sharpness offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_border_fade_distance)) == kMediumGridNoiseBorderFadeDistanceOffset,

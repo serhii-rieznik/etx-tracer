@@ -33,8 +33,7 @@ float wavefront_direct_light_stage_bsdf_pdf(BSDFResourceContext context, BSDFDat
 
   BSDFEval bsdf_eval = (BSDFEval)0;
   bsdf_eval.bsdf = partial_task.contribution;
-  bsdf_eval.pdf = bsdf_dielectric_pdf(
-    wavefront_make_scene_bsdf_resource_gpu_context(), bsdf_data, input_value.sample_value.direction, input_value.material, bsdf_sampler);
+  bsdf_eval.pdf = bsdf_dielectric_pdf(wavefront_make_scene_bsdf_resource_gpu_context(), bsdf_data, input_value.sample_value.direction, input_value.material, bsdf_sampler);
   bsdf_eval.eta = 1.0f;
 
   wavefront_store_direct_light_prepare_task(dtid.x, input_value, bsdf_eval, bsdf_sampler);

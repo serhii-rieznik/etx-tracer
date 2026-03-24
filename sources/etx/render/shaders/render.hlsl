@@ -44,7 +44,7 @@ float4 tonemap(float4 value) {
 
 struct VSOutput {
   float4 pos : SV_Position;
-  float2 uv : TEXCOORD0;
+  float2 uv  : TEXCOORD0;
 };
 
 VSOutput vertex_main(uint vertexIndex : SV_VertexID) {

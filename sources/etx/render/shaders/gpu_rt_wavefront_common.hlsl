@@ -654,9 +654,8 @@ Vertex wavefront_interpolate_vertex(TriangleData tri, float3 barycentrics) {
     texcoord_2 = load_float2(texcoord_buffer, tri.i.z);
   }
 
-  surface_point_shared_interpolate_vertex(
-    p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1, texcoord_2, barycentrics, has_surface_frame,
-    has_texcoords, result);
+  surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1, texcoord_2,
+    barycentrics, has_surface_frame, has_texcoords, result);
   return result;
 }
 
@@ -739,8 +738,8 @@ void wavefront_write_root_camera_vertex(uint path_index, Camera camera, Ray ray,
   vertex.sampled_bsdf_pdf = eval.pdf_dir;
   vertex.path_length = 0u;
   vertex.pixel_index = pixel_index;
-  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible |
-                 GPUWavefrontVertexFlags::From_camera | GPUWavefrontVertexFlags::Camera;
+  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible | GPUWavefrontVertexFlags::From_camera |
+                 GPUWavefrontVertexFlags::Camera;
   vertex.pdf_from_prev = 1.0f;
   float history_value = scene_path_mode_uses_bdpt_fast() ? 1.0f : 0.0f;
   vertex.pdf_history = history_value;
@@ -768,8 +767,7 @@ void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample e
   vertex.sampled_bsdf_pdf = emitter_sample.pdf_dir;
   vertex.path_length = 0u;
   vertex.pixel_index = path_index;
-  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Emitter |
-                 GPUWavefrontVertexFlags::From_light;
+  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Emitter | GPUWavefrontVertexFlags::From_light;
   if (emitter_sample.is_distant == 0u) {
     vertex.triangle_index = emitter_sample.triangle_index;
     vertex.texcoord = emitter_sample.image_uv;
@@ -818,8 +816,7 @@ void wavefront_write_vertex(bool from_camera, uint path_index, GPUWavefrontPathS
   vertex.eta_scale = state.eta_scale;
   vertex.path_length = state.path_length;
   vertex.pixel_index = state.pixel_index;
-  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Surface |
-                 (from_camera ? GPUWavefrontVertexFlags::From_camera : GPUWavefrontVertexFlags::From_light);
+  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Surface | (from_camera ? GPUWavefrontVertexFlags::From_camera : GPUWavefrontVertexFlags::From_light);
   if ((state.flags & GPUWavefrontPathFlags::Connectible) != 0u) {
     vertex.flags |= GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible;
   }

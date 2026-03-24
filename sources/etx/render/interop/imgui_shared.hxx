@@ -10,4 +10,3 @@ struct ETX_ALIGNED ImGuiPushConstants {
   uint32_t sampler_index;
   uint32_t padding;
 };
-

@@ -206,8 +206,8 @@ struct Ocean {
   float _last_update_time = 0.0f;
 
   void prepare_render_draw_state(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& view_proj, const float4x4& inv_view_proj, const float3& camera_position,
-    RHITexture envmap_texture, bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, RHITexture wave_thickness_min_texture,
-    RHITexture wave_thickness_max_texture, RHITexture foam_history_texture, uint32_t viewport_width, uint32_t viewport_height);
+    RHITexture envmap_texture, bool envmap_equal_area_mapping, RHITexture scene_opaque_color_texture, RHITexture wave_thickness_min_texture, RHITexture wave_thickness_max_texture,
+    RHITexture foam_history_texture, uint32_t viewport_width, uint32_t viewport_height);
 };
 
 }  // namespace etx

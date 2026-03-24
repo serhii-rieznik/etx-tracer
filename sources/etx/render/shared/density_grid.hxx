@@ -41,16 +41,15 @@ struct MediumTextureSampleContext {
   ArrayView<float> density = {};
 };
 
-ETX_SHARED_INLINE float medium_texture_sample_density(
-  ETX_INOUT(MediumTextureSampleContext, context), ETX_IN(uint3, dimensions), uint32_t x, uint32_t y, uint32_t z) {
+ETX_SHARED_INLINE float medium_texture_sample_density(ETX_INOUT(MediumTextureSampleContext, context), ETX_IN(uint3, dimensions), uint32_t x, uint32_t y, uint32_t z) {
   uint32_t index = x + y * dimensions.x + z * dimensions.x * dimensions.y;
   return context.density[index];
 }
 
 #include <etx/render/interop/medium_texture_sample_shared.hxx>
 
-ETX_SHARED_INLINE float density_grid_sample_direct(
-  ETX_IN(ArrayView<float>, density), ETX_IN(MediumDensitySharedGrid, grid), ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_IN(float3, local_coord)) {
+ETX_SHARED_INLINE float density_grid_sample_direct(ETX_IN(ArrayView<float>, density), ETX_IN(MediumDensitySharedGrid, grid), ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max),
+  ETX_IN(float3, local_coord)) {
   float value = 0.0f;
   if (grid.type == MediumGridType::NoiseFunction) {
     value = medium_density_shared_sample_noise(local_coord, bounds_min, bounds_max, grid.noise_type, grid.noise_scale, grid.noise_octaves, grid.noise_lacunarity,

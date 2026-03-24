@@ -16,4 +16,3 @@ struct Triangle {
   float3 geo_n ETX_INIT({});
   uint32_t emitter_index ETX_INIT(kInvalidIndex);
 };
-

@@ -78,7 +78,7 @@ struct DxcComPtr {
     return _ptr != nullptr;
   }
 
-private:
+ private:
   void internal_add_ref() {
     if (_ptr != nullptr) {
       _ptr->AddRef();

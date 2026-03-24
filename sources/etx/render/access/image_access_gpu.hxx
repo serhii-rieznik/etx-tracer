@@ -135,8 +135,7 @@ bool image_access_has_alpha(ImageAccessGPUContext context, uint image_index) {
   return (image_access.options & Image::HasAlphaChannel) != 0u;
 }
 
-bool image_access_try_load_pixel_payload(
-  ImageAccessGPUContext context, uint image_index, out ImageAccessGPUDesc image_access, out uint payload_descriptor_index) {
+bool image_access_try_load_pixel_payload(ImageAccessGPUContext context, uint image_index, out ImageAccessGPUDesc image_access, out uint payload_descriptor_index) {
   payload_descriptor_index = kInvalidIndex;
   if (image_access_try_load(context, image_index, image_access) == false) {
     return false;
@@ -150,9 +149,8 @@ bool image_access_try_load_pixel_payload(
   return payload_descriptor_index != kInvalidIndex;
 }
 
-bool image_access_try_load_distribution_payloads(
-  ImageAccessGPUContext context, uint image_index, out ImageAccessGPUDesc image_access, out uint x_payload_descriptor_index, out uint y_payload_descriptor_index,
-  out uint y_count) {
+bool image_access_try_load_distribution_payloads(ImageAccessGPUContext context, uint image_index, out ImageAccessGPUDesc image_access, out uint x_payload_descriptor_index,
+  out uint y_payload_descriptor_index, out uint y_count) {
   x_payload_descriptor_index = kInvalidIndex;
   y_payload_descriptor_index = kInvalidIndex;
   y_count = 0u;

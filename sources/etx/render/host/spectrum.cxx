@@ -394,6 +394,4 @@ SpectralResponse rgb_response(const SpectralQuery spect, const float3& rgb) {
   return wrapped;
 }
 
-
 }  // namespace etx
-

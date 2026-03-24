@@ -4,25 +4,25 @@
 #include "spectrum.hxx"
 
 #if defined(__cplusplus)
-# define ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE ::SpectralResponse
-# define ETX_MEDIUM_SHARED_SPECTRAL_QUERY ::SpectralQuery
+# define ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE           ::SpectralResponse
+# define ETX_MEDIUM_SHARED_SPECTRAL_QUERY              ::SpectralQuery
 # define ETX_MEDIUM_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE ::spectral_response_clamp_non_negative
-# define ETX_MEDIUM_SHARED_SPECTRAL_EXP ::spectral_response_exp
-# define ETX_MEDIUM_SHARED_SPECTRAL_MUL ::spectral_response_mul
-# define ETX_MEDIUM_SHARED_SPECTRAL_DIV ::spectral_response_div
-# define ETX_MEDIUM_SHARED_SPECTRAL_SUB ::spectral_response_sub
-# define ETX_MEDIUM_SHARED_SPECTRAL_MAXIMUM ::spectral_response_maximum
-# define ETX_MEDIUM_SHARED_SPECTRAL_MAKE ::spectral_response_make
+# define ETX_MEDIUM_SHARED_SPECTRAL_EXP                ::spectral_response_exp
+# define ETX_MEDIUM_SHARED_SPECTRAL_MUL                ::spectral_response_mul
+# define ETX_MEDIUM_SHARED_SPECTRAL_DIV                ::spectral_response_div
+# define ETX_MEDIUM_SHARED_SPECTRAL_SUB                ::spectral_response_sub
+# define ETX_MEDIUM_SHARED_SPECTRAL_MAXIMUM            ::spectral_response_maximum
+# define ETX_MEDIUM_SHARED_SPECTRAL_MAKE               ::spectral_response_make
 #else
-# define ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE SpectralResponse
-# define ETX_MEDIUM_SHARED_SPECTRAL_QUERY SpectralQuery
+# define ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE           SpectralResponse
+# define ETX_MEDIUM_SHARED_SPECTRAL_QUERY              SpectralQuery
 # define ETX_MEDIUM_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE spectral_response_clamp_non_negative
-# define ETX_MEDIUM_SHARED_SPECTRAL_EXP spectral_response_exp
-# define ETX_MEDIUM_SHARED_SPECTRAL_MUL spectral_response_mul
-# define ETX_MEDIUM_SHARED_SPECTRAL_DIV spectral_response_div
-# define ETX_MEDIUM_SHARED_SPECTRAL_SUB spectral_response_sub
-# define ETX_MEDIUM_SHARED_SPECTRAL_MAXIMUM spectral_response_maximum
-# define ETX_MEDIUM_SHARED_SPECTRAL_MAKE spectral_response_make
+# define ETX_MEDIUM_SHARED_SPECTRAL_EXP                spectral_response_exp
+# define ETX_MEDIUM_SHARED_SPECTRAL_MUL                spectral_response_mul
+# define ETX_MEDIUM_SHARED_SPECTRAL_DIV                spectral_response_div
+# define ETX_MEDIUM_SHARED_SPECTRAL_SUB                spectral_response_sub
+# define ETX_MEDIUM_SHARED_SPECTRAL_MAXIMUM            spectral_response_maximum
+# define ETX_MEDIUM_SHARED_SPECTRAL_MAKE               spectral_response_make
 #endif
 
 struct MediumSharedIntersection {
@@ -130,8 +130,8 @@ ETX_SHARED_INLINE bool medium_shared_bounds(ETX_IN(float3, in_pos), ETX_IN(float
   return true;
 }
 
-ETX_SHARED_INLINE bool medium_shared_intersects_bounds(ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_IN(float3, in_pos), ETX_IN(float3, in_direction),
-  float in_max_t, ETX_OUT(MediumSharedIntersection, result)) {
+ETX_SHARED_INLINE bool medium_shared_intersects_bounds(ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_IN(float3, in_pos), ETX_IN(float3, in_direction), float in_max_t,
+  ETX_OUT(MediumSharedIntersection, result)) {
   result = medium_shared_zero_intersection();
   if (in_max_t >= kMaxFloat) {
     return false;
@@ -160,14 +160,13 @@ ETX_SHARED_INLINE float3 medium_shared_transmittance_homogeneous_integrated(ETX_
   return exp(-max(extinction, float3(0.0f, 0.0f, 0.0f)) * distance);
 }
 
-ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittance_homogeneous_spectral(
-  ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE, extinction), float distance) {
+ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittance_homogeneous_spectral(ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE, extinction), float distance) {
   ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE extinction_non_negative = ETX_MEDIUM_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE(extinction);
   return ETX_MEDIUM_SHARED_SPECTRAL_EXP(ETX_MEDIUM_SHARED_SPECTRAL_MUL(extinction_non_negative, -distance));
 }
 
-ETX_SHARED_INLINE float3 medium_shared_transmittance_heterogeneous_integrated(ETX_IN(float3, base_extinction), ETX_IN(float3, origin), ETX_IN(float3, direction),
-  float distance, ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_INOUT(MediumSharedContext, context)) {
+ETX_SHARED_INLINE float3 medium_shared_transmittance_heterogeneous_integrated(ETX_IN(float3, base_extinction), ETX_IN(float3, origin), ETX_IN(float3, direction), float distance,
+  ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_INOUT(MediumSharedContext, context)) {
   float3 extinction = max(base_extinction, float3(0.0f, 0.0f, 0.0f));
   float max_sigma = max(extinction.x, max(extinction.y, extinction.z));
   if (max_sigma <= 0.0f) {
@@ -213,9 +212,9 @@ ETX_SHARED_INLINE float3 medium_shared_transmittance_heterogeneous_integrated(ET
   return transmittance;
 }
 
-ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittance_heterogeneous_spectral(
-  ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE, base_extinction), ETX_IN(float3, origin), ETX_IN(float3, direction), float distance, ETX_IN(float3, bounds_min),
-  ETX_IN(float3, bounds_max), ETX_INOUT(MediumSharedContext, context), ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_QUERY, spect)) {
+ETX_SHARED_INLINE ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE medium_shared_transmittance_heterogeneous_spectral(ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE, base_extinction),
+  ETX_IN(float3, origin), ETX_IN(float3, direction), float distance, ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max), ETX_INOUT(MediumSharedContext, context),
+  ETX_IN(ETX_MEDIUM_SHARED_SPECTRAL_QUERY, spect)) {
   ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE one = ETX_MEDIUM_SHARED_SPECTRAL_MAKE(spect, 1.0f);
   ETX_MEDIUM_SHARED_SPECTRAL_RESPONSE extinction = ETX_MEDIUM_SHARED_SPECTRAL_CLAMP_NON_NEGATIVE(base_extinction);
   float max_sigma = ETX_MEDIUM_SHARED_SPECTRAL_MAXIMUM(extinction);

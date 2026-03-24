@@ -90,8 +90,8 @@ SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary,
     texcoord_2 = load_float2(bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)], tri.i.z);
   }
 
-  surface_point_shared_interpolate_vertex(position_0, position_1, position_2, normal_0, normal_1, normal_2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1,
-    bitangent_2, texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
+  surface_point_shared_interpolate_vertex(position_0, position_1, position_2, normal_0, normal_1, normal_2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2,
+    texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
   result.vertex.nrm = scene_math_shared_orient_normals_to_hemisphere(result.vertex.nrm, tri.geo_n, ray_dir);
 
   result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
@@ -162,8 +162,8 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
 
     bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
     bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
-    HitPolicyDecision hit_policy = hit_policy_evaluate(
-      HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface, material_access.int_medium_index, material_access.ext_medium_index);
+    HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface,
+      material_access.int_medium_index, material_access.ext_medium_index);
     if (hit_policy.action == HitPolicyAction::Ignore) {
       continue;
     }

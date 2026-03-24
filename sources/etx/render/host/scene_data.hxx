@@ -198,8 +198,7 @@ struct SceneData {
 
   uint32_t add_atmosphere_emitter(const AtmosphereEmitterParameters& params);
   void build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_index, RHIContext& rhi, scattering::GpuContext& gpu_context);
-  void rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_index, const std::vector<uint32_t>& sun_emitter_indices, RHIContext& rhi,
-    scattering::GpuContext& gpu_context);
+  void rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_index, const std::vector<uint32_t>& sun_emitter_indices, RHIContext& rhi, scattering::GpuContext& gpu_context);
   void rebuild_atmosphere_emitter(uint32_t emitter_index, RHIContext& rhi, scattering::GpuContext& gpu_context);
 };
 

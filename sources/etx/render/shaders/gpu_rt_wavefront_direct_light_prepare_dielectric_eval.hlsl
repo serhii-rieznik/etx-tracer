@@ -14,8 +14,7 @@ float wavefront_direct_light_stage_bsdf_pdf(BSDFResourceContext context, BSDFDat
 
 #include "gpu_rt_wavefront_direct_light_prepare_common.hlsl"
 
-BSDFEval wavefront_direct_light_dielectric_eval_external(
-  BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+BSDFEval wavefront_direct_light_dielectric_eval_external(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   LocalFrame local_frame = ETX_ZERO(LocalFrame);
   local_frame.tan = data.tan;
   local_frame.btn = data.btn;
@@ -67,8 +66,8 @@ BSDFEval wavefront_direct_light_dielectric_eval_external(
   return eval;
 }
 
-void wavefront_store_direct_light_dielectric_partial_task(
-  uint dispatch_index, WavefrontDirectLightPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), ETX_IN(Sampler, sampler)) {
+void wavefront_store_direct_light_dielectric_partial_task(uint dispatch_index, WavefrontDirectLightPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval),
+  ETX_IN(Sampler, sampler)) {
   if ((bsdf_eval_valid(bsdf_eval) == false) || (wavefront_valid_spectral_response(bsdf_eval.bsdf) == false)) {
     return;
   }
@@ -94,7 +93,7 @@ void wavefront_store_direct_light_dielectric_partial_task(
   Sampler bsdf_sampler = wavefront_make_bsdf_sampler(input_value.state.sampler_seed);
   bsdf_sampler_push_fixed(bsdf_sampler, input_value.state.film_uv.x, input_value.state.film_uv.y, input_value.state.last_emitter_pdf);
   BSDFData bsdf_data = wavefront_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.current_vertex.medium_index, input_value.current_vertex.w_i);
-  BSDFEval bsdf_eval =
-    wavefront_direct_light_dielectric_eval_external(wavefront_make_scene_bsdf_resource_gpu_context(), bsdf_data, input_value.sample_value.direction, input_value.material, bsdf_sampler);
+  BSDFEval bsdf_eval = wavefront_direct_light_dielectric_eval_external(wavefront_make_scene_bsdf_resource_gpu_context(), bsdf_data, input_value.sample_value.direction,
+    input_value.material, bsdf_sampler);
   wavefront_store_direct_light_dielectric_partial_task(dtid.x, input_value, bsdf_eval, bsdf_sampler);
 }

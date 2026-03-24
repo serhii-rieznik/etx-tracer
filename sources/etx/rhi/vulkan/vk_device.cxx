@@ -13,6 +13,12 @@
 #include <vulkan/vulkan.h>
 namespace etx {
 
+namespace {
+
+constexpr const char* kVK_KHR_portability_subset_extension_name = "VK_KHR_portability_subset";
+
+}
+
 static VkSampleCountFlagBits convert_sample_count_to_vk(uint32_t sample_count) {
   switch (sample_count) {
     case 1u:
@@ -159,6 +165,9 @@ struct VKDevice::Impl {
   bool memory_budget_supported = false;
   bool fill_mode_non_solid_supported = false;
   bool headless = false;
+  bool buffer_device_address_supported = false;
+  bool dynamic_rendering_supported = false;
+  bool ray_tracing_supported = false;
 
   Impl(const RHIInitInfo& info);
   ~Impl();
@@ -456,9 +465,11 @@ VKDevice::Impl::Impl(const RHIInitInfo& info) {
     return;
   }
 
-  if (load_acceleration_structure_functions() != RHIResult::Success) {
-    log::error("Failed load acceleration structure functions");
-    return;
+  if (ray_tracing_supported) {
+    if (load_acceleration_structure_functions() != RHIResult::Success) {
+      log::warning("Failed to load Vulkan ray tracing functions; disabling GPU ray tracing support");
+      ray_tracing_supported = false;
+    }
   }
 
   staging_buffer.initialize(device, physical_device, 64 * 1024 * 1024);  // 64 MB staging buffer
@@ -514,10 +525,15 @@ bool VKDevice::Impl::initialize_instance(const RHIInitInfo& init_info) {
   std::vector<const char*> extensions = {
     VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
   };
+#if ETX_PLATFORM_APPLE
+  extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
   if (init_info.headless == false) {
     extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
 #if ETX_PLATFORM_WINDOWS
     extensions.push_back("VK_KHR_win32_surface");
+#elif ETX_PLATFORM_APPLE
+    extensions.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
 #endif
   }
 
@@ -530,6 +546,9 @@ bool VKDevice::Impl::initialize_instance(const RHIInitInfo& init_info) {
   create_info.pApplicationInfo = &app_info;
   create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
   create_info.ppEnabledExtensionNames = extensions.data();
+#if ETX_PLATFORM_APPLE
+  create_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
 
   std::vector<const char*> layers = {};
   if (init_info.enable_validation) {
@@ -648,26 +667,41 @@ bool VKDevice::Impl::initialize_device() {
   available_device_extensions.resize(extension_count);
   vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, available_device_extensions.data());
 
+  auto has_extension = [&](const char* name) {
+    for (const auto& ext : available_device_extensions) {
+      if (strcmp(ext.extensionName, name) == 0) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   std::vector<const char*> device_extensions = {
     VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
     VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
     VK_KHR_MAINTENANCE_3_EXTENSION_NAME,
-    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-    VK_KHR_RAY_QUERY_EXTENSION_NAME,
-    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-    VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME,
   };
   if (headless == false) {
     device_extensions.insert(device_extensions.begin(), VK_KHR_SWAPCHAIN_EXTENSION_NAME);
   }
 
-  for (const auto& ext : available_device_extensions) {
-    if (strcmp(ext.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0) {
-      device_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
-      memory_budget_supported = true;
-    } else if (strcmp(ext.extensionName, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) == 0) {
-      device_extensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
-    }
+  const bool memory_budget_extension_available = has_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+  const bool dynamic_rendering_extension_available = has_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+  const bool buffer_device_address_extension_available = has_extension(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+  const bool acceleration_structure_extension_available = has_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+  const bool deferred_host_operations_extension_available = has_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+  const bool portability_subset_extension_available = has_extension(kVK_KHR_portability_subset_extension_name);
+  const bool ray_query_extension_available = has_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+
+  if (memory_budget_extension_available) {
+    device_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    memory_budget_supported = true;
+  }
+  if (dynamic_rendering_extension_available) {
+    device_extensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+  }
+  if (portability_subset_extension_available) {
+    device_extensions.push_back(kVK_KHR_portability_subset_extension_name);
   }
 
   if (!check_extension_support(device_extensions)) {
@@ -684,47 +718,90 @@ bool VKDevice::Impl::initialize_device() {
   device_features.fillModeNonSolid = fill_mode_non_solid_supported ? VK_TRUE : VK_FALSE;
 
   VkPhysicalDeviceBufferDeviceAddressFeatures buffer_device_address_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES};
-  buffer_device_address_features.bufferDeviceAddress = VK_TRUE;
-
   VkPhysicalDeviceAccelerationStructureFeaturesKHR acceleration_structure_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
-  acceleration_structure_features.pNext = &buffer_device_address_features;
-  acceleration_structure_features.accelerationStructure = VK_TRUE;
-  acceleration_structure_features.descriptorBindingAccelerationStructureUpdateAfterBind = VK_TRUE;
-
   VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
-  ray_query_features.pNext = &acceleration_structure_features;
-  ray_query_features.rayQuery = VK_TRUE;
-
   VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
-  descriptor_indexing_features.pNext = &ray_query_features;
-  descriptor_indexing_features.shaderInputAttachmentArrayNonUniformIndexing = VK_TRUE;
-  descriptor_indexing_features.shaderUniformTexelBufferArrayNonUniformIndexing = VK_TRUE;
-  descriptor_indexing_features.shaderStorageTexelBufferArrayNonUniformIndexing = VK_TRUE;
-  descriptor_indexing_features.shaderUniformBufferArrayNonUniformIndexing = VK_TRUE;
-  descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-  descriptor_indexing_features.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
-  descriptor_indexing_features.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
+  VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES};
+  VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures demote_to_helper_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES};
+
+  VkPhysicalDeviceFeatures2 supported_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+  supported_features.pNext = &descriptor_indexing_features;
+  descriptor_indexing_features.pNext = &dynamic_rendering_features;
+  dynamic_rendering_features.pNext = &demote_to_helper_features;
+  demote_to_helper_features.pNext = &ray_query_features;
+  ray_query_features.pNext = &acceleration_structure_features;
+  acceleration_structure_features.pNext = &buffer_device_address_features;
+  vkGetPhysicalDeviceFeatures2(physical_device, &supported_features);
+
+  const bool descriptor_indexing_supported =
+    (descriptor_indexing_features.runtimeDescriptorArray == VK_TRUE) && (descriptor_indexing_features.descriptorBindingPartiallyBound == VK_TRUE) &&
+    (descriptor_indexing_features.descriptorBindingVariableDescriptorCount == VK_TRUE) && (descriptor_indexing_features.descriptorBindingStorageBufferUpdateAfterBind == VK_TRUE) &&
+    (descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE) &&
+    (descriptor_indexing_features.descriptorBindingStorageImageUpdateAfterBind == VK_TRUE);
+  if (descriptor_indexing_supported == false) {
+    log::error("Required descriptor indexing features are not supported");
+    return false;
+  }
+
+  dynamic_rendering_supported = (dynamic_rendering_features.dynamicRendering == VK_TRUE);
+  if (dynamic_rendering_supported == false) {
+    log::error("Required dynamic rendering feature is not supported");
+    return false;
+  }
+
+  const bool shader_demote_supported = (demote_to_helper_features.shaderDemoteToHelperInvocation == VK_TRUE);
+  buffer_device_address_supported = buffer_device_address_extension_available && (buffer_device_address_features.bufferDeviceAddress == VK_TRUE);
+  ray_tracing_supported = buffer_device_address_supported && acceleration_structure_extension_available && deferred_host_operations_extension_available &&
+                          ray_query_extension_available && (acceleration_structure_features.accelerationStructure == VK_TRUE) && (ray_query_features.rayQuery == VK_TRUE);
+
+  if (buffer_device_address_supported) {
+    device_extensions.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+  }
+  if (ray_tracing_supported) {
+    device_extensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+    device_extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+    device_extensions.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+  }
+
+  if (!check_extension_support(device_extensions)) {
+    log::error("Required Vulkan device extensions are not supported after optional feature selection");
+    return false;
+  }
+
+  buffer_device_address_features.bufferDeviceAddress = buffer_device_address_supported ? VK_TRUE : VK_FALSE;
+  acceleration_structure_features.accelerationStructure = ray_tracing_supported ? VK_TRUE : VK_FALSE;
+  acceleration_structure_features.descriptorBindingAccelerationStructureUpdateAfterBind = ray_tracing_supported ? VK_TRUE : VK_FALSE;
+  ray_query_features.rayQuery = ray_tracing_supported ? VK_TRUE : VK_FALSE;
   descriptor_indexing_features.runtimeDescriptorArray = VK_TRUE;
-  descriptor_indexing_features.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
   descriptor_indexing_features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
   descriptor_indexing_features.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
   descriptor_indexing_features.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
-  descriptor_indexing_features.descriptorBindingUniformTexelBufferUpdateAfterBind = VK_TRUE;
-  descriptor_indexing_features.descriptorBindingStorageTexelBufferUpdateAfterBind = VK_TRUE;
-  descriptor_indexing_features.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
   descriptor_indexing_features.descriptorBindingPartiallyBound = VK_TRUE;
   descriptor_indexing_features.descriptorBindingVariableDescriptorCount = VK_TRUE;
-
-  VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES};
-  dynamic_rendering_features.pNext = &descriptor_indexing_features;
   dynamic_rendering_features.dynamicRendering = VK_TRUE;
-
-  VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures demote_to_helper_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES};
-  demote_to_helper_features.pNext = &dynamic_rendering_features;
-  demote_to_helper_features.shaderDemoteToHelperInvocation = VK_TRUE;
+  demote_to_helper_features.shaderDemoteToHelperInvocation = shader_demote_supported ? VK_TRUE : VK_FALSE;
 
   VkDeviceCreateInfo device_create_info = {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-  device_create_info.pNext = &demote_to_helper_features;
+  void* feature_chain = nullptr;
+  if (buffer_device_address_supported) {
+    buffer_device_address_features.pNext = feature_chain;
+    feature_chain = &buffer_device_address_features;
+  }
+  if (ray_tracing_supported) {
+    acceleration_structure_features.pNext = feature_chain;
+    feature_chain = &acceleration_structure_features;
+    ray_query_features.pNext = feature_chain;
+    feature_chain = &ray_query_features;
+  }
+  descriptor_indexing_features.pNext = feature_chain;
+  feature_chain = &descriptor_indexing_features;
+  dynamic_rendering_features.pNext = feature_chain;
+  feature_chain = &dynamic_rendering_features;
+  if (shader_demote_supported) {
+    demote_to_helper_features.pNext = feature_chain;
+    feature_chain = &demote_to_helper_features;
+  }
+  device_create_info.pNext = feature_chain;
   device_create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size());
   device_create_info.pQueueCreateInfos = queue_create_infos.data();
   device_create_info.pEnabledFeatures = &device_features;
@@ -866,6 +943,18 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
   VkBufferUsageFlags vk_usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
   using BufferUsage = std::underlying_type<RHIBufferUsage>::type;
   BufferUsage usage = static_cast<BufferUsage>(desc.usage);
+
+  const bool requires_ray_tracing_usage = (usage & static_cast<BufferUsage>(RHIBufferUsage::AccelerationStructureBuild)) ||
+                                          (usage & static_cast<BufferUsage>(RHIBufferUsage::AccelerationStructureStorage)) ||
+                                          (usage & static_cast<BufferUsage>(RHIBufferUsage::ShaderBindingTable));
+  if (requires_ray_tracing_usage && (ray_tracing_supported == false)) {
+    log::error("Requested Vulkan ray tracing buffer usage on a device without ray tracing support");
+    return RHIResult::UnsupportedFeature;
+  }
+  if ((usage & static_cast<BufferUsage>(RHIBufferUsage::ShaderDeviceAddress)) && (buffer_device_address_supported == false)) {
+    log::error("Requested Vulkan shader device address on a device without buffer device address support");
+    return RHIResult::UnsupportedFeature;
+  }
 
   if (usage & static_cast<BufferUsage>(RHIBufferUsage::Vertex)) {
     vk_usage |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
@@ -1475,6 +1564,10 @@ void VKDevice::Impl::free_acceleration_structure_index(uint32_t index) {
 }
 
 RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAccelerationStructureDesc& desc) {
+  if (_impl->ray_tracing_supported == false) {
+    return {RHIResult::UnsupportedFeature, {}};
+  }
+
   VkAccelerationStructureBuildGeometryInfoKHR build_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
   build_info.type = (desc.type == RHIAccelerationStructureType::BottomLevel) ? VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR : VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
   build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
@@ -2609,6 +2702,10 @@ uint64_t VKDevice::get_buffer_device_address(RHIBindlessHandle buffer) const {
 }
 
 uint64_t VKDevice::get_acceleration_structure_device_address(RHIBindlessHandle as_handle) {
+  if (_impl->ray_tracing_supported == false) {
+    return 0u;
+  }
+
   uint32_t index = _impl->acceleration_structures.get_index(as_handle);
   if (index == UINT32_MAX) {
     return 0;
@@ -2622,6 +2719,10 @@ uint64_t VKDevice::get_acceleration_structure_device_address(RHIBindlessHandle a
 }
 
 uint64_t VKDevice::get_acceleration_structure_build_scratch_size(RHIBindlessHandle as_handle) {
+  if (_impl->ray_tracing_supported == false) {
+    return 0u;
+  }
+
   uint32_t index = _impl->acceleration_structures.get_index(as_handle);
   if (index == UINT32_MAX) {
     return 0u;
@@ -2721,7 +2822,22 @@ VkCommandPool VKDevice::get_vk_command_pool(uint32_t index) const {
 }
 
 bool VKDevice::supports_timestamps() const {
+#if ETX_PLATFORM_APPLE
+  // MoltenVK may advertise timestamp capability, but query reset/write/readback has
+  // proven unstable during interactive playback. Keep timestamps disabled on Apple
+  // for the Phase 1 portability path.
+  return false;
+#else
   return (timestamp_valid_bits() > 0u);
+#endif
+}
+
+bool VKDevice::supports_bindless() const {
+  return _impl->bindless_supported;
+}
+
+bool VKDevice::supports_ray_tracing() const {
+  return _impl->ray_tracing_supported;
 }
 
 bool VKDevice::supports_timestamp_stage(RHITimestampStage stage) const {

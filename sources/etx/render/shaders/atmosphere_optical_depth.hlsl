@@ -11,8 +11,7 @@ struct AtmosphereOpticalDepthPushConstants {
 
 [[vk::push_constant]] AtmosphereOpticalDepthPushConstants constants;
 
-[numthreads(8, 8, 1)]
-void optical_depth_main(uint3 dtid : SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void optical_depth_main(uint3 dtid : SV_DispatchThreadID) {
   if ((dtid.x >= constants.width) || (dtid.y >= constants.height)) {
     return;
   }

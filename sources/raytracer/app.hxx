@@ -103,6 +103,7 @@ struct RTApplication {
   GPURaytracingRenderer gpu_renderer;
   Renderer* _active_renderer = nullptr;
   bool _gpu_renderer_initialized = false;
+  bool _gpu_renderer_supported = false;
 
   Options _options;
   std::vector<std::string> _recent_files = {};

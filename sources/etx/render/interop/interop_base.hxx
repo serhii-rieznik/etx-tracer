@@ -19,11 +19,11 @@
 #endif
 
 #if (ETX_CPP)
-# define ETX_ENUM_U32(name)           enum class name : uint32_t
+# define ETX_ENUM_U32(name)            enum class name : uint32_t
 # define ETX_ENUM_U32_TO_UINT32(value) static_cast<uint32_t>(value)
-# define ETX_STATIC_ASSERT(cond, msg) static_assert((cond), msg)
+# define ETX_STATIC_ASSERT(cond, msg)  static_assert((cond), msg)
 #else
-# define ETX_ENUM_U32(name)           enum name
+# define ETX_ENUM_U32(name)            enum name
 # define ETX_ENUM_U32_TO_UINT32(value) (value)
 # define ETX_STATIC_ASSERT(cond, msg)
 #endif
@@ -44,8 +44,8 @@
 # define ETX_ALIGNED           alignas(16)
 # define ETX_INIT(...)         = __VA_ARGS__
 # define ETX_ZERO(type) \
-  {                    \
-  }
+   {                    \
+   }
 # define ETX_ZERO_INIT(type, name) type name = ETX_ZERO(type)
 # define ETX_STATIC_CONST          constexpr
 #else

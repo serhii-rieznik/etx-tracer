@@ -104,8 +104,8 @@ ETX_SHARED_INLINE float image_sample_interpolate(float rnd, float cdf_0, float c
   return result;
 }
 
-ETX_SHARED_INLINE float2 image_sample_uv_from_distribution(
-  ETX_IN(float2, rnd), ETX_IN(uint2, location), ETX_IN(float2, image_fsize), float x_cdf_0, float x_cdf_1, float y_cdf_0, float y_cdf_1) {
+ETX_SHARED_INLINE float2 image_sample_uv_from_distribution(ETX_IN(float2, rnd), ETX_IN(uint2, location), ETX_IN(float2, image_fsize), float x_cdf_0, float x_cdf_1, float y_cdf_0,
+  float y_cdf_1) {
   float dx = image_sample_interpolate(rnd.x, x_cdf_0, x_cdf_1);
   float dy = image_sample_interpolate(rnd.y, y_cdf_0, y_cdf_1);
 

@@ -5,12 +5,12 @@
 #include "geometry.hxx"
 #include "ray.hxx"
 
-ETX_ENUM_U32(ProjectionType) {
+ETX_ENUM_U32(ProjectionType){
   Equirectangular = 0u,
   EqualArea = 1u,
 };
 
-ETX_ENUM_U32(InteractionType) {
+ETX_ENUM_U32(InteractionType){
   Surface = 0u,
   Medium = 1u,
 
@@ -49,7 +49,6 @@ struct ETX_ALIGNED LocalFrame {
   ETX_SHARED_INLINE static float sin_theta(float3 v) {
     return sqrt(max(0.0f, 1.0f - cos_theta(v)));
   }
-
 };
 
 ETX_SHARED_INLINE float3 local_frame_to_local(ETX_IN(LocalFrame, local_frame), float3 v) {

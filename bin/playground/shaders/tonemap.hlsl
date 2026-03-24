@@ -12,7 +12,7 @@ PushConstants pushConstants;
 
 struct VSOutput {
   float4 position : SV_Position;
-  float2 uv : TEXCOORD;
+  float2 uv       : TEXCOORD;
 };
 
 VSOutput VSMain(uint vertexId : SV_VertexID) {

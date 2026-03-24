@@ -2,289 +2,168 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug Raytracer (Windows)",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
-            "externalConsole": false,
-            "preLaunchTask": "build"
-        },
-        {
-            "name": "Release Raytracer (Windows)",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
-            "externalConsole": false,
-            "preLaunchTask": "build-release"
-        },
-        {
-            "name": "Debug Raytracer (Linux/macOS)",
+            "name": "Debug Raytracer",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer",
-            "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "DYLD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                },
-                {
-                    "name": "LD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                }
-            ],
             "externalConsole": false,
-            "MIMode": "lldb",
-            "preLaunchTask": "build"
+            "preLaunchTask": "Build Raytracer",
+            "windows": {
+                "type": "cppvsdbg",
+                "program": "${workspaceFolder}/bin/raytracer.exe",
+                "environment": [
+                    {
+                        "name": "PATH",
+                        "value": "${workspaceFolder}/bin;${env:PATH}"
+                    }
+                ]
+            },
+            "linux": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/raytracer",
+                "MIMode": "gdb",
+                "environment": [
+                    {
+                        "name": "LD_LIBRARY_PATH",
+                        "value": "${workspaceFolder}/bin:${env:LD_LIBRARY_PATH}"
+                    }
+                ]
+            },
+            "osx": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/raytracer",
+                "MIMode": "lldb",
+                "environment": [
+                    {
+                        "name": "DYLD_LIBRARY_PATH",
+                        "value": "/Users/serhii/Development/SDK/Vulkan/macOS/lib:${workspaceFolder}/bin:${env:DYLD_LIBRARY_PATH}"
+                    }
+                ]
+            }
         },
         {
-            "name": "Release Raytracer (Linux/macOS)",
+            "name": "Release Raytracer",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer",
-            "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "DYLD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                },
-                {
-                    "name": "LD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                }
-            ],
             "externalConsole": false,
-            "MIMode": "lldb",
-            "preLaunchTask": "build-release"
+            "preLaunchTask": "Build Raytracer (Release)",
+            "windows": {
+                "type": "cppvsdbg",
+                "program": "${workspaceFolder}/bin/raytracer.exe",
+                "environment": [
+                    {
+                        "name": "PATH",
+                        "value": "${workspaceFolder}/bin;${env:PATH}"
+                    }
+                ]
+            },
+            "linux": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/raytracer",
+                "MIMode": "gdb",
+                "environment": [
+                    {
+                        "name": "LD_LIBRARY_PATH",
+                        "value": "${workspaceFolder}/bin:${env:LD_LIBRARY_PATH}"
+                    }
+                ]
+            },
+            "osx": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/raytracer",
+                "MIMode": "lldb",
+                "environment": [
+                    {
+                        "name": "DYLD_LIBRARY_PATH",
+                        "value": "/Users/serhii/Development/SDK/Vulkan/macOS/lib:${workspaceFolder}/bin:${env:DYLD_LIBRARY_PATH}"
+                    }
+                ]
+            }
         },
         {
-            "name": "Run Raytracer (No Debug)",
+            "name": "Debug Playground",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer.exe",
-            "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
-            "externalConsole": true,
-            "preLaunchTask": "build"
-        },
-        {
-            "name": "Debug Raytracer RHI (Windows)",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer-rhi.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
             "externalConsole": false,
-            "preLaunchTask": "build-rhi"
+            "preLaunchTask": "Build Playground",
+            "windows": {
+                "type": "cppvsdbg",
+                "program": "${workspaceFolder}/bin/playground.exe",
+                "environment": [
+                    {
+                        "name": "PATH",
+                        "value": "${workspaceFolder}/bin;${env:PATH}"
+                    }
+                ]
+            },
+            "linux": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/playground",
+                "MIMode": "gdb",
+                "environment": [
+                    {
+                        "name": "LD_LIBRARY_PATH",
+                        "value": "${workspaceFolder}/bin:${env:LD_LIBRARY_PATH}"
+                    }
+                ]
+            },
+            "osx": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/playground_app",
+                "MIMode": "lldb",
+                "environment": [
+                    {
+                        "name": "DYLD_LIBRARY_PATH",
+                        "value": "/Users/serhii/Development/SDK/Vulkan/macOS/lib:${workspaceFolder}/bin:${env:DYLD_LIBRARY_PATH}"
+                    }
+                ]
+            }
         },
         {
-            "name": "Release Raytracer RHI (Windows)",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer-rhi.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
-            "externalConsole": false,
-            "preLaunchTask": "build-rhi-release"
-        },
-        {
-            "name": "Debug Raytracer RHI (Linux/macOS)",
+            "name": "Release Playground",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer-rhi",
-            "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "DYLD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                },
-                {
-                    "name": "LD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                }
-            ],
             "externalConsole": false,
-            "MIMode": "lldb",
-            "preLaunchTask": "build-rhi"
-        },
-        {
-            "name": "Release Raytracer RHI (Linux/macOS)",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer-rhi",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "DYLD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                },
-                {
-                    "name": "LD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                }
-            ],
-            "externalConsole": false,
-            "MIMode": "lldb",
-            "preLaunchTask": "build-rhi-release"
-        },
-        {
-            "name": "Run Raytracer RHI (No Debug)",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/raytracer-rhi.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
-            "externalConsole": true,
-            "preLaunchTask": "build-rhi"
-        },
-        {
-            "name": "Debug Playground (Windows)",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/playground.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
-            "externalConsole": false,
-            "preLaunchTask": "build-playground"
-        },
-        {
-            "name": "Release Playground (Windows)",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/playground.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
-            "externalConsole": false,
-            "preLaunchTask": "build-playground-release"
-        },
-        {
-            "name": "Debug Playground (Linux/macOS)",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/playground",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "DYLD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                },
-                {
-                    "name": "LD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                }
-            ],
-            "externalConsole": false,
-            "MIMode": "lldb",
-            "preLaunchTask": "build-playground"
-        },
-        {
-            "name": "Release Playground (Linux/macOS)",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/playground",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "DYLD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                },
-                {
-                    "name": "LD_LIBRARY_PATH",
-                    "value": "${workspaceFolder}/bin"
-                }
-            ],
-            "externalConsole": false,
-            "MIMode": "lldb",
-            "preLaunchTask": "build-playground-release"
-        },
-        {
-            "name": "Run Playground (No Debug)",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/bin/playground.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/bin",
-            "environment": [
-                {
-                    "name": "PATH",
-                    "value": "${workspaceFolder}/bin;${env:PATH}"
-                }
-            ],
-            "externalConsole": true,
-            "preLaunchTask": "build-playground"
+            "preLaunchTask": "Build Playground (Release)",
+            "windows": {
+                "type": "cppvsdbg",
+                "program": "${workspaceFolder}/bin/playground.exe",
+                "environment": [
+                    {
+                        "name": "PATH",
+                        "value": "${workspaceFolder}/bin;${env:PATH}"
+                    }
+                ]
+            },
+            "linux": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/playground",
+                "MIMode": "gdb",
+                "environment": [
+                    {
+                        "name": "LD_LIBRARY_PATH",
+                        "value": "${workspaceFolder}/bin:${env:LD_LIBRARY_PATH}"
+                    }
+                ]
+            },
+            "osx": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/playground_app",
+                "MIMode": "lldb",
+                "environment": [
+                    {
+                        "name": "DYLD_LIBRARY_PATH",
+                        "value": "/Users/serhii/Development/SDK/Vulkan/macOS/lib:${workspaceFolder}/bin:${env:DYLD_LIBRARY_PATH}"
+                    }
+                ]
+            }
         }
     ]
 }

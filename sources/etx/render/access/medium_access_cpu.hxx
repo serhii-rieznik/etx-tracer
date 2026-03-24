@@ -38,8 +38,7 @@ ETX_SHARED_INLINE MediumAccess medium_access_cpu_make(ETX_IN(Medium, medium), ui
   return result;
 }
 
-ETX_SHARED_INLINE bool medium_access_try_load(
-  ETX_IN(MediumAccessCPUContext, context), uint32_t medium_index, ETX_OUT(MediumAccess, access)) {
+ETX_SHARED_INLINE bool medium_access_try_load(ETX_IN(MediumAccessCPUContext, context), uint32_t medium_index, ETX_OUT(MediumAccess, access)) {
   access = {};
   if (medium_access_can_load(context, medium_index) == false) {
     return false;
@@ -54,8 +53,7 @@ ETX_SHARED_INLINE bool medium_access_has_grid_data(ETX_IN(MediumAccessCPUContext
   return medium_access_has_grid_data(access);
 }
 
-ETX_SHARED_INLINE float medium_access_sample_density(
-  ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(float3, local_coord)) {
+ETX_SHARED_INLINE float medium_access_sample_density(ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(float3, local_coord)) {
   if (medium_access_can_load(context, access.medium_index) == false) {
     return 0.0f;
   }
@@ -95,8 +93,7 @@ ETX_SHARED_INLINE float3 medium_access_load_extinction_integrated(ETX_IN(MediumA
   return medium_access_load_absorption_integrated(context, access) + medium_access_load_scattering_integrated(context, access);
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_access_load_absorption_spectral(
-  ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(SpectralQuery, spect)) {
+ETX_SHARED_INLINE SpectralResponse medium_access_load_absorption_spectral(ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(SpectralQuery, spect)) {
   if (medium_access_can_sample_spectrum(context, access.absorption_spectrum_index) == false) {
     return SpectralResponse{spect, 0.0f};
   }
@@ -107,8 +104,7 @@ ETX_SHARED_INLINE SpectralResponse medium_access_load_absorption_spectral(
   return ::spectral_response_is_spectral(response) ? SpectralResponse{response_query, response.value} : SpectralResponse{response_query, response.integrated};
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_access_load_scattering_spectral(
-  ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(SpectralQuery, spect)) {
+ETX_SHARED_INLINE SpectralResponse medium_access_load_scattering_spectral(ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(SpectralQuery, spect)) {
   if (medium_access_can_sample_spectrum(context, access.scattering_spectrum_index) == false) {
     return SpectralResponse{spect, 0.0f};
   }
@@ -119,7 +115,6 @@ ETX_SHARED_INLINE SpectralResponse medium_access_load_scattering_spectral(
   return ::spectral_response_is_spectral(response) ? SpectralResponse{response_query, response.value} : SpectralResponse{response_query, response.integrated};
 }
 
-ETX_SHARED_INLINE SpectralResponse medium_access_load_extinction_spectral(
-  ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(SpectralQuery, spect)) {
+ETX_SHARED_INLINE SpectralResponse medium_access_load_extinction_spectral(ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(SpectralQuery, spect)) {
   return medium_access_load_absorption_spectral(context, access, spect) + medium_access_load_scattering_spectral(context, access, spect);
 }

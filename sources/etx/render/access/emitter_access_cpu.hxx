@@ -19,8 +19,8 @@ ETX_SHARED_INLINE EmitterAccessCPUContext make_emitter_access_cpu_context(const 
   return result;
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_scene_state(
-  ETX_IN(EmitterAccessCPUContext, context), ETX_OUT(uint32_t, emitter_instance_count), ETX_OUT(uint32_t, emitter_profile_count)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_scene_state(ETX_IN(EmitterAccessCPUContext, context), ETX_OUT(uint32_t, emitter_instance_count),
+  ETX_OUT(uint32_t, emitter_profile_count)) {
   emitter_instance_count = 0u;
   emitter_profile_count = 0u;
   if (context.scene == nullptr) {
@@ -32,8 +32,7 @@ ETX_SHARED_INLINE bool emitter_access_try_load_scene_state(
   return (emitter_instance_count > 0u) && (emitter_profile_count > 0u);
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_profile(
-  ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_profile_count, ETX_INOUT(EmitterAccess, access)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_profile(ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_profile_count, ETX_INOUT(EmitterAccess, access)) {
   if ((context.scene == nullptr) || (access.emitter_profile_index >= emitter_profile_count)) {
     return false;
   }
@@ -48,8 +47,8 @@ ETX_SHARED_INLINE bool emitter_access_try_load_profile(
   return access.emission_spectrum_index != kInvalidIndex;
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_from_instance(
-  ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_class, uint32_t emitter_profile_index, ETX_OUT(EmitterAccess, access)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_from_instance(ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_class, uint32_t emitter_profile_index,
+  ETX_OUT(EmitterAccess, access)) {
   access = {};
 
   uint32_t emitter_instance_count = 0u;
@@ -64,8 +63,7 @@ ETX_SHARED_INLINE bool emitter_access_try_load_from_instance(
   return emitter_access_try_load_profile(context, emitter_profile_count, access);
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load(
-  ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_index, ETX_OUT(EmitterAccess, access)) {
+ETX_SHARED_INLINE bool emitter_access_try_load(ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_index, ETX_OUT(EmitterAccess, access)) {
   access = {};
 
   uint32_t emitter_instance_count = 0u;
@@ -83,8 +81,7 @@ ETX_SHARED_INLINE bool emitter_access_try_load(
   return emitter_access_try_load_profile(context, emitter_profile_count, access);
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_local(
-  ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_index, ETX_OUT(EmitterAccess, access)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_local(ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_index, ETX_OUT(EmitterAccess, access)) {
   if (emitter_access_try_load(context, emitter_index, access) == false) {
     return false;
   }
@@ -92,23 +89,20 @@ ETX_SHARED_INLINE bool emitter_access_try_load_local(
   return emitter_access_is_local_class(access.emitter_class);
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_distant(
-  ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_index, ETX_IN(float3, direction), ETX_OUT(EmitterAccess, access)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_distant(ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_index, ETX_IN(float3, direction),
+  ETX_OUT(EmitterAccess, access)) {
   if (emitter_access_try_load(context, emitter_index, access) == false) {
     return false;
   }
 
-  return emitter_access_accepts_distant(
-    access.emitter_class, access.emitter_profile_class, direction, access.emitter_direction, access.emitter_angular_size_cosine);
+  return emitter_access_accepts_distant(access.emitter_class, access.emitter_profile_class, direction, access.emitter_direction, access.emitter_angular_size_cosine);
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_from_instance(
-  ETX_IN(EmitterAccessCPUContext, context), ETX_IN(Emitter, emitter_instance), ETX_OUT(EmitterAccess, access)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_from_instance(ETX_IN(EmitterAccessCPUContext, context), ETX_IN(Emitter, emitter_instance), ETX_OUT(EmitterAccess, access)) {
   return emitter_access_try_load_from_instance(context, static_cast<uint32_t>(emitter_instance.cls), emitter_instance.profile, access);
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_local_from_instance(
-  ETX_IN(EmitterAccessCPUContext, context), ETX_IN(Emitter, emitter_instance), ETX_OUT(EmitterAccess, access)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_local_from_instance(ETX_IN(EmitterAccessCPUContext, context), ETX_IN(Emitter, emitter_instance), ETX_OUT(EmitterAccess, access)) {
   if (emitter_access_try_load_from_instance(context, emitter_instance, access) == false) {
     return false;
   }
@@ -116,18 +110,17 @@ ETX_SHARED_INLINE bool emitter_access_try_load_local_from_instance(
   return emitter_access_is_local_class(access.emitter_class);
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_distant_from_instance(
-  ETX_IN(EmitterAccessCPUContext, context), ETX_IN(Emitter, emitter_instance), ETX_IN(float3, direction), ETX_OUT(EmitterAccess, access)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_distant_from_instance(ETX_IN(EmitterAccessCPUContext, context), ETX_IN(Emitter, emitter_instance), ETX_IN(float3, direction),
+  ETX_OUT(EmitterAccess, access)) {
   if (emitter_access_try_load_from_instance(context, emitter_instance, access) == false) {
     return false;
   }
 
-  return emitter_access_accepts_distant(
-    access.emitter_class, access.emitter_profile_class, direction, access.emitter_direction, access.emitter_angular_size_cosine);
+  return emitter_access_accepts_distant(access.emitter_class, access.emitter_profile_class, direction, access.emitter_direction, access.emitter_angular_size_cosine);
 }
 
-ETX_SHARED_INLINE bool emitter_access_try_load_image_params(
-  ETX_IN(EmitterAccessCPUContext, context), uint32_t emission_image_index, ETX_OUT(float2, image_offset), ETX_OUT(float, image_u_scale)) {
+ETX_SHARED_INLINE bool emitter_access_try_load_image_params(ETX_IN(EmitterAccessCPUContext, context), uint32_t emission_image_index, ETX_OUT(float2, image_offset),
+  ETX_OUT(float, image_u_scale)) {
   image_offset = float2(0.0f, 0.0f);
   image_u_scale = 1.0f;
   if ((context.scene == nullptr) || (emission_image_index == kInvalidIndex) || (emission_image_index >= context.scene->images.count)) {
@@ -140,13 +133,12 @@ ETX_SHARED_INLINE bool emitter_access_try_load_image_params(
   return true;
 }
 
-ETX_SHARED_INLINE float2 emitter_access_environment_uv(
-  ETX_IN(EmitterAccessCPUContext, context), ETX_IN(EmitterAccess, access), ETX_IN(float3, direction)) {
+ETX_SHARED_INLINE float2 emitter_access_environment_uv(ETX_IN(EmitterAccessCPUContext, context), ETX_IN(EmitterAccess, access), ETX_IN(float3, direction)) {
   float2 image_offset = float2(0.0f, 0.0f);
   float image_u_scale = 1.0f;
   emitter_access_try_load_image_params(context, access.emission_image_index, image_offset, image_u_scale);
-  return ::emitter_access_shared_environment_uv(
-    access.emitter_class, access.emitter_profile_meta, image_offset, image_u_scale, access.emitter_direction, access.emitter_angular_size_cosine, direction);
+  return ::emitter_access_shared_environment_uv(access.emitter_class, access.emitter_profile_meta, image_offset, image_u_scale, access.emitter_direction,
+    access.emitter_angular_size_cosine, direction);
 }
 
 ETX_SHARED_INLINE bool emitter_access_can_sample_spectrum(ETX_IN(EmitterAccessCPUContext, context), uint32_t emission_spectrum_index) {

@@ -59,10 +59,6 @@ if (APPLE)
     "-framework AppKit"
     )
   target_link_options(raytracer PRIVATE "-Wl,-rpath,@executable_path" "-Wl,-rpath,@loader_path")
-elseif (WIN32)
-  find_package(Vulkan REQUIRED)
-  target_link_libraries(raytracer PRIVATE Vulkan::Vulkan)
-  target_include_directories(raytracer PRIVATE ${Vulkan_INCLUDE_DIRS} "${CMAKE_SOURCE_DIR}/bin" "${CMAKE_SOURCE_DIR}/sources/etx/render")
 endif()
 
 if(MSVC)

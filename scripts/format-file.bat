@@ -9,7 +9,8 @@ set FORMAT=1
 if not x%INPUT_REL_FILE:samplerBlueNoise=%==x%INPUT_REL_FILE% set FORMAT=0
 
 if %FORMAT%==0 echo Skipping %INPUT_FILE%
-if %FORMAT%==1 clang-format -verbose -style=file -i %INPUT_FILE%
+if %FORMAT%==1 clang-format -verbose -style=file -i "%INPUT_FILE%"
+if %FORMAT%==1 if /I "%~x2"==".hlsl" python "%~dp0fix_hlsl_semantics.py" "%INPUT_FILE%"
 
 endlocal
 @echo on

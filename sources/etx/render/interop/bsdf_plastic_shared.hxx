@@ -2,11 +2,11 @@
 
 #include "bsdf_various_shared.hxx"
 
-ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler));
+ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler));
 
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_specular_func(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_plastic_specular_func(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame local_frame = bsdf_data_get_normal_frame(data, material);
 
   float3 w_i = local_frame_to_local(local_frame, -data.w_i);
@@ -29,8 +29,8 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_specular_func(
   return func;
 }
 
-ETX_SHARED_INLINE float bsdf_plastic_specular_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_plastic_specular_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   LocalFrame local_frame = bsdf_data_get_normal_frame(data, material);
 
   float3 w_i = local_frame_to_local(local_frame, -data.w_i);
@@ -60,8 +60,7 @@ ETX_SHARED_INLINE float bsdf_plastic_specular_pdf(
   return abs(prob * dwh_dwo);
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data, material);
 
   float2 roughness = bsdf_resource_evaluate_roughness(context, material, data.tex);
@@ -100,8 +99,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   float3 m = normalize(outgoing_direction - data.w_i);
 
@@ -132,8 +131,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(
   return result;
 }
 
-ETX_SHARED_INLINE float bsdf_plastic_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data);
   float3 m = normalize(outgoing_direction - data.w_i);
   float m_dot_o = dot(m, outgoing_direction);
@@ -162,8 +161,7 @@ ETX_SHARED_INLINE bool bsdf_plastic_is_delta(ETX_IN(Material, material), ETX_IN(
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_plastic_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }

@@ -2,6 +2,8 @@
 #include <etx/engine/options.hxx>
 #include <etx/render/shared/scene.hxx>
 
+#include <atomic>
+
 namespace etx {
 
 VCMOptions VCMOptions::default_values() {

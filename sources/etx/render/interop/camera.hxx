@@ -69,4 +69,3 @@ ETX_SHARED_INLINE Ray camera_generate_ray(ETX_IN(Camera, camera), ETX_IN(float2,
   float max_t = (camera.clip_far > 0.0f) ? (camera.clip_far / cos_t) : kMaxFloat;
   return camera_ray_make(origin, out_direction, max(min_t, kRayEpsilon), max_t);
 }
-

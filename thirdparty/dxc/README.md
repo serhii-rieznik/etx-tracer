@@ -8,6 +8,7 @@ DirectX Shader Compiler (DXC) package.
 For each platform, provide a folder that contains:
 
 - `include/dxc/dxcapi.h` (required)
+- `include/dxc/WinAdapter.h` (required on macOS/Linux; `dxcapi.h` includes it on non-Windows)
 - DXC runtime library (required):
   - Windows: `lib/dxcompiler.dll` or `bin/dxcompiler.dll`
   - macOS: `lib/libdxcompiler.dylib` or `bin/libdxcompiler.dylib`
@@ -39,6 +40,7 @@ Other aliases also supported by CMake:
 
 ```text
 thirdparty/dxc/macos-arm64/
+  include/dxc/WinAdapter.h
   include/dxc/dxcapi.h
   lib/libdxcompiler.dylib
   lib/libdxil.dylib            # optional

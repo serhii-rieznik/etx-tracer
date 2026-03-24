@@ -4,7 +4,86 @@
 #include <etx/core/log.hxx>
 #include <etx/core/core.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
+
+#include <chrono>
+#include <thread>
+#include <type_traits>
+
+#if ETX_PLATFORM_APPLE
+# include <objc/message.h>
+# include <objc/objc.h>
+# include <objc/runtime.h>
+#endif
+
 #include <new>
+
+namespace {
+
+#if ETX_PLATFORM_APPLE
+using ObjCBool = signed char;
+
+template <typename Result, typename... Args>
+Result objc_send(id object, const char* selector_name, Args... args) {
+  if (object == nil) {
+    if constexpr (std::is_void_v<Result>) {
+      return;
+    } else {
+      return Result();
+    }
+  }
+
+  return ((Result (*)(id, SEL, Args...))objc_msgSend)(object, sel_registerName(selector_name), args...);
+}
+
+bool objc_is_kind_of(id object, const char* class_name) {
+  if (object == nil) {
+    return false;
+  }
+
+  Class target_class = (Class)objc_getClass(class_name);
+  if (target_class == Nil) {
+    return false;
+  }
+
+  return objc_send<ObjCBool>(object, "isKindOfClass:", target_class) != 0;
+}
+
+id acquire_metal_layer_from_window(const void* native_window) {
+  id window = (id)native_window;
+  if (window == nil) {
+    return nil;
+  }
+
+  id view = objc_send<id>(window, "contentView");
+  if (view == nil) {
+    return nil;
+  }
+
+  id layer = objc_send<id>(view, "layer");
+  if (objc_is_kind_of(layer, "CAMetalLayer")) {
+    return layer;
+  }
+
+  Class metal_layer_class = (Class)objc_getClass("CAMetalLayer");
+  if (metal_layer_class == Nil) {
+    return nil;
+  }
+
+  objc_send<void>(view, "setWantsLayer:", static_cast<ObjCBool>(1));
+  layer = objc_send<id>((id)metal_layer_class, "layer");
+  if (layer == nil) {
+    return nil;
+  }
+
+  const double contents_scale = objc_send<double>(window, "backingScaleFactor");
+  objc_send<void>(layer, "setContentsScale:", contents_scale > 0.0 ? contents_scale : 1.0);
+  objc_send<void>(view, "setLayer:", layer);
+  return layer;
+}
+#endif
+
+}  // namespace
+
 const char* vk_error_to_string(VkResult err) {
   switch (err) {
     case VK_SUCCESS:
@@ -153,6 +232,9 @@ struct VKContext::Impl {
 
   void initialize_bindless_manager() {
     if ((device.get_vk_device() != VK_NULL_HANDLE) && (bindless_manager.is_initialized() == false)) {
+      if (device.supports_ray_tracing() == false) {
+        bindless_manager.set_max_acceleration_structures(0u);
+      }
       bindless_manager.initialize(device.get_vk_device(), device.get_vk_physical_device());
       device.set_bindless_manager(&bindless_manager);
 
@@ -230,11 +312,15 @@ struct VKContext::Impl {
   std::vector<RHIResourceState> swapchain_image_states;
   VkFormat swapchain_format = VK_FORMAT_UNDEFINED;
   VkExtent2D swapchain_extent = {0, 0};
-  uint32_t current_swapchain_image = 0;
+  uint32_t current_swapchain_image = UINT32_MAX;
+  bool frame_in_progress = false;
+  bool frame_has_acquired_swapchain_image = false;
+  bool frame_submit_succeeded = false;
 
   std::vector<RHISemaphore> image_available_semaphores;
   std::vector<RHISemaphore> render_finished_semaphores;
   std::vector<VkFence> in_flight_fences;
+  std::vector<VkFence> swapchain_image_fences;
   std::vector<VkFence> temporary_fences;
   uint32_t current_frame = 0;
 
@@ -367,6 +453,10 @@ void VKContext::resize_swapchain(uint32_t width, uint32_t height) {
 }
 
 RHITexture VKContext::get_current_swapchain_texture() {
+  if ((_impl->swapchain != VK_NULL_HANDLE) && (_impl->frame_has_acquired_swapchain_image == false)) {
+    return {};
+  }
+
   if (_impl->current_swapchain_image < _impl->swapchain_textures.size()) {
     RHITexture handle = _impl->swapchain_textures[_impl->current_swapchain_image];
     if (_impl->bindless_manager.is_valid_handle(handle)) {
@@ -406,6 +496,9 @@ static bool rhi_timestamp_query_range_valid(uint32_t first_query, uint32_t query
 
 RHIExtent2D VKContext::get_swapchain_extent_rhi() const {
   RHIExtent2D result = {};
+  if ((_impl->swapchain != VK_NULL_HANDLE) && _impl->frame_in_progress && (_impl->frame_has_acquired_swapchain_image == false)) {
+    return result;
+  }
   result.width = _impl->swapchain_extent.width;
   result.height = _impl->swapchain_extent.height;
   return result;
@@ -416,7 +509,16 @@ void VKContext::present() {
     return;
   }
 
-  VkSemaphore wait_semaphore = _impl->device.get_vk_semaphore(_impl->render_finished_semaphores[_impl->current_frame]);
+  if ((_impl->frame_has_acquired_swapchain_image == false) || (_impl->frame_submit_succeeded == false)) {
+    return;
+  }
+
+  if (_impl->current_swapchain_image >= _impl->render_finished_semaphores.size()) {
+    log::error("Current swapchain image index %u is out of range for render-finished semaphores (%zu)", _impl->current_swapchain_image, _impl->render_finished_semaphores.size());
+    return;
+  }
+
+  VkSemaphore wait_semaphore = _impl->device.get_vk_semaphore(_impl->render_finished_semaphores[_impl->current_swapchain_image]);
   VkPresentInfoKHR present_info = {VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
   present_info.waitSemaphoreCount = 1;
   present_info.pWaitSemaphores = &wait_semaphore;
@@ -468,6 +570,11 @@ RHIResult VKContext::wait_idle() {
 
 void VKContext::begin_frame() {
   ETX_PROFILER_SCOPE();
+  _impl->frame_in_progress = true;
+  _impl->frame_has_acquired_swapchain_image = false;
+  _impl->frame_submit_succeeded = false;
+  _impl->current_swapchain_image = UINT32_MAX;
+
   if (_impl->in_flight_fences.empty() == false) {
     ETX_PROFILER_NAMED_SCOPE("vkWaitForFences");
     if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &_impl->in_flight_fences[_impl->current_frame], VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
@@ -554,27 +661,39 @@ void VKContext::begin_frame() {
     }
   }
 
-  {
-    ETX_PROFILER_NAMED_SCOPE("vkResetFences");
-    etx_vk_call(vkResetFences(_impl->device.get_vk_device(), 1, &_impl->in_flight_fences[_impl->current_frame]));
+  _impl->frame_has_acquired_swapchain_image = true;
+
+  if (_impl->current_swapchain_image < _impl->swapchain_image_fences.size()) {
+    VkFence image_fence = _impl->swapchain_image_fences[_impl->current_swapchain_image];
+    if ((image_fence != VK_NULL_HANDLE) && (image_fence != _impl->in_flight_fences[_impl->current_frame])) {
+      ETX_PROFILER_NAMED_SCOPE("vkWaitForImageFence");
+      if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &image_fence, VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
+        return;
+      }
+    }
   }
 }
 
 RHISemaphore VKContext::get_image_acquired_semaphore() {
-  if (_impl->image_available_semaphores.empty()) {
+  if ((_impl->image_available_semaphores.empty()) || ((_impl->swapchain != VK_NULL_HANDLE) && (_impl->frame_has_acquired_swapchain_image == false))) {
     return {};
   }
   return _impl->image_available_semaphores[_impl->current_frame];
 }
 
 RHISemaphore VKContext::get_render_complete_semaphore() {
-  if (_impl->render_finished_semaphores.empty()) {
+  if ((_impl->render_finished_semaphores.empty()) || (_impl->frame_has_acquired_swapchain_image == false) ||
+      (_impl->current_swapchain_image >= _impl->render_finished_semaphores.size())) {
     return {};
   }
-  return _impl->render_finished_semaphores[_impl->current_frame];
+  return _impl->render_finished_semaphores[_impl->current_swapchain_image];
 }
 
 void VKContext::end_frame() {
+  _impl->frame_in_progress = false;
+  _impl->frame_has_acquired_swapchain_image = false;
+  _impl->frame_submit_succeeded = false;
+  _impl->current_swapchain_image = UINT32_MAX;
   _impl->current_frame = (_impl->current_frame + 1) % kRHIMaxFrames;
 }
 
@@ -588,6 +707,15 @@ uint32_t VKContext::get_sampler_index(RHISamplerType type) const {
     return _impl->predefined_sampler_indices[index];
   }
   return 0;
+}
+
+RHICapabilities VKContext::capabilities() const {
+  return {
+    .supports_swapchain = _impl->init_info.headless == false,
+    .supports_bindless = _impl->device.supports_bindless(),
+    .supports_timestamps = _impl->device.supports_timestamps(),
+    .supports_ray_tracing = _impl->device.supports_ray_tracing(),
+  };
 }
 
 RHICommandBuffer VKContext::get_command_buffer() {
@@ -641,20 +769,24 @@ void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   }
 
   VkFence submit_fence = VK_NULL_HANDLE;
+  RHISemaphore current_render_complete = get_render_complete_semaphore();
+  bool frame_completion_submit = false;
 
   for (auto s : info.signal_semaphores) {
     if (s.valid()) {
       VkSemaphore vk_sem = _impl->device.get_vk_semaphore(s);
       if (vk_sem != VK_NULL_HANDLE) {
         signal_semaphores.push_back(vk_sem);
-        // Hack: if we are signaling a semaphore that matches our internal render_finished semaphore,
-        // we assume this is the frame end and we should attach the frame fence.
-        if (s == _impl->render_finished_semaphores[_impl->current_frame]) {
+        if (s == current_render_complete) {
+          frame_completion_submit = true;
           submit_fence = _impl->in_flight_fences[_impl->current_frame];
-          etx_vk_call(vkResetFences(_impl->device.get_vk_device(), 1, &submit_fence));
         }
       }
     }
+  }
+
+  if (submit_fence != VK_NULL_HANDLE) {
+    etx_vk_call(vkResetFences(_impl->device.get_vk_device(), 1, &submit_fence));
   }
 
   VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -675,6 +807,11 @@ void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   if (etx_vk_call(vkQueueSubmit(_impl->device.get_graphics_queue(), 1, &submit_info, submit_fence)) != VK_SUCCESS) {
     log::error("Failed to submit command buffer");
     return;
+  }
+
+  if (frame_completion_submit && (_impl->current_swapchain_image < _impl->swapchain_image_fences.size())) {
+    _impl->swapchain_image_fences[_impl->current_swapchain_image] = submit_fence;
+    _impl->frame_submit_succeeded = true;
   }
 
   vk_cmd_buf->set_submitted(true);
@@ -1264,6 +1401,9 @@ void VKCommandBuffer::ensure_texture_layout(RHIBindlessHandle texture, VkImageLa
     case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
       target_state = RHIResourceState::ColorAttachment;
       break;
+    case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+      target_state = RHIResourceState::DepthAttachment;
+      break;
     case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
       target_state = RHIResourceState::TransferSrc;
       break;
@@ -1318,24 +1458,39 @@ void VKCommandBuffer::texture_barrier(RHIBindlessHandle texture, RHIResourceStat
 
   switch (old_state) {
     case RHIResourceState::ColorAttachment:
+      old_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       src_access = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
       src_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
       break;
+    case RHIResourceState::DepthAttachment:
+      old_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+      src_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+      src_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+      break;
     case RHIResourceState::ShaderReadOnly:
+      old_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
       src_access = VK_ACCESS_SHADER_READ_BIT;
       src_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       break;
     case RHIResourceState::TransferSrc:
+      old_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
       src_access = VK_ACCESS_TRANSFER_READ_BIT;
       src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
       break;
     case RHIResourceState::TransferDst:
+      old_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
       src_access = VK_ACCESS_TRANSFER_WRITE_BIT;
       src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
       break;
     case RHIResourceState::General:
+      old_layout = VK_IMAGE_LAYOUT_GENERAL;
       src_access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
       src_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+      break;
+    case RHIResourceState::Present:
+      old_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+      src_access = 0;
+      src_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
       break;
     default:
       break;
@@ -1360,6 +1515,11 @@ void VKCommandBuffer::texture_barrier(RHIBindlessHandle texture, RHIResourceStat
       new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
       dst_access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
       dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+      break;
+    case RHIResourceState::DepthAttachment:
+      new_layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+      dst_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+      dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
       break;
     case RHIResourceState::TransferSrc:
       new_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -1553,16 +1713,25 @@ void VKCommandBuffer::end_render_pass() {
         continue;
       }
 
+      const RHIResourceState final_state = (i < current_color_final_states.size()) ? current_color_final_states[i] : RHIResourceState::ColorAttachment;
+      if ((final_state != RHIResourceState::Undefined) && (final_state != RHIResourceState::ColorAttachment)) {
+        texture_barrier(tex, RHIResourceState::ColorAttachment, final_state);
+      }
+
       VKTextureData* texture_data_ptr = device->get_texture_data(tex);
       if (texture_data_ptr != nullptr) {
-        texture_data_ptr->current_state = current_color_final_states[i];
+        texture_data_ptr->current_state = (final_state == RHIResourceState::Undefined) ? RHIResourceState::ColorAttachment : final_state;
       }
     }
 
     if (current_depth_attachment.valid()) {
+      if ((current_depth_final_state != RHIResourceState::Undefined) && (current_depth_final_state != RHIResourceState::DepthAttachment)) {
+        texture_barrier(current_depth_attachment, RHIResourceState::DepthAttachment, current_depth_final_state);
+      }
+
       VKTextureData* texture_data_ptr = device->get_texture_data(current_depth_attachment);
       if (texture_data_ptr != nullptr) {
-        texture_data_ptr->current_state = current_depth_final_state;
+        texture_data_ptr->current_state = (current_depth_final_state == RHIResourceState::Undefined) ? RHIResourceState::DepthAttachment : current_depth_final_state;
       }
     }
   }
@@ -2190,6 +2359,25 @@ bool VKContext::Impl::create_surface() {
   if (etx_vk_call(vkCreateWin32SurfaceKHR(device.get_vk_instance(), &surface_info, nullptr, &surface)) != VK_SUCCESS) {
     return false;
   }
+#elif ETX_PLATFORM_APPLE
+  id metal_layer = acquire_metal_layer_from_window(native_window);
+  if (metal_layer == nil) {
+    log::error("Failed to acquire CAMetalLayer from macOS window");
+    return false;
+  }
+
+  VkMetalSurfaceCreateInfoEXT surface_info = {VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
+  surface_info.pLayer = metal_layer;
+
+  auto vkCreateMetalSurfaceEXT = (PFN_vkCreateMetalSurfaceEXT)vkGetInstanceProcAddr(device.get_vk_instance(), "vkCreateMetalSurfaceEXT");
+  if (vkCreateMetalSurfaceEXT == nullptr) {
+    log::error("Failed to get vkCreateMetalSurfaceEXT function pointer");
+    return false;
+  }
+
+  if (etx_vk_call(vkCreateMetalSurfaceEXT(device.get_vk_instance(), &surface_info, nullptr, &surface)) != VK_SUCCESS) {
+    return false;
+  }
 #else
 
   log::error("Platform not supported for surface creation");
@@ -2310,13 +2498,17 @@ void VKContext::Impl::create_sync_objects() {
   fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
   image_available_semaphores.resize(kRHIMaxFrames);
-  render_finished_semaphores.resize(kRHIMaxFrames);
+  render_finished_semaphores.resize(swapchain_images.empty() ? kRHIMaxFrames : swapchain_images.size());
   in_flight_fences.resize(kRHIMaxFrames);
+  swapchain_image_fences.assign(swapchain_images.size(), VK_NULL_HANDLE);
 
   for (size_t i = 0; i < kRHIMaxFrames; i++) {
     image_available_semaphores[i] = device.create_semaphore().handle;
-    render_finished_semaphores[i] = device.create_semaphore().handle;
     etx_vk_call(vkCreateFence(device.get_vk_device(), &fence_info, nullptr, &in_flight_fences[i]));
+  }
+
+  for (size_t i = 0; i < render_finished_semaphores.size(); ++i) {
+    render_finished_semaphores[i] = device.create_semaphore().handle;
   }
 }
 
@@ -2343,6 +2535,7 @@ void VKContext::Impl::destroy_sync_objects() {
   image_available_semaphores.clear();
   render_finished_semaphores.clear();
   in_flight_fences.clear();
+  swapchain_image_fences.clear();
 }
 
 void VKContext::Impl::destroy_swapchain() {

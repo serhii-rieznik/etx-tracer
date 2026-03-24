@@ -23,8 +23,8 @@ ETX_SHARED_INLINE uint32_t gpu_image_pixel_stride(const Image& image) {
   return 0u;
 }
 
-ETX_SHARED_INLINE ::Image make_gpu_image_descriptor(
-  const Image& image, PackedPayloadLocation pixel_payload = {}, PackedPayloadLocation x_distribution_payload = {}, PackedPayloadLocation y_distribution_payload = {}) {
+ETX_SHARED_INLINE ::Image make_gpu_image_descriptor(const Image& image, PackedPayloadLocation pixel_payload = {}, PackedPayloadLocation x_distribution_payload = {},
+  PackedPayloadLocation y_distribution_payload = {}) {
   ::Image result = {};
   result.fsize = image.fsize;
   result.offset = image.offset;

@@ -2,9 +2,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build",
+            "label": "Build Raytracer",
             "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/_build --config Debug --parallel --target raytracer",
+            "command": "cmake --build ${workspaceFolder}/build --config Debug --parallel --target raytracer",
             "group": {
                 "kind": "build",
                 "isDefault": false
@@ -14,12 +14,29 @@
                 "reveal": "always",
                 "focus": false,
                 "panel": "shared"
-            }
+            },
+            "problemMatcher": []
         },
         {
-            "label": "build-release",
+            "label": "Build Raytracer (Release)",
             "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/_build --config RelWithDebInfo --parallel --target raytracer",
+            "command": "cmake --build ${workspaceFolder}/build --config RelWithDebInfo --parallel --target raytracer",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build Playground",
+            "type": "shell",
+            "command": "cmake --build ${workspaceFolder}/build --config Debug --parallel --target playground",
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -29,49 +46,13 @@
                 "reveal": "always",
                 "focus": false,
                 "panel": "shared"
-            }
-        },
-        {
-            "label": "run-debug",
-            "type": "shell",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "build"
-            ],
-            "command": "${workspaceFolder}/bin/raytracer.exe",
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "new"
-            },
-            "options": {
-                "cwd": "${workspaceFolder}/bin"
-            }
-        },
-        {
-            "label": "run-release",
-            "type": "shell",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "build-release"
-            ],
-            "command": "${workspaceFolder}/bin/raytracer.exe",
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "new"
-            },
-            "options": {
-                "cwd": "${workspaceFolder}/bin"
             },
             "problemMatcher": []
         },
         {
-            "label": "build-rhi",
+            "label": "Build Playground (Release)",
             "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/_build --config Debug --parallel --target raytracer-rhi",
+            "command": "cmake --build ${workspaceFolder}/build --config RelWithDebInfo --parallel --target playground",
             "group": {
                 "kind": "build",
                 "isDefault": false
@@ -81,124 +62,6 @@
                 "reveal": "always",
                 "focus": false,
                 "panel": "shared"
-            }
-        },
-        {
-            "label": "build-rhi-release",
-            "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/_build --config RelWithDebInfo --parallel --target raytracer-rhi",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "run-rhi-debug",
-            "type": "shell",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "build-rhi"
-            ],
-            "command": "${workspaceFolder}/bin/raytracer-rhi.exe",
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "new"
-            },
-            "options": {
-                "cwd": "${workspaceFolder}/bin"
-            }
-        },
-        {
-            "label": "run-rhi-release",
-            "type": "shell",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "build-rhi-release"
-            ],
-            "command": "${workspaceFolder}/bin/raytracer-rhi.exe",
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "new"
-            },
-            "options": {
-                "cwd": "${workspaceFolder}/bin"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "build-playground",
-            "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/_build --config Debug --parallel --target playground",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "build-playground-release",
-            "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/_build --config RelWithDebInfo --parallel --target playground",
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "run-playground-debug",
-            "type": "shell",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "build-playground"
-            ],
-            "command": "${workspaceFolder}/bin/playground.exe",
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "new"
-            },
-            "options": {
-                "cwd": "${workspaceFolder}/bin"
-            }
-        },
-        {
-            "label": "run-playground-release",
-            "type": "shell",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "build-playground-release"
-            ],
-            "command": "${workspaceFolder}/bin/playground.exe",
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "new"
-            },
-            "options": {
-                "cwd": "${workspaceFolder}/bin"
             },
             "problemMatcher": []
         }

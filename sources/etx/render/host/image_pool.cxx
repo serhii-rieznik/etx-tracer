@@ -509,8 +509,7 @@ struct ImagePoolImpl {
 
     std::vector<float> thread_total_weights(scheduler.max_thread_count(), 0.0f);
     scheduler.execute(img.isize.y,
-      [&img, x_entries_base, y_entries_base, x_distributions_base, uniform_sampling, &thread_total_weights, x_entries_per_row](uint32_t begin, uint32_t end,
-        uint32_t thread_id) {
+      [&img, x_entries_base, y_entries_base, x_distributions_base, uniform_sampling, &thread_total_weights, x_entries_per_row](uint32_t begin, uint32_t end, uint32_t thread_id) {
         ETX_ASSERT(thread_id < thread_total_weights.size());
         float local_total_weight = 0.0f;
         for (uint32_t y = begin; y < end; ++y) {

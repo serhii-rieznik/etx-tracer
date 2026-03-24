@@ -2,8 +2,8 @@
 
 #include "bsdf_fresnel_shared.hxx"
 
-ETX_SHARED_INLINE SpectralResponse bsdf_external_eval_diffuse(
-  ETX_INOUT(Sampler, sampler), ETX_IN(float3, incoming_direction), ETX_IN(float3, outgoing_direction), ETX_IN(float2, alpha), ETX_IN(SpectralResponse, albedo)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_external_eval_diffuse(ETX_INOUT(Sampler, sampler), ETX_IN(float3, incoming_direction), ETX_IN(float3, outgoing_direction),
+  ETX_IN(float2, alpha), ETX_IN(SpectralResponse, albedo)) {
   (void)sampler;
   (void)incoming_direction;
   (void)alpha;
@@ -18,16 +18,16 @@ ETX_SHARED_INLINE float3 bsdf_external_sample_diffuse(ETX_INOUT(Sampler, sampler
   return sample_cosine_distribution(bsdf_sampler_next_2d(sampler), 1.0f);
 }
 
-ETX_SHARED_INLINE float3 bsdf_external_sample_diffuse(
-  ETX_INOUT(Sampler, sampler), ETX_IN(float3, incoming_direction), ETX_IN(float2, alpha), ETX_IN(SpectralResponse, albedo), ETX_OUT(SpectralResponse, energy)) {
+ETX_SHARED_INLINE float3 bsdf_external_sample_diffuse(ETX_INOUT(Sampler, sampler), ETX_IN(float3, incoming_direction), ETX_IN(float2, alpha), ETX_IN(SpectralResponse, albedo),
+  ETX_OUT(SpectralResponse, energy)) {
   (void)incoming_direction;
   (void)alpha;
   energy = albedo;
   return sample_cosine_distribution(bsdf_sampler_next_2d(sampler), 1.0f);
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_external_vmf_diffuse_brdf(
-  ETX_IN(float3, incoming_direction), ETX_IN(float3, outgoing_direction), ETX_IN(float2, roughness), ETX_IN(SpectralResponse, albedo)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_external_vmf_diffuse_brdf(ETX_IN(float3, incoming_direction), ETX_IN(float3, outgoing_direction), ETX_IN(float2, roughness),
+  ETX_IN(SpectralResponse, albedo)) {
   (void)incoming_direction;
   (void)outgoing_direction;
   (void)roughness;
@@ -72,8 +72,7 @@ ETX_SHARED_INLINE BSDFExternalRayInfo bsdf_external_ray_info_make(ETX_IN(float3,
   return result;
 }
 
-ETX_SHARED_INLINE BSDFExternalRayInfo bsdf_external_ray_info_update_direction(
-  ETX_IN(BSDFExternalRayInfo, ray), ETX_IN(float3, in_w), ETX_IN(float2, alpha)) {
+ETX_SHARED_INLINE BSDFExternalRayInfo bsdf_external_ray_info_update_direction(ETX_IN(BSDFExternalRayInfo, ray), ETX_IN(float3, in_w), ETX_IN(float2, alpha)) {
   BSDFExternalRayInfo result = ray;
   result = bsdf_external_ray_info_make(in_w, alpha);
   result.h = ray.h;
@@ -304,8 +303,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_external_eval_conductor(ETX_IN(SpectralQ
 
     float2 slope_rnd = ((current_scattering_order == 1u) && bsdf_sampler_has_fixed(sampler)) ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
     SpectralResponse weight = spectral_response_make(spect, 0.0f);
-    ray = bsdf_external_ray_info_update_direction(
-      ray, bsdf_external_sample_phase_function_conductor(spect, slope_rnd, -ray.w, alpha, ext_ior, int_ior, thinfilm, weight), alpha);
+    ray = bsdf_external_ray_info_update_direction(ray, bsdf_external_sample_phase_function_conductor(spect, slope_rnd, -ray.w, alpha, ext_ior, int_ior, thinfilm, weight), alpha);
     energy = spectral_response_mul(energy, weight);
     ray = bsdf_external_ray_info_update_height(ray, ray.h);
 
@@ -350,8 +348,8 @@ ETX_SHARED_INLINE float3 bsdf_external_refract(ETX_IN(float3, wi), ETX_IN(float3
   return wm * (dot(wi, wm) / eta + cos_theta_t) - wi / eta;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_external_eval_phase_function_dielectric(ETX_IN(SpectralQuery, spect), ETX_IN(BSDFExternalRayInfo, ray), ETX_IN(float3, wo),
-  bool reflection, ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm), ETX_IN(float2, alpha)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_external_eval_phase_function_dielectric(ETX_IN(SpectralQuery, spect), ETX_IN(BSDFExternalRayInfo, ray), ETX_IN(float3, wo), bool reflection,
+  ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm), ETX_IN(float2, alpha)) {
   if (ray.w.z > 0.9999f) {
     return spectral_response_make(spect, 0.0f);
   }
@@ -434,8 +432,8 @@ ETX_SHARED_INLINE float bsdf_external_mis_weight_dielectric(ETX_IN(float3, wi), 
   return bsdf_external_d_ggx((wh.z > 0.0f) ? wh : -wh, alpha);
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_external_eval_dielectric(ETX_IN(SpectralQuery, spect), ETX_INOUT(Sampler, sampler), ETX_IN(float3, wi), ETX_IN(float3, wo),
-  bool wo_outside, ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_external_eval_dielectric(ETX_IN(SpectralQuery, spect), ETX_INOUT(Sampler, sampler), ETX_IN(float3, wi), ETX_IN(float3, wo), bool wo_outside,
+  ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm)) {
   if ((wi.z <= 0.0f) || ((wo.z <= 0.0f) && wo_outside) || ((wo.z >= 0.0f) && (wo_outside == false))) {
     return spectral_response_make(spect, 0.0f);
   }

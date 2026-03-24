@@ -9,7 +9,7 @@
 #endif
 
 #if defined(__cplusplus) && !defined(ETX_INIT)
-# define ETX_INIT(...) ETX_INIT_WITH(__VA_ARGS__)
+# define ETX_INIT(...)          ETX_INIT_WITH(__VA_ARGS__)
 # define ETX_RAY_LOCAL_ETX_INIT 1
 #endif
 
@@ -39,4 +39,3 @@ struct ETX_ALIGNED Ray {
 # undef ETX_RAY_LOCAL_ETX_INIT
 # undef ETX_INIT
 #endif
-

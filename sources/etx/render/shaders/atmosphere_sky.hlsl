@@ -29,8 +29,8 @@ float atmosphere_sky_transmittance(float optical_depth) {
   return exp(-optical_depth);
 }
 
-float atmosphere_sky_spectral_step_value(float wavelength, float emission_power, float3 total_optical_path, float3 density_scale, float3 current_density, float phase_r, float phase_m,
-  float dt) {
+float atmosphere_sky_spectral_step_value(float wavelength, float emission_power, float3 total_optical_path, float3 density_scale, float3 current_density, float phase_r,
+  float phase_m, float dt) {
   float r = scattering_rayleigh(wavelength);
   float m = scattering_mie(wavelength);
   float o = scattering_ozone_absorption(wavelength);
@@ -55,8 +55,7 @@ float3 atmosphere_sky_integrate_light_step_xyz(SpectrumAccessGPUContext spectra_
 
   float prev_wavelength = spectrum_access_entry_wavelength(spectra_context, light.emission_spectrum_index, 0u);
   float prev_emission = spectrum_access_entry_power(spectra_context, light.emission_spectrum_index, 0u) * light.intensity_scale;
-  float prev_value =
-    atmosphere_sky_spectral_step_value(prev_wavelength, prev_emission, total_optical_path, density_scale, current_density, phase_r, phase_m, dt);
+  float prev_value = atmosphere_sky_spectral_step_value(prev_wavelength, prev_emission, total_optical_path, density_scale, current_density, phase_r, phase_m, dt);
   float3 prev_xyz = spectral_response_to_xyz(spectral_response_make(prev_wavelength, prev_value));
 
   for (uint entry_index = 1u; entry_index < entry_count; ++entry_index) {
@@ -111,7 +110,8 @@ float3 atmosphere_sky_radiance_xyz(AtmosphereSkyPushConstants constants, float3 
 
     for (uint light_index = 0u; light_index < constants.light_count; ++light_index) {
       AtmosphereSkyGpuLight light = load_atmosphere_sky_light(lights_buffer, light_index);
-      float3 light_optical_path = density_scale * atmosphere_sky_sample_optical_depth_lut(constants.optical_depth_texture_index, constants.optical_depth_sampler_index, p, light.direction);
+      float3 light_optical_path =
+        density_scale * atmosphere_sky_sample_optical_depth_lut(constants.optical_depth_texture_index, constants.optical_depth_sampler_index, p, light.direction);
       float3 total_optical_path = view_optical_path + light_optical_path;
 
       float l_dot_v = dot(light.direction, view_direction);
@@ -125,8 +125,7 @@ float3 atmosphere_sky_radiance_xyz(AtmosphereSkyPushConstants constants, float3 
   return xyz_result;
 }
 
-[numthreads(8, 8, 1)]
-void sky_raw_main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gi : SV_GroupIndex) {
+[numthreads(8, 8, 1)] void sky_raw_main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gi : SV_GroupIndex) {
   float3 rgb = float3(0.0f, 0.0f, 0.0f);
   float weight = 0.0f;
 
@@ -156,8 +155,7 @@ void sky_raw_main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint
   }
 }
 
-[numthreads(8, 8, 1)]
-void sky_finalize_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(8, 8, 1)] void sky_finalize_main(uint3 dtid : SV_DispatchThreadID) {
   if ((dtid.x >= constants.width) || (dtid.y >= constants.height)) {
     return;
   }
@@ -168,8 +166,7 @@ void sky_finalize_main(uint3 dtid : SV_DispatchThreadID) {
   bool has_primary_scattering = (constants.pass_flags & AtmosphereSkyPassFlags::PrimaryScattering) != 0u;
   bool has_secondary_scattering = (constants.pass_flags & AtmosphereSkyPassFlags::SecondaryScattering) != 0u;
   if (has_secondary_scattering) {
-    rgb = (has_primary_scattering ? scattering_sky_apply_approx_multiple_scattering(rgb, average_color)
-                                  : scattering_sky_approx_multiple_scattering_only(rgb, average_color));
+    rgb = (has_primary_scattering ? scattering_sky_apply_approx_multiple_scattering(rgb, average_color) : scattering_sky_approx_multiple_scattering_only(rgb, average_color));
   } else if (has_primary_scattering == false) {
     rgb = float3(0.0f, 0.0f, 0.0f);
   }

@@ -14,8 +14,7 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
   const uint dimension_base = sampler_stream_dimension_base(kSamplerStreamBSDF);
   const uint sample_count = load_scene_options_samples();
 
-  [loop]
-  for (uint i = 0u; i < sample_count; ++i) {
+  [loop] for (uint i = 0u; i < sample_count; ++i) {
     float2 u = float2(0.0f, 0.0f);
     const uint sample_index = constants.sample_index + i;
     if (sample_use_blue_noise_primary(sample_index, kSamplerStreamBSDF)) {
@@ -137,4 +136,3 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
 
   bindless_storage_textures[constants.output_image_index][dtid.xy] = color;
 }
-

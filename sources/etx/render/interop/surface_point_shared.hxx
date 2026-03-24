@@ -2,17 +2,16 @@
 
 #include "math_shared.hxx"
 
-ETX_SHARED_INLINE void surface_point_shared_orthogonalize_frame(
-  ETX_IN(float3, normal), ETX_IN(float3, tangent_hint), ETX_IN(float3, bitangent_hint), ETX_OUT(float3, tangent), ETX_OUT(float3, bitangent)) {
+ETX_SHARED_INLINE void surface_point_shared_orthogonalize_frame(ETX_IN(float3, normal), ETX_IN(float3, tangent_hint), ETX_IN(float3, bitangent_hint), ETX_OUT(float3, tangent),
+  ETX_OUT(float3, bitangent)) {
   tangent = normalize(tangent_hint - dot(tangent_hint, normal) * normal);
   bitangent = normalize(cross(normal, tangent));
   bitangent = bitangent * ((dot(bitangent, bitangent_hint) > 0.0f) ? 1.0f : -1.0f);
 }
 
-ETX_SHARED_INLINE void surface_point_shared_interpolate_vertex(
-  ETX_IN(float3, pos_0), ETX_IN(float3, pos_1), ETX_IN(float3, pos_2), ETX_IN(float3, nrm_0), ETX_IN(float3, nrm_1), ETX_IN(float3, nrm_2), ETX_IN(float3, tan_0),
-  ETX_IN(float3, tan_1), ETX_IN(float3, tan_2), ETX_IN(float3, btn_0), ETX_IN(float3, btn_1), ETX_IN(float3, btn_2), ETX_IN(float2, tex_0), ETX_IN(float2, tex_1),
-  ETX_IN(float2, tex_2), ETX_IN(float3, bc), bool has_surface_frame, bool has_texcoords, ETX_OUT(Vertex, vertex)) {
+ETX_SHARED_INLINE void surface_point_shared_interpolate_vertex(ETX_IN(float3, pos_0), ETX_IN(float3, pos_1), ETX_IN(float3, pos_2), ETX_IN(float3, nrm_0), ETX_IN(float3, nrm_1),
+  ETX_IN(float3, nrm_2), ETX_IN(float3, tan_0), ETX_IN(float3, tan_1), ETX_IN(float3, tan_2), ETX_IN(float3, btn_0), ETX_IN(float3, btn_1), ETX_IN(float3, btn_2),
+  ETX_IN(float2, tex_0), ETX_IN(float2, tex_1), ETX_IN(float2, tex_2), ETX_IN(float3, bc), bool has_surface_frame, bool has_texcoords, ETX_OUT(Vertex, vertex)) {
   vertex.pos = pos_0 * bc.x + pos_1 * bc.y + pos_2 * bc.z;
   vertex.nrm = normalize(nrm_0 * bc.x + nrm_1 * bc.y + nrm_2 * bc.z);
 

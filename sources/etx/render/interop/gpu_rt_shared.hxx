@@ -18,4 +18,3 @@ struct ETX_ALIGNED GPURTConstants {
   uint32_t render_window_height;
   GPUScene scene;
 };
-

@@ -3,8 +3,7 @@
 #include "bsdf_external_shared.hxx"
 #include "bsdf_resource_shared.hxx"
 
-ETX_SHARED_INLINE BSDFSample bsdf_void_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_void_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)material;
   (void)sampler;
@@ -19,8 +18,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_void_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_void_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_void_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)outgoing_direction;
   (void)material;
@@ -28,8 +27,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_void_evaluate(
   return bsdf_eval_zero(data.spectrum_sample);
 }
 
-ETX_SHARED_INLINE float bsdf_void_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_void_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)data;
   (void)outgoing_direction;
@@ -45,17 +44,15 @@ ETX_SHARED_INLINE bool bsdf_void_is_delta(ETX_IN(Material, material), ETX_IN(flo
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_void_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_void_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)material;
   (void)sampler;
   return spectral_response_zero(data.spectrum_sample);
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_diffuse_layer(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o), ETX_IN(Material, material),
-  ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_diffuse_layer(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   if (local_w_o.z <= 0.0f) {
     return bsdf_eval_zero(data.spectrum_sample);
   }
@@ -84,8 +81,7 @@ ETX_SHARED_INLINE BSDFEval bsdf_diffuse_layer(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_diffuse_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_diffuse_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   float3 local_w_i = local_frame_to_local(frame, -data.w_i);
   float2 roughness = bsdf_resource_evaluate_roughness(context, material, data.tex);
@@ -115,8 +111,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_diffuse_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_diffuse_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_diffuse_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
   if (local_w_o.z <= kEpsilon) {
@@ -127,8 +123,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_diffuse_evaluate(
   return bsdf_diffuse_layer(context, data, local_w_i, local_w_o, material, sampler);
 }
 
-ETX_SHARED_INLINE float bsdf_diffuse_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_diffuse_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)sampler;
 
@@ -148,14 +144,12 @@ ETX_SHARED_INLINE bool bsdf_diffuse_is_delta(ETX_IN(Material, material), ETX_IN(
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_diffuse_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_diffuse_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = bsdf_data_get_normal_frame(data);
   SpectralResponse transmission = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
   SpectralResponse reflection = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
@@ -190,8 +184,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_translucent_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_translucent_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
 
   LocalFrame frame = bsdf_data_get_normal_frame(data);
@@ -224,8 +218,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_translucent_evaluate(
   return result;
 }
 
-ETX_SHARED_INLINE float bsdf_translucent_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_translucent_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
 
   LocalFrame frame = bsdf_data_get_normal_frame(data);
@@ -249,14 +243,12 @@ ETX_SHARED_INLINE bool bsdf_translucent_is_delta(ETX_IN(Material, material), ETX
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_translucent_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_translucent_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_mirror_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_mirror_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
 
   LocalFrame frame = bsdf_data_get_normal_frame(data, material);
@@ -270,8 +262,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_mirror_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_mirror_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_mirror_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
 
   BSDFEval result = bsdf_eval_zero(data.spectrum_sample);
@@ -286,8 +278,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_mirror_evaluate(
   return result;
 }
 
-ETX_SHARED_INLINE float bsdf_mirror_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_mirror_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)sampler;
 
@@ -304,16 +296,14 @@ ETX_SHARED_INLINE bool bsdf_mirror_is_delta(ETX_IN(Material, material), ETX_IN(f
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_mirror_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_mirror_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)material;
   (void)sampler;
   return spectral_response_make(data.spectrum_sample, 1.0f);
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_boundary_sample(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_boundary_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)sampler;
 
@@ -328,8 +318,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_boundary_sample(
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_boundary_evaluate(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFEval bsdf_boundary_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)outgoing_direction;
   (void)material;
@@ -337,8 +327,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_boundary_evaluate(
   return bsdf_eval_zero(data.spectrum_sample);
 }
 
-ETX_SHARED_INLINE float bsdf_boundary_pdf(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_boundary_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)data;
   (void)outgoing_direction;
@@ -354,8 +344,7 @@ ETX_SHARED_INLINE bool bsdf_boundary_is_delta(ETX_IN(Material, material), ETX_IN
   return false;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_boundary_albedo(
-  ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE SpectralResponse bsdf_boundary_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)material;
   (void)sampler;

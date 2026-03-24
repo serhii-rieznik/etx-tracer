@@ -551,8 +551,7 @@ bool Film::active_pixel(uint32_t index, uint2& location) const {
     };
     a_location.x += rand() % _private->pixel_size;
     a_location.y += rand() % _private->pixel_size;
-    linear_index = min(a_location.x, render_window_origin.x + render_window_size.x - 1u) +
-                   min(a_location.y, render_window_origin_y + render_window_size.y - 1u) * film_size.x;
+    linear_index = min(a_location.x, render_window_origin.x + render_window_size.x - 1u) + min(a_location.y, render_window_origin_y + render_window_size.y - 1u) * film_size.x;
     ETX_ASSERT(linear_index < _private->total_pixel_count());
   } else {
     const uint32_t local_x = index % render_window_size.x;

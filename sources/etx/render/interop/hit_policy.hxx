@@ -28,8 +28,8 @@ ETX_SHARED_INLINE uint32_t hit_policy_boundary_medium(bool entering_surface, uin
   return entering_surface ? int_medium : ext_medium;
 }
 
-ETX_SHARED_INLINE HitPolicyDecision hit_policy_evaluate(
-  uint32_t mode, uint32_t material_class, bool alpha_rejected, bool entering_surface, uint32_t int_medium, uint32_t ext_medium) {
+ETX_SHARED_INLINE HitPolicyDecision hit_policy_evaluate(uint32_t mode, uint32_t material_class, bool alpha_rejected, bool entering_surface, uint32_t int_medium,
+  uint32_t ext_medium) {
   HitPolicyDecision result;
   result.action = HitPolicyAction::Ignore;
   result.medium_index = kInvalidIndex;

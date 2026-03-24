@@ -61,8 +61,8 @@ bool EnvMap::setup(RHIContext& rhi, RHITextureFormat color_format, RHITextureFor
   return setup_from_pixels(rhi, color_format, depth_format, reinterpret_cast<const float4*>(hdr_data.data()), hdr_dims, sample_count);
 }
 
-bool EnvMap::setup_from_pixels(
-  RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format, const float4* pixels, const uint2& dimensions, uint32_t sample_count) {
+bool EnvMap::setup_from_pixels(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format, const float4* pixels, const uint2& dimensions,
+  uint32_t sample_count) {
   if (pixels == nullptr) {
     log::error("Failed to create envmap texture: invalid pixels");
     return false;
@@ -104,9 +104,8 @@ bool EnvMap::setup_from_pixels(
   return true;
 }
 
-bool EnvMap::setup_with_texture(
-  RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format, RHITexture texture, RHIResourceState texture_state, bool equal_area_mapping,
-  uint32_t sample_count) {
+bool EnvMap::setup_with_texture(RHIContext& rhi, RHITextureFormat color_format, RHITextureFormat depth_format, RHITexture texture, RHIResourceState texture_state,
+  bool equal_area_mapping, uint32_t sample_count) {
   if (texture.valid() == false) {
     log::error("Failed to bind envmap texture: invalid texture");
     return false;

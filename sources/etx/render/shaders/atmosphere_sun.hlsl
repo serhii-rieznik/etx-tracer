@@ -35,7 +35,7 @@ float3 atmosphere_sun_extinction_xyz(float3 view_direction, float3 next_directio
   float first_m = scattering_mie(first_wavelength);
   float first_o = scattering_ozone_absorption(first_wavelength);
   float first_transmittance = atmosphere_sun_transmittance(first_r * view_optical_path.x) * atmosphere_sun_transmittance(first_m * view_optical_path.y) *
-    atmosphere_sun_transmittance(first_o * view_optical_path.z);
+                              atmosphere_sun_transmittance(first_o * view_optical_path.z);
   float3 previous_xyz = spectral_response_to_xyz(spectral_response_make(first_wavelength, first_transmittance));
   float3 xyz = float3(0.0f, 0.0f, 0.0f);
 
@@ -45,8 +45,8 @@ float3 atmosphere_sun_extinction_xyz(float3 view_direction, float3 next_directio
     float m = scattering_mie(current_wavelength);
     float o = scattering_ozone_absorption(current_wavelength);
 
-    float transmittance = atmosphere_sun_transmittance(r * view_optical_path.x) * atmosphere_sun_transmittance(m * view_optical_path.y) *
-      atmosphere_sun_transmittance(o * view_optical_path.z);
+    float transmittance =
+      atmosphere_sun_transmittance(r * view_optical_path.x) * atmosphere_sun_transmittance(m * view_optical_path.y) * atmosphere_sun_transmittance(o * view_optical_path.z);
     float3 current_xyz = spectral_response_to_xyz(spectral_response_make(current_wavelength, transmittance));
     xyz += previous_xyz + 0.5f * (current_xyz - previous_xyz);
     previous_xyz = current_xyz;
@@ -55,8 +55,7 @@ float3 atmosphere_sun_extinction_xyz(float3 view_direction, float3 next_directio
   return xyz;
 }
 
-[numthreads(8, 8, 1)]
-void sun_main(uint3 dtid : SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void sun_main(uint3 dtid : SV_DispatchThreadID) {
   if ((dtid.x >= constants.width) || (dtid.y >= constants.height)) {
     return;
   }

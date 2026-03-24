@@ -4,8 +4,8 @@ struct VSInput {
 };
 
 struct VSOutput {
-  float4 pos : SV_Position;
-  float3 nrm : NORMAL;
+  float4 pos      : SV_Position;
+  float3 nrm      : NORMAL;
   float3 view_dir : TEXCOORD0;
 };
 

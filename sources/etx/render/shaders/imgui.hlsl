@@ -6,7 +6,7 @@
 struct VertexToPixel {
   float4 position : SV_Position;
   float2 texcoord : TEXCOORD0;
-  float4 color : COLOR0;
+  float4 color    : COLOR0;
 };
 
 VertexToPixel vs_main(uint vertex_id : SV_VertexID) {
@@ -22,8 +22,7 @@ VertexToPixel vs_main(uint vertex_id : SV_VertexID) {
   return output;
 }
 
-float4 ps_main(VertexToPixel input)
-  : SV_Target {
+float4 ps_main(VertexToPixel input) : SV_Target {
   float4 tex_color = SampleTexture(pushConstants.texture_index, pushConstants.sampler_index, input.texcoord);
   return input.color * tex_color;
 }

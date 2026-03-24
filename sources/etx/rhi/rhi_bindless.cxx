@@ -6,9 +6,9 @@ namespace etx {
 using BackendBindlessManager = VKBindlessManager;
 }  // namespace etx
 #elif defined(ETX_PLATFORM_APPLE)
-# include <etx/rhi/metal/mt_rhi.hxx>
+# include <etx/rhi/vulkan/vk_rhi.hxx>
 namespace etx {
-using BackendBindlessManager = MTBindlessManager;
+using BackendBindlessManager = VKBindlessManager;
 }  // namespace etx
 #else
 # error Unsupported platform for RHI bindless dispatch

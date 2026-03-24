@@ -107,4 +107,3 @@ struct ETX_ALIGNED GPUScene {
 
   uint32_t scene_options;
 };
-
