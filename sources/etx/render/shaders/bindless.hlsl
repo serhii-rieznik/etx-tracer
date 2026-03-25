@@ -5,6 +5,7 @@ enum SamplerType : uint {
   LinearClamp = 1,
   NearestRepeat = 2,
   NearestClamp = 3,
+  LinearRepeatUClampV = 4,
 };
 
 [[vk::binding(0, 0)]] ByteAddressBuffer bindless_buffers[];

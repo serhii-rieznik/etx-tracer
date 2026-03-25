@@ -151,7 +151,7 @@ void EnvMap::draw(RHIContext& rhi, RHICommandBuffer cmd, const float4x4& inv_vie
   };
   PushConstants pc = {};
   pc.envmap_index = get_bindless_descriptor_index(_texture);
-  pc.sampler_index = rhi.get_sampler_index(RHISamplerType::LinearClamp);
+  pc.sampler_index = rhi.get_sampler_index(RHISamplerType::LinearRepeatUClampV);
   pc.mapping_mode = _equal_area_mapping ? 1u : 0u;
   pc.inv_view_proj = inv_view_proj;
   rhi.cmd_push_constants(cmd, &pc, sizeof(PushConstants), 0);

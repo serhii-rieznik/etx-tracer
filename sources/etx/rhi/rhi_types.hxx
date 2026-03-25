@@ -155,6 +155,7 @@ enum class RHISamplerType : uint32_t {
   LinearClamp = 1,
   NearestRepeat = 2,
   NearestClamp = 3,
+  LinearRepeatUClampV = 4,
 
   Count,
 };

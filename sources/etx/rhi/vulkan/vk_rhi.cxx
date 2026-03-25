@@ -222,7 +222,7 @@ struct VKContext::Impl {
   VKDevice device;
   VKBindlessManager bindless_manager = {};
   VKResourcePool<VKCommandBuffer, RHICommandBuffer> command_buffer_pool;
-  uint32_t predefined_sampler_indices[4] = {};
+  uint32_t predefined_sampler_indices[static_cast<size_t>(RHISamplerType::Count)] = {};
 
   Impl(const RHIInitInfo& inf)
     : init_info(inf)
@@ -269,7 +269,7 @@ struct VKContext::Impl {
 
       auto result = device.create_sampler(desc);
       if (result.result == RHIResult::Success) {
-        predefined_sampler_indices[static_cast<size_t>(RHISamplerType::LinearClamp)] = (get_bindless_descriptor_index(result.handle));
+        predefined_sampler_indices[static_cast<size_t>(RHISamplerType::LinearClamp)] = get_bindless_descriptor_index(result.handle);
       }
     }
 
@@ -299,7 +299,22 @@ struct VKContext::Impl {
 
       auto result = device.create_sampler(desc);
       if (result.result == RHIResult::Success) {
-        predefined_sampler_indices[static_cast<size_t>(RHISamplerType::NearestClamp)] = (get_bindless_descriptor_index(result.handle));
+        predefined_sampler_indices[static_cast<size_t>(RHISamplerType::NearestClamp)] = get_bindless_descriptor_index(result.handle);
+      }
+    }
+
+    {
+      RHISamplerDesc desc = {};
+      desc.min_filter = RHISamplerFilter::Linear;
+      desc.mag_filter = RHISamplerFilter::Linear;
+      desc.mipmap_mode = RHISamplerMipmapMode::Linear;
+      desc.address_mode_u = RHISamplerAddressMode::Repeat;
+      desc.address_mode_v = RHISamplerAddressMode::ClampToEdge;
+      desc.address_mode_w = RHISamplerAddressMode::ClampToEdge;
+
+      auto result = device.create_sampler(desc);
+      if (result.result == RHIResult::Success) {
+        predefined_sampler_indices[static_cast<size_t>(RHISamplerType::LinearRepeatUClampV)] = get_bindless_descriptor_index(result.handle);
       }
     }
   }
@@ -703,7 +718,7 @@ uint32_t VKContext::get_current_frame_index() const {
 
 uint32_t VKContext::get_sampler_index(RHISamplerType type) const {
   size_t index = static_cast<size_t>(type);
-  if (index < 4 && index < static_cast<size_t>(RHISamplerType::Count)) {
+  if (index < static_cast<size_t>(RHISamplerType::Count)) {
     return _impl->predefined_sampler_indices[index];
   }
   return 0;

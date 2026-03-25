@@ -1658,7 +1658,7 @@ void Ocean::prepare_render_draw_state(RHIContext& rhi, RHICommandBuffer cmd, con
   OceanRenderSettings render_settings = {};
   render_settings.envmap_index = envmap_texture.valid() ? get_bindless_descriptor_index(envmap_texture) : 0;
   render_settings.scene_color_index = scene_opaque_color_texture.valid() ? get_bindless_descriptor_index(scene_opaque_color_texture) : 0;
-  render_settings.env_sampler_index = rhi.get_sampler_index(RHISamplerType::LinearClamp);
+  render_settings.env_sampler_index = rhi.get_sampler_index(RHISamplerType::LinearRepeatUClampV);
   render_settings.scene_sampler_index = rhi.get_sampler_index(RHISamplerType::LinearClamp);
   render_settings.stitch_transition_cells = _parameters.stitch_transition_cells;
   render_settings.mip_color_mix = _parameters.mip_color_mix;
