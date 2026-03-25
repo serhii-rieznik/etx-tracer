@@ -14,6 +14,8 @@ struct OceanPushConstants {
 [[vk::push_constant]]
 OceanPushConstants pushConstants;
 
+static const uint kInvalidBindlessIndex = 0xFFFFFFFFu;
+
 struct VSOutput {
   float4 position                : SV_Position;
   float3 worldPos                : WORLD_POS;
@@ -79,7 +81,7 @@ float3 sample_displacement_field(float2 world_xz, float cascade_lengths[3], floa
   float3 disp = float3(0.0f, 0.0f, 0.0f);
   SamplerState envSampler = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];
   for (int i = 0; i < 3; ++i) {
-    if ((pushConstants.dispMapIndex[i] != 0u) && (cascade_weights[i] > 0.0f)) {
+    if ((pushConstants.dispMapIndex[i] != kInvalidBindlessIndex) && (cascade_weights[i] > 0.0f)) {
       Texture2D dispTex = bindless_textures[NonUniformResourceIndex(pushConstants.dispMapIndex[i])];
       float2 uv = world_xz / cascade_lengths[i];
       disp += dispTex.SampleLevel(envSampler, uv, 0).xyz * cascade_weights[i];
@@ -92,7 +94,7 @@ float displacement_sample_step(float cascade_lengths[3], float cascade_weights[3
   bool has_step = false;
   float min_step = 0.0f;
   for (int i = 0; i < 3; ++i) {
-    if ((pushConstants.dispMapIndex[i] != 0u) && (cascade_weights[i] > 0.0f)) {
+    if ((pushConstants.dispMapIndex[i] != kInvalidBindlessIndex) && (cascade_weights[i] > 0.0f)) {
       Texture2D dispTex = bindless_textures[NonUniformResourceIndex(pushConstants.dispMapIndex[i])];
       uint tex_width = 0u;
       uint tex_height = 0u;
@@ -170,7 +172,7 @@ float3 reconstruct_surface_normal(float2 surface_xz, float2 surface_xz_ddx, floa
     if ((cascade_filter >= 0) && (i != cascade_filter)) {
       continue;
     }
-    if ((settings.surfaceDerivUIndex[i] == 0u) || (settings.surfaceDerivVIndex[i] == 0u)) {
+    if ((settings.surfaceDerivUIndex[i] == kInvalidBindlessIndex) || (settings.surfaceDerivVIndex[i] == kInvalidBindlessIndex)) {
       continue;
     }
 
@@ -219,7 +221,7 @@ float3 sample_filtered_slope_metrics(float2 surface_xz, float2 surface_xz_ddx, f
   float ny_accum = 0.0f;
   float weight_accum = 0.0f;
   for (int i = 0; i < 3; ++i) {
-    if (settings.slopeMetricIndex[i] == 0u) {
+    if (settings.slopeMetricIndex[i] == kInvalidBindlessIndex) {
       continue;
     }
     float weight = max(cascade_weights[i], 0.0f);
@@ -362,7 +364,7 @@ float3 reconstruct_world_position_from_uv_depth(float2 uv, float depth, float4x4
 
 float sample_wave_thickness_meters(float2 screen_uv, OceanRenderSettings settings, out bool has_wave_thickness) {
   has_wave_thickness = false;
-  if ((settings.waveThicknessMinIndex == 0u) || (settings.waveThicknessMaxIndex == 0u)) {
+  if ((settings.waveThicknessMinIndex == kInvalidBindlessIndex) || (settings.waveThicknessMaxIndex == kInvalidBindlessIndex)) {
     return 0.0f;
   }
 
@@ -398,7 +400,7 @@ bool clip_to_screen_uv(float4 clip_pos, out float2 out_uv) {
 
 float sample_reprojected_foam_history(float3 world_pos, OceanRenderSettings settings, out bool has_history) {
   has_history = false;
-  if (settings.foamHistoryIndex == 0u) {
+  if (settings.foamHistoryIndex == kInvalidBindlessIndex) {
     return 0.0f;
   }
 
@@ -416,7 +418,7 @@ float sample_reprojected_foam_history(float3 world_pos, OceanRenderSettings sett
 }
 
 float sample_detail_texture(float2 world_xz, float2 world_xz_ddx, float2 world_xz_ddy, uint texture_index, OceanRenderSettings settings) {
-  if (texture_index == 0u) {
+  if (texture_index == kInvalidBindlessIndex) {
     return 1.0f;
   }
   SamplerState repeat_sampler = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];
@@ -661,7 +663,7 @@ float4 PSMain(VSOutput input) : SV_Target0 {
       bool has_basis = false;
       SamplerState envSampler = bindless_samplers[NonUniformResourceIndex(pushConstants.samplerIndex)];
       for (int i = 0; i < 3; ++i) {
-        if ((settings.surfaceDerivUIndex[i] == 0u) || (settings.surfaceDerivVIndex[i] == 0u) || (cascade_weights[i] <= 0.0f)) {
+        if ((settings.surfaceDerivUIndex[i] == kInvalidBindlessIndex) || (settings.surfaceDerivVIndex[i] == kInvalidBindlessIndex) || (cascade_weights[i] <= 0.0f)) {
           continue;
         }
         float2 uv = input.surfaceXZ / cascade_lengths[i];
@@ -780,7 +782,7 @@ float4 PSMain(VSOutput input) : SV_Target0 {
   float3 waterReflectColor = float3(0.5f, 0.6f, 0.8f) * env_reflection_intensity;
   float3 direct_specular = float3(0.0f, 0.0f, 0.0f);
 
-  if ((physical_render_mode) && (settings.sceneColorIndex != 0u)) {
+  if ((physical_render_mode) && (settings.sceneColorIndex != kInvalidBindlessIndex)) {
     Texture2D sceneTex = bindless_textures[NonUniformResourceIndex(settings.sceneColorIndex)];
     SamplerState sceneSampler = bindless_samplers[NonUniformResourceIndex(settings.sceneSamplerIndex)];
     float4 scene_center_sample = sceneTex.Sample(sceneSampler, screen_uv);
@@ -882,7 +884,7 @@ float4 PSMain(VSOutput input) : SV_Target0 {
     float foam_diffuse_gain = max(settings.foamControls2.x, 0.0f);
     float foam_backlight_gain = max(settings.foamControls2.y, 0.0f);
     float3 foam_lighting = float3(0.15f, 0.18f, 0.20f);
-    if (settings.envmapIndex != 0u) {
+    if (settings.envmapIndex != kInvalidBindlessIndex) {
       Texture2D envTexFoam = bindless_textures[NonUniformResourceIndex(settings.envmapIndex)];
       SamplerState envSamplerFoam = bindless_samplers[NonUniformResourceIndex(settings.envSamplerIndex)];
       bool envmap_equal_area_mapping = (settings._padding0 > 0.5f);

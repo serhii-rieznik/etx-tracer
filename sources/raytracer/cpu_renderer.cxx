@@ -116,7 +116,7 @@ void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& 
     .width = _output_dimensions.x,
     .height = _output_dimensions.y,
     .format = RHITextureFormat::R32G32B32A32_FLOAT,
-    .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst | RHITextureUsage::Storage,
+    .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst,
   };
   _output_texture = ctx.device().create_texture(desc).handle;
 }

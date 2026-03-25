@@ -6,7 +6,11 @@
 #include <etx/core/environment.hxx>
 #include <array>
 #include <codecvt>
+#include <cstdio>
+#include <fstream>
 #include <locale>
+#include <regex>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -178,6 +182,142 @@ std::vector<std::string> build_shader_include_directories(const std::string& sou
   return include_directories;
 }
 
+std::string shell_quote(const std::string& value) {
+  std::string result = "'";
+  for (char ch : value) {
+    if (ch == '\'') {
+      result += "'\\''";
+    } else {
+      result.push_back(ch);
+    }
+  }
+  result.push_back('\'');
+  return result;
+}
+
+bool read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>& out_data) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return false;
+  }
+  file.seekg(0, std::ios::end);
+  const std::streamsize size = file.tellg();
+  if (size < 0) {
+    return false;
+  }
+  file.seekg(0, std::ios::beg);
+  out_data.resize(static_cast<size_t>(size));
+  if (size > 0) {
+    file.read(reinterpret_cast<char*>(out_data.data()), size);
+  }
+  return file.good() || file.eof();
+}
+
+bool read_text_file(const std::filesystem::path& path, std::string& out_text) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return false;
+  }
+  std::ostringstream stream;
+  stream << file.rdbuf();
+  out_text = stream.str();
+  return true;
+}
+
+std::string resolve_spirv_cross_executable() {
+  static constexpr const char* kCommonCandidates[] = {
+    "spirv-cross",
+    "./spirv-cross",
+    "./bin/spirv-cross",
+    "../bin/spirv-cross",
+    "/usr/local/bin/spirv-cross",
+    "/opt/homebrew/bin/spirv-cross",
+  };
+  for (const char* candidate : kCommonCandidates) {
+    std::error_code ec = {};
+    if (std::filesystem::exists(candidate, ec) && (ec.value() == 0)) {
+      return candidate;
+    }
+  }
+
+  return {};
+}
+
+bool translate_spirv_to_msl(const std::vector<uint8_t>& spirv_data, std::string& out_msl, std::string& error_message) {
+  const std::string spirv_cross = resolve_spirv_cross_executable();
+  if (spirv_cross.empty()) {
+    error_message = "spirv-cross executable was not found in PATH.";
+    return false;
+  }
+
+  std::error_code ec = {};
+  const std::filesystem::path temp_dir = std::filesystem::temp_directory_path(ec) / "etx_shader_tmp";
+  if (ec.value() != 0) {
+    error_message = "Failed to locate temporary directory.";
+    return false;
+  }
+
+  std::filesystem::create_directories(temp_dir, ec);
+  if (ec.value() != 0) {
+    error_message = "Failed to create temporary shader directory.";
+    return false;
+  }
+
+  const uint64_t shader_hash = etx_hash64(spirv_data.data(), spirv_data.size());
+  const std::filesystem::path spirv_path = temp_dir / ("shader_" + std::to_string(shader_hash) + ".spv");
+  const std::filesystem::path msl_path = temp_dir / ("shader_" + std::to_string(shader_hash) + ".metal");
+  const std::filesystem::path error_path = temp_dir / ("shader_" + std::to_string(shader_hash) + ".log");
+
+  {
+    std::ofstream spirv_file(spirv_path, std::ios::binary);
+    if (!spirv_file) {
+      error_message = "Failed to create temporary SPIR-V file.";
+      return false;
+    }
+    spirv_file.write(reinterpret_cast<const char*>(spirv_data.data()), static_cast<std::streamsize>(spirv_data.size()));
+  }
+
+  const std::string command = shell_quote(spirv_cross) + " " + shell_quote(spirv_path.string()) +
+                              " --msl --msl-version 30000 --msl-argument-buffers --msl-argument-buffer-tier 1 --msl-discrete-descriptor-set 0 > " +
+                              shell_quote(msl_path.string()) + " 2> " + shell_quote(error_path.string());
+  const int exit_code = std::system(command.c_str());
+  if (exit_code != 0) {
+    std::string log_output = {};
+    read_text_file(error_path, log_output);
+    error_message = log_output.empty() ? "spirv-cross failed to translate SPIR-V to MSL." : log_output;
+    return false;
+  }
+
+  if (read_text_file(msl_path, out_msl) == false) {
+    error_message = "Failed to read translated MSL output.";
+    return false;
+  }
+
+  if (out_msl.empty()) {
+    error_message = "spirv-cross produced empty MSL output.";
+    return false;
+  }
+
+  return true;
+}
+
+bool translated_msl_has_unsafe_overlapping_bindless(const std::vector<uint8_t>& spirv_data, std::string& out_error_message) {
+  std::string msl_source = {};
+  if (translate_spirv_to_msl(spirv_data, msl_source, out_error_message) == false) {
+    return false;
+  }
+
+  if ((msl_source.find("ETX_METAL_UNSUPPORTED_OVERLAPPING_BINDLESS") != std::string::npos) ||
+      (msl_source.find("Overlapping binding:") != std::string::npos)) {
+    out_error_message =
+      "Shader translation produced overlapping bindless descriptor layouts that are unsafe on macOS GPU backends.";
+    return true;
+  }
+
+  out_error_message.clear();
+  return false;
+}
+
 std::string resolve_shader_file_path(const std::string& filename) {
   if (filename.empty()) {
     return {};
@@ -237,6 +377,27 @@ bool contains_include_directive(const std::string& source) {
   return false;
 }
 
+void extract_compute_local_size(const std::string& source, const std::string& entry_point, RHIShaderStage stage, uint32_t& out_x, uint32_t& out_y, uint32_t& out_z) {
+  out_x = 1;
+  out_y = 1;
+  out_z = 1;
+
+  if (stage != RHIShaderStage::Compute) {
+    return;
+  }
+
+  const std::string escaped_entry = std::regex_replace(entry_point, std::regex(R"([.^$|()\\[\]{}*+?])"), R"(\\$&)");
+  const std::regex entry_regex("\\[\\s*numthreads\\s*\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)\\s*\\][^\\n\\r]*?[A-Za-z_][A-Za-z0-9_<>\\s]*\\b" + escaped_entry +
+                                 "\\s*\\(",
+    std::regex::ECMAScript);
+  std::smatch match = {};
+  if (std::regex_search(source, match, entry_regex) && (match.size() == 4u)) {
+    out_x = static_cast<uint32_t>(std::stoul(match[1].str()));
+    out_y = static_cast<uint32_t>(std::stoul(match[2].str()));
+    out_z = static_cast<uint32_t>(std::stoul(match[3].str()));
+  }
+}
+
 }  // namespace
 
 class CustomIncludeHandler : public IDxcIncludeHandler {
@@ -265,11 +426,13 @@ struct ShaderVariantKey {
   std::string source_name;
   std::string entry_point;
   RHIShaderStage stage;
+  RHIBackend backend = RHIBackend::Vulkan;
   std::map<std::string, std::string> defines;
   uint64_t source_hash = 0;
 
   bool operator==(const ShaderVariantKey& other) const {
-    return source_name == other.source_name && entry_point == other.entry_point && stage == other.stage && defines == other.defines && source_hash == other.source_hash;
+    return source_name == other.source_name && entry_point == other.entry_point && stage == other.stage && backend == other.backend && defines == other.defines &&
+           source_hash == other.source_hash;
   }
 };
 
@@ -279,6 +442,7 @@ struct ShaderVariantKeyHash {
     h = etx_hash64_continue(key.source_name.data(), key.source_name.size(), h);
     h = etx_hash64_continue(key.entry_point.data(), key.entry_point.size(), h);
     h = etx_hash64_continue(&key.stage, sizeof(key.stage), h);
+    h = etx_hash64_continue(&key.backend, sizeof(key.backend), h);
     for (const auto& define : key.defines) {
       h = etx_hash64_continue(define.first.data(), define.first.size(), h);
       h = etx_hash64_continue(define.second.data(), define.second.size(), h);
@@ -374,8 +538,11 @@ ShaderCompiler& ShaderCompiler::instance() {
 void ShaderCompiler::shutdown() {
   std::lock_guard<std::mutex> dll_lock(global_dll_mutex);
 
-  if (ShaderCompiler::instance()._impl != nullptr) {
-    ShaderCompiler::instance()._impl.reset();
+  if (_impl != nullptr) {
+    std::lock_guard<std::mutex> cache_lock(_impl->cache_mutex);
+    _impl->shader_cache.clear();
+    _impl->dxc_utils.Reset();
+    _impl->dxc_compiler.Reset();
   }
 
   global_dxc_utils.Reset();
@@ -387,12 +554,11 @@ void ShaderCompiler::shutdown() {
     global_com_initialized.store(false, std::memory_order_release);
   }
 #endif
-
   if (global_dxc_dll) {
     unload_dxc_library(global_dxc_dll);
     global_dxc_dll = nullptr;
-    global_dxc_create_instance = nullptr;
   }
+  global_dxc_create_instance = nullptr;
 }
 
 ShaderCompiler::ShaderCompiler()
@@ -400,6 +566,7 @@ ShaderCompiler::ShaderCompiler()
 }
 
 ShaderCompiler::~ShaderCompiler() {
+  shutdown();
   if (_impl != nullptr) {
     _impl->shader_cache.clear();
   }
@@ -422,7 +589,7 @@ bool ShaderCompiler::is_initialized() const {
 
 // File-loading overload
 ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& filename, const std::vector<ShaderEntryPoint>& entry_points,
-  const std::unordered_map<std::string, std::string>& defines) {
+  const std::unordered_map<std::string, std::string>& defines, RHIBackend backend) {
   std::string source_path = resolve_shader_file_path(filename);
   if (source_path.empty()) {
     source_path = filename;
@@ -444,11 +611,11 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     return result;
   }
 
-  return compile(source, source_path, entry_points, defines);
+  return compile(source, source_path, entry_points, defines, backend);
 }
 
 ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& hlsl_source, const std::string& source_name,
-  const std::vector<ShaderEntryPoint>& entry_points, const std::unordered_map<std::string, std::string>& defines) {
+  const std::vector<ShaderEntryPoint>& entry_points, const std::unordered_map<std::string, std::string>& defines, RHIBackend backend) {
   MultiShaderCompilationResult result = {};
 
   if (hlsl_source.empty()) {
@@ -594,7 +761,11 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
   for (uint32_t i = 0, e = entry_points.size(); i < e; ++i) {
     const auto& ep = entry_points[i];
-    ShaderVariantKey key{source_name, ep.entry_point, ep.stage, ordered_defines, source_hash};
+    ShaderVariantKey key{source_name, ep.entry_point, ep.stage, backend, ordered_defines, source_hash};
+    uint32_t local_size_x = 1;
+    uint32_t local_size_y = 1;
+    uint32_t local_size_z = 1;
+    extract_compute_local_size(preprocessed_source, ep.entry_point, ep.stage, local_size_x, local_size_y, local_size_z);
 
     // Check cache
     std::vector<uint8_t> cached_spirv;
@@ -610,7 +781,12 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       result.binaries[i].spirv_data = nullptr;  // Fix up pointers later
       result.binaries[i].spirv_size = cached_spirv.size();
       result.binaries[i].stage = ep.stage;
+      result.binaries[i].backend = backend;
+      result.binaries[i].format = (backend == RHIBackend::Metal) ? RHIShaderBinaryFormat::MetalSource : RHIShaderBinaryFormat::SpirV;
       result.binaries[i].entry_point = ep.entry_point;
+      result.binaries[i].local_size_x = local_size_x;
+      result.binaries[i].local_size_y = local_size_y;
+      result.binaries[i].local_size_z = local_size_z;
       result.shared_blob.insert(result.shared_blob.end(), cached_spirv.begin(), cached_spirv.end());
       continue;
     }
@@ -679,11 +855,56 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
     const uint8_t* ptr = static_cast<const uint8_t*>(shader_obj->GetBufferPointer());
     size_t size = shader_obj->GetBufferSize();
+    std::vector<uint8_t> final_binary = {};
+    RHIShaderBinaryFormat binary_format = RHIShaderBinaryFormat::SpirV;
+
+    std::vector<uint8_t> spirv_binary = {};
+    if ((backend == RHIBackend::Metal)
+#if ETX_PLATFORM_APPLE
+        || (backend == RHIBackend::Vulkan)
+#endif
+    ) {
+      spirv_binary.assign(ptr, ptr + size);
+    }
+
+#if ETX_PLATFORM_APPLE
+    if (backend == RHIBackend::Vulkan) {
+      std::string preflight_error = {};
+      if (translated_msl_has_unsafe_overlapping_bindless(spirv_binary, preflight_error)) {
+        result.result = RHIResult::ValidationError;
+        result.error_message = preflight_error;
+        return result;
+      }
+      if (preflight_error.empty() == false) {
+        log::warning("Skipping Vulkan-on-macOS shader translation safety preflight for '%s': %s", ep.entry_point.c_str(), preflight_error.c_str());
+      }
+    }
+#endif
+
+    if (backend == RHIBackend::Metal) {
+      std::string msl_source = {};
+      std::string translation_error = {};
+      if (translate_spirv_to_msl(spirv_binary, msl_source, translation_error) == false) {
+        result.result = RHIResult::ValidationError;
+        result.error_message = translation_error;
+        return result;
+      }
+
+      final_binary.assign(msl_source.begin(), msl_source.end());
+      binary_format = RHIShaderBinaryFormat::MetalSource;
+      ptr = final_binary.data();
+      size = final_binary.size();
+    }
 
     result.binaries[i].spirv_data = nullptr;  // Fix up pointers later or store offsets
     result.binaries[i].spirv_size = size;
     result.binaries[i].stage = ep.stage;
+    result.binaries[i].backend = backend;
+    result.binaries[i].format = binary_format;
     result.binaries[i].entry_point = ep.entry_point;
+    result.binaries[i].local_size_x = local_size_x;
+    result.binaries[i].local_size_y = local_size_y;
+    result.binaries[i].local_size_z = local_size_z;
 
     result.shared_blob.insert(result.shared_blob.end(), ptr, ptr + size);
     // Update cache (we need to convert back to ShaderCompilationResult for cache compatibility)
@@ -830,7 +1051,6 @@ RHIResult load_dxc_dll_global() {
     "C:\\Windows\\SysWOW64\\",
   };
 #elif (ETX_PLATFORM_APPLE)
-  constexpr char path_list_separator = ':';
   constexpr char path_separator = '/';
   const char* library_names[] = {"libdxcompiler.dylib"};
   std::vector<std::string> search_paths = {
@@ -847,7 +1067,6 @@ RHIResult load_dxc_dll_global() {
     "/opt/dxc/lib/",
   };
 #else
-  constexpr char path_list_separator = ':';
   constexpr char path_separator = '/';
   const char* library_names[] = {"libdxcompiler.so"};
   std::vector<std::string> search_paths = {
@@ -868,32 +1087,6 @@ RHIResult load_dxc_dll_global() {
   if (data_folder && data_folder[0] != '\0') {
     append_with_separator(search_paths, std::string(data_folder), path_separator);
     append_with_separator(search_paths, std::string(data_folder) + "bin", path_separator);
-  }
-
-  const char* path_env = getenv("PATH");
-  if (path_env) {
-    std::string path_str(path_env);
-    size_t begin = 0;
-    while (begin <= path_str.size()) {
-      size_t separator = path_str.find(path_list_separator, begin);
-      std::string entry = (separator == std::string::npos) ? path_str.substr(begin) : path_str.substr(begin, separator - begin);
-      if (entry.empty() == false) {
-        append_with_separator(search_paths, std::move(entry), path_separator);
-      }
-
-      if (separator == std::string::npos) {
-        break;
-      }
-      begin = separator + 1;
-    }
-  }
-
-  const char* dxc_path_env = getenv("DXC_PATH");
-  if (dxc_path_env) {
-    std::string dxc_path(dxc_path_env);
-    append_with_separator(search_paths, dxc_path, path_separator);
-    append_with_separator(search_paths, dxc_path + "lib", path_separator);
-    append_with_separator(search_paths, dxc_path + "bin", path_separator);
   }
 
   search_paths.insert(search_paths.end(), system_paths.begin(), system_paths.end());

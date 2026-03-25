@@ -29,7 +29,7 @@ float2 complexExp(float theta) {
 }
 
 [numthreads(8, 8, 1)] void FFTMain(uint3 id : SV_DispatchThreadID) {
-  RWTexture2D<float4> inTex = bindless_storage_textures[NonUniformResourceIndex(fftPc.inTexIndex)];
+  Texture2D<float4> inTex = bindless_textures[NonUniformResourceIndex(fftPc.inTexIndex)];
   RWTexture2D<float4> outTex = bindless_storage_textures[NonUniformResourceIndex(fftPc.outTexIndex)];
 
   uint n = fftPc.N;
@@ -57,8 +57,8 @@ float2 complexExp(float theta) {
   uint2 uv1 = (fftPc.direction == 0) ? uint2(in_idx1, other) : uint2(other, in_idx1);
   uint2 uv2 = (fftPc.direction == 0) ? uint2(in_idx2, other) : uint2(other, in_idx2);
 
-  float4 p1 = inTex[uv1];
-  float4 p2 = inTex[uv2];
+  float4 p1 = inTex.Load(int3(uv1, 0));
+  float4 p2 = inTex.Load(int3(uv2, 0));
 
   float angle = 2.0 * 3.1415926535 * float(t) / float(len);
   float2 twiddle = complexExp(angle);

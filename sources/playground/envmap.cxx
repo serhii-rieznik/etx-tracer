@@ -14,7 +14,7 @@ bool envmap_create_pipeline(RHIContext& rhi, RHITextureFormat color_format, RHIT
   std::string shader_source = env().file_in_data("playground/shaders/envmap.hlsl");
   ShaderCompiler::ShaderEntryPoint vs_ep = {"VSMain", RHIShaderStage::Vertex};
   ShaderCompiler::ShaderEntryPoint ps_ep = {"PSMain", RHIShaderStage::Fragment};
-  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs_ep, ps_ep});
+  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs_ep, ps_ep}, {}, rhi.backend());
   if (compilation.result != RHIResult::Success) {
     log::error("Failed to compile envmap shader:\n%s", compilation.error_message.c_str());
     return false;
@@ -25,10 +25,14 @@ bool envmap_create_pipeline(RHIContext& rhi, RHITextureFormat color_format, RHIT
   p_desc.vertex_shader.entry_point = "VSMain";
   p_desc.vertex_shader.spirv_data = compilation.binaries[0].spirv_data;
   p_desc.vertex_shader.spirv_size = compilation.binaries[0].spirv_size;
+  p_desc.vertex_shader.backend = compilation.binaries[0].backend;
+  p_desc.vertex_shader.format = compilation.binaries[0].format;
   p_desc.fragment_shader.stage = RHIShaderStage::Fragment;
   p_desc.fragment_shader.entry_point = "PSMain";
   p_desc.fragment_shader.spirv_data = compilation.binaries[1].spirv_data;
   p_desc.fragment_shader.spirv_size = compilation.binaries[1].spirv_size;
+  p_desc.fragment_shader.backend = compilation.binaries[1].backend;
+  p_desc.fragment_shader.format = compilation.binaries[1].format;
   p_desc.depth_state.depth_test_enable = false;
   p_desc.depth_state.depth_write_enable = false;
   p_desc.primitive_topology = RHIPrimitiveTopology::TriangleList;
@@ -54,8 +58,14 @@ bool EnvMap::setup(RHIContext& rhi, RHITextureFormat color_format, RHITextureFor
   uint2 hdr_dims = {};
   Image::Format fmt = load_data(hdr_path.c_str(), hdr_data, hdr_dims);
   if (fmt == Image::Format::Undefined) {
-    log::error("Failed to load envmap: %s", hdr_path.c_str());
-    return false;
+    static constexpr float4 kFallbackEnvmapPixels[] = {
+      {0.70f, 0.82f, 1.00f, 1.0f},
+      {0.70f, 0.82f, 1.00f, 1.0f},
+      {0.08f, 0.09f, 0.11f, 1.0f},
+      {0.08f, 0.09f, 0.11f, 1.0f},
+    };
+    log::warning("Envmap asset is unavailable, using built-in fallback: %s", hdr_path.c_str());
+    return setup_from_pixels(rhi, color_format, depth_format, kFallbackEnvmapPixels, {2u, 2u}, sample_count);
   }
 
   return setup_from_pixels(rhi, color_format, depth_format, reinterpret_cast<const float4*>(hdr_data.data()), hdr_dims, sample_count);

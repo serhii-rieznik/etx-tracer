@@ -53,7 +53,11 @@ RHIResult RHIImGui::setup(RHIContext& context, const RHIImGuiDesc& desc) {
   _desc.no_default_font = true;
 
   auto result = create_resources();
-  ETX_CRITICAL(result == RHIResult::Success);
+  if (result != RHIResult::Success) {
+    destroy_resources();
+    _context = nullptr;
+    return result;
+  }
 
   _initialized = true;
   return RHIResult::Success;
@@ -274,6 +278,7 @@ void RHIImGui::destroy_resources() {
 
   device.destroy_texture(_font_texture);
   _font_texture = {};
+  ImGui::GetIO().Fonts->TexID = (ImTextureID)0;
 
   device.destroy_pipeline(_pipeline);
   _pipeline = {};
@@ -340,22 +345,6 @@ RHIResult RHIImGui::create_font_texture() {
     return update_result;
   }
 
-  // Create sampler
-  RHISamplerDesc sampler_desc = {};
-  sampler_desc.min_filter = RHISamplerFilter::Linear;
-  sampler_desc.mag_filter = RHISamplerFilter::Linear;
-  sampler_desc.mipmap_mode = RHISamplerMipmapMode::Linear;
-  sampler_desc.address_mode_u = RHISamplerAddressMode::ClampToEdge;
-  sampler_desc.address_mode_v = RHISamplerAddressMode::ClampToEdge;
-  sampler_desc.address_mode_w = RHISamplerAddressMode::ClampToEdge;
-
-  auto sampler_result = _context->device().create_sampler(sampler_desc);
-  if (sampler_result.result != RHIResult::Success) {
-    _context->device().destroy_texture(_font_texture);
-    _font_texture = {};
-    return sampler_result.result;
-  }
-
   io.FontDefault = font;
   io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_texture.value;
   return RHIResult::Success;
@@ -365,7 +354,7 @@ RHIResult RHIImGui::create_pipeline() {
   auto& device = _context->device();
   auto& compiler = ShaderCompiler::instance();
 
-  auto result = compiler.compile("shaders/imgui.hlsl", {{"vs_main", RHIShaderStage::Vertex}, {"ps_main", RHIShaderStage::Fragment}});
+  auto result = compiler.compile("shaders/imgui.hlsl", {{"vs_main", RHIShaderStage::Vertex}, {"ps_main", RHIShaderStage::Fragment}}, {}, _context->backend());
 
   if (result.result != RHIResult::Success) {
     log::error("Failed to compile imgui shader: %s", result.error_message.c_str());
@@ -390,6 +379,8 @@ RHIResult RHIImGui::create_pipeline() {
         .spirv_data = result.binaries[0].spirv_data,
         .spirv_size = result.binaries[0].spirv_size,
         .stage = RHIShaderStage::Vertex,
+        .backend = result.binaries[0].backend,
+        .format = result.binaries[0].format,
         .entry_point = "vs_main",
       },
     .fragment_shader =
@@ -397,6 +388,8 @@ RHIResult RHIImGui::create_pipeline() {
         .spirv_data = result.binaries[1].spirv_data,
         .spirv_size = result.binaries[1].spirv_size,
         .stage = RHIShaderStage::Fragment,
+        .backend = result.binaries[1].backend,
+        .format = result.binaries[1].format,
         .entry_point = "ps_main",
       },
     .blend =
@@ -500,10 +493,11 @@ void RHIImGui::render_draw_data(RHICommandBuffer command_buffer, const ImDrawDat
   float B = draw_data->DisplayPos.y + draw_data->DisplaySize.y;
 
   ImGuiPushConstants pc = {};
-  pc.scale = {2.0f / (R - L), 2.0f / (B - T)};
-  pc.translate = {(R + L) / (L - R), (T + B) / (T - B)};
+  // ImGui emits top-left UI coordinates; map them to clip space without relying on a Y-flipped viewport.
+  pc.scale = {2.0f / (R - L), 2.0f / (T - B)};
+  pc.translate = {(R + L) / (L - R), (T + B) / (B - T)};
   pc.vertex_buffer_index = get_bindless_descriptor_index(vertices.buffer);
-  pc.sampler_index = _context->get_sampler_index(RHISamplerType::LinearRepeat);
+  pc.sampler_index = _context->get_sampler_index(RHISamplerType::LinearClamp);
 
   float fb_width = draw_data->DisplaySize.x * draw_data->FramebufferScale.x;
   float fb_height = draw_data->DisplaySize.y * draw_data->FramebufferScale.y;

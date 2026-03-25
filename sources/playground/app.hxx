@@ -38,11 +38,16 @@ struct PlaygroundApp {
   ~PlaygroundApp() = default;
 
   void init();
+  void init_headless(uint32_t width, uint32_t height);
   void frame();
+  void frame_headless(float delta_time = 1.0f / 60.0f, float dpi_scale = 1.0f);
   void cleanup();
   void process_event(const sapp_event* e);
+  bool initialized() const;
 
  private:
+  void init_internal(uint32_t width, uint32_t height, const void* native_window, bool headless);
+  bool recreate_headless_present_target(uint32_t width, uint32_t height);
   void recreate_scene_targets(uint32_t width, uint32_t height);
   void sync_scene_targets_to_swapchain_extent();
   bool recreate_tonemap_pipeline();
@@ -69,6 +74,7 @@ struct PlaygroundApp {
   RHIPipeline _compute_pipeline;
   RHIPipeline _tonemap_pipeline;
   RHIPipeline _sun_sprite_pipeline;
+  RHITexture _headless_present_texture;
   RHIBindlessHandle _vertex_buffer;
   RHIBindlessHandle _index_buffer;
   RHIBindlessHandle _test_storage_texture;
@@ -148,6 +154,9 @@ struct PlaygroundApp {
   bool _gpu_timing_supported = false;
   bool _gpu_timing_have_results = false;
   bool _gpu_timing_last_poll_not_ready = false;
+  bool _headless = false;
+  float _headless_frame_delta_time = 1.0f / 60.0f;
+  float _headless_dpi_scale = 1.0f;
   bool _scene_opaque_color_initialized = false;
   bool _scene_color_initialized = false;
   bool _scene_opaque_color_msaa_initialized = false;

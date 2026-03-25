@@ -53,6 +53,9 @@ struct RHIImGui {
   RHIPipeline get_pipeline() const {
     return _pipeline;
   }
+  bool initialized() const {
+    return _initialized;
+  }
 
   void set_theme(RHIImGuiTheme theme);
 

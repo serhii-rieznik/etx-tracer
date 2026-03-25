@@ -164,6 +164,54 @@
                     }
                 ]
             }
+        },
+        {
+            "name": "Debug Playground Headless",
+            "type": "cppdbg",
+            "request": "launch",
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/bin",
+            "externalConsole": false,
+            "args": [
+                "--headless",
+                "--frames",
+                "60",
+                "--resolution",
+                "1280x720"
+            ],
+            "preLaunchTask": "Build Playground",
+            "windows": {
+                "type": "cppvsdbg",
+                "program": "${workspaceFolder}/bin/playground.exe",
+                "environment": [
+                    {
+                        "name": "PATH",
+                        "value": "${workspaceFolder}/bin;${env:PATH}"
+                    }
+                ]
+            },
+            "linux": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/playground",
+                "MIMode": "gdb",
+                "environment": [
+                    {
+                        "name": "LD_LIBRARY_PATH",
+                        "value": "${workspaceFolder}/bin:${env:LD_LIBRARY_PATH}"
+                    }
+                ]
+            },
+            "osx": {
+                "type": "cppdbg",
+                "program": "${workspaceFolder}/bin/playground_app",
+                "MIMode": "lldb",
+                "environment": [
+                    {
+                        "name": "DYLD_LIBRARY_PATH",
+                        "value": "/Users/serhii/Development/SDK/Vulkan/macOS/lib:${workspaceFolder}/bin:${env:DYLD_LIBRARY_PATH}"
+                    }
+                ]
+            }
         }
     ]
 }

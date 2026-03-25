@@ -1,10 +1,20 @@
 #include "headless_render_context.hxx"
-
 namespace etx {
+namespace {
+
+RHIBackend select_default_backend() {
+#if ETX_PLATFORM_APPLE
+  return RHIBackend::Metal;
+#else
+  return RHIBackend::Vulkan;
+#endif
+}
+
+}  // namespace
 
 void HeadlessRenderContext::init() {
   RHIInitInfo info = {
-    .backend = RHIBackend::Vulkan,
+    .backend = select_default_backend(),
     .enable_validation = ETX_DEBUG,
     .headless = true,
   };

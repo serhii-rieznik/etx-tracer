@@ -751,7 +751,7 @@ bool gpu_init(RHIContext& rhi, GpuContext& context) {
   auto& compiler = ShaderCompiler::instance();
 
   ShaderCompiler::MultiShaderCompilationResult compilation = {};
-  compilation = compiler.compile("shaders/atmosphere_optical_depth.hlsl", {{"optical_depth_main", RHIShaderStage::Compute}});
+  compilation = compiler.compile("shaders/atmosphere_optical_depth.hlsl", {{"optical_depth_main", RHIShaderStage::Compute}}, {}, rhi.backend());
   if (compilation.result != RHIResult::Success) {
     log::error("Failed to compile atmosphere optical depth shader: %s", compilation.error_message.c_str());
     return false;
@@ -769,7 +769,7 @@ bool gpu_init(RHIContext& rhi, GpuContext& context) {
   }
   context.optical_depth_pipeline = pipeline_result.handle;
 
-  compilation = compiler.compile("shaders/atmosphere_sky.hlsl", {{"sky_raw_main", RHIShaderStage::Compute}, {"sky_finalize_main", RHIShaderStage::Compute}});
+  compilation = compiler.compile("shaders/atmosphere_sky.hlsl", {{"sky_raw_main", RHIShaderStage::Compute}, {"sky_finalize_main", RHIShaderStage::Compute}}, {}, rhi.backend());
   if (compilation.result != RHIResult::Success) {
     log::error("Failed to compile atmosphere sky shaders: %s", compilation.error_message.c_str());
     gpu_cleanup(rhi, context);
@@ -799,7 +799,7 @@ bool gpu_init(RHIContext& rhi, GpuContext& context) {
   }
   context.sky_finalize_pipeline = sky_finalize_result.handle;
 
-  compilation = compiler.compile("shaders/atmosphere_sun.hlsl", {{"sun_main", RHIShaderStage::Compute}});
+  compilation = compiler.compile("shaders/atmosphere_sun.hlsl", {{"sun_main", RHIShaderStage::Compute}}, {}, rhi.backend());
   if (compilation.result != RHIResult::Success) {
     log::error("Failed to compile atmosphere sun shader: %s", compilation.error_message.c_str());
     gpu_cleanup(rhi, context);

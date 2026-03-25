@@ -277,7 +277,8 @@ RHIResult VKBindlessManager::Impl::register_resource(RHIResourceType type, uint3
 
   uint32_t descriptor_index = 0;
   bool found_free_slot = false;
-  for (uint32_t i = 0; i < max_count; ++i) {
+  // Reserve descriptor slot 0 as an invalid/null bindless index to match shader-side expectations.
+  for (uint32_t i = 1; i < max_count; ++i) {
     if (!resource_array->at(i).valid) {
       descriptor_index = i;
       found_free_slot = true;

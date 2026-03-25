@@ -42,6 +42,7 @@ struct MTContext {
 
   uint32_t get_current_frame_index() const;
   uint32_t get_sampler_index(RHISamplerType type) const;
+  RHICapabilities capabilities() const;
 
   RHICommandBuffer get_command_buffer();
   void destroy_command_buffer(RHICommandBuffer cmd);
@@ -79,6 +80,7 @@ struct MTContext {
   void cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
   void cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level = 0);
   void cmd_resolve_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height);
+  void cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture);
 
   void cmd_set_debug_name(RHICommandBuffer cmd, const char* name);
   bool supports_timestamps() const;
@@ -88,6 +90,9 @@ struct MTContext {
  private:
   class Impl;
   Impl* _impl = nullptr;
+
+  friend struct MTContext;
+  friend struct MTCommandBuffer;
 };
 
 struct MTDevice {
@@ -122,9 +127,13 @@ struct MTDevice {
 
   RHIMemoryStats get_memory_statistics() const;
 
- private:
+ public:
   class Impl;
   Impl* _impl = nullptr;
+
+  friend struct MTContext;
+  friend struct MTDevice;
+  friend struct MTCommandBuffer;
 };
 
 struct MTBindlessManager {
@@ -160,7 +169,7 @@ struct MTBindlessManager {
   uint32_t get_sampler_count() const;
   uint32_t get_acceleration_structure_count() const;
 
- private:
+ public:
   class Impl;
   Impl* _impl = nullptr;
 };
@@ -176,7 +185,8 @@ struct MTCommandBuffer {
   void buffer_barrier(RHIBuffer buffer, RHIResourceState old_state, RHIResourceState new_state);
   void texture_barrier(RHITexture texture, RHIResourceState old_state, RHIResourceState new_state);
 
-  void begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors = nullptr, RHITexture depth_attachment = {});
+  void begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors = nullptr, RHITexture depth_attachment = {},
+    const RHIResourceState* color_final_states = nullptr, RHIResourceState depth_final_state = RHIResourceState::Undefined);
   void end_render_pass();
 
   void set_viewport(const RHIViewport& viewport);
@@ -198,7 +208,7 @@ struct MTCommandBuffer {
 
   void set_debug_name(const char* name);
 
- private:
+ public:
   class Impl;
   Impl* _impl = nullptr;
 };

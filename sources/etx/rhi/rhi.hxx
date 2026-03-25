@@ -63,12 +63,17 @@ struct RHIChunkedBufferState {
 
 struct RHIDevice {
   RHIDevice() = default;
-  explicit RHIDevice(void* impl)
-    : _impl(impl) {
+  explicit RHIDevice(void* impl, RHIBackend backend = RHIBackend::Vulkan)
+    : _impl(impl)
+    , _backend(backend) {
   }
 
   bool valid() const {
     return _impl != nullptr;
+  }
+
+  RHIBackend backend() const {
+    return _backend;
   }
 
   RHICreateResult<RHISemaphore> create_semaphore();
@@ -106,11 +111,21 @@ struct RHIDevice {
     final_desc.vertex_shader.spirv_data = vertex_shader.spirv_data;
     final_desc.vertex_shader.spirv_size = vertex_shader.spirv_size;
     final_desc.vertex_shader.stage = vertex_shader.stage;
+    final_desc.vertex_shader.backend = vertex_shader.backend;
+    final_desc.vertex_shader.format = vertex_shader.format;
     final_desc.vertex_shader.entry_point = vertex_shader.entry_point;
+    final_desc.vertex_shader.local_size_x = vertex_shader.local_size_x;
+    final_desc.vertex_shader.local_size_y = vertex_shader.local_size_y;
+    final_desc.vertex_shader.local_size_z = vertex_shader.local_size_z;
     final_desc.fragment_shader.spirv_data = fragment_shader.spirv_data;
     final_desc.fragment_shader.spirv_size = fragment_shader.spirv_size;
     final_desc.fragment_shader.stage = fragment_shader.stage;
+    final_desc.fragment_shader.backend = fragment_shader.backend;
+    final_desc.fragment_shader.format = fragment_shader.format;
     final_desc.fragment_shader.entry_point = fragment_shader.entry_point;
+    final_desc.fragment_shader.local_size_x = fragment_shader.local_size_x;
+    final_desc.fragment_shader.local_size_y = fragment_shader.local_size_y;
+    final_desc.fragment_shader.local_size_z = fragment_shader.local_size_z;
     return create_graphics_pipeline(final_desc);
   }
 
@@ -119,13 +134,19 @@ struct RHIDevice {
       .compute_shader = {.spirv_data = compute_shader.spirv_data,
         .spirv_size = compute_shader.spirv_size,
         .stage = compute_shader.stage,
-        .entry_point = compute_shader.entry_point},
+        .backend = compute_shader.backend,
+        .format = compute_shader.format,
+        .entry_point = compute_shader.entry_point,
+        .local_size_x = compute_shader.local_size_x,
+        .local_size_y = compute_shader.local_size_y,
+        .local_size_z = compute_shader.local_size_z},
     };
     return desc;
   }
 
  private:
   void* _impl = nullptr;
+  RHIBackend _backend = RHIBackend::Vulkan;
   friend struct RHIContext;
 };
 
@@ -143,6 +164,10 @@ struct RHIContext {
 
   bool valid() const {
     return _impl != nullptr;
+  }
+
+  RHIBackend backend() const {
+    return _backend;
   }
 
   RHIDevice& device() {
@@ -231,10 +256,11 @@ struct RHIContext {
   static constexpr size_t kBackendStorageSize = 64;
   static constexpr size_t kBackendStorageAlignment = alignof(std::max_align_t);
 
-  void initialize_backend(void* context_impl, void* device_impl, void* bindless_impl) {
+  void initialize_backend(RHIBackend backend, void* context_impl, void* device_impl, void* bindless_impl) {
+    _backend = backend;
     _impl = context_impl;
-    _device = RHIDevice(device_impl);
-    _bindless = RHIBindlessManager(bindless_impl);
+    _device = RHIDevice(device_impl, backend);
+    _bindless = RHIBindlessManager(bindless_impl, backend);
   }
 
   void destroy_backend();
@@ -243,6 +269,7 @@ struct RHIContext {
   alignas(kBackendStorageAlignment) unsigned char _backend_storage[kBackendStorageSize] = {};
   RHIDevice _device = {};
   RHIBindlessManager _bindless = {};
+  RHIBackend _backend = RHIBackend::Vulkan;
 
   friend void create_vulkan_context(RHIContext& context, const RHIInitInfo& info);
   friend void create_metal_context(RHIContext& context, const RHIInitInfo& info);

@@ -25,6 +25,11 @@ static constexpr uint32_t k_cascade_rng_seed[Ocean::k_cascade_count] = {0x9e3779
 static constexpr float k_cascade_length_ratio_min = 2.0f;
 static constexpr float k_cascade_length_min[Ocean::k_cascade_count] = {20.0f, 10.0f, 5.0f};
 static constexpr float k_cascade_length_max = 4000.0f;
+static constexpr uint32_t k_invalid_bindless_index = ~0u;
+
+static uint32_t bindless_index_or_invalid(RHIBindlessHandle handle) {
+  return handle.valid() ? get_bindless_descriptor_index(handle) : k_invalid_bindless_index;
+}
 
 static uint32_t ceil_div_u32(uint32_t value, uint32_t divisor) {
   if (divisor == 0u) {
@@ -71,67 +76,6 @@ static uint32_t hash_u32(uint32_t x) {
 static float hash_to_unit_float(uint32_t x) {
   uint32_t bits = hash_u32(x);
   return static_cast<float>(bits & 0x00FFFFFFu) / static_cast<float>(0x01000000u);
-}
-
-static void save_debug_texture_r8_pgm(const char* file_name, uint32_t width, uint32_t height, const uint8_t* pixels) {
-  if ((file_name == nullptr) || (pixels == nullptr) || (width == 0u) || (height == 0u)) {
-    return;
-  }
-
-  FILE* file = fopen(file_name, "wb");
-  if (file == nullptr) {
-    log::error("Failed to open debug texture file: %s", file_name);
-    return;
-  }
-
-  int header_size = fprintf(file, "P5\n%u %u\n255\n", width, height);
-  if (header_size <= 0) {
-    fclose(file);
-    log::error("Failed to write PGM header: %s", file_name);
-    return;
-  }
-
-  size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
-  size_t written = fwrite(pixels, 1u, pixel_count, file);
-  fclose(file);
-  if (written != pixel_count) {
-    log::error("Failed to write PGM pixels: %s", file_name);
-  }
-}
-
-static void save_debug_texture_preview_ppm(const char* file_name, uint32_t width, uint32_t height, const uint8_t* pixels) {
-  if ((file_name == nullptr) || (pixels == nullptr) || (width == 0u) || (height == 0u)) {
-    return;
-  }
-
-  std::vector<uint8_t> rgb_pixels(width * height * 3u, 255u);
-  for (uint32_t i = 0u; i < (width * height); ++i) {
-    uint8_t v = pixels[i];
-    uint8_t rim = (v > 180u) ? 255u : 0u;
-    rgb_pixels[(i * 3u) + 0u] = static_cast<uint8_t>(min(255u, static_cast<uint32_t>(v) + 30u));
-    rgb_pixels[(i * 3u) + 1u] = static_cast<uint8_t>(min(255u, static_cast<uint32_t>(v) + 10u));
-    rgb_pixels[(i * 3u) + 2u] = static_cast<uint8_t>(min(255u, (static_cast<uint32_t>(v) / 2u) + (static_cast<uint32_t>(rim) / 3u)));
-  }
-
-  FILE* file = fopen(file_name, "wb");
-  if (file == nullptr) {
-    log::error("Failed to open debug preview texture file: %s", file_name);
-    return;
-  }
-
-  int header_size = fprintf(file, "P6\n%u %u\n255\n", width, height);
-  if (header_size <= 0) {
-    fclose(file);
-    log::error("Failed to write PPM header: %s", file_name);
-    return;
-  }
-
-  size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height) * 3u;
-  size_t written = fwrite(rgb_pixels.data(), 1u, pixel_count, file);
-  fclose(file);
-  if (written != pixel_count) {
-    log::error("Failed to write PPM pixels: %s", file_name);
-  }
 }
 
 static bool create_r8_texture_from_pixels(RHIContext& rhi, uint32_t width, uint32_t height, const uint8_t* pixels, RHITexture& out_texture, const char* debug_name) {
@@ -890,7 +834,7 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
   ShaderCompiler::ShaderEntryPoint ps = {"PSMain", RHIShaderStage::Fragment};
   ShaderCompiler::ShaderEntryPoint ps_thickness = {"PSThickness", RHIShaderStage::Fragment};
   ShaderCompiler::ShaderEntryPoint ps_foam_history = {"PSFoamHistory", RHIShaderStage::Fragment};
-  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs, ps, ps_thickness, ps_foam_history});
+  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs, ps, ps_thickness, ps_foam_history}, {}, rhi.backend());
 
   if (compilation.result == RHIResult::Success) {
     RHIGraphicsPipelineDesc p_desc = {};
@@ -898,11 +842,15 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
     p_desc.vertex_shader.entry_point = "VSMain";
     p_desc.vertex_shader.spirv_data = compilation.binaries[0].spirv_data;
     p_desc.vertex_shader.spirv_size = compilation.binaries[0].spirv_size;
+    p_desc.vertex_shader.backend = compilation.binaries[0].backend;
+    p_desc.vertex_shader.format = compilation.binaries[0].format;
 
     p_desc.fragment_shader.stage = RHIShaderStage::Fragment;
     p_desc.fragment_shader.entry_point = "PSMain";
     p_desc.fragment_shader.spirv_data = compilation.binaries[1].spirv_data;
     p_desc.fragment_shader.spirv_size = compilation.binaries[1].spirv_size;
+    p_desc.fragment_shader.backend = compilation.binaries[1].backend;
+    p_desc.fragment_shader.format = compilation.binaries[1].format;
 
     p_desc.rasterization.depth_clamp_enable = false;
     p_desc.rasterization.rasterizer_discard_enable = false;
@@ -940,6 +888,8 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
     thickness_desc.fragment_shader.entry_point = "PSThickness";
     thickness_desc.fragment_shader.spirv_data = compilation.binaries[2].spirv_data;
     thickness_desc.fragment_shader.spirv_size = compilation.binaries[2].spirv_size;
+    thickness_desc.fragment_shader.backend = compilation.binaries[2].backend;
+    thickness_desc.fragment_shader.format = compilation.binaries[2].format;
     thickness_desc.depth_state.depth_test_enable = false;
     thickness_desc.depth_state.depth_write_enable = false;
     thickness_desc.depth_format = RHITextureFormat::Undefined;
@@ -971,6 +921,8 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
     foam_history_desc.fragment_shader.entry_point = "PSFoamHistory";
     foam_history_desc.fragment_shader.spirv_data = compilation.binaries[3].spirv_data;
     foam_history_desc.fragment_shader.spirv_size = compilation.binaries[3].spirv_size;
+    foam_history_desc.fragment_shader.backend = compilation.binaries[3].backend;
+    foam_history_desc.fragment_shader.format = compilation.binaries[3].format;
     foam_history_desc.depth_state.depth_test_enable = false;
     foam_history_desc.depth_state.depth_write_enable = false;
     foam_history_desc.depth_format = RHITextureFormat::Undefined;
@@ -991,7 +943,7 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
 
     // Compute Pipeline
     std::string compute_source = env().file_in_data("playground/shaders/ocean_compute.hlsl");
-    auto cs_compilation = ShaderCompiler::instance().compile(compute_source, {{"GenerateH0", RHIShaderStage::Compute}, {"UpdateSpectrum", RHIShaderStage::Compute}});
+    auto cs_compilation = ShaderCompiler::instance().compile(compute_source, {{"GenerateH0", RHIShaderStage::Compute}, {"UpdateSpectrum", RHIShaderStage::Compute}}, {}, rhi.backend());
     if (cs_compilation.result != RHIResult::Success) {
       log::error("Failed to compile ocean compute shader:\n%s", cs_compilation.error_message.c_str());
     } else {
@@ -1000,6 +952,11 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
       h0_desc.compute_shader.entry_point = "GenerateH0";
       h0_desc.compute_shader.spirv_data = cs_compilation.binaries[0].spirv_data;
       h0_desc.compute_shader.spirv_size = cs_compilation.binaries[0].spirv_size;
+      h0_desc.compute_shader.backend = cs_compilation.binaries[0].backend;
+      h0_desc.compute_shader.format = cs_compilation.binaries[0].format;
+      h0_desc.compute_shader.local_size_x = cs_compilation.binaries[0].local_size_x;
+      h0_desc.compute_shader.local_size_y = cs_compilation.binaries[0].local_size_y;
+      h0_desc.compute_shader.local_size_z = cs_compilation.binaries[0].local_size_z;
       auto h0_result = rhi.device().create_compute_pipeline(h0_desc);
       if (h0_result.result != RHIResult::Success) {
         log::error("Failed to create ocean GenerateH0 pipeline");
@@ -1011,6 +968,11 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
       update_desc.compute_shader.entry_point = "UpdateSpectrum";
       update_desc.compute_shader.spirv_data = cs_compilation.binaries[1].spirv_data;
       update_desc.compute_shader.spirv_size = cs_compilation.binaries[1].spirv_size;
+      update_desc.compute_shader.backend = cs_compilation.binaries[1].backend;
+      update_desc.compute_shader.format = cs_compilation.binaries[1].format;
+      update_desc.compute_shader.local_size_x = cs_compilation.binaries[1].local_size_x;
+      update_desc.compute_shader.local_size_y = cs_compilation.binaries[1].local_size_y;
+      update_desc.compute_shader.local_size_z = cs_compilation.binaries[1].local_size_z;
       auto update_result = rhi.device().create_compute_pipeline(update_desc);
       if (update_result.result != RHIResult::Success) {
         log::error("Failed to create ocean UpdateSpectrum pipeline");
@@ -1018,7 +980,7 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
       _update_spectrum_pipeline = update_result.handle;
 
       std::string fft_source = env().file_in_data("playground/shaders/ocean_fft.hlsl");
-      auto fft_compilation = ShaderCompiler::instance().compile(fft_source, {{"FFTMain", RHIShaderStage::Compute}});
+      auto fft_compilation = ShaderCompiler::instance().compile(fft_source, {{"FFTMain", RHIShaderStage::Compute}}, {}, rhi.backend());
       if (fft_compilation.result != RHIResult::Success) {
         log::error("Failed to compile ocean FFT shader:\n%s", fft_compilation.error_message.c_str());
       } else {
@@ -1027,6 +989,11 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
         fft_desc.compute_shader.entry_point = "FFTMain";
         fft_desc.compute_shader.spirv_data = fft_compilation.binaries[0].spirv_data;
         fft_desc.compute_shader.spirv_size = fft_compilation.binaries[0].spirv_size;
+        fft_desc.compute_shader.backend = fft_compilation.binaries[0].backend;
+        fft_desc.compute_shader.format = fft_compilation.binaries[0].format;
+        fft_desc.compute_shader.local_size_x = fft_compilation.binaries[0].local_size_x;
+        fft_desc.compute_shader.local_size_y = fft_compilation.binaries[0].local_size_y;
+        fft_desc.compute_shader.local_size_z = fft_compilation.binaries[0].local_size_z;
         auto fft_result = rhi.device().create_compute_pipeline(fft_desc);
         if (fft_result.result != RHIResult::Success) {
           log::error("Failed to create ocean FFT pipeline");
@@ -1035,7 +1002,7 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
       }
 
       std::string assemble_source = env().file_in_data("playground/shaders/ocean_assemble.hlsl");
-      auto assemble_compilation = ShaderCompiler::instance().compile(assemble_source, {{"AssembleMain", RHIShaderStage::Compute}});
+      auto assemble_compilation = ShaderCompiler::instance().compile(assemble_source, {{"AssembleMain", RHIShaderStage::Compute}}, {}, rhi.backend());
       if (assemble_compilation.result != RHIResult::Success) {
         log::error("Failed to compile ocean Assemble shader:\n%s", assemble_compilation.error_message.c_str());
       } else {
@@ -1044,6 +1011,11 @@ void Ocean::init(RHIContext& rhi, RHITextureFormat color_format, RHITextureForma
         assemble_desc.compute_shader.entry_point = "AssembleMain";
         assemble_desc.compute_shader.spirv_data = assemble_compilation.binaries[0].spirv_data;
         assemble_desc.compute_shader.spirv_size = assemble_compilation.binaries[0].spirv_size;
+        assemble_desc.compute_shader.backend = assemble_compilation.binaries[0].backend;
+        assemble_desc.compute_shader.format = assemble_compilation.binaries[0].format;
+        assemble_desc.compute_shader.local_size_x = assemble_compilation.binaries[0].local_size_x;
+        assemble_desc.compute_shader.local_size_y = assemble_compilation.binaries[0].local_size_y;
+        assemble_desc.compute_shader.local_size_z = assemble_compilation.binaries[0].local_size_z;
         auto assemble_result = rhi.device().create_compute_pipeline(assemble_desc);
         if (assemble_result.result != RHIResult::Success) {
           log::error("Failed to create ocean Assemble pipeline");
@@ -1199,6 +1171,28 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
   if ((valid() == false) || (_h0_pipeline.valid() == false) || (_displacement_map[0].valid() == false)) {
     return;
   }
+  const bool metal_readonly_texture_inputs = (rhi.backend() == RHIBackend::Metal);
+
+  auto validate_texture = [&](RHITexture texture, const char* name, uint32_t cascade) -> bool {
+    if (texture.valid()) {
+      return true;
+    }
+    log::error("Ocean: missing texture '%s' for cascade %u, skipping ocean update", (name != nullptr) ? name : "unknown", cascade);
+    return false;
+  };
+
+  for (uint32_t c = 0; c < k_cascade_count; ++c) {
+    if (!validate_texture(_displacement_map[c], "displacement", c) || !validate_texture(_surface_derivative_u_map[c], "surface_derivative_u", c) ||
+        !validate_texture(_surface_derivative_v_map[c], "surface_derivative_v", c) || !validate_texture(_slope_metric_map[c], "slope_metric", c) ||
+        !validate_texture(_h0_texture[c], "h0", c) || !validate_texture(_ht_texture[c], "ht", c) || !validate_texture(_dxdz_texture[c], "dxdz", c) ||
+        !validate_texture(_deriv_spec_0_texture[c], "deriv_spec_0", c) || !validate_texture(_deriv_spec_1_texture[c], "deriv_spec_1", c) ||
+        !validate_texture(_deriv_spec_2_texture[c], "deriv_spec_2", c) || !validate_texture(_ht_pingpong[c], "ht_pingpong", c) ||
+        !validate_texture(_dxdz_pingpong[c], "dxdz_pingpong", c) || !validate_texture(_deriv_spec_0_pingpong[c], "deriv_spec_0_pingpong", c) ||
+        !validate_texture(_deriv_spec_1_pingpong[c], "deriv_spec_1_pingpong", c) || !validate_texture(_deriv_spec_2_pingpong[c], "deriv_spec_2_pingpong", c)) {
+      return;
+    }
+  }
+
   enforce_cascade_length_constraints(_parameters);
 
   float effective_cascade_weight[k_cascade_count] = {0.0f, 0.0f, 0.0f};
@@ -1339,12 +1333,25 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       rhi.cmd_texture_barrier(cmd, _surface_derivative_u_map[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _surface_derivative_v_map[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
       rhi.cmd_texture_barrier(cmd, _slope_metric_map[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_texture[i], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_texture[i], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_texture[i], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_pingpong[i], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_pingpong[i], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_pingpong[i], RHIResourceState::General, RHIResourceState::General);
+      if (metal_readonly_texture_inputs) {
+        rhi.cmd_texture_barrier(cmd, _ht_texture[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _dxdz_texture[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_0_texture[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_1_texture[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_2_texture[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _ht_pingpong[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _dxdz_pingpong[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_0_pingpong[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_1_pingpong[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_2_pingpong[i], RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+      } else {
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_0_texture[i], RHIResourceState::General, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_1_texture[i], RHIResourceState::General, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_2_texture[i], RHIResourceState::General, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_0_pingpong[i], RHIResourceState::General, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_1_pingpong[i], RHIResourceState::General, RHIResourceState::General);
+        rhi.cmd_texture_barrier(cmd, _deriv_spec_2_pingpong[i], RHIResourceState::General, RHIResourceState::General);
+      }
     }
   }
 
@@ -1460,7 +1467,7 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       dispatch.group_count_y = dispatch_group_count_y;
       dispatch.group_count_z = 1;
       rhi.cmd_dispatch(cmd, dispatch);
-      rhi.cmd_texture_barrier(cmd, _h0_texture[c], RHIResourceState::General, RHIResourceState::General);
+      rhi.cmd_texture_barrier(cmd, _h0_texture[c], RHIResourceState::General, metal_readonly_texture_inputs ? RHIResourceState::ShaderReadOnly : RHIResourceState::General);
     }
     _h0_generated = true;
   }
@@ -1525,11 +1532,12 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       dispatch.group_count_y = dispatch_group_count_y;
       dispatch.group_count_z = 1;
       rhi.cmd_dispatch(cmd, dispatch);
-      rhi.cmd_texture_barrier(cmd, _ht_texture[c], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _dxdz_texture[c], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_texture[c], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_texture[c], RHIResourceState::General, RHIResourceState::General);
-      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_texture[c], RHIResourceState::General, RHIResourceState::General);
+      const RHIResourceState post_update_state = metal_readonly_texture_inputs ? RHIResourceState::ShaderReadOnly : RHIResourceState::General;
+      rhi.cmd_texture_barrier(cmd, _ht_texture[c], RHIResourceState::General, post_update_state);
+      rhi.cmd_texture_barrier(cmd, _dxdz_texture[c], RHIResourceState::General, post_update_state);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_0_texture[c], RHIResourceState::General, post_update_state);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_1_texture[c], RHIResourceState::General, post_update_state);
+      rhi.cmd_texture_barrier(cmd, _deriv_spec_2_texture[c], RHIResourceState::General, post_update_state);
     }
   }
 
@@ -1554,26 +1562,46 @@ void Ocean::update(RHIContext& rhi, RHICommandBuffer cmd, float time, const floa
       bool pingpong_local = false;
       io_fft_pc.direction = 0;
       for (uint32_t i = 0; i < io_fft_pc.log2N; ++i) {
+        const RHITexture input_tex = (pingpong_local == false) ? src_tex : ping_tex;
+        const RHITexture output_tex = (pingpong_local == false) ? ping_tex : src_tex;
         io_fft_pc.pass = i;
-        io_fft_pc.inTexIndex = get_bindless_descriptor_index((pingpong_local == false) ? src_tex : ping_tex);
-        io_fft_pc.outTexIndex = get_bindless_descriptor_index((pingpong_local == false) ? ping_tex : src_tex);
+        io_fft_pc.inTexIndex = get_bindless_descriptor_index(input_tex);
+        io_fft_pc.outTexIndex = get_bindless_descriptor_index(output_tex);
         pingpong_local = (pingpong_local == false);
+        if (metal_readonly_texture_inputs) {
+          rhi.cmd_texture_barrier(cmd, input_tex, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
+          rhi.cmd_texture_barrier(cmd, output_tex, RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        }
         rhi.cmd_push_constants(cmd, &io_fft_pc, sizeof(FFTPushConstants), 0);
         rhi.cmd_dispatch(cmd, dispatch);
-        rhi.cmd_texture_barrier(cmd, src_tex, RHIResourceState::General, RHIResourceState::General);
-        rhi.cmd_texture_barrier(cmd, ping_tex, RHIResourceState::General, RHIResourceState::General);
+        if (metal_readonly_texture_inputs) {
+          rhi.cmd_texture_barrier(cmd, output_tex, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
+        } else {
+          rhi.cmd_texture_barrier(cmd, src_tex, RHIResourceState::General, RHIResourceState::General);
+          rhi.cmd_texture_barrier(cmd, ping_tex, RHIResourceState::General, RHIResourceState::General);
+        }
       }
 
       io_fft_pc.direction = 1;
       for (uint32_t i = 0; i < io_fft_pc.log2N; ++i) {
+        const RHITexture input_tex = (pingpong_local == false) ? src_tex : ping_tex;
+        const RHITexture output_tex = (pingpong_local == false) ? ping_tex : src_tex;
         io_fft_pc.pass = i;
-        io_fft_pc.inTexIndex = get_bindless_descriptor_index((pingpong_local == false) ? src_tex : ping_tex);
-        io_fft_pc.outTexIndex = get_bindless_descriptor_index((pingpong_local == false) ? ping_tex : src_tex);
+        io_fft_pc.inTexIndex = get_bindless_descriptor_index(input_tex);
+        io_fft_pc.outTexIndex = get_bindless_descriptor_index(output_tex);
         pingpong_local = (pingpong_local == false);
+        if (metal_readonly_texture_inputs) {
+          rhi.cmd_texture_barrier(cmd, input_tex, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
+          rhi.cmd_texture_barrier(cmd, output_tex, RHIResourceState::ShaderReadOnly, RHIResourceState::General);
+        }
         rhi.cmd_push_constants(cmd, &io_fft_pc, sizeof(FFTPushConstants), 0);
         rhi.cmd_dispatch(cmd, dispatch);
-        rhi.cmd_texture_barrier(cmd, src_tex, RHIResourceState::General, RHIResourceState::General);
-        rhi.cmd_texture_barrier(cmd, ping_tex, RHIResourceState::General, RHIResourceState::General);
+        if (metal_readonly_texture_inputs) {
+          rhi.cmd_texture_barrier(cmd, output_tex, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
+        } else {
+          rhi.cmd_texture_barrier(cmd, src_tex, RHIResourceState::General, RHIResourceState::General);
+          rhi.cmd_texture_barrier(cmd, ping_tex, RHIResourceState::General, RHIResourceState::General);
+        }
       }
 
       return pingpong_local;
@@ -1656,8 +1684,8 @@ void Ocean::prepare_render_draw_state(RHIContext& rhi, RHICommandBuffer cmd, con
   } pc = {};
 
   OceanRenderSettings render_settings = {};
-  render_settings.envmap_index = envmap_texture.valid() ? get_bindless_descriptor_index(envmap_texture) : 0;
-  render_settings.scene_color_index = scene_opaque_color_texture.valid() ? get_bindless_descriptor_index(scene_opaque_color_texture) : 0;
+  render_settings.envmap_index = bindless_index_or_invalid(envmap_texture);
+  render_settings.scene_color_index = bindless_index_or_invalid(scene_opaque_color_texture);
   render_settings.env_sampler_index = rhi.get_sampler_index(RHISamplerType::LinearRepeatUClampV);
   render_settings.scene_sampler_index = rhi.get_sampler_index(RHISamplerType::LinearClamp);
   render_settings.stitch_transition_cells = _parameters.stitch_transition_cells;
@@ -1704,14 +1732,14 @@ void Ocean::prepare_render_draw_state(RHIContext& rhi, RHICommandBuffer cmd, con
     render_settings.prev_view_proj = view_proj;
   }
   int32_t water_debug_visualize_mode = max(0, min(_parameters.water_debug_visualize_mode, 2));
-  render_settings.wave_thickness_min_index = wave_thickness_min_texture.valid() ? get_bindless_descriptor_index(wave_thickness_min_texture) : 0u;
-  render_settings.wave_thickness_max_index = wave_thickness_max_texture.valid() ? get_bindless_descriptor_index(wave_thickness_max_texture) : 0u;
+  render_settings.wave_thickness_min_index = bindless_index_or_invalid(wave_thickness_min_texture);
+  render_settings.wave_thickness_max_index = bindless_index_or_invalid(wave_thickness_max_texture);
   render_settings.wave_thickness_sampler_index = rhi.get_sampler_index(RHISamplerType::NearestClamp);
   render_settings._padding1 = 0u;
-  render_settings.foam_history_index = foam_history_texture.valid() ? get_bindless_descriptor_index(foam_history_texture) : 0u;
-  render_settings.foam_detail_index = _foam_detail_texture.valid() ? get_bindless_descriptor_index(_foam_detail_texture) : 0u;
+  render_settings.foam_history_index = bindless_index_or_invalid(foam_history_texture);
+  render_settings.foam_detail_index = bindless_index_or_invalid(_foam_detail_texture);
   render_settings.foam_sampler_index = rhi.get_sampler_index(RHISamplerType::LinearClamp);
-  render_settings.aeration_detail_index = _aeration_detail_texture.valid() ? get_bindless_descriptor_index(_aeration_detail_texture) : 0u;
+  render_settings.aeration_detail_index = bindless_index_or_invalid(_aeration_detail_texture);
   render_settings.wave_thickness_controls = {max(_parameters.wave_thickness_path_scale, 0.0f), static_cast<float>(water_debug_visualize_mode),
     max(_parameters.wave_thickness_debug_max_m, 1.0e-3f), 0.0f};
   render_settings.foam_controls_0 = {_parameters.foam_enable ? 1.0f : 0.0f, max(_parameters.foam_strength, 0.0f), max(_parameters.foam_slope_start, 0.0f),

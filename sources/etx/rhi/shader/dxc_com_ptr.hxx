@@ -86,9 +86,10 @@ struct DxcComPtr {
   }
 
   void internal_release() {
-    if (_ptr != nullptr) {
-      _ptr->Release();
-      _ptr = nullptr;
+    T* ptr = _ptr;
+    _ptr = nullptr;
+    if (ptr != nullptr) {
+      ptr->Release();
     }
   }
 

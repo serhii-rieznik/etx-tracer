@@ -20,11 +20,11 @@ struct AssemblePushConstants {
   if (id.x >= assemblePc.N || id.y >= assemblePc.N)
     return;
 
-  RWTexture2D<float4> inHt = bindless_storage_textures[NonUniformResourceIndex(assemblePc.inHtIndex)];
-  RWTexture2D<float4> inDxDz = bindless_storage_textures[NonUniformResourceIndex(assemblePc.inDxDzIndex)];
-  RWTexture2D<float4> inDerivSpec0 = bindless_storage_textures[NonUniformResourceIndex(assemblePc.inDerivSpec0Index)];
-  RWTexture2D<float4> inDerivSpec1 = bindless_storage_textures[NonUniformResourceIndex(assemblePc.inDerivSpec1Index)];
-  RWTexture2D<float4> inDerivSpec2 = bindless_storage_textures[NonUniformResourceIndex(assemblePc.inDerivSpec2Index)];
+  Texture2D<float4> inHt = bindless_textures[NonUniformResourceIndex(assemblePc.inHtIndex)];
+  Texture2D<float4> inDxDz = bindless_textures[NonUniformResourceIndex(assemblePc.inDxDzIndex)];
+  Texture2D<float4> inDerivSpec0 = bindless_textures[NonUniformResourceIndex(assemblePc.inDerivSpec0Index)];
+  Texture2D<float4> inDerivSpec1 = bindless_textures[NonUniformResourceIndex(assemblePc.inDerivSpec1Index)];
+  Texture2D<float4> inDerivSpec2 = bindless_textures[NonUniformResourceIndex(assemblePc.inDerivSpec2Index)];
   RWTexture2D<float4> outDisp = bindless_storage_textures[NonUniformResourceIndex(assemblePc.outDispIndex)];
   RWTexture2D<float4> outDerivU = bindless_storage_textures[NonUniformResourceIndex(assemblePc.outDerivUIndex)];
   RWTexture2D<float4> outDerivV = bindless_storage_textures[NonUniformResourceIndex(assemblePc.outDerivVIndex)];
@@ -34,16 +34,18 @@ struct AssemblePushConstants {
   float inv_n2 = 1.0 / float(assemblePc.N * assemblePc.N);
   float sign = ((id.x + id.y) % 2 == 1) ? -1.0 : 1.0;
 
-  float y = inHt[id.xy].x * sign * inv_n2;
-  float x = inDxDz[id.xy].x * sign * inv_n2;
-  float z = inDxDz[id.xy].z * sign * inv_n2;
+  float4 in_ht = inHt.Load(int3(id.xy, 0));
+  float4 in_dxdz = inDxDz.Load(int3(id.xy, 0));
+  float y = in_ht.x * sign * inv_n2;
+  float x = in_dxdz.x * sign * inv_n2;
+  float z = in_dxdz.z * sign * inv_n2;
 
   float3 disp = float3(x * assemblePc.lambda, y, z * assemblePc.lambda);
   outDisp[id.xy] = float4(disp, 1.0);
 
-  float4 deriv0 = inDerivSpec0[id.xy];
-  float4 deriv1 = inDerivSpec1[id.xy];
-  float4 deriv2 = inDerivSpec2[id.xy];
+  float4 deriv0 = inDerivSpec0.Load(int3(id.xy, 0));
+  float4 deriv1 = inDerivSpec1.Load(int3(id.xy, 0));
+  float4 deriv2 = inDerivSpec2.Load(int3(id.xy, 0));
   float du_x = deriv0.x * sign * inv_n2 * assemblePc.lambda;
   float du_y = deriv0.z * sign * inv_n2;
   float du_z = deriv1.x * sign * inv_n2 * assemblePc.lambda;

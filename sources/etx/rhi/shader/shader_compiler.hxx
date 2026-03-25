@@ -62,10 +62,10 @@ struct ShaderCompiler {
   };
 
   MultiShaderCompilationResult compile(const std::string& hlsl_source, const std::string& source_name, const std::vector<ShaderEntryPoint>& entry_points,
-    const std::unordered_map<std::string, std::string>& defines = {});
+    const std::unordered_map<std::string, std::string>& defines = {}, RHIBackend backend = RHIBackend::Vulkan);
 
   MultiShaderCompilationResult compile(const std::string& filename, const std::vector<ShaderEntryPoint>& entry_points,
-    const std::unordered_map<std::string, std::string>& defines = {});
+    const std::unordered_map<std::string, std::string>& defines = {}, RHIBackend backend = RHIBackend::Vulkan);
 
   std::string read_file_content(const std::string& file_path, std::string& error_message);
 

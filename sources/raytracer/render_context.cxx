@@ -17,8 +17,29 @@
 
 #include <vector>
 #include <algorithm>
-
 namespace etx {
+namespace {
+
+RHIBackend select_default_backend() {
+#if ETX_PLATFORM_APPLE
+  return RHIBackend::Metal;
+#else
+  return RHIBackend::Vulkan;
+#endif
+}
+
+const char* backend_name(RHIBackend backend) {
+  switch (backend) {
+    case RHIBackend::Vulkan:
+      return "Vulkan";
+    case RHIBackend::Metal:
+      return "Metal";
+    default:
+      return "Unknown";
+  }
+}
+
+}  // namespace
 
 struct RenderContextImpl {
   RenderContextImpl(TaskScheduler& s)
@@ -72,6 +93,10 @@ RenderContext::~RenderContext() {
   ETX_PIMPL_CLEANUP(RenderContext);
 }
 
+bool RenderContext::valid() const {
+  return _private->rhi_context.valid();
+}
+
 RHIContext& RenderContext::get_context() {
   ETX_ASSERT(_private->rhi_context.valid());
   return _private->rhi_context;
@@ -94,7 +119,7 @@ RHITextureFormat RenderContext::get_depth_format() {
 void RenderContext::init() {
   ETX_PROFILER_SCOPE();
 
-  RHIBackend backend = RHIBackend::Vulkan;
+  RHIBackend backend = select_default_backend();
 
   RHIInitInfo info = {
     .backend = backend,
@@ -117,6 +142,11 @@ void RenderContext::init() {
     return;
   }
 
+  const RHICapabilities capabilities = _private->rhi_context.capabilities();
+  log::info("RenderContext RHI backend: %s (swapchain=%u, bindless=%u, timestamps=%u, ray_tracing=%u)", backend_name(backend),
+    static_cast<uint32_t>(capabilities.supports_swapchain), static_cast<uint32_t>(capabilities.supports_bindless), static_cast<uint32_t>(capabilities.supports_timestamps),
+    static_cast<uint32_t>(capabilities.supports_ray_tracing));
+
   {
     ETX_PROFILER_NAMED_SCOPE("render_context_create_swapchain");
     _private->rhi_context.create_swapchain(native_window, static_cast<uint32_t>(sapp_width()), static_cast<uint32_t>(sapp_height()));
@@ -136,7 +166,7 @@ void RenderContext::init() {
   ShaderCompiler::MultiShaderCompilationResult result = {};
   {
     ETX_PROFILER_NAMED_SCOPE("render_context_compile_presentation_shader");
-    result = compiler.compile("shaders/render.hlsl", {{"vertex_main", RHIShaderStage::Vertex}, {"fragment_main", RHIShaderStage::Fragment}});
+    result = compiler.compile("shaders/render.hlsl", {{"vertex_main", RHIShaderStage::Vertex}, {"fragment_main", RHIShaderStage::Fragment}}, {}, backend);
   }
 
   if (result.result != RHIResult::Success) {

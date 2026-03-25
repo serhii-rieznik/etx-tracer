@@ -11,8 +11,9 @@ inline constexpr uint32_t kDefaultMaxAccelerationStructures = 512u;
 
 struct RHIBindlessManager {
   RHIBindlessManager() = default;
-  explicit RHIBindlessManager(void* impl)
-    : _impl(impl) {
+  explicit RHIBindlessManager(void* impl, RHIBackend backend = RHIBackend::Vulkan)
+    : _impl(impl)
+    , _backend(backend) {
   }
 
   bool valid() const {
@@ -50,6 +51,7 @@ struct RHIBindlessManager {
 
  private:
   void* _impl = nullptr;
+  RHIBackend _backend = RHIBackend::Vulkan;
 
   friend struct RHIContext;
 };

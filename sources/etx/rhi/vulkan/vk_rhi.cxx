@@ -191,7 +191,7 @@ void create_vulkan_context(RHIContext& context, const RHIInitInfo& info) {
   static_assert(sizeof(VKContext) <= RHIContext::kBackendStorageSize, "VKContext does not fit into RHIContext backend storage");
   static_assert(alignof(VKContext) <= RHIContext::kBackendStorageAlignment, "VKContext alignment exceeds RHIContext backend storage alignment");
   auto* vk_context = new (context._backend_storage) VKContext(info);
-  context.initialize_backend(vk_context, vk_context->get_device(), vk_context->get_bindless_manager());
+  context.initialize_backend(RHIBackend::Vulkan, vk_context, vk_context->get_device(), vk_context->get_bindless_manager());
 }
 
 static VkImageLayout rhi_state_to_vk_layout(RHIResourceState state, bool is_depth) {
@@ -1837,6 +1837,8 @@ void VKCommandBuffer::set_pipeline(RHIPipeline pipeline) {
     return;
   }
 
+  current_pipeline_layout = VK_NULL_HANDLE;
+  current_bind_point = VK_PIPELINE_BIND_POINT_MAX_ENUM;
   current_pipeline = pipeline;
 
   const VKPipelineData* graphics_pipeline_data = device->get_graphics_pipeline_data(pipeline);

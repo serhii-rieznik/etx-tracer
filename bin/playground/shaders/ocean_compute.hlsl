@@ -227,7 +227,7 @@ float2 complexExp(float theta) {
     return;
   }
 
-  RWTexture2D<float4> inH0 = bindless_storage_textures[NonUniformResourceIndex(pushConstants.inH0Index)];
+  Texture2D<float4> inH0 = bindless_textures[NonUniformResourceIndex(pushConstants.inH0Index)];
   RWTexture2D<float4> outHt = bindless_storage_textures[NonUniformResourceIndex(pushConstants.outHtIndex)];
   RWTexture2D<float4> outDxDz = bindless_storage_textures[NonUniformResourceIndex(pushConstants.outDxDzIndex)];
   RWTexture2D<float4> outDerivSpec0 = bindless_storage_textures[NonUniformResourceIndex(pushConstants.outDerivSpec0Index)];
@@ -245,8 +245,8 @@ float2 complexExp(float theta) {
   float w = dispersionOmega(k_len, pushConstants.waterDepth);
 
   uint2 mirror_id = uint2((N - id.x) % N, (N - id.y) % N);
-  float4 h0_data = inH0[id.xy];
-  float4 h0_mirror_data = inH0[mirror_id];
+  float4 h0_data = inH0.Load(int3(id.xy, 0));
+  float4 h0_mirror_data = inH0.Load(int3(mirror_id, 0));
   float2 h0_k = h0_data.xy;
   float2 h0_minus_k_conj = float2(h0_mirror_data.x, -h0_mirror_data.y);
 

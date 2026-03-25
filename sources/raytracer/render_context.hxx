@@ -25,6 +25,7 @@ struct RenderContext {
   RenderContext(TaskScheduler& s);
   ~RenderContext();
 
+  bool valid() const;
   void init();
   void cleanup();
 

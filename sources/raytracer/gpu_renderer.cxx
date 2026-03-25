@@ -154,7 +154,7 @@ bool compile_timed_compute_stage(RHIDevice& device, ShaderCompiler& compiler, co
   ShaderCompiler::MultiShaderCompilationResult result = {};
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_compile_compute_shader");
-    result = compiler.compile(source_file, {{entry_point, RHIShaderStage::Compute}}, defines);
+    result = compiler.compile(source_file, {{entry_point, RHIShaderStage::Compute}}, defines, device.backend());
   }
   const auto compile_end = std::chrono::steady_clock::now();
   const auto compile_ms = std::chrono::duration_cast<std::chrono::milliseconds>(compile_end - compile_begin).count();

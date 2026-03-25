@@ -70,6 +70,11 @@ enum class RHIShaderStage : uint32_t {
   Compute = 2,
 };
 
+enum class RHIShaderBinaryFormat : uint32_t {
+  SpirV = 0,
+  MetalSource = 1,
+};
+
 enum class RHIIndexType : uint32_t {
   UInt16 = 0,
   UInt32 = 1,
@@ -361,14 +366,24 @@ struct RHIShaderDesc {
   const void* spirv_data = nullptr;
   uint64_t spirv_size = 0;
   RHIShaderStage stage = RHIShaderStage::Vertex;
+  RHIBackend backend = RHIBackend::Vulkan;
+  RHIShaderBinaryFormat format = RHIShaderBinaryFormat::SpirV;
   std::string entry_point = "main";
+  uint32_t local_size_x = 1;
+  uint32_t local_size_y = 1;
+  uint32_t local_size_z = 1;
 };
 
 struct RHIShaderBinary {
   const uint8_t* spirv_data = nullptr;
   size_t spirv_size = 0;
   RHIShaderStage stage = RHIShaderStage::Vertex;
+  RHIBackend backend = RHIBackend::Vulkan;
+  RHIShaderBinaryFormat format = RHIShaderBinaryFormat::SpirV;
   std::string entry_point;
+  uint32_t local_size_x = 1;
+  uint32_t local_size_y = 1;
+  uint32_t local_size_z = 1;
 };
 
 struct RHIShaderVariantDesc {

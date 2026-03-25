@@ -13,7 +13,6 @@
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
-
 #include <etx/render/interop/geometry.hxx>
 #include <etx/render/shared/scattering.hxx>
 
@@ -23,10 +22,65 @@
 #endif
 
 namespace etx {
+namespace {
+
+RHIBackend select_default_backend() {
+#if ETX_PLATFORM_APPLE
+  return RHIBackend::Metal;
+#else
+  return RHIBackend::Vulkan;
+#endif
+}
+
+const char* backend_name(RHIBackend backend) {
+  switch (backend) {
+    case RHIBackend::Vulkan:
+      return "Vulkan";
+    case RHIBackend::Metal:
+      return "Metal";
+    default:
+      return "Unknown";
+  }
+}
+
+}  // namespace
+
+bool PlaygroundApp::initialized() const {
+  return _rhi.valid();
+}
+
+bool PlaygroundApp::recreate_headless_present_target(uint32_t width, uint32_t height) {
+  if (_headless_present_texture.valid()) {
+    _rhi.device().destroy_texture(_headless_present_texture);
+    _headless_present_texture = {};
+  }
+
+  if ((width == 0u) || (height == 0u)) {
+    return false;
+  }
+
+  RHITextureDesc desc = {};
+  desc.width = width;
+  desc.height = height;
+  desc.format = _rhi.get_swapchain_format();
+  desc.usage = RHITextureUsage::ColorAttachment | RHITextureUsage::TransferSrc;
+  auto result = _rhi.device().create_texture(desc);
+  if (result.result != RHIResult::Success) {
+    log::error("Playground headless: failed to create present target: %u", static_cast<uint32_t>(result.result));
+    return false;
+  }
+
+  _headless_present_texture = result.handle;
+  return true;
+}
 
 static constexpr RHITextureFormat k_scene_color_format = RHITextureFormat::R16G16B16A16_FLOAT;
 static constexpr RHITextureFormat k_scene_depth_format = RHITextureFormat::D32_FLOAT;
 static constexpr uint32_t k_default_scene_msaa_sample_count = 4u;
+
+static uint32_t default_scene_msaa_sample_count(RHIBackend backend) {
+  return (backend == RHIBackend::Metal) ? 1u : k_default_scene_msaa_sample_count;
+}
 
 static constexpr float k_cascade_length_min[Ocean::k_cascade_count] = {20.0f, 10.0f, 5.0f};
 static constexpr float k_cascade_length_max = 4000.0f;
@@ -1142,18 +1196,22 @@ bool PlaygroundApp::recreate_tonemap_pipeline() {
   ShaderCompiler::ShaderEntryPoint ps = {"PSMain", RHIShaderStage::Fragment};
 
   std::string tonemap_shader_source = env().file_in_data("playground/shaders/tonemap.hlsl");
-  auto tonemap_compilation = ShaderCompiler::instance().compile(tonemap_shader_source, {vs, ps});
+  auto tonemap_compilation = ShaderCompiler::instance().compile(tonemap_shader_source, {vs, ps}, {}, _rhi.backend());
   if (tonemap_compilation.result == RHIResult::Success) {
     RHIGraphicsPipelineDesc tonemap_desc = {};
     tonemap_desc.vertex_shader.stage = RHIShaderStage::Vertex;
     tonemap_desc.vertex_shader.entry_point = "VSMain";
     tonemap_desc.vertex_shader.spirv_data = tonemap_compilation.binaries[0].spirv_data;
     tonemap_desc.vertex_shader.spirv_size = tonemap_compilation.binaries[0].spirv_size;
+    tonemap_desc.vertex_shader.backend = tonemap_compilation.binaries[0].backend;
+    tonemap_desc.vertex_shader.format = tonemap_compilation.binaries[0].format;
 
     tonemap_desc.fragment_shader.stage = RHIShaderStage::Fragment;
     tonemap_desc.fragment_shader.entry_point = "PSMain";
     tonemap_desc.fragment_shader.spirv_data = tonemap_compilation.binaries[1].spirv_data;
     tonemap_desc.fragment_shader.spirv_size = tonemap_compilation.binaries[1].spirv_size;
+    tonemap_desc.fragment_shader.backend = tonemap_compilation.binaries[1].backend;
+    tonemap_desc.fragment_shader.format = tonemap_compilation.binaries[1].format;
 
     tonemap_desc.rasterization.depth_clamp_enable = false;
     tonemap_desc.rasterization.rasterizer_discard_enable = false;
@@ -1191,13 +1249,15 @@ void PlaygroundApp::sync_swapchain_dependent_resources() {
     return;
   }
 
-  RHIImGuiDesc imgui_desc = {
-    .color_format = current_swapchain_format,
-    .depth_format = k_scene_depth_format,
-  };
-  RHIResult imgui_result = _imgui.setup(_rhi, imgui_desc);
-  if (imgui_result != RHIResult::Success) {
-    log::error("Failed to (re)create ImGui resources for swapchain format: %u", static_cast<uint32_t>(imgui_result));
+  if (_headless == false) {
+    RHIImGuiDesc imgui_desc = {
+      .color_format = current_swapchain_format,
+      .depth_format = k_scene_depth_format,
+    };
+    RHIResult imgui_result = _imgui.setup(_rhi, imgui_desc);
+    if (imgui_result != RHIResult::Success) {
+      log::error("Failed to (re)create ImGui resources for swapchain format: %u", static_cast<uint32_t>(imgui_result));
+    }
   }
 
   recreate_tonemap_pipeline();
@@ -1319,7 +1379,7 @@ bool PlaygroundApp::recreate_sun_sprite_pipeline() {
   ShaderCompiler::ShaderEntryPoint vs = {"VSMain", RHIShaderStage::Vertex};
   ShaderCompiler::ShaderEntryPoint ps = {"PSMain", RHIShaderStage::Fragment};
   std::string shader_source = env().file_in_data("playground/shaders/sun_sprite.hlsl");
-  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs, ps});
+  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs, ps}, {}, _rhi.backend());
   if (compilation.result != RHIResult::Success) {
     log::error("Failed to compile sun sprite shader:\n%s", compilation.error_message.c_str());
     return false;
@@ -1330,10 +1390,14 @@ bool PlaygroundApp::recreate_sun_sprite_pipeline() {
   p_desc.vertex_shader.entry_point = "VSMain";
   p_desc.vertex_shader.spirv_data = compilation.binaries[0].spirv_data;
   p_desc.vertex_shader.spirv_size = compilation.binaries[0].spirv_size;
+  p_desc.vertex_shader.backend = compilation.binaries[0].backend;
+  p_desc.vertex_shader.format = compilation.binaries[0].format;
   p_desc.fragment_shader.stage = RHIShaderStage::Fragment;
   p_desc.fragment_shader.entry_point = "PSMain";
   p_desc.fragment_shader.spirv_data = compilation.binaries[1].spirv_data;
   p_desc.fragment_shader.spirv_size = compilation.binaries[1].spirv_size;
+  p_desc.fragment_shader.backend = compilation.binaries[1].backend;
+  p_desc.fragment_shader.format = compilation.binaries[1].format;
   p_desc.depth_state.depth_test_enable = false;
   p_desc.depth_state.depth_write_enable = false;
   p_desc.blend.blend_enable = true;
@@ -1368,7 +1432,7 @@ bool PlaygroundApp::recreate_base_pipeline() {
   std::string shader_source = env().file_in_data("playground/shaders/base.hlsl");
   ShaderCompiler::ShaderEntryPoint vs = {"VSMain", RHIShaderStage::Vertex};
   ShaderCompiler::ShaderEntryPoint ps = {"PSMain", RHIShaderStage::Fragment};
-  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs, ps});
+  auto compilation = ShaderCompiler::instance().compile(shader_source, {vs, ps}, {}, _rhi.backend());
 
   if (compilation.result != RHIResult::Success) {
     log::error("Failed to compile shaders:\n%s", compilation.error_message.c_str());
@@ -1380,11 +1444,15 @@ bool PlaygroundApp::recreate_base_pipeline() {
   p_desc.vertex_shader.entry_point = "VSMain";
   p_desc.vertex_shader.spirv_data = compilation.binaries[0].spirv_data;
   p_desc.vertex_shader.spirv_size = compilation.binaries[0].spirv_size;
+  p_desc.vertex_shader.backend = compilation.binaries[0].backend;
+  p_desc.vertex_shader.format = compilation.binaries[0].format;
 
   p_desc.fragment_shader.stage = RHIShaderStage::Fragment;
   p_desc.fragment_shader.entry_point = "PSMain";
   p_desc.fragment_shader.spirv_data = compilation.binaries[1].spirv_data;
   p_desc.fragment_shader.spirv_size = compilation.binaries[1].spirv_size;
+  p_desc.fragment_shader.backend = compilation.binaries[1].backend;
+  p_desc.fragment_shader.format = compilation.binaries[1].format;
 
   p_desc.rasterization.depth_clamp_enable = false;
   p_desc.rasterization.rasterizer_discard_enable = false;
@@ -1616,26 +1684,35 @@ void PlaygroundApp::draw_sun_sprite(RHICommandBuffer cmd, const float4x4& view_p
   _rhi.cmd_draw(cmd, {.vertex_count = 6, .instance_count = 1});
 }
 
-void PlaygroundApp::init() {
-  ETX_PROFILER_SCOPE();
-
-  _width = static_cast<uint32_t>(sapp_width());
-  _height = static_cast<uint32_t>(sapp_height());
+void PlaygroundApp::init_internal(uint32_t width, uint32_t height, const void* native_window, bool headless) {
+  _headless = headless;
+  _width = width;
+  _height = height;
 
   RHIInitInfo info = {
-    .backend = RHIBackend::Vulkan,
+    .backend = select_default_backend(),
     .enable_validation = true,
+    .headless = headless,
   };
 
   _rhi = RHIContext::create(info);
-  const void* native_window = nullptr;
-#if ETX_PLATFORM_WINDOWS
-  native_window = sapp_win32_get_hwnd();
-#elif defined(__APPLE__)
-  native_window = sapp_macos_get_window();
-#endif
-  _rhi.create_swapchain(native_window, _width, _height);
-  _scene_msaa_sample_count = k_default_scene_msaa_sample_count;
+  if (_rhi.valid() == false) {
+    log::error("Playground: failed to create RHI context");
+    return;
+  }
+
+  if (_headless) {
+    _rhi.initialize_headless();
+    _rhi.resize_swapchain(_width, _height);
+  } else {
+    _rhi.create_swapchain(native_window, _width, _height);
+  }
+
+  const RHICapabilities capabilities = _rhi.capabilities();
+  log::info("Playground RHI backend: %s (swapchain=%u, bindless=%u, timestamps=%u, ray_tracing=%u)", backend_name(info.backend),
+    static_cast<uint32_t>(capabilities.supports_swapchain), static_cast<uint32_t>(capabilities.supports_bindless), static_cast<uint32_t>(capabilities.supports_timestamps),
+    static_cast<uint32_t>(capabilities.supports_ray_tracing));
+  _scene_msaa_sample_count = default_scene_msaa_sample_count(info.backend);
   _pending_scene_msaa_sample_count = _scene_msaa_sample_count;
   _scene_msaa_recreate_requested = false;
   _pending_ocean_patch_resolution = _ocean.patch_resolution();
@@ -1651,6 +1728,9 @@ void PlaygroundApp::init() {
 
   ShaderCompiler::instance().initialize();
   sync_swapchain_dependent_resources();
+  if (_headless) {
+    recreate_headless_present_target(_width, _height);
+  }
 
   bool generated_sky_envmap_valid = create_sun_sky_textures();
   if (generated_sky_envmap_valid == false) {
@@ -1780,8 +1860,37 @@ void PlaygroundApp::init() {
   build_camera(_camera, {5.0f, 5.0f, 5.0f}, normalize(float3{0.0f, 0.0f, 0.0f} - float3{5.0f, 5.0f, 5.0f}), kWorldUp, {camera_width, camera_height}, 45.0f);
 }
 
+void PlaygroundApp::init() {
+  ETX_PROFILER_SCOPE();
+
+  const uint32_t width = static_cast<uint32_t>(sapp_width());
+  const uint32_t height = static_cast<uint32_t>(sapp_height());
+  const void* native_window = nullptr;
+#if ETX_PLATFORM_WINDOWS
+  native_window = sapp_win32_get_hwnd();
+#elif defined(__APPLE__)
+  native_window = sapp_macos_get_window();
+#endif
+  init_internal(width, height, native_window, false);
+}
+
+void PlaygroundApp::init_headless(uint32_t width, uint32_t height) {
+  ETX_PROFILER_SCOPE();
+  init_internal(width, height, nullptr, true);
+}
+
+void PlaygroundApp::frame_headless(float delta_time, float dpi_scale) {
+  _headless_frame_delta_time = delta_time;
+  _headless_dpi_scale = dpi_scale;
+  frame();
+}
+
 void PlaygroundApp::cleanup() {
   ETX_PROFILER_SCOPE();
+  if (_rhi.valid() == false) {
+    ShaderCompiler::instance().shutdown();
+    return;
+  }
   _rhi.wait_idle();
   destroy_ocean_obj_export_buffers();
   for (uint32_t i = 0u; i < k_gpu_timing_pending_frame_count; ++i) {
@@ -1870,22 +1979,32 @@ void PlaygroundApp::cleanup() {
   if (_depth_msaa_buffer.valid()) {
     _rhi.device().destroy_texture(_depth_msaa_buffer);
   }
+  if (_headless_present_texture.valid()) {
+    _rhi.device().destroy_texture(_headless_present_texture);
+    _headless_present_texture = {};
+  }
   _rhi.destroy_swapchain();
   ShaderCompiler::instance().shutdown();
 }
 
 void PlaygroundApp::frame() {
   ETX_PROFILER_SCOPE();
+  if (_rhi.valid() == false) {
+    return;
+  }
   static_assert(k_gpu_timing_query_count <= 64u, "Playground GPU timing query count exceeds Vulkan command-buffer query pool capacity.");
 
-  uint32_t w = static_cast<uint32_t>(sapp_width());
-  uint32_t h = static_cast<uint32_t>(sapp_height());
+  uint32_t w = _headless ? _width : static_cast<uint32_t>(sapp_width());
+  uint32_t h = _headless ? _height : static_cast<uint32_t>(sapp_height());
 
   if ((w != _width) || (h != _height)) {
     _width = w;
     _height = h;
     _rhi.resize_swapchain(_width, _height);
     sync_scene_targets_to_swapchain_extent();
+    if (_headless) {
+      recreate_headless_present_target(_width, _height);
+    }
   }
 
   _rhi.begin_frame();
@@ -1910,7 +2029,10 @@ void PlaygroundApp::frame() {
 
   const uint32_t render_width = (_render_width > 0u) ? _render_width : swapchain_extent.width;
   const uint32_t render_height = (_render_height > 0u) ? _render_height : swapchain_extent.height;
-  RHITexture swapchain_texture = _rhi.get_current_swapchain_texture();
+  RHITexture swapchain_texture = _headless ? _headless_present_texture : _rhi.get_current_swapchain_texture();
+  if (swapchain_texture.valid() == false) {
+    return;
+  }
 
   RHICommandBuffer cmd = _rhi.get_command_buffer();
   _rhi.command_buffer_begin(cmd);
@@ -1948,7 +2070,7 @@ void PlaygroundApp::frame() {
   }
   write_gpu_timestamp(k_gpu_timing_query_after_sun_sky_regen);
 
-  float frame_delta_time = static_cast<float>(sapp_frame_duration());
+  float frame_delta_time = _headless ? _headless_frame_delta_time : static_cast<float>(sapp_frame_duration());
   if (_simulation_paused == false) {
     _time += frame_delta_time;
   }
@@ -2194,50 +2316,52 @@ void PlaygroundApp::frame() {
     write_gpu_timestamp(k_gpu_timing_query_after_scene_resolve);
   }
 
-  // GUI
-  RHIImGuiFrameDesc imgui_frame_desc = {
-    .width = render_width,
-    .height = render_height,
-    .delta_time = sapp_frame_duration(),
-    .dpi_scale = sapp_dpi_scale(),
-  };
-  _imgui.new_frame(imgui_frame_desc);
-  const char* ocean_obj_export_status = nullptr;
-  if (_ocean_obj_export.last_result_valid) {
-    if (_ocean_obj_export.last_result_success) {
-      ocean_obj_export_status = _ocean_obj_export.last_output_path.c_str();
-    } else {
-      ocean_obj_export_status = _ocean_obj_export.last_error.c_str();
+  const bool imgui_available = (_headless == false) && _imgui.initialized();
+  if (imgui_available) {
+    RHIImGuiFrameDesc imgui_frame_desc = {
+      .width = render_width,
+      .height = render_height,
+      .delta_time = _headless ? _headless_frame_delta_time : static_cast<float>(sapp_frame_duration()),
+      .dpi_scale = _headless ? _headless_dpi_scale : sapp_dpi_scale(),
+    };
+    _imgui.new_frame(imgui_frame_desc);
+    const char* ocean_obj_export_status = nullptr;
+    if (_ocean_obj_export.last_result_valid) {
+      if (_ocean_obj_export.last_result_success) {
+        ocean_obj_export_status = _ocean_obj_export.last_output_path.c_str();
+      } else {
+        ocean_obj_export_status = _ocean_obj_export.last_error.c_str();
+      }
     }
+    PlaygroundUiChanges ui_changes = draw_ocean_control_panel(_ocean, _scene_msaa_sample_count, _simulation_paused, _ocean_obj_export.request_next_frame,
+      _ocean_obj_export.last_result_valid, _ocean_obj_export.last_result_success, _ocean_obj_export_size_m, ocean_obj_export_status);
+    if (ui_changes.sky_parameters_changed) {
+      _sun_sky_dirty = true;
+    }
+    if (ui_changes.simulation_paused_changed) {
+      _simulation_paused = ui_changes.simulation_paused;
+    }
+    if (ui_changes.ocean_obj_export_size_changed) {
+      _ocean_obj_export_size_m = max(ui_changes.ocean_obj_export_size_m, 1);
+    }
+    if (ui_changes.ocean_obj_export_requested) {
+      _ocean_obj_export.request_next_frame = true;
+    }
+    if (ui_changes.msaa_sample_count_changed) {
+      _pending_scene_msaa_sample_count = ui_changes.msaa_sample_count;
+      _scene_msaa_recreate_requested = true;
+    }
+    if (ui_changes.patch_resolution_changed) {
+      _pending_ocean_patch_resolution = ui_changes.patch_resolution;
+      _ocean_patch_resolution_recreate_requested = true;
+    }
+    if (ui_changes.fft_resolution_changed) {
+      _pending_ocean_fft_resolution = ui_changes.fft_resolution;
+      _ocean_fft_resolution_recreate_requested = true;
+    }
+    draw_performance_overlay(_frame_time_ms_display, _fps_display, _scene_msaa_sample_count);
+    draw_gpu_timing_window();
   }
-  PlaygroundUiChanges ui_changes = draw_ocean_control_panel(_ocean, _scene_msaa_sample_count, _simulation_paused, _ocean_obj_export.request_next_frame,
-    _ocean_obj_export.last_result_valid, _ocean_obj_export.last_result_success, _ocean_obj_export_size_m, ocean_obj_export_status);
-  if (ui_changes.sky_parameters_changed) {
-    _sun_sky_dirty = true;
-  }
-  if (ui_changes.simulation_paused_changed) {
-    _simulation_paused = ui_changes.simulation_paused;
-  }
-  if (ui_changes.ocean_obj_export_size_changed) {
-    _ocean_obj_export_size_m = max(ui_changes.ocean_obj_export_size_m, 1);
-  }
-  if (ui_changes.ocean_obj_export_requested) {
-    _ocean_obj_export.request_next_frame = true;
-  }
-  if (ui_changes.msaa_sample_count_changed) {
-    _pending_scene_msaa_sample_count = ui_changes.msaa_sample_count;
-    _scene_msaa_recreate_requested = true;
-  }
-  if (ui_changes.patch_resolution_changed) {
-    _pending_ocean_patch_resolution = ui_changes.patch_resolution;
-    _ocean_patch_resolution_recreate_requested = true;
-  }
-  if (ui_changes.fft_resolution_changed) {
-    _pending_ocean_fft_resolution = ui_changes.fft_resolution;
-    _ocean_fft_resolution_recreate_requested = true;
-  }
-  draw_performance_overlay(_frame_time_ms_display, _fps_display, _scene_msaa_sample_count);
-  draw_gpu_timing_window();
 
   if (hdr_path_available) {
     float present_clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -2263,13 +2387,17 @@ void PlaygroundApp::frame() {
     _rhi.cmd_draw(cmd, {.vertex_count = 3, .instance_count = 1});
     write_gpu_timestamp(k_gpu_timing_query_after_tonemap);
 
-    _imgui.render(cmd);
+    if (imgui_available) {
+      _imgui.render(cmd);
+    }
     write_gpu_timestamp(k_gpu_timing_query_after_imgui_render);
     _rhi.cmd_end_render_pass(cmd);
     write_gpu_timestamp(k_gpu_timing_query_after_final_pass);
   } else {
     write_gpu_timestamp(k_gpu_timing_query_after_tonemap);
-    _imgui.render(cmd);
+    if (imgui_available) {
+      _imgui.render(cmd);
+    }
     write_gpu_timestamp(k_gpu_timing_query_after_imgui_render);
     _rhi.cmd_end_render_pass(cmd);
     write_gpu_timestamp(k_gpu_timing_query_after_final_pass);
@@ -2283,14 +2411,17 @@ void PlaygroundApp::frame() {
   if (_ocean_obj_export.capture_recorded) {
     finalize_ocean_obj_export_capture();
   }
-  _rhi.present();
+  if (_headless == false) {
+    _rhi.present();
+  }
 }
 
 void PlaygroundApp::process_event(const sapp_event* e) {
   ETX_PROFILER_SCOPE();
-  bool event_handled = _imgui.handle_event(e);
-  bool imgui_wants_mouse = ImGui::GetIO().WantCaptureMouse;
-  bool imgui_wants_keyboard = ImGui::GetIO().WantCaptureKeyboard;
+  const bool imgui_available = _imgui.initialized();
+  bool event_handled = imgui_available && _imgui.handle_event(e);
+  bool imgui_wants_mouse = imgui_available && ImGui::GetIO().WantCaptureMouse;
+  bool imgui_wants_keyboard = imgui_available && ImGui::GetIO().WantCaptureKeyboard;
   if ((event_handled == false) && (imgui_wants_mouse == false) && (imgui_wants_keyboard == false)) {
     _camera_controller.handle_event(e);
   }

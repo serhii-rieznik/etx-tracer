@@ -3,6 +3,7 @@
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/host/scene_global.hxx>
+#include <etx/rhi/shader/shader_compiler.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 
@@ -57,7 +58,7 @@ void RTApplication::init() {
   {
     ETX_PROFILER_NAMED_SCOPE("app_init_render_context_and_ior");
     render_context.init();
-    if (render_context.get_context().valid() == false) {
+    if (render_context.valid() == false) {
       log::error("Failed to initialize rendering context");
       return;
     }
@@ -291,7 +292,7 @@ void RTApplication::frame() {
     ETX_PROFILER_NAMED_SCOPE("app_render_context_start_frame");
     render_context.start_frame(_active_renderer, scene, render_frame_data);
   }
-  {
+  if (render_context.valid() && render_context.rhi_ui().initialized()) {
     ETX_PROFILER_NAMED_SCOPE("app_ui_build");
     ui.build(scene, ui_frame_data);
   }
@@ -308,15 +309,18 @@ void RTApplication::cleanup() {
     _active_renderer->stop();
   }
 
-  auto& ctx = render_context.get_context();
-  cpu_renderer.cleanup(ctx);
-  raster_renderer.cleanup(ctx);
-  if (_gpu_renderer_initialized) {
-    gpu_renderer.cleanup(ctx);
+  if (render_context.valid()) {
+    auto& ctx = render_context.get_context();
+    cpu_renderer.cleanup(ctx);
+    raster_renderer.cleanup(ctx);
+    if (_gpu_renderer_initialized) {
+      gpu_renderer.cleanup(ctx);
+    }
   }
 
   scene_global_deinit();
   render_context.cleanup();
+  ShaderCompiler::instance().shutdown();
 }
 
 void RTApplication::process_event(const sapp_event* e) {
@@ -324,7 +328,7 @@ void RTApplication::process_event(const sapp_event* e) {
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_process_event_imgui");
-    if (render_context.rhi_ui().handle_event(e))
+    if (render_context.valid() && render_context.rhi_ui().handle_event(e))
       return;
   }
 

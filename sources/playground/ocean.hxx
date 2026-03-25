@@ -17,7 +17,7 @@ struct OceanParameters {
   bool significant_wave_height_enable = true;
   float significant_wave_height = 4.0f;
   bool debug_cascade_overrides_enable = false;
-  float time_scale = 0.0f;
+  float time_scale = 1.0f;
   float choppiness = 4.0f;
   float cascade_detail_boost = 4.0f;
   bool lock_lods = false;
