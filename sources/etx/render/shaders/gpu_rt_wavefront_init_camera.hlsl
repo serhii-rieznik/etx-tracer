@@ -30,6 +30,8 @@
   state.eta = 1.0f;
   state.eta_scale = 1.0f;
   state.sampled_bsdf_pdf = camera_film_shared_evaluate_out(camera, state.ray).pdf_dir;
+  state.forward_pdf = wavefront_safe_div(1.0f, state.sampled_bsdf_pdf);
+  state.reverse_pdf = 0.0f;
   state.medium_index = camera.medium_index;
   state.path_length = 1u;
   state.pixel_index = output_pixel_index;

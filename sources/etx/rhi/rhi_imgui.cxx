@@ -503,6 +503,11 @@ void RHIImGui::render_draw_data(RHICommandBuffer command_buffer, const ImDrawDat
   float fb_height = draw_data->DisplaySize.y * draw_data->FramebufferScale.y;
 
   RHIViewport viewport = {0.0f, 0.0f, fb_width, fb_height, 0.0f, 1.0f};
+  if (_context->backend() == RHIBackend::Vulkan) {
+    // The ImGui projection above emits clip-space Y for a Vulkan-style flipped viewport.
+    viewport.y = fb_height;
+    viewport.height = -fb_height;
+  }
   _context->cmd_set_viewport(command_buffer, viewport);
 
   uint32_t vertex_offset = 0;

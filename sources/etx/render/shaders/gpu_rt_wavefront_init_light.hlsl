@@ -55,6 +55,12 @@
   state.eta = 1.0f;
   state.eta_scale = 1.0f;
   state.sampled_bsdf_pdf = emitter_sample.pdf_dir;
+  state.forward_pdf = emitter_sample.is_distant != 0u ? wavefront_safe_div(1.0f, emitter_sample.pdf_area) : wavefront_safe_div(1.0f, emitter_sample.pdf_dir);
+  state.reverse_pdf = 0.0f;
+  if (emitter_sample.is_delta == 0u) {
+    float reverse_numerator = (emitter_sample.is_distant != 0u) ? 1.0f : cosine_term;
+    state.reverse_pdf = wavefront_safe_div(reverse_numerator, emission_pdf);
+  }
   state.medium_index = emitter_sample.medium_index;
   state.path_length = 1u;
   state.pixel_index = path_index;

@@ -1,7 +1,7 @@
 #include "gpu_rt_wavefront_common.hlsl"
 #include "gpu_rt_wavefront_emitter_sample.hlsl"
 
-float wavefront_direct_light_ris_candidate_weight(WavefrontEmitterSample sample_value, float3 source_position, float3 source_normal) {
+float wavefront_direct_light_ris_candidate_weight(WavefrontEmitterSample sample_value, float3 source_position, bool source_is_surface, float3 source_normal) {
   float radiance_weight = luminance(spectral_response_to_rgb(sample_value.value));
   if (radiance_weight <= 0.0f) {
     return 0.0f;
@@ -10,7 +10,7 @@ float wavefront_direct_light_ris_candidate_weight(WavefrontEmitterSample sample_
   float3 to_emitter = sample_value.origin - source_position;
   float len_sq = dot(to_emitter, to_emitter);
   float source_alignment = 1.0f;
-  if (len_sq > kEpsilon) {
+  if (source_is_surface && (len_sq > kEpsilon)) {
     source_alignment = abs(dot(source_normal, to_emitter) / sqrt(len_sq));
   }
 
@@ -27,7 +27,7 @@ float wavefront_direct_light_ris_candidate_weight(WavefrontEmitterSample sample_
   return radiance_weight * distance_weight * (emitter_orientation / sqrt(len_sq)) * source_alignment;
 }
 
-bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery spect, float3 source_position, float3 source_normal, inout uint seed,
+bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery spect, float3 source_position, bool source_is_surface, float3 source_normal, inout uint seed,
   out WavefrontEmitterSample sample_value) {
   sample_value = (WavefrontEmitterSample)0;
 
@@ -57,7 +57,7 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
       continue;
     }
 
-    float candidate_weight = wavefront_direct_light_ris_candidate_weight(candidate, source_position, source_normal);
+    float candidate_weight = wavefront_direct_light_ris_candidate_weight(candidate, source_position, source_is_surface, source_normal);
     float weight = (pdf_sample > 0.0f) ? (candidate_weight / pdf_sample) : 0.0f;
     weight_sum += weight;
     float reservoir_rnd = rnd01(seed);
@@ -74,6 +74,70 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
   selected_sample.value = spectral_response_mul(selected_sample.value, weight_sum / (float(candidate_count) * selected_weight));
   sample_value = selected_sample;
   return true;
+}
+
+float wavefront_direct_light_vertex_to_vertex_area_pdf(float pdf_dir, GPUWavefrontPathVertex from_vertex, GPUWavefrontPathVertex to_vertex) {
+  if (wavefront_path_vertex_is_infinite_emitter(to_vertex)) {
+    return pdf_dir;
+  }
+  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, from_vertex.position, to_vertex.position, wavefront_path_vertex_is_surface(to_vertex), to_vertex.normal);
+}
+
+float wavefront_emitter_sample_from_emitter_pdf(WavefrontEmitterSample sample_value, GPUWavefrontPathVertex target_vertex) {
+  if (sample_value.is_distant != 0u) {
+    float3 w_o = normalize(sample_value.origin - target_vertex.position);
+    float cosine_term = wavefront_path_vertex_is_surface(target_vertex) ? abs(dot(target_vertex.geo_normal, w_o)) : 1.0f;
+    return sample_value.pdf_area * cosine_term;
+  }
+
+  float3 w_o = target_vertex.position - sample_value.origin;
+  float distance_squared = dot(w_o, w_o);
+  if (distance_squared <= kEpsilon) {
+    return 0.0f;
+  }
+
+  w_o *= rsqrt(distance_squared);
+  float3 emitter_normal = normalize(sample_value.normal);
+  float exponent = 1.0f;
+  if (sample_value.triangle_index != kInvalidIndex) {
+    TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], sample_value.triangle_index);
+    Material emitter_material = (Material)0;
+    MaterialAccessGPUContext material_context = {constants.scene.materials};
+    if (material_access_try_load_full(material_context, tri.material_index, emitter_material) == false) {
+      return 0.0f;
+    }
+    exponent = scene_math_shared_collimation_to_exponent(emitter_material.emission_collimation);
+    emitter_normal = tri.geo_n;
+  }
+
+  float pdf_dir = pow(max(0.0f, dot(emitter_normal, w_o)), exponent) * kInvPi;
+  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, sample_value.origin, target_vertex.position, wavefront_path_vertex_is_surface(target_vertex), target_vertex.normal);
+}
+
+float wavefront_medium_direct_light_weight(GPUWavefrontPathVertex current_vertex, WavefrontEmitterSample emitter_sample, MediumAccess medium_access, float phase_value) {
+  if (scene_multiple_importance_sampling_enabled() == false) {
+    return 1.0f;
+  }
+
+  float sampling_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
+  if (sampling_pdf <= 0.0f) {
+    return 0.0f;
+  }
+
+  float w_light = 0.0f;
+  if (emitter_sample.is_delta == 0u) {
+    w_light = wavefront_safe_div(phase_value, sampling_pdf);
+  }
+
+  float emitter_cosine = abs(dot(emitter_sample.direction, emitter_sample.normal));
+  if (emitter_cosine <= 0.0f) {
+    return 0.0f;
+  }
+
+  float reverse_phase_pdf = gpu_medium_phase_function(medium_access, -emitter_sample.direction, current_vertex.w_i);
+  float current_from_light = wavefront_safe_div(emitter_sample.pdf_dir_out, emitter_sample.pdf_dir * emitter_cosine);
+  float w_camera = current_from_light * (current_vertex.forward_pdf + current_vertex.reverse_pdf * reverse_phase_pdf);
+  return 1.0f / (1.0f + w_light + w_camera);
 }
 
 [numthreads(64, 1, 1)] void wavefront_camera_direct_light_sample_main(uint3 dtid : SV_DispatchThreadID) {
@@ -121,7 +185,6 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
   if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false)) {
     return;
   }
-
   uint connection_length = meta.camera_path_length + 1u;
   if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length()) ||
       (connection_length > load_scene_options_max_path_length())) {
@@ -133,13 +196,58 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
   uint light_sampling_mode = load_scene_options_light_sampling();
   bool sampled = false;
   if ((light_sampling_mode == kSceneLightSamplingRISFromDistribution) || (light_sampling_mode == kSceneLightSamplingRISUniform)) {
-    sampled = wavefront_sample_direct_light_ris(light_sampling_mode, state.spect, current_vertex.position, current_vertex.normal, seed, emitter_sample);
+    sampled = wavefront_sample_direct_light_ris(light_sampling_mode, state.spect, current_vertex.position, true, current_vertex.normal, seed, emitter_sample);
   } else {
     sampled = wavefront_sample_emitter_to_point(light_sampling_mode, state.spect, current_vertex.position, seed, emitter_sample);
   }
   state.sampler_seed = seed;
   wavefront_store_path_state(resources.camera_state_buffer, path_index, state);
   if (sampled == false) {
+    return;
+  }
+
+  if (wavefront_path_vertex_is_medium(current_vertex)) {
+    MediumAccess medium_access = (MediumAccess)0;
+    if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
+      return;
+    }
+
+    float sampling_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
+    float phase_value = gpu_medium_phase_function(medium_access, current_vertex.w_i, emitter_sample.direction);
+    if ((sampling_pdf <= 0.0f) || (phase_value <= 0.0f)) {
+      return;
+    }
+
+    float mis_weight = wavefront_medium_direct_light_weight(current_vertex, emitter_sample, medium_access, phase_value);
+    if (mis_weight <= 0.0f) {
+      return;
+    }
+    SpectralResponse contribution =
+      spectral_response_mul(current_vertex.throughput, spectral_response_mul(emitter_sample.value, phase_value * (mis_weight / sampling_pdf)));
+    if (gpu_valid_spectral_response(contribution) == false) {
+      return;
+    }
+
+    float3 shadow_delta = emitter_sample.origin - current_vertex.position;
+    float shadow_distance = length(shadow_delta);
+    if (shadow_distance <= kRayEpsilon) {
+      return;
+    }
+
+    GPUWavefrontDirectLightTask task = (GPUWavefrontDirectLightTask)0;
+    task.shadow_ray.o = current_vertex.position;
+    task.shadow_ray.d = shadow_delta / shadow_distance;
+    task.shadow_ray.min_t = kRayEpsilon;
+    task.shadow_ray.max_t = shadow_distance;
+    task.shadow_target = emitter_sample.origin;
+    task.contribution = contribution;
+    task.mis_weight = mis_weight;
+    task.pixel_index = current_vertex.pixel_index;
+    task.medium_index = current_vertex.medium_index;
+    task.flags = 1u;
+    task.path_index = path_index;
+    task.sampler_seed = state.sampler_seed;
+    wavefront_store_direct_light_task(resources.direct_light_task_buffer, dispatch_index, task);
     return;
   }
 

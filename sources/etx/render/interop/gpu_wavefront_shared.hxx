@@ -24,6 +24,7 @@ struct GPUWavefrontHitFlags {
     Miss = 1u << 1u,
     Local_emitter = 1u << 2u,
     Environment_emitter = 1u << 3u,
+    Medium = 1u << 4u,
   };
 };
 

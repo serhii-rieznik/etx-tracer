@@ -14,7 +14,11 @@
 
   GPUWavefrontConnectCameraTask task = wavefront_load_connect_camera_task(resources.connect_camera_task_buffer, dispatch_index);
   GPUWavefrontConnectCameraResult result_value = wavefront_load_connect_camera_result(resources.connect_camera_result_buffer, dispatch_index);
-  if ((task.flags == 0u) || (result_value.visible == 0u)) {
+  if (task.flags == 0u) {
+    return;
+  }
+
+  if (result_value.visible == 0u) {
     return;
   }
 

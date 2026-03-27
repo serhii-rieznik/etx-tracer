@@ -599,6 +599,10 @@ bool wavefront_hit_is_miss(GPUWavefrontHit hit) {
   return (hit.flags & GPUWavefrontHitFlags::Miss) != 0u;
 }
 
+bool wavefront_hit_is_medium(GPUWavefrontHit hit) {
+  return (hit.flags & GPUWavefrontHitFlags::Medium) != 0u;
+}
+
 bool wavefront_path_vertex_valid(GPUWavefrontPathVertex vertex) {
   return (vertex.flags & GPUWavefrontVertexFlags::Valid) != 0u;
 }
@@ -611,8 +615,30 @@ bool wavefront_path_vertex_is_surface(GPUWavefrontPathVertex vertex) {
   return (vertex.flags & GPUWavefrontVertexFlags::Surface) != 0u;
 }
 
+bool wavefront_path_vertex_is_medium(GPUWavefrontPathVertex vertex) {
+  return (vertex.flags & GPUWavefrontVertexFlags::Medium) != 0u;
+}
+
 bool wavefront_path_vertex_is_infinite_emitter(GPUWavefrontPathVertex vertex) {
   return ((vertex.flags & GPUWavefrontVertexFlags::Emitter) != 0u) && (vertex.triangle_index == kInvalidIndex);
+}
+
+bool wavefront_try_load_medium(uint medium_index, out MediumAccess medium_access) {
+  medium_access = (MediumAccess)0;
+  if (medium_index == kInvalidIndex) {
+    return false;
+  }
+
+  return try_load_medium_access(medium_index, medium_access);
+}
+
+bool wavefront_medium_explicit_connections_enabled(uint medium_index) {
+  MediumAccess medium_access = (MediumAccess)0;
+  if (wavefront_try_load_medium(medium_index, medium_access) == false) {
+    return false;
+  }
+
+  return medium_access.enable_explicit_connections != 0u;
 }
 
 Vertex wavefront_interpolate_vertex(TriangleData tri, float3 barycentrics) {
@@ -734,7 +760,8 @@ void wavefront_write_root_camera_vertex(uint path_index, Camera camera, Ray ray,
   vertex.geo_normal = eval.normal;
   vertex.medium_index = camera.medium_index;
   vertex.w_i = ray.d;
-  vertex.forward_pdf = eval.pdf_dir;
+  vertex.forward_pdf = wavefront_safe_div(1.0f, eval.pdf_dir);
+  vertex.reverse_pdf = 0.0f;
   vertex.sampled_bsdf_pdf = eval.pdf_dir;
   vertex.path_length = 0u;
   vertex.pixel_index = pixel_index;
@@ -763,7 +790,8 @@ void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample e
   vertex.medium_index = emitter_sample.medium_index;
   vertex.w_i = emitter_sample.direction;
   vertex.emitter_index = emitter_sample.emitter_index;
-  vertex.forward_pdf = emitter_sample.pdf_dir;
+  vertex.forward_pdf = emitter_sample.is_distant != 0u ? wavefront_safe_div(1.0f, emitter_sample.pdf_area) : wavefront_safe_div(1.0f, emitter_sample.pdf_dir);
+  vertex.reverse_pdf = 0.0f;
   vertex.sampled_bsdf_pdf = emitter_sample.pdf_dir;
   vertex.path_length = 0u;
   vertex.pixel_index = path_index;
@@ -786,6 +814,12 @@ void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample e
     vertex.flags |= GPUWavefrontVertexFlags::Delta;
   }
   vertex.pdf_from_prev = emitter_sample.pdf_area * emitter_sample.pdf_sample;
+  if (emitter_sample.is_delta == 0u) {
+    float cosine_term = dot(emitter_sample.direction, emitter_sample.normal);
+    float emission_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample;
+    float reverse_numerator = (emitter_sample.is_distant != 0u) ? 1.0f : cosine_term;
+    vertex.reverse_pdf = wavefront_safe_div(reverse_numerator, emission_pdf);
+  }
   float history_value = scene_path_mode_uses_bdpt_fast() ? 1.0f : 0.0f;
   vertex.pdf_history = history_value;
   vertex.pdf_accumulated = history_value;
@@ -822,6 +856,39 @@ void wavefront_write_vertex(bool from_camera, uint path_index, GPUWavefrontPathS
   }
   if ((state.flags & GPUWavefrontPathFlags::Delta) != 0u) {
     vertex.flags |= GPUWavefrontVertexFlags::Delta;
+  }
+
+  uint descriptor_index = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
+  wavefront_store_path_vertex(descriptor_index, vertex_slot, vertex);
+}
+
+void wavefront_write_medium_vertex(bool from_camera, uint path_index, GPUWavefrontPathState state, GPUWavefrontHit hit) {
+  GPUWavefrontResources resources = wavefront_load_resources();
+  uint vertex_slot = wavefront_vertex_slot(path_index, state.path_length);
+  if (vertex_slot >= resources.vertex_capacity) {
+    return;
+  }
+
+  GPUWavefrontPathVertex vertex = (GPUWavefrontPathVertex)0;
+  vertex.throughput = state.throughput;
+  vertex.position = hit.vertex.pos;
+  vertex.triangle_index = kInvalidIndex;
+  vertex.normal = float3(0.0f, 0.0f, 0.0f);
+  vertex.material_index = kInvalidIndex;
+  vertex.geo_normal = float3(0.0f, 0.0f, 0.0f);
+  vertex.medium_index = state.medium_index;
+  vertex.w_i = state.ray.d;
+  vertex.emitter_index = kInvalidIndex;
+  vertex.texcoord = float2(0.0f, 0.0f);
+  vertex.forward_pdf = state.forward_pdf;
+  vertex.reverse_pdf = state.reverse_pdf;
+  vertex.sampled_bsdf_pdf = state.sampled_bsdf_pdf;
+  vertex.eta_scale = state.eta_scale;
+  vertex.path_length = state.path_length;
+  vertex.pixel_index = state.pixel_index;
+  vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Medium | (from_camera ? GPUWavefrontVertexFlags::From_camera : GPUWavefrontVertexFlags::From_light);
+  if (wavefront_medium_explicit_connections_enabled(state.medium_index)) {
+    vertex.flags |= GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible;
   }
 
   uint descriptor_index = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;

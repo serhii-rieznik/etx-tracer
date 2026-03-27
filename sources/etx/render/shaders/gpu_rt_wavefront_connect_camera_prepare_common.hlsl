@@ -152,7 +152,6 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
   if (wavefront_path_vertex_connectible(input_value.current_vertex) == false) {
     return false;
   }
-
   uint target_path_length = input_value.path_meta.light_path_length + 1u;
   if ((scene_strategy_enabled(kSceneStrategyConnectToCamera) == false) || (target_path_length < load_scene_options_min_path_length()) ||
       (target_path_length > load_scene_options_max_path_length())) {
@@ -195,11 +194,19 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
 
 void wavefront_clear_connect_camera_task(uint dispatch_index) {
   GPUWavefrontResources resources = wavefront_load_resources();
-  if (resources.connect_camera_task_buffer != kInvalidIndex) {
-    GPUWavefrontConnectCameraTask empty_task = (GPUWavefrontConnectCameraTask)0;
-    empty_task.medium_index = kInvalidIndex;
-    wavefront_store_connect_camera_task(resources.connect_camera_task_buffer, dispatch_index, empty_task);
+  if (resources.connect_camera_task_buffer == kInvalidIndex) {
+    return;
   }
+
+  uint queue_descriptor = wavefront_queue_current_descriptor(false);
+  uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index < queue_count) {
+    return;
+  }
+
+  GPUWavefrontConnectCameraTask empty_task = (GPUWavefrontConnectCameraTask)0;
+  empty_task.medium_index = kInvalidIndex;
+  wavefront_store_connect_camera_task(resources.connect_camera_task_buffer, dispatch_index, empty_task);
 }
 
 void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontConnectCameraPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), inout Sampler sampler) {
@@ -224,11 +231,11 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
     return;
   }
 
-  float len = length(input_value.camera_sample.position - input_value.current_vertex.position);
   float direction_scale = camera_shared_clip_direction_scale(input_value.camera, input_value.camera_sample.direction);
   float near_extent = (input_value.camera.clip_near > 0.0f) ? input_value.camera.clip_near / direction_scale : 0.0f;
-  float3 clip_pos = input_value.current_vertex.position + input_value.camera_sample.direction * max(0.0f, len - near_extent);
+  float surface_len = length(input_value.camera_sample.position - input_value.hit.vertex.pos);
   float3 shadow_origin = wavefront_surface_shading_position(input_value.hit, input_value.camera_sample.direction);
+  float3 clip_pos = shadow_origin + input_value.camera_sample.direction * max(0.0f, surface_len - near_extent);
   float3 shadow_delta = clip_pos - shadow_origin;
   float shadow_distance = length(shadow_delta);
   if (shadow_distance <= kRayEpsilon) {

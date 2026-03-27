@@ -93,16 +93,6 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
     return 1.0f;
   }
 
-  if (scene_path_mode_is_path_tracing()) {
-    if ((input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Delta) != 0u) {
-      return 1.0f;
-    }
-
-    float p_connect = wavefront_direct_light_sampling_pdf(input_value.sample_value);
-    float p_direct = bsdf_eval.pdf;
-    return power_heuristic(p_connect, p_direct);
-  }
-
   float p_sample = wavefront_direct_light_emitter_sample_pdf(input_value.sample_value);
   float p_fwd = input_value.previous_vertex.pdf_from_prev * input_value.current_vertex.pdf_from_prev;
   float p_connection = p_fwd * p_sample;
@@ -162,12 +152,10 @@ bool wavefront_load_direct_light_prepare_input(uint dispatch_index, out Wavefron
   if ((wavefront_path_vertex_valid(input_value.current_vertex) == false) || (wavefront_path_vertex_connectible(input_value.current_vertex) == false)) {
     return false;
   }
-  if (scene_path_mode_is_path_tracing() == false) {
-    input_value.previous_vertex =
-      wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
-    if (wavefront_path_vertex_valid(input_value.previous_vertex) == false) {
-      return false;
-    }
+  input_value.previous_vertex =
+    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
+  if (wavefront_path_vertex_valid(input_value.previous_vertex) == false) {
+    return false;
   }
   if (wavefront_try_load_material_full(input_value.hit.material_index, input_value.material) == false) {
     return false;

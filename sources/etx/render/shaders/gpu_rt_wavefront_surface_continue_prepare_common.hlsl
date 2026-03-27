@@ -18,6 +18,9 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   if ((wavefront_path_state_valid(state) == false) || (wavefront_hit_valid(hit) == false) || wavefront_hit_is_miss(hit)) {
     return;
   }
+  if (wavefront_hit_is_medium(hit)) {
+    return;
+  }
 
   Material material = (Material)0;
   if (try_load_material_full(hit.material_index, material) == false) {
@@ -94,6 +97,8 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   bool current_connectible = sample_valid ? (bsdf_sample_is_delta(bsdf_sample) == false) : true;
   bool previous_connectible = wavefront_path_vertex_connectible(previous_vertex);
   uint current_medium_index = (sample_valid && ((bsdf_sample.properties & BSDFSample::MediumChanged) != 0u)) ? bsdf_sample.medium_index : state.medium_index;
+  float current_d_vcm = current_vertex.forward_pdf;
+  float current_d_vc = current_vertex.reverse_pdf;
 
   current_vertex.sampled_bsdf_pdf = bsdf_sample.pdf;
   current_vertex.medium_index = current_medium_index;
@@ -137,6 +142,14 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   bool continue_path = sample_valid && ((state.path_length + 1u) <= resources.max_path_length);
   state.reserved0 = GPUWavefrontPendingContinuationFlags::Prepared;
   if (continue_path) {
+    float cos_theta_bsdf = abs(dot(hit.vertex.nrm, bsdf_sample.w_o));
+    if (bsdf_sample_is_delta(bsdf_sample)) {
+      state.forward_pdf = 0.0f;
+      state.reverse_pdf = current_d_vc * cos_theta_bsdf;
+    } else {
+      state.forward_pdf = wavefront_safe_div(1.0f, bsdf_sample.pdf);
+      state.reverse_pdf = wavefront_safe_div(cos_theta_bsdf * ((current_d_vc * reverse_bsdf_pdf) + current_d_vcm), bsdf_sample.pdf);
+    }
     SpectralResponse next_throughput = spectral_response_mul(state.throughput, bsdf_sample.weight);
     if (from_camera == false) {
       float shading_fix = bsdf_fix_shading_normal(hit.geo_normal, hit.vertex.nrm, state.ray.d, bsdf_sample.w_o);
