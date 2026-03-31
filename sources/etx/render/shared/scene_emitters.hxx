@@ -125,7 +125,8 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(Scene::LightSampling sampling_met
       float weight = candidate_weight / pdf_sample;
 
       weight_sum += weight;
-      if (smp.next() * weight_sum < weight) {
+      float reservoir_weight = smp.next() * weight_sum;
+      if (reservoir_weight < weight) {
         selected_sample = sample;
         selected_weight = weight;
       }
@@ -135,7 +136,8 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(Scene::LightSampling sampling_met
       return {};
     }
 
-    selected_sample.value *= weight_sum / (float(candidate_count) * selected_weight);
+    float reservoir_scale = weight_sum / (float(candidate_count) * selected_weight);
+    selected_sample.value *= reservoir_scale;
     return selected_sample;
   }
 

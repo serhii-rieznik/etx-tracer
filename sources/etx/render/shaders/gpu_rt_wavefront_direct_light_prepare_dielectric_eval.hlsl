@@ -68,6 +68,8 @@ BSDFEval wavefront_direct_light_dielectric_eval_external(BSDFResourceContext con
 
 void wavefront_store_direct_light_dielectric_partial_task(uint dispatch_index, WavefrontDirectLightPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval),
   ETX_IN(Sampler, sampler)) {
+  wavefront_store_direct_light_prepare_sampler_seed(input_value, sampler.seed);
+
   if ((bsdf_eval_valid(bsdf_eval) == false) || (wavefront_valid_spectral_response(bsdf_eval.bsdf) == false)) {
     return;
   }

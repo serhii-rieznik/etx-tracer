@@ -402,6 +402,15 @@ bool wavefront_trace_path_state(RayDesc ray, SpectralQuery spect, SpectralRespon
       return true;
     }
 
+    // Match CPU bidirectional sampler consumption for boundary intersections.
+    // The CPU path allocates per-surface randoms before discovering the boundary and continuing.
+    rnd01(seed);
+    rnd01(seed);
+    rnd01(seed);
+    rnd01(seed);
+    rnd01(seed);
+    rnd01(seed);
+
     traveled_distance += segment_hit.hit_t;
     if ((ray.TMax < kMaxFloat) && (traveled_distance >= ray.TMax)) {
       return false;

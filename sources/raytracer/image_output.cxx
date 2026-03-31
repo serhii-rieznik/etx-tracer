@@ -21,8 +21,59 @@ float compare_space_value(float value) {
   return clamped / (1.0f + clamped);
 }
 
+float3 compare_space_rgb(const float4& value) {
+  return {compare_space_value(value.x), compare_space_value(value.y), compare_space_value(value.z)};
+}
+
 float luminance_from_rgb(const float3& value) {
   return dot(value, float3{0.2126f, 0.7152f, 0.0722f});
+}
+
+uint32_t clamp_image_coordinate(int32_t value, uint32_t limit) {
+  if (value < 0) {
+    return 0u;
+  }
+
+  const int32_t max_value = static_cast<int32_t>(limit) - 1;
+  if (value > max_value) {
+    return limit - 1u;
+  }
+
+  return static_cast<uint32_t>(value);
+}
+
+void gaussian_blur_compare_space_image(const std::vector<float3>& input, const uint2& image_size, std::vector<float3>& output) {
+  static constexpr float kernel[5] = {1.0f / 16.0f, 4.0f / 16.0f, 6.0f / 16.0f, 4.0f / 16.0f, 1.0f / 16.0f};
+
+  const size_t pixel_count = static_cast<size_t>(image_size.x) * static_cast<size_t>(image_size.y);
+  std::vector<float3> temp(pixel_count);
+  output.resize(pixel_count);
+
+  for (uint32_t y = 0u; y < image_size.y; ++y) {
+    for (uint32_t x = 0u; x < image_size.x; ++x) {
+      float3 value = {0.0f, 0.0f, 0.0f};
+      for (int32_t dx = -2; dx <= 2; ++dx) {
+        const uint32_t sx = clamp_image_coordinate(static_cast<int32_t>(x) + dx, image_size.x);
+        const float weight = kernel[dx + 2];
+        const float3 sample = input[static_cast<size_t>(y) * static_cast<size_t>(image_size.x) + sx];
+        value += sample * weight;
+      }
+      temp[static_cast<size_t>(y) * static_cast<size_t>(image_size.x) + x] = value;
+    }
+  }
+
+  for (uint32_t y = 0u; y < image_size.y; ++y) {
+    for (uint32_t x = 0u; x < image_size.x; ++x) {
+      float3 value = {0.0f, 0.0f, 0.0f};
+      for (int32_t dy = -2; dy <= 2; ++dy) {
+        const uint32_t sy = clamp_image_coordinate(static_cast<int32_t>(y) + dy, image_size.y);
+        const float weight = kernel[dy + 2];
+        const float3 sample = temp[static_cast<size_t>(sy) * static_cast<size_t>(image_size.x) + x];
+        value += sample * weight;
+      }
+      output[static_cast<size_t>(y) * static_cast<size_t>(image_size.x) + x] = value;
+    }
+  }
 }
 
 float3 heatmap_color(float t) {
@@ -213,16 +264,20 @@ bool compare_images(const float4* reference, const float4* result, const uint2& 
   float linear_max_absolute_error = 0.0f;
   const double channel_count = 3.0 * static_cast<double>(image_size.x) * static_cast<double>(image_size.y);
   const double pixel_count = static_cast<double>(image_size.x) * static_cast<double>(image_size.y);
+  std::vector<float3> reference_compare_space = {};
+  std::vector<float3> result_compare_space = {};
   std::vector<float> absolute_error_distribution = {};
   std::vector<float> linear_absolute_error_distribution = {};
+  reference_compare_space.reserve(static_cast<size_t>(image_size.x) * static_cast<size_t>(image_size.y));
+  result_compare_space.reserve(static_cast<size_t>(image_size.x) * static_cast<size_t>(image_size.y));
   absolute_error_distribution.reserve(static_cast<size_t>(image_size.x) * static_cast<size_t>(image_size.y));
   linear_absolute_error_distribution.reserve(static_cast<size_t>(image_size.x) * static_cast<size_t>(image_size.y));
 
   for (uint32_t i = 0u, e = image_size.x * image_size.y; i < e; ++i) {
     const float3 reference_linear_rgb = {reference[i].x, reference[i].y, reference[i].z};
     const float3 result_linear_rgb = {result[i].x, result[i].y, result[i].z};
-    const float3 reference_rgb = {compare_space_value(reference[i].x), compare_space_value(reference[i].y), compare_space_value(reference[i].z)};
-    const float3 result_rgb = {compare_space_value(result[i].x), compare_space_value(result[i].y), compare_space_value(result[i].z)};
+    const float3 reference_rgb = compare_space_rgb(reference[i]);
+    const float3 result_rgb = compare_space_rgb(result[i]);
     const float3 diff_rgb = {
       fabsf(result_rgb.x - reference_rgb.x),
       fabsf(result_rgb.y - reference_rgb.y),
@@ -247,6 +302,8 @@ bool compare_images(const float4* reference, const float4* result, const uint2& 
     const float linear_diff_value = fmaxf(linear_diff_rgb.x, fmaxf(linear_diff_rgb.y, linear_diff_rgb.z));
     const float3 diff_heatmap = heatmap_color(diff_value);
 
+    reference_compare_space.push_back(reference_rgb);
+    result_compare_space.push_back(result_rgb);
     difference_image[i] = {diff_heatmap.x, diff_heatmap.y, diff_heatmap.z, 1.0f};
 
     absolute_error_sum += diff_rgb.x + diff_rgb.y + diff_rgb.z;
@@ -284,6 +341,24 @@ bool compare_images(const float4* reference, const float4* result, const uint2& 
   comparison.brightness_ratio = comparison.result_mean_luminance / fmaxf(comparison.reference_mean_luminance, 1.0e-12f);
   comparison.brightness_relative_error = (comparison.result_mean_luminance - comparison.reference_mean_luminance) / fmaxf(comparison.reference_mean_luminance, 1.0e-12f);
   comparison.similarity = 100.0f * (1.0f - saturate(comparison.root_mean_squared_error));
+
+  std::vector<float3> low_frequency_reference = {};
+  std::vector<float3> low_frequency_result = {};
+  gaussian_blur_compare_space_image(reference_compare_space, image_size, low_frequency_reference);
+  gaussian_blur_compare_space_image(result_compare_space, image_size, low_frequency_result);
+
+  double low_frequency_squared_error_sum = 0.0;
+  for (uint32_t i = 0u, e = image_size.x * image_size.y; i < e; ++i) {
+    const float3 diff_rgb = {
+      low_frequency_result[i].x - low_frequency_reference[i].x,
+      low_frequency_result[i].y - low_frequency_reference[i].y,
+      low_frequency_result[i].z - low_frequency_reference[i].z,
+    };
+    low_frequency_squared_error_sum += (diff_rgb.x * diff_rgb.x) + (diff_rgb.y * diff_rgb.y) + (diff_rgb.z * diff_rgb.z);
+  }
+
+  comparison.low_frequency_root_mean_squared_error = static_cast<float>(sqrt(low_frequency_squared_error_sum / channel_count));
+  comparison.low_frequency_similarity = 100.0f * (1.0f - saturate(comparison.low_frequency_root_mean_squared_error));
 
   comparison.linear_mean_absolute_error = static_cast<float>(linear_absolute_error_sum / channel_count);
   comparison.linear_root_mean_squared_error = static_cast<float>(sqrt(linear_squared_error_sum / channel_count));

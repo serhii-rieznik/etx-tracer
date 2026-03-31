@@ -70,10 +70,11 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
   sample_value.triangle_index = emitter_instance.triangle_index;
   sample_value.medium_index = emitter_access_external_medium_index(make_scene_emitter_access_gpu_context(), emitter_index);
   sample_value.pdf_sample = pdf_sample;
+  float2 emitter_sample_rnd = float2(rnd01(seed), rnd01(seed));
 
   if (emitter_instance.emitter_class == EmitterClass::Area) {
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
-    sample_value.barycentric = random_barycentric(float2(rnd01(seed), rnd01(seed)));
+    sample_value.barycentric = random_barycentric(emitter_sample_rnd);
     Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
     sample_value.origin = vertex.pos;
     sample_value.normal = normalize(vertex.nrm);
@@ -127,7 +128,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
       float sin_half_angle = sqrt(max(0.0f, 1.0f - (emitter_profile.emitter_angular_size_cosine * emitter_profile.emitter_angular_size_cosine)));
       float equivalent_disk_size = 2.0f * (sin_half_angle / max(kEpsilon, emitter_profile.emitter_angular_size_cosine));
       OrthonormalBasis basis = orthonormal_basis(access.emitter_direction);
-      disk_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));
+      disk_sample = sample_disk(emitter_sample_rnd);
       sample_value.direction =
         normalize(access.emitter_direction + basis.u * disk_sample.x * (0.5f * equivalent_disk_size) + basis.v * disk_sample.y * (0.5f * equivalent_disk_size));
     } else {
@@ -147,9 +148,8 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
   }
 
   ImageSampleGPUContext image_context = make_image_sample_gpu_context(constants.scene.images);
-  float2 sample_rnd = float2(rnd01(seed), rnd01(seed));
-  ImageSampleAccess image_sample = image_sample_access_default(sample_rnd);
-  if (image_sample_try_sample(image_context, emitter_profile.emission_image_index, sample_rnd, image_sample) == false) {
+  ImageSampleAccess image_sample = image_sample_access_default(emitter_sample_rnd);
+  if (image_sample_try_sample(image_context, emitter_profile.emission_image_index, emitter_sample_rnd, image_sample) == false) {
     return false;
   }
 

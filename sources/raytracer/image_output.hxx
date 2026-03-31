@@ -13,8 +13,10 @@ struct ImageOutputParameters {
 
 struct ImageComparisonResult {
   float similarity = 0.0f;
+  float low_frequency_similarity = 0.0f;
   float mean_absolute_error = 0.0f;
   float root_mean_squared_error = 0.0f;
+  float low_frequency_root_mean_squared_error = 0.0f;
   float relative_root_mean_squared_error = 0.0f;
   float max_absolute_error = 0.0f;
   float mean_signed_error = 0.0f;

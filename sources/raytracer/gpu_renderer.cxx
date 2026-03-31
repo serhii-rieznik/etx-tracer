@@ -1129,9 +1129,8 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   const uint32_t path_capacity = static_cast<uint32_t>(pixel_count_u64);
   const GPUPathMode path_mode = static_cast<GPUPathMode>(_path_mode);
   const uint32_t scene_max_path_length = std::max(1u, scene.data().options.max_path_length);
-  const uint32_t stored_history_bounces =
-    ((path_mode == GPUPathMode::PathTracing) || (path_mode == GPUPathMode::BDPTFast)) ? GPURaytracingRenderer::kGPUFixedMaxBounces : kWavefrontRollingHistoryBounces;
-  const uint32_t max_path_length = (path_mode == GPUPathMode::BDPTFast) ? std::min(scene_max_path_length, GPURaytracingRenderer::kGPUFixedMaxBounces) : scene_max_path_length;
+  const uint32_t stored_history_bounces = (path_mode == GPUPathMode::PathTracing) ? GPURaytracingRenderer::kGPUFixedMaxBounces : kWavefrontRollingHistoryBounces;
+  const uint32_t max_path_length = scene_max_path_length;
   const uint64_t vertex_capacity_u64 = static_cast<uint64_t>(path_capacity) * static_cast<uint64_t>(stored_history_bounces + 1u);
   if (vertex_capacity_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
     log::error("GPU RT: wavefront vertex capacity overflow");
@@ -1564,7 +1563,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     };
     const uint32_t scene_max_path_length = std::max(1u, scene.data().options.max_path_length);
     const GPUPathMode path_mode = static_cast<GPUPathMode>(_path_mode);
-    const uint32_t max_path_length = (path_mode == GPUPathMode::BDPTFast) ? std::min(scene_max_path_length, GPURaytracingRenderer::kGPUFixedMaxBounces) : scene_max_path_length;
+    const uint32_t max_path_length = scene_max_path_length;
     constexpr uint32_t kQueueCountReadbackSubmitLag = 4u;
     std::vector<RHICommandBuffer> submitted_commands = {};
     submitted_commands.reserve(static_cast<size_t>(kQueueCountReadbackSubmitLag) + 1u);

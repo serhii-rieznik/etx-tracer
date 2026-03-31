@@ -93,11 +93,17 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
     return 1.0f;
   }
 
+  float sampling_pdf = wavefront_direct_light_sampling_pdf(input_value.sample_value);
+  bool sampled_light_is_delta = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Delta) != 0u;
+  if (scene_path_mode_is_path_tracing()) {
+    float direct_pdf = sampled_light_is_delta ? 0.0f : bsdf_eval.pdf;
+    return power_heuristic(sampling_pdf, direct_pdf);
+  }
+
   float p_sample = wavefront_direct_light_emitter_sample_pdf(input_value.sample_value);
   float p_fwd = input_value.previous_vertex.pdf_from_prev * input_value.current_vertex.pdf_from_prev;
   float p_connection = p_fwd * p_sample;
   bool sampled_light_is_surface = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Distant) == 0u;
-  bool sampled_light_is_delta = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Delta) != 0u;
   float p_direct = 0.0f;
   if (sampled_light_is_delta == false) {
     float p_bsdf_sample = sampled_light_is_surface ? wavefront_convert_solid_angle_pdf_to_area(bsdf_eval.pdf, input_value.current_vertex.position, input_value.sample_value.origin,
@@ -164,8 +170,21 @@ bool wavefront_load_direct_light_prepare_input(uint dispatch_index, out Wavefron
   return true;
 }
 
+void wavefront_store_direct_light_prepare_sampler_seed(ETX_IN(WavefrontDirectLightPrepareInput, input_value), uint sampler_seed) {
+  GPUWavefrontPathState state = wavefront_load_path_state(input_value.resources.camera_state_buffer, input_value.path_index);
+  if (wavefront_path_state_valid(state) == false) {
+    return;
+  }
+
+  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(input_value.resources.camera_state_buffer);
+  uint base_offset = input_value.path_index * kGPUWavefrontPathStateStride;
+  buffer.Store(base_offset + kGPUWavefrontPathStateSamplerSeedOffset, sampler_seed);
+}
+
 void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(WavefrontDirectLightPrepareInput, input_value), ETX_IN(BSDFEval, bsdf_eval),
   ETX_INOUT(Sampler, sampler)) {
+  wavefront_store_direct_light_prepare_sampler_seed(input_value, sampler.seed);
+
   if ((bsdf_eval_valid(bsdf_eval) == false) || (wavefront_valid_spectral_response(bsdf_eval.bsdf) == false)) {
     return;
   }

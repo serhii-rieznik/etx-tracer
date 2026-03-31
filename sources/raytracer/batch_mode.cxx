@@ -380,9 +380,18 @@ const char* metric_tooltip_text(const char* label, bool linear_space) {
     return linear_space ? "Overall similarity score derived from linear-space RMSE. Higher is better. 100% means identical images."
                         : "Overall similarity score derived from compare-space RMSE. Higher is better. 100% means identical images.";
   }
+  if (strcmp(label, "Low-Freq Similarity") == 0) {
+    return linear_space
+             ? "Low-frequency similarity is currently reported only for compare space."
+             : "Similarity derived from compare-space RMSE after a small Gaussian blur. Higher is better. Useful when images are visually identical apart from noise pattern.";
+  }
   if (strcmp(label, "RMSE") == 0) {
     return linear_space ? "Root mean squared error in linear HDR space. Penalizes larger errors more strongly than MAE. Lower is better."
                         : "Root mean squared error in compare space. Penalizes larger errors more strongly than MAE. Lower is better.";
+  }
+  if (strcmp(label, "Low-Freq RMSE") == 0) {
+    return linear_space ? "Low-frequency RMSE is currently reported only for compare space."
+                        : "Compare-space RMSE after a small Gaussian blur. Lower is better. Useful for separating structure mismatch from different noise realization.";
   }
   if (strcmp(label, "MAE") == 0) {
     return linear_space ? "Mean absolute error in linear HDR space. Average per-channel absolute difference. Lower is better."
@@ -495,17 +504,18 @@ std::string json_escape(const std::string& text) {
 }
 
 std::string format_comparison_report(const char* technique_tag, const ImageComparisonResult& comparison) {
-  char buffer[1536] = {};
+  char buffer[1792] = {};
   std::snprintf(buffer, sizeof(buffer),
-    "[%s] compare_space{similarity=%.2f%%, rmse=%.6f, mae=%.6f, relative_rmse=%.6f, max_abs=%.6f, mean_signed=%.6f, ref_avg_luma=%.6f, gpu_avg_luma=%.6f, "
-    "brightness_ratio=%.6f, brightness_rel=%.6f, p95_abs=%.6f, p99_abs=%.6f} linear{rmse=%.6f, mae=%.6f, relative_rmse=%.6f, max_abs=%.6f, "
+    "[%s] compare_space{similarity=%.2f%%, low_freq_similarity=%.2f%%, rmse=%.6f, low_freq_rmse=%.6f, mae=%.6f, relative_rmse=%.6f, max_abs=%.6f, "
+    "mean_signed=%.6f, ref_avg_luma=%.6f, gpu_avg_luma=%.6f, brightness_ratio=%.6f, brightness_rel=%.6f, p95_abs=%.6f, p99_abs=%.6f} linear{rmse=%.6f, mae=%.6f, relative_rmse=%.6f, max_abs=%.6f, "
     "mean_signed=%.6f, ref_avg_luma=%.6f, gpu_avg_luma=%.6f, brightness_ratio=%.6f, brightness_rel=%.6f, p95_abs=%.6f, p99_abs=%.6f}\n",
-    technique_tag, comparison.similarity, comparison.root_mean_squared_error, comparison.mean_absolute_error, comparison.relative_root_mean_squared_error,
-    comparison.max_absolute_error, comparison.mean_signed_error, comparison.reference_mean_luminance, comparison.result_mean_luminance, comparison.brightness_ratio,
-    comparison.brightness_relative_error, comparison.percentile_95_absolute_error, comparison.percentile_99_absolute_error, comparison.linear_root_mean_squared_error,
-    comparison.linear_mean_absolute_error, comparison.linear_relative_root_mean_squared_error, comparison.linear_max_absolute_error, comparison.linear_mean_signed_error,
-    comparison.linear_reference_mean_luminance, comparison.linear_result_mean_luminance, comparison.linear_brightness_ratio, comparison.linear_brightness_relative_error,
-    comparison.linear_percentile_95_absolute_error, comparison.linear_percentile_99_absolute_error);
+    technique_tag, comparison.similarity, comparison.low_frequency_similarity, comparison.root_mean_squared_error, comparison.low_frequency_root_mean_squared_error,
+    comparison.mean_absolute_error, comparison.relative_root_mean_squared_error, comparison.max_absolute_error, comparison.mean_signed_error,
+    comparison.reference_mean_luminance, comparison.result_mean_luminance, comparison.brightness_ratio, comparison.brightness_relative_error,
+    comparison.percentile_95_absolute_error, comparison.percentile_99_absolute_error, comparison.linear_root_mean_squared_error, comparison.linear_mean_absolute_error,
+    comparison.linear_relative_root_mean_squared_error, comparison.linear_max_absolute_error, comparison.linear_mean_signed_error, comparison.linear_reference_mean_luminance,
+    comparison.linear_result_mean_luminance, comparison.linear_brightness_ratio, comparison.linear_brightness_relative_error, comparison.linear_percentile_95_absolute_error,
+    comparison.linear_percentile_99_absolute_error);
   return buffer;
 }
 
@@ -517,15 +527,16 @@ std::string format_ai_comparison_report(const char* kind, const char* technique_
   const std::string safe_reference = json_escape(reference_file != nullptr ? reference_file : "");
   const std::string safe_output = json_escape(output_file != nullptr ? output_file : "");
 
-  char buffer[3072] = {};
+  char buffer[3584] = {};
   std::snprintf(buffer, sizeof(buffer),
-    "AI_IMAGE_COMPARISON {\"schema\":\"etx.image_comparison.v2\",\"kind\":\"%s\",\"technique\":\"%s\",\"scene\":\"%s\",\"reference\":\"%s\","
-    "\"output\":\"%s\",\"compare_space\":{\"similarity_percent\":%.6f,\"rmse\":%.6f,\"mae\":%.6f,\"relative_rmse\":%.6f,\"max_abs\":%.6f,"
+    "AI_IMAGE_COMPARISON {\"schema\":\"etx.image_comparison.v3\",\"kind\":\"%s\",\"technique\":\"%s\",\"scene\":\"%s\",\"reference\":\"%s\","
+    "\"output\":\"%s\",\"compare_space\":{\"similarity_percent\":%.6f,\"low_frequency_similarity_percent\":%.6f,\"rmse\":%.6f,\"low_frequency_rmse\":%.6f,\"mae\":%.6f,\"relative_rmse\":%.6f,\"max_abs\":%.6f,"
     "\"mean_signed\":%.6f,\"ref_avg_luma\":%.6f,\"gpu_avg_luma\":%.6f,\"brightness_ratio\":%.6f,\"brightness_rel\":%.6f,\"p95_abs\":%.6f,\"p99_abs\":%.6f},"
     "\"linear\":{\"rmse\":%.6f,\"mae\":%.6f,\"relative_rmse\":%.6f,\"max_abs\":%.6f,\"mean_signed\":%.6f,\"ref_avg_luma\":%.6f,\"gpu_avg_luma\":%.6f,"
     "\"brightness_ratio\":%.6f,\"brightness_rel\":%.6f,\"p95_abs\":%.6f,\"p99_abs\":%.6f}}\n",
-    safe_kind.c_str(), safe_technique.c_str(), safe_scene.c_str(), safe_reference.c_str(), safe_output.c_str(), comparison.similarity, comparison.root_mean_squared_error,
-    comparison.mean_absolute_error, comparison.relative_root_mean_squared_error, comparison.max_absolute_error, comparison.mean_signed_error, comparison.reference_mean_luminance,
+    safe_kind.c_str(), safe_technique.c_str(), safe_scene.c_str(), safe_reference.c_str(), safe_output.c_str(), comparison.similarity,
+    comparison.low_frequency_similarity, comparison.root_mean_squared_error, comparison.low_frequency_root_mean_squared_error, comparison.mean_absolute_error,
+    comparison.relative_root_mean_squared_error, comparison.max_absolute_error, comparison.mean_signed_error, comparison.reference_mean_luminance,
     comparison.result_mean_luminance, comparison.brightness_ratio, comparison.brightness_relative_error, comparison.percentile_95_absolute_error,
     comparison.percentile_99_absolute_error, comparison.linear_root_mean_squared_error, comparison.linear_mean_absolute_error, comparison.linear_relative_root_mean_squared_error,
     comparison.linear_max_absolute_error, comparison.linear_mean_signed_error, comparison.linear_reference_mean_luminance, comparison.linear_result_mean_luminance,
@@ -550,7 +561,9 @@ void append_ai_comparison_json(std::string& json_text, const char* kind, const c
   json_text += "      \"output\": \"" + safe_output + "\",\n";
   json_text += "      \"compare_space\": {\n";
   json_text += "        \"similarity_percent\": " + std::to_string(comparison.similarity) + ",\n";
+  json_text += "        \"low_frequency_similarity_percent\": " + std::to_string(comparison.low_frequency_similarity) + ",\n";
   json_text += "        \"rmse\": " + std::to_string(comparison.root_mean_squared_error) + ",\n";
+  json_text += "        \"low_frequency_rmse\": " + std::to_string(comparison.low_frequency_root_mean_squared_error) + ",\n";
   json_text += "        \"mae\": " + std::to_string(comparison.mean_absolute_error) + ",\n";
   json_text += "        \"relative_rmse\": " + std::to_string(comparison.relative_root_mean_squared_error) + ",\n";
   json_text += "        \"max_abs\": " + std::to_string(comparison.max_absolute_error) + ",\n";
@@ -844,7 +857,9 @@ void append_full_comparison_html_entry(std::string& html_text, const FullCompari
   const std::string gpu_exr_file = html_file_name_only(gpu_output_file);
   const std::string viewer_id = std::string("viewer_") + technique.file_tag;
   const float compare_similarity_score = clamp_metric_score(comparison.similarity / 100.0f);
+  const float compare_low_frequency_similarity_score = clamp_metric_score(comparison.low_frequency_similarity / 100.0f);
   const float compare_rmse_score = inverse_error_metric_score(comparison.root_mean_squared_error, 1.0f);
+  const float compare_low_frequency_rmse_score = inverse_error_metric_score(comparison.low_frequency_root_mean_squared_error, 1.0f);
   const float compare_mae_score = inverse_error_metric_score(comparison.mean_absolute_error, 1.0f);
   const float compare_relative_rmse_score = inverse_error_metric_score(comparison.relative_root_mean_squared_error, 1.0f);
   const float compare_max_abs_score = inverse_error_metric_score(comparison.max_absolute_error, 1.0f);
@@ -868,7 +883,9 @@ void append_full_comparison_html_entry(std::string& html_text, const FullCompari
   const float linear_p99_score = inverse_error_metric_score(comparison.linear_percentile_99_absolute_error, 1.0f);
   std::string compare_rows = {};
   compare_rows += metric_row_percent("Similarity", comparison.similarity, compare_similarity_score, false);
+  compare_rows += metric_row_percent("Low-Freq Similarity", comparison.low_frequency_similarity, compare_low_frequency_similarity_score, false);
   compare_rows += metric_row_value("RMSE", comparison.root_mean_squared_error, compare_rmse_score, false);
+  compare_rows += metric_row_value("Low-Freq RMSE", comparison.low_frequency_root_mean_squared_error, compare_low_frequency_rmse_score, false);
   compare_rows += metric_row_value("MAE", comparison.mean_absolute_error, compare_mae_score, false);
   compare_rows += metric_row_value("Relative RMSE", comparison.relative_root_mean_squared_error, compare_relative_rmse_score, false);
   compare_rows += metric_row_value("Max Abs", comparison.max_absolute_error, compare_max_abs_score, false);

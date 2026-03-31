@@ -112,8 +112,9 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     current_vertex.flags |= GPUWavefrontVertexFlags::Delta;
   }
 
+  float3 reverse_direction = sample_valid ? bsdf_sample.w_o : float3(0.0f, 0.0f, 0.0f);
   float reverse_bsdf_pdf =
-    sample_valid ? wavefront_surface_continue_stage_reverse_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), bsdf_data, bsdf_sample.w_o, material, bsdf_sampler) : 0.0f;
+    wavefront_surface_continue_stage_reverse_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), bsdf_data, reverse_direction, material, bsdf_sampler);
   previous_vertex.pdf_from_next = wavefront_vertex_to_vertex_area_pdf(reverse_bsdf_pdf, current_vertex, previous_vertex);
   if ((from_camera == false) && (state.path_length == 1u) && (previous_vertex.emitter_index != kInvalidIndex)) {
     GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;

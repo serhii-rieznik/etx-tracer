@@ -2,7 +2,7 @@
 #include "gpu_rt_wavefront_emitter_sample.hlsl"
 
 float wavefront_direct_light_ris_candidate_weight(WavefrontEmitterSample sample_value, float3 source_position, bool source_is_surface, float3 source_normal) {
-  float radiance_weight = luminance(spectral_response_to_rgb(sample_value.value));
+  float radiance_weight = spectral_response_to_xyz(sample_value.value).y;
   if (radiance_weight <= 0.0f) {
     return 0.0f;
   }
@@ -60,8 +60,8 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
     float candidate_weight = wavefront_direct_light_ris_candidate_weight(candidate, source_position, source_is_surface, source_normal);
     float weight = (pdf_sample > 0.0f) ? (candidate_weight / pdf_sample) : 0.0f;
     weight_sum += weight;
-    float reservoir_rnd = rnd01(seed);
-    if ((weight > 0.0f) && ((reservoir_rnd * weight_sum) < weight)) {
+    float reservoir_rnd = rnd01(seed) * weight_sum;
+    if ((weight > 0.0f) && (reservoir_rnd < weight)) {
       selected_sample = candidate;
       selected_weight = weight;
     }
@@ -71,7 +71,8 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
     return false;
   }
 
-  selected_sample.value = spectral_response_mul(selected_sample.value, weight_sum / (float(candidate_count) * selected_weight));
+  float reservoir_scale = weight_sum / (float(candidate_count) * selected_weight);
+  selected_sample.value = spectral_response_mul(selected_sample.value, reservoir_scale);
   sample_value = selected_sample;
   return true;
 }
@@ -122,6 +123,11 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathVertex current_vertex
   float sampling_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
   if (sampling_pdf <= 0.0f) {
     return 0.0f;
+  }
+
+  if (scene_path_mode_is_path_tracing()) {
+    float direct_pdf = (emitter_sample.is_delta != 0u) ? 0.0f : phase_value;
+    return power_heuristic(sampling_pdf, direct_pdf);
   }
 
   float w_light = 0.0f;
@@ -194,9 +200,11 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathVertex current_vertex
   uint seed = state.sampler_seed;
   WavefrontEmitterSample emitter_sample = (WavefrontEmitterSample)0;
   uint light_sampling_mode = load_scene_options_light_sampling();
+  bool source_is_surface = true;
+  float3 source_normal = wavefront_path_vertex_is_surface(current_vertex) ? current_vertex.normal : float3(0.0f, 0.0f, 0.0f);
   bool sampled = false;
   if ((light_sampling_mode == kSceneLightSamplingRISFromDistribution) || (light_sampling_mode == kSceneLightSamplingRISUniform)) {
-    sampled = wavefront_sample_direct_light_ris(light_sampling_mode, state.spect, current_vertex.position, true, current_vertex.normal, seed, emitter_sample);
+    sampled = wavefront_sample_direct_light_ris(light_sampling_mode, state.spect, current_vertex.position, source_is_surface, source_normal, seed, emitter_sample);
   } else {
     sampled = wavefront_sample_emitter_to_point(light_sampling_mode, state.spect, current_vertex.position, seed, emitter_sample);
   }

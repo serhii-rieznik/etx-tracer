@@ -549,6 +549,15 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     }
 
     float2 sample_random = float2(rnd01(state.sampler_seed), rnd01(state.sampler_seed));
+    float2 connection_random = float2(rnd01(state.sampler_seed), rnd01(state.sampler_seed));
+    float2 support_random = float2(rnd01(state.sampler_seed), rnd01(state.sampler_seed));
+    if (from_camera && (state.path_length == 1u) && (constants.sample_index < 256u)) {
+      sample_random = float2(sample_blue_noise_value(state.pixel, constants.sample_index, 0u), sample_blue_noise_value(state.pixel, constants.sample_index, 1u));
+      connection_random = float2(sample_blue_noise_value(state.pixel, constants.sample_index, 2u), sample_blue_noise_value(state.pixel, constants.sample_index, 3u));
+      support_random = float2(sample_blue_noise_value(state.pixel, constants.sample_index, 4u), sample_blue_noise_value(state.pixel, constants.sample_index, 5u));
+    }
+    state.film_uv = connection_random;
+    state.last_emitter_pdf = support_random.y;
     float3 sampled_direction = gpu_medium_sample_phase_function(medium_access, sample_random, current_vertex.w_i);
     float phase_pdf = gpu_medium_phase_function(medium_access, current_vertex.w_i, sampled_direction);
     if ((gpu_valid_direction(sampled_direction) == false) || (phase_pdf <= 0.0f)) {
