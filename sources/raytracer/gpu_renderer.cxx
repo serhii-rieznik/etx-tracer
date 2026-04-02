@@ -1127,9 +1127,10 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   }
 
   const uint32_t path_capacity = static_cast<uint32_t>(pixel_count_u64);
-  const GPUPathMode path_mode = static_cast<GPUPathMode>(_path_mode);
   const uint32_t scene_max_path_length = std::max(1u, scene.data().options.max_path_length);
-  const uint32_t stored_history_bounces = (path_mode == GPUPathMode::PathTracing) ? GPURaytracingRenderer::kGPUFixedMaxBounces : kWavefrontRollingHistoryBounces;
+  const uint32_t camera_history_bounces = kWavefrontRollingHistoryBounces;
+  const uint32_t light_history_bounces = kWavefrontRollingHistoryBounces;
+  const uint32_t stored_history_bounces = kWavefrontRollingHistoryBounces;
   const uint32_t max_path_length = scene_max_path_length;
   const uint64_t vertex_capacity_u64 = static_cast<uint64_t>(path_capacity) * static_cast<uint64_t>(stored_history_bounces + 1u);
   if (vertex_capacity_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
@@ -1263,7 +1264,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   resources.path_capacity = path_capacity;
   resources.max_path_length = max_path_length;
   resources.vertex_capacity = vertex_capacity;
-  resources.fixed_max_bounces = stored_history_bounces;
+  resources.fixed_max_bounces = (camera_history_bounces << 16u) | light_history_bounces;
 
   if (upload_or_update_linear_scene_buffer(device, &resources, size_t(1), wavefront_usage, _wavefront_resources_buffer, _wavefront_resources_buffer_size,
         _wavefront_resources_buffer_descriptor_index, "wavefront_resources") == false) {

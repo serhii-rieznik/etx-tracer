@@ -83,8 +83,8 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   }
 
   uint vertex_descriptor = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
-  uint current_vertex_index = wavefront_vertex_slot(path_index, state.path_length);
-  uint previous_vertex_index = wavefront_vertex_slot(path_index, state.path_length - 1u);
+  uint current_vertex_index = wavefront_path_vertex_slot(from_camera, path_index, state.path_length);
+  uint previous_vertex_index = wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u);
   GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, current_vertex_index);
   GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(vertex_descriptor, previous_vertex_index);
   if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_valid(previous_vertex) == false)) {

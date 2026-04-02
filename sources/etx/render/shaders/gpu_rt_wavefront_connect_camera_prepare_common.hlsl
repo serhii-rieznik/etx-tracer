@@ -87,14 +87,14 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
       return 1.0f;
     }
 
-    GPUWavefrontPathVertex emitter_root = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, 0u));
+    GPUWavefrontPathVertex emitter_root = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 0u));
     if (wavefront_path_vertex_valid(emitter_root) == false) {
       return 1.0f;
     }
 
     GPUWavefrontPathVertex first_light_vertex = (GPUWavefrontPathVertex)0;
     if (input_value.path_meta.light_path_length >= 1u) {
-      first_light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, 1u));
+      first_light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 1u));
     }
 
     float p_sample = emitter_root.pdf_from_prev;
@@ -143,9 +143,9 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
   }
 
   input_value.current_vertex =
-    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.light_path_length));
+    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, input_value.path_meta.light_path_length));
   input_value.previous_vertex =
-    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.light_path_length - 1u));
+    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, input_value.path_meta.light_path_length - 1u));
   if ((wavefront_path_vertex_valid(input_value.current_vertex) == false) || (wavefront_path_vertex_valid(input_value.previous_vertex) == false)) {
     return false;
   }

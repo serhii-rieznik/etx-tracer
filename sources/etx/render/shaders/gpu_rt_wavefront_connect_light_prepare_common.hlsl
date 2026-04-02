@@ -75,7 +75,7 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, out Wavefro
     return false;
   }
 
-  const uint vertex_stride = input_value.resources.fixed_max_bounces + 1u;
+  const uint vertex_stride = wavefront_light_fixed_max_bounces(input_value.resources) + 1u;
   input_value.task_index = dispatch_index;
   input_value.path_index = dispatch_index / vertex_stride;
   input_value.light_vertex_length = dispatch_index % vertex_stride;
@@ -96,12 +96,13 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, out Wavefro
   }
 
   input_value.camera_vertex =
-    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
+    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
   input_value.camera_previous_vertex =
-    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
-  input_value.light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.light_vertex_length));
+    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
+  input_value.light_vertex =
+    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, input_value.light_vertex_length));
   input_value.light_previous_vertex =
-    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.light_vertex_length - 1u));
+    wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, input_value.light_vertex_length - 1u));
 
   if ((wavefront_path_vertex_valid(input_value.camera_vertex) == false) || (wavefront_path_vertex_valid(input_value.camera_previous_vertex) == false) ||
       (wavefront_path_vertex_valid(input_value.light_vertex) == false) || (wavefront_path_vertex_valid(input_value.light_previous_vertex) == false) ||

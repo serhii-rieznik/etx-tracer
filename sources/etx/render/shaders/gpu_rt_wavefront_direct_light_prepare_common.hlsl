@@ -154,12 +154,13 @@ bool wavefront_load_direct_light_prepare_input(uint dispatch_index, out Wavefron
     return false;
   }
   input_value.current_vertex =
-    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
+    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
   if ((wavefront_path_vertex_valid(input_value.current_vertex) == false) || (wavefront_path_vertex_connectible(input_value.current_vertex) == false)) {
     return false;
   }
   input_value.previous_vertex =
-    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
+    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer,
+      wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
   if (wavefront_path_vertex_valid(input_value.previous_vertex) == false) {
     return false;
   }

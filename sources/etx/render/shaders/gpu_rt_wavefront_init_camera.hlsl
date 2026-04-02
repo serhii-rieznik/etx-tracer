@@ -41,7 +41,7 @@
   state.pixel = camera_space_pixel;
   state.spect = spect;
   state.film_uv = uv;
-  state.last_vertex_index = wavefront_vertex_slot(output_pixel_index, 0u);
+  state.last_vertex_index = wavefront_camera_vertex_slot(output_pixel_index, 0u);
   GPUWavefrontResources resources = wavefront_load_resources();
   wavefront_store_path_state(resources.camera_state_buffer, output_pixel_index, state);
   wavefront_write_root_camera_vertex(output_pixel_index, camera, state.ray, spect, output_pixel_index);

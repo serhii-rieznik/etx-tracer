@@ -69,7 +69,7 @@
   state.sampler_seed = seed;
   state.pixel = output_pixel;
   state.spect = spect;
-  state.last_vertex_index = wavefront_vertex_slot(path_index, 0u);
+  state.last_vertex_index = wavefront_light_vertex_slot(path_index, 0u);
   wavefront_store_path_state(resources.light_state_buffer, path_index, state);
   wavefront_write_root_light_vertex(path_index, emitter_sample, spect);
   if (resources.path_meta_buffer != kInvalidIndex) {

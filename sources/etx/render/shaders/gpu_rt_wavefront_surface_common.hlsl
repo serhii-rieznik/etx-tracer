@@ -348,14 +348,14 @@ float wavefront_medium_connect_camera_weight(Camera camera, CameraFilmSampleShar
       return 1.0f;
     }
 
-    GPUWavefrontPathVertex emitter_root = wavefront_load_path_vertex(resources.light_vertex_buffer, wavefront_vertex_slot(path_index, 0u));
+    GPUWavefrontPathVertex emitter_root = wavefront_load_path_vertex(resources.light_vertex_buffer, wavefront_light_vertex_slot(path_index, 0u));
     if (wavefront_path_vertex_valid(emitter_root) == false) {
       return 1.0f;
     }
 
     GPUWavefrontPathVertex first_light_vertex = (GPUWavefrontPathVertex)0;
     if (path_meta.light_path_length >= 1u) {
-      first_light_vertex = wavefront_load_path_vertex(resources.light_vertex_buffer, wavefront_vertex_slot(path_index, 1u));
+      first_light_vertex = wavefront_load_path_vertex(resources.light_vertex_buffer, wavefront_light_vertex_slot(path_index, 1u));
     }
 
     float previous_from_current_dir = gpu_medium_phase_function(medium_access, -camera_sample.direction, current_vertex.w_i);
@@ -492,7 +492,8 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
   if (wavefront_hit_is_miss(hit)) {
     if (from_camera && (scene_path_mode_is_light_tracing() == false) && scene_strategy_enabled(kSceneStrategyDirectHit) &&
         (state.path_length >= load_scene_options_min_path_length()) && (state.path_length <= load_scene_options_max_path_length())) {
-      GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_vertex_slot(path_index, state.path_length - 1u));
+      GPUWavefrontPathVertex previous_vertex =
+        wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, state.path_length - 1u));
       if (wavefront_path_vertex_valid(previous_vertex)) {
         if (scene_path_mode_is_path_tracing() == false) {
           GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
@@ -514,8 +515,9 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     wavefront_write_path_meta(from_camera, path_index, state);
 
     uint vertex_descriptor = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
-    GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length));
-    GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length - 1u));
+    GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length));
+    GPUWavefrontPathVertex previous_vertex =
+      wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u));
     if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_valid(previous_vertex) == false)) {
       state.flags = 0u;
       wavefront_store_path_state(state_descriptor, path_index, state);
@@ -538,7 +540,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
       if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_instance.emitter_class != EmitterClass::Area)) {
         previous_vertex.pdf_from_prev = wavefront_distant_emitter_sample_pdf(previous_vertex.emitter_index, -previous_vertex.w_i);
         current_vertex.pdf_from_prev = wavefront_distant_emitter_area_pdf(previous_vertex.w_i, current_vertex);
-        wavefront_store_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length - 1u), previous_vertex);
+        wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u), previous_vertex);
       }
     }
     MediumAccess medium_access = (MediumAccess)0;
@@ -591,8 +593,8 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     state.ray.min_t = kRayEpsilon;
     state.ray.max_t = kMaxFloat;
 
-    wavefront_store_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length - 1u), previous_vertex);
-    wavefront_store_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length), current_vertex);
+    wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u), previous_vertex);
+    wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length), current_vertex);
     wavefront_store_path_meta(resources.path_meta_buffer, path_index, path_meta);
 
     if (from_camera == false) {
@@ -607,8 +609,9 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
   wavefront_write_vertex(from_camera, path_index, state, hit);
   wavefront_write_path_meta(from_camera, path_index, state);
   uint vertex_descriptor = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
-  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length));
-  GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length - 1u));
+  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length));
+  GPUWavefrontPathVertex previous_vertex =
+    wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u));
   if (wavefront_path_vertex_valid(previous_vertex)) {
     current_vertex.pdf_from_prev = wavefront_vertex_to_vertex_area_pdf(state.sampled_bsdf_pdf, previous_vertex, current_vertex);
     float cos_to_prev = abs(dot(hit.vertex.nrm, -state.ray.d));
@@ -625,10 +628,10 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
         if ((emitter_instance.emitter_class == EmitterClass::Directional) || (emitter_instance.emitter_class == EmitterClass::Environment)) {
           current_vertex.pdf_from_prev = wavefront_distant_emitter_area_pdf(previous_vertex.w_i, current_vertex);
         }
-        wavefront_store_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length - 1u), previous_vertex);
+        wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u), previous_vertex);
       }
     }
-    wavefront_store_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length), current_vertex);
+    wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length), current_vertex);
   }
 
   state.reserved0 = 0u;
@@ -667,7 +670,7 @@ void wavefront_surface_continue_finalize(bool from_camera, uint dispatch_index) 
   }
 
   uint vertex_descriptor = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
-  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_vertex_slot(path_index, state.path_length));
+  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length));
   if (wavefront_path_vertex_valid(current_vertex) == false) {
     state.flags = 0u;
     wavefront_store_path_state(state_descriptor, path_index, state);

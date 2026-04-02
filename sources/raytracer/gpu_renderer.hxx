@@ -35,8 +35,6 @@ struct GPURaytracingRenderer : public Renderer {
   void on_scene_changed(SceneRepresentation& scene) override;
 
  private:
-  static constexpr uint32_t kGPUFixedMaxBounces = 32u;
-
   void destroy_scene_buffers(RHIContext& ctx);
   void destroy_wavefront_buffers(RHIContext& ctx);
   void destroy_blue_noise_buffer(RHIContext& ctx);

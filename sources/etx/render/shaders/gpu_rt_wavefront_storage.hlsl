@@ -364,10 +364,33 @@ bool wavefront_path_vertex_is_surface(GPUWavefrontPathVertex vertex) {
   return (vertex.flags & GPUWavefrontVertexFlags::Surface) != 0u;
 }
 
-uint wavefront_vertex_slot(uint path_index, uint path_length) {
+uint wavefront_camera_fixed_max_bounces(GPUWavefrontResources resources) {
+  return resources.fixed_max_bounces >> 16u;
+}
+
+uint wavefront_light_fixed_max_bounces(GPUWavefrontResources resources) {
+  uint result = resources.fixed_max_bounces & 0xFFFFu;
+  return (result == 0u) ? wavefront_camera_fixed_max_bounces(resources) : result;
+}
+
+uint wavefront_vertex_slot_from_limit(uint path_index, uint path_length, uint fixed_max_bounces) {
+  uint vertex_index = 0u;
+  if (fixed_max_bounces <= 2u) {
+    vertex_index = (path_length == 0u) ? 0u : (1u + ((path_length - 1u) & 1u));
+  } else {
+    vertex_index = min(path_length, fixed_max_bounces);
+  }
+  return path_index * (fixed_max_bounces + 1u) + vertex_index;
+}
+
+uint wavefront_camera_vertex_slot(uint path_index, uint path_length) {
   GPUWavefrontResources resources = wavefront_load_resources();
-  uint vertex_index = min(path_length, resources.fixed_max_bounces);
-  return path_index * (resources.fixed_max_bounces + 1u) + vertex_index;
+  return wavefront_vertex_slot_from_limit(path_index, path_length, wavefront_camera_fixed_max_bounces(resources));
+}
+
+uint wavefront_light_vertex_slot(uint path_index, uint path_length) {
+  GPUWavefrontResources resources = wavefront_load_resources();
+  return wavefront_vertex_slot_from_limit(path_index, path_length, wavefront_light_fixed_max_bounces(resources));
 }
 
 float wavefront_safe_div(float a, float b) {

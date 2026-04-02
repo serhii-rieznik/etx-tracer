@@ -187,7 +187,7 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathVertex current_vertex
     return;
   }
 
-  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_vertex_slot(path_index, meta.camera_path_length));
+  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, meta.camera_path_length));
   if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false)) {
     return;
   }

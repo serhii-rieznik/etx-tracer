@@ -38,8 +38,8 @@
     return;
   }
 
-  uint current_vertex_index = wavefront_vertex_slot(path_index, meta.camera_path_length);
-  uint previous_vertex_index = wavefront_vertex_slot(path_index, meta.camera_path_length - 1u);
+  uint current_vertex_index = wavefront_camera_vertex_slot(path_index, meta.camera_path_length);
+  uint previous_vertex_index = wavefront_camera_vertex_slot(path_index, meta.camera_path_length - 1u);
   GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, current_vertex_index);
   GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, previous_vertex_index);
   if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_valid(previous_vertex) == false)) {
