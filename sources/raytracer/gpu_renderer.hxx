@@ -20,6 +20,12 @@ struct GPURaytracingRenderer : public Renderer {
 
   void reload_shaders(RHIContext& ctx);
   bool pipelines_valid() const;
+  bool runtime_failed() const {
+    return _runtime_failed;
+  }
+  const std::string& runtime_failure_reason() const {
+    return _runtime_failure_reason;
+  }
   void set_compile_stage_filter(const std::string&);
   bool set_render_window(const uint2& origin, const uint2& size, const uint2& full_size);
   void reset_render_window();
@@ -45,6 +51,8 @@ struct GPURaytracingRenderer : public Renderer {
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
   bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene);
   void create_pipelines(RHIContext& ctx);
+  void reset_runtime_failure();
+  void set_runtime_failure(std::string message);
 
  private:
   enum class PipelineStage : uint32_t {
@@ -216,8 +224,10 @@ struct GPURaytracingRenderer : public Renderer {
   RHIResourceState _output_texture_state = RHIResourceState::Undefined;
 
   std::string _compile_stage_filter = {};
+  std::string _runtime_failure_reason = {};
   bool _compile_filter_matched = false;
   bool _initialized = false;
+  bool _runtime_failed = false;
 };
 
 }  // namespace etx

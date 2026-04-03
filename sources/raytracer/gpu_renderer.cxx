@@ -825,11 +825,24 @@ void GPURaytracingRenderer::reset_render_window() {
   _render_window_size = {};
 }
 
+void GPURaytracingRenderer::reset_runtime_failure() {
+  _runtime_failed = false;
+  _runtime_failure_reason.clear();
+}
+
+void GPURaytracingRenderer::set_runtime_failure(std::string message) {
+  if (_runtime_failed == false) {
+    _runtime_failure_reason = std::move(message);
+  }
+  _runtime_failed = true;
+}
+
 void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
 
   Renderer::init(ctx, scene);
 
+  reset_runtime_failure();
   _path_mode = static_cast<uint32_t>(gpu_path_mode_from_scene(scene));
   _material_compile_mask = build_material_compile_mask(scene.data());
   _initialized = true;
@@ -1015,6 +1028,7 @@ void GPURaytracingRenderer::create_pipelines(RHIContext& ctx) {
     _compile_filter_matched = true;
     RHIPipeline pipeline = {};
     if (compile_timed_compute_stage(device, compiler, stage_info.source_file, stage_info.entry_point, stage_info.optimization_level, stage_info.bsdf_kind, pipeline) == false) {
+      set_runtime_failure("GPU shader pipeline compilation failed at '" + std::string(stage_info.entry_point) + "'");
       for (auto& pipeline : _pipelines) {
         if (pipeline.valid()) {
           device.destroy_pipeline(pipeline);
@@ -1034,6 +1048,7 @@ void GPURaytracingRenderer::create_pipelines(RHIContext& ctx) {
 
 void GPURaytracingRenderer::reload_shaders(RHIContext& ctx) {
   ETX_PROFILER_SCOPE();
+  reset_runtime_failure();
   create_pipelines(ctx);
 }
 
@@ -1408,6 +1423,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (_tlas.valid() == false) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_build_acceleration_structures");
     scene_data_update_success = build_acceleration_structures(ctx, scene);
+    if (scene_data_update_success == false) {
+      set_runtime_failure("GPU acceleration-structure build failed");
+    }
   } else if (needs_scene_data_reupload) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_scene_update");
     const bool update_success = update_scene_data_partial(ctx, scene, changes);
@@ -1878,6 +1896,7 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _material_compile_mask = 0u;
   _render_window_origin = {};
   _render_window_size = {};
+  reset_runtime_failure();
   request_scene_update();
 }
 

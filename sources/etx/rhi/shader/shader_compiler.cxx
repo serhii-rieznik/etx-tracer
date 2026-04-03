@@ -465,6 +465,14 @@ struct ShaderCompiler::Impl {
 };
 
 // File-scope global variables for DXC
+#if ETX_PLATFORM_APPLE
+std::mutex& global_init_mutex = *new std::mutex();
+DxcComPtr<IDxcUtils>& global_dxc_utils = *new DxcComPtr<IDxcUtils>();
+DxcComPtr<IDxcCompiler3>& global_dxc_compiler = *new DxcComPtr<IDxcCompiler3>();
+DxcLibraryHandle& global_dxc_dll = *new DxcLibraryHandle(nullptr);
+std::mutex& global_dll_mutex = *new std::mutex();
+DxcCreateInstanceProc& global_dxc_create_instance = *new DxcCreateInstanceProc(nullptr);
+#else
 std::mutex global_init_mutex;
 DxcComPtr<IDxcUtils> global_dxc_utils;
 DxcComPtr<IDxcCompiler3> global_dxc_compiler;
@@ -474,6 +482,7 @@ std::atomic<bool> global_com_initialized{false};
 #endif
 std::mutex global_dll_mutex;
 DxcCreateInstanceProc global_dxc_create_instance = nullptr;
+#endif
 
 // Singleton implementation - Meyer's singleton with thread-safe initialization
 ShaderCompiler& ShaderCompiler::instance() {
@@ -536,6 +545,14 @@ ShaderCompiler& ShaderCompiler::instance() {
 }
 
 void ShaderCompiler::shutdown() {
+#if ETX_PLATFORM_APPLE
+  if (_impl != nullptr) {
+    std::lock_guard<std::mutex> cache_lock(_impl->cache_mutex);
+    _impl->shader_cache.clear();
+  }
+  return;
+#endif
+
   std::lock_guard<std::mutex> dll_lock(global_dll_mutex);
 
   if (_impl != nullptr) {
@@ -555,10 +572,17 @@ void ShaderCompiler::shutdown() {
   }
 #endif
   if (global_dxc_dll) {
+#if ETX_PLATFORM_APPLE
+    // DXC keeps thread-local state alive through process teardown on macOS.
+    // Keeping the dylib loaded avoids exit-time crashes in libdxcompiler.
+#else
     unload_dxc_library(global_dxc_dll);
     global_dxc_dll = nullptr;
+#endif
   }
-  global_dxc_create_instance = nullptr;
+  if (global_dxc_dll == nullptr) {
+    global_dxc_create_instance = nullptr;
+  }
 }
 
 ShaderCompiler::ShaderCompiler()
@@ -1143,9 +1167,13 @@ RHIResult load_dxc_dll_global() {
 void unload_dxc_dll_global() {
   std::lock_guard<std::mutex> lock(global_dll_mutex);
   if (global_dxc_dll) {
+#if ETX_PLATFORM_APPLE
+    return;
+#else
     unload_dxc_library(global_dxc_dll);
     global_dxc_dll = nullptr;
     global_dxc_create_instance = nullptr;
+#endif
   }
 }
 

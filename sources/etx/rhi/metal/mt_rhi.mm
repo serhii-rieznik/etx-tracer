@@ -38,6 +38,10 @@ constexpr uint32_t kMetalBindlessRWBufferBinding = 5u;
 constexpr uint32_t kMetalBindlessBindingCount = 6u;
 constexpr uint32_t kInvalidMetalBufferIndex = std::numeric_limits<uint32_t>::max();
 constexpr size_t kMetalMaxColorAttachments = 8u;
+constexpr uint32_t kRHIAccelerationStructureInstanceFlagDisableTriangleCulling = 1u << 0u;
+constexpr uint32_t kRHIAccelerationStructureInstanceFlagFrontFacingCCW = 1u << 1u;
+constexpr uint32_t kRHIAccelerationStructureInstanceFlagForceOpaque = 1u << 2u;
+constexpr uint32_t kRHIAccelerationStructureInstanceFlagForceNonOpaque = 1u << 3u;
 
 template <typename T>
 bool has_flag(T value, T flag) {
@@ -233,6 +237,44 @@ MTLVertexFormat to_metal_vertex_format(RHIVertexFormat format) {
     default:
       return MTLVertexFormatInvalid;
   }
+}
+
+MTLAttributeFormat to_metal_acceleration_structure_vertex_format(RHIVertexFormat format) {
+  switch (format) {
+    case RHIVertexFormat::Float2:
+      return MTLAttributeFormatFloat2;
+    case RHIVertexFormat::Float3:
+      return MTLAttributeFormatFloat3;
+    case RHIVertexFormat::Float4:
+      return MTLAttributeFormatFloat4;
+    default:
+      return MTLAttributeFormatInvalid;
+  }
+}
+
+MTLAccelerationStructureInstanceOptions to_metal_instance_options(uint32_t flags) {
+  MTLAccelerationStructureInstanceOptions result = MTLAccelerationStructureInstanceOptionNone;
+  if ((flags & kRHIAccelerationStructureInstanceFlagDisableTriangleCulling) != 0u) {
+    result |= MTLAccelerationStructureInstanceOptionDisableTriangleCulling;
+  }
+  if ((flags & kRHIAccelerationStructureInstanceFlagFrontFacingCCW) != 0u) {
+    result |= MTLAccelerationStructureInstanceOptionTriangleFrontFacingWindingCounterClockwise;
+  }
+  if ((flags & kRHIAccelerationStructureInstanceFlagForceOpaque) != 0u) {
+    result |= MTLAccelerationStructureInstanceOptionOpaque;
+  }
+  if ((flags & kRHIAccelerationStructureInstanceFlagForceNonOpaque) != 0u) {
+    result |= MTLAccelerationStructureInstanceOptionNonOpaque;
+  }
+  return result;
+}
+
+MTLPackedFloat4x3 to_metal_transform(const float transform[12]) {
+  return MTLPackedFloat4x3(
+    MTLPackedFloat3Make(transform[0], transform[4], transform[8]),
+    MTLPackedFloat3Make(transform[1], transform[5], transform[9]),
+    MTLPackedFloat3Make(transform[2], transform[6], transform[10]),
+    MTLPackedFloat3Make(transform[3], transform[7], transform[11]));
 }
 
 NSString* make_nsstring(const void* data, size_t size) {
@@ -456,6 +498,13 @@ struct MTTextureData {
   bool is_swapchain_texture = false;
 };
 
+struct MTAccelerationStructureData {
+  id<MTLAccelerationStructure> acceleration_structure = nil;
+  RHIAccelerationStructureDesc desc = {};
+  uint64_t allocated_size = 0;
+  uint64_t build_scratch_size = 0;
+};
+
 static bool texture_is_bindless_2d_compatible(const MTTextureData& data, bool require_storage_usage) {
   if (data.texture == nil) {
     return false;
@@ -528,6 +577,7 @@ class MTDevice::Impl {
   std::unordered_map<RHIBindlessHandle, MTBufferData> buffers = {};
   std::unordered_map<RHIBindlessHandle, MTTextureData> textures = {};
   std::unordered_map<RHIBindlessHandle, MTSamplerData> samplers = {};
+  std::unordered_map<RHIBindlessHandle, MTAccelerationStructureData> acceleration_structures = {};
   std::unordered_map<RHIPipeline, MTPipelineData> pipelines = {};
   std::unordered_map<RHISemaphore, MTSemaphoreData> semaphores = {};
 
@@ -592,6 +642,77 @@ class MTContext::Impl {
   bool supports_ray_tracing = false;
 };
 
+static MTLPrimitiveAccelerationStructureDescriptor* create_metal_blas_descriptor(const RHIAccelerationStructureGeometry* geometries, uint32_t geometry_count,
+  MTDevice::Impl* device, std::string* out_error = nullptr) {
+  if ((device == nullptr) || (geometries == nullptr) || (geometry_count == 0u)) {
+    if (out_error != nullptr) {
+      *out_error = "Invalid BLAS geometry description.";
+    }
+    return nil;
+  }
+
+  NSMutableArray<MTLAccelerationStructureGeometryDescriptor*>* geometry_descriptors = [NSMutableArray arrayWithCapacity:geometry_count];
+  for (uint32_t i = 0; i < geometry_count; ++i) {
+    const auto& src_geo = geometries[i];
+    const auto vertex_it = device->buffers.find(src_geo.triangles.vertex_buffer);
+    if (vertex_it == device->buffers.end() || (vertex_it->second.buffer == nil)) {
+      if (out_error != nullptr) {
+        *out_error = "BLAS vertex buffer handle is invalid.";
+      }
+      return nil;
+    }
+
+    const MTLAttributeFormat vertex_format = to_metal_acceleration_structure_vertex_format(src_geo.triangles.vertex_format);
+    if (vertex_format == MTLAttributeFormatInvalid) {
+      if (out_error != nullptr) {
+        *out_error = "BLAS vertex format is unsupported by Metal.";
+      }
+      return nil;
+    }
+
+    MTLAccelerationStructureTriangleGeometryDescriptor* triangle_descriptor = [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
+    triangle_descriptor.vertexBuffer = vertex_it->second.buffer;
+    triangle_descriptor.vertexBufferOffset = 0u;
+    triangle_descriptor.vertexStride = src_geo.triangles.vertex_stride;
+    triangle_descriptor.vertexFormat = vertex_format;
+    triangle_descriptor.opaque = src_geo.is_opaque ? YES : NO;
+
+    if (src_geo.triangles.index_buffer.valid()) {
+      const auto index_it = device->buffers.find(src_geo.triangles.index_buffer);
+      if (index_it == device->buffers.end() || (index_it->second.buffer == nil)) {
+        if (out_error != nullptr) {
+          *out_error = "BLAS index buffer handle is invalid.";
+        }
+        return nil;
+      }
+      triangle_descriptor.indexBuffer = index_it->second.buffer;
+      triangle_descriptor.indexBufferOffset = 0u;
+      triangle_descriptor.indexType = to_metal_index_type(src_geo.triangles.index_type);
+      triangle_descriptor.triangleCount = static_cast<NSUInteger>(src_geo.triangles.index_count / 3u);
+    } else {
+      triangle_descriptor.indexBuffer = nil;
+      triangle_descriptor.triangleCount = static_cast<NSUInteger>(src_geo.triangles.vertex_count / 3u);
+    }
+
+    [geometry_descriptors addObject:triangle_descriptor];
+  }
+
+  MTLPrimitiveAccelerationStructureDescriptor* descriptor = [MTLPrimitiveAccelerationStructureDescriptor descriptor];
+  descriptor.usage = MTLAccelerationStructureUsageNone;
+  descriptor.geometryDescriptors = geometry_descriptors;
+  return descriptor;
+}
+
+static MTLInstanceAccelerationStructureDescriptor* create_metal_tlas_sizing_descriptor(uint32_t instance_count) {
+  MTLInstanceAccelerationStructureDescriptor* descriptor = [MTLInstanceAccelerationStructureDescriptor descriptor];
+  descriptor.usage = MTLAccelerationStructureUsageNone;
+  descriptor.instanceCount = instance_count;
+  if (@available(macOS 12.0, *)) {
+    descriptor.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeDefault;
+  }
+  return descriptor;
+}
+
 static std::vector<MTBindlessManager::Impl::ResourceEntry>& bindless_entries_for_type(MTBindlessManager::Impl* impl, RHIResourceType type) {
   switch (type) {
     case RHIResourceType::Buffer:
@@ -653,7 +774,8 @@ static void reap_completed_command_buffers(std::vector<MTInflightSubmission>& in
   inflight.resize(write_index);
 }
 
-static void wait_for_inflight_command_buffers(std::vector<MTInflightSubmission>& inflight) {
+static bool wait_for_inflight_command_buffers(std::vector<MTInflightSubmission>& inflight) {
+  bool success = true;
   for (MTInflightSubmission& submission : inflight) {
     id<MTLCommandBuffer> command_buffer = submission.command_buffer;
     if (command_buffer == nil) {
@@ -664,12 +786,14 @@ static void wait_for_inflight_command_buffers(std::vector<MTInflightSubmission>&
     }
 
     [command_buffer waitUntilCompleted];
+    success &= (command_buffer.status != MTLCommandBufferStatusError);
     [command_buffer release];
     if (submission.drawable != nil) {
       [submission.drawable release];
     }
   }
   inflight.clear();
+  return success;
 }
 
 static bool bindless_handle_matches(const MTBindlessManager::Impl::ResourceEntry& entry, RHIBindlessHandle handle) {
@@ -951,6 +1075,19 @@ static void declare_compute_stage_bindless_resources(id<MTLComputeCommandEncoder
   declare_buffer_entries(kMetalBindlessRWBufferBinding, MTLResourceUsageRead | MTLResourceUsageWrite);
   declare_texture_entries(kMetalBindlessTextureBinding, kSampledTextureUsage);
   declare_texture_entries(kMetalBindlessStorageTextureBinding, storage_texture_usage);
+  if (stage.uses_bindless_binding[kMetalBindlessAccelerationStructureBinding]) {
+    for (uint32_t i = 0, e = static_cast<uint32_t>(bindless->acceleration_structure_entries.size()); i < e; ++i) {
+      const auto& entry = bindless->acceleration_structure_entries[i];
+      if (entry.valid == false) {
+        continue;
+      }
+      RHIBindlessHandle handle = make_bindless_handle(RHIResourceType::AccelerationStructure, entry.generation, i);
+      auto as_it = device->acceleration_structures.find(handle);
+      if ((as_it != device->acceleration_structures.end()) && (as_it->second.acceleration_structure != nil)) {
+        [encoder useResource:(id<MTLResource>)as_it->second.acceleration_structure usage:MTLResourceUsageRead];
+      }
+    }
+  }
 }
 
 static void declare_render_stage_bindless_resources(id<MTLRenderCommandEncoder> encoder, const MTPipelineStageData& stage, MTBindlessManager::Impl* bindless,
@@ -1020,6 +1157,19 @@ static void declare_render_stage_bindless_resources(id<MTLRenderCommandEncoder> 
   declare_buffer_entries(kMetalBindlessRWBufferBinding, MTLResourceUsageRead | MTLResourceUsageWrite);
   declare_texture_entries(kMetalBindlessTextureBinding, kSampledTextureUsage);
   declare_texture_entries(kMetalBindlessStorageTextureBinding, MTLResourceUsageRead | MTLResourceUsageWrite);
+  if (stage.uses_bindless_binding[kMetalBindlessAccelerationStructureBinding]) {
+    for (uint32_t i = 0, e = static_cast<uint32_t>(bindless->acceleration_structure_entries.size()); i < e; ++i) {
+      const auto& entry = bindless->acceleration_structure_entries[i];
+      if (entry.valid == false) {
+        continue;
+      }
+      RHIBindlessHandle handle = make_bindless_handle(RHIResourceType::AccelerationStructure, entry.generation, i);
+      auto as_it = device->acceleration_structures.find(handle);
+      if ((as_it != device->acceleration_structures.end()) && (as_it->second.acceleration_structure != nil)) {
+        declare_resource((id<MTLResource>)as_it->second.acceleration_structure, MTLResourceUsageRead);
+      }
+    }
+  }
 }
 
 static bool create_stage_resources(id<MTLDevice> device, const MTBindlessManager::Impl* bindless, const RHIShaderDesc& shader_desc, MTPipelineStageData& out_stage,
@@ -1329,8 +1479,7 @@ void MTContext::present() {
 }
 
 RHIResult MTContext::wait_idle() {
-  wait_for_inflight_command_buffers(_impl->inflight_command_buffers);
-  return RHIResult::Success;
+  return wait_for_inflight_command_buffers(_impl->inflight_command_buffers) ? RHIResult::Success : RHIResult::DeviceLost;
 }
 
 void MTContext::begin_frame() {
@@ -1375,7 +1524,7 @@ RHICapabilities MTContext::capabilities() const {
     .supports_swapchain = has_swapchain() || _impl->headless,
     .supports_bindless = true,
     .supports_timestamps = false,
-    .supports_ray_tracing = false,
+    .supports_ray_tracing = _impl->supports_ray_tracing,
   };
 }
 
@@ -1612,6 +1761,9 @@ MTDevice::~MTDevice() {
   }
   for (auto& [handle, sampler] : _impl->samplers) {
     [sampler.sampler release];
+  }
+  for (auto& [handle, acceleration_structure] : _impl->acceleration_structures) {
+    [acceleration_structure.acceleration_structure release];
   }
   for (auto& [handle, pipeline] : _impl->pipelines) {
     release_stage_resources(pipeline.vertex_stage);
@@ -2588,33 +2740,178 @@ RHIMemoryStats MTDevice::get_memory_statistics() const {
 }
 
 RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAccelerationStructureDesc& desc) {
-  (void)desc;
-  log::warning("Metal RHI: acceleration structure creation is not implemented yet");
-  return {RHIResult::NotImplemented, {}};
+  if ((_impl->metal_device == nil) || (_impl->bindless_manager == nullptr)) {
+    return {RHIResult::InvalidArgument, {}};
+  }
+  if (device_reports_raytracing(_impl->metal_device) == false) {
+    return {RHIResult::UnsupportedFeature, {}};
+  }
+
+  MTLAccelerationStructureDescriptor* descriptor = nil;
+  std::string error_message = {};
+  if (desc.type == RHIAccelerationStructureType::BottomLevel) {
+    descriptor = create_metal_blas_descriptor(desc.geometries, desc.geometry_count, _impl, &error_message);
+  } else {
+    if (desc.instance_count == 0u) {
+      return {RHIResult::InvalidArgument, {}};
+    }
+    descriptor = create_metal_tlas_sizing_descriptor(desc.instance_count);
+  }
+
+  if (descriptor == nil) {
+    if (error_message.empty() == false) {
+      log::error("Metal RHI: failed to create acceleration-structure descriptor: %s", error_message.c_str());
+    }
+    return {RHIResult::InvalidArgument, {}};
+  }
+
+  const MTLAccelerationStructureSizes size_info = [_impl->metal_device accelerationStructureSizesWithDescriptor:descriptor];
+  if ((size_info.accelerationStructureSize == 0u) || (size_info.buildScratchBufferSize == 0u)) {
+    log::error("Metal RHI: acceleration-structure size query returned zero-sized allocation");
+    return {RHIResult::ValidationError, {}};
+  }
+
+  id<MTLAccelerationStructure> acceleration_structure = [_impl->metal_device newAccelerationStructureWithSize:size_info.accelerationStructureSize];
+  if (acceleration_structure == nil) {
+    return {RHIResult::OutOfMemory, {}};
+  }
+
+  RHIBindlessHandle as_handle = {};
+  const RHIResult register_result =
+    _impl->bindless_manager->register_acceleration_structure((__bridge const void*)acceleration_structure, size_info.accelerationStructureSize, as_handle);
+  if (register_result != RHIResult::Success) {
+    [acceleration_structure release];
+    return {register_result, {}};
+  }
+
+  _impl->acceleration_structures.emplace(as_handle,
+    MTAccelerationStructureData{
+      .acceleration_structure = acceleration_structure,
+      .desc = desc,
+      .allocated_size = static_cast<uint64_t>(size_info.accelerationStructureSize),
+      .build_scratch_size = static_cast<uint64_t>(size_info.buildScratchBufferSize),
+    });
+  _impl->gpu_allocated_bytes += static_cast<uint64_t>(size_info.accelerationStructureSize);
+  return {RHIResult::Success, as_handle};
 }
 
 RHIResult MTDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) {
   if (!as_handle.valid()) {
     return RHIResult::Success;
   }
-  return RHIResult::NotImplemented;
+  auto it = _impl->acceleration_structures.find(as_handle);
+  if (it == _impl->acceleration_structures.end()) {
+    return RHIResult::Success;
+  }
+  _impl->bindless_manager->unregister_acceleration_structure(as_handle);
+  _impl->gpu_allocated_bytes -= it->second.allocated_size;
+  [it->second.acceleration_structure release];
+  _impl->acceleration_structures.erase(it);
+  return RHIResult::Success;
 }
 
 uint64_t MTDevice::get_acceleration_structure_device_address(RHIBindlessHandle as_handle) {
-  (void)as_handle;
-  return 0u;
+  return (_impl->acceleration_structures.find(as_handle) != _impl->acceleration_structures.end()) ? as_handle.value : 0u;
 }
 
 uint64_t MTDevice::get_acceleration_structure_build_scratch_size(RHIBindlessHandle as_handle) {
-  (void)as_handle;
-  return 0u;
+  const auto it = _impl->acceleration_structures.find(as_handle);
+  return (it != _impl->acceleration_structures.end()) ? it->second.build_scratch_size : 0u;
 }
 
 void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
-  (void)desc;
-  (void)scratch_buffer;
-  (void)scratch_offset;
-  log::warning("Metal RHI: acceleration structure builds are not implemented yet");
+  auto* owner = static_cast<MTContext::Impl*>(_impl->owner);
+  if ((owner == nullptr) || (_impl->command_buffer == nil)) {
+    return;
+  }
+
+  auto as_it = owner->device._impl->acceleration_structures.find(desc.as_handle);
+  auto scratch_it = owner->device._impl->buffers.find(scratch_buffer);
+  if ((as_it == owner->device._impl->acceleration_structures.end()) || (scratch_it == owner->device._impl->buffers.end())) {
+    log::error("Metal RHI: acceleration-structure build received invalid destination or scratch buffer handle");
+    return;
+  }
+
+  [_impl->render_encoder endEncoding];
+  _impl->render_encoder = nil;
+  [_impl->compute_encoder endEncoding];
+  _impl->compute_encoder = nil;
+  [_impl->blit_encoder endEncoding];
+  _impl->blit_encoder = nil;
+
+  MTLAccelerationStructureDescriptor* descriptor = nil;
+  std::string error_message = {};
+  if (desc.type == RHIAccelerationStructureType::BottomLevel) {
+    descriptor = create_metal_blas_descriptor(desc.geometries, desc.geometry_count, owner->device._impl, &error_message);
+  } else {
+    auto instance_buffer_it = owner->device._impl->buffers.find(desc.instance_buffer);
+    if ((instance_buffer_it == owner->device._impl->buffers.end()) || (instance_buffer_it->second.buffer == nil) || (desc.instance_count == 0u)) {
+      log::error("Metal RHI: TLAS build received an invalid instance buffer");
+      return;
+    }
+
+    const NSUInteger descriptor_stride = sizeof(MTLAccelerationStructureInstanceDescriptor);
+    const NSUInteger required_size = static_cast<NSUInteger>(desc.instance_count) * descriptor_stride;
+    if (instance_buffer_it->second.buffer.length < required_size) {
+      log::error("Metal RHI: TLAS instance buffer is too small for Metal descriptors");
+      return;
+    }
+
+    auto* src_instances = static_cast<const RHIAccelerationStructureInstance*>(instance_buffer_it->second.buffer.contents);
+    std::vector<RHIAccelerationStructureInstance> instance_source(src_instances, src_instances + desc.instance_count);
+    auto* dst_instances = static_cast<MTLAccelerationStructureInstanceDescriptor*>(instance_buffer_it->second.buffer.contents);
+    NSMutableArray<id<MTLAccelerationStructure>>* instanced_acceleration_structures = [NSMutableArray arrayWithCapacity:desc.instance_count];
+
+    for (uint32_t i = 0; i < desc.instance_count; ++i) {
+      const auto& src_instance = instance_source[i];
+      RHIBindlessHandle referenced_handle = {.value = src_instance.acceleration_structure_reference};
+      auto referenced_it = owner->device._impl->acceleration_structures.find(referenced_handle);
+      if ((referenced_it == owner->device._impl->acceleration_structures.end()) || (referenced_it->second.acceleration_structure == nil)) {
+        log::error("Metal RHI: TLAS instance %u references an invalid BLAS handle", i);
+        return;
+      }
+
+      dst_instances[i].transformationMatrix = to_metal_transform(src_instance.transform);
+      dst_instances[i].options = to_metal_instance_options(src_instance.flags);
+      dst_instances[i].mask = src_instance.mask;
+      dst_instances[i].intersectionFunctionTableOffset = src_instance.instance_shader_binding_table_record_offset;
+      dst_instances[i].accelerationStructureIndex = i;
+      [instanced_acceleration_structures addObject:referenced_it->second.acceleration_structure];
+    }
+    [instance_buffer_it->second.buffer didModifyRange:NSMakeRange(0u, required_size)];
+
+    MTLInstanceAccelerationStructureDescriptor* tlas_descriptor = [MTLInstanceAccelerationStructureDescriptor descriptor];
+    tlas_descriptor.usage = MTLAccelerationStructureUsageNone;
+    tlas_descriptor.instanceDescriptorBuffer = instance_buffer_it->second.buffer;
+    tlas_descriptor.instanceDescriptorBufferOffset = 0u;
+    tlas_descriptor.instanceDescriptorStride = descriptor_stride;
+    tlas_descriptor.instanceCount = desc.instance_count;
+    tlas_descriptor.instancedAccelerationStructures = instanced_acceleration_structures;
+    if (@available(macOS 12.0, *)) {
+      tlas_descriptor.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeDefault;
+    }
+    descriptor = tlas_descriptor;
+  }
+
+  if (descriptor == nil) {
+    if (error_message.empty() == false) {
+      log::error("Metal RHI: failed to create acceleration-structure build descriptor: %s", error_message.c_str());
+    }
+    return;
+  }
+
+  id<MTLAccelerationStructureCommandEncoder> as_encoder = [_impl->command_buffer accelerationStructureCommandEncoder];
+  if (as_encoder == nil) {
+    log::error("Metal RHI: failed to create acceleration-structure command encoder");
+    return;
+  }
+
+  as_encoder.label = @"ETX build acceleration structure";
+  [as_encoder buildAccelerationStructure:as_it->second.acceleration_structure
+                              descriptor:descriptor
+                           scratchBuffer:scratch_it->second.buffer
+                     scratchBufferOffset:static_cast<NSUInteger>(scratch_offset)];
+  [as_encoder endEncoding];
 }
 
 }  // namespace etx

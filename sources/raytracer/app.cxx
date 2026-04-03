@@ -203,20 +203,25 @@ void RTApplication::save_options() {
   _options.save_to_file(env().file_in_data("options.json"));
 }
 
-void RTApplication::ensure_gpu_renderer_initialized() {
+bool RTApplication::ensure_gpu_renderer_initialized() {
   ETX_PROFILER_SCOPE();
 
   if (_gpu_renderer_supported == false) {
     log::warning("GPU ray tracing is unavailable for the active RHI backend");
-    return;
+    return false;
   }
 
   if (_gpu_renderer_initialized) {
-    return;
+    return true;
   }
 
   gpu_renderer.init(render_context.get_context(), scene);
+  if (gpu_renderer.runtime_failed()) {
+    log::warning("GPU ray tracing initialization failed: %s", gpu_renderer.runtime_failure_reason().c_str());
+    return false;
+  }
   _gpu_renderer_initialized = true;
+  return true;
 }
 
 void RTApplication::set_renderer_mode(RendererMode mode) {
@@ -250,7 +255,12 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   save_options();
 
   if (next_renderer == &gpu_renderer) {
-    ensure_gpu_renderer_initialized();
+    if (ensure_gpu_renderer_initialized() == false) {
+      log::warning("GPU ray tracing is unavailable for the active RHI backend; using CPU ray tracing instead");
+      next_renderer = &cpu_renderer;
+      renderer_name = "cpu";
+      mode = RendererMode::CPURaytracing;
+    }
   }
 
   if (next_renderer == _active_renderer) {
@@ -299,6 +309,11 @@ void RTApplication::frame() {
   {
     ETX_PROFILER_NAMED_SCOPE("app_render_context_end_frame");
     render_context.end_frame();
+  }
+
+  if ((_active_renderer == &gpu_renderer) && gpu_renderer.runtime_failed()) {
+    log::warning("GPU ray tracing failed at runtime: %s. Falling back to CPU ray tracing.", gpu_renderer.runtime_failure_reason().c_str());
+    set_renderer_mode(RendererMode::CPURaytracing);
   }
 }
 

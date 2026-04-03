@@ -84,7 +84,7 @@ struct RTApplication {
 
  private:
   void add_to_recent(const std::string&);
-  void ensure_gpu_renderer_initialized();
+  bool ensure_gpu_renderer_initialized();
   void save_options();
   void update_camera_to_fit_scene(const float3& view_direction);
   void notify_scene_might_have_changed();
