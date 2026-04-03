@@ -3,7 +3,6 @@
 #if defined(ETX_PLATFORM_WINDOWS)
 # include <etx/rhi/vulkan/vk_rhi.hxx>
 #elif defined(ETX_PLATFORM_APPLE)
-# include <etx/rhi/vulkan/vk_rhi.hxx>
 # include <etx/rhi/metal/mt_rhi.hxx>
 #else
 # error Unsupported platform for RHI bindless dispatch
@@ -17,15 +16,8 @@ static decltype(auto) dispatch_bindless(RHIBackend backend, void* impl, Fn&& fn)
   (void)backend;
   return fn(static_cast<VKBindlessManager*>(impl));
 #elif defined(ETX_PLATFORM_APPLE)
-  switch (backend) {
-    case RHIBackend::Vulkan:
-      return fn(static_cast<VKBindlessManager*>(impl));
-    case RHIBackend::Metal:
-      return fn(static_cast<MTBindlessManager*>(impl));
-    default:
-      ETX_ASSERT(false);
-      return fn(static_cast<VKBindlessManager*>(impl));
-  }
+  (void)backend;
+  return fn(static_cast<MTBindlessManager*>(impl));
 #endif
 }
 
@@ -35,15 +27,8 @@ static decltype(auto) dispatch_bindless(RHIBackend backend, const void* impl, Fn
   (void)backend;
   return fn(static_cast<const VKBindlessManager*>(impl));
 #elif defined(ETX_PLATFORM_APPLE)
-  switch (backend) {
-    case RHIBackend::Vulkan:
-      return fn(static_cast<const VKBindlessManager*>(impl));
-    case RHIBackend::Metal:
-      return fn(static_cast<const MTBindlessManager*>(impl));
-    default:
-      ETX_ASSERT(false);
-      return fn(static_cast<const VKBindlessManager*>(impl));
-  }
+  (void)backend;
+  return fn(static_cast<const MTBindlessManager*>(impl));
 #endif
 }
 

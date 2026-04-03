@@ -4,8 +4,10 @@
 #include <etx/core/log.hxx>
 #include <etx/core/platform.hxx>
 #include <etx/core/environment.hxx>
+#include <spirv_msl.hpp>
 #include <array>
 #include <codecvt>
+#include <cstring>
 #include <cstdio>
 #include <fstream>
 #include <locale>
@@ -182,119 +184,37 @@ std::vector<std::string> build_shader_include_directories(const std::string& sou
   return include_directories;
 }
 
-std::string shell_quote(const std::string& value) {
-  std::string result = "'";
-  for (char ch : value) {
-    if (ch == '\'') {
-      result += "'\\''";
-    } else {
-      result.push_back(ch);
-    }
-  }
-  result.push_back('\'');
-  return result;
-}
-
-bool read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>& out_data) {
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
-    return false;
-  }
-  file.seekg(0, std::ios::end);
-  const std::streamsize size = file.tellg();
-  if (size < 0) {
-    return false;
-  }
-  file.seekg(0, std::ios::beg);
-  out_data.resize(static_cast<size_t>(size));
-  if (size > 0) {
-    file.read(reinterpret_cast<char*>(out_data.data()), size);
-  }
-  return file.good() || file.eof();
-}
-
-bool read_text_file(const std::filesystem::path& path, std::string& out_text) {
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
-    return false;
-  }
-  std::ostringstream stream;
-  stream << file.rdbuf();
-  out_text = stream.str();
-  return true;
-}
-
-std::string resolve_spirv_cross_executable() {
-  static constexpr const char* kCommonCandidates[] = {
-    "spirv-cross",
-    "./spirv-cross",
-    "./bin/spirv-cross",
-    "../bin/spirv-cross",
-    "/usr/local/bin/spirv-cross",
-    "/opt/homebrew/bin/spirv-cross",
-  };
-  for (const char* candidate : kCommonCandidates) {
-    std::error_code ec = {};
-    if (std::filesystem::exists(candidate, ec) && (ec.value() == 0)) {
-      return candidate;
-    }
-  }
-
-  return {};
-}
-
 bool translate_spirv_to_msl(const std::vector<uint8_t>& spirv_data, std::string& out_msl, std::string& error_message) {
-  const std::string spirv_cross = resolve_spirv_cross_executable();
-  if (spirv_cross.empty()) {
-    error_message = "spirv-cross executable was not found in PATH.";
+  if ((spirv_data.empty()) || ((spirv_data.size() % sizeof(uint32_t)) != 0u)) {
+    error_message = "SPIR-V payload is empty or not aligned to 32-bit words.";
     return false;
   }
 
-  std::error_code ec = {};
-  const std::filesystem::path temp_dir = std::filesystem::temp_directory_path(ec) / "etx_shader_tmp";
-  if (ec.value() != 0) {
-    error_message = "Failed to locate temporary directory.";
+  std::vector<uint32_t> spirv_words(spirv_data.size() / sizeof(uint32_t));
+  std::memcpy(spirv_words.data(), spirv_data.data(), spirv_data.size());
+
+  try {
+    spirv_cross::CompilerMSL compiler(std::move(spirv_words));
+    spirv_cross::CompilerMSL::Options options = compiler.get_msl_options();
+    options.platform = spirv_cross::CompilerMSL::Options::macOS;
+    options.msl_version = spirv_cross::CompilerMSL::Options::make_msl_version(3, 0);
+    options.argument_buffers = true;
+    // The Metal backend relies on runtime-sized bindless descriptor arrays, which require tier 2.
+    options.argument_buffers_tier = spirv_cross::CompilerMSL::Options::ArgumentBuffersTier::Tier2;
+    compiler.set_msl_options(options);
+    compiler.add_discrete_descriptor_set(0u);
+
+    out_msl = compiler.compile();
+  } catch (const spirv_cross::CompilerError& error) {
+    error_message = error.what();
     return false;
-  }
-
-  std::filesystem::create_directories(temp_dir, ec);
-  if (ec.value() != 0) {
-    error_message = "Failed to create temporary shader directory.";
-    return false;
-  }
-
-  const uint64_t shader_hash = etx_hash64(spirv_data.data(), spirv_data.size());
-  const std::filesystem::path spirv_path = temp_dir / ("shader_" + std::to_string(shader_hash) + ".spv");
-  const std::filesystem::path msl_path = temp_dir / ("shader_" + std::to_string(shader_hash) + ".metal");
-  const std::filesystem::path error_path = temp_dir / ("shader_" + std::to_string(shader_hash) + ".log");
-
-  {
-    std::ofstream spirv_file(spirv_path, std::ios::binary);
-    if (!spirv_file) {
-      error_message = "Failed to create temporary SPIR-V file.";
-      return false;
-    }
-    spirv_file.write(reinterpret_cast<const char*>(spirv_data.data()), static_cast<std::streamsize>(spirv_data.size()));
-  }
-
-  const std::string command = shell_quote(spirv_cross) + " " + shell_quote(spirv_path.string()) +
-                              " --msl --msl-version 30000 --msl-argument-buffers --msl-argument-buffer-tier 1 --msl-discrete-descriptor-set 0 > " +
-                              shell_quote(msl_path.string()) + " 2> " + shell_quote(error_path.string());
-  const int exit_code = std::system(command.c_str());
-  if (exit_code != 0) {
-    std::string log_output = {};
-    read_text_file(error_path, log_output);
-    error_message = log_output.empty() ? "spirv-cross failed to translate SPIR-V to MSL." : log_output;
-    return false;
-  }
-
-  if (read_text_file(msl_path, out_msl) == false) {
-    error_message = "Failed to read translated MSL output.";
+  } catch (const std::exception& error) {
+    error_message = error.what();
     return false;
   }
 
   if (out_msl.empty()) {
-    error_message = "spirv-cross produced empty MSL output.";
+    error_message = "Embedded SPIRV-Cross produced empty MSL output.";
     return false;
   }
 
