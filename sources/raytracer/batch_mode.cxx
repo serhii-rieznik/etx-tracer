@@ -28,6 +28,10 @@ namespace etx {
 
 namespace {
 
+double elapsed_ms(const std::chrono::steady_clock::time_point& begin, const std::chrono::steady_clock::time_point& end) {
+  return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
 bool parse_u32_argument(const char* value, uint32_t& result) {
   if ((value == nullptr) || (value[0] == 0)) {
     return false;
@@ -1017,29 +1021,53 @@ struct BatchRenderSession {
   }
 
   bool init(bool initialize_cpu_renderer, bool initialize_gpu_renderer) {
+    const auto total_begin = std::chrono::steady_clock::now();
+
+    const auto scene_global_begin = std::chrono::steady_clock::now();
     scene_global_init();
+    const auto scene_global_end = std::chrono::steady_clock::now();
+
+    const auto render_context_begin = std::chrono::steady_clock::now();
     render_context.init();
+    const auto render_context_end = std::chrono::steady_clock::now();
     if (render_context.context().valid() == false) {
       log::error("Failed to initialize headless RHI context");
       return false;
     }
 
+    const auto scene_rhi_begin = std::chrono::steady_clock::now();
     scene.set_scattering_rhi(render_context.context());
     gpu_renderer_supported = render_context.context().capabilities().supports_ray_tracing;
+    const auto scene_rhi_end = std::chrono::steady_clock::now();
 
+    const auto ior_begin = std::chrono::steady_clock::now();
     std::string ior_folder = env().file_in_data("./spectrum/");
     ior_database.load(ior_folder.c_str());
+    const auto ior_end = std::chrono::steady_clock::now();
 
+    double cpu_renderer_init_ms = 0.0;
     if (initialize_cpu_renderer) {
+      const auto cpu_begin = std::chrono::steady_clock::now();
       cpu_renderer.init(render_context.context(), scene);
+      const auto cpu_end = std::chrono::steady_clock::now();
+      cpu_renderer_init_ms = elapsed_ms(cpu_begin, cpu_end);
     }
+    double gpu_renderer_init_ms = 0.0;
     if (initialize_gpu_renderer) {
       if (gpu_renderer_supported == false) {
         log::error("GPU ray tracing is not supported by the active RHI backend in this build");
         return false;
       }
+      const auto gpu_begin = std::chrono::steady_clock::now();
       gpu_renderer.init(render_context.context(), scene);
+      const auto gpu_end = std::chrono::steady_clock::now();
+      gpu_renderer_init_ms = elapsed_ms(gpu_begin, gpu_end);
     }
+
+    const auto total_end = std::chrono::steady_clock::now();
+    log::info("Batch session init timing: total=%.2fms scene_global=%.2fms render_context=%.2fms scene_rhi=%.2fms ior=%.2fms cpu_renderer=%.2fms gpu_renderer=%.2fms",
+      elapsed_ms(total_begin, total_end), elapsed_ms(scene_global_begin, scene_global_end), elapsed_ms(render_context_begin, render_context_end), elapsed_ms(scene_rhi_begin, scene_rhi_end),
+      elapsed_ms(ior_begin, ior_end), cpu_renderer_init_ms, gpu_renderer_init_ms);
     return true;
   }
 
@@ -1212,18 +1240,22 @@ bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const ui
 }
 
 bool load_scene_for_batch(const BatchRenderOptions& options, BatchRenderSession& session, Integrator*& selected_integrator, bool configure_cpu_renderer) {
+  const auto total_begin = std::chrono::steady_clock::now();
   SceneRepresentation::IntegratorData integrator_data = {};
   const std::string absolute_scene_path = resolve_input_path(options.scene_file);
+  const auto scene_load_begin = std::chrono::steady_clock::now();
   if (session.scene.load_from_file(absolute_scene_path.c_str(), SceneRepresentation::LoadEverything, &integrator_data) == false) {
     log::error("Failed to load scene from file: %s", absolute_scene_path.c_str());
     return false;
   }
+  const auto scene_load_end = std::chrono::steady_clock::now();
 
   if (session.scene.valid() == false) {
     log::error("Scene is invalid after loading: %s", absolute_scene_path.c_str());
     return false;
   }
 
+  const auto configure_begin = std::chrono::steady_clock::now();
   if (options.integrator.empty() == false) {
     const Integrator::Type requested_type = integrator_id_to_type(options.integrator.c_str());
     if (requested_type == Integrator::Type::Invalid) {
@@ -1238,8 +1270,11 @@ bool load_scene_for_batch(const BatchRenderOptions& options, BatchRenderSession&
   if (configure_batch_render_window(options, session) == false) {
     return false;
   }
+  const auto configure_end = std::chrono::steady_clock::now();
 
+  double cpu_setup_ms = 0.0;
   if (configure_cpu_renderer) {
+    const auto cpu_setup_begin = std::chrono::steady_clock::now();
     session.cpu_renderer.set_output_dimensions(session.render_context.context(), session.scene.camera().film_size);
 
     for (const auto& [type, options_data] : integrator_data.settings) {
@@ -1257,9 +1292,15 @@ bool load_scene_for_batch(const BatchRenderOptions& options, BatchRenderSession&
     }
 
     session.cpu_renderer.set_integrator(selected_integrator);
+    const auto cpu_setup_end = std::chrono::steady_clock::now();
+    cpu_setup_ms = elapsed_ms(cpu_setup_begin, cpu_setup_end);
   } else {
     selected_integrator = nullptr;
   }
+
+  const auto total_end = std::chrono::steady_clock::now();
+  log::info("Batch scene load timing: total=%.2fms load=%.2fms configure=%.2fms cpu_setup=%.2fms path=%s", elapsed_ms(total_begin, total_end),
+    elapsed_ms(scene_load_begin, scene_load_end), elapsed_ms(configure_begin, configure_end), cpu_setup_ms, absolute_scene_path.c_str());
 
   return true;
 }
@@ -1348,7 +1389,9 @@ bool configure_preloaded_scene_for_full_comparison(const BatchRenderOptions& opt
 
   session.cpu_renderer.set_integrator(selected_integrator);
   session.gpu_renderer.cleanup(session.render_context.context());
-  session.gpu_renderer.init(session.render_context.context(), session.scene);
+  if (session.gpu_renderer.camera_controller() == nullptr) {
+    session.gpu_renderer.init(session.render_context.context(), session.scene);
+  }
   session.cpu_renderer.integrator_thread().request_scene_check();
   session.gpu_renderer.on_scene_changed(session.scene);
   return true;
@@ -1424,21 +1467,61 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     return false;
   }
 
-  const uint32_t gpu_frame_count = max(1u, session.scene.data().options.samples);
-  for (uint32_t frame_index = 0u; frame_index < gpu_frame_count; ++frame_index) {
-    session.render_context.begin_frame();
-    Renderer::FrameData frame_data = {};
-    frame_data.dt = 0.0f;
-    session.gpu_renderer.render(session.render_context.context(), session.scene, frame_data);
-    session.render_context.end_frame();
-
-    log::info("GPU rendering progress: %u / %u", frame_index + 1u, gpu_frame_count);
+  session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
+  if (session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene) == false) {
+    log::error("GPU renderer preparation failed before batch rendering");
+    return false;
   }
 
+  const uint32_t target_sample_count = max(1u, session.scene.data().options.samples);
+  const uint32_t max_gpu_frame_count = std::max(1024u, target_sample_count * 4096u);
+  const auto render_begin = std::chrono::steady_clock::now();
+  double total_frame_time_ms = 0.0;
+  double first_frame_time_ms = 0.0;
+  uint32_t frame_index = 0u;
+  while ((session.gpu_renderer.completed_samples() < target_sample_count) && (frame_index < max_gpu_frame_count)) {
+    const auto frame_begin = std::chrono::steady_clock::now();
+    const auto begin_frame_begin = std::chrono::steady_clock::now();
+    session.render_context.begin_frame();
+    const auto begin_frame_end = std::chrono::steady_clock::now();
+    Renderer::FrameData frame_data = {};
+    frame_data.dt = 0.0f;
+    const auto render_begin = std::chrono::steady_clock::now();
+    session.gpu_renderer.render(session.render_context.context(), session.scene, frame_data);
+    const auto render_end = std::chrono::steady_clock::now();
+    const auto end_frame_begin = std::chrono::steady_clock::now();
+    session.render_context.end_frame();
+    const auto end_frame_end = std::chrono::steady_clock::now();
+    const auto frame_end = std::chrono::steady_clock::now();
+    const double frame_time_ms = std::chrono::duration<double, std::milli>(frame_end - frame_begin).count();
+    total_frame_time_ms += frame_time_ms;
+    if (frame_index == 0u) {
+      first_frame_time_ms = frame_time_ms;
+      log::info("GPU first-frame timing: total=%.2fms begin_frame=%.2fms render=%.2fms end_frame=%.2fms", frame_time_ms, elapsed_ms(begin_frame_begin, begin_frame_end),
+        elapsed_ms(render_begin, render_end), elapsed_ms(end_frame_begin, end_frame_end));
+    }
+
+    frame_index += 1u;
+    log::info("GPU rendering progress: frames=%u samples=%u / %u", frame_index, session.gpu_renderer.completed_samples(), target_sample_count);
+  }
+  if (session.gpu_renderer.completed_samples() < target_sample_count) {
+    log::error("GPU batch render did not reach target samples (%u / %u) within %u frames", session.gpu_renderer.completed_samples(), target_sample_count, max_gpu_frame_count);
+    return false;
+  }
+  const auto render_end = std::chrono::steady_clock::now();
+  const double render_wall_time_ms = std::chrono::duration<double, std::milli>(render_end - render_begin).count();
+  const double average_frame_time_ms = total_frame_time_ms / static_cast<double>(frame_index);
+  const double steady_state_frame_time_ms = (frame_index > 1u) ? ((total_frame_time_ms - first_frame_time_ms) / static_cast<double>(frame_index - 1u)) : first_frame_time_ms;
+  log::info("GPU batch render timing: frames=%u total=%.2fms first=%.2fms avg=%.2fms steady=%.2fms", frame_index, render_wall_time_ms, first_frame_time_ms,
+    average_frame_time_ms, steady_state_frame_time_ms);
+
   image_size = session.gpu_renderer.output_size();
+  const auto readback_begin = std::chrono::steady_clock::now();
   if (read_texture_to_float4_buffer(session.render_context.context(), session.gpu_renderer.output_texture(), image_size, output) == false) {
     return false;
   }
+  const auto readback_end = std::chrono::steady_clock::now();
+  log::info("GPU output readback timing: %.2fms", elapsed_ms(readback_begin, readback_end));
 
   return true;
 }
@@ -1486,12 +1569,16 @@ bool run_gpu_shader_compile_test(const BatchRenderOptions& options, BatchRenderS
     return false;
   }
 
-  session.gpu_renderer.reload_shaders(session.render_context.context());
-  if (session.gpu_renderer.pipelines_valid() == false) {
+  const auto shader_reload_begin = std::chrono::steady_clock::now();
+  session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
+  const bool preparation_success = session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene);
+  const auto shader_reload_end = std::chrono::steady_clock::now();
+  if ((preparation_success == false) || (session.gpu_renderer.pipelines_valid() == false)) {
     log::error("GPU shader compile test failed");
     return false;
   }
 
+  log::info("GPU shader compile test timing: reload_shaders=%.2fms", elapsed_ms(shader_reload_begin, shader_reload_end));
   log::info("GPU shader compile test succeeded");
   return true;
 }

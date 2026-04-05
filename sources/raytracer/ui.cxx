@@ -1583,84 +1583,128 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
 
 void UI::build_toolbar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##toolbar", ImGui::GetMainViewport(), ImGuiDir_Up, ctx.button_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
-    bool can_run = ctx.has_integrator && _current_integrator->can_run();
-    Integrator::State state = can_run ? _current_integrator->state() : Integrator::State::Stopped;
+    const bool cpu_mode = _current_renderer_mode == RendererMode::CPURaytracing;
+    if (cpu_mode) {
+      bool can_run = ctx.has_integrator && _current_integrator->can_run();
+      Integrator::State state = can_run ? _current_integrator->state() : Integrator::State::Stopped;
 
-    bool state_available[4] = {
-      can_run && (state == Integrator::State::Stopped),
-      can_run && (state == Integrator::State::Running),
-      can_run && (state != Integrator::State::Stopped),
-      can_run && (state == Integrator::State::Running),
-    };
+      bool state_available[4] = {
+        can_run && (state == Integrator::State::Stopped),
+        can_run && (state == Integrator::State::Running),
+        can_run && (state != Integrator::State::Stopped),
+        can_run && (state == Integrator::State::Running),
+      };
 
-    std::string labels[4] = {
-      (state == Integrator::State::Running) ? "> Running <" : "  Launch  ",
-      (state == Integrator::State::WaitingForCompletion) ? "> Finishing <" : "  Finish  ",
-      " Terminate ",
-      (state == Integrator::State::Running) ? " Restart " : "  Restart  ",
-    };
+      std::string labels[4] = {
+        (state == Integrator::State::Running) ? "> Running <" : "  Launch  ",
+        (state == Integrator::State::WaitingForCompletion) ? "> Finishing <" : "  Finish  ",
+        " Terminate ",
+        (state == Integrator::State::Running) ? " Restart " : "  Restart  ",
+      };
 
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::PushStyleColor(ImGuiCol_Button, state_available[0] ? kToolbarLaunchColor : kToolbarDisabledColor);
-    if (state_available[0] == false) {
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      ImGui::PushStyleColor(ImGuiCol_Button, state_available[0] ? kToolbarLaunchColor : kToolbarDisabledColor);
+      if (state_available[0] == false) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button(labels[0].c_str(), {0.0f, ctx.button_size}) && (state_available[0] == true)) {
+        callbacks.run_selected();
+      }
+      if (state_available[0] == false) {
+        ImGui::EndDisabled();
+      }
+
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      ImGui::PushStyleColor(ImGuiCol_Button, state_available[1] ? kToolbarFinishColor : kToolbarDisabledColor);
+      if (state_available[1] == false) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button(labels[1].c_str(), {0.0f, ctx.button_size}) && (state_available[1] == true)) {
+        callbacks.stop_selected(true);
+      }
+      if (state_available[1] == false) {
+        ImGui::EndDisabled();
+      }
+
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      ImGui::PushStyleColor(ImGuiCol_Button, state_available[2] ? kToolbarTerminateColor : kToolbarDisabledColor);
+      if (state_available[2] == false) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button(labels[2].c_str(), {0.0f, ctx.button_size}) && (state_available[2] == true)) {
+        callbacks.stop_selected(false);
+      }
+      if (state_available[2] == false) {
+        ImGui::EndDisabled();
+      }
+
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      ImGui::PushStyleColor(ImGuiCol_Button, state_available[3] ? kToolbarRestartColor : kToolbarDisabledColor);
+      if (state_available[3] == false) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button(labels[3].c_str(), {0.0f, ctx.button_size}) && (state_available[3] == true)) {
+        callbacks.restart_selected();
+      }
+      if (state_available[3] == false) {
+        ImGui::EndDisabled();
+      }
+      ImGui::PopStyleColor(4);
+
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      if (state_available[0] == false) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button("  Denoise (preview)  ", {0.0f, ctx.button_size})) {
+        callbacks.denoise_selected();
+      }
+      if (state_available[0] == false) {
+        ImGui::EndDisabled();
+      }
+    } else {
+      const bool gpu_mode = _current_renderer_mode == RendererMode::GPURaytracing;
+      const RendererPreparationStatus status = _current_renderer_status;
+      const char* label = "  Ready  ";
+      ImVec4 status_color = kToolbarLaunchColor;
+      if (status.state == RendererPreparationState::Preparing) {
+        label = " Preparing... ";
+        status_color = kToolbarFinishColor;
+      } else if (status.state == RendererPreparationState::Failed) {
+        label = "  Failed  ";
+        status_color = kToolbarTerminateColor;
+      }
+
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      ImGui::PushStyleColor(ImGuiCol_Button, status_color);
       ImGui::BeginDisabled();
-    }
-    if (ImGui::Button(labels[0].c_str(), {0.0f, ctx.button_size}) && (state_available[0] == true)) {
-      callbacks.run_selected();
-    }
-    if (state_available[0] == false) {
+      ImGui::Button(label, {0.0f, ctx.button_size});
       ImGui::EndDisabled();
-    }
+      ImGui::PopStyleColor();
 
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::PushStyleColor(ImGuiCol_Button, state_available[1] ? kToolbarFinishColor : kToolbarDisabledColor);
-    if (state_available[1] == false) {
-      ImGui::BeginDisabled();
-    }
-    if (ImGui::Button(labels[1].c_str(), {0.0f, ctx.button_size}) && (state_available[1] == true)) {
-      callbacks.stop_selected(true);
-    }
-    if (state_available[1] == false) {
-      ImGui::EndDisabled();
-    }
+      if (gpu_mode) {
+        ImGui::SameLine(0.0f, ctx.wpadding.x);
+        if (ImGui::Button((status.state == RendererPreparationState::Failed) ? "  Retry  " : "  Reload Shaders  ", {0.0f, ctx.button_size})) {
+          if (callbacks.reload_shaders_selected) {
+            callbacks.reload_shaders_selected();
+          }
+        }
 
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::PushStyleColor(ImGuiCol_Button, state_available[2] ? kToolbarTerminateColor : kToolbarDisabledColor);
-    if (state_available[2] == false) {
-      ImGui::BeginDisabled();
-    }
-    if (ImGui::Button(labels[2].c_str(), {0.0f, ctx.button_size}) && (state_available[2] == true)) {
-      callbacks.stop_selected(false);
-    }
-    if (state_available[2] == false) {
-      ImGui::EndDisabled();
-    }
-
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::PushStyleColor(ImGuiCol_Button, state_available[3] ? kToolbarRestartColor : kToolbarDisabledColor);
-    if (state_available[3] == false) {
-      ImGui::BeginDisabled();
-    }
-    if (ImGui::Button(labels[3].c_str(), {0.0f, ctx.button_size}) && (state_available[3] == true)) {
-      callbacks.restart_selected();
-    }
-    if (state_available[3] == false) {
-      ImGui::EndDisabled();
-    }
-    ImGui::PopStyleColor(4);
-
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    if (state_available[0] == false) {
-      ImGui::BeginDisabled();
-    }
-    if (ImGui::Button("  Denoise (preview)  ", {0.0f, ctx.button_size})) {
-      callbacks.denoise_selected();
-    }
-    if (state_available[0] == false) {
-      ImGui::EndDisabled();
+        ImGui::SameLine(0.0f, ctx.wpadding.x);
+        if (status.state != RendererPreparationState::Preparing) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("  Cancel  ", {0.0f, ctx.button_size})) {
+          if (callbacks.cancel_renderer_preparation_selected) {
+            callbacks.cancel_renderer_preparation_selected();
+          }
+        }
+        if (status.state != RendererPreparationState::Preparing) {
+          ImGui::EndDisabled();
+        }
+      }
     }
 
     ImGui::SameLine(0.0f, ctx.wpadding.x);
@@ -1673,15 +1717,6 @@ void UI::build_toolbar(const BuildContext& ctx) {
         }
       }
       ImGui::PopStyleColor();
-    }
-
-    if ((_current_renderer_mode != RendererMode::CPURaytracing) && (_current_renderer_mode != RendererMode::Rasterization)) {
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      if (ImGui::Button("  Reload Shaders  ", {0.0f, ctx.button_size})) {
-        if (callbacks.reload_shaders_selected) {
-          callbacks.reload_shaders_selected();
-        }
-      }
     }
 
     ImGui::SameLine(0.0f, ctx.wpadding.x);
@@ -1746,21 +1781,46 @@ void UI::build_toolbar(const BuildContext& ctx) {
   }
 
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ctx.text_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
-    constexpr const char* status_str[] = {
-      "Stopped",
-      "Running",
-      "Completing",
-    };
+    if (_current_renderer_mode == RendererMode::CPURaytracing) {
+      constexpr const char* status_str[] = {
+        "Stopped",
+        "Running",
+        "Completing",
+      };
 
-    auto status = _current_integrator ? _current_integrator->status() : Integrator::Status{};
-    auto state = _current_integrator ? _current_integrator->state() : Integrator::State::Stopped;
+      auto status = _current_integrator ? _current_integrator->status() : Integrator::Status{};
+      auto state = _current_integrator ? _current_integrator->state() : Integrator::State::Stopped;
 
-    double average_time = status.completed_iterations > 0 ? status.total_time / status.completed_iterations : 0.0;
+      double average_time = status.completed_iterations > 0 ? status.total_time / status.completed_iterations : 0.0;
 
-    const char* buffer = format_string("%-4d | %s | %.3fms last, %.3fms avg, %.3fs total | %.1f FPS", status.completed_iterations, status_str[uint32_t(state)],
-      status.last_iteration_time * 1000.0, average_time * 1000.0f, status.total_time, _current_fps);
+      const char* buffer = format_string("%-4d | %s | %.3fms last, %.3fms avg, %.3fs total | %.1f FPS", status.completed_iterations, status_str[uint32_t(state)],
+        status.last_iteration_time * 1000.0, average_time * 1000.0f, status.total_time, _current_fps);
 
-    ImGui::Text("%s", buffer);
+      ImGui::Text("%s", buffer);
+    } else {
+      const RendererPreparationStatus status = _current_renderer_status;
+      const char* state_str = "Ready";
+      if (status.state == RendererPreparationState::Preparing) {
+        state_str = "Preparing";
+      } else if (status.state == RendererPreparationState::Failed) {
+        state_str = "Failed";
+      }
+
+      std::string progress = {};
+      if (status.total_steps > 0u) {
+        progress = format_string("%u/%u", status.completed_steps, status.total_steps);
+      } else {
+        progress = "-";
+      }
+
+      const char* buffer = format_string("%s | %s | %s | %s | %.1f FPS", (_current_renderer_mode == RendererMode::GPURaytracing) ? "GPU Raytracing" : "Rasterization", state_str,
+        status.phase.empty() ? "-" : status.phase.c_str(), progress.c_str(), _current_fps);
+      ImGui::Text("%s", buffer);
+      if (status.message.empty() == false) {
+        ImGui::SameLine(0.0f, ctx.wpadding.x);
+        ImGui::TextUnformatted(status.message.c_str());
+      }
+    }
     ImGui::End();
   }
 }

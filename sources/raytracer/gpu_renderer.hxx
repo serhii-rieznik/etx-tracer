@@ -1,60 +1,19 @@
 #pragma once
 
 #include "renderer.hxx"
+#include <etx/render/host/tasks.hxx>
 #include <etx/rhi/rhi.hxx>
 #include <interop/gpu_scene_shared.hxx>
 #include <interop/gpu_wavefront_shared.hxx>
+#include <atomic>
+#include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace etx {
 
 struct GPURaytracingRenderer : public Renderer {
-  GPURaytracingRenderer(TaskScheduler&);
-  ~GPURaytracingRenderer() override;
-
-  void init(RHIContext& ctx, SceneRepresentation& scene) override;
-  void render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) override;
-
-  void cleanup(RHIContext& ctx) override;
-
-  void reload_shaders(RHIContext& ctx);
-  bool pipelines_valid() const;
-  bool runtime_failed() const {
-    return _runtime_failed;
-  }
-  const std::string& runtime_failure_reason() const {
-    return _runtime_failure_reason;
-  }
-  void set_compile_stage_filter(const std::string&);
-  bool set_render_window(const uint2& origin, const uint2& size, const uint2& full_size);
-  void reset_render_window();
-
-  const char* name() const override {
-    return "GPU Raytracing";
-  }
-  RendererMode mode() const override {
-    return RendererMode::GPURaytracing;
-  }
-
-  void on_camera_changed(SceneRepresentation& scene) override;
-  void on_scene_changed(SceneRepresentation& scene) override;
-
- private:
-  void destroy_scene_buffers(RHIContext& ctx);
-  void destroy_wavefront_buffers(RHIContext& ctx);
-  void destroy_blue_noise_buffer(RHIContext& ctx);
-  bool update_blue_noise_buffer(RHIContext& ctx, const SceneRepresentation& scene);
-  void destroy_acceleration_structures(RHIContext& ctx);
-  bool build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene);
-  bool upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
-  bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
-  bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene);
-  void create_pipelines(RHIContext& ctx);
-  void reset_runtime_failure();
-  void set_runtime_failure(std::string message);
-
- private:
   enum class PipelineStage : uint32_t {
     PrepareSample = 0u,
     InitCameraPath0 = 1u,
@@ -101,6 +60,113 @@ struct GPURaytracingRenderer : public Renderer {
     Count = 42u,
   };
 
+  GPURaytracingRenderer(TaskScheduler&);
+  ~GPURaytracingRenderer() override;
+
+  void init(RHIContext& ctx, SceneRepresentation& scene) override;
+  void render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) override;
+
+  void cleanup(RHIContext& ctx) override;
+
+  void reload_shaders(RHIContext& ctx, SceneRepresentation& scene);
+  bool finish_preparation(RHIContext& ctx, SceneRepresentation& scene);
+  bool pipelines_valid() const;
+  bool runtime_failed() const {
+    return _runtime_failed;
+  }
+  const std::string& runtime_failure_reason() const {
+    return _runtime_failure_reason;
+  }
+  uint32_t completed_samples() const {
+    return _sample_index;
+  }
+  void set_compile_stage_filter(const std::string&);
+  bool set_render_window(const uint2& origin, const uint2& size, const uint2& full_size);
+  void reset_render_window();
+
+  const char* name() const override {
+    return "GPU Raytracing";
+  }
+  RendererMode mode() const override {
+    return RendererMode::GPURaytracing;
+  }
+  RendererPreparationStatus preparation_status() const override;
+  void cancel_preparation() override;
+  void stop() override;
+
+  void on_camera_changed(SceneRepresentation& scene) override;
+  void on_scene_changed(SceneRepresentation& scene) override;
+
+ private:
+  struct CompiledStageBinary {
+    PipelineStage stage = PipelineStage::PrepareSample;
+    std::string entry_point = {};
+    std::string source_file = {};
+    std::string optimization_level = {};
+    std::string bsdf_kind = {};
+    bool uses_stage_entry_define = false;
+    std::vector<uint8_t> blob = {};
+    RHIShaderBinary binary = {};
+  };
+
+  struct PipelinePublishTiming {
+    PipelineStage stage = PipelineStage::PrepareSample;
+    std::string entry_point = {};
+    std::string source_file = {};
+    std::string optimization_level = {};
+    std::string bsdf_kind = {};
+    bool uses_stage_entry_define = false;
+    double elapsed_ms = 0.0;
+  };
+
+  struct PendingPipelinePreparation {
+    uint32_t generation = 0u;
+    uint32_t path_mode = 0u;
+    uint32_t material_compile_mask = 0u;
+    std::string compile_stage_filter = {};
+    uint32_t total_steps = 0u;
+    uint32_t total_compile_groups = 0u;
+    uint32_t total_pipelines = 0u;
+    std::atomic<uint32_t> completed_compile_groups = 0u;
+    std::vector<CompiledStageBinary> compiled_stages = {};
+    std::vector<PipelinePublishTiming> publish_timings = {};
+    std::string error_message = {};
+    bool compile_filter_matched = false;
+    bool success = false;
+    std::chrono::steady_clock::time_point queued_at = {};
+    std::chrono::steady_clock::time_point compile_started_at = {};
+    std::chrono::steady_clock::time_point compile_finished_at = {};
+  };
+
+  struct InflightPreparationTask {
+    Task::Handle handle = {};
+    std::shared_ptr<PendingPipelinePreparation> result = {};
+  };
+
+  void destroy_scene_buffers(RHIContext& ctx);
+  void destroy_wavefront_buffers(RHIContext& ctx);
+  void destroy_blue_noise_buffer(RHIContext& ctx);
+  bool update_blue_noise_buffer(RHIContext& ctx, const SceneRepresentation& scene);
+  void destroy_acceleration_structures(RHIContext& ctx);
+  bool build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene);
+  bool upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
+  bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
+  bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene);
+  void request_pipeline_preparation(const SceneRepresentation& scene, const char* reason);
+  void poll_preparation_tasks(RHIContext& ctx, bool wait_for_active = false);
+  bool begin_pipeline_publish(std::shared_ptr<PendingPipelinePreparation> result);
+  bool advance_pipeline_publish(RHIContext& ctx, uint32_t max_pipelines);
+  bool create_pipelines_sync(RHIContext& ctx, SceneRepresentation& scene, const char* reason);
+  void release_inflight_preparation_tasks(bool wait);
+  void compile_pipeline_preparation(std::shared_ptr<PendingPipelinePreparation> result);
+  void destroy_pipelines(RHIDevice& device);
+  void set_preparation_failed(const std::string& message, const char* phase = "Failed");
+  void set_preparation_ready(const char* message = nullptr);
+  void set_preparation_state(RendererPreparationState state, const char* phase, const std::string& message = {}, uint32_t completed_steps = 0u, uint32_t total_steps = 0u);
+  void reset_runtime_failure();
+  void set_runtime_failure(std::string message);
+
+ private:
   RHIPipeline _pipelines[static_cast<uint32_t>(PipelineStage::Count)] = {};
   RHIBindlessHandle _tlas = {};
   std::vector<RHIBindlessHandle> _blas;
@@ -222,12 +288,25 @@ struct GPURaytracingRenderer : public Renderer {
   uint2 _render_window_origin = {};
   uint2 _render_window_size = {};
   RHIResourceState _output_texture_state = RHIResourceState::Undefined;
+  RHIBackend _backend = RHIBackend::Metal;
 
   std::string _compile_stage_filter = {};
   std::string _runtime_failure_reason = {};
+  std::string _preparation_phase = "Ready";
+  std::string _preparation_message = {};
+  std::vector<InflightPreparationTask> _inflight_preparation_tasks = {};
+  std::shared_ptr<PendingPipelinePreparation> _active_preparation = {};
+  std::shared_ptr<PendingPipelinePreparation> _publish_preparation = {};
+  std::chrono::steady_clock::time_point _preparation_started_at = {};
+  std::chrono::steady_clock::time_point _pipeline_publish_started_at = {};
+  uint32_t _preparation_generation = 0u;
+  uint32_t _published_pipeline_count = 0u;
+  uint32_t _publish_pipeline_index = 0u;
   bool _compile_filter_matched = false;
   bool _initialized = false;
   bool _runtime_failed = false;
+  bool _pipeline_publish_logged = false;
+  RendererPreparationState _preparation_state = RendererPreparationState::Ready;
 };
 
 }  // namespace etx

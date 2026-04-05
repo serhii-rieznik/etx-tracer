@@ -81,6 +81,7 @@ struct RTApplication {
   void on_camera_activated(uint32_t camera_index);
   void on_scene_update_requested();
   void on_reload_shaders_selected();
+  void on_cancel_renderer_preparation_selected();
 
  private:
   void add_to_recent(const std::string&);
