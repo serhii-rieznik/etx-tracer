@@ -627,7 +627,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
     .spect = state.spect,
     .source_type = camera_at_medium ? InteractionType::Medium : InteractionType::Surface,
     .source_position = sample_pos,
-    .source_normal = camera_at_medium ? isect->nrm : float3{},
+    .source_normal = camera_at_medium ? float3{} : isect->nrm,
   };
   auto emitter_sample = sample_emitter(scene.light_sampling_method(), query, state.sampler);
   if (emitter_sample.pdf_dir <= 0.0f)

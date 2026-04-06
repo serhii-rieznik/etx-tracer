@@ -108,7 +108,7 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
     sum += t;
   }
 
-  uint32_t total = _cell_ends.back();
+  const uint32_t total = sum;
   _positions.resize(total);
   _normals.resize(total);
   _w_in.resize(total);

@@ -1281,11 +1281,12 @@ struct CPUBidirectionalImpl : public Task {
     if (invalid_path_length || (enable_connect_to_light == false) || (mode == Mode::LightTracing))
       return {spect, 0.0f};
 
+    const bool source_is_surface = z_curr.is_surface_interaction();
     EmitterSampleQuery query = {
       .spect = spect,
-      .source_type = InteractionType::Surface,
+      .source_type = source_is_surface ? InteractionType::Surface : InteractionType::Medium,
       .source_position = z_curr.intersection.pos,
-      .source_normal = z_curr.intersection.nrm,
+      .source_normal = source_is_surface ? z_curr.intersection.nrm : float3{},
     };
     auto emitter_sample = sample_emitter(scene.light_sampling_method(), query, smp);
     if (emitter_sample.value.is_zero() || (emitter_sample.pdf_dir == 0.0f)) {

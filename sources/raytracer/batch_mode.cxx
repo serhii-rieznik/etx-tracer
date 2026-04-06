@@ -186,9 +186,20 @@ struct FullComparisonTechniqueInfo {
   uint32_t strategy_flags = 0u;
 };
 
+struct CPUComparisonTechniqueInfo {
+  const char* file_tag = "";
+  const char* display_name = "";
+  const char* description = "";
+  Integrator::Type integrator = Integrator::Type::Invalid;
+  uint32_t bdpt_mode = 0u;
+  uint32_t strategy_flags = 0u;
+  bool reference = false;
+};
+
 constexpr uint32_t kBDPTModePathTracing = 0u;
 constexpr uint32_t kBDPTModeLightTracing = 1u;
 constexpr uint32_t kBDPTModeFast = 2u;
+constexpr uint32_t kBDPTModeFull = 3u;
 
 const FullComparisonTechniqueInfo kFullComparisonTechniques[] = {
   {
@@ -233,13 +244,73 @@ const FullComparisonTechniqueInfo kFullComparisonTechniques[] = {
   },
 };
 
+const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
+  {
+    .file_tag = "pt",
+    .display_name = "PT",
+    .description = "Standalone CPU path tracing reference.",
+    .integrator = Integrator::Type::PathTracing,
+    .bdpt_mode = kBDPTModePathTracing,
+    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight,
+    .reference = true,
+  },
+  {
+    .file_tag = "bdpt-pt",
+    .display_name = "BDPT PT",
+    .description = "Bidirectional integrator in path-tracing mode.",
+    .integrator = Integrator::Type::Bidirectional,
+    .bdpt_mode = kBDPTModePathTracing,
+    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight,
+    .reference = false,
+  },
+  {
+    .file_tag = "bdpt-lt",
+    .display_name = "BDPT LT",
+    .description = "Bidirectional integrator in light-tracing mode.",
+    .integrator = Integrator::Type::Bidirectional,
+    .bdpt_mode = kBDPTModeLightTracing,
+    .strategy_flags = Scene::Strategy::ConnectToCamera,
+    .reference = false,
+  },
+  {
+    .file_tag = "bdpt-fast",
+    .display_name = "BDPT Fast",
+    .description = "Bidirectional path tracing with fast MIS precomputation.",
+    .integrator = Integrator::Type::Bidirectional,
+    .bdpt_mode = kBDPTModeFast,
+    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices,
+    .reference = false,
+  },
+  {
+    .file_tag = "bdpt-full",
+    .display_name = "BDPT Full",
+    .description = "Full bidirectional path tracing with complete vertex connections.",
+    .integrator = Integrator::Type::Bidirectional,
+    .bdpt_mode = kBDPTModeFull,
+    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices,
+    .reference = false,
+  },
+  {
+    .file_tag = "vcm",
+    .display_name = "VCM",
+    .description = "Vertex connection and merging CPU integrator.",
+    .integrator = Integrator::Type::VCM,
+    .bdpt_mode = kBDPTModeFast,
+    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices |
+                      Scene::Strategy::MergeVertices,
+    .reference = false,
+  },
+};
+
 const char* batch_usage_string() {
   return "Usage:\n"
          "  raytracer --render --scene <scene-file> --output <output-file> [options]\n"
          "  raytracer --full-comparison --scene <scene-file> [options]\n"
+         "  raytracer --cpu-comparison --scene <scene-file> [options]\n"
          "\n"
          "Options:\n"
          "  --full-comparison\n"
+         "  --cpu-comparison\n"
          "  --integrator <debug|pt|bdpt|vcm|bdpt_distilled>\n"
          "  --renderer <cpu|gpu>\n"
          "  --samples <count>\n"
@@ -309,6 +380,28 @@ std::string full_comparison_ai_report_file_name(const std::string& scene_file) {
   return (output_directory / "comparison.ai.json").generic_string();
 }
 
+std::string cpu_comparison_output_file_name(const std::string& scene_file, const char* technique_tag) {
+  const std::filesystem::path scene_path(resolve_input_path(scene_file));
+  const std::filesystem::path output_directory = scene_path.parent_path() / (scene_path.stem().generic_string() + ".cpu-comparison");
+  std::string result = output_directory.generic_string();
+  result += "/";
+  result += technique_tag;
+  result += ".cpu.exr";
+  return result;
+}
+
+std::string cpu_comparison_report_file_name(const std::string& scene_file) {
+  const std::filesystem::path scene_path(resolve_input_path(scene_file));
+  const std::filesystem::path output_directory = scene_path.parent_path() / (scene_path.stem().generic_string() + ".cpu-comparison");
+  return (output_directory / "comparison.html").generic_string();
+}
+
+std::string cpu_comparison_ai_report_file_name(const std::string& scene_file) {
+  const std::filesystem::path scene_path(resolve_input_path(scene_file));
+  const std::filesystem::path output_directory = scene_path.parent_path() / (scene_path.stem().generic_string() + ".cpu-comparison");
+  return (output_directory / "comparison.ai.json").generic_string();
+}
+
 bool ensure_parent_directory_exists(const std::string& file_name) {
   const std::filesystem::path file_path(file_name);
   const std::filesystem::path parent_path = file_path.parent_path();
@@ -328,6 +421,12 @@ bool ensure_parent_directory_exists(const std::string& file_name) {
 
 std::string png_file_name_from_output_file(const std::string& output_file) {
   std::filesystem::path path(output_file);
+  path.replace_extension(".png");
+  return path.generic_string();
+}
+
+std::string comparison_png_file_name_from_output_file(const std::string& output_file) {
+  std::filesystem::path path(comparison_file_name_from_output(output_file));
   path.replace_extension(".png");
   return path.generic_string();
 }
@@ -784,6 +883,11 @@ bool compare_output_to_reference_and_save(const BatchRenderOptions& options, con
     return false;
   }
 
+  const std::string difference_png_file_name = comparison_png_file_name_from_output_file(output_file);
+  if (save_image_to_file(difference_png_file_name, difference_image.data(), image_size, difference_params) == false) {
+    return false;
+  }
+
   if (out_comparison != nullptr) {
     *out_comparison = comparison;
   }
@@ -792,61 +896,109 @@ bool compare_output_to_reference_and_save(const BatchRenderOptions& options, con
 }
 
 void append_full_comparison_html_header(std::string& html_text, const std::string& scene_file) {
-  html_text += "<!doctype html>\n";
-  html_text += "<html lang=\"en\">\n";
-  html_text += "<head>\n";
-  html_text += "  <meta charset=\"utf-8\">\n";
-  html_text += "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n";
-  html_text += "  <title>ETX Full Comparison</title>\n";
-  html_text += "  <style>\n";
-  html_text += "    :root { color-scheme: dark; --bg: #10151d; --panel: #17202c; --panel-2: #1d2937; --text: #edf2f7; --muted: #9fb0c3; --accent: #7dd3fc; --line: #2b3a4b; }\n";
-  html_text += "    * { box-sizing: border-box; }\n";
-  html_text +=
-    "    body { margin: 0; font-family: \"Cascadia Mono\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", Menlo, monospace; background: radial-gradient(circle at top, #1a2533 "
-    "0%, #10151d 45%, #0b1016 100%); color: var(--text); }\n";
-  html_text += "    .page { max-width: 1500px; margin: 0 auto; padding: 32px 24px 64px; }\n";
-  html_text +=
-    "    .hero { margin-bottom: 28px; padding: 24px 28px; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(135deg, rgba(125, 211, 252, 0.08), "
-    "rgba(255, 255, 255, 0.02)); }\n";
-  html_text += "    .hero h1 { margin: 0 0 8px; font-size: 34px; }\n";
-  html_text += "    .hero p { margin: 0; color: var(--muted); word-break: break-all; }\n";
-  html_text += "    .grid { display: grid; gap: 20px; }\n";
-  html_text +=
-    "    .card { border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015)); overflow: hidden; "
-    "box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22); }\n";
-  html_text += "    .card-header { padding: 20px 24px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }\n";
-  html_text += "    .card-header h2 { margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 0.08em; }\n";
-  html_text += "    .card-header .tag { color: var(--accent); font-size: 13px; }\n";
-  html_text += "    .card-body { display: grid; grid-template-columns: minmax(340px, 1.25fr) minmax(280px, 0.9fr); gap: 0; }\n";
-  html_text += "    .viewer-wrap { padding: 20px 24px 24px; }\n";
-  html_text += "    .viewer-toolbar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 16px; color: var(--muted); }\n";
-  html_text += "    .viewer-toolbar label { display: inline-flex; gap: 8px; align-items: center; }\n";
-  html_text += "    .viewer { position: relative; width: 100%; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: #0c1117; }\n";
-  html_text += "    .viewer img { display: block; width: 100%; height: auto; }\n";
-  html_text += "    .viewer .overlay { position: absolute; inset: 0; opacity: 1; transition: opacity 120ms linear; pointer-events: none; }\n";
-  html_text += "    .legend { margin-top: 12px; color: var(--muted); font-size: 13px; display: flex; gap: 18px; flex-wrap: wrap; }\n";
-  html_text += "    .metrics { padding: 20px 24px 24px; border-left: 1px solid var(--line); background: rgba(12, 17, 23, 0.42); }\n";
-  html_text += "    .metrics h3 { margin: 0 0 12px; font-size: 16px; color: var(--accent); }\n";
-  html_text += "    table { width: 100%; border-collapse: collapse; font-size: 14px; }\n";
-  html_text += "    th, td { padding: 8px 0; border-bottom: 1px solid rgba(159, 176, 195, 0.14); text-align: left; }\n";
-  html_text += "    th { color: var(--muted); font-weight: 600; }\n";
-  html_text += "    td { font-variant-numeric: tabular-nums; }\n";
-  html_text += "    .metric-label { padding-left: 10px; border-radius: 6px; cursor: help; }\n";
-  html_text += "    .files { margin-top: 18px; color: var(--muted); font-size: 13px; }\n";
-  html_text += "    .files div { margin-top: 6px; word-break: break-all; }\n";
-  html_text += "    input[type=\"range\"] { width: 220px; }\n";
-  html_text += "    @media (max-width: 1024px) { .card-body { grid-template-columns: 1fr; } .metrics { border-left: 0; border-top: 1px solid var(--line); } }\n";
-  html_text += "  </style>\n";
-  html_text += "</head>\n";
-  html_text += "<body>\n";
-  html_text += "  <div class=\"page\">\n";
-  html_text += "    <section class=\"hero\">\n";
-  html_text += "      <h1>ETX Full Comparison</h1>\n";
-  html_text += "      <p>Scene: ";
+  html_text += R"html(<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ETX Full Comparison</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0b1016; --bg-2: #121a24; --panel: rgba(18, 27, 37, 0.86); --panel-strong: rgba(24, 35, 47, 0.94); --panel-soft: rgba(12, 18, 26, 0.76); --text: #eff5fb; --muted: #98aabd; --accent: #77d9ff; --accent-strong: #d5f5ff; --warm: #f1c978; --line: rgba(146, 167, 188, 0.18); --line-strong: rgba(146, 167, 188, 0.3); --shadow: 0 30px 80px rgba(0, 0, 0, 0.34); }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; min-height: 100vh; font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-weight: 400; background: radial-gradient(circle at 18% 0%, rgba(119, 217, 255, 0.16), transparent 28%), radial-gradient(circle at 100% 0%, rgba(241, 201, 120, 0.08), transparent 24%), linear-gradient(180deg, #101720 0%, #0b1016 100%); color: var(--text); }
+    body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px); background-size: 32px 32px; mask-image: linear-gradient(180deg, rgba(255, 255, 255, 0.45), transparent 70%); opacity: 0.18; }
+    button, input, select, textarea { font: inherit; }
+    .page { position: relative; z-index: 1; max-width: 1680px; margin: 0 auto; padding: 12px 14px 28px; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, auto); gap: 12px; align-items: center; margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 16px; background: rgba(10, 16, 22, 0.72); box-shadow: 0 12px 26px rgba(0, 0, 0, 0.16); backdrop-filter: blur(14px); }
+    .hero-meta { min-width: 0; }
+    .hero-meta-right { text-align: right; }
+    .hero-label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 10px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; }
+    .scene-path { display: block; color: var(--accent-strong); font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 0.79rem; font-weight: 400; line-height: 1.4; word-break: break-all; }
+    .selection-label { display: block; color: var(--text); font-size: 0.95rem; font-weight: 600; letter-spacing: 0.02em; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(420px, 0.78fr); gap: 12px; align-items: start; }
+    .tech-nav { position: sticky; top: 10px; z-index: 5; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: 16px; background: rgba(11, 16, 22, 0.82); box-shadow: 0 12px 24px rgba(0, 0, 0, 0.16); backdrop-filter: blur(16px); }
+    .tech-nav:empty { display: none; }
+    .thumb-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .thumb-card { padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, 0.025); transition: border-color 120ms ease, background 120ms ease, transform 120ms ease; cursor: pointer; }
+    .thumb-card:hover { transform: translateY(-1px); border-color: rgba(119, 217, 255, 0.28); background: rgba(255, 255, 255, 0.035); }
+    .thumb-card.is-active { border-color: rgba(119, 217, 255, 0.5); background: rgba(119, 217, 255, 0.08); box-shadow: inset 0 0 0 1px rgba(119, 217, 255, 0.12); }
+    .thumb-toolbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; margin-bottom: 6px; }
+    .thumb-head { flex: 1; min-width: 0; display: grid; gap: 4px; }
+    .thumb-score-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .thumb-name { color: var(--text); font-size: 10px; font-weight: 600; letter-spacing: 0.03em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .thumb-score { color: var(--accent-strong); font-size: 10px; font-weight: 600; white-space: nowrap; }
+    .thumb-progress { height: 6px; border: 1px solid rgba(146, 167, 188, 0.18); border-radius: 999px; overflow: hidden; background: rgba(255, 255, 255, 0.05); }
+    .thumb-progress-fill { height: 100%; border-radius: 999px; }
+    .thumb-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .thumb-viewer { position: relative; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: #0c1117; }
+    .thumb-viewer img { display: block; width: 100%; height: auto; }
+    .thumb-viewer .overlay { position: absolute; inset: 0; pointer-events: none; }
+    .grid { position: sticky; top: 10px; display: grid; gap: 12px; align-self: start; }
+    .card { display: none; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.038), rgba(255, 255, 255, 0.015)); box-shadow: 0 16px 44px rgba(0, 0, 0, 0.22); overflow: hidden; }
+    .grid > .card:first-child { display: block; }
+    .grid.has-active > .card:first-child:not(.is-active) { display: none; }
+    .card.is-active { display: block; }
+    .card-header { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 18px 0; }
+    .card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .card-header h2 { margin: 0; font-size: 1.15rem; font-weight: 600; line-height: 1; letter-spacing: -0.02em; text-transform: none; }
+    .tag { display: inline-flex; align-items: center; width: fit-content; padding: 5px 8px; border: 1px solid rgba(241, 201, 120, 0.22); border-radius: 999px; color: var(--warm); font-size: 10px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(241, 201, 120, 0.08); }
+    .card-summary { display: none; }
+    .summary-pill { padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(8, 13, 19, 0.28); }
+    .summary-label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
+    .summary-value { display: block; color: var(--accent-strong); font-size: 1rem; font-weight: 600; line-height: 1.05; }
+    .card-body { display: grid; grid-template-columns: 1fr; gap: 16px; padding: 14px 18px 18px; align-items: start; }
+    .viewer-wrap { display: none; }
+    .viewer-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; color: var(--muted); }
+    .viewer-toolbar label { display: inline-flex; gap: 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(8, 13, 19, 0.26); font-size: 13px; }
+    .viewer { position: relative; width: 100%; border-radius: 18px; overflow: hidden; border: 1px solid var(--line-strong); background: linear-gradient(45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%), linear-gradient(-45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.03) 75%), linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.03) 75%), #0c1117; background-position: 0 0, 0 10px, 10px -10px, -10px 0; background-size: 20px 20px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02); }
+    .viewer::after { content: "CPU base / GPU overlay"; position: absolute; right: 14px; bottom: 14px; padding: 6px 10px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 999px; font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.82); background: rgba(11, 16, 22, 0.72); backdrop-filter: blur(10px); }
+    .viewer img { display: block; width: 100%; height: auto; }
+    .viewer .overlay { position: absolute; inset: 0; opacity: 1; transition: opacity 120ms linear; pointer-events: none; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+    .legend span { padding: 6px 9px; border: 1px solid var(--line); border-radius: 999px; background: rgba(8, 13, 19, 0.24); }
+    .metrics { display: grid; gap: 10px; align-self: start; }
+    .metric-section { padding: 14px 14px 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel-soft); }
+    .metrics h3 { margin: 0 0 10px; font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+    table { width: 100%; border-collapse: separate; border-spacing: 0 4px; font-size: 13px; }
+    th, td { padding: 5px 0; border-bottom: 0; text-align: left; vertical-align: middle; }
+    th { color: var(--muted); font-weight: 500; }
+    td { font-variant-numeric: tabular-nums; }
+    td:last-child { padding-left: 18px; color: var(--accent-strong); font-weight: 600; text-align: right; white-space: nowrap; }
+    .metric-label { padding: 6px 10px; border-radius: 8px; cursor: help; }
+    .files { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }
+    .file-entry { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, 0.02); }
+    .file-entry span { color: var(--muted); font-size: 10px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
+    .file-entry code { color: var(--text); font-family: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 12px; word-break: break-all; }
+    .has-tooltip { cursor: help; }
+    .report-tooltip { position: fixed; z-index: 1000; max-width: 360px; padding: 8px 10px; border: 1px solid rgba(119, 217, 255, 0.3); border-radius: 10px; background: rgba(7, 11, 16, 0.96); color: var(--text); font-size: 12px; line-height: 1.45; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28); pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity 90ms ease, transform 90ms ease; }
+    .report-tooltip.is-visible { opacity: 1; transform: translateY(0); }
+    input[type="checkbox"] { accent-color: var(--accent); }
+    input[type="range"] { width: min(220px, 38vw); accent-color: var(--accent); }
+    @media (max-width: 1200px) { .workspace { grid-template-columns: minmax(0, 0.86fr) minmax(360px, 0.88fr); } }
+    @media (max-width: 980px) { .workspace { grid-template-columns: 1fr; } .grid { position: static; } .thumb-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 900px) { .hero { grid-template-columns: 1fr; } .hero-meta-right { text-align: left; } .thumb-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 640px) { .page { padding-left: 10px; padding-right: 10px; } .hero, .card, .viewer-wrap { border-radius: 14px; } .thumb-grid { grid-template-columns: 1fr; } .viewer-toolbar label { width: 100%; justify-content: space-between; } .viewer::after { left: 12px; right: auto; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="hero-meta">
+        <span class="hero-label">Scene</span>
+        <code class="scene-path">)html";
   html_text += html_escape(scene_file);
-  html_text += "</p>\n";
-  html_text += "    </section>\n";
-  html_text += "    <section class=\"grid\">\n";
+  html_text += R"html(</code>
+      </div>
+      <div class="hero-meta hero-meta-right">
+        <span class="hero-label">Selected</span>
+        <span class="selection-label" id="selection_label">pt</span>
+      </div>
+    </section>
+    <div class="workspace">
+    <section class="tech-nav" id="tech_nav"></section>
+    <section class="grid">
+)html";
 }
 
 void append_full_comparison_html_entry(std::string& html_text, const FullComparisonTechniqueInfo& technique, const std::string& cpu_output_file, const std::string& gpu_output_file,
@@ -977,28 +1129,681 @@ void append_full_comparison_html_entry(std::string& html_text, const FullCompari
 }
 
 void append_full_comparison_html_footer(std::string& html_text) {
+  html_text += R"html(    </section>
+    </div>
+  </div>
+  <script>
+    const slugify = (value) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const readMetricValue = (table, label) => {
+      if (table == null) {
+        return '';
+      }
+      const rows = table.querySelectorAll('tr');
+      for (const row of rows) {
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 2) {
+          continue;
+        }
+        if (cells[0].textContent.trim() === label) {
+          return cells[1].textContent.trim();
+        }
+      }
+      return '';
+    };
+
+    const clampScore = (value) => Math.max(0, Math.min(1, value));
+    const inverseErrorScore = (value, scale) => clampScore(1 - (value / Math.max(scale, 1.0e-6)));
+    const readMetricNumber = (table, label) => {
+      const text = readMetricValue(table, label).replace('%', '').trim();
+      const value = Number(text);
+      return Number.isFinite(value) ? value : 0;
+    };
+    const metricScoreColor = (score) => {
+      const clamped = clampScore(score);
+      return {
+        r: 138 + (92 - 138) * clamped,
+        g: 82 + (126 - 82) * clamped,
+        b: 82 + (104 - 82) * clamped,
+      };
+    };
+    const compositeSimilarityTooltip = 'Noise-robust similarity score emphasizing low-frequency structural agreement, with smaller penalties for compare-space error, linear relative error, and brightness mismatch. Designed so independent noise does not dominate the score.';
+    const computeCompositeSimilarity = (compareTable, linearTable) => {
+      const lowFreqSimilarity = readMetricNumber(compareTable, 'Low-Freq Similarity') / 100.0;
+      const lowFreqRmse = readMetricNumber(compareTable, 'Low-Freq RMSE');
+      const compareSimilarity = readMetricNumber(compareTable, 'Similarity') / 100.0;
+      const compareRelativeRmse = readMetricNumber(compareTable, 'Relative RMSE');
+      const linearRelativeRmse = readMetricNumber(linearTable, 'Relative RMSE');
+      const brightnessRel = Math.abs(readMetricNumber(compareTable, 'Brightness Rel'));
+
+      return clampScore(
+        (lowFreqSimilarity * 0.55) +
+        (inverseErrorScore(lowFreqRmse, 0.02) * 0.20) +
+        (compareSimilarity * 0.10) +
+        (inverseErrorScore(compareRelativeRmse, 0.25) * 0.05) +
+        (inverseErrorScore(linearRelativeRmse, 0.12) * 0.05) +
+        (inverseErrorScore(brightnessRel, 0.03) * 0.05)
+      );
+    };
+
+    const overlayToggles = document.querySelectorAll('input[data-target]');
+    for (const toggle of overlayToggles) {
+      toggle.addEventListener('change', () => {
+        const target = document.getElementById(toggle.dataset.target);
+        if (target) {
+          target.style.display = toggle.checked ? 'block' : 'none';
+        }
+      });
+    }
+    const opacitySliders = document.querySelectorAll('input[data-opacity-target]');
+    for (const slider of opacitySliders) {
+      slider.addEventListener('input', () => {
+        const target = document.getElementById(slider.dataset.opacityTarget);
+        if (target) {
+          target.style.opacity = String(Number(slider.value) / 100.0);
+        }
+      });
+    }
+
+    const grid = document.querySelector('.grid');
+    const techniqueNav = document.getElementById('tech_nav');
+    const selectionLabel = document.getElementById('selection_label');
+    const cards = document.querySelectorAll('.card');
+    const thumbsBySlug = new Map();
+    const cardsBySlug = new Map();
+    const tooltip = document.createElement('div');
+    tooltip.className = 'report-tooltip';
+    document.body.appendChild(tooltip);
+
+    let tooltipElement = null;
+
+    const positionTooltip = (event) => {
+      const offset = 14;
+      const maxLeft = Math.max(8, window.innerWidth - tooltip.offsetWidth - 8);
+      const maxTop = Math.max(8, window.innerHeight - tooltip.offsetHeight - 8);
+      const nextLeft = Math.min(event.clientX + offset, maxLeft);
+      const nextTop = Math.min(event.clientY + offset, maxTop);
+      tooltip.style.left = `${nextLeft}px`;
+      tooltip.style.top = `${nextTop}px`;
+    };
+
+    const showTooltip = (element, event) => {
+      const tooltipText = element.dataset.tooltip || '';
+      if (tooltipText === '') {
+        return;
+      }
+      tooltipElement = element;
+      tooltip.textContent = tooltipText;
+      tooltip.classList.add('is-visible');
+      positionTooltip(event);
+    };
+
+    const hideTooltip = (element) => {
+      if ((tooltipElement != null) && (tooltipElement !== element)) {
+        return;
+      }
+      tooltipElement = null;
+      tooltip.classList.remove('is-visible');
+    };
+
+    const prepareTooltips = (root) => {
+      const elements = root.querySelectorAll('[title]');
+      for (const element of elements) {
+        const tooltipText = element.getAttribute('title');
+        if ((tooltipText == null) || (tooltipText === '')) {
+          continue;
+        }
+        element.dataset.tooltip = tooltipText;
+        element.removeAttribute('title');
+        element.classList.add('has-tooltip');
+        element.setAttribute('tabindex', '0');
+        element.addEventListener('mouseenter', (event) => {
+          showTooltip(element, event);
+        });
+        element.addEventListener('mousemove', (event) => {
+          if (tooltipElement === element) {
+            positionTooltip(event);
+          }
+        });
+        element.addEventListener('mouseleave', () => {
+          hideTooltip(element);
+        });
+        element.addEventListener('focus', () => {
+          const rect = element.getBoundingClientRect();
+          showTooltip(element, {
+            clientX: rect.left + Math.min(rect.width, 24),
+            clientY: rect.bottom,
+          });
+        });
+        element.addEventListener('blur', () => {
+          hideTooltip(element);
+        });
+      }
+    };
+
+    prepareTooltips(document);
+
+    const setCardOverlayState = (card, checked, sourceToggle = null) => {
+      const cardToggle = card.querySelector('.viewer-toolbar input[data-target]');
+      const overlayId = cardToggle ? cardToggle.dataset.target : '';
+      const overlay = overlayId ? document.getElementById(overlayId) : null;
+      if ((cardToggle != null) && (cardToggle !== sourceToggle)) {
+        cardToggle.checked = checked;
+      }
+      if (overlay != null) {
+        overlay.style.display = checked ? 'block' : 'none';
+      }
+      const thumbCheckbox = card.dataset.thumbCheckboxId ? document.getElementById(card.dataset.thumbCheckboxId) : null;
+      if ((thumbCheckbox != null) && (thumbCheckbox !== sourceToggle)) {
+        thumbCheckbox.checked = checked;
+      }
+      const thumbOverlay = card.dataset.thumbOverlayId ? document.getElementById(card.dataset.thumbOverlayId) : null;
+      if ((thumbOverlay != null) && (thumbOverlay !== sourceToggle)) {
+        thumbOverlay.style.display = checked ? 'block' : 'none';
+      }
+    };
+
+    const selectTechnique = (slug) => {
+      for (const [entrySlug, card] of cardsBySlug) {
+        card.classList.toggle('is-active', entrySlug === slug);
+      }
+      for (const [entrySlug, thumb] of thumbsBySlug) {
+        thumb.classList.toggle('is-active', entrySlug === slug);
+      }
+      const activeCard = cardsBySlug.get(slug);
+      if ((selectionLabel != null) && (activeCard != null)) {
+        selectionLabel.textContent = activeCard.dataset.title || slug;
+      }
+      if (grid != null) {
+        grid.classList.add('has-active');
+      }
+    };
+
+    for (const card of cards) {
+      const header = card.querySelector('.card-header');
+      const titleElement = header ? header.querySelector('h2') : null;
+      const tagElement = header ? header.querySelector('.tag') : null;
+      const metrics = card.querySelector('.metrics');
+      const tables = metrics ? metrics.querySelectorAll('table') : [];
+      const compareTable = tables.length > 0 ? tables[0] : null;
+      const linearTable = tables.length > 1 ? tables[1] : null;
+      if (titleElement == null) {
+        continue;
+      }
+
+      const title = titleElement.textContent.trim();
+      const slug = slugify(title);
+      card.id = slug;
+      card.dataset.title = title;
+      cardsBySlug.set(slug, card);
+
+      if ((header != null) && (tagElement != null) && (header.querySelector('.card-title') == null)) {
+        const titleGroup = document.createElement('div');
+        titleGroup.className = 'card-title';
+        header.insertBefore(titleGroup, header.firstChild);
+        titleGroup.appendChild(titleElement);
+        titleGroup.appendChild(tagElement);
+      }
+
+      if ((card.querySelector('.card-summary') == null) && (compareTable != null) && (linearTable != null)) {
+        const summary = document.createElement('div');
+        summary.className = 'card-summary';
+
+        const summaryMetrics = [
+          { label: 'Similarity', value: readMetricValue(compareTable, 'Similarity') },
+          { label: 'Relative RMSE', value: readMetricValue(compareTable, 'Relative RMSE') },
+          { label: 'Linear RMSE', value: readMetricValue(linearTable, 'RMSE') },
+        ];
+
+        for (const metric of summaryMetrics) {
+          const item = document.createElement('div');
+          item.className = 'summary-pill';
+          item.innerHTML = `<span class="summary-label">${metric.label}</span><span class="summary-value">${metric.value}</span>`;
+          summary.appendChild(item);
+        }
+
+        const body = card.querySelector('.card-body');
+        if (body != null) {
+          card.insertBefore(summary, body);
+        }
+      }
+
+      if (metrics != null) {
+        const headings = metrics.querySelectorAll(':scope > h3');
+        for (const heading of headings) {
+          const table = heading.nextElementSibling;
+          if ((table == null) || (table.tagName !== 'TABLE')) {
+            continue;
+          }
+          if ((heading.parentElement != null) && heading.parentElement.classList.contains('metric-section')) {
+            continue;
+          }
+          const section = document.createElement('section');
+          section.className = 'metric-section';
+          metrics.insertBefore(section, heading);
+          section.appendChild(heading);
+          section.appendChild(table);
+        }
+
+        const files = metrics.querySelector('.files');
+        if (files != null) {
+          files.classList.add('metric-section');
+          const entries = files.querySelectorAll('div');
+          for (const entry of entries) {
+            if (entry.classList.contains('file-entry')) {
+              continue;
+            }
+            const separatorIndex = entry.textContent.indexOf(':');
+            if (separatorIndex < 0) {
+              continue;
+            }
+            const label = entry.textContent.slice(0, separatorIndex).trim();
+            const value = entry.textContent.slice(separatorIndex + 1).trim();
+            entry.className = 'file-entry';
+            entry.innerHTML = `<span>${label}</span><code>${value}</code>`;
+          }
+        }
+      }
+
+      const overlayToggle = card.querySelector('.viewer-toolbar input[data-target]');
+      if (overlayToggle != null) {
+        overlayToggle.addEventListener('change', () => {
+          setCardOverlayState(card, overlayToggle.checked, overlayToggle);
+        });
+        setCardOverlayState(card, overlayToggle.checked, overlayToggle);
+      }
+
+      if (techniqueNav != null) {
+        let thumbGrid = techniqueNav.querySelector('.thumb-grid');
+        if (thumbGrid == null) {
+          thumbGrid = document.createElement('div');
+          thumbGrid.className = 'thumb-grid';
+          techniqueNav.appendChild(thumbGrid);
+        }
+
+        const viewer = card.querySelector('.viewer');
+        const baseImage = viewer ? viewer.querySelector('img:not(.overlay)') : null;
+        const overlayImage = viewer ? viewer.querySelector('.overlay') : null;
+        if ((baseImage == null) || (overlayImage == null)) {
+          continue;
+        }
+
+        const compositeSimilarity = computeCompositeSimilarity(compareTable, linearTable);
+        const compositeSimilarityPercent = `${(compositeSimilarity * 100).toFixed(1)}%`;
+        const compositeColor = metricScoreColor(compositeSimilarity);
+
+        const thumb = document.createElement('article');
+        thumb.className = 'thumb-card';
+        thumb.dataset.target = slug;
+
+        const thumbOverlayId = `thumb_overlay_${slug}`;
+        const thumbCheckboxId = `thumb_checkbox_${slug}`;
+        card.dataset.thumbOverlayId = thumbOverlayId;
+        card.dataset.thumbCheckboxId = thumbCheckboxId;
+
+        thumb.innerHTML = `
+          <div class="thumb-toolbar">
+            <div class="thumb-head">
+              <div class="thumb-score-row">
+                <span class="thumb-name">${title}</span>
+                <span class="thumb-score" title="${compositeSimilarityTooltip}">${compositeSimilarityPercent}</span>
+              </div>
+              <div class="thumb-progress" title="${compositeSimilarityTooltip}">
+                <div class="thumb-progress-fill" style="width: ${compositeSimilarityPercent}; background: linear-gradient(90deg, rgba(${compositeColor.r.toFixed(0)}, ${compositeColor.g.toFixed(0)}, ${compositeColor.b.toFixed(0)}, 0.95), rgba(${compositeColor.r.toFixed(0)}, ${compositeColor.g.toFixed(0)}, ${compositeColor.b.toFixed(0)}, 0.68));"></div>
+              </div>
+            </div>
+            <label class="thumb-toggle">
+              <input type="checkbox" id="${thumbCheckboxId}" ${overlayToggle && overlayToggle.checked ? 'checked' : ''}>
+              <span>GPU</span>
+            </label>
+          </div>
+          <div class="thumb-viewer">
+            <img src="${baseImage.getAttribute('src')}" alt="${baseImage.getAttribute('alt') || title}">
+            <img class="overlay" id="${thumbOverlayId}" src="${overlayImage.getAttribute('src')}" alt="${overlayImage.getAttribute('alt') || `${title} GPU result`}">
+          </div>`;
+
+        thumb.addEventListener('click', (event) => {
+          if (event.target.closest('.thumb-toggle')) {
+            return;
+          }
+          selectTechnique(slug);
+        });
+
+        const thumbCheckbox = thumb.querySelector(`#${thumbCheckboxId}`);
+        if (thumbCheckbox != null) {
+          thumbCheckbox.addEventListener('click', (event) => {
+            event.stopPropagation();
+          });
+          thumbCheckbox.addEventListener('change', () => {
+            setCardOverlayState(card, thumbCheckbox.checked, thumbCheckbox);
+          });
+        }
+
+        thumbsBySlug.set(slug, thumb);
+        thumbGrid.appendChild(thumb);
+        prepareTooltips(thumb);
+      }
+    }
+
+    if (cards.length > 0) {
+      const firstCard = cards[0];
+      if (firstCard.id) {
+        selectTechnique(firstCard.id);
+      }
+    }
+  </script>
+</body>
+</html>
+)html";
+}
+
+struct CPUComparisonReportEntry {
+  const CPUComparisonTechniqueInfo* technique = nullptr;
+  std::string output_file = {};
+  ImageComparisonResult comparison = {};
+  std::string failure_text = {};
+  int exit_code = 0;
+  bool render_succeeded = true;
+};
+
+std::string strategy_flags_text(const uint32_t strategy_flags) {
+  if (strategy_flags == 0u) {
+    return "none";
+  }
+
+  std::string result = {};
+  auto append_flag = [&result](const char* text) {
+    if (result.empty() == false) {
+      result += " + ";
+    }
+    result += text;
+  };
+
+  if ((strategy_flags & Scene::Strategy::DirectHit) != 0u) {
+    append_flag("direct-hit");
+  }
+  if ((strategy_flags & Scene::Strategy::ConnectToLight) != 0u) {
+    append_flag("connect-light");
+  }
+  if ((strategy_flags & Scene::Strategy::ConnectToCamera) != 0u) {
+    append_flag("connect-camera");
+  }
+  if ((strategy_flags & Scene::Strategy::ConnectVertices) != 0u) {
+    append_flag("connect-vertices");
+  }
+  if ((strategy_flags & Scene::Strategy::MergeVertices) != 0u) {
+    append_flag("merge-vertices");
+  }
+
+  return result;
+}
+
+std::string cpu_comparison_metric_chip(const char* label, const std::string& value, const float score) {
+  const float clamped_score = clamp_metric_score(score);
+  const float chip_r = lerp(148.0f, 64.0f, clamped_score);
+  const float chip_g = lerp(74.0f, 146.0f, clamped_score);
+  const float chip_b = lerp(70.0f, 108.0f, clamped_score);
+
+  char buffer[512] = {};
+  std::snprintf(buffer, sizeof(buffer),
+    "<div class=\"metric-chip\" style=\"background: linear-gradient(135deg, rgba(%.0f, %.0f, %.0f, 0.42), rgba(255, 255, 255, 0.04));\">"
+    "<span>%s</span><strong>%s</strong></div>\n",
+    chip_r, chip_g, chip_b, html_escape(label).c_str(), html_escape(value).c_str());
+  return buffer;
+}
+
+void append_cpu_comparison_html_header(std::string& html_text, const std::string& scene_file, const CPUComparisonTechniqueInfo& reference_technique) {
+  html_text += "<!doctype html>\n";
+  html_text += "<html lang=\"en\">\n";
+  html_text += "<head>\n";
+  html_text += "  <meta charset=\"utf-8\">\n";
+  html_text += "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n";
+  html_text += "  <title>ETX CPU Integrator Comparison</title>\n";
+  html_text += "  <style>\n";
+  html_text +=
+    "    :root { color-scheme: dark; --bg: #0d1318; --panel: #121b22; --panel-2: #18232d; --panel-3: #0f171d; --text: #edf3f7; --muted: #94a8b6; --accent: #8adbb4; --line: #26333f; "
+    "--warm: #f5b971; }\n";
+  html_text += "    * { box-sizing: border-box; }\n";
+  html_text +=
+    "    body { margin: 0; font-family: \"Cascadia Mono\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", Menlo, monospace; background: radial-gradient(circle at top, #17232c 0%, "
+    "#0d1318 50%, #081017 100%); color: var(--text); }\n";
+  html_text += "    .page { max-width: 1540px; margin: 0 auto; padding: 28px 22px 56px; }\n";
+  html_text +=
+    "    .hero { padding: 24px 26px; border: 1px solid var(--line); border-radius: 22px; background: linear-gradient(135deg, rgba(138, 219, 180, 0.12), rgba(245, 185, 113, 0.06)); "
+    "box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22); }\n";
+  html_text += "    .hero h1 { margin: 0 0 10px; font-size: 32px; }\n";
+  html_text += "    .hero p { margin: 0; color: var(--muted); word-break: break-all; }\n";
+  html_text += "    .hero-meta { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 10px; }\n";
+  html_text +=
+    "    .pill { display: inline-flex; align-items: center; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 7px 11px; font-size: 12px; color: var(--text); "
+    "background: rgba(255, 255, 255, 0.04); }\n";
+  html_text += "    .layout { display: grid; gap: 18px; margin-top: 20px; }\n";
+  html_text +=
+    "    .reference { display: grid; grid-template-columns: minmax(340px, 1.05fr) minmax(280px, 0.95fr); gap: 18px; padding: 20px; border: 1px solid var(--line); border-radius: 20px; "
+    "background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)); }\n";
+  html_text += "    .section-title { margin: 0 0 12px; font-size: 18px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--warm); }\n";
+  html_text += "    .frame { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: #090d11; }\n";
+  html_text += "    .frame img { display: block; width: 100%; height: auto; }\n";
+  html_text += "    .reference-copy p { margin: 0 0 14px; color: var(--muted); line-height: 1.55; }\n";
+  html_text += "    .summary { border: 1px solid var(--line); border-radius: 20px; overflow: hidden; background: rgba(11, 16, 21, 0.76); }\n";
+  html_text += "    .summary header { padding: 18px 20px 10px; }\n";
+  html_text += "    .summary header p { margin: 6px 0 0; color: var(--muted); }\n";
+  html_text += "    table { width: 100%; border-collapse: collapse; }\n";
+  html_text += "    th, td { padding: 12px 20px; border-top: 1px solid rgba(148, 168, 182, 0.12); text-align: left; font-size: 14px; }\n";
+  html_text += "    th { color: var(--muted); font-weight: 600; }\n";
+  html_text += "    td { font-variant-numeric: tabular-nums; }\n";
+  html_text += "    tbody tr:hover { background: rgba(255, 255, 255, 0.025); }\n";
+  html_text += "    .name-cell { font-weight: 700; }\n";
+  html_text += "    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }\n";
+  html_text +=
+    "    .card { border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015)); overflow: hidden; "
+    "box-shadow: 0 18px 42px rgba(0, 0, 0, 0.18); }\n";
+  html_text += "    .card-head { padding: 18px 18px 12px; display: flex; justify-content: space-between; gap: 12px; align-items: start; }\n";
+  html_text += "    .card-head h3 { margin: 0; font-size: 20px; }\n";
+  html_text += "    .card-head p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }\n";
+  html_text += "    .tag { border-radius: 999px; padding: 6px 10px; font-size: 12px; border: 1px solid rgba(255, 255, 255, 0.08); color: var(--accent); white-space: nowrap; }\n";
+  html_text += "    .thumbs { display: grid; grid-template-columns: 1.4fr 1fr; gap: 10px; padding: 0 18px 16px; }\n";
+  html_text += "    .thumb-label { padding: 8px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); background: rgba(255, 255, 255, 0.03); }\n";
+  html_text += "    .metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 18px 18px; }\n";
+  html_text += "    .metric-chip { border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.08); padding: 10px 12px; }\n";
+  html_text += "    .metric-chip span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.08em; }\n";
+  html_text += "    .metric-chip strong { font-size: 16px; }\n";
+  html_text += "    .card-meta { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 18px 16px; }\n";
+  html_text += "    .file-list { padding: 0 18px 18px; color: var(--muted); font-size: 12px; }\n";
+  html_text += "    .file-list div { margin-top: 4px; word-break: break-all; }\n";
+  html_text += "    @media (max-width: 980px) { .reference { grid-template-columns: 1fr; } }\n";
+  html_text += "    @media (max-width: 720px) { .thumbs { grid-template-columns: 1fr; } .metrics { grid-template-columns: 1fr 1fr; } th, td { padding: 10px 12px; font-size: 13px; } }\n";
+  html_text += "  </style>\n";
+  html_text += "</head>\n";
+  html_text += "<body>\n";
+  html_text += "  <div class=\"page\">\n";
+  html_text += "    <section class=\"hero\">\n";
+  html_text += "      <h1>ETX CPU Integrator Comparison</h1>\n";
+  html_text += "      <p>Scene: ";
+  html_text += html_escape(scene_file);
+  html_text += "</p>\n";
+  html_text += "      <div class=\"hero-meta\">\n";
+  html_text += "        <span class=\"pill\">Reference: ";
+  html_text += html_escape(reference_technique.display_name);
+  html_text += "</span>\n";
+  html_text += "        <span class=\"pill\">CPU-only validation</span>\n";
+  html_text += "        <span class=\"pill\">All metrics compare each technique against the PT reference</span>\n";
+  html_text += "      </div>\n";
+  html_text += "    </section>\n";
+  html_text += "    <section class=\"layout\">\n";
+}
+
+void append_cpu_comparison_html_reference(std::string& html_text, const CPUComparisonReportEntry& reference_entry) {
+  const std::string reference_png_file = html_file_name_only(png_file_name_from_output_file(reference_entry.output_file));
+
+  html_text += "      <section class=\"reference\">\n";
+  html_text += "        <div>\n";
+  html_text += "          <h2 class=\"section-title\">Reference</h2>\n";
+  html_text += "          <div class=\"frame\"><img src=\"";
+  html_text += reference_png_file;
+  html_text += "\" alt=\"Reference render\"></div>\n";
+  html_text += "        </div>\n";
+  html_text += "        <div class=\"reference-copy\">\n";
+  html_text += "          <h2 class=\"section-title\">";
+  html_text += html_escape(reference_entry.technique->display_name);
+  html_text += "</h2>\n";
+  html_text += "          <p>";
+  html_text += html_escape(reference_entry.technique->description);
+  html_text += "</p>\n";
+  html_text += "          <div class=\"hero-meta\">\n";
+  html_text += "            <span class=\"pill\">";
+  html_text += html_escape(strategy_flags_text(reference_entry.technique->strategy_flags));
+  html_text += "</span>\n";
+  html_text += "            <span class=\"pill\">";
+  html_text += html_escape(html_file_name_only(reference_entry.output_file));
+  html_text += "</span>\n";
+  html_text += "          </div>\n";
+  html_text += "        </div>\n";
+  html_text += "      </section>\n";
+}
+
+void append_cpu_comparison_html_summary(std::string& html_text, const std::vector<CPUComparisonReportEntry>& entries) {
+  html_text += "      <section class=\"summary\">\n";
+  html_text += "        <header>\n";
+  html_text += "          <h2 class=\"section-title\">Summary</h2>\n";
+  html_text += "          <p>Compact scan of the main compare-space and linear-space metrics versus the PT reference.</p>\n";
+  html_text += "        </header>\n";
+  html_text += "        <table>\n";
+  html_text += "          <thead><tr><th>Technique</th><th>Compare Similarity</th><th>Low-Freq Similarity</th><th>Compare RMSE</th><th>Linear RMSE</th><th>Brightness Ratio</th></tr></thead>\n";
+  html_text += "          <tbody>\n";
+
+  for (const CPUComparisonReportEntry& entry : entries) {
+    html_text += "            <tr><td class=\"name-cell\">";
+    html_text += html_escape(entry.technique->display_name);
+    if (entry.technique->reference) {
+      html_text += " <span class=\"tag\">reference</span>";
+    }
+    html_text += "</td><td>";
+    if (entry.render_succeeded) {
+      char similarity_buffer[64] = {};
+      char low_freq_buffer[64] = {};
+      char rmse_buffer[64] = {};
+      char linear_rmse_buffer[64] = {};
+      char brightness_buffer[64] = {};
+      std::snprintf(similarity_buffer, sizeof(similarity_buffer), "%.2f%%", entry.comparison.similarity);
+      std::snprintf(low_freq_buffer, sizeof(low_freq_buffer), "%.2f%%", entry.comparison.low_frequency_similarity);
+      std::snprintf(rmse_buffer, sizeof(rmse_buffer), "%.6f", entry.comparison.root_mean_squared_error);
+      std::snprintf(linear_rmse_buffer, sizeof(linear_rmse_buffer), "%.6f", entry.comparison.linear_root_mean_squared_error);
+      std::snprintf(brightness_buffer, sizeof(brightness_buffer), "%.4f", entry.comparison.brightness_ratio);
+      html_text += similarity_buffer;
+      html_text += "</td><td>";
+      html_text += low_freq_buffer;
+      html_text += "</td><td>";
+      html_text += rmse_buffer;
+      html_text += "</td><td>";
+      html_text += linear_rmse_buffer;
+      html_text += "</td><td>";
+      html_text += brightness_buffer;
+    } else {
+      html_text += "failed</td><td>failed</td><td>failed</td><td>failed</td><td>failed";
+    }
+    html_text += "</td></tr>\n";
+  }
+
+  html_text += "          </tbody>\n";
+  html_text += "        </table>\n";
+  html_text += "      </section>\n";
+}
+
+void append_cpu_comparison_html_cards(std::string& html_text, const std::vector<CPUComparisonReportEntry>& entries) {
+  html_text += "      <section>\n";
+  html_text += "        <h2 class=\"section-title\">Technique Cards</h2>\n";
+  html_text += "        <div class=\"cards\">\n";
+
+  for (const CPUComparisonReportEntry& entry : entries) {
+    if (entry.technique->reference) {
+      continue;
+    }
+
+    html_text += "          <article class=\"card\">\n";
+    html_text += "            <div class=\"card-head\">\n";
+    html_text += "              <div><h3>";
+    html_text += html_escape(entry.technique->display_name);
+    html_text += "</h3><p>";
+    html_text += html_escape(entry.technique->description);
+    html_text += "</p></div>\n";
+    html_text += "              <span class=\"tag\">";
+    html_text += html_escape(entry.technique->file_tag);
+    html_text += "</span>\n";
+    html_text += "            </div>\n";
+    if (entry.render_succeeded) {
+      const std::string output_png_file = html_file_name_only(png_file_name_from_output_file(entry.output_file));
+      const std::string diff_png_file = html_file_name_only(comparison_png_file_name_from_output_file(entry.output_file));
+      const std::string diff_exr_file = html_file_name_only(comparison_file_name_from_output(entry.output_file));
+
+      char similarity_buffer[64] = {};
+      char low_freq_buffer[64] = {};
+      char rmse_buffer[64] = {};
+      char linear_rmse_buffer[64] = {};
+      char p95_buffer[64] = {};
+      char brightness_buffer[64] = {};
+      std::snprintf(similarity_buffer, sizeof(similarity_buffer), "%.2f%%", entry.comparison.similarity);
+      std::snprintf(low_freq_buffer, sizeof(low_freq_buffer), "%.2f%%", entry.comparison.low_frequency_similarity);
+      std::snprintf(rmse_buffer, sizeof(rmse_buffer), "%.6f", entry.comparison.root_mean_squared_error);
+      std::snprintf(linear_rmse_buffer, sizeof(linear_rmse_buffer), "%.6f", entry.comparison.linear_root_mean_squared_error);
+      std::snprintf(p95_buffer, sizeof(p95_buffer), "%.6f", entry.comparison.percentile_95_absolute_error);
+      std::snprintf(brightness_buffer, sizeof(brightness_buffer), "%.4f", entry.comparison.brightness_ratio);
+
+      html_text += "            <div class=\"thumbs\">\n";
+      html_text += "              <div class=\"frame\"><div class=\"thumb-label\">Result</div><img src=\"";
+      html_text += output_png_file;
+      html_text += "\" alt=\"Technique result\"></div>\n";
+      html_text += "              <div class=\"frame\"><div class=\"thumb-label\">Difference To PT</div><img src=\"";
+      html_text += diff_png_file;
+      html_text += "\" alt=\"Technique difference\"></div>\n";
+      html_text += "            </div>\n";
+      html_text += "            <div class=\"metrics\">\n";
+      html_text += cpu_comparison_metric_chip("Similarity", similarity_buffer, entry.comparison.similarity * 0.01f);
+      html_text += cpu_comparison_metric_chip("Low-Freq Similarity", low_freq_buffer, entry.comparison.low_frequency_similarity * 0.01f);
+      html_text += cpu_comparison_metric_chip("Compare RMSE", rmse_buffer, inverse_error_metric_score(entry.comparison.root_mean_squared_error, 0.1f));
+      html_text += cpu_comparison_metric_chip("Linear RMSE", linear_rmse_buffer, inverse_error_metric_score(entry.comparison.linear_root_mean_squared_error, 0.1f));
+      html_text += cpu_comparison_metric_chip("P95 Abs", p95_buffer, inverse_error_metric_score(entry.comparison.percentile_95_absolute_error, 0.1f));
+      html_text += cpu_comparison_metric_chip("Brightness Ratio", brightness_buffer, inverse_error_metric_score(fabsf(1.0f - entry.comparison.brightness_ratio), 0.05f));
+      html_text += "            </div>\n";
+      html_text += "            <div class=\"file-list\">\n";
+      html_text += "              <div>EXR: ";
+      html_text += html_escape(html_file_name_only(entry.output_file));
+      html_text += "</div>\n";
+      html_text += "              <div>PNG: ";
+      html_text += output_png_file;
+      html_text += "</div>\n";
+      html_text += "              <div>Diff EXR: ";
+      html_text += diff_exr_file;
+      html_text += "</div>\n";
+      html_text += "              <div>Diff PNG: ";
+      html_text += diff_png_file;
+      html_text += "</div>\n";
+      html_text += "            </div>\n";
+    } else {
+      html_text += "            <div class=\"metrics\">\n";
+      html_text += cpu_comparison_metric_chip("Status", "Render failed", 0.0f);
+      html_text += cpu_comparison_metric_chip("Exit Code", std::to_string(entry.exit_code), 0.0f);
+      html_text += "            </div>\n";
+      html_text += "            <div class=\"file-list\">\n";
+      html_text += "              <div>";
+      html_text += html_escape(entry.failure_text);
+      html_text += "</div>\n";
+      html_text += "            </div>\n";
+    }
+    html_text += "            <div class=\"card-meta\">\n";
+    html_text += "              <span class=\"pill\">";
+    html_text += html_escape(strategy_flags_text(entry.technique->strategy_flags));
+    html_text += "</span>\n";
+    html_text += "            </div>\n";
+    html_text += "          </article>\n";
+  }
+
+  html_text += "        </div>\n";
+  html_text += "      </section>\n";
+}
+
+void append_cpu_comparison_html_footer(std::string& html_text) {
   html_text += "    </section>\n";
   html_text += "  </div>\n";
-  html_text += "  <script>\n";
-  html_text += "    const overlayToggles = document.querySelectorAll('input[data-target]');\n";
-  html_text += "    for (const toggle of overlayToggles) {\n";
-  html_text += "      toggle.addEventListener('change', () => {\n";
-  html_text += "        const target = document.getElementById(toggle.dataset.target);\n";
-  html_text += "        if (target) {\n";
-  html_text += "          target.style.display = toggle.checked ? 'block' : 'none';\n";
-  html_text += "        }\n";
-  html_text += "      });\n";
-  html_text += "    }\n";
-  html_text += "    const opacitySliders = document.querySelectorAll('input[data-opacity-target]');\n";
-  html_text += "    for (const slider of opacitySliders) {\n";
-  html_text += "      slider.addEventListener('input', () => {\n";
-  html_text += "        const target = document.getElementById(slider.dataset.opacityTarget);\n";
-  html_text += "        if (target) {\n";
-  html_text += "          target.style.opacity = String(Number(slider.value) / 100.0);\n";
-  html_text += "        }\n";
-  html_text += "      });\n";
-  html_text += "    }\n";
-  html_text += "  </script>\n";
   html_text += "</body>\n";
   html_text += "</html>\n";
 }
@@ -1354,6 +2159,52 @@ bool configure_preloaded_scene_for_full_comparison(const BatchRenderOptions& opt
   return true;
 }
 
+bool load_scene_for_cpu_comparison(const BatchRenderOptions& options, BatchRenderSession& session, const CPUComparisonTechniqueInfo& technique, Integrator*& selected_integrator) {
+  SceneRepresentation::IntegratorData integrator_data = {};
+  const std::string absolute_scene_path = resolve_input_path(options.scene_file);
+  if (session.scene.load_from_file(absolute_scene_path.c_str(), SceneRepresentation::LoadEverything, &integrator_data) == false) {
+    log::error("Failed to load scene from file: %s", absolute_scene_path.c_str());
+    return false;
+  }
+
+  if (session.scene.valid() == false) {
+    log::error("Scene is invalid after loading: %s", absolute_scene_path.c_str());
+    return false;
+  }
+
+  integrator_data.selected = technique.integrator;
+  if (technique.integrator == Integrator::Type::Bidirectional) {
+    Options& bdpt_options = integrator_data.settings[Integrator::Type::Bidirectional];
+    bdpt_options.set_integral("bdpt-mode", technique.bdpt_mode, "Mode", Option::Meta::EnumValue);
+  }
+
+  session.scene.data().options.strategy_flags = technique.strategy_flags;
+
+  session.scene.set_integrator_data(integrator_data);
+  apply_batch_scene_overrides(options, session.scene);
+  if (configure_batch_render_window(options, session) == false) {
+    return false;
+  }
+
+  session.cpu_renderer.set_output_dimensions(session.render_context.context(), session.scene.camera().film_size);
+  for (const auto& [type, options_data] : integrator_data.settings) {
+    Integrator* integrator = integrator_type_to_instance(type, session.cpu_renderer.integrator_list(), session.cpu_renderer.integrator_count());
+    if (integrator != nullptr) {
+      integrator->sync_from_options(options_data);
+      integrator->update_options();
+    }
+  }
+
+  selected_integrator = integrator_type_to_instance(technique.integrator, session.cpu_renderer.integrator_list(), session.cpu_renderer.integrator_count());
+  if (selected_integrator == nullptr) {
+    log::error("Failed to select CPU integrator comparison technique '%s'", technique.file_tag);
+    return false;
+  }
+
+  session.cpu_renderer.set_integrator(selected_integrator);
+  return true;
+}
+
 bool run_cpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchRenderSession& session, std::vector<float4>& output, uint2& image_size) {
   ETX_ASSERT(session.cpu_renderer.current_integrator() != nullptr);
 
@@ -1602,11 +2453,119 @@ bool run_full_comparison_batch_render(const BatchRenderOptions& options) {
   return true;
 }
 
+bool run_cpu_comparison_batch_render(const BatchRenderOptions& options) {
+  const std::string absolute_scene_path = resolve_input_path(options.scene_file);
+  const std::string report_file_name = cpu_comparison_report_file_name(absolute_scene_path);
+  const std::string ai_report_file_name = cpu_comparison_ai_report_file_name(absolute_scene_path);
+
+  std::vector<CPUComparisonReportEntry> report_entries = {};
+  report_entries.reserve(sizeof(kCPUComparisonTechniques) / sizeof(kCPUComparisonTechniques[0]));
+
+  std::string report_html = {};
+  std::string ai_report_json = {};
+  bool first_ai_result = true;
+
+  const CPUComparisonTechniqueInfo* reference_technique = nullptr;
+  std::string reference_output_file = {};
+
+  for (const CPUComparisonTechniqueInfo& technique : kCPUComparisonTechniques) {
+    const std::string output_file = cpu_comparison_output_file_name(absolute_scene_path, technique.file_tag);
+    log::info("CPU comparison '%s': rendering CPU integrator variant", technique.file_tag);
+
+    BatchRenderSession session = {};
+    if (session.init(true, false) == false) {
+      return false;
+    }
+
+    Integrator* selected_integrator = nullptr;
+    if (load_scene_for_cpu_comparison(options, session, technique, selected_integrator) == false) {
+      return false;
+    }
+
+    std::vector<float4> cpu_output = {};
+    uint2 cpu_image_size = {};
+    if (run_cpu_preloaded_scene_to_buffer(options, session, cpu_output, cpu_image_size) == false) {
+      return false;
+    }
+
+    std::vector<float4> prepared_cpu_output = {};
+    uint2 prepared_cpu_image_size = {};
+    if (prepare_batch_output_buffer(options, cpu_output.data(), cpu_image_size, prepared_cpu_output, prepared_cpu_image_size) == false) {
+      return false;
+    }
+
+    if (save_batch_output_with_png(output_file, prepared_cpu_output.data(), prepared_cpu_image_size, options.exposure) == false) {
+      return false;
+    }
+
+    if (technique.reference) {
+      reference_technique = &technique;
+      reference_output_file = output_file;
+    }
+
+    if (reference_technique == nullptr) {
+      log::error("CPU comparison reference technique was not initialized before '%s'", technique.file_tag);
+      return false;
+    }
+
+    ImageComparisonResult comparison = {};
+    if (compare_output_to_reference_and_save(options, reference_output_file, output_file, prepared_cpu_output.data(), prepared_cpu_image_size, &comparison) == false) {
+      return false;
+    }
+
+    print_comparison_report(technique.file_tag, "cpu_comparison", absolute_scene_path.c_str(), reference_output_file.c_str(), output_file.c_str(), comparison);
+
+    CPUComparisonReportEntry entry = {};
+    entry.technique = &technique;
+    entry.output_file = output_file;
+    entry.comparison = comparison;
+    report_entries.emplace_back(entry);
+
+    if (first_ai_result == false) {
+      ai_report_json += ",\n";
+    }
+    append_ai_comparison_json(ai_report_json, "cpu_comparison", technique.file_tag, absolute_scene_path.c_str(), reference_output_file.c_str(), output_file.c_str(), comparison);
+    first_ai_result = false;
+  }
+
+  if ((reference_technique == nullptr) || report_entries.empty()) {
+    log::error("CPU comparison did not produce any report entries");
+    return false;
+  }
+
+  append_cpu_comparison_html_header(report_html, absolute_scene_path, *reference_technique);
+  append_cpu_comparison_html_reference(report_html, report_entries.front());
+  append_cpu_comparison_html_summary(report_html, report_entries);
+  append_cpu_comparison_html_cards(report_html, report_entries);
+  append_cpu_comparison_html_footer(report_html);
+
+  ai_report_json = "{\n"
+                   "  \"schema\": \"etx.cpu_comparison.v1\",\n"
+                   "  \"scene\": \"" +
+                   json_escape(absolute_scene_path) + "\",\n"
+                                                    "  \"reference\": \"" +
+                   json_escape(reference_output_file) + "\",\n"
+                                                        "  \"results\": [\n" +
+                   ai_report_json + "\n  ]\n}\n";
+
+  if (save_text_to_file(report_file_name, report_html) == false) {
+    return false;
+  }
+  if (save_text_to_file(ai_report_file_name, ai_report_json) == false) {
+    return false;
+  }
+
+  log::info("Saved CPU comparison report to %s", report_file_name.c_str());
+  log::info("Saved CPU comparison AI report to %s", ai_report_file_name.c_str());
+  return true;
+}
+
 }  // namespace
 
 BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOptions& options, std::string& message) {
   bool render_requested = false;
   bool full_comparison_requested = false;
+  bool cpu_comparison_requested = false;
   bool batch_argument_seen = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -1626,6 +2585,13 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     if (argument == "--full-comparison") {
       full_comparison_requested = true;
       options.full_comparison = true;
+      batch_argument_seen = true;
+      continue;
+    }
+
+    if (argument == "--cpu-comparison") {
+      cpu_comparison_requested = true;
+      options.cpu_comparison = true;
       batch_argument_seen = true;
       continue;
     }
@@ -1851,15 +2817,16 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     return BatchModeCommand::Error;
   }
 
-  if (render_requested && full_comparison_requested) {
-    message = "Use either --render or --full-comparison, not both\n\n";
+  const uint32_t selected_batch_modes = uint32_t(render_requested) + uint32_t(full_comparison_requested) + uint32_t(cpu_comparison_requested);
+  if (selected_batch_modes > 1u) {
+    message = "Use exactly one of --render, --full-comparison, or --cpu-comparison\n\n";
     message += batch_usage_string();
     return BatchModeCommand::Error;
   }
 
-  if ((render_requested == false) && (full_comparison_requested == false)) {
+  if ((render_requested == false) && (full_comparison_requested == false) && (cpu_comparison_requested == false)) {
     if (batch_argument_seen) {
-      message = "Batch render options require --render or --full-comparison\n\n";
+      message = "Batch render options require --render, --full-comparison, or --cpu-comparison\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
     }
@@ -1876,6 +2843,23 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     if ((options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) || (options.renderer != "cpu") ||
         (options.integrator.empty() == false) || options.gpu_compile_only) {
       message = "--full-comparison does not accept --output, --reference, --compare, --renderer, --integrator, or --gpu-compile-only\n\n";
+      message += batch_usage_string();
+      return BatchModeCommand::Error;
+    }
+
+    return BatchModeCommand::Run;
+  }
+
+  if (cpu_comparison_requested) {
+    if (options.scene_file.empty()) {
+      message = "CPU comparison requires --scene\n\n";
+      message += batch_usage_string();
+      return BatchModeCommand::Error;
+    }
+
+    if ((options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) || (options.renderer != "cpu") ||
+        (options.integrator.empty() == false) || options.gpu_compile_only || (options.gpu_compile_stage.empty() == false)) {
+      message = "--cpu-comparison does not accept --output, --reference, --compare, --renderer, --integrator, --gpu-compile-only, or --gpu-compile-stage\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
     }
@@ -1901,6 +2885,9 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
 int run_batch_render(const BatchRenderOptions& options) {
   if (options.full_comparison) {
     return run_full_comparison_batch_render(options) ? 0 : 1;
+  }
+  if (options.cpu_comparison) {
+    return run_cpu_comparison_batch_render(options) ? 0 : 1;
   }
 
   BatchRenderSession session = {};

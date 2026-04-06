@@ -25,6 +25,7 @@ struct BatchRenderOptions {
   uint32_t strategy_flags = 0u;
   bool gpu_compile_only = false;
   bool full_comparison = false;
+  bool cpu_comparison = false;
   bool denoise = false;
   bool override_random_seed = false;
   bool override_resolution = false;
