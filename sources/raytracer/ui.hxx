@@ -42,6 +42,10 @@ struct UI {
     _current_renderer_mode = mode;
   }
 
+  void set_current_renderer_status(const RendererPreparationStatus& status) {
+    _current_renderer_status = status;
+  }
+
   void set_gpu_renderer_available(bool value) {
     _gpu_renderer_available = value;
     if ((_gpu_renderer_available == false) && (_current_renderer_mode == RendererMode::GPURaytracing)) {
@@ -79,6 +83,7 @@ struct UI {
     std::function<void()> reload_scene_selected;
     std::function<void()> reload_geometry_selected;
     std::function<void()> reload_shaders_selected;
+    std::function<void()> cancel_renderer_preparation_selected;
     std::function<void()> options_changed;
     std::function<void()> use_image_as_reference;
     std::function<void()> material_added;
@@ -164,6 +169,7 @@ struct UI {
  private:
   Integrator* _current_integrator = nullptr;
   RendererMode _current_renderer_mode = RendererMode::CPURaytracing;
+  RendererPreparationStatus _current_renderer_status = {};
   bool _gpu_renderer_available = true;
 
   ArrayView<Integrator*> _integrators = {};

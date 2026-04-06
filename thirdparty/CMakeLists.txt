@@ -16,9 +16,12 @@ add_subdirectory(bluenoise)
 add_subdirectory(microprofile)
 set_property(TARGET microprofile PROPERTY FOLDER "thirdparty")
 
+add_subdirectory(spirv-cross)
+set_property(TARGET spirv-cross-core PROPERTY FOLDER "thirdparty")
+set_property(TARGET spirv-cross-glsl PROPERTY FOLDER "thirdparty")
+set_property(TARGET spirv-cross-msl PROPERTY FOLDER "thirdparty")
+
 cmake_policy(SET CMP0077 NEW)
 set(BCDEC_STATIC_LIB ON)
 add_subdirectory(bcdec)
 set_property(TARGET bcdec PROPERTY FOLDER "thirdparty")
-
-

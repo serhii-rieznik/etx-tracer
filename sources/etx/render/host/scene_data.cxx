@@ -4,8 +4,14 @@
 #include <etx/core/log.hxx>
 #include <etx/render/host/gpu_asset_descriptor.hxx>
 
+#include <chrono>
+
 namespace etx {
 namespace {
+
+double elapsed_ms(const std::chrono::steady_clock::time_point& begin, const std::chrono::steady_clock::time_point& end) {
+  return std::chrono::duration<double, std::milli>(end - begin).count();
+}
 
 uint64_t hash_payload_view(const BufferPool& buffer_pool, BufferView view, uint64_t seed) {
   uint64_t result = seed;
@@ -101,54 +107,74 @@ BoundingBox SceneData::compute_bounding_volumes() const {
 
 SceneHashes SceneData::compute_hashes() const {
   ETX_PROFILER_SCOPE();
+  const auto total_begin = std::chrono::steady_clock::now();
   SceneHashes result = {};
-
-  // Always use parallel hashing
-  ETX_PROFILER_NAMED_SCOPE("parallel_hashing");
-
-  // Create tasks for parallel hash computation
-  struct HashTask {
-    const void* data;
-    size_t size;
-    uint64_t* result;
+  const auto timed_hash = [](const void* data, size_t size, uint64_t* out_result, double& out_time_ms) {
+    const auto begin = std::chrono::steady_clock::now();
+    *out_result = xxh64(data, size);
+    const auto end = std::chrono::steady_clock::now();
+    out_time_ms = elapsed_ms(begin, end);
   };
 
-  std::vector<HashTask> tasks;
-  tasks.reserve(32);  // Reserve more since we may have multiple tasks per resource type
+  double vertices_pos_ms = 0.0;
+  double vertices_nrm_ms = 0.0;
+  double vertices_tan_ms = 0.0;
+  double vertices_btn_ms = 0.0;
+  double vertices_tex_ms = 0.0;
+  double triangles_ms = 0.0;
+  double triangle_indices_ms = 0.0;
+  double meshes_ms = 0.0;
+  double materials_ms = 0.0;
+  double spectra_ms = 0.0;
+  double emitters_ms = 0.0;
+  double images_ms = 0.0;
+  double mediums_ms = 0.0;
+  double pixel_filter_ms = 0.0;
+  double defaults_ms = 0.0;
+  double options_ms = 0.0;
 
-  // Vertex data
-  tasks.emplace_back(vertices.pos.data(), vertices.pos.size() * sizeof(float3), &result.vertices_pos_hash);
-  tasks.emplace_back(vertices.nrm.data(), vertices.nrm.size() * sizeof(float3), &result.vertices_nrm_hash);
-  tasks.emplace_back(vertices.tan.data(), vertices.tan.size() * sizeof(float3), &result.vertices_tan_hash);
-  tasks.emplace_back(vertices.btn.data(), vertices.btn.size() * sizeof(float3), &result.vertices_btn_hash);
-  tasks.emplace_back(vertices.tex.data(), vertices.tex.size() * sizeof(float2), &result.vertices_tex_hash);
+  timed_hash(vertices.pos.data(), vertices.pos.size() * sizeof(float3), &result.vertices_pos_hash, vertices_pos_ms);
+  timed_hash(vertices.nrm.data(), vertices.nrm.size() * sizeof(float3), &result.vertices_nrm_hash, vertices_nrm_ms);
+  timed_hash(vertices.tan.data(), vertices.tan.size() * sizeof(float3), &result.vertices_tan_hash, vertices_tan_ms);
+  timed_hash(vertices.btn.data(), vertices.btn.size() * sizeof(float3), &result.vertices_btn_hash, vertices_btn_ms);
+  timed_hash(vertices.tex.data(), vertices.tex.size() * sizeof(float2), &result.vertices_tex_hash, vertices_tex_ms);
+  timed_hash(triangles.data(), triangles.size() * sizeof(Triangle), &result.triangles_hash, triangles_ms);
+  timed_hash(meshes.data(), meshes.size() * sizeof(Mesh), &result.meshes_hash, meshes_ms);
+  timed_hash(materials.data(), materials.size() * sizeof(Material), &result.materials_hash, materials_ms);
+  timed_hash(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution), &result.spectra_hash, spectra_ms);
+  timed_hash(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile), &result.emitter_profiles_hash, emitters_ms);
+  timed_hash(&pixel_filter, sizeof(PixelFilter), &result.pixel_filter_hash, pixel_filter_ms);
+  timed_hash(&defaults, sizeof(Scene::Defaults), &result.defaults_hash, defaults_ms);
+  timed_hash(&options, sizeof(Scene::Options), &result.options_hash, options_ms);
 
-  // Geometry data
-  tasks.emplace_back(triangles.data(), triangles.size() * sizeof(Triangle), &result.triangles_hash);
-  tasks.emplace_back(meshes.data(), meshes.size() * sizeof(Mesh), &result.meshes_hash);
+  {
+    const auto begin = std::chrono::steady_clock::now();
+    result.images_hash = hash_images_struct_and_payload(*this);
+    const auto end = std::chrono::steady_clock::now();
+    images_ms = elapsed_ms(begin, end);
+  }
+  {
+    const auto begin = std::chrono::steady_clock::now();
+    result.mediums_hash = hash_mediums_struct_and_payload(*this);
+    const auto end = std::chrono::steady_clock::now();
+    mediums_ms = elapsed_ms(begin, end);
+  }
+  {
+    const auto begin = std::chrono::steady_clock::now();
+    result.triangle_indices_hash = hash_triangle_indices(triangles);
+    const auto end = std::chrono::steady_clock::now();
+    triangle_indices_ms = elapsed_ms(begin, end);
+  }
 
-  // Material data
-  tasks.emplace_back(materials.data(), materials.size() * sizeof(Material), &result.materials_hash);
-  tasks.emplace_back(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution), &result.spectra_hash);
-
-  // Emitter data
-  tasks.emplace_back(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile), &result.emitter_profiles_hash);
-
-  // Non-ArrayView scene data
-  tasks.emplace_back(&pixel_filter, sizeof(PixelFilter), &result.pixel_filter_hash);
-  tasks.emplace_back(&defaults, sizeof(Scene::Defaults), &result.defaults_hash);
-  tasks.emplace_back(&options, sizeof(Scene::Options), &result.options_hash);
-
-  scheduler.execute_linear(tasks.size(), [&](uint32_t start, uint32_t end, uint32_t thread_id) {
-    for (uint32_t i = start; i < end; ++i) {
-      const auto& task = tasks[i];
-      *task.result = xxh64(task.data, task.size);
-    }
-  });
-
-  result.images_hash = hash_images_struct_and_payload(*this);
-  result.mediums_hash = hash_mediums_struct_and_payload(*this);
-  result.triangle_indices_hash = hash_triangle_indices(triangles);
+  const auto total_end = std::chrono::steady_clock::now();
+  log::info(
+    "Scene hash recompute timing: total=%.2fms pos=%.2fms nrm=%.2fms tan=%.2fms btn=%.2fms tex=%.2fms tri=%.2fms tri_idx=%.2fms meshes=%.2fms materials=%.2fms "
+    "spectra=%.2fms emitters=%.2fms images=%.2fms mediums=%.2fms pixel_filter=%.2fms defaults=%.2fms options=%.2fms",
+    elapsed_ms(total_begin, total_end), vertices_pos_ms, vertices_nrm_ms, vertices_tan_ms, vertices_btn_ms, vertices_tex_ms, triangles_ms, triangle_indices_ms, meshes_ms,
+    materials_ms, spectra_ms, emitters_ms, images_ms, mediums_ms, pixel_filter_ms, defaults_ms, options_ms);
+  log::info(
+    "Scene hash recompute sizes: vertices=%zu triangles=%zu meshes=%zu materials=%zu spectra=%zu emitters=%zu images=%zu mediums=%zu",
+    vertices.pos.size(), triangles.size(), meshes.size(), materials.size(), spectrum_values.size(), emitter_profiles.size(), images_vector.size(), mediums_vector.size());
 
   return result;
 }

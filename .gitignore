@@ -8,6 +8,7 @@
 /bin/options.json
 /bin/ui.ini
 /bin/raytracer
+/bin/cache/
 /bin/tmp/
 /bin/_tmp/
 /bin/assets_testing/

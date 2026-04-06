@@ -181,6 +181,7 @@ struct MTCommandBuffer {
   void begin();
   void end();
   void reset();
+  void detach_submitted();
 
   void buffer_barrier(RHIBuffer buffer, RHIResourceState old_state, RHIResourceState new_state);
   void texture_barrier(RHITexture texture, RHIResourceState old_state, RHIResourceState new_state);

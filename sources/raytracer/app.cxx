@@ -65,6 +65,7 @@ void RTApplication::init() {
     scene.set_scattering_rhi(render_context.get_context());
     _gpu_renderer_supported = render_context.get_context().capabilities().supports_ray_tracing;
     ui.set_gpu_renderer_available(_gpu_renderer_supported);
+    ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
     if (_gpu_renderer_supported == false) {
       log::warning("GPU ray tracing is not supported by the active RHI backend; falling back to CPU or raster rendering");
     }
@@ -107,6 +108,7 @@ void RTApplication::init() {
     ui.callbacks.reload_geometry_selected = std::bind(&RTApplication::on_reload_geometry_selected, this);
     ui.callbacks.options_changed = std::bind(&RTApplication::on_options_changed, this);
     ui.callbacks.reload_shaders_selected = std::bind(&RTApplication::on_reload_shaders_selected, this);
+    ui.callbacks.cancel_renderer_preparation_selected = std::bind(&RTApplication::on_cancel_renderer_preparation_selected, this);
     ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
     ui.callbacks.material_added = std::bind(&RTApplication::on_material_added, this);
     ui.callbacks.material_renamed = std::bind(&RTApplication::on_material_renamed, this, std::placeholders::_1, std::placeholders::_2);
@@ -203,20 +205,25 @@ void RTApplication::save_options() {
   _options.save_to_file(env().file_in_data("options.json"));
 }
 
-void RTApplication::ensure_gpu_renderer_initialized() {
+bool RTApplication::ensure_gpu_renderer_initialized() {
   ETX_PROFILER_SCOPE();
 
   if (_gpu_renderer_supported == false) {
     log::warning("GPU ray tracing is unavailable for the active RHI backend");
-    return;
+    return false;
   }
 
   if (_gpu_renderer_initialized) {
-    return;
+    return true;
   }
 
   gpu_renderer.init(render_context.get_context(), scene);
+  if (gpu_renderer.runtime_failed()) {
+    log::warning("GPU ray tracing initialization failed: %s", gpu_renderer.runtime_failure_reason().c_str());
+    return false;
+  }
   _gpu_renderer_initialized = true;
+  return true;
 }
 
 void RTApplication::set_renderer_mode(RendererMode mode) {
@@ -250,10 +257,18 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   save_options();
 
   if (next_renderer == &gpu_renderer) {
-    ensure_gpu_renderer_initialized();
+    if (ensure_gpu_renderer_initialized() == false) {
+      log::warning("GPU ray tracing is unavailable for the active RHI backend; using CPU ray tracing instead");
+      next_renderer = &cpu_renderer;
+      renderer_name = "cpu";
+      mode = RendererMode::CPURaytracing;
+    }
   }
 
   if (next_renderer == _active_renderer) {
+    if (next_renderer == &gpu_renderer && _gpu_renderer_initialized) {
+      gpu_renderer.reload_shaders(render_context.get_context(), scene);
+    }
     return;
   }
 
@@ -268,6 +283,10 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   }
 
   ui.set_current_renderer_mode(mode);
+  ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
+  if ((_active_renderer == &gpu_renderer) && _gpu_renderer_initialized) {
+    gpu_renderer.reload_shaders(render_context.get_context(), scene);
+  }
 }
 
 void RTApplication::frame() {
@@ -287,11 +306,13 @@ void RTApplication::frame() {
     .film = film,
     .dt = render_frame_data.dt,
   };
+  ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_render_context_start_frame");
     render_context.start_frame(_active_renderer, scene, render_frame_data);
   }
+  ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
   if (render_context.valid() && render_context.rhi_ui().initialized()) {
     ETX_PROFILER_NAMED_SCOPE("app_ui_build");
     ui.build(scene, ui_frame_data);
@@ -300,6 +321,7 @@ void RTApplication::frame() {
     ETX_PROFILER_NAMED_SCOPE("app_render_context_end_frame");
     render_context.end_frame();
   }
+
 }
 
 void RTApplication::cleanup() {
@@ -576,7 +598,9 @@ void RTApplication::on_reload_geometry_selected() {
 void RTApplication::on_options_changed() {
   ETX_PROFILER_SCOPE();
   notify_scene_might_have_changed();
-  cpu_renderer.restart();
+  if (_active_renderer == &cpu_renderer) {
+    cpu_renderer.restart();
+  }
 }
 
 void RTApplication::on_material_added() {
@@ -685,10 +709,13 @@ void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
   ETX_PROFILER_SCOPE();
 
   scene.update_active_camera();
-  if ((viewport != film.base_dimensions()) || (pixel_size != film.pixel_size())) {
+  if ((_active_renderer == &cpu_renderer) && ((viewport != film.base_dimensions()) || (pixel_size != film.pixel_size()))) {
     cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
   }
-  cpu_renderer.restart();
+  notify_scene_might_have_changed();
+  if (_active_renderer == &cpu_renderer) {
+    cpu_renderer.restart();
+  }
 }
 
 void RTApplication::on_scene_settings_changed() {
@@ -764,7 +791,14 @@ void RTApplication::on_scene_update_requested() {
 void RTApplication::on_reload_shaders_selected() {
   ETX_PROFILER_SCOPE();
   if (_active_renderer == &gpu_renderer) {
-    gpu_renderer.reload_shaders(render_context.get_context());
+    gpu_renderer.reload_shaders(render_context.get_context(), scene);
+  }
+}
+
+void RTApplication::on_cancel_renderer_preparation_selected() {
+  ETX_PROFILER_SCOPE();
+  if (_active_renderer == &gpu_renderer) {
+    gpu_renderer.cancel_preparation();
   }
 }
 

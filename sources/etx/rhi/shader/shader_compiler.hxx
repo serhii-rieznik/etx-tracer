@@ -35,6 +35,26 @@ struct ShaderReflectionInfo {
   bool supports_subgroups = false;
 };
 
+struct ShaderCompilerStatistics {
+  uint64_t compile_calls = 0;
+  uint64_t requested_entry_points = 0;
+  uint64_t compiled_entry_points = 0;
+  uint64_t preprocessed_memory_cache_hits = 0;
+  uint64_t preprocessed_disk_cache_hits = 0;
+  uint64_t shader_memory_cache_hits = 0;
+  uint64_t shader_disk_cache_hits = 0;
+  uint64_t preprocess_invocations = 0;
+  uint64_t dxc_compile_invocations = 0;
+  uint64_t spirv_to_msl_translations = 0;
+  uint64_t cache_writes = 0;
+  double total_wall_time_ms = 0.0;
+  double preprocess_time_ms = 0.0;
+  double dxc_compile_time_ms = 0.0;
+  double spirv_to_msl_time_ms = 0.0;
+  double cache_read_time_ms = 0.0;
+  double cache_write_time_ms = 0.0;
+};
+
 struct ShaderCompiler {
   // Deleted constructors - enforce singleton usage
   ShaderCompiler(const ShaderCompiler&) = delete;
@@ -68,6 +88,10 @@ struct ShaderCompiler {
     const std::unordered_map<std::string, std::string>& defines = {}, RHIBackend backend = RHIBackend::Vulkan);
 
   std::string read_file_content(const std::string& file_path, std::string& error_message);
+
+  ShaderCompilerStatistics statistics() const;
+  void reset_statistics();
+  void log_statistics(const char* label = nullptr) const;
 
   void parse_dxc_error(const std::string& error_message, ShaderCompilationResult& result);
   static std::string get_error_description(RHIResult result);

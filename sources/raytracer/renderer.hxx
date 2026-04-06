@@ -7,6 +7,7 @@
 #include <etx/engine/camera_controller.hxx>
 
 #include <memory>
+#include <string>
 
 struct sapp_event;
 
@@ -18,6 +19,20 @@ enum class RendererMode {
   CPURaytracing,
   Rasterization,
   GPURaytracing,
+};
+
+enum class RendererPreparationState : uint32_t {
+  Ready,
+  Preparing,
+  Failed,
+};
+
+struct RendererPreparationStatus {
+  RendererPreparationState state = RendererPreparationState::Ready;
+  std::string phase = "Ready";
+  std::string message = {};
+  uint32_t completed_steps = 0u;
+  uint32_t total_steps = 0u;
 };
 
 struct Renderer {
@@ -98,6 +113,9 @@ struct Renderer {
 
   virtual const char* name() const = 0;
   virtual RendererMode mode() const = 0;
+  virtual RendererPreparationStatus preparation_status() const {
+    return {};
+  }
 
   virtual bool is_running() const {
     return false;
@@ -110,6 +128,9 @@ struct Renderer {
   }
 
   virtual void restart() {
+  }
+
+  virtual void cancel_preparation() {
   }
 
   CameraController* camera_controller() {

@@ -8,7 +8,6 @@
 #if defined(ETX_PLATFORM_WINDOWS)
 # include <etx/rhi/vulkan/vk_rhi.hxx>
 #elif defined(ETX_PLATFORM_APPLE)
-# include <etx/rhi/vulkan/vk_rhi.hxx>
 # include <etx/rhi/metal/mt_rhi.hxx>
 #else
 # error Unsupported platform for RHI dispatch
@@ -86,15 +85,8 @@ static decltype(auto) dispatch_device(RHIBackend backend, void* impl, Fn&& fn) {
   (void)backend;
   return fn(static_cast<VKDevice*>(impl));
 #elif defined(ETX_PLATFORM_APPLE)
-  switch (backend) {
-    case RHIBackend::Vulkan:
-      return fn(static_cast<VKDevice*>(impl));
-    case RHIBackend::Metal:
-      return fn(static_cast<MTDevice*>(impl));
-    default:
-      ETX_ASSERT(false);
-      return fn(static_cast<VKDevice*>(impl));
-  }
+  (void)backend;
+  return fn(static_cast<MTDevice*>(impl));
 #endif
 }
 
@@ -104,15 +96,8 @@ static decltype(auto) dispatch_device(RHIBackend backend, const void* impl, Fn&&
   (void)backend;
   return fn(static_cast<const VKDevice*>(impl));
 #elif defined(ETX_PLATFORM_APPLE)
-  switch (backend) {
-    case RHIBackend::Vulkan:
-      return fn(static_cast<const VKDevice*>(impl));
-    case RHIBackend::Metal:
-      return fn(static_cast<const MTDevice*>(impl));
-    default:
-      ETX_ASSERT(false);
-      return fn(static_cast<const VKDevice*>(impl));
-  }
+  (void)backend;
+  return fn(static_cast<const MTDevice*>(impl));
 #endif
 }
 
@@ -122,15 +107,8 @@ static decltype(auto) dispatch_context(RHIBackend backend, void* impl, Fn&& fn) 
   (void)backend;
   return fn(static_cast<VKContext*>(impl));
 #elif defined(ETX_PLATFORM_APPLE)
-  switch (backend) {
-    case RHIBackend::Vulkan:
-      return fn(static_cast<VKContext*>(impl));
-    case RHIBackend::Metal:
-      return fn(static_cast<MTContext*>(impl));
-    default:
-      ETX_ASSERT(false);
-      return fn(static_cast<VKContext*>(impl));
-  }
+  (void)backend;
+  return fn(static_cast<MTContext*>(impl));
 #endif
 }
 
@@ -140,15 +118,8 @@ static decltype(auto) dispatch_context(RHIBackend backend, const void* impl, Fn&
   (void)backend;
   return fn(static_cast<const VKContext*>(impl));
 #elif defined(ETX_PLATFORM_APPLE)
-  switch (backend) {
-    case RHIBackend::Vulkan:
-      return fn(static_cast<const VKContext*>(impl));
-    case RHIBackend::Metal:
-      return fn(static_cast<const MTContext*>(impl));
-    default:
-      ETX_ASSERT(false);
-      return fn(static_cast<const VKContext*>(impl));
-  }
+  (void)backend;
+  return fn(static_cast<const MTContext*>(impl));
 #endif
 }
 
