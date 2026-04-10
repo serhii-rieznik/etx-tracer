@@ -98,6 +98,8 @@ struct GPURaytracingRenderer : public Renderer {
   void on_scene_changed(SceneRepresentation& scene) override;
 
  private:
+  static constexpr uint32_t kGPUFixedMaxBounces = 32u;
+
   struct CompiledStageBinary {
     PipelineStage stage = PipelineStage::PrepareSample;
     std::string entry_point = {};

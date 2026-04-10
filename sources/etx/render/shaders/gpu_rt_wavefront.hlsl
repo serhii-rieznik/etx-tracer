@@ -834,6 +834,8 @@ uint wavefront_vertex_slot_from_limit(uint path_index, uint path_length, uint fi
   uint vertex_index = 0u;
   if (fixed_max_bounces <= 2u) {
     vertex_index = (path_length == 0u) ? 0u : (1u + ((path_length - 1u) & 1u));
+  } else if (fixed_max_bounces == 3u) {
+    vertex_index = (path_length <= 1u) ? path_length : (2u + ((path_length - 2u) & 1u));
   } else {
     vertex_index = min(path_length, fixed_max_bounces);
   }

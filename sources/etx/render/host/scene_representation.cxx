@@ -29,6 +29,14 @@ namespace etx {
 
 namespace {
 
+Integrator::Type legacy_integrator_selection_to_type(const std::string& type_id) {
+  if (type_id == "bdpt_distilled") {
+    return Integrator::Type::Bidirectional;
+  }
+
+  return integrator_id_to_type(type_id.c_str());
+}
+
 std::string rename_entry(std::unordered_map<std::string, uint32_t>& mapping, uint32_t index, const char* desired_name, const char* fallback_prefix) {
   auto current = mapping.end();
   for (auto it = mapping.begin(); it != mapping.end(); ++it) {
@@ -1117,16 +1125,18 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
           std::string selected_id_str;
           if (obj.contains("selected") && obj["selected"].is_string()) {
             selected_id_str = obj["selected"].get<std::string>();
-            integrator_data->selected = integrator_id_to_type(selected_id_str.c_str());
+            integrator_data->selected = legacy_integrator_selection_to_type(selected_id_str);
           }
           if (integrator_data->selected == Integrator::Type::Invalid) {
             if (obj.contains("type") && obj["type"].is_string()) {
-              integrator_data->selected = integrator_id_to_type(obj["type"].get<std::string>().c_str());
+              integrator_data->selected = legacy_integrator_selection_to_type(obj["type"].get<std::string>());
             } else if (obj.contains("name") && obj["name"].is_string()) {
               std::string name = obj["name"].get<std::string>();
               if (name.find("Path Tracing") != std::string::npos) {
                 integrator_data->selected = Integrator::Type::PathTracing;
               } else if (name.find("Bidirectional") != std::string::npos) {
+                integrator_data->selected = Integrator::Type::Bidirectional;
+              } else if (name.find("Distilled") != std::string::npos) {
                 integrator_data->selected = Integrator::Type::Bidirectional;
               } else if (name.find("VCM") != std::string::npos) {
                 integrator_data->selected = Integrator::Type::VCM;

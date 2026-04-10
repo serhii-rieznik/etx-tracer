@@ -1,6 +1,7 @@
 #include <etx/core/core.hxx>
 #include <etx/render/host/film.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
+#include <etx/rt/shared/bdpt_mode.hxx>
 #include <etx/rt/shared/path_tracing_shared.hxx>
 
 namespace etx {
@@ -245,15 +246,7 @@ struct CPUBidirectionalImpl : public Task {
   bool enable_mis = true;
   bool enable_blue_noise = true;
 
-  enum class Mode : uint32_t {
-    PathTracing,
-    LightTracing,
-    BDPTFast,
-    BDPTFull,
-
-    Count,
-  };
-
+  using Mode = BDPTMode;
   Mode mode = Mode::BDPTFast;
 
   struct GBuffer {
@@ -1390,20 +1383,8 @@ struct CPUBidirectionalImpl : public Task {
   void build_options(Options& options) const {
     options.options.clear();
 
-    options.set_integral("bdpt-mode", mode, "Mode", Option::Meta::EnumValue, {CPUBidirectionalImpl::Mode::PathTracing, CPUBidirectionalImpl::Mode::BDPTFull}).name_getter =
-      [](uint32_t index) -> std::string {
-      switch (CPUBidirectionalImpl::Mode(index)) {
-        case CPUBidirectionalImpl::Mode::PathTracing:
-          return "Path Tracing";
-        case CPUBidirectionalImpl::Mode::LightTracing:
-          return "Light Tracing";
-        case CPUBidirectionalImpl::Mode::BDPTFast:
-          return "BDPT Fast (Experimental)";
-        case CPUBidirectionalImpl::Mode::BDPTFull:
-          return "BDPT Full";
-        default:
-          return "Unknown";
-      }
+    options.set_integral("bdpt-mode", mode, "Mode", Option::Meta::EnumValue, {BDPTMode::PathTracing, BDPTMode::BDPTFull}).name_getter = [](uint32_t index) -> std::string {
+      return bdpt_mode_display_name(static_cast<BDPTMode>(index));
     };
   }
 

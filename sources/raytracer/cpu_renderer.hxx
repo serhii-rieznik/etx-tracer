@@ -7,7 +7,6 @@
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
-#include <etx/rt/integrators/bdpt_distilled.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
 
 namespace etx {
@@ -67,15 +66,13 @@ struct CPURaytracingRenderer : public Renderer {
   CPUDebugIntegrator _debug = {_raytracing};
   CPUPathTracing _cpu_pt = {_raytracing};
   CPUBidirectional _cpu_bidir = {_raytracing};
-  BDPTDistilled _bdpt_distilled = {_raytracing};
   CPUVCM _cpu_vcm = {_raytracing};
 
-  Integrator* _integrator_array[5] = {
-    &_debug,           // Debug = 0
-    &_cpu_pt,          // PathTracing = 1
-    &_cpu_bidir,       // Bidirectional = 2
-    &_cpu_vcm,         // VCM = 3
-    &_bdpt_distilled,  // BDPTDistilled = 4
+  Integrator* _integrator_array[4] = {
+    &_debug,      // Debug = 0
+    &_cpu_pt,     // PathTracing = 1
+    &_cpu_bidir,  // Bidirectional = 2
+    &_cpu_vcm,    // VCM = 3
   };
 
   RHIPipeline rhi_pipeline = {};

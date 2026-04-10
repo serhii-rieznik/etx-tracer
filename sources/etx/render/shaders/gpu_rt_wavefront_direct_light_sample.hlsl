@@ -84,6 +84,15 @@ float wavefront_direct_light_vertex_to_vertex_area_pdf(float pdf_dir, GPUWavefro
   return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, from_vertex.position, to_vertex.position, wavefront_path_vertex_is_surface(to_vertex), to_vertex.normal);
 }
 
+float wavefront_direct_light_emitter_sample_pdf(WavefrontEmitterSample sample_value) {
+  if (sample_value.is_distant != 0u) {
+    float directional_pdf = (sample_value.is_delta != 0u) ? 1.0f : sample_value.pdf_dir;
+    return sample_value.pdf_sample * directional_pdf;
+  }
+
+  return sample_value.pdf_sample * sample_value.pdf_area;
+}
+
 float wavefront_emitter_sample_from_emitter_pdf(WavefrontEmitterSample sample_value, GPUWavefrontPathVertex target_vertex) {
   if (sample_value.is_distant != 0u) {
     float3 w_o = normalize(sample_value.origin - target_vertex.position);
@@ -115,7 +124,26 @@ float wavefront_emitter_sample_from_emitter_pdf(WavefrontEmitterSample sample_va
   return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, sample_value.origin, target_vertex.position, wavefront_path_vertex_is_surface(target_vertex), target_vertex.normal);
 }
 
-float wavefront_medium_direct_light_weight(GPUWavefrontPathVertex current_vertex, WavefrontEmitterSample emitter_sample, MediumAccess medium_access, float phase_value) {
+float wavefront_emitter_sample_to_vertex_area_pdf(WavefrontEmitterSample sample_value, GPUWavefrontPathVertex source_vertex, float pdf_dir) {
+  if (sample_value.is_distant != 0u) {
+    GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
+    if (try_load_emitter_instance(sample_value.emitter_index, emitter_instance) == false) {
+      return 0.0f;
+    }
+
+    if (emitter_instance.emitter_class == EmitterClass::Environment) {
+      return pdf_dir;
+    }
+
+    return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, source_vertex.position, sample_value.origin, false, float3(0.0f, 0.0f, 0.0f));
+  }
+
+  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, source_vertex.position, sample_value.origin, true, sample_value.normal);
+}
+
+float wavefront_medium_direct_light_weight(
+  GPUWavefrontResources resources, uint path_index, GPUWavefrontPathMeta path_meta, GPUWavefrontPathVertex current_vertex, WavefrontEmitterSample emitter_sample,
+  MediumAccess medium_access, float phase_value) {
   if (scene_multiple_importance_sampling_enabled() == false) {
     return 1.0f;
   }
@@ -130,20 +158,35 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathVertex current_vertex
     return power_heuristic(sampling_pdf, direct_pdf);
   }
 
-  float w_light = 0.0f;
-  if (emitter_sample.is_delta == 0u) {
-    w_light = wavefront_safe_div(phase_value, sampling_pdf);
+  if (path_meta.camera_path_length == 0u) {
+    return 1.0f;
   }
 
-  float emitter_cosine = abs(dot(emitter_sample.direction, emitter_sample.normal));
-  if (emitter_cosine <= 0.0f) {
+  GPUWavefrontPathVertex previous_vertex =
+    wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, path_meta.camera_path_length - 1u));
+  if (wavefront_path_vertex_valid(previous_vertex) == false) {
     return 0.0f;
   }
 
+  float p_sample = wavefront_direct_light_emitter_sample_pdf(emitter_sample);
+  float p_fwd = previous_vertex.pdf_from_prev * current_vertex.pdf_from_prev;
+  float p_connection = p_fwd * p_sample;
+  float p_direct = 0.0f;
+  if (emitter_sample.is_delta == 0u) {
+    float p_bsdf_sample = wavefront_emitter_sample_to_vertex_area_pdf(emitter_sample, current_vertex, phase_value);
+    p_direct = p_fwd * p_bsdf_sample;
+  }
+
   float reverse_phase_pdf = gpu_medium_phase_function(medium_access, -emitter_sample.direction, current_vertex.w_i);
-  float current_from_light = wavefront_safe_div(emitter_sample.pdf_dir_out, emitter_sample.pdf_dir * emitter_cosine);
-  float w_camera = current_from_light * (current_vertex.forward_pdf + current_vertex.reverse_pdf * reverse_phase_pdf);
-  return 1.0f / (1.0f + w_light + w_camera);
+  float z_prev_backward_pdf = wavefront_direct_light_vertex_to_vertex_area_pdf(reverse_phase_pdf, current_vertex, previous_vertex);
+  float p_bck = previous_vertex.pdf_history;
+  if (path_meta.camera_path_length > 1u) {
+    p_bck *= z_prev_backward_pdf;
+  }
+
+  float from_emitter = wavefront_emitter_sample_from_emitter_pdf(emitter_sample, current_vertex);
+  float p_light_path = p_sample * from_emitter * p_bck;
+  return balance_heuristic(p_connection, p_direct, p_light_path);
 }
 
 [numthreads(64, 1, 1)] void wavefront_camera_direct_light_sample_main(uint3 dtid : SV_DispatchThreadID) {
@@ -200,7 +243,7 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathVertex current_vertex
   uint seed = state.sampler_seed;
   WavefrontEmitterSample emitter_sample = (WavefrontEmitterSample)0;
   uint light_sampling_mode = load_scene_options_light_sampling();
-  bool source_is_surface = true;
+  bool source_is_surface = wavefront_path_vertex_is_surface(current_vertex);
   float3 source_normal = wavefront_path_vertex_is_surface(current_vertex) ? current_vertex.normal : float3(0.0f, 0.0f, 0.0f);
   bool sampled = false;
   if ((light_sampling_mode == kSceneLightSamplingRISFromDistribution) || (light_sampling_mode == kSceneLightSamplingRISUniform)) {
@@ -226,7 +269,7 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathVertex current_vertex
       return;
     }
 
-    float mis_weight = wavefront_medium_direct_light_weight(current_vertex, emitter_sample, medium_access, phase_value);
+    float mis_weight = wavefront_medium_direct_light_weight(resources, path_index, meta, current_vertex, emitter_sample, medium_access, phase_value);
     if (mis_weight <= 0.0f) {
       return;
     }

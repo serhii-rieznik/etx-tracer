@@ -746,6 +746,7 @@ std::atomic<bool> global_com_initialized{false};
 std::mutex global_dll_mutex;
 DxcCreateInstanceProc global_dxc_create_instance = nullptr;
 #endif
+std::atomic<uint32_t> global_dxc_thread_context_count{0u};
 
 // Singleton implementation - Meyer's singleton with thread-safe initialization
 struct ThreadLocalDxcContext {
@@ -767,6 +768,10 @@ struct ThreadLocalDxcContext {
       return;
     }
 #endif
+
+    if (global_dxc_create_instance == nullptr) {
+      return;
+    }
 
     hr = global_dxc_create_instance(CLSID_DxcUtils, IID_PPV_ARGS(dxc_utils.GetAddressOf()));
     if (FAILED(hr)) {
@@ -795,9 +800,44 @@ struct ThreadLocalDxcContext {
   }
 };
 
+struct ThreadLocalDxcContextHolder {
+  ThreadLocalDxcContext* context = nullptr;
+
+  ThreadLocalDxcContext& get() {
+    if (context == nullptr) {
+      context = new ThreadLocalDxcContext();
+      global_dxc_thread_context_count.fetch_add(1u, std::memory_order_acq_rel);
+    }
+
+    return *context;
+  }
+
+  void reset() {
+    if (context == nullptr) {
+      return;
+    }
+
+    delete context;
+    context = nullptr;
+    global_dxc_thread_context_count.fetch_sub(1u, std::memory_order_acq_rel);
+  }
+
+  ~ThreadLocalDxcContextHolder() {
+    reset();
+  }
+};
+
+ThreadLocalDxcContextHolder& thread_local_dxc_context_holder() {
+  thread_local ThreadLocalDxcContextHolder holder = {};
+  return holder;
+}
+
 ThreadLocalDxcContext& thread_local_dxc_context() {
-  thread_local ThreadLocalDxcContext context = {};
-  return context;
+  return thread_local_dxc_context_holder().get();
+}
+
+void reset_thread_local_dxc_context() {
+  thread_local_dxc_context_holder().reset();
 }
 
 ShaderCompiler& ShaderCompiler::instance() {
@@ -878,6 +918,8 @@ void ShaderCompiler::shutdown() {
   return;
 #endif
 
+  reset_thread_local_dxc_context();
+
   std::lock_guard<std::mutex> dll_lock(global_dll_mutex);
 
   if (_impl != nullptr) {
@@ -911,8 +953,13 @@ void ShaderCompiler::shutdown() {
     // DXC keeps thread-local state alive through process teardown on macOS.
     // Keeping the dylib loaded avoids exit-time crashes in libdxcompiler.
 #else
-    unload_dxc_library(global_dxc_dll);
-    global_dxc_dll = nullptr;
+    const uint32_t remaining_thread_contexts = global_dxc_thread_context_count.load(std::memory_order_acquire);
+    if (remaining_thread_contexts == 0u) {
+      unload_dxc_library(global_dxc_dll);
+      global_dxc_dll = nullptr;
+    } else {
+      log::warning("Skipping DXC runtime unload because %u thread-local DXC context(s) are still alive", remaining_thread_contexts);
+    }
 #endif
   }
   if (global_dxc_dll == nullptr) {

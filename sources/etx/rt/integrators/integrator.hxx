@@ -13,7 +13,6 @@ struct Integrator {
     PathTracing = 1,
     Bidirectional = 2,
     VCM = 3,
-    BDPTDistilled = 4,
 
     Count,
     Invalid = kInvalidIndex,
@@ -148,8 +147,6 @@ inline const char* integrator_type_to_id(Integrator::Type type) {
       return "bdpt";
     case Integrator::Type::VCM:
       return "vcm";
-    case Integrator::Type::BDPTDistilled:
-      return "bdpt_distilled";
     default:
       return nullptr;
   }
@@ -166,8 +163,6 @@ inline Integrator::Type integrator_id_to_type(const char* id) {
     return Integrator::Type::Bidirectional;
   if (strcmp(id, "vcm") == 0)
     return Integrator::Type::VCM;
-  if (strcmp(id, "bdpt_distilled") == 0)
-    return Integrator::Type::BDPTDistilled;
   return Integrator::Type::Invalid;
 }
 

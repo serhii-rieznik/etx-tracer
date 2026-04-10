@@ -7,7 +7,7 @@
             "request": "launch",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "externalConsole": false,
+            "console": "internalConsole",
             "preLaunchTask": "Build Raytracer",
             "windows": {
                 "type": "cppvsdbg",
@@ -48,7 +48,7 @@
             "request": "launch",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "externalConsole": false,
+            "console": "internalConsole",
             "preLaunchTask": "Build Raytracer (Release)",
             "windows": {
                 "type": "cppvsdbg",
@@ -89,7 +89,7 @@
             "request": "launch",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "externalConsole": false,
+            "console": "internalConsole",
             "preLaunchTask": "Build Playground",
             "windows": {
                 "type": "cppvsdbg",
@@ -130,7 +130,7 @@
             "request": "launch",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "externalConsole": false,
+            "console": "internalConsole",
             "preLaunchTask": "Build Playground (Release)",
             "windows": {
                 "type": "cppvsdbg",
@@ -171,7 +171,7 @@
             "request": "launch",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
-            "externalConsole": false,
+            "console": "internalConsole",
             "args": [
                 "--headless",
                 "--frames",

@@ -12,6 +12,7 @@
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/shared/density_grid.hxx>
+#include <etx/rt/shared/bdpt_mode.hxx>
 #include <bluenoise.hxx>
 #include <algorithm>
 #include <chrono>
@@ -35,11 +36,19 @@ constexpr uint32_t kBlueNoiseTileSize = kSamplerBlueNoiseTileSize;
 constexpr uint32_t kBlueNoiseSampleCount = kSamplerBlueNoiseSampleCount;
 constexpr uint32_t kBlueNoiseDimensionCount = kSamplerBlueNoiseDimensionCount;
 constexpr uint32_t kWavefrontRollingHistoryBounces = 2u;
+constexpr uint32_t kWavefrontLightHistoryBounces = 3u;
 
 enum class GPUPathMode : uint32_t {
   PathTracing = 0u,
   LightTracing = 1u,
   BDPTFast = 2u,
+};
+
+struct GPUPathModeSelection {
+  GPUPathMode path_mode = GPUPathMode::PathTracing;
+  Integrator::Type integrator_type = Integrator::Type::Invalid;
+  BDPTMode requested_bdpt_mode = BDPTMode::Invalid;
+  bool supported = true;
 };
 
 struct WavefrontStage {
@@ -138,33 +147,91 @@ GPUPathMode gpu_path_mode_from_scene_strategies(const SceneData& scene_data) {
   return GPUPathMode::BDPTFast;
 }
 
-GPUPathMode gpu_path_mode_from_scene(const SceneRepresentation& scene) {
+const char* integrator_type_to_display_name(Integrator::Type type) {
+  switch (type) {
+    case Integrator::Type::Debug:
+      return "Debug";
+    case Integrator::Type::PathTracing:
+      return "Path Tracing";
+    case Integrator::Type::Bidirectional:
+      return "Bidirectional";
+    case Integrator::Type::VCM:
+      return "VCM";
+    default:
+      return "Unknown";
+  }
+}
+
+GPUPathMode gpu_path_mode_from_bdpt_mode(BDPTMode mode) {
+  switch (mode) {
+    case BDPTMode::PathTracing:
+      return GPUPathMode::PathTracing;
+    case BDPTMode::LightTracing:
+      return GPUPathMode::LightTracing;
+    case BDPTMode::BDPTFast:
+    case BDPTMode::BDPTFull:
+      return GPUPathMode::BDPTFast;
+    default:
+      return GPUPathMode::BDPTFast;
+  }
+}
+
+GPUPathModeSelection gpu_path_mode_selection_from_scene(const SceneRepresentation& scene) {
+  GPUPathModeSelection result = {};
   const auto& integrator_data = scene.integrator_data();
+  result.integrator_type = integrator_data.selected;
 
   if (integrator_data.selected == Integrator::Type::PathTracing) {
-    return GPUPathMode::PathTracing;
+    result.requested_bdpt_mode = BDPTMode::PathTracing;
+    result.path_mode = GPUPathMode::PathTracing;
+    return result;
   }
 
   if (integrator_data.selected == Integrator::Type::Bidirectional) {
     auto settings_it = integrator_data.settings.find(Integrator::Type::Bidirectional);
-    uint32_t bidirectional_mode = 2u;
+    BDPTMode bidirectional_mode = BDPTMode::BDPTFast;
     if (settings_it != integrator_data.settings.end()) {
       bidirectional_mode = settings_it->second.get_integral("bdpt-mode", bidirectional_mode);
     }
 
-    switch (bidirectional_mode) {
-      case 0u:
-        return GPUPathMode::PathTracing;
-      case 1u:
-        return GPUPathMode::LightTracing;
-      case 2u:
-        return GPUPathMode::BDPTFast;
-      default:
-        return GPUPathMode::BDPTFast;
+    result.requested_bdpt_mode = bidirectional_mode;
+    result.path_mode = gpu_path_mode_from_bdpt_mode(bidirectional_mode);
+
+    if (bdpt_mode_valid(bidirectional_mode) == false) {
+      result.supported = false;
+      return result;
+    }
+
+    result.supported = (bidirectional_mode != BDPTMode::BDPTFull);
+    return result;
+  }
+
+  if ((integrator_data.selected != Integrator::Type::Invalid) && (integrator_data.selected != Integrator::Type::PathTracing)) {
+    result.supported = false;
+    result.path_mode = gpu_path_mode_from_scene_strategies(scene.data());
+    return result;
+  }
+
+  result.path_mode = gpu_path_mode_from_scene_strategies(scene.data());
+  return result;
+}
+
+GPUPathMode gpu_path_mode_from_scene(const SceneRepresentation& scene) {
+  return gpu_path_mode_selection_from_scene(scene).path_mode;
+}
+
+std::string gpu_path_mode_selection_error_message(const GPUPathModeSelection& selection) {
+  if (selection.integrator_type == Integrator::Type::Bidirectional) {
+    if (bdpt_mode_valid(selection.requested_bdpt_mode) == false) {
+      return "GPU RT does not support the requested bidirectional mode value.";
+    }
+
+    if (selection.requested_bdpt_mode == BDPTMode::BDPTFull) {
+      return "GPU RT does not support 'BDPT Full'. Camera-to-light connection stages are currently disabled, so GPU supports only Path Tracing, Light Tracing, and BDPT Fast.";
     }
   }
 
-  return gpu_path_mode_from_scene_strategies(scene.data());
+  return std::string("GPU RT does not support the '") + integrator_type_to_display_name(selection.integrator_type) + "' integrator.";
 }
 
 const char* gpu_path_mode_to_string(GPUPathMode path_mode) {
@@ -1069,7 +1136,7 @@ void GPURaytracingRenderer::reset_runtime_failure() {
 }
 
 void GPURaytracingRenderer::set_runtime_failure(std::string message) {
-  if (_runtime_failed == false) {
+  if ((_runtime_failed == false) || (_runtime_failure_reason != message)) {
     _runtime_failure_reason = std::move(message);
   }
   _runtime_failed = true;
@@ -1083,10 +1150,17 @@ void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
 
   reset_runtime_failure();
   _backend = ctx.device().backend();
-  _path_mode = static_cast<uint32_t>(gpu_path_mode_from_scene(scene));
+  const GPUPathModeSelection path_mode_selection = gpu_path_mode_selection_from_scene(scene);
+  _path_mode = static_cast<uint32_t>(path_mode_selection.path_mode);
   _material_compile_mask = build_material_compile_mask(scene.data());
-  set_preparation_ready();
   _initialized = true;
+
+  if (path_mode_selection.supported == false) {
+    set_runtime_failure(gpu_path_mode_selection_error_message(path_mode_selection));
+    return;
+  }
+
+  set_preparation_ready();
 }
 
 void GPURaytracingRenderer::reload_shaders(RHIContext& ctx, SceneRepresentation& scene) {
@@ -1337,10 +1411,16 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
     return;
   }
 
+  const GPUPathModeSelection path_mode_selection = gpu_path_mode_selection_from_scene(scene);
+  if (path_mode_selection.supported == false) {
+    set_runtime_failure(gpu_path_mode_selection_error_message(path_mode_selection));
+    return;
+  }
+
   reset_runtime_failure();
   _frame_index = 0u;
   _sample_index = 0u;
-  _path_mode = static_cast<uint32_t>(gpu_path_mode_from_scene(scene));
+  _path_mode = static_cast<uint32_t>(path_mode_selection.path_mode);
   _material_compile_mask = build_material_compile_mask(scene.data());
   _preparation_generation += 1u;
   _active_preparation = std::make_shared<PendingPipelinePreparation>();
@@ -1616,10 +1696,12 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   }
 
   const uint32_t path_capacity = static_cast<uint32_t>(pixel_count_u64);
+  const GPUPathMode path_mode = static_cast<GPUPathMode>(_path_mode);
   const uint32_t scene_max_path_length = std::max(1u, scene.data().options.max_path_length);
-  const uint32_t camera_history_bounces = kWavefrontRollingHistoryBounces;
-  const uint32_t light_history_bounces = kWavefrontRollingHistoryBounces;
-  const uint32_t stored_history_bounces = kWavefrontRollingHistoryBounces;
+  const uint32_t camera_history_bounces =
+    (path_mode == GPUPathMode::PathTracing) ? GPURaytracingRenderer::kGPUFixedMaxBounces : kWavefrontRollingHistoryBounces;
+  const uint32_t light_history_bounces = kWavefrontLightHistoryBounces;
+  const uint32_t stored_history_bounces = std::max(camera_history_bounces, light_history_bounces);
   const uint32_t max_path_length = scene_max_path_length;
   const uint64_t vertex_capacity_u64 = static_cast<uint64_t>(path_capacity) * static_cast<uint64_t>(stored_history_bounces + 1u);
   if (vertex_capacity_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
@@ -1858,17 +1940,25 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     advance_pipeline_publish(ctx, 1u);
   }
 
-  const uint32_t new_path_mode = static_cast<uint32_t>(gpu_path_mode_from_scene(scene));
+  const GPUPathModeSelection path_mode_selection = gpu_path_mode_selection_from_scene(scene);
+  const uint32_t new_path_mode = static_cast<uint32_t>(path_mode_selection.path_mode);
   const uint32_t new_material_compile_mask = build_material_compile_mask(scene.data());
   const bool path_mode_changed = (_path_mode != new_path_mode);
   const bool material_compile_mask_changed = (_material_compile_mask != new_material_compile_mask);
   const bool missing_pipelines = (_pipelines[static_cast<uint32_t>(PipelineStage::PrepareSample)].valid() == false);
-  const bool should_request_prepare = path_mode_changed || material_compile_mask_changed || (missing_pipelines && (_preparation_state == RendererPreparationState::Ready));
+  const bool should_request_prepare =
+    path_mode_selection.supported &&
+    (path_mode_changed || material_compile_mask_changed || missing_pipelines || (_preparation_state == RendererPreparationState::Failed));
   if (should_request_prepare) {
     const auto pipeline_refresh_begin = std::chrono::steady_clock::now();
     request_pipeline_preparation(scene, path_mode_changed || material_compile_mask_changed ? "scene pipeline change" : "missing pipelines");
     const auto pipeline_refresh_end = std::chrono::steady_clock::now();
     pipeline_refresh_ms = elapsed_ms(pipeline_refresh_begin, pipeline_refresh_end);
+  }
+
+  if (path_mode_selection.supported == false) {
+    set_runtime_failure(gpu_path_mode_selection_error_message(path_mode_selection));
+    return;
   }
 
   if ((_preparation_state != RendererPreparationState::Ready) || missing_pipelines)

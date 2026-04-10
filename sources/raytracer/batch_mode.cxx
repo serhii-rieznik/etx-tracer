@@ -7,6 +7,7 @@
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/rt/integrators/integrator.hxx>
+#include <etx/rt/shared/bdpt_mode.hxx>
 #include <etx/rt/rt.hxx>
 
 #include "cpu_renderer.hxx"
@@ -186,7 +187,7 @@ bool parse_strategy_flags_argument(const char* value, uint32_t& result) {
 
 struct FullComparisonTechniqueInfo {
   const char* file_tag = "";
-  uint32_t bdpt_mode = 0u;
+  BDPTMode bdpt_mode = BDPTMode::PathTracing;
   uint32_t strategy_flags = 0u;
 };
 
@@ -195,55 +196,50 @@ struct CPUComparisonTechniqueInfo {
   const char* display_name = "";
   const char* description = "";
   Integrator::Type integrator = Integrator::Type::Invalid;
-  uint32_t bdpt_mode = 0u;
+  BDPTMode bdpt_mode = BDPTMode::PathTracing;
   uint32_t strategy_flags = 0u;
   bool reference = false;
 };
 
-constexpr uint32_t kBDPTModePathTracing = 0u;
-constexpr uint32_t kBDPTModeLightTracing = 1u;
-constexpr uint32_t kBDPTModeFast = 2u;
-constexpr uint32_t kBDPTModeFull = 3u;
-
 const FullComparisonTechniqueInfo kFullComparisonTechniques[] = {
   {
     .file_tag = "pt",
-    .bdpt_mode = kBDPTModePathTracing,
+    .bdpt_mode = BDPTMode::PathTracing,
     .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight,
   },
   {
     .file_tag = "pt-direct-hit",
-    .bdpt_mode = kBDPTModePathTracing,
+    .bdpt_mode = BDPTMode::PathTracing,
     .strategy_flags = Scene::Strategy::DirectHit,
   },
   {
     .file_tag = "pt-connect-to-light",
-    .bdpt_mode = kBDPTModePathTracing,
+    .bdpt_mode = BDPTMode::PathTracing,
     .strategy_flags = Scene::Strategy::ConnectToLight,
   },
   {
     .file_tag = "lt",
-    .bdpt_mode = kBDPTModeLightTracing,
+    .bdpt_mode = BDPTMode::LightTracing,
     .strategy_flags = Scene::Strategy::ConnectToCamera,
   },
   {
     .file_tag = "bdpt-fast",
-    .bdpt_mode = kBDPTModeFast,
+    .bdpt_mode = BDPTMode::BDPTFast,
     .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices,
   },
   {
     .file_tag = "bdpt-fast-direct-hit",
-    .bdpt_mode = kBDPTModeFast,
+    .bdpt_mode = BDPTMode::BDPTFast,
     .strategy_flags = Scene::Strategy::DirectHit,
   },
   {
     .file_tag = "bdpt-fast-connect-to-light",
-    .bdpt_mode = kBDPTModeFast,
+    .bdpt_mode = BDPTMode::BDPTFast,
     .strategy_flags = Scene::Strategy::ConnectToLight,
   },
   {
     .file_tag = "bdpt-fast-connect-to-camera",
-    .bdpt_mode = kBDPTModeFast,
+    .bdpt_mode = BDPTMode::BDPTFast,
     .strategy_flags = Scene::Strategy::ConnectToCamera,
   },
 };
@@ -254,7 +250,7 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
     .display_name = "PT",
     .description = "Standalone CPU path tracing reference.",
     .integrator = Integrator::Type::PathTracing,
-    .bdpt_mode = kBDPTModePathTracing,
+    .bdpt_mode = BDPTMode::PathTracing,
     .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight,
     .reference = true,
   },
@@ -263,7 +259,7 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
     .display_name = "BDPT PT",
     .description = "Bidirectional integrator in path-tracing mode.",
     .integrator = Integrator::Type::Bidirectional,
-    .bdpt_mode = kBDPTModePathTracing,
+    .bdpt_mode = BDPTMode::PathTracing,
     .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight,
     .reference = false,
   },
@@ -272,7 +268,7 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
     .display_name = "BDPT LT",
     .description = "Bidirectional integrator in light-tracing mode.",
     .integrator = Integrator::Type::Bidirectional,
-    .bdpt_mode = kBDPTModeLightTracing,
+    .bdpt_mode = BDPTMode::LightTracing,
     .strategy_flags = Scene::Strategy::ConnectToCamera,
     .reference = false,
   },
@@ -281,7 +277,7 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
     .display_name = "BDPT Fast",
     .description = "Bidirectional path tracing with fast MIS precomputation.",
     .integrator = Integrator::Type::Bidirectional,
-    .bdpt_mode = kBDPTModeFast,
+    .bdpt_mode = BDPTMode::BDPTFast,
     .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices,
     .reference = false,
   },
@@ -290,7 +286,7 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
     .display_name = "BDPT Full",
     .description = "Full bidirectional path tracing with complete vertex connections.",
     .integrator = Integrator::Type::Bidirectional,
-    .bdpt_mode = kBDPTModeFull,
+    .bdpt_mode = BDPTMode::BDPTFull,
     .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices,
     .reference = false,
   },
@@ -299,7 +295,7 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
     .display_name = "VCM",
     .description = "Vertex connection and merging CPU integrator.",
     .integrator = Integrator::Type::VCM,
-    .bdpt_mode = kBDPTModeFast,
+    .bdpt_mode = BDPTMode::BDPTFast,
     .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices |
                       Scene::Strategy::MergeVertices,
     .reference = false,
@@ -315,7 +311,7 @@ const char* batch_usage_string() {
          "Options:\n"
          "  --full-comparison\n"
          "  --cpu-comparison\n"
-         "  --integrator <debug|pt|bdpt|vcm|bdpt_distilled>\n"
+         "  --integrator <debug|pt|bdpt|vcm>\n"
          "  --renderer <cpu|gpu>\n"
          "  --samples <count>\n"
          "  --max-path-length <count>\n"
@@ -1910,12 +1906,12 @@ bool configure_batch_render_window(const BatchRenderOptions& options, BatchRende
   const auto& integrator_data = session.scene.integrator_data();
   if (integrator_data.selected == Integrator::Type::Bidirectional) {
     const auto settings_it = integrator_data.settings.find(Integrator::Type::Bidirectional);
-    uint32_t bdpt_mode = kBDPTModeFast;
+    BDPTMode bdpt_mode = BDPTMode::BDPTFast;
     if (settings_it != integrator_data.settings.end()) {
       bdpt_mode = settings_it->second.get_integral("bdpt-mode", bdpt_mode);
     }
-    cpu_can_render_crop_window = bdpt_mode == kBDPTModePathTracing;
-  } else if ((integrator_data.selected == Integrator::Type::VCM) || (integrator_data.selected == Integrator::Type::BDPTDistilled)) {
+    cpu_can_render_crop_window = bdpt_mode == BDPTMode::PathTracing;
+  } else if (integrator_data.selected == Integrator::Type::VCM) {
     cpu_can_render_crop_window = false;
   }
 
