@@ -95,8 +95,11 @@ target_compile_definitions(etx-render PUBLIC -DETX_HAVE_OPENVDB=1)
 target_include_directories(etx-render PUBLIC "${CMAKE_SOURCE_DIR}/sources/etx/render")
 
 create_library(engine)
-target_link_libraries(etx-engine PRIVATE etx-core etx-render imgui sokol json)
+target_link_libraries(etx-engine PRIVATE etx-core etx-render imgui sokol json datachannel-static)
 target_include_directories(etx-engine PUBLIC "${CMAKE_SOURCE_DIR}/sources/etx/render" "${CMAKE_SOURCE_DIR}/thirdparty/imgui" "${CMAKE_SOURCE_DIR}/thirdparty/sokol")
+if(WIN32)
+  target_link_libraries(etx-engine PRIVATE ws2_32 mfplat mfuuid strmiids wmcodecdspuuid)
+endif()
 
 create_library(rhi)
 target_link_libraries(etx-rhi PRIVATE etx-core imgui sokol spirv-cross-core spirv-cross-glsl spirv-cross-msl)

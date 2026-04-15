@@ -5,7 +5,9 @@
 #include "app.hxx"
 
 #include <imgui.h>
+#include <stb_image_write.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <vector>
@@ -43,35 +45,95 @@ const char* backend_name(RHIBackend backend) {
   }
 }
 
+bool read_texture_to_bgra8_buffer(RHIContext& rhi, RHITexture texture, const RHIExtent2D& extent, RHITextureFormat format, std::vector<uint8_t>& output) {
+  output.clear();
+  if ((texture.valid() == false) || (extent.width == 0u) || (extent.height == 0u)) {
+    return false;
+  }
+
+  if ((format != RHITextureFormat::B8G8R8A8_UNORM) && (format != RHITextureFormat::R8G8B8A8_UNORM)) {
+    log::error("Playground browser capture: unsupported output format %u", static_cast<uint32_t>(format));
+    return false;
+  }
+
+  const uint64_t pixel_count = static_cast<uint64_t>(extent.width) * static_cast<uint64_t>(extent.height);
+  const uint64_t buffer_size = pixel_count * 4u;
+
+  RHIBufferDesc readback_desc = {};
+  readback_desc.size = buffer_size;
+  readback_desc.usage = RHIBufferUsage::TransferDst;
+  readback_desc.host_visible = true;
+
+  const RHICreateBindlessResult readback_result = rhi.device().create_buffer(readback_desc);
+  if ((readback_result.result != RHIResult::Success) || (readback_result.handle.valid() == false)) {
+    log::error("Playground browser capture: failed to create readback buffer (%u)", static_cast<uint32_t>(readback_result.result));
+    return false;
+  }
+
+  rhi.begin_frame();
+  const RHICommandBuffer cmd = rhi.get_command_buffer();
+  if (cmd.valid() == false) {
+    rhi.device().destroy_buffer(readback_result.handle);
+    rhi.end_frame();
+    log::error("Playground browser capture: failed to get command buffer");
+    return false;
+  }
+
+  rhi.command_buffer_begin(cmd);
+  rhi.cmd_texture_barrier(cmd, texture, RHIResourceState::ColorAttachment, RHIResourceState::TransferSrc);
+  rhi.cmd_copy_texture_to_buffer(cmd, texture, readback_result.handle, extent.width, extent.height);
+  rhi.cmd_texture_barrier(cmd, texture, RHIResourceState::TransferSrc, RHIResourceState::ColorAttachment);
+  rhi.command_buffer_end(cmd);
+  rhi.submit_command_buffer({cmd});
+  rhi.end_frame();
+
+  const RHIResult wait_result = rhi.wait_idle();
+  if (wait_result != RHIResult::Success) {
+    rhi.destroy_command_buffer(cmd);
+    rhi.device().destroy_buffer(readback_result.handle);
+    log::error("Playground browser capture: wait_idle failed (%u)", static_cast<uint32_t>(wait_result));
+    return false;
+  }
+
+  rhi.destroy_command_buffer(cmd);
+
+  output.resize(static_cast<size_t>(buffer_size));
+  const RHIResult read_result = rhi.device().read_buffer(readback_result.handle, output.data(), buffer_size);
+  const RHIResult destroy_result = rhi.device().destroy_buffer(readback_result.handle);
+  if (destroy_result != RHIResult::Success) {
+    log::warning("Playground browser capture: failed to destroy readback buffer (%u)", static_cast<uint32_t>(destroy_result));
+  }
+
+  if (read_result != RHIResult::Success) {
+    output.clear();
+    log::error("Playground browser capture: failed to read output buffer (%u)", static_cast<uint32_t>(read_result));
+    return false;
+  }
+
+  if (format == RHITextureFormat::R8G8B8A8_UNORM) {
+    for (size_t pixel_index = 0u; pixel_index < output.size(); pixel_index += 4u) {
+      std::swap(output[pixel_index + 0u], output[pixel_index + 2u]);
+    }
+  }
+
+  return true;
+}
+
+void append_png_bytes(void* context, void* data, int size) {
+  if ((context == nullptr) || (data == nullptr) || (size <= 0)) {
+    return;
+  }
+
+  auto* output = reinterpret_cast<std::vector<uint8_t>*>(context);
+  const size_t current_size = output->size();
+  output->resize(current_size + static_cast<size_t>(size));
+  std::memcpy(output->data() + current_size, data, static_cast<size_t>(size));
+}
+
 }  // namespace
 
 bool PlaygroundApp::initialized() const {
   return _rhi.valid();
-}
-
-bool PlaygroundApp::recreate_headless_present_target(uint32_t width, uint32_t height) {
-  if (_headless_present_texture.valid()) {
-    _rhi.device().destroy_texture(_headless_present_texture);
-    _headless_present_texture = {};
-  }
-
-  if ((width == 0u) || (height == 0u)) {
-    return false;
-  }
-
-  RHITextureDesc desc = {};
-  desc.width = width;
-  desc.height = height;
-  desc.format = _rhi.get_swapchain_format();
-  desc.usage = RHITextureUsage::ColorAttachment | RHITextureUsage::TransferSrc;
-  auto result = _rhi.device().create_texture(desc);
-  if (result.result != RHIResult::Success) {
-    log::error("Playground headless: failed to create present target: %u", static_cast<uint32_t>(result.result));
-    return false;
-  }
-
-  _headless_present_texture = result.handle;
-  return true;
 }
 
 static constexpr RHITextureFormat k_scene_color_format = RHITextureFormat::R16G16B16A16_FLOAT;
@@ -1159,12 +1221,12 @@ void PlaygroundApp::recreate_scene_targets(uint32_t width, uint32_t height) {
 }
 
 void PlaygroundApp::sync_scene_targets_to_swapchain_extent() {
-  const RHIExtent2D swapchain_extent = _rhi.get_swapchain_extent();
-  if ((swapchain_extent.width == 0u) || (swapchain_extent.height == 0u)) {
+  const RHIExtent2D output_extent = _runtime_output.extent();
+  if ((output_extent.width == 0u) || (output_extent.height == 0u)) {
     return;
   }
 
-  const bool extent_changed = ((_render_width != swapchain_extent.width) || (_render_height != swapchain_extent.height));
+  const bool extent_changed = ((_render_width != output_extent.width) || (_render_height != output_extent.height));
   const bool missing_scene_opaque_color = (_scene_opaque_color_buffer.valid() == false);
   const bool missing_scene_color = (_scene_color_buffer.valid() == false);
   const bool missing_depth = (_depth_buffer.valid() == false);
@@ -1183,7 +1245,7 @@ void PlaygroundApp::sync_scene_targets_to_swapchain_extent() {
     return;
   }
 
-  recreate_scene_targets(swapchain_extent.width, swapchain_extent.height);
+  recreate_scene_targets(output_extent.width, output_extent.height);
 }
 
 bool PlaygroundApp::recreate_tonemap_pipeline() {
@@ -1220,7 +1282,7 @@ bool PlaygroundApp::recreate_tonemap_pipeline() {
     tonemap_desc.blend.blend_enable = false;
     tonemap_desc.primitive_topology = RHIPrimitiveTopology::TriangleList;
     tonemap_desc.color_attachment_count = 1;
-    tonemap_desc.color_formats[0] = _rhi.get_swapchain_format();
+    tonemap_desc.color_formats[0] = _runtime_output.output_format();
     tonemap_desc.depth_format = k_scene_depth_format;
 
     auto tonemap_result = _rhi.device().create_graphics_pipeline(tonemap_desc);
@@ -1238,12 +1300,12 @@ bool PlaygroundApp::recreate_tonemap_pipeline() {
 }
 
 void PlaygroundApp::sync_swapchain_dependent_resources() {
-  const RHITextureFormat current_swapchain_format = _rhi.get_swapchain_format();
-  if (current_swapchain_format == RHITextureFormat::Undefined) {
+  const RHITextureFormat current_output_format = _runtime_output.output_format();
+  if (current_output_format == RHITextureFormat::Undefined) {
     return;
   }
 
-  const bool format_changed = (_swapchain_color_format != current_swapchain_format);
+  const bool format_changed = (_swapchain_color_format != current_output_format);
   const bool initial_setup = (_swapchain_color_format == RHITextureFormat::Undefined);
   if ((format_changed == false) && (initial_setup == false)) {
     return;
@@ -1251,7 +1313,7 @@ void PlaygroundApp::sync_swapchain_dependent_resources() {
 
   if (_headless == false) {
     RHIImGuiDesc imgui_desc = {
-      .color_format = current_swapchain_format,
+      .color_format = current_output_format,
       .depth_format = k_scene_depth_format,
     };
     RHIResult imgui_result = _imgui.setup(_rhi, imgui_desc);
@@ -1261,7 +1323,7 @@ void PlaygroundApp::sync_swapchain_dependent_resources() {
   }
 
   recreate_tonemap_pipeline();
-  _swapchain_color_format = current_swapchain_format;
+  _swapchain_color_format = current_output_format;
 }
 
 bool PlaygroundApp::ensure_sky_scattering_context() {
@@ -1510,9 +1572,9 @@ bool PlaygroundApp::apply_scene_msaa_sample_count(uint32_t sample_count) {
   _scene_msaa_recreate_requested = false;
   log::info("Playground: applying MSAA sample count = %u", _scene_msaa_sample_count);
 
-  const RHIExtent2D swapchain_extent = _rhi.get_swapchain_extent();
-  if ((swapchain_extent.width > 0u) && (swapchain_extent.height > 0u)) {
-    recreate_scene_targets(swapchain_extent.width, swapchain_extent.height);
+  const RHIExtent2D output_extent = _runtime_output.extent();
+  if ((output_extent.width > 0u) && (output_extent.height > 0u)) {
+    recreate_scene_targets(output_extent.width, output_extent.height);
   }
 
   bool base_pipeline_ok = recreate_base_pipeline();
@@ -1701,11 +1763,15 @@ void PlaygroundApp::init_internal(uint32_t width, uint32_t height, const void* n
     return;
   }
 
-  if (_headless) {
-    _rhi.initialize_headless();
-    _rhi.resize_swapchain(_width, _height);
-  } else {
-    _rhi.create_swapchain(native_window, _width, _height);
+  RuntimeOutputConfig runtime_output_config = {
+    .mode = _headless ? RuntimeMode::Headless : RuntimeMode::Desktop,
+    .width = _width,
+    .height = _height,
+    .native_window = native_window,
+  };
+  if (_runtime_output.init(_rhi, runtime_output_config) == false) {
+    log::error("Playground: failed to initialize runtime output");
+    return;
   }
 
   const RHICapabilities capabilities = _rhi.capabilities();
@@ -1728,9 +1794,6 @@ void PlaygroundApp::init_internal(uint32_t width, uint32_t height, const void* n
 
   ShaderCompiler::instance().initialize();
   sync_swapchain_dependent_resources();
-  if (_headless) {
-    recreate_headless_present_target(_width, _height);
-  }
 
   bool generated_sky_envmap_valid = create_sun_sky_textures();
   if (generated_sky_envmap_valid == false) {
@@ -1979,11 +2042,7 @@ void PlaygroundApp::cleanup() {
   if (_depth_msaa_buffer.valid()) {
     _rhi.device().destroy_texture(_depth_msaa_buffer);
   }
-  if (_headless_present_texture.valid()) {
-    _rhi.device().destroy_texture(_headless_present_texture);
-    _headless_present_texture = {};
-  }
-  _rhi.destroy_swapchain();
+  _runtime_output.shutdown(_rhi);
   ShaderCompiler::instance().shutdown();
 }
 
@@ -2000,14 +2059,11 @@ void PlaygroundApp::frame() {
   if ((w != _width) || (h != _height)) {
     _width = w;
     _height = h;
-    _rhi.resize_swapchain(_width, _height);
+    _runtime_output.resize(_rhi, _width, _height);
     sync_scene_targets_to_swapchain_extent();
-    if (_headless) {
-      recreate_headless_present_target(_width, _height);
-    }
   }
 
-  _rhi.begin_frame();
+  _runtime_output.begin_frame(_rhi);
   sync_swapchain_dependent_resources();
   sync_scene_targets_to_swapchain_extent();
   poll_gpu_timing_results();
@@ -2022,17 +2078,15 @@ void PlaygroundApp::frame() {
     apply_ocean_fft_resolution(_pending_ocean_fft_resolution);
   }
 
-  const RHIExtent2D swapchain_extent = _rhi.get_swapchain_extent();
-  if ((swapchain_extent.width == 0u) || (swapchain_extent.height == 0u)) {
+  const RuntimeOutputTarget output_target = _runtime_output.acquire_target(_rhi);
+  if ((output_target.valid() == false) || (output_target.width == 0u) || (output_target.height == 0u)) {
+    _runtime_output.submit_frame(_rhi, {});
     return;
   }
 
-  const uint32_t render_width = (_render_width > 0u) ? _render_width : swapchain_extent.width;
-  const uint32_t render_height = (_render_height > 0u) ? _render_height : swapchain_extent.height;
-  RHITexture swapchain_texture = _headless ? _headless_present_texture : _rhi.get_current_swapchain_texture();
-  if (swapchain_texture.valid() == false) {
-    return;
-  }
+  const uint32_t render_width = (_render_width > 0u) ? _render_width : output_target.width;
+  const uint32_t render_height = (_render_height > 0u) ? _render_height : output_target.height;
+  RHITexture swapchain_texture = output_target.texture;
 
   RHICommandBuffer cmd = _rhi.get_command_buffer();
   _rhi.command_buffer_begin(cmd);
@@ -2382,7 +2436,7 @@ void PlaygroundApp::frame() {
     tonemap_pc.hdr_texture_index = get_bindless_descriptor_index(_scene_color_buffer);
     tonemap_pc.sampler_index = _rhi.get_sampler_index(RHISamplerType::LinearClamp);
     tonemap_pc.exposure = _tonemap_exposure;
-    tonemap_pc.output_gamma_encode = texture_format_is_srgb(_rhi.get_swapchain_format()) ? 0u : 1u;
+    tonemap_pc.output_gamma_encode = texture_format_is_srgb(_runtime_output.output_format()) ? 0u : 1u;
     _rhi.cmd_push_constants(cmd, &tonemap_pc, sizeof(TonemapPushConstants), 0);
     _rhi.cmd_draw(cmd, {.vertex_count = 3, .instance_count = 1});
     write_gpu_timestamp(k_gpu_timing_query_after_tonemap);
@@ -2406,13 +2460,10 @@ void PlaygroundApp::frame() {
   write_gpu_timestamp(k_gpu_timing_query_frame_end);
   _rhi.command_buffer_end(cmd);
 
-  _rhi.submit_frame_command_buffer(cmd);
+  _runtime_output.submit_frame(_rhi, cmd);
   enqueue_gpu_timing_request(cmd);
   if (_ocean_obj_export.capture_recorded) {
     finalize_ocean_obj_export_capture();
-  }
-  if (_headless == false) {
-    _rhi.present();
   }
 }
 
@@ -2425,6 +2476,101 @@ void PlaygroundApp::process_event(const sapp_event* e) {
   if ((event_handled == false) && (imgui_wants_mouse == false) && (imgui_wants_keyboard == false)) {
     _camera_controller.handle_event(e);
   }
+}
+
+void PlaygroundApp::process_browser_input_event(const BrowserInputEvent& event) {
+  switch (event.type) {
+    case BrowserInputEventType::MouseMove: {
+      _camera_controller.add_mouse_delta(event.delta_x, event.delta_y);
+      break;
+    }
+
+    case BrowserInputEventType::MouseButton: {
+      uint32_t mouse_button = 0u;
+      if (event.mouse_button == 0u) {
+        mouse_button = CameraController::MouseLeft;
+      } else if (event.mouse_button == 1u) {
+        mouse_button = CameraController::MouseMiddle;
+      } else if (event.mouse_button == 2u) {
+        mouse_button = CameraController::MouseRight;
+      }
+
+      if (mouse_button > 0u) {
+        _camera_controller.set_mouse_button_state(mouse_button, event.pressed);
+      }
+      break;
+    }
+
+    case BrowserInputEventType::MouseWheel: {
+      _camera_controller.handle_scroll(event.wheel_delta);
+      break;
+    }
+
+    case BrowserInputEventType::Key: {
+      if (event.key_code > 0u) {
+        _camera_controller.set_key_state(event.key_code, event.pressed);
+      }
+      break;
+    }
+
+    case BrowserInputEventType::Focus: {
+      if (event.focused == false) {
+        _camera_controller.clear_input_state();
+      }
+      break;
+    }
+
+    default:
+      break;
+  }
+}
+
+bool PlaygroundApp::capture_headless_frame_bgra(std::vector<uint8_t>& bgra_data, uint32_t& width, uint32_t& height) {
+  bgra_data.clear();
+  width = 0u;
+  height = 0u;
+
+  if ((_headless == false) || (_rhi.valid() == false)) {
+    return false;
+  }
+
+  const RHITexture output_texture = _runtime_output.offscreen_texture();
+  const RHIExtent2D output_extent = _runtime_output.extent();
+  const RHITextureFormat output_format = _runtime_output.output_format();
+  if ((output_texture.valid() == false) || (output_extent.width == 0u) || (output_extent.height == 0u)) {
+    return false;
+  }
+
+  if (read_texture_to_bgra8_buffer(_rhi, output_texture, output_extent, output_format, bgra_data) == false) {
+    return false;
+  }
+
+  width = output_extent.width;
+  height = output_extent.height;
+  return true;
+}
+
+bool PlaygroundApp::capture_headless_frame_png(std::vector<uint8_t>& png_data, uint32_t& width, uint32_t& height) {
+  png_data.clear();
+  width = 0u;
+  height = 0u;
+
+  std::vector<uint8_t> bgra_pixels = {};
+  if (capture_headless_frame_bgra(bgra_pixels, width, height) == false) {
+    return false;
+  }
+
+  std::vector<uint8_t> rgba_pixels = bgra_pixels;
+  for (size_t pixel_index = 0u; pixel_index < rgba_pixels.size(); pixel_index += 4u) {
+    std::swap(rgba_pixels[pixel_index + 0u], rgba_pixels[pixel_index + 2u]);
+  }
+
+  if (stbi_write_png_to_func(append_png_bytes, &png_data, static_cast<int>(width), static_cast<int>(height), 4, rgba_pixels.data(),
+        static_cast<int>(width * 4u)) == 0) {
+    log::error("Playground browser capture: failed to encode PNG");
+    return false;
+  }
+  return true;
 }
 
 }  // namespace etx

@@ -16,7 +16,9 @@
 #include <etx/rhi/rhi.hxx>
 #include <etx/rhi/rhi_imgui.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
+#include <etx/engine/browser_stream_server.hxx>
 #include <etx/engine/camera_controller.hxx>
+#include <etx/engine/runtime_output.hxx>
 #include "envmap.hxx"
 #include "ocean.hxx"
 
@@ -24,6 +26,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace etx {
 
@@ -43,11 +46,13 @@ struct PlaygroundApp {
   void frame_headless(float delta_time = 1.0f / 60.0f, float dpi_scale = 1.0f);
   void cleanup();
   void process_event(const sapp_event* e);
+  void process_browser_input_event(const BrowserInputEvent& event);
+  bool capture_headless_frame_bgra(std::vector<uint8_t>& bgra_data, uint32_t& width, uint32_t& height);
+  bool capture_headless_frame_png(std::vector<uint8_t>& png_data, uint32_t& width, uint32_t& height);
   bool initialized() const;
 
  private:
   void init_internal(uint32_t width, uint32_t height, const void* native_window, bool headless);
-  bool recreate_headless_present_target(uint32_t width, uint32_t height);
   void recreate_scene_targets(uint32_t width, uint32_t height);
   void sync_scene_targets_to_swapchain_extent();
   bool recreate_tonemap_pipeline();
@@ -69,12 +74,12 @@ struct PlaygroundApp {
   void finalize_ocean_obj_export_capture();
 
   RHIContext _rhi;
+  RuntimeOutput _runtime_output;
   RHIImGui _imgui;
   RHIPipeline _pipeline;
   RHIPipeline _compute_pipeline;
   RHIPipeline _tonemap_pipeline;
   RHIPipeline _sun_sprite_pipeline;
-  RHITexture _headless_present_texture;
   RHIBindlessHandle _vertex_buffer;
   RHIBindlessHandle _index_buffer;
   RHIBindlessHandle _test_storage_texture;

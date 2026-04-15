@@ -49,6 +49,7 @@ struct RenderContextImpl {
 
   TaskScheduler& scheduler;
   RHIContext rhi_context = {};
+  RuntimeOutput runtime_output = {};
   RHIImGui rhi_imgui = {};
   RHICommandBuffer rhi_cmd = {};
   RHIPipeline presentation_pipeline = {};
@@ -109,11 +110,15 @@ RHIDevice& RenderContext::get_device() {
 
 RHITextureFormat RenderContext::get_swapchain_format() {
   ETX_ASSERT(_private->rhi_context.valid());
-  return _private->rhi_context.get_swapchain_format();
+  return _private->runtime_output.output_format();
 }
 
 RHITextureFormat RenderContext::get_depth_format() {
   return RHITextureFormat::D32_FLOAT;
+}
+
+RuntimeMode RenderContext::runtime_mode() const {
+  return _private->runtime_output.mode();
 }
 
 void RenderContext::init() {
@@ -142,18 +147,23 @@ void RenderContext::init() {
     return;
   }
 
+  RuntimeOutputConfig runtime_output_config = {
+    .mode = RuntimeMode::Desktop,
+    .width = static_cast<uint32_t>(sapp_width()),
+    .height = static_cast<uint32_t>(sapp_height()),
+    .native_window = native_window,
+  };
+  if (_private->runtime_output.init(_private->rhi_context, runtime_output_config) == false) {
+    return;
+  }
+
   const RHICapabilities capabilities = _private->rhi_context.capabilities();
   log::info("RenderContext RHI backend: %s (swapchain=%u, bindless=%u, timestamps=%u, ray_tracing=%u)", backend_name(backend),
     static_cast<uint32_t>(capabilities.supports_swapchain), static_cast<uint32_t>(capabilities.supports_bindless), static_cast<uint32_t>(capabilities.supports_timestamps),
     static_cast<uint32_t>(capabilities.supports_ray_tracing));
 
-  {
-    ETX_PROFILER_NAMED_SCOPE("render_context_create_swapchain");
-    _private->rhi_context.create_swapchain(native_window, static_cast<uint32_t>(sapp_width()), static_cast<uint32_t>(sapp_height()));
-  }
-
-  static RHIImGuiDesc imgui_desc = {
-    .color_format = _private->rhi_context.get_swapchain_format(),
+  const RHIImGuiDesc imgui_desc = {
+    .color_format = _private->runtime_output.output_format(),
     .ini_filename = env().file_in_data("ui.ini"),
   };
   {
@@ -176,7 +186,7 @@ void RenderContext::init() {
 
   RHIGraphicsPipelineDesc pipeline_desc = {
     .color_attachment_count = 1,
-    .color_formats = {_private->rhi_context.get_swapchain_format()},
+    .color_formats = {_private->runtime_output.output_format()},
   };
 
   {
@@ -211,6 +221,8 @@ void RenderContext::cleanup() {
     _private->image_pool.remove(_private->reference_image_handle);
     _private->image_pool.cleanup();
   }
+
+  _private->runtime_output.shutdown(_private->rhi_context);
 
   _private->rhi_context = {};
   _private->rhi_cmd = {};
@@ -282,7 +294,7 @@ void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, 
 
   {
     ETX_PROFILER_NAMED_SCOPE("render_context_renderer_render");
-    _private->rhi_context.begin_frame();
+    _private->runtime_output.begin_frame(_private->rhi_context);
     render_frame_data.cmd = _private->rhi_context.get_command_buffer();
     _private->rhi_cmd = render_frame_data.cmd;
     _private->rhi_context.command_buffer_begin(_private->rhi_cmd);
@@ -298,26 +310,34 @@ void RenderContext::end_frame() {
   if (_private->rhi_context.valid() == false)
     return;
 
+  const RuntimeOutputTarget output_target = _private->runtime_output.acquire_target(_private->rhi_context);
+  if ((output_target.valid() == false) || (output_target.width == 0u) || (output_target.height == 0u)) {
+    _private->rhi_context.command_buffer_end(_private->rhi_cmd);
+    _private->runtime_output.submit_frame(_private->rhi_context, _private->rhi_cmd);
+    _private->rhi_cmd = {};
+    return;
+  }
+
   {
     ETX_PROFILER_NAMED_SCOPE("render_context_begin_present_pass");
     float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    RHITexture swapchain_image = _private->rhi_context.get_current_swapchain_texture();
-    _private->rhi_context.cmd_begin_render_pass(_private->rhi_cmd, 1, &swapchain_image, clear_color);
+    RHITexture output_texture = output_target.texture;
+    _private->rhi_context.cmd_begin_render_pass(_private->rhi_cmd, 1, &output_texture, clear_color);
   }
 
   RHITexture output = _private->active_renderer ? _private->active_renderer->output_texture() : RHITexture{};
 
   if (output.valid()) {
     ETX_PROFILER_NAMED_SCOPE("render_context_draw_present_quad");
-    const RHIViewport viewport = {.width = float(sapp_width()), .height = float(sapp_height())};
-    const RHIRect scissor = {.width = uint32_t(sapp_width()), .height = uint32_t(sapp_height())};
+    const RHIViewport viewport = {.width = float(output_target.width), .height = float(output_target.height)};
+    const RHIRect scissor = {.width = output_target.width, .height = output_target.height};
     _private->rhi_context.cmd_set_viewport(_private->rhi_cmd, viewport);
     _private->rhi_context.cmd_set_scissor(_private->rhi_cmd, scissor);
 
     uint2 output_size = _private->active_renderer->output_size();
     RenderParameters params = {
       .view = _private->frame_data.view_parameters,
-      .dimensions = {float(sapp_width()), float(sapp_height()), float(output_size.x), float(output_size.y)},
+      .dimensions = {float(output_target.width), float(output_target.height), float(output_size.x), float(output_size.y)},
       .sample_count = _private->frame_data.sample_count,
       .sample_image_index = get_bindless_descriptor_index(output),
       .reference_image_index = _private->reference_texture.valid() ? get_bindless_descriptor_index(_private->reference_texture) : ~0u,
@@ -336,9 +356,7 @@ void RenderContext::end_frame() {
     ETX_PROFILER_NAMED_SCOPE("render_context_submit_and_present");
     _private->rhi_context.cmd_end_render_pass(_private->rhi_cmd);
     _private->rhi_context.command_buffer_end(_private->rhi_cmd);
-
-    _private->rhi_context.submit_frame_command_buffer(_private->rhi_cmd);
-    _private->rhi_context.present();
+    _private->runtime_output.submit_frame(_private->rhi_context, _private->rhi_cmd);
   }
   _private->rhi_cmd = {};
 }

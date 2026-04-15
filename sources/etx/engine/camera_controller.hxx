@@ -10,6 +10,11 @@ namespace etx {
 struct CameraController {
   static constexpr float kMaxCameraDistance = 8192.0f;
   static constexpr float kMinCameraDistance = 1.0f / 255.0f;
+  enum MouseButton : uint32_t {
+    MouseLeft = 1u << 0u,
+    MouseMiddle = 1u << 1u,
+    MouseRight = 1u << 2u,
+  };
 
   bool enable_inertia = true;
 
@@ -170,6 +175,38 @@ struct CameraController {
     _mouse_delta.z += kScrollScaleFactor * scroll;
   }
 
+  void set_key_state(uint32_t key_code, bool pressed) {
+    if (key_code >= 512u) {
+      return;
+    }
+
+    _keys[key_code] = pressed;
+  }
+
+  void set_mouse_button_state(uint32_t button, bool pressed) {
+    if (pressed) {
+      _mouse_buttons = _mouse_buttons | button;
+      return;
+    }
+
+    _mouse_buttons = _mouse_buttons & (~button);
+  }
+
+  void add_mouse_delta(float dx, float dy) {
+    _mouse_delta.x += dx;
+    _mouse_delta.y += dy;
+  }
+
+  void clear_input_state() {
+    for (bool& key : _keys) {
+      key = false;
+    }
+
+    _mouse_delta = {};
+    _mouse_buttons = 0u;
+    reset_velocities();
+  }
+
   void handle_event(const sapp_event* e) {
     switch (e->type) {
       case SAPP_EVENTTYPE_MOUSE_SCROLL: {
@@ -218,12 +255,7 @@ struct CameraController {
       }
 
       case SAPP_EVENTTYPE_UNFOCUSED: {
-        for (bool& k : _keys) {
-          k = false;
-        }
-        _mouse_delta = {};
-        _mouse_buttons = 0;
-        reset_velocities();
+        clear_input_state();
         break;
       }
 
@@ -424,12 +456,6 @@ struct CameraController {
   }
 
  private:
-  enum : uint32_t {
-    MouseLeft = 1u << 0u,
-    MouseMiddle = 1u << 1u,
-    MouseRight = 1u << 2u,
-  };
-
   Camera& _camera;
   bool _keys[512] = {};
   float3 _mouse_delta = {};

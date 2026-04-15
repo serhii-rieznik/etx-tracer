@@ -3,6 +3,7 @@
 #include <etx/render/interop/interop.hxx>
 
 #include <etx/core/pimpl.hxx>
+#include <etx/engine/runtime_output.hxx>
 #include <etx/rhi/rhi_types.hxx>
 #include <etx/rhi/rhi.hxx>
 #include "options.hxx"
@@ -37,6 +38,7 @@ struct RenderContext {
   RHIDevice& get_device();
   RHITextureFormat get_swapchain_format();
   RHITextureFormat get_depth_format();
+  RuntimeMode runtime_mode() const;
 
   void set_reference_image(const char*);
   void set_reference_image(const float4 data[], const uint2 dimensions);

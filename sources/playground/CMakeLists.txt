@@ -28,6 +28,7 @@ target_include_directories(playground
     PRIVATE "${CMAKE_SOURCE_DIR}/bin"
     PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
     PRIVATE "${CMAKE_SOURCE_DIR}/thirdparty/imgui"
+    PRIVATE "${CMAKE_SOURCE_DIR}/thirdparty/stb_image"
     PRIVATE "${CMAKE_SOURCE_DIR}/thirdparty/sokol")
 
 set_target_properties(playground PROPERTIES
