@@ -338,7 +338,11 @@ ETX_SHARED_INLINE float bsdf_external_gamma(float x) {
 }
 
 ETX_SHARED_INLINE float bsdf_external_beta(float m, float n) {
+#if (ETX_CPP)
+  return exp(lgamma(m) + lgamma(n) - lgamma(m + n));
+#else
   return bsdf_external_gamma(m) * bsdf_external_gamma(n) / bsdf_external_gamma(m + n);
+#endif
 }
 
 ETX_SHARED_INLINE float3 bsdf_external_refract(ETX_IN(float3, wi), ETX_IN(float3, wm), float eta) {

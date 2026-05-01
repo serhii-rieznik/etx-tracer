@@ -303,7 +303,8 @@ ETX_SHARED_INLINE SpectralResponse evaluate_light(const Scene& scene, const Inte
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   auto pos = shading_pos(scene, tri, intersection.barycentric, emitter_sample.direction);
-  auto tr = rt.trace_transmittance(spect, scene, pos, emitter_sample.origin, {.index = medium}, smp);
+  const uint32_t shadow_medium = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : medium;
+  auto tr = rt.trace_transmittance(spect, scene, pos, emitter_sample.origin, {.index = shadow_medium}, smp);
   ETX_VALIDATE(tr);
 
   bool no_weight = (mis == false) || emitter_sample.is_delta;
@@ -489,7 +490,8 @@ ETX_SHARED_INLINE void handle_missed_ray(const Scene& scene, PTRayPayload& paylo
     ETX_VALIDATE(e);
     if ((pdf_emitter_dir > 0) && (e.is_zero() == false)) {
       float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance);
-      auto weight = ((payload.mis_weight == false) || q.directly_visible) ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
+      bool no_weight = ((scene.multiple_importance_sampling() == false) || q.directly_visible || (payload.mis_weight == false));
+      auto weight = no_weight ? 1.0f : power_heuristic(payload.sampled_bsdf_pdf, pdf_emitter_discrete * pdf_emitter_dir);
       payload.accumulated += payload.throughput * e * weight;
       ETX_VALIDATE(payload.accumulated);
     }

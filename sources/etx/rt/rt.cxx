@@ -93,6 +93,7 @@ struct RaytracingImpl {
     scene.meshes = {scene_data.meshes.data(), scene_data.meshes.size()};
     scene.materials = {scene_data.materials.data(), scene_data.materials.size()};
     scene.mediums = {scene_data.mediums.as_array(), scene_data.mediums.array_size()};
+    scene.energy_compensation_interfaces = {scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
     scene.emitter_profiles = {internal_data.emitter_profiles.data(), internal_data.emitter_profiles.size()};
     scene.emitter_instances = {internal_data.emitter_instances.data(), internal_data.emitter_instances.size()};
     scene.pixel_sampler = scene_data.pixel_filter;

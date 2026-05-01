@@ -12,6 +12,8 @@ set(RAYTRACER_SHARED_SOURCES
   headless_render_context.cxx
   batch_mode.hxx
   batch_mode.cxx
+  bsdf_lut_generation.hxx
+  bsdf_lut_generation.cxx
   gpu_renderer.hxx
   gpu_renderer.cxx
   raster_renderer.cxx

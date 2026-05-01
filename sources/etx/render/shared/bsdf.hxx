@@ -61,6 +61,8 @@ struct BSDFEval {
   SpectralResponse bsdf = {};
   float pdf = 0.0f;
   float eta = 1.0f;
+  uint32_t properties = 0u;
+  uint32_t medium_index = kInvalidIndex;
 
   ETX_SHARED_INLINE bool valid() const {
     return (pdf > 0.0f);
@@ -352,7 +354,7 @@ ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_thet
   ETX_ASSERT(spect.wavelength == int_ior.eta.wavelength);
   ETX_ASSERT(spect.wavelength == int_ior.k.wavelength);
 
-  cos_theta = fabsf(cos_theta);
+  cos_theta = min(1.0f, max(0.0f, fabsf(cos_theta)));
 
   SpectralResponse result = {spect, 0.0f};
 

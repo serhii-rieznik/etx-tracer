@@ -88,21 +88,6 @@
                 "panel": "shared"
             },
             "problemMatcher": []
-        },
-        {
-            "label": "Stream Playground Metal Logs",
-            "type": "shell",
-            "osx": {
-                "command": "/usr/bin/log stream --style compact --level debug --predicate 'process == \"playground_app\"'"
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "dedicated"
-            },
-            "problemMatcher": [],
-            "isBackground": true
         }
     ]
 }

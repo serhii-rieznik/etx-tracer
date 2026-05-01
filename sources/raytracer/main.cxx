@@ -4,6 +4,7 @@
 
 #include "app.hxx"
 #include "batch_mode.hxx"
+#include "bsdf_lut_generation.hxx"
 
 #include <cstdio>
 #include <cstring>
@@ -31,6 +32,15 @@ extern "C" int main(int argc, char* argv[]) {
   }
   if (batch_command == BatchModeCommand::Run) {
     return run_batch_render(batch_options);
+  }
+  if (batch_command == BatchModeCommand::GenerateBSDFLuts) {
+    BSDFLutGenerationOptions lut_options = {};
+    lut_options.output_directory = batch_options.output_file;
+    lut_options.sample_count = batch_options.bsdf_lut_samples;
+    return generate_bsdf_energy_compensation_luts(lut_options) ? 0 : 1;
+  }
+  if (batch_command == BatchModeCommand::PregenerateBSDFLutCache) {
+    return pregenerate_named_bsdf_energy_compensation_lut_cache() ? 0 : 1;
   }
 
   RTApplication rhi_app = {};

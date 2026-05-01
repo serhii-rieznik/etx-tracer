@@ -65,6 +65,8 @@ ETX_SHARED_INLINE bool interop_supported(const Material& mtl) {
     case MaterialClass::Translucent:
     case MaterialClass::Conductor:
     case MaterialClass::Dielectric:
+    case MaterialClass::ConductorEnergyCompensated:
+    case MaterialClass::DielectricEnergyCompensated:
     case MaterialClass::Plastic:
     case MaterialClass::Thinfilm:
     case MaterialClass::Mirror:
@@ -122,6 +124,8 @@ ETX_SHARED_INLINE BSDFEval make_public_eval(const ::BSDFEval& value) {
   result.bsdf = make_public_response(value.bsdf);
   result.pdf = value.pdf;
   result.eta = value.eta;
+  result.properties = value.properties;
+  result.medium_index = value.medium_index;
   return result;
 }
 
@@ -139,7 +143,9 @@ ETX_SHARED_INLINE BSDFSample make_public_sample(const ::BSDFSample& value) {
 
 ETX_SHARED_INLINE BSDFResourceContext make_interop_context() {
   const Scene& scene = scene_global_get();
-  return make_bsdf_resource_cpu_context(scene);
+  BSDFResourceContext result = make_bsdf_resource_cpu_context(scene);
+  result.energy_compensated_specular = scene.energy_compensated_specular();
+  return result;
 }
 
 [[nodiscard]] ETX_SHARED_INLINE BSDFSample sample_interop(const BSDFData& data, const Material& mtl, Sampler& smp) {

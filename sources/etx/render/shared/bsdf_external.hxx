@@ -465,7 +465,7 @@ ETX_SHARED_INLINE float MISweight_dielectric(const float3& wi, const float3& wo,
 
 ETX_SHARED_INLINE SpectralResponse eval_dielectric(const SpectralQuery spect, Sampler& smp, const float3& wi, const float3& wo, const bool wo_outside, const float2& alpha,
   const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinFilmEval& thinfilm) {
-  if ((wi.z <= 0) || (wo.z <= 0 && wo_outside) || (wo.z >= 0 && !wo_outside))
+  if ((wi.z <= 0.0f) || ((wo.z <= 0.0f) && wo_outside) || ((wo.z >= 0.0f) && (wo_outside == false)))
     return {spect, 0.0f};
 
   // init

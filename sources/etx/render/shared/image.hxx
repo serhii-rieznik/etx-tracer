@@ -117,6 +117,33 @@ struct Image {
     return g.p00 + g.p01 + g.p10 + g.p11;
   }
 
+  ETX_SHARED_INLINE float4 evaluate_rgba32f_fast(const float2& in_uv) const {
+    ETX_ASSERT(format == Format::RGBA32F);
+    ETX_ASSERT(pixels.f32.a != nullptr);
+    ETX_ASSERT((isize.x > 0u) && (isize.y > 0u));
+
+    const float2 uv = in_uv * fsize;
+    const float x0 = tex_coord_u(uv.x, fsize.x);
+    const float y0 = tex_coord_v(uv.y, fsize.y);
+    const float dx = x0 - floorf(x0);
+    const float dy = y0 - floorf(y0);
+
+    const uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.y - 1u);
+    const uint32_t row_1 = clamp(row_0 + 1u, 0u, isize.y - 1u);
+    const uint32_t col_0 = clamp(static_cast<uint32_t>(x0), 0u, isize.x - 1u);
+    const uint32_t col_1 = clamp(col_0 + 1u, 0u, isize.x - 1u);
+
+    const float wx0 = 1.0f - dx;
+    const float wy0 = 1.0f - dy;
+    const uint32_t row_offset_0 = row_0 * isize.x;
+    const uint32_t row_offset_1 = row_1 * isize.x;
+    const float4 p00 = pixels.f32.a[row_offset_0 + col_0] * (wx0 * wy0);
+    const float4 p01 = pixels.f32.a[row_offset_0 + col_1] * (dx * wy0);
+    const float4 p10 = pixels.f32.a[row_offset_1 + col_0] * (wx0 * dy);
+    const float4 p11 = pixels.f32.a[row_offset_1 + col_1] * (dx * dy);
+    return p00 + p01 + p10 + p11;
+  }
+
   ETX_SHARED_INLINE float evaluate_alpha(const float2& in_uv) const {
     auto g = gather(in_uv);
     return g.p00.w + g.p01.w + g.p10.w + g.p11.w;

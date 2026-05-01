@@ -132,8 +132,22 @@ ETX_SHARED_INLINE BSDFEval bsdf_conductor_evaluate(ETX_IN(BSDFResourceContext, c
   SpectralResponse value = bsdf_external_eval_conductor(data.spectrum_sample, sampler, w_i, w_o, roughness, ext_ior, int_ior, thinfilm);
   BSDFEval result = ETX_ZERO(BSDFEval);
   result.bsdf = spectral_response_mul(value, bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex));
+  if ((isfinite(result.bsdf.integrated.x) == false) || (isfinite(result.bsdf.integrated.y) == false) || (isfinite(result.bsdf.integrated.z) == false) ||
+      (isfinite(result.bsdf.value) == false)) {
+    return bsdf_eval_zero(data.spectrum_sample);
+  }
+
   result.func = spectral_response_div(result.bsdf, w_o.z);
+  if ((isfinite(result.func.integrated.x) == false) || (isfinite(result.func.integrated.y) == false) || (isfinite(result.func.integrated.z) == false) ||
+      (isfinite(result.func.value) == false)) {
+    return bsdf_eval_zero(data.spectrum_sample);
+  }
+
   result.pdf = bsdf_conductor_pdf_local(w_i, w_o, roughness);
+  if ((isfinite(result.pdf) == false) || (result.pdf <= 0.0f)) {
+    return bsdf_eval_zero(data.spectrum_sample);
+  }
+
   result.eta = 1.0f;
   return result;
 }

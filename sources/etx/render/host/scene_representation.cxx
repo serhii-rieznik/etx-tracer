@@ -13,6 +13,7 @@
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
+#include <etx/render/host/bsdf_energy_compensation_lut.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
@@ -28,6 +29,14 @@
 namespace etx {
 
 namespace {
+
+constexpr float kDefaultCameraClipNear = 0.1f;
+constexpr float kDefaultCameraClipFar = 1000.0f;
+
+void sanitize_camera_clip_planes(Camera& camera) {
+  camera.clip_near = (camera.clip_near > 0.0f) ? camera.clip_near : kDefaultCameraClipNear;
+  camera.clip_far = (camera.clip_far > camera.clip_near) ? camera.clip_far : max(camera.clip_near + 0.001f, kDefaultCameraClipFar);
+}
 
 Integrator::Type legacy_integrator_selection_to_type(const std::string& type_id) {
   if (type_id == "bdpt_distilled") {
@@ -99,6 +108,8 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "velvet",
     "principled",
     "void",
+    "conductor_energy_compensated",
+    "dielectric_energy_compensated",
     "undefined",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(MaterialClass::Count) + 1);
@@ -175,6 +186,7 @@ struct SceneRepresentationImpl {
     data.options.properties[Scene::Properties::Spectral] = false;
     data.options.properties[Scene::Properties::MultipleImportanceSampling] = true;
     data.options.properties[Scene::Properties::BlueNoise] = true;
+    data.options.properties[Scene::Properties::EnergyCompensatedSpecular] = false;
 
     data.defaults.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
     data.materials[data.defaults.subsurface_scatter_material].reflectance = {.spectrum_index = data.defaults.black_spectrum};
@@ -237,7 +249,7 @@ struct SceneRepresentationImpl {
         }
         if (mtl.int_ior.eta_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          if (mtl.cls == MaterialClass::Conductor) {
+          if ((mtl.cls == MaterialClass::Conductor) || (mtl.cls == MaterialClass::ConductorEnergyCompensated)) {
             mtl.int_ior.cls = SpectralDistribution::Conductor;
             mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
           } else {
@@ -247,7 +259,7 @@ struct SceneRepresentationImpl {
         }
         if (mtl.int_ior.k_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          if (mtl.cls == MaterialClass::Conductor) {
+          if ((mtl.cls == MaterialClass::Conductor) || (mtl.cls == MaterialClass::ConductorEnergyCompensated)) {
             mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
           } else {
             mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
@@ -505,6 +517,8 @@ struct SceneRepresentationImpl {
 };
 
 void build_camera(Camera& camera, const float3& position, const float3& direction, const float3& up, const uint2& viewport, const float fov) {
+  sanitize_camera_clip_planes(camera);
+
   float3 target = position + direction;
 
   float4x4 view = look_at(position, target, up);
@@ -1031,6 +1045,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
       } else if (json_get_bool(i, "blue_noise", bool_value)) {
         _private->data.options.properties[Scene::Properties::BlueNoise] = bool_value;
+      } else if (json_get_bool(i, "energy_compensated_specular", bool_value)) {
+        _private->data.options.properties[Scene::Properties::EnergyCompensatedSpecular] = bool_value;
       } else if (json_get_string(i, "light_sampling", str_value)) {
         if (str_value == "uniform") {
           _private->data.options.light_sampling = Scene::LightSampling::Uniform;
@@ -1065,6 +1081,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
             _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = strat_value;
           } else if (strat_key == "blue_noise") {
             _private->data.options.properties[Scene::Properties::BlueNoise] = strat_value;
+          } else if (strat_key == "energy_compensated_specular") {
+            _private->data.options.properties[Scene::Properties::EnergyCompensatedSpecular] = strat_value;
           }
         }
         _private->data.options.strategy_flags = strategy_flags;
@@ -1393,6 +1411,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   js["spectral"] = impl->data.options.properties[Scene::Properties::Spectral];
   js["multiple_importance_sampling"] = impl->data.options.properties[Scene::Properties::MultipleImportanceSampling];
   js["blue_noise"] = impl->data.options.properties[Scene::Properties::BlueNoise];
+  js["energy_compensated_specular"] = impl->data.options.properties[Scene::Properties::EnergyCompensatedSpecular];
 
   switch (impl->data.options.light_sampling) {
     case Scene::LightSampling::Uniform:
@@ -1749,7 +1768,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "material class " << material_class_to_string(material.cls) << "\n";
 
     write_spectrum_line(materials_stream, "Kd", material.scattering.spectrum_index, true);
-    if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Translucent) || (material.transmission.value.x > kEpsilon)) {
+    if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::DielectricEnergyCompensated) || (material.cls == MaterialClass::Translucent) ||
+        (material.transmission.value.x > kEpsilon)) {
       write_spectrum_line(materials_stream, "Kt", material.scattering.spectrum_index, true);
     }
     write_spectrum_line(materials_stream, "Ks", material.reflectance.spectrum_index, true);
@@ -2002,6 +2022,10 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   validate_mediums();
 
   generate_pixel_sampler_image();
+
+  if (ensure_energy_compensation_interfaces(data, scheduler) == false) {
+    return false;
+  }
 
   data.images.load_images(scheduler);
 

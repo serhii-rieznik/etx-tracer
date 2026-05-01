@@ -153,6 +153,12 @@ bool Options::load_from_file(const std::string& filename) {
 
   options.clear();
   for (const auto& value : values) {
+    if ((value.is_object()) && (value.contains("id")) && (value.at("id").is_string())) {
+      const std::string id = value.at("id").get<std::string>();
+      if (id.empty() == false) {
+        remove(id);
+      }
+    }
     auto& option = options.emplace_back();
     option.deserialize(static_cast<const void*>(&value));
   }
@@ -176,6 +182,12 @@ bool Options::deserialize_from_json(const nlohmann::json& js) {
 
   options.clear();
   for (const auto& value : js) {
+    if ((value.is_object()) && (value.contains("id")) && (value.at("id").is_string())) {
+      const std::string id = value.at("id").get<std::string>();
+      if (id.empty() == false) {
+        remove(id);
+      }
+    }
     auto& option = options.emplace_back();
     option.deserialize(static_cast<const void*>(&value));
   }

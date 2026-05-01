@@ -25,6 +25,7 @@ struct SceneProperty {
     Spectral,
     MultipleImportanceSampling,
     BlueNoise,
+    EnergyCompensatedSpecular,
 
     Count,
   };

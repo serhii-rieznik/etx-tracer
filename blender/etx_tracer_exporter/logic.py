@@ -836,7 +836,7 @@ def _bake_procedural_textures(operator, materials, obj_path):
 
                 baked_paths = {}
                 for bake_type, filename in bake_targets:
-                img = bpy.data.images.new(
+                    img = bpy.data.images.new(
                         name=filename,
                         width=res,
                         height=res,

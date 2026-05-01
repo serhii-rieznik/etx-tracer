@@ -195,6 +195,7 @@ void SceneData::clear(TaskScheduler& scheduler) {
   spectrum_values.clear();
   images_vector.clear();
   mediums_vector.clear();
+  energy_compensation_interfaces.clear();
   spectrum_names.clear();
   material_mapping.clear();
   mesh_mapping.clear();
@@ -307,6 +308,12 @@ uint32_t SceneData::add_image(const char* path, uint32_t options) {
 
 void SceneData::add_image_options(uint32_t index, uint32_t options) {
   images.add_options(index, options);
+}
+
+uint32_t SceneData::add_energy_compensation_interface(const Scene::EnergyCompensationInterface& interface_data) {
+  const uint32_t index = static_cast<uint32_t>(energy_compensation_interfaces.size());
+  energy_compensation_interfaces.emplace_back(interface_data);
+  return index;
 }
 
 uint32_t SceneData::add_medium(Medium::Class cls, const char* name, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g,

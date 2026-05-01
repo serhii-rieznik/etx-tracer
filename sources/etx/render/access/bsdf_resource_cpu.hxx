@@ -10,6 +10,7 @@ struct Scene;
 
 struct BSDFResourceContext {
   const etx::Scene* scene = nullptr;
+  bool energy_compensated_specular = false;
 };
 
 ETX_SHARED_INLINE BSDFResourceContext make_bsdf_resource_cpu_context(const etx::Scene& scene) {

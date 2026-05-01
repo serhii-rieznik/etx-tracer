@@ -27,6 +27,29 @@ namespace {
 
 constexpr uint32_t kRecentFileLimit = 8u;
 
+std::string normalized_existing_scene_path(const std::string& value) {
+  if (value.empty()) {
+    return {};
+  }
+
+  std::filesystem::path path(env().resolve_to_absolute(value));
+  if (path.empty()) {
+    return {};
+  }
+
+  std::error_code ec = {};
+  if (std::filesystem::is_regular_file(path, ec) == false) {
+    return {};
+  }
+
+  const std::filesystem::path canonical_path = std::filesystem::weakly_canonical(path, ec);
+  if (ec.value() == 0) {
+    path = canonical_path;
+  }
+
+  return path.generic_string();
+}
+
 }
 
 RTApplication::RTApplication()
@@ -89,11 +112,6 @@ void RTApplication::init() {
     mode = RendererMode::Rasterization;
   }
   {
-    ETX_PROFILER_NAMED_SCOPE("app_set_initial_renderer_mode");
-    set_renderer_mode(mode);
-  }
-
-  {
     ETX_PROFILER_NAMED_SCOPE("app_bind_ui_callbacks");
     ui.callbacks.reference_image_selected = std::bind(&RTApplication::on_referenece_image_selected, this, std::placeholders::_1);
     ui.callbacks.save_image_selected = std::bind(&RTApplication::on_save_image_selected, this, std::placeholders::_1, std::placeholders::_2);
@@ -141,6 +159,11 @@ void RTApplication::init() {
         }
       }
     }
+  }
+
+  {
+    ETX_PROFILER_NAMED_SCOPE("app_set_initial_renderer_mode");
+    set_renderer_mode(mode);
   }
 
 #if defined(ETX_PLATFORM_WINDOWS)
@@ -369,17 +392,14 @@ void RTApplication::process_event(const sapp_event* e) {
 void RTApplication::add_to_recent(const std::string& value) {
   ETX_PROFILER_SCOPE();
 
-  if (value.empty()) {
-    return;
-  }
-
-  const std::string absolute_path = env().resolve_to_absolute(value);
+  const std::string absolute_path = normalized_existing_scene_path(value);
   if (absolute_path.empty()) {
     return;
   }
 
   auto e = std::remove_if(_recent_files.begin(), _recent_files.end(), [&](const std::string& entry) {
-    return env().resolve_to_absolute(entry) == absolute_path;
+    const std::string normalized_entry = normalized_existing_scene_path(entry);
+    return (normalized_entry.empty() || (normalized_entry == absolute_path));
   });
   _recent_files.erase(e, _recent_files.end());
 
@@ -393,7 +413,18 @@ void RTApplication::add_to_recent(const std::string& value) {
 void RTApplication::load_scene_file(const std::string& file_name, uint32_t options, bool start_rendering) {
   ETX_PROFILER_SCOPE();
 
-  _current_scene_file = env().resolve_to_absolute(file_name);
+  const std::string scene_file = normalized_existing_scene_path(file_name);
+  if (scene_file.empty()) {
+    log::error("Scene file does not exist: %s", file_name.c_str());
+    auto e = std::remove_if(_recent_files.begin(), _recent_files.end(), [&](const std::string& entry) {
+      return env().resolve_to_absolute(entry) == env().resolve_to_absolute(file_name);
+    });
+    _recent_files.erase(e, _recent_files.end());
+    save_options();
+    return;
+  }
+
+  _current_scene_file = scene_file;
 
   cpu_renderer.stop();
   _options.set_string("scene", _current_scene_file, "Scene");
@@ -756,7 +787,6 @@ void RTApplication::on_view_scene(uint32_t direction) {
 void RTApplication::on_clear_recent_files() {
   ETX_PROFILER_SCOPE();
   _recent_files.clear();
-  add_to_recent(_current_scene_file);
   save_options();
 }
 

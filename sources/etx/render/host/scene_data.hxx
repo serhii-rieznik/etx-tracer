@@ -145,6 +145,7 @@ struct SceneData {
   std::vector<SpectralDistribution> spectrum_values;
   std::vector<Image> images_vector;
   std::vector<Medium> mediums_vector;
+  std::vector<Scene::EnergyCompensationInterface> energy_compensation_interfaces;
 
   BufferPool buffer_pool;
   ImagePool images;
@@ -192,6 +193,8 @@ struct SceneData {
   uint32_t add_image(const Image& img);
   uint32_t add_image(const char* path, uint32_t options);
   void add_image_options(uint32_t index, uint32_t options);
+
+  uint32_t add_energy_compensation_interface(const Scene::EnergyCompensationInterface& interface_data);
 
   uint32_t add_medium(Medium::Class cls, const char* name, const char* volume_file, const SpectralDistribution& s_a, const SpectralDistribution& s_t, float g,
     bool explicit_connections);

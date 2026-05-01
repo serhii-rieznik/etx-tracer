@@ -307,13 +307,18 @@ const char* batch_usage_string() {
          "  raytracer --render --scene <scene-file> --output <output-file> [options]\n"
          "  raytracer --full-comparison --scene <scene-file> [options]\n"
          "  raytracer --cpu-comparison --scene <scene-file> [options]\n"
+         "  raytracer --generate-bsdf-luts [--output <output-directory>] [options]\n"
+         "  raytracer --pregenerate-bsdf-lut-cache\n"
          "\n"
          "Options:\n"
          "  --full-comparison\n"
          "  --cpu-comparison\n"
+         "  --generate-bsdf-luts\n"
+         "  --pregenerate-bsdf-lut-cache\n"
          "  --integrator <debug|pt|bdpt|vcm>\n"
          "  --renderer <cpu|gpu>\n"
          "  --samples <count>\n"
+         "  --bsdf-lut-samples <count>\n"
          "  --max-path-length <count>\n"
          "  --random-seed <value>\n"
          "  --resolution <width>x<height>\n"
@@ -2649,6 +2654,8 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
   bool render_requested = false;
   bool full_comparison_requested = false;
   bool cpu_comparison_requested = false;
+  bool generate_bsdf_luts_requested = false;
+  bool pregenerate_bsdf_lut_cache_requested = false;
   bool batch_argument_seen = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -2675,6 +2682,18 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     if (argument == "--cpu-comparison") {
       cpu_comparison_requested = true;
       options.cpu_comparison = true;
+      batch_argument_seen = true;
+      continue;
+    }
+
+    if (argument == "--generate-bsdf-luts") {
+      generate_bsdf_luts_requested = true;
+      batch_argument_seen = true;
+      continue;
+    }
+
+    if (argument == "--pregenerate-bsdf-lut-cache") {
+      pregenerate_bsdf_lut_cache_requested = true;
       batch_argument_seen = true;
       continue;
     }
@@ -2743,6 +2762,27 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
       }
       if (parse_u32_argument(argv[i + 1], options.samples) == false) {
         message = "Invalid value for --samples\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (argument == "--bsdf-lut-samples") {
+      batch_argument_seen = true;
+      if ((i + 1) >= argc) {
+        message = "Missing value for --bsdf-lut-samples\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      if (parse_u32_argument(argv[i + 1], options.bsdf_lut_samples) == false) {
+        message = "Invalid value for --bsdf-lut-samples\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      if (options.bsdf_lut_samples == 0u) {
+        message = "--bsdf-lut-samples must be greater than zero\n\n";
         message += batch_usage_string();
         return BatchModeCommand::Error;
       }
@@ -2900,20 +2940,49 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     return BatchModeCommand::Error;
   }
 
-  const uint32_t selected_batch_modes = uint32_t(render_requested) + uint32_t(full_comparison_requested) + uint32_t(cpu_comparison_requested);
+  const uint32_t selected_batch_modes =
+    uint32_t(render_requested) + uint32_t(full_comparison_requested) + uint32_t(cpu_comparison_requested) + uint32_t(generate_bsdf_luts_requested) +
+    uint32_t(pregenerate_bsdf_lut_cache_requested);
   if (selected_batch_modes > 1u) {
-    message = "Use exactly one of --render, --full-comparison, or --cpu-comparison\n\n";
+    message = "Use exactly one of --render, --full-comparison, --cpu-comparison, --generate-bsdf-luts, or --pregenerate-bsdf-lut-cache\n\n";
     message += batch_usage_string();
     return BatchModeCommand::Error;
   }
 
-  if ((render_requested == false) && (full_comparison_requested == false) && (cpu_comparison_requested == false)) {
+  if ((render_requested == false) && (full_comparison_requested == false) && (cpu_comparison_requested == false) && (generate_bsdf_luts_requested == false) &&
+      (pregenerate_bsdf_lut_cache_requested == false)) {
     if (batch_argument_seen) {
-      message = "Batch render options require --render, --full-comparison, or --cpu-comparison\n\n";
+      message = "Batch options require --render, --full-comparison, --cpu-comparison, --generate-bsdf-luts, or --pregenerate-bsdf-lut-cache\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
     }
     return BatchModeCommand::None;
+  }
+
+  if (generate_bsdf_luts_requested) {
+    if ((options.scene_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
+        (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) ||
+        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.denoise) || (options.override_random_seed) ||
+        (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.exposure != 1.0f)) {
+      message = "--generate-bsdf-luts accepts only --output and --bsdf-lut-samples\n\n";
+      message += batch_usage_string();
+      return BatchModeCommand::Error;
+    }
+
+    return BatchModeCommand::GenerateBSDFLuts;
+  }
+
+  if (pregenerate_bsdf_lut_cache_requested) {
+    if ((options.scene_file.empty() == false) || (options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
+        (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) ||
+        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.denoise) || (options.override_random_seed) ||
+        (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.exposure != 1.0f) || (options.bsdf_lut_samples != 512u)) {
+      message = "--pregenerate-bsdf-lut-cache does not accept additional options\n\n";
+      message += batch_usage_string();
+      return BatchModeCommand::Error;
+    }
+
+    return BatchModeCommand::PregenerateBSDFLutCache;
   }
 
   if (full_comparison_requested) {

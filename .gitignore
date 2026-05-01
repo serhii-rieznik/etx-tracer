@@ -18,3 +18,4 @@
 papers/
 build-vs18/
 thirdparty/dxc
+bin/bsdf/cache/

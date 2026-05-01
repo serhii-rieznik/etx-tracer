@@ -33,6 +33,7 @@ struct ETX_ALIGNED Scene {
       Spectral = SceneProperty::Spectral,
       MultipleImportanceSampling = SceneProperty::MultipleImportanceSampling,
       BlueNoise = SceneProperty::BlueNoise,
+      EnergyCompensatedSpecular = SceneProperty::EnergyCompensatedSpecular,
 
       Count = SceneProperty::Count,
     };
@@ -77,6 +78,17 @@ struct ETX_ALIGNED Scene {
   ArrayView<Medium> mediums ETX_EMPTY_INIT;
   ArrayView<SpectralDistribution> spectrums ETX_EMPTY_INIT;
 
+  struct EnergyCompensationInterface {
+    uint32_t cls = MaterialClass::Undefined;
+    uint32_t directional_lut = kInvalidIndex;
+    uint32_t average_lut = kInvalidIndex;
+    uint32_t geometric_lut = kInvalidIndex;
+    uint32_t geometric_average_lut = kInvalidIndex;
+    uint32_t conductor_fms_lut = kInvalidIndex;
+  };
+
+  ArrayView<EnergyCompensationInterface> energy_compensation_interfaces ETX_EMPTY_INIT;
+
   struct EnvironmentEmitters {
     uint32_t emitters[SceneLimits::MaxEnvironmentEmitters] ETX_EMPTY_INIT;
     uint32_t count ETX_EMPTY_INIT;
@@ -117,6 +129,9 @@ struct ETX_ALIGNED Scene {
   }
   bool blue_noise() const {
     return options.properties[Properties::BlueNoise];
+  }
+  bool energy_compensated_specular() const {
+    return options.properties[Properties::EnergyCompensatedSpecular];
   }
   LightSampling light_sampling_method() const {
     return options.light_sampling;
@@ -311,21 +326,24 @@ ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float
 }
 
 ETX_SHARED_INLINE bool random_continue(uint32_t path_length, uint32_t start_path_length, float eta_scale, Sampler& smp, SpectralResponse& throughput) {
-  float max_t = throughput.maximum();
-  if (max_t == 0.0f)
-    return false;
-
-  if (path_length < start_path_length)
-    return true;
-
-  max_t *= sqr(eta_scale);
-  if (valid_value(max_t) == false) {
+  const float max_t = throughput.maximum();
+  if (max_t == 0.0f) {
     return false;
   }
 
-  float p = clamp(max_t, 0.01f, 0.95f);
-  if (smp.next() > p)
+  if (path_length < start_path_length) {
+    return true;
+  }
+
+  const float eta_scaled_max_t = max_t * sqr(eta_scale);
+  if (valid_value(eta_scaled_max_t) == false) {
     return false;
+  }
+
+  const float p = clamp(eta_scaled_max_t, 0.01f, 1.0f);
+  if (smp.next() > p) {
+    return false;
+  }
 
   throughput *= 1.0f / p;
   return true;

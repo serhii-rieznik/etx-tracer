@@ -520,8 +520,27 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
     std::string mat_name = b.value("material", "");
     if (mat_name.empty() == false)
       set_conductor_ior(mtl, mat_name, data, database);
+  } else if ((type == "conductor_energy_compensated") || (type == "rough_conductor_energy_compensated")) {
+    mtl.cls = MaterialClass::ConductorEnergyCompensated;
+    tungsten_set_albedo(mtl, tungsten_albedo_json(b), data, base_dir);
+    float rough = b.value("roughness", 0.0f);
+    mtl.roughness.value = {rough, rough};
+    mtl.metalness.value = {1.0f, 1.0f};
+    std::string mat_name = b.value("material", "");
+    if (mat_name.empty() == false)
+      set_conductor_ior(mtl, mat_name, data, database);
   } else if ((type == "dielectric") || (type == "rough_dielectric")) {
     mtl.cls = MaterialClass::Dielectric;
+    set_dielectric_ior(mtl, name, b, data, database);
+    mtl.transmission.value = {1.0f, 1.0f, 1.0f, 1.0f};
+    mtl.roughness.value = {b.value("roughness", 0.0f), b.value("roughness", 0.0f)};
+    mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+    mtl.reflectance.image_index = kInvalidIndex;
+    mtl.scattering.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+    mtl.scattering.image_index = kInvalidIndex;
+    tungsten_set_transmission(mtl, tungsten_albedo_json(b), data, base_dir);
+  } else if ((type == "dielectric_energy_compensated") || (type == "rough_dielectric_energy_compensated")) {
+    mtl.cls = MaterialClass::DielectricEnergyCompensated;
     set_dielectric_ior(mtl, name, b, data, database);
     mtl.transmission.value = {1.0f, 1.0f, 1.0f, 1.0f};
     mtl.roughness.value = {b.value("roughness", 0.0f), b.value("roughness", 0.0f)};

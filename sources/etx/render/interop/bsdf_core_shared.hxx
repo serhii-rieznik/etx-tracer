@@ -98,6 +98,8 @@ struct BSDFEval {
   SpectralResponse bsdf ETX_INIT({});
   float pdf ETX_INIT(0.0f);
   float eta ETX_INIT(1.0f);
+  uint32_t properties ETX_INIT(0u);
+  uint32_t medium_index ETX_INIT(kInvalidIndex);
 };
 
 ETX_SHARED_INLINE BSDFEval bsdf_eval_zero(ETX_IN(SpectralQuery, query)) {
