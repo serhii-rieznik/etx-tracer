@@ -16,8 +16,26 @@ struct BSDFPlasticExternalAlbedos {
   SpectralResponse transmission ETX_INIT({});
 };
 
+struct BSDFPlasticDeltaThinfilmTerms {
+  LocalFrame frame ETX_INIT({});
+  float3 local_w_i ETX_INIT({});
+  SpectralResponse reflection ETX_INIT({});
+  SpectralResponse diffuse_scale ETX_INIT({});
+  float specular_probability ETX_INIT(0.0f);
+  bool valid ETX_INIT(false);
+};
+
 ETX_SHARED_INLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler));
+
+ETX_SHARED_INLINE BSDFEval bsdf_plastic_delta_thinfilm_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler));
+
+ETX_SHARED_INLINE BSDFSample bsdf_plastic_delta_thinfilm_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler));
+
+ETX_SHARED_INLINE float bsdf_plastic_delta_thinfilm_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler));
 
 ETX_SHARED_INLINE bool bsdf_plastic_supported(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
   if (bsdf_energy_compensated_material_supported(context, material, uv) == false) {
@@ -26,8 +44,21 @@ ETX_SHARED_INLINE bool bsdf_plastic_supported(ETX_IN(BSDFResourceContext, contex
   return bsdf_energy_compensated_material_interface_valid(context, material, MaterialClass::Dielectric);
 }
 
+ETX_SHARED_INLINE LocalFrame bsdf_plastic_coating_frame(ETX_IN(BSDFData, data), ETX_IN(Material, material)) {
+  return bsdf_data_get_normal_frame(data, material);
+}
+
 ETX_SHARED_INLINE SpectralResponse bsdf_plastic_one(ETX_IN(SpectralQuery, spect)) {
   return spectral_response_make(spect, 1.0f);
+}
+
+ETX_SHARED_INLINE bool bsdf_plastic_delta_thinfilm_supported(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
+  if (bsdf_resource_thinfilm_enabled(material.thinfilm) == false) {
+    return false;
+  }
+
+  const float2 roughness = bsdf_resource_evaluate_roughness(context, material, uv);
+  return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
@@ -101,6 +132,134 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_internal_bounce_denominator(ETX_
   return spectral_response_max(spectral_response_sub(one, spectral_response_mul(substrate, r_internal_average)), kEpsilon);
 }
 
+ETX_SHARED_INLINE BSDFPlasticDeltaThinfilmTerms bsdf_plastic_delta_thinfilm_terms(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  BSDFPlasticDeltaThinfilmTerms result = ETX_ZERO(BSDFPlasticDeltaThinfilmTerms);
+  result.frame = bsdf_plastic_coating_frame(data, material);
+  result.local_w_i = local_frame_to_local(result.frame, -data.w_i);
+  if (result.local_w_i.z <= kEpsilon) {
+    return result;
+  }
+
+  const RefractiveIndexSample ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
+  const RefractiveIndexSample int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
+  const ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, data.spectrum_sample, material.thinfilm, data.tex, sampler);
+  const SpectralResponse fresnel_i = bsdf_fresnel_calculate(data.spectrum_sample, result.local_w_i.z, ext_ior, int_ior, thinfilm);
+  const SpectralResponse one = bsdf_plastic_one(data.spectrum_sample);
+  const SpectralResponse substrate = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
+  const SpectralResponse reflectance = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
+  const SpectralResponse internal_reflection_average = bsdf_fresnel_average(data.spectrum_sample, int_ior, ext_ior, thinfilm);
+  const SpectralResponse internal_transmission_average = spectral_response_sub(one, internal_reflection_average);
+  const SpectralResponse denominator = spectral_response_max(spectral_response_sub(one, spectral_response_mul(substrate, internal_reflection_average)), kEpsilon);
+  const SpectralResponse t_i = spectral_response_sub(one, fresnel_i);
+  result.reflection = spectral_response_mul(reflectance, fresnel_i);
+  result.diffuse_scale = spectral_response_div(spectral_response_mul(t_i, internal_transmission_average), denominator);
+
+  const float reflection_energy = max(0.0f, spectral_response_monochromatic(result.reflection));
+  const float substrate_energy = max(0.0f, spectral_response_monochromatic(spectral_response_mul(substrate, result.diffuse_scale)));
+  const float total_energy = reflection_energy + substrate_energy;
+  result.specular_probability = (total_energy > kEpsilon) ? bsdf_energy_compensated_saturate(reflection_energy / total_energy) : 0.0f;
+  result.valid = true;
+  return result;
+}
+
+ETX_SHARED_INLINE BSDFEval bsdf_plastic_delta_thinfilm_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  const BSDFPlasticDeltaThinfilmTerms terms = bsdf_plastic_delta_thinfilm_terms(context, data, material, sampler);
+  if (terms.valid == false) {
+    return bsdf_eval_zero(data.spectrum_sample);
+  }
+
+  const float3 local_w_o = local_frame_to_local(terms.frame, outgoing_direction);
+  if (local_w_o.z <= kEpsilon) {
+    return bsdf_eval_zero(data.spectrum_sample);
+  }
+
+  const float3 ideal_reflection_w_o = normalize(reflect(data.w_i, terms.frame.nrm));
+  const float3 actual_w_o = normalize(outgoing_direction);
+  BSDFEval result = ETX_ZERO(BSDFEval);
+  if (direction_matches(ideal_reflection_w_o, actual_w_o, 1.0f)) {
+    result.bsdf = terms.reflection;
+    result.func = result.bsdf;
+    result.pdf = terms.specular_probability;
+    result.eta = 1.0f;
+    result.properties = BSDFSample::Delta | BSDFSample::Reflection;
+    result.medium_index = data.current_medium;
+    return result;
+  }
+
+  const BSDFEval substrate_eval = bsdf_diffuse_layer(context, data, terms.local_w_i, local_w_o, material, sampler);
+  if (bsdf_eval_valid(substrate_eval) == false) {
+    return bsdf_eval_zero(data.spectrum_sample);
+  }
+
+  const float diffuse_probability = max(0.0f, 1.0f - terms.specular_probability);
+  result.bsdf = spectral_response_mul(substrate_eval.bsdf, terms.diffuse_scale);
+  result.func = spectral_response_div(result.bsdf, local_w_o.z);
+  result.pdf = diffuse_probability * substrate_eval.pdf;
+  result.eta = 1.0f;
+  result.properties = BSDFSample::Diffuse | BSDFSample::Reflection;
+  result.medium_index = data.current_medium;
+  return result;
+}
+
+ETX_SHARED_INLINE BSDFSample bsdf_plastic_delta_thinfilm_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  const BSDFPlasticDeltaThinfilmTerms terms = bsdf_plastic_delta_thinfilm_terms(context, data, material, sampler);
+  if (terms.valid == false) {
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
+
+  const bool has_fixed = bsdf_sampler_has_fixed(sampler);
+  const float selector = has_fixed ? sampler.fixed_w : bsdf_sampler_next(sampler);
+  const float2 rnd = has_fixed ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+  BSDFSample result = ETX_ZERO(BSDFSample);
+  if (selector < terms.specular_probability) {
+    result.w_o = normalize(reflect(data.w_i, terms.frame.nrm));
+    result.pdf = max(kEpsilon, terms.specular_probability);
+    result.weight = spectral_response_div(terms.reflection, result.pdf);
+    result.properties = BSDFSample::Delta | BSDFSample::Reflection;
+    result.medium_index = data.current_medium;
+    result.eta = 1.0f;
+    return result;
+  }
+
+  const float3 local_w_o = sample_cosine_distribution(rnd, 1.0f);
+  const float3 world_w_o = normalize(local_frame_from_local(terms.frame, local_w_o));
+  const BSDFEval eval = bsdf_plastic_delta_thinfilm_evaluate(context, data, world_w_o, material, sampler);
+  if (bsdf_eval_valid(eval) == false) {
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
+
+  result.w_o = world_w_o;
+  result.pdf = eval.pdf;
+  result.weight = spectral_response_div(eval.bsdf, eval.pdf);
+  result.properties = BSDFSample::Diffuse | BSDFSample::Reflection;
+  result.medium_index = data.current_medium;
+  result.eta = 1.0f;
+  return result;
+}
+
+ETX_SHARED_INLINE float bsdf_plastic_delta_thinfilm_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  const BSDFPlasticDeltaThinfilmTerms terms = bsdf_plastic_delta_thinfilm_terms(context, data, material, sampler);
+  if (terms.valid == false) {
+    return 0.0f;
+  }
+
+  const float3 ideal_reflection_w_o = normalize(reflect(data.w_i, terms.frame.nrm));
+  const float3 actual_w_o = normalize(outgoing_direction);
+  if (direction_matches(ideal_reflection_w_o, actual_w_o, 1.0f)) {
+    return terms.specular_probability;
+  }
+
+  const float3 local_w_o = local_frame_to_local(terms.frame, outgoing_direction);
+  if (local_w_o.z <= kEpsilon) {
+    return 0.0f;
+  }
+  return max(0.0f, 1.0f - terms.specular_probability) * local_w_o.z * kInvPi;
+}
+
 ETX_SHARED_INLINE SpectralResponse bsdf_plastic_coated_diffuse_func(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
   ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o), float alpha, ETX_INOUT(Sampler, sampler)) {
   const BSDFEval substrate_eval = bsdf_diffuse_layer(context, data, local_w_i, local_w_o, material, sampler);
@@ -110,7 +269,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_coated_diffuse_func(ETX_IN(BSDFR
 
   const SpectralResponse substrate = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
   const SpectralResponse t_i = bsdf_plastic_external_transmission_albedo(context, data.spectrum_sample, material, local_w_i.z, alpha);
-  const SpectralResponse t_o = bsdf_plastic_internal_transmission_albedo(context, data.spectrum_sample, material, local_w_o.z, alpha);
+  const SpectralResponse t_o = bsdf_plastic_internal_average_transmission_albedo(context, data.spectrum_sample, material, alpha);
   const SpectralResponse denominator = bsdf_plastic_internal_bounce_denominator(context, data.spectrum_sample, material, substrate, alpha);
   const SpectralResponse scale = spectral_response_div(spectral_response_mul(t_i, t_o), denominator);
   return spectral_response_mul(substrate_eval.func, scale);
@@ -168,11 +327,15 @@ ETX_SHARED_INLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_refl
 
 ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
+  if (bsdf_plastic_delta_thinfilm_supported(context, material, data.tex)) {
+    return bsdf_plastic_delta_thinfilm_evaluate(context, data, outgoing_direction, material, sampler);
+  }
+
   if (bsdf_plastic_supported(context, material, data.tex) == false) {
     return bsdf_diffuse_evaluate(context, data, outgoing_direction, material, sampler);
   }
 
-  const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
+  const LocalFrame frame = bsdf_plastic_coating_frame(data, material);
   const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
   const float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
   if ((local_w_i.z <= kEpsilon) || (local_w_o.z <= kEpsilon)) {
@@ -205,11 +368,15 @@ ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, con
 }
 
 ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  if (bsdf_plastic_delta_thinfilm_supported(context, material, data.tex)) {
+    return bsdf_plastic_delta_thinfilm_sample(context, data, material, sampler);
+  }
+
   if (bsdf_plastic_supported(context, material, data.tex) == false) {
     return bsdf_diffuse_sample(context, data, material, sampler);
   }
 
-  const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
+  const LocalFrame frame = bsdf_plastic_coating_frame(data, material);
   const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
   if (local_w_i.z <= kEpsilon) {
     return bsdf_sample_zero(data.spectrum_sample);
@@ -277,11 +444,15 @@ ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, con
 ETX_SHARED_INLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
+  if (bsdf_plastic_delta_thinfilm_supported(context, material, data.tex)) {
+    return bsdf_plastic_delta_thinfilm_pdf(context, data, outgoing_direction, material, sampler);
+  }
+
   if (bsdf_plastic_supported(context, material, data.tex) == false) {
     return bsdf_diffuse_pdf(context, data, outgoing_direction, material, sampler);
   }
 
-  const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
+  const LocalFrame frame = bsdf_plastic_coating_frame(data, material);
   const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
   const float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
   if ((local_w_i.z <= kEpsilon) || (local_w_o.z <= kEpsilon)) {

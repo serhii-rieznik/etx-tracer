@@ -132,7 +132,7 @@ ETX_SHARED_INLINE float bsdf_energy_compensated_scalar_roughness(ETX_IN(BSDFReso
 }
 
 ETX_SHARED_INLINE bool bsdf_energy_compensated_material_supported(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
-  if ((material.thinfilm.min_thickness * material.thinfilm.max_thickness) > 0.0f) {
+  if (bsdf_resource_thinfilm_enabled(material.thinfilm)) {
     return false;
   }
 

@@ -71,26 +71,26 @@ ETX_SHARED_INLINE RefractiveIndexSample bsdf_resource_evaluate_refractive_index(
   return result;
 }
 
+ETX_SHARED_INLINE bool bsdf_resource_thinfilm_enabled(ETX_IN(Thinfilm, film)) {
+  return max(film.min_thickness, film.max_thickness) > 0.0f;
+}
+
 ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Thinfilm, film), ETX_IN(float2, uv),
   ETX_INOUT(Sampler, sampler)) {
+  (void)sampler;
+
   ThinfilmEval result = ETX_ZERO(ThinfilmEval);
   result.ior.cls = SpectralDistribution::Invalid;
   result.rgb_wavelengths = kRGBWavelengths;
   result.thickness = 0.0f;
 
-  if ((film.max_thickness * film.min_thickness) <= 0.0f) {
+  if (bsdf_resource_thinfilm_enabled(film) == false) {
     return result;
   }
 
   float sampled_thickness = bsdf_resource_image_sample_channel_or_default(context, film.thinkness_image, 0u, uv, 1.0f);
   result.thickness = film.min_thickness + (film.max_thickness - film.min_thickness) * sampled_thickness;
   result.ior = bsdf_resource_evaluate_refractive_index(context, film.ior, spect);
-
-  if (spectral_query_is_spectral(spect) == false) {
-    result.rgb_wavelengths.x = kRGBWavelengths.x + kRGBWavelengthsSpan.x * (2.0f * bsdf_sampler_next(sampler) - 1.0f);
-    result.rgb_wavelengths.y = kRGBWavelengths.y + kRGBWavelengthsSpan.y * (2.0f * bsdf_sampler_next(sampler) - 1.0f);
-    result.rgb_wavelengths.z = kRGBWavelengths.z + kRGBWavelengthsSpan.z * (2.0f * bsdf_sampler_next(sampler) - 1.0f);
-  }
 
   return result;
 }

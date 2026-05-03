@@ -131,16 +131,25 @@ struct UI {
   void save_image(SaveImageMode mode) const;
   void load_image() const;
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&);
+  bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&, const std::vector<uint32_t>& material_indices);
   bool build_medium(SceneRepresentation& scene_rep, Medium& medium);
   bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);
   bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&);
+  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&, bool mixed);
   bool emission_picker(SceneRepresentation& scene_rep, const char* label, const char* id_suffix, uint32_t& spectrum_index, const FrameData&);
   bool medium_dropdown(const char* label, uint32_t& medium);
   void update_name_buffer(SelectionKind kind, int32_t index, const char* current_name);
 
   void reset_selection();
+  uint32_t selected_material_count() const;
+  bool material_list_position_selected(int32_t index) const;
+  void set_single_material_selection(int32_t index, bool track_history);
+  void toggle_material_selection(int32_t index);
+  void set_material_selection_range(int32_t index);
+  std::vector<uint32_t> selected_material_indices(SceneRepresentation& scene_rep) const;
+  void apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const Material& before, const Material& after) const;
   void reload_geometry();
   void reload_scene();
   void set_selection(SelectionKind kind, int32_t index, bool track_history = true);
@@ -155,6 +164,7 @@ struct UI {
   void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx, const FrameData& data);
 
   bool build_material_class_selector(Material& material);
+  bool build_material_class_selector(Material& material, bool mixed);
 
   void build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
@@ -259,6 +269,11 @@ struct UI {
   uint32_t _font_image = 0u;
   std::unordered_map<std::string, SpectrumEditorState> _spectrum_editors;
   std::unordered_map<std::string, bool> _material_anisotropy;
+  std::vector<int32_t> _selected_material_positions;
+  int32_t _material_selection_anchor = -1;
+  bool _updating_material_multi_selection = false;
+  const std::vector<uint32_t>* _editing_material_indices = nullptr;
+  uint32_t _material_batch_changed_fields = 0u;
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;

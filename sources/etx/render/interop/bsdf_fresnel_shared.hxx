@@ -195,56 +195,36 @@ ETX_SHARED_INLINE float bsdf_fresnel_generic(float cos_theta_i, ETX_IN(complex, 
 }
 
 ETX_SHARED_INLINE float bsdf_fresnel_thinfilm(float wavelength, float cos_theta_0, ETX_IN(complex, ext_ior), ETX_IN(complex, film_ior), ETX_IN(complex, int_ior), float thickness) {
-  complex i = bsdf_complex_make(0.0f, 1.0f);
-
   if (cos_theta_0 == 0.0f) {
-    return 0.0f;
-  }
-
-  complex ext_to_film = bsdf_complex_div(ext_ior, film_ior);
-  complex sin_theta_1_squared = bsdf_complex_mul_scalar(bsdf_complex_mul(ext_to_film, ext_to_film), 1.0f - cos_theta_0 * cos_theta_0);
-  if (bsdf_complex_real(sin_theta_1_squared) >= 1.0f) {
     return 1.0f;
   }
 
-  complex cos_theta_1 = bsdf_complex_sqrt(bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), sin_theta_1_squared));
+  const complex i = bsdf_complex_make(0.0f, 1.0f);
+  const complex cos_theta_0_complex = bsdf_complex_make(cos_theta_0, 0.0f);
+  const complex ext_to_film = bsdf_complex_div(ext_ior, film_ior);
+  const complex sin_theta_1_squared = bsdf_complex_mul_scalar(bsdf_complex_mul(ext_to_film, ext_to_film), 1.0f - cos_theta_0 * cos_theta_0);
+  const complex cos_theta_1 = bsdf_complex_sqrt(bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), sin_theta_1_squared));
 
-  complex film_to_int = bsdf_complex_div(film_ior, int_ior);
-  complex cos_theta_1_squared = bsdf_complex_mul(cos_theta_1, cos_theta_1);
-  complex sin_theta_2_squared = bsdf_complex_mul(bsdf_complex_mul(film_to_int, film_to_int), bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), cos_theta_1_squared));
-  if (bsdf_complex_real(sin_theta_2_squared) >= 1.0f) {
-    return 1.0f;
-  }
+  const complex film_to_int = bsdf_complex_div(film_ior, int_ior);
+  const complex cos_theta_1_squared = bsdf_complex_mul(cos_theta_1, cos_theta_1);
+  const complex sin_theta_2_squared = bsdf_complex_mul(bsdf_complex_mul(film_to_int, film_to_int), bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), cos_theta_1_squared));
+  const complex cos_theta_2 = bsdf_complex_sqrt(bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), sin_theta_2_squared));
 
-  complex cos_theta_2 = bsdf_complex_sqrt(bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), sin_theta_2_squared));
-  complex ratio = bsdf_complex_div(bsdf_complex_mul(int_ior, cos_theta_2), bsdf_complex_mul(ext_ior, bsdf_complex_make(cos_theta_0, 0.0f)));
+  const BSDFFresnelReflectanceResult r01 = bsdf_fresnel_reflectance(ext_ior, cos_theta_0_complex, film_ior, cos_theta_1);
+  const BSDFFresnelReflectanceResult r12 = bsdf_fresnel_reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
 
-  float delta_10 = (bsdf_complex_real(ext_ior) < bsdf_complex_real(film_ior)) ? kPi : 0.0f;
-  float delta_21 = (bsdf_complex_real(film_ior) < bsdf_complex_real(int_ior)) ? kPi : 0.0f;
-  float phase_shift = delta_10 + delta_21;
+  const complex phase = bsdf_complex_mul_scalar(bsdf_complex_mul(film_ior, cos_theta_1), kDoublePi * 2.0f * thickness / max(kEpsilon, wavelength));
+  const complex exp_i_phase = bsdf_complex_exp(bsdf_complex_mul(i, phase));
 
-  BSDFFresnelReflectanceResult r01 = bsdf_fresnel_reflectance(ext_ior, bsdf_complex_make(cos_theta_0, 0.0f), film_ior, cos_theta_1);
-  BSDFFresnelTransmittanceResult t01 = bsdf_fresnel_transmittance(ext_ior, bsdf_complex_make(cos_theta_0, 0.0f), film_ior, cos_theta_1);
-  BSDFFresnelReflectanceResult r12 = bsdf_fresnel_reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
-  BSDFFresnelTransmittanceResult t12 = bsdf_fresnel_transmittance(film_ior, cos_theta_1, int_ior, cos_theta_2);
+  const complex rp_numerator = bsdf_complex_add(r01.rp, bsdf_complex_mul(r12.rp, exp_i_phase));
+  const complex rp_denominator = bsdf_complex_add(bsdf_complex_make(1.0f, 0.0f), bsdf_complex_mul(bsdf_complex_mul(r01.rp, r12.rp), exp_i_phase));
+  const complex rp = bsdf_complex_div(rp_numerator, rp_denominator);
 
-  complex phase_term = bsdf_complex_add(bsdf_complex_mul_scalar(cos_theta_1, kDoublePi * 2.0f * thickness), bsdf_complex_mul_scalar(film_ior, phase_shift));
-  complex phi = bsdf_complex_div_scalar(phase_term, wavelength);
-  complex exp_i_phi = bsdf_complex_exp(bsdf_complex_mul(i, phi));
+  const complex rs_numerator = bsdf_complex_add(r01.rs, bsdf_complex_mul(r12.rs, exp_i_phase));
+  const complex rs_denominator = bsdf_complex_add(bsdf_complex_make(1.0f, 0.0f), bsdf_complex_mul(bsdf_complex_mul(r01.rs, r12.rs), exp_i_phase));
+  const complex rs = bsdf_complex_div(rs_numerator, rs_denominator);
 
-  complex tp_numerator = bsdf_complex_mul(t01.tp, t12.tp);
-  complex tp_denominator = bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), bsdf_complex_mul(bsdf_complex_mul(r01.rp, r12.rp), exp_i_phi));
-  complex tp_base = bsdf_complex_div(tp_numerator, tp_denominator);
-  complex tp = bsdf_complex_mul(tp_base, tp_base);
-
-  complex ts_numerator = bsdf_complex_mul(t01.ts, t12.ts);
-  complex ts_denominator = bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), bsdf_complex_mul(bsdf_complex_mul(r01.rs, r12.rs), exp_i_phi));
-  complex ts_base = bsdf_complex_div(ts_numerator, ts_denominator);
-  complex ts = bsdf_complex_mul(ts_base, ts_base);
-
-  complex transmission = bsdf_complex_mul_scalar(bsdf_complex_add(tp, ts), 0.5f);
-  complex result = bsdf_complex_sub(bsdf_complex_make(1.0f, 0.0f), bsdf_complex_mul(ratio, transmission));
-  return bsdf_complex_abs(result);
+  return 0.5f * (bsdf_complex_norm(rp) + bsdf_complex_norm(rs));
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_fresnel_calculate(ETX_IN(SpectralQuery, spect), float cos_theta, ETX_IN(RefractiveIndexSample, ext_ior),
@@ -285,5 +265,37 @@ ETX_SHARED_INLINE SpectralResponse bsdf_fresnel_calculate(ETX_IN(SpectralQuery, 
 
   result.integrated = saturate(values);
   result.value = luminance(result.integrated);
+  return result;
+}
+
+ETX_SHARED_INLINE SpectralResponse bsdf_fresnel_average(ETX_IN(SpectralQuery, spect), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior),
+  ETX_IN(ThinfilmEval, thinfilm)) {
+  const float nodes[8] = {
+    1.98550718e-2f,
+    1.01666761e-1f,
+    2.37233795e-1f,
+    4.08282679e-1f,
+    5.91717321e-1f,
+    7.62766205e-1f,
+    8.98333239e-1f,
+    9.80144928e-1f,
+  };
+  const float weights[8] = {
+    5.06142681e-2f,
+    1.11190517e-1f,
+    1.56853323e-1f,
+    1.81341892e-1f,
+    1.81341892e-1f,
+    1.56853323e-1f,
+    1.11190517e-1f,
+    5.06142681e-2f,
+  };
+
+  SpectralResponse result = spectral_response_make(spect, 0.0f);
+  for (uint32_t i = 0u; i < 8u; ++i) {
+    const float mu = nodes[i];
+    const SpectralResponse fresnel = bsdf_fresnel_calculate(spect, mu, ext_ior, int_ior, thinfilm);
+    result = spectral_response_add(result, spectral_response_mul(fresnel, 2.0f * weights[i] * mu));
+  }
   return result;
 }

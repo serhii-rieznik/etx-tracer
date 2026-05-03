@@ -16,6 +16,7 @@ constexpr uint32_t kBsdfSamples = 2048u;
 
 enum SpectrumSlot : uint32_t {
   SpectrumWhite,
+  SpectrumBlack,
   SpectrumColored,
   SpectrumAirEta,
   SpectrumDielectricEta,
@@ -387,6 +388,58 @@ etx::Material make_plastic(const float roughness) {
   return result;
 }
 
+etx::Material make_black_substrate_plastic(const float roughness) {
+  etx::Material result = make_plastic(roughness);
+  result.scattering.spectrum_index = SpectrumBlack;
+  return result;
+}
+
+etx::Material make_colored_substrate_black_coating_plastic(const float roughness) {
+  etx::Material result = make_plastic(roughness);
+  result.reflectance.spectrum_index = SpectrumBlack;
+  result.scattering.spectrum_index = SpectrumColored;
+  return result;
+}
+
+void set_basic_thinfilm(etx::Material& material, const float min_thickness, const float max_thickness) {
+  material.thinfilm.min_thickness = min_thickness;
+  material.thinfilm.max_thickness = max_thickness;
+  material.thinfilm.ior.cls = etx::SpectralDistribution::Dielectric;
+  material.thinfilm.ior.eta_index = SpectrumDielectricEta;
+  material.thinfilm.ior.k_index = SpectrumBlack;
+}
+
+etx::Material make_standalone_thinfilm(const float min_thickness, const float max_thickness) {
+  etx::Material result = {};
+  result.cls = MaterialClass::Thinfilm;
+  result.reflectance.spectrum_index = SpectrumWhite;
+  result.scattering.spectrum_index = SpectrumWhite;
+  result.ext_ior.cls = etx::SpectralDistribution::Dielectric;
+  result.ext_ior.eta_index = SpectrumAirEta;
+  result.int_ior.cls = etx::SpectralDistribution::Dielectric;
+  result.int_ior.eta_index = SpectrumAirEta;
+  set_basic_thinfilm(result, min_thickness, max_thickness);
+  return result;
+}
+
+etx::Material make_thinfilm_delta_dielectric() {
+  etx::Material result = make_white_dielectric(0.0f);
+  set_basic_thinfilm(result, 500.0f, 500.0f);
+  return result;
+}
+
+etx::Material make_thinfilm_delta_conductor() {
+  etx::Material result = make_mirror_conductor(0.0f);
+  set_basic_thinfilm(result, 500.0f, 500.0f);
+  return result;
+}
+
+etx::Material make_thinfilm_delta_plastic() {
+  etx::Material result = make_plastic(0.0f);
+  set_basic_thinfilm(result, 500.0f, 500.0f);
+  return result;
+}
+
 bool validate_energy_compensated_material(const char* label, const etx::BSDFData& data, const etx::Material& material, const float roughness, const uint32_t seed) {
   const float pdf_integral = integrate_pdf(data, material, seed);
   const float reverse_pdf_integral = integrate_reverse_pdf(data, material, seed + 50000u);
@@ -471,16 +524,171 @@ bool validate_eon_diffuse_material(const etx::BSDFData& data, const float roughn
   return diagnostic_valid;
 }
 
-bool validate_exact_plastic_interface(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const float roughness,
-  const uint32_t seed) {
+bool validate_plastic_sample_contract(const char* label, const etx::BSDFData& data, const etx::Material& material, const float roughness, const uint32_t seed) {
+  etx::Material material_with_media = material;
+  material_with_media.ext_medium = 7u;
+  material_with_media.int_medium = 11u;
+
+  bool saw_coating = false;
+  bool saw_substrate = false;
+  for (uint32_t i = 0u; i < kBsdfSamples; ++i) {
+    etx::Sampler sampler(seed + i, seed ^ (i * 47u + 31u));
+    const etx::BSDFSample sample = etx::bsdf::sample(data, material_with_media, sampler);
+    if ((validate_sample(sample) == false) || (sample.valid() == false)) {
+      std::printf("%s roughness %.3f invalid plastic sample\n", label, roughness);
+      return false;
+    }
+
+    const bool reflection = (sample.properties & etx::BSDFSample::Reflection) != 0u;
+    const bool diffuse = (sample.properties & etx::BSDFSample::Diffuse) != 0u;
+    const bool transmission = (sample.properties & etx::BSDFSample::Transmission) != 0u;
+    const bool medium_changed = (sample.properties & etx::BSDFSample::MediumChanged) != 0u;
+    if ((((reflection == false) || transmission) || medium_changed) || ((sample.medium_index != data.current_medium) || (fabsf(sample.eta - 1.0f) > 1.0e-4f))) {
+      std::printf("%s roughness %.3f invalid plastic metadata eta %.6f medium %u\n", label, roughness, sample.eta, sample.medium_index);
+      return false;
+    }
+
+    if (diffuse) {
+      saw_substrate = true;
+    } else {
+      saw_coating = true;
+    }
+
+    etx::Sampler eval_sampler(seed + i + 10000u, seed ^ (i * 53u + 37u));
+    const etx::BSDFEval eval = etx::bsdf::evaluate(data, sample.w_o, material_with_media, eval_sampler);
+    if ((eval.valid() == false) || (finite_response(eval.bsdf) == false)) {
+      std::printf("%s roughness %.3f invalid plastic eval at sampled direction\n", label, roughness);
+      return false;
+    }
+
+    etx::Sampler pdf_sampler(seed + i + 20000u, seed ^ (i * 59u + 41u));
+    const float pdf = etx::bsdf::pdf(data, sample.w_o, material_with_media, pdf_sampler);
+    if ((std::isfinite(pdf) == false) || (pdf <= kEpsilon)) {
+      std::printf("%s roughness %.3f invalid plastic pdf %.6f\n", label, roughness, pdf);
+      return false;
+    }
+
+    const float pdf_tolerance = max(1.0e-3f, 0.05f * max(sample.pdf, pdf));
+    if (fabsf(sample.pdf - pdf) > pdf_tolerance) {
+      std::printf("%s roughness %.3f plastic sample/pdf mismatch sample %.6f pdf %.6f\n", label, roughness, sample.pdf, pdf);
+      return false;
+    }
+
+    const etx::SpectralResponse expected_weight = eval.bsdf / pdf;
+    const float weight_error = fabsf(sample.weight.monochromatic() - expected_weight.monochromatic());
+    const float weight_tolerance = max(1.0e-3f, 0.05f * max(sample.weight.monochromatic(), expected_weight.monochromatic()));
+    if (weight_error > weight_tolerance) {
+      std::printf("%s roughness %.3f plastic weight mismatch sample %.6f expected %.6f\n", label, roughness, sample.weight.monochromatic(),
+        expected_weight.monochromatic());
+      return false;
+    }
+  }
+
+  if ((saw_coating == false) || (saw_substrate == false)) {
+    std::printf("%s roughness %.3f missing plastic branch coating %u substrate %u\n", label, roughness, saw_coating ? 1u : 0u, saw_substrate ? 1u : 0u);
+    return false;
+  }
+
+  std::printf("%s roughness %.3f plastic sample contract valid\n", label, roughness);
+  return true;
+}
+
+bool validate_plastic_inner_matches_outer(const char* label, const etx::BSDFData& outside_data, const etx::BSDFData& inside_data, const etx::Material& material,
+  const float roughness, const uint32_t seed) {
+  const float3 outside_w_o = normalize(float3{0.25f, 0.1f, 0.963068f});
+  const float3 inside_w_o = -outside_w_o;
+  etx::Sampler outside_eval_sampler(seed, seed ^ 0x75e1a9cu);
+  const etx::BSDFEval outside_eval = etx::bsdf::evaluate(outside_data, outside_w_o, material, outside_eval_sampler);
+  etx::Sampler inside_eval_sampler(seed + 1u, seed ^ 0x9830cf1u);
+  const etx::BSDFEval inside_eval = etx::bsdf::evaluate(inside_data, inside_w_o, material, inside_eval_sampler);
+  if ((outside_eval.valid() == false) || (inside_eval.valid() == false)) {
+    std::printf("%s roughness %.3f invalid inner/outer plastic eval\n", label, roughness);
+    return false;
+  }
+
+  const float bsdf_error = fabsf(outside_eval.bsdf.monochromatic() - inside_eval.bsdf.monochromatic());
+  const float bsdf_tolerance = max(1.0e-4f, 5.0e-3f * max(outside_eval.bsdf.monochromatic(), inside_eval.bsdf.monochromatic()));
+  if (bsdf_error > bsdf_tolerance) {
+    std::printf("%s roughness %.3f inner/outer bsdf mismatch outside %.6f inside %.6f\n", label, roughness, outside_eval.bsdf.monochromatic(),
+      inside_eval.bsdf.monochromatic());
+    return false;
+  }
+
+  etx::Sampler outside_pdf_sampler(seed + 2u, seed ^ 0x16bca45u);
+  const float outside_pdf = etx::bsdf::pdf(outside_data, outside_w_o, material, outside_pdf_sampler);
+  etx::Sampler inside_pdf_sampler(seed + 3u, seed ^ 0x85cf034u);
+  const float inside_pdf = etx::bsdf::pdf(inside_data, inside_w_o, material, inside_pdf_sampler);
+  const float pdf_tolerance = max(1.0e-4f, 5.0e-3f * max(outside_pdf, inside_pdf));
+  if (fabsf(outside_pdf - inside_pdf) > pdf_tolerance) {
+    std::printf("%s roughness %.3f inner/outer pdf mismatch outside %.6f inside %.6f\n", label, roughness, outside_pdf, inside_pdf);
+    return false;
+  }
+
+  if (validate_plastic_sample_contract(label, inside_data, material, roughness, seed + 1000u) == false) {
+    return false;
+  }
+
+  std::printf("%s roughness %.3f inner side matches outer side\n", label, roughness);
+  return true;
+}
+
+bool validate_plastic_black_substrate_matches_dielectric_reflection(const char* label, const etx::BSDFData& data, const etx::Material& plastic,
+  const etx::Material& dielectric, const float roughness, const uint32_t seed) {
+  const float3 outgoing_direction = normalize(float3{0.0f, 0.0f, 1.0f});
+  etx::Sampler plastic_eval_sampler(seed, seed ^ 0x7a53d21u);
+  const etx::BSDFEval plastic_eval = etx::bsdf::evaluate(data, outgoing_direction, plastic, plastic_eval_sampler);
+  etx::Sampler dielectric_eval_sampler(seed + 1u, seed ^ 0x3e19f5bu);
+  const etx::BSDFEval dielectric_eval = etx::bsdf::evaluate(data, outgoing_direction, dielectric, dielectric_eval_sampler);
+  if ((plastic_eval.valid() == false) || (dielectric_eval.valid() == false)) {
+    std::printf("%s roughness %.3f invalid coating comparison eval\n", label, roughness);
+    return false;
+  }
+
+  const float bsdf_error = fabsf(plastic_eval.bsdf.monochromatic() - dielectric_eval.bsdf.monochromatic());
+  const float bsdf_tolerance = max(1.0e-4f, 5.0e-3f * max(plastic_eval.bsdf.monochromatic(), dielectric_eval.bsdf.monochromatic()));
+  if (bsdf_error > bsdf_tolerance) {
+    std::printf("%s roughness %.3f coating bsdf %.6f dielectric %.6f\n", label, roughness, plastic_eval.bsdf.monochromatic(),
+      dielectric_eval.bsdf.monochromatic());
+    return false;
+  }
+
+  const BSDFResourceContext context = etx::bsdf::detail::make_interop_context();
+  const ::BSDFData interop_data = etx::bsdf::detail::make_interop_data(data);
+  const LocalFrame frame = bsdf_plastic_coating_frame(interop_data, plastic);
+  const float3 local_w_i = local_frame_to_local(frame, -interop_data.w_i);
+  const float alpha = bsdf_energy_compensated_scalar_roughness(context, plastic, interop_data.tex);
+  const BSDFPlasticCoatingReflectionProposal proposal =
+    bsdf_plastic_coating_reflection_proposal(context, interop_data.spectrum_sample, plastic, local_w_i, alpha);
+  if (proposal.probability <= kEpsilon) {
+    std::printf("%s roughness %.3f invalid coating proposal probability %.6f\n", label, roughness, proposal.probability);
+    return false;
+  }
+
+  etx::Sampler plastic_pdf_sampler(seed + 2u, seed ^ 0x6452ce7u);
+  const float plastic_pdf = etx::bsdf::pdf(data, outgoing_direction, plastic, plastic_pdf_sampler);
+  etx::Sampler dielectric_pdf_sampler(seed + 3u, seed ^ 0x150abe3u);
+  const float dielectric_pdf = etx::bsdf::pdf(data, outgoing_direction, dielectric, dielectric_pdf_sampler);
+  const float expected_dielectric_pdf = plastic_pdf * proposal.probability;
+  const float pdf_tolerance = max(1.0e-4f, 5.0e-3f * max(expected_dielectric_pdf, dielectric_pdf));
+  if (fabsf(expected_dielectric_pdf - dielectric_pdf) > pdf_tolerance) {
+    std::printf("%s roughness %.3f coating pdf %.6f proposal %.6f dielectric %.6f\n", label, roughness, plastic_pdf, proposal.probability, dielectric_pdf);
+    return false;
+  }
+
+  std::printf("%s roughness %.3f coating matches dielectric reflection\n", label, roughness);
+  return true;
+}
+
+bool validate_plastic_low_roughness_substrate_exit(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count) {
+  const float roughness = 0.0f;
   etx::TaskScheduler scheduler = {};
   etx::SceneData scene_data(scheduler);
   scene_data.images.init(16u);
   scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
-  scene_data.materials.emplace_back(make_plastic(roughness));
+  scene_data.materials.emplace_back(make_colored_substrate_black_coating_plastic(roughness));
 
   if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
-    std::printf("plastic exact interface roughness %.3f failed to bind LUT\n", roughness);
+    std::printf("plastic low roughness substrate exit failed to bind LUT\n");
     return false;
   }
 
@@ -504,8 +712,303 @@ bool validate_exact_plastic_interface(etx::Scene& original_scene, const etx::Spe
     float3{0.0f, 1.0f, 0.0f},
     float2{0.5f, 0.5f},
   };
+  const etx::BSDFData data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
+  const float external_mu_values[] = {0.8f, 0.5f, 0.25f, 0.05f};
+  bool diagnostic_valid = true;
+  for (uint32_t i = 0u; i < 4u; ++i) {
+    const float mu = external_mu_values[i];
+    const float sin_theta = sqrtf(max(0.0f, 1.0f - mu * mu));
+    const float3 outgoing_direction = normalize(float3{sin_theta, 0.0f, mu});
+    etx::Sampler eval_sampler(43000u + i, 0x9e3779b9u ^ i);
+    const etx::BSDFEval eval = etx::bsdf::evaluate(data, outgoing_direction, material, eval_sampler);
+    const float3 rgb = eval.bsdf.to_rgb();
+    const bool substrate_visible = (eval.valid() && (std::isfinite(rgb.x)) && (rgb.x > 1.0e-3f));
+    if (substrate_visible == false) {
+      std::printf("plastic low roughness substrate exit mu %.3f failed rgb %.6f %.6f %.6f pdf %.6f\n", mu, rgb.x, rgb.y, rgb.z, eval.pdf);
+      diagnostic_valid = false;
+    } else {
+      std::printf("plastic low roughness substrate exit mu %.3f rgb %.6f %.6f %.6f pdf %.6f\n", mu, rgb.x, rgb.y, rgb.z, eval.pdf);
+    }
+  }
+
+  etx::scene_global_clear(&exact_scene);
+  etx::scene_global_publish(&original_scene, &original_scene);
+  return diagnostic_valid;
+}
+
+bool validate_standalone_thinfilm_contract(const char* label, const etx::BSDFData& data, const etx::Material& material, const uint32_t seed) {
+  etx::Material material_with_media = material;
+  material_with_media.ext_medium = 7u;
+  material_with_media.int_medium = 11u;
+  const uint32_t expected_transmission_medium = data.current_medium;
+
+  bool saw_reflection = false;
+  bool saw_transmission = false;
+  for (uint32_t i = 0u; i < kBsdfSamples; ++i) {
+    etx::Sampler sampler(seed + i, seed ^ (i * 67u + 43u));
+    const etx::BSDFSample sample = etx::bsdf::sample(data, material_with_media, sampler);
+    if ((validate_sample(sample) == false) || (sample.valid() == false) || (sample.is_delta() == false)) {
+      std::printf("%s invalid standalone thinfilm sample\n", label);
+      return false;
+    }
+
+    const bool reflection = (sample.properties & etx::BSDFSample::Reflection) != 0u;
+    const bool transmission = (sample.properties & etx::BSDFSample::Transmission) != 0u;
+    const bool medium_changed = (sample.properties & etx::BSDFSample::MediumChanged) != 0u;
+    if (reflection) {
+      saw_reflection = true;
+      if ((transmission || medium_changed) || ((sample.medium_index != data.current_medium) || (fabsf(sample.eta - 1.0f) > kEpsilon))) {
+        std::printf("%s invalid standalone thinfilm reflection metadata\n", label);
+        return false;
+      }
+    } else if (transmission) {
+      saw_transmission = true;
+      if ((medium_changed || (sample.medium_index != expected_transmission_medium)) || (fabsf(sample.eta - 1.0f) > kEpsilon)) {
+        std::printf("%s invalid standalone thinfilm transmission metadata medium %u expected %u\n", label, sample.medium_index, expected_transmission_medium);
+        return false;
+      }
+    } else {
+      std::printf("%s standalone thinfilm sample missing branch flags\n", label);
+      return false;
+    }
+
+    etx::Sampler eval_sampler(seed + i + 10000u, seed ^ (i * 71u + 47u));
+    const etx::BSDFEval eval = etx::bsdf::evaluate(data, sample.w_o, material_with_media, eval_sampler);
+    etx::Sampler pdf_sampler(seed + i + 20000u, seed ^ (i * 73u + 53u));
+    const float pdf = etx::bsdf::pdf(data, sample.w_o, material_with_media, pdf_sampler);
+    if ((eval.valid() == false) || (std::isfinite(pdf) == false) || (pdf <= kEpsilon)) {
+      std::printf("%s invalid standalone thinfilm eval/pdf %.6f\n", label, pdf);
+      return false;
+    }
+
+    const float pdf_tolerance = max(1.0e-4f, 5.0e-3f * max(sample.pdf, pdf));
+    if (fabsf(sample.pdf - pdf) > pdf_tolerance) {
+      std::printf("%s standalone thinfilm pdf mismatch sample %.6f pdf %.6f\n", label, sample.pdf, pdf);
+      return false;
+    }
+
+    const etx::SpectralResponse expected_weight = eval.bsdf / pdf;
+    const float weight_error = fabsf(sample.weight.monochromatic() - expected_weight.monochromatic());
+    const float weight_tolerance = max(1.0e-4f, 5.0e-3f * max(sample.weight.monochromatic(), expected_weight.monochromatic()));
+    if (weight_error > weight_tolerance) {
+      std::printf("%s standalone thinfilm weight mismatch sample %.6f expected %.6f\n", label, sample.weight.monochromatic(), expected_weight.monochromatic());
+      return false;
+    }
+  }
+
+  if ((saw_reflection == false) || (saw_transmission == false)) {
+    std::printf("%s standalone thinfilm missing branch reflection %u transmission %u\n", label, saw_reflection ? 1u : 0u, saw_transmission ? 1u : 0u);
+    return false;
+  }
+
+  std::printf("%s standalone thinfilm contract valid\n", label);
+  return true;
+}
+
+bool validate_standalone_thinfilm_sheet_symmetry(const char* label, const etx::BSDFData& base_data, const etx::Material& material, const uint32_t seed) {
+  etx::Material material_with_boundary_ior = material;
+  material_with_boundary_ior.ext_medium = 7u;
+  material_with_boundary_ior.int_medium = 11u;
+  material_with_boundary_ior.int_ior.cls = etx::SpectralDistribution::Dielectric;
+  material_with_boundary_ior.int_ior.eta_index = SpectrumDielectricEta;
+  material_with_boundary_ior.int_ior.k_index = SpectrumBlack;
+
+  const float mu_values[] = {1.0f, 0.5f, 0.2f, 0.05f};
+  for (uint32_t i = 0u; i < 4u; ++i) {
+    const float mu = mu_values[i];
+    const float sin_theta = sqrtf(max(0.0f, 1.0f - mu * mu));
+    etx::BSDFData outside_data = base_data;
+    outside_data.w_i = normalize(float3{sin_theta, 0.0f, -mu});
+    etx::BSDFData inside_data = base_data;
+    inside_data.w_i = normalize(float3{sin_theta, 0.0f, mu});
+
+    const float3 outside_reflection = normalize(reflect(outside_data.w_i, outside_data.nrm));
+    const float3 inside_reflection = normalize(reflect(inside_data.w_i, -inside_data.nrm));
+
+    etx::Sampler outside_sampler(seed + i, seed ^ (i * 101u + 73u));
+    const etx::BSDFEval outside_eval = etx::bsdf::evaluate(outside_data, outside_reflection, material_with_boundary_ior, outside_sampler);
+    etx::Sampler inside_sampler(seed + i + 100u, seed ^ (i * 103u + 79u));
+    const etx::BSDFEval inside_eval = etx::bsdf::evaluate(inside_data, inside_reflection, material_with_boundary_ior, inside_sampler);
+    if ((outside_eval.valid() == false) || (inside_eval.valid() == false)) {
+      std::printf("%s invalid symmetric thinfilm reflection mu %.3f\n", label, mu);
+      return false;
+    }
+
+    const float outside_value = outside_eval.bsdf.monochromatic();
+    const float inside_value = inside_eval.bsdf.monochromatic();
+    const float value_tolerance = max(1.0e-4f, 1.0e-3f * max(outside_value, inside_value));
+    if (fabsf(outside_value - inside_value) > value_tolerance) {
+      std::printf("%s asymmetric thinfilm reflection mu %.3f outside %.6f inside %.6f\n", label, mu, outside_value, inside_value);
+      return false;
+    }
+
+    etx::Sampler outside_transmission_sampler(seed + i + 200u, seed ^ (i * 107u + 83u));
+    const etx::BSDFEval outside_transmission = etx::bsdf::evaluate(outside_data, outside_data.w_i, material_with_boundary_ior, outside_transmission_sampler);
+    etx::Sampler inside_transmission_sampler(seed + i + 300u, seed ^ (i * 109u + 89u));
+    const etx::BSDFEval inside_transmission = etx::bsdf::evaluate(inside_data, inside_data.w_i, material_with_boundary_ior, inside_transmission_sampler);
+    if ((outside_transmission.valid() == false) || (inside_transmission.valid() == false)) {
+      std::printf("%s invalid symmetric thinfilm transmission mu %.3f\n", label, mu);
+      return false;
+    }
+
+    const bool outside_medium_changed = (outside_transmission.properties & etx::BSDFSample::MediumChanged) != 0u;
+    const bool inside_medium_changed = (inside_transmission.properties & etx::BSDFSample::MediumChanged) != 0u;
+    if (((outside_medium_changed || inside_medium_changed) || (outside_transmission.medium_index != outside_data.current_medium)) ||
+        (inside_transmission.medium_index != inside_data.current_medium)) {
+      std::printf("%s standalone thinfilm transmission changed medium at mu %.3f\n", label, mu);
+      return false;
+    }
+
+    const float outside_transmission_pdf = etx::bsdf::pdf(outside_data, outside_data.w_i, material_with_boundary_ior, outside_transmission_sampler);
+    const float inside_transmission_pdf = etx::bsdf::pdf(inside_data, inside_data.w_i, material_with_boundary_ior, inside_transmission_sampler);
+    if ((outside_transmission_pdf <= kEpsilon) || (inside_transmission_pdf <= kEpsilon)) {
+      std::printf("%s standalone thinfilm artificial total reflection mu %.3f outside %.6f inside %.6f\n", label, mu, outside_transmission_pdf, inside_transmission_pdf);
+      return false;
+    }
+  }
+
+  std::printf("%s standalone thinfilm sheet symmetry valid\n", label);
+  return true;
+}
+
+bool validate_delta_thinfilm_coating_sample(const char* label, const etx::BSDFData& data, const etx::Material& material, const uint32_t seed, bool require_transmission) {
+  etx::Material material_with_media = material;
+  material_with_media.ext_medium = 7u;
+  material_with_media.int_medium = 11u;
+  const bool entering = dot(data.nrm, data.w_i) < 0.0f;
+  const uint32_t expected_transmission_medium = entering ? material_with_media.int_medium : material_with_media.ext_medium;
+
+  bool saw_reflection = false;
+  bool saw_transmission = false;
+  for (uint32_t i = 0u; i < kBsdfSamples; ++i) {
+    etx::Sampler sampler(seed + i, seed ^ (i * 79u + 59u));
+    const etx::BSDFSample sample = etx::bsdf::sample(data, material_with_media, sampler);
+    if ((validate_sample(sample) == false) || (sample.valid() == false) || (sample.is_delta() == false)) {
+      std::printf("%s invalid delta thinfilm coating sample\n", label);
+      return false;
+    }
+
+    const bool reflection = (sample.properties & etx::BSDFSample::Reflection) != 0u;
+    const bool transmission = (sample.properties & etx::BSDFSample::Transmission) != 0u;
+    const bool medium_changed = (sample.properties & etx::BSDFSample::MediumChanged) != 0u;
+    if (reflection) {
+      saw_reflection = true;
+      if ((transmission || medium_changed) || (sample.medium_index != data.current_medium)) {
+        std::printf("%s invalid delta thinfilm reflection metadata\n", label);
+        return false;
+      }
+    } else if (transmission) {
+      saw_transmission = true;
+      if (((medium_changed == false) || (sample.medium_index != expected_transmission_medium)) || (sample.eta <= 0.0f)) {
+        std::printf("%s invalid delta thinfilm transmission metadata eta %.6f medium %u expected %u\n", label, sample.eta, sample.medium_index,
+          expected_transmission_medium);
+        return false;
+      }
+    } else {
+      std::printf("%s delta thinfilm coating sample missing branch flags\n", label);
+      return false;
+    }
+  }
+
+  if ((saw_reflection == false) || (require_transmission && (saw_transmission == false))) {
+    std::printf("%s delta thinfilm coating missing branch reflection %u transmission %u\n", label, saw_reflection ? 1u : 0u, saw_transmission ? 1u : 0u);
+    return false;
+  }
+
+  std::printf("%s delta thinfilm coating sample valid\n", label);
+  return true;
+}
+
+bool validate_delta_plastic_thinfilm_contract(const char* label, const etx::BSDFData& data, const etx::Material& material, const uint32_t seed) {
+  bool saw_coating = false;
+  bool saw_substrate = false;
+  for (uint32_t i = 0u; i < kBsdfSamples; ++i) {
+    etx::Sampler sampler(seed + i, seed ^ (i * 83u + 61u));
+    const etx::BSDFSample sample = etx::bsdf::sample(data, material, sampler);
+    if ((validate_sample(sample) == false) || (sample.valid() == false)) {
+      std::printf("%s invalid delta plastic thinfilm sample\n", label);
+      return false;
+    }
+
+    const bool diffuse = (sample.properties & etx::BSDFSample::Diffuse) != 0u;
+    const bool reflection = (sample.properties & etx::BSDFSample::Reflection) != 0u;
+    const bool transmission = (sample.properties & etx::BSDFSample::Transmission) != 0u;
+    const bool medium_changed = (sample.properties & etx::BSDFSample::MediumChanged) != 0u;
+    if (((reflection == false) || transmission) || medium_changed) {
+      std::printf("%s invalid delta plastic thinfilm metadata\n", label);
+      return false;
+    }
+    if (diffuse) {
+      saw_substrate = true;
+    } else {
+      saw_coating = true;
+    }
+
+    etx::Sampler eval_sampler(seed + i + 10000u, seed ^ (i * 89u + 67u));
+    const etx::BSDFEval eval = etx::bsdf::evaluate(data, sample.w_o, material, eval_sampler);
+    etx::Sampler pdf_sampler(seed + i + 20000u, seed ^ (i * 97u + 71u));
+    const float pdf = etx::bsdf::pdf(data, sample.w_o, material, pdf_sampler);
+    if ((eval.valid() == false) || (std::isfinite(pdf) == false) || (pdf <= kEpsilon)) {
+      std::printf("%s invalid delta plastic thinfilm eval/pdf %.6f\n", label, pdf);
+      return false;
+    }
+
+    const float pdf_tolerance = max(1.0e-4f, 5.0e-3f * max(sample.pdf, pdf));
+    if (fabsf(sample.pdf - pdf) > pdf_tolerance) {
+      std::printf("%s delta plastic thinfilm pdf mismatch sample %.6f pdf %.6f\n", label, sample.pdf, pdf);
+      return false;
+    }
+  }
+
+  if ((saw_coating == false) || (saw_substrate == false)) {
+    std::printf("%s delta plastic thinfilm missing branch coating %u substrate %u\n", label, saw_coating ? 1u : 0u, saw_substrate ? 1u : 0u);
+    return false;
+  }
+
+  std::printf("%s delta plastic thinfilm contract valid\n", label);
+  return true;
+}
+
+bool validate_exact_plastic_interface(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const float roughness,
+  const uint32_t seed) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(16u);
+  scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  scene_data.materials.emplace_back(make_plastic(roughness));
+  scene_data.materials.emplace_back(make_black_substrate_plastic(roughness));
+  scene_data.materials.emplace_back(make_white_dielectric(roughness));
+
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("plastic exact interface roughness %.3f failed to bind LUT\n", roughness);
+    return false;
+  }
+
+  scene_data.images.load_images(scheduler);
+
+  etx::Scene exact_scene = {};
+  exact_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
+  exact_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
+  exact_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
+  exact_scene.energy_compensation_interfaces =
+    etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+
+  etx::scene_global_clear(&original_scene);
+  etx::scene_global_publish(&exact_scene, &exact_scene);
+
+  const etx::Material material = scene_data.materials[0];
+  const etx::Material black_substrate_material = scene_data.materials[1];
+  const etx::Material dielectric_material = scene_data.materials[2];
+  const Vertex vertex = {
+    float3{0.0f, 0.0f, 0.0f},
+    float3{0.0f, 0.0f, 1.0f},
+    float3{1.0f, 0.0f, 0.0f},
+    float3{0.0f, 1.0f, 0.0f},
+    float2{0.5f, 0.5f},
+  };
   const etx::BSDFData camera_data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
   const etx::BSDFData light_data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Light, vertex, float3{0.0f, 0.0f, -1.0f}};
+  const etx::BSDFData inside_data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, 1.0f}};
 
   bool diagnostic_valid = validate_energy_compensated_material("plastic coated diffuse", camera_data, material, roughness, seed);
   diagnostic_valid =
@@ -514,6 +1017,14 @@ bool validate_exact_plastic_interface(etx::Scene& original_scene, const etx::Spe
     validate_energy_compensated_white_furnace_direction("plastic coated diffuse", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 1000u) && diagnostic_valid;
   diagnostic_valid = validate_energy_compensated_white_furnace_direction("plastic coated diffuse", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness,
                        seed + 1100u) &&
+                     diagnostic_valid;
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction("plastic coated diffuse grazing", normalize(float3{0.9848077f, 0.0f, -0.1736482f}), material,
+                       roughness, seed + 1150u) &&
+                     diagnostic_valid;
+  diagnostic_valid = validate_plastic_sample_contract("plastic coated diffuse", camera_data, material, roughness, seed + 1250u) && diagnostic_valid;
+  diagnostic_valid = validate_plastic_inner_matches_outer("plastic coated diffuse", camera_data, inside_data, material, roughness, seed + 1300u) && diagnostic_valid;
+  diagnostic_valid = validate_plastic_black_substrate_matches_dielectric_reflection("plastic coated diffuse", camera_data, black_substrate_material, dielectric_material,
+                       roughness, seed + 1350u) &&
                      diagnostic_valid;
 
   const float bsdf_energy = integrate_bsdf_energy(camera_data, material, seed + 1200u);
@@ -845,6 +1356,7 @@ int main() {
 
   etx::SpectralDistribution spectra[SpectrumCount] = {};
   spectra[SpectrumWhite] = make_spectrum(float3{1.0f, 1.0f, 1.0f});
+  spectra[SpectrumBlack] = make_spectrum(float3{0.0f, 0.0f, 0.0f});
   spectra[SpectrumColored] = make_spectrum(float3{0.8f, 0.35f, 0.15f});
   spectra[SpectrumAirEta] = make_spectrum(float3{1.0f, 1.0f, 1.0f});
   spectra[SpectrumDielectricEta] = make_spectrum(float3{1.5f, 1.5f, 1.5f});
@@ -876,7 +1388,17 @@ int main() {
   etx::BSDFData inside_data = data;
   inside_data.w_i = float3{0.0f, 0.0f, 1.0f};
   bool valid = true;
+  const etx::Material standalone_thinfilm = make_standalone_thinfilm(0.0f, 500.0f);
+  valid = validate_standalone_thinfilm_contract("standalone thinfilm outside", data, standalone_thinfilm, 22000u) && valid;
+  valid = validate_standalone_thinfilm_contract("standalone thinfilm inside", inside_data, standalone_thinfilm, 22100u) && valid;
+  valid = validate_standalone_thinfilm_sheet_symmetry("standalone thinfilm boundary ior ignored", data, standalone_thinfilm, 22150u) && valid;
+  valid = validate_delta_thinfilm_coating_sample("delta dielectric thinfilm outside", data, make_thinfilm_delta_dielectric(), 22200u, true) && valid;
+  valid = validate_delta_thinfilm_coating_sample("delta dielectric thinfilm inside", inside_data, make_thinfilm_delta_dielectric(), 22300u, true) && valid;
+  valid = validate_delta_thinfilm_coating_sample("delta conductor thinfilm outside", data, make_thinfilm_delta_conductor(), 22400u, false) && valid;
+  valid = validate_delta_plastic_thinfilm_contract("delta plastic thinfilm outside", data, make_thinfilm_delta_plastic(), 22500u) && valid;
+  valid = validate_delta_plastic_thinfilm_contract("delta plastic thinfilm inside", inside_data, make_thinfilm_delta_plastic(), 22600u) && valid;
   valid = validate_named_plastic_water_exact_interface(scene, spectra, SpectrumCount) && valid;
+  valid = validate_plastic_low_roughness_substrate_exit(scene, spectra, SpectrumCount) && valid;
 
   const float diffuse_roughness_values[] = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
   for (uint32_t i = 0u; i < 5u; ++i) {

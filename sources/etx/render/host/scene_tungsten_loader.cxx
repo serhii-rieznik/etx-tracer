@@ -472,6 +472,18 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
       data.materials[mat_idx] = data.materials[base_material];
     }
 
+    if ((mtl.cls == MaterialClass::Diffuse) || (mtl.cls == MaterialClass::Translucent)) {
+      mtl.cls = MaterialClass::Plastic;
+      mtl.reflectance.image_index = kInvalidIndex;
+      mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+      mtl.roughness.value = {0.0f, 0.0f};
+    } else if (mtl.cls == MaterialClass::Plastic) {
+      mtl.roughness.value = {0.0f, 0.0f};
+      if (mtl.reflectance.spectrum_index == kInvalidIndex) {
+        mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+      }
+    }
+
     float coat_thickness = b.value("thickness", 0.0f);
     float coat_ior = b.value("ior", 1.5f);
     float thickness_nm = coat_thickness * 100.0f;
@@ -772,7 +784,7 @@ bool add_builtin_quad(const float3& translate, const float3& scale, const float3
   t1.i[2] = vertex_offset + 2;
   t1.material_index = material_index;
 
-  if (!validate_triangle(t0, data.vertices.pos) || !validate_triangle(t1, data.vertices.pos)) {
+  if ((validate_triangle(t0, data.vertices.pos) == false) || (validate_triangle(t1, data.vertices.pos) == false)) {
     data.vertices.pos.resize(vertex_offset);
     data.vertices.nrm.resize(vertex_offset);
     data.vertices.tan.resize(vertex_offset);
@@ -1198,25 +1210,25 @@ bool load_wo3_mesh(const std::string& resolved, const float3& translate, const f
   };
 
   uint64_t vert_count = 0;
-  if (!fin.read(reinterpret_cast<char*>(&vert_count), sizeof(uint64_t))) {
+  if (static_cast<bool>(fin.read(reinterpret_cast<char*>(&vert_count), sizeof(uint64_t))) == false) {
     log::warning("Failed to read vertex count from %s", resolved.c_str());
     return false;
   }
 
   std::vector<Wo3Vertex> vbuf(vert_count);
-  if (!fin.read(reinterpret_cast<char*>(vbuf.data()), vbuf.size() * sizeof(Wo3Vertex))) {
+  if (static_cast<bool>(fin.read(reinterpret_cast<char*>(vbuf.data()), vbuf.size() * sizeof(Wo3Vertex))) == false) {
     log::warning("Failed to read vertices from %s", resolved.c_str());
     return false;
   }
 
   uint64_t tri_count = 0;
-  if (!fin.read(reinterpret_cast<char*>(&tri_count), sizeof(uint64_t))) {
+  if (static_cast<bool>(fin.read(reinterpret_cast<char*>(&tri_count), sizeof(uint64_t))) == false) {
     log::warning("Failed to read triangle count from %s", resolved.c_str());
     return false;
   }
 
   std::vector<Wo3Triangle> tbuf(tri_count);
-  if (!fin.read(reinterpret_cast<char*>(tbuf.data()), tbuf.size() * sizeof(Wo3Triangle))) {
+  if (static_cast<bool>(fin.read(reinterpret_cast<char*>(tbuf.data()), tbuf.size() * sizeof(Wo3Triangle))) == false) {
     log::warning("Failed to read triangles from %s", resolved.c_str());
     return false;
   }

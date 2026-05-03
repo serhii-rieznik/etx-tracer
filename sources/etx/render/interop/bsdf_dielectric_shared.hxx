@@ -7,7 +7,7 @@ ETX_SHARED_INLINE bool bsdf_dielectric_is_delta(ETX_IN(Material, material), ETX_
 ETX_SHARED_INLINE bool bsdf_dielectric_is_delta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, tex));
 
 ETX_SHARED_INLINE bool bsdf_dielectric_has_thinfilm(ETX_IN(Material, material)) {
-  return (material.thinfilm.min_thickness * material.thinfilm.max_thickness) > 0.0f;
+  return bsdf_resource_thinfilm_enabled(material.thinfilm);
 }
 
 ETX_SHARED_INLINE bool bsdf_dielectric_equal_eta(ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior)) {
@@ -102,28 +102,66 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceCon
   return result;
 }
 
+struct BSDFThinfilmInterface {
+  LocalFrame frame ETX_INIT({});
+  SpectralResponse reflection ETX_INIT({});
+  SpectralResponse transmission ETX_INIT({});
+  float reflection_probability ETX_INIT(0.0f);
+  float transmission_probability ETX_INIT(0.0f);
+  uint32_t transmission_medium ETX_INIT(kInvalidIndex);
+  bool medium_changed ETX_INIT(false);
+};
+
+ETX_SHARED_INLINE BSDFThinfilmInterface bsdf_thinfilm_interface(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  BSDFThinfilmInterface result = ETX_ZERO(BSDFThinfilmInterface);
+  result.frame = bsdf_data_get_normal_frame(data);
+
+  const float3 local_w_i = local_frame_to_local(result.frame, -data.w_i);
+  if (local_w_i.z <= kEpsilon) {
+    return result;
+  }
+
+  const bool entering = local_frame_entering_material(result.frame);
+  const RefractiveIndexSample material_ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
+  const RefractiveIndexSample material_int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
+  const bool standalone_sheet = material.cls == MaterialClass::Thinfilm;
+  const RefractiveIndexSample phase_ext_ior = standalone_sheet ? material_ext_ior : (entering ? material_ext_ior : material_int_ior);
+  const RefractiveIndexSample phase_int_ior = standalone_sheet ? material_ext_ior : (entering ? material_int_ior : material_ext_ior);
+  const ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, data.spectrum_sample, material.thinfilm, data.tex, sampler);
+  const SpectralResponse fresnel = bsdf_fresnel_calculate(data.spectrum_sample, local_w_i.z, phase_ext_ior, phase_int_ior, thinfilm);
+  const SpectralResponse one_minus_fresnel = spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), fresnel);
+  result.reflection = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex), fresnel);
+  result.transmission = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex), one_minus_fresnel);
+  result.reflection_probability = min(1.0f, max(0.0f, spectral_response_monochromatic(fresnel)));
+  result.transmission_probability = max(0.0f, 1.0f - result.reflection_probability);
+  result.transmission_medium = standalone_sheet ? data.current_medium : (entering ? material.int_medium : material.ext_medium);
+  result.medium_changed = standalone_sheet == false;
+  return result;
+}
+
 ETX_SHARED_INLINE BSDFSample bsdf_thinfilm_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  LocalFrame frame = bsdf_data_get_normal_frame(data);
-  RefractiveIndexSample ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
-  RefractiveIndexSample int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
-  ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, data.spectrum_sample, material.thinfilm, data.tex, sampler);
-  SpectralResponse fr = bsdf_fresnel_calculate(data.spectrum_sample, dot(data.w_i, data.nrm), ext_ior, int_ior, thinfilm);
-  float f = spectral_response_monochromatic(fr);
+  const BSDFThinfilmInterface interface_data = bsdf_thinfilm_interface(context, data, material, sampler);
+  if ((interface_data.reflection_probability <= kEpsilon) && (interface_data.transmission_probability <= kEpsilon)) {
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
 
   BSDFSample result = ETX_ZERO(BSDFSample);
-  if (bsdf_sampler_next(sampler) <= f) {
-    result.w_o = normalize(reflect(data.w_i, frame.nrm));
-    result.pdf = f;
-    result.weight = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex), spectral_response_div(fr, f));
+  if (bsdf_sampler_next(sampler) <= interface_data.reflection_probability) {
+    result.w_o = normalize(reflect(data.w_i, interface_data.frame.nrm));
+    result.pdf = max(kEpsilon, interface_data.reflection_probability);
+    result.weight = spectral_response_div(interface_data.reflection, result.pdf);
     result.properties = BSDFSample::Delta | BSDFSample::Reflection;
     result.medium_index = data.current_medium;
   } else {
     result.w_o = data.w_i;
-    result.pdf = 1.0f - f;
-    SpectralResponse one_minus_fr = spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), fr);
-    result.weight = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex), spectral_response_div(one_minus_fr, 1.0f - f));
-    result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
-    result.medium_index = local_frame_entering_material(frame) ? material.int_medium : material.ext_medium;
+    result.pdf = max(kEpsilon, interface_data.transmission_probability);
+    result.weight = spectral_response_div(interface_data.transmission, result.pdf);
+    result.properties = BSDFSample::Delta | BSDFSample::Transmission;
+    if (interface_data.medium_changed) {
+      result.properties |= BSDFSample::MediumChanged;
+    }
+    result.medium_index = interface_data.transmission_medium;
   }
 
   result.eta = 1.0f;
@@ -132,20 +170,45 @@ ETX_SHARED_INLINE BSDFSample bsdf_thinfilm_sample(ETX_IN(BSDFResourceContext, co
 
 ETX_SHARED_INLINE BSDFEval bsdf_thinfilm_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
-  (void)context;
-  (void)outgoing_direction;
-  (void)material;
-  (void)sampler;
-  return bsdf_eval_zero(data.spectrum_sample);
+  const BSDFThinfilmInterface interface_data = bsdf_thinfilm_interface(context, data, material, sampler);
+  const float3 actual_w_o = normalize(outgoing_direction);
+  const float3 reflection_w_o = normalize(reflect(data.w_i, interface_data.frame.nrm));
+  BSDFEval result = bsdf_eval_zero(data.spectrum_sample);
+  if (direction_matches(reflection_w_o, actual_w_o, 1.0f)) {
+    result.bsdf = interface_data.reflection;
+    result.func = result.bsdf;
+    result.pdf = interface_data.reflection_probability;
+    result.properties = BSDFSample::Delta | BSDFSample::Reflection;
+    result.medium_index = data.current_medium;
+    return result;
+  }
+
+  if (direction_matches(data.w_i, actual_w_o, 1.0f)) {
+    result.bsdf = interface_data.transmission;
+    result.func = result.bsdf;
+    result.pdf = interface_data.transmission_probability;
+    result.properties = BSDFSample::Delta | BSDFSample::Transmission;
+    if (interface_data.medium_changed) {
+      result.properties |= BSDFSample::MediumChanged;
+    }
+    result.medium_index = interface_data.transmission_medium;
+    return result;
+  }
+
+  return result;
 }
 
 ETX_SHARED_INLINE float bsdf_thinfilm_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
-  (void)context;
-  (void)data;
-  (void)outgoing_direction;
-  (void)material;
-  (void)sampler;
+  const BSDFThinfilmInterface interface_data = bsdf_thinfilm_interface(context, data, material, sampler);
+  const float3 actual_w_o = normalize(outgoing_direction);
+  const float3 reflection_w_o = normalize(reflect(data.w_i, interface_data.frame.nrm));
+  if (direction_matches(reflection_w_o, actual_w_o, 1.0f)) {
+    return interface_data.reflection_probability;
+  }
+  if (direction_matches(data.w_i, actual_w_o, 1.0f)) {
+    return interface_data.transmission_probability;
+  }
   return 0.0f;
 }
 
