@@ -73,10 +73,8 @@ constexpr WavefrontStage kWavefrontStages[] = {
     "wavefront_camera_direct_light_prepare_plastic_main", "0", "2", true},
   {GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareConductor, "shaders/gpu_rt_wavefront_direct_light_prepare_variant.hlsl",
     "wavefront_camera_direct_light_prepare_conductor_main", "0", "3", true},
-  {GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectricEval, "shaders/gpu_rt_wavefront_direct_light_prepare_dielectric_eval.hlsl",
-    "wavefront_camera_direct_light_prepare_dielectric_eval_main", "0", nullptr},
-  {GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectricPdf, "shaders/gpu_rt_wavefront_direct_light_prepare_dielectric_pdf.hlsl",
-    "wavefront_camera_direct_light_prepare_dielectric_pdf_main", "0", nullptr},
+  {GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectric, "shaders/gpu_rt_wavefront_direct_light_prepare_variant.hlsl",
+    "wavefront_camera_direct_light_prepare_dielectric_main", "0", "4", true},
   {GPURaytracingRenderer::PipelineStage::CameraDirectLightShadow, "shaders/gpu_rt_wavefront_shadow.hlsl", "wavefront_camera_direct_light_shadow_main", nullptr, nullptr},
   {GPURaytracingRenderer::PipelineStage::CameraDirectLightAccumulate, "shaders/gpu_rt_wavefront_direct_light.hlsl", "wavefront_camera_direct_light_accumulate_main", nullptr, nullptr},
   {GPURaytracingRenderer::PipelineStage::CameraDirectHitAccumulate, "shaders/gpu_rt_wavefront_direct_hit.hlsl", "wavefront_camera_direct_hit_accumulate_main", nullptr, nullptr},
@@ -267,10 +265,8 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "CameraDirectLightPreparePlastic";
     case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareConductor:
       return "CameraDirectLightPrepareConductor";
-    case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectricEval:
-      return "CameraDirectLightPrepareDielectricEval";
-    case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectricPdf:
-      return "CameraDirectLightPrepareDielectricPdf";
+    case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectric:
+      return "CameraDirectLightPrepareDielectric";
     case GPURaytracingRenderer::PipelineStage::CameraDirectLightShadow:
       return "CameraDirectLightShadow";
     case GPURaytracingRenderer::PipelineStage::CameraDirectLightAccumulate:
@@ -406,9 +402,8 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUPath
       return enable_direct_light && has_plastic;
     case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareConductor:
       return enable_direct_light && has_conductor;
-    case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectricEval:
-    case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectricPdf:
-      return false;
+    case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectric:
+      return enable_direct_light && has_dielectric;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDiffuse:
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPreparePlastic:
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareConductor:
@@ -2288,7 +2283,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         const RHIBindlessHandle next_camera_queue_buffer = ((batch_path_iteration & 1u) == 0u) ? _camera_queue_b_buffer : _camera_queue_a_buffer;
         const RHIBindlessHandle next_light_queue_buffer = ((batch_path_iteration & 1u) == 0u) ? _light_queue_b_buffer : _light_queue_a_buffer;
 
-        constexpr bool enable_dielectric_direct_light_runtime = false;
         record_and_submit([&](RHICommandBuffer cmd) {
           barrier_wavefront_buffers(cmd);
           if (current_camera_queue_count > 0u) {
@@ -2331,10 +2325,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                 dispatch_stage(cmd, PipelineStage::CameraDirectLightPrepareConductor, camera_queue_dispatch, batch_path_iteration);
                 barrier_wavefront_buffers(cmd);
               }
-              if (enable_dielectric_direct_light_runtime && has_dielectric) {
-                dispatch_stage(cmd, PipelineStage::CameraDirectLightPrepareDielectricEval, camera_queue_dispatch, batch_path_iteration);
-                barrier_wavefront_buffers(cmd);
-                dispatch_stage(cmd, PipelineStage::CameraDirectLightPrepareDielectricPdf, camera_queue_dispatch, batch_path_iteration);
+              if (has_dielectric) {
+                dispatch_stage(cmd, PipelineStage::CameraDirectLightPrepareDielectric, camera_queue_dispatch, batch_path_iteration);
                 barrier_wavefront_buffers(cmd);
               }
               dispatch_stage(cmd, PipelineStage::CameraDirectLightShadow, camera_queue_dispatch, batch_path_iteration);

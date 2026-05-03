@@ -69,7 +69,6 @@ const ImVec4 kCameraTextColor(0.90f, 0.80f, 0.35f, 1.0f);
 const ImVec4 kMaterialHeaderPrimaryColor(0.96f, 0.79f, 0.45f, 1.0f);
 const ImVec4 kMaterialHeaderSpecializedColor(0.54f, 0.80f, 0.98f, 1.0f);
 const ImVec4 kMaterialHeaderInterfacesColor(0.88f, 0.68f, 0.97f, 1.0f);
-const ImVec4 kMaterialHeaderEnergyCompensationColor(0.62f, 0.92f, 0.70f, 1.0f);
 
 inline void decrease_exposure(ViewParameters& o) {
   o.exposure = fmaxf(1.0f / 1024.0f, 0.5f * o.exposure);
@@ -113,10 +112,6 @@ const char* material_class_display_name(const Material::Class cls) {
       return "Principled";
     case MaterialClass::Void:
       return "Void";
-    case MaterialClass::ConductorEnergyCompensated:
-      return "Conductor Energy Compensated";
-    case MaterialClass::DielectricEnergyCompensated:
-      return "Dielectric Energy Compensated";
     default:
       return "Undefined";
   }
@@ -1193,13 +1188,12 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
 
   const auto uses_roughness = [&]() -> bool {
     switch (material.cls) {
+      case MaterialClass::Diffuse:
       case MaterialClass::Plastic:
       case MaterialClass::Conductor:
       case MaterialClass::Dielectric:
       case MaterialClass::Velvet:
       case MaterialClass::Principled:
-      case MaterialClass::ConductorEnergyCompensated:
-      case MaterialClass::DielectricEnergyCompensated:
         return true;
       default:
         return false;
@@ -1212,8 +1206,6 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       case MaterialClass::Conductor:
       case MaterialClass::Dielectric:
       case MaterialClass::Thinfilm:
-      case MaterialClass::ConductorEnergyCompensated:
-      case MaterialClass::DielectricEnergyCompensated:
         return true;
       default:
         return false;
@@ -1256,19 +1248,6 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
 
   if (uses_surface_spectra()) {
     with_section(0, "Surface", [&]() {
-      if (material_has_diffuse(material)) {
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        int dv = static_cast<int>(material.diffuse_variation);
-        if (ImGui::Combo("##diff_var", &dv, "Diffuse: Lambert\0Diffuse: Microfacet\0Diffuse: vMF\0")) {
-          dv = clamp(dv, 0, 2);
-          if (material.diffuse_variation != static_cast<uint32_t>(dv)) {
-            material.diffuse_variation = static_cast<uint32_t>(dv);
-            changed = true;
-          }
-        }
-        ImGui::Spacing();
-      }
-
       ImGui::Text("Reflectance Spectrum");
       changed |= spectrum_picker(scene_rep, "Reflectance", material.reflectance.spectrum_index, false, false);
       ImGui::Spacing();
@@ -1293,15 +1272,25 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
         auto aniso_insert = _material_anisotropy.emplace(material_key, std::fabs(rough_u - rough_v) > 1.0e-4f);
         auto aniso_entry = aniso_insert.first;
         bool anisotropic = aniso_entry->second;
+        const bool force_isotropic_roughness = material.cls == MaterialClass::Diffuse;
 
-        if (ImGui::Checkbox("Anisotropic##rough_aniso", &anisotropic)) {
-          aniso_entry->second = anisotropic;
-          if (anisotropic == false) {
+        if (force_isotropic_roughness) {
+          anisotropic = false;
+          aniso_entry->second = false;
+          if (rough_v != rough_u) {
             rough_v = rough_u;
             changed = true;
           }
+        } else {
+          if (ImGui::Checkbox("Anisotropic##rough_aniso", &anisotropic)) {
+            aniso_entry->second = anisotropic;
+            if (anisotropic == false) {
+              rough_v = rough_u;
+              changed = true;
+            }
+          }
+          ImGui::Spacing();
         }
-        ImGui::Spacing();
 
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         if (ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, anisotropic ? "Roughness U %.3f" : "Roughness %.3f",
@@ -2338,10 +2327,9 @@ bool UI::build_material_class_selector(Material& material) {
       kMaterialHeaderPrimaryColor,
       kMaterialHeaderSpecializedColor,
       kMaterialHeaderInterfacesColor,
-      kMaterialHeaderEnergyCompensationColor,
     };
 
-    ImGui::Columns(4, "material_class_columns", true);
+    ImGui::Columns(3, "material_class_columns", true);
 
     auto draw_material_column = [&](uint32_t column_index, const char* title, std::initializer_list<Material::Class> entries) {
       ImGui::PushStyleColor(ImGuiCol_Text, header_colors[column_index % (sizeof(header_colors) / sizeof(header_colors[0]))]);
@@ -2368,9 +2356,6 @@ bool UI::build_material_class_selector(Material& material) {
       {MaterialClass::Principled, MaterialClass::Translucent, MaterialClass::Thinfilm, MaterialClass::Velvet, MaterialClass::Mirror});
     ImGui::NextColumn();
     draw_material_column(column_index++, "Interfaces", {MaterialClass::Boundary, MaterialClass::Void});
-    ImGui::NextColumn();
-    draw_material_column(column_index++, "Energy",
-      {MaterialClass::ConductorEnergyCompensated, MaterialClass::DielectricEnergyCompensated});
 
     ImGui::Columns(1);
     ImGui::EndPopup();
@@ -2962,9 +2947,6 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
   scene_settings_changed = (scene_settings_changed || spectral_changed);
   const bool blue_noise_changed = ImGui::Checkbox("Blue Noise", scene_rep.data().options.properties + Scene::Properties::BlueNoise);
   scene_settings_changed = (scene_settings_changed || blue_noise_changed);
-  const bool energy_compensated_specular_changed =
-    ImGui::Checkbox("Energy-compensated conductors and dielectrics", scene_rep.data().options.properties + Scene::Properties::EnergyCompensatedSpecular);
-  scene_settings_changed = (scene_settings_changed || energy_compensated_specular_changed);
 
   ImGui::Separator();
   if (labeled_control("Noise Threshold (experimental)", [&]() {

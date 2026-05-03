@@ -1,6 +1,5 @@
 #pragma once
 
-#include "bsdf_external_shared.hxx"
 #include "bsdf_resource_shared.hxx"
 
 ETX_SHARED_INLINE BSDFSample bsdf_void_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
@@ -51,60 +50,99 @@ ETX_SHARED_INLINE SpectralResponse bsdf_void_albedo(ETX_IN(BSDFResourceContext, 
   return spectral_response_zero(data.spectrum_sample);
 }
 
+ETX_SHARED_INLINE float bsdf_diffuse_scalar_roughness(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
+  const float2 roughness = bsdf_resource_evaluate_roughness(context, material, uv);
+  return saturate(0.5f * (roughness.x + roughness.y));
+}
+
+ETX_SHARED_INLINE float bsdf_diffuse_eon_a(float roughness) {
+  const float coefficient = 0.5f - 2.0f * kInvPi / 3.0f;
+  return 1.0f / (1.0f + coefficient * roughness);
+}
+
+ETX_SHARED_INLINE float bsdf_diffuse_eon_directional_albedo(float mu, float roughness) {
+  if (roughness <= kEpsilon) {
+    return 1.0f;
+  }
+
+  const float clamped_mu = min(1.0f, max(0.0f, mu));
+  const float a = bsdf_diffuse_eon_a(roughness);
+  if (clamped_mu <= kEpsilon) {
+    return a * (1.0f + roughness * kInvPi * (0.5f * kPi - 2.0f / 3.0f));
+  }
+
+  const float sin_theta = sqrt(max(0.0f, 1.0f - clamped_mu * clamped_mu));
+  const float sin_theta_3 = sin_theta * sin_theta * sin_theta;
+  const float grazing_term = sin_theta * (acos(clamped_mu) - sin_theta * clamped_mu) + (2.0f / 3.0f) * (((sin_theta / clamped_mu) * (1.0f - sin_theta_3)) - sin_theta);
+  return a * (1.0f + roughness * kInvPi * grazing_term);
+}
+
+ETX_SHARED_INLINE float bsdf_diffuse_eon_average_albedo(float roughness) {
+  const float a = bsdf_diffuse_eon_a(roughness);
+  return a * (1.0f + roughness * (2.0f / 3.0f - 28.0f * kInvPi / 15.0f));
+}
+
+ETX_SHARED_INLINE SpectralResponse bsdf_diffuse_eon_brdf(ETX_IN(SpectralQuery, spect), ETX_IN(SpectralResponse, albedo), ETX_IN(float3, local_w_i),
+  ETX_IN(float3, local_w_o), float roughness) {
+  if (roughness <= kEpsilon) {
+    return spectral_response_mul(albedo, kInvPi);
+  }
+
+  const float mu_i = max(0.0f, local_w_i.z);
+  const float mu_o = max(0.0f, local_w_o.z);
+  const float s = dot(local_w_i, local_w_o) - mu_i * mu_o;
+  const float t = max(mu_i, mu_o);
+  const float s_over_t = (s > 0.0f) ? (s / max(kEpsilon, t)) : s;
+  const float a = bsdf_diffuse_eon_a(roughness);
+
+  const SpectralResponse f_ss = spectral_response_mul(albedo, kInvPi * a * (1.0f + roughness * s_over_t));
+
+  const float e_i = bsdf_diffuse_eon_directional_albedo(mu_i, roughness);
+  const float e_o = bsdf_diffuse_eon_directional_albedo(mu_o, roughness);
+  const float e_avg = bsdf_diffuse_eon_average_albedo(roughness);
+  const SpectralResponse one = spectral_response_make(spect, 1.0f);
+  const SpectralResponse numerator = spectral_response_mul(spectral_response_mul(albedo, albedo), e_avg);
+  const SpectralResponse denominator = spectral_response_sub(one, spectral_response_mul(albedo, 1.0f - e_avg));
+  const SpectralResponse rho_ms = spectral_response_div(numerator, denominator);
+  const float f_ms_scalar = ((1.0f - e_i) * (1.0f - e_o)) / (1.0f - e_avg);
+  const SpectralResponse f_ms = spectral_response_mul(rho_ms, kInvPi * f_ms_scalar);
+  return spectral_response_add(f_ss, f_ms);
+}
+
 ETX_SHARED_INLINE BSDFEval bsdf_diffuse_layer(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o),
   ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  if (local_w_o.z <= 0.0f) {
+  (void)sampler;
+
+  if ((local_w_i.z <= kEpsilon) || (local_w_o.z <= kEpsilon)) {
     return bsdf_eval_zero(data.spectrum_sample);
   }
 
-  SpectralResponse diffuse = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
+  const SpectralResponse diffuse = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
+  const float roughness = bsdf_diffuse_scalar_roughness(context, material, data.tex);
   BSDFEval result = ETX_ZERO(BSDFEval);
-  result.func = spectral_response_zero(data.spectrum_sample);
-  result.bsdf = spectral_response_zero(data.spectrum_sample);
-  result.eta = 1.0f;
-
-  float2 roughness = bsdf_resource_evaluate_roughness(context, material, data.tex);
-  if (material.diffuse_variation == 1u) {
-    result.bsdf = bsdf_external_eval_diffuse(sampler, local_w_i, local_w_o, roughness, diffuse);
-    if (local_w_o.z > 0.0f) {
-      result.func = spectral_response_div(result.bsdf, local_w_o.z);
-    }
-  } else if (material.diffuse_variation == 2u) {
-    result.func = bsdf_external_vmf_diffuse_brdf(local_w_i, local_w_o, roughness, diffuse);
-    result.bsdf = spectral_response_mul(result.func, local_w_o.z);
-  } else {
-    result.func = spectral_response_mul(diffuse, kInvPi);
-    result.bsdf = spectral_response_mul(result.func, local_w_o.z);
-  }
-
+  result.func = bsdf_diffuse_eon_brdf(data.spectrum_sample, diffuse, local_w_i, local_w_o, roughness);
+  result.bsdf = spectral_response_mul(result.func, local_w_o.z);
   result.pdf = kInvPi * local_w_o.z;
+  result.eta = 1.0f;
   return result;
 }
 
 ETX_SHARED_INLINE BSDFSample bsdf_diffuse_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  LocalFrame frame = bsdf_data_get_normal_frame(data, material);
-  float3 local_w_i = local_frame_to_local(frame, -data.w_i);
-  float2 roughness = bsdf_resource_evaluate_roughness(context, material, data.tex);
+  const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
+  const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
 
   BSDFSample result = ETX_ZERO(BSDFSample);
   result.weight = spectral_response_zero(data.spectrum_sample);
   result.eta = 1.0f;
   result.properties = BSDFSample::Reflection | BSDFSample::Diffuse;
 
-  float3 local_w_o = float3(0.0f, 0.0f, 0.0f);
-  if (material.diffuse_variation == 1u) {
-    SpectralResponse diffuse = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
-    local_w_o = bsdf_external_sample_diffuse(sampler, local_w_i, roughness, diffuse, result.weight);
-    result.pdf = kInvPi * local_w_o.z;
-  } else {
-    float2 cosine_rnd = bsdf_sampler_has_fixed(sampler) ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
-    local_w_o = sample_cosine_distribution(cosine_rnd, 1.0f);
-    BSDFEval layer = bsdf_diffuse_layer(context, data, local_w_i, local_w_o, material, sampler);
-    if (layer.pdf > 0.0f) {
-      result.weight = spectral_response_div(layer.bsdf, layer.pdf);
-    }
-    result.pdf = layer.pdf;
+  const float2 cosine_rnd = bsdf_sampler_has_fixed(sampler) ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+  const float3 local_w_o = sample_cosine_distribution(cosine_rnd, 1.0f);
+  const BSDFEval layer = bsdf_diffuse_layer(context, data, local_w_i, local_w_o, material, sampler);
+  if (layer.pdf > 0.0f) {
+    result.weight = spectral_response_div(layer.bsdf, layer.pdf);
   }
+  result.pdf = layer.pdf;
 
   result.w_o = local_frame_from_local(frame, local_w_o);
   result.medium_index = data.current_medium;
@@ -113,13 +151,13 @@ ETX_SHARED_INLINE BSDFSample bsdf_diffuse_sample(ETX_IN(BSDFResourceContext, con
 
 ETX_SHARED_INLINE BSDFEval bsdf_diffuse_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
-  LocalFrame frame = bsdf_data_get_normal_frame(data, material);
-  float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
+  const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
+  const float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
   if (local_w_o.z <= kEpsilon) {
     return bsdf_eval_zero(data.spectrum_sample);
   }
 
-  float3 local_w_i = local_frame_to_local(frame, -data.w_i);
+  const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
   return bsdf_diffuse_layer(context, data, local_w_i, local_w_o, material, sampler);
 }
 
@@ -128,13 +166,13 @@ ETX_SHARED_INLINE float bsdf_diffuse_pdf(ETX_IN(BSDFResourceContext, context), E
   (void)context;
   (void)sampler;
 
-  LocalFrame frame = bsdf_data_get_normal_frame(data, material);
-  float n_dot_o = dot(frame.nrm, outgoing_direction);
-  if (n_dot_o <= kEpsilon) {
+  const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
+  const float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
+  if (local_w_o.z <= kEpsilon) {
     return 0.0f;
   }
 
-  return kInvPi * n_dot_o;
+  return kInvPi * local_w_o.z;
 }
 
 ETX_SHARED_INLINE bool bsdf_diffuse_is_delta(ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {

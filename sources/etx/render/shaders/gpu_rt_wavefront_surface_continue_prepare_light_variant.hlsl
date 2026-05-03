@@ -19,15 +19,15 @@
 # define ETX_STAGE_BSDF_SAMPLE bsdf_plastic_sample
 # define ETX_STAGE_BSDF_PDF    bsdf_plastic_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
-# include <interop/bsdf_conductor_shared.hxx>
+# include <interop/bsdf_various_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS  MaterialClass::Conductor
-# define ETX_STAGE_BSDF_SAMPLE bsdf_conductor_sample
-# define ETX_STAGE_BSDF_PDF    bsdf_conductor_pdf
+# define ETX_STAGE_BSDF_SAMPLE bsdf_diffuse_sample
+# define ETX_STAGE_BSDF_PDF    bsdf_diffuse_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
-# include <interop/bsdf_dielectric_shared.hxx>
+# include <interop/bsdf_various_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS  MaterialClass::Dielectric
-# define ETX_STAGE_BSDF_SAMPLE bsdf_dielectric_sample
-# define ETX_STAGE_BSDF_PDF    bsdf_dielectric_pdf
+# define ETX_STAGE_BSDF_SAMPLE bsdf_diffuse_sample
+# define ETX_STAGE_BSDF_PDF    bsdf_diffuse_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_THINFILM)
 # include <interop/bsdf_dielectric_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS  MaterialClass::Thinfilm

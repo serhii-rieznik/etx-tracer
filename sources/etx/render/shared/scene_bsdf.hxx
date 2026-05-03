@@ -65,8 +65,6 @@ ETX_SHARED_INLINE bool interop_supported(const Material& mtl) {
     case MaterialClass::Translucent:
     case MaterialClass::Conductor:
     case MaterialClass::Dielectric:
-    case MaterialClass::ConductorEnergyCompensated:
-    case MaterialClass::DielectricEnergyCompensated:
     case MaterialClass::Plastic:
     case MaterialClass::Thinfilm:
     case MaterialClass::Mirror:
@@ -144,7 +142,6 @@ ETX_SHARED_INLINE BSDFSample make_public_sample(const ::BSDFSample& value) {
 ETX_SHARED_INLINE BSDFResourceContext make_interop_context() {
   const Scene& scene = scene_global_get();
   BSDFResourceContext result = make_bsdf_resource_cpu_context(scene);
-  result.energy_compensated_specular = scene.energy_compensated_specular();
   return result;
 }
 
@@ -242,6 +239,11 @@ ETX_SHARED_INLINE BSDFResourceContext make_interop_context() {
   float3 w_o = -in_data.w_i;
   BSDFData data = in_data;
   data.w_i = -in_w_o;
+  if (in_data.path_source == PathSource::Camera) {
+    data.path_source = PathSource::Light;
+  } else if (in_data.path_source == PathSource::Light) {
+    data.path_source = PathSource::Camera;
+  }
 
 #if defined(ETX_FORCED_BSDF)
   return ETX_FORCED_BSDF::pdf(data, w_o, mtl, smp);
@@ -295,7 +297,6 @@ ETX_SHARED_INLINE bool alpha_test_pass(const Material& mat, const float2& uv, Sa
 
 }  // namespace etx
 
-#include <etx/render/shared/bsdf_external.hxx>
 #include <etx/render/shared/bsdf_various.hxx>
 #include <etx/render/shared/bsdf_plastic.hxx>
 #include <etx/render/shared/bsdf_conductor.hxx>

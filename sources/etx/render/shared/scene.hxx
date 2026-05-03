@@ -33,7 +33,6 @@ struct ETX_ALIGNED Scene {
       Spectral = SceneProperty::Spectral,
       MultipleImportanceSampling = SceneProperty::MultipleImportanceSampling,
       BlueNoise = SceneProperty::BlueNoise,
-      EnergyCompensatedSpecular = SceneProperty::EnergyCompensatedSpecular,
 
       Count = SceneProperty::Count,
     };
@@ -129,9 +128,6 @@ struct ETX_ALIGNED Scene {
   }
   bool blue_noise() const {
     return options.properties[Properties::BlueNoise];
-  }
-  bool energy_compensated_specular() const {
-    return options.properties[Properties::EnergyCompensatedSpecular];
   }
   LightSampling light_sampling_method() const {
     return options.light_sampling;

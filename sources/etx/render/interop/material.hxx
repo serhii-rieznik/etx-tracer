@@ -59,8 +59,6 @@ struct MaterialClass {
     Velvet,
     Principled,
     Void,
-    ConductorEnergyCompensated,
-    DielectricEnergyCompensated,
 
     Count,
     Undefined = kInvalidIndex,
@@ -86,14 +84,9 @@ struct ETX_ALIGNED Material {
   uint32_t int_medium ETX_INIT(kInvalidIndex);
   uint32_t ext_medium ETX_INIT(kInvalidIndex);
   uint32_t normal_image_index ETX_INIT(kInvalidIndex);
-  uint32_t diffuse_variation ETX_INIT(0u);
   uint32_t two_sided ETX_INIT(0u);
   float normal_scale ETX_INIT(1.0f);
   float opacity ETX_INIT(1.0f);
   float emission_collimation ETX_INIT(0.0f);
   uint32_t energy_compensation_interface_index ETX_INIT(kInvalidIndex);
 };
-
-ETX_SHARED_INLINE bool material_has_diffuse(ETX_IN(Material, mtl)) {
-  return (mtl.cls == MaterialClass::Diffuse) || (mtl.cls == MaterialClass::Plastic);
-}

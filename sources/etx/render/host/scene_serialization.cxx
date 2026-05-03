@@ -67,10 +67,6 @@ inline Material::Class material_string_to_class(const char* s) {
     return MaterialClass::Principled;
   else if (strcmp(s, "void") == 0)
     return MaterialClass::Void;
-  else if (strcmp(s, "conductor_energy_compensated") == 0)
-    return MaterialClass::ConductorEnergyCompensated;
-  else if (strcmp(s, "dielectric_energy_compensated") == 0)
-    return MaterialClass::DielectricEnergyCompensated;
   else {
     log::error("Undefined BSDF: `%s`", s);
     return MaterialClass::Diffuse;
@@ -1784,13 +1780,6 @@ struct SceneSerializationImpl {
           mtl.cls = material_string_to_class(params[i + 1]);
           i += 1;
         }
-      }
-    }
-
-    if (get_param(material, "diffuse")) {
-      uint32_t var = 0;
-      if (sscanf(_data_buffer, "%u", &var) == 1) {
-        mtl.diffuse_variation = var;
       }
     }
 

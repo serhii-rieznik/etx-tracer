@@ -1082,16 +1082,12 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
   return bsdf_diffuse_sample(context, data, material, sampler);
 }
 
-  [noinline] BSDFSample gpu_plastic_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+[noinline] BSDFSample gpu_plastic_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   return bsdf_plastic_sample(context, data, material, sampler);
 }
 
-[noinline] BSDFSample gpu_conductor_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  return bsdf_conductor_sample(context, data, material, sampler);
-}
-
-  [noinline] BSDFSample gpu_dielectric_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  return bsdf_dielectric_sample(context, data, material, sampler);
+[noinline] BSDFSample gpu_thinfilm_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  return bsdf_thinfilm_sample(context, data, material, sampler);
 }
 
 [noinline] BSDFSample gpu_sample_material_bsdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
@@ -1102,10 +1098,13 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
     return gpu_plastic_bsdf_sample(context, data, material, sampler);
   }
   if (material.cls == MaterialClass::Conductor) {
-    return gpu_conductor_bsdf_sample(context, data, material, sampler);
+    return gpu_diffuse_bsdf_sample(context, data, material, sampler);
   }
-  if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Thinfilm)) {
-    return gpu_dielectric_bsdf_sample(context, data, material, sampler);
+  if (material.cls == MaterialClass::Dielectric) {
+    return gpu_diffuse_bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::Thinfilm) {
+    return gpu_thinfilm_bsdf_sample(context, data, material, sampler);
   }
 
   return bsdf_sample_zero(data.spectrum_sample);

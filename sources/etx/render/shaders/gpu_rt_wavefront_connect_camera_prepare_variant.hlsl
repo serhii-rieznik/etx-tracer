@@ -18,17 +18,17 @@
 # define ETX_STAGE_BSDF_EVAL  bsdf_plastic_evaluate
 # define ETX_STAGE_BSDF_PDF   bsdf_plastic_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
-# include <interop/bsdf_conductor_shared.hxx>
+# include <interop/bsdf_various_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Conductor
-# define ETX_STAGE_BSDF_EVAL  bsdf_conductor_evaluate
-# define ETX_STAGE_BSDF_PDF   bsdf_conductor_pdf
+# define ETX_STAGE_BSDF_EVAL  bsdf_diffuse_evaluate
+# define ETX_STAGE_BSDF_PDF   bsdf_diffuse_pdf
+#elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
+# include <interop/bsdf_various_shared.hxx>
+# define ETX_STAGE_BSDF_CLASS MaterialClass::Dielectric
+# define ETX_STAGE_BSDF_EVAL  bsdf_diffuse_evaluate
+# define ETX_STAGE_BSDF_PDF   bsdf_diffuse_pdf
 #endif
 
-#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
-[numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
-  (void)dtid;
-}
-#else
 BSDFEval wavefront_connect_camera_stage_bsdf_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_EVAL(context, data, outgoing_direction, material, sampler);
 }
@@ -61,4 +61,3 @@ float wavefront_connect_camera_stage_bsdf_pdf(BSDFResourceContext context, BSDFD
   }
   wavefront_store_connect_camera_prepare_task(dtid.x, input_value, bsdf_eval, bsdf_sampler);
 }
-#endif

@@ -110,11 +110,11 @@ ETX_SHARED_INLINE Material gpu_abi_load_material_full(ByteAddressBuffer buffer, 
   result.int_medium = gpu_abi_load_u32(buffer, base_offset + kMaterialIntMediumOffset);
   result.ext_medium = gpu_abi_load_u32(buffer, base_offset + kMaterialExtMediumOffset);
   result.normal_image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialNormalImageIndexOffset);
-  result.diffuse_variation = gpu_abi_load_u32(buffer, base_offset + kMaterialDiffuseVariationOffset);
   result.two_sided = gpu_abi_load_u32(buffer, base_offset + kMaterialTwoSidedOffset);
   result.normal_scale = gpu_abi_load_f32(buffer, base_offset + kMaterialNormalScaleOffset);
   result.opacity = gpu_abi_load_f32(buffer, base_offset + kMaterialOpacityOffset);
   result.emission_collimation = gpu_abi_load_f32(buffer, base_offset + kMaterialEmissionCollimationOffset);
+  result.energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialEnergyCompensationInterfaceIndexOffset);
   return result;
 }
 

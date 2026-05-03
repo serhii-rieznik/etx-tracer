@@ -98,6 +98,8 @@ static_assert(offsetof(Material, int_medium) == kMaterialIntMediumOffset, "Mater
 static_assert(offsetof(Material, ext_medium) == kMaterialExtMediumOffset, "Material::ext_medium offset changed");
 static_assert(offsetof(Material, opacity) == kMaterialOpacityOffset, "Material::opacity offset changed");
 static_assert(offsetof(Material, emission_collimation) == kMaterialEmissionCollimationOffset, "Material::emission_collimation offset changed");
+static_assert(offsetof(Material, energy_compensation_interface_index) == kMaterialEnergyCompensationInterfaceIndexOffset,
+  "Material::energy_compensation_interface_index offset changed");
 
 static_assert(std::is_standard_layout_v<Camera>, "Camera must stay standard layout for C++/HLSL interop");
 static_assert(alignof(Camera) == 16, "Camera alignment must match HLSL packing");

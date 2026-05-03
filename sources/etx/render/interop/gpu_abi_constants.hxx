@@ -25,7 +25,6 @@ struct SceneProperty {
     Spectral,
     MultipleImportanceSampling,
     BlueNoise,
-    EnergyCompensatedSpecular,
 
     Count,
   };
@@ -75,11 +74,11 @@ ETX_STATIC_CONST uint32_t kMaterialClassOffset = 232u;
 ETX_STATIC_CONST uint32_t kMaterialIntMediumOffset = 236u;
 ETX_STATIC_CONST uint32_t kMaterialExtMediumOffset = 240u;
 ETX_STATIC_CONST uint32_t kMaterialNormalImageIndexOffset = 244u;
-ETX_STATIC_CONST uint32_t kMaterialDiffuseVariationOffset = 248u;
-ETX_STATIC_CONST uint32_t kMaterialTwoSidedOffset = 252u;
-ETX_STATIC_CONST uint32_t kMaterialNormalScaleOffset = 256u;
-ETX_STATIC_CONST uint32_t kMaterialOpacityOffset = 260u;
-ETX_STATIC_CONST uint32_t kMaterialEmissionCollimationOffset = 264u;
+ETX_STATIC_CONST uint32_t kMaterialTwoSidedOffset = 248u;
+ETX_STATIC_CONST uint32_t kMaterialNormalScaleOffset = 252u;
+ETX_STATIC_CONST uint32_t kMaterialOpacityOffset = 256u;
+ETX_STATIC_CONST uint32_t kMaterialEmissionCollimationOffset = 260u;
+ETX_STATIC_CONST uint32_t kMaterialEnergyCompensationInterfaceIndexOffset = 264u;
 
 ETX_STATIC_CONST uint32_t kEmitterStride = 32u;
 ETX_STATIC_CONST uint32_t kEmitterClassOffset = 0u;

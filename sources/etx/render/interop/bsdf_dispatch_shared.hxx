@@ -30,42 +30,24 @@ ETX_SHARED_INLINE bool bsdf_gpu_supported_class(uint32_t material_class) {
   }
 }
 
-ETX_SHARED_INLINE Material bsdf_effective_material(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material)) {
-  Material result = material;
-#if (ETX_CPP)
-  if (context.energy_compensated_specular) {
-    if (material.cls == MaterialClass::Conductor) {
-      result.cls = MaterialClass::ConductorEnergyCompensated;
-    } else if (material.cls == MaterialClass::Dielectric) {
-      result.cls = MaterialClass::DielectricEnergyCompensated;
-    }
-  } else {
-    if (material.cls == MaterialClass::ConductorEnergyCompensated) {
-      result.cls = MaterialClass::Conductor;
-    } else if (material.cls == MaterialClass::DielectricEnergyCompensated) {
-      result.cls = MaterialClass::Dielectric;
-    }
-  }
-#endif
-  return result;
-}
-
 ETX_SHARED_INLINE BSDFSample bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  const Material effective_material = bsdf_effective_material(context, material);
+  const Material effective_material = material;
   switch (effective_material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_sample(context, data, effective_material, sampler);
     case MaterialClass::Translucent:
       return bsdf_translucent_sample(context, data, effective_material, sampler);
     case MaterialClass::Conductor:
-      return bsdf_conductor_sample(context, data, effective_material, sampler);
-    case MaterialClass::Dielectric:
-      return bsdf_dielectric_sample(context, data, effective_material, sampler);
 #if (ETX_CPP)
-    case MaterialClass::ConductorEnergyCompensated:
       return bsdf_conductor_energy_compensated_sample(context, data, effective_material, sampler);
-    case MaterialClass::DielectricEnergyCompensated:
+#else
+      return bsdf_diffuse_sample(context, data, effective_material, sampler);
+#endif
+    case MaterialClass::Dielectric:
+#if (ETX_CPP)
       return bsdf_dielectric_energy_compensated_sample(context, data, effective_material, sampler);
+#else
+      return bsdf_diffuse_sample(context, data, effective_material, sampler);
 #endif
     case MaterialClass::Plastic:
       return bsdf_plastic_sample(context, data, effective_material, sampler);
@@ -86,21 +68,23 @@ ETX_SHARED_INLINE BSDFSample bsdf_sample(ETX_IN(BSDFResourceContext, context), E
 
 ETX_SHARED_INLINE BSDFEval bsdf_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
-  const Material effective_material = bsdf_effective_material(context, material);
+  const Material effective_material = material;
   switch (effective_material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_evaluate(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Translucent:
       return bsdf_translucent_evaluate(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Conductor:
-      return bsdf_conductor_evaluate(context, data, outgoing_direction, effective_material, sampler);
-    case MaterialClass::Dielectric:
-      return bsdf_dielectric_evaluate(context, data, outgoing_direction, effective_material, sampler);
 #if (ETX_CPP)
-    case MaterialClass::ConductorEnergyCompensated:
       return bsdf_conductor_energy_compensated_evaluate(context, data, outgoing_direction, effective_material, sampler);
-    case MaterialClass::DielectricEnergyCompensated:
+#else
+      return bsdf_diffuse_evaluate(context, data, outgoing_direction, effective_material, sampler);
+#endif
+    case MaterialClass::Dielectric:
+#if (ETX_CPP)
       return bsdf_dielectric_energy_compensated_evaluate(context, data, outgoing_direction, effective_material, sampler);
+#else
+      return bsdf_diffuse_evaluate(context, data, outgoing_direction, effective_material, sampler);
 #endif
     case MaterialClass::Plastic:
       return bsdf_plastic_evaluate(context, data, outgoing_direction, effective_material, sampler);
@@ -121,21 +105,23 @@ ETX_SHARED_INLINE BSDFEval bsdf_evaluate(ETX_IN(BSDFResourceContext, context), E
 
 ETX_SHARED_INLINE float bsdf_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
-  const Material effective_material = bsdf_effective_material(context, material);
+  const Material effective_material = material;
   switch (effective_material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_pdf(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Translucent:
       return bsdf_translucent_pdf(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Conductor:
-      return bsdf_conductor_pdf(context, data, outgoing_direction, effective_material, sampler);
-    case MaterialClass::Dielectric:
-      return bsdf_dielectric_pdf(context, data, outgoing_direction, effective_material, sampler);
 #if (ETX_CPP)
-    case MaterialClass::ConductorEnergyCompensated:
       return bsdf_conductor_energy_compensated_pdf(context, data, outgoing_direction, effective_material, sampler);
-    case MaterialClass::DielectricEnergyCompensated:
+#else
+      return bsdf_diffuse_pdf(context, data, outgoing_direction, effective_material, sampler);
+#endif
+    case MaterialClass::Dielectric:
+#if (ETX_CPP)
       return bsdf_dielectric_energy_compensated_pdf(context, data, outgoing_direction, effective_material, sampler);
+#else
+      return bsdf_diffuse_pdf(context, data, outgoing_direction, effective_material, sampler);
 #endif
     case MaterialClass::Plastic:
       return bsdf_plastic_pdf(context, data, outgoing_direction, effective_material, sampler);
@@ -159,6 +145,11 @@ ETX_SHARED_INLINE float bsdf_reverse_pdf(ETX_IN(BSDFResourceContext, context), E
   float3 reverse_w_o = -input_data.w_i;
   BSDFData reverse_data = input_data;
   reverse_data.w_i = -outgoing_direction;
+  if (input_data.path_source == PathSource::Camera) {
+    reverse_data.path_source = PathSource::Light;
+  } else if (input_data.path_source == PathSource::Light) {
+    reverse_data.path_source = PathSource::Camera;
+  }
   return bsdf_pdf(context, reverse_data, reverse_w_o, material, sampler);
 }
 
@@ -169,14 +160,16 @@ ETX_SHARED_INLINE bool bsdf_is_delta(ETX_IN(Material, material), ETX_IN(float2, 
     case MaterialClass::Translucent:
       return bsdf_translucent_is_delta(material, tex, sampler);
     case MaterialClass::Conductor:
-      return bsdf_conductor_is_delta(material, tex, sampler);
-    case MaterialClass::Dielectric:
-      return bsdf_dielectric_is_delta(material, tex, sampler);
 #if (ETX_CPP)
-    case MaterialClass::ConductorEnergyCompensated:
-      return bsdf_conductor_energy_compensated_is_delta(material, tex, sampler);
-    case MaterialClass::DielectricEnergyCompensated:
-      return bsdf_dielectric_energy_compensated_is_delta(material, tex, sampler);
+      return bsdf_conductor_is_delta(material, tex, sampler);
+#else
+      return bsdf_diffuse_is_delta(material, tex, sampler);
+#endif
+    case MaterialClass::Dielectric:
+#if (ETX_CPP)
+      return bsdf_dielectric_is_delta(material, tex, sampler);
+#else
+      return bsdf_diffuse_is_delta(material, tex, sampler);
 #endif
     case MaterialClass::Plastic:
       return bsdf_plastic_is_delta(material, tex, sampler);
@@ -196,21 +189,23 @@ ETX_SHARED_INLINE bool bsdf_is_delta(ETX_IN(Material, material), ETX_IN(float2, 
 }
 
 ETX_SHARED_INLINE bool bsdf_is_delta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {
-  const Material effective_material = bsdf_effective_material(context, material);
+  const Material effective_material = material;
   switch (effective_material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_is_delta(effective_material, tex, sampler);
     case MaterialClass::Translucent:
       return bsdf_translucent_is_delta(effective_material, tex, sampler);
     case MaterialClass::Conductor:
-      return bsdf_conductor_is_delta_with_context(context, effective_material, tex);
-    case MaterialClass::Dielectric:
-      return bsdf_dielectric_is_delta_with_context(context, effective_material, tex);
 #if (ETX_CPP)
-    case MaterialClass::ConductorEnergyCompensated:
       return bsdf_conductor_energy_compensated_is_delta_with_context(context, effective_material, tex);
-    case MaterialClass::DielectricEnergyCompensated:
+#else
+      return bsdf_diffuse_is_delta(effective_material, tex, sampler);
+#endif
+    case MaterialClass::Dielectric:
+#if (ETX_CPP)
       return bsdf_dielectric_energy_compensated_is_delta_with_context(context, effective_material, tex);
+#else
+      return bsdf_diffuse_is_delta(effective_material, tex, sampler);
 #endif
     case MaterialClass::Plastic:
       return bsdf_plastic_is_delta(effective_material, tex, sampler);
@@ -230,21 +225,23 @@ ETX_SHARED_INLINE bool bsdf_is_delta_with_context(ETX_IN(BSDFResourceContext, co
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  const Material effective_material = bsdf_effective_material(context, material);
+  const Material effective_material = material;
   switch (effective_material.cls) {
     case MaterialClass::Diffuse:
       return bsdf_diffuse_albedo(context, data, effective_material, sampler);
     case MaterialClass::Translucent:
       return bsdf_translucent_albedo(context, data, effective_material, sampler);
     case MaterialClass::Conductor:
-      return bsdf_conductor_albedo(context, data, effective_material, sampler);
-    case MaterialClass::Dielectric:
-      return bsdf_dielectric_albedo(context, data, effective_material, sampler);
 #if (ETX_CPP)
-    case MaterialClass::ConductorEnergyCompensated:
       return bsdf_conductor_energy_compensated_albedo(context, data, effective_material, sampler);
-    case MaterialClass::DielectricEnergyCompensated:
+#else
+      return bsdf_diffuse_albedo(context, data, effective_material, sampler);
+#endif
+    case MaterialClass::Dielectric:
+#if (ETX_CPP)
       return bsdf_dielectric_energy_compensated_albedo(context, data, effective_material, sampler);
+#else
+      return bsdf_diffuse_albedo(context, data, effective_material, sampler);
 #endif
     case MaterialClass::Plastic:
       return bsdf_plastic_albedo(context, data, effective_material, sampler);

@@ -108,8 +108,6 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "velvet",
     "principled",
     "void",
-    "conductor_energy_compensated",
-    "dielectric_energy_compensated",
     "undefined",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(MaterialClass::Count) + 1);
@@ -186,7 +184,6 @@ struct SceneRepresentationImpl {
     data.options.properties[Scene::Properties::Spectral] = false;
     data.options.properties[Scene::Properties::MultipleImportanceSampling] = true;
     data.options.properties[Scene::Properties::BlueNoise] = true;
-    data.options.properties[Scene::Properties::EnergyCompensatedSpecular] = false;
 
     data.defaults.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
     data.materials[data.defaults.subsurface_scatter_material].reflectance = {.spectrum_index = data.defaults.black_spectrum};
@@ -249,7 +246,7 @@ struct SceneRepresentationImpl {
         }
         if (mtl.int_ior.eta_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          if ((mtl.cls == MaterialClass::Conductor) || (mtl.cls == MaterialClass::ConductorEnergyCompensated)) {
+          if (mtl.cls == MaterialClass::Conductor) {
             mtl.int_ior.cls = SpectralDistribution::Conductor;
             mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
           } else {
@@ -259,7 +256,7 @@ struct SceneRepresentationImpl {
         }
         if (mtl.int_ior.k_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          if ((mtl.cls == MaterialClass::Conductor) || (mtl.cls == MaterialClass::ConductorEnergyCompensated)) {
+          if (mtl.cls == MaterialClass::Conductor) {
             mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
           } else {
             mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
@@ -1045,8 +1042,6 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
       } else if (json_get_bool(i, "blue_noise", bool_value)) {
         _private->data.options.properties[Scene::Properties::BlueNoise] = bool_value;
-      } else if (json_get_bool(i, "energy_compensated_specular", bool_value)) {
-        _private->data.options.properties[Scene::Properties::EnergyCompensatedSpecular] = bool_value;
       } else if (json_get_string(i, "light_sampling", str_value)) {
         if (str_value == "uniform") {
           _private->data.options.light_sampling = Scene::LightSampling::Uniform;
@@ -1081,8 +1076,6 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
             _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = strat_value;
           } else if (strat_key == "blue_noise") {
             _private->data.options.properties[Scene::Properties::BlueNoise] = strat_value;
-          } else if (strat_key == "energy_compensated_specular") {
-            _private->data.options.properties[Scene::Properties::EnergyCompensatedSpecular] = strat_value;
           }
         }
         _private->data.options.strategy_flags = strategy_flags;
@@ -1411,7 +1404,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   js["spectral"] = impl->data.options.properties[Scene::Properties::Spectral];
   js["multiple_importance_sampling"] = impl->data.options.properties[Scene::Properties::MultipleImportanceSampling];
   js["blue_noise"] = impl->data.options.properties[Scene::Properties::BlueNoise];
-  js["energy_compensated_specular"] = impl->data.options.properties[Scene::Properties::EnergyCompensatedSpecular];
 
   switch (impl->data.options.light_sampling) {
     case Scene::LightSampling::Uniform:
@@ -1768,7 +1760,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "material class " << material_class_to_string(material.cls) << "\n";
 
     write_spectrum_line(materials_stream, "Kd", material.scattering.spectrum_index, true);
-    if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::DielectricEnergyCompensated) || (material.cls == MaterialClass::Translucent) ||
+    if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Translucent) ||
         (material.transmission.value.x > kEpsilon)) {
       write_spectrum_line(materials_stream, "Kt", material.scattering.spectrum_index, true);
     }
@@ -1860,9 +1852,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
     if (std::fabs(material.opacity - 1.0f) >= kEpsilon) {
       materials_stream << "opacity " << material.opacity << "\n";
-    }
-    if (material.diffuse_variation != 0u) {
-      materials_stream << "diffuse " << material.diffuse_variation << "\n";
     }
 
     bool has_emission_texture = (material.emission.image_index != kInvalidIndex);

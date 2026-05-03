@@ -545,7 +545,7 @@ bool pregenerate_named_bsdf_energy_compensation_lut_cache() {
   for (const NamedIor& ext_ior : dielectrics) {
     for (const NamedIor& int_ior : dielectrics) {
       Material material = {};
-      material.cls = MaterialClass::DielectricEnergyCompensated;
+      material.cls = MaterialClass::Dielectric;
       material.ext_ior = ext_ior.ior;
       material.int_ior = int_ior.ior;
       data.materials.emplace_back(material);
@@ -555,7 +555,7 @@ bool pregenerate_named_bsdf_energy_compensation_lut_cache() {
   for (const NamedIor& ext_ior : dielectrics) {
     for (const NamedIor& int_ior : conductors) {
       Material material = {};
-      material.cls = MaterialClass::ConductorEnergyCompensated;
+      material.cls = MaterialClass::Conductor;
       material.ext_ior = ext_ior.ior;
       material.int_ior = int_ior.ior;
       data.materials.emplace_back(material);
