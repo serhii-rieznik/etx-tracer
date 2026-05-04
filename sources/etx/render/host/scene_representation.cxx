@@ -106,7 +106,7 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "mirror",
     "boundary",
     "velvet",
-    "principled",
+    "openpbr",
     "void",
     "undefined",
   };

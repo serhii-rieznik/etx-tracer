@@ -642,6 +642,35 @@ bool ensure_cache_file(const SceneData& data, const Material& material, uint32_t
   return generated;
 }
 
+bool bind_energy_compensation_interface(SceneData& data, const Material& material, uint32_t material_class, std::unordered_map<uint64_t, uint32_t>& interface_cache,
+  TaskScheduler& scheduler, uint32_t& out_interface_index) {
+  const bool conductor = material_class == MaterialClass::Conductor;
+  const uint64_t hash = hash_material_interface(data, material, material_class);
+  const auto found = interface_cache.find(hash);
+  if (found != interface_cache.end()) {
+    out_interface_index = found->second;
+    return true;
+  }
+
+  const GeneratedInterfacePaths paths = interface_paths(material_class, hash);
+  if (ensure_cache_file(data, material, material_class, paths, scheduler) == false) {
+    return false;
+  }
+
+  Scene::EnergyCompensationInterface interface_data = {};
+  interface_data.cls = material_class;
+  interface_data.directional_lut = data.add_image(paths.directional.generic_string().c_str(), Image::SkipSRGBConversion);
+  interface_data.average_lut = data.add_image(paths.average.generic_string().c_str(), Image::SkipSRGBConversion);
+  interface_data.geometric_lut = conductor ? data.add_image(paths.geometric.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
+  interface_data.geometric_average_lut = conductor ? data.add_image(paths.geometric_average.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
+  interface_data.conductor_fms_lut = conductor ? data.add_image(paths.conductor_fms.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
+  const uint32_t interface_index = data.add_energy_compensation_interface(interface_data);
+  interface_cache[hash] = interface_index;
+  out_interface_index = interface_index;
+  log::info("Bound material energy-compensation interface %u to %s", interface_index, paths.directional.generic_string().c_str());
+  return true;
+}
+
 }  // namespace
 
 bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& scheduler) {
@@ -651,39 +680,39 @@ bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& sched
   data.energy_compensation_interfaces.clear();
   for (Material& material : data.materials) {
     material.energy_compensation_interface_index = kInvalidIndex;
+    material.conductor_energy_compensation_interface_index = kInvalidIndex;
   }
 
   for (Material& material : data.materials) {
+    if (material.cls == MaterialClass::OpenPBR) {
+      Material dielectric_material = material;
+      dielectric_material.cls = MaterialClass::Dielectric;
+      const bool dielectric_bound = bind_energy_compensation_interface(data, dielectric_material, MaterialClass::Dielectric, interface_cache, scheduler,
+        material.energy_compensation_interface_index);
+
+      Material conductor_material = material;
+      conductor_material.cls = MaterialClass::Conductor;
+      conductor_material.int_ior.cls = SpectralDistribution::Conductor;
+      if (data.defaults.conductor_eta == kInvalidIndex) {
+        data.defaults.conductor_eta = data.add_spectrum(SpectralDistribution::constant(0.0f));
+      }
+      if (data.defaults.conductor_k == kInvalidIndex) {
+        data.defaults.conductor_k = data.add_spectrum(SpectralDistribution::constant(1000000.0f));
+      }
+      conductor_material.int_ior.eta_index = data.defaults.conductor_eta;
+      conductor_material.int_ior.k_index = data.defaults.conductor_k;
+      const bool conductor_bound = bind_energy_compensation_interface(data, conductor_material, MaterialClass::Conductor, interface_cache, scheduler,
+        material.conductor_energy_compensation_interface_index);
+      result = (dielectric_bound && conductor_bound) && result;
+      continue;
+    }
+
     if (((material.cls != MaterialClass::Conductor) && (material.cls != MaterialClass::Dielectric)) && (material.cls != MaterialClass::Plastic)) {
       continue;
     }
 
     const uint32_t material_class = (material.cls == MaterialClass::Plastic) ? MaterialClass::Dielectric : material.cls;
-    const bool conductor = material_class == MaterialClass::Conductor;
-    const uint64_t hash = hash_material_interface(data, material, material_class);
-    const auto found = interface_cache.find(hash);
-    if (found != interface_cache.end()) {
-      material.energy_compensation_interface_index = found->second;
-      continue;
-    }
-
-    const GeneratedInterfacePaths paths = interface_paths(material_class, hash);
-    if (ensure_cache_file(data, material, material_class, paths, scheduler) == false) {
-      result = false;
-      continue;
-    }
-
-    Scene::EnergyCompensationInterface interface_data = {};
-    interface_data.cls = material_class;
-    interface_data.directional_lut = data.add_image(paths.directional.generic_string().c_str(), Image::SkipSRGBConversion);
-    interface_data.average_lut = data.add_image(paths.average.generic_string().c_str(), Image::SkipSRGBConversion);
-    interface_data.geometric_lut = conductor ? data.add_image(paths.geometric.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
-    interface_data.geometric_average_lut = conductor ? data.add_image(paths.geometric_average.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
-    interface_data.conductor_fms_lut = conductor ? data.add_image(paths.conductor_fms.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
-    const uint32_t interface_index = data.add_energy_compensation_interface(interface_data);
-    interface_cache[hash] = interface_index;
-    material.energy_compensation_interface_index = interface_index;
-    log::info("Bound material energy-compensation interface %u to %s", interface_index, paths.directional.generic_string().c_str());
+    result = bind_energy_compensation_interface(data, material, material_class, interface_cache, scheduler, material.energy_compensation_interface_index) && result;
   }
 
   return result;

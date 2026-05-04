@@ -333,6 +333,8 @@ static_assert(offsetof(Material, opacity) == kMaterialOpacityOffset, "Material::
 static_assert(offsetof(Material, emission_collimation) == kMaterialEmissionCollimationOffset, "Material::emission_collimation offset changed; update GPU shader decode");
 static_assert(offsetof(Material, energy_compensation_interface_index) == kMaterialEnergyCompensationInterfaceIndexOffset,
   "Material::energy_compensation_interface_index offset changed; update GPU shader decode");
+static_assert(offsetof(Material, conductor_energy_compensation_interface_index) == kMaterialConductorEnergyCompensationInterfaceIndexOffset,
+  "Material::conductor_energy_compensation_interface_index offset changed; update GPU shader decode");
 static_assert(std::is_standard_layout_v<SpectralImage>, "SpectralImage must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<SpectralImage>, "SpectralImage must stay trivially copyable for GPU upload ABI");
 static_assert(sizeof(SpectralImage) == 16u, "SpectralImage size changed; update material ABI");

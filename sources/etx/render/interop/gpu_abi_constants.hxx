@@ -79,6 +79,7 @@ ETX_STATIC_CONST uint32_t kMaterialNormalScaleOffset = 252u;
 ETX_STATIC_CONST uint32_t kMaterialOpacityOffset = 256u;
 ETX_STATIC_CONST uint32_t kMaterialEmissionCollimationOffset = 260u;
 ETX_STATIC_CONST uint32_t kMaterialEnergyCompensationInterfaceIndexOffset = 264u;
+ETX_STATIC_CONST uint32_t kMaterialConductorEnergyCompensationInterfaceIndexOffset = 268u;
 
 ETX_STATIC_CONST uint32_t kEmitterStride = 32u;
 ETX_STATIC_CONST uint32_t kEmitterClassOffset = 0u;

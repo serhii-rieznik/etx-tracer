@@ -115,6 +115,7 @@ ETX_SHARED_INLINE Material gpu_abi_load_material_full(ByteAddressBuffer buffer, 
   result.opacity = gpu_abi_load_f32(buffer, base_offset + kMaterialOpacityOffset);
   result.emission_collimation = gpu_abi_load_f32(buffer, base_offset + kMaterialEmissionCollimationOffset);
   result.energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialEnergyCompensationInterfaceIndexOffset);
+  result.conductor_energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialConductorEnergyCompensationInterfaceIndexOffset);
   return result;
 }
 

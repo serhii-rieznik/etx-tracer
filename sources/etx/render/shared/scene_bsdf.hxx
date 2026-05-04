@@ -24,7 +24,7 @@ ETX_DECLARE_BSDF(Thinfilm);
 ETX_DECLARE_BSDF(Mirror);
 ETX_DECLARE_BSDF(Boundary);
 ETX_DECLARE_BSDF(Velvet);
-ETX_DECLARE_BSDF(Principled)
+ETX_DECLARE_BSDF(OpenPBR)
 ETX_DECLARE_BSDF(Void);
 
 #define CASE_IMPL(CLS, FUNC, ...) \
@@ -48,7 +48,7 @@ ETX_DECLARE_BSDF(Void);
     MACRO(Mirror);                          \
     MACRO(Boundary);                        \
     MACRO(Velvet);                          \
-    MACRO(Principled);                      \
+    MACRO(OpenPBR);                         \
     MACRO(Void);                            \
     default:                                \
       ETX_FAIL("Unhandled material class"); \
@@ -302,4 +302,4 @@ ETX_SHARED_INLINE bool alpha_test_pass(const Material& mat, const float2& uv, Sa
 #include <etx/render/shared/bsdf_conductor.hxx>
 #include <etx/render/shared/bsdf_dielectric.hxx>
 #include <etx/render/shared/bsdf_velvet.hxx>
-#include <etx/render/shared/bsdf_principled.hxx>
+#include <etx/render/shared/bsdf_openpbr.hxx>

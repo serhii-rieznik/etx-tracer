@@ -63,8 +63,8 @@ inline Material::Class material_string_to_class(const char* s) {
     return MaterialClass::Boundary;
   else if (strcmp(s, "velvet") == 0)
     return MaterialClass::Velvet;
-  else if (strcmp(s, "principled") == 0)
-    return MaterialClass::Principled;
+  else if ((strcmp(s, "openpbr") == 0) || (strcmp(s, "principled") == 0))
+    return MaterialClass::OpenPBR;
   else if (strcmp(s, "void") == 0)
     return MaterialClass::Void;
   else {

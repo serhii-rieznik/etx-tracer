@@ -3,7 +3,9 @@
 #include <etx/core/log.hxx>
 
 #include <etx/render/host/film.hxx>
+#include <etx/render/host/openpbr_material_loader.hxx>
 #include <etx/render/host/scene_representation.hxx>
+#include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/shared/math.hxx>
@@ -115,8 +117,8 @@ const char* material_class_display_name(const Material::Class cls) {
       return "Boundary";
     case MaterialClass::Velvet:
       return "Velvet";
-    case MaterialClass::Principled:
-      return "Principled";
+    case MaterialClass::OpenPBR:
+      return "OpenPBR";
     case MaterialClass::Void:
       return "Void";
     default:
@@ -1455,6 +1457,15 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
     ImGui::TextDisabled("Mixed material classes");
   }
 
+  if ((material.cls == MaterialClass::OpenPBR) && ((_editing_material_indices == nullptr) || (_editing_material_indices->size() <= 1u))) {
+    if (ImGui::Button("Load OpenPBR MaterialX...", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+      const std::string selected_file = open_file("mtlx");
+      if (selected_file.empty() == false) {
+        changed = load_openpbr_material_file(selected_file, scene_rep.data(), material) || changed;
+      }
+    }
+  }
+
   const auto uses_surface_spectra = [&]() -> bool {
     return (material.cls != MaterialClass::Boundary) && (material.cls != MaterialClass::Void);
   };
@@ -1466,7 +1477,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       case MaterialClass::Conductor:
       case MaterialClass::Dielectric:
       case MaterialClass::Velvet:
-      case MaterialClass::Principled:
+      case MaterialClass::OpenPBR:
         return true;
       default:
         return false;
@@ -1479,6 +1490,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       case MaterialClass::Conductor:
       case MaterialClass::Dielectric:
       case MaterialClass::Thinfilm:
+      case MaterialClass::OpenPBR:
         return true;
       default:
         return false;
@@ -1486,7 +1498,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   };
 
   const auto uses_subsurface = [&]() -> bool {
-    return (material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::Principled);
+    return (material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::OpenPBR);
   };
 
   const ImVec4 base_bg = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
@@ -1605,7 +1617,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           }
         }
       }
-      if (material.cls == MaterialClass::Principled) {
+      if (material.cls == MaterialClass::OpenPBR) {
         ImGui::Spacing();
         float metal = material.metalness.value.x;
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -1636,7 +1648,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       }
 
       if (uses_interface_ior()) {
-        if ((uses_roughness()) || (material.cls == MaterialClass::Principled)) {
+        if ((uses_roughness()) || (material.cls == MaterialClass::OpenPBR)) {
           ImGui::Spacing();
         }
         const ImVec2 old_cell_padding = ImGui::GetStyle().CellPadding;
@@ -2754,7 +2766,7 @@ bool UI::build_material_class_selector(Material& material, bool mixed) {
     draw_material_column(column_index++, "Primary", {MaterialClass::Diffuse, MaterialClass::Plastic, MaterialClass::Conductor, MaterialClass::Dielectric});
     ImGui::NextColumn();
     draw_material_column(column_index++, "Specialized",
-      {MaterialClass::Principled, MaterialClass::Translucent, MaterialClass::Thinfilm, MaterialClass::Velvet, MaterialClass::Mirror});
+      {MaterialClass::OpenPBR, MaterialClass::Translucent, MaterialClass::Thinfilm, MaterialClass::Velvet, MaterialClass::Mirror});
     ImGui::NextColumn();
     draw_material_column(column_index++, "Interfaces", {MaterialClass::Boundary, MaterialClass::Void});
 

@@ -57,7 +57,7 @@ struct MaterialClass {
     Mirror,
     Boundary,
     Velvet,
-    Principled,
+    OpenPBR,
     Void,
 
     Count,
@@ -89,4 +89,5 @@ struct ETX_ALIGNED Material {
   float opacity ETX_INIT(1.0f);
   float emission_collimation ETX_INIT(0.0f);
   uint32_t energy_compensation_interface_index ETX_INIT(kInvalidIndex);
+  uint32_t conductor_energy_compensation_interface_index ETX_INIT(kInvalidIndex);
 };

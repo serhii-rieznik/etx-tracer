@@ -1348,6 +1348,164 @@ bool validate_exact_energy_compensated_conductor_interface(etx::Scene& original_
   return diagnostic_valid;
 }
 
+bool validate_openpbr_white_furnace(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const float roughness,
+  const uint32_t seed) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(16u);
+  scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  scene_data.materials.emplace_back(make_plastic(roughness));
+  scene_data.materials[0].cls = MaterialClass::OpenPBR;
+  scene_data.materials[0].metalness.value = {0.0f, 0.0f, 0.0f, 0.0f};
+  scene_data.materials[0].transmission.value = {0.0f, 0.0f, 0.0f, 0.0f};
+
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("openpbr white furnace failed to bind LUT\n");
+    return false;
+  }
+
+  scene_data.images.load_images(scheduler);
+
+  etx::Scene openpbr_scene = {};
+  openpbr_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
+  openpbr_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
+  openpbr_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
+  openpbr_scene.defaults.white_spectrum = SpectrumWhite;
+  openpbr_scene.defaults.dielectric_eta = SpectrumDielectricEta;
+  openpbr_scene.defaults.conductor_eta = SpectrumMirrorEta;
+  openpbr_scene.defaults.conductor_k = SpectrumMirrorK;
+  openpbr_scene.energy_compensation_interfaces =
+    etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+
+  etx::scene_global_clear(&original_scene);
+  etx::scene_global_publish(&openpbr_scene, &openpbr_scene);
+
+  const etx::Material material = scene_data.materials[0];
+  const Vertex vertex = {
+    float3{0.0f, 0.0f, 0.0f},
+    float3{0.0f, 0.0f, 1.0f},
+    float3{1.0f, 0.0f, 0.0f},
+    float3{0.0f, 1.0f, 0.0f},
+    float2{0.5f, 0.5f},
+  };
+  const etx::BSDFData data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
+  bool diagnostic_valid = validate_energy_compensated_material("openpbr coated base", data, material, roughness, seed);
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction("openpbr coated base", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
+  diagnostic_valid =
+    validate_energy_compensated_white_furnace_direction("openpbr coated base", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) &&
+    diagnostic_valid;
+
+  etx::scene_global_clear(&openpbr_scene);
+  etx::scene_global_publish(&original_scene, &original_scene);
+  return diagnostic_valid;
+}
+
+etx::Material make_openpbr(const float roughness, const float metalness, const float transmission, const uint32_t base_spectrum, const bool thinfilm) {
+  etx::Material result = make_plastic(roughness);
+  result.cls = MaterialClass::OpenPBR;
+  result.scattering.spectrum_index = base_spectrum;
+  result.reflectance.spectrum_index = SpectrumWhite;
+  result.metalness.value = {metalness, metalness, metalness, metalness};
+  result.transmission.value = {transmission, transmission, transmission, transmission};
+  if (thinfilm) {
+    set_basic_thinfilm(result, 500.0f, 500.0f);
+  }
+  return result;
+}
+
+bool validate_openpbr_case(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const char* label,
+  const etx::Material& source_material, const uint32_t seed, const bool require_integrated_energy) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(16u);
+  scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  scene_data.materials.emplace_back(source_material);
+
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("%s failed to bind OpenPBR LUTs\n", label);
+    return false;
+  }
+
+  scene_data.images.load_images(scheduler);
+
+  etx::Scene openpbr_scene = {};
+  openpbr_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
+  openpbr_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
+  openpbr_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
+  openpbr_scene.defaults.white_spectrum = SpectrumWhite;
+  openpbr_scene.defaults.dielectric_eta = SpectrumDielectricEta;
+  openpbr_scene.defaults.conductor_eta = SpectrumMirrorEta;
+  openpbr_scene.defaults.conductor_k = SpectrumMirrorK;
+  openpbr_scene.energy_compensation_interfaces =
+    etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+
+  etx::scene_global_clear(&original_scene);
+  etx::scene_global_publish(&openpbr_scene, &openpbr_scene);
+
+  const etx::Material material = scene_data.materials[0];
+  const Vertex vertex = {
+    float3{0.0f, 0.0f, 0.0f},
+    float3{0.0f, 0.0f, 1.0f},
+    float3{1.0f, 0.0f, 0.0f},
+    float3{0.0f, 1.0f, 0.0f},
+    float2{0.5f, 0.5f},
+  };
+  const etx::BSDFData data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
+
+  bool diagnostic_valid = true;
+  float maximum_weight = 0.0f;
+  uint32_t valid_sample_count = 0u;
+  etx::Sampler sampler(seed);
+  for (uint32_t i = 0u; i < kBsdfSamples; ++i) {
+    const etx::BSDFSample sample = etx::bsdf::sample(data, material, sampler);
+    if (validate_sample(sample) == false) {
+      diagnostic_valid = false;
+      continue;
+    }
+    if (sample.valid()) {
+      valid_sample_count += 1u;
+      maximum_weight = max(maximum_weight, sample.weight.maximum());
+    }
+  }
+
+  if ((valid_sample_count == 0u) || (maximum_weight <= kEpsilon)) {
+    std::printf("%s produced no visible OpenPBR samples\n", label);
+    diagnostic_valid = false;
+  }
+
+  if (require_integrated_energy) {
+    const float bsdf_energy = integrate_bsdf_energy(data, material, seed + 30000u);
+    if (((std::isfinite(bsdf_energy) == false) || (bsdf_energy < 0.0f)) || (bsdf_energy > 1.2f)) {
+      std::printf("%s invalid OpenPBR integrated energy %.6f\n", label, bsdf_energy);
+      diagnostic_valid = false;
+    } else {
+      std::printf("%s OpenPBR integrated energy %.6f valid samples %u max weight %.6f\n", label, bsdf_energy, valid_sample_count, maximum_weight);
+    }
+  } else {
+    std::printf("%s OpenPBR valid samples %u max weight %.6f\n", label, valid_sample_count, maximum_weight);
+  }
+
+  etx::scene_global_clear(&openpbr_scene);
+  etx::scene_global_publish(&original_scene, &original_scene);
+  return diagnostic_valid;
+}
+
+bool validate_openpbr_parameter_sweeps(etx::Scene& scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count) {
+  bool valid = true;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr roughness low", make_openpbr(0.05f, 0.0f, 0.0f, SpectrumWhite, false), 40000u, true) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr roughness high", make_openpbr(1.0f, 0.0f, 0.0f, SpectrumWhite, false), 41000u, true) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr transmission zero", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumWhite, false), 42000u, true) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr transmission one", make_openpbr(0.5f, 0.0f, 1.0f, SpectrumColored, false), 43000u, true) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr transmission delta", make_openpbr(0.0f, 0.0f, 1.0f, SpectrumColored, false), 43500u, false) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr metalness zero", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumWhite, false), 44000u, true) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr metalness one", make_openpbr(0.5f, 1.0f, 0.0f, SpectrumColored, false), 45000u, true) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr base color colored", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumColored, false), 46000u, true) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr thinfilm disabled", make_openpbr(0.0f, 0.0f, 0.0f, SpectrumWhite, false), 47000u, false) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr thinfilm enabled", make_openpbr(0.0f, 0.0f, 0.0f, SpectrumWhite, true), 48000u, false) && valid;
+  valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr thinfilm rough", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumWhite, true), 49000u, true) && valid;
+  return valid;
+}
+
 }  // namespace
 
 int main() {
@@ -1373,6 +1531,10 @@ int main() {
 
   etx::Scene scene = {};
   scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{spectra, SpectrumCount};
+  scene.defaults.white_spectrum = SpectrumWhite;
+  scene.defaults.dielectric_eta = SpectrumDielectricEta;
+  scene.defaults.conductor_eta = SpectrumMirrorEta;
+  scene.defaults.conductor_k = SpectrumMirrorK;
 
   etx::scene_global_init();
   etx::scene_global_publish(&scene, &scene);
@@ -1432,6 +1594,9 @@ int main() {
               make_white_sapphire_dielectric(rough_sapphire_roughness), rough_sapphire_roughness, 34600u + i * 1000u) &&
             valid;
   }
+
+  valid = validate_openpbr_white_furnace(scene, spectra, SpectrumCount, 0.5f, 39000u) && valid;
+  valid = validate_openpbr_parameter_sweeps(scene, spectra, SpectrumCount) && valid;
 
   etx::scene_global_clear(&scene);
   etx::scene_global_deinit();
