@@ -45,6 +45,7 @@ struct ETX_ALIGNED MediumGrid {
   float noise_sharpness ETX_INIT(1.0f);
   float noise_border_fade_distance ETX_INIT(0.1f);
   uint32_t density_data_chunk_index ETX_INIT(kInvalidIndex);
+  uint32_t density_image_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED Medium {

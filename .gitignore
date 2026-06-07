@@ -20,3 +20,4 @@ build-vs18/
 thirdparty/dxc
 bin/bsdf/cache/
 bin/review/
+bin/validation/

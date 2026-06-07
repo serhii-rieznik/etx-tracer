@@ -106,7 +106,23 @@ struct MediumDensitySharedGrid {
   float noise_sharpness ETX_INIT(1.0f);
   float noise_border_fade_distance ETX_INIT(0.1f);
   uint32_t density_data_chunk_index ETX_INIT(kInvalidIndex);
+  uint32_t density_image_index ETX_INIT(kInvalidIndex);
 };
+
+ETX_SHARED_INLINE bool medium_density_shared_texture_uvw(ETX_IN(float3, local_coord), ETX_IN(uint3, dimensions), ETX_OUT(float3, uvw)) {
+  uvw = float3(0.0f, 0.0f, 0.0f);
+  if ((local_coord.x < 0.0f) || (local_coord.y < 0.0f) || (local_coord.z < 0.0f) || (local_coord.x >= 1.0f) || (local_coord.y >= 1.0f) || (local_coord.z >= 1.0f)) {
+    return false;
+  }
+
+  if ((dimensions.x == 0u) || (dimensions.y == 0u) || (dimensions.z == 0u)) {
+    return false;
+  }
+
+  const float3 f_dimensions = float3(float(dimensions.x), float(dimensions.y), float(dimensions.z));
+  uvw = (local_coord * f_dimensions - float3(0.5f, 0.5f, 0.5f)) / f_dimensions;
+  return true;
+}
 
 ETX_SHARED_INLINE bool medium_density_shared_prepare_texture_sample_3d(ETX_IN(float3, local_coord), ETX_IN(uint3, dimensions),
   ETX_OUT(MediumDensitySharedTextureSample3D, sample)) {
@@ -157,6 +173,19 @@ ETX_SHARED_INLINE bool medium_density_shared_has_grid_data(uint32_t grid_type, E
   }
 
   return medium_density_shared_has_texture_data(dimensions, density_count);
+}
+
+ETX_SHARED_INLINE bool medium_density_shared_has_grid_data(uint32_t grid_type, ETX_IN(uint3, dimensions), uint32_t density_count, uint32_t density_image_index) {
+  if (grid_type == MediumGridType::NoiseFunction) {
+    return true;
+  }
+
+  if (grid_type != MediumGridType::Texture3D) {
+    return false;
+  }
+
+  return medium_density_shared_has_texture_data(dimensions, density_count) || ((dimensions.x > 0u) && (dimensions.y > 0u) && (dimensions.z > 0u) &&
+    (density_image_index != kInvalidIndex));
 }
 
 ETX_SHARED_INLINE float3 medium_density_shared_bounds_from_local(ETX_IN(float3, p), ETX_IN(float3, bounds_min), ETX_IN(float3, bounds_max)) {

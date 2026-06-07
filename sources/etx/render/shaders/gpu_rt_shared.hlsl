@@ -251,7 +251,7 @@ float medium_shared_density(inout MediumSharedContext context, float3 local_pos)
 MediumSample sample_medium_gpu(MediumAccess medium_access, SpectralQuery spect, SpectralResponse throughput, SpectralResponse scattering_value, SpectralResponse absorption_value,
   float3 pos, float3 w_i, float max_t, inout uint seed) {
   MediumSharedContext context;
-  context.access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  context.access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.images, constants.scene.spectrums);
   context.medium_access = medium_access;
   context.seed = seed;
   context.medium_class = medium_access.medium_class;
@@ -269,7 +269,7 @@ float3 medium_segment_transmittance_integrated(uint medium_index, float3 origin,
     return one;
   }
 
-  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.images, constants.scene.spectrums);
   ETX_ZERO_INIT(MediumAccess, medium_access);
   if (medium_access_try_load(access_context, medium_index, medium_access) == false) {
     return one;
@@ -306,7 +306,7 @@ SpectralResponse medium_segment_transmittance_spectral(uint medium_index, float3
     return one;
   }
 
-  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.images, constants.scene.spectrums);
   ETX_ZERO_INIT(MediumAccess, medium_access);
   if (medium_access_try_load(access_context, medium_index, medium_access) == false) {
     return one;
@@ -338,17 +338,17 @@ SpectralResponse medium_segment_transmittance_spectral(uint medium_index, float3
 }
 
 bool try_load_medium_access(uint medium_index, out MediumAccess medium_access) {
-  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.images, constants.scene.spectrums);
   return medium_access_try_load(access_context, medium_index, medium_access);
 }
 
 SpectralResponse gpu_medium_scattering(MediumAccess medium_access, SpectralQuery spect) {
-  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.images, constants.scene.spectrums);
   return medium_access_load_scattering_spectral(access_context, medium_access, spect);
 }
 
 SpectralResponse gpu_medium_absorption(MediumAccess medium_access, SpectralQuery spect) {
-  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.spectrums);
+  MediumAccessGPUContext access_context = make_medium_access_gpu_context(constants.scene.mediums, constants.scene.images, constants.scene.spectrums);
   return medium_access_load_absorption_spectral(access_context, medium_access, spect);
 }
 

@@ -14,6 +14,7 @@
 #include <etx/render/shared/material.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
+#include <etx/render/host/scene_procedural_geometry.hxx>
 
 namespace etx {
 
@@ -93,6 +94,7 @@ struct SceneSerializationImpl {
   std::vector<uint8_t> _buffer;  // Keep for loading functionality
   std::vector<std::string> _string_table;
   std::vector<MaterialIndexMapping> _material_index_mappings;
+  std::vector<ProceduralGeometryDefinition> _pending_procedural_geometry;
   bool _is_loaded = false;
 
   static constexpr uint32_t kDataBufferSize = 2048u;
@@ -140,6 +142,17 @@ struct SceneSerializationImpl {
 
   bool is_internal_name(const std::string& name) {
     return name.compare(0, 4, "et::") == 0 || name.compare(0, 5, "etx::") == 0;
+  }
+
+  bool special_name_equals(const std::string& name, const char* entry_name) {
+    char buffer[128] = {};
+    snprintf(buffer, sizeof(buffer), "et::%s", entry_name);
+    if (name == buffer) {
+      return true;
+    }
+
+    snprintf(buffer, sizeof(buffer), "etx::%s", entry_name);
+    return name == buffer;
   }
 
   void resolve_material_index_mappings(SceneData& scene_data) {
@@ -458,11 +471,6 @@ struct SceneSerializationImpl {
       get_file_folder(materials_file, base_dir, sizeof(base_dir));
     }
 
-    if (parse_materials_file(materials_file, base_dir, data, database, scheduler) == false) {
-      log::error("Failed to load materials from %s", materials_file);
-      return false;
-    }
-
     std::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
     if (file.is_open() == false) {
       log::error("Failed to open file for reading: %s", path.string().c_str());
@@ -495,7 +503,26 @@ struct SceneSerializationImpl {
     data.meshes.clear();
     data.mesh_mapping.clear();
 
-    return parse_file(data);
+    if (parse_file(data) == false) {
+      return false;
+    }
+
+    if ((materials_file == nullptr) || (materials_file[0] == 0)) {
+      for (Triangle& tri : data.triangles) {
+        tri.material_index = data.defaults.missing_material;
+      }
+      return true;
+    }
+
+    if (parse_materials_file(materials_file, base_dir, data, database, scheduler, false) == false) {
+      log::error("Failed to load materials from %s", materials_file);
+      return false;
+    }
+
+    resolve_material_index_mappings(data);
+    generate_pending_procedural_geometry(data, true);
+
+    return true;
   }
 
   // Reading methods
@@ -521,6 +548,7 @@ struct SceneSerializationImpl {
     }
 
     _string_table.clear();
+    _material_index_mappings.clear();
     size_t offset = sizeof(BinaryGeometryFileHeader);
     std::vector<std::pair<size_t, std::string>> deferred_chunks;
 
@@ -556,8 +584,6 @@ struct SceneSerializationImpl {
         return false;
       }
     }
-
-    resolve_material_index_mappings(data);
 
     return true;
   }
@@ -864,6 +890,11 @@ struct SceneSerializationImpl {
   }
 
   bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler) {
+    return parse_materials_file(path, base_dir, data, database, scheduler, true);
+  }
+
+  bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler,
+    bool generate_procedural) {
     std::ifstream file(path);
     if (file.is_open() == false) {
       log::error("Failed to open materials file: %s", path.string().c_str());
@@ -902,8 +933,7 @@ struct SceneSerializationImpl {
 
     file.close();
 
-    SceneSerialization temp_serialization;
-    temp_serialization.parse_material_definitions(base_dir, materials, data, database, scheduler);
+    parse_material_definitions(base_dir, materials, data, database, scheduler, generate_procedural);
 
     return true;
   }
@@ -1712,7 +1742,7 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.roughness.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.roughness.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
         mtl.roughness.channel = static_cast<uint32_t>(channel);
       }
     }
@@ -1730,7 +1760,7 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.metalness.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.metalness.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
         mtl.metalness.channel = static_cast<uint32_t>(channel);
       }
     }
@@ -1748,7 +1778,7 @@ struct SceneSerializationImpl {
         }
       }
       if (path && get_file(base_dir, path)) {
-        mtl.transmission.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+        mtl.transmission.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
         mtl.transmission.channel = static_cast<uint32_t>(channel);
       }
     }
@@ -1882,7 +1912,7 @@ struct SceneSerializationImpl {
         if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
           char tmp_buffer[1024] = {};
           snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, params[i + 1]);
-          mtl.thinfilm.thinkness_image = data.add_image(tmp_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+          mtl.thinfilm.thinkness_image = data.add_image(tmp_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
           i += 1;
         }
 
@@ -1953,27 +1983,68 @@ struct SceneSerializationImpl {
       }
     }
   }
+
+  uint32_t generate_pending_procedural_geometry(SceneData& data, bool skip_existing_meshes) {
+    if (_pending_procedural_geometry.empty()) {
+      return 0u;
+    }
+
+    uint32_t generated_count = 0u;
+    if (skip_existing_meshes) {
+      std::vector<ProceduralGeometryDefinition> missing_definitions;
+      missing_definitions.reserve(_pending_procedural_geometry.size());
+      for (const ProceduralGeometryDefinition& definition : _pending_procedural_geometry) {
+        if (definition.id.empty()) {
+          log::warning("Procedural geometry in binary scene sidecar has no id - skipped to avoid duplicate baked geometry");
+        } else if (data.mesh_mapping.count(definition.id) == 0u) {
+          missing_definitions.emplace_back(definition);
+        }
+      }
+      generated_count = generate_procedural_geometry(data, missing_definitions);
+    } else {
+      generated_count = generate_procedural_geometry(data, _pending_procedural_geometry);
+    }
+
+    _pending_procedural_geometry.clear();
+    return generated_count;
+  }
+
+  void parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler,
+    bool generate_procedural) {
+    _pending_procedural_geometry.clear();
+
+    for (const auto& material : materials) {
+      if (is_procedural_geometry_entry(material.name)) {
+        ProceduralGeometryDefinition definition = {};
+        if (parse_procedural_geometry_definition(material, definition)) {
+          _pending_procedural_geometry.emplace_back(std::move(definition));
+        }
+      } else if (special_name_equals(material.name, "camera")) {
+        parse_camera(base_dir, material, data, database);
+      } else if (special_name_equals(material.name, "medium")) {
+        parse_medium(base_dir, material, data, database);
+      } else if (special_name_equals(material.name, "dir")) {
+        parse_directional_light(base_dir, material, data, database);
+      } else if (special_name_equals(material.name, "env")) {
+        parse_env_light(base_dir, material, data, database);
+      } else if (special_name_equals(material.name, "atmosphere")) {
+        parse_atmosphere_light(base_dir, material, data, database, scheduler);
+      } else if (special_name_equals(material.name, "spectrum")) {
+        parse_spectrum(base_dir, material, data, database);
+      } else {
+        parse_material(base_dir, material, data, database);
+      }
+    }
+
+    if (generate_procedural) {
+      generate_pending_procedural_geometry(data, false);
+    }
+  }
 };
 
 void SceneSerialization::parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, const IORDatabase& database,
   TaskScheduler& scheduler) {
-  for (const auto& material : materials) {
-    if (material.name == "et::camera") {
-      _private->parse_camera(base_dir, material, data, database);
-    } else if (material.name == "et::medium") {
-      _private->parse_medium(base_dir, material, data, database);
-    } else if (material.name == "et::dir") {
-      _private->parse_directional_light(base_dir, material, data, database);
-    } else if (material.name == "et::env") {
-      _private->parse_env_light(base_dir, material, data, database);
-    } else if (material.name == "et::atmosphere") {
-      _private->parse_atmosphere_light(base_dir, material, data, database, scheduler);
-    } else if (material.name == "et::spectrum") {
-      _private->parse_spectrum(base_dir, material, data, database);
-    } else {
-      _private->parse_material(base_dir, material, data, database);
-    }
-  }
+  _private->parse_material_definitions(base_dir, materials, data, database, scheduler, true);
 }
 
 ETX_IMPLEMENT_PIMPL(SceneSerialization);

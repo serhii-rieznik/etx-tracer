@@ -1005,6 +1005,107 @@ bool UI::medium_dropdown(const char* label, uint32_t& medium) {
   return changed;
 }
 
+bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options) {
+  auto image_label = [&](uint32_t index) -> std::string {
+    if (index >= scene_rep.data().images_vector.size()) {
+      return "None";
+    }
+
+    const Image& image = scene_rep.data().images_vector[index];
+    std::string path = scene_rep.data().images.path(index);
+    std::string name = {};
+    if ((path.empty() == false) && (path.starts_with("##") == false)) {
+      name = std::filesystem::path(path).filename().string();
+    }
+    if (name.empty()) {
+      name = "Image " + std::to_string(index);
+    }
+
+    if ((image.isize.x > 0u) && (image.isize.y > 0u) && (image.isize.z > 0u)) {
+      name += format_string(" (%u x %u x %u)", image.isize.x, image.isize.y, image.isize.z);
+    }
+    return name;
+  };
+
+  bool changed = false;
+  bool load_from_file = false;
+  const std::string current = (image_index == kInvalidIndex) ? std::string("None") : image_label(image_index);
+  char buffer[256] = {};
+  snprintf(buffer, sizeof(buffer), "##picker_%s", label);
+  if (ImGui::BeginCombo(buffer, current.c_str())) {
+    const bool is_none = image_index == kInvalidIndex;
+    if (ImGui::Selectable("None", is_none)) {
+      image_index = kInvalidIndex;
+      changed = true;
+    }
+    if (is_none) {
+      ImGui::SetItemDefaultFocus();
+    }
+
+    ImGui::Separator();
+    for (uint32_t i = 0u; i < scene_rep.data().images_vector.size(); ++i) {
+      const Image& image = scene_rep.data().images_vector[i];
+      if (image.isize.z > 1u) {
+        continue;
+      }
+
+      const std::string entry_label = image_label(i);
+      const bool is_selected = image_index == i;
+      if (ImGui::Selectable(entry_label.c_str(), is_selected)) {
+        image_index = i;
+        changed = true;
+      }
+      if (is_selected) {
+        ImGui::SetItemDefaultFocus();
+      }
+    }
+
+    ImGui::Separator();
+    if (ImGui::Selectable("Load Texture...", false)) {
+      load_from_file = true;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndCombo();
+  }
+
+  if (load_from_file) {
+    const std::string selected_file = open_file("exr,png,hdr,pfm,jpg,bmp,tga");
+    if (selected_file.empty() == false) {
+      image_index = scene_rep.data().add_image(selected_file.c_str(), image_options, {}, {1.0f, 1.0f});
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+bool UI::sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options) {
+  bool changed = image_picker(scene_rep, label, image.image_index, image_options);
+  if (image.image_index == kInvalidIndex) {
+    if (image.channel != kInvalidIndex) {
+      image.channel = kInvalidIndex;
+      changed = true;
+    }
+    return changed;
+  }
+
+  if (image.channel >= 4u) {
+    image.channel = 0u;
+    changed = true;
+  }
+
+  const char* channel_names[] = {"R", "G", "B", "A"};
+  int32_t channel_index = static_cast<int32_t>(image.channel);
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  const std::string channel_label = std::string("Channel##") + label;
+  if (ImGui::Combo(channel_label.c_str(), &channel_index, channel_names, 4)) {
+    image.channel = static_cast<uint32_t>(channel_index);
+    changed = true;
+  }
+
+  return changed;
+}
+
 bool UI::spectrum_picker(SceneRepresentation& scene, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color, bool show_scale) {
   if (scene.data().spectrum_values.empty()) {
     return false;
@@ -1432,6 +1533,61 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
     return false;
   };
 
+  static const SpectralDistribution zero_spectrum = SpectralDistribution::constant(0.0f);
+  auto spectrum_or_fallback = [&](uint32_t spectrum_index, const SpectralDistribution* fallback) -> const SpectralDistribution* {
+    if (spectrum_index < scene_rep.data().spectrum_values.size()) {
+      return &scene_rep.data().spectrum_values[spectrum_index];
+    }
+
+    return fallback;
+  };
+  auto spectra_equal = [](const SpectralDistribution* a, const SpectralDistribution* b) -> bool {
+    if ((a == nullptr) || (b == nullptr)) {
+      return a == b;
+    }
+
+    return std::memcmp(a, b, sizeof(SpectralDistribution)) == 0;
+  };
+  auto refractive_indices_equal = [&](const RefractiveIndex& a, const RefractiveIndex& b) -> bool {
+    if (a.cls != b.cls) {
+      return false;
+    }
+
+    const SpectralDistribution* a_eta = spectrum_or_fallback(a.eta_index, nullptr);
+    const SpectralDistribution* b_eta = spectrum_or_fallback(b.eta_index, nullptr);
+    if (spectra_equal(a_eta, b_eta) == false) {
+      return false;
+    }
+
+    const SpectralDistribution* a_k = spectrum_or_fallback(a.k_index, &zero_spectrum);
+    const SpectralDistribution* b_k = spectrum_or_fallback(b.k_index, &zero_spectrum);
+    return spectra_equal(a_k, b_k);
+  };
+  auto material_ior_values_mixed = [&](auto getter) -> bool {
+    if ((_editing_material_indices == nullptr) || (_editing_material_indices->size() <= 1u)) {
+      return false;
+    }
+
+    const uint32_t first_index = _editing_material_indices->front();
+    if (first_index >= scene_rep.data().materials.size()) {
+      return false;
+    }
+
+    const RefractiveIndex first_value = getter(scene_rep.data().materials[first_index]);
+    for (const uint32_t material_index : *_editing_material_indices) {
+      if (material_index >= scene_rep.data().materials.size()) {
+        continue;
+      }
+
+      const RefractiveIndex value = getter(scene_rep.data().materials[material_index]);
+      if (refractive_indices_equal(first_value, value) == false) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
   auto mixed_control = [&](bool mixed, auto&& control) {
     if (mixed) {
       ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
@@ -1532,252 +1688,344 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   };
 
   if (uses_surface_spectra()) {
-    with_section(0, "Surface", [&]() {
-      ImGui::Text("Reflectance Spectrum");
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.reflectance;
-      }), [&]() {
-        return spectrum_picker(scene_rep, "Reflectance", material.reflectance.spectrum_index, false, false);
-      });
-      ImGui::Spacing();
-      ImGui::Text("Scattering Spectrum");
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.scattering;
-      }), [&]() {
-        return spectrum_picker(scene_rep, "Scattering", material.scattering.spectrum_index, false, false);
-      });
-      ImGui::Spacing();
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      const bool opacity_mixed = material_values_mixed([](const Material& value) {
-        return value.opacity;
-      });
-      changed |= mixed_control(opacity_mixed, [&]() {
-        return ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, opacity_mixed ? "Opacity mixed" : "Opacity %.3f",
-          ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-      });
-      if (uses_roughness()) {
+    with_section(
+      0, "Surface",
+      [&]() {
+        ImGui::Text("Reflectance Spectrum");
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.reflectance.spectrum_index;
+        }),
+          [&]() {
+            return spectrum_picker(scene_rep, "Reflectance", material.reflectance.spectrum_index, false, false);
+          });
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.reflectance.image_index;
+        }),
+          [&]() {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            return image_picker(scene_rep, "Reflectance Texture##reflectance_texture", material.reflectance.image_index, Image::RepeatU | Image::RepeatV);
+          });
         ImGui::Spacing();
-        float& rough_u = material.roughness.value.x;
-        float& rough_v = material.roughness.value.y;
+        ImGui::Text("Scattering Spectrum");
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.scattering.spectrum_index;
+        }),
+          [&]() {
+            return spectrum_picker(scene_rep, "Scattering", material.scattering.spectrum_index, false, false);
+          });
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.scattering.image_index;
+        }),
+          [&]() {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            return image_picker(scene_rep, "Scattering Texture##scattering_texture", material.scattering.image_index, Image::RepeatU | Image::RepeatV);
+          });
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        const bool opacity_mixed = material_values_mixed([](const Material& value) {
+          return value.opacity;
+        });
+        changed |= mixed_control(opacity_mixed, [&]() {
+          return ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, opacity_mixed ? "Opacity mixed" : "Opacity %.3f",
+            ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+        });
+        if (uses_roughness()) {
+          ImGui::Spacing();
+          float& rough_u = material.roughness.value.x;
+          float& rough_v = material.roughness.value.y;
 
-        char material_key_buf[32] = {};
-        snprintf(material_key_buf, sizeof(material_key_buf), "%p", (void*)&material);
-        std::string material_key(material_key_buf);
+          char material_key_buf[32] = {};
+          snprintf(material_key_buf, sizeof(material_key_buf), "%p", (void*)&material);
+          std::string material_key(material_key_buf);
 
-        auto aniso_insert = _material_anisotropy.emplace(material_key, std::fabs(rough_u - rough_v) > 1.0e-4f);
-        auto aniso_entry = aniso_insert.first;
-        bool anisotropic = aniso_entry->second;
-        const bool force_isotropic_roughness = material.cls == MaterialClass::Diffuse;
+          auto aniso_insert = _material_anisotropy.emplace(material_key, std::fabs(rough_u - rough_v) > 1.0e-4f);
+          auto aniso_entry = aniso_insert.first;
+          bool anisotropic = aniso_entry->second;
+          const bool force_isotropic_roughness = material.cls == MaterialClass::Diffuse;
 
-        if (force_isotropic_roughness) {
-          anisotropic = false;
-          aniso_entry->second = false;
-          if (rough_v != rough_u) {
-            rough_v = rough_u;
-            changed = true;
-          }
-        } else {
-          if (ImGui::Checkbox("Anisotropic##rough_aniso", &anisotropic)) {
-            aniso_entry->second = anisotropic;
-            if (anisotropic == false) {
+          if (force_isotropic_roughness) {
+            anisotropic = false;
+            aniso_entry->second = false;
+            if (rough_v != rough_u) {
               rough_v = rough_u;
               changed = true;
             }
+          } else {
+            if (ImGui::Checkbox("Anisotropic##rough_aniso", &anisotropic)) {
+              aniso_entry->second = anisotropic;
+              if (anisotropic == false) {
+                rough_v = rough_u;
+                changed = true;
+              }
+            }
+            ImGui::Spacing();
           }
-          ImGui::Spacing();
-        }
 
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        const bool rough_u_mixed = material_values_mixed([](const Material& value) {
-          return value.roughness.value.x;
-        });
-        const bool rough_u_changed = mixed_control(rough_u_mixed, [&]() {
-          return ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, rough_u_mixed ? "Roughness mixed" : (anisotropic ? "Roughness U %.3f" : "Roughness %.3f"),
-            ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-        });
-        if (rough_u_changed) {
-          if (anisotropic == false) {
-            rough_v = rough_u;
-            aniso_entry->second = false;
-          }
-          changed = true;
-        }
-
-        if (anisotropic) {
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          const bool rough_v_mixed = material_values_mixed([](const Material& value) {
-            return value.roughness.value.y;
+          const bool rough_u_mixed = material_values_mixed([](const Material& value) {
+            return value.roughness.value.x;
           });
-          const bool rough_v_changed = mixed_control(rough_v_mixed, [&]() {
-            return ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, rough_v_mixed ? "Roughness V mixed" : "Roughness V %.3f",
+          const bool rough_u_changed = mixed_control(rough_u_mixed, [&]() {
+            return ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, rough_u_mixed ? "Roughness mixed" : (anisotropic ? "Roughness U %.3f" : "Roughness %.3f"),
               ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
-          if (rough_v_changed) {
+          if (rough_u_changed) {
+            if (anisotropic == false) {
+              rough_v = rough_u;
+              aniso_entry->second = false;
+            }
             changed = true;
           }
-        }
-      }
-      if (material.cls == MaterialClass::OpenPBR) {
-        ImGui::Spacing();
-        float metal = material.metalness.value.x;
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        const bool metalness_mixed = material_values_mixed([](const Material& value) {
-          return value.metalness.value.x;
-        });
-        const bool metalness_changed = mixed_control(metalness_mixed, [&]() {
-          return ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, metalness_mixed ? "Metalness mixed" : "Metalness %.3f",
-            ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-        });
-        if (metalness_changed) {
-          material.metalness.value = {metal, metal, metal, metal};
-          changed = true;
-        }
-        float trans = material.transmission.value.x;
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        const bool transmission_mixed = material_values_mixed([](const Material& value) {
-          return value.transmission.value.x;
-        });
-        const bool transmission_changed = mixed_control(transmission_mixed, [&]() {
-          return ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, transmission_mixed ? "Transmission mixed" : "Transmission %.3f",
-            ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-        });
-        if (transmission_changed) {
-          material.transmission.value = {trans, trans, trans, trans};
-          changed = true;
-        }
-      }
 
-      if (uses_interface_ior()) {
-        if ((uses_roughness()) || (material.cls == MaterialClass::OpenPBR)) {
+          if (anisotropic) {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            const bool rough_v_mixed = material_values_mixed([](const Material& value) {
+              return value.roughness.value.y;
+            });
+            const bool rough_v_changed = mixed_control(rough_v_mixed, [&]() {
+              return ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, rough_v_mixed ? "Roughness V mixed" : "Roughness V %.3f",
+                ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+            });
+            if (rough_v_changed) {
+              changed = true;
+            }
+          }
+
           ImGui::Spacing();
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return uint2{value.roughness.image_index, value.roughness.channel};
+          }),
+            [&]() {
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return sampled_image_picker(scene_rep, "Roughness Texture##roughness_texture", material.roughness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
+            });
         }
-        const ImVec2 old_cell_padding = ImGui::GetStyle().CellPadding;
-        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1.0f, old_cell_padding.y));
-        if (ImGui::BeginTable("ior_inout", 2, ImGuiTableFlags_SizingStretchSame)) {
-          ImGui::TableNextRow();
-          ImGui::TableSetColumnIndex(0);
+        if (material.cls == MaterialClass::OpenPBR) {
+          ImGui::Spacing();
+          float metal = material.metalness.value.x;
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          const bool int_ior_mixed = material_values_mixed([](const Material& value) {
-            return value.int_ior;
+          const bool metalness_mixed = material_values_mixed([](const Material& value) {
+            return value.metalness.value.x;
           });
-          const bool int_ior_changed = mixed_control(int_ior_mixed, [&]() {
-            return ior_picker(scene_rep, "Inside", material.int_ior, data, int_ior_mixed);
+          const bool metalness_changed = mixed_control(metalness_mixed, [&]() {
+            return ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, metalness_mixed ? "Metalness mixed" : "Metalness %.3f",
+              ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
-          if (int_ior_changed) {
-            _material_batch_changed_fields |= MaterialBatchChangedIntIOR;
+          if (metalness_changed) {
+            material.metalness.value = {metal, metal, metal, metal};
             changed = true;
           }
-          ImGui::TableSetColumnIndex(1);
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return uint2{value.metalness.image_index, value.metalness.channel};
+          }),
+            [&]() {
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return sampled_image_picker(scene_rep, "Metalness Texture##metalness_texture", material.metalness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
+            });
+
+          float trans = material.transmission.value.x;
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          const bool ext_ior_mixed = material_values_mixed([](const Material& value) {
-            return value.ext_ior;
+          const bool transmission_mixed = material_values_mixed([](const Material& value) {
+            return value.transmission.value.x;
           });
-          const bool ext_ior_changed = mixed_control(ext_ior_mixed, [&]() {
-            return ior_picker(scene_rep, "Outside", material.ext_ior, data, ext_ior_mixed);
+          const bool transmission_changed = mixed_control(transmission_mixed, [&]() {
+            return ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, transmission_mixed ? "Transmission mixed" : "Transmission %.3f",
+              ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
-          if (ext_ior_changed) {
-            _material_batch_changed_fields |= MaterialBatchChangedExtIOR;
+          if (transmission_changed) {
+            material.transmission.value = {trans, trans, trans, trans};
             changed = true;
           }
-          ImGui::EndTable();
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return uint2{value.transmission.image_index, value.transmission.channel};
+          }),
+            [&]() {
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return sampled_image_picker(scene_rep, "Transmission Texture##transmission_texture", material.transmission,
+                Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
+            });
         }
-        ImGui::PopStyleVar();
-      }
-    }, false);
+
+        ImGui::Spacing();
+        ImGui::Text("Normal Map");
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.normal_image_index;
+        }),
+          [&]() {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            return image_picker(scene_rep, "Normal Texture##normal_texture", material.normal_image_index, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
+          });
+        if (material.normal_image_index != kInvalidIndex) {
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return value.normal_scale;
+          }),
+            [&]() {
+              return ImGui::SliderFloat("##normal_scale", &material.normal_scale, 0.0f, 4.0f, "Normal Scale %.3f", ImGuiSliderFlags_AlwaysClamp);
+            });
+        }
+
+        if (uses_interface_ior()) {
+          if ((uses_roughness()) || (material.cls == MaterialClass::OpenPBR)) {
+            ImGui::Spacing();
+          }
+          const ImVec2 old_cell_padding = ImGui::GetStyle().CellPadding;
+          ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(1.0f, old_cell_padding.y));
+          if (ImGui::BeginTable("ior_inout", 2, ImGuiTableFlags_SizingStretchSame)) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            const bool int_ior_mixed = material_ior_values_mixed([](const Material& value) {
+              return value.int_ior;
+            });
+            const bool int_ior_changed = mixed_control(int_ior_mixed, [&]() {
+              return ior_picker(scene_rep, "Inside", material.int_ior, data, int_ior_mixed);
+            });
+            if (int_ior_changed) {
+              _material_batch_changed_fields |= MaterialBatchChangedIntIOR;
+              changed = true;
+            }
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            const bool ext_ior_mixed = material_ior_values_mixed([](const Material& value) {
+              return value.ext_ior;
+            });
+            const bool ext_ior_changed = mixed_control(ext_ior_mixed, [&]() {
+              return ior_picker(scene_rep, "Outside", material.ext_ior, data, ext_ior_mixed);
+            });
+            if (ext_ior_changed) {
+              _material_batch_changed_fields |= MaterialBatchChangedExtIOR;
+              changed = true;
+            }
+            ImGui::EndTable();
+          }
+          ImGui::PopStyleVar();
+        }
+      },
+      false);
   }
 
-  with_section(2, "Thin Film", [&]() {
-    ImGui::Text("IoR");
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    const bool thinfilm_ior_mixed = material_values_mixed([](const Material& value) {
-      return value.thinfilm.ior;
-    });
-    const bool thinfilm_ior_changed = mixed_control(thinfilm_ior_mixed, [&]() {
-      return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed);
-    });
-    if (thinfilm_ior_changed) {
-      _material_batch_changed_fields |= MaterialBatchChangedThinfilmIOR;
-      changed = true;
-    }
+  with_section(
+    2, "Thin Film",
+    [&]() {
+      ImGui::Text("IoR");
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+      const bool thinfilm_ior_mixed = material_ior_values_mixed([](const Material& value) {
+        return value.thinfilm.ior;
+      });
+      const bool thinfilm_ior_changed = mixed_control(thinfilm_ior_mixed, [&]() {
+        return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed);
+      });
+      if (thinfilm_ior_changed) {
+        _material_batch_changed_fields |= MaterialBatchChangedThinfilmIOR;
+        changed = true;
+      }
 
-    ImGui::Spacing();
-    ImGui::Text("Thickness (nm)");
-    const float avail = ImGui::GetContentRegionAvail().x;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const float dash_width = ImGui::CalcTextSize(" - ").x;
-    const float field_width = max((avail - dash_width - spacing * 2.0f) * 0.5f, 0.0f);
-    ImGui::SetNextItemWidth(field_width);
-    changed |= mixed_control(material_values_mixed([](const Material& value) {
-      return value.thinfilm.min_thickness;
-    }), [&]() {
-      return ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
-    });
-    ImGui::SameLine();
-    ImGui::Text(" - ");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(field_width);
-    changed |= mixed_control(material_values_mixed([](const Material& value) {
-      return value.thinfilm.max_thickness;
-    }), [&]() {
-      return ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
-    });
-  }, material.cls == MaterialClass::Thinfilm);
+      ImGui::Spacing();
+      ImGui::Text("Thickness (nm)");
+      const float avail = ImGui::GetContentRegionAvail().x;
+      const float spacing = ImGui::GetStyle().ItemSpacing.x;
+      const float dash_width = ImGui::CalcTextSize(" - ").x;
+      const float field_width = max((avail - dash_width - spacing * 2.0f) * 0.5f, 0.0f);
+      ImGui::SetNextItemWidth(field_width);
+      changed |= mixed_control(material_values_mixed([](const Material& value) {
+        return value.thinfilm.min_thickness;
+      }),
+        [&]() {
+          return ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
+        });
+      ImGui::SameLine();
+      ImGui::Text(" - ");
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(field_width);
+      changed |= mixed_control(material_values_mixed([](const Material& value) {
+        return value.thinfilm.max_thickness;
+      }),
+        [&]() {
+          return ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
+        });
+      ImGui::Spacing();
+      changed |= mixed_control(material_values_mixed([](const Material& value) {
+        return value.thinfilm.thinkness_image;
+      }),
+        [&]() {
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+          return image_picker(scene_rep, "Thickness Texture##thinfilm_thickness_texture", material.thinfilm.thinkness_image,
+            Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
+        });
+    },
+    material.cls == MaterialClass::Thinfilm);
 
   if ((uses_subsurface()) || (_medium_mapping.empty() == false)) {
-    with_section(3, "Volume & Media", [&]() {
-      if (uses_subsurface()) {
-        ImGui::TextDisabled("Subsurface Scattering");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.subsurface_cls;
-        }), [&]() {
-          return ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface_cls), "Disabled\0Random Walk\0Christensen-Burley\0");
-        });
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.subsurface_path;
-        }), [&]() {
-          return ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface_path), "Diffuse Transmittance\0Refraction\0");
-        });
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.subsurface;
-        }), [&]() {
-          return spectrum_picker(scene_rep, "Subsurface Distance", material.subsurface.spectrum_index, true, true);
-        });
+    with_section(
+      3, "Volume & Media",
+      [&]() {
+        if (uses_subsurface()) {
+          ImGui::TextDisabled("Subsurface Scattering");
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return value.subsurface_cls;
+          }),
+            [&]() {
+              return ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface_cls), "Disabled\0Random Walk\0Christensen-Burley\0");
+            });
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return value.subsurface_path;
+          }),
+            [&]() {
+              return ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface_path), "Diffuse Transmittance\0Refraction\0");
+            });
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return value.subsurface.spectrum_index;
+          }),
+            [&]() {
+              return spectrum_picker(scene_rep, "Subsurface Distance", material.subsurface.spectrum_index, true, true);
+            });
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return value.subsurface.image_index;
+          }),
+            [&]() {
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return image_picker(scene_rep, "Subsurface Texture##subsurface_texture", material.subsurface.image_index, Image::RepeatU | Image::RepeatV);
+            });
 
-        ImGui::Spacing();
-      }
-
-      if (_medium_mapping.empty()) {
-        ImGui::TextDisabled("No mediums available");
-      } else {
-        const float avail = ImGui::GetContentRegionAvail().x;
-        const float spacing = ImGui::GetStyle().ItemSpacing.x;
-        float combo_width = (avail - spacing) * 0.5f;
-        combo_width = max(combo_width, 0.0f);
-
-        ImGui::TextDisabled("Internal / External Medium");
-        ImGui::SetNextItemWidth(combo_width);
-        const bool int_medium_changed = mixed_control(material_values_mixed([](const Material& value) {
-          return value.int_medium;
-        }), [&]() {
-          return medium_dropdown("##internal_medium", material.int_medium);
-        });
-        if (int_medium_changed) {
-          changed = true;
+          ImGui::Spacing();
         }
-        ImGui::SameLine(0.0f, spacing);
-        ImGui::SetNextItemWidth(combo_width);
-        const bool ext_medium_changed = mixed_control(material_values_mixed([](const Material& value) {
-          return value.ext_medium;
-        }), [&]() {
-          return medium_dropdown("##external_medium", material.ext_medium);
-        });
-        if (ext_medium_changed) {
-          changed = true;
+
+        if (_medium_mapping.empty()) {
+          ImGui::TextDisabled("No mediums available");
+        } else {
+          const float avail = ImGui::GetContentRegionAvail().x;
+          const float spacing = ImGui::GetStyle().ItemSpacing.x;
+          float combo_width = (avail - spacing) * 0.5f;
+          combo_width = max(combo_width, 0.0f);
+
+          ImGui::TextDisabled("Internal / External Medium");
+          ImGui::SetNextItemWidth(combo_width);
+          const bool int_medium_changed = mixed_control(material_values_mixed([](const Material& value) {
+            return value.int_medium;
+          }),
+            [&]() {
+              return medium_dropdown("##internal_medium", material.int_medium);
+            });
+          if (int_medium_changed) {
+            changed = true;
+          }
+          ImGui::SameLine(0.0f, spacing);
+          ImGui::SetNextItemWidth(combo_width);
+          const bool ext_medium_changed = mixed_control(material_values_mixed([](const Material& value) {
+            return value.ext_medium;
+          }),
+            [&]() {
+              return medium_dropdown("##external_medium", material.ext_medium);
+            });
+          if (ext_medium_changed) {
+            changed = true;
+          }
         }
-      }
-    }, false);
+      },
+      false);
   }
 
   with_section(
@@ -1799,10 +2047,18 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
 
       std::string preset_id = "material_emission_" + std::to_string(material.emission.spectrum_index);
       changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.emission;
-      }), [&]() {
-        return emission_picker(scene_rep, "Emission", preset_id.c_str(), material.emission.spectrum_index, data);
-      });
+        return value.emission.spectrum_index;
+      }),
+        [&]() {
+          return emission_picker(scene_rep, "Emission", preset_id.c_str(), material.emission.spectrum_index, data);
+        });
+      changed |= mixed_control(material_values_mixed([](const Material& value) {
+        return value.emission.image_index;
+      }),
+        [&]() {
+          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+          return image_picker(scene_rep, "Emission Texture##emission_texture", material.emission.image_index, Image::RepeatU | Image::RepeatV);
+        });
     },
     _auto_open_emission_section);
 
@@ -3002,6 +3258,11 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     }
   }
 
+  if ((emitter.cls == EmitterProfile::Class::Area) && (material_index >= scene_rep.data().materials.size())) {
+    ImGui::TextDisabled("Area emitter has no material reference");
+    return;
+  }
+
   bool common_changed = false;
   if (emitter.cls == EmitterProfile::Class::Area) {
     auto& material = scene_rep.data().materials[material_index];
@@ -3185,11 +3446,8 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kDeleteButtonHoverColor);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
     if (ImGui::Button("Delete Emitter", ImVec2(-1.0f, 0.0f))) {
-      if (scene_rep.delete_emitter(emitter_index)) {
+      if ((callbacks.emitter_deleted) && callbacks.emitter_deleted(emitter_index)) {
         set_selection(SelectionKind::Rendering, 0, false);
-        if (callbacks.scene_update_requested) {
-          callbacks.scene_update_requested();
-        }
       }
     }
     ImGui::PopStyleColor(3);

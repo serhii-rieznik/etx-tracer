@@ -2,17 +2,20 @@
 
 #include <interop/medium_density_shared.hxx>
 #include <access/medium_access_shared.hxx>
+#include <access/image_evaluate_gpu.hxx>
 #include <access/spectrum_access_gpu.hxx>
 #include <interop/scene_gpu_access_shared.hxx>
 
 struct MediumAccessGPUContext {
   uint mediums_descriptor_index;
+  uint images_descriptor_index;
   uint spectrums_descriptor_index;
 };
 
-MediumAccessGPUContext make_medium_access_gpu_context(uint mediums_descriptor_index, uint spectrums_descriptor_index) {
+MediumAccessGPUContext make_medium_access_gpu_context(uint mediums_descriptor_index, uint images_descriptor_index, uint spectrums_descriptor_index) {
   MediumAccessGPUContext result;
   result.mediums_descriptor_index = mediums_descriptor_index;
+  result.images_descriptor_index = images_descriptor_index;
   result.spectrums_descriptor_index = spectrums_descriptor_index;
   return result;
 }
@@ -56,6 +59,7 @@ void medium_access_gpu_load(MediumAccessGPUContext context, ByteAddressBuffer me
   access.grid.noise_sharpness = asfloat(medium_blob.Load(medium_desc_offset + kMediumGridNoiseSharpnessOffset));
   access.grid.noise_border_fade_distance = asfloat(medium_blob.Load(medium_desc_offset + kMediumGridNoiseBorderFadeDistanceOffset));
   access.grid.density_data_chunk_index = medium_blob.Load(medium_desc_offset + kMediumGridDensityDataChunkIndexOffset);
+  access.grid.density_image_index = medium_blob.Load(medium_desc_offset + kMediumGridDensityImageIndexOffset);
   access.bounds_min = asfloat(medium_blob.Load3(medium_desc_offset + kMediumBoundsMinOffset));
   access.bounds_max = asfloat(medium_blob.Load3(medium_desc_offset + kMediumBoundsMaxOffset));
   access.medium_index = medium_index;
@@ -84,8 +88,22 @@ bool medium_access_try_load(MediumAccessGPUContext context, uint medium_index, o
   return true;
 }
 
+bool medium_access_gpu_has_valid_density_image(MediumAccessGPUContext context, MediumAccess access) {
+  if ((access.grid.density_image_index == kInvalidIndex) || (context.images_descriptor_index == kInvalidIndex)) {
+    return false;
+  }
+
+  ImageAccessGPUContext image_access_context = {context.images_descriptor_index};
+  ImageAccessGPUDesc density_image_access = ETX_ZERO(ImageAccessGPUDesc);
+  if (image_access_try_load(image_access_context, access.grid.density_image_index, density_image_access) == false) {
+    return false;
+  }
+
+  return (density_image_access.format == (uint)Image::Format::R32F) && (density_image_access.size.x == access.grid.dimensions.x) &&
+    (density_image_access.size.y == access.grid.dimensions.y) && (density_image_access.size.z == access.grid.dimensions.z);
+}
+
 bool medium_access_has_grid_data(MediumAccessGPUContext context, MediumAccess access) {
-  (void)context;
   if (medium_access_has_grid_data(access) == false) {
     return false;
   }
@@ -94,7 +112,8 @@ bool medium_access_has_grid_data(MediumAccessGPUContext context, MediumAccess ac
     return true;
   }
 
-  return (access.grid.density_data_offset != kInvalidIndex) && (access.density_payload_descriptor_index != kInvalidIndex);
+  return medium_access_gpu_has_valid_density_image(context, access) ||
+    ((access.grid.density_data_offset != kInvalidIndex) && (access.density_payload_descriptor_index != kInvalidIndex));
 }
 
 struct MediumTextureSampleContext {
@@ -115,7 +134,16 @@ float medium_texture_sample_density(MediumTextureSampleContext context, uint3 di
 #include <interop/medium_texture_sample_shared.hxx>
 
 float medium_access_sample_texture_3d(MediumAccessGPUContext context, MediumAccess access, float3 local_coord) {
-  (void)context;
+  if (medium_access_gpu_has_valid_density_image(context, access)) {
+    float3 uvw = float3(0.0f, 0.0f, 0.0f);
+    if (medium_density_shared_texture_uvw(local_coord, access.grid.dimensions, uvw) == false) {
+      return 0.0f;
+    }
+
+    ImageEvaluateGPUContext image_context = {context.images_descriptor_index};
+    return image_evaluate_gpu_r32_3d(image_context, access.grid.density_image_index, uvw, 0.0f);
+  }
+
   if ((access.grid.density_count == 0u) || (access.grid.density_data_offset == kInvalidIndex) || (access.density_payload_descriptor_index == kInvalidIndex)) {
     return 0.0f;
   }

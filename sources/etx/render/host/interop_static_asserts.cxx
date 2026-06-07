@@ -168,6 +168,7 @@ static_assert(offsetof(MediumGrid, noise_power) == kMediumGridNoisePowerOffset, 
 static_assert(offsetof(MediumGrid, noise_sharpness) == kMediumGridNoiseSharpnessOffset, "MediumGrid::noise_sharpness offset changed");
 static_assert(offsetof(MediumGrid, noise_border_fade_distance) == kMediumGridNoiseBorderFadeDistanceOffset, "MediumGrid::noise_border_fade_distance offset changed");
 static_assert(offsetof(MediumGrid, density_data_chunk_index) == kMediumGridDensityDataChunkIndexOffset, "MediumGrid::density_data_chunk_index offset changed");
+static_assert(offsetof(MediumGrid, density_image_index) == kMediumGridDensityImageIndexOffset, "MediumGrid::density_image_index offset changed");
 static_assert((offsetof(Medium, bounds) + offsetof(BoundingBox, p_min)) == kMediumBoundsMinOffset, "Medium::bounds.p_min offset changed");
 static_assert((offsetof(Medium, bounds) + offsetof(BoundingBox, p_max)) == kMediumBoundsMaxOffset, "Medium::bounds.p_max offset changed");
 static_assert(offsetof(Medium, absorption_index) == kMediumAbsorptionIndexOffset, "Medium::absorption_index offset changed");

@@ -46,7 +46,7 @@ ImageSampleGPUDistributionContext image_sample_gpu_make_distribution_context(Byt
   context.x_entries_stride = image_access.x_entries_stride;
   context.x_distribution_count = image_access.x_distribution_count;
   context.y_count = y_count;
-  context.fsize = image_access.fsize;
+  context.fsize = image_access.fsize.xy;
   return context;
 }
 

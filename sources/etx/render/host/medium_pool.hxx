@@ -5,11 +5,12 @@
 namespace etx {
 
 struct BufferPool;
+struct ImagePool;
 
 struct MediumPool {
   using Mapping = std::unordered_map<std::string, uint32_t>;
 
-  MediumPool(std::vector<Medium>&, BufferPool&);
+  MediumPool(std::vector<Medium>&, BufferPool&, ImagePool&);
   ~MediumPool();
 
   void init(uint32_t capacity);

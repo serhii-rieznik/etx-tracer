@@ -128,7 +128,7 @@ ETX_SHARED_INLINE bool emitter_access_try_load_image_params(ETX_IN(EmitterAccess
   }
 
   const auto& image = context.scene->images[emission_image_index];
-  image_offset = image.offset;
+  image_offset = float2{image.offset.x, image.offset.y};
   image_u_scale = image.scale.x;
   return true;
 }

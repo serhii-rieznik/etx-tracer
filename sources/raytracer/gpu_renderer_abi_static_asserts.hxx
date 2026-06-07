@@ -443,7 +443,7 @@ static_assert(SceneLimits::MaxEnvironmentEmitters == std::extent_v<decltype(GPUS
 
 static_assert(std::is_standard_layout_v<::Medium>, "Interop Medium must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<::Medium>, "Interop Medium must stay trivially copyable for GPU upload ABI");
-static_assert(sizeof(::Medium) == 128u, "Interop Medium size changed; update GPU medium blob ABI");
+static_assert(sizeof(::Medium) == kMediumStride, "Interop Medium size changed; update GPU medium blob ABI");
 static_assert(sizeof(::Medium) == kMediumStride, "Medium stride changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, dimensions)) == kMediumGridDimensionsOffset, "Medium::grid.dimensions offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, type)) == kMediumGridTypeOffset, "Medium::grid.type offset changed; update GPU shader decode");
@@ -471,6 +471,8 @@ static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, noise_border_fa
   "Medium::grid.noise_border_fade_distance offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, density_data_chunk_index)) == kMediumGridDensityDataChunkIndexOffset,
   "Medium::grid.density_data_chunk_index offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, grid) + offsetof(::MediumGrid, density_image_index)) == kMediumGridDensityImageIndexOffset,
+  "Medium::grid.density_image_index offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, bounds) + offsetof(BoundingBox, p_min)) == kMediumBoundsMinOffset, "Medium::bounds.p_min offset changed; update GPU shader decode");
 static_assert((offsetof(::Medium, bounds) + offsetof(BoundingBox, p_max)) == kMediumBoundsMaxOffset, "Medium::bounds.p_max offset changed; update GPU shader decode");
 static_assert(offsetof(::Medium, absorption_index) == kMediumAbsorptionIndexOffset, "Medium::absorption_index offset changed; update GPU shader decode");

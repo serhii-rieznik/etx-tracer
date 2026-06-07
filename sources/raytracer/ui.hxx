@@ -96,6 +96,7 @@ struct UI {
     std::function<void(uint32_t, const std::string&)> mesh_renamed;
     std::function<void(uint32_t)> emitter_changed;
     std::function<void(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
+    std::function<bool(uint32_t)> emitter_deleted;
     std::function<void(uint2 /* viewport */, uint32_t /* pixel size*/)> camera_changed;
     std::function<void()> scene_settings_changed;
     std::function<void()> denoise_selected;
@@ -135,6 +136,8 @@ struct UI {
   bool build_medium(SceneRepresentation& scene_rep, Medium& medium);
   bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
+  bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options);
+  bool sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options);
   bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);
   bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&);
   bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&, bool mixed);

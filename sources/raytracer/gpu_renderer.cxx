@@ -1969,6 +1969,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (scene_check_requested) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_scene_hashes_and_changes");
     const auto scene_hash_begin = std::chrono::steady_clock::now();
+    scene.data().images.load_images(scheduler);
     new_hashes = scene.data().compute_hashes();
     changes = new_hashes.compare(_current_scene_hashes);
     scene_changed = changes.any();
@@ -3023,7 +3024,8 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
   }
 
   const bool packed_emitters_changed = changes[UpdateFlags::Triangles] || changes[UpdateFlags::Emitters] || changes[UpdateFlags::Materials] || changes[UpdateFlags::Spectra];
-  const bool scene_globals_changed = changes[UpdateFlags::Triangles] || changes[UpdateFlags::Meshes] || changes[UpdateFlags::Emitters] || changes[UpdateFlags::Defaults] ||
+  const bool scene_globals_changed = changes[UpdateFlags::Triangles] || changes[UpdateFlags::Meshes] || changes[UpdateFlags::Materials] || changes[UpdateFlags::Spectra] ||
+                                     changes[UpdateFlags::Emitters] || changes[UpdateFlags::EnergyCompensationInterfaces] || changes[UpdateFlags::Defaults] ||
                                      changes[UpdateFlags::Images] || changes[UpdateFlags::PixelFilter];
 
   PackedEmitterData packed_emitters = {};

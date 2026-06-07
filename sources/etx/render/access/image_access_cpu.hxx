@@ -5,8 +5,8 @@
 struct Scene;
 
 struct ImageAccessCPUDesc {
-  float2 fsize = {};
-  uint2 size = {};
+  float3 fsize = {};
+  uint3 size = {};
   uint32_t options = 0u;
   uint32_t image_index = kInvalidIndex;
 };

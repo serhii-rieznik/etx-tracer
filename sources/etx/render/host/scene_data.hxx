@@ -34,6 +34,7 @@ struct UpdateFlags {
     Emitters,
     Images,
     Mediums,
+    EnergyCompensationInterfaces,
     PixelFilter,
     Defaults,
     Options,
@@ -82,6 +83,7 @@ struct SceneHashes {
   uint64_t emitter_profiles_hash = 0;
   uint64_t images_hash = 0;
   uint64_t mediums_hash = 0;
+  uint64_t energy_compensation_interfaces_hash = 0;
   uint64_t pixel_filter_hash = 0;
   uint64_t defaults_hash = 0;
   uint64_t options_hash = 0;
@@ -101,6 +103,7 @@ struct SceneHashes {
     result[UpdateFlags::Emitters] = (emitter_profiles_hash != existing.emitter_profiles_hash);
     result[UpdateFlags::Images] = (images_hash != existing.images_hash);
     result[UpdateFlags::Mediums] = (mediums_hash != existing.mediums_hash);
+    result[UpdateFlags::EnergyCompensationInterfaces] = (energy_compensation_interfaces_hash != existing.energy_compensation_interfaces_hash);
     result[UpdateFlags::PixelFilter] = (pixel_filter_hash != existing.pixel_filter_hash);
     result[UpdateFlags::Defaults] = (defaults_hash != existing.defaults_hash);
     result[UpdateFlags::Options] = (options_hash != existing.options_hash);

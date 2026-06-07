@@ -32,6 +32,9 @@ namespace {
 
 constexpr float kDefaultCameraClipNear = 0.1f;
 constexpr float kDefaultCameraClipFar = 1000.0f;
+constexpr uint2 kDefaultModelCameraFilmSize = {1280u, 720u};
+constexpr float kDefaultModelSunAngularDiameter = 0.53f;
+constexpr float kDefaultModelAtmosphereQuality = 0.125f;
 
 void sanitize_camera_clip_planes(Camera& camera) {
   camera.clip_near = (camera.clip_near > 0.0f) ? camera.clip_near : kDefaultCameraClipNear;
@@ -91,6 +94,36 @@ std::string rename_entry(std::unordered_map<std::string, uint32_t>& mapping, uin
     mapping.emplace(final, index);
   }
   return final;
+}
+
+bool scene_has_environment_emitter(const SceneData& data) {
+  for (const auto& profile : data.emitter_profiles) {
+    if (profile.cls == EmitterProfile::Class::Environment) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void add_default_raw_model_lighting(SceneData& data) {
+  scattering::Parameters scattering_params = {};
+  scattering_params.altitude = 1000.0f;
+  scattering_params.anisotropy = 0.825f;
+  scattering_params.rayleigh_scale = 1.0f;
+  scattering_params.mie_scale = 1.0f;
+  scattering_params.ozone_scale = 1.0f;
+
+  const uint32_t atmosphere_index = data.add_atmosphere_emitter({scattering_params, kDefaultModelAtmosphereQuality});
+
+  auto& sun = data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
+  sun.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f}));
+  sun.emission.image_index = kInvalidIndex;
+  sun.directional.direction = normalize(float3{0.0f, 1.0f, 1.0f});
+  sun.directional.angular_size = kDefaultModelSunAngularDiameter * kPi / 180.0f;
+  sun.directional.equivalent_disk_size = 2.0f * std::tan(sun.directional.angular_size * 0.5f);
+  sun.directional.angular_size_cosine = std::cos(sun.directional.angular_size * 0.5f);
+  sun.reference_emitter_index = atmosphere_index;
+  sun.medium_index = kInvalidIndex;
 }
 
 }  // namespace
@@ -510,7 +543,7 @@ struct SceneRepresentationImpl {
   void setup_atmosphere_references();
 
   bool finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len, bool force_tangents,
-    bool spectral_scene);
+    bool spectral_scene, bool create_default_camera_entry);
 };
 
 void build_camera(Camera& camera, const float3& position, const float3& direction, const float3& up, const uint2& viewport, const float fov) {
@@ -957,7 +990,9 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   bool force_tangents = false;
   bool spectral_scene = false;
 
-  if (strcmp(get_file_ext(filename), ".json") == 0) {
+  const bool raw_model_file = (strcmp(get_file_ext(filename), ".json") != 0);
+
+  if (raw_model_file == false) {
     std::string json_content;
     if (auto f = fopen(filename, "rb")) {
       size_t file_size = get_file_size(f);
@@ -1009,12 +1044,16 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
       uint32_t load_result = load_from_tungsten_file(filename, _private->data, _private->ior_database, _private->scheduler, _private->active_camera);
       if ((load_result & SceneLoadSucceeded) == 0)
         return false;
-      return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
+      return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene, false);
     }
 
     if (parsed == false) {
       log::error("Failed to parse JSON scene %s", filename);
       return false;
+    }
+
+    if (is_native) {
+      _private->data.geometry_file_name.clear();
     }
 
     for (auto i = js.begin(), e = js.end(); i != e; ++i) {
@@ -1194,26 +1233,50 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
 
   uint32_t load_result = SceneLoadFailed;
 
-  const char* geometry_file_name = _private->data.geometry_file_name.c_str();
   const char* materials_file_name = _private->data.materials_file_name.c_str();
-  auto ext = get_file_ext(geometry_file_name);
-  if (strcmp(ext, ".etx") == 0) {
-    SceneSerialization loader;
-    if (loader.load_from_file(geometry_file_name, _private->data, materials_file_name, _private->ior_database, _private->scheduler) == false) {
-      log::error("Failed to load ETX file from %s", geometry_file_name);
+  if (_private->data.geometry_file_name.empty()) {
+    if ((materials_file_name == nullptr) || (materials_file_name[0] == 0)) {
+      log::error("Scene %s does not provide geometry or materials", filename);
       return false;
     }
-    load_result = SceneLoadSucceeded;
-  } else if (strcmp(ext, ".obj") == 0) {
-    load_result = load_from_obj_file(geometry_file_name, materials_file_name, _private->data, _private->ior_database, _private->scheduler);
-  } else if (strcmp(ext, ".gltf") == 0) {
-    load_result = load_from_gltf_file(geometry_file_name, false, _private->data, _private->scheduler, _private->active_camera);
-  } else if (strcmp(ext, ".glb") == 0) {
-    load_result = load_from_gltf_file(geometry_file_name, true, _private->data, _private->scheduler, _private->active_camera);
+
+    char materials_base_dir[2048] = {};
+    get_file_folder(materials_file_name, materials_base_dir, sizeof(materials_base_dir));
+    SceneSerialization loader;
+    if (loader.parse_materials_file(materials_file_name, materials_base_dir, _private->data, _private->ior_database, _private->scheduler) == false) {
+      log::error("Failed to load materials from %s", materials_file_name);
+      return false;
+    }
+
+    load_result = _private->data.triangles.empty() ? SceneLoadFailed : SceneLoadSucceeded;
+  } else {
+    const char* geometry_file_name = _private->data.geometry_file_name.c_str();
+    auto ext = get_file_ext(geometry_file_name);
+    if (strcmp(ext, ".etx") == 0) {
+      SceneSerialization loader;
+      if (loader.load_from_file(geometry_file_name, _private->data, materials_file_name, _private->ior_database, _private->scheduler) == false) {
+        log::error("Failed to load ETX file from %s", geometry_file_name);
+        return false;
+      }
+      load_result = SceneLoadSucceeded;
+    } else if (strcmp(ext, ".obj") == 0) {
+      load_result = load_from_obj_file(geometry_file_name, materials_file_name, _private->data, _private->ior_database, _private->scheduler);
+    } else if (strcmp(ext, ".gltf") == 0) {
+      load_result = load_from_gltf_file(geometry_file_name, false, _private->data, _private->scheduler, _private->active_camera);
+    } else if (strcmp(ext, ".glb") == 0) {
+      load_result = load_from_gltf_file(geometry_file_name, true, _private->data, _private->scheduler, _private->active_camera);
+    }
   }
 
   if ((load_result & SceneLoadSucceeded) == 0) {
     return false;
+  }
+
+  const bool setup_camera = (options & SceneRepresentation::SetupCamera) != 0u;
+  const bool create_default_camera_entry = ((raw_model_file && setup_camera) && _private->data.cameras.empty() && ((load_result & SceneLoadCameraInfo) == 0));
+
+  if ((raw_model_file && setup_camera) && (scene_has_environment_emitter(_private->data) == false)) {
+    add_default_raw_model_lighting(_private->data);
   }
 
   if (has_target || has_direction || default_camera.film_size.x > 0 || default_camera.lens_radius > 0.0f) {
@@ -1238,7 +1301,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     entry.cam.clip_far = default_camera.clip_far;
   }
 
-  return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
+  return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene, create_default_camera_entry);
 }
 
 void SceneRepresentationImpl::update_medium_bounds() {
@@ -1950,33 +2013,25 @@ void SceneRepresentationImpl::generate_pixel_sampler_image() {
 
 void SceneRepresentationImpl::setup_atmosphere_references() {
   for (auto& profile : data.emitter_profiles) {
-    if (profile.cls == EmitterProfile::Class::Directional) {
+    if (profile.cls != EmitterProfile::Class::Directional) {
+      continue;
+    }
+
+    const bool invalid_reference = (profile.reference_emitter_index == kInvalidIndex) || (profile.reference_emitter_index >= data.emitter_profiles.size());
+    if (invalid_reference) {
       profile.reference_emitter_index = kInvalidIndex;
+      continue;
     }
-  }
 
-  // Find atmosphere emitter (environment emitter with atmosphere meta)
-  uint32_t atmosphere_emitter_index = kInvalidIndex;
-  for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
-    const auto& profile = data.emitter_profiles[i];
-    if ((profile.cls == EmitterProfile::Class::Environment) && (profile.meta & EmitterProfile::Meta::Atmosphere) != 0) {
-      atmosphere_emitter_index = i;
-      break;  // For now, only support one atmosphere emitter
-    }
-  }
-
-  if (atmosphere_emitter_index != kInvalidIndex) {
-    for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
-      auto& profile = data.emitter_profiles[i];
-      if (profile.cls == EmitterProfile::Class::Directional) {
-        profile.reference_emitter_index = atmosphere_emitter_index;
-      }
+    const auto& referenced = data.emitter_profiles[profile.reference_emitter_index];
+    if ((referenced.cls != EmitterProfile::Class::Environment) || ((referenced.meta & EmitterProfile::Meta::Atmosphere) == 0u)) {
+      profile.reference_emitter_index = kInvalidIndex;
     }
   }
 }
 
 bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len,
-  bool force_tangents, bool spectral_scene) {
+  bool force_tangents, bool spectral_scene, bool create_default_camera_entry) {
   auto& camera = active_camera;
   bool needs_camera_positioning = false;
 
@@ -1985,6 +2040,12 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
       if ((load_result & SceneLoadCameraInfo) == 0) {
         if (use_focal_len) {
           camera_fov = focal_length_to_fov(camera_focal_len) * 180.0f / kPi;
+        }
+        if ((camera.film_size.x == 0u) || (camera.film_size.y == 0u)) {
+          camera.film_size = kDefaultModelCameraFilmSize;
+        }
+        if (length(camera.direction) <= kEpsilon) {
+          camera.direction = kWorldForward;
         }
         build_camera(camera, camera.position, camera.direction, camera.up, camera.film_size, camera_fov);
         needs_camera_positioning = true;
@@ -2059,6 +2120,12 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     compute_camera_position_to_fit_scene(data, camera, kDefaultViewDirection, position, target);
     const float3 direction = normalize(target - position);
     build_camera(camera, position, direction, kWorldUp, camera.film_size, camera_fov);
+    if (create_default_camera_entry && (data.cameras.empty())) {
+      auto& entry = data.cameras.emplace_back();
+      entry.id = "default";
+      entry.active = true;
+      entry.cam = camera;
+    }
   }
 
   return true;
@@ -2126,7 +2193,19 @@ bool SceneRepresentationImpl::delete_emitter(uint32_t emitter_index) {
   // Remove the emitter profile
   data.emitter_profiles.erase(data.emitter_profiles.begin() + emitter_index);
 
-  // Rebuild atmosphere/sun references from scratch
+  for (auto& current_profile : data.emitter_profiles) {
+    if ((current_profile.cls != EmitterProfile::Class::Directional) || (current_profile.reference_emitter_index == kInvalidIndex)) {
+      continue;
+    }
+
+    if (current_profile.reference_emitter_index == emitter_index) {
+      current_profile.reference_emitter_index = kInvalidIndex;
+    } else if (current_profile.reference_emitter_index > emitter_index) {
+      current_profile.reference_emitter_index -= 1u;
+    }
+  }
+
+  // Drop stale atmosphere/sun references after profile indices changed.
   setup_atmosphere_references();
 
   // Rebuild area emitters from materials (this will update triangle references)

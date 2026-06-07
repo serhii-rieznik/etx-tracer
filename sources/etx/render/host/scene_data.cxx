@@ -61,7 +61,7 @@ uint64_t hash_triangle_indices(const std::vector<Triangle>& triangles) {
 
 SceneData::SceneData(TaskScheduler& s)
   : images(images_vector, buffer_pool)
-  , mediums(mediums_vector, buffer_pool)
+  , mediums(mediums_vector, buffer_pool, images)
   , scheduler(s) {
 }
 
@@ -102,6 +102,12 @@ BoundingBox SceneData::compute_bounding_volumes() const {
     bbox.p_max = max(bbox.p_max, tb.p_max);
   }
 
+  const bool has_valid_bounds = (bbox.p_min.x <= bbox.p_max.x) && (bbox.p_min.y <= bbox.p_max.y) && (bbox.p_min.z <= bbox.p_max.z);
+  if (has_valid_bounds == false) {
+    bbox.p_min = {-1.0f, -1.0f, -1.0f};
+    bbox.p_max = {1.0f, 1.0f, 1.0f};
+  }
+
   return bbox;
 }
 
@@ -129,6 +135,7 @@ SceneHashes SceneData::compute_hashes() const {
   double emitters_ms = 0.0;
   double images_ms = 0.0;
   double mediums_ms = 0.0;
+  double energy_compensation_ms = 0.0;
   double pixel_filter_ms = 0.0;
   double defaults_ms = 0.0;
   double options_ms = 0.0;
@@ -143,6 +150,8 @@ SceneHashes SceneData::compute_hashes() const {
   timed_hash(materials.data(), materials.size() * sizeof(Material), &result.materials_hash, materials_ms);
   timed_hash(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution), &result.spectra_hash, spectra_ms);
   timed_hash(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile), &result.emitter_profiles_hash, emitters_ms);
+  timed_hash(energy_compensation_interfaces.data(), energy_compensation_interfaces.size() * sizeof(Scene::EnergyCompensationInterface),
+    &result.energy_compensation_interfaces_hash, energy_compensation_ms);
   timed_hash(&pixel_filter, sizeof(PixelFilter), &result.pixel_filter_hash, pixel_filter_ms);
   timed_hash(&defaults, sizeof(Scene::Defaults), &result.defaults_hash, defaults_ms);
   timed_hash(&options, sizeof(Scene::Options), &result.options_hash, options_ms);
@@ -169,12 +178,13 @@ SceneHashes SceneData::compute_hashes() const {
   const auto total_end = std::chrono::steady_clock::now();
   log::info(
     "Scene hash recompute timing: total=%.2fms pos=%.2fms nrm=%.2fms tan=%.2fms btn=%.2fms tex=%.2fms tri=%.2fms tri_idx=%.2fms meshes=%.2fms materials=%.2fms "
-    "spectra=%.2fms emitters=%.2fms images=%.2fms mediums=%.2fms pixel_filter=%.2fms defaults=%.2fms options=%.2fms",
+    "spectra=%.2fms emitters=%.2fms images=%.2fms mediums=%.2fms energy_compensation=%.2fms pixel_filter=%.2fms defaults=%.2fms options=%.2fms",
     elapsed_ms(total_begin, total_end), vertices_pos_ms, vertices_nrm_ms, vertices_tan_ms, vertices_btn_ms, vertices_tex_ms, triangles_ms, triangle_indices_ms, meshes_ms,
-    materials_ms, spectra_ms, emitters_ms, images_ms, mediums_ms, pixel_filter_ms, defaults_ms, options_ms);
+    materials_ms, spectra_ms, emitters_ms, images_ms, mediums_ms, energy_compensation_ms, pixel_filter_ms, defaults_ms, options_ms);
   log::info(
-    "Scene hash recompute sizes: vertices=%zu triangles=%zu meshes=%zu materials=%zu spectra=%zu emitters=%zu images=%zu mediums=%zu",
-    vertices.pos.size(), triangles.size(), meshes.size(), materials.size(), spectrum_values.size(), emitter_profiles.size(), images_vector.size(), mediums_vector.size());
+    "Scene hash recompute sizes: vertices=%zu triangles=%zu meshes=%zu materials=%zu spectra=%zu emitters=%zu images=%zu mediums=%zu energy_compensation=%zu",
+    vertices.pos.size(), triangles.size(), meshes.size(), materials.size(), spectrum_values.size(), emitter_profiles.size(), images_vector.size(), mediums_vector.size(),
+    energy_compensation_interfaces.size());
 
   return result;
 }
@@ -372,7 +382,8 @@ void SceneData::build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_inde
     img.options = img.options | Image::UniformSamplingTable | Image::RepeatU;
     auto ptr = buffer_pool.map<float4>(img.data);
     ETX_CRITICAL(ptr != nullptr);
-    if (scattering::generate_sky_image(rhi, gpu_context, atmosphere_emitter.atmosphere.scattering, img.isize, light_sources, ptr) == false) {
+    const uint2 image_dimensions = uint2{img.isize.x, img.isize.y};
+    if (scattering::generate_sky_image(rhi, gpu_context, atmosphere_emitter.atmosphere.scattering, image_dimensions, light_sources, ptr) == false) {
       log::error("Failed to generate atmosphere sky image on GPU for emitter %u", atmosphere_emitter_index);
     } else {
       images.rebuild_sampling_table(atmosphere_emitter.emission.image_index, scheduler);

@@ -7,6 +7,7 @@ struct ETX_ALIGNED Image {
     Undefined,
     RGBA32F,
     RGBA8,
+    R32F,
     BC1,
     BC1_SRGB,
     BC2,
@@ -26,19 +27,20 @@ struct ETX_ALIGNED Image {
     BuildSamplingTable = 1u << 0u,
     RepeatU = 1u << 1u,
     RepeatV = 1u << 2u,
-    SkipSRGBConversion = 1u << 3u,
-    HasAlphaChannel = 1u << 4u,
-    UniformSamplingTable = 1u << 5u,
+    RepeatW = 1u << 3u,
+    SkipSRGBConversion = 1u << 4u,
+    HasAlphaChannel = 1u << 5u,
+    UniformSamplingTable = 1u << 6u,
 
-    Committed = 1u << 6u,
+    Committed = 1u << 7u,
   };
 
-  float2 fsize ETX_INIT({});
-  float2 offset ETX_INIT({});
-  float2 scale ETX_INIT((float2{1.0f, 1.0f}));
+  float3 fsize ETX_INIT({});
+  float3 offset ETX_INIT({});
+  float3 scale ETX_INIT((float3{1.0f, 1.0f, 1.0f}));
   float normalization ETX_INIT(0.0f);
 
-  uint2 isize ETX_INIT({});
+  uint3 isize ETX_INIT({});
   uint32_t options ETX_INIT(0u);
   Format format ETX_INIT(Format::Undefined);
   uint32_t data_size ETX_INIT(0u);
@@ -93,6 +95,10 @@ ETX_SHARED_INLINE float image_tex_coord_u(float u, float size, uint32_t options)
 
 ETX_SHARED_INLINE float image_tex_coord_v(float u, float size, uint32_t options) {
   return ((options & Image::RepeatV) != 0u) ? image_tex_coord_repeat(u, size) : image_tex_coord_clamp(u, size);
+}
+
+ETX_SHARED_INLINE float image_tex_coord_w(float u, float size, uint32_t options) {
+  return ((options & Image::RepeatW) != 0u) ? image_tex_coord_repeat(u, size) : image_tex_coord_clamp(u, size);
 }
 
 ETX_SHARED_INLINE float image_sample_interpolate(float rnd, float cdf_0, float cdf_1) {

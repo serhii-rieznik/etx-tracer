@@ -73,6 +73,7 @@ struct RTApplication {
   void on_mesh_renamed(uint32_t index, const std::string&);
   void on_emitter_changed(uint32_t index);
   void on_emitter_added(uint32_t type);
+  bool on_emitter_deleted(uint32_t index);
   void on_camera_changed(uint2 viewport, uint32_t pixel_size);
   void on_scene_settings_changed();
   void on_denoise_selected();
@@ -89,6 +90,7 @@ struct RTApplication {
   void save_options();
   void update_camera_to_fit_scene(const float3& view_direction);
   void notify_scene_might_have_changed();
+  bool rebuild_material_render_resources();
 
  private:
   TaskScheduler scheduler;

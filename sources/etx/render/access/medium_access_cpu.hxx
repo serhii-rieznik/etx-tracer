@@ -59,6 +59,20 @@ ETX_SHARED_INLINE float medium_access_sample_density(ETX_IN(MediumAccessCPUConte
   }
 
   const Medium& medium = medium_access_cpu_medium(context, access.medium_index);
+  if ((medium.grid.type == MediumGridType::Texture3D) && (medium.grid.density_image_index != kInvalidIndex) && (medium.grid.density_image_index < context.scene->images.count)) {
+    float3 uvw = {};
+    if (medium_density_shared_texture_uvw(local_coord, medium.grid.dimensions, uvw) == false) {
+      return 0.0f;
+    }
+
+    const Image& density_image = context.scene->images[medium.grid.density_image_index];
+    if ((density_image.format == Image::Format::R32F) && (density_image.isize.x == medium.grid.dimensions.x) && (density_image.isize.y == medium.grid.dimensions.y) &&
+        (density_image.isize.z == medium.grid.dimensions.z)) {
+      const float value = density_image.evaluate_r32f_fast_3d(uvw);
+      return medium_density_shared_apply_shape(value, medium.grid.noise_power, medium.grid.noise_sharpness);
+    }
+  }
+
   return medium.sample_density(local_coord, medium.bounds);
 }
 

@@ -16,6 +16,7 @@ struct ImagePoolImpl {
   void init(uint32_t capacity) {
     images.reserve(capacity);
     paths.reserve(capacity);
+    keys.reserve(capacity);
   }
 
   void cleanup() {
@@ -44,6 +45,8 @@ struct ImagePoolImpl {
         src_data = reinterpret_cast<const uint8_t*>(img.pixels.f32.a);
       } else if (img.format == Image::Format::RGBA8) {
         src_data = reinterpret_cast<const uint8_t*>(img.pixels.u8.a);
+      } else if (img.format == Image::Format::R32F) {
+        src_data = reinterpret_cast<const uint8_t*>(img.pixels.r32.a);
       } else if (Image::is_compressed_bc_format(img.format)) {
         src_data = reinterpret_cast<const uint8_t*>(img.pixels.compressed.a);
       }
@@ -56,6 +59,8 @@ struct ImagePoolImpl {
           image.pixels.f32 = {buffer_pool.map<float4>(image.data), img.pixels.f32.count};
         } else if (img.format == Image::Format::RGBA8) {
           image.pixels.u8 = {buffer_pool.map<ubyte4>(image.data), img.pixels.u8.count};
+        } else if (img.format == Image::Format::R32F) {
+          image.pixels.r32 = {buffer_pool.map<float>(image.data), img.pixels.r32.count};
         } else if (Image::is_compressed_bc_format(img.format)) {
           image.pixels.compressed = {buffer_pool.map<uint8_t>(image.data), static_cast<uint32_t>(image.data.byte_size)};
         }
@@ -114,21 +119,23 @@ struct ImagePoolImpl {
   }
 
   uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
-    auto i = mapping.find(path);
+    const std::string key = file_image_key(path, image_options, offset, scale);
+    auto i = mapping.find(key);
     if (i != mapping.end()) {
       return i->second;
     }
 
-    uint32_t handle = create_entry(path);
+    uint32_t handle = create_entry(path, key);
     auto& image = images[handle];
-    image.offset = offset;
-    image.scale = scale;
+    image.offset = float3{offset.x, offset.y, 0.0f};
+    image.scale = float3{scale.x, scale.y, 1.0f};
     image.options = image_options;
 
     return handle;
   }
 
-  uint32_t add_from_data(const float4 data[], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
+  uint32_t add_from_data_3d(const float4 data[], const uint3& dimensions, uint32_t image_options, const float3& offset, const float3& scale) {
+    ETX_CRITICAL(((image_options & Image::BuildSamplingTable) == 0u) || (dimensions.z == 1u));
     std::string path = "##mem" + std::to_string(1u + counter++);
     uint32_t handle = create_entry(path);
     auto& image = images[handle];
@@ -138,14 +145,42 @@ struct ImagePoolImpl {
     image.format = Image::Format::RGBA32F;
     image.options = image_options;
     image.isize = dimensions;
-    image.fsize = {float(dimensions.x), float(dimensions.y)};
-    const uint64_t pixel_count = 1ull * dimensions.x * dimensions.y;
+    image.fsize = {float(dimensions.x), float(dimensions.y), float(dimensions.z)};
+    const uint64_t pixel_count = 1ull * dimensions.x * dimensions.y * dimensions.z;
     image.data = buffer_pool.allocate_elements<float4>(image.pixel_buffer, pixel_count, alignof(float4));
     image.data_size = static_cast<uint32_t>(image.data.byte_size);
 
     if (data != nullptr) {
       buffer_pool.write(image.data, data, image.data_size);
       image.pixels.f32 = {buffer_pool.map<float4>(image.data), static_cast<uint32_t>(pixel_count)};
+    }
+
+    return handle;
+  }
+
+  uint32_t add_from_data(const float4 data[], const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
+    return add_from_data_3d(data, uint3{dimensions.x, dimensions.y, 1u}, image_options, float3{offset.x, offset.y, 0.0f}, float3{scale.x, scale.y, 1.0f});
+  }
+
+  uint32_t add_from_data_3d_r32(const float data[], const uint3& dimensions, uint32_t image_options, const float3& offset, const float3& scale) {
+    ETX_CRITICAL(((image_options & Image::BuildSamplingTable) == 0u) || (dimensions.z == 1u));
+    std::string path = "##mem" + std::to_string(1u + counter++);
+    uint32_t handle = create_entry(path);
+    auto& image = images[handle];
+
+    image.offset = offset;
+    image.scale = scale;
+    image.format = Image::Format::R32F;
+    image.options = image_options;
+    image.isize = dimensions;
+    image.fsize = {float(dimensions.x), float(dimensions.y), float(dimensions.z)};
+    const uint64_t pixel_count = 1ull * dimensions.x * dimensions.y * dimensions.z;
+    image.data = buffer_pool.allocate_elements<float>(image.pixel_buffer, pixel_count, alignof(float));
+    image.data_size = static_cast<uint32_t>(image.data.byte_size);
+
+    if (data != nullptr) {
+      buffer_pool.write(image.data, data, image.data_size);
+      image.pixels.r32 = {buffer_pool.map<float>(image.data), static_cast<uint32_t>(pixel_count)};
     }
 
     return handle;
@@ -310,6 +345,60 @@ struct ImagePoolImpl {
     build_image_sampling_table(image, scheduler);
   }
 
+  bool ensure_pixel_view(Image& img) {
+    if ((img.format == Image::Format::Undefined) || (img.data.valid() == false) || (img.data.byte_size == 0u)) {
+      log::error("Unable to build image sampling table: image payload is not loaded");
+      return false;
+    }
+
+    if (img.format == Image::Format::RGBA32F) {
+      if (img.pixels.f32.a == nullptr) {
+        img.pixels.f32 = {buffer_pool.map<float4>(img.data), static_cast<uint32_t>(img.data.byte_size / sizeof(float4))};
+      }
+      if (img.pixels.f32.a == nullptr) {
+        log::error("Unable to build image sampling table: failed to map RGBA32F image payload");
+        return false;
+      }
+      return true;
+    }
+
+    if (img.format == Image::Format::RGBA8) {
+      if (img.pixels.u8.a == nullptr) {
+        img.pixels.u8 = {buffer_pool.map<ubyte4>(img.data), static_cast<uint32_t>(img.data.byte_size / sizeof(ubyte4))};
+      }
+      if (img.pixels.u8.a == nullptr) {
+        log::error("Unable to build image sampling table: failed to map RGBA8 image payload");
+        return false;
+      }
+      return true;
+    }
+
+    if (img.format == Image::Format::R32F) {
+      if (img.pixels.r32.a == nullptr) {
+        img.pixels.r32 = {buffer_pool.map<float>(img.data), static_cast<uint32_t>(img.data.byte_size / sizeof(float))};
+      }
+      if (img.pixels.r32.a == nullptr) {
+        log::error("Unable to build image sampling table: failed to map R32F image payload");
+        return false;
+      }
+      return true;
+    }
+
+    if (Image::is_compressed_bc_format(img.format)) {
+      if (img.pixels.compressed.a == nullptr) {
+        img.pixels.compressed = {buffer_pool.map<uint8_t>(img.data), static_cast<uint32_t>(img.data.byte_size)};
+      }
+      if (img.pixels.compressed.a == nullptr) {
+        log::error("Unable to build image sampling table: failed to map compressed image payload");
+        return false;
+      }
+      return true;
+    }
+
+    log::error("Unable to build image sampling table: unsupported image format %u", static_cast<uint32_t>(img.format));
+    return false;
+  }
+
   void delay_load(TaskScheduler& scheduler) {
     if (images.empty())
       return;
@@ -332,11 +421,13 @@ struct ImagePoolImpl {
           image.pixels.f32 = {buffer_pool.map<float4>(image.data), static_cast<uint32_t>(image.data.byte_size / sizeof(float4))};
         } else if (image.format == Image::Format::RGBA8) {
           image.pixels.u8 = {buffer_pool.map<ubyte4>(image.data), static_cast<uint32_t>(image.data.byte_size / sizeof(ubyte4))};
+        } else if (image.format == Image::Format::R32F) {
+          image.pixels.r32 = {buffer_pool.map<float>(image.data), static_cast<uint32_t>(image.data.byte_size / sizeof(float))};
         } else if (Image::is_compressed_bc_format(image.format)) {
           image.pixels.compressed = {buffer_pool.map<uint8_t>(image.data), static_cast<uint32_t>(image.data.byte_size)};
         }
 
-        for (uint32_t i = 0, e = image.isize.x * image.isize.y; i < e; ++i) {
+        for (uint32_t i = 0, e = image.isize.x * image.isize.y * image.isize.z; i < e; ++i) {
           if (image.pixel(i).w < 1.0f) {
             image.options = image.options | Image::HasAlphaChannel;
             break;
@@ -344,6 +435,7 @@ struct ImagePoolImpl {
         }
 
         if (image.options & Image::BuildSamplingTable) {
+          ETX_CRITICAL(image.isize.z == 1u);
           build_image_sampling_table(image, scheduler);
         }
 
@@ -374,13 +466,14 @@ struct ImagePoolImpl {
     buffer_pool.destroy(image.distribution_buffer);
     free_image(image);
 
-    const std::string& path = paths[handle];
-    auto it = mapping.find(path);
+    const std::string& key = keys[handle];
+    auto it = mapping.find(key);
     if ((it != mapping.end()) && (it->second == handle)) {
       mapping.erase(it);
     }
 
     paths[handle].clear();
+    keys[handle].clear();
   }
 
   void remove_all() {
@@ -391,6 +484,7 @@ struct ImagePoolImpl {
     }
     images.clear();
     paths.clear();
+    keys.clear();
     mapping.clear();
     counter = 0;
   }
@@ -399,16 +493,19 @@ struct ImagePoolImpl {
     const bool skip_loading = (file_name == nullptr) || (file_name[0] == '\0') || ((file_name[0] == '#') && (file_name[1] == '#'));
 
     // In-memory image entries are already filled by add_from_data/add_copy.
-    if (skip_loading && img.data.valid() && (img.data_size > 0u) && (img.format != Image::Format::Undefined) && (img.isize.x > 0u) && (img.isize.y > 0u)) {
+    if (skip_loading && img.data.valid() && (img.data_size > 0u) && (img.format != Image::Format::Undefined) && (img.isize.x > 0u) && (img.isize.y > 0u) && (img.isize.z > 0u)) {
       img.fsize.x = static_cast<float>(img.isize.x);
       img.fsize.y = static_cast<float>(img.isize.y);
+      img.fsize.z = static_cast<float>(img.isize.z);
       return;
     }
 
     std::vector<uint8_t> source_data = {};
 
     if (skip_loading == false) {
-      img.format = load_data(file_name, source_data, img.isize);
+      uint2 image_dimensions = {};
+      img.format = load_data(file_name, source_data, image_dimensions);
+      img.isize = uint3{image_dimensions.x, image_dimensions.y, 1u};
       if ((img.format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
         log::error("Failed to load image from file: %s", file_name);
       }
@@ -424,10 +521,12 @@ struct ImagePoolImpl {
       img.options = img.options | Image::SkipSRGBConversion | Image::RepeatU | Image::RepeatV;
       img.isize.x = 1;
       img.isize.y = 1;
+      img.isize.z = 1;
     }
 
     img.fsize.x = static_cast<float>(img.isize.x);
     img.fsize.y = static_cast<float>(img.isize.y);
+    img.fsize.z = static_cast<float>(img.isize.z);
 
     if (img.format == Image::Format::RGBA8) {
       bool convert_from_srgb = (img.options & Image::SkipSRGBConversion) == 0;
@@ -474,6 +573,11 @@ struct ImagePoolImpl {
     ETX_ASSERT(img.x_distributions.count == 0);
     ETX_ASSERT(img.y_distribution.values.count == 0);
     ETX_ASSERT(img.y_distribution.values.a == nullptr);
+    if (ensure_pixel_view(img) == false) {
+      return;
+    }
+    ETX_CRITICAL(img.isize.z == 1u);
+
     bool uniform_sampling = (img.options & Image::UniformSamplingTable) == Image::UniformSamplingTable;
 
     uint32_t x_entries_per_row = img.isize.x + 1;  // +1 for sentinel
@@ -519,7 +623,7 @@ struct ImagePoolImpl {
           auto* x_entries = x_entries_base + y * x_entries_per_row;
           for (uint32_t x = 0; x < img.isize.x; ++x) {
             float u = (float(x) + 0.5f) / img.fsize.x;
-            float4 px = img.read(img.fsize * float2{u, v});
+            float4 px = img.read(float2{img.fsize.x, img.fsize.y} * float2{u, v});
             float lum = luminance(to_float3(px));
             row_value += lum;
             x_entries[x] = {lum, 0.0f, 0.0f};
@@ -548,6 +652,7 @@ struct ImagePoolImpl {
 
   void free_image(Image& img) {
     img.pixels.f32 = {};
+    img.pixels.r32 = {};
     img.pixels.u8 = {};
     img.pixels.compressed = {};
     img.x_distributions = {};
@@ -555,7 +660,7 @@ struct ImagePoolImpl {
 
     img.fsize = {};
     img.offset = {};
-    img.scale = {1.0f, 1.0f};
+    img.scale = {1.0f, 1.0f, 1.0f};
     img.isize = {};
     img.normalization = 1.0f;
     img.options = 0;
@@ -573,16 +678,27 @@ struct ImagePoolImpl {
   std::vector<Image>& images;
   BufferPool& buffer_pool;
   std::vector<std::string> paths;
+  std::vector<std::string> keys;
   std::unordered_map<std::string, uint32_t> mapping;
   uint64_t counter = 0;
 
+  static std::string file_image_key(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
+    return path + "#" + std::to_string(image_options) + "#" + std::to_string(offset.x) + "#" + std::to_string(offset.y) + "#" + std::to_string(scale.x) + "#" +
+      std::to_string(scale.y);
+  }
+
   uint32_t create_entry(const std::string& path) {
+    return create_entry(path, path);
+  }
+
+  uint32_t create_entry(const std::string& path, const std::string& key) {
     uint32_t index = static_cast<uint32_t>(images.size());
     images.emplace_back();
     images[index].pixel_buffer = buffer_pool.create(0u, "image_pixels");
     images[index].distribution_buffer = buffer_pool.create(0u, "image_distributions");
     paths.emplace_back(path);
-    mapping[path] = index;
+    keys.emplace_back(key);
+    mapping[key] = index;
     return index;
   }
 };
@@ -615,6 +731,14 @@ uint32_t ImagePool::add_from_file(const std::string& path, uint32_t image_option
 
 uint32_t ImagePool::add_from_data(const float4* data, const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale) {
   return _private->add_from_data(data, dimensions, image_options, offset, scale);
+}
+
+uint32_t ImagePool::add_from_data_3d(const float4* data, const uint3& dimensions, uint32_t image_options, const float3& offset, const float3& scale) {
+  return _private->add_from_data_3d(data, dimensions, image_options, offset, scale);
+}
+
+uint32_t ImagePool::add_from_data_3d_r32(const float* data, const uint3& dimensions, uint32_t image_options, const float3& offset, const float3& scale) {
+  return _private->add_from_data_3d_r32(data, dimensions, image_options, offset, scale);
 }
 
 uint32_t ImagePool::add_from_spherical_harmonics(TaskScheduler& scheduler, const float3 sh_coeffs[9], const uint2& dimensions, uint32_t image_options, const float2& offset,

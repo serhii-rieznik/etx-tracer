@@ -85,6 +85,95 @@ bool validate_sample(const etx::BSDFSample& sample) {
   return non_negative_response(sample.weight);
 }
 
+bool close_value(const float a, const float b, const float tolerance) {
+  return fabsf(a - b) <= tolerance;
+}
+
+bool validate_image_3d_sampling() {
+  etx::BufferPool buffer_pool;
+  std::vector<etx::Image> images;
+  etx::ImagePool image_pool(images, buffer_pool);
+  image_pool.init(4u);
+
+  const float4 rgba_pixels[] = {
+    float4{0.0f, 0.0f, 0.0f, 1.0f},
+    float4{1.0f, 0.0f, 0.0f, 1.0f},
+    float4{2.0f, 0.0f, 0.0f, 1.0f},
+    float4{3.0f, 0.0f, 0.0f, 1.0f},
+    float4{4.0f, 0.0f, 0.0f, 1.0f},
+    float4{5.0f, 0.0f, 0.0f, 1.0f},
+    float4{6.0f, 0.0f, 0.0f, 1.0f},
+    float4{7.0f, 0.0f, 0.0f, 1.0f},
+  };
+  float r32_pixels[] = {
+    0.0f,
+    1.0f,
+    2.0f,
+    3.0f,
+    4.0f,
+    5.0f,
+    6.0f,
+    7.0f,
+  };
+
+  const uint32_t rgba_index = image_pool.add_from_data_3d(rgba_pixels, uint3{2u, 2u, 2u}, 0u, {}, float3{1.0f, 1.0f, 1.0f});
+  const uint32_t r32_index = image_pool.add_from_data_3d_r32(r32_pixels, uint3{2u, 2u, 2u}, 0u, {}, float3{1.0f, 1.0f, 1.0f});
+  const etx::Image& rgba_image = image_pool.get(rgba_index);
+  const etx::Image& r32_image = image_pool.get(r32_index);
+
+  bool valid = true;
+  const float4 rgba_center = rgba_image.evaluate_rgba32f_fast_3d(float3{0.25f, 0.25f, 0.25f});
+  const float r32_center = r32_image.evaluate_r32f_fast_3d(float3{0.25f, 0.25f, 0.25f});
+  if ((close_value(rgba_center.x, 3.5f, 1.0e-5f) == false) || (close_value(r32_center, 3.5f, 1.0e-5f) == false)) {
+    std::printf("3D image trilinear sampling failed rgba %.6f r32 %.6f\n", rgba_center.x, r32_center);
+    valid = false;
+  }
+
+  const float4 rgba_2d = rgba_image.evaluate_rgba32f_fast(float2{0.25f, 0.25f});
+  if (close_value(rgba_2d.x, 1.5f, 1.0e-5f) == false) {
+    std::printf("2D wrapper sampling changed %.6f\n", rgba_2d.x);
+    valid = false;
+  }
+
+  const uint32_t repeat_index = image_pool.add_from_data_3d_r32(r32_pixels, uint3{2u, 2u, 2u}, etx::Image::RepeatW, {}, float3{1.0f, 1.0f, 1.0f});
+  const etx::Image& repeat_image = image_pool.get(repeat_index);
+  const float repeated = repeat_image.evaluate_r32f_fast_3d(float3{0.0f, 0.0f, 1.25f});
+  if (close_value(repeated, 2.0f, 1.0e-5f) == false) {
+    std::printf("3D image RepeatW sampling failed %.6f\n", repeated);
+    valid = false;
+  }
+
+  const float3 medium_samples[] = {
+    float3{0.0f, 0.0f, 0.0f},
+    float3{0.25f, 0.25f, 0.25f},
+    float3{0.5f, 0.5f, 0.5f},
+    float3{0.75f, 0.75f, 0.75f},
+    float3{0.99f, 0.1f, 0.6f},
+    float3{-0.01f, 0.5f, 0.5f},
+    float3{1.0f, 0.5f, 0.5f},
+  };
+  etx::MediumTextureSampleContext medium_context = {etx::ArrayView<float>{r32_pixels, 8u}};
+  for (const float3& local_coord : medium_samples) {
+    const float old_value = etx::medium_texture_sample_shared_3d(medium_context, local_coord, uint3{2u, 2u, 2u});
+    float3 uvw = {};
+    float image_value = 0.0f;
+    if (::medium_density_shared_texture_uvw(local_coord, uint3{2u, 2u, 2u}, uvw)) {
+      image_value = r32_image.evaluate_r32f_fast_3d(uvw);
+    }
+    if (close_value(old_value, image_value, 1.0e-5f) == false) {
+      std::printf("Medium density image parity failed old %.6f image %.6f\n", old_value, image_value);
+      valid = false;
+    }
+  }
+
+  if (valid) {
+    std::printf("3D image sampling valid\n");
+  }
+
+  image_pool.cleanup();
+  return valid;
+}
+
 float integrate_pdf(const etx::BSDFData& data, const etx::Material& material, const uint32_t seed) {
   etx::Sampler sampler(seed, seed ^ 0x9e3779b9u);
   float sum = 0.0f;
@@ -440,6 +529,24 @@ etx::Material make_thinfilm_delta_plastic() {
   return result;
 }
 
+etx::Material make_thinfilm_rough_conductor(const float roughness) {
+  etx::Material result = make_mirror_conductor(roughness);
+  set_basic_thinfilm(result, 500.0f, 500.0f);
+  return result;
+}
+
+etx::Material make_thinfilm_rough_dielectric(const float roughness) {
+  etx::Material result = make_white_sapphire_dielectric(roughness);
+  set_basic_thinfilm(result, 500.0f, 500.0f);
+  return result;
+}
+
+etx::Material make_thinfilm_rough_plastic(const float roughness) {
+  etx::Material result = make_plastic(roughness);
+  set_basic_thinfilm(result, 500.0f, 500.0f);
+  return result;
+}
+
 bool validate_energy_compensated_material(const char* label, const etx::BSDFData& data, const etx::Material& material, const float roughness, const uint32_t seed) {
   const float pdf_integral = integrate_pdf(data, material, seed);
   const float reverse_pdf_integral = integrate_reverse_pdf(data, material, seed + 50000u);
@@ -658,7 +765,7 @@ bool validate_plastic_black_substrate_matches_dielectric_reflection(const char* 
   const float3 local_w_i = local_frame_to_local(frame, -interop_data.w_i);
   const float alpha = bsdf_energy_compensated_scalar_roughness(context, plastic, interop_data.tex);
   const BSDFPlasticCoatingReflectionProposal proposal =
-    bsdf_plastic_coating_reflection_proposal(context, interop_data.spectrum_sample, plastic, local_w_i, alpha);
+    bsdf_plastic_coating_reflection_proposal(context, interop_data.spectrum_sample, plastic, local_w_i, alpha, 0.0f);
   if (proposal.probability <= kEpsilon) {
     std::printf("%s roughness %.3f invalid coating proposal probability %.6f\n", label, roughness, proposal.probability);
     return false;
@@ -1040,6 +1147,237 @@ bool validate_exact_plastic_interface(etx::Scene& original_scene, const etx::Spe
   return diagnostic_valid;
 }
 
+bool validate_thinfilm_plastic_interface(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const float roughness,
+  const uint32_t seed) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(16u);
+  scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  scene_data.materials.emplace_back(make_thinfilm_rough_plastic(roughness));
+
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("plastic thinfilm coated diffuse roughness %.3f failed to bind LUT\n", roughness);
+    return false;
+  }
+
+  scene_data.images.load_images(scheduler);
+
+  etx::Scene exact_scene = {};
+  exact_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
+  exact_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
+  exact_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
+  exact_scene.energy_compensation_interfaces =
+    etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+
+  etx::scene_global_clear(&original_scene);
+  etx::scene_global_publish(&exact_scene, &exact_scene);
+
+  const etx::Material material = scene_data.materials[0];
+  const Vertex vertex = {
+    float3{0.0f, 0.0f, 0.0f},
+    float3{0.0f, 0.0f, 1.0f},
+    float3{1.0f, 0.0f, 0.0f},
+    float3{0.0f, 1.0f, 0.0f},
+    float2{0.5f, 0.5f},
+  };
+  const etx::BSDFData data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
+
+  bool diagnostic_valid = validate_energy_compensated_material("plastic thinfilm coated diffuse", data, material, roughness, seed);
+  diagnostic_valid =
+    validate_energy_compensated_white_furnace_direction("plastic thinfilm coated diffuse", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) &&
+    diagnostic_valid;
+  diagnostic_valid =
+    validate_energy_compensated_white_furnace_direction("plastic thinfilm coated diffuse", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) &&
+    diagnostic_valid;
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction("plastic thinfilm coated diffuse grazing", normalize(float3{0.9848077f, 0.0f, -0.1736482f}),
+                       material, roughness, seed + 300u) &&
+                     diagnostic_valid;
+  diagnostic_valid = validate_plastic_sample_contract("plastic thinfilm coated diffuse", data, material, roughness, seed + 400u) && diagnostic_valid;
+
+  etx::scene_global_clear(&exact_scene);
+  etx::scene_global_publish(&original_scene, &original_scene);
+  return diagnostic_valid;
+}
+
+bool validate_thinfilm_energy_compensation_cache_key(const etx::SpectralDistribution* spectra, const uint32_t spectrum_count) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(16u);
+  scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  etx::Material material_500 = make_thinfilm_rough_conductor(0.5f);
+  etx::Material material_650 = material_500;
+  set_basic_thinfilm(material_650, 650.0f, 650.0f);
+  scene_data.materials.emplace_back(material_500);
+  scene_data.materials.emplace_back(material_650);
+
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("thinfilm EC cache-key validation failed to bind LUTs\n");
+    return false;
+  }
+
+  const uint32_t interface_500 = scene_data.materials[0].energy_compensation_interface_index;
+  const uint32_t interface_650 = scene_data.materials[1].energy_compensation_interface_index;
+  if ((interface_500 == kInvalidIndex) || (interface_650 == kInvalidIndex) || (interface_500 == interface_650)) {
+    std::printf("thinfilm EC cache-key validation failed interfaces %u %u\n", interface_500, interface_650);
+    return false;
+  }
+
+  std::printf("thinfilm EC cache-key validation interfaces %u %u\n", interface_500, interface_650);
+  return true;
+}
+
+bool validate_variable_thinfilm_texture_lut(const etx::SpectralDistribution* spectra, const uint32_t spectrum_count) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(32u);
+  scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+
+  const float4 thickness_pixels[] = {
+    float4{0.0f, 0.0f, 0.0f, 1.0f},
+    float4{0.5f, 0.5f, 0.5f, 1.0f},
+    float4{1.0f, 1.0f, 1.0f, 1.0f},
+  };
+  const uint32_t thickness_image = scene_data.images.add_from_data(thickness_pixels, uint2{3u, 1u}, etx::Image::SkipSRGBConversion, {}, float2{1.0f, 1.0f});
+
+  etx::Material variable_material = make_thinfilm_rough_conductor(0.5f);
+  variable_material.thinfilm.min_thickness = 400.0f;
+  variable_material.thinfilm.max_thickness = 700.0f;
+  variable_material.thinfilm.thinkness_image = thickness_image;
+
+  etx::Material constant_material = make_thinfilm_rough_conductor(0.5f);
+  set_basic_thinfilm(constant_material, 550.0f, 550.0f);
+
+  scene_data.materials.emplace_back(variable_material);
+  scene_data.materials.emplace_back(constant_material);
+
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("variable thinfilm texture LUT validation failed to bind interfaces\n");
+    return false;
+  }
+
+  scene_data.images.load_images(scheduler);
+
+  etx::Scene exact_scene = {};
+  exact_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
+  exact_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
+  exact_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
+  exact_scene.energy_compensation_interfaces =
+    etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+
+  const BSDFResourceContext context = make_bsdf_resource_cpu_context(exact_scene);
+  const etx::Material& bound_variable_material = scene_data.materials[0];
+  const etx::Material& bound_constant_material = scene_data.materials[1];
+  const uint32_t variable_interface_index = bound_variable_material.energy_compensation_interface_index;
+  const uint32_t constant_interface_index = bound_constant_material.energy_compensation_interface_index;
+  if ((variable_interface_index == kInvalidIndex) || (constant_interface_index == kInvalidIndex)) {
+    std::printf("variable thinfilm texture LUT validation missing interfaces %u %u\n", variable_interface_index, constant_interface_index);
+    return false;
+  }
+
+  const etx::Scene::EnergyCompensationInterface& variable_interface = scene_data.energy_compensation_interfaces[variable_interface_index];
+  const etx::Scene::EnergyCompensationInterface& constant_interface = scene_data.energy_compensation_interfaces[constant_interface_index];
+  const etx::Image& variable_directional_lut = scene_data.images.get(variable_interface.directional_lut);
+  const etx::Image& variable_average_lut = scene_data.images.get(variable_interface.average_lut);
+  const etx::Image& constant_directional_lut = scene_data.images.get(constant_interface.directional_lut);
+  if ((variable_directional_lut.isize.z <= 1u) || (variable_average_lut.isize.z <= 1u)) {
+    std::printf("variable thinfilm texture LUT validation expected 3D LUTs directional %u average %u\n", variable_directional_lut.isize.z, variable_average_lut.isize.z);
+    return false;
+  }
+  if (constant_directional_lut.isize.z != 1u) {
+    std::printf("constant thinfilm LUT validation expected depth 1, got %u\n", constant_directional_lut.isize.z);
+    return false;
+  }
+
+  const float2 uvs[] = {
+    float2{0.0f, 0.0f},
+    float2{1.0f / 3.0f, 0.0f},
+    float2{2.0f / 3.0f, 0.0f},
+  };
+  const float expected_thickness[] = {400.0f, 550.0f, 700.0f};
+  const float expected_lut_value[] = {0.0f, 0.5f, 1.0f};
+  for (uint32_t i = 0u; i < 3u; ++i) {
+    Sampler sampler(57000u + i, 0x1234u + i);
+    const ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, bound_variable_material.thinfilm, uvs[i], sampler);
+    const float lut_value = bsdf_energy_compensated_thinfilm_lut_value(bound_variable_material, thinfilm);
+    if ((close_value(thinfilm.thickness, expected_thickness[i], 1.0e-4f) == false) || (close_value(lut_value, expected_lut_value[i], 1.0e-5f) == false)) {
+      std::printf("variable thinfilm texture mapping failed index %u thickness %.6f lut %.6f\n", i, thinfilm.thickness, lut_value);
+      return false;
+    }
+  }
+
+  Sampler constant_sampler(58000u, 0x5678u);
+  const ThinfilmEval constant_thinfilm =
+    bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, bound_constant_material.thinfilm, float2{0.0f, 0.0f}, constant_sampler);
+  const float constant_lut_value = bsdf_energy_compensated_thinfilm_lut_value(bound_constant_material, constant_thinfilm);
+  if ((close_value(constant_thinfilm.thickness, 550.0f, 1.0e-4f) == false) || (close_value(constant_lut_value, 0.0f, 1.0e-5f) == false)) {
+    std::printf("constant thinfilm mapping failed thickness %.6f lut %.6f\n", constant_thinfilm.thickness, constant_lut_value);
+    return false;
+  }
+
+  constexpr uint32_t kSyntheticLutSize = kBSDFEnergyCompensationConductorLutSize;
+  constexpr uint32_t kSyntheticLutLayerPixels = kSyntheticLutSize * kSyntheticLutSize;
+  constexpr uint32_t kSyntheticLutPixels = 2u * kSyntheticLutLayerPixels;
+  float4 synthetic_3d_lut[kSyntheticLutPixels] = {};
+  float4 synthetic_1d_lut[kSyntheticLutLayerPixels] = {};
+  for (uint32_t i = 0u; i < kSyntheticLutLayerPixels; ++i) {
+    synthetic_3d_lut[i] = float4{0.1f, 0.2f, 0.3f, 1.0f};
+    synthetic_3d_lut[i + kSyntheticLutLayerPixels] = float4{0.7f, 0.6f, 0.5f, 1.0f};
+    synthetic_1d_lut[i] = float4{0.4f, 0.5f, 0.6f, 1.0f};
+  }
+
+  const uint32_t synthetic_3d_lut_index =
+    scene_data.images.add_from_data_3d(synthetic_3d_lut, uint3{kSyntheticLutSize, kSyntheticLutSize, 2u}, etx::Image::SkipSRGBConversion, {}, float3{1.0f, 1.0f, 1.0f});
+  const uint32_t synthetic_1d_lut_index =
+    scene_data.images.add_from_data_3d(synthetic_1d_lut, uint3{kSyntheticLutSize, kSyntheticLutSize, 1u}, etx::Image::SkipSRGBConversion, {}, float3{1.0f, 1.0f, 1.0f});
+
+  etx::Scene::EnergyCompensationInterface synthetic_3d_interface = {};
+  synthetic_3d_interface.cls = MaterialClass::Conductor;
+  synthetic_3d_interface.directional_lut = synthetic_3d_lut_index;
+  const uint32_t synthetic_3d_interface_index = scene_data.add_energy_compensation_interface(synthetic_3d_interface);
+
+  etx::Scene::EnergyCompensationInterface synthetic_1d_interface = {};
+  synthetic_1d_interface.cls = MaterialClass::Conductor;
+  synthetic_1d_interface.directional_lut = synthetic_1d_lut_index;
+  const uint32_t synthetic_1d_interface_index = scene_data.add_energy_compensation_interface(synthetic_1d_interface);
+
+  exact_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
+  exact_scene.energy_compensation_interfaces =
+    etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+
+  etx::Material synthetic_3d_material = bound_variable_material;
+  synthetic_3d_material.energy_compensation_interface_index = synthetic_3d_interface_index;
+  const SpectralResponse synthetic_low =
+    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, 0.0f);
+  const SpectralResponse synthetic_high =
+    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, 1.0f);
+  if ((close_value(synthetic_low.integrated.x, 0.1f, 1.0e-5f) == false) || (close_value(synthetic_low.integrated.y, 0.2f, 1.0e-5f) == false) ||
+      (close_value(synthetic_low.integrated.z, 0.3f, 1.0e-5f) == false) || (close_value(synthetic_high.integrated.x, 0.7f, 1.0e-5f) == false) ||
+      (close_value(synthetic_high.integrated.y, 0.6f, 1.0e-5f) == false) || (close_value(synthetic_high.integrated.z, 0.5f, 1.0e-5f) == false)) {
+    std::printf("synthetic variable thinfilm LUT sampling failed low %.6f %.6f %.6f high %.6f %.6f %.6f\n", synthetic_low.integrated.x,
+      synthetic_low.integrated.y, synthetic_low.integrated.z, synthetic_high.integrated.x, synthetic_high.integrated.y, synthetic_high.integrated.z);
+    return false;
+  }
+
+  etx::Material synthetic_1d_material = bound_constant_material;
+  synthetic_1d_material.energy_compensation_interface_index = synthetic_1d_interface_index;
+  const SpectralResponse synthetic_constant_low =
+    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, 0.0f);
+  const SpectralResponse synthetic_constant_high =
+    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, 1.0f);
+  const float synthetic_constant_delta = length(synthetic_constant_low.integrated - synthetic_constant_high.integrated);
+  if ((synthetic_constant_delta > 1.0e-6f) || (close_value(synthetic_constant_low.integrated.x, 0.4f, 1.0e-5f) == false) ||
+      (close_value(synthetic_constant_low.integrated.y, 0.5f, 1.0e-5f) == false) || (close_value(synthetic_constant_low.integrated.z, 0.6f, 1.0e-5f) == false)) {
+    std::printf("synthetic constant thinfilm LUT sampling failed low %.6f %.6f %.6f high %.6f %.6f %.6f\n", synthetic_constant_low.integrated.x,
+      synthetic_constant_low.integrated.y, synthetic_constant_low.integrated.z, synthetic_constant_high.integrated.x, synthetic_constant_high.integrated.y,
+      synthetic_constant_high.integrated.z);
+    return false;
+  }
+
+  std::printf("variable thinfilm texture LUT validation valid depth %u synthetic delta %.6f\n", variable_directional_lut.isize.z,
+    length(synthetic_low.integrated - synthetic_high.integrated));
+  return true;
+}
+
 bool validate_energy_compensated_dielectric_transport_contract(const char* label, const etx::BSDFData& data, const etx::Material& material, const float roughness,
   const uint32_t seed) {
   if (validate_sampling(data, material, seed) == false) {
@@ -1320,12 +1658,14 @@ bool validate_exact_energy_compensated_conductor_interface(etx::Scene& original_
   const float alpha = bsdf_energy_compensated_scalar_roughness(context, material, data.tex);
   const RefractiveIndexSample ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
   const RefractiveIndexSample int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
+  Sampler thinfilm_sampler(seed + 17u, seed ^ 0x4d31a2bu);
+  const ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, data.spectrum_sample, material.thinfilm, data.tex, thinfilm_sampler);
   const SpectralResponse e_i_response = bsdf_energy_compensated_conductor_directional_albedo(context, data.spectrum_sample, material, 1.0f, alpha);
   const SpectralResponse e_average_response = bsdf_energy_compensated_conductor_average_albedo(context, data.spectrum_sample, material, alpha);
   const float e_i_scalar = bsdf_energy_compensated_conductor_geometric_directional_albedo(context, material, 1.0f, alpha);
   const float e_average_scalar = bsdf_energy_compensated_conductor_geometric_average_albedo(context, material, alpha);
   const float visible_probability = bsdf_energy_compensated_conductor_visible_probability(context, material, 1.0f, alpha);
-  const SpectralResponse f_ms = bsdf_energy_compensated_conductor_fms(data.spectrum_sample, ext_ior, int_ior, e_average_scalar);
+  const SpectralResponse f_ms = bsdf_energy_compensated_conductor_fms(data.spectrum_sample, ext_ior, int_ior, thinfilm, e_average_scalar);
   std::printf("%s exact interface roughness %.3f e_i %.6f e_avg %.6f geom_i %.6f geom_avg %.6f visible %.6f f_ms %.6f\n", label, roughness,
     spectral_response_monochromatic(e_i_response), spectral_response_monochromatic(e_average_response), e_i_scalar, e_average_scalar, visible_probability,
     spectral_response_monochromatic(f_ms));
@@ -1348,12 +1688,27 @@ bool validate_exact_energy_compensated_conductor_interface(etx::Scene& original_
   return diagnostic_valid;
 }
 
+void set_openpbr_validation_defaults(etx::SceneData& scene_data) {
+  scene_data.defaults.white_spectrum = SpectrumWhite;
+  scene_data.defaults.dielectric_eta = SpectrumDielectricEta;
+  scene_data.defaults.conductor_eta = SpectrumMirrorEta;
+  scene_data.defaults.conductor_k = SpectrumMirrorK;
+}
+
+void set_openpbr_validation_defaults(etx::Scene& scene) {
+  scene.defaults.white_spectrum = SpectrumWhite;
+  scene.defaults.dielectric_eta = SpectrumDielectricEta;
+  scene.defaults.conductor_eta = SpectrumMirrorEta;
+  scene.defaults.conductor_k = SpectrumMirrorK;
+}
+
 bool validate_openpbr_white_furnace(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const float roughness,
   const uint32_t seed) {
   etx::TaskScheduler scheduler = {};
   etx::SceneData scene_data(scheduler);
   scene_data.images.init(16u);
   scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  set_openpbr_validation_defaults(scene_data);
   scene_data.materials.emplace_back(make_plastic(roughness));
   scene_data.materials[0].cls = MaterialClass::OpenPBR;
   scene_data.materials[0].metalness.value = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -1370,10 +1725,7 @@ bool validate_openpbr_white_furnace(etx::Scene& original_scene, const etx::Spect
   openpbr_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
   openpbr_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
   openpbr_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
-  openpbr_scene.defaults.white_spectrum = SpectrumWhite;
-  openpbr_scene.defaults.dielectric_eta = SpectrumDielectricEta;
-  openpbr_scene.defaults.conductor_eta = SpectrumMirrorEta;
-  openpbr_scene.defaults.conductor_k = SpectrumMirrorK;
+  set_openpbr_validation_defaults(openpbr_scene);
   openpbr_scene.energy_compensation_interfaces =
     etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
 
@@ -1419,6 +1771,7 @@ bool validate_openpbr_case(etx::Scene& original_scene, const etx::SpectralDistri
   etx::SceneData scene_data(scheduler);
   scene_data.images.init(16u);
   scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  set_openpbr_validation_defaults(scene_data);
   scene_data.materials.emplace_back(source_material);
 
   if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
@@ -1432,10 +1785,7 @@ bool validate_openpbr_case(etx::Scene& original_scene, const etx::SpectralDistri
   openpbr_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
   openpbr_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
   openpbr_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
-  openpbr_scene.defaults.white_spectrum = SpectrumWhite;
-  openpbr_scene.defaults.dielectric_eta = SpectrumDielectricEta;
-  openpbr_scene.defaults.conductor_eta = SpectrumMirrorEta;
-  openpbr_scene.defaults.conductor_k = SpectrumMirrorK;
+  set_openpbr_validation_defaults(openpbr_scene);
   openpbr_scene.energy_compensation_interfaces =
     etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
 
@@ -1490,6 +1840,115 @@ bool validate_openpbr_case(etx::Scene& original_scene, const etx::SpectralDistri
   return diagnostic_valid;
 }
 
+float spectral_response_max_abs_difference(const etx::SpectralResponse& a, const etx::SpectralResponse& b) {
+  if ((a.spectral()) || (b.spectral())) {
+    return fabsf(a.monochromatic() - b.monochromatic());
+  }
+
+  const float3 d = abs(a.integrated - b.integrated);
+  return max(d.x, max(d.y, d.z));
+}
+
+bool validate_openpbr_thinfilm_delegate(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const char* label,
+  const etx::Material& source_material, const uint32_t expected_class, const uint32_t seed) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(16u);
+  scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  set_openpbr_validation_defaults(scene_data);
+  scene_data.materials.emplace_back(source_material);
+
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("%s failed to bind OpenPBR thinfilm delegate LUTs\n", label);
+    return false;
+  }
+
+  scene_data.images.load_images(scheduler);
+
+  etx::Scene openpbr_scene = {};
+  openpbr_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
+  openpbr_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
+  openpbr_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
+  set_openpbr_validation_defaults(openpbr_scene);
+  openpbr_scene.energy_compensation_interfaces =
+    etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+
+  etx::scene_global_clear(&original_scene);
+  etx::scene_global_publish(&openpbr_scene, &openpbr_scene);
+
+  const etx::Material material = scene_data.materials[0];
+  const Vertex vertex = {
+    float3{0.0f, 0.0f, 0.0f},
+    float3{0.0f, 0.0f, 1.0f},
+    float3{1.0f, 0.0f, 0.0f},
+    float3{0.0f, 1.0f, 0.0f},
+    float2{0.5f, 0.5f},
+  };
+  const etx::BSDFData data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
+  const float3 outgoing_direction = normalize(float3{0.35f, 0.0f, 0.9367497f});
+  const etx::OpenPBRBSDF::OpenPBRComponents components = etx::OpenPBRBSDF::make_components(data, material);
+
+  etx::Material delegate = {};
+  float delegate_weight = 0.0f;
+  if (expected_class == MaterialClass::Conductor) {
+    delegate = components.conductor;
+    delegate_weight = components.conductor_weight;
+  } else if (expected_class == MaterialClass::Dielectric) {
+    delegate = components.dielectric;
+    delegate_weight = components.dielectric_weight;
+  } else if (expected_class == MaterialClass::Plastic) {
+    delegate = components.plastic;
+    delegate_weight = components.plastic_weight;
+  } else {
+    std::printf("%s invalid expected delegate class %u\n", label, expected_class);
+    etx::scene_global_clear(&openpbr_scene);
+    etx::scene_global_publish(&original_scene, &original_scene);
+    return false;
+  }
+
+  bool diagnostic_valid = true;
+  if ((fabsf(delegate_weight - 1.0f) > 1.0e-6f) || (delegate.cls != expected_class)) {
+    std::printf("%s invalid delegate weight %.6f class %u expected %u\n", label, delegate_weight, delegate.cls, expected_class);
+    diagnostic_valid = false;
+  }
+
+  if ((delegate.thinfilm.min_thickness <= 0.0f) || (delegate.thinfilm.max_thickness <= 0.0f) ||
+      (delegate.thinfilm.ior.cls == etx::SpectralDistribution::Invalid)) {
+    std::printf("%s did not preserve thinfilm on delegate\n", label);
+    diagnostic_valid = false;
+  }
+
+  etx::Sampler open_eval_sampler(seed, seed ^ 0x72163c1u);
+  const etx::BSDFEval openpbr_eval = etx::bsdf::evaluate(data, outgoing_direction, material, open_eval_sampler);
+  etx::Sampler delegate_eval_sampler(seed + 1u, seed ^ 0x18cc04du);
+  const etx::BSDFEval delegate_eval = etx::bsdf::evaluate(data, outgoing_direction, delegate, delegate_eval_sampler);
+  const float bsdf_error = spectral_response_max_abs_difference(openpbr_eval.bsdf, delegate_eval.bsdf);
+  const float bsdf_scale = max(openpbr_eval.bsdf.maximum(), delegate_eval.bsdf.maximum());
+  const float bsdf_tolerance = max(1.0e-5f, 1.0e-4f * bsdf_scale);
+  if ((openpbr_eval.valid() == false) || (delegate_eval.valid() == false) || (bsdf_error > bsdf_tolerance)) {
+    std::printf("%s delegate bsdf mismatch open %.6f delegate %.6f error %.6f\n", label, openpbr_eval.bsdf.monochromatic(), delegate_eval.bsdf.monochromatic(), bsdf_error);
+    diagnostic_valid = false;
+  }
+
+  etx::Sampler open_pdf_sampler(seed + 2u, seed ^ 0x6adc8d5u);
+  const float openpbr_pdf = etx::bsdf::pdf(data, outgoing_direction, material, open_pdf_sampler);
+  etx::Sampler delegate_pdf_sampler(seed + 3u, seed ^ 0x5cfcb0bu);
+  const float delegate_pdf = etx::bsdf::pdf(data, outgoing_direction, delegate, delegate_pdf_sampler);
+  const float pdf_tolerance = max(1.0e-5f, 1.0e-4f * max(openpbr_pdf, delegate_pdf));
+  if ((std::isfinite(openpbr_pdf) == false) || (std::isfinite(delegate_pdf) == false) || (fabsf(openpbr_pdf - delegate_pdf) > pdf_tolerance)) {
+    std::printf("%s delegate pdf mismatch open %.6f delegate %.6f\n", label, openpbr_pdf, delegate_pdf);
+    diagnostic_valid = false;
+  }
+
+  if (diagnostic_valid) {
+    std::printf("%s OpenPBR thinfilm delegate valid\n", label);
+  }
+
+  etx::scene_global_clear(&openpbr_scene);
+  etx::scene_global_publish(&original_scene, &original_scene);
+  return diagnostic_valid;
+}
+
 bool validate_openpbr_parameter_sweeps(etx::Scene& scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count) {
   bool valid = true;
   valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr roughness low", make_openpbr(0.05f, 0.0f, 0.0f, SpectrumWhite, false), 40000u, true) && valid;
@@ -1503,6 +1962,15 @@ bool validate_openpbr_parameter_sweeps(etx::Scene& scene, const etx::SpectralDis
   valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr thinfilm disabled", make_openpbr(0.0f, 0.0f, 0.0f, SpectrumWhite, false), 47000u, false) && valid;
   valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr thinfilm enabled", make_openpbr(0.0f, 0.0f, 0.0f, SpectrumWhite, true), 48000u, false) && valid;
   valid = validate_openpbr_case(scene, spectra, spectrum_count, "openpbr thinfilm rough", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumWhite, true), 49000u, true) && valid;
+  valid = validate_openpbr_thinfilm_delegate(scene, spectra, spectrum_count, "openpbr thinfilm plastic delegate", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumWhite, true),
+            MaterialClass::Plastic, 50000u) &&
+          valid;
+  valid = validate_openpbr_thinfilm_delegate(scene, spectra, spectrum_count, "openpbr thinfilm dielectric delegate", make_openpbr(0.5f, 0.0f, 1.0f, SpectrumWhite, true),
+            MaterialClass::Dielectric, 51000u) &&
+          valid;
+  valid = validate_openpbr_thinfilm_delegate(scene, spectra, spectrum_count, "openpbr thinfilm conductor delegate", make_openpbr(0.5f, 1.0f, 0.0f, SpectrumWhite, true),
+            MaterialClass::Conductor, 52000u) &&
+          valid;
   return valid;
 }
 
@@ -1550,6 +2018,7 @@ int main() {
   etx::BSDFData inside_data = data;
   inside_data.w_i = float3{0.0f, 0.0f, 1.0f};
   bool valid = true;
+  valid = validate_image_3d_sampling() && valid;
   const etx::Material standalone_thinfilm = make_standalone_thinfilm(0.0f, 500.0f);
   valid = validate_standalone_thinfilm_contract("standalone thinfilm outside", data, standalone_thinfilm, 22000u) && valid;
   valid = validate_standalone_thinfilm_contract("standalone thinfilm inside", inside_data, standalone_thinfilm, 22100u) && valid;
@@ -1573,6 +2042,11 @@ int main() {
     const float plastic_roughness = plastic_roughness_values[i];
     valid = validate_exact_plastic_interface(scene, spectra, SpectrumCount, plastic_roughness, 26000u + i * 1000u) && valid;
   }
+  const float thinfilm_plastic_roughness_values[] = {0.25f, 0.5f, 1.0f};
+  for (uint32_t i = 0u; i < 3u; ++i) {
+    const float plastic_roughness = thinfilm_plastic_roughness_values[i];
+    valid = validate_thinfilm_plastic_interface(scene, spectra, SpectrumCount, plastic_roughness, 30500u + i * 1000u) && valid;
+  }
 
   const etx::Material equal_ior_dielectric = make_white_equal_ior_dielectric(1.0f);
   valid = validate_equal_ior_dielectric_direction("dielectric outside", data, equal_ior_dielectric, 25500u) && valid;
@@ -1586,6 +2060,9 @@ int main() {
   valid = validate_exact_energy_compensated_conductor_interface(scene, spectra, SpectrumCount, "mirror conductor exact interface",
     make_mirror_conductor(exact_conductor_roughness), exact_conductor_roughness, 33400u) &&
           valid;
+  valid = validate_exact_energy_compensated_conductor_interface(scene, spectra, SpectrumCount, "mirror conductor thinfilm exact interface",
+            make_thinfilm_rough_conductor(exact_conductor_roughness), exact_conductor_roughness, 33600u) &&
+          valid;
 
   const float exact_dielectric_roughness_values[] = {0.25f, 0.5f, 0.75f, 1.0f};
   for (uint32_t i = 0u; i < 4u; ++i) {
@@ -1594,6 +2071,11 @@ int main() {
               make_white_sapphire_dielectric(rough_sapphire_roughness), rough_sapphire_roughness, 34600u + i * 1000u) &&
             valid;
   }
+  valid = validate_exact_energy_compensated_dielectric_interface(scene, spectra, SpectrumCount, "sapphire dielectric thinfilm exact interface",
+            make_thinfilm_rough_dielectric(0.5f), 0.5f, 38600u) &&
+          valid;
+  valid = validate_thinfilm_energy_compensation_cache_key(spectra, SpectrumCount) && valid;
+  valid = validate_variable_thinfilm_texture_lut(spectra, SpectrumCount) && valid;
 
   valid = validate_openpbr_white_furnace(scene, spectra, SpectrumCount, 0.5f, 39000u) && valid;
   valid = validate_openpbr_parameter_sweeps(scene, spectra, SpectrumCount) && valid;

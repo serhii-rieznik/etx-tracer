@@ -30,18 +30,19 @@ struct Image {
     BuildSamplingTable = ::Image::BuildSamplingTable,
     RepeatU = ::Image::RepeatU,
     RepeatV = ::Image::RepeatV,
+    RepeatW = ::Image::RepeatW,
     SkipSRGBConversion = ::Image::SkipSRGBConversion,
     HasAlphaChannel = ::Image::HasAlphaChannel,
     UniformSamplingTable = ::Image::UniformSamplingTable,
     Committed = ::Image::Committed,
   };
 
-  float2 fsize = {};
-  float2 offset = {};
-  float2 scale = float2{1.0f, 1.0f};
+  float3 fsize = {};
+  float3 offset = {};
+  float3 scale = float3{1.0f, 1.0f, 1.0f};
   float normalization = 0.0f;
 
-  uint2 isize = {};
+  uint3 isize = {};
   uint32_t options = 0u;
   Format format = Format::Undefined;
   uint32_t data_size = 0u;
@@ -59,6 +60,7 @@ struct Image {
   // Compressed BC data view is always available for sampling support
   union {
     ArrayView<float4> f32;
+    ArrayView<float> r32;
     ArrayView<ubyte4> u8;
     ArrayView<uint8_t> compressed;  // BC compressed data
   } pixels = {};
@@ -78,17 +80,53 @@ struct Image {
   BufferView y_distribution_storage = {};
   BufferView x_distributions_buffer = {};
 
+  ETX_SHARED_INLINE uint32_t next_coord_u(uint32_t value) const {
+    if (isize.x == 0u) {
+      return 0u;
+    }
+
+    if ((options & RepeatU) != 0u) {
+      return (value + 1u) % isize.x;
+    }
+
+    return min(value + 1u, isize.x - 1u);
+  }
+
+  ETX_SHARED_INLINE uint32_t next_coord_v(uint32_t value) const {
+    if (isize.y == 0u) {
+      return 0u;
+    }
+
+    if ((options & RepeatV) != 0u) {
+      return (value + 1u) % isize.y;
+    }
+
+    return min(value + 1u, isize.y - 1u);
+  }
+
+  ETX_SHARED_INLINE uint32_t next_coord_w(uint32_t value) const {
+    if (isize.z == 0u) {
+      return 0u;
+    }
+
+    if ((options & RepeatW) != 0u) {
+      return (value + 1u) % isize.z;
+    }
+
+    return min(value + 1u, isize.z - 1u);
+  }
+
   ETX_SHARED_INLINE Gather gather(const float2& in_uv) const {
-    float2 uv = in_uv * fsize;
+    const float2 uv = in_uv * float2{fsize.x, fsize.y};
     float x0 = tex_coord_u(uv.x, fsize.x);
     float y0 = tex_coord_v(uv.y, fsize.y);
     float dx = x0 - floorf(x0);
     float dy = y0 - floorf(y0);
 
     uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.y - 1u);
-    uint32_t row_1 = clamp(row_0 + 1u, 0u, isize.y - 1u);
+    uint32_t row_1 = next_coord_v(row_0);
     uint32_t col_0 = clamp(static_cast<uint32_t>(x0), 0u, isize.x - 1u);
-    uint32_t col_1 = clamp(col_0 + 1u, 0u, isize.x - 1u);
+    uint32_t col_1 = next_coord_u(col_0);
 
     const auto& p00 = pixel(col_0, row_0) * (1.0f - dx) * (1.0f - dy);
     ETX_VALIDATE(p00);
@@ -120,21 +158,61 @@ struct Image {
     return g.p00 + g.p01 + g.p10 + g.p11;
   }
 
+  ETX_SHARED_INLINE float4 evaluate_rgba32f_fast_3d(const float3& in_uvw) const {
+    ETX_ASSERT(format == Format::RGBA32F);
+    ETX_ASSERT(pixels.f32.a != nullptr);
+    ETX_ASSERT((isize.x > 0u) && (isize.y > 0u) && (isize.z > 0u));
+
+    const float3 uvw = in_uvw * fsize;
+    const float x0 = tex_coord_u(uvw.x, fsize.x);
+    const float y0 = tex_coord_v(uvw.y, fsize.y);
+    const float z0 = tex_coord_w(uvw.z, fsize.z);
+    const float dx = x0 - floorf(x0);
+    const float dy = y0 - floorf(y0);
+    const float dz = z0 - floorf(z0);
+
+    const uint32_t slice_0 = clamp(static_cast<uint32_t>(z0), 0u, isize.z - 1u);
+    const uint32_t slice_1 = next_coord_w(slice_0);
+    const uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.y - 1u);
+    const uint32_t row_1 = next_coord_v(row_0);
+    const uint32_t col_0 = clamp(static_cast<uint32_t>(x0), 0u, isize.x - 1u);
+    const uint32_t col_1 = next_coord_u(col_0);
+
+    const uint32_t row_stride = isize.x;
+    const uint32_t slice_stride = isize.x * isize.y;
+    const uint32_t slice_offset_0 = slice_0 * slice_stride;
+    const uint32_t slice_offset_1 = slice_1 * slice_stride;
+    const uint32_t row_offset_0 = row_0 * row_stride;
+    const uint32_t row_offset_1 = row_1 * row_stride;
+    const float4 p000 = pixels.f32.a[slice_offset_0 + row_offset_0 + col_0];
+    const float4 p001 = pixels.f32.a[slice_offset_0 + row_offset_0 + col_1];
+    const float4 p010 = pixels.f32.a[slice_offset_0 + row_offset_1 + col_0];
+    const float4 p011 = pixels.f32.a[slice_offset_0 + row_offset_1 + col_1];
+    const float4 p100 = pixels.f32.a[slice_offset_1 + row_offset_0 + col_0];
+    const float4 p101 = pixels.f32.a[slice_offset_1 + row_offset_0 + col_1];
+    const float4 p110 = pixels.f32.a[slice_offset_1 + row_offset_1 + col_0];
+    const float4 p111 = pixels.f32.a[slice_offset_1 + row_offset_1 + col_1];
+
+    const float4 bottom = image_filter_shared_bilinear(p000, p001, p010, p011, dx, dy);
+    const float4 top = image_filter_shared_bilinear(p100, p101, p110, p111, dx, dy);
+    return bottom * (1.0f - dz) + top * dz;
+  }
+
   ETX_SHARED_INLINE float4 evaluate_rgba32f_fast(const float2& in_uv) const {
     ETX_ASSERT(format == Format::RGBA32F);
     ETX_ASSERT(pixels.f32.a != nullptr);
     ETX_ASSERT((isize.x > 0u) && (isize.y > 0u));
 
-    const float2 uv = in_uv * fsize;
+    const float2 uv = in_uv * float2{fsize.x, fsize.y};
     const float x0 = tex_coord_u(uv.x, fsize.x);
     const float y0 = tex_coord_v(uv.y, fsize.y);
     const float dx = x0 - floorf(x0);
     const float dy = y0 - floorf(y0);
 
     const uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.y - 1u);
-    const uint32_t row_1 = clamp(row_0 + 1u, 0u, isize.y - 1u);
+    const uint32_t row_1 = next_coord_v(row_0);
     const uint32_t col_0 = clamp(static_cast<uint32_t>(x0), 0u, isize.x - 1u);
-    const uint32_t col_1 = clamp(col_0 + 1u, 0u, isize.x - 1u);
+    const uint32_t col_1 = next_coord_u(col_0);
 
     const float wx0 = 1.0f - dx;
     const float wy0 = 1.0f - dy;
@@ -145,6 +223,46 @@ struct Image {
     const float4 p10 = pixels.f32.a[row_offset_1 + col_0] * (wx0 * dy);
     const float4 p11 = pixels.f32.a[row_offset_1 + col_1] * (dx * dy);
     return p00 + p01 + p10 + p11;
+  }
+
+  ETX_SHARED_INLINE float evaluate_r32f_fast_3d(const float3& in_uvw) const {
+    ETX_ASSERT(format == Format::R32F);
+    ETX_ASSERT(pixels.r32.a != nullptr);
+    ETX_ASSERT((isize.x > 0u) && (isize.y > 0u) && (isize.z > 0u));
+
+    const float3 uvw = in_uvw * fsize;
+    const float x0 = tex_coord_u(uvw.x, fsize.x);
+    const float y0 = tex_coord_v(uvw.y, fsize.y);
+    const float z0 = tex_coord_w(uvw.z, fsize.z);
+    const float dx = x0 - floorf(x0);
+    const float dy = y0 - floorf(y0);
+    const float dz = z0 - floorf(z0);
+
+    const uint32_t slice_0 = clamp(static_cast<uint32_t>(z0), 0u, isize.z - 1u);
+    const uint32_t slice_1 = next_coord_w(slice_0);
+    const uint32_t row_0 = clamp(static_cast<uint32_t>(y0), 0u, isize.y - 1u);
+    const uint32_t row_1 = next_coord_v(row_0);
+    const uint32_t col_0 = clamp(static_cast<uint32_t>(x0), 0u, isize.x - 1u);
+    const uint32_t col_1 = next_coord_u(col_0);
+
+    const uint32_t row_stride = isize.x;
+    const uint32_t slice_stride = isize.x * isize.y;
+    const uint32_t slice_offset_0 = slice_0 * slice_stride;
+    const uint32_t slice_offset_1 = slice_1 * slice_stride;
+    const uint32_t row_offset_0 = row_0 * row_stride;
+    const uint32_t row_offset_1 = row_1 * row_stride;
+    const float p000 = pixels.r32.a[slice_offset_0 + row_offset_0 + col_0];
+    const float p001 = pixels.r32.a[slice_offset_0 + row_offset_0 + col_1];
+    const float p010 = pixels.r32.a[slice_offset_0 + row_offset_1 + col_0];
+    const float p011 = pixels.r32.a[slice_offset_0 + row_offset_1 + col_1];
+    const float p100 = pixels.r32.a[slice_offset_1 + row_offset_0 + col_0];
+    const float p101 = pixels.r32.a[slice_offset_1 + row_offset_0 + col_1];
+    const float p110 = pixels.r32.a[slice_offset_1 + row_offset_1 + col_0];
+    const float p111 = pixels.r32.a[slice_offset_1 + row_offset_1 + col_1];
+
+    const float bottom = p000 * (1.0f - dx) * (1.0f - dy) + p001 * dx * (1.0f - dy) + p010 * (1.0f - dx) * dy + p011 * dx * dy;
+    const float top = p100 * (1.0f - dx) * (1.0f - dy) + p101 * dx * (1.0f - dy) + p110 * (1.0f - dx) * dy + p111 * dx * dy;
+    return bottom * (1.0f - dz) + top * dz;
   }
 
   ETX_SHARED_INLINE float evaluate_alpha(const float2& in_uv) const {
@@ -326,12 +444,24 @@ struct Image {
       return decompress_bc_pixel(i);
     }
 
+    if (format == Format::R32F) {
+      const float value = pixels.r32[i];
+      return float4(value, value, value, 1.0f);
+    }
+
     return pixels.f32[i];
   }
 
   ETX_SHARED_INLINE float4 pixel(uint32_t x, uint32_t y) const {
     uint32_t i = min(x + y * isize.x, isize.x * isize.y - 1u);
     return pixel(i);
+  }
+
+  ETX_SHARED_INLINE float pixel_r32(uint32_t x, uint32_t y, uint32_t z) const {
+    ETX_ASSERT(format == Format::R32F);
+    ETX_ASSERT(pixels.r32.a != nullptr);
+    const uint32_t i = min(x + y * isize.x + z * isize.x * isize.y, isize.x * isize.y * isize.z - 1u);
+    return pixels.r32[i];
   }
 
   ETX_SHARED_INLINE float3 evaluate_normal(const float2& uv, float scale) const {
@@ -398,6 +528,10 @@ struct Image {
     return (options & RepeatV) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
   }
 
+  ETX_SHARED_INLINE float tex_coord_w(float u, float size) const {
+    return (options & RepeatW) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
+  }
+
   ETX_SHARED_INLINE float4 read(const float2& uv) const {
     float x0 = tex_coord_u(uv.x - 0.0f, fsize.x);
     float x1 = tex_coord_u(uv.x + 1.0f, fsize.x);
@@ -457,7 +591,7 @@ ETX_SHARED_INLINE bool image_sample_distribution_cpu(ETX_IN(Image, image), ETX_I
   const float y0_cdf = image.y_distribution.values[location.y].cdf;
   const float y1_cdf = image.y_distribution.values.a[y1_index].cdf;
 
-  uv = image_sample_uv_from_distribution(rnd, location, image.fsize, x0_cdf, x1_cdf, y0_cdf, y1_cdf);
+  uv = image_sample_uv_from_distribution(rnd, location, float2{image.fsize.x, image.fsize.y}, x0_cdf, x1_cdf, y0_cdf, y1_cdf);
   image_pdf = x_pdf * y_pdf;
   return true;
 }

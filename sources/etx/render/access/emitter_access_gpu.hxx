@@ -131,7 +131,7 @@ bool emitter_access_try_load_image_params(EmitterAccessGPUContext context, uint 
     return false;
   }
 
-  image_offset = image_access.uv_offset;
+  image_offset = image_access.uv_offset.xy;
   image_u_scale = image_access.uv_scale.x;
   return true;
 }

@@ -6,10 +6,10 @@
 
 struct ImageAccessGPUDesc {
   uint format;
-  uint2 size;
-  float2 fsize;
-  float2 uv_offset;
-  float2 uv_scale;
+  uint3 size;
+  float3 fsize;
+  float3 uv_offset;
+  float3 uv_scale;
   float normalization;
   uint options;
   uint pixel_data_offset;
@@ -37,8 +37,16 @@ uint2 image_access_gpu_blob_load_u32x2(ByteAddressBuffer buffer, uint byte_offse
   return buffer.Load2(byte_offset);
 }
 
+uint3 image_access_gpu_blob_load_u32x3(ByteAddressBuffer buffer, uint byte_offset) {
+  return buffer.Load3(byte_offset);
+}
+
 float2 image_access_gpu_blob_load_f32x2(ByteAddressBuffer buffer, uint byte_offset) {
   return asfloat(buffer.Load2(byte_offset));
+}
+
+float3 image_access_gpu_blob_load_f32x3(ByteAddressBuffer buffer, uint byte_offset) {
+  return asfloat(buffer.Load3(byte_offset));
 }
 
 uint image_access_gpu_blob_image_count(ByteAddressBuffer buffer) {
@@ -64,10 +72,10 @@ uint image_access_gpu_blob_desc_offset(ByteAddressBuffer buffer, uint image_inde
 
 void image_access_gpu_blob_load_desc(ByteAddressBuffer buffer, uint image_desc_offset, out ImageAccessGPUDesc desc) {
   desc.format = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescFormatOffset);
-  desc.size = image_access_gpu_blob_load_u32x2(buffer, image_desc_offset + kImageDescISizeOffset);
-  desc.fsize = image_access_gpu_blob_load_f32x2(buffer, image_desc_offset + kImageDescFSizeOffset);
-  desc.uv_offset = image_access_gpu_blob_load_f32x2(buffer, image_desc_offset + kImageDescOffsetOffset);
-  desc.uv_scale = image_access_gpu_blob_load_f32x2(buffer, image_desc_offset + kImageDescScaleOffset);
+  desc.size = image_access_gpu_blob_load_u32x3(buffer, image_desc_offset + kImageDescISizeOffset);
+  desc.fsize = image_access_gpu_blob_load_f32x3(buffer, image_desc_offset + kImageDescFSizeOffset);
+  desc.uv_offset = image_access_gpu_blob_load_f32x3(buffer, image_desc_offset + kImageDescOffsetOffset);
+  desc.uv_scale = image_access_gpu_blob_load_f32x3(buffer, image_desc_offset + kImageDescScaleOffset);
   desc.normalization = asfloat(image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescNormalizationOffset));
   desc.options = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescOptionsOffset);
   desc.pixel_data_offset = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescPixelDataOffset);
@@ -141,7 +149,8 @@ bool image_access_try_load_pixel_payload(ImageAccessGPUContext context, uint ima
     return false;
   }
 
-  if ((image_access.pixel_data_offset == kInvalidIndex) || (image_access.pixel_data_stride == 0u) || (image_access.size.x == 0u) || (image_access.size.y == 0u)) {
+  if ((image_access.pixel_data_offset == kInvalidIndex) || (image_access.pixel_data_stride == 0u) || (image_access.size.x == 0u) || (image_access.size.y == 0u) ||
+      (image_access.size.z == 0u)) {
     return false;
   }
 

@@ -35,6 +35,7 @@ struct ETX_ALIGNED MediumGrid {
   float noise_power = 1.0f;
   float noise_sharpness = 1.0f;
   float noise_border_fade_distance = 0.1f;
+  uint32_t density_image_index = kInvalidIndex;
 };
 
 struct MediumTextureSampleContext {
@@ -100,6 +101,7 @@ struct ETX_ALIGNED DensityGrid {
     result.noise_sharpness = grid.noise_sharpness;
     result.noise_border_fade_distance = grid.noise_border_fade_distance;
     result.density_data_chunk_index = kInvalidIndex;
+    result.density_image_index = grid.density_image_index;
     return result;
   }
 
@@ -123,7 +125,7 @@ struct ETX_ALIGNED DensityGrid {
   ETX_SHARED_INLINE bool has_data(const MediumGrid& grid) const {
     uint32_t density_count = (density.count > 0ull) ? 1u : 0u;
     MediumDensitySharedGrid shared_grid = to_shared_grid(grid, density_count);
-    return density_grid_has_data_direct(shared_grid, true);
+    return medium_density_shared_has_grid_data(shared_grid.type, shared_grid.dimensions, shared_grid.density_count, shared_grid.density_image_index);
   }
 };
 

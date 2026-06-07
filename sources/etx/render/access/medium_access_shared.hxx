@@ -21,7 +21,7 @@ ETX_SHARED_INLINE BoundingBox medium_access_bounds(ETX_IN(MediumAccess, access))
 }
 
 ETX_SHARED_INLINE bool medium_access_has_grid_data(ETX_IN(MediumAccess, access)) {
-  return medium_density_shared_has_grid_data(access.grid.type, access.grid.dimensions, access.grid.density_count);
+  return medium_density_shared_has_grid_data(access.grid.type, access.grid.dimensions, access.grid.density_count, access.grid.density_image_index);
 }
 
 ETX_SHARED_INLINE bool medium_access_supported_class(uint32_t medium_class) {

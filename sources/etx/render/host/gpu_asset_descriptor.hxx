@@ -17,6 +17,9 @@ ETX_SHARED_INLINE uint32_t gpu_image_pixel_stride(const Image& image) {
   if (image.format == Image::Format::RGBA8) {
     return sizeof(ubyte4);
   }
+  if (image.format == Image::Format::R32F) {
+    return sizeof(float);
+  }
   if (Image::is_compressed_bc_format(image.format)) {
     return Image::get_bc_block_size(image.format);
   }
@@ -54,7 +57,7 @@ ETX_SHARED_INLINE ::Medium make_gpu_medium_descriptor(const Medium& medium, Pack
   result.grid.type = medium.grid.type;
   result.grid.noise_type = medium.grid.noise_type;
   result.grid.density_data_offset = density_payload.offset;
-  result.grid.density_count = static_cast<uint32_t>(medium.density_view.count);
+  result.grid.density_count = (medium.grid.density_image_index != kInvalidIndex) ? 1u : static_cast<uint32_t>(medium.density_view.count);
   result.grid.noise_seed = medium.grid.noise_seed;
   result.grid.noise_offset = medium.grid.noise_offset;
   result.grid.noise_enable_border_fade = medium.grid.noise_enable_border_fade;
@@ -66,6 +69,7 @@ ETX_SHARED_INLINE ::Medium make_gpu_medium_descriptor(const Medium& medium, Pack
   result.grid.noise_sharpness = medium.grid.noise_sharpness;
   result.grid.noise_border_fade_distance = medium.grid.noise_border_fade_distance;
   result.grid.density_data_chunk_index = density_payload.chunk_index;
+  result.grid.density_image_index = medium.grid.density_image_index;
   result.bounds = medium.bounds;
   result.absorption_index = medium.absorption_index;
   result.scattering_index = medium.scattering_index;

@@ -3,6 +3,7 @@
 
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/buffer_pool.hxx>
+#include <etx/render/host/image_pool.hxx>
 #include <etx/render/shared/medium.hxx>
 #include <etx/render/shared/math.hxx>
 
@@ -10,9 +11,10 @@
 namespace etx {
 
 struct MediumPoolImpl {
-  MediumPoolImpl(std::vector<Medium>& external_mediums, BufferPool& external_buffer_pool)
+  MediumPoolImpl(std::vector<Medium>& external_mediums, BufferPool& external_buffer_pool, ImagePool& external_image_pool)
     : mediums(external_mediums)
-    , buffer_pool(external_buffer_pool) {
+    , buffer_pool(external_buffer_pool)
+    , image_pool(external_image_pool) {
   }
 
   void init(uint32_t capacity) {
@@ -35,7 +37,6 @@ struct MediumPoolImpl {
     mediums.emplace_back();
 
     Medium& medium = mediums[handle];
-    medium.density_buffer = buffer_pool.create(0u, "medium_density");
     medium.cls = cls;
     medium.absorption_index = absorption_index;
     medium.scattering_index = scattering_index;
@@ -55,9 +56,9 @@ struct MediumPoolImpl {
           f /= max_density;
         }
         medium.set_grid_type(DensityGrid::Type::Texture3D);
-        medium.density_data = buffer_pool.allocate_elements<float>(medium.density_buffer, density.size(), alignof(float));
-        buffer_pool.write(medium.density_data, density.data(), density.size() * sizeof(float));
-        medium.density_view = {buffer_pool.map<float>(medium.density_data), density.size()};
+        medium.grid.density_image_index = image_pool.add_from_data_3d_r32(density.data(), dimensions, 0u, float3{0.0f, 0.0f, 0.0f}, float3{1.0f, 1.0f, 1.0f});
+        const Image& density_image = image_pool.get(medium.grid.density_image_index);
+        medium.density_view = density_image.pixels.r32;
         ETX_CRITICAL(medium.density_view.a != nullptr);
         medium.grid.dimensions = dimensions;
         medium.cls = Medium::Heterogeneous;
@@ -135,7 +136,6 @@ struct MediumPoolImpl {
 
   void remove_all() {
     for (auto& medium : mediums) {
-      buffer_pool.destroy(medium.density_buffer);
       free_medium(medium);
     }
     mediums.clear();
@@ -146,6 +146,7 @@ struct MediumPoolImpl {
     m.density_view = {};
     m.density_data = {};
     m.density_buffer = {};
+    m.grid.density_image_index = kInvalidIndex;
     m = {};
   }
 
@@ -223,11 +224,12 @@ struct MediumPoolImpl {
 
   std::vector<Medium>& mediums;
   BufferPool& buffer_pool;
+  ImagePool& image_pool;
   MediumPool::Mapping mapping;
 };
 
-MediumPool::MediumPool(std::vector<Medium>& external_mediums, BufferPool& buffer_pool) {
-  ETX_PIMPL_CREATE(MediumPool, Impl, external_mediums, buffer_pool);
+MediumPool::MediumPool(std::vector<Medium>& external_mediums, BufferPool& buffer_pool, ImagePool& image_pool) {
+  ETX_PIMPL_CREATE(MediumPool, Impl, external_mediums, buffer_pool, image_pool);
 }
 
 MediumPool::~MediumPool() {
@@ -260,7 +262,6 @@ uint32_t MediumPool::add_noise(Medium::Class cls, const std::string& id, NoiseFu
   _private->mediums.emplace_back();
 
   Medium& medium = _private->mediums[handle];
-  medium.density_buffer = _private->buffer_pool.create(0u, "medium_density");
   medium.cls = cls;
   medium.absorption_index = absorption_index;
   medium.scattering_index = scattering_index;

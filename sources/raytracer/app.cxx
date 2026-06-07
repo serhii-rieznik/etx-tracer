@@ -3,6 +3,7 @@
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/host/scene_global.hxx>
+#include <etx/render/host/bsdf_energy_compensation_lut.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/rt/integrators/integrator.hxx>
@@ -138,6 +139,7 @@ void RTApplication::init() {
     ui.callbacks.mesh_renamed = std::bind(&RTApplication::on_mesh_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
     ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
+    ui.callbacks.emitter_deleted = std::bind(&RTApplication::on_emitter_deleted, this, std::placeholders::_1);
     ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
     ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
@@ -645,8 +647,19 @@ void RTApplication::on_material_renamed(uint32_t index, const std::string& name)
 }
 
 void RTApplication::on_material_changed(uint32_t index) {
+  (void)index;
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
   scene.create_area_emitters_from_materials();
+  rebuild_material_render_resources();
   notify_scene_might_have_changed();
+
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
 }
 
 void RTApplication::on_medium_added() {
@@ -666,9 +679,18 @@ void RTApplication::on_medium_changed(uint32_t index) {
 }
 
 void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
   scene.set_mesh_material(mesh_index, material_index);
   scene.create_area_emitters_from_materials();
   notify_scene_might_have_changed();
+
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
 }
 
 void RTApplication::on_mesh_renamed(uint32_t index, const std::string& name) {
@@ -677,23 +699,28 @@ void RTApplication::on_mesh_renamed(uint32_t index, const std::string& name) {
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
-  bool cpu_was_running = cpu_renderer.is_running();
+  const bool cpu_was_running = cpu_renderer.is_running();
   bool atmosphere_related = false;
+  uint32_t atmosphere_emitter_index = kInvalidIndex;
   if (index < scene.data().emitter_profiles.size()) {
     const auto& emitter = scene.data().emitter_profiles[index];
-    if ((emitter.cls == EmitterProfile::Class::Environment) && ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0)) {
+    if ((emitter.cls == EmitterProfile::Class::Environment) && ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
       atmosphere_related = true;
+      atmosphere_emitter_index = index;
     } else if ((emitter.cls == EmitterProfile::Class::Directional) && (emitter.reference_emitter_index != kInvalidIndex) &&
                (emitter.reference_emitter_index < scene.data().emitter_profiles.size())) {
       const auto& referenced = scene.data().emitter_profiles[emitter.reference_emitter_index];
-      atmosphere_related = (referenced.cls == EmitterProfile::Class::Environment) && ((referenced.meta & EmitterProfile::Meta::Atmosphere) != 0);
+      atmosphere_related = (referenced.cls == EmitterProfile::Class::Environment) && ((referenced.meta & EmitterProfile::Meta::Atmosphere) != 0u);
+      if (atmosphere_related) {
+        atmosphere_emitter_index = emitter.reference_emitter_index;
+      }
     }
 
     if (atmosphere_related) {
       if (cpu_was_running) {
         cpu_renderer.stop();
       }
-      scene.rebuild_atmosphere_emitter(index);
+      scene.rebuild_atmosphere_emitter(atmosphere_emitter_index);
     }
   }
 
@@ -705,8 +732,10 @@ void RTApplication::on_emitter_changed(uint32_t index) {
 
 void RTApplication::on_emitter_added(uint32_t type) {
   ETX_PROFILER_SCOPE();
-  bool cpu_was_running = cpu_renderer.is_running();
-  bool atmosphere_related = false;
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
 
   switch (type) {
     case 0: {
@@ -718,10 +747,6 @@ void RTApplication::on_emitter_added(uint32_t type) {
       break;
     }
     case 2: {
-      atmosphere_related = true;
-      if (cpu_was_running) {
-        cpu_renderer.stop();
-      }
       scene.add_atmosphere_emitter({
         .scattering = {.altitude = 1000.0f, .anisotropy = 0.825f, .rayleigh_scale = 1.0f, .mie_scale = 1.0f, .ozone_scale = 1.0f},
         .quality = 0.125f,
@@ -731,9 +756,27 @@ void RTApplication::on_emitter_added(uint32_t type) {
   }
 
   notify_scene_might_have_changed();
-  if (atmosphere_related && cpu_was_running) {
+  if (cpu_was_running) {
     cpu_renderer.restart();
   }
+}
+
+bool RTApplication::on_emitter_deleted(uint32_t index) {
+  ETX_PROFILER_SCOPE();
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const bool deleted = scene.delete_emitter(index);
+  if (deleted) {
+    notify_scene_might_have_changed();
+  }
+
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return deleted;
 }
 
 void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
@@ -811,6 +854,14 @@ void RTApplication::notify_scene_might_have_changed() {
   cpu_renderer.on_scene_changed(scene);
   raster_renderer.on_scene_changed(scene);
   gpu_renderer.on_scene_changed(scene);
+}
+
+bool RTApplication::rebuild_material_render_resources() {
+  if (ensure_energy_compensation_interfaces(scene.data(), scheduler) == false) {
+    log::error("Failed to rebuild material energy-compensation interfaces");
+    return false;
+  }
+  return true;
 }
 
 void RTApplication::on_scene_update_requested() {
