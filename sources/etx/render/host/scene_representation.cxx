@@ -1077,6 +1077,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         _private->data.materials_file_name = std::string(base_folder) + str_value;
       } else if (json_get_bool(i, "spectral", bool_value)) {
         spectral_scene = bool_value;
+      } else if (json_get_bool(i, "energy_compensated_specular", bool_value)) {
+        (void)bool_value;
       } else if (json_get_bool(i, "multiple_importance_sampling", bool_value)) {
         _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
       } else if (json_get_bool(i, "blue_noise", bool_value)) {
@@ -1754,6 +1756,12 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (profile.directional.angular_size >= kEpsilon) {
       materials_stream << "angular_diameter " << (profile.directional.angular_size * 180.0f / kPi) << "\n";
     }
+    const bool references_atmosphere = (profile.reference_emitter_index != kInvalidIndex) && (profile.reference_emitter_index < impl->data.emitter_profiles.size()) &&
+                                       (impl->data.emitter_profiles[profile.reference_emitter_index].cls == EmitterProfile::Class::Environment) &&
+                                       ((impl->data.emitter_profiles[profile.reference_emitter_index].meta & EmitterProfile::Meta::Atmosphere) != 0u);
+    if (references_atmosphere) {
+      materials_stream << "use_as_sun 1\n";
+    }
     std::string dir_path = texture_path(profile.emission.image_index);
     if (dir_path.empty() == false) {
       materials_stream << "image " << dir_path << "\n";
@@ -2034,6 +2042,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   bool force_tangents, bool spectral_scene, bool create_default_camera_entry) {
   auto& camera = active_camera;
   bool needs_camera_positioning = false;
+  data.options.properties[Scene::Properties::Spectral] = spectral_scene;
 
   if (options & SceneRepresentation::SetupCamera) {
     if (data.cameras.empty()) {

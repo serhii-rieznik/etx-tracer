@@ -17,10 +17,6 @@ ETX_SHARED_INLINE bool image_evaluate_cpu_try_rgba(ETX_IN(ImageEvaluateCPUContex
   image_pdf = 0.0f;
   image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
 
-  if (context.scene == nullptr) {
-    return false;
-  }
-
   ImageAccessCPUContext access_context = make_image_access_cpu_context(*context.scene);
   ImageAccessCPUDesc image_access = {};
   if (image_access_try_load(access_context, image_index, image_access) == false) {
@@ -33,9 +29,20 @@ ETX_SHARED_INLINE bool image_evaluate_cpu_try_rgba(ETX_IN(ImageEvaluateCPUContex
 
 ETX_SHARED_INLINE bool image_evaluate_try_rgba(ETX_IN(ImageEvaluateCPUContext, context), uint32_t image_index, ETX_IN(float2, uv), ETX_OUT(float, image_pdf),
   ETX_OUT(float4, image_value)) {
-  image_pdf = 0.0f;
-  image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
   return image_evaluate_cpu_try_rgba(context, image_index, uv, image_pdf, image_value);
+}
+
+ETX_SHARED_INLINE bool image_evaluate_try_rgba_no_pdf(ETX_IN(ImageEvaluateCPUContext, context), uint32_t image_index, ETX_IN(float2, uv), ETX_OUT(float4, image_value)) {
+  image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
+
+  ImageAccessCPUContext access_context = make_image_access_cpu_context(*context.scene);
+  ImageAccessCPUDesc image_access = {};
+  if (image_access_try_load(access_context, image_index, image_access) == false) {
+    return false;
+  }
+
+  image_value = context.scene->images[image_access.image_index].evaluate(uv, nullptr);
+  return true;
 }
 
 ETX_SHARED_INLINE float4 image_evaluate_sample_whole_or_default(ETX_IN(ImageEvaluateCPUContext, context), uint32_t image_index, ETX_IN(float2, uv), ETX_IN(float4, default_value)) {
@@ -43,9 +50,8 @@ ETX_SHARED_INLINE float4 image_evaluate_sample_whole_or_default(ETX_IN(ImageEval
     return default_value;
   }
 
-  float image_pdf = 0.0f;
-  float4 image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
-  if (image_evaluate_try_rgba(context, image_index, uv, image_pdf, image_value) == false) {
+  float4 image_value;
+  if (image_evaluate_try_rgba_no_pdf(context, image_index, uv, image_value) == false) {
     return default_value;
   }
 
@@ -58,9 +64,8 @@ ETX_SHARED_INLINE float image_evaluate_sample_channel_or_default(ETX_IN(ImageEva
     return default_value;
   }
 
-  float image_pdf = 0.0f;
-  float4 image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
-  if (image_evaluate_try_rgba(context, image_index, uv, image_pdf, image_value) == false) {
+  float4 image_value;
+  if (image_evaluate_try_rgba_no_pdf(context, image_index, uv, image_value) == false) {
     return default_value;
   }
 

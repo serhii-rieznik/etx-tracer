@@ -1323,6 +1323,19 @@ struct SceneSerializationImpl {
       }
       e.medium_index = m;
     }
+
+    if (get_param(material, "use_as_sun")) {
+      int use_as_sun = 0;
+      if ((sscanf(_data_buffer, "%d", &use_as_sun) == 1) && (use_as_sun != 0)) {
+        for (uint32_t i = 0u; i < data.emitter_profiles.size(); ++i) {
+          const EmitterProfile& candidate = data.emitter_profiles[i];
+          if ((candidate.cls == EmitterProfile::Class::Environment) && ((candidate.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
+            e.reference_emitter_index = i;
+            break;
+          }
+        }
+      }
+    }
   }
 
   void parse_env_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
@@ -1528,8 +1541,9 @@ struct SceneSerializationImpl {
         smp.y = static_cast<float>(atof(params[i + 1]));
       }
 
-      if (samples.empty() == false) {
+      if (samples.empty()) {
         log::warning("Spectrum `%s` sample set is empty - skipped", name.c_str());
+        return;
       }
 
       auto spectrum = SpectralDistribution::from_samples(samples.data(), samples.size());
@@ -1565,14 +1579,32 @@ struct SceneSerializationImpl {
 
     auto& mtl = data.materials[material_index];
 
+    const bool explicit_reflectance = (material.properties.find("Ks") != material.properties.end()) || (material.properties.find("map_Ks") != material.properties.end());
+    const bool explicit_transmission = (material.properties.find("Kt") != material.properties.end()) || (material.properties.find("map_Kt") != material.properties.end()) ||
+                                       (material.properties.find("Kd") != material.properties.end()) || (material.properties.find("map_Kd") != material.properties.end());
+
     mtl.cls = MaterialClass::Diffuse;
     mtl.emission = {};
     mtl.emission_collimation = 0.0f;
 
+    bool base_applied = false;
     if (get_param(material, "base")) {
       auto i = material_mapping.find(_data_buffer);
       if (i != material_mapping.end()) {
         mtl = data.materials[i->second];
+        base_applied = true;
+      }
+    }
+
+    if (get_param(material, "material")) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      auto params = split_params(buffer);
+      for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+        if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
+          mtl.cls = material_string_to_class(params[i + 1]);
+          i += 1;
+        }
       }
     }
 
@@ -1801,15 +1833,14 @@ struct SceneSerializationImpl {
       }
     }
 
-    if (get_param(material, "material")) {
-      char buffer[kDataBufferSize] = {};
-      memcpy(buffer, _data_buffer, kDataBufferSize);
-      auto params = split_params(buffer);
-      for (uint64_t i = 0, e = params.size(); i < e; ++i) {
-        if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
-          mtl.cls = material_string_to_class(params[i + 1]);
-          i += 1;
-        }
+    if (mtl.cls == MaterialClass::Translucent) {
+      SpectralImage black = {};
+      black.spectrum_index = data.defaults.black_spectrum;
+      if (((base_applied == false) && (explicit_reflectance == false)) && explicit_transmission) {
+        mtl.reflectance = black;
+      }
+      if (((base_applied == false) && (explicit_transmission == false)) && explicit_reflectance) {
+        mtl.scattering = black;
       }
     }
 

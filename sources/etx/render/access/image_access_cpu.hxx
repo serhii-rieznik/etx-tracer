@@ -22,11 +22,11 @@ ETX_SHARED_INLINE ImageAccessCPUContext make_image_access_cpu_context(const Scen
 }
 
 ETX_SHARED_INLINE bool image_access_cpu_has_images(ETX_IN(ImageAccessCPUContext, context)) {
-  return (context.scene != nullptr) && (context.scene->images.count > 0u);
+  return context.scene->images.count > 0u;
 }
 
 ETX_SHARED_INLINE bool image_access_cpu_load_desc(ETX_IN(ImageAccessCPUContext, context), uint32_t image_index, ETX_OUT(ImageAccessCPUDesc, image_access)) {
-  if ((context.scene == nullptr) || (image_index >= context.scene->images.count)) {
+  if (image_index >= context.scene->images.count) {
     return false;
   }
 

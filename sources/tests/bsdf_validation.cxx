@@ -17,6 +17,7 @@ constexpr uint32_t kBsdfSamples = 2048u;
 enum SpectrumSlot : uint32_t {
   SpectrumWhite,
   SpectrumBlack,
+  SpectrumHalf,
   SpectrumColored,
   SpectrumAirEta,
   SpectrumDielectricEta,
@@ -87,6 +88,18 @@ bool validate_sample(const etx::BSDFSample& sample) {
 
 bool close_value(const float a, const float b, const float tolerance) {
   return fabsf(a - b) <= tolerance;
+}
+
+void set_test_float4_channel(float4& value, uint32_t channel, float scalar) {
+  if (channel == 0u) {
+    value.x = scalar;
+  } else if (channel == 1u) {
+    value.y = scalar;
+  } else if (channel == 2u) {
+    value.z = scalar;
+  } else {
+    value.w = scalar;
+  }
 }
 
 bool validate_image_3d_sampling() {
@@ -171,6 +184,80 @@ bool validate_image_3d_sampling() {
   }
 
   image_pool.cleanup();
+  return valid;
+}
+
+bool validate_spectral_energy_compensation_lut_sampling() {
+  etx::BufferPool buffer_pool;
+  std::vector<etx::Image> images;
+  etx::ImagePool image_pool(images, buffer_pool);
+  image_pool.init(4u);
+
+  const uint32_t thinfilm_slice_count = 7u;
+  const uint32_t wavelength_group_count = kBSDFEnergyCompensationSpectralWavelengthGroupCount;
+  const uint32_t depth = thinfilm_slice_count * wavelength_group_count;
+  std::vector<float4> pixels(depth, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  for (uint32_t thinfilm_slice = 0u; thinfilm_slice < thinfilm_slice_count; ++thinfilm_slice) {
+    for (uint32_t group = 0u; group < wavelength_group_count; ++group) {
+      const uint32_t layer = thinfilm_slice * wavelength_group_count + group;
+      for (uint32_t channel = 0u; channel < kBSDFEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
+        const uint32_t wavelength_index = group * kBSDFEnergyCompensationSpectralWavelengthGroupSize + channel;
+        set_test_float4_channel(pixels[layer], channel, static_cast<float>(wavelength_index + thinfilm_slice * 1000u));
+      }
+    }
+  }
+
+  const uint32_t image_index = image_pool.add_from_data_3d(pixels.data(), uint3{1u, 1u, depth}, etx::Image::SkipSRGBConversion, {}, float3{1.0f, 1.0f, 1.0f});
+
+  etx::Scene::EnergyCompensationInterface interface_data = {};
+  interface_data.cache_mode = kBSDFEnergyCompensationCacheModeSpectralScalar;
+  interface_data.spectral_wavelength_count = kBSDFEnergyCompensationSpectralWavelengthCount;
+  interface_data.thinfilm_slice_count = thinfilm_slice_count;
+  interface_data.spectral_shortest_wavelength = kShortestWavelength;
+  interface_data.spectral_longest_wavelength = kLongestWavelength;
+
+  etx::Scene scene = {};
+  scene.images = etx::ArrayView<etx::Image>{images.data(), images.size()};
+  scene.energy_compensation_interfaces = etx::ArrayView<etx::Scene::EnergyCompensationInterface>{&interface_data, 1u};
+  const BSDFResourceContext context = make_bsdf_resource_cpu_context(scene);
+
+  bool valid = true;
+  etx::SpectralQuery spect = etx::SpectralQuery::spectral_sample(0.5f);
+  spect.wavelength = kShortestWavelength + (kLongestWavelength - kShortestWavelength) * (5.0f / 127.0f);
+  const float exact_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.0f,
+    interface_data.cache_mode, interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength,
+    interface_data.spectral_longest_wavelength);
+  if (close_value(exact_value, 5.0f, 1.0e-5f) == false) {
+    std::printf("Spectral energy-compensation LUT exact wavelength failed %.6f\n", exact_value);
+    valid = false;
+  }
+
+  spect.wavelength = kShortestWavelength + (kLongestWavelength - kShortestWavelength) * (5.5f / 127.0f);
+  const float wavelength_interp_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.0f,
+    interface_data.cache_mode, interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength,
+    interface_data.spectral_longest_wavelength);
+  if (close_value(wavelength_interp_value, 5.5f, 1.0e-5f) == false) {
+    std::printf("Spectral energy-compensation LUT wavelength interpolation failed %.6f\n", wavelength_interp_value);
+    valid = false;
+  }
+
+  const float thinfilm_interp_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.5f,
+    interface_data.cache_mode, interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength,
+    interface_data.spectral_longest_wavelength);
+  if (close_value(thinfilm_interp_value, 3005.5f, 1.0e-5f) == false) {
+    std::printf("Spectral energy-compensation LUT thinfilm interpolation failed %.6f\n", thinfilm_interp_value);
+    valid = false;
+  }
+
+  spect.wavelength = kShortestWavelength + (kLongestWavelength - kShortestWavelength) * (100.0f / 127.0f);
+  const float exact_layer_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 1.0f / 6.0f,
+    interface_data.cache_mode, interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength,
+    interface_data.spectral_longest_wavelength);
+  if (close_value(exact_layer_value, 1100.0f, 1.0e-6f) == false) {
+    std::printf("Spectral energy-compensation LUT exact packed layer failed %.6f\n", exact_layer_value);
+    valid = false;
+  }
+
   return valid;
 }
 
@@ -464,6 +551,24 @@ etx::Material make_diffuse(const float roughness) {
   return result;
 }
 
+etx::Material make_velvet(const float roughness) {
+  etx::Material result = {};
+  result.cls = MaterialClass::Velvet;
+  result.reflectance.spectrum_index = SpectrumWhite;
+  result.scattering.spectrum_index = SpectrumWhite;
+  result.roughness.value = float4{roughness, roughness, 0.0f, 0.0f};
+  return result;
+}
+
+etx::Material make_balanced_translucent(const float roughness) {
+  etx::Material result = {};
+  result.cls = MaterialClass::Translucent;
+  result.reflectance.spectrum_index = SpectrumHalf;
+  result.scattering.spectrum_index = SpectrumHalf;
+  result.roughness.value = float4{roughness, roughness, 0.0f, 0.0f};
+  return result;
+}
+
 etx::Material make_plastic(const float roughness) {
   etx::Material result = {};
   result.cls = MaterialClass::Plastic;
@@ -628,6 +733,24 @@ bool validate_eon_diffuse_material(const etx::BSDFData& data, const float roughn
   diagnostic_valid = validate_energy_compensated_white_furnace_direction("eon diffuse", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
   diagnostic_valid =
     validate_energy_compensated_white_furnace_direction("eon diffuse", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) && diagnostic_valid;
+  return diagnostic_valid;
+}
+
+bool validate_velvet_material(const etx::BSDFData& data, const float roughness, const uint32_t seed) {
+  const etx::Material material = make_velvet(roughness);
+  bool diagnostic_valid = validate_energy_compensated_material("velvet", data, material, roughness, seed);
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction("velvet", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
+  diagnostic_valid =
+    validate_energy_compensated_white_furnace_direction("velvet", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) && diagnostic_valid;
+  return diagnostic_valid;
+}
+
+bool validate_balanced_translucent_material(const etx::BSDFData& data, const float roughness, const uint32_t seed) {
+  const etx::Material material = make_balanced_translucent(roughness);
+  bool diagnostic_valid = validate_energy_compensated_material("balanced translucent", data, material, roughness, seed);
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction("balanced translucent", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
+  diagnostic_valid =
+    validate_energy_compensated_white_furnace_direction("balanced translucent", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) && diagnostic_valid;
   return diagnostic_valid;
 }
 
@@ -1983,6 +2106,7 @@ int main() {
   etx::SpectralDistribution spectra[SpectrumCount] = {};
   spectra[SpectrumWhite] = make_spectrum(float3{1.0f, 1.0f, 1.0f});
   spectra[SpectrumBlack] = make_spectrum(float3{0.0f, 0.0f, 0.0f});
+  spectra[SpectrumHalf] = make_spectrum(float3{0.5f, 0.5f, 0.5f});
   spectra[SpectrumColored] = make_spectrum(float3{0.8f, 0.35f, 0.15f});
   spectra[SpectrumAirEta] = make_spectrum(float3{1.0f, 1.0f, 1.0f});
   spectra[SpectrumDielectricEta] = make_spectrum(float3{1.5f, 1.5f, 1.5f});
@@ -2019,6 +2143,7 @@ int main() {
   inside_data.w_i = float3{0.0f, 0.0f, 1.0f};
   bool valid = true;
   valid = validate_image_3d_sampling() && valid;
+  valid = validate_spectral_energy_compensation_lut_sampling() && valid;
   const etx::Material standalone_thinfilm = make_standalone_thinfilm(0.0f, 500.0f);
   valid = validate_standalone_thinfilm_contract("standalone thinfilm outside", data, standalone_thinfilm, 22000u) && valid;
   valid = validate_standalone_thinfilm_contract("standalone thinfilm inside", inside_data, standalone_thinfilm, 22100u) && valid;
@@ -2035,6 +2160,16 @@ int main() {
   for (uint32_t i = 0u; i < 5u; ++i) {
     const float roughness = diffuse_roughness_values[i];
     valid = validate_eon_diffuse_material(data, roughness, 24000u + i * 1000u) && valid;
+  }
+  const float velvet_roughness_values[] = {0.25f, 0.5f, 0.75f, 1.0f};
+  for (uint32_t i = 0u; i < 4u; ++i) {
+    const float roughness = velvet_roughness_values[i];
+    valid = validate_velvet_material(data, roughness, 25000u + i * 1000u) && valid;
+  }
+  const float translucent_roughness_values[] = {0.0f, 0.5f, 1.0f};
+  for (uint32_t i = 0u; i < 3u; ++i) {
+    const float roughness = translucent_roughness_values[i];
+    valid = validate_balanced_translucent_material(data, roughness, 24500u + i * 1000u) && valid;
   }
 
   const float plastic_roughness_values[] = {0.25f, 0.5f, 0.75f, 1.0f};

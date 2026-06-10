@@ -21,6 +21,7 @@ struct ETX_ALIGNED PTRayPayload {
   uint2 pixel = {};
   bool mis_weight = true;
   bool use_blue_noise = false;
+  bool depth_limit_reached_while_refractive = false;
 };
 
 enum PTRayState : uint8_t {
@@ -30,6 +31,11 @@ enum PTRayState : uint8_t {
   EndIteration,
   Finished,
 };
+
+ETX_SHARED_INLINE bool path_tracing_neutral_eta(float eta) {
+  const float eta_delta = abs(eta - 1.0f);
+  return eta_delta <= (16.0f * kEpsilon);
+}
 
 namespace subsurface {
 
@@ -499,8 +505,18 @@ ETX_SHARED_INLINE void handle_missed_ray(const Scene& scene, PTRayPayload& paylo
 }
 
 ETX_SHARED_INLINE bool run_path_iteration(const Scene& scene, const Raytracing& rt, PTRayPayload& payload) {
-  if (payload.path_length > rt.scene().options.max_path_length)
+  const bool depth_exceeded = payload.path_length > rt.scene().options.max_path_length;
+  const bool neutral_eta = path_tracing_neutral_eta(payload.eta);
+  const bool exceeded_refractive_depth = (depth_exceeded && (neutral_eta == false));
+  const bool exceeded_neutral_depth = (depth_exceeded && neutral_eta);
+  const bool terminate_exceeded_neutral_depth = (exceeded_neutral_depth && (payload.depth_limit_reached_while_refractive == false));
+  if (exceeded_refractive_depth) {
+    payload.depth_limit_reached_while_refractive = true;
+  }
+
+  if (terminate_exceeded_neutral_depth) {
     return false;
+  }
 
   ETX_CHECK_FINITE(payload.ray.d);
 
@@ -515,6 +531,11 @@ ETX_SHARED_INLINE bool run_path_iteration(const Scene& scene, const Raytracing& 
   }
 
   if (found_intersection) {
+    if (exceeded_neutral_depth) {
+      const auto& tri = scene.triangles[intersection.triangle_index];
+      handle_direct_emitter(scene, tri, intersection, rt, payload);
+      return false;
+    }
     return handle_hit_ray(scene, intersection, rt, payload);
   }
 

@@ -24,7 +24,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(ETX_IN(BSDFResource
     return result;
   }
 
-  float4 image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
+  float4 image_value;
   if (bsdf_resource_image_try_evaluate_rgba(context, image.image_index, uv, image_pdf, image_value) == false) {
     return result;
   }
@@ -33,11 +33,24 @@ ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(ETX_IN(BSDFResource
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(SpectralImage, image), ETX_IN(float2, uv)) {
-  float image_pdf = 0.0f;
-  return bsdf_resource_apply_image(context, spect, image, uv, image_pdf);
+  SpectralResponse result = bsdf_resource_load_spectrum(context, image.spectrum_index, spect);
+  if (image.image_index == kInvalidIndex) {
+    return result;
+  }
+
+  float4 image_value;
+  if (bsdf_resource_image_try_evaluate_rgba_no_pdf(context, image.image_index, uv, image_value) == false) {
+    return result;
+  }
+
+  return bsdf_resource_apply_rgb(spect, result, image_value);
 }
 
 ETX_SHARED_INLINE float bsdf_resource_evaluate_sampled_image(ETX_IN(BSDFResourceContext, context), ETX_IN(SampledImage, image), ETX_IN(float2, uv), float default_value) {
+  if (image.image_index == kInvalidIndex) {
+    return default_value;
+  }
+
   return bsdf_resource_image_sample_channel_or_default(context, image.image_index, image.channel, uv, default_value);
 }
 
@@ -88,7 +101,11 @@ ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResour
     return result;
   }
 
-  float sampled_thickness = bsdf_resource_image_sample_channel_or_default(context, film.thinkness_image, 0u, uv, 1.0f);
+  float sampled_thickness = 1.0f;
+  if (film.thinkness_image != kInvalidIndex) {
+    sampled_thickness = bsdf_resource_image_sample_channel_or_default(context, film.thinkness_image, 0u, uv, 1.0f);
+  }
+
   result.thickness = film.min_thickness + (film.max_thickness - film.min_thickness) * sampled_thickness;
   result.ior = bsdf_resource_evaluate_refractive_index(context, film.ior, spect);
 

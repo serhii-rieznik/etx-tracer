@@ -23,9 +23,6 @@ ETX_SHARED_INLINE bool emitter_access_try_load_scene_state(ETX_IN(EmitterAccessC
   ETX_OUT(uint32_t, emitter_profile_count)) {
   emitter_instance_count = 0u;
   emitter_profile_count = 0u;
-  if (context.scene == nullptr) {
-    return false;
-  }
 
   emitter_instance_count = static_cast<uint32_t>(context.scene->emitter_instances.count);
   emitter_profile_count = static_cast<uint32_t>(context.scene->emitter_profiles.count);
@@ -33,7 +30,7 @@ ETX_SHARED_INLINE bool emitter_access_try_load_scene_state(ETX_IN(EmitterAccessC
 }
 
 ETX_SHARED_INLINE bool emitter_access_try_load_profile(ETX_IN(EmitterAccessCPUContext, context), uint32_t emitter_profile_count, ETX_INOUT(EmitterAccess, access)) {
-  if ((context.scene == nullptr) || (access.emitter_profile_index >= emitter_profile_count)) {
+  if (access.emitter_profile_index >= emitter_profile_count) {
     return false;
   }
 
@@ -123,7 +120,7 @@ ETX_SHARED_INLINE bool emitter_access_try_load_image_params(ETX_IN(EmitterAccess
   ETX_OUT(float, image_u_scale)) {
   image_offset = float2(0.0f, 0.0f);
   image_u_scale = 1.0f;
-  if ((context.scene == nullptr) || (emission_image_index == kInvalidIndex) || (emission_image_index >= context.scene->images.count)) {
+  if ((emission_image_index == kInvalidIndex) || (emission_image_index >= context.scene->images.count)) {
     return false;
   }
 
@@ -142,19 +139,11 @@ ETX_SHARED_INLINE float2 emitter_access_environment_uv(ETX_IN(EmitterAccessCPUCo
 }
 
 ETX_SHARED_INLINE bool emitter_access_can_sample_spectrum(ETX_IN(EmitterAccessCPUContext, context), uint32_t emission_spectrum_index) {
-  if (context.scene == nullptr) {
-    return false;
-  }
-
   SpectrumAccessCPUContext spectrum_context = make_spectrum_access_cpu_context(context.scene->spectrums.a, static_cast<uint32_t>(context.scene->spectrums.count));
   return spectrum_access_can_evaluate(spectrum_context, emission_spectrum_index);
 }
 
 ETX_SHARED_INLINE uint32_t emitter_access_external_medium_index(ETX_IN(EmitterAccessCPUContext, context), ETX_IN(Emitter, emitter_instance)) {
-  if (context.scene == nullptr) {
-    return kInvalidIndex;
-  }
-
   if (static_cast<uint32_t>(emitter_instance.cls) == EmitterClass::Area) {
     if (emitter_instance.triangle_index >= context.scene->triangles.count) {
       return kInvalidIndex;

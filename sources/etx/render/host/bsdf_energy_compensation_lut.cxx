@@ -17,14 +17,17 @@ namespace etx {
 
 namespace {
 
-constexpr uint32_t kEnergyCompensationGeneratorVersion = 21u;
+constexpr uint32_t kEnergyCompensationGeneratorVersion = 24u;
 constexpr uint32_t kEnergyCompensationConductorLutSize = 64u;
 constexpr uint32_t kEnergyCompensationDielectricLutSize = 64u;
 constexpr uint32_t kEnergyCompensationConductorSampleCount = 2048u;
-constexpr uint32_t kEnergyCompensationSampleCount = 512u;
+constexpr uint32_t kEnergyCompensationSampleCount = 2048u;
 constexpr uint32_t kEnergyCompensationDielectricMultiScatterSampleCount = 2048u;
 constexpr uint32_t kEnergyCompensationDielectricBranchCount = 4u;
 constexpr uint32_t kEnergyCompensationDielectricAverageWidth = 8u;
+constexpr uint32_t kEnergyCompensationSpectralWavelengthCount = kBSDFEnergyCompensationSpectralWavelengthCount;
+constexpr uint32_t kEnergyCompensationSpectralWavelengthGroupSize = kBSDFEnergyCompensationSpectralWavelengthGroupSize;
+constexpr uint32_t kEnergyCompensationSpectralWavelengthGroupCount = kBSDFEnergyCompensationSpectralWavelengthGroupCount;
 
 struct SpectralDirectionalAlbedoResult {
   float3 albedo = {};
@@ -44,6 +47,7 @@ struct GeneratedInterfacePaths {
   std::filesystem::path geometric;
   std::filesystem::path geometric_average;
   std::filesystem::path conductor_fms;
+  std::filesystem::path probability;
 };
 
 float lut_parameter(uint32_t index, uint32_t size) {
@@ -82,6 +86,27 @@ float quasi_random(uint32_t index, uint32_t dimension) {
 
 float2 quasi_random_2d(uint32_t index, uint32_t dimension) {
   return float2{quasi_random(index, dimension), quasi_random(index, dimension + 1u)};
+}
+
+SpectralQuery spectral_cache_query(uint32_t wavelength_index) {
+  const float t = static_cast<float>(min(wavelength_index, kEnergyCompensationSpectralWavelengthCount - 1u)) /
+                  static_cast<float>(kEnergyCompensationSpectralWavelengthCount - 1u);
+  SpectralQuery result = {};
+  result.wavelength = kShortestWavelength + (kLongestWavelength - kShortestWavelength) * t;
+  result.flags = SpectralFlags::Spectral;
+  return result;
+}
+
+void set_float4_channel(float4& value, uint32_t channel, float scalar) {
+  if (channel == 0u) {
+    value.x = scalar;
+  } else if (channel == 1u) {
+    value.y = scalar;
+  } else if (channel == 2u) {
+    value.z = scalar;
+  } else {
+    value.w = scalar;
+  }
 }
 
 float3 incident_direction_from_mu(float mu) {
@@ -205,10 +230,11 @@ uint64_t hash_thinfilm(const SceneData& data, const Thinfilm& thinfilm, uint64_t
   return result;
 }
 
-uint64_t hash_material_interface(const SceneData& data, const Material& material, uint32_t material_class) {
+uint64_t hash_material_interface(const SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode) {
   uint64_t result = 0u;
   result = etx_hash64_continue(&kEnergyCompensationGeneratorVersion, sizeof(kEnergyCompensationGeneratorVersion), result);
   result = etx_hash64_continue(&material_class, sizeof(material_class), result);
+  result = etx_hash64_continue(&cache_mode, sizeof(cache_mode), result);
   result = etx_hash64_continue(&kEnergyCompensationConductorLutSize, sizeof(kEnergyCompensationConductorLutSize), result);
   result = etx_hash64_continue(&kEnergyCompensationDielectricLutSize, sizeof(kEnergyCompensationDielectricLutSize), result);
   result = etx_hash64_continue(&kEnergyCompensationConductorSampleCount, sizeof(kEnergyCompensationConductorSampleCount), result);
@@ -216,6 +242,14 @@ uint64_t hash_material_interface(const SceneData& data, const Material& material
   result = etx_hash64_continue(&kEnergyCompensationDielectricMultiScatterSampleCount, sizeof(kEnergyCompensationDielectricMultiScatterSampleCount), result);
   result = etx_hash64_continue(&kEnergyCompensationDielectricBranchCount, sizeof(kEnergyCompensationDielectricBranchCount), result);
   result = etx_hash64_continue(&kEnergyCompensationDielectricAverageWidth, sizeof(kEnergyCompensationDielectricAverageWidth), result);
+  const uint32_t thinfilm_slice_count = thinfilm_lut_slice_count(material.thinfilm);
+  result = etx_hash64_continue(&thinfilm_slice_count, sizeof(thinfilm_slice_count), result);
+  if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+    result = etx_hash64_continue(&kEnergyCompensationSpectralWavelengthCount, sizeof(kEnergyCompensationSpectralWavelengthCount), result);
+    result = etx_hash64_continue(&kEnergyCompensationSpectralWavelengthGroupSize, sizeof(kEnergyCompensationSpectralWavelengthGroupSize), result);
+    result = etx_hash64_continue(&kShortestWavelength, sizeof(kShortestWavelength), result);
+    result = etx_hash64_continue(&kLongestWavelength, sizeof(kLongestWavelength), result);
+  }
   result = hash_refractive_index(data, material.ext_ior, result);
   result = hash_refractive_index(data, material.int_ior, result);
   result = hash_thinfilm(data, material.thinfilm, result);
@@ -223,7 +257,7 @@ uint64_t hash_material_interface(const SceneData& data, const Material& material
 }
 
 std::filesystem::path cache_directory() {
-  return std::filesystem::path(env().file_in_data("bsdf/cache/energy_compensation"));
+  return std::filesystem::path(env().file_in_data("cache/bsdf/energy_compensation"));
 }
 
 std::string hash_string(uint64_t hash) {
@@ -242,6 +276,7 @@ GeneratedInterfacePaths interface_paths(uint32_t material_class, uint64_t hash) 
     directory / (key + "_geometric.exr"),
     directory / (key + "_geometric_average.exr"),
     directory / (key + "_conductor_fms.exr"),
+    directory / (key + "_probability.exr"),
   };
 }
 
@@ -261,6 +296,7 @@ GeneratedInterfacePaths interface_slice_paths(const GeneratedInterfacePaths& pat
     slice_path(paths.geometric, slice_index),
     slice_path(paths.geometric_average, slice_index),
     slice_path(paths.conductor_fms, slice_index),
+    slice_path(paths.probability, slice_index),
   };
 }
 
@@ -330,14 +366,13 @@ bool load_rgba32f_lut_slices(const GeneratedInterfacePaths& paths, uint32_t widt
   return true;
 }
 
-SpectralDirectionalAlbedoResult integrate_conductor_directional(const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm,
-  float mu_i, float alpha) {
+SpectralDirectionalAlbedoResult integrate_conductor_directional(const SpectralQuery& spect, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
+  const ThinfilmEval& thinfilm, float mu_i, float alpha) {
   SpectralDirectionalAlbedoResult result = {};
   if (mu_i <= kEpsilon) {
     return result;
   }
 
-  const SpectralQuery spect = {};
   const float2 alpha2 = float2(alpha, alpha);
   const float3 w_i = incident_direction_from_mu(mu_i);
   const float lambda_i = bsdf_external_ray_info_make(w_i, alpha2).Lambda;
@@ -376,14 +411,13 @@ SpectralDirectionalAlbedoResult integrate_conductor_directional(const Refractive
   return result;
 }
 
-DielectricDirectionalAlbedoResult integrate_dielectric_directional(const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm,
-  bool incident_outside, float mu_i, float alpha) {
+DielectricDirectionalAlbedoResult integrate_dielectric_directional(const SpectralQuery& spect, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
+  const ThinfilmEval& thinfilm, bool incident_outside, float mu_i, float alpha) {
   DielectricDirectionalAlbedoResult result = {};
   if (mu_i <= kEpsilon) {
     return result;
   }
 
-  const SpectralQuery spect = {};
   const float3 w_i = incident_direction_from_mu(mu_i);
   const float eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
   const auto texture = spectral_response_make(spect, 1.0f);
@@ -440,14 +474,13 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Refract
   return result;
 }
 
-DielectricDirectionalAlbedoResult integrate_dielectric_total_directional(const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm,
-  bool incident_outside, float mu_i, float alpha) {
+DielectricDirectionalAlbedoResult integrate_dielectric_total_directional(const SpectralQuery& spect, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
+  const ThinfilmEval& thinfilm, bool incident_outside, float mu_i, float alpha) {
   DielectricDirectionalAlbedoResult result = {};
   if (mu_i <= kEpsilon) {
     return result;
   }
 
-  const SpectralQuery spect = {};
   const float2 alpha2 = float2(alpha, alpha);
   const float3 w_i = incident_direction_from_mu(mu_i);
   const uint32_t incident_side = dielectric_side(incident_outside);
@@ -550,6 +583,17 @@ float3 integrate_dielectric_branch_average(const std::vector<DielectricDirection
   return saturate(total);
 }
 
+void clamp_dielectric_residual_row(float3 residual_average[kEnergyCompensationDielectricBranchCount], const float3 side_residual[2]) {
+  for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
+    const uint32_t branch_0 = dielectric_branch_index(incident_side, 0u);
+    const uint32_t branch_1 = dielectric_branch_index(incident_side, 1u);
+    const float3 residual_sum = residual_average[branch_0] + residual_average[branch_1];
+    const float3 scale = min(float3(1.0f, 1.0f, 1.0f), side_residual[incident_side] / max(float3(kEpsilon, kEpsilon, kEpsilon), residual_sum));
+    residual_average[branch_0] *= scale;
+    residual_average[branch_1] *= scale;
+  }
+}
+
 float integrate_geometric_average(const std::vector<SpectralDirectionalAlbedoResult>& directional, uint32_t alpha_index, uint32_t lut_size) {
   float total = 0.0f;
   const float h = 1.0f / static_cast<float>(lut_size - 1u);
@@ -566,6 +610,7 @@ float integrate_geometric_average(const std::vector<SpectralDirectionalAlbedoRes
 
 bool generate_conductor_interface(const GeneratedInterfacePaths& paths, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm,
   TaskScheduler& scheduler) {
+  const SpectralQuery spect = {};
   const uint32_t entry_count = kEnergyCompensationConductorLutSize * kEnergyCompensationConductorLutSize;
   std::vector<SpectralDirectionalAlbedoResult> directional(entry_count);
   scheduler.execute(entry_count, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
@@ -573,7 +618,7 @@ bool generate_conductor_interface(const GeneratedInterfacePaths& paths, const Re
     for (uint32_t index = begin; index < end; ++index) {
       const uint32_t alpha_index = index / kEnergyCompensationConductorLutSize;
       const uint32_t mu_index = index - alpha_index * kEnergyCompensationConductorLutSize;
-      directional[index] = integrate_conductor_directional(ext_ior, int_ior, thinfilm, mu_parameter(mu_index, kEnergyCompensationConductorLutSize),
+      directional[index] = integrate_conductor_directional(spect, ext_ior, int_ior, thinfilm, mu_parameter(mu_index, kEnergyCompensationConductorLutSize),
         alpha_parameter(alpha_index, kEnergyCompensationConductorLutSize));
     }
   });
@@ -583,7 +628,6 @@ bool generate_conductor_interface(const GeneratedInterfacePaths& paths, const Re
   std::vector<float4> geometric_image(entry_count, float4{0.0f, 0.0f, 0.0f, 1.0f});
   std::vector<float4> geometric_average(kEnergyCompensationConductorLutSize, float4{0.0f, 0.0f, 0.0f, 1.0f});
   std::vector<float4> conductor_fms(kEnergyCompensationConductorLutSize, float4{0.0f, 0.0f, 0.0f, 1.0f});
-  const SpectralQuery spect = {};
   for (uint32_t alpha_index = 0u; alpha_index < kEnergyCompensationConductorLutSize; ++alpha_index) {
     const float3 average_value = integrate_average(directional, alpha_index, kEnergyCompensationConductorLutSize, 0u);
     average[alpha_index] = float4(average_value.x, average_value.y, average_value.z, 1.0f);
@@ -606,8 +650,83 @@ bool generate_conductor_interface(const GeneratedInterfacePaths& paths, const Re
          save_exr_rgba(paths.conductor_fms, conductor_fms, kEnergyCompensationConductorLutSize, 1u);
 }
 
+bool generate_conductor_geometric_interface(const GeneratedInterfacePaths& paths, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
+  const ThinfilmEval& thinfilm, TaskScheduler& scheduler) {
+  const SpectralQuery spect = {};
+  const uint32_t entry_count = kEnergyCompensationConductorLutSize * kEnergyCompensationConductorLutSize;
+  std::vector<SpectralDirectionalAlbedoResult> directional(entry_count);
+  scheduler.execute(entry_count, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+    (void)thread_id;
+    for (uint32_t index = begin; index < end; ++index) {
+      const uint32_t alpha_index = index / kEnergyCompensationConductorLutSize;
+      const uint32_t mu_index = index - alpha_index * kEnergyCompensationConductorLutSize;
+      directional[index] = integrate_conductor_directional(spect, ext_ior, int_ior, thinfilm, mu_parameter(mu_index, kEnergyCompensationConductorLutSize),
+        alpha_parameter(alpha_index, kEnergyCompensationConductorLutSize));
+    }
+  });
+
+  std::vector<float4> geometric_image(entry_count, float4{0.0f, 0.0f, 0.0f, 1.0f});
+  std::vector<float4> geometric_average(kEnergyCompensationConductorLutSize, float4{0.0f, 0.0f, 0.0f, 1.0f});
+  for (uint32_t alpha_index = 0u; alpha_index < kEnergyCompensationConductorLutSize; ++alpha_index) {
+    for (uint32_t mu_index = 0u; mu_index < kEnergyCompensationConductorLutSize; ++mu_index) {
+      const uint32_t index = alpha_index * kEnergyCompensationConductorLutSize + mu_index;
+      const SpectralDirectionalAlbedoResult& value = directional[index];
+      geometric_image[index] = float4(value.geometric_albedo, value.visible_probability, 0.0f, 1.0f);
+    }
+    const float geometric_average_value = integrate_geometric_average(directional, alpha_index, kEnergyCompensationConductorLutSize);
+    geometric_average[alpha_index] = float4(geometric_average_value, 0.0f, 0.0f, 1.0f);
+  }
+
+  return save_exr_rgba(paths.geometric, geometric_image, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize) &&
+         save_exr_rgba(paths.geometric_average, geometric_average, kEnergyCompensationConductorLutSize, 1u);
+}
+
+bool generate_conductor_interface_spectral(const SceneData& data, const Material& material, const GeneratedInterfacePaths& paths, uint32_t thinfilm_slice_index,
+  uint32_t thinfilm_slice_count, uint32_t wavelength_group_index, TaskScheduler& scheduler) {
+  const uint32_t entry_count = kEnergyCompensationConductorLutSize * kEnergyCompensationConductorLutSize;
+  std::vector<float4> image(entry_count, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  std::vector<float4> average(kEnergyCompensationConductorLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  std::vector<float4> conductor_fms(kEnergyCompensationConductorLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
+
+  for (uint32_t channel = 0u; channel < kEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
+    const uint32_t wavelength_index = wavelength_group_index * kEnergyCompensationSpectralWavelengthGroupSize + channel;
+    const SpectralQuery spect = spectral_cache_query(wavelength_index);
+    const RefractiveIndexSample ext_ior = sample_refractive_index(data, material.ext_ior, spect);
+    const RefractiveIndexSample int_ior = sample_refractive_index(data, material.int_ior, spect);
+    const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, thinfilm_slice_index, thinfilm_slice_count);
+    std::vector<SpectralDirectionalAlbedoResult> directional(entry_count);
+    scheduler.execute(entry_count, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+      (void)thread_id;
+      for (uint32_t index = begin; index < end; ++index) {
+        const uint32_t alpha_index = index / kEnergyCompensationConductorLutSize;
+        const uint32_t mu_index = index - alpha_index * kEnergyCompensationConductorLutSize;
+        directional[index] = integrate_conductor_directional(spect, ext_ior, int_ior, thinfilm, mu_parameter(mu_index, kEnergyCompensationConductorLutSize),
+          alpha_parameter(alpha_index, kEnergyCompensationConductorLutSize));
+      }
+    });
+
+    for (uint32_t alpha_index = 0u; alpha_index < kEnergyCompensationConductorLutSize; ++alpha_index) {
+      const float3 average_value = integrate_average(directional, alpha_index, kEnergyCompensationConductorLutSize, 0u);
+      set_float4_channel(average[alpha_index], channel, average_value.x);
+      for (uint32_t mu_index = 0u; mu_index < kEnergyCompensationConductorLutSize; ++mu_index) {
+        const uint32_t index = alpha_index * kEnergyCompensationConductorLutSize + mu_index;
+        set_float4_channel(image[index], channel, directional[index].albedo.x);
+      }
+
+      const float geometric_average_value = integrate_geometric_average(directional, alpha_index, kEnergyCompensationConductorLutSize);
+      const ::SpectralResponse fms = bsdf_energy_compensated_conductor_fms(spect, ext_ior, int_ior, thinfilm, geometric_average_value);
+      set_float4_channel(conductor_fms[alpha_index], channel, spectral_response_monochromatic(fms));
+    }
+  }
+
+  return save_exr_rgba(paths.directional, image, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize) &&
+         save_exr_rgba(paths.average, average, kEnergyCompensationConductorLutSize, 1u) &&
+         save_exr_rgba(paths.conductor_fms, conductor_fms, kEnergyCompensationConductorLutSize, 1u);
+}
+
 bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm,
   TaskScheduler& scheduler) {
+  const SpectralQuery spect = {};
   const uint32_t side_entry_count = kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricLutSize;
   std::vector<DielectricDirectionalAlbedoResult> directional(side_entry_count * 2u);
   std::vector<DielectricDirectionalAlbedoResult> total_directional(side_entry_count * 2u);
@@ -620,7 +739,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
       const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
       const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
       const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
-      directional[index] = integrate_dielectric_directional(source_ior, target_ior, thinfilm, side == 0u, mu_parameter(mu_index, kEnergyCompensationDielectricLutSize),
+      directional[index] = integrate_dielectric_directional(spect, source_ior, target_ior, thinfilm, side == 0u, mu_parameter(mu_index, kEnergyCompensationDielectricLutSize),
         alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
     }
   });
@@ -633,7 +752,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
       const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
       const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
       const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
-      total_directional[index] = integrate_dielectric_total_directional(source_ior, target_ior, thinfilm, side == 0u,
+      total_directional[index] = integrate_dielectric_total_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
         mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
     }
   });
@@ -667,6 +786,14 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
       for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
         const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
         residual_average[branch] = max(float3(0.0f, 0.0f, 0.0f), total_average[branch] - single_average[branch]);
+      }
+    }
+
+    clamp_dielectric_residual_row(residual_average, side_residual);
+
+    for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
+      for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
+        const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
         const float3 denominator = max(float3(kEpsilon, kEpsilon, kEpsilon), side_residual[incident_side] * side_residual[outgoing_side]);
         residual_coefficient[branch] = residual_average[branch] / denominator;
       }
@@ -730,12 +857,161 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
          save_exr_rgba(paths.average, average, kEnergyCompensationDielectricAverageWidth, kEnergyCompensationDielectricLutSize);
 }
 
-bool ensure_cache_file(const SceneData& data, const Material& material, uint32_t material_class, const GeneratedInterfacePaths& paths, TaskScheduler& scheduler) {
+bool generate_dielectric_interface_spectral(const SceneData& data, const Material& material, const GeneratedInterfacePaths& paths, uint32_t thinfilm_slice_index,
+  uint32_t thinfilm_slice_count, uint32_t wavelength_group_index, TaskScheduler& scheduler) {
+  const uint32_t side_entry_count = kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricLutSize;
+  const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize;
+  std::vector<float4> image(width * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  std::vector<float4> probability(width * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  std::vector<float4> average(kEnergyCompensationDielectricAverageWidth * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
+
+  for (uint32_t channel = 0u; channel < kEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
+    const uint32_t wavelength_index = wavelength_group_index * kEnergyCompensationSpectralWavelengthGroupSize + channel;
+    const SpectralQuery spect = spectral_cache_query(wavelength_index);
+    const RefractiveIndexSample ext_ior = sample_refractive_index(data, material.ext_ior, spect);
+    const RefractiveIndexSample int_ior = sample_refractive_index(data, material.int_ior, spect);
+    const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, thinfilm_slice_index, thinfilm_slice_count);
+    std::vector<DielectricDirectionalAlbedoResult> directional(side_entry_count * 2u);
+    std::vector<DielectricDirectionalAlbedoResult> total_directional(side_entry_count * 2u);
+    scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+      (void)thread_id;
+      for (uint32_t index = begin; index < end; ++index) {
+        const uint32_t side = index / side_entry_count;
+        const uint32_t side_index = index - side * side_entry_count;
+        const uint32_t alpha_index = side_index / kEnergyCompensationDielectricLutSize;
+        const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
+        const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
+        const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
+        directional[index] = integrate_dielectric_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
+          mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+      }
+    });
+    scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+      (void)thread_id;
+      for (uint32_t index = begin; index < end; ++index) {
+        const uint32_t side = index / side_entry_count;
+        const uint32_t side_index = index - side * side_entry_count;
+        const uint32_t alpha_index = side_index / kEnergyCompensationDielectricLutSize;
+        const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
+        const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
+        const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
+        total_directional[index] = integrate_dielectric_total_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
+          mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+      }
+    });
+
+    for (uint32_t alpha_index = 0u; alpha_index < kEnergyCompensationDielectricLutSize; ++alpha_index) {
+      float3 single_average[kEnergyCompensationDielectricBranchCount] = {};
+      float3 total_average[kEnergyCompensationDielectricBranchCount] = {};
+      float3 residual_average[kEnergyCompensationDielectricBranchCount] = {};
+      float3 residual_coefficient[kEnergyCompensationDielectricBranchCount] = {};
+
+      for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
+        for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
+          const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
+          single_average[branch] = integrate_dielectric_branch_average(directional, alpha_index, incident_side, outgoing_side);
+          total_average[branch] = integrate_dielectric_branch_average(total_directional, alpha_index, incident_side, outgoing_side);
+        }
+      }
+
+      float3 side_residual[2] = {};
+      for (uint32_t side = 0u; side < 2u; ++side) {
+        const uint32_t branch_0 = dielectric_branch_index(side, 0u);
+        const uint32_t branch_1 = dielectric_branch_index(side, 1u);
+        const float3 row_single = saturate(single_average[branch_0] + single_average[branch_1]);
+        side_residual[side] = max(float3(0.0f, 0.0f, 0.0f), float3(1.0f, 1.0f, 1.0f) - row_single);
+      }
+
+      for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
+        for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
+          const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
+          residual_average[branch] = max(float3(0.0f, 0.0f, 0.0f), total_average[branch] - single_average[branch]);
+        }
+      }
+
+      clamp_dielectric_residual_row(residual_average, side_residual);
+
+      for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
+        for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
+          const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
+          const float3 denominator = max(float3(kEpsilon, kEpsilon, kEpsilon), side_residual[incident_side] * side_residual[outgoing_side]);
+          residual_coefficient[branch] = residual_average[branch] / denominator;
+        }
+      }
+
+      for (uint32_t branch = 0u; branch < kEnergyCompensationDielectricBranchCount; ++branch) {
+        set_float4_channel(average[alpha_index * kEnergyCompensationDielectricAverageWidth + branch], channel, saturate(single_average[branch].x));
+        set_float4_channel(average[alpha_index * kEnergyCompensationDielectricAverageWidth + 4u + branch], channel, max(0.0f, residual_coefficient[branch].x));
+      }
+
+      for (uint32_t side = 0u; side < 2u; ++side) {
+        const uint32_t side_offset = side * side_entry_count;
+        for (uint32_t mu_index = 0u; mu_index < kEnergyCompensationDielectricLutSize; ++mu_index) {
+          const uint32_t source_index = side_offset + alpha_index * kEnergyCompensationDielectricLutSize + mu_index;
+          const DielectricDirectionalAlbedoResult& value = directional[source_index];
+          for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
+            const uint32_t branch = dielectric_branch_index(side, outgoing_side);
+            const uint32_t x = branch * kEnergyCompensationDielectricLutSize + mu_index;
+            const uint32_t image_index = alpha_index * width + x;
+            set_float4_channel(image[image_index], channel, saturate(value.branch_albedo[outgoing_side].x));
+            set_float4_channel(probability[image_index], channel, saturate(value.branch_visible_probability[outgoing_side]));
+          }
+        }
+      }
+    }
+  }
+
+  return save_exr_rgba(paths.directional, image, width, kEnergyCompensationDielectricLutSize) &&
+         save_exr_rgba(paths.average, average, kEnergyCompensationDielectricAverageWidth, kEnergyCompensationDielectricLutSize) &&
+         save_exr_rgba(paths.probability, probability, width, kEnergyCompensationDielectricLutSize);
+}
+
+bool ensure_cache_file(const SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode, const GeneratedInterfacePaths& paths,
+  TaskScheduler& scheduler) {
   const bool conductor = material_class == MaterialClass::Conductor;
   const SpectralQuery spect = {};
   const RefractiveIndexSample ext_ior = sample_refractive_index(data, material.ext_ior, spect);
   const RefractiveIndexSample int_ior = sample_refractive_index(data, material.int_ior, spect);
   const uint32_t slice_count = thinfilm_lut_slice_count(material.thinfilm);
+  if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+    bool spectral_result = true;
+    for (uint32_t thinfilm_slice_index = 0u; thinfilm_slice_index < slice_count; ++thinfilm_slice_index) {
+      if (conductor) {
+        const GeneratedInterfacePaths geometric_paths = interface_slice_paths(paths, thinfilm_slice_index);
+        const bool geometric_exists = std::filesystem::exists(geometric_paths.geometric);
+        const bool geometric_average_exists = std::filesystem::exists(geometric_paths.geometric_average);
+        if ((geometric_exists && geometric_average_exists) == false) {
+          const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, thinfilm_slice_index, slice_count);
+          const bool generated_geometric = generate_conductor_geometric_interface(geometric_paths, ext_ior, int_ior, thinfilm, scheduler);
+          spectral_result = generated_geometric && spectral_result;
+        }
+      }
+
+      for (uint32_t wavelength_group = 0u; wavelength_group < kEnergyCompensationSpectralWavelengthGroupCount; ++wavelength_group) {
+        const uint32_t packed_slice_index = thinfilm_slice_index * kEnergyCompensationSpectralWavelengthGroupCount + wavelength_group;
+        const GeneratedInterfacePaths slice_paths_value = interface_slice_paths(paths, packed_slice_index);
+        const bool directional_exists = std::filesystem::exists(slice_paths_value.directional);
+        const bool average_exists = std::filesystem::exists(slice_paths_value.average);
+        const bool conductor_fms_exists = conductor ? std::filesystem::exists(slice_paths_value.conductor_fms) : true;
+        const bool probability_exists = conductor ? true : std::filesystem::exists(slice_paths_value.probability);
+        if (((directional_exists && average_exists) && conductor_fms_exists) && probability_exists) {
+          continue;
+        }
+
+        const auto time_begin = std::chrono::steady_clock::now();
+        const bool generated = conductor ? generate_conductor_interface_spectral(data, material, slice_paths_value, thinfilm_slice_index, slice_count, wavelength_group, scheduler)
+                                         : generate_dielectric_interface_spectral(data, material, slice_paths_value, thinfilm_slice_index, slice_count, wavelength_group, scheduler);
+        const auto time_end = std::chrono::steady_clock::now();
+        const double elapsed_seconds = std::chrono::duration<double>(time_end - time_begin).count();
+        if (generated) {
+          log::info("Generated spectral energy-compensation LUT cache %s in %.3f seconds", slice_paths_value.directional.generic_string().c_str(), elapsed_seconds);
+        }
+        spectral_result = generated && spectral_result;
+      }
+    }
+    return spectral_result;
+  }
+
   bool result = true;
   for (uint32_t slice_index = 0u; slice_index < slice_count; ++slice_index) {
     const GeneratedInterfacePaths slice_paths_value = interface_slice_paths(paths, slice_index);
@@ -762,15 +1038,10 @@ bool ensure_cache_file(const SceneData& data, const Material& material, uint32_t
   return result;
 }
 
-bool bind_energy_compensation_interface(SceneData& data, const Material& material, uint32_t material_class, std::unordered_map<uint64_t, uint32_t>& interface_cache,
-  TaskScheduler& scheduler, uint32_t& out_interface_index) {
+bool bind_energy_compensation_interface(SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode,
+  std::unordered_map<uint64_t, uint32_t>& interface_cache, TaskScheduler& scheduler, uint32_t& out_interface_index) {
   const bool conductor = material_class == MaterialClass::Conductor;
-  if (bsdf_energy_compensated_constant_thinfilm_supported(material) == false) {
-    log::error("Energy compensation for thin film requires constant thickness without a thickness image");
-    return false;
-  }
-
-  const uint64_t hash = hash_material_interface(data, material, material_class);
+  const uint64_t hash = hash_material_interface(data, material, material_class, cache_mode);
   const auto found = interface_cache.find(hash);
   if (found != interface_cache.end()) {
     out_interface_index = found->second;
@@ -778,14 +1049,63 @@ bool bind_energy_compensation_interface(SceneData& data, const Material& materia
   }
 
   const GeneratedInterfacePaths paths = interface_paths(material_class, hash);
-  if (ensure_cache_file(data, material, material_class, paths, scheduler) == false) {
+  if (ensure_cache_file(data, material, material_class, cache_mode, paths, scheduler) == false) {
     return false;
   }
 
   Scene::EnergyCompensationInterface interface_data = {};
   interface_data.cls = material_class;
+  interface_data.cache_mode = cache_mode;
   const uint32_t slice_count = thinfilm_lut_slice_count(material.thinfilm);
-  if (slice_count == 1u) {
+  interface_data.thinfilm_slice_count = slice_count;
+  if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+    interface_data.spectral_wavelength_count = kEnergyCompensationSpectralWavelengthCount;
+    interface_data.spectral_shortest_wavelength = kShortestWavelength;
+    interface_data.spectral_longest_wavelength = kLongestWavelength;
+  }
+  if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+    std::vector<float4> directional_pixels;
+    std::vector<float4> average_pixels;
+    std::vector<float4> geometric_pixels;
+    std::vector<float4> geometric_average_pixels;
+    std::vector<float4> conductor_fms_pixels;
+    std::vector<float4> probability_pixels;
+    const uint32_t directional_width = conductor ? kEnergyCompensationConductorLutSize : (kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize);
+    const uint32_t directional_height = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricLutSize;
+    const uint32_t average_width = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricAverageWidth;
+    const uint32_t average_height = conductor ? 1u : kEnergyCompensationDielectricLutSize;
+    const uint32_t packed_slice_count = slice_count * kEnergyCompensationSpectralWavelengthGroupCount;
+    if ((load_rgba32f_lut_slices(paths, directional_width, directional_height, packed_slice_count, directional_pixels, &GeneratedInterfacePaths::directional) == false) ||
+        (load_rgba32f_lut_slices(paths, average_width, average_height, packed_slice_count, average_pixels, &GeneratedInterfacePaths::average) == false)) {
+      return false;
+    }
+
+    interface_data.directional_lut = data.images.add_from_data_3d(directional_pixels.data(), uint3{directional_width, directional_height, packed_slice_count},
+      Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+    interface_data.average_lut =
+      data.images.add_from_data_3d(average_pixels.data(), uint3{average_width, average_height, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+
+    if (conductor) {
+      if ((load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count, geometric_pixels,
+             &GeneratedInterfacePaths::geometric) == false) ||
+          (load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, 1u, slice_count, geometric_average_pixels, &GeneratedInterfacePaths::geometric_average) == false) ||
+          (load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, 1u, packed_slice_count, conductor_fms_pixels, &GeneratedInterfacePaths::conductor_fms) == false)) {
+        return false;
+      }
+      interface_data.geometric_lut = data.images.add_from_data_3d(geometric_pixels.data(), uint3{kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count},
+        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+      interface_data.geometric_average_lut = data.images.add_from_data_3d(geometric_average_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, slice_count},
+        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+      interface_data.conductor_fms_lut = data.images.add_from_data_3d(conductor_fms_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, packed_slice_count},
+        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+    } else {
+      if (load_rgba32f_lut_slices(paths, directional_width, directional_height, packed_slice_count, probability_pixels, &GeneratedInterfacePaths::probability) == false) {
+        return false;
+      }
+      interface_data.probability_lut = data.images.add_from_data_3d(probability_pixels.data(), uint3{directional_width, directional_height, packed_slice_count},
+        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+    }
+  } else if (slice_count == 1u) {
     interface_data.directional_lut = data.add_image(paths.directional.generic_string().c_str(), Image::SkipSRGBConversion);
     interface_data.average_lut = data.add_image(paths.average.generic_string().c_str(), Image::SkipSRGBConversion);
     interface_data.geometric_lut = conductor ? data.add_image(paths.geometric.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
@@ -842,6 +1162,7 @@ bool bind_energy_compensation_interface(SceneData& data, const Material& materia
 bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& scheduler) {
   std::unordered_map<uint64_t, uint32_t> interface_cache;
   bool result = true;
+  const uint32_t cache_mode = data.options.properties[Scene::Properties::Spectral] ? kBSDFEnergyCompensationCacheModeSpectralScalar : kBSDFEnergyCompensationCacheModeIntegratedRGB;
 
   data.energy_compensation_interfaces.clear();
   for (Material& material : data.materials) {
@@ -853,7 +1174,7 @@ bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& sched
     if (material.cls == MaterialClass::OpenPBR) {
       Material dielectric_material = material;
       dielectric_material.cls = MaterialClass::Dielectric;
-      const bool dielectric_bound = bind_energy_compensation_interface(data, dielectric_material, MaterialClass::Dielectric, interface_cache, scheduler,
+      const bool dielectric_bound = bind_energy_compensation_interface(data, dielectric_material, MaterialClass::Dielectric, cache_mode, interface_cache, scheduler,
         material.energy_compensation_interface_index);
 
       Material conductor_material = material;
@@ -867,7 +1188,7 @@ bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& sched
       }
       conductor_material.int_ior.eta_index = data.defaults.conductor_eta;
       conductor_material.int_ior.k_index = data.defaults.conductor_k;
-      const bool conductor_bound = bind_energy_compensation_interface(data, conductor_material, MaterialClass::Conductor, interface_cache, scheduler,
+      const bool conductor_bound = bind_energy_compensation_interface(data, conductor_material, MaterialClass::Conductor, cache_mode, interface_cache, scheduler,
         material.conductor_energy_compensation_interface_index);
       result = (dielectric_bound && conductor_bound) && result;
       continue;
@@ -878,7 +1199,7 @@ bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& sched
     }
 
     const uint32_t material_class = (material.cls == MaterialClass::Plastic) ? MaterialClass::Dielectric : material.cls;
-    result = bind_energy_compensation_interface(data, material, material_class, interface_cache, scheduler, material.energy_compensation_interface_index) && result;
+    result = bind_energy_compensation_interface(data, material, material_class, cache_mode, interface_cache, scheduler, material.energy_compensation_interface_index) && result;
   }
 
   return result;

@@ -15,7 +15,7 @@ ETX_SHARED_INLINE MaterialAccessCPUContext make_material_access_cpu_context(cons
 }
 
 ETX_SHARED_INLINE bool material_access_can_load(ETX_IN(MaterialAccessCPUContext, context), uint32_t material_index) {
-  return (context.scene != nullptr) && (material_index < context.scene->materials.count);
+  return material_index < context.scene->materials.count;
 }
 
 ETX_SHARED_INLINE MaterialAccess material_access_cpu_make(ETX_IN(Material, material)) {

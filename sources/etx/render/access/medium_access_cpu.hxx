@@ -14,11 +14,10 @@ ETX_SHARED_INLINE MediumAccessCPUContext make_medium_access_cpu_context(const Sc
 }
 
 ETX_SHARED_INLINE bool medium_access_can_load(ETX_IN(MediumAccessCPUContext, context), uint32_t medium_index) {
-  return (context.scene != nullptr) && (medium_index < context.scene->mediums.count);
+  return medium_index < context.scene->mediums.count;
 }
 
 ETX_SHARED_INLINE const Medium& medium_access_cpu_medium(ETX_IN(MediumAccessCPUContext, context), uint32_t medium_index) {
-  ETX_ASSERT(context.scene != nullptr);
   ETX_ASSERT(medium_index < static_cast<uint32_t>(context.scene->mediums.count));
   return context.scene->mediums[medium_index];
 }
@@ -77,10 +76,6 @@ ETX_SHARED_INLINE float medium_access_sample_density(ETX_IN(MediumAccessCPUConte
 }
 
 ETX_SHARED_INLINE bool medium_access_can_sample_spectrum(ETX_IN(MediumAccessCPUContext, context), uint32_t spectrum_index) {
-  if (context.scene == nullptr) {
-    return false;
-  }
-
   SpectrumAccessCPUContext spectrum_context = make_spectrum_access_cpu_context(context.scene->spectrums.a, static_cast<uint32_t>(context.scene->spectrums.count));
   return spectrum_access_can_evaluate(spectrum_context, spectrum_index);
 }

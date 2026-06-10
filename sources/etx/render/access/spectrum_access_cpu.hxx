@@ -17,11 +17,10 @@ ETX_SHARED_INLINE SpectrumAccessCPUContext make_spectrum_access_cpu_context(cons
 }
 
 ETX_SHARED_INLINE bool spectrum_access_can_evaluate(ETX_IN(SpectrumAccessCPUContext, context), uint32_t spectrum_index) {
-  return (context.spectrums != nullptr) && (spectrum_index < context.spectrum_count);
+  return spectrum_index < context.spectrum_count;
 }
 
 ETX_SHARED_INLINE const ::SpectralDistribution& spectrum_access_cpu_distribution(ETX_IN(SpectrumAccessCPUContext, context), uint32_t spectrum_index) {
-  ETX_ASSERT(context.spectrums != nullptr);
   ETX_ASSERT(spectrum_index < context.spectrum_count);
   return context.spectrums[spectrum_index];
 }

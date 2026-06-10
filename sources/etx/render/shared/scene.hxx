@@ -79,11 +79,17 @@ struct ETX_ALIGNED Scene {
 
   struct EnergyCompensationInterface {
     uint32_t cls = MaterialClass::Undefined;
+    uint32_t cache_mode = 0u;
+    uint32_t spectral_wavelength_count = 0u;
+    uint32_t thinfilm_slice_count = 1u;
     uint32_t directional_lut = kInvalidIndex;
     uint32_t average_lut = kInvalidIndex;
     uint32_t geometric_lut = kInvalidIndex;
     uint32_t geometric_average_lut = kInvalidIndex;
     uint32_t conductor_fms_lut = kInvalidIndex;
+    uint32_t probability_lut = kInvalidIndex;
+    float spectral_shortest_wavelength = 0.0f;
+    float spectral_longest_wavelength = 0.0f;
   };
 
   ArrayView<EnergyCompensationInterface> energy_compensation_interfaces ETX_EMPTY_INIT;

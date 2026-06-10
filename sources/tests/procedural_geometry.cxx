@@ -526,6 +526,41 @@ bool test_raw_obj_load_adds_default_camera_and_lighting() {
   return true;
 }
 
+bool test_directional_use_as_sun_parse() {
+  TestContext context;
+
+  etx::MaterialDefinition atmosphere = make_definition("et::atmosphere");
+  add_property(atmosphere, "quality", "0.125");
+
+  etx::MaterialDefinition directional_definition = make_definition("et::dir");
+  add_property(directional_definition, "direction", "0 1 0");
+  add_property(directional_definition, "use_as_sun", "1");
+
+  std::vector<etx::MaterialDefinition> definitions = {atmosphere, directional_definition};
+  parse_definitions(context, definitions);
+
+  uint32_t atmosphere_index = kInvalidIndex;
+  uint32_t directional_index = kInvalidIndex;
+  for (uint32_t i = 0u, e = static_cast<uint32_t>(context.data.emitter_profiles.size()); i < e; ++i) {
+    const etx::EmitterProfile& profile = context.data.emitter_profiles[i];
+    if ((profile.cls == etx::EmitterProfile::Class::Environment) && ((profile.meta & etx::EmitterProfile::Meta::Atmosphere) != 0u)) {
+      atmosphere_index = i;
+    } else if (profile.cls == etx::EmitterProfile::Class::Directional) {
+      directional_index = i;
+    }
+  }
+
+  if (check_condition(atmosphere_index != kInvalidIndex, "use_as_sun scene has atmosphere") == false) {
+    return false;
+  }
+  if (check_condition(directional_index != kInvalidIndex, "use_as_sun scene has directional emitter") == false) {
+    return false;
+  }
+
+  const etx::EmitterProfile& directional = context.data.emitter_profiles[directional_index];
+  return check_condition(directional.reference_emitter_index == atmosphere_index, "use_as_sun directional references atmosphere");
+}
+
 }  // namespace
 
 int main() {
@@ -546,6 +581,7 @@ int main() {
     {"native_json_loads_text_only_procedural_geometry", test_native_json_loads_text_only_procedural_geometry},
     {"empty_scene_environment_emitter_packs", test_empty_scene_environment_emitter_packs},
     {"raw_obj_load_adds_default_camera_and_lighting", test_raw_obj_load_adds_default_camera_and_lighting},
+    {"directional_use_as_sun_parse", test_directional_use_as_sun_parse},
   };
 
   uint32_t passed_count = 0u;
