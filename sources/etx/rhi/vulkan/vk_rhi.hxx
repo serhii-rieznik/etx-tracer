@@ -199,6 +199,7 @@ struct VKContext {
 
   RHICommandBuffer get_command_buffer();
   void destroy_command_buffer(RHICommandBuffer cmd);
+  RHIResult wait_for_command_buffer(RHICommandBuffer cmd);
 
   void submit_command_buffer(const RHISubmitInfo& info);
 
@@ -266,6 +267,7 @@ struct VKDevice {
   VkPhysicalDevice get_vk_physical_device() const;
   void set_bindless_manager(VKBindlessManager* manager);
   void destroy_all_resources();
+  void destroy_bindless_pipeline_layout();
 
   uint64_t get_buffer_device_address(RHIBindlessHandle buffer) const;
 
@@ -403,6 +405,7 @@ struct VKCommandBuffer {
   bool is_submitted() const;
   uint32_t command_pool_index() const;
   bool uses_timestamps() const;
+  VkFence submit_fence() const;
 
   void begin();
   void end();
@@ -410,6 +413,7 @@ struct VKCommandBuffer {
 
   void reset_internal_state();
   void set_submitted(bool value);
+  void set_submit_fence(VkFence fence);
 
  private:
   friend class VKContext;
@@ -458,6 +462,7 @@ struct VKCommandBuffer {
   bool _in_render_pass = false;
   bool _is_recording = false;
   bool _submitted = false;
+  VkFence _submit_fence = VK_NULL_HANDLE;
   bool _timestamps_used = false;
   bool _rendering_to_swapchain = false;
   uint32_t _command_pool_index = 0u;

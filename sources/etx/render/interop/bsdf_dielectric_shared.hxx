@@ -126,8 +126,15 @@ ETX_SHARED_INLINE BSDFThinfilmInterface bsdf_thinfilm_interface(ETX_IN(BSDFResou
   const RefractiveIndexSample material_ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
   const RefractiveIndexSample material_int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
   const bool standalone_sheet = material.cls == MaterialClass::Thinfilm;
-  const RefractiveIndexSample phase_ext_ior = standalone_sheet ? material_ext_ior : (entering ? material_ext_ior : material_int_ior);
-  const RefractiveIndexSample phase_int_ior = standalone_sheet ? material_ext_ior : (entering ? material_int_ior : material_ext_ior);
+  RefractiveIndexSample phase_ext_ior = material_ext_ior;
+  RefractiveIndexSample phase_int_ior = material_ext_ior;
+  if (standalone_sheet == false) {
+    phase_int_ior = material_int_ior;
+    if (entering == false) {
+      phase_ext_ior = material_int_ior;
+      phase_int_ior = material_ext_ior;
+    }
+  }
   const ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, data.spectrum_sample, material.thinfilm, data.tex, sampler);
   const SpectralResponse fresnel = bsdf_fresnel_calculate(data.spectrum_sample, local_w_i.z, phase_ext_ior, phase_int_ior, thinfilm);
   const SpectralResponse one_minus_fresnel = spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), fresnel);

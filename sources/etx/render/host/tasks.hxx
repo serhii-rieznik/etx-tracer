@@ -40,6 +40,7 @@ struct TaskScheduler {
   void release(Task::Handle&);
 
   void restart(Task::Handle);
+  void shutdown();
 
  private:
   ETX_DECLARE_PIMPL(TaskScheduler, 512);

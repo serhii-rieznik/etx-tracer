@@ -1969,6 +1969,11 @@ void MTContext::destroy_command_buffer(RHICommandBuffer cmd) {
   _impl->command_buffers.erase(it);
 }
 
+RHIResult MTContext::wait_for_command_buffer(RHICommandBuffer cmd) {
+  (void)cmd;
+  return wait_idle();
+}
+
 void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
   (void)info.wait_semaphores;
   (void)info.signal_semaphores;

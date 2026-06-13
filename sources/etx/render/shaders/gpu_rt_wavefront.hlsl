@@ -1315,10 +1315,7 @@ void wavefront_surface_continue(bool from_camera, uint dispatch_index) {
   state.eta *= bsdf_sample.eta;
   state.eta_scale *= abs(bsdf_sample.eta);
   state.path_length += 1u;
-  uint continuation_path_length = 0u;
-  if (state.path_length > 0u) {
-    continuation_path_length = state.path_length - 1u;
-  }
+  const uint continuation_path_length = state.path_length;
   if (spectral_response_is_zero(state.throughput) ||
       (gpu_random_continue(continuation_path_length, load_scene_options_random_path_termination(), state.eta, state.sampler_seed, state.throughput) == false)) {
     state.flags = 0u;

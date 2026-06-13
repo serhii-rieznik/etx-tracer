@@ -218,6 +218,11 @@ static VkImageLayout rhi_state_to_vk_layout(RHIResourceState state, bool is_dept
 constexpr size_t kMaxColorAttachments = 8;
 
 struct VKContext::Impl {
+  struct TemporaryFence {
+    VkFence fence = VK_NULL_HANDLE;
+    bool used = false;
+  };
+
   RHIInitInfo init_info = {};
   VKDevice device;
   VKBindlessManager bindless_manager = {};
@@ -336,7 +341,7 @@ struct VKContext::Impl {
   std::vector<RHISemaphore> render_finished_semaphores;
   std::vector<VkFence> in_flight_fences;
   std::vector<VkFence> swapchain_image_fences;
-  std::vector<VkFence> temporary_fences;
+  std::vector<TemporaryFence> temporary_fences;
   uint32_t current_frame = 0;
 
   const void* native_window = nullptr;
@@ -348,6 +353,11 @@ struct VKContext::Impl {
   void destroy_swapchain();
   void create_sync_objects();
   void destroy_sync_objects();
+  VkFence acquire_temporary_fence();
+  void release_temporary_fence(VkFence fence);
+  void release_all_temporary_fences();
+  void wait_for_used_temporary_fences();
+  void destroy_all_temporary_fences();
 
   bool register_swapchain_textures_with_bindless();
   void unregister_swapchain_textures_from_bindless();
@@ -376,14 +386,8 @@ VKContext::~VKContext() {
     }
 
     if (_impl->temporary_fences.empty() == false) {
-      etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), static_cast<uint32_t>(_impl->temporary_fences.size()), _impl->temporary_fences.data(), VK_TRUE, UINT64_MAX));
-
-      for (VkFence fence : _impl->temporary_fences) {
-        if (fence != VK_NULL_HANDLE) {
-          vkDestroyFence(_impl->device.get_vk_device(), fence, nullptr);
-        }
-      }
-      _impl->temporary_fences.clear();
+      _impl->wait_for_used_temporary_fences();
+      _impl->destroy_all_temporary_fences();
     }
 
     etx_vk_call(vkDeviceWaitIdle(_impl->device.get_vk_device()));
@@ -392,10 +396,14 @@ VKContext::~VKContext() {
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
   _impl->command_buffer_pool.clear();
+
   _impl->destroy_swapchain();
+
   _impl->device.destroy_all_resources();
 
-  if (_impl->surface != VK_NULL_HANDLE && _impl->device.get_vk_instance() != VK_NULL_HANDLE) {
+  _impl->device.destroy_bindless_pipeline_layout();
+
+  if ((_impl->surface != VK_NULL_HANDLE) && (_impl->device.get_vk_instance() != VK_NULL_HANDLE)) {
     vkDestroySurfaceKHR(_impl->device.get_vk_instance(), _impl->surface, nullptr);
   }
 
@@ -580,6 +588,7 @@ RHIResult VKContext::wait_idle() {
     command_buffer->set_submitted(false);
   }
 
+  _impl->release_all_temporary_fences();
   return RHIResult::Success;
 }
 
@@ -752,6 +761,34 @@ void VKContext::destroy_command_buffer(RHICommandBuffer cmd) {
   }
 }
 
+RHIResult VKContext::wait_for_command_buffer(RHICommandBuffer cmd) {
+  VKCommandBuffer* command_buffer = _impl->command_buffer_pool.get_data_ptr(cmd);
+  if (command_buffer == nullptr) {
+    return RHIResult::InvalidHandle;
+  }
+
+  if (command_buffer->is_recording()) {
+    return RHIResult::ValidationError;
+  }
+
+  if (command_buffer->is_submitted() == false) {
+    return RHIResult::Success;
+  }
+
+  const VkFence fence = command_buffer->submit_fence();
+  if (fence == VK_NULL_HANDLE) {
+    return wait_idle();
+  }
+
+  if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &fence, VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
+    return RHIResult::ValidationError;
+  }
+
+  command_buffer->set_submitted(false);
+  _impl->release_temporary_fence(fence);
+  return RHIResult::Success;
+}
+
 void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   VKCommandBuffer* vk_cmd_buf = _impl->command_buffer_pool.get_data_ptr(info.command_buffer);
   if (vk_cmd_buf == nullptr) {
@@ -800,6 +837,16 @@ void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
     }
   }
 
+  VkCommandBuffer vk_command_buffer = vk_cmd_buf->get_vk_command_buffer();
+  if (vk_command_buffer == VK_NULL_HANDLE) {
+    log::error("Invalid VkCommandBuffer");
+    return;
+  }
+
+  if (submit_fence == VK_NULL_HANDLE) {
+    submit_fence = _impl->acquire_temporary_fence();
+  }
+
   if (submit_fence != VK_NULL_HANDLE) {
     etx_vk_call(vkResetFences(_impl->device.get_vk_device(), 1, &submit_fence));
   }
@@ -809,18 +856,13 @@ void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   submit_info.pWaitSemaphores = wait_semaphores.data();
   submit_info.pWaitDstStageMask = wait_stages.data();
   submit_info.commandBufferCount = 1;
-
-  VkCommandBuffer vk_command_buffer = vk_cmd_buf->get_vk_command_buffer();
-  if (vk_command_buffer == VK_NULL_HANDLE) {
-    log::error("Invalid VkCommandBuffer");
-    return;
-  }
   submit_info.pCommandBuffers = &vk_command_buffer;
   submit_info.signalSemaphoreCount = static_cast<uint32_t>(signal_semaphores.size());
   submit_info.pSignalSemaphores = signal_semaphores.data();
 
   if (etx_vk_call(vkQueueSubmit(_impl->device.get_graphics_queue(), 1, &submit_info, submit_fence)) != VK_SUCCESS) {
     log::error("Failed to submit command buffer");
+    _impl->release_temporary_fence(submit_fence);
     return;
   }
 
@@ -829,6 +871,7 @@ void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
     _impl->frame_submit_succeeded = true;
   }
 
+  vk_cmd_buf->set_submit_fence(submit_fence);
   vk_cmd_buf->set_submitted(true);
 }
 
@@ -1023,6 +1066,7 @@ void VKCommandBuffer::initialize(VKContext* ctx, uint32_t pool_index) {
   context = ctx;
   device = ctx->get_device();
   _command_pool_index = pool_index;
+  _submit_fence = VK_NULL_HANDLE;
   _timestamps_used = false;
   VkCommandBufferAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
   alloc_info.commandPool = ctx->get_vk_command_pool(pool_index);
@@ -1049,6 +1093,7 @@ VKCommandBuffer& VKCommandBuffer::operator=(VKCommandBuffer&& other) noexcept {
     _in_render_pass = other._in_render_pass;
     _is_recording = other._is_recording;
     _submitted = other._submitted;
+    _submit_fence = other._submit_fence;
     _timestamps_used = other._timestamps_used;
     _rendering_to_swapchain = other._rendering_to_swapchain;
     _command_pool_index = other._command_pool_index;
@@ -1069,6 +1114,7 @@ VKCommandBuffer& VKCommandBuffer::operator=(VKCommandBuffer&& other) noexcept {
     other._in_render_pass = false;
     other._is_recording = false;
     other._submitted = false;
+    other._submit_fence = VK_NULL_HANDLE;
     other._timestamps_used = false;
     other._rendering_to_swapchain = false;
     other._command_pool_index = 0u;
@@ -1104,6 +1150,10 @@ bool VKCommandBuffer::is_submitted() const {
   return _submitted;
 }
 
+VkFence VKCommandBuffer::submit_fence() const {
+  return _submit_fence;
+}
+
 uint32_t VKCommandBuffer::command_pool_index() const {
   return _command_pool_index;
 }
@@ -1119,6 +1169,7 @@ VKCommandBuffer::~VKCommandBuffer() {
 void VKCommandBuffer::reset() {
   _is_recording = false;
   _submitted = false;
+  _submit_fence = VK_NULL_HANDLE;
   _timestamps_used = false;
   _render_pass_depth = 0;
   _in_render_pass = false;
@@ -1141,6 +1192,7 @@ void VKCommandBuffer::begin() {
   if (_submitted) {
     log::warning("Beginning a command buffer that was previously submitted - resetting submission state");
     _submitted = false;
+    _submit_fence = VK_NULL_HANDLE;
   }
 
   if (etx_vk_call(vkResetCommandBuffer(command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT)) != VK_SUCCESS) {
@@ -1156,6 +1208,7 @@ void VKCommandBuffer::begin() {
 
   _is_recording = true;
   _submitted = false;
+  _submit_fence = VK_NULL_HANDLE;
   _timestamps_used = false;
   _in_render_pass = false;
   _render_pass_depth = 0;
@@ -1194,11 +1247,19 @@ void VKCommandBuffer::reset_internal_state() {
   _in_render_pass = false;
   _is_recording = false;
   _submitted = false;
+  _submit_fence = VK_NULL_HANDLE;
   _timestamps_used = false;
 }
 
 void VKCommandBuffer::set_submitted(bool value) {
   _submitted = value;
+  if (value == false) {
+    _submit_fence = VK_NULL_HANDLE;
+  }
+}
+
+void VKCommandBuffer::set_submit_fence(VkFence fence) {
+  _submit_fence = fence;
 }
 
 void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) {
@@ -2553,6 +2614,63 @@ void VKContext::Impl::destroy_sync_objects() {
   render_finished_semaphores.clear();
   in_flight_fences.clear();
   swapchain_image_fences.clear();
+}
+
+VkFence VKContext::Impl::acquire_temporary_fence() {
+  for (TemporaryFence& temporary_fence : temporary_fences) {
+    if (temporary_fence.used == false) {
+      temporary_fence.used = true;
+      return temporary_fence.fence;
+    }
+  }
+
+  VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VkFence fence = VK_NULL_HANDLE;
+  if (etx_vk_call(vkCreateFence(device.get_vk_device(), &fence_info, nullptr, &fence)) != VK_SUCCESS) {
+    return VK_NULL_HANDLE;
+  }
+  temporary_fences.push_back({.fence = fence, .used = true});
+  return fence;
+}
+
+void VKContext::Impl::release_temporary_fence(VkFence fence) {
+  if (fence == VK_NULL_HANDLE) {
+    return;
+  }
+
+  for (TemporaryFence& temporary_fence : temporary_fences) {
+    if (temporary_fence.fence != fence) {
+      continue;
+    }
+
+    temporary_fence.used = false;
+    return;
+  }
+}
+
+void VKContext::Impl::release_all_temporary_fences() {
+  for (TemporaryFence& temporary_fence : temporary_fences) {
+    temporary_fence.used = false;
+  }
+}
+
+void VKContext::Impl::wait_for_used_temporary_fences() {
+  for (const TemporaryFence& temporary_fence : temporary_fences) {
+    if ((temporary_fence.used == false) || (temporary_fence.fence == VK_NULL_HANDLE)) {
+      continue;
+    }
+    etx_vk_call(vkWaitForFences(device.get_vk_device(), 1u, &temporary_fence.fence, VK_TRUE, UINT64_MAX));
+  }
+  release_all_temporary_fences();
+}
+
+void VKContext::Impl::destroy_all_temporary_fences() {
+  for (const TemporaryFence& temporary_fence : temporary_fences) {
+    if (temporary_fence.fence != VK_NULL_HANDLE) {
+      vkDestroyFence(device.get_vk_device(), temporary_fence.fence, nullptr);
+    }
+  }
+  temporary_fences.clear();
 }
 
 void VKContext::Impl::destroy_swapchain() {

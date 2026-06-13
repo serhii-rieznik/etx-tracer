@@ -48,8 +48,10 @@
    }
 # define ETX_ZERO_INIT(type, name) type name = ETX_ZERO(type)
 # define ETX_STATIC_CONST          constexpr
+# define ETX_SHARED_NOINLINE       inline
 #else
 # define ETX_SHARED_INLINE         inline
+# define ETX_SHARED_NOINLINE       [noinline]
 # define ETX_IN(type, name)        in type name
 # define ETX_OUT(type, name)       out type name
 # define ETX_INOUT(type, name)     inout type name

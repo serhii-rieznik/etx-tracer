@@ -22,7 +22,7 @@ struct WavefrontDirectLightPrepareInput {
 };
 
 BSDFResourceContext wavefront_make_scene_bsdf_resource_gpu_context() {
-  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums);
+  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
 }
 
 bool wavefront_try_load_material_full(uint material_index, out Material material) {
@@ -95,6 +95,10 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
 
   float sampling_pdf = wavefront_direct_light_sampling_pdf(input_value.sample_value);
   bool sampled_light_is_delta = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Delta) != 0u;
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY
+  float direct_pdf = sampled_light_is_delta ? 0.0f : bsdf_eval.pdf;
+  return power_heuristic(sampling_pdf, direct_pdf);
+#else
   if (scene_path_mode_is_path_tracing()) {
     float direct_pdf = sampled_light_is_delta ? 0.0f : bsdf_eval.pdf;
     return power_heuristic(sampling_pdf, direct_pdf);
@@ -124,6 +128,7 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   float p_light_path = p_sample * from_emitter * p_bck;
 
   return balance_heuristic(p_connection, p_direct, p_light_path);
+#endif
 }
 
 bool wavefront_load_direct_light_prepare_input(uint dispatch_index, out WavefrontDirectLightPrepareInput input_value) {
@@ -218,7 +223,7 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
   task.contribution = contribution;
   task.mis_weight = mis_weight;
   task.pixel_index = input_value.current_vertex.pixel_index;
-  task.medium_index = input_value.current_vertex.medium_index;
+  task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.current_vertex.medium_index;
   task.flags = 1u;
   task.path_index = input_value.path_index;
   task.sampler_seed = sampler.seed;

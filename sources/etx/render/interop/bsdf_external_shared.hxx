@@ -175,11 +175,15 @@ ETX_SHARED_INLINE float bsdf_external_gamma(float x) {
   return exp(bsdf_external_abgam(x + 5.0f)) / (x * (x + 1.0f) * (x + 2.0f) * (x + 3.0f) * (x + 4.0f));
 }
 
+ETX_SHARED_INLINE float bsdf_external_log_gamma_approx(float x) {
+  return bsdf_external_abgam(x + 5.0f) - log(x) - log(x + 1.0f) - log(x + 2.0f) - log(x + 3.0f) - log(x + 4.0f);
+}
+
 ETX_SHARED_INLINE float bsdf_external_beta(float m, float n) {
 #if (ETX_CPP)
   return exp(lgamma(m) + lgamma(n) - lgamma(m + n));
 #else
-  return bsdf_external_gamma(m) * bsdf_external_gamma(n) / bsdf_external_gamma(m + n);
+  return exp(bsdf_external_log_gamma_approx(m) + bsdf_external_log_gamma_approx(n) - bsdf_external_log_gamma_approx(m + n));
 #endif
 }
 
@@ -200,8 +204,12 @@ ETX_SHARED_INLINE BSDFExternalDielectricSample bsdf_external_sample_phase_functi
   float3 wi_11 = normalize(float3(alpha.x * wi.x, alpha.y * wi.y, wi.z));
   float2 slope_11 = bsdf_external_sample_p22_11(acos(wi_11.z), rnd_slope, alpha);
 
-  float phi = atan2(wi_11.y, wi_11.x);
-  float2 slope = float2(cos(phi) * slope_11.x - sin(phi) * slope_11.y, sin(phi) * slope_11.x + cos(phi) * slope_11.y);
+  float2 slope = slope_11;
+  const float wi_xy_length_sq = (wi_11.x * wi_11.x) + (wi_11.y * wi_11.y);
+  if (wi_xy_length_sq > (kEpsilon * kEpsilon)) {
+    const float phi = atan2(wi_11.y, wi_11.x);
+    slope = float2(cos(phi) * slope_11.x - sin(phi) * slope_11.y, sin(phi) * slope_11.x + cos(phi) * slope_11.y);
+  }
   slope.x *= alpha.x;
   slope.y *= alpha.y;
 

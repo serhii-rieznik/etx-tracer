@@ -426,6 +426,10 @@ RHIResult RHIContext::wait_idle() {
   return dispatch_context(_backend, _impl, [](auto* context) { return context->wait_idle(); });
 }
 
+RHIResult RHIContext::wait_for_command_buffer(RHICommandBuffer cmd) {
+  return dispatch_context(_backend, _impl, [&](auto* context) { return context->wait_for_command_buffer(cmd); });
+}
+
 RHISemaphore RHIContext::get_image_acquired_semaphore() {
   return dispatch_context(_backend, _impl, [](auto* context) { return context->get_image_acquired_semaphore(); });
 }

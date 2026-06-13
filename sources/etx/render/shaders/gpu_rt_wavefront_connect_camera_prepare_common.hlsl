@@ -23,7 +23,7 @@ struct WavefrontConnectCameraPrepareInput {
 };
 
 BSDFResourceContext wavefront_connect_camera_make_scene_bsdf_resource_gpu_context() {
-  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums);
+  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
 }
 
 bool wavefront_connect_camera_try_load_material_full(uint material_index, out Material material) {
@@ -251,7 +251,7 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   task.contribution = contribution;
   task.mis_weight = mis_weight;
   task.pixel_index = pixel_index;
-  task.medium_index = input_value.current_vertex.medium_index;
+  task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.current_vertex.medium_index;
   task.flags = 1u;
   task.path_index = input_value.path_index;
   task.sampler_seed = sampler.seed;

@@ -197,6 +197,12 @@ struct CameraController {
     _mouse_delta.y += dy;
   }
 
+  bool camera_navigation_input_active() const {
+    const bool mouse_navigation_active = _mouse_buttons != 0u;
+    const bool keyboard_navigation_active = movement_key_pressed();
+    return (mouse_navigation_active || keyboard_navigation_active);
+  }
+
   void clear_input_state() {
     for (bool& key : _keys) {
       key = false;
@@ -295,6 +301,11 @@ struct CameraController {
 
   bool is_ctrl_pressed() const {
     return _keys[SAPP_KEYCODE_LEFT_CONTROL] || _keys[SAPP_KEYCODE_RIGHT_CONTROL];
+  }
+
+  bool movement_key_pressed() const {
+    return (((_keys[SAPP_KEYCODE_W] || _keys[SAPP_KEYCODE_A]) || (_keys[SAPP_KEYCODE_S] || _keys[SAPP_KEYCODE_D])) ||
+            (_keys[SAPP_KEYCODE_Q] || _keys[SAPP_KEYCODE_E]));
   }
 
   static void clamp_position(float3& p) {

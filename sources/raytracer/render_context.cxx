@@ -196,12 +196,16 @@ void RenderContext::init() {
 }
 
 void RenderContext::cleanup() {
+  cleanup(false);
+}
+
+void RenderContext::cleanup(bool device_already_idle) {
   ETX_PROFILER_SCOPE();
 
   if (_private->rhi_context.valid() == false)
     return;
 
-  {
+  if (device_already_idle == false) {
     ETX_PROFILER_NAMED_SCOPE("render_context_wait_idle");
     _private->rhi_context.wait_idle();
   }
@@ -222,10 +226,16 @@ void RenderContext::cleanup() {
     _private->image_pool.cleanup();
   }
 
-  _private->runtime_output.shutdown(_private->rhi_context);
+  {
+    ETX_PROFILER_NAMED_SCOPE("render_context_runtime_output_shutdown");
+    _private->runtime_output.shutdown(_private->rhi_context);
+  }
 
-  _private->rhi_context = {};
-  _private->rhi_cmd = {};
+  {
+    ETX_PROFILER_NAMED_SCOPE("render_context_destroy_rhi_context");
+    _private->rhi_context = {};
+    _private->rhi_cmd = {};
+  }
 }
 
 void RenderContext::set_reference_image(const char* file_name) {

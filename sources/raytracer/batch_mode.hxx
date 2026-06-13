@@ -13,6 +13,7 @@ struct BatchRenderOptions {
   std::string renderer = "cpu";
   std::string compare_mode = {};
   std::string gpu_compile_stage = {};
+  std::string gpu_parity_mode = "off";
   uint32_t samples = 0u;
   uint32_t max_path_length = 0u;
   uint32_t random_seed = 0u;

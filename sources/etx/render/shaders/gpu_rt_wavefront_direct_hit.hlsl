@@ -26,7 +26,8 @@
   if (hit.emitter_index == kInvalidIndex) {
     return;
   }
-  if ((meta.camera_path_length < load_scene_options_min_path_length()) || (meta.camera_path_length > load_scene_options_max_path_length())) {
+  if ((scene_path_mode_is_path_tracing() == false) &&
+      ((meta.camera_path_length < load_scene_options_min_path_length()) || (meta.camera_path_length > load_scene_options_max_path_length()))) {
     return;
   }
 

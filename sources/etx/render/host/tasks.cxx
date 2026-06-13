@@ -51,6 +51,7 @@ struct TaskSchedulerImpl {
   ObjectIndexPool<FunctionTask> function_task_pool;
   std::map<uint32_t, uint32_t> task_to_function;
   std::mutex task_pool_lock;
+  bool shutdown_requested = false;
 
   TaskSchedulerImpl() {
     task_pool.init(1024u);
@@ -195,6 +196,14 @@ void TaskScheduler::restart(Task::Handle handle) {
   }
   _private->scheduler.WaitforTask(task_wrapper);
   _private->scheduler.AddTaskSetToPipe(task_wrapper);
+}
+
+void TaskScheduler::shutdown() {
+  if (_private->shutdown_requested) {
+    return;
+  }
+  _private->scheduler.WaitforAllAndShutdown();
+  _private->shutdown_requested = true;
 }
 
 }  // namespace etx

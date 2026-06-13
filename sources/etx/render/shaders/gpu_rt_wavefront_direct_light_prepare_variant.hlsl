@@ -8,33 +8,140 @@
 #define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
-# include <interop/bsdf_various_shared.hxx>
+# if ETX_ENABLE_VELVET_STAGE
+#  include <interop/bsdf_velvet_shared.hxx>
+# else
+#  include <interop/bsdf_various_shared.hxx>
+# endif
+# if ETX_ENABLE_THINFILM_STAGE
+#  include <interop/bsdf_dielectric_shared.hxx>
+# endif
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Diffuse
-# define ETX_STAGE_BSDF_EVAL  bsdf_diffuse_evaluate
-# define ETX_STAGE_BSDF_PDF   bsdf_diffuse_pdf
+# define ETX_STAGE_BSDF_EVAL  wavefront_direct_light_stage_various_eval
+# define ETX_STAGE_BSDF_PDF   wavefront_direct_light_stage_various_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
 # include <interop/bsdf_plastic_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Plastic
 # define ETX_STAGE_BSDF_EVAL  bsdf_plastic_evaluate
 # define ETX_STAGE_BSDF_PDF   bsdf_plastic_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
-# include <interop/bsdf_various_shared.hxx>
+# if ETX_ENABLE_OPENPBR_STAGE
+#  include <interop/bsdf_openpbr_shared.hxx>
+# else
+#  include <interop/bsdf_energy_compensated_shared.hxx>
+# endif
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Conductor
-# define ETX_STAGE_BSDF_EVAL  bsdf_diffuse_evaluate
-# define ETX_STAGE_BSDF_PDF   bsdf_diffuse_pdf
+# define ETX_STAGE_BSDF_EVAL  wavefront_direct_light_stage_conductor_eval
+# define ETX_STAGE_BSDF_PDF   wavefront_direct_light_stage_conductor_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
-# include <interop/bsdf_various_shared.hxx>
+# include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Dielectric
-# define ETX_STAGE_BSDF_EVAL  bsdf_diffuse_evaluate
-# define ETX_STAGE_BSDF_PDF   bsdf_diffuse_pdf
+# define ETX_STAGE_BSDF_EVAL  bsdf_dielectric_energy_compensated_evaluate
+# define ETX_STAGE_BSDF_PDF   bsdf_dielectric_energy_compensated_pdf
+#endif
+
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
+BSDFEval wavefront_direct_light_stage_various_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+  switch (material.cls) {
+    case MaterialClass::Translucent:
+      return bsdf_translucent_evaluate(context, data, outgoing_direction, material, sampler);
+    case MaterialClass::Mirror:
+      return bsdf_mirror_evaluate(context, data, outgoing_direction, material, sampler);
+    case MaterialClass::Boundary:
+      return bsdf_boundary_evaluate(context, data, outgoing_direction, material, sampler);
+# if ETX_ENABLE_THINFILM_STAGE
+    case MaterialClass::Thinfilm:
+      return bsdf_thinfilm_evaluate(context, data, outgoing_direction, material, sampler);
+# endif
+# if ETX_ENABLE_VELVET_STAGE
+    case MaterialClass::Velvet:
+      return bsdf_velvet_evaluate(context, data, outgoing_direction, material, sampler);
+# endif
+    case MaterialClass::Void:
+      return bsdf_void_evaluate(context, data, outgoing_direction, material, sampler);
+    default:
+      return bsdf_diffuse_evaluate(context, data, outgoing_direction, material, sampler);
+  }
+}
+
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
+float wavefront_direct_light_stage_various_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+  switch (material.cls) {
+    case MaterialClass::Translucent:
+      return bsdf_translucent_pdf(context, data, outgoing_direction, material, sampler);
+    case MaterialClass::Mirror:
+      return bsdf_mirror_pdf(context, data, outgoing_direction, material, sampler);
+    case MaterialClass::Boundary:
+      return bsdf_boundary_pdf(context, data, outgoing_direction, material, sampler);
+# if ETX_ENABLE_THINFILM_STAGE
+    case MaterialClass::Thinfilm:
+      return bsdf_thinfilm_pdf(context, data, outgoing_direction, material, sampler);
+# endif
+# if ETX_ENABLE_VELVET_STAGE
+    case MaterialClass::Velvet:
+      return bsdf_velvet_pdf(context, data, outgoing_direction, material, sampler);
+# endif
+    case MaterialClass::Void:
+      return bsdf_void_pdf(context, data, outgoing_direction, material, sampler);
+    default:
+      return bsdf_diffuse_pdf(context, data, outgoing_direction, material, sampler);
+  }
+}
+#endif
+#endif
+
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+BSDFEval wavefront_direct_light_stage_conductor_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+# if ETX_ENABLE_OPENPBR_STAGE
+  if (material.cls == MaterialClass::OpenPBR) {
+    return bsdf_openpbr_evaluate(context, data, outgoing_direction, material, sampler);
+  }
+# endif
+  return bsdf_conductor_energy_compensated_evaluate(context, data, outgoing_direction, material, sampler);
+}
+
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
+float wavefront_direct_light_stage_conductor_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+# if ETX_ENABLE_OPENPBR_STAGE
+  if (material.cls == MaterialClass::OpenPBR) {
+    return bsdf_openpbr_pdf(context, data, outgoing_direction, material, sampler);
+  }
+# endif
+  return bsdf_conductor_energy_compensated_pdf(context, data, outgoing_direction, material, sampler);
+}
+#endif
 #endif
 
 BSDFEval wavefront_direct_light_stage_bsdf_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_EVAL(context, data, outgoing_direction, material, sampler);
 }
 
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
 float wavefront_direct_light_stage_bsdf_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_PDF(context, data, outgoing_direction, material, sampler);
+}
+#endif
+
+bool wavefront_direct_light_stage_matches_material(uint material_class) {
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
+  return (material_class == MaterialClass::Diffuse) || (material_class == MaterialClass::Translucent) || (material_class == MaterialClass::Mirror) ||
+         (material_class == MaterialClass::Boundary) || (material_class == MaterialClass::Void)
+# if ETX_ENABLE_THINFILM_STAGE
+         || (material_class == MaterialClass::Thinfilm)
+# endif
+# if ETX_ENABLE_VELVET_STAGE
+         || (material_class == MaterialClass::Velvet)
+# endif
+         ;
+#elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+# if ETX_ENABLE_OPENPBR_STAGE
+  return (material_class == MaterialClass::Conductor) || (material_class == MaterialClass::OpenPBR);
+# else
+  return material_class == MaterialClass::Conductor;
+# endif
+#else
+  return material_class == ETX_STAGE_BSDF_CLASS;
+#endif
 }
 
 # include "gpu_rt_wavefront_direct_light_prepare_common.hlsl"
@@ -44,7 +151,7 @@ float wavefront_direct_light_stage_bsdf_pdf(BSDFResourceContext context, BSDFDat
   if (wavefront_load_direct_light_prepare_input(dtid.x, input_value) == false) {
     return;
   }
-  if (input_value.material.cls != ETX_STAGE_BSDF_CLASS) {
+  if (wavefront_direct_light_stage_matches_material(input_value.material.cls) == false) {
     return;
   }
 

@@ -357,8 +357,7 @@ void extract_compute_local_size(const std::string& source, const std::string& en
   }
 
   const std::string escaped_entry = std::regex_replace(entry_point, std::regex(R"([.^$|()\\[\]{}*+?])"), R"(\\$&)");
-  const std::regex entry_regex("\\[\\s*numthreads\\s*\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)\\s*\\][^\\n\\r]*?[A-Za-z_][A-Za-z0-9_<>\\s]*\\b" + escaped_entry +
-                                 "\\s*\\(",
+  const std::regex entry_regex("\\[\\s*numthreads\\s*\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)\\s*\\]\\s*[A-Za-z_][A-Za-z0-9_<>]*\\s+" + escaped_entry + "\\s*\\(",
     std::regex::ECMAScript);
   std::smatch match = {};
   if (std::regex_search(source, match, entry_regex) && (match.size() == 4u)) {
@@ -1214,7 +1213,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     DxcComPtr<IDxcBlobUtf8> canonical_hlsl_blob;
     canonical_hlsl_blob.Reset();
     hr = preprocess_result->GetOutput(DXC_OUT_HLSL, IID_PPV_ARGS(canonical_hlsl_blob.GetAddressOf()), nullptr);
-    if (FAILED(hr) || !canonical_hlsl_blob || canonical_hlsl_blob->GetStringLength() == 0) {
+    if ((FAILED(hr)) || (canonical_hlsl_blob.Get() == nullptr) || (canonical_hlsl_blob->GetStringLength() == 0)) {
       result.result = RHIResult::ValidationError;
       result.error_message = "Failed to get preprocessed HLSL";
       return finalize_result(std::move(result));
@@ -1361,7 +1360,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       .result = RHIResult::Success,
     };
 
-    if (FAILED(hr) || !compile_result) {
+    if ((FAILED(hr)) || (compile_result.Get() == nullptr)) {
       entry_result.result = RHIResult::ValidationError;
       entry_result.error_message = "DXC Compile failed";
     } else {
@@ -1391,7 +1390,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
     DxcComPtr<IDxcBlob> shader_obj;
     HRESULT object_hr = compile_result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(shader_obj.GetAddressOf()), nullptr);
-    if (FAILED(object_hr) || !shader_obj || shader_obj->GetBufferPointer() == nullptr || shader_obj->GetBufferSize() == 0) {
+    if ((FAILED(object_hr)) || (shader_obj.Get() == nullptr) || (shader_obj->GetBufferPointer() == nullptr) || (shader_obj->GetBufferSize() == 0)) {
       result.result = RHIResult::ValidationError;
       result.error_message = entry_result.error_message.empty() ? "DXC did not produce shader object output" : entry_result.error_message;
       return finalize_result(std::move(result));
@@ -1737,6 +1736,7 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
 
   if (for_preprocessing == false) {
     std::wstring entry_wstr = utf8_to_wstring(entry_point);
+    const auto spirv_opt_config_it = defines.find("ETX_DXC_SPIRV_OPT_CONFIG");
 
     arguments.emplace_back(L"-T");
     arguments.emplace_back(profile.c_str());
@@ -1748,8 +1748,13 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
     arguments.emplace_back(L"-fspv-target-env=vulkan1.3");
     arguments.emplace_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
     arguments.emplace_back(L"-fspv-extension=SPV_KHR_ray_query");
-    arguments.emplace_back(L"-enable-16bit-types");
-    arguments.emplace_back((optimization_level == 0u) ? L"-O0" : ((optimization_level == 1u) ? L"-O1" : ((optimization_level == 2u) ? L"-O2" : L"-O3")));
+    if ((spirv_opt_config_it != defines.end()) && (spirv_opt_config_it->second.empty() == false)) {
+      arguments.emplace_back(L"-enable-16bit-types");
+      arguments.emplace_back(L"-Oconfig=" + utf8_to_wstring(spirv_opt_config_it->second));
+    } else {
+      arguments.emplace_back(L"-enable-16bit-types");
+      arguments.emplace_back((optimization_level == 0u) ? L"-O0" : ((optimization_level == 1u) ? L"-O1" : ((optimization_level == 2u) ? L"-O2" : L"-O3")));
+    }
     if constexpr (kEnableShaderDebugInfo) {
       arguments.emplace_back(L"-Zi");
       arguments.emplace_back(L"-Qembed_debug");
@@ -1759,11 +1764,11 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
   }
 
   for (const auto& [key, value] : defines) {
-    if (key == "ETX_DXC_OPT_LEVEL") {
+    if ((key == "ETX_DXC_OPT_LEVEL") || (key == "ETX_DXC_SPIRV_OPT_CONFIG")) {
       continue;
     }
     std::string define_str = key;
-    if (!value.empty()) {
+    if (value.empty() == false) {
       define_str += "=" + value;
     }
     std::wstring define_wstr = utf8_to_wstring(define_str);

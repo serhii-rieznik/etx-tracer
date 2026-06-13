@@ -1,13 +1,20 @@
 #include <etx/core/environment.hxx>
 #include <etx/render/host/bsdf_energy_compensation_lut.hxx>
+#include <etx/render/host/gpu_asset_descriptor.hxx>
 #include <etx/render/host/scene_global.hxx>
 #include <etx/render/host/scene_data.hxx>
+#include <etx/render/interop/gpu_scene_shared.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scene_bsdf.hxx>
+#include <etx/rhi/rhi.hxx>
+#include <etx/rhi/shader/shader_compiler.hxx>
 
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <cstring>
+#include <limits>
+#include <vector>
 
 namespace {
 
@@ -258,6 +265,70 @@ bool validate_spectral_energy_compensation_lut_sampling() {
     valid = false;
   }
 
+  return valid;
+}
+
+etx::RHIBackend select_default_backend() {
+#if ETX_PLATFORM_APPLE
+  return etx::RHIBackend::Metal;
+#else
+  return etx::RHIBackend::Vulkan;
+#endif
+}
+
+bool validate_energy_compensation_gpu_shader_compile() {
+  auto& compiler = etx::ShaderCompiler::instance();
+  if (compiler.is_initialized() == false) {
+    std::printf("Energy-compensation GPU shader compiler is not initialized\n");
+    return false;
+  }
+
+  const std::vector<etx::ShaderCompiler::ShaderEntryPoint> entry_points = {{"main", etx::RHIShaderStage::Compute}};
+  const auto compilation = compiler.compile("shaders/bsdf_energy_compensation.hlsl", entry_points, {}, select_default_backend());
+  bool valid = true;
+  if ((compilation.result != etx::RHIResult::Success) || compilation.binaries.empty()) {
+    std::printf("Energy-compensation GPU shader compilation failed: %s\n", compilation.error_message.c_str());
+    return false;
+  }
+
+  const etx::RHIShaderBinary& binary = compilation.binaries[0];
+  if (((binary.local_size_x != 8u) || (binary.local_size_y != 8u)) || (binary.local_size_z != 1u)) {
+    std::printf("Energy-compensation GPU shader local size changed: %u %u %u\n", binary.local_size_x, binary.local_size_y, binary.local_size_z);
+    valid = false;
+  }
+
+  if (binary.spirv_size == 0u) {
+    std::printf("Energy-compensation GPU shader produced empty binary\n");
+    valid = false;
+  }
+
+  if (valid) {
+    std::printf("Energy-compensation GPU shader compile valid\n");
+  }
+  return valid;
+}
+
+bool validate_energy_compensation_gpu_lut_parity() {
+  etx::RHIInitInfo init_info = {
+    .backend = select_default_backend(),
+    .enable_validation = ETX_DEBUG,
+    .headless = true,
+  };
+  etx::RHIContext rhi = etx::RHIContext::create(init_info);
+  if (rhi.valid() == false) {
+    std::printf("Energy-compensation GPU LUT parity failed to create RHI context\n");
+    return false;
+  }
+
+  rhi.initialize_headless();
+  etx::TaskScheduler scheduler = {};
+  const bool valid = etx::validate_energy_compensation_gpu_lut_parity(rhi, scheduler);
+  rhi.wait_idle();
+  rhi = {};
+
+  if (valid) {
+    std::printf("Energy-compensation GPU LUT parity valid\n");
+  }
   return valid;
 }
 
@@ -1888,6 +1959,696 @@ etx::Material make_openpbr(const float roughness, const float metalness, const f
   return result;
 }
 
+struct BSDFRuntimeValidationCase {
+  uint32_t material_index = 0u;
+  uint32_t seed = 0u;
+  float fixed_u = 0.0f;
+  float fixed_v = 0.0f;
+  float fixed_w = 0.0f;
+  uint32_t pad0 = 0u;
+  uint32_t pad1 = 0u;
+  uint32_t pad2 = 0u;
+};
+
+struct BSDFRuntimeValidationExpected {
+  etx::BSDFSample sample = {};
+  etx::BSDFEval eval = {};
+  float pdf = 0.0f;
+  float reverse_pdf = 0.0f;
+  uint32_t is_delta = 0u;
+  etx::SpectralResponse albedo = {};
+  uint32_t sample_seed = 0u;
+  uint32_t eval_seed = 0u;
+  uint32_t pdf_seed = 0u;
+  uint32_t reverse_pdf_seed = 0u;
+  uint32_t delta_seed = 0u;
+  uint32_t albedo_seed = 0u;
+};
+
+constexpr uint32_t kBSDFRuntimeValidationOutputStride = 148u;
+
+uint64_t validation_align_up_u64(const uint64_t value, const uint64_t alignment) {
+  const uint64_t a = (alignment == 0u) ? 1u : alignment;
+  return ((value + a - 1u) / a) * a;
+}
+
+uint32_t validation_append_aligned_bytes(std::vector<uint8_t>& blob, const void* data, const uint64_t byte_size, const uint64_t alignment) {
+  if ((data == nullptr) || (byte_size == 0u)) {
+    return kInvalidIndex;
+  }
+
+  const uint64_t aligned_offset = validation_align_up_u64(static_cast<uint64_t>(blob.size()), alignment);
+  if (aligned_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    return kInvalidIndex;
+  }
+  if (aligned_offset > static_cast<uint64_t>(blob.size())) {
+    blob.resize(static_cast<size_t>(aligned_offset), 0u);
+  }
+
+  if (aligned_offset > (std::numeric_limits<uint64_t>::max() - byte_size)) {
+    return kInvalidIndex;
+  }
+
+  const uint64_t end_offset = aligned_offset + byte_size;
+  if (end_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    return kInvalidIndex;
+  }
+
+  const size_t old_size = blob.size();
+  blob.resize(static_cast<size_t>(end_offset), 0u);
+  std::memcpy(blob.data() + old_size, data, static_cast<size_t>(byte_size));
+  return static_cast<uint32_t>(aligned_offset);
+}
+
+template <typename T>
+uint32_t validation_append_aligned_array(std::vector<uint8_t>& blob, const T* data, const size_t count, const uint64_t alignment) {
+  if (count > (std::numeric_limits<uint64_t>::max() / sizeof(T))) {
+    return kInvalidIndex;
+  }
+  return validation_append_aligned_bytes(blob, data, static_cast<uint64_t>(count) * sizeof(T), alignment);
+}
+
+struct ValidationChunkedPayloadLocation {
+  uint32_t chunk_index = kInvalidIndex;
+  uint32_t offset = kInvalidIndex;
+};
+
+struct ValidationChunkedBlobPayloadBuilder {
+  uint64_t chunk_size = 512ull * 1024ull * 1024ull;
+  std::vector<uint8_t> payload_blob = {};
+  std::vector<etx::RHIChunkedBufferRange> chunk_ranges = {};
+  std::vector<uint64_t> chunk_capacities = {};
+
+  bool append(const void* data, const uint64_t byte_size, const uint64_t alignment, ValidationChunkedPayloadLocation& location) {
+    location = {};
+    if ((data == nullptr) || (byte_size == 0u)) {
+      return true;
+    }
+
+    uint64_t required_chunk_capacity = chunk_size;
+    if (required_chunk_capacity < byte_size) {
+      required_chunk_capacity = byte_size;
+    }
+    if (required_chunk_capacity > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+      return false;
+    }
+
+    uint32_t target_chunk_index = kInvalidIndex;
+    uint64_t aligned_offset = 0u;
+    uint64_t chunk_start_offset = 0u;
+
+    if (chunk_ranges.empty() == false) {
+      const uint32_t last_chunk_index = static_cast<uint32_t>(chunk_ranges.size() - 1u);
+      const uint64_t last_chunk_capacity = chunk_capacities[last_chunk_index];
+      const auto& last_chunk_range = chunk_ranges[last_chunk_index];
+      const uint64_t candidate_offset = validation_align_up_u64(last_chunk_range.size, alignment);
+      if ((candidate_offset <= last_chunk_capacity) && ((last_chunk_capacity - candidate_offset) >= byte_size)) {
+        target_chunk_index = last_chunk_index;
+        aligned_offset = candidate_offset;
+        chunk_start_offset = last_chunk_range.offset;
+      }
+    }
+
+    if (target_chunk_index == kInvalidIndex) {
+      chunk_start_offset = static_cast<uint64_t>(payload_blob.size());
+      chunk_ranges.push_back({.offset = chunk_start_offset, .size = 0u});
+      chunk_capacities.push_back(required_chunk_capacity);
+      target_chunk_index = static_cast<uint32_t>(chunk_ranges.size() - 1u);
+      aligned_offset = 0u;
+    }
+
+    if (aligned_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+      return false;
+    }
+    if (aligned_offset > (std::numeric_limits<uint64_t>::max() - byte_size)) {
+      return false;
+    }
+
+    const uint64_t end_offset = aligned_offset + byte_size;
+    if (end_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+      return false;
+    }
+
+    const uint64_t chunk_capacity = chunk_capacities[target_chunk_index];
+    if (end_offset > chunk_capacity) {
+      return false;
+    }
+
+    const uint64_t global_dst_offset = chunk_start_offset + aligned_offset;
+    const uint64_t global_end_offset = chunk_start_offset + end_offset;
+    if (global_end_offset > static_cast<uint64_t>(payload_blob.size())) {
+      payload_blob.resize(static_cast<size_t>(global_end_offset), 0u);
+    }
+    std::memcpy(payload_blob.data() + static_cast<size_t>(global_dst_offset), data, static_cast<size_t>(byte_size));
+    chunk_ranges[target_chunk_index].size = end_offset;
+
+    location.chunk_index = target_chunk_index;
+    location.offset = static_cast<uint32_t>(aligned_offset);
+    return true;
+  }
+};
+
+etx::RHIChunkedBufferUploadData validation_build_packed_images_blob(const etx::SceneData& scene_data) {
+  etx::RHIChunkedBufferUploadData result = {};
+  GPUImageBlobHeader header = {};
+  const uint64_t image_count_u64 = scene_data.images.array_size();
+  if (image_count_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+    result.success = false;
+    return result;
+  }
+
+  header.image_count = static_cast<uint32_t>(image_count_u64);
+  result.metadata = std::vector<uint8_t>(sizeof(GPUImageBlobHeader), 0u);
+  std::vector<::Image> packed_images(header.image_count);
+  ValidationChunkedBlobPayloadBuilder payload_builder = {};
+
+  const auto* images = scene_data.images.as_array();
+  for (uint32_t i = 0u; i < header.image_count; ++i) {
+    const auto& src = images[i];
+    auto& dst = packed_images[i];
+    etx::PackedPayloadLocation pixel_payload = {};
+    etx::PackedPayloadLocation x_distribution_payload = {};
+    etx::PackedPayloadLocation y_distribution_payload = {};
+
+    if (src.data.valid()) {
+      const void* ptr = scene_data.buffer_pool.map(src.data);
+      ValidationChunkedPayloadLocation payload_location = {};
+      if (payload_builder.append(ptr, src.data.byte_size, 16u, payload_location) == false) {
+        result.success = false;
+        return result;
+      }
+      pixel_payload.offset = payload_location.offset;
+      pixel_payload.chunk_index = payload_location.chunk_index;
+    }
+
+    if (src.x_distributions_storage.valid()) {
+      const void* ptr = scene_data.buffer_pool.map(src.x_distributions_storage);
+      ValidationChunkedPayloadLocation payload_location = {};
+      if (payload_builder.append(ptr, src.x_distributions_storage.byte_size, alignof(etx::Distribution::Entry), payload_location) == false) {
+        result.success = false;
+        return result;
+      }
+      x_distribution_payload.offset = payload_location.offset;
+      x_distribution_payload.chunk_index = payload_location.chunk_index;
+    }
+
+    if (src.y_distribution_storage.valid()) {
+      const void* ptr = scene_data.buffer_pool.map(src.y_distribution_storage);
+      ValidationChunkedPayloadLocation payload_location = {};
+      if (payload_builder.append(ptr, src.y_distribution_storage.byte_size, alignof(etx::Distribution::Entry), payload_location) == false) {
+        result.success = false;
+        return result;
+      }
+      y_distribution_payload.offset = payload_location.offset;
+      y_distribution_payload.chunk_index = payload_location.chunk_index;
+    }
+
+    dst = etx::make_gpu_image_descriptor(src, pixel_payload, x_distribution_payload, y_distribution_payload);
+  }
+
+  header.images_offset = validation_append_aligned_array(result.metadata, packed_images.data(), packed_images.size(), alignof(::Image));
+  if ((packed_images.empty() == false) && (header.images_offset == kInvalidIndex)) {
+    result.success = false;
+    return result;
+  }
+
+  if (payload_builder.chunk_ranges.size() > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+    result.success = false;
+    return result;
+  }
+
+  header.data_chunk_count = static_cast<uint32_t>(payload_builder.chunk_ranges.size());
+  if (header.data_chunk_count > 0u) {
+    std::vector<uint32_t> placeholder_chunk_indices(header.data_chunk_count, kInvalidIndex);
+    header.data_chunk_indices_offset = validation_append_aligned_array(result.metadata, placeholder_chunk_indices.data(), placeholder_chunk_indices.size(), alignof(uint32_t));
+    if (header.data_chunk_indices_offset == kInvalidIndex) {
+      result.success = false;
+      return result;
+    }
+  } else {
+    header.data_chunk_indices_offset = kInvalidIndex;
+  }
+
+  result.chunk_indices_offset = header.data_chunk_indices_offset;
+  result.payload_data = std::move(payload_builder.payload_blob);
+  result.payload_chunk_ranges = std::move(payload_builder.chunk_ranges);
+  std::memcpy(result.metadata.data(), &header, sizeof(header));
+  return result;
+}
+
+bool validation_create_storage_buffer(etx::RHIContext& rhi, const void* data, const uint64_t size, const etx::RHIBufferUsage usage, const bool host_visible,
+  etx::RHIBuffer& out_buffer, const char* label) {
+  if (size == 0u) {
+    std::printf("%s buffer size is zero\n", label);
+    return false;
+  }
+
+  etx::RHIBufferDesc desc = {};
+  desc.size = size;
+  desc.usage = etx::RHIBufferUsage::Storage | usage;
+  desc.host_visible = host_visible;
+  auto result = rhi.device().create_buffer(desc);
+  if ((result.result != etx::RHIResult::Success) || (result.handle.valid() == false)) {
+    std::printf("Failed to create %s buffer (%u)\n", label, static_cast<uint32_t>(result.result));
+    return false;
+  }
+
+  if (data != nullptr) {
+    const etx::RHIResult update_result = rhi.device().update_buffer(result.handle, data, size);
+    if (update_result != etx::RHIResult::Success) {
+      std::printf("Failed to upload %s buffer (%u)\n", label, static_cast<uint32_t>(update_result));
+      rhi.device().destroy_buffer(result.handle);
+      return false;
+    }
+  }
+
+  out_buffer = result.handle;
+  return true;
+}
+
+bool validation_create_readback_buffer(etx::RHIContext& rhi, const uint64_t size, etx::RHIBuffer& out_buffer, const char* label) {
+  if (size == 0u) {
+    std::printf("%s readback buffer size is zero\n", label);
+    return false;
+  }
+
+  etx::RHIBufferDesc desc = {};
+  desc.size = size;
+  desc.usage = etx::RHIBufferUsage::TransferDst;
+  desc.host_visible = true;
+  auto result = rhi.device().create_buffer(desc);
+  if ((result.result != etx::RHIResult::Success) || (result.handle.valid() == false)) {
+    std::printf("Failed to create %s readback buffer (%u)\n", label, static_cast<uint32_t>(result.result));
+    return false;
+  }
+
+  out_buffer = result.handle;
+  return true;
+}
+
+void validation_destroy_buffer(etx::RHIContext& rhi, etx::RHIBuffer& buffer) {
+  if (buffer.valid()) {
+    rhi.device().destroy_buffer(buffer);
+    buffer = {};
+  }
+}
+
+float validation_read_f32(const std::vector<uint8_t>& data, const uint32_t case_index, const uint32_t offset) {
+  float result = 0.0f;
+  const size_t byte_offset = static_cast<size_t>(case_index) * kBSDFRuntimeValidationOutputStride + offset;
+  std::memcpy(&result, data.data() + byte_offset, sizeof(result));
+  return result;
+}
+
+uint32_t validation_read_u32(const std::vector<uint8_t>& data, const uint32_t case_index, const uint32_t offset) {
+  uint32_t result = 0u;
+  const size_t byte_offset = static_cast<size_t>(case_index) * kBSDFRuntimeValidationOutputStride + offset;
+  std::memcpy(&result, data.data() + byte_offset, sizeof(result));
+  return result;
+}
+
+float3 validation_read_f32x3(const std::vector<uint8_t>& data, const uint32_t case_index, const uint32_t offset) {
+  return float3{validation_read_f32(data, case_index, offset + 0u), validation_read_f32(data, case_index, offset + 4u), validation_read_f32(data, case_index, offset + 8u)};
+}
+
+float validation_max_abs_diff(const float3& a, const float3& b) {
+  return max(fabsf(a.x - b.x), max(fabsf(a.y - b.y), fabsf(a.z - b.z)));
+}
+
+bool validation_close_float(const char* label, const char* field, const float cpu, const float gpu, const float tolerance) {
+  if ((std::isfinite(cpu) == false) || (std::isfinite(gpu) == false) || (fabsf(cpu - gpu) > tolerance)) {
+    std::printf("%s %s CPU %.9f GPU %.9f tolerance %.9f\n", label, field, cpu, gpu, tolerance);
+    return false;
+  }
+  return true;
+}
+
+bool validation_close_float3(const char* label, const char* field, const float3& cpu, const float3& gpu, const float tolerance) {
+  const float error = validation_max_abs_diff(cpu, gpu);
+  if ((std::isfinite(cpu.x) == false) || (std::isfinite(cpu.y) == false) || (std::isfinite(cpu.z) == false) || (std::isfinite(gpu.x) == false) ||
+      (std::isfinite(gpu.y) == false) || (std::isfinite(gpu.z) == false) || (error > tolerance)) {
+    std::printf("%s %s CPU %.9f %.9f %.9f GPU %.9f %.9f %.9f tolerance %.9f\n", label, field, cpu.x, cpu.y, cpu.z, gpu.x, gpu.y, gpu.z, tolerance);
+    return false;
+  }
+  return true;
+}
+
+bool validation_equal_u32(const char* label, const char* field, const uint32_t cpu, const uint32_t gpu) {
+  if (cpu != gpu) {
+    std::printf("%s %s CPU %u GPU %u\n", label, field, cpu, gpu);
+    return false;
+  }
+  return true;
+}
+
+BSDFRuntimeValidationExpected validation_expected(const etx::BSDFData& data, const etx::Material& material, const BSDFRuntimeValidationCase& test_case) {
+  const float3 outgoing_direction = normalize(float3{0.35f, 0.0f, 0.9367497f});
+  BSDFRuntimeValidationExpected result = {};
+
+  etx::Sampler sample_sampler(test_case.seed);
+  sample_sampler.push_fixed(test_case.fixed_u, test_case.fixed_v, test_case.fixed_w);
+  result.sample = etx::bsdf::sample(data, material, sample_sampler);
+  result.sample_seed = sample_sampler.seed;
+
+  etx::Sampler eval_sampler(test_case.seed + 1u);
+  eval_sampler.push_fixed(test_case.fixed_u, test_case.fixed_v, test_case.fixed_w);
+  result.eval = etx::bsdf::evaluate(data, outgoing_direction, material, eval_sampler);
+  result.eval_seed = eval_sampler.seed;
+
+  etx::Sampler pdf_sampler(test_case.seed + 2u);
+  pdf_sampler.push_fixed(test_case.fixed_u, test_case.fixed_v, test_case.fixed_w);
+  result.pdf = etx::bsdf::pdf(data, outgoing_direction, material, pdf_sampler);
+  result.pdf_seed = pdf_sampler.seed;
+
+  etx::Sampler reverse_pdf_sampler(test_case.seed + 3u);
+  reverse_pdf_sampler.push_fixed(test_case.fixed_u, test_case.fixed_v, test_case.fixed_w);
+  result.reverse_pdf = etx::bsdf::reverse_pdf(data, outgoing_direction, material, reverse_pdf_sampler);
+  result.reverse_pdf_seed = reverse_pdf_sampler.seed;
+
+  etx::Sampler delta_sampler(test_case.seed + 4u);
+  delta_sampler.push_fixed(test_case.fixed_u, test_case.fixed_v, test_case.fixed_w);
+  result.is_delta = etx::bsdf::is_delta(material, data.tex, delta_sampler) ? 1u : 0u;
+  result.delta_seed = delta_sampler.seed;
+
+  etx::Sampler albedo_sampler(test_case.seed + 5u);
+  albedo_sampler.push_fixed(test_case.fixed_u, test_case.fixed_v, test_case.fixed_w);
+  result.albedo = etx::bsdf::albedo(data, material, albedo_sampler);
+  result.albedo_seed = albedo_sampler.seed;
+  return result;
+}
+
+bool validation_check_runtime_case(const char* label, const etx::BSDFData& data, const etx::Material& material, const BSDFRuntimeValidationCase& test_case,
+  const std::vector<uint8_t>& output, const uint32_t output_case_index, const uint32_t validation_operation) {
+  const BSDFRuntimeValidationExpected expected = validation_expected(data, material, test_case);
+  constexpr float value_tolerance = 2.5e-4f;
+  constexpr float pdf_tolerance = 2.5e-4f;
+  const bool check_sample = (validation_operation == 0u) || (validation_operation == 1u);
+  const bool check_eval = (validation_operation == 0u) || (validation_operation == 2u);
+  const bool check_pdf = (validation_operation == 0u) || (validation_operation == 3u);
+  const bool check_albedo = (validation_operation == 0u) || (validation_operation == 4u);
+  bool case_valid = true;
+
+  if (check_sample) {
+    case_valid =
+      validation_close_float3(label, "sample.weight", expected.sample.weight.to_rgb(), validation_read_f32x3(output, output_case_index, 0u), value_tolerance) && case_valid;
+    case_valid = validation_close_float(label, "sample.weight.value", expected.sample.weight.value, validation_read_f32(output, output_case_index, 12u), value_tolerance) &&
+                 case_valid;
+    case_valid = validation_close_float3(label, "sample.w_o", expected.sample.w_o, validation_read_f32x3(output, output_case_index, 16u), value_tolerance) && case_valid;
+    case_valid = validation_close_float(label, "sample.pdf", expected.sample.pdf, validation_read_f32(output, output_case_index, 28u), pdf_tolerance) && case_valid;
+    case_valid = validation_close_float(label, "sample.eta", expected.sample.eta, validation_read_f32(output, output_case_index, 32u), value_tolerance) && case_valid;
+    case_valid = validation_equal_u32(label, "sample.properties", expected.sample.properties, validation_read_u32(output, output_case_index, 36u)) && case_valid;
+    case_valid = validation_equal_u32(label, "sample.medium_index", expected.sample.medium_index, validation_read_u32(output, output_case_index, 40u)) && case_valid;
+    case_valid = validation_equal_u32(label, "sample.seed", expected.sample_seed, validation_read_u32(output, output_case_index, 44u)) && case_valid;
+  }
+
+  if (check_eval) {
+    case_valid = validation_close_float3(label, "eval.func", expected.eval.func.to_rgb(), validation_read_f32x3(output, output_case_index, 48u), value_tolerance) && case_valid;
+    case_valid = validation_close_float(label, "eval.func.value", expected.eval.func.value, validation_read_f32(output, output_case_index, 60u), value_tolerance) && case_valid;
+    case_valid = validation_close_float3(label, "eval.bsdf", expected.eval.bsdf.to_rgb(), validation_read_f32x3(output, output_case_index, 64u), value_tolerance) && case_valid;
+    case_valid = validation_close_float(label, "eval.bsdf.value", expected.eval.bsdf.value, validation_read_f32(output, output_case_index, 76u), value_tolerance) && case_valid;
+    case_valid = validation_close_float(label, "eval.pdf", expected.eval.pdf, validation_read_f32(output, output_case_index, 80u), pdf_tolerance) && case_valid;
+    case_valid = validation_close_float(label, "eval.eta", expected.eval.eta, validation_read_f32(output, output_case_index, 84u), value_tolerance) && case_valid;
+    case_valid = validation_equal_u32(label, "eval.properties", expected.eval.properties, validation_read_u32(output, output_case_index, 88u)) && case_valid;
+    case_valid = validation_equal_u32(label, "eval.medium_index", expected.eval.medium_index, validation_read_u32(output, output_case_index, 92u)) && case_valid;
+    case_valid = validation_equal_u32(label, "eval.seed", expected.eval_seed, validation_read_u32(output, output_case_index, 96u)) && case_valid;
+  }
+
+  if (check_pdf) {
+    case_valid = validation_close_float(label, "pdf", expected.pdf, validation_read_f32(output, output_case_index, 100u), pdf_tolerance) && case_valid;
+    case_valid = validation_equal_u32(label, "pdf.seed", expected.pdf_seed, validation_read_u32(output, output_case_index, 104u)) && case_valid;
+    case_valid = validation_close_float(label, "reverse_pdf", expected.reverse_pdf, validation_read_f32(output, output_case_index, 108u), pdf_tolerance) && case_valid;
+    case_valid = validation_equal_u32(label, "reverse_pdf.seed", expected.reverse_pdf_seed, validation_read_u32(output, output_case_index, 112u)) && case_valid;
+  }
+
+  if (check_albedo) {
+    case_valid = validation_equal_u32(label, "is_delta", expected.is_delta, validation_read_u32(output, output_case_index, 116u)) && case_valid;
+    case_valid = validation_equal_u32(label, "delta.seed", expected.delta_seed, validation_read_u32(output, output_case_index, 120u)) && case_valid;
+    case_valid = validation_close_float3(label, "albedo", expected.albedo.to_rgb(), validation_read_f32x3(output, output_case_index, 128u), value_tolerance) && case_valid;
+    case_valid = validation_close_float(label, "albedo.value", expected.albedo.value, validation_read_f32(output, output_case_index, 140u), value_tolerance) && case_valid;
+    case_valid = validation_equal_u32(label, "albedo.seed", expected.albedo_seed, validation_read_u32(output, output_case_index, 144u)) && case_valid;
+  }
+
+  return case_valid;
+}
+
+bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(128u);
+  scene_data.spectrum_values.assign(spectra, spectra + spectrum_count);
+  set_openpbr_validation_defaults(scene_data);
+
+  scene_data.materials.emplace_back(make_mirror_conductor(0.5f));
+  scene_data.materials.emplace_back(make_white_sapphire_dielectric(0.5f));
+  scene_data.materials.emplace_back(make_plastic(0.5f));
+  scene_data.materials.emplace_back(make_openpbr(0.5f, 1.0f, 0.0f, SpectrumWhite, false));
+  scene_data.materials.emplace_back(make_openpbr(0.5f, 0.0f, 1.0f, SpectrumWhite, false));
+
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("BSDF runtime numeric harness failed to bind LUTs\n");
+    return false;
+  }
+  scene_data.images.load_images(scheduler);
+
+  etx::Scene exact_scene = {};
+  exact_scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
+  exact_scene.images = etx::ArrayView<etx::Image>{scene_data.images.as_array(), scene_data.images.array_size()};
+  exact_scene.materials = etx::ArrayView<etx::Material>{scene_data.materials.data(), scene_data.materials.size()};
+  set_openpbr_validation_defaults(exact_scene);
+  exact_scene.energy_compensation_interfaces =
+    etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+
+  etx::scene_global_clear(&original_scene);
+  etx::scene_global_publish(&exact_scene, &exact_scene);
+
+  const Vertex vertex = {
+    float3{0.0f, 0.0f, 0.0f},
+    float3{0.0f, 0.0f, 1.0f},
+    float3{1.0f, 0.0f, 0.0f},
+    float3{0.0f, 1.0f, 0.0f},
+    float2{0.5f, 0.5f},
+  };
+  const etx::BSDFData data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
+
+  const char* labels[] = {"rough conductor", "rough dielectric", "rough plastic", "openpbr conductor", "openpbr dielectric"};
+  const BSDFRuntimeValidationCase cases[] = {
+    {0u, 41001u, 0.31f, 0.63f, 0.17f, 0u, 0u, 0u},
+    {1u, 42001u, 0.41f, 0.23f, 0.72f, 0u, 0u, 0u},
+    {2u, 43001u, 0.19f, 0.77f, 0.44f, 0u, 0u, 0u},
+    {3u, 44001u, 0.55f, 0.37f, 0.28f, 0u, 0u, 0u},
+    {4u, 45001u, 0.27f, 0.52f, 0.66f, 0u, 0u, 0u},
+  };
+  constexpr uint32_t case_count = static_cast<uint32_t>(sizeof(cases) / sizeof(cases[0]));
+
+  etx::RHIInitInfo init_info = {
+    .backend = select_default_backend(),
+    .enable_validation = ETX_DEBUG,
+    .headless = true,
+  };
+  etx::RHIContext rhi = etx::RHIContext::create(init_info);
+  if (rhi.valid() == false) {
+    std::printf("BSDF runtime numeric harness failed to create RHI context\n");
+    etx::scene_global_clear(&exact_scene);
+    etx::scene_global_publish(&original_scene, &original_scene);
+    return false;
+  }
+  rhi.initialize_headless();
+
+  etx::RHIBuffer material_buffer = {};
+  etx::RHIBuffer spectrum_buffer = {};
+  etx::RHIBuffer interface_buffer = {};
+  etx::RHIBuffer globals_buffer = {};
+  etx::RHIChunkedBufferState image_blob_state = {};
+  bool valid = true;
+
+  do {
+    const etx::RHIChunkedBufferUploadData image_blob = validation_build_packed_images_blob(scene_data);
+    if (rhi.device().upload_or_update_chunked_buffer(image_blob, etx::RHIBufferUsage::Storage | etx::RHIBufferUsage::TransferDst, image_blob_state, "bsdf_validation_images") ==
+        false) {
+      std::printf("BSDF runtime numeric harness failed to upload images\n");
+      valid = false;
+      break;
+    }
+
+    GPUSceneGlobals globals = {};
+    globals.default_black_spectrum = scene_data.defaults.black_spectrum;
+    globals.default_white_spectrum = scene_data.defaults.white_spectrum;
+    globals.default_rayleigh_spectrum = scene_data.defaults.rayleigh_spectrum;
+    globals.default_mie_spectrum = scene_data.defaults.mie_spectrum;
+    globals.default_ozone_spectrum = scene_data.defaults.ozone_spectrum;
+    globals.default_subsurface_scatter_material = scene_data.defaults.subsurface_scatter_material;
+    globals.default_subsurface_exit_material = scene_data.defaults.subsurface_exit_material;
+    globals.default_missing_material = scene_data.defaults.missing_material;
+    globals.default_dielectric_eta = scene_data.defaults.dielectric_eta;
+    globals.default_conductor_eta = scene_data.defaults.conductor_eta;
+    globals.default_conductor_k = scene_data.defaults.conductor_k;
+    globals.pixel_filter_image_index = scene_data.pixel_filter.image_index;
+    globals.pixel_filter_radius = scene_data.pixel_filter.radius;
+
+    valid = validation_create_storage_buffer(rhi, scene_data.materials.data(), scene_data.materials.size() * sizeof(etx::Material), etx::RHIBufferUsage::TransferDst, true,
+              material_buffer, "bsdf validation materials") &&
+            valid;
+    valid = validation_create_storage_buffer(rhi, scene_data.spectrum_values.data(), scene_data.spectrum_values.size() * sizeof(etx::SpectralDistribution),
+              etx::RHIBufferUsage::TransferDst, true, spectrum_buffer, "bsdf validation spectra") &&
+            valid;
+    valid = validation_create_storage_buffer(rhi, scene_data.energy_compensation_interfaces.data(),
+              scene_data.energy_compensation_interfaces.size() * sizeof(etx::Scene::EnergyCompensationInterface), etx::RHIBufferUsage::TransferDst, true, interface_buffer,
+              "bsdf validation interfaces") &&
+            valid;
+    valid =
+      validation_create_storage_buffer(rhi, &globals, sizeof(globals), etx::RHIBufferUsage::TransferDst, true, globals_buffer, "bsdf validation globals") && valid;
+    if (valid == false) {
+      break;
+    }
+
+    struct PushConstants {
+      uint32_t case_buffer_index;
+      uint32_t output_buffer_index;
+      uint32_t materials_descriptor_index;
+      uint32_t images_descriptor_index;
+      uint32_t spectrums_descriptor_index;
+      uint32_t energy_compensation_interfaces_descriptor_index;
+      uint32_t scene_globals_descriptor_index;
+      uint32_t case_count;
+    };
+
+    auto validate_batch = [&](const char* batch_label, const uint32_t first_case, const uint32_t batch_case_count, const uint32_t validation_mode,
+                            const uint32_t validation_operation) -> bool {
+      std::vector<BSDFRuntimeValidationCase> batch_cases(cases + first_case, cases + first_case + batch_case_count);
+      etx::RHIBuffer case_buffer = {};
+      etx::RHIBuffer output_buffer = {};
+      etx::RHIBuffer readback_buffer = {};
+      etx::RHIPipeline pipeline = {};
+      etx::RHICommandBuffer cmd = {};
+      bool batch_valid = true;
+
+      do {
+        batch_valid =
+          validation_create_storage_buffer(rhi, batch_cases.data(), batch_cases.size() * sizeof(BSDFRuntimeValidationCase), etx::RHIBufferUsage::TransferDst, true,
+            case_buffer, "bsdf validation cases") &&
+          batch_valid;
+        batch_valid = validation_create_storage_buffer(rhi, nullptr, batch_case_count * kBSDFRuntimeValidationOutputStride, etx::RHIBufferUsage::TransferSrc, false,
+                        output_buffer, "bsdf validation output") &&
+                      batch_valid;
+        batch_valid = validation_create_readback_buffer(rhi, batch_case_count * kBSDFRuntimeValidationOutputStride, readback_buffer, "bsdf validation") && batch_valid;
+        if (batch_valid == false) {
+          break;
+        }
+
+        auto& compiler = etx::ShaderCompiler::instance();
+        std::unordered_map<std::string, std::string> defines = {
+          {"ETX_BSDF_RUNTIME_VALIDATION_MODE", std::to_string(validation_mode)},
+          {"ETX_BSDF_RUNTIME_VALIDATION_OPERATION", std::to_string(validation_operation)},
+        };
+        if (validation_mode != 0u) {
+          defines["ETX_DXC_OPT_LEVEL"] = "0";
+          defines["ETX_DXC_SPIRV_OPT_CONFIG"] = "--compact-ids";
+        }
+        const auto compilation = compiler.compile("shaders/bsdf_runtime_validation.hlsl", {{"main", etx::RHIShaderStage::Compute}}, defines, rhi.backend());
+        if ((compilation.result != etx::RHIResult::Success) || compilation.binaries.empty()) {
+          std::printf("BSDF runtime numeric %s operation %u shader compilation failed: %s\n", batch_label, validation_operation, compilation.error_message.c_str());
+          batch_valid = false;
+          break;
+        }
+
+        const etx::RHIComputePipelineDesc pipeline_desc = rhi.device().make_compute_pipeline_desc(compilation.binaries[0]);
+        auto pipeline_result = rhi.device().create_compute_pipeline(pipeline_desc);
+        if ((pipeline_result.result != etx::RHIResult::Success) || (pipeline_result.handle.valid() == false)) {
+          std::printf("BSDF runtime numeric %s operation %u pipeline creation failed (%u)\n", batch_label, validation_operation, static_cast<uint32_t>(pipeline_result.result));
+          batch_valid = false;
+          break;
+        }
+        pipeline = pipeline_result.handle;
+
+        const PushConstants pc = {
+          etx::get_bindless_descriptor_index(case_buffer),
+          etx::get_bindless_descriptor_index(output_buffer),
+          etx::get_bindless_descriptor_index(material_buffer),
+          image_blob_state.metadata_descriptor_index,
+          etx::get_bindless_descriptor_index(spectrum_buffer),
+          etx::get_bindless_descriptor_index(interface_buffer),
+          etx::get_bindless_descriptor_index(globals_buffer),
+          batch_case_count,
+        };
+
+        cmd = rhi.get_command_buffer();
+        if (cmd.valid() == false) {
+          std::printf("BSDF runtime numeric %s harness failed to acquire command buffer\n", batch_label);
+          batch_valid = false;
+          break;
+        }
+
+        rhi.command_buffer_begin(cmd);
+        rhi.cmd_set_pipeline(cmd, pipeline);
+        rhi.cmd_push_constants(cmd, &pc, sizeof(pc), 0);
+        etx::RHIDispatchDesc dispatch = {};
+        dispatch.group_count_x = 1u;
+        dispatch.group_count_y = 1u;
+        dispatch.group_count_z = 1u;
+        rhi.cmd_dispatch(cmd, dispatch);
+        rhi.cmd_buffer_barrier(cmd, output_buffer, etx::RHIResourceState::General, etx::RHIResourceState::TransferSrc);
+        rhi.cmd_copy_buffer(cmd, output_buffer, readback_buffer, batch_case_count * kBSDFRuntimeValidationOutputStride);
+        rhi.command_buffer_end(cmd);
+        rhi.submit_command_buffer({cmd});
+        const etx::RHIResult wait_result = rhi.wait_idle();
+        if (wait_result != etx::RHIResult::Success) {
+          std::printf("BSDF runtime numeric %s operation %u dispatch failed to wait (%u)\n", batch_label, validation_operation, static_cast<uint32_t>(wait_result));
+          batch_valid = false;
+          break;
+        }
+
+        std::vector<uint8_t> output(batch_case_count * kBSDFRuntimeValidationOutputStride);
+        const etx::RHIResult read_result = rhi.device().read_buffer(readback_buffer, output.data(), output.size());
+        if (read_result != etx::RHIResult::Success) {
+          std::printf("BSDF runtime numeric %s operation %u readback failed (%u)\n", batch_label, validation_operation, static_cast<uint32_t>(read_result));
+          batch_valid = false;
+          break;
+        }
+
+        for (uint32_t i = 0u; i < batch_case_count; ++i) {
+          const uint32_t case_index = first_case + i;
+          const auto& test_case = cases[case_index];
+          const etx::Material& material = scene_data.materials[test_case.material_index];
+          batch_valid = validation_check_runtime_case(labels[case_index], data, material, test_case, output, i, validation_operation) && batch_valid;
+        }
+      } while (false);
+
+      if (cmd.valid()) {
+        rhi.destroy_command_buffer(cmd);
+      }
+      if (pipeline.valid()) {
+        rhi.device().destroy_pipeline(pipeline);
+      }
+      validation_destroy_buffer(rhi, case_buffer);
+      validation_destroy_buffer(rhi, output_buffer);
+      validation_destroy_buffer(rhi, readback_buffer);
+      return batch_valid;
+    };
+
+    valid = validate_batch("energy", 0u, 2u, 0u, 0u) && valid;
+    for (uint32_t operation = 1u; operation <= 4u; ++operation) {
+      valid = validate_batch("plastic", 2u, 1u, 1u, operation) && valid;
+      valid = validate_batch("openpbr", 3u, case_count - 3u, 2u, operation) && valid;
+    }
+  } while (false);
+
+  validation_destroy_buffer(rhi, material_buffer);
+  validation_destroy_buffer(rhi, spectrum_buffer);
+  validation_destroy_buffer(rhi, interface_buffer);
+  validation_destroy_buffer(rhi, globals_buffer);
+  rhi.device().destroy_chunked_buffer(image_blob_state);
+  rhi.wait_idle();
+  rhi = {};
+
+  etx::scene_global_clear(&exact_scene);
+  etx::scene_global_publish(&original_scene, &original_scene);
+
+  if (valid) {
+    std::printf("BSDF runtime numeric CPU/GPU harness valid\n");
+  }
+  return valid;
+}
+
 bool validate_openpbr_case(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const char* label,
   const etx::Material& source_material, const uint32_t seed, const bool require_integrated_energy) {
   etx::TaskScheduler scheduler = {};
@@ -2099,9 +2860,15 @@ bool validate_openpbr_parameter_sweeps(etx::Scene& scene, const etx::SpectralDis
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   etx::env().setup("bin/bsdf_validation.exe");
+  bool runtime_only = false;
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--bsdf-runtime-only") == 0) {
+      runtime_only = true;
+    }
+  }
 
   etx::SpectralDistribution spectra[SpectrumCount] = {};
   spectra[SpectrumWhite] = make_spectrum(float3{1.0f, 1.0f, 1.0f});
@@ -2130,6 +2897,12 @@ int main() {
 
   etx::scene_global_init();
   etx::scene_global_publish(&scene, &scene);
+  if (runtime_only) {
+    const bool runtime_valid = validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount);
+    etx::scene_global_clear(&scene);
+    etx::scene_global_deinit();
+    return runtime_valid ? 0 : 1;
+  }
 
   const Vertex vertex = {
     float3{0.0f, 0.0f, 0.0f},
@@ -2144,6 +2917,9 @@ int main() {
   bool valid = true;
   valid = validate_image_3d_sampling() && valid;
   valid = validate_spectral_energy_compensation_lut_sampling() && valid;
+  valid = validate_energy_compensation_gpu_shader_compile() && valid;
+  valid = validate_energy_compensation_gpu_lut_parity() && valid;
+  valid = validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount) && valid;
   const etx::Material standalone_thinfilm = make_standalone_thinfilm(0.0f, 500.0f);
   valid = validate_standalone_thinfilm_contract("standalone thinfilm outside", data, standalone_thinfilm, 22000u) && valid;
   valid = validate_standalone_thinfilm_contract("standalone thinfilm inside", inside_data, standalone_thinfilm, 22100u) && valid;

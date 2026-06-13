@@ -3,6 +3,7 @@
 #include "renderer.hxx"
 #include <etx/render/host/tasks.hxx>
 #include <etx/rhi/rhi.hxx>
+#include <interop/gpu_rt_shared.hxx>
 #include <interop/gpu_scene_shared.hxx>
 #include <interop/gpu_wavefront_shared.hxx>
 #include <atomic>
@@ -56,13 +57,15 @@ struct GPURaytracingRenderer : public Renderer {
     LightContinueFinalize = 38u,
     SwapQueues = 39u,
     FinalizeSample = 40u,
-    Count = 41u,
+    CpuOrderPathTrace = 41u,
+    Count = 42u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
   ~GPURaytracingRenderer() override;
 
   void init(RHIContext& ctx, SceneRepresentation& scene) override;
+  void update_camera(SceneRepresentation& scene, float dt) override;
   void render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) override;
 
   void cleanup(RHIContext& ctx) override;
@@ -73,6 +76,9 @@ struct GPURaytracingRenderer : public Renderer {
   bool runtime_failed() const {
     return _runtime_failed;
   }
+  bool cleanup_wait_succeeded() const {
+    return _cleanup_wait_succeeded;
+  }
   const std::string& runtime_failure_reason() const {
     return _runtime_failure_reason;
   }
@@ -82,6 +88,7 @@ struct GPURaytracingRenderer : public Renderer {
   void set_compile_stage_filter(const std::string&);
   bool set_render_window(const uint2& origin, const uint2& size, const uint2& full_size);
   void reset_render_window();
+  void set_cpu_order_parity_mode(bool enabled);
 
   const char* name() const override {
     return "GPU Raytracing";
@@ -94,6 +101,7 @@ struct GPURaytracingRenderer : public Renderer {
   void stop() override;
 
   void on_camera_changed(SceneRepresentation& scene) override;
+  void on_camera_become_steady(SceneRepresentation& scene) override;
   void on_scene_changed(SceneRepresentation& scene) override;
 
  private:
@@ -124,6 +132,7 @@ struct GPURaytracingRenderer : public Renderer {
     uint32_t generation = 0u;
     uint32_t path_mode = 0u;
     uint32_t material_compile_mask = 0u;
+    bool cpu_order_parity_mode = false;
     std::string compile_stage_filter = {};
     uint32_t total_steps = 0u;
     uint32_t total_compile_groups = 0u;
@@ -144,6 +153,12 @@ struct GPURaytracingRenderer : public Renderer {
     std::shared_ptr<PendingPipelinePreparation> result = {};
   };
 
+  enum class WavefrontRenderStep : uint32_t {
+    InitSample = 0u,
+    TraceBounce = 1u,
+    FinalizeSample = 2u,
+  };
+
   void destroy_scene_buffers(RHIContext& ctx);
   void destroy_wavefront_buffers(RHIContext& ctx);
   void destroy_blue_noise_buffer(RHIContext& ctx);
@@ -161,6 +176,9 @@ struct GPURaytracingRenderer : public Renderer {
   void release_inflight_preparation_tasks(bool wait);
   void compile_pipeline_preparation(std::shared_ptr<PendingPipelinePreparation> result);
   void destroy_pipelines(RHIDevice& device);
+  bool create_preview_pipeline(RHIContext& ctx);
+  void destroy_preview_pipeline(RHIDevice& device);
+  bool render_preview(RHIContext& ctx, RHICommandBuffer frame_cmd, const GPURTConstants& constants, const RHIDispatchDesc& dispatch);
   void set_preparation_failed(const std::string& message, const char* phase = "Failed");
   void set_preparation_ready(const char* message = nullptr);
   void set_preparation_state(RendererPreparationState state, const char* phase, const std::string& message = {}, uint32_t completed_steps = 0u, uint32_t total_steps = 0u);
@@ -169,6 +187,7 @@ struct GPURaytracingRenderer : public Renderer {
 
  private:
   RHIPipeline _pipelines[static_cast<uint32_t>(PipelineStage::Count)] = {};
+  RHIPipeline _preview_pipeline = {};
   RHIBindlessHandle _tlas = {};
   std::vector<RHIBindlessHandle> _blas;
   std::vector<RHIBindlessHandle> _blas_buffers;
@@ -183,6 +202,7 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _emitter_instances_buffer = {};
   RHIBindlessHandle _materials_buffer = {};
   RHIBindlessHandle _spectrums_buffer = {};
+  RHIBindlessHandle _energy_compensation_interfaces_buffer = {};
   RHIBindlessHandle _scene_globals_buffer = {};
   RHIBindlessHandle _scene_options_buffer = {};
   RHIBindlessHandle _emitters_distribution_buffer = {};
@@ -221,6 +241,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _emitter_instances_buffer_size = 0;
   uint64_t _materials_buffer_size = 0;
   uint64_t _spectrums_buffer_size = 0;
+  uint64_t _energy_compensation_interfaces_buffer_size = 0;
   uint64_t _scene_globals_buffer_size = 0;
   uint64_t _scene_options_buffer_size = 0;
   uint64_t _emitters_distribution_buffer_size = 0;
@@ -284,6 +305,13 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _current_camera_hash = 0;
   uint32_t _frame_index = 0u;
   uint32_t _sample_index = 0u;
+  WavefrontRenderStep _wavefront_render_step = WavefrontRenderStep::InitSample;
+  uint32_t _wavefront_path_iteration = 0u;
+  uint32_t _wavefront_hard_iteration_cap = 0u;
+  uint32_t _wavefront_camera_queue_count = 0u;
+  uint32_t _wavefront_light_queue_count = 0u;
+  RHIResourceState _camera_queue_count_readback_state = RHIResourceState::Undefined;
+  RHIResourceState _light_queue_count_readback_state = RHIResourceState::Undefined;
   uint32_t _path_mode = 0u;
   uint32_t _material_compile_mask = 0u;
   uint2 _render_window_origin = {};
@@ -307,6 +335,10 @@ struct GPURaytracingRenderer : public Renderer {
   bool _initialized = false;
   bool _runtime_failed = false;
   bool _pipeline_publish_logged = false;
+  bool _cpu_order_parity_mode = false;
+  bool _preview_active = false;
+  bool _preview_pipeline_failed = false;
+  bool _cleanup_wait_succeeded = false;
   RendererPreparationState _preparation_state = RendererPreparationState::Ready;
 };
 

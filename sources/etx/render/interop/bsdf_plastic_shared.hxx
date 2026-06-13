@@ -1,9 +1,7 @@
 #pragma once
 
 #include "bsdf_various_shared.hxx"
-
-#if (ETX_CPP)
-# include "bsdf_energy_compensated_shared.hxx"
+#include "bsdf_energy_compensated_shared.hxx"
 
 struct BSDFPlasticCoatingReflectionProposal {
   float probability ETX_INIT(0.0f);
@@ -25,7 +23,7 @@ struct BSDFPlasticDeltaThinfilmTerms {
   bool valid ETX_INIT(false);
 };
 
-ETX_SHARED_INLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler));
 
 ETX_SHARED_INLINE BSDFEval bsdf_plastic_delta_thinfilm_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
@@ -61,7 +59,7 @@ ETX_SHARED_INLINE bool bsdf_plastic_delta_thinfilm_supported(ETX_IN(BSDFResource
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
   ETX_IN(Material, material), float mu, float alpha, bool incident_outside, bool outgoing_outside, float thinfilm_lut_value) {
   const BSDFEnergyCompensatedDielectricBranchPair pair =
     bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, mu, alpha, incident_outside, thinfilm_lut_value);
@@ -74,7 +72,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo(E
   return spectral_response_min(spectral_response_add(single, spectral_response_mul(spectral_response_mul(coefficient, d_i), d_o)), 1.0f);
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_dielectric_total_branch_average_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_dielectric_total_branch_average_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
   ETX_IN(Material, material), float alpha, bool incident_outside, bool outgoing_outside, float thinfilm_lut_value) {
   const SpectralResponse single =
     bsdf_energy_compensated_dielectric_branch_average_albedo(context, spect, material, alpha, incident_outside, outgoing_outside, thinfilm_lut_value);
@@ -95,7 +93,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_external_transmission_albedo(ETX
   return bsdf_plastic_dielectric_total_branch_albedo(context, spect, material, mu, alpha, true, false, thinfilm_lut_value);
 }
 
-ETX_SHARED_INLINE BSDFPlasticExternalAlbedos bsdf_plastic_external_albedos(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE BSDFPlasticExternalAlbedos bsdf_plastic_external_albedos(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
   float mu, float alpha, float thinfilm_lut_value) {
   BSDFPlasticExternalAlbedos result = ETX_ZERO(BSDFPlasticExternalAlbedos);
   const BSDFEnergyCompensatedDielectricBranchPair pair =
@@ -132,7 +130,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_internal_average_reflection_albe
   return bsdf_plastic_dielectric_total_branch_average_albedo(context, spect, material, alpha, false, false, thinfilm_lut_value);
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_internal_bounce_denominator(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_internal_bounce_denominator(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
   ETX_IN(SpectralResponse, substrate), float alpha, float thinfilm_lut_value) {
   const SpectralResponse one = bsdf_plastic_one(spect);
   const SpectralResponse r_internal_average = bsdf_plastic_internal_average_reflection_albedo(context, spect, material, alpha, thinfilm_lut_value);
@@ -218,8 +216,12 @@ ETX_SHARED_INLINE BSDFSample bsdf_plastic_delta_thinfilm_sample(ETX_IN(BSDFResou
   }
 
   const bool has_fixed = bsdf_sampler_has_fixed(sampler);
-  const float selector = has_fixed ? sampler.fixed_w : bsdf_sampler_next(sampler);
-  const float2 rnd = has_fixed ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+  float selector = sampler.fixed_w;
+  float2 rnd = float2(sampler.fixed_u, sampler.fixed_v);
+  if (has_fixed == false) {
+    selector = bsdf_sampler_next(sampler);
+    rnd = bsdf_sampler_next_2d(sampler);
+  }
   BSDFSample result = ETX_ZERO(BSDFSample);
   if (selector < terms.specular_probability) {
     result.w_o = normalize(reflect(data.w_i, terms.frame.nrm));
@@ -267,7 +269,7 @@ ETX_SHARED_INLINE float bsdf_plastic_delta_thinfilm_pdf(ETX_IN(BSDFResourceConte
   return max(0.0f, 1.0f - terms.specular_probability) * local_w_o.z * kInvPi;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_coated_diffuse_func(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_coated_diffuse_func(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
   ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o), float alpha, float thinfilm_lut_value, ETX_INOUT(Sampler, sampler)) {
   const BSDFEval substrate_eval = bsdf_diffuse_layer(context, data, local_w_i, local_w_o, material, sampler);
   if (bsdf_eval_valid(substrate_eval) == false) {
@@ -282,7 +284,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_coated_diffuse_func(ETX_IN(BSDFR
   return spectral_response_mul(substrate_eval.func, scale);
 }
 
-ETX_SHARED_INLINE float bsdf_plastic_specular_sample_probability(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE float bsdf_plastic_specular_sample_probability(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
   ETX_IN(SpectralResponse, substrate), float mu_i, float alpha, float thinfilm_lut_value) {
   const BSDFPlasticExternalAlbedos external_albedos = bsdf_plastic_external_albedos(context, spect, material, mu_i, alpha, thinfilm_lut_value);
   const SpectralResponse transmission_average = bsdf_plastic_internal_average_transmission_albedo(context, spect, material, alpha, thinfilm_lut_value);
@@ -297,9 +299,9 @@ ETX_SHARED_INLINE float bsdf_plastic_specular_sample_probability(ETX_IN(BSDFReso
   return bsdf_energy_compensated_saturate(reflection_energy / total_energy);
 }
 
-ETX_SHARED_INLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_reflection_proposal(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+ETX_SHARED_NOINLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_reflection_proposal(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
   ETX_IN(Material, material), float mu_i, float alpha, float thinfilm_lut_value) {
-  BSDFPlasticCoatingReflectionProposal result = {};
+  BSDFPlasticCoatingReflectionProposal result = ETX_ZERO(BSDFPlasticCoatingReflectionProposal);
   const BSDFEnergyCompensatedDielectricBranchPair pair =
     bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, mu_i, alpha, true, thinfilm_lut_value);
   const float visible_probability = bsdf_energy_compensated_dielectric_branch_pair_visible_probability(pair);
@@ -334,7 +336,7 @@ ETX_SHARED_INLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_refl
   return bsdf_plastic_coating_reflection_proposal(context, spect, material, local_w_i.z, alpha, thinfilm_lut_value);
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
   if (bsdf_plastic_delta_thinfilm_supported(context, material, data.tex)) {
     return bsdf_plastic_delta_thinfilm_evaluate(context, data, outgoing_direction, material, sampler);
@@ -378,7 +380,7 @@ ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, con
   return result;
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_NOINLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   if (bsdf_plastic_delta_thinfilm_supported(context, material, data.tex)) {
     return bsdf_plastic_delta_thinfilm_sample(context, data, material, sampler);
   }
@@ -401,8 +403,12 @@ ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, con
   const BSDFPlasticCoatingReflectionProposal coating_proposal =
     bsdf_plastic_coating_reflection_proposal(context, data.spectrum_sample, material, local_w_i, alpha, thinfilm_lut_value);
   const bool has_fixed = bsdf_sampler_has_fixed(sampler);
-  const float selector = has_fixed ? sampler.fixed_w : bsdf_sampler_next(sampler);
-  const float2 rnd = has_fixed ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+  float selector = sampler.fixed_w;
+  float2 rnd = float2(sampler.fixed_u, sampler.fixed_v);
+  if (has_fixed == false) {
+    selector = bsdf_sampler_next(sampler);
+    rnd = bsdf_sampler_next_2d(sampler);
+  }
 
   float3 local_w_o = float3(0.0f, 0.0f, 0.0f);
   bool sampled_diffuse = (selector >= specular_probability) || (coating_proposal.probability <= kEpsilon);
@@ -414,7 +420,10 @@ ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, con
       bool candidate_valid = false;
       bool first_attempt = true;
       while (candidate_valid == false) {
-        const float2 attempt_rnd = (first_attempt && has_fixed) ? rnd : bsdf_sampler_next_2d(sampler);
+        float2 attempt_rnd = rnd;
+        if ((first_attempt == false) || (has_fixed == false)) {
+          attempt_rnd = bsdf_sampler_next_2d(sampler);
+        }
         const float3 m = bsdf_energy_compensated_sample_vndf_local(local_w_i, alpha, attempt_rnd);
         const float i_dot_m = dot(local_w_i, m);
         if ((m.z > kEpsilon) && (i_dot_m > kEpsilon)) {
@@ -454,7 +463,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, con
   return result;
 }
 
-ETX_SHARED_INLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   if (bsdf_plastic_delta_thinfilm_supported(context, material, data.tex)) {
@@ -503,29 +512,3 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_albedo(ETX_IN(BSDFResourceContex
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }
-
-#else
-
-ETX_SHARED_INLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
-  ETX_INOUT(Sampler, sampler)) {
-  return bsdf_diffuse_evaluate(context, data, outgoing_direction, material, sampler);
-}
-
-ETX_SHARED_INLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  return bsdf_diffuse_sample(context, data, material, sampler);
-}
-
-ETX_SHARED_INLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
-  ETX_INOUT(Sampler, sampler)) {
-  return bsdf_diffuse_pdf(context, data, outgoing_direction, material, sampler);
-}
-
-ETX_SHARED_INLINE bool bsdf_plastic_is_delta(ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {
-  return bsdf_diffuse_is_delta(material, tex, sampler);
-}
-
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  return bsdf_diffuse_albedo(context, data, material, sampler);
-}
-
-#endif

@@ -95,7 +95,11 @@ ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluate(ETX_IN(BSDFResourceContext, cont
 
 ETX_SHARED_INLINE BSDFSample bsdf_velvet_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
-  const float2 rnd = bsdf_sampler_has_fixed(sampler) ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+  const bool has_fixed_sample = bsdf_sampler_has_fixed(sampler);
+  float2 rnd = float2(sampler.fixed_u, sampler.fixed_v);
+  if (has_fixed_sample == false) {
+    rnd = bsdf_sampler_next_2d(sampler);
+  }
   const float3 local_w_o = sample_cosine_distribution(rnd, 0.0f);
   const float3 sampled_direction = local_frame_from_local(frame, local_w_o);
   const BSDFEval eval = bsdf_velvet_evaluate(context, data, sampled_direction, material, sampler);

@@ -195,7 +195,7 @@ void wavefront_store_connect_light_prepare_task(uint dispatch_index, WavefrontCo
   task.contribution = contribution;
   task.mis_weight = weight;
   task.pixel_index = input_value.camera_vertex.pixel_index;
-  task.medium_index = input_value.light_vertex.medium_index;
+  task.medium_index = ((light_eval.properties & BSDFSample::MediumChanged) != 0u) ? light_eval.medium_index : input_value.light_vertex.medium_index;
   task.flags = 1u;
   task.path_index = input_value.path_index;
   task.sampler_seed = 0u;

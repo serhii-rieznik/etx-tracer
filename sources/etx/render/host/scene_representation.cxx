@@ -2082,7 +2082,8 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
 
   generate_pixel_sampler_image();
 
-  if (ensure_energy_compensation_interfaces(data, scheduler) == false) {
+  const bool energy_compensation_ready = (rhi != nullptr) ? ensure_energy_compensation_interfaces(data, scheduler, *rhi) : ensure_energy_compensation_interfaces(data, scheduler);
+  if (energy_compensation_ready == false) {
     return false;
   }
 

@@ -106,4 +106,5 @@ struct ETX_ALIGNED GPUScene {
   uint32_t emitters_distribution;
 
   uint32_t scene_options;
+  uint32_t energy_compensation_interfaces;
 };

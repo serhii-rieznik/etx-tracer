@@ -128,6 +128,40 @@ bool image_evaluate_gpu_try_rgba_no_pdf(ImageEvaluateGPUContext context, uint im
   return true;
 }
 
+bool image_evaluate_gpu_try_rgba_layer_no_pdf(ImageEvaluateGPUContext context, uint image_index, float2 uv, uint layer, out float4 image_value) {
+  image_value = float4(0.0f, 0.0f, 0.0f, 0.0f);
+  ImageAccessGPUContext access_context = {context.images_descriptor_index};
+  ImageAccessGPUDesc image_access;
+  uint payload_descriptor_index = kInvalidIndex;
+  if (image_access_try_load_pixel_payload(access_context, image_index, image_access, payload_descriptor_index) == false) {
+    return false;
+  }
+
+  if ((image_access.format != (uint)Image::Format::RGBA32F) || (image_access.size.z == 0u)) {
+    return false;
+  }
+
+  ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(payload_descriptor_index)];
+  ImageFilterSharedAddress sample = image_filter_shared_address(uv, image_access.fsize.xy, image_access.size.xy, image_access.options);
+  uint slice = min(layer, image_access.size.z - 1u);
+  uint row_stride = image_access.size.x;
+  uint slice_offset = slice * image_access.size.x * image_access.size.y;
+  uint row_offset_0 = sample.row_0 * row_stride;
+  uint row_offset_1 = sample.row_1 * row_stride;
+
+  uint pixel_offset_00 = image_access.pixel_data_offset + ((slice_offset + row_offset_0 + sample.col_0) * image_access.pixel_data_stride);
+  uint pixel_offset_01 = image_access.pixel_data_offset + ((slice_offset + row_offset_0 + sample.col_1) * image_access.pixel_data_stride);
+  uint pixel_offset_10 = image_access.pixel_data_offset + ((slice_offset + row_offset_1 + sample.col_0) * image_access.pixel_data_stride);
+  uint pixel_offset_11 = image_access.pixel_data_offset + ((slice_offset + row_offset_1 + sample.col_1) * image_access.pixel_data_stride);
+
+  float4 p00 = image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, pixel_offset_00);
+  float4 p01 = image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, pixel_offset_01);
+  float4 p10 = image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, pixel_offset_10);
+  float4 p11 = image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, pixel_offset_11);
+  image_value = image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
+  return true;
+}
+
 bool image_evaluate_gpu_try_rgba_3d(ImageEvaluateGPUContext context, uint image_index, float3 uvw, out float4 image_value) {
   image_value = float4(0.0f, 0.0f, 0.0f, 0.0f);
   ImageAccessGPUContext access_context = {context.images_descriptor_index};

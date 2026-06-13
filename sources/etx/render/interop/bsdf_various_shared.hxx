@@ -136,7 +136,11 @@ ETX_SHARED_INLINE BSDFSample bsdf_diffuse_sample(ETX_IN(BSDFResourceContext, con
   result.eta = 1.0f;
   result.properties = BSDFSample::Reflection | BSDFSample::Diffuse;
 
-  const float2 cosine_rnd = bsdf_sampler_has_fixed(sampler) ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+  const bool has_fixed_sample = bsdf_sampler_has_fixed(sampler);
+  float2 cosine_rnd = float2(sampler.fixed_u, sampler.fixed_v);
+  if (has_fixed_sample == false) {
+    cosine_rnd = bsdf_sampler_next_2d(sampler);
+  }
   const float3 local_w_o = sample_cosine_distribution(cosine_rnd, 1.0f);
   const BSDFEval layer = bsdf_diffuse_layer(context, data, local_w_i, local_w_o, material, sampler);
   if (layer.pdf > 0.0f) {
@@ -205,7 +209,10 @@ ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(ETX_IN(BSDFResourceContext,
   }
 
   const bool has_fixed_sample = bsdf_sampler_has_fixed(sampler);
-  const float2 cosine_rnd = has_fixed_sample ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+  float2 cosine_rnd = float2(sampler.fixed_u, sampler.fixed_v);
+  if (has_fixed_sample == false) {
+    cosine_rnd = bsdf_sampler_next_2d(sampler);
+  }
   const float3 local_sampled_w_o = sample_cosine_distribution(cosine_rnd, 1.0f);
   const float n_dot_o = local_sampled_w_o.z;
 
@@ -215,10 +222,17 @@ ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(ETX_IN(BSDFResourceContext,
   const float scale = (total > 1.0f) ? (1.0f / total) : 1.0f;
   const float transmission_probability = transmission_value / total;
   const float reflection_probability = reflection_value / total;
-  const float branch_rnd = has_fixed_sample ? sampler.fixed_w : bsdf_sampler_next(sampler);
+  float branch_rnd = sampler.fixed_w;
+  if (has_fixed_sample == false) {
+    branch_rnd = bsdf_sampler_next(sampler);
+  }
   const bool sample_transmission = (reflection_probability == 0.0f) || (branch_rnd < transmission_probability);
   const float branch_probability = sample_transmission ? transmission_probability : reflection_probability;
-  const SpectralResponse branch_response = spectral_response_mul(sample_transmission ? transmission : reflection, scale);
+  SpectralResponse branch_response = reflection;
+  if (sample_transmission) {
+    branch_response = transmission;
+  }
+  branch_response = spectral_response_mul(branch_response, scale);
   const float roughness = bsdf_diffuse_scalar_roughness(context, material, data.tex);
   const SpectralResponse unit_response = spectral_response_make(data.spectrum_sample, 1.0f);
   const SpectralResponse unit_func = bsdf_diffuse_eon_brdf(data.spectrum_sample, unit_response, local_w_i, local_sampled_w_o, roughness);
@@ -272,7 +286,11 @@ ETX_SHARED_INLINE BSDFEval bsdf_translucent_evaluate(ETX_IN(BSDFResourceContext,
 
   const float scale = (total > 1.0f) ? (1.0f / total) : 1.0f;
   const float branch_probability = reflection ? (reflection_strength / total) : (transmission_strength / total);
-  const SpectralResponse branch_response = spectral_response_mul(reflection ? reflection_value : transmission, scale);
+  SpectralResponse branch_response = transmission;
+  if (reflection) {
+    branch_response = reflection_value;
+  }
+  branch_response = spectral_response_mul(branch_response, scale);
   const float roughness = bsdf_diffuse_scalar_roughness(context, material, data.tex);
   const float3 lobe_w_o = reflection ? local_w_o : -local_w_o;
   const SpectralResponse unit_response = spectral_response_make(data.spectrum_sample, 1.0f);

@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <thread>
 
 namespace etx {
@@ -324,6 +325,7 @@ const char* batch_usage_string() {
          "  --resolution <width>x<height>\n"
          "  --crop <x>,<y>,<width>,<height>\n"
          "  --strategy-flags <flag[,flag...]>\n"
+         "  --gpu-parity-mode <off|cpu-order>\n"
          "  --gpu-compile-only\n"
          "  --gpu-compile-stage <entry-point>\n"
          "  --reference <reference-image>\n"
@@ -2319,6 +2321,7 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     return false;
   }
 
+  session.gpu_renderer.set_cpu_order_parity_mode(options.gpu_parity_mode == "cpu-order");
   session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
   if (session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene) == false) {
     log::error("GPU renderer preparation failed before batch rendering");
@@ -2326,7 +2329,9 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   }
 
   const uint32_t target_sample_count = max(1u, session.scene.data().options.samples);
-  const uint32_t max_gpu_frame_count = std::max(1024u, target_sample_count * 4096u);
+  const uint64_t frames_per_sample_budget = std::max<uint64_t>(4096u, static_cast<uint64_t>(session.scene.data().options.max_path_length) + 2u);
+  const uint64_t max_gpu_frame_count_u64 = std::max<uint64_t>(1024u, static_cast<uint64_t>(target_sample_count) * frames_per_sample_budget);
+  const uint32_t max_gpu_frame_count = static_cast<uint32_t>(std::min<uint64_t>(max_gpu_frame_count_u64, std::numeric_limits<uint32_t>::max()));
   const auto render_begin = std::chrono::steady_clock::now();
   double total_frame_time_ms = 0.0;
   double first_frame_time_ms = 0.0;
@@ -2422,6 +2427,7 @@ bool run_gpu_shader_compile_test(const BatchRenderOptions& options, BatchRenderS
   }
 
   const auto shader_reload_begin = std::chrono::steady_clock::now();
+  session.gpu_renderer.set_cpu_order_parity_mode(options.gpu_parity_mode == "cpu-order");
   session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
   const bool preparation_success = session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene);
   const auto shader_reload_end = std::chrono::steady_clock::now();
@@ -2454,6 +2460,10 @@ bool run_full_comparison_batch_render(const BatchRenderOptions& options) {
   printf("Full comparison scene: %s\n", absolute_scene_path.c_str());
 
   for (const FullComparisonTechniqueInfo& technique : kFullComparisonTechniques) {
+    if ((options.gpu_parity_mode == "cpu-order") && (technique.bdpt_mode != BDPTMode::PathTracing)) {
+      continue;
+    }
+
     const std::string cpu_output_file = full_comparison_output_file_name(absolute_scene_path, technique.file_tag, "cpu");
     const std::string gpu_output_file = full_comparison_output_file_name(absolute_scene_path, technique.file_tag, "gpu");
     log::info("Full comparison '%s': loading scene in a fresh session and running CPU/GPU renders", technique.file_tag);
@@ -2885,6 +2895,22 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
       continue;
     }
 
+    if (argument == "--gpu-parity-mode") {
+      batch_argument_seen = true;
+      if ((i + 1) >= argc) {
+        message = "Missing value for --gpu-parity-mode\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      options.gpu_parity_mode = argv[++i];
+      if ((options.gpu_parity_mode != "off") && (options.gpu_parity_mode != "cpu-order")) {
+        message = "Unsupported value for --gpu-parity-mode. Expected: off or cpu-order\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      continue;
+    }
+
     if (argument == "--gpu-compile-stage") {
       batch_argument_seen = true;
       if ((i + 1) >= argc) {
@@ -2962,7 +2988,7 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
   if (generate_bsdf_luts_requested) {
     if ((options.scene_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
         (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) ||
-        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.denoise) || (options.override_random_seed) ||
+        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.gpu_parity_mode != "off") || (options.denoise) || (options.override_random_seed) ||
         (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.exposure != 1.0f)) {
       message = "--generate-bsdf-luts accepts only --output and --bsdf-lut-samples\n\n";
       message += batch_usage_string();
@@ -2975,7 +3001,7 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
   if (pregenerate_bsdf_lut_cache_requested) {
     if ((options.scene_file.empty() == false) || (options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
         (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) ||
-        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.denoise) || (options.override_random_seed) ||
+        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.gpu_parity_mode != "off") || (options.denoise) || (options.override_random_seed) ||
         (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.exposure != 1.0f) || (options.bsdf_lut_samples != 512u)) {
       message = "--pregenerate-bsdf-lut-cache does not accept additional options\n\n";
       message += batch_usage_string();
@@ -3010,8 +3036,8 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     }
 
     if ((options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) || (options.renderer != "cpu") ||
-        (options.integrator.empty() == false) || options.gpu_compile_only || (options.gpu_compile_stage.empty() == false)) {
-      message = "--cpu-comparison does not accept --output, --reference, --compare, --renderer, --integrator, --gpu-compile-only, or --gpu-compile-stage\n\n";
+        (options.integrator.empty() == false) || options.gpu_compile_only || (options.gpu_compile_stage.empty() == false) || (options.gpu_parity_mode != "off")) {
+      message = "--cpu-comparison does not accept --output, --reference, --compare, --renderer, --integrator, --gpu-compile-only, --gpu-compile-stage, or --gpu-parity-mode\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
     }
@@ -3027,6 +3053,12 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
 
   if ((options.compare_mode.empty() == false) && (options.reference_file.empty())) {
     message = "Image comparison requires --reference\n\n";
+    message += batch_usage_string();
+    return BatchModeCommand::Error;
+  }
+
+  if ((options.gpu_parity_mode != "off") && (options.renderer != "gpu")) {
+    message = "--gpu-parity-mode requires --renderer gpu\n\n";
     message += batch_usage_string();
     return BatchModeCommand::Error;
   }

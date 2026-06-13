@@ -29,6 +29,7 @@ struct RenderContext {
   bool valid() const;
   void init();
   void cleanup();
+  void cleanup(bool device_already_idle);
 
   void start_frame(Renderer* renderer, SceneRepresentation& scene, const FrameData&);
   void end_frame();

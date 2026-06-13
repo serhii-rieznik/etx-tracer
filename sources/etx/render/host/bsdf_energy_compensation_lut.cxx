@@ -6,10 +6,14 @@
 #include <etx/render/host/image_loaders.hxx>
 #include <etx/render/interop/bsdf_energy_compensated_shared.hxx>
 #include <etx/render/interop/bsdf_external_shared.hxx>
+#include <etx/rhi/rhi.hxx>
+#include <etx/rhi/shader/shader_compiler.hxx>
 
 #include <tinyexr.hxx>
 
+#include <cmath>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <unordered_map>
 
@@ -17,17 +21,21 @@ namespace etx {
 
 namespace {
 
-constexpr uint32_t kEnergyCompensationGeneratorVersion = 24u;
-constexpr uint32_t kEnergyCompensationConductorLutSize = 64u;
-constexpr uint32_t kEnergyCompensationDielectricLutSize = 64u;
+constexpr uint32_t kEnergyCompensationGeneratorVersion = 26u;
+constexpr uint32_t kEnergyCompensationConductorLutSize = kBSDFEnergyCompensationConductorLutSize;
+constexpr uint32_t kEnergyCompensationDielectricLutSize = kBSDFEnergyCompensationDielectricLutSize;
 constexpr uint32_t kEnergyCompensationConductorSampleCount = 2048u;
 constexpr uint32_t kEnergyCompensationSampleCount = 2048u;
 constexpr uint32_t kEnergyCompensationDielectricMultiScatterSampleCount = 2048u;
-constexpr uint32_t kEnergyCompensationDielectricBranchCount = 4u;
-constexpr uint32_t kEnergyCompensationDielectricAverageWidth = 8u;
+constexpr uint32_t kEnergyCompensationDielectricBranchCount = kBSDFEnergyCompensationDielectricBranchCount;
+constexpr uint32_t kEnergyCompensationDielectricAverageWidth = kBSDFEnergyCompensationDielectricAverageWidth;
 constexpr uint32_t kEnergyCompensationSpectralWavelengthCount = kBSDFEnergyCompensationSpectralWavelengthCount;
 constexpr uint32_t kEnergyCompensationSpectralWavelengthGroupSize = kBSDFEnergyCompensationSpectralWavelengthGroupSize;
 constexpr uint32_t kEnergyCompensationSpectralWavelengthGroupCount = kBSDFEnergyCompensationSpectralWavelengthGroupCount;
+constexpr uint32_t kEnergyCompensationGpuPassConductorDirectional = kBSDFEnergyCompensationGpuPassConductorDirectional;
+constexpr uint32_t kEnergyCompensationGpuPassConductorAverage = kBSDFEnergyCompensationGpuPassConductorAverage;
+constexpr uint32_t kEnergyCompensationGpuPassDielectricDirectional = kBSDFEnergyCompensationGpuPassDielectricDirectional;
+constexpr uint32_t kEnergyCompensationGpuPassDielectricAverage = kBSDFEnergyCompensationGpuPassDielectricAverage;
 
 struct SpectralDirectionalAlbedoResult {
   float3 albedo = {};
@@ -48,6 +56,67 @@ struct GeneratedInterfacePaths {
   std::filesystem::path geometric_average;
   std::filesystem::path conductor_fms;
   std::filesystem::path probability;
+};
+
+struct EnergyCompensationGpuParams {
+  uint32_t output_directional_index = kInvalidIndex;
+  uint32_t output_average_index = kInvalidIndex;
+  uint32_t output_geometric_index = kInvalidIndex;
+  uint32_t output_geometric_average_index = kInvalidIndex;
+  uint32_t output_conductor_fms_index = kInvalidIndex;
+  uint32_t output_probability_index = kInvalidIndex;
+  uint32_t output_total_index = kInvalidIndex;
+  uint32_t cache_mode = kBSDFEnergyCompensationCacheModeIntegratedRGB;
+  uint32_t wavelength_group_index = 0u;
+  uint32_t thinfilm_slice_index = 0u;
+  uint32_t thinfilm_slice_count = 1u;
+  uint32_t pass_kind = 0u;
+  uint32_t sample_count = kEnergyCompensationSampleCount;
+  uint32_t multisample_count = kEnergyCompensationDielectricMultiScatterSampleCount;
+  uint32_t pad0 = 0u;
+  uint32_t pad1 = 0u;
+  float4 ext_eta = {};
+  float4 ext_k = {};
+  float4 int_eta = {};
+  float4 int_k = {};
+  float4 film_eta = {};
+  float4 film_k = {};
+  float4 wavelengths = {};
+  float thinfilm_thickness = 0.0f;
+  uint32_t film_cls = SpectralDistribution::Invalid;
+  uint32_t pad2 = 0u;
+  uint32_t pad3 = 0u;
+};
+
+static_assert(sizeof(EnergyCompensationGpuParams) == 192u);
+static_assert(offsetof(EnergyCompensationGpuParams, output_directional_index) == 0u);
+static_assert(offsetof(EnergyCompensationGpuParams, cache_mode) == 28u);
+static_assert(offsetof(EnergyCompensationGpuParams, ext_eta) == 64u);
+static_assert(offsetof(EnergyCompensationGpuParams, int_eta) == 96u);
+static_assert(offsetof(EnergyCompensationGpuParams, film_eta) == 128u);
+static_assert(offsetof(EnergyCompensationGpuParams, wavelengths) == 160u);
+static_assert(offsetof(EnergyCompensationGpuParams, thinfilm_thickness) == 176u);
+static_assert(offsetof(EnergyCompensationGpuParams, film_cls) == 180u);
+
+struct EnergyCompensationGpuPushConstants {
+  uint32_t params_buffer_index = kInvalidIndex;
+};
+
+struct EnergyCompensationGpuBuffers {
+  RHIBuffer params_directional = {};
+  RHIBuffer params_average = {};
+  RHIBuffer directional = {};
+  RHIBuffer average = {};
+  RHIBuffer geometric = {};
+  RHIBuffer geometric_average = {};
+  RHIBuffer conductor_fms = {};
+  RHIBuffer probability = {};
+  RHIBuffer total = {};
+};
+
+struct EnergyCompensationGpuPipeline {
+  RHIPipeline pipeline = {};
+  bool initialization_failed = false;
 };
 
 float lut_parameter(uint32_t index, uint32_t size) {
@@ -200,6 +269,289 @@ ThinfilmEval sample_thinfilm_slice(const SceneData& data, const Thinfilm& thinfi
   return result;
 }
 
+float4 spectral_response_to_gpu_float4(const ::SpectralResponse& value) {
+  return float4{value.integrated.x, value.integrated.y, value.integrated.z, spectral_response_monochromatic(value)};
+}
+
+void set_gpu_float4_channel(float4& value, uint32_t channel, float scalar) {
+  if (channel == 0u) {
+    value.x = scalar;
+  } else if (channel == 1u) {
+    value.y = scalar;
+  } else if (channel == 2u) {
+    value.z = scalar;
+  } else {
+    value.w = scalar;
+  }
+}
+
+bool gpu_create_storage_buffer(RHIContext& rhi, const void* data, uint64_t size, RHIBufferUsage usage, bool host_visible, RHIBuffer& out_buffer, const char* debug_name) {
+  if (size == 0u) {
+    log::error("Invalid BSDF energy-compensation GPU buffer size for %s", debug_name);
+    return false;
+  }
+
+  RHIBufferDesc desc = {};
+  desc.size = size;
+  desc.usage = RHIBufferUsage::Storage | usage;
+  desc.host_visible = host_visible;
+  auto result = rhi.device().create_buffer(desc);
+  if ((result.result != RHIResult::Success) || (result.handle.valid() == false)) {
+    log::error("Failed to create BSDF energy-compensation GPU buffer %s (%u)", debug_name, static_cast<uint32_t>(result.result));
+    return false;
+  }
+
+  if (data != nullptr) {
+    const RHIResult update_result = rhi.device().update_buffer(result.handle, data, size);
+    if (update_result != RHIResult::Success) {
+      log::error("Failed to upload BSDF energy-compensation GPU buffer %s (%u)", debug_name, static_cast<uint32_t>(update_result));
+      rhi.device().destroy_buffer(result.handle);
+      return false;
+    }
+  }
+
+  out_buffer = result.handle;
+  return true;
+}
+
+bool gpu_create_params_buffer(RHIContext& rhi, const EnergyCompensationGpuParams& params, RHIBuffer& out_buffer, const char* debug_name) {
+  return gpu_create_storage_buffer(rhi, &params, sizeof(params), RHIBufferUsage::TransferDst, true, out_buffer, debug_name);
+}
+
+bool gpu_create_float4_output_buffer(RHIContext& rhi, uint64_t element_count, RHIBuffer& out_buffer, const char* debug_name) {
+  return gpu_create_storage_buffer(rhi, nullptr, element_count * sizeof(float4), RHIBufferUsage::TransferSrc, false, out_buffer, debug_name);
+}
+
+void gpu_destroy_buffer_if_valid(RHIContext& rhi, RHIBuffer& buffer) {
+  if (buffer.valid()) {
+    rhi.device().destroy_buffer(buffer);
+    buffer = {};
+  }
+}
+
+void gpu_destroy_energy_compensation_buffers(RHIContext& rhi, EnergyCompensationGpuBuffers& buffers) {
+  gpu_destroy_buffer_if_valid(rhi, buffers.params_directional);
+  gpu_destroy_buffer_if_valid(rhi, buffers.params_average);
+  gpu_destroy_buffer_if_valid(rhi, buffers.directional);
+  gpu_destroy_buffer_if_valid(rhi, buffers.average);
+  gpu_destroy_buffer_if_valid(rhi, buffers.geometric);
+  gpu_destroy_buffer_if_valid(rhi, buffers.geometric_average);
+  gpu_destroy_buffer_if_valid(rhi, buffers.conductor_fms);
+  gpu_destroy_buffer_if_valid(rhi, buffers.probability);
+  gpu_destroy_buffer_if_valid(rhi, buffers.total);
+}
+
+bool gpu_create_float4_readback_buffer(RHIContext& rhi, uint64_t element_count, RHIBuffer& out_buffer, const char* debug_name) {
+  const uint64_t size = element_count * sizeof(float4);
+  RHIBufferDesc desc = {};
+  desc.size = size;
+  desc.usage = RHIBufferUsage::TransferDst;
+  desc.host_visible = true;
+
+  auto result = rhi.device().create_buffer(desc);
+  if ((result.result != RHIResult::Success) || (result.handle.valid() == false)) {
+    log::error("Failed to create BSDF energy-compensation GPU readback buffer %s (%u)", debug_name, static_cast<uint32_t>(result.result));
+    return false;
+  }
+
+  out_buffer = result.handle;
+  return true;
+}
+
+bool gpu_read_float4_output_buffer(RHIContext& rhi, RHIBuffer buffer, uint64_t element_count, std::vector<float4>& out_pixels, const char* debug_name) {
+  if (buffer.valid() == false) {
+    log::error("Invalid BSDF energy-compensation GPU output buffer %s", debug_name);
+    return false;
+  }
+
+  const uint64_t size = element_count * sizeof(float4);
+  RHIBuffer readback_buffer = {};
+  RHICommandBuffer cmd = {};
+  bool success = false;
+
+  do {
+    if (gpu_create_float4_readback_buffer(rhi, element_count, readback_buffer, debug_name) == false) {
+      break;
+    }
+
+    cmd = rhi.get_command_buffer();
+    if (cmd.valid() == false) {
+      log::error("Failed to acquire command buffer for BSDF energy-compensation GPU readback %s", debug_name);
+      break;
+    }
+
+    rhi.command_buffer_begin(cmd);
+    rhi.cmd_buffer_barrier(cmd, buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
+    rhi.cmd_copy_buffer(cmd, buffer, readback_buffer, size);
+    rhi.command_buffer_end(cmd);
+    rhi.submit_command_buffer({cmd});
+
+    const RHIResult wait_result = rhi.wait_idle();
+    if (wait_result != RHIResult::Success) {
+      log::error("Failed to wait for BSDF energy-compensation GPU readback %s (%u)", debug_name, static_cast<uint32_t>(wait_result));
+      break;
+    }
+
+    out_pixels.resize(static_cast<size_t>(element_count));
+    const RHIResult read_result = rhi.device().read_buffer(readback_buffer, out_pixels.data(), size);
+    if (read_result != RHIResult::Success) {
+      log::error("Failed to read BSDF energy-compensation GPU buffer %s (%u)", debug_name, static_cast<uint32_t>(read_result));
+      out_pixels.clear();
+      break;
+    }
+
+    success = true;
+  } while (false);
+
+  if (cmd.valid()) {
+    rhi.destroy_command_buffer(cmd);
+  }
+  gpu_destroy_buffer_if_valid(rhi, readback_buffer);
+  return success;
+}
+
+bool gpu_init_energy_compensation_pipeline(RHIContext& rhi, EnergyCompensationGpuPipeline& out_pipeline) {
+  if (out_pipeline.pipeline.valid()) {
+    return true;
+  }
+  if (out_pipeline.initialization_failed) {
+    return false;
+  }
+
+  auto compilation = ShaderCompiler::instance().compile("shaders/bsdf_energy_compensation.hlsl", {{"main", RHIShaderStage::Compute}}, {}, rhi.backend());
+  if (compilation.result != RHIResult::Success) {
+    log::error("Failed to compile BSDF energy-compensation GPU shader: %s", compilation.error_message.c_str());
+    out_pipeline.initialization_failed = true;
+    return false;
+  }
+  if (compilation.binaries.empty()) {
+    log::error("BSDF energy-compensation GPU shader compilation returned no binaries");
+    out_pipeline.initialization_failed = true;
+    return false;
+  }
+
+  RHIComputePipelineDesc desc = rhi.device().make_compute_pipeline_desc(compilation.binaries[0]);
+  auto pipeline_result = rhi.device().create_compute_pipeline(desc);
+  if ((pipeline_result.result != RHIResult::Success) || (pipeline_result.handle.valid() == false)) {
+    log::error("Failed to create BSDF energy-compensation GPU pipeline (%u)", static_cast<uint32_t>(pipeline_result.result));
+    out_pipeline.initialization_failed = true;
+    return false;
+  }
+
+  out_pipeline.pipeline = pipeline_result.handle;
+  return true;
+}
+
+bool gpu_dispatch_energy_compensation(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const EnergyCompensationGpuBuffers& buffers, uint32_t width,
+  uint32_t height, bool run_average_pass) {
+  if (gpu_init_energy_compensation_pipeline(rhi, pipeline) == false) {
+    return false;
+  }
+
+  RHICommandBuffer cmd = rhi.get_command_buffer();
+  if (cmd.valid() == false) {
+    log::error("Failed to acquire command buffer for BSDF energy-compensation GPU generation");
+    return false;
+  }
+
+  rhi.command_buffer_begin(cmd);
+  rhi.cmd_set_pipeline(cmd, pipeline.pipeline);
+
+  EnergyCompensationGpuPushConstants pc = {};
+  pc.params_buffer_index = get_bindless_descriptor_index(buffers.params_directional);
+  rhi.cmd_push_constants(cmd, &pc, sizeof(pc), 0);
+  RHIDispatchDesc dispatch = {};
+  dispatch.group_count_x = (width + 7u) / 8u;
+  dispatch.group_count_y = (height + 7u) / 8u;
+  dispatch.group_count_z = 1u;
+  rhi.cmd_dispatch(cmd, dispatch);
+
+  if (run_average_pass) {
+    rhi.cmd_buffer_barrier(cmd, buffers.directional, RHIResourceState::General, RHIResourceState::General);
+    if (buffers.geometric.valid()) {
+      rhi.cmd_buffer_barrier(cmd, buffers.geometric, RHIResourceState::General, RHIResourceState::General);
+    }
+    if (buffers.total.valid()) {
+      rhi.cmd_buffer_barrier(cmd, buffers.total, RHIResourceState::General, RHIResourceState::General);
+    }
+
+    pc.params_buffer_index = get_bindless_descriptor_index(buffers.params_average);
+    rhi.cmd_push_constants(cmd, &pc, sizeof(pc), 0);
+    RHIDispatchDesc average_dispatch = {};
+    average_dispatch.group_count_x = 8u;
+    average_dispatch.group_count_y = 1u;
+    average_dispatch.group_count_z = 1u;
+    rhi.cmd_dispatch(cmd, average_dispatch);
+  }
+
+  rhi.command_buffer_end(cmd);
+  rhi.submit_command_buffer({cmd});
+  const RHIResult wait_result = rhi.wait_idle();
+  rhi.destroy_command_buffer(cmd);
+  if (wait_result != RHIResult::Success) {
+    log::error("Failed to wait for BSDF energy-compensation GPU generation (%u)", static_cast<uint32_t>(wait_result));
+    return false;
+  }
+
+  return true;
+}
+
+void fill_gpu_refractive_index_integrated(const SceneData& data, const RefractiveIndex& refractive_index, float4& eta, float4& k) {
+  const SpectralQuery spect = {};
+  const RefractiveIndexSample value = sample_refractive_index(data, refractive_index, spect);
+  eta = spectral_response_to_gpu_float4(value.eta);
+  k = spectral_response_to_gpu_float4(value.k);
+}
+
+void fill_gpu_refractive_index_spectral(const SceneData& data, const RefractiveIndex& refractive_index, uint32_t wavelength_group_index, float4& eta, float4& k,
+  float4& wavelengths) {
+  eta = {};
+  k = {};
+  wavelengths = {};
+  for (uint32_t channel = 0u; channel < kEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
+    const uint32_t wavelength_index = wavelength_group_index * kEnergyCompensationSpectralWavelengthGroupSize + channel;
+    const SpectralQuery spect = spectral_cache_query(wavelength_index);
+    const RefractiveIndexSample value = sample_refractive_index(data, refractive_index, spect);
+    set_gpu_float4_channel(eta, channel, spectral_response_monochromatic(value.eta));
+    set_gpu_float4_channel(k, channel, spectral_response_monochromatic(value.k));
+    set_gpu_float4_channel(wavelengths, channel, spect.wavelength);
+  }
+}
+
+EnergyCompensationGpuParams make_gpu_params(const SceneData& data, const Material& material, uint32_t cache_mode, uint32_t pass_kind, uint32_t thinfilm_slice_index,
+  uint32_t thinfilm_slice_count, uint32_t wavelength_group_index) {
+  EnergyCompensationGpuParams result = {};
+  result.cache_mode = cache_mode;
+  result.wavelength_group_index = wavelength_group_index;
+  result.thinfilm_slice_index = thinfilm_slice_index;
+  result.thinfilm_slice_count = thinfilm_slice_count;
+  result.pass_kind = pass_kind;
+  result.sample_count = kEnergyCompensationSampleCount;
+  result.multisample_count = kEnergyCompensationDielectricMultiScatterSampleCount;
+
+  if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+    fill_gpu_refractive_index_spectral(data, material.ext_ior, wavelength_group_index, result.ext_eta, result.ext_k, result.wavelengths);
+    float4 unused_wavelengths = {};
+    fill_gpu_refractive_index_spectral(data, material.int_ior, wavelength_group_index, result.int_eta, result.int_k, unused_wavelengths);
+    const SpectralQuery spect = spectral_cache_query(wavelength_group_index * kEnergyCompensationSpectralWavelengthGroupSize);
+    const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, thinfilm_slice_index, thinfilm_slice_count);
+    result.thinfilm_thickness = thinfilm.thickness;
+    result.film_cls = thinfilm.ior.cls;
+    fill_gpu_refractive_index_spectral(data, material.thinfilm.ior, wavelength_group_index, result.film_eta, result.film_k, unused_wavelengths);
+  } else {
+    fill_gpu_refractive_index_integrated(data, material.ext_ior, result.ext_eta, result.ext_k);
+    fill_gpu_refractive_index_integrated(data, material.int_ior, result.int_eta, result.int_k);
+    const SpectralQuery spect = {};
+    const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, thinfilm_slice_index, thinfilm_slice_count);
+    result.thinfilm_thickness = thinfilm.thickness;
+    result.film_cls = thinfilm.ior.cls;
+    result.film_eta = spectral_response_to_gpu_float4(thinfilm.ior.eta);
+    result.film_k = spectral_response_to_gpu_float4(thinfilm.ior.k);
+  }
+
+  return result;
+}
+
 uint64_t hash_spectrum(const SceneData& data, uint32_t index, uint64_t seed) {
   if (index >= data.spectrum_values.size()) {
     return etx_hash64_continue(&index, sizeof(index), seed);
@@ -260,6 +612,10 @@ std::filesystem::path cache_directory() {
   return std::filesystem::path(env().file_in_data("cache/bsdf/energy_compensation"));
 }
 
+std::filesystem::path parity_cache_directory() {
+  return cache_directory() / "parity";
+}
+
 std::string hash_string(uint64_t hash) {
   char buffer[32] = {};
   snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(hash));
@@ -277,6 +633,18 @@ GeneratedInterfacePaths interface_paths(uint32_t material_class, uint64_t hash) 
     directory / (key + "_geometric_average.exr"),
     directory / (key + "_conductor_fms.exr"),
     directory / (key + "_probability.exr"),
+  };
+}
+
+GeneratedInterfacePaths parity_interface_paths(const char* key) {
+  const std::filesystem::path directory = parity_cache_directory();
+  return {
+    directory / (std::string(key) + ".exr"),
+    directory / (std::string(key) + "_average.exr"),
+    directory / (std::string(key) + "_geometric.exr"),
+    directory / (std::string(key) + "_geometric_average.exr"),
+    directory / (std::string(key) + "_conductor_fms.exr"),
+    directory / (std::string(key) + "_probability.exr"),
   };
 }
 
@@ -453,7 +821,8 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
     }
 
     if ((fresnel_probability < 1.0f) && (cos_theta_t2 > 0.0f)) {
-      const float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
+      float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
+      w_o_t.z = -abs(w_o_t.z);
       if (w_o_t.z < 0.0f) {
         const auto lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i, w_o_t, alpha, ext_ior, int_ior, thinfilm, texture);
         const float transmission_probability = 1.0f - fresnel_probability;
@@ -966,6 +1335,146 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
          save_exr_rgba(paths.probability, probability, width, kEnergyCompensationDielectricLutSize);
 }
 
+bool generate_conductor_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material, const GeneratedInterfacePaths& paths,
+  const GeneratedInterfacePaths& geometric_paths, uint32_t cache_mode, uint32_t thinfilm_slice_index, uint32_t thinfilm_slice_count, uint32_t wavelength_group_index,
+  bool save_spectral_geometric) {
+  const uint64_t entry_count = uint64_t(kEnergyCompensationConductorLutSize) * uint64_t(kEnergyCompensationConductorLutSize);
+  EnergyCompensationGpuBuffers buffers = {};
+  bool result = false;
+
+  do {
+    if ((gpu_create_float4_output_buffer(rhi, entry_count, buffers.directional, "ec_conductor_directional") == false) ||
+        (gpu_create_float4_output_buffer(rhi, kEnergyCompensationConductorLutSize, buffers.average, "ec_conductor_average") == false) ||
+        (gpu_create_float4_output_buffer(rhi, entry_count, buffers.geometric, "ec_conductor_geometric") == false) ||
+        (gpu_create_float4_output_buffer(rhi, kEnergyCompensationConductorLutSize, buffers.geometric_average, "ec_conductor_geometric_average") == false) ||
+        (gpu_create_float4_output_buffer(rhi, kEnergyCompensationConductorLutSize, buffers.conductor_fms, "ec_conductor_fms") == false)) {
+      break;
+    }
+
+    EnergyCompensationGpuParams directional_params = make_gpu_params(data, material, cache_mode, kEnergyCompensationGpuPassConductorDirectional, thinfilm_slice_index,
+      thinfilm_slice_count, wavelength_group_index);
+    directional_params.output_directional_index = get_bindless_descriptor_index(buffers.directional);
+    directional_params.output_geometric_index = get_bindless_descriptor_index(buffers.geometric);
+
+    EnergyCompensationGpuParams average_params = make_gpu_params(data, material, cache_mode, kEnergyCompensationGpuPassConductorAverage, thinfilm_slice_index,
+      thinfilm_slice_count, wavelength_group_index);
+    average_params.output_directional_index = get_bindless_descriptor_index(buffers.directional);
+    average_params.output_average_index = get_bindless_descriptor_index(buffers.average);
+    average_params.output_geometric_index = get_bindless_descriptor_index(buffers.geometric);
+    average_params.output_geometric_average_index = get_bindless_descriptor_index(buffers.geometric_average);
+    average_params.output_conductor_fms_index = get_bindless_descriptor_index(buffers.conductor_fms);
+
+    if ((gpu_create_params_buffer(rhi, directional_params, buffers.params_directional, "ec_conductor_directional_params") == false) ||
+        (gpu_create_params_buffer(rhi, average_params, buffers.params_average, "ec_conductor_average_params") == false)) {
+      break;
+    }
+
+    if (gpu_dispatch_energy_compensation(rhi, pipeline, buffers, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, true) == false) {
+      break;
+    }
+
+    std::vector<float4> directional_pixels;
+    std::vector<float4> average_pixels;
+    std::vector<float4> conductor_fms_pixels;
+    if ((gpu_read_float4_output_buffer(rhi, buffers.directional, entry_count, directional_pixels, "ec_conductor_directional") == false) ||
+        (gpu_read_float4_output_buffer(rhi, buffers.average, kEnergyCompensationConductorLutSize, average_pixels, "ec_conductor_average") == false) ||
+        (gpu_read_float4_output_buffer(rhi, buffers.conductor_fms, kEnergyCompensationConductorLutSize, conductor_fms_pixels, "ec_conductor_fms") == false)) {
+      break;
+    }
+
+    if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+      result = save_exr_rgba(paths.directional, directional_pixels, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize) &&
+               save_exr_rgba(paths.average, average_pixels, kEnergyCompensationConductorLutSize, 1u) &&
+               save_exr_rgba(paths.conductor_fms, conductor_fms_pixels, kEnergyCompensationConductorLutSize, 1u);
+      if (save_spectral_geometric) {
+        std::vector<float4> geometric_pixels;
+        std::vector<float4> geometric_average_pixels;
+        if ((gpu_read_float4_output_buffer(rhi, buffers.geometric, entry_count, geometric_pixels, "ec_conductor_geometric") == false) ||
+            (gpu_read_float4_output_buffer(rhi, buffers.geometric_average, kEnergyCompensationConductorLutSize, geometric_average_pixels, "ec_conductor_geometric_average") == false)) {
+          break;
+        }
+        result = (save_exr_rgba(geometric_paths.geometric, geometric_pixels, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize) &&
+                   save_exr_rgba(geometric_paths.geometric_average, geometric_average_pixels, kEnergyCompensationConductorLutSize, 1u)) &&
+                 result;
+      }
+    } else {
+      std::vector<float4> geometric_pixels;
+      std::vector<float4> geometric_average_pixels;
+      if ((gpu_read_float4_output_buffer(rhi, buffers.geometric, entry_count, geometric_pixels, "ec_conductor_geometric") == false) ||
+          (gpu_read_float4_output_buffer(rhi, buffers.geometric_average, kEnergyCompensationConductorLutSize, geometric_average_pixels, "ec_conductor_geometric_average") == false)) {
+        break;
+      }
+      result = save_exr_rgba(paths.directional, directional_pixels, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize) &&
+               save_exr_rgba(paths.average, average_pixels, kEnergyCompensationConductorLutSize, 1u) &&
+               save_exr_rgba(paths.geometric, geometric_pixels, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize) &&
+               save_exr_rgba(paths.geometric_average, geometric_average_pixels, kEnergyCompensationConductorLutSize, 1u) &&
+               save_exr_rgba(paths.conductor_fms, conductor_fms_pixels, kEnergyCompensationConductorLutSize, 1u);
+    }
+  } while (false);
+
+  gpu_destroy_energy_compensation_buffers(rhi, buffers);
+  return result;
+}
+
+bool generate_dielectric_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material, const GeneratedInterfacePaths& paths,
+  uint32_t cache_mode, uint32_t thinfilm_slice_index, uint32_t thinfilm_slice_count, uint32_t wavelength_group_index) {
+  const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize;
+  const uint64_t directional_count = uint64_t(width) * uint64_t(kEnergyCompensationDielectricLutSize);
+  const uint64_t average_count = uint64_t(kEnergyCompensationDielectricAverageWidth) * uint64_t(kEnergyCompensationDielectricLutSize);
+  EnergyCompensationGpuBuffers buffers = {};
+  bool result = false;
+
+  do {
+    if ((gpu_create_float4_output_buffer(rhi, directional_count, buffers.directional, "ec_dielectric_directional") == false) ||
+        (gpu_create_float4_output_buffer(rhi, directional_count, buffers.total, "ec_dielectric_total") == false) ||
+        (gpu_create_float4_output_buffer(rhi, directional_count, buffers.probability, "ec_dielectric_probability") == false) ||
+        (gpu_create_float4_output_buffer(rhi, average_count, buffers.average, "ec_dielectric_average") == false)) {
+      break;
+    }
+
+    EnergyCompensationGpuParams directional_params = make_gpu_params(data, material, cache_mode, kEnergyCompensationGpuPassDielectricDirectional, thinfilm_slice_index,
+      thinfilm_slice_count, wavelength_group_index);
+    directional_params.output_directional_index = get_bindless_descriptor_index(buffers.directional);
+    directional_params.output_total_index = get_bindless_descriptor_index(buffers.total);
+    directional_params.output_probability_index = get_bindless_descriptor_index(buffers.probability);
+
+    EnergyCompensationGpuParams average_params =
+      make_gpu_params(data, material, cache_mode, kEnergyCompensationGpuPassDielectricAverage, thinfilm_slice_index, thinfilm_slice_count, wavelength_group_index);
+    average_params.output_directional_index = get_bindless_descriptor_index(buffers.directional);
+    average_params.output_total_index = get_bindless_descriptor_index(buffers.total);
+    average_params.output_average_index = get_bindless_descriptor_index(buffers.average);
+
+    if ((gpu_create_params_buffer(rhi, directional_params, buffers.params_directional, "ec_dielectric_directional_params") == false) ||
+        (gpu_create_params_buffer(rhi, average_params, buffers.params_average, "ec_dielectric_average_params") == false)) {
+      break;
+    }
+
+    if (gpu_dispatch_energy_compensation(rhi, pipeline, buffers, kEnergyCompensationDielectricLutSize, 2u * kEnergyCompensationDielectricLutSize, true) == false) {
+      break;
+    }
+
+    std::vector<float4> directional_pixels;
+    std::vector<float4> average_pixels;
+    std::vector<float4> probability_pixels;
+    if ((gpu_read_float4_output_buffer(rhi, buffers.directional, directional_count, directional_pixels, "ec_dielectric_directional") == false) ||
+        (gpu_read_float4_output_buffer(rhi, buffers.average, average_count, average_pixels, "ec_dielectric_average") == false)) {
+      break;
+    }
+
+    result = save_exr_rgba(paths.directional, directional_pixels, width, kEnergyCompensationDielectricLutSize) &&
+             save_exr_rgba(paths.average, average_pixels, kEnergyCompensationDielectricAverageWidth, kEnergyCompensationDielectricLutSize);
+    if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+      if (gpu_read_float4_output_buffer(rhi, buffers.probability, directional_count, probability_pixels, "ec_dielectric_probability") == false) {
+        break;
+      }
+      result = save_exr_rgba(paths.probability, probability_pixels, width, kEnergyCompensationDielectricLutSize) && result;
+    }
+  } while (false);
+
+  gpu_destroy_energy_compensation_buffers(rhi, buffers);
+  return result;
+}
+
 bool ensure_cache_file(const SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode, const GeneratedInterfacePaths& paths,
   TaskScheduler& scheduler) {
   const bool conductor = material_class == MaterialClass::Conductor;
@@ -1038,8 +1547,76 @@ bool ensure_cache_file(const SceneData& data, const Material& material, uint32_t
   return result;
 }
 
+bool ensure_cache_file_gpu(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode,
+  const GeneratedInterfacePaths& paths) {
+  const bool conductor = material_class == MaterialClass::Conductor;
+  const uint32_t slice_count = thinfilm_lut_slice_count(material.thinfilm);
+  if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+    bool spectral_result = true;
+    for (uint32_t thinfilm_slice_index = 0u; thinfilm_slice_index < slice_count; ++thinfilm_slice_index) {
+      bool conductor_geometric_generated = false;
+      for (uint32_t wavelength_group = 0u; wavelength_group < kEnergyCompensationSpectralWavelengthGroupCount; ++wavelength_group) {
+        const uint32_t packed_slice_index = thinfilm_slice_index * kEnergyCompensationSpectralWavelengthGroupCount + wavelength_group;
+        const GeneratedInterfacePaths slice_paths_value = interface_slice_paths(paths, packed_slice_index);
+        const bool directional_exists = std::filesystem::exists(slice_paths_value.directional);
+        const bool average_exists = std::filesystem::exists(slice_paths_value.average);
+        const bool conductor_fms_exists = conductor ? std::filesystem::exists(slice_paths_value.conductor_fms) : true;
+        const bool probability_exists = conductor ? true : std::filesystem::exists(slice_paths_value.probability);
+        const GeneratedInterfacePaths geometric_paths = interface_slice_paths(paths, thinfilm_slice_index);
+        const bool geometric_exists = conductor ? std::filesystem::exists(geometric_paths.geometric) : true;
+        const bool geometric_average_exists = conductor ? std::filesystem::exists(geometric_paths.geometric_average) : true;
+        if (((((directional_exists && average_exists) && conductor_fms_exists) && probability_exists) && geometric_exists) && geometric_average_exists) {
+          continue;
+        }
+
+        const auto time_begin = std::chrono::steady_clock::now();
+        const bool save_spectral_geometric = conductor && (conductor_geometric_generated == false) &&
+                                             ((std::filesystem::exists(geometric_paths.geometric) && std::filesystem::exists(geometric_paths.geometric_average)) == false);
+        const bool generated = conductor ? generate_conductor_interface_gpu(rhi, pipeline, data, material, slice_paths_value, geometric_paths, cache_mode, thinfilm_slice_index,
+                                            slice_count, wavelength_group, save_spectral_geometric)
+                                         : generate_dielectric_interface_gpu(rhi, pipeline, data, material, slice_paths_value, cache_mode, thinfilm_slice_index, slice_count,
+                                             wavelength_group);
+        if (save_spectral_geometric) {
+          conductor_geometric_generated = generated || conductor_geometric_generated;
+        }
+        const auto time_end = std::chrono::steady_clock::now();
+        const double elapsed_seconds = std::chrono::duration<double>(time_end - time_begin).count();
+        if (generated) {
+          log::info("Generated GPU spectral energy-compensation LUT cache %s in %.3f seconds", slice_paths_value.directional.generic_string().c_str(), elapsed_seconds);
+        }
+        spectral_result = generated && spectral_result;
+      }
+    }
+    return spectral_result;
+  }
+
+  bool result = true;
+  for (uint32_t slice_index = 0u; slice_index < slice_count; ++slice_index) {
+    const GeneratedInterfacePaths slice_paths_value = interface_slice_paths(paths, slice_index);
+    const bool directional_exists = std::filesystem::exists(slice_paths_value.directional);
+    const bool average_exists = std::filesystem::exists(slice_paths_value.average);
+    const bool geometric_exists = conductor ? std::filesystem::exists(slice_paths_value.geometric) : true;
+    const bool geometric_average_exists = conductor ? std::filesystem::exists(slice_paths_value.geometric_average) : true;
+    const bool conductor_fms_exists = conductor ? std::filesystem::exists(slice_paths_value.conductor_fms) : true;
+    if ((((directional_exists && average_exists) && geometric_exists) && geometric_average_exists) && conductor_fms_exists) {
+      continue;
+    }
+
+    const auto time_begin = std::chrono::steady_clock::now();
+    const bool generated = conductor ? generate_conductor_interface_gpu(rhi, pipeline, data, material, slice_paths_value, slice_paths_value, cache_mode, slice_index, slice_count, 0u, false)
+                                     : generate_dielectric_interface_gpu(rhi, pipeline, data, material, slice_paths_value, cache_mode, slice_index, slice_count, 0u);
+    const auto time_end = std::chrono::steady_clock::now();
+    const double elapsed_seconds = std::chrono::duration<double>(time_end - time_begin).count();
+    if (generated) {
+      log::info("Generated GPU energy-compensation LUT cache %s in %.3f seconds", slice_paths_value.directional.generic_string().c_str(), elapsed_seconds);
+    }
+    result = generated && result;
+  }
+  return result;
+}
+
 bool bind_energy_compensation_interface(SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode,
-  std::unordered_map<uint64_t, uint32_t>& interface_cache, TaskScheduler& scheduler, uint32_t& out_interface_index) {
+  std::unordered_map<uint64_t, uint32_t>& interface_cache, TaskScheduler& scheduler, RHIContext* rhi, EnergyCompensationGpuPipeline* gpu_pipeline, uint32_t& out_interface_index) {
   const bool conductor = material_class == MaterialClass::Conductor;
   const uint64_t hash = hash_material_interface(data, material, material_class, cache_mode);
   const auto found = interface_cache.find(hash);
@@ -1049,7 +1626,13 @@ bool bind_energy_compensation_interface(SceneData& data, const Material& materia
   }
 
   const GeneratedInterfacePaths paths = interface_paths(material_class, hash);
-  if (ensure_cache_file(data, material, material_class, cache_mode, paths, scheduler) == false) {
+  bool cache_ready = false;
+  if ((rhi != nullptr) && (gpu_pipeline != nullptr)) {
+    cache_ready = ensure_cache_file_gpu(*rhi, *gpu_pipeline, data, material, material_class, cache_mode, paths);
+  } else {
+    cache_ready = ensure_cache_file(data, material, material_class, cache_mode, paths, scheduler);
+  }
+  if (cache_ready == false) {
     return false;
   }
 
@@ -1159,8 +1742,9 @@ bool bind_energy_compensation_interface(SceneData& data, const Material& materia
 
 }  // namespace
 
-bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& scheduler) {
+bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& scheduler, RHIContext* rhi) {
   std::unordered_map<uint64_t, uint32_t> interface_cache;
+  EnergyCompensationGpuPipeline gpu_pipeline = {};
   bool result = true;
   const uint32_t cache_mode = data.options.properties[Scene::Properties::Spectral] ? kBSDFEnergyCompensationCacheModeSpectralScalar : kBSDFEnergyCompensationCacheModeIntegratedRGB;
 
@@ -1174,7 +1758,7 @@ bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& sched
     if (material.cls == MaterialClass::OpenPBR) {
       Material dielectric_material = material;
       dielectric_material.cls = MaterialClass::Dielectric;
-      const bool dielectric_bound = bind_energy_compensation_interface(data, dielectric_material, MaterialClass::Dielectric, cache_mode, interface_cache, scheduler,
+      const bool dielectric_bound = bind_energy_compensation_interface(data, dielectric_material, MaterialClass::Dielectric, cache_mode, interface_cache, scheduler, rhi, &gpu_pipeline,
         material.energy_compensation_interface_index);
 
       Material conductor_material = material;
@@ -1188,7 +1772,7 @@ bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& sched
       }
       conductor_material.int_ior.eta_index = data.defaults.conductor_eta;
       conductor_material.int_ior.k_index = data.defaults.conductor_k;
-      const bool conductor_bound = bind_energy_compensation_interface(data, conductor_material, MaterialClass::Conductor, cache_mode, interface_cache, scheduler,
+      const bool conductor_bound = bind_energy_compensation_interface(data, conductor_material, MaterialClass::Conductor, cache_mode, interface_cache, scheduler, rhi, &gpu_pipeline,
         material.conductor_energy_compensation_interface_index);
       result = (dielectric_bound && conductor_bound) && result;
       continue;
@@ -1199,10 +1783,411 @@ bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& sched
     }
 
     const uint32_t material_class = (material.cls == MaterialClass::Plastic) ? MaterialClass::Dielectric : material.cls;
-    result = bind_energy_compensation_interface(data, material, material_class, cache_mode, interface_cache, scheduler, material.energy_compensation_interface_index) && result;
+    result = bind_energy_compensation_interface(data, material, material_class, cache_mode, interface_cache, scheduler, rhi, &gpu_pipeline, material.energy_compensation_interface_index) && result;
+  }
+
+  if ((rhi != nullptr) && gpu_pipeline.pipeline.valid()) {
+    rhi->device().destroy_pipeline(gpu_pipeline.pipeline);
   }
 
   return result;
+}
+
+namespace {
+
+float parity_channel(const float4& value, uint32_t channel) {
+  if (channel == 0u) {
+    return value.x;
+  }
+  if (channel == 1u) {
+    return value.y;
+  }
+  if (channel == 2u) {
+    return value.z;
+  }
+  return value.w;
+}
+
+template <typename Function>
+bool measure_energy_compensation_parity_generation(const char* label, const char* backend, Function function) {
+  const auto start = std::chrono::steady_clock::now();
+  const bool result = function();
+  const auto finish = std::chrono::steady_clock::now();
+  const double elapsed = std::chrono::duration<double>(finish - start).count();
+  log::info("Generated %s energy-compensation parity LUTs on %s in %.3f seconds", label, backend, elapsed);
+  return result;
+}
+
+bool compare_energy_compensation_lut(const char* label, const std::filesystem::path& cpu_path, const std::filesystem::path& gpu_path, uint32_t width, uint32_t height,
+  float base_tolerance, float relative_tolerance) {
+  std::vector<float4> cpu_pixels;
+  std::vector<float4> gpu_pixels;
+  if ((load_rgba32f_lut(cpu_path, width, height, cpu_pixels) == false) || (load_rgba32f_lut(gpu_path, width, height, gpu_pixels) == false)) {
+    log::error("Failed to load energy-compensation parity LUT %s", label);
+    return false;
+  }
+
+  float max_error = 0.0f;
+  uint32_t max_pixel = 0u;
+  uint32_t max_channel = 0u;
+  for (uint32_t pixel = 0u; pixel < cpu_pixels.size(); ++pixel) {
+    for (uint32_t channel = 0u; channel < 4u; ++channel) {
+      const float cpu_value = parity_channel(cpu_pixels[pixel], channel);
+      const float gpu_value = parity_channel(gpu_pixels[pixel], channel);
+      if ((std::isfinite(cpu_value) == false) || (std::isfinite(gpu_value) == false)) {
+        log::error("Non-finite energy-compensation parity value %s pixel %u channel %u cpu %.9f gpu %.9f", label, pixel, channel, cpu_value, gpu_value);
+        return false;
+      }
+
+      const float error = fabsf(cpu_value - gpu_value);
+      const float cpu_abs = fabsf(cpu_value);
+      const float gpu_abs = fabsf(gpu_value);
+      const float scale = (cpu_abs > gpu_abs) ? cpu_abs : gpu_abs;
+      const float tolerance = base_tolerance + relative_tolerance * scale;
+      if (error > tolerance) {
+        log::error("Energy-compensation GPU parity failed %s pixel %u channel %u cpu %.9f gpu %.9f error %.9f tolerance %.9f", label, pixel, channel,
+          cpu_value, gpu_value, error, tolerance);
+        return false;
+      }
+
+      if (error > max_error) {
+        max_error = error;
+        max_pixel = pixel;
+        max_channel = channel;
+      }
+    }
+  }
+
+  log::info("Energy-compensation GPU parity valid %s max error %.9f at pixel %u channel %u", label, max_error, max_pixel, max_channel);
+  return true;
+}
+
+bool compare_parity_values(const char* label, uint32_t pixel, uint32_t channel, float cpu_value, float gpu_value, float base_tolerance, float relative_tolerance,
+  float& max_error, uint32_t& max_pixel, uint32_t& max_channel) {
+  if ((std::isfinite(cpu_value) == false) || (std::isfinite(gpu_value) == false)) {
+    log::error("Non-finite energy-compensation parity value %s pixel %u channel %u cpu %.9f gpu %.9f", label, pixel, channel, cpu_value, gpu_value);
+    return false;
+  }
+
+  const float error = fabsf(cpu_value - gpu_value);
+  const float cpu_abs = fabsf(cpu_value);
+  const float gpu_abs = fabsf(gpu_value);
+  const float scale = (cpu_abs > gpu_abs) ? cpu_abs : gpu_abs;
+  const float tolerance = base_tolerance + relative_tolerance * scale;
+  if (error > tolerance) {
+    log::error("Energy-compensation GPU parity failed %s pixel %u channel %u cpu %.9f gpu %.9f error %.9f tolerance %.9f", label, pixel, channel, cpu_value, gpu_value,
+      error, tolerance);
+    return false;
+  }
+
+  if (error > max_error) {
+    max_error = error;
+    max_pixel = pixel;
+    max_channel = channel;
+  }
+  return true;
+}
+
+bool compare_dielectric_average_lut(const char* label, const std::filesystem::path& cpu_path, const std::filesystem::path& gpu_path, float base_tolerance,
+  float relative_tolerance) {
+  constexpr uint32_t width = kEnergyCompensationDielectricAverageWidth;
+  constexpr uint32_t height = kEnergyCompensationDielectricLutSize;
+  std::vector<float4> cpu_pixels;
+  std::vector<float4> gpu_pixels;
+  if ((load_rgba32f_lut(cpu_path, width, height, cpu_pixels) == false) || (load_rgba32f_lut(gpu_path, width, height, gpu_pixels) == false)) {
+    log::error("Failed to load energy-compensation parity LUT %s", label);
+    return false;
+  }
+
+  float max_error = 0.0f;
+  uint32_t max_pixel = 0u;
+  uint32_t max_channel = 0u;
+  for (uint32_t alpha_index = 0u; alpha_index < height; ++alpha_index) {
+    const uint32_t row_offset = alpha_index * width;
+    for (uint32_t channel = 0u; channel < 4u; ++channel) {
+      float cpu_single[kEnergyCompensationDielectricBranchCount] = {};
+      float gpu_single[kEnergyCompensationDielectricBranchCount] = {};
+      for (uint32_t branch = 0u; branch < kEnergyCompensationDielectricBranchCount; ++branch) {
+        const uint32_t pixel = row_offset + branch;
+        cpu_single[branch] = parity_channel(cpu_pixels[pixel], channel);
+        gpu_single[branch] = parity_channel(gpu_pixels[pixel], channel);
+        if (compare_parity_values(label, pixel, channel, cpu_single[branch], gpu_single[branch], base_tolerance, relative_tolerance, max_error, max_pixel, max_channel) ==
+            false) {
+          return false;
+        }
+      }
+
+      float cpu_side_residual[2] = {};
+      float gpu_side_residual[2] = {};
+      for (uint32_t side = 0u; side < 2u; ++side) {
+        const uint32_t branch_0 = dielectric_branch_index(side, 0u);
+        const uint32_t branch_1 = dielectric_branch_index(side, 1u);
+        cpu_side_residual[side] = max(0.0f, 1.0f - saturate(cpu_single[branch_0] + cpu_single[branch_1]));
+        gpu_side_residual[side] = max(0.0f, 1.0f - saturate(gpu_single[branch_0] + gpu_single[branch_1]));
+      }
+
+      for (uint32_t branch = 0u; branch < kEnergyCompensationDielectricBranchCount; ++branch) {
+        const uint32_t pixel = row_offset + kEnergyCompensationDielectricBranchCount + branch;
+        const uint32_t incident_side = branch / 2u;
+        const uint32_t outgoing_side = branch - incident_side * 2u;
+        const float cpu_coefficient = parity_channel(cpu_pixels[pixel], channel);
+        const float gpu_coefficient = parity_channel(gpu_pixels[pixel], channel);
+        const float cpu_value = cpu_coefficient * cpu_side_residual[incident_side] * cpu_side_residual[outgoing_side];
+        const float gpu_value = gpu_coefficient * gpu_side_residual[incident_side] * gpu_side_residual[outgoing_side];
+        if (compare_parity_values(label, pixel, channel, cpu_value, gpu_value, base_tolerance, relative_tolerance, max_error, max_pixel, max_channel) == false) {
+          return false;
+        }
+      }
+    }
+  }
+
+  log::info("Energy-compensation GPU parity valid %s max error %.9f at pixel %u channel %u", label, max_error, max_pixel, max_channel);
+  return true;
+}
+
+void set_parity_thinfilm(Material& material, uint32_t film_eta, uint32_t film_k) {
+  material.thinfilm.min_thickness = 500.0f;
+  material.thinfilm.max_thickness = 500.0f;
+  material.thinfilm.ior.cls = SpectralDistribution::Dielectric;
+  material.thinfilm.ior.eta_index = film_eta;
+  material.thinfilm.ior.k_index = film_k;
+}
+
+Material make_parity_conductor(uint32_t white, uint32_t air_eta, uint32_t zero, uint32_t conductor_eta, uint32_t conductor_k, uint32_t film_eta) {
+  Material result = {};
+  result.cls = MaterialClass::Conductor;
+  result.reflectance.spectrum_index = white;
+  result.roughness.value = float4{0.5f, 0.5f, 0.0f, 0.0f};
+  result.ext_ior.cls = SpectralDistribution::Dielectric;
+  result.ext_ior.eta_index = air_eta;
+  result.ext_ior.k_index = zero;
+  result.int_ior.cls = SpectralDistribution::Conductor;
+  result.int_ior.eta_index = conductor_eta;
+  result.int_ior.k_index = conductor_k;
+  set_parity_thinfilm(result, film_eta, zero);
+  return result;
+}
+
+Material make_parity_dielectric(uint32_t white, uint32_t air_eta, uint32_t zero, uint32_t dielectric_eta, uint32_t dielectric_k) {
+  Material result = {};
+  result.cls = MaterialClass::Dielectric;
+  result.reflectance.spectrum_index = white;
+  result.scattering.spectrum_index = white;
+  result.roughness.value = float4{0.5f, 0.5f, 0.0f, 0.0f};
+  result.ext_ior.cls = SpectralDistribution::Dielectric;
+  result.ext_ior.eta_index = air_eta;
+  result.ext_ior.k_index = zero;
+  result.int_ior.cls = SpectralDistribution::Dielectric;
+  result.int_ior.eta_index = dielectric_eta;
+  result.int_ior.k_index = dielectric_k;
+  return result;
+}
+
+bool validate_energy_compensation_integrated_conductor_parity(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material,
+  TaskScheduler& scheduler) {
+  const GeneratedInterfacePaths cpu_paths = parity_interface_paths("cpu_conductor_rgb");
+  const GeneratedInterfacePaths gpu_paths = parity_interface_paths("gpu_conductor_rgb");
+  const SpectralQuery spect = {};
+  const RefractiveIndexSample ext_ior = sample_refractive_index(data, material.ext_ior, spect);
+  const RefractiveIndexSample int_ior = sample_refractive_index(data, material.int_ior, spect);
+  const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, 0u, 1u);
+
+  const bool cpu_generated = measure_energy_compensation_parity_generation("conductor rgb", "CPU", [&]() {
+    return generate_conductor_interface(cpu_paths, ext_ior, int_ior, thinfilm, scheduler);
+  });
+  const bool gpu_generated = measure_energy_compensation_parity_generation("conductor rgb", "GPU", [&]() {
+    return generate_conductor_interface_gpu(rhi, pipeline, data, material, gpu_paths, gpu_paths, kBSDFEnergyCompensationCacheModeIntegratedRGB, 0u, 1u, 0u, false);
+  });
+
+  if ((cpu_generated == false) || (gpu_generated == false)) {
+    log::error("Failed to generate integrated conductor energy-compensation parity LUTs");
+    return false;
+  }
+
+  bool valid = true;
+  valid = compare_energy_compensation_lut("conductor rgb directional", cpu_paths.directional, gpu_paths.directional, kEnergyCompensationConductorLutSize,
+            kEnergyCompensationConductorLutSize, 4.0e-4f, 3.0e-3f) &&
+          valid;
+  valid = compare_energy_compensation_lut("conductor rgb average", cpu_paths.average, gpu_paths.average, kEnergyCompensationConductorLutSize, 1u, 4.0e-4f, 3.0e-3f) && valid;
+  valid = compare_energy_compensation_lut("conductor rgb geometric", cpu_paths.geometric, gpu_paths.geometric, kEnergyCompensationConductorLutSize,
+            kEnergyCompensationConductorLutSize, 4.0e-4f, 3.0e-3f) &&
+          valid;
+  valid = compare_energy_compensation_lut("conductor rgb geometric average", cpu_paths.geometric_average, gpu_paths.geometric_average, kEnergyCompensationConductorLutSize, 1u,
+            4.0e-4f, 3.0e-3f) &&
+          valid;
+  valid = compare_energy_compensation_lut("conductor rgb fms", cpu_paths.conductor_fms, gpu_paths.conductor_fms, kEnergyCompensationConductorLutSize, 1u, 4.0e-4f, 3.0e-3f) &&
+          valid;
+  return valid;
+}
+
+bool validate_energy_compensation_integrated_dielectric_parity(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material,
+  const char* key, const char* label, TaskScheduler& scheduler) {
+  const std::string cpu_key = std::string("cpu_") + key;
+  const std::string gpu_key = std::string("gpu_") + key;
+  const GeneratedInterfacePaths cpu_paths = parity_interface_paths(cpu_key.c_str());
+  const GeneratedInterfacePaths gpu_paths = parity_interface_paths(gpu_key.c_str());
+  const SpectralQuery spect = {};
+  const RefractiveIndexSample ext_ior = sample_refractive_index(data, material.ext_ior, spect);
+  const RefractiveIndexSample int_ior = sample_refractive_index(data, material.int_ior, spect);
+  const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, 0u, 1u);
+
+  const bool cpu_generated = measure_energy_compensation_parity_generation(label, "CPU", [&]() {
+    return generate_dielectric_interface(cpu_paths, ext_ior, int_ior, thinfilm, scheduler);
+  });
+  const bool gpu_generated = measure_energy_compensation_parity_generation(label, "GPU", [&]() {
+    return generate_dielectric_interface_gpu(rhi, pipeline, data, material, gpu_paths, kBSDFEnergyCompensationCacheModeIntegratedRGB, 0u, 1u, 0u);
+  });
+
+  if ((cpu_generated == false) || (gpu_generated == false)) {
+    log::error("Failed to generate integrated dielectric energy-compensation parity LUTs");
+    return false;
+  }
+
+  const std::string directional_label = std::string(label) + " directional";
+  const std::string average_label = std::string(label) + " average";
+  bool valid = true;
+  valid = compare_energy_compensation_lut(directional_label.c_str(), cpu_paths.directional, gpu_paths.directional,
+            kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize, kEnergyCompensationDielectricLutSize, 8.0e-4f, 6.0e-3f) &&
+          valid;
+  valid = compare_dielectric_average_lut(average_label.c_str(), cpu_paths.average, gpu_paths.average, 8.0e-4f, 6.0e-3f) && valid;
+  return valid;
+}
+
+bool validate_energy_compensation_spectral_conductor_parity(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material,
+  TaskScheduler& scheduler) {
+  const GeneratedInterfacePaths cpu_paths = parity_interface_paths("cpu_conductor_spectral");
+  const GeneratedInterfacePaths gpu_paths = parity_interface_paths("gpu_conductor_spectral");
+  const SpectralQuery spect = {};
+  const RefractiveIndexSample ext_ior = sample_refractive_index(data, material.ext_ior, spect);
+  const RefractiveIndexSample int_ior = sample_refractive_index(data, material.int_ior, spect);
+  const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, 0u, 1u);
+
+  const bool cpu_generated = measure_energy_compensation_parity_generation("conductor spectral", "CPU", [&]() {
+    const bool geometric_generated = generate_conductor_geometric_interface(cpu_paths, ext_ior, int_ior, thinfilm, scheduler);
+    const bool spectral_generated = generate_conductor_interface_spectral(data, material, cpu_paths, 0u, 1u, 0u, scheduler);
+    return (geometric_generated && spectral_generated);
+  });
+  const bool gpu_generated = measure_energy_compensation_parity_generation("conductor spectral", "GPU", [&]() {
+    return generate_conductor_interface_gpu(rhi, pipeline, data, material, gpu_paths, gpu_paths, kBSDFEnergyCompensationCacheModeSpectralScalar, 0u, 1u, 0u, true);
+  });
+
+  if ((cpu_generated == false) || (gpu_generated == false)) {
+    log::error("Failed to generate spectral conductor energy-compensation parity LUTs");
+    return false;
+  }
+
+  bool valid = true;
+  valid = compare_energy_compensation_lut("conductor spectral directional", cpu_paths.directional, gpu_paths.directional, kEnergyCompensationConductorLutSize,
+            kEnergyCompensationConductorLutSize, 4.0e-4f, 3.0e-3f) &&
+          valid;
+  valid = compare_energy_compensation_lut("conductor spectral average", cpu_paths.average, gpu_paths.average, kEnergyCompensationConductorLutSize, 1u, 4.0e-4f, 3.0e-3f) &&
+          valid;
+  valid = compare_energy_compensation_lut("conductor spectral fms", cpu_paths.conductor_fms, gpu_paths.conductor_fms, kEnergyCompensationConductorLutSize, 1u, 4.0e-4f,
+            3.0e-3f) &&
+          valid;
+  valid = compare_energy_compensation_lut("conductor spectral geometric", cpu_paths.geometric, gpu_paths.geometric, kEnergyCompensationConductorLutSize,
+            kEnergyCompensationConductorLutSize, 4.0e-4f, 3.0e-3f) &&
+          valid;
+  valid = compare_energy_compensation_lut("conductor spectral geometric average", cpu_paths.geometric_average, gpu_paths.geometric_average,
+            kEnergyCompensationConductorLutSize, 1u, 4.0e-4f, 3.0e-3f) &&
+          valid;
+  return valid;
+}
+
+bool validate_energy_compensation_spectral_dielectric_parity(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material,
+  const char* key, const char* label, TaskScheduler& scheduler) {
+  const std::string cpu_key = std::string("cpu_") + key;
+  const std::string gpu_key = std::string("gpu_") + key;
+  const GeneratedInterfacePaths cpu_paths = parity_interface_paths(cpu_key.c_str());
+  const GeneratedInterfacePaths gpu_paths = parity_interface_paths(gpu_key.c_str());
+  const bool cpu_generated = measure_energy_compensation_parity_generation(label, "CPU", [&]() {
+    return generate_dielectric_interface_spectral(data, material, cpu_paths, 0u, 1u, 0u, scheduler);
+  });
+  const bool gpu_generated = measure_energy_compensation_parity_generation(label, "GPU", [&]() {
+    return generate_dielectric_interface_gpu(rhi, pipeline, data, material, gpu_paths, kBSDFEnergyCompensationCacheModeSpectralScalar, 0u, 1u, 0u);
+  });
+
+  if ((cpu_generated == false) || (gpu_generated == false)) {
+    log::error("Failed to generate spectral dielectric energy-compensation parity LUTs");
+    return false;
+  }
+
+  const std::string directional_label = std::string(label) + " directional";
+  const std::string average_label = std::string(label) + " average";
+  const std::string probability_label = std::string(label) + " probability";
+  bool valid = true;
+  valid = compare_energy_compensation_lut(directional_label.c_str(), cpu_paths.directional, gpu_paths.directional,
+            kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize, kEnergyCompensationDielectricLutSize, 8.0e-4f, 6.0e-3f) &&
+          valid;
+  valid = compare_dielectric_average_lut(average_label.c_str(), cpu_paths.average, gpu_paths.average, 8.0e-4f, 6.0e-3f) && valid;
+  valid = compare_energy_compensation_lut(probability_label.c_str(), cpu_paths.probability, gpu_paths.probability,
+            kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize, kEnergyCompensationDielectricLutSize, 8.0e-4f, 6.0e-3f) &&
+          valid;
+  return valid;
+}
+
+bool validate_energy_compensation_gpu_lut_parity_impl(RHIContext& rhi, TaskScheduler& scheduler) {
+  std::error_code filesystem_error = {};
+  std::filesystem::remove_all(parity_cache_directory(), filesystem_error);
+  if (filesystem_error.value() != 0) {
+    log::error("Failed to clear energy-compensation parity cache %s", parity_cache_directory().generic_string().c_str());
+    return false;
+  }
+
+  SceneData data(scheduler);
+  data.images.init(16u);
+  const uint32_t white = data.add_spectrum(SpectralDistribution::constant(1.0f));
+  const uint32_t zero = data.add_spectrum(SpectralDistribution::constant(0.0f));
+  const uint32_t air_eta = data.add_spectrum(SpectralDistribution::constant(1.0f));
+  SpectralDistribution dielectric_eta_spd = {};
+  SpectralDistribution dielectric_k_spd = {};
+  SpectralDistribution conductor_eta_spd = {};
+  SpectralDistribution conductor_k_spd = {};
+  std::string spectrum_title = {};
+  SpectralDistribution::load_refractive_index(env().file_in_data("spectrum/dielectric/sapphire.spd"), dielectric_eta_spd, dielectric_k_spd, spectrum_title);
+  SpectralDistribution::load_refractive_index(env().file_in_data("spectrum/conductor/copper.spd"), conductor_eta_spd, conductor_k_spd, spectrum_title);
+  const uint32_t dielectric_eta = data.add_spectrum(dielectric_eta_spd);
+  const uint32_t dielectric_k = data.add_spectrum(dielectric_k_spd);
+  const uint32_t conductor_eta = data.add_spectrum(conductor_eta_spd);
+  const uint32_t conductor_k = data.add_spectrum(conductor_k_spd);
+  const uint32_t film_eta = data.add_spectrum(SpectralDistribution::constant(1.5f));
+
+  const Material conductor = make_parity_conductor(white, air_eta, zero, conductor_eta, conductor_k, film_eta);
+  const Material dielectric = make_parity_dielectric(white, air_eta, zero, dielectric_eta, dielectric_k);
+  Material dielectric_thinfilm = dielectric;
+  set_parity_thinfilm(dielectric_thinfilm, film_eta, zero);
+  EnergyCompensationGpuPipeline pipeline = {};
+
+  bool valid = true;
+  valid = validate_energy_compensation_integrated_conductor_parity(rhi, pipeline, data, conductor, scheduler) && valid;
+  valid = validate_energy_compensation_integrated_dielectric_parity(rhi, pipeline, data, dielectric, "dielectric_rgb", "dielectric rgb", scheduler) && valid;
+  valid = validate_energy_compensation_integrated_dielectric_parity(rhi, pipeline, data, dielectric_thinfilm, "dielectric_thinfilm_rgb", "dielectric thinfilm rgb", scheduler) &&
+          valid;
+  valid = validate_energy_compensation_spectral_conductor_parity(rhi, pipeline, data, conductor, scheduler) && valid;
+  valid = validate_energy_compensation_spectral_dielectric_parity(rhi, pipeline, data, dielectric, "dielectric_spectral", "dielectric spectral", scheduler) && valid;
+  valid = validate_energy_compensation_spectral_dielectric_parity(rhi, pipeline, data, dielectric_thinfilm, "dielectric_thinfilm_spectral", "dielectric thinfilm spectral",
+            scheduler) &&
+          valid;
+
+  if (pipeline.pipeline.valid()) {
+    rhi.device().destroy_pipeline(pipeline.pipeline);
+  }
+  data.images.cleanup();
+  return valid;
+}
+
+}  // namespace
+
+bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& scheduler) {
+  return ensure_energy_compensation_interfaces_impl(data, scheduler, nullptr);
+}
+
+bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& scheduler, RHIContext& rhi) {
+  return ensure_energy_compensation_interfaces_impl(data, scheduler, &rhi);
+}
+
+bool validate_energy_compensation_gpu_lut_parity(RHIContext& rhi, TaskScheduler& scheduler) {
+  return validate_energy_compensation_gpu_lut_parity_impl(rhi, scheduler);
 }
 
 }  // namespace etx

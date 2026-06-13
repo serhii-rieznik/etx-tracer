@@ -15,6 +15,7 @@ struct GPUWavefrontPathFlags {
     Hit_emitter = 1u << 6u,
     Surface_vertex = 1u << 7u,
     Medium_vertex = 1u << 8u,
+    Depth_limit_reached_while_refractive = 1u << 9u,
   };
 };
 

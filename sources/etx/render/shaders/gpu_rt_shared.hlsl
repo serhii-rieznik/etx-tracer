@@ -137,7 +137,7 @@ TriangleData load_triangle(ByteAddressBuffer buffer, uint triangle_index) {
 #include <access/material_access_gpu.hxx>
 
 BSDFResourceContext make_scene_bsdf_resource_gpu_context() {
-  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums);
+  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
 }
 
 bool try_load_material_full(uint material_index, out Material material) {
@@ -385,13 +385,18 @@ bool gpu_random_continue(uint path_length, uint start_path_length, float eta_sca
     return false;
   }
 
-  float probability = clamp(continuation, 0.01f, 0.95f);
+  float probability = clamp(continuation, 0.01f, 1.0f);
   if (rnd01(seed) > probability) {
     return false;
   }
 
   throughput = spectral_response_mul(throughput, 1.0f / probability);
   return true;
+}
+
+bool gpu_path_tracing_neutral_eta(float eta) {
+  const float eta_delta = abs(eta - 1.0f);
+  return eta_delta <= (16.0f * kEpsilon);
 }
 
 float2 camera_primary_uv(uint2 pixel, uint2 film_size) {
@@ -1055,12 +1060,20 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
 bool gpu_bsdf_sample_supported_class(uint material_class) {
   switch (material_class) {
     case MaterialClass::Diffuse:
+    case MaterialClass::Translucent:
     case MaterialClass::Plastic:
     case MaterialClass::Conductor:
     case MaterialClass::Dielectric:
     case MaterialClass::Thinfilm:
+    case MaterialClass::Mirror:
+    case MaterialClass::Boundary:
+    case MaterialClass::Velvet:
+    case MaterialClass::Void:
       return true;
 
+    // TODO(OpenPBR GPU parity): OpenPBR is deliberately unsupported on the production GPU path for now.
+    // Do not re-enable this until sample/evaluate/pdf/reverse-pdf/albedo compile and pass CPU parity tests.
+    case MaterialClass::OpenPBR:
     default: {
       return false;
     }
@@ -1092,19 +1105,38 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
 
 [noinline] BSDFSample gpu_sample_material_bsdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   if (material.cls == MaterialClass::Diffuse) {
-    return gpu_diffuse_bsdf_sample(context, data, material, sampler);
+    return bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::Translucent) {
+    return bsdf_sample(context, data, material, sampler);
   }
   if (material.cls == MaterialClass::Plastic) {
     return gpu_plastic_bsdf_sample(context, data, material, sampler);
   }
   if (material.cls == MaterialClass::Conductor) {
-    return gpu_diffuse_bsdf_sample(context, data, material, sampler);
+    return bsdf_sample(context, data, material, sampler);
   }
   if (material.cls == MaterialClass::Dielectric) {
-    return gpu_diffuse_bsdf_sample(context, data, material, sampler);
+    return bsdf_sample(context, data, material, sampler);
   }
   if (material.cls == MaterialClass::Thinfilm) {
     return gpu_thinfilm_bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::Mirror) {
+    return bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::Boundary) {
+    return bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::Velvet) {
+    return bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::OpenPBR) {
+    // TODO(OpenPBR GPU parity): keep OpenPBR off the production GPU sampler until the shader size and parity blockers are fixed.
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
+  if (material.cls == MaterialClass::Void) {
+    return bsdf_sample(context, data, material, sampler);
   }
 
   return bsdf_sample_zero(data.spectrum_sample);

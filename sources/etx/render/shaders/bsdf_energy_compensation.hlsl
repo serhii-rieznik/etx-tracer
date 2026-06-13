@@ -1,18 +1,7 @@
 #include "bindless.hlsl"
 
+#include <interop/bsdf_energy_compensation_constants_shared.hxx>
 #include <interop/bsdf_external_shared.hxx>
-
-static const uint kEcCacheIntegratedRGB = 0u;
-static const uint kEcCacheSpectralScalar = 1u;
-static const uint kEcPassConductorDirectional = 0u;
-static const uint kEcPassConductorAverage = 1u;
-static const uint kEcPassDielectricDirectional = 2u;
-static const uint kEcPassDielectricAverage = 3u;
-static const uint kEcConductorLutSize = 64u;
-static const uint kEcDielectricLutSize = 64u;
-static const uint kEcDielectricBranchCount = 4u;
-static const uint kEcDielectricAverageWidth = 8u;
-static const uint kEcSpectralWavelengthGroupSize = 4u;
 
 struct EnergyCompensationPushConstants {
   uint params_buffer_index;
@@ -196,7 +185,7 @@ float ec_vndf_pdf(float3 w_i, float3 m, float alpha) {
 
 SpectralQuery ec_query(EnergyCompensationParams params, uint channel) {
   SpectralQuery result = (SpectralQuery)0;
-  if (params.cache_mode == kEcCacheSpectralScalar) {
+  if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
     result.flags = SpectralFlags::Spectral;
     result.wavelength = params.wavelengths[channel];
   }
@@ -214,6 +203,18 @@ float ec_channel(float4 value, uint channel) {
     return value.z;
   }
   return value.w;
+}
+
+void ec_set_channel(inout float4 value, uint channel, float scalar) {
+  if (channel == 0u) {
+    value.x = scalar;
+  } else if (channel == 1u) {
+    value.y = scalar;
+  } else if (channel == 2u) {
+    value.z = scalar;
+  } else {
+    value.w = scalar;
+  }
 }
 
 RefractiveIndexSample ec_refractive_index(float4 eta, float4 k, uint cls, SpectralQuery spect, uint channel) {
@@ -467,6 +468,7 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
       }
       if ((fresnel_probability < 1.0f) && (cos_theta_t2 > 0.0f)) {
         float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
+        w_o_t.z = -abs(w_o_t.z);
         if (w_o_t.z < 0.0f) {
           EnergyCompensationLobe lobe = ec_dielectric_base_lobe(spect, w_i, w_o_t, alpha, source_ior, target_ior, thinfilm);
           float transmission_probability = 1.0f - fresnel_probability;
@@ -547,15 +549,32 @@ float4 ec_integrate_average(uint buffer_index, uint alpha_index, uint lut_size, 
   return ec_saturate4(total);
 }
 
-float ec_integrate_geometric_average(uint buffer_index, uint alpha_index) {
-  float total = 0.0f;
-  float h = 1.0f / float(kEcConductorLutSize - 1u);
-  for (uint mu_index = 0u; mu_index < (kEcConductorLutSize - 1u); ++mu_index) {
+float4 ec_integrate_dielectric_branch_average(uint buffer_index, uint alpha_index, uint branch) {
+  float4 total = float4(0.0f, 0.0f, 0.0f, 0.0f);
+  float h = 1.0f / float(kBSDFEnergyCompensationDielectricLutSize - 1u);
+  uint width = kBSDFEnergyCompensationDielectricBranchCount * kBSDFEnergyCompensationDielectricLutSize;
+  uint branch_offset = branch * kBSDFEnergyCompensationDielectricLutSize;
+  uint row_offset = alpha_index * width;
+  for (uint mu_index = 0u; mu_index < (kBSDFEnergyCompensationDielectricLutSize - 1u); ++mu_index) {
     float mu = float(mu_index) * h;
     float weight_0 = h * mu + h * h / 3.0f;
     float weight_1 = h * mu + 2.0f * h * h / 3.0f;
-    float value_0 = load_float4(buffer_index, alpha_index * kEcConductorLutSize + mu_index).x;
-    float value_1 = load_float4(buffer_index, alpha_index * kEcConductorLutSize + mu_index + 1u).x;
+    float4 value_0 = load_float4(buffer_index, row_offset + branch_offset + mu_index);
+    float4 value_1 = load_float4(buffer_index, row_offset + branch_offset + mu_index + 1u);
+    total += value_0 * weight_0 + value_1 * weight_1;
+  }
+  return ec_saturate4(total);
+}
+
+float ec_integrate_geometric_average(uint buffer_index, uint alpha_index) {
+  float total = 0.0f;
+  float h = 1.0f / float(kBSDFEnergyCompensationConductorLutSize - 1u);
+  for (uint mu_index = 0u; mu_index < (kBSDFEnergyCompensationConductorLutSize - 1u); ++mu_index) {
+    float mu = float(mu_index) * h;
+    float weight_0 = h * mu + h * h / 3.0f;
+    float weight_1 = h * mu + 2.0f * h * h / 3.0f;
+    float value_0 = load_float4(buffer_index, alpha_index * kBSDFEnergyCompensationConductorLutSize + mu_index).x;
+    float value_1 = load_float4(buffer_index, alpha_index * kBSDFEnergyCompensationConductorLutSize + mu_index + 1u).x;
     total += value_0 * weight_0 + value_1 * weight_1;
   }
   return ec_saturate(total);
@@ -568,19 +587,19 @@ float4 ec_residual_coefficient(float4 residual_average, float4 side_residual_a, 
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
   EnergyCompensationParams params = load_params();
-  if (params.pass_kind == kEcPassConductorDirectional) {
-    if ((id.x >= kEcConductorLutSize) || (id.y >= kEcConductorLutSize)) {
+  if (params.pass_kind == kBSDFEnergyCompensationGpuPassConductorDirectional) {
+    if ((id.x >= kBSDFEnergyCompensationConductorLutSize) || (id.y >= kBSDFEnergyCompensationConductorLutSize)) {
       return;
     }
-    uint index = id.y * kEcConductorLutSize + id.x;
-    float mu = ec_mu_parameter(id.x, kEcConductorLutSize);
-    float alpha = ec_alpha_parameter(id.y, kEcConductorLutSize);
+    uint index = id.y * kBSDFEnergyCompensationConductorLutSize + id.x;
+    float mu = ec_mu_parameter(id.x, kBSDFEnergyCompensationConductorLutSize);
+    float alpha = ec_alpha_parameter(id.y, kBSDFEnergyCompensationConductorLutSize);
     float4 image = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 geometric = float4(0.0f, 0.0f, 0.0f, 1.0f);
-    if (params.cache_mode == kEcCacheSpectralScalar) {
-      for (uint channel = 0u; channel < kEcSpectralWavelengthGroupSize; ++channel) {
+    if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+      for (uint channel = 0u; channel < kBSDFEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
         EnergyCompensationDirectionalResult value = ec_integrate_conductor_directional(params, channel, mu, alpha);
-        image[channel] = value.albedo.x;
+        ec_set_channel(image, channel, value.albedo.x);
         geometric.x = value.geometric_albedo;
         geometric.y = value.visible_probability;
       }
@@ -594,23 +613,23 @@ void main(uint3 id : SV_DispatchThreadID) {
     return;
   }
 
-  if (params.pass_kind == kEcPassConductorAverage) {
-    if ((id.x >= kEcConductorLutSize) || (id.y != 0u)) {
+  if (params.pass_kind == kBSDFEnergyCompensationGpuPassConductorAverage) {
+    if ((id.x >= kBSDFEnergyCompensationConductorLutSize) || (id.y != 0u)) {
       return;
     }
     uint alpha_index = id.x;
-    float4 average = ec_integrate_average(params.output_directional_index, alpha_index, kEcConductorLutSize, 0u);
+    float4 average = ec_integrate_average(params.output_directional_index, alpha_index, kBSDFEnergyCompensationConductorLutSize, 0u);
     float geometric_average = ec_integrate_geometric_average(params.output_geometric_index, alpha_index);
-    float alpha = ec_alpha_parameter(alpha_index, kEcConductorLutSize);
+    float alpha = ec_alpha_parameter(alpha_index, kBSDFEnergyCompensationConductorLutSize);
     float4 conductor_fms = float4(0.0f, 0.0f, 0.0f, 1.0f);
-    if (params.cache_mode == kEcCacheSpectralScalar) {
-      for (uint channel = 0u; channel < kEcSpectralWavelengthGroupSize; ++channel) {
+    if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+      for (uint channel = 0u; channel < kBSDFEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
         SpectralQuery spect = ec_query(params, channel);
         RefractiveIndexSample ext_ior = ec_refractive_index(params.ext_eta, params.ext_k, SpectralDistribution::Dielectric, spect, channel);
         RefractiveIndexSample int_ior = ec_refractive_index(params.int_eta, params.int_k, SpectralDistribution::Conductor, spect, channel);
         ThinfilmEval thinfilm = ec_thinfilm(params, spect, channel);
         SpectralResponse fms = ec_conductor_fms(spect, ext_ior, int_ior, thinfilm, geometric_average);
-        conductor_fms[channel] = spectral_response_monochromatic(fms);
+        ec_set_channel(conductor_fms, channel, spectral_response_monochromatic(fms));
       }
     } else {
       SpectralQuery spect = ec_query(params, 0u);
@@ -620,7 +639,7 @@ void main(uint3 id : SV_DispatchThreadID) {
       SpectralResponse fms = ec_conductor_fms(spect, ext_ior, int_ior, thinfilm, geometric_average);
       conductor_fms = float4(fms.integrated, 1.0f);
     }
-    if (params.cache_mode == kEcCacheSpectralScalar) {
+    if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
       store_float4(params.output_average_index, alpha_index, average);
     } else {
       store_float4(params.output_average_index, alpha_index, float4(average.x, average.y, average.z, 1.0f));
@@ -630,29 +649,29 @@ void main(uint3 id : SV_DispatchThreadID) {
     return;
   }
 
-  if (params.pass_kind == kEcPassDielectricDirectional) {
-    if ((id.x >= kEcDielectricLutSize) || (id.y >= (2u * kEcDielectricLutSize))) {
+  if (params.pass_kind == kBSDFEnergyCompensationGpuPassDielectricDirectional) {
+    if ((id.x >= kBSDFEnergyCompensationDielectricLutSize) || (id.y >= (2u * kBSDFEnergyCompensationDielectricLutSize))) {
       return;
     }
-    uint side = id.y / kEcDielectricLutSize;
-    uint alpha_index = id.y - side * kEcDielectricLutSize;
+    uint side = id.y / kBSDFEnergyCompensationDielectricLutSize;
+    uint alpha_index = id.y - side * kBSDFEnergyCompensationDielectricLutSize;
     uint mu_index = id.x;
     bool incident_outside = side == 0u;
-    float mu = ec_mu_parameter(mu_index, kEcDielectricLutSize);
-    float alpha = ec_alpha_parameter(alpha_index, kEcDielectricLutSize);
+    float mu = ec_mu_parameter(mu_index, kBSDFEnergyCompensationDielectricLutSize);
+    float alpha = ec_alpha_parameter(alpha_index, kBSDFEnergyCompensationDielectricLutSize);
     float4 branch_albedo[2] = {float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f)};
     float4 total_albedo[2] = {float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f)};
     float4 probability[2] = {float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f)};
-    if (params.cache_mode == kEcCacheSpectralScalar) {
-      for (uint channel = 0u; channel < kEcSpectralWavelengthGroupSize; ++channel) {
+    if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+      for (uint channel = 0u; channel < kBSDFEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
         EnergyCompensationDielectricResult single_value = ec_integrate_dielectric_directional(params, channel, false, incident_outside, mu, alpha);
         EnergyCompensationDielectricResult total_value = ec_integrate_dielectric_directional(params, channel, true, incident_outside, mu, alpha);
-        branch_albedo[0][channel] = single_value.branch_albedo[0].x;
-        branch_albedo[1][channel] = single_value.branch_albedo[1].x;
-        total_albedo[0][channel] = total_value.branch_albedo[0].x;
-        total_albedo[1][channel] = total_value.branch_albedo[1].x;
-        probability[0][channel] = single_value.branch_visible_probability[0];
-        probability[1][channel] = single_value.branch_visible_probability[1];
+        ec_set_channel(branch_albedo[0], channel, single_value.branch_albedo[0].x);
+        ec_set_channel(branch_albedo[1], channel, single_value.branch_albedo[1].x);
+        ec_set_channel(total_albedo[0], channel, total_value.branch_albedo[0].x);
+        ec_set_channel(total_albedo[1], channel, total_value.branch_albedo[1].x);
+        ec_set_channel(probability[0], channel, single_value.branch_visible_probability[0]);
+        ec_set_channel(probability[1], channel, single_value.branch_visible_probability[1]);
       }
     } else {
       EnergyCompensationDielectricResult single_value = ec_integrate_dielectric_directional(params, 0u, false, incident_outside, mu, alpha);
@@ -667,8 +686,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     uint incident_side = side;
     for (uint outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
       uint branch = ec_dielectric_branch_index(incident_side, outgoing_side);
-      uint x = branch * kEcDielectricLutSize + mu_index;
-      uint out_index = alpha_index * (kEcDielectricBranchCount * kEcDielectricLutSize) + x;
+      uint x = branch * kBSDFEnergyCompensationDielectricLutSize + mu_index;
+      uint out_index = alpha_index * (kBSDFEnergyCompensationDielectricBranchCount * kBSDFEnergyCompensationDielectricLutSize) + x;
       store_float4(params.output_directional_index, out_index, branch_albedo[outgoing_side]);
       store_float4(params.output_total_index, out_index, total_albedo[outgoing_side]);
       store_float4(params.output_probability_index, out_index, probability[outgoing_side]);
@@ -676,22 +695,20 @@ void main(uint3 id : SV_DispatchThreadID) {
     return;
   }
 
-  if (params.pass_kind == kEcPassDielectricAverage) {
-    if ((id.x >= kEcDielectricLutSize) || (id.y != 0u)) {
+  if (params.pass_kind == kBSDFEnergyCompensationGpuPassDielectricAverage) {
+    if ((id.x >= kBSDFEnergyCompensationDielectricLutSize) || (id.y != 0u)) {
       return;
     }
     uint alpha_index = id.x;
-    uint width = kEcDielectricBranchCount * kEcDielectricLutSize;
-    float4 single_average[kEcDielectricBranchCount];
-    float4 total_average[kEcDielectricBranchCount];
-    float4 residual_average[kEcDielectricBranchCount];
-    float4 residual_coefficient[kEcDielectricBranchCount];
+    float4 single_average[kBSDFEnergyCompensationDielectricBranchCount];
+    float4 total_average[kBSDFEnergyCompensationDielectricBranchCount];
+    float4 residual_average[kBSDFEnergyCompensationDielectricBranchCount];
+    float4 residual_coefficient[kBSDFEnergyCompensationDielectricBranchCount];
     for (uint incident_side = 0u; incident_side < 2u; ++incident_side) {
       for (uint outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
         uint branch = ec_dielectric_branch_index(incident_side, outgoing_side);
-        uint side_offset = branch * kEcDielectricLutSize;
-        single_average[branch] = ec_integrate_average(params.output_directional_index, alpha_index, width, side_offset);
-        total_average[branch] = ec_integrate_average(params.output_total_index, alpha_index, width, side_offset);
+        single_average[branch] = ec_integrate_dielectric_branch_average(params.output_directional_index, alpha_index, branch);
+        total_average[branch] = ec_integrate_dielectric_branch_average(params.output_total_index, alpha_index, branch);
       }
     }
     float4 side_residual[2];
@@ -721,9 +738,16 @@ void main(uint3 id : SV_DispatchThreadID) {
         residual_coefficient[branch] = ec_residual_coefficient(residual_average[branch], side_residual[incident_side], side_residual[outgoing_side]);
       }
     }
-    for (uint branch = 0u; branch < kEcDielectricBranchCount; ++branch) {
-      store_float4(params.output_average_index, alpha_index * kEcDielectricAverageWidth + branch, ec_saturate4(single_average[branch]));
-      store_float4(params.output_average_index, alpha_index * kEcDielectricAverageWidth + 4u + branch, max(float4(0.0f, 0.0f, 0.0f, 0.0f), residual_coefficient[branch]));
+    for (uint branch = 0u; branch < kBSDFEnergyCompensationDielectricBranchCount; ++branch) {
+      if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + branch, ec_saturate4(single_average[branch]));
+        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + 4u + branch, max(float4(0.0f, 0.0f, 0.0f, 0.0f), residual_coefficient[branch]));
+      } else {
+        float4 single_value = ec_saturate4(single_average[branch]);
+        float4 residual_value = max(float4(0.0f, 0.0f, 0.0f, 0.0f), residual_coefficient[branch]);
+        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + branch, float4(single_value.x, single_value.y, single_value.z, 1.0f));
+        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + 4u + branch, float4(residual_value.x, residual_value.y, residual_value.z, 1.0f));
+      }
     }
   }
 }

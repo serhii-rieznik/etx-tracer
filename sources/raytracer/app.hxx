@@ -107,6 +107,7 @@ struct RTApplication {
   Renderer* _active_renderer = nullptr;
   bool _gpu_renderer_initialized = false;
   bool _gpu_renderer_supported = false;
+  bool _quit_preparation_cancel_requested = false;
 
   Options _options;
   std::vector<std::string> _recent_files = {};

@@ -1,0 +1,19 @@
+#pragma once
+
+#include "interop_base.hxx"
+
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationConductorLutSize = 64u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationDielectricLutSize = 64u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationDielectricBranchCount = 4u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationDielectricAverageWidth = 8u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationCacheModeIntegratedRGB = 0u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationCacheModeSpectralScalar = 1u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationSpectralWavelengthCount = 128u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationSpectralWavelengthGroupSize = 4u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationSpectralWavelengthGroupCount =
+  kBSDFEnergyCompensationSpectralWavelengthCount / kBSDFEnergyCompensationSpectralWavelengthGroupSize;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationGpuPassConductorDirectional = 0u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationGpuPassConductorAverage = 1u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationGpuPassDielectricDirectional = 2u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationGpuPassDielectricAverage = 3u;
+ETX_STATIC_CONST float kBSDFEnergyCompensationF0Max = 9.99000013e-1f;

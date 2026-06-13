@@ -198,6 +198,7 @@ struct RHIContext {
   void end_frame();
   void present();
   RHIResult wait_idle();
+  RHIResult wait_for_command_buffer(RHICommandBuffer cmd);
 
   RHISemaphore get_image_acquired_semaphore();
   RHISemaphore get_render_complete_semaphore();

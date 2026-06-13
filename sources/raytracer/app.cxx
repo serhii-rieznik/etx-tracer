@@ -352,6 +352,8 @@ void RTApplication::frame() {
 void RTApplication::cleanup() {
   ETX_PROFILER_SCOPE();
 
+  bool device_already_idle = false;
+
   if (_active_renderer != nullptr) {
     _active_renderer->stop();
   }
@@ -360,29 +362,42 @@ void RTApplication::cleanup() {
     auto& ctx = render_context.get_context();
     cpu_renderer.cleanup(ctx);
     raster_renderer.cleanup(ctx);
+
     if (_gpu_renderer_initialized) {
       gpu_renderer.cleanup(ctx);
+      device_already_idle = gpu_renderer.cleanup_wait_succeeded();
     }
   }
 
-  scene_global_deinit();
-  render_context.cleanup();
+  scheduler.shutdown();
   ShaderCompiler::instance().shutdown();
+  scene_global_deinit();
+
+  render_context.cleanup(device_already_idle);
 }
 
 void RTApplication::process_event(const sapp_event* e) {
   ETX_PROFILER_SCOPE();
 
+  if ((e != nullptr) && (e->type == SAPP_EVENTTYPE_QUIT_REQUESTED) && (_quit_preparation_cancel_requested == false)) {
+    if (_gpu_renderer_initialized) {
+      gpu_renderer.cancel_preparation();
+    }
+    _quit_preparation_cancel_requested = true;
+  }
+
   {
     ETX_PROFILER_NAMED_SCOPE("app_process_event_imgui");
-    if (render_context.valid() && render_context.rhi_ui().handle_event(e))
+    if ((render_context.valid()) && (render_context.rhi_ui().handle_event(e))) {
       return;
+    }
   }
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_process_event_ui");
-    if (ui.handle_event(e))
+    if (ui.handle_event(e)) {
       return;
+    }
   }
 
   if (_active_renderer != nullptr) {
