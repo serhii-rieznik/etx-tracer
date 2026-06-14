@@ -80,7 +80,6 @@ struct RTApplication {
   void on_view_scene(uint32_t direction);
   void on_clear_recent_files();
   void on_camera_activated(uint32_t camera_index);
-  void on_scene_update_requested();
   void on_reload_shaders_selected();
   void on_cancel_renderer_preparation_selected();
 
@@ -90,6 +89,7 @@ struct RTApplication {
   void save_options();
   void update_camera_to_fit_scene(const float3& view_direction);
   void notify_scene_might_have_changed();
+  void sync_scene_integrator_data_from_current_integrator();
   bool rebuild_material_render_resources();
 
  private:

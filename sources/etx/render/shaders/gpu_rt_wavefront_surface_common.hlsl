@@ -92,7 +92,8 @@ float wavefront_distant_emitter_area_pdf(float3 emission_direction, GPUWavefront
   return result;
 }
 
-float wavefront_direct_hit_weight(float current_pdf_from_prev, float previous_pdf_from_prev, float previous_pdf_history, bool previous_connectible, float p_sample, float p_from);
+float wavefront_direct_hit_weight(uint camera_path_length, float current_pdf_from_prev, float previous_pdf_from_prev, float previous_pdf_history, bool previous_connectible,
+  bool previous_mis_connectible, float p_sample, float p_from);
 
 float2 wavefront_environment_emitter_pdf(float3 in_direction, GPUWavefrontPathVertex target_vertex) {
   uint environment_count = wavefront_environment_emitter_count();
@@ -183,8 +184,8 @@ SpectralResponse wavefront_compute_environment_direct_hit_contribution(SpectralQ
   float mis_weight = 1.0f;
   if (scene_multiple_importance_sampling_enabled() && (state.path_length > 1u) && (scene_path_mode_is_path_tracing() == false)) {
     float2 emitter_pdfs = wavefront_environment_emitter_pdf(state.ray.d, previous_vertex);
-    mis_weight = wavefront_direct_hit_weight(state.sampled_bsdf_pdf, previous_vertex.pdf_from_prev, previous_vertex.pdf_history, wavefront_path_vertex_connectible(previous_vertex),
-      emitter_pdfs.y, emitter_pdfs.x);
+    mis_weight = wavefront_direct_hit_weight(state.path_length, state.sampled_bsdf_pdf, previous_vertex.pdf_from_prev, previous_vertex.pdf_history,
+      wavefront_path_vertex_connectible(previous_vertex), wavefront_path_vertex_mis_connectible(previous_vertex), emitter_pdfs.y, emitter_pdfs.x);
   }
 
   return spectral_response_mul(spectral_response_mul(state.throughput, accumulated), mis_weight);
@@ -291,7 +292,19 @@ float wavefront_local_direct_hit_pdf_from_emitter(uint emitter_index, SpectralQu
   return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, emitter_vertex.position, target_vertex.position, wavefront_path_vertex_is_surface(target_vertex), target_vertex.normal);
 }
 
-float wavefront_direct_hit_weight(float current_pdf_from_prev, float previous_pdf_from_prev, float previous_pdf_history, bool previous_connectible, float p_sample, float p_from) {
+float wavefront_direct_hit_weight(uint camera_path_length, float current_pdf_from_prev, float previous_pdf_from_prev, float previous_pdf_history, bool previous_connectible,
+  bool previous_mis_connectible, float p_sample, float p_from) {
+  if (scene_path_mode_is_bdpt_full()) {
+    float result_accumulated = 0.0f;
+    if (camera_path_length > 1u) {
+      float r1 = wavefront_safe_div(p_from, previous_pdf_from_prev);
+      result_accumulated = r1 * ((previous_mis_connectible ? 1.0f : 0.0f) + previous_pdf_history);
+    }
+    float r0 = wavefront_safe_div(p_sample, current_pdf_from_prev);
+    result_accumulated = r0 * ((previous_connectible ? 1.0f : 0.0f) + result_accumulated);
+    return 1.0f / (1.0f + result_accumulated);
+  }
+
   if (scene_path_mode_uses_bdpt_fast()) {
     float to_emitter_direct = previous_pdf_from_prev * current_pdf_from_prev;
     float to_emitter_connect = previous_connectible ? (previous_pdf_from_prev * p_sample) : 0.0f;
@@ -338,7 +351,8 @@ SpectralResponse wavefront_compute_local_direct_hit_contribution(SpectralQuery s
     } else {
       float p_sample = emitter_discrete_pdf(emitter_index) * pdf_area;
       float p_from = wavefront_local_direct_hit_pdf_from_emitter(emitter_index, spect, current_vertex, previous_vertex);
-      mis_weight = wavefront_direct_hit_weight(current_vertex.pdf_from_prev, previous_vertex.pdf_from_prev, previous_vertex.pdf_history, previous_connectible, p_sample, p_from);
+      mis_weight = wavefront_direct_hit_weight(camera_path_length, current_vertex.pdf_from_prev, previous_vertex.pdf_from_prev, previous_vertex.pdf_history, previous_connectible,
+        wavefront_path_vertex_mis_connectible(previous_vertex), p_sample, p_from);
     }
   }
 
@@ -348,10 +362,16 @@ SpectralResponse wavefront_compute_local_direct_hit_contribution(SpectralQuery s
 void wavefront_surface_precompute_camera_mis(bool current_connectible, uint path_length, inout GPUWavefrontPathMeta meta, inout GPUWavefrontPathVertex previous_vertex) {
   previous_vertex.pdf_ratio = wavefront_safe_div(previous_vertex.pdf_from_next, previous_vertex.pdf_from_prev);
   previous_vertex.pdf_history = meta.camera_mis_history;
-  if (path_length == 1u) {
-    previous_vertex.pdf_accumulated = current_connectible ? meta.camera_mis_history : 0.0f;
-  } else {
-    previous_vertex.pdf_accumulated = meta.camera_mis_history * previous_vertex.pdf_ratio;
+
+  if (scene_path_mode_uses_bdpt_fast()) {
+    if (path_length == 1u) {
+      previous_vertex.pdf_accumulated = current_connectible ? meta.camera_mis_history : 0.0f;
+    } else {
+      previous_vertex.pdf_accumulated = meta.camera_mis_history * previous_vertex.pdf_ratio;
+    }
+  } else if (path_length > 1u) {
+    float previous_mis_connectible = wavefront_path_vertex_mis_connectible(previous_vertex) ? 1.0f : 0.0f;
+    previous_vertex.pdf_accumulated = previous_vertex.pdf_ratio * (previous_mis_connectible + meta.camera_mis_history);
   }
   meta.camera_mis_history = previous_vertex.pdf_accumulated;
 }
@@ -556,8 +576,9 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
       return;
     }
 
+    const bool subsurface_medium_vertex = wavefront_path_vertex_is_subsurface(current_vertex);
     current_vertex.flags &= ~(GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible | GPUWavefrontVertexFlags::Delta);
-    if (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index)) {
+    if (subsurface_medium_vertex || wavefront_medium_explicit_connections_enabled(current_vertex.medium_index)) {
       current_vertex.flags |= GPUWavefrontVertexFlags::Connectible;
       if (wavefront_path_vertex_connectible(previous_vertex)) {
         current_vertex.flags |= GPUWavefrontVertexFlags::Mis_connectible;
@@ -576,10 +597,15 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
       }
     }
     MediumAccess medium_access = (MediumAccess)0;
-    if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
-      state.flags = 0u;
-      wavefront_store_path_state(state_descriptor, path_index, state);
-      return;
+    if (subsurface_medium_vertex) {
+      GPUWavefrontSubsurfaceState subsurface_state = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, from_camera), path_index);
+      medium_access.phase_function_g = subsurface_state.phase_function_g;
+    } else {
+      if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
+        state.flags = 0u;
+        wavefront_store_path_state(state_descriptor, path_index, state);
+        return;
+      }
     }
 
     float2 sample_random = float2(rnd01(state.sampler_seed), rnd01(state.sampler_seed));
@@ -611,8 +637,13 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     } else {
       previous_vertex.pdf_ratio = wavefront_safe_div(previous_vertex.pdf_from_next, previous_vertex.pdf_from_prev);
       previous_vertex.pdf_history = path_meta.light_mis_history;
-      float scale = (state.path_length > 1u) ? previous_vertex.pdf_ratio : 1.0f;
-      previous_vertex.pdf_accumulated = path_meta.light_mis_history * scale;
+      if (scene_path_mode_uses_bdpt_fast()) {
+        float scale = (state.path_length > 1u) ? previous_vertex.pdf_ratio : 1.0f;
+        previous_vertex.pdf_accumulated = path_meta.light_mis_history * scale;
+      } else {
+        float previous_mis_connectible = wavefront_path_vertex_mis_connectible(previous_vertex) ? 1.0f : 0.0f;
+        previous_vertex.pdf_accumulated = previous_vertex.pdf_ratio * (previous_mis_connectible + path_meta.light_mis_history);
+      }
       path_meta.light_mis_history = previous_vertex.pdf_accumulated;
     }
 
@@ -629,7 +660,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length), current_vertex);
     wavefront_store_path_meta(resources.path_meta_buffer, path_index, path_meta);
 
-    if (from_camera == false) {
+    if ((from_camera == false) && (subsurface_medium_vertex == false)) {
       wavefront_store_medium_connect_camera_task(dispatch_index, path_index, resources, state, path_meta, current_vertex, previous_vertex);
     }
 

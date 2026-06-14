@@ -187,6 +187,7 @@ void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefront
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   uint base_offset = index * kGPUWavefrontPathVertexStride;
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexThroughputOffset, vertex.throughput);
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexInlineMediumExtinctionOffset, vertex.inline_medium_extinction);
   wavefront_store_float3(buffer, base_offset + kGPUWavefrontPathVertexPositionOffset, vertex.position);
   buffer.Store(base_offset + kGPUWavefrontPathVertexTriangleIndexOffset, vertex.triangle_index);
   wavefront_store_float3(buffer, base_offset + kGPUWavefrontPathVertexNormalOffset, vertex.normal);
@@ -203,6 +204,7 @@ void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefront
   buffer.Store(base_offset + kGPUWavefrontPathVertexPathLengthOffset, vertex.path_length);
   buffer.Store(base_offset + kGPUWavefrontPathVertexPixelIndexOffset, vertex.pixel_index);
   buffer.Store(base_offset + kGPUWavefrontPathVertexFlagsOffset, vertex.flags);
+  buffer.Store(base_offset + kGPUWavefrontPathVertexInlineMediumFlagsOffset, vertex.inline_medium_flags);
 }
 
 void wavefront_store_path_meta(uint descriptor_index, uint index, GPUWavefrontPathMeta meta) {
@@ -286,6 +288,8 @@ GPUWavefrontResources wavefront_load_resources() {
   result.connect_light_result_buffer = buffer.Load(kGPUWavefrontResourcesConnectLightResultBufferOffset);
   result.connect_camera_task_buffer = buffer.Load(kGPUWavefrontResourcesConnectCameraTaskBufferOffset);
   result.connect_camera_result_buffer = buffer.Load(kGPUWavefrontResourcesConnectCameraResultBufferOffset);
+  result.camera_subsurface_state_buffer = buffer.Load(kGPUWavefrontResourcesCameraSubsurfaceStateBufferOffset);
+  result.light_subsurface_state_buffer = buffer.Load(kGPUWavefrontResourcesLightSubsurfaceStateBufferOffset);
   result.path_capacity = buffer.Load(kGPUWavefrontResourcesPathCapacityOffset);
   result.max_path_length = buffer.Load(kGPUWavefrontResourcesMaxPathLengthOffset);
   result.vertex_capacity = buffer.Load(kGPUWavefrontResourcesVertexCapacityOffset);
@@ -1074,7 +1078,7 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   hit.flags = GPUWavefrontHitFlags::Valid;
   if (hit_found) {
     hit.vertex = trace_result.surface_point.vertex;
-    hit.geo_normal = trace_result.surface_point.geo_normal;
+    hit.geo_normal = trace_result.tri.geo_n;
     hit.hit_t = trace_result.hit_t;
     hit.triangle_index = trace_result.triangle_index;
     hit.material_index = trace_result.tri.material_index;

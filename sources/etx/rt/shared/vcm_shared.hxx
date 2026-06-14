@@ -1050,19 +1050,20 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
 
   subsurface::Gather ss_gather = {};
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface_cls != SubsurfaceMaterial::Disabled);
-  bool subsurface_sampled = subsurface_path && (subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather) == subsurface::GatherResult::Succeedded);
+  subsurface::GatherResult ss_gather_result = subsurface::GatherResult::Failed;
+  if (subsurface_path) {
+    ss_gather_result = subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather);
+  }
+  const bool subsurface_sampled = ss_gather_result == subsurface::GatherResult::Succeeded;
 
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
     if (subsurface_sampled) {
-      for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-        Intersection out_isect = ss_gather.intersections[i];
-        out_isect.material_index = scene.defaults.subsurface_exit_material;
-        state.gathered += ss_gather.weights[i] * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &out_isect, {}, rt, state);
-        // Use fixed samples for each subsurface connection
-        state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
-        state.gathered += ss_gather.weights[i] * vcm_connect_to_light(scene, iteration, options, false, &out_isect, {}, rt, state);
-        state.sampler.pop_fixed();
-      }
+      Intersection out_isect = ss_gather.intersection;
+      out_isect.material_index = scene.defaults.subsurface_exit_material;
+      state.gathered += ss_gather.weight * vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &out_isect, {}, rt, state);
+      state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
+      state.gathered += ss_gather.weight * vcm_connect_to_light(scene, iteration, options, false, &out_isect, {}, rt, state);
+      state.sampler.pop_fixed();
     } else {
       state.gathered += vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &intersection, {}, rt, state);
       // Use fixed samples for light connection
@@ -1073,8 +1074,8 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   }
 
   if (subsurface_sampled) {
-    state.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
-    intersection = ss_gather.intersections[ss_gather.selected_intersection];
+    state.throughput *= ss_gather.weight;
+    intersection = ss_gather.intersection;
     intersection.material_index = scene.defaults.subsurface_exit_material;
     // Use the already allocated samples for subsurface cosine distribution
     state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, 0.0f);
@@ -1098,10 +1099,10 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
 
 struct ETX_ALIGNED LightStepResult {
   VCMLightVertex vertex_to_add = {};
-  SpectralResponse values_to_splat[subsurface::kTotalIntersections] = {};
-  float2 splat_uvs[subsurface::kTotalIntersections] = {};
-  uint32_t splat_count = 0;
+  SpectralResponse value_to_splat = {};
+  float2 splat_uv = {};
   bool add_vertex = false;
+  bool splat = false;
   bool continue_tracing = false;
 };
 
@@ -1152,9 +1153,9 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
       state.sampler.pop_fixed();
       ETX_VALIDATE(value);
       if (value.maximum() > kEpsilon) {
-        result.values_to_splat[0] = value;
-        result.splat_uvs[0] = uv;
-        result.splat_count = 1;
+        result.value_to_splat = value;
+        result.splat_uv = uv;
+        result.splat = true;
       }
     }
 
@@ -1215,47 +1216,47 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
 
   subsurface::Gather ss_gather = {};
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface_cls != SubsurfaceMaterial::Disabled);
-  bool subsurface_sampled = subsurface_path && (subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather) == subsurface::GatherResult::Succeedded);
+  subsurface::GatherResult ss_gather_result = subsurface::GatherResult::Failed;
+  if (subsurface_path) {
+    ss_gather_result = subsurface::gather(state.spect, scene, intersection, rt, state.sampler, ss_gather);
+  }
+  const bool subsurface_sampled = ss_gather_result == subsurface::GatherResult::Succeeded;
 
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
     result.add_vertex = true;
     result.vertex_to_add = {state, intersection, path_index};
-    result.splat_count = 0;
+    result.splat = false;
 
     if (options.connect_to_camera() && (state.total_path_depth + 1 <= scene.options.max_path_length)) {
       if (subsurface_sampled) {
-        for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-          // Use fixed samples for each subsurface camera connection
-          state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
-          Intersection out_isect = ss_gather.intersections[i];
-          out_isect.material_index = scene.defaults.subsurface_exit_material;
-          auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &out_isect, {}, state, result.splat_uvs[result.splat_count]);
-          state.sampler.pop_fixed();
-          ETX_VALIDATE(value);
-          if (value.maximum() > kEpsilon) {
-            float ss_scale = ss_gather.weights[i].average() / ss_gather.total_weight;
-            result.values_to_splat[result.splat_count] = ss_gather.weights[i] * value;  // * ss_scale;
-            result.splat_count++;
-          }
+        state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
+        Intersection out_isect = ss_gather.intersection;
+        out_isect.material_index = scene.defaults.subsurface_exit_material;
+        auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &out_isect, {}, state, result.splat_uv);
+        state.sampler.pop_fixed();
+        ETX_VALIDATE(value);
+        if (value.maximum() > kEpsilon) {
+          result.value_to_splat = ss_gather.weight * value;
+          result.splat = true;
         }
       } else {
         // Use fixed samples for camera connection
         state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
-        auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &intersection, {}, state, result.splat_uvs[0]);
+        auto value = vcm_connect_to_camera(rt, scene, camera, iteration, options, false, &intersection, {}, state, result.splat_uv);
         state.sampler.pop_fixed();
         ETX_VALIDATE(value);
         if (value.maximum() > kEpsilon) {
-          result.values_to_splat[0] = value;
-          result.splat_count = 1;
+          result.value_to_splat = value;
+          result.splat = true;
         }
       }
     }
   }
 
   if (subsurface_sampled) {
-    state.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
+    state.throughput *= ss_gather.weight;
     ETX_VALIDATE(state.throughput);
-    intersection = ss_gather.intersections[ss_gather.selected_intersection];
+    intersection = ss_gather.intersection;
     // Use the already allocated samples for subsurface cosine distribution
     state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, 0.0f);
     bsdf_sample.w_o = sample_cosine_distribution(state.sampler.next_2d(), intersection.nrm, 1.0f);

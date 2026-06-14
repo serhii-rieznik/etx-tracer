@@ -33,9 +33,12 @@ static const uint kSceneStrategyDirectHit = 1u << 0u;
 static const uint kSceneStrategyConnectToLight = 1u << 1u;
 static const uint kSceneStrategyConnectToCamera = 1u << 2u;
 static const uint kSceneStrategyConnectVertices = 1u << 3u;
+static const uint kSceneStrategyMergeVertices = 1u << 4u;
 static const uint kScenePathModePathTracing = 0u;
 static const uint kScenePathModeLightTracing = 1u;
 static const uint kScenePathModeBDPTFast = 2u;
+static const uint kScenePathModeBDPTFull = 3u;
+static const uint kScenePathModeVCM = 4u;
 static const uint kSceneLightSamplingUniform = 0u;
 static const uint kSceneLightSamplingFromDistribution = 1u;
 static const uint kSceneLightSamplingRISUniform = 2u;
@@ -223,6 +226,10 @@ bool scene_path_mode_is_light_tracing() {
 
 bool scene_path_mode_uses_bdpt_fast() {
   return load_scene_options_path_mode() == kScenePathModeBDPTFast;
+}
+
+bool scene_path_mode_is_bdpt_full() {
+  return load_scene_options_path_mode() == kScenePathModeBDPTFull;
 }
 
 #include <access/medium_access_gpu.hxx>

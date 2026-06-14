@@ -88,6 +88,20 @@ float wavefront_direct_light_from_emitter_pdf(GPUWavefrontDirectLightSample samp
   return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, sample_value.origin, current_vertex.position, wavefront_path_vertex_is_surface(current_vertex), current_vertex.normal);
 }
 
+float wavefront_direct_light_mis_camera(uint camera_path_length, GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex, float current_backward_pdf,
+  float previous_backward_pdf) {
+  float result_accumulated = 0.0f;
+  float previous_connectible = wavefront_path_vertex_connectible(previous_vertex) ? 1.0f : 0.0f;
+  if (camera_path_length > 1u) {
+    float r1 = wavefront_safe_div(previous_backward_pdf, previous_vertex.pdf_from_prev);
+    float previous_mis_connectible = wavefront_path_vertex_mis_connectible(previous_vertex) ? 1.0f : 0.0f;
+    result_accumulated = r1 * (previous_mis_connectible + previous_vertex.pdf_history);
+  }
+  float r0 = wavefront_safe_div(current_backward_pdf, current_vertex.pdf_from_prev);
+  result_accumulated = r0 * (previous_connectible + result_accumulated);
+  return result_accumulated;
+}
+
 float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), inout Sampler sampler) {
   if (wavefront_scene_multiple_importance_sampling_enabled() == false) {
     return 1.0f;
@@ -108,11 +122,11 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   float p_fwd = input_value.previous_vertex.pdf_from_prev * input_value.current_vertex.pdf_from_prev;
   float p_connection = p_fwd * p_sample;
   bool sampled_light_is_surface = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Distant) == 0u;
+  float p_bsdf_sample = sampled_light_is_surface ? wavefront_convert_solid_angle_pdf_to_area(bsdf_eval.pdf, input_value.current_vertex.position, input_value.sample_value.origin, true,
+                                                   input_value.sample_value.normal)
+                                                 : bsdf_eval.pdf;
   float p_direct = 0.0f;
   if (sampled_light_is_delta == false) {
-    float p_bsdf_sample = sampled_light_is_surface ? wavefront_convert_solid_angle_pdf_to_area(bsdf_eval.pdf, input_value.current_vertex.position, input_value.sample_value.origin,
-                                                       true, input_value.sample_value.normal)
-                                                   : bsdf_eval.pdf;
     p_direct = p_fwd * p_bsdf_sample;
   }
 
@@ -125,6 +139,13 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
     wavefront_path_vertex_is_surface(input_value.previous_vertex), input_value.previous_vertex.normal);
   float p_bck = input_value.previous_vertex.pdf_history * ((input_value.path_meta.camera_path_length > 1u) ? z_prev_backward_pdf : 1.0f);
   float from_emitter = wavefront_direct_light_from_emitter_pdf(input_value.sample_value, input_value.current_vertex);
+  if (scene_path_mode_is_bdpt_full()) {
+    float w_camera =
+      wavefront_direct_light_mis_camera(input_value.path_meta.camera_path_length, input_value.current_vertex, input_value.previous_vertex, from_emitter, z_prev_backward_pdf);
+    float w_light = sampled_light_is_delta ? 0.0f : wavefront_safe_div(p_bsdf_sample, p_sample);
+    return 1.0f / (1.0f + w_camera + w_light);
+  }
+
   float p_light_path = p_sample * from_emitter * p_bck;
 
   return balance_heuristic(p_connection, p_direct, p_light_path);
@@ -169,7 +190,7 @@ bool wavefront_load_direct_light_prepare_input(uint dispatch_index, out Wavefron
   if (wavefront_path_vertex_valid(input_value.previous_vertex) == false) {
     return false;
   }
-  if (wavefront_try_load_material_full(input_value.hit.material_index, input_value.material) == false) {
+  if (wavefront_try_load_material_full(input_value.current_vertex.material_index, input_value.material) == false) {
     return false;
   }
 

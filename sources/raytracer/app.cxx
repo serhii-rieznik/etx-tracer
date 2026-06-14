@@ -51,7 +51,7 @@ std::string normalized_existing_scene_path(const std::string& value) {
   return path.generic_string();
 }
 
-}
+}  // namespace
 
 RTApplication::RTApplication()
   : rt(scheduler, film)
@@ -146,7 +146,6 @@ void RTApplication::init() {
     ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
     ui.callbacks.clear_recent_files = std::bind(&RTApplication::on_clear_recent_files, this);
     ui.callbacks.camera_activated = std::bind(&RTApplication::on_camera_activated, this, std::placeholders::_1);
-    ui.callbacks.scene_update_requested = std::bind(&RTApplication::on_scene_update_requested, this);
     ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
   }
 
@@ -196,6 +195,7 @@ void RTApplication::init() {
   }
 
   cpu_renderer.set_integrator(integrator);
+  sync_scene_integrator_data_from_current_integrator();
   ui.set_current_integrator(integrator);
 
   {
@@ -346,7 +346,6 @@ void RTApplication::frame() {
     ETX_PROFILER_NAMED_SCOPE("app_render_context_end_frame");
     render_context.end_frame();
   }
-
 }
 
 void RTApplication::cleanup() {
@@ -491,7 +490,9 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   }
 
   cpu_renderer.set_integrator(integrator);
+  sync_scene_integrator_data_from_current_integrator();
   ui.set_current_integrator(integrator);
+  notify_scene_might_have_changed();
 
   add_to_recent(_current_scene_file);
   save_options();
@@ -597,13 +598,19 @@ void RTApplication::on_integrator_selected(Integrator::Type itype) {
   ETX_PROFILER_SCOPE();
 
   Integrator* i = integrator_type_to_instance(itype, cpu_renderer.integrator_list(), cpu_renderer.integrator_count());
-  if (i == nullptr)
+  if (i == nullptr) {
     return;
+  }
 
   cpu_renderer.set_integrator(i);
-  cpu_renderer.film().clear(Film::ClearEverything);
+  sync_scene_integrator_data_from_current_integrator();
+  _options.set_string("integrator", i->name(), "Integrator");
+  save_options();
 
-  if (scene.valid()) {
+  notify_scene_might_have_changed();
+
+  if ((_active_renderer == &cpu_renderer) && scene.valid()) {
+    cpu_renderer.film().clear(Film::ClearEverything);
     cpu_renderer.start();
   }
 }
@@ -645,8 +652,14 @@ void RTApplication::on_reload_geometry_selected() {
 
 void RTApplication::on_options_changed() {
   ETX_PROFILER_SCOPE();
+  const bool cpu_renderer_active = _active_renderer == &cpu_renderer;
+  if (cpu_renderer_active) {
+    cpu_renderer.stop();
+  }
+
+  sync_scene_integrator_data_from_current_integrator();
   notify_scene_might_have_changed();
-  if (_active_renderer == &cpu_renderer) {
+  if (cpu_renderer_active) {
     cpu_renderer.restart();
   }
 }
@@ -871,17 +884,26 @@ void RTApplication::notify_scene_might_have_changed() {
   gpu_renderer.on_scene_changed(scene);
 }
 
+void RTApplication::sync_scene_integrator_data_from_current_integrator() {
+  Integrator* current = cpu_renderer.current_integrator();
+  if (current == nullptr) {
+    return;
+  }
+
+  current->sync_from_options(current->options());
+
+  SceneRepresentation::IntegratorData integrator_data = scene.integrator_data();
+  integrator_data.selected = current->type();
+  integrator_data.settings[current->type()] = current->options();
+  scene.set_integrator_data(integrator_data);
+}
+
 bool RTApplication::rebuild_material_render_resources() {
   if (ensure_energy_compensation_interfaces(scene.data(), scheduler) == false) {
     log::error("Failed to rebuild material energy-compensation interfaces");
     return false;
   }
   return true;
-}
-
-void RTApplication::on_scene_update_requested() {
-  ETX_PROFILER_SCOPE();
-  notify_scene_might_have_changed();
 }
 
 void RTApplication::on_reload_shaders_selected() {

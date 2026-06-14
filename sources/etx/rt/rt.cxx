@@ -378,62 +378,6 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
   return true;
 }
 
-uint32_t Raytracing::continuous_trace(const Scene& scene, const Ray& r, const ContinousTraceOptions& options, Sampler& smp) const {
-  struct IntersectionContextExt {
-    RTCRayQueryContext context;
-    const Scene* scene;
-    Sampler* smp;
-    IntersectionBase* buffer;
-    uint32_t mat_id;
-    uint32_t count;
-    uint32_t max_count;
-  } context = {{}, &scene, &smp, options.intersection_buffer, options.material_id, 0u, options.max_intersections};
-
-  auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
-    auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
-    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
-    const auto& tri = ctx->scene->triangles[triangle_index];
-
-    if ((ctx->mat_id != kInvalidIndex) && (ctx->mat_id != tri.material_index)) {
-      *args->valid = 0;
-      return;
-    }
-
-    float u = RTCHitN_u(args->hit, args->N, 0);
-    float v = RTCHitN_v(args->hit, args->N, 0);
-    float3 bc = barycentrics({u, v});
-    const auto& scene = *ctx->scene;
-    const auto& mat = ctx->scene->materials[tri.material_index];
-
-    if (mat.cls == MaterialClass::Void) {
-      *args->valid = 0;
-      return;
-    }
-
-    float2 uv = lerp_uv(scene, tri, bc);
-    if (alpha_test_pass(mat, uv, *ctx->smp)) {
-      *args->valid = 0;
-      return;
-    }
-
-    if (ctx->count < ctx->max_count) {
-      ctx->buffer[ctx->count] = {
-        .barycentric = {u, v},
-        .triangle_index = triangle_index,
-        .t = RTCRayN_tfar(args->ray, args->N, 0),
-      };
-      ctx->count += 1u;
-    }
-
-    *args->valid = (ctx->count < ctx->max_count) ? 0 : -1;
-  };
-
-  ETX_ASSERT(_private != nullptr);
-  _private->trace_with_function(r, &context.context, filter_funtion);
-
-  return context.count;
-}
-
 bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_intersection, Sampler& smp) const {
   struct IntersectionContextExt {
     RTCRayQueryContext context;

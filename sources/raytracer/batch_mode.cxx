@@ -186,6 +186,32 @@ bool parse_strategy_flags_argument(const char* value, uint32_t& result) {
   return true;
 }
 
+bool parse_bdpt_mode_argument(const char* value, uint32_t& result) {
+  if ((value == nullptr) || (value[0] == 0)) {
+    return false;
+  }
+
+  const std::string mode = normalize_strategy_flag_name(value);
+  if ((mode == "pt") || (mode == "path_tracing") || (mode == "pathtracing")) {
+    result = static_cast<uint32_t>(BDPTMode::PathTracing);
+    return true;
+  }
+  if ((mode == "lt") || (mode == "light_tracing") || (mode == "lighttracing")) {
+    result = static_cast<uint32_t>(BDPTMode::LightTracing);
+    return true;
+  }
+  if ((mode == "bdpt_fast") || (mode == "bdptfast")) {
+    result = static_cast<uint32_t>(BDPTMode::BDPTFast);
+    return true;
+  }
+  if ((mode == "bdpt_full") || (mode == "bdptfull")) {
+    result = static_cast<uint32_t>(BDPTMode::BDPTFull);
+    return true;
+  }
+
+  return false;
+}
+
 struct FullComparisonTechniqueInfo {
   const char* file_tag = "";
   BDPTMode bdpt_mode = BDPTMode::PathTracing;
@@ -224,9 +250,14 @@ const FullComparisonTechniqueInfo kFullComparisonTechniques[] = {
     .strategy_flags = Scene::Strategy::ConnectToCamera,
   },
   {
+    .file_tag = "lt-connect-to-camera",
+    .bdpt_mode = BDPTMode::LightTracing,
+    .strategy_flags = Scene::Strategy::ConnectToCamera,
+  },
+  {
     .file_tag = "bdpt-fast",
     .bdpt_mode = BDPTMode::BDPTFast,
-    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices,
+    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera,
   },
   {
     .file_tag = "bdpt-fast-direct-hit",
@@ -242,6 +273,31 @@ const FullComparisonTechniqueInfo kFullComparisonTechniques[] = {
     .file_tag = "bdpt-fast-connect-to-camera",
     .bdpt_mode = BDPTMode::BDPTFast,
     .strategy_flags = Scene::Strategy::ConnectToCamera,
+  },
+  {
+    .file_tag = "bdpt-full",
+    .bdpt_mode = BDPTMode::BDPTFull,
+    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices,
+  },
+  {
+    .file_tag = "bdpt-full-direct-hit",
+    .bdpt_mode = BDPTMode::BDPTFull,
+    .strategy_flags = Scene::Strategy::DirectHit,
+  },
+  {
+    .file_tag = "bdpt-full-connect-to-light",
+    .bdpt_mode = BDPTMode::BDPTFull,
+    .strategy_flags = Scene::Strategy::ConnectToLight,
+  },
+  {
+    .file_tag = "bdpt-full-connect-to-camera",
+    .bdpt_mode = BDPTMode::BDPTFull,
+    .strategy_flags = Scene::Strategy::ConnectToCamera,
+  },
+  {
+    .file_tag = "bdpt-full-connect-vertices",
+    .bdpt_mode = BDPTMode::BDPTFull,
+    .strategy_flags = Scene::Strategy::ConnectVertices,
   },
 };
 
@@ -303,6 +359,21 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
   },
 };
 
+const char* full_comparison_group_name(const BDPTMode mode) {
+  switch (mode) {
+    case BDPTMode::PathTracing:
+      return "Path Tracing";
+    case BDPTMode::LightTracing:
+      return "Light Tracing";
+    case BDPTMode::BDPTFast:
+      return "BDPT Fast";
+    case BDPTMode::BDPTFull:
+      return "BDPT Full";
+    default:
+      return "Unknown";
+  }
+}
+
 const char* batch_usage_string() {
   return "Usage:\n"
          "  raytracer --render --scene <scene-file> --output <output-file> [options]\n"
@@ -317,6 +388,7 @@ const char* batch_usage_string() {
          "  --generate-bsdf-luts\n"
          "  --pregenerate-bsdf-lut-cache\n"
          "  --integrator <debug|pt|bdpt|vcm>\n"
+         "  --bdpt-mode <pt|lt|bdpt-fast|bdpt-full>\n"
          "  --renderer <cpu|gpu>\n"
          "  --samples <count>\n"
          "  --bsdf-lut-samples <count>\n"
@@ -325,7 +397,7 @@ const char* batch_usage_string() {
          "  --resolution <width>x<height>\n"
          "  --crop <x>,<y>,<width>,<height>\n"
          "  --strategy-flags <flag[,flag...]>\n"
-         "  --gpu-parity-mode <off|cpu-order>\n"
+         "  --strict-comparison\n"
          "  --gpu-compile-only\n"
          "  --gpu-compile-stage <entry-point>\n"
          "  --reference <reference-image>\n"
@@ -705,6 +777,78 @@ void print_comparison_report(const char* technique_tag, const char* kind, const 
   printf("%s", ai_line.c_str());
 }
 
+bool full_comparison_technique_is_exact_gate(const char* technique_tag) {
+  (void)technique_tag;
+  return false;
+}
+
+struct FullComparisonExactGateThresholds {
+  float linear_max_absolute_error = 1.0e-4f;
+  float linear_root_mean_squared_error = 1.0e-5f;
+  float low_frequency_root_mean_squared_error = 1.0e-5f;
+};
+
+FullComparisonExactGateThresholds full_comparison_exact_gate_thresholds(const char* technique_tag) {
+  FullComparisonExactGateThresholds result = {};
+  if (std::strcmp(technique_tag, "lt") == 0) {
+    result.linear_max_absolute_error = 2.5e-4f;
+    result.linear_root_mean_squared_error = 2.0e-5f;
+  }
+  return result;
+}
+
+float full_comparison_linear_brightness_error(const ImageComparisonResult& comparison) {
+  constexpr float kBlackLuminanceEpsilon = 1.0e-6f;
+  if ((fabsf(comparison.linear_reference_mean_luminance) <= kBlackLuminanceEpsilon) && (fabsf(comparison.linear_result_mean_luminance) <= kBlackLuminanceEpsilon)) {
+    return 0.0f;
+  }
+  return fabsf(comparison.linear_brightness_ratio - 1.0f);
+}
+
+bool full_comparison_is_low_signal_reference(const ImageComparisonResult& comparison) {
+  constexpr float kLowSignalReferenceLuminance = 1.0e-4f;
+  return fabsf(comparison.linear_reference_mean_luminance) <= kLowSignalReferenceLuminance;
+}
+
+bool full_comparison_passes_strict_gate(const char* technique_tag, const ImageComparisonResult& comparison) {
+  if (full_comparison_technique_is_exact_gate(technique_tag)) {
+    const FullComparisonExactGateThresholds thresholds = full_comparison_exact_gate_thresholds(technique_tag);
+    return (comparison.linear_max_absolute_error <= thresholds.linear_max_absolute_error) &&
+           (comparison.linear_root_mean_squared_error <= thresholds.linear_root_mean_squared_error) &&
+           (comparison.low_frequency_root_mean_squared_error <= thresholds.low_frequency_root_mean_squared_error);
+  }
+
+  const float brightness_error = full_comparison_linear_brightness_error(comparison);
+  const bool low_signal_reference = full_comparison_is_low_signal_reference(comparison);
+  const bool relative_metrics_pass = low_signal_reference || ((comparison.linear_relative_root_mean_squared_error <= 5.0e-1f) && (brightness_error <= 5.0e-2f));
+  return (comparison.low_frequency_root_mean_squared_error <= 2.0e-2f) && (comparison.root_mean_squared_error <= 6.0e-2f) &&
+         (comparison.percentile_95_absolute_error <= 1.5e-1f) && (comparison.percentile_99_absolute_error <= 4.0e-1f) &&
+         relative_metrics_pass && (comparison.linear_percentile_95_absolute_error <= 2.0e-1f) && (comparison.linear_percentile_99_absolute_error <= 9.0e-1f) &&
+         (comparison.linear_max_absolute_error <= 4.0f);
+}
+
+std::string full_comparison_strict_gate_message(const char* technique_tag, const ImageComparisonResult& comparison) {
+  char buffer[768] = {};
+  if (full_comparison_technique_is_exact_gate(technique_tag)) {
+    const FullComparisonExactGateThresholds thresholds = full_comparison_exact_gate_thresholds(technique_tag);
+    std::snprintf(buffer, sizeof(buffer),
+      "%s failed exact gate: linear.max_abs=%.8f <= %.8f, linear.rmse=%.8f <= %.8f, low_freq.rmse=%.8f <= %.8f", technique_tag,
+      comparison.linear_max_absolute_error, thresholds.linear_max_absolute_error, comparison.linear_root_mean_squared_error,
+      thresholds.linear_root_mean_squared_error, comparison.low_frequency_root_mean_squared_error, thresholds.low_frequency_root_mean_squared_error);
+  } else {
+    const float brightness_error = full_comparison_linear_brightness_error(comparison);
+    const bool low_signal_reference = full_comparison_is_low_signal_reference(comparison);
+    std::snprintf(buffer, sizeof(buffer),
+      "%s failed stochastic gate: low_freq.rmse=%.8f <= 0.02000000, compare.rmse=%.8f <= 0.06000000, linear.rel_rmse=%.8f <= 0.50000000, "
+      "compare.p95=%.8f <= 0.15000000, compare.p99=%.8f <= 0.40000000, linear.p95=%.8f <= 0.20000000, linear.p99=%.8f <= 0.90000000, "
+      "linear.max_abs=%.8f <= 4.00000000, linear.brightness_error=%.8f <= 0.05000000, low_signal_reference=%u",
+      technique_tag, comparison.low_frequency_root_mean_squared_error, comparison.root_mean_squared_error, comparison.linear_relative_root_mean_squared_error,
+      comparison.percentile_95_absolute_error, comparison.percentile_99_absolute_error, comparison.linear_percentile_95_absolute_error,
+      comparison.linear_percentile_99_absolute_error, comparison.linear_max_absolute_error, brightness_error, low_signal_reference ? 1u : 0u);
+  }
+  return buffer;
+}
+
 bool save_text_to_file(const std::string& file_name, const std::string& text) {
   if (ensure_parent_directory_exists(file_name) == false) {
     return false;
@@ -926,6 +1070,9 @@ void append_full_comparison_html_header(std::string& html_text, const std::strin
     .workspace { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(420px, 0.78fr); gap: 12px; align-items: start; }
     .tech-nav { position: sticky; top: 10px; z-index: 5; margin: 0; padding: 8px; border: 1px solid var(--line); border-radius: 16px; background: rgba(11, 16, 22, 0.82); box-shadow: 0 12px 24px rgba(0, 0, 0, 0.16); backdrop-filter: blur(16px); }
     .tech-nav:empty { display: none; }
+    .thumb-group { display: grid; gap: 8px; margin-bottom: 12px; }
+    .thumb-group:last-child { margin-bottom: 0; }
+    .thumb-group-title { margin: 0; color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; }
     .thumb-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     .thumb-card { padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255, 255, 255, 0.025); transition: border-color 120ms ease, background 120ms ease, transform 120ms ease; cursor: pointer; }
     .thumb-card:hover { transform: translateY(-1px); border-color: rgba(119, 217, 255, 0.28); background: rgba(255, 255, 255, 0.035); }
@@ -950,6 +1097,7 @@ void append_full_comparison_html_header(std::string& html_text, const std::strin
     .card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
     .card-header h2 { margin: 0; font-size: 1.15rem; font-weight: 600; line-height: 1; letter-spacing: -0.02em; text-transform: none; }
     .tag { display: inline-flex; align-items: center; width: fit-content; padding: 5px 8px; border: 1px solid rgba(241, 201, 120, 0.22); border-radius: 999px; color: var(--warm); font-size: 10px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; background: rgba(241, 201, 120, 0.08); }
+    .group-tag { border-color: rgba(119, 217, 255, 0.24); color: var(--accent-strong); background: rgba(119, 217, 255, 0.08); }
     .card-summary { display: none; }
     .summary-pill { padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(8, 13, 19, 0.28); }
     .summary-label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
@@ -1015,6 +1163,7 @@ void append_full_comparison_html_entry(std::string& html_text, const FullCompari
   const std::string cpu_exr_file = html_file_name_only(cpu_output_file);
   const std::string gpu_exr_file = html_file_name_only(gpu_output_file);
   const std::string viewer_id = std::string("viewer_") + technique.file_tag;
+  const char* group_name = full_comparison_group_name(technique.bdpt_mode);
   const float compare_similarity_score = clamp_metric_score(comparison.similarity / 100.0f);
   const float compare_low_frequency_similarity_score = clamp_metric_score(comparison.low_frequency_similarity / 100.0f);
   const float compare_rmse_score = inverse_error_metric_score(comparison.root_mean_squared_error, 1.0f);
@@ -1068,11 +1217,16 @@ void append_full_comparison_html_entry(std::string& html_text, const FullCompari
   linear_rows += metric_row_value("P95 Abs", comparison.linear_percentile_95_absolute_error, linear_p95_score, true);
   linear_rows += metric_row_value("P99 Abs", comparison.linear_percentile_99_absolute_error, linear_p99_score, true);
 
-  html_text += "      <div class=\"card\">\n";
+  html_text += "      <div class=\"card\" data-group=\"";
+  html_text += html_escape(group_name);
+  html_text += "\">\n";
   html_text += "        <div class=\"card-header\">\n";
   html_text += "          <h2>";
   html_text += html_escape(technique.file_tag);
   html_text += "</h2>\n";
+  html_text += "          <div class=\"tag group-tag\">";
+  html_text += html_escape(group_name);
+  html_text += "</div>\n";
   html_text += "          <div class=\"tag\">CPU/GPU overlay</div>\n";
   html_text += "        </div>\n";
   html_text += "        <div class=\"card-body\">\n";
@@ -1217,6 +1371,7 @@ void append_full_comparison_html_footer(std::string& html_text) {
     const cards = document.querySelectorAll('.card');
     const thumbsBySlug = new Map();
     const cardsBySlug = new Map();
+    const thumbGroups = new Map();
     const tooltip = document.createElement('div');
     tooltip.className = 'report-tooltip';
     document.body.appendChild(tooltip);
@@ -1420,11 +1575,20 @@ void append_full_comparison_html_footer(std::string& html_text) {
       }
 
       if (techniqueNav != null) {
-        let thumbGrid = techniqueNav.querySelector('.thumb-grid');
+        const groupName = card.dataset.group || 'Other';
+        let thumbGrid = thumbGroups.get(groupName);
         if (thumbGrid == null) {
+          const group = document.createElement('section');
+          group.className = 'thumb-group';
+          const groupTitle = document.createElement('h3');
+          groupTitle.className = 'thumb-group-title';
+          groupTitle.textContent = groupName;
           thumbGrid = document.createElement('div');
           thumbGrid.className = 'thumb-grid';
-          techniqueNav.appendChild(thumbGrid);
+          group.appendChild(groupTitle);
+          group.appendChild(thumbGrid);
+          techniqueNav.appendChild(group);
+          thumbGroups.set(groupName, thumbGrid);
         }
 
         const viewer = card.querySelector('.viewer');
@@ -2072,6 +2236,17 @@ bool load_scene_for_batch(const BatchRenderOptions& options, BatchRenderSession&
     }
     integrator_data.selected = requested_type;
   }
+  if (options.override_bdpt_mode) {
+    if (integrator_data.selected == Integrator::Type::Invalid) {
+      integrator_data.selected = Integrator::Type::Bidirectional;
+    } else if (integrator_data.selected != Integrator::Type::Bidirectional) {
+      log::error("--bdpt-mode requires the bidirectional integrator");
+      return false;
+    }
+
+    Options& bdpt_options = integrator_data.settings[Integrator::Type::Bidirectional];
+    bdpt_options.set_integral("bdpt-mode", static_cast<int32_t>(options.bdpt_mode), "Mode", Option::Meta::EnumValue);
+  }
 
   session.scene.set_integrator_data(integrator_data);
   apply_batch_scene_overrides(options, session.scene);
@@ -2321,7 +2496,6 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     return false;
   }
 
-  session.gpu_renderer.set_cpu_order_parity_mode(options.gpu_parity_mode == "cpu-order");
   session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
   if (session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene) == false) {
     log::error("GPU renderer preparation failed before batch rendering");
@@ -2427,7 +2601,6 @@ bool run_gpu_shader_compile_test(const BatchRenderOptions& options, BatchRenderS
   }
 
   const auto shader_reload_begin = std::chrono::steady_clock::now();
-  session.gpu_renderer.set_cpu_order_parity_mode(options.gpu_parity_mode == "cpu-order");
   session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
   const bool preparation_success = session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene);
   const auto shader_reload_end = std::chrono::steady_clock::now();
@@ -2452,6 +2625,7 @@ bool run_full_comparison_batch_render(const BatchRenderOptions& options) {
   std::string report_html = {};
   std::string ai_report_json = {};
   bool first_ai_result = true;
+  bool strict_comparison_passed = true;
   append_full_comparison_html_header(report_html, absolute_scene_path);
   ai_report_json += "{\n";
   ai_report_json += "  \"schema\": \"etx.full_comparison.v1\",\n";
@@ -2460,10 +2634,6 @@ bool run_full_comparison_batch_render(const BatchRenderOptions& options) {
   printf("Full comparison scene: %s\n", absolute_scene_path.c_str());
 
   for (const FullComparisonTechniqueInfo& technique : kFullComparisonTechniques) {
-    if ((options.gpu_parity_mode == "cpu-order") && (technique.bdpt_mode != BDPTMode::PathTracing)) {
-      continue;
-    }
-
     const std::string cpu_output_file = full_comparison_output_file_name(absolute_scene_path, technique.file_tag, "cpu");
     const std::string gpu_output_file = full_comparison_output_file_name(absolute_scene_path, technique.file_tag, "gpu");
     log::info("Full comparison '%s': loading scene in a fresh session and running CPU/GPU renders", technique.file_tag);
@@ -2528,6 +2698,10 @@ bool run_full_comparison_batch_render(const BatchRenderOptions& options) {
     }
 
     print_comparison_report(technique.file_tag, "full_comparison", absolute_scene_path.c_str(), cpu_output_file.c_str(), gpu_output_file.c_str(), comparison);
+    if ((options.strict_comparison) && (full_comparison_passes_strict_gate(technique.file_tag, comparison) == false)) {
+      strict_comparison_passed = false;
+      log::error("%s", full_comparison_strict_gate_message(technique.file_tag, comparison).c_str());
+    }
     append_full_comparison_html_entry(report_html, technique, cpu_output_file, gpu_output_file, comparison);
     if (first_ai_result == false) {
       ai_report_json += ",\n";
@@ -2548,6 +2722,10 @@ bool run_full_comparison_batch_render(const BatchRenderOptions& options) {
 
   log::info("Saved comparison report to %s", report_file_name.c_str());
   log::info("Saved AI comparison report to %s", ai_report_file_name.c_str());
+  if (strict_comparison_passed == false) {
+    log::error("Strict full comparison failed");
+    return false;
+  }
   return true;
 }
 
@@ -2889,25 +3067,32 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
       continue;
     }
 
+    if (argument == "--bdpt-mode") {
+      batch_argument_seen = true;
+      if ((i + 1) >= argc) {
+        message = "Missing value for --bdpt-mode\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      if (parse_bdpt_mode_argument(argv[i + 1], options.bdpt_mode) == false) {
+        message = "Invalid value for --bdpt-mode. Expected pt, lt, bdpt-fast, or bdpt-full\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      options.override_bdpt_mode = true;
+      i += 1;
+      continue;
+    }
+
     if (argument == "--gpu-compile-only") {
       batch_argument_seen = true;
       options.gpu_compile_only = true;
       continue;
     }
 
-    if (argument == "--gpu-parity-mode") {
+    if (argument == "--strict-comparison") {
       batch_argument_seen = true;
-      if ((i + 1) >= argc) {
-        message = "Missing value for --gpu-parity-mode\n\n";
-        message += batch_usage_string();
-        return BatchModeCommand::Error;
-      }
-      options.gpu_parity_mode = argv[++i];
-      if ((options.gpu_parity_mode != "off") && (options.gpu_parity_mode != "cpu-order")) {
-        message = "Unsupported value for --gpu-parity-mode. Expected: off or cpu-order\n\n";
-        message += batch_usage_string();
-        return BatchModeCommand::Error;
-      }
+      options.strict_comparison = true;
       continue;
     }
 
@@ -2988,8 +3173,9 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
   if (generate_bsdf_luts_requested) {
     if ((options.scene_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
         (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) ||
-        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.gpu_parity_mode != "off") || (options.denoise) || (options.override_random_seed) ||
-        (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.exposure != 1.0f)) {
+        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) || (options.denoise) ||
+        (options.override_random_seed) || (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.override_bdpt_mode) ||
+        (options.exposure != 1.0f)) {
       message = "--generate-bsdf-luts accepts only --output and --bsdf-lut-samples\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
@@ -3001,8 +3187,9 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
   if (pregenerate_bsdf_lut_cache_requested) {
     if ((options.scene_file.empty() == false) || (options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
         (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) ||
-        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.gpu_parity_mode != "off") || (options.denoise) || (options.override_random_seed) ||
-        (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.exposure != 1.0f) || (options.bsdf_lut_samples != 512u)) {
+        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) || (options.denoise) ||
+        (options.override_random_seed) || (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.override_bdpt_mode) || (options.exposure != 1.0f) ||
+        (options.bsdf_lut_samples != 512u)) {
       message = "--pregenerate-bsdf-lut-cache does not accept additional options\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
@@ -3019,8 +3206,8 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     }
 
     if ((options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) || (options.renderer != "cpu") ||
-        (options.integrator.empty() == false) || options.gpu_compile_only) {
-      message = "--full-comparison does not accept --output, --reference, --compare, --renderer, --integrator, or --gpu-compile-only\n\n";
+        (options.integrator.empty() == false) || options.gpu_compile_only || (options.override_bdpt_mode)) {
+      message = "--full-comparison does not accept --output, --reference, --compare, --renderer, --integrator, --bdpt-mode, or --gpu-compile-only\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
     }
@@ -3036,8 +3223,10 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     }
 
     if ((options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) || (options.renderer != "cpu") ||
-        (options.integrator.empty() == false) || options.gpu_compile_only || (options.gpu_compile_stage.empty() == false) || (options.gpu_parity_mode != "off")) {
-      message = "--cpu-comparison does not accept --output, --reference, --compare, --renderer, --integrator, --gpu-compile-only, --gpu-compile-stage, or --gpu-parity-mode\n\n";
+        (options.integrator.empty() == false) || options.gpu_compile_only || (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) ||
+        (options.override_bdpt_mode)) {
+      message =
+        "--cpu-comparison does not accept --output, --reference, --compare, --renderer, --integrator, --bdpt-mode, --gpu-compile-only, --gpu-compile-stage, or --strict-comparison\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
     }
@@ -3057,8 +3246,8 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     return BatchModeCommand::Error;
   }
 
-  if ((options.gpu_parity_mode != "off") && (options.renderer != "gpu")) {
-    message = "--gpu-parity-mode requires --renderer gpu\n\n";
+  if (options.strict_comparison) {
+    message = "--strict-comparison requires --full-comparison\n\n";
     message += batch_usage_string();
     return BatchModeCommand::Error;
   }

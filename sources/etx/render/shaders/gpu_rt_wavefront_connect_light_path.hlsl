@@ -10,7 +10,7 @@
 
   GPUWavefrontConnectLightTask task = wavefront_load_connect_light_task(resources.connect_light_task_buffer, dispatch_index);
   GPUWavefrontConnectLightResult result_value = wavefront_load_connect_light_result(resources.connect_light_result_buffer, dispatch_index);
-  if ((task.flags == 0u) || (result_value.visible == 0u)) {
+  if ((task.flags != GPUWavefrontConnectLightTaskFlags::Ready) || (result_value.visible == 0u)) {
     return;
   }
 

@@ -13,7 +13,7 @@ struct BatchRenderOptions {
   std::string renderer = "cpu";
   std::string compare_mode = {};
   std::string gpu_compile_stage = {};
-  std::string gpu_parity_mode = "off";
+  uint32_t bdpt_mode = 0u;
   uint32_t samples = 0u;
   uint32_t max_path_length = 0u;
   uint32_t random_seed = 0u;
@@ -28,11 +28,13 @@ struct BatchRenderOptions {
   bool gpu_compile_only = false;
   bool full_comparison = false;
   bool cpu_comparison = false;
+  bool strict_comparison = false;
   bool denoise = false;
   bool override_random_seed = false;
   bool override_resolution = false;
   bool override_crop = false;
   bool override_strategy_flags = false;
+  bool override_bdpt_mode = false;
   float exposure = 1.0f;
 };
 

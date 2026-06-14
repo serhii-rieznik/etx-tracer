@@ -34,6 +34,17 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
 SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir);
 float3 wavefront_trace_surface_shading_position(TraceSurfaceResult surface_hit, float3 outgoing_direction);
 
+bool wavefront_subsurface_state_active(GPUWavefrontResources resources, bool from_camera, uint path_index, out GPUWavefrontSubsurfaceState state) {
+  state = (GPUWavefrontSubsurfaceState)0;
+  uint state_buffer = wavefront_subsurface_state_buffer(resources, from_camera);
+  if (state_buffer == kInvalidIndex) {
+    return false;
+  }
+
+  state = wavefront_load_subsurface_state(state_buffer, path_index);
+  return (state.flags & GPUWavefrontSubsurfaceFlags::Active) != 0u;
+}
+
 bool wavefront_trace_transmittance_to_point(float3 origin, float3 target, SpectralQuery spect, uint medium_index, inout uint seed, out SpectralResponse transmittance) {
   transmittance = spectral_response_make(spect, 1.0f);
   float3 current_origin = origin;
@@ -70,6 +81,56 @@ bool wavefront_trace_transmittance_to_point(float3 origin, float3 target, Spectr
     }
 
     current_medium_index = boundary_medium;
+    current_origin = trace_result.surface_point.vertex.pos;
+  }
+}
+
+bool wavefront_trace_transmittance_to_point_inline_medium(float3 origin, float3 target, SpectralQuery spect, uint medium_index, SpectralResponse inline_extinction,
+  uint inline_flags, inout uint seed, out SpectralResponse transmittance) {
+  transmittance = spectral_response_make(spect, 1.0f);
+  float3 current_origin = origin;
+  uint current_medium_index = medium_index;
+  SpectralResponse current_inline_extinction = inline_extinction;
+  uint current_inline_flags = inline_flags;
+
+  while (true) {
+    float3 delta = target - current_origin;
+    float distance = length(delta);
+    if (distance <= kRayEpsilon) {
+      return true;
+    }
+
+    RayDesc ray = (RayDesc)0;
+    ray.Origin = current_origin;
+    ray.Direction = delta / distance;
+    ray.TMin = kRayEpsilon;
+    const float t_max_epsilon = max(kRayEpsilon, distance * kRayEpsilon);
+    ray.TMax = max(ray.TMin, distance - t_max_epsilon);
+
+    TraceSurfaceResult trace_result = (TraceSurfaceResult)0;
+    bool boundary_hit = false;
+    uint boundary_medium = kInvalidIndex;
+    bool found_hit = wavefront_trace_closest_surface_or_boundary(ray, seed, trace_result, boundary_hit, boundary_medium);
+    float segment_distance = found_hit ? trace_result.hit_t : ray.TMax;
+    SpectralResponse segment_transmittance = spectral_response_make(spect, 1.0f);
+    if (current_medium_index != kInvalidIndex) {
+      segment_transmittance = medium_segment_transmittance_spectral(current_medium_index, current_origin, ray.Direction, segment_distance, spect, seed);
+    } else if ((current_inline_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) {
+      segment_transmittance = spectral_response_exp(spectral_response_mul(current_inline_extinction, -segment_distance));
+    }
+    transmittance = spectral_response_mul(transmittance, segment_transmittance);
+
+    if (found_hit == false) {
+      return true;
+    }
+
+    if (boundary_hit == false) {
+      return false;
+    }
+
+    current_medium_index = boundary_medium;
+    current_inline_flags = 0u;
+    current_inline_extinction = spectral_response_make(spect, 0.0f);
     current_origin = trace_result.surface_point.vertex.pos;
   }
 }
@@ -343,6 +404,162 @@ bool wavefront_try_sample_medium_segment(uint medium_index, float3 segment_origi
   return medium_sample_sampled_medium(medium_sample);
 }
 
+float wavefront_subsurface_trace_response_component(SpectralResponse value, uint channel) {
+  if (spectral_response_is_spectral(value)) {
+    return value.value;
+  }
+
+  if (channel == 0u) {
+    return value.integrated.x;
+  }
+  if (channel == 1u) {
+    return value.integrated.y;
+  }
+  return value.integrated.z;
+}
+
+float wavefront_subsurface_trace_response_sum(SpectralResponse value) {
+  if (spectral_response_is_spectral(value)) {
+    return value.value;
+  }
+
+  return value.integrated.x + value.integrated.y + value.integrated.z;
+}
+
+SpectralResponse wavefront_subsurface_trace_safe_mul(SpectralQuery spect, SpectralResponse a, SpectralResponse b) {
+  if (spectral_query_is_spectral(spect)) {
+    const float value = ((a.value == 0.0f) || (b.value == 0.0f)) ? 0.0f : (a.value * b.value);
+    return spectral_response_make(spect, value);
+  }
+
+  return spectral_response_make(spect, float3(((a.integrated.x == 0.0f) || (b.integrated.x == 0.0f)) ? 0.0f : (a.integrated.x * b.integrated.x),
+                                        ((a.integrated.y == 0.0f) || (b.integrated.y == 0.0f)) ? 0.0f : (a.integrated.y * b.integrated.y),
+                                        ((a.integrated.z == 0.0f) || (b.integrated.z == 0.0f)) ? 0.0f : (a.integrated.z * b.integrated.z)));
+}
+
+bool wavefront_trace_subsurface_material(RayDesc ray, uint material_index, inout uint seed, out TraceSurfaceResult result) {
+  result = (TraceSurfaceResult)0;
+  result.triangle_index = kInvalidIndex;
+  result.emitter_index = kInvalidIndex;
+  result.hit_t = ray.TMax;
+
+  bool has_geometry_buffers = (constants.scene.triangles != kInvalidIndex) && (constants.scene.vertex_positions != kInvalidIndex) &&
+                              (constants.scene.vertex_normals != kInvalidIndex) && (constants.scene.scene_globals != kInvalidIndex);
+  if (has_geometry_buffers == false) {
+    return false;
+  }
+
+  SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
+  uint vertex_count = scene_globals_data.vertex_count;
+  uint triangle_count = scene_globals_data.triangle_count;
+  bool has_texcoords = constants.scene.vertex_texcoords != kInvalidIndex;
+
+  RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> ray_query;
+  ray_query.TraceRayInline(bindless_accel_structs[NonUniformResourceIndex(constants.as_index)], RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, ray);
+
+  while (ray_query.Proceed()) {
+    if (ray_query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) {
+      continue;
+    }
+
+    uint candidate_triangle_index = ray_query.CandidatePrimitiveIndex();
+    if (candidate_triangle_index >= triangle_count) {
+      continue;
+    }
+
+    TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], candidate_triangle_index);
+    if (tri.material_index != material_index) {
+      continue;
+    }
+
+    bool valid_indices = (tri.i.x < vertex_count) && (tri.i.y < vertex_count) && (tri.i.z < vertex_count);
+    if (valid_indices == false) {
+      continue;
+    }
+
+    float2 candidate_bary = ray_query.CandidateTriangleBarycentrics();
+    float2 candidate_uv = float2(0.0f, 0.0f);
+    if (has_texcoords) {
+      candidate_uv = interpolate_uv(bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)], tri, candidate_bary);
+    }
+    if (alpha_test_pass(tri.material_index, candidate_uv, seed)) {
+      continue;
+    }
+
+    ray_query.CommitNonOpaqueTriangleHit();
+  }
+
+  if (ray_query.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+    return false;
+  }
+
+  result.triangle_index = ray_query.CommittedPrimitiveIndex();
+  result.hit_t = ray_query.CommittedRayT();
+  result.tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], result.triangle_index);
+  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction);
+  result.emitter_index = kInvalidIndex;
+  try_load_material_full(result.tri.material_index, result.material);
+  result.hit = 1u;
+  return true;
+}
+
+bool wavefront_trace_subsurface_path_state(RayDesc ray, SpectralQuery spect, SpectralResponse throughput, inout uint seed, inout GPUWavefrontSubsurfaceState subsurface_state,
+  out TraceSurfaceResult result) {
+  result = (TraceSurfaceResult)0;
+  result.medium_index = subsurface_state.medium_index;
+  result.triangle_index = kInvalidIndex;
+  result.emitter_index = kInvalidIndex;
+  result.hit_t = ray.TMax;
+  result.transmittance = spectral_response_make(spect, 1.0f);
+
+  SpectralResponse pdf = spectral_response_zero(spect);
+  float sampled_distance = 0.0f;
+  while (sampled_distance < kRayEpsilon) {
+    uint channel = medium_sample_shared_sample_spectrum_component(spect, subsurface_state.albedo, throughput, rnd01(seed), pdf);
+    float extinction_value = wavefront_subsurface_trace_response_component(subsurface_state.extinction, channel);
+    sampled_distance = (extinction_value > 0.0f) ? (-log(1.0f - rnd01(seed)) / extinction_value) : kMaxFloat;
+  }
+
+  RayDesc subsurface_ray = ray;
+  subsurface_ray.TMin = max(kRayEpsilon, ray.TMin);
+  subsurface_ray.TMax = sampled_distance;
+
+  TraceSurfaceResult surface_hit = (TraceSurfaceResult)0;
+  bool intersection_found = wavefront_trace_subsurface_material(subsurface_ray, subsurface_state.material_index, seed, surface_hit);
+  float segment_distance = intersection_found ? surface_hit.hit_t : sampled_distance;
+  SpectralResponse tr = spectral_response_exp(spectral_response_mul(subsurface_state.extinction, -segment_distance));
+  SpectralResponse pdf_factor = tr;
+  if (intersection_found == false) {
+    pdf_factor = wavefront_subsurface_trace_safe_mul(spect, tr, subsurface_state.extinction);
+  }
+  pdf = spectral_response_mul(pdf, pdf_factor);
+  if (spectral_response_is_zero(pdf)) {
+    return false;
+  }
+
+  SpectralResponse weight = tr;
+  if (intersection_found == false) {
+    weight = wavefront_subsurface_trace_safe_mul(spect, tr, subsurface_state.scattering);
+  }
+  SpectralResponse weighted_transmittance = spectral_response_div(weight, max(kEpsilon, wavefront_subsurface_trace_response_sum(pdf)));
+  if (intersection_found) {
+    subsurface_state.flags = 0u;
+    result = surface_hit;
+    result.transmittance = weighted_transmittance;
+    result.medium_index = subsurface_state.medium_index;
+    result.tri.material_index = subsurface_state.scatter_material_index;
+    try_load_material_full(subsurface_state.scatter_material_index, result.material);
+    result.emitter_index = kInvalidIndex;
+    return true;
+  }
+
+  result.hit_t = segment_distance;
+  result.transmittance = weighted_transmittance;
+  result.surface_point.vertex.pos = ray.Origin + ray.Direction * segment_distance;
+  result.hit = 1u;
+  return true;
+}
+
 bool wavefront_trace_path_state(RayDesc ray, SpectralQuery spect, SpectralResponse throughput, inout uint medium_index, inout uint seed, out TraceSurfaceResult result) {
   result = (TraceSurfaceResult)0;
   result.medium_index = medium_index;
@@ -446,7 +663,16 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   uint medium_index = state.medium_index;
   uint seed = state.sampler_seed;
   TraceSurfaceResult trace_result = (TraceSurfaceResult)0;
-  bool hit_found = wavefront_trace_path_state(ray, state.spect, state.throughput, medium_index, seed, trace_result);
+  GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
+  uint subsurface_state_buffer = wavefront_subsurface_state_buffer(resources, from_camera);
+  bool subsurface_active = wavefront_subsurface_state_active(resources, from_camera, path_index, subsurface_state);
+  bool hit_found = false;
+  if (subsurface_active) {
+    hit_found = wavefront_trace_subsurface_path_state(ray, state.spect, state.throughput, seed, subsurface_state, trace_result);
+    wavefront_store_subsurface_state(subsurface_state_buffer, path_index, subsurface_state);
+  } else {
+    hit_found = wavefront_trace_path_state(ray, state.spect, state.throughput, medium_index, seed, trace_result);
+  }
   state.medium_index = medium_index;
   state.sampler_seed = seed;
   wavefront_store_path_state(state_descriptor, path_index, state);
@@ -457,7 +683,7 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   hit.flags = GPUWavefrontHitFlags::Valid;
   if (hit_found) {
     hit.vertex = trace_result.surface_point.vertex;
-    hit.geo_normal = trace_result.surface_point.geo_normal;
+    hit.geo_normal = trace_result.tri.geo_n;
     hit.hit_t = trace_result.hit_t;
     hit.triangle_index = trace_result.triangle_index;
     hit.material_index = trace_result.tri.material_index;
@@ -465,6 +691,9 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
     hit.barycentric = trace_result.surface_point.barycentrics.yz;
     if (trace_result.triangle_index == kInvalidIndex) {
       hit.flags |= GPUWavefrontHitFlags::Medium;
+      if (subsurface_active) {
+        hit.flags |= GPUWavefrontHitFlags::Subsurface;
+      }
     }
   } else {
     hit.flags |= GPUWavefrontHitFlags::Miss;

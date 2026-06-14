@@ -41,7 +41,7 @@ namespace subsurface {
 
 enum class GatherResult {
   Failed = 0u,
-  Succeedded = 1u,
+  Succeeded = 1u,
 };
 
 inline float safe_mul(const float a, const float b) {
@@ -57,8 +57,10 @@ inline SpectralResponse safe_mul(const SpectralResponse& a, const SpectralRespon
            : SpectralResponse{a.as_query(), {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}};
 }
 
-ETX_SHARED_INLINE GatherResult gather_rw(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
+template <class RT>
+ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
   constexpr uint32_t kMaxIterations = 1024u;
+  result = {};
 
   const auto& mat = scene.materials[in_intersection.material_index];
 
@@ -127,14 +129,10 @@ ETX_SHARED_INLINE GatherResult gather_rw(SpectralQuery spect, const Scene& scene
     if (intersection_found) {
       bool w_i_in = dot(local_i.w_i, local_i.nrm) > 0.0f;
 
-      result.intersections[0] = local_i;
-      result.intersections[0].w_i *= w_i_in ? -1.0f : +1.0f;
-      result.weights[0] = throughput;
-      result.intersection_count = 1u;
-      result.selected_intersection = 0;
-      result.selected_sample_weight = 1.0f;
-      result.total_weight = 1.0f;
-      return GatherResult::Succeedded;
+      result.intersection = local_i;
+      result.intersection.w_i *= w_i_in ? -1.0f : +1.0f;
+      result.weight = throughput;
+      return GatherResult::Succeeded;
     }
 
     auto prev_dir = ray.d;
@@ -143,87 +141,6 @@ ETX_SHARED_INLINE GatherResult gather_rw(SpectralQuery spect, const Scene& scene
   }
 
   return GatherResult::Failed;
-}
-
-ETX_SHARED_INLINE GatherResult gather_cb(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const Raytracing& rt, Sampler& smp, Gather& result) {
-  const auto& mat = scene.materials[in_intersection.material_index];
-  const auto& sss = mat.subsurface;
-
-  Sample ss_samples[kIntersectionDirections] = {
-    sample(spect, in_intersection, sss, 0u, smp),
-    sample(spect, in_intersection, sss, 1u, smp),
-    sample(spect, in_intersection, sss, 2u, smp),
-  };
-
-  IntersectionBase intersections[kTotalIntersections] = {};
-  ContinousTraceOptions ct = {intersections, kIntersectionsPerDirection, in_intersection.material_index};
-  uint32_t intersections_0 = rt.continuous_trace(scene, ss_samples[0].ray, ct, smp);
-  ct.intersection_buffer += intersections_0;
-  uint32_t intersections_1 = rt.continuous_trace(scene, ss_samples[1].ray, ct, smp);
-  ct.intersection_buffer += intersections_1;
-  uint32_t intersections_2 = rt.continuous_trace(scene, ss_samples[2].ray, ct, smp);
-
-  uint32_t intersection_count = intersections_0 + intersections_1 + intersections_2;
-  ETX_CRITICAL(intersection_count <= kTotalIntersections);
-  if (intersection_count == 0) {
-    return GatherResult::Failed;
-  }
-
-  SpectralResponse base_weight = apply_image(spect, mat.scattering, in_intersection.tex);
-
-  result = {};
-  for (uint32_t i = 0; i < intersection_count; ++i) {
-    const Sample& ss_sample = (i < intersections_0) ? ss_samples[0] : (i < intersections_0 + intersections_1 ? ss_samples[1] : ss_samples[2]);
-
-    auto out_intersection = make_intersection(scene, ss_sample.ray.d, intersections[i]);
-
-    float gw = geometric_weigth(out_intersection.nrm, ss_sample);
-    float pdf = evaluate(spect, out_intersection, sss, ss_sample.sampled_radius).average();
-    ETX_VALIDATE(pdf);
-    if (pdf <= 0.0f)
-      continue;
-
-    auto eval = evaluate(spect, out_intersection, sss, length(out_intersection.pos - in_intersection.pos));
-    ETX_VALIDATE(eval);
-
-    auto weight = base_weight * eval / pdf * gw;
-    ETX_VALIDATE(weight);
-
-    if (weight.is_zero())
-      continue;
-
-    result.total_weight += weight.average();
-    result.intersections[result.intersection_count] = out_intersection;
-    result.weights[result.intersection_count] = weight;
-    result.intersection_count += 1u;
-  }
-
-  if (result.total_weight > 0.0f) {
-    float rnd = smp.next() * result.total_weight;
-    float partial_sum = 0.0f;
-    float sample_weight = 0.0f;
-    for (uint32_t i = 0; i < result.intersection_count; ++i) {
-      sample_weight = result.weights[i].average();
-      float next_sum = partial_sum + sample_weight;
-      if (rnd < next_sum) {
-        result.selected_intersection = i;
-        result.selected_sample_weight = result.total_weight / sample_weight;
-        break;
-      }
-      partial_sum = next_sum;
-    }
-    ETX_ASSERT(result.selected_intersection != kInvalidIndex);
-  }
-
-  return result.intersection_count > 0 ? GatherResult::Succeedded : GatherResult::Failed;
-}
-
-template <class RT>
-ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
-  if (scene.materials[in_intersection.material_index].subsurface_cls == SubsurfaceMaterial::ChristensenBurley)
-    return gather_cb(spect, scene, in_intersection, rt, smp, result);
-
-  return gather_rw(spect, scene, in_intersection, rt, smp, result);
 }
 
 }  // namespace subsurface
@@ -393,13 +310,12 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   bool subsurface_path = (mat.subsurface_cls != SubsurfaceMaterial::Disabled) &&  //
                          (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
 
-  // uint8_t ss_gather_data[sizeof(subsurface::Gather)];
-  subsurface::Gather ss_gather;
-  bool subsurface_sampled = false;
+  subsurface::Gather ss_gather = {};
+  subsurface::GatherResult ss_gather_result = subsurface::GatherResult::Failed;
   if (subsurface_path) {
-    auto ss_gather_result = subsurface::gather(payload.spect, scene, intersection, rt, payload.smp, ss_gather);
-    subsurface_sampled = ss_gather_result == subsurface::GatherResult::Succeedded;
+    ss_gather_result = subsurface::gather(payload.spect, scene, intersection, rt, payload.smp, ss_gather);
   }
+  const bool subsurface_sampled = ss_gather_result == subsurface::GatherResult::Succeeded;
 
   if (subsurface_path && (subsurface_sampled == false)) {
     return false;
@@ -417,19 +333,17 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   if (scene.strategy_enabled(Scene::Strategy::ConnectToLight) && (payload.path_length + 1 <= rt.scene().options.max_path_length)) {
     SpectralResponse direct_light = {payload.spect, 0.0f};
     if (subsurface_sampled) {
-      for (uint32_t i = 0; i < ss_gather.intersection_count; ++i) {
-        EmitterSampleQuery query = {
-          .spect = payload.spect,
-          .source_type = InteractionType::Surface,
-          .source_position = ss_gather.intersections[i].pos,
-          .source_normal = ss_gather.intersections[i].nrm,
-        };
-        auto local_sample = sample_emitter(scene.light_sampling_method(), query, payload.smp);
-        SpectralResponse light_value = evaluate_light(scene, ss_gather.intersections[i], rt, scene.materials[scene.defaults.subsurface_exit_material],  //
-          payload.medium, payload.spect, local_sample, payload.smp, scene.multiple_importance_sampling());
-        direct_light += ss_gather.weights[i] * light_value;
-        ETX_VALIDATE(direct_light);
-      }
+      EmitterSampleQuery query = {
+        .spect = payload.spect,
+        .source_type = InteractionType::Surface,
+        .source_position = ss_gather.intersection.pos,
+        .source_normal = ss_gather.intersection.nrm,
+      };
+      auto local_sample = sample_emitter(scene.light_sampling_method(), query, payload.smp);
+      SpectralResponse light_value = evaluate_light(scene, ss_gather.intersection, rt, scene.materials[scene.defaults.subsurface_exit_material],  //
+        payload.medium, payload.spect, local_sample, payload.smp, scene.multiple_importance_sampling());
+      direct_light += ss_gather.weight * light_value;
+      ETX_VALIDATE(direct_light);
     } else {
       EmitterSampleQuery query = {
         .spect = payload.spect,
@@ -446,9 +360,9 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   }
 
   if (subsurface_sampled) {
-    const auto& out_intersection = ss_gather.intersections[ss_gather.selected_intersection];
+    const auto& out_intersection = ss_gather.intersection;
     payload.ray.d = sample_cosine_distribution(rnd_bsdf, out_intersection.nrm, 1.0f);
-    payload.throughput *= ss_gather.weights[ss_gather.selected_intersection] * ss_gather.selected_sample_weight;
+    payload.throughput *= ss_gather.weight;
     payload.sampled_bsdf_pdf = fabsf(dot(payload.ray.d, out_intersection.nrm)) / kPi;
     payload.mis_weight = true;
     payload.ray.o = shading_pos(scene, scene.triangles[out_intersection.triangle_index], out_intersection.barycentric, payload.ray.d);

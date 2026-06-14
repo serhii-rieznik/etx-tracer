@@ -33,32 +33,36 @@ struct GPURaytracingRenderer : public Renderer {
     CameraConnectLightPreparePlastic = 14u,
     CameraConnectLightPrepareConductor = 15u,
     CameraConnectLightPrepareDielectric = 16u,
-    CameraConnectLightShadow = 17u,
-    CameraConnectLightAccumulate = 18u,
-    CameraContinuePrepareDiffuse = 19u,
-    CameraContinuePreparePlastic = 20u,
-    CameraContinuePrepareConductor = 21u,
-    CameraContinuePrepareDielectric = 22u,
-    CameraContinuePrepareThinfilm = 23u,
-    CameraContinueFinalize = 24u,
-    TraceLight = 25u,
-    LightSurfaceClassify = 26u,
-    LightConnectCameraPrepareDiffuse = 27u,
-    LightConnectCameraPreparePlastic = 28u,
-    LightConnectCameraPrepareConductor = 29u,
-    LightConnectCameraPrepareDielectric = 30u,
-    LightConnectCameraShadow = 31u,
-    LightConnectCameraAccumulate = 32u,
-    LightContinuePrepareDiffuse = 33u,
-    LightContinuePreparePlastic = 34u,
-    LightContinuePrepareConductor = 35u,
-    LightContinuePrepareDielectric = 36u,
-    LightContinuePrepareThinfilm = 37u,
-    LightContinueFinalize = 38u,
-    SwapQueues = 39u,
-    FinalizeSample = 40u,
-    CpuOrderPathTrace = 41u,
-    Count = 42u,
+    CameraConnectLightResolveDiffuse = 17u,
+    CameraConnectLightResolvePlastic = 18u,
+    CameraConnectLightResolveConductor = 19u,
+    CameraConnectLightResolveDielectric = 20u,
+    CameraConnectLightShadow = 21u,
+    CameraConnectLightAccumulate = 22u,
+    CameraContinuePrepareDiffuse = 23u,
+    CameraContinuePreparePlastic = 24u,
+    CameraContinuePrepareConductor = 25u,
+    CameraContinuePrepareDielectric = 26u,
+    CameraContinuePrepareThinfilm = 27u,
+    CameraContinueFinalize = 28u,
+    TraceLight = 29u,
+    LightSurfaceClassify = 30u,
+    LightConnectCameraPrepareDiffuse = 31u,
+    LightConnectCameraPreparePlastic = 32u,
+    LightConnectCameraPrepareConductor = 33u,
+    LightConnectCameraPrepareDielectric = 34u,
+    LightConnectCameraShadow = 35u,
+    LightConnectCameraAccumulate = 36u,
+    LightContinuePrepareDiffuse = 37u,
+    LightContinuePreparePlastic = 38u,
+    LightContinuePrepareConductor = 39u,
+    LightContinuePrepareDielectric = 40u,
+    LightContinuePrepareThinfilm = 41u,
+    LightContinueFinalize = 42u,
+    SwapQueues = 43u,
+    FinalizeSample = 44u,
+    CameraConnectLightClear = 45u,
+    Count = 46u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
@@ -88,7 +92,6 @@ struct GPURaytracingRenderer : public Renderer {
   void set_compile_stage_filter(const std::string&);
   bool set_render_window(const uint2& origin, const uint2& size, const uint2& full_size);
   void reset_render_window();
-  void set_cpu_order_parity_mode(bool enabled);
 
   const char* name() const override {
     return "GPU Raytracing";
@@ -130,9 +133,9 @@ struct GPURaytracingRenderer : public Renderer {
 
   struct PendingPipelinePreparation {
     uint32_t generation = 0u;
-    uint32_t path_mode = 0u;
+    uint32_t integrator_mode = 0u;
+    uint32_t integrator_features = 0u;
     uint32_t material_compile_mask = 0u;
-    bool cpu_order_parity_mode = false;
     std::string compile_stage_filter = {};
     uint32_t total_steps = 0u;
     uint32_t total_compile_groups = 0u;
@@ -230,6 +233,8 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _connect_light_result_buffer = {};
   RHIBindlessHandle _connect_camera_task_buffer = {};
   RHIBindlessHandle _connect_camera_result_buffer = {};
+  RHIBindlessHandle _camera_subsurface_state_buffer = {};
+  RHIBindlessHandle _light_subsurface_state_buffer = {};
 
   uint64_t _vertex_normals_buffer_size = 0;
   uint64_t _vertex_tangents_buffer_size = 0;
@@ -269,6 +274,8 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _connect_light_result_buffer_size = 0;
   uint64_t _connect_camera_task_buffer_size = 0;
   uint64_t _connect_camera_result_buffer_size = 0;
+  uint64_t _camera_subsurface_state_buffer_size = 0;
+  uint64_t _light_subsurface_state_buffer_size = 0;
   uint32_t _camera_buffer_descriptor_index = ~0u;
   uint32_t _blue_noise_buffer_descriptor_index = ~0u;
   uint32_t _wavefront_resources_buffer_descriptor_index = ~0u;
@@ -293,6 +300,8 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _connect_light_result_buffer_descriptor_index = ~0u;
   uint32_t _connect_camera_task_buffer_descriptor_index = ~0u;
   uint32_t _connect_camera_result_buffer_descriptor_index = ~0u;
+  uint32_t _camera_subsurface_state_buffer_descriptor_index = ~0u;
+  uint32_t _light_subsurface_state_buffer_descriptor_index = ~0u;
   uint32_t _blue_noise_target_samples = 0u;
   uint32_t _wavefront_path_capacity = 0u;
   uint32_t _wavefront_vertex_capacity = 0u;
@@ -310,9 +319,11 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _wavefront_hard_iteration_cap = 0u;
   uint32_t _wavefront_camera_queue_count = 0u;
   uint32_t _wavefront_light_queue_count = 0u;
+  bool _wavefront_camera_phase_initialized = false;
   RHIResourceState _camera_queue_count_readback_state = RHIResourceState::Undefined;
   RHIResourceState _light_queue_count_readback_state = RHIResourceState::Undefined;
-  uint32_t _path_mode = 0u;
+  uint32_t _integrator_mode = 0u;
+  uint32_t _integrator_features = 0u;
   uint32_t _material_compile_mask = 0u;
   uint2 _render_window_origin = {};
   uint2 _render_window_size = {};
@@ -335,7 +346,6 @@ struct GPURaytracingRenderer : public Renderer {
   bool _initialized = false;
   bool _runtime_failed = false;
   bool _pipeline_publish_logged = false;
-  bool _cpu_order_parity_mode = false;
   bool _preview_active = false;
   bool _preview_pipeline_failed = false;
   bool _cleanup_wait_succeeded = false;

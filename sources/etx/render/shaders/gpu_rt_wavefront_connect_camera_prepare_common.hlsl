@@ -158,7 +158,7 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
     return false;
   }
 
-  if (wavefront_connect_camera_try_load_material_full(input_value.hit.material_index, input_value.material) == false) {
+  if (wavefront_connect_camera_try_load_material_full(input_value.current_vertex.material_index, input_value.material) == false) {
     return false;
   }
 

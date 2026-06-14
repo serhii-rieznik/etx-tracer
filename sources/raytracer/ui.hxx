@@ -104,7 +104,6 @@ struct UI {
     std::function<void(Integrator::Type)> integrator_selected;
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
-    std::function<void()> scene_update_requested;
   } callbacks;
 
  private:

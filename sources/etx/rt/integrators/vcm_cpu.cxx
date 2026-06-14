@@ -137,10 +137,10 @@ struct CPUVCMImpl {
         if (step_result.add_vertex) {
           local_vertices.emplace_back(step_result.vertex_to_add);
         }
-        for (uint32_t i = 0; i < step_result.splat_count; ++i) {
-          const float3& val = step_result.values_to_splat[i].to_rgb() / step_result.values_to_splat[i].sampling_pdf();
+        if (step_result.splat) {
+          const float3& val = step_result.value_to_splat.to_rgb() / step_result.value_to_splat.sampling_pdf();
           if (dot(val, val) > kEpsilon) {
-            film.submit(val, step_result.splat_uvs[i]);
+            film.submit(val, step_result.splat_uv);
           }
         }
       }

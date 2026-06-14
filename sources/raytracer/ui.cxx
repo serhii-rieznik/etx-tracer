@@ -1967,7 +1967,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             return value.subsurface_cls;
           }),
             [&]() {
-              return ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface_cls), "Disabled\0Random Walk\0Christensen-Burley\0");
+              return ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface_cls), "Disabled\0Random Walk\0");
             });
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           changed |= mixed_control(material_values_mixed([](const Material& value) {
@@ -2502,18 +2502,6 @@ void UI::build_toolbar(const BuildContext& ctx) {
           ImGui::EndDisabled();
         }
       }
-    }
-
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-
-    {
-      ImGui::PushStyleColor(ImGuiCol_Button, kToolbarLaunchColor);
-      if (ImGui::Button("  Notify Scene Change  ", {0.0f, ctx.button_size})) {
-        if (callbacks.scene_update_requested) {
-          callbacks.scene_update_requested();
-        }
-      }
-      ImGui::PopStyleColor();
     }
 
     ImGui::SameLine(0.0f, ctx.wpadding.x);
@@ -3781,7 +3769,7 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
 }
 
 void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
-  if (!ctx.has_integrator) {
+  if (ctx.has_integrator == false) {
     ImGui::Text("No integrator available");
     return;
   }
@@ -3789,20 +3777,37 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   ImGui::Text("Integrator Type:");
   full_width_item();
 
+  const bool gpu_renderer_mode = _current_renderer_mode == RendererMode::GPURaytracing;
+  const auto gpu_integrator_supported = [](Integrator::Type type) {
+    return (type == Integrator::Type::PathTracing) || (type == Integrator::Type::Bidirectional);
+  };
+
   if (ImGui::BeginCombo("##integrator_type", _current_integrator->name())) {
     for (uint64_t i = 0; i < _integrators.count; ++i) {
-      bool is_selected = (_integrators[i] == _current_integrator);
-      if (ImGui::Selectable(_integrators[i]->name(), is_selected)) {
+      const bool is_selected = (_integrators[i] == _current_integrator);
+      const bool supported_by_gpu = gpu_integrator_supported(_integrators[i]->type());
+      const bool selectable_enabled = (gpu_renderer_mode == false) || supported_by_gpu;
+      if (selectable_enabled == false) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Selectable(_integrators[i]->name(), is_selected) && selectable_enabled) {
         if (callbacks.integrator_selected) {
           callbacks.integrator_selected(_integrators[i]->type());
           set_current_integrator(_integrators[i]);
         }
+      }
+      if (selectable_enabled == false) {
+        ImGui::EndDisabled();
       }
       if (is_selected) {
         ImGui::SetItemDefaultFocus();
       }
     }
     ImGui::EndCombo();
+  }
+
+  if (gpu_renderer_mode && (gpu_integrator_supported(_current_integrator->type()) == false)) {
+    ImGui::TextColored(kErrorTextColor, "Selected integrator is not supported by GPU raytracing");
   }
 
   bool options_changed = false;
@@ -3819,18 +3824,18 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   ImGui::Spacing();
 
   if (ImGui::CollapsingHeader("Rendering Strategies", ImGuiTreeNodeFlags_None)) {
-    uint32_t supported = _current_integrator->supported_strategies();
+    const uint32_t supported = _current_integrator->supported_strategies();
     bool strategies_changed = false;
 
     auto draw_strategy_checkbox = [&](const char* label, uint32_t flag) {
-      bool supported_flag = (supported & flag) == flag;
-      bool scene_value = (scene_rep.data().options.strategy_flags & flag) != 0;
+      const bool supported_flag = (supported & flag) == flag;
+      const bool scene_value = (scene_rep.data().options.strategy_flags & flag) != 0u;
       bool enabled = supported_flag ? scene_value : false;
 
       if (supported_flag == false) {
         ImGui::BeginDisabled();
       }
-      bool changed = ImGui::Checkbox(label, &enabled);
+      const bool changed = ImGui::Checkbox(label, &enabled);
       if (supported_flag == false) {
         ImGui::EndDisabled();
       }
@@ -3855,7 +3860,7 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   ImGui::Separator();
   ImGui::Spacing();
 
-  bool mis_changed = ImGui::Checkbox("Multiple Importance Sampling", scene_rep.data().options.properties + Scene::Properties::MultipleImportanceSampling);
+  const bool mis_changed = ImGui::Checkbox("Multiple Importance Sampling", scene_rep.data().options.properties + Scene::Properties::MultipleImportanceSampling);
   if (mis_changed && callbacks.scene_settings_changed) {
     callbacks.scene_settings_changed();
   }
@@ -3863,7 +3868,7 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   int current_light_sampling = static_cast<int>(scene_rep.data().options.light_sampling);
   const char* light_sampling_options[] = {"Uniform", "From Distribution", "RIS Uniform", "RIS From Distribution"};
-  bool light_sampling_changed = ImGui::Combo("##light_sampling", &current_light_sampling, light_sampling_options, IM_ARRAYSIZE(light_sampling_options));
+  const bool light_sampling_changed = ImGui::Combo("##light_sampling", &current_light_sampling, light_sampling_options, IM_ARRAYSIZE(light_sampling_options));
   if (light_sampling_changed) {
     scene_rep.data().options.light_sampling = static_cast<Scene::LightSampling>(current_light_sampling);
     if (callbacks.scene_settings_changed) {
@@ -3898,7 +3903,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
 
   build_scene_selection_properties(scene_rep, ctx, data);
 
-  if (_current_renderer_mode == RendererMode::CPURaytracing) {
+  if ((_current_renderer_mode == RendererMode::CPURaytracing) || (_current_renderer_mode == RendererMode::GPURaytracing)) {
     build_integrator_selection_properties(scene_rep, ctx);
   }
 }

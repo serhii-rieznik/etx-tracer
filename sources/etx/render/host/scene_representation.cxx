@@ -269,6 +269,9 @@ struct SceneRepresentationImpl {
           std::unique_lock lock(mt);
           mtl.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
         }
+        if ((mtl.subsurface_cls != SubsurfaceMaterial::Disabled) && (mtl.subsurface_cls != SubsurfaceMaterial::RandomWalk)) {
+          mtl.subsurface_cls = SubsurfaceMaterial::RandomWalk;
+        }
         if (mtl.emission.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
           mtl.emission.spectrum_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
@@ -1950,9 +1953,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
     if (material.subsurface_cls != SubsurfaceMaterial::Disabled) {
       materials_stream << "subsurface";
-      if (material.subsurface_cls == SubsurfaceMaterial::ChristensenBurley) {
-        materials_stream << " class approximate";
-      }
       if (material.subsurface_path == SubsurfaceMaterial::RefractedPath) {
         materials_stream << " path refracted";
       }

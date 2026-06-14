@@ -31,6 +31,13 @@ struct GPUWavefrontPendingContinuationFlags {
   };
 };
 
+struct GPUWavefrontConnectLightTaskFlags {
+  enum : uint {
+    Ready = 1u,
+    CameraPrepared = 2u,
+  };
+};
+
 #define WAVEFRONT_RW_BUFFER(descriptor_index) bindless_rw_buffers[NonUniformResourceIndex(descriptor_index)]
 #define WAVEFRONT_RO_BUFFER(descriptor_index) bindless_buffers[NonUniformResourceIndex(descriptor_index)]
 
@@ -200,6 +207,7 @@ void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefront
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   uint base_offset = index * kGPUWavefrontPathVertexStride;
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexThroughputOffset, vertex.throughput);
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexInlineMediumExtinctionOffset, vertex.inline_medium_extinction);
   wavefront_store_float3(buffer, base_offset + kGPUWavefrontPathVertexPositionOffset, vertex.position);
   buffer.Store(base_offset + kGPUWavefrontPathVertexTriangleIndexOffset, vertex.triangle_index);
   wavefront_store_float3(buffer, base_offset + kGPUWavefrontPathVertexNormalOffset, vertex.normal);
@@ -221,6 +229,8 @@ void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefront
   buffer.Store(base_offset + kGPUWavefrontPathVertexPdfAccumulatedOffset, asuint(vertex.pdf_accumulated));
   buffer.Store(base_offset + kGPUWavefrontPathVertexPdfHistoryOffset, asuint(vertex.pdf_history));
   buffer.Store(base_offset + kGPUWavefrontPathVertexPdfRatioOffset, asuint(vertex.pdf_ratio));
+  wavefront_store_float2(buffer, base_offset + kGPUWavefrontPathVertexBarycentricOffset, vertex.barycentric);
+  buffer.Store(base_offset + kGPUWavefrontPathVertexInlineMediumFlagsOffset, vertex.inline_medium_flags);
 }
 
 GPUWavefrontPathVertex wavefront_load_path_vertex(uint descriptor_index, uint index) {
@@ -228,6 +238,7 @@ GPUWavefrontPathVertex wavefront_load_path_vertex(uint descriptor_index, uint in
   uint base_offset = index * kGPUWavefrontPathVertexStride;
   GPUWavefrontPathVertex result = (GPUWavefrontPathVertex)0;
   result.throughput = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexThroughputOffset);
+  result.inline_medium_extinction = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexInlineMediumExtinctionOffset);
   result.position = wavefront_load_float3(buffer, base_offset + kGPUWavefrontPathVertexPositionOffset);
   result.triangle_index = buffer.Load(base_offset + kGPUWavefrontPathVertexTriangleIndexOffset);
   result.normal = wavefront_load_float3(buffer, base_offset + kGPUWavefrontPathVertexNormalOffset);
@@ -249,6 +260,8 @@ GPUWavefrontPathVertex wavefront_load_path_vertex(uint descriptor_index, uint in
   result.pdf_accumulated = asfloat(buffer.Load(base_offset + kGPUWavefrontPathVertexPdfAccumulatedOffset));
   result.pdf_history = asfloat(buffer.Load(base_offset + kGPUWavefrontPathVertexPdfHistoryOffset));
   result.pdf_ratio = asfloat(buffer.Load(base_offset + kGPUWavefrontPathVertexPdfRatioOffset));
+  result.barycentric = wavefront_load_float2(buffer, base_offset + kGPUWavefrontPathVertexBarycentricOffset);
+  result.inline_medium_flags = buffer.Load(base_offset + kGPUWavefrontPathVertexInlineMediumFlagsOffset);
   return result;
 }
 
@@ -274,6 +287,34 @@ GPUWavefrontPathMeta wavefront_load_path_meta(uint descriptor_index, uint index)
   result.light_mis_history = asfloat(buffer.Load(base_offset + kGPUWavefrontPathMetaLightMisHistoryOffset));
   result.from_delta = buffer.Load(base_offset + kGPUWavefrontPathMetaFromDeltaOffset);
   return result;
+}
+
+GPUWavefrontSubsurfaceState wavefront_load_subsurface_state(uint descriptor_index, uint index) {
+  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
+  uint base_offset = index * kGPUWavefrontSubsurfaceStateStride;
+  GPUWavefrontSubsurfaceState result = (GPUWavefrontSubsurfaceState)0;
+  result.extinction = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontSubsurfaceStateExtinctionOffset);
+  result.scattering = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontSubsurfaceStateScatteringOffset);
+  result.albedo = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontSubsurfaceStateAlbedoOffset);
+  result.material_index = buffer.Load(base_offset + kGPUWavefrontSubsurfaceStateMaterialIndexOffset);
+  result.medium_index = buffer.Load(base_offset + kGPUWavefrontSubsurfaceStateMediumIndexOffset);
+  result.scatter_material_index = buffer.Load(base_offset + kGPUWavefrontSubsurfaceStateScatterMaterialIndexOffset);
+  result.flags = buffer.Load(base_offset + kGPUWavefrontSubsurfaceStateFlagsOffset);
+  result.phase_function_g = asfloat(buffer.Load(base_offset + kGPUWavefrontSubsurfaceStatePhaseFunctionGOffset));
+  return result;
+}
+
+void wavefront_store_subsurface_state(uint descriptor_index, uint index, GPUWavefrontSubsurfaceState state) {
+  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
+  uint base_offset = index * kGPUWavefrontSubsurfaceStateStride;
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontSubsurfaceStateExtinctionOffset, state.extinction);
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontSubsurfaceStateScatteringOffset, state.scattering);
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontSubsurfaceStateAlbedoOffset, state.albedo);
+  buffer.Store(base_offset + kGPUWavefrontSubsurfaceStateMaterialIndexOffset, state.material_index);
+  buffer.Store(base_offset + kGPUWavefrontSubsurfaceStateMediumIndexOffset, state.medium_index);
+  buffer.Store(base_offset + kGPUWavefrontSubsurfaceStateScatterMaterialIndexOffset, state.scatter_material_index);
+  buffer.Store(base_offset + kGPUWavefrontSubsurfaceStateFlagsOffset, state.flags);
+  buffer.Store(base_offset + kGPUWavefrontSubsurfaceStatePhaseFunctionGOffset, asuint(state.phase_function_g));
 }
 
 void wavefront_store_direct_light_sample(uint descriptor_index, uint index, GPUWavefrontDirectLightSample sample_value) {
@@ -361,6 +402,7 @@ void wavefront_store_connect_light_task(uint descriptor_index, uint index, GPUWa
   uint base_offset = index * kGPUWavefrontConnectLightTaskStride;
   wavefront_store_ray(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowRayOffset, task.shadow_ray);
   wavefront_store_float3(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowTargetOffset, task.shadow_target);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskReserved0Offset, task.reserved0);
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskContributionOffset, task.contribution);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskMisWeightOffset, asuint(task.mis_weight));
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskPixelIndexOffset, task.pixel_index);
@@ -368,6 +410,8 @@ void wavefront_store_connect_light_task(uint descriptor_index, uint index, GPUWa
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskFlagsOffset, task.flags);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskPathIndexOffset, task.path_index);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskSamplerSeedOffset, task.sampler_seed);
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskInlineMediumExtinctionOffset, task.inline_medium_extinction);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskInlineMediumFlagsOffset, task.inline_medium_flags);
 }
 
 GPUWavefrontConnectLightTask wavefront_load_connect_light_task(uint descriptor_index, uint index) {
@@ -376,6 +420,7 @@ GPUWavefrontConnectLightTask wavefront_load_connect_light_task(uint descriptor_i
   GPUWavefrontConnectLightTask result_value = (GPUWavefrontConnectLightTask)0;
   result_value.shadow_ray = wavefront_load_ray(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowRayOffset);
   result_value.shadow_target = wavefront_load_float3(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowTargetOffset);
+  result_value.reserved0 = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskReserved0Offset);
   result_value.contribution = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskContributionOffset);
   result_value.mis_weight = asfloat(buffer.Load(base_offset + kGPUWavefrontConnectLightTaskMisWeightOffset));
   result_value.pixel_index = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskPixelIndexOffset);
@@ -383,6 +428,8 @@ GPUWavefrontConnectLightTask wavefront_load_connect_light_task(uint descriptor_i
   result_value.flags = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskFlagsOffset);
   result_value.path_index = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskPathIndexOffset);
   result_value.sampler_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskSamplerSeedOffset);
+  result_value.inline_medium_extinction = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskInlineMediumExtinctionOffset);
+  result_value.inline_medium_flags = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskInlineMediumFlagsOffset);
   return result_value;
 }
 
@@ -470,11 +517,17 @@ GPUWavefrontResources wavefront_load_resources() {
   result.connect_light_result_buffer = buffer.Load(kGPUWavefrontResourcesConnectLightResultBufferOffset);
   result.connect_camera_task_buffer = buffer.Load(kGPUWavefrontResourcesConnectCameraTaskBufferOffset);
   result.connect_camera_result_buffer = buffer.Load(kGPUWavefrontResourcesConnectCameraResultBufferOffset);
+  result.camera_subsurface_state_buffer = buffer.Load(kGPUWavefrontResourcesCameraSubsurfaceStateBufferOffset);
+  result.light_subsurface_state_buffer = buffer.Load(kGPUWavefrontResourcesLightSubsurfaceStateBufferOffset);
   result.path_capacity = buffer.Load(kGPUWavefrontResourcesPathCapacityOffset);
   result.max_path_length = buffer.Load(kGPUWavefrontResourcesMaxPathLengthOffset);
   result.vertex_capacity = buffer.Load(kGPUWavefrontResourcesVertexCapacityOffset);
   result.fixed_max_bounces = buffer.Load(kGPUWavefrontResourcesFixedMaxBouncesOffset);
   return result;
+}
+
+uint wavefront_subsurface_state_buffer(GPUWavefrontResources resources, bool from_camera) {
+  return from_camera ? resources.camera_subsurface_state_buffer : resources.light_subsurface_state_buffer;
 }
 
 uint wavefront_queue_current_descriptor(bool from_camera) {
@@ -603,6 +656,10 @@ bool wavefront_hit_is_medium(GPUWavefrontHit hit) {
   return (hit.flags & GPUWavefrontHitFlags::Medium) != 0u;
 }
 
+bool wavefront_hit_is_subsurface(GPUWavefrontHit hit) {
+  return (hit.flags & GPUWavefrontHitFlags::Subsurface) != 0u;
+}
+
 bool wavefront_path_vertex_valid(GPUWavefrontPathVertex vertex) {
   return (vertex.flags & GPUWavefrontVertexFlags::Valid) != 0u;
 }
@@ -611,12 +668,20 @@ bool wavefront_path_vertex_connectible(GPUWavefrontPathVertex vertex) {
   return (vertex.flags & GPUWavefrontVertexFlags::Connectible) != 0u;
 }
 
+bool wavefront_path_vertex_mis_connectible(GPUWavefrontPathVertex vertex) {
+  return (vertex.flags & GPUWavefrontVertexFlags::Mis_connectible) != 0u;
+}
+
 bool wavefront_path_vertex_is_surface(GPUWavefrontPathVertex vertex) {
   return (vertex.flags & GPUWavefrontVertexFlags::Surface) != 0u;
 }
 
 bool wavefront_path_vertex_is_medium(GPUWavefrontPathVertex vertex) {
   return (vertex.flags & GPUWavefrontVertexFlags::Medium) != 0u;
+}
+
+bool wavefront_path_vertex_is_subsurface(GPUWavefrontPathVertex vertex) {
+  return (vertex.flags & GPUWavefrontVertexFlags::Subsurface) != 0u;
 }
 
 bool wavefront_path_vertex_is_infinite_emitter(GPUWavefrontPathVertex vertex) {
@@ -830,6 +895,7 @@ void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample e
       TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
       vertex.material_index = tri.material_index;
       vertex.geo_normal = tri.geo_n;
+      vertex.barycentric = emitter_sample.barycentric.yz;
     }
   }
   if (emitter_sample.is_delta == 0u) {
@@ -868,6 +934,7 @@ void wavefront_write_vertex(bool from_camera, uint path_index, GPUWavefrontPathS
   vertex.w_i = state.ray.d;
   vertex.emitter_index = hit.emitter_index;
   vertex.texcoord = hit.vertex.tex;
+  vertex.barycentric = hit.barycentric;
   vertex.forward_pdf = state.forward_pdf;
   vertex.reverse_pdf = state.reverse_pdf;
   vertex.sampled_bsdf_pdf = state.sampled_bsdf_pdf;
@@ -911,6 +978,9 @@ void wavefront_write_medium_vertex(bool from_camera, uint path_index, GPUWavefro
   vertex.path_length = state.path_length;
   vertex.pixel_index = state.pixel_index;
   vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Medium | (from_camera ? GPUWavefrontVertexFlags::From_camera : GPUWavefrontVertexFlags::From_light);
+  if (wavefront_hit_is_subsurface(hit)) {
+    vertex.flags |= GPUWavefrontVertexFlags::Subsurface;
+  }
   if (wavefront_medium_explicit_connections_enabled(state.medium_index)) {
     vertex.flags |= GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible;
   }

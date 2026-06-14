@@ -17,6 +17,7 @@ struct WavefrontConnectLightPrepareInput {
   GPUWavefrontPathVertex light_previous_vertex;
   Material camera_material;
   Material light_material;
+  uint camera_sampler_seed;
 };
 
 Vertex wavefront_make_connect_vertex(float3 position, float3 normal, float2 texcoord) {
@@ -27,12 +28,27 @@ Vertex wavefront_make_connect_vertex(float3 position, float3 normal, float2 texc
   return result;
 }
 
+Vertex wavefront_make_connect_path_vertex(GPUWavefrontPathVertex path_vertex) {
+  if (path_vertex.triangle_index == kInvalidIndex) {
+    return wavefront_make_connect_vertex(path_vertex.position, path_vertex.normal, path_vertex.texcoord);
+  }
+
+  TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], path_vertex.triangle_index);
+  Vertex result = wavefront_interpolate_vertex(tri, barycentrics(path_vertex.barycentric));
+  result.pos = path_vertex.position;
+  result.nrm = path_vertex.normal;
+  result.tex = path_vertex.texcoord;
+  return result;
+}
+
 float wavefront_connect_light_mis_camera(GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex, float current_backward_pdf, float previous_backward_pdf) {
   float result_accumulated = 0.0f;
-  float r1 = wavefront_safe_div(previous_backward_pdf, previous_vertex.pdf_from_prev);
-  float previous_mis_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Mis_connectible) != 0u) ? 1.0f : 0.0f;
   float previous_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Connectible) != 0u) ? 1.0f : 0.0f;
-  result_accumulated = r1 * (previous_mis_connectible + previous_vertex.pdf_history);
+  if (current_vertex.path_length > 1u) {
+    float r1 = wavefront_safe_div(previous_backward_pdf, previous_vertex.pdf_from_prev);
+    float previous_mis_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Mis_connectible) != 0u) ? 1.0f : 0.0f;
+    result_accumulated = r1 * (previous_mis_connectible + previous_vertex.pdf_history);
+  }
   float r0 = wavefront_safe_div(current_backward_pdf, current_vertex.pdf_from_prev);
   result_accumulated = r0 * (previous_connectible + result_accumulated);
   return result_accumulated;
@@ -47,6 +63,33 @@ float wavefront_connect_light_mis_light(GPUWavefrontPathVertex current_vertex, G
   float r0 = wavefront_safe_div(current_backward_pdf, current_vertex.pdf_from_prev);
   result_accumulated = r0 * (previous_connectible + result_accumulated);
   return result_accumulated;
+}
+
+float wavefront_connect_light_vertex_to_vertex_area_pdf(float pdf_dir, GPUWavefrontPathVertex from_vertex, GPUWavefrontPathVertex to_vertex) {
+  if (wavefront_path_vertex_is_infinite_emitter(to_vertex)) {
+    return pdf_dir;
+  }
+  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, from_vertex.position, to_vertex.position, wavefront_path_vertex_is_surface(to_vertex), to_vertex.normal);
+}
+
+float3 wavefront_connect_light_shadow_origin(GPUWavefrontPathVertex vertex, float3 outgoing_direction) {
+  if (vertex.triangle_index == kInvalidIndex) {
+    float sign_value = (dot(vertex.geo_normal, outgoing_direction) >= 0.0f) ? 1.0f : -1.0f;
+    return offset_ray(vertex.position, vertex.geo_normal * sign_value);
+  }
+
+  TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], vertex.triangle_index);
+  ByteAddressBuffer position_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_positions)];
+  ByteAddressBuffer normal_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_normals)];
+
+  float3 p0 = load_float3(position_buffer, tri.i.x);
+  float3 p1 = load_float3(position_buffer, tri.i.y);
+  float3 p2 = load_float3(position_buffer, tri.i.z);
+  float3 n0 = load_float3(normal_buffer, tri.i.x);
+  float3 n1 = load_float3(normal_buffer, tri.i.y);
+  float3 n2 = load_float3(normal_buffer, tri.i.z);
+
+  return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, tri.geo_n, barycentrics(vertex.barycentric), outgoing_direction);
 }
 
 float wavefront_connect_light_weight(WavefrontConnectLightPrepareInput input_value, float z_curr_pdf, float z_prev_pdf, float y_curr_pdf, float y_prev_pdf) {
@@ -76,11 +119,18 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, out Wavefro
   }
 
   const uint vertex_stride = wavefront_light_fixed_max_bounces(input_value.resources) + 1u;
+  const uint queue_descriptor = wavefront_queue_current_descriptor(true);
+  const uint queue_count = wavefront_queue_count(queue_descriptor);
+  const uint queue_index = dispatch_index / vertex_stride;
+  if (queue_index >= queue_count) {
+    return false;
+  }
+
   input_value.task_index = dispatch_index;
-  input_value.path_index = dispatch_index / vertex_stride;
+  input_value.path_index = wavefront_queue_load(queue_descriptor, queue_index);
   input_value.light_vertex_length = dispatch_index % vertex_stride;
 
-  if ((input_value.path_index >= input_value.resources.path_capacity) || (input_value.light_vertex_length == 0u)) {
+  if (input_value.light_vertex_length == 0u) {
     return false;
   }
 
@@ -88,6 +138,14 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, out Wavefro
   if ((scene_strategy_enabled(kSceneStrategyConnectVertices) == false) || (input_value.path_meta.camera_path_length == 0u) ||
       (input_value.light_vertex_length > input_value.path_meta.light_path_length)) {
     return false;
+  }
+
+  if (input_value.resources.camera_state_buffer != kInvalidIndex) {
+    GPUWavefrontPathState camera_state = wavefront_load_path_state(input_value.resources.camera_state_buffer, input_value.path_index);
+    if ((wavefront_path_state_valid(camera_state) == false) || (camera_state.path_length != input_value.path_meta.camera_path_length)) {
+      return false;
+    }
+    input_value.camera_sampler_seed = camera_state.sampler_seed;
   }
 
   uint target_path_length = input_value.path_meta.camera_path_length + input_value.light_vertex_length + 1u;
@@ -118,14 +176,62 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, out Wavefro
   return true;
 }
 
-void wavefront_store_connect_light_prepare_task(uint dispatch_index, WavefrontConnectLightPrepareInput input_value, ETX_IN(BSDFEval, camera_eval)) {
+#if ETX_CONNECT_LIGHT_CAMERA_PREPARE_STAGE
+void wavefront_store_connect_light_camera_task(uint dispatch_index, WavefrontConnectLightPrepareInput input_value, ETX_IN(BSDFEval, camera_eval)) {
   if (bsdf_eval_valid(camera_eval) == false) {
+    return;
+  }
+
+  float3 direction_to_light = input_value.light_vertex.position - input_value.camera_vertex.position;
+  const float distance_squared = dot(direction_to_light, direction_to_light);
+  if (distance_squared <= kInvMaxHalf) {
+    return;
+  }
+
+  direction_to_light *= rsqrt(distance_squared);
+  SpectralQuery spect = (SpectralQuery)0;
+  spect.wavelength = input_value.camera_vertex.throughput.wavelength;
+  spect.flags = input_value.camera_vertex.throughput.flags;
+
+  const float3 direction_to_camera = -direction_to_light;
+  BSDFData camera_reverse_data =
+    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, input_value.camera_vertex.medium_index, PathSource::Camera, direction_to_camera);
+  Sampler camera_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 1u) ^ (constants.path_iteration + 31u)));
+  float3 camera_prev_direction = normalize(input_value.camera_previous_vertex.position - input_value.camera_vertex.position);
+  float z_prev_pdf_dir = wavefront_connect_light_stage_camera_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), camera_reverse_data, camera_prev_direction,
+    input_value.camera_material, camera_reverse_sampler);
+  float z_prev_pdf = wavefront_convert_solid_angle_pdf_to_area(z_prev_pdf_dir, input_value.camera_vertex.position, input_value.camera_previous_vertex.position,
+    wavefront_path_vertex_is_surface(input_value.camera_previous_vertex), input_value.camera_previous_vertex.normal);
+
+  GPUWavefrontConnectLightTask task = (GPUWavefrontConnectLightTask)0;
+  task.contribution = camera_eval.bsdf;
+  task.mis_weight = camera_eval.pdf;
+  task.flags = GPUWavefrontConnectLightTaskFlags::CameraPrepared;
+  task.path_index = input_value.path_index;
+  task.reserved0 = asuint(z_prev_pdf);
+  task.sampler_seed = input_value.camera_sampler_seed;
+  wavefront_store_connect_light_task(input_value.resources.connect_light_task_buffer, dispatch_index, task);
+}
+#endif
+
+#if ETX_CONNECT_LIGHT_RESOLVE_STAGE
+void wavefront_resolve_connect_light_prepare_task(uint dispatch_index) {
+  WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;
+  if (wavefront_load_connect_light_prepare_input(dispatch_index, input_value) == false) {
+    return;
+  }
+  if (wavefront_connect_light_stage_matches_material(input_value.light_material.cls) == false) {
+    return;
+  }
+
+  GPUWavefrontConnectLightTask camera_task = wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, dispatch_index);
+  if ((camera_task.flags != GPUWavefrontConnectLightTaskFlags::CameraPrepared) || (camera_task.path_index != input_value.path_index)) {
     return;
   }
 
   float3 direction_to_camera = input_value.camera_vertex.position - input_value.light_vertex.position;
   float distance_squared = dot(direction_to_camera, direction_to_camera);
-  if (distance_squared <= kRayEpsilon * kRayEpsilon) {
+  if (distance_squared <= kInvMaxHalf) {
     return;
   }
 
@@ -137,37 +243,31 @@ void wavefront_store_connect_light_prepare_task(uint dispatch_index, WavefrontCo
   spect.flags = input_value.camera_vertex.throughput.flags;
 
   Sampler light_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 17u)));
-  BSDFData light_data = bsdf_data_make(wavefront_make_connect_vertex(input_value.light_vertex.position, input_value.light_vertex.normal, input_value.light_vertex.texcoord), spect,
-    input_value.light_vertex.medium_index, PathSource::Light, input_value.light_vertex.w_i);
-  BSDFEval light_eval = bsdf_evaluate(make_scene_bsdf_resource_gpu_context(), light_data, direction_to_camera, input_value.light_material, light_sampler);
+  BSDFData light_data =
+    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, input_value.light_vertex.medium_index, PathSource::Light, input_value.light_vertex.w_i);
+  BSDFEval light_eval = wavefront_connect_light_stage_light_bsdf_eval(make_scene_bsdf_resource_gpu_context(), light_data, direction_to_camera, input_value.light_material, light_sampler);
   if (bsdf_eval_valid(light_eval) == false) {
     return;
   }
+  float shading_fix = bsdf_fix_shading_normal(input_value.light_vertex.geo_normal, input_value.light_vertex.normal, input_value.light_vertex.w_i, direction_to_camera);
+  light_eval.bsdf = spectral_response_mul(light_eval.bsdf, shading_fix);
 
-  SpectralResponse connection = spectral_response_mul(input_value.light_vertex.throughput, spectral_response_mul(light_eval.bsdf, camera_eval.bsdf));
+  SpectralResponse connection = spectral_response_mul(input_value.light_vertex.throughput, spectral_response_mul(light_eval.bsdf, camera_task.contribution));
   if (spectral_response_is_zero(connection)) {
     return;
   }
 
-  BSDFData camera_reverse_data =
-    bsdf_data_make(wavefront_make_connect_vertex(input_value.camera_vertex.position, input_value.camera_vertex.normal, input_value.camera_vertex.texcoord), spect,
-      input_value.camera_vertex.medium_index, PathSource::Camera, direction_to_camera);
-  Sampler camera_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 1u) ^ (constants.path_iteration + 31u)));
-  float3 camera_prev_direction = normalize(input_value.camera_previous_vertex.position - input_value.camera_vertex.position);
-  float z_prev_pdf_dir = wavefront_connect_light_stage_camera_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), camera_reverse_data, camera_prev_direction,
-    input_value.camera_material, camera_reverse_sampler);
-  float z_prev_pdf = wavefront_convert_solid_angle_pdf_to_area(z_prev_pdf_dir, input_value.camera_vertex.position, input_value.camera_previous_vertex.position,
-    wavefront_path_vertex_is_surface(input_value.camera_previous_vertex), input_value.camera_previous_vertex.normal);
-
-  float y_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(camera_eval.pdf, input_value.camera_vertex.position, input_value.light_vertex.position,
+  float z_prev_pdf = asfloat(camera_task.reserved0);
+  float y_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(camera_task.mis_weight, input_value.camera_vertex.position, input_value.light_vertex.position,
     wavefront_path_vertex_is_surface(input_value.light_vertex), input_value.light_vertex.normal);
 
-  BSDFData light_reverse_data = bsdf_data_make(wavefront_make_connect_vertex(input_value.light_vertex.position, input_value.light_vertex.normal, input_value.light_vertex.texcoord),
-    spect, input_value.light_vertex.medium_index, PathSource::Light, -direction_to_camera);
+  BSDFData light_reverse_data =
+    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, input_value.light_vertex.medium_index, PathSource::Light, -direction_to_camera);
   Sampler light_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 3u) ^ (constants.path_iteration + 43u)));
   float3 light_prev_direction = normalize(input_value.light_previous_vertex.position - input_value.light_vertex.position);
-  float y_prev_pdf_dir = bsdf_pdf(make_scene_bsdf_resource_gpu_context(), light_reverse_data, light_prev_direction, input_value.light_material, light_reverse_sampler);
-  float y_prev_pdf = wavefront_vertex_to_vertex_area_pdf(y_prev_pdf_dir, input_value.light_vertex, input_value.light_previous_vertex);
+  float y_prev_pdf_dir =
+    wavefront_connect_light_stage_light_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), light_reverse_data, light_prev_direction, input_value.light_material, light_reverse_sampler);
+  float y_prev_pdf = wavefront_connect_light_vertex_to_vertex_area_pdf(y_prev_pdf_dir, input_value.light_vertex, input_value.light_previous_vertex);
 
   float z_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(light_eval.pdf, input_value.light_vertex.position, input_value.camera_vertex.position,
     wavefront_path_vertex_is_surface(input_value.camera_vertex), input_value.camera_vertex.normal);
@@ -178,8 +278,7 @@ void wavefront_store_connect_light_prepare_task(uint dispatch_index, WavefrontCo
     return;
   }
 
-  float light_sign = (dot(input_value.light_vertex.geo_normal, direction_to_camera) >= 0.0f) ? 1.0f : -1.0f;
-  float3 shadow_origin = offset_ray(input_value.light_vertex.position, input_value.light_vertex.geo_normal * light_sign);
+  float3 shadow_origin = wavefront_connect_light_shadow_origin(input_value.light_vertex, direction_to_camera);
   float3 shadow_delta = input_value.camera_vertex.position - shadow_origin;
   float shadow_distance = length(shadow_delta);
   if (shadow_distance <= kRayEpsilon) {
@@ -195,9 +294,12 @@ void wavefront_store_connect_light_prepare_task(uint dispatch_index, WavefrontCo
   task.contribution = contribution;
   task.mis_weight = weight;
   task.pixel_index = input_value.camera_vertex.pixel_index;
-  task.medium_index = ((light_eval.properties & BSDFSample::MediumChanged) != 0u) ? light_eval.medium_index : input_value.light_vertex.medium_index;
-  task.flags = 1u;
+  task.medium_index = input_value.light_vertex.medium_index;
+  task.flags = GPUWavefrontConnectLightTaskFlags::Ready;
   task.path_index = input_value.path_index;
-  task.sampler_seed = 0u;
+  task.sampler_seed = camera_task.sampler_seed;
+  task.inline_medium_extinction = input_value.light_vertex.inline_medium_extinction;
+  task.inline_medium_flags = input_value.light_vertex.inline_medium_flags;
   wavefront_store_connect_light_task(input_value.resources.connect_light_task_buffer, dispatch_index, task);
 }
+#endif

@@ -44,12 +44,26 @@
   state.last_vertex_index = wavefront_camera_vertex_slot(output_pixel_index, 0u);
   GPUWavefrontResources resources = wavefront_load_resources();
   wavefront_store_path_state(resources.camera_state_buffer, output_pixel_index, state);
+  if (resources.camera_subsurface_state_buffer != kInvalidIndex) {
+    GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
+    subsurface_state.material_index = kInvalidIndex;
+    subsurface_state.medium_index = kInvalidIndex;
+    subsurface_state.scatter_material_index = kInvalidIndex;
+    wavefront_store_subsurface_state(resources.camera_subsurface_state_buffer, output_pixel_index, subsurface_state);
+  }
   wavefront_write_root_camera_vertex(output_pixel_index, camera, state.ray, spect, output_pixel_index);
   if (resources.path_meta_buffer != kInvalidIndex) {
     GPUWavefrontPathMeta meta = (GPUWavefrontPathMeta)0;
+    if (scene_path_mode_is_bdpt_full()) {
+      meta = wavefront_load_path_meta(resources.path_meta_buffer, output_pixel_index);
+    }
     meta.camera_path_length = 1u;
     meta.camera_mis_history = scene_path_mode_uses_bdpt_fast() ? 1.0f : 0.0f;
-    meta.flags = GPUWavefrontPathMetaFlags::Camera_active;
+    if (scene_path_mode_is_bdpt_full()) {
+      meta.flags |= GPUWavefrontPathMetaFlags::Camera_active;
+    } else {
+      meta.flags = GPUWavefrontPathMetaFlags::Camera_active;
+    }
     wavefront_store_path_meta(resources.path_meta_buffer, output_pixel_index, meta);
   }
   uint queue_slot = wavefront_render_window_local_index(dtid.xy);

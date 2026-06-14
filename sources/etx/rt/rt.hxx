@@ -10,12 +10,6 @@ struct Scene;
 struct SceneData;
 struct UpdateFlags;
 
-struct ContinousTraceOptions {
-  IntersectionBase* intersection_buffer = nullptr;
-  uint32_t max_intersections = 0;
-  uint32_t material_id = kInvalidIndex;
-};
-
 struct Raytracing {
   Raytracing(TaskScheduler&, Film&);
   ~Raytracing();
@@ -32,7 +26,6 @@ struct Raytracing {
 
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
   bool trace_material(const Scene& scene, const Ray&, const uint32_t material_id, Intersection&, Sampler& smp) const;
-  uint32_t continuous_trace(const Scene& scene, const Ray&, const ContinousTraceOptions& options, Sampler& smp) const;
   SpectralResponse trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const MediumInstance& medium, Sampler& smp) const;
 
  private:

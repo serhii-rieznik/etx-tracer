@@ -36,7 +36,6 @@ struct SubsurfaceMaterial {
   enum : uint32_t {
     Disabled,
     RandomWalk,
-    ChristensenBurley,
   };
 
   using Path = uint32_t;

@@ -31,7 +31,7 @@
   wavefront_store_direct_light_result(resources.direct_light_result_buffer, dispatch_index, result_value);
 }
 
-  [numthreads(64, 1, 1)] void wavefront_camera_connect_light_shadow_main(uint3 dtid : SV_DispatchThreadID) {
+[numthreads(64, 1, 1)] void wavefront_camera_connect_light_shadow_main(uint3 dtid : SV_DispatchThreadID) {
   const uint dispatch_index = dtid.x;
 
   GPUWavefrontResources resources = wavefront_load_resources();
@@ -42,7 +42,7 @@
   GPUWavefrontConnectLightTask task = wavefront_load_connect_light_task(resources.connect_light_task_buffer, dispatch_index);
   GPUWavefrontConnectLightResult result_value = (GPUWavefrontConnectLightResult)0;
   result_value.transmittance = spectral_response_make(spectral_query_sample(), 0.0f);
-  if (task.flags == 0u) {
+  if (task.flags != GPUWavefrontConnectLightTaskFlags::Ready) {
     wavefront_store_connect_light_result(resources.connect_light_result_buffer, dispatch_index, result_value);
     return;
   }
@@ -53,7 +53,14 @@
   result_value.transmittance = spectral_response_make(spect, 1.0f);
 
   uint seed = task.sampler_seed;
-  result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+  if ((task.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) {
+    result_value.visible = wavefront_trace_transmittance_to_point_inline_medium(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
+                             task.inline_medium_flags, seed, result_value.transmittance)
+                             ? 1u
+                             : 0u;
+  } else {
+    result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+  }
   GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, task.path_index);
   if (wavefront_path_state_valid(state)) {
     state.sampler_seed = seed;

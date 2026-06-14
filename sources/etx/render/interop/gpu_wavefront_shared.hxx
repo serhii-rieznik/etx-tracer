@@ -26,6 +26,7 @@ struct GPUWavefrontHitFlags {
     Local_emitter = 1u << 2u,
     Environment_emitter = 1u << 3u,
     Medium = 1u << 4u,
+    Subsurface = 1u << 5u,
   };
 };
 
@@ -41,6 +42,14 @@ struct GPUWavefrontVertexFlags {
     Emitter = 1u << 7u,
     Mis_connectible = 1u << 8u,
     Camera = 1u << 9u,
+    Subsurface = 1u << 10u,
+  };
+};
+
+struct GPUWavefrontSubsurfaceFlags {
+  enum : uint32_t {
+    Active = 1u << 0u,
+    InlineMedium = 1u << 1u,
   };
 };
 
@@ -103,6 +112,7 @@ struct ETX_ALIGNED GPUWavefrontHit {
 
 struct ETX_ALIGNED GPUWavefrontPathVertex {
   SpectralResponse throughput ETX_INIT({});
+  SpectralResponse inline_medium_extinction ETX_INIT({});
   float3 position ETX_INIT({});
   uint32_t triangle_index ETX_INIT(kInvalidIndex);
   float3 normal ETX_INIT({});
@@ -124,6 +134,8 @@ struct ETX_ALIGNED GPUWavefrontPathVertex {
   float pdf_accumulated ETX_INIT(0.0f);
   float pdf_history ETX_INIT(0.0f);
   float pdf_ratio ETX_INIT(0.0f);
+  float2 barycentric ETX_INIT({});
+  uint32_t inline_medium_flags ETX_INIT(0u);
   uint32_t reserved0 ETX_INIT(0u);
 };
 
@@ -136,6 +148,20 @@ struct ETX_ALIGNED GPUWavefrontPathMeta {
   float light_mis_history ETX_INIT(0.0f);
   uint32_t from_delta ETX_INIT(0u);
   uint32_t reserved1 ETX_INIT(0u);
+};
+
+struct ETX_ALIGNED GPUWavefrontSubsurfaceState {
+  SpectralResponse extinction ETX_INIT({});
+  SpectralResponse scattering ETX_INIT({});
+  SpectralResponse albedo ETX_INIT({});
+  uint32_t material_index ETX_INIT(kInvalidIndex);
+  uint32_t medium_index ETX_INIT(kInvalidIndex);
+  uint32_t scatter_material_index ETX_INIT(kInvalidIndex);
+  uint32_t flags ETX_INIT(0u);
+  float phase_function_g ETX_INIT(0.0f);
+  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t reserved1 ETX_INIT(0u);
+  uint32_t reserved2 ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontDirectLightSample {
@@ -187,6 +213,11 @@ struct ETX_ALIGNED GPUWavefrontConnectLightTask {
   uint32_t flags ETX_INIT(0u);
   uint32_t path_index ETX_INIT(0u);
   uint32_t sampler_seed ETX_INIT(0u);
+  SpectralResponse inline_medium_extinction ETX_INIT({});
+  uint32_t inline_medium_flags ETX_INIT(0u);
+  uint32_t reserved1 ETX_INIT(0u);
+  uint32_t reserved2 ETX_INIT(0u);
+  uint32_t reserved3 ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectLightResult {
@@ -241,6 +272,8 @@ struct ETX_ALIGNED GPUWavefrontResources {
   uint32_t connect_light_result_buffer ETX_INIT(kInvalidIndex);
   uint32_t connect_camera_task_buffer ETX_INIT(kInvalidIndex);
   uint32_t connect_camera_result_buffer ETX_INIT(kInvalidIndex);
+  uint32_t camera_subsurface_state_buffer ETX_INIT(kInvalidIndex);
+  uint32_t light_subsurface_state_buffer ETX_INIT(kInvalidIndex);
   uint32_t path_capacity ETX_INIT(0u);
   uint32_t max_path_length ETX_INIT(0u);
   uint32_t vertex_capacity ETX_INIT(0u);

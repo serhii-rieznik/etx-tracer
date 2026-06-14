@@ -15,7 +15,9 @@
 
   uint2 output_pixel = wavefront_output_pixel(dtid.xy);
   uint path_index = output_pixel.x + output_pixel.y * camera.film_size.x;
-  uint seed = scene_random_seed(path_index, constants.sample_index);
+  uint2 camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
+  uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
+  uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
     spect = spectral_query_spectral_sample(rnd01(seed));
@@ -23,6 +25,13 @@
   GPUWavefrontResources resources = wavefront_load_resources();
   GPUWavefrontPathState cleared_state = (GPUWavefrontPathState)0;
   wavefront_store_path_state(resources.light_state_buffer, path_index, cleared_state);
+  if (resources.light_subsurface_state_buffer != kInvalidIndex) {
+    GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
+    subsurface_state.material_index = kInvalidIndex;
+    subsurface_state.medium_index = kInvalidIndex;
+    subsurface_state.scatter_material_index = kInvalidIndex;
+    wavefront_store_subsurface_state(resources.light_subsurface_state_buffer, path_index, subsurface_state);
+  }
   if (resources.path_meta_buffer != kInvalidIndex) {
     GPUWavefrontPathMeta cleared_meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
     cleared_meta.light_path_length = 0u;
