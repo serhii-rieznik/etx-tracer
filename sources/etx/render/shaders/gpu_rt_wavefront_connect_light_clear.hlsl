@@ -8,8 +8,7 @@
   }
 
   const uint vertex_stride = wavefront_light_fixed_max_bounces(resources) + 1u;
-  const uint task_count = resources.path_capacity * vertex_stride;
-  if (dispatch_index >= task_count) {
+  if ((vertex_stride == 0u) || ((dispatch_index / vertex_stride) >= resources.path_capacity)) {
     return;
   }
 

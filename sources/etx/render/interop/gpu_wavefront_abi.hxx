@@ -169,5 +169,7 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraSubsurfaceStateBufferOffse
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesLightSubsurfaceStateBufferOffset = 80u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesPathCapacityOffset = 84u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesMaxPathLengthOffset = 88u;
-ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesVertexCapacityOffset = 92u;
-ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesFixedMaxBouncesOffset = 96u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraVertexCapacityOffset = 92u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesLightVertexCapacityOffset = 96u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraFixedMaxBouncesOffset = 100u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesLightFixedMaxBouncesOffset = 104u;

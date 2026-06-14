@@ -2123,6 +2123,13 @@ RHICreateBindlessResult VKDevice::create_buffer(const RHIBufferDesc& desc) {
     return {RHIResult::InvalidArgument, {}};
   }
 
+  using BufferUsage = std::underlying_type<RHIBufferUsage>::type;
+  const BufferUsage usage = static_cast<BufferUsage>(desc.usage);
+  if ((usage & static_cast<BufferUsage>(RHIBufferUsage::Storage)) && (desc.size > _impl->properties.limits.maxStorageBufferRange)) {
+    log::error("Requested Vulkan storage buffer exceeds device maxStorageBufferRange (size=%llu limit=%u)", desc.size, _impl->properties.limits.maxStorageBufferRange);
+    return {RHIResult::InvalidArgument, {}};
+  }
+
   VkBuffer vk_handle = VK_NULL_HANDLE;
   VkDeviceMemory vk_memory = VK_NULL_HANDLE;
   RHIResult create_result = _impl->create_vulkan_buffer(desc, vk_handle, vk_memory);

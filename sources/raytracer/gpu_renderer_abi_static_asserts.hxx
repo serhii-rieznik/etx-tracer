@@ -299,10 +299,14 @@ static_assert(offsetof(GPUWavefrontResources, path_capacity) == kGPUWavefrontRes
   "GPUWavefrontResources::path_capacity offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontResources, max_path_length) == kGPUWavefrontResourcesMaxPathLengthOffset,
   "GPUWavefrontResources::max_path_length offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontResources, vertex_capacity) == kGPUWavefrontResourcesVertexCapacityOffset,
-  "GPUWavefrontResources::vertex_capacity offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontResources, fixed_max_bounces) == kGPUWavefrontResourcesFixedMaxBouncesOffset,
-  "GPUWavefrontResources::fixed_max_bounces offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, camera_vertex_capacity) == kGPUWavefrontResourcesCameraVertexCapacityOffset,
+  "GPUWavefrontResources::camera_vertex_capacity offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, light_vertex_capacity) == kGPUWavefrontResourcesLightVertexCapacityOffset,
+  "GPUWavefrontResources::light_vertex_capacity offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, camera_fixed_max_bounces) == kGPUWavefrontResourcesCameraFixedMaxBouncesOffset,
+  "GPUWavefrontResources::camera_fixed_max_bounces offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, light_fixed_max_bounces) == kGPUWavefrontResourcesLightFixedMaxBouncesOffset,
+  "GPUWavefrontResources::light_fixed_max_bounces offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<float2>, "float2 must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<float2>, "float2 must stay trivially copyable for GPU upload ABI");

@@ -276,6 +276,9 @@ struct ETX_ALIGNED GPUWavefrontResources {
   uint32_t light_subsurface_state_buffer ETX_INIT(kInvalidIndex);
   uint32_t path_capacity ETX_INIT(0u);
   uint32_t max_path_length ETX_INIT(0u);
-  uint32_t vertex_capacity ETX_INIT(0u);
-  uint32_t fixed_max_bounces ETX_INIT(0u);
+  uint32_t camera_vertex_capacity ETX_INIT(0u);
+  uint32_t light_vertex_capacity ETX_INIT(0u);
+  uint32_t camera_fixed_max_bounces ETX_INIT(0u);
+  uint32_t light_fixed_max_bounces ETX_INIT(0u);
+  uint32_t reserved0 ETX_INIT(0u);
 };

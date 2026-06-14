@@ -521,8 +521,10 @@ GPUWavefrontResources wavefront_load_resources() {
   result.light_subsurface_state_buffer = buffer.Load(kGPUWavefrontResourcesLightSubsurfaceStateBufferOffset);
   result.path_capacity = buffer.Load(kGPUWavefrontResourcesPathCapacityOffset);
   result.max_path_length = buffer.Load(kGPUWavefrontResourcesMaxPathLengthOffset);
-  result.vertex_capacity = buffer.Load(kGPUWavefrontResourcesVertexCapacityOffset);
-  result.fixed_max_bounces = buffer.Load(kGPUWavefrontResourcesFixedMaxBouncesOffset);
+  result.camera_vertex_capacity = buffer.Load(kGPUWavefrontResourcesCameraVertexCapacityOffset);
+  result.light_vertex_capacity = buffer.Load(kGPUWavefrontResourcesLightVertexCapacityOffset);
+  result.camera_fixed_max_bounces = buffer.Load(kGPUWavefrontResourcesCameraFixedMaxBouncesOffset);
+  result.light_fixed_max_bounces = buffer.Load(kGPUWavefrontResourcesLightFixedMaxBouncesOffset);
   return result;
 }
 
@@ -772,17 +774,24 @@ float3 wavefront_surface_shading_position(GPUWavefrontHit hit, float3 outgoing_d
 }
 
 uint wavefront_camera_fixed_max_bounces(GPUWavefrontResources resources) {
-  return resources.fixed_max_bounces >> 16u;
+  return resources.camera_fixed_max_bounces;
 }
 
 uint wavefront_light_fixed_max_bounces(GPUWavefrontResources resources) {
-  uint result = resources.fixed_max_bounces & 0xFFFFu;
-  return (result == 0u) ? wavefront_camera_fixed_max_bounces(resources) : result;
+  return resources.light_fixed_max_bounces;
+}
+
+uint wavefront_vertex_capacity(GPUWavefrontResources resources, bool from_camera) {
+  return from_camera ? resources.camera_vertex_capacity : resources.light_vertex_capacity;
 }
 
 uint wavefront_vertex_slot_from_limit(uint path_index, uint path_length, uint fixed_max_bounces) {
   uint vertex_index = 0u;
-  if (fixed_max_bounces <= 2u) {
+  if (fixed_max_bounces == 0u) {
+    vertex_index = 0u;
+  } else if (fixed_max_bounces == 1u) {
+    vertex_index = path_length & 1u;
+  } else if (fixed_max_bounces == 2u) {
     vertex_index = (path_length == 0u) ? 0u : (1u + ((path_length - 1u) & 1u));
   } else if (fixed_max_bounces == 3u) {
     vertex_index = (path_length <= 1u) ? path_length : (2u + ((path_length - 2u) & 1u));
@@ -919,7 +928,7 @@ void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample e
 void wavefront_write_vertex(bool from_camera, uint path_index, GPUWavefrontPathState state, GPUWavefrontHit hit) {
   GPUWavefrontResources resources = wavefront_load_resources();
   uint vertex_slot = wavefront_path_vertex_slot(from_camera, path_index, state.path_length);
-  if (vertex_slot >= resources.vertex_capacity) {
+  if (vertex_slot >= wavefront_vertex_capacity(resources, from_camera)) {
     return;
   }
 
@@ -956,7 +965,7 @@ void wavefront_write_vertex(bool from_camera, uint path_index, GPUWavefrontPathS
 void wavefront_write_medium_vertex(bool from_camera, uint path_index, GPUWavefrontPathState state, GPUWavefrontHit hit) {
   GPUWavefrontResources resources = wavefront_load_resources();
   uint vertex_slot = wavefront_path_vertex_slot(from_camera, path_index, state.path_length);
-  if (vertex_slot >= resources.vertex_capacity) {
+  if (vertex_slot >= wavefront_vertex_capacity(resources, from_camera)) {
     return;
   }
 

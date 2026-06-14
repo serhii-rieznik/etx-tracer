@@ -200,6 +200,9 @@ float wavefront_medium_direct_light_weight(
   if (resources.direct_light_sample_buffer == kInvalidIndex) {
     return;
   }
+  if (dispatch_index >= resources.path_capacity) {
+    return;
+  }
 
   GPUWavefrontDirectLightSample empty_sample = (GPUWavefrontDirectLightSample)0;
   wavefront_store_direct_light_sample(resources.direct_light_sample_buffer, dispatch_index, empty_sample);
