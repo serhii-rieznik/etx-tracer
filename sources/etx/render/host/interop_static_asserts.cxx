@@ -78,14 +78,17 @@ static_assert(sizeof(ShaderConstants) == 32, "ShaderConstants size changed; upda
 
 static_assert(std::is_standard_layout_v<GPURTConstants>, "GPURTConstants must stay standard layout for C++/HLSL interop");
 static_assert(alignof(GPURTConstants) == 16, "GPURTConstants alignment must match HLSL packing");
-static_assert(sizeof(GPURTConstants) == 128, "GPURTConstants size changed; update shared ABI or padding");
+static_assert(sizeof(GPURTConstants) == 144, "GPURTConstants size changed; update shared ABI or padding");
 static_assert(offsetof(GPURTConstants, as_index) == 4, "GPURTConstants::as_index offset changed");
 static_assert(offsetof(GPURTConstants, blue_noise_buffer_index) == 20, "GPURTConstants::blue_noise_buffer_index offset changed");
-static_assert(offsetof(GPURTConstants, render_window_origin_x) == 32, "GPURTConstants::render_window_origin_x offset changed");
-static_assert(offsetof(GPURTConstants, render_window_origin_y) == 36, "GPURTConstants::render_window_origin_y offset changed");
-static_assert(offsetof(GPURTConstants, render_window_width) == 40, "GPURTConstants::render_window_width offset changed");
-static_assert(offsetof(GPURTConstants, render_window_height) == 44, "GPURTConstants::render_window_height offset changed");
-static_assert(offsetof(GPURTConstants, scene) == 48, "GPURTConstants::scene offset changed");
+static_assert(offsetof(GPURTConstants, connect_light_vertex_length) == 32, "GPURTConstants::connect_light_vertex_length offset changed");
+static_assert(offsetof(GPURTConstants, render_window_origin_x) == 36, "GPURTConstants::render_window_origin_x offset changed");
+static_assert(offsetof(GPURTConstants, render_window_origin_y) == 40, "GPURTConstants::render_window_origin_y offset changed");
+static_assert(offsetof(GPURTConstants, render_window_width) == 44, "GPURTConstants::render_window_width offset changed");
+static_assert(offsetof(GPURTConstants, render_window_height) == 48, "GPURTConstants::render_window_height offset changed");
+static_assert(offsetof(GPURTConstants, dispatch_item_offset) == 52, "GPURTConstants::dispatch_item_offset offset changed");
+static_assert(offsetof(GPURTConstants, dispatch_item_count) == 56, "GPURTConstants::dispatch_item_count offset changed");
+static_assert(offsetof(GPURTConstants, scene) == 64, "GPURTConstants::scene offset changed");
 
 static_assert(std::is_standard_layout_v<SpectralImage>, "SpectralImage must stay standard layout for C++/HLSL interop");
 static_assert(std::is_standard_layout_v<Material>, "Material must stay standard layout for C++/HLSL interop");
@@ -135,6 +138,7 @@ static_assert(offsetof(Image, normalization) == kImageDescNormalizationOffset, "
 static_assert(offsetof(Image, isize) == kImageDescISizeOffset, "Image::isize offset changed");
 static_assert(offsetof(Image, options) == kImageDescOptionsOffset, "Image::options offset changed");
 static_assert(offsetof(Image, format) == kImageDescFormatOffset, "Image::format offset changed");
+static_assert(offsetof(Image, data_size) == kImageDescDataSizeOffset, "Image::data_size offset changed");
 static_assert(offsetof(Image, pixel_data_offset) == kImageDescPixelDataOffset, "Image::pixel_data_offset offset changed");
 static_assert(offsetof(Image, x_distribution_entries_offset) == kImageDescXDistributionEntriesOffset, "Image::x_distribution_entries_offset offset changed");
 static_assert(offsetof(Image, y_distribution_entries_offset) == kImageDescYDistributionEntriesOffset, "Image::y_distribution_entries_offset offset changed");

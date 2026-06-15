@@ -2520,6 +2520,11 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     const auto render_begin = std::chrono::steady_clock::now();
     session.gpu_renderer.render(session.render_context.context(), session.scene, frame_data);
     const auto render_end = std::chrono::steady_clock::now();
+    if (session.gpu_renderer.runtime_failed()) {
+      session.render_context.end_frame();
+      log::error("GPU batch render failed: %s", session.gpu_renderer.runtime_failure_reason().c_str());
+      return false;
+    }
     const auto end_frame_begin = std::chrono::steady_clock::now();
     session.render_context.end_frame();
     const auto end_frame_end = std::chrono::steady_clock::now();

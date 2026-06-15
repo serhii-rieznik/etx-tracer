@@ -1125,7 +1125,8 @@ VKCommandBuffer& VKCommandBuffer::operator=(VKCommandBuffer&& other) noexcept {
 
 void VKCommandBuffer::destroy_resources() {
   if ((command_buffer != VK_NULL_HANDLE) && (context != nullptr) && (_is_recording == false) && (_submitted == false)) {
-    vkResetCommandBuffer(command_buffer, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
+    vkFreeCommandBuffers(context->get_vk_device(), context->get_vk_command_pool(_command_pool_index), 1u, &command_buffer);
+    command_buffer = VK_NULL_HANDLE;
     _submitted = false;
   }
   if ((timestamp_query_pool != VK_NULL_HANDLE) && (context != nullptr)) {
@@ -2617,13 +2618,6 @@ void VKContext::Impl::destroy_sync_objects() {
 }
 
 VkFence VKContext::Impl::acquire_temporary_fence() {
-  for (TemporaryFence& temporary_fence : temporary_fences) {
-    if (temporary_fence.used == false) {
-      temporary_fence.used = true;
-      return temporary_fence.fence;
-    }
-  }
-
   VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   VkFence fence = VK_NULL_HANDLE;
   if (etx_vk_call(vkCreateFence(device.get_vk_device(), &fence_info, nullptr, &fence)) != VK_SUCCESS) {
@@ -2638,12 +2632,13 @@ void VKContext::Impl::release_temporary_fence(VkFence fence) {
     return;
   }
 
-  for (TemporaryFence& temporary_fence : temporary_fences) {
-    if (temporary_fence.fence != fence) {
+  for (auto temporary_fence = temporary_fences.begin(); temporary_fence != temporary_fences.end(); ++temporary_fence) {
+    if (temporary_fence->fence != fence) {
       continue;
     }
 
-    temporary_fence.used = false;
+    vkDestroyFence(device.get_vk_device(), temporary_fence->fence, nullptr);
+    temporary_fences.erase(temporary_fence);
     return;
   }
 }

@@ -83,7 +83,7 @@
   wavefront_write_root_light_vertex(path_index, emitter_sample, spect);
   if (resources.path_meta_buffer != kInvalidIndex) {
     GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
-    meta.light_path_length = 1u;
+    meta.light_path_length = 0u;
     meta.flags |= GPUWavefrontPathMetaFlags::Light_active;
     meta.light_mis_history = scene_path_mode_uses_bdpt_fast() ? 1.0f : 0.0f;
     meta.from_delta = emitter_sample.is_delta;

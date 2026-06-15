@@ -12,6 +12,7 @@ struct ImageAccessGPUDesc {
   float3 uv_scale;
   float normalization;
   uint options;
+  uint data_size;
   uint pixel_data_offset;
   uint x_distribution_entries_offset;
   uint y_distribution_entries_offset;
@@ -78,6 +79,7 @@ void image_access_gpu_blob_load_desc(ByteAddressBuffer buffer, uint image_desc_o
   desc.uv_scale = image_access_gpu_blob_load_f32x3(buffer, image_desc_offset + kImageDescScaleOffset);
   desc.normalization = asfloat(image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescNormalizationOffset));
   desc.options = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescOptionsOffset);
+  desc.data_size = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescDataSizeOffset);
   desc.pixel_data_offset = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescPixelDataOffset);
   desc.x_distribution_entries_offset = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescXDistributionEntriesOffset);
   desc.y_distribution_entries_offset = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescYDistributionEntriesOffset);
@@ -150,7 +152,7 @@ bool image_access_try_load_pixel_payload(ImageAccessGPUContext context, uint ima
   }
 
   if ((image_access.pixel_data_offset == kInvalidIndex) || (image_access.pixel_data_stride == 0u) || (image_access.size.x == 0u) || (image_access.size.y == 0u) ||
-      (image_access.size.z == 0u)) {
+      (image_access.size.z == 0u) || (image_access.data_size == 0u)) {
     return false;
   }
 

@@ -419,7 +419,7 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, c
       const RefractiveIndexSample int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
       bool candidate_valid = false;
       bool first_attempt = true;
-      while (candidate_valid == false) {
+      for (uint32_t attempt = 0u; (attempt < kBSDFEnergyCompensatedMaxSampleAttempts) && (candidate_valid == false); ++attempt) {
         float2 attempt_rnd = rnd;
         if ((first_attempt == false) || (has_fixed == false)) {
           attempt_rnd = bsdf_sampler_next_2d(sampler);
@@ -433,6 +433,9 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, c
           candidate_valid = (local_w_o.z > kEpsilon) && (bsdf_sampler_next(sampler) < fresnel_probability);
         }
         first_attempt = false;
+      }
+      if (candidate_valid == false) {
+        return bsdf_sample_zero(data.spectrum_sample);
       }
     } else {
       local_w_o = sample_cosine_distribution(rnd, 1.0f);

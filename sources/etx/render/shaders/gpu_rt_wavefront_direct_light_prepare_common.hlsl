@@ -31,7 +31,8 @@ bool wavefront_try_load_material_full(uint material_index, out Material material
 }
 
 BSDFData wavefront_make_surface_bsdf_data(Vertex vertex, SpectralQuery spect, uint medium_index, float3 incoming_direction) {
-  return bsdf_data_make(vertex, spect, medium_index, PathSource::Camera, incoming_direction);
+  (void)medium_index;
+  return bsdf_data_make(vertex, spect, kInvalidIndex, PathSource::Camera, incoming_direction);
 }
 
 Sampler wavefront_make_bsdf_sampler(uint seed) {

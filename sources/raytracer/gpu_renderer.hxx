@@ -99,6 +99,9 @@ struct GPURaytracingRenderer : public Renderer {
   RendererMode mode() const override {
     return RendererMode::GPURaytracing;
   }
+  RHITexture output_texture() const override {
+    return (_output_texture_state == RHIResourceState::ShaderReadOnly) ? _output_texture : RHITexture{};
+  }
   RendererPreparationStatus preparation_status() const override;
   void cancel_preparation() override;
   void stop() override;

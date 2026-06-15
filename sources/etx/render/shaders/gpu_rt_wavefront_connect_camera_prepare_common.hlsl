@@ -32,7 +32,8 @@ bool wavefront_connect_camera_try_load_material_full(uint material_index, out Ma
 }
 
 BSDFData wavefront_connect_camera_make_surface_bsdf_data(Vertex vertex, SpectralQuery spect, uint medium_index, float3 incoming_direction) {
-  return bsdf_data_make(vertex, spect, medium_index, PathSource::Light, incoming_direction);
+  (void)medium_index;
+  return bsdf_data_make(vertex, spect, kInvalidIndex, PathSource::Light, incoming_direction);
 }
 
 Sampler wavefront_connect_camera_make_bsdf_sampler(uint seed) {
@@ -200,7 +201,7 @@ void wavefront_clear_connect_camera_task(uint dispatch_index) {
 
   uint queue_descriptor = wavefront_queue_current_descriptor(false);
   uint queue_count = wavefront_queue_count(queue_descriptor);
-  if (dispatch_index < queue_count) {
+  if (dispatch_index >= queue_count) {
     return;
   }
 

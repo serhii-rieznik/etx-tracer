@@ -135,9 +135,9 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
   spect.wavelength = input_value.camera_vertex.throughput.wavelength;
   spect.flags = input_value.camera_vertex.throughput.flags;
 
-  Sampler bsdf_sampler = make_bsdf_sampler(scene_random_seed(dispatch_index, constants.sample_index ^ (constants.path_iteration + 29u)));
+  Sampler bsdf_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 29u)));
   BSDFData bsdf_data =
-    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, input_value.camera_vertex.medium_index, PathSource::Camera, input_value.camera_vertex.w_i);
+    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, kInvalidIndex, PathSource::Camera, input_value.camera_vertex.w_i);
   BSDFEval bsdf_eval =
     wavefront_connect_light_stage_camera_bsdf_eval(make_scene_bsdf_resource_gpu_context(), bsdf_data, direction_to_light, input_value.camera_material, bsdf_sampler);
   wavefront_store_connect_light_camera_task(dispatch_index, input_value, bsdf_eval);

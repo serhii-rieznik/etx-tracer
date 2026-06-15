@@ -139,6 +139,31 @@ struct ETX_ALIGNED GPUWavefrontPathVertex {
   uint32_t reserved0 ETX_INIT(0u);
 };
 
+struct ETX_ALIGNED GPUWavefrontLightPathVertex {
+  SpectralResponse throughput ETX_INIT({});
+  SpectralResponse inline_medium_extinction ETX_INIT({});
+  float3 position ETX_INIT({});
+  uint32_t triangle_index ETX_INIT(kInvalidIndex);
+  float3 normal ETX_INIT({});
+  uint32_t material_index ETX_INIT(kInvalidIndex);
+  float3 geo_normal ETX_INIT({});
+  uint32_t medium_index ETX_INIT(kInvalidIndex);
+  float3 w_i ETX_INIT({});
+  uint32_t emitter_index ETX_INIT(kInvalidIndex);
+  float2 texcoord ETX_INIT({});
+  float forward_pdf ETX_INIT(0.0f);
+  float reverse_pdf ETX_INIT(0.0f);
+  float sampled_bsdf_pdf ETX_INIT(0.0f);
+  uint32_t path_length ETX_INIT(0u);
+  uint32_t flags ETX_INIT(0u);
+  float pdf_from_prev ETX_INIT(0.0f);
+  float pdf_from_next ETX_INIT(0.0f);
+  float pdf_accumulated ETX_INIT(0.0f);
+  float pdf_history ETX_INIT(0.0f);
+  float pdf_ratio ETX_INIT(0.0f);
+  float2 barycentric ETX_INIT({});
+};
+
 struct ETX_ALIGNED GPUWavefrontPathMeta {
   uint32_t camera_path_length ETX_INIT(0u);
   uint32_t light_path_length ETX_INIT(0u);

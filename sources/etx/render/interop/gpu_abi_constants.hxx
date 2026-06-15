@@ -117,6 +117,7 @@ ETX_STATIC_CONST uint32_t kImageDescNormalizationOffset = 36u;
 ETX_STATIC_CONST uint32_t kImageDescISizeOffset = 40u;
 ETX_STATIC_CONST uint32_t kImageDescOptionsOffset = 52u;
 ETX_STATIC_CONST uint32_t kImageDescFormatOffset = 56u;
+ETX_STATIC_CONST uint32_t kImageDescDataSizeOffset = 60u;
 ETX_STATIC_CONST uint32_t kImageDescPixelDataOffset = 64u;
 ETX_STATIC_CONST uint32_t kImageDescXDistributionEntriesOffset = 68u;
 ETX_STATIC_CONST uint32_t kImageDescYDistributionEntriesOffset = 72u;

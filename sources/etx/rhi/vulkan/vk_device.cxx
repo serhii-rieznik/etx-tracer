@@ -1563,34 +1563,42 @@ RHIResult VKDevice::Impl::create_vulkan_sampler(const RHISamplerDesc& desc, VkSa
 }
 
 RHIResult VKDevice::Impl::execute_single_time_commands(std::function<void(VkCommandBuffer)> recorder) {
-  // Acquire resources from pools
-  VkCommandBuffer command_buffer = acquire_command_buffer(kRHIMaxFrames);
-  if (command_buffer == VK_NULL_HANDLE) {
-    log::error("Failed to acquire command buffer from pool");
+  VkCommandBufferAllocateInfo alloc_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+  alloc_info.commandPool = command_pools[kRHIMaxFrames];
+  alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  alloc_info.commandBufferCount = 1u;
+
+  VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+  if (etx_vk_call(vkAllocateCommandBuffers(device, &alloc_info, &command_buffer)) != VK_SUCCESS) {
+    log::error("Failed to allocate one-time command buffer");
     return RHIResult::OutOfMemory;
   }
 
-  VkFence fence = acquire_fence();
-  if (fence == VK_NULL_HANDLE) {
-    log::error("Failed to acquire fence from pool");
-    release_command_buffer(command_buffer);
+  VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VkFence fence = VK_NULL_HANDLE;
+  if (etx_vk_call(vkCreateFence(device, &fence_info, nullptr, &fence)) != VK_SUCCESS) {
+    log::error("Failed to create one-time command fence");
+    vkFreeCommandBuffers(device, command_pools[kRHIMaxFrames], 1u, &command_buffer);
     return RHIResult::OutOfMemory;
   }
+
+  auto cleanup_one_time_resources = [&]() {
+    vkDestroyFence(device, fence, nullptr);
+    vkFreeCommandBuffers(device, command_pools[kRHIMaxFrames], 1u, &command_buffer);
+  };
 
   VkCommandBufferBeginInfo begin_info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
   if (etx_vk_call(vkBeginCommandBuffer(command_buffer, &begin_info)) != VK_SUCCESS) {
-    release_fence(fence);
-    release_command_buffer(command_buffer);
+    cleanup_one_time_resources();
     return RHIResult::ValidationError;
   }
 
   recorder(command_buffer);
 
   if (etx_vk_call(vkEndCommandBuffer(command_buffer)) != VK_SUCCESS) {
-    release_fence(fence);
-    release_command_buffer(command_buffer);
+    cleanup_one_time_resources();
     return RHIResult::ValidationError;
   }
 
@@ -1599,22 +1607,16 @@ RHIResult VKDevice::Impl::execute_single_time_commands(std::function<void(VkComm
   submit_info.pCommandBuffers = &command_buffer;
 
   if (etx_vk_call(vkQueueSubmit(graphics_queue, 1, &submit_info, fence)) != VK_SUCCESS) {
-    release_fence(fence);
-    release_command_buffer(command_buffer);
+    cleanup_one_time_resources();
     return RHIResult::ValidationError;
   }
 
   if (etx_vk_call(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
-    release_fence(fence);
-    release_command_buffer(command_buffer);
+    cleanup_one_time_resources();
     return RHIResult::ValidationError;
   }
 
-  etx_vk_call(vkResetFences(device, 1, &fence));
-
-  // Release resources back to pools
-  release_fence(fence);
-  release_command_buffer(command_buffer);
+  cleanup_one_time_resources();
 
   return RHIResult::Success;
 }

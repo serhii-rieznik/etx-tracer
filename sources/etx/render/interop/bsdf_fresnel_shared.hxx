@@ -93,6 +93,9 @@ ETX_SHARED_INLINE complex bsdf_complex_div(ETX_IN(complex, a), ETX_IN(complex, b
 #else
   complex numerator = bsdf_complex_mul(a, bsdf_complex_conjugate(b));
   float denominator = bsdf_complex_norm(b);
+  if (denominator <= kEpsilon) {
+    return bsdf_complex_make(0.0f, 0.0f);
+  }
   return bsdf_complex_div_scalar(numerator, denominator);
 #endif
 }

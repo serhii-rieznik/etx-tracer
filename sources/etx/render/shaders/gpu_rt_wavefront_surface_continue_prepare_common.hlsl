@@ -55,6 +55,11 @@ bool wavefront_subsurface_random_walk_applicable(Material material, BSDFSample b
 #endif
 
 void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispatch_index) {
+  if ((constants.dispatch_item_count != 0u) && (dispatch_index >= constants.dispatch_item_count)) {
+    return;
+  }
+
+  dispatch_index += constants.dispatch_item_offset;
   uint queue_descriptor = wavefront_queue_current_descriptor(from_camera);
   uint queue_count = wavefront_queue_count(queue_descriptor);
   if (dispatch_index >= queue_count) {

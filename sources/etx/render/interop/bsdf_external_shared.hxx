@@ -3,6 +3,7 @@
 #include "bsdf_fresnel_shared.hxx"
 
 ETX_STATIC_CONST uint32_t kBSDFExternalScatteringOrderMax = 16u;
+ETX_STATIC_CONST float kBSDFExternalLambdaMax = 1.0e10f;
 
 struct BSDFExternalRayInfo {
   float3 w ETX_INIT({});
@@ -16,6 +17,7 @@ struct BSDFExternalRayInfo {
 ETX_SHARED_INLINE BSDFExternalRayInfo bsdf_external_ray_info_make(ETX_IN(float3, w), ETX_IN(float2, alpha)) {
   BSDFExternalRayInfo result = ETX_ZERO(BSDFExternalRayInfo);
   result.w = w;
+  result.w.z = clamp(result.w.z, -1.0f, 1.0f);
 
   if (result.w.z > 0.9999f) {
     result.Lambda = 0.0f;
@@ -27,16 +29,27 @@ ETX_SHARED_INLINE BSDFExternalRayInfo bsdf_external_ray_info_make(ETX_IN(float3,
     return result;
   }
 
-  float theta = acos(result.w.z);
   float cos_theta = result.w.z;
+  if (abs(cos_theta) <= kEpsilon) {
+    result.Lambda = kBSDFExternalLambdaMax;
+    return result;
+  }
+
+  float theta = acos(cos_theta);
   float sin_theta = sin(theta);
   float tan_theta = sin_theta / cos_theta;
-  float inv_sin_theta_2 = 1.0f / (1.0f - result.w.z * result.w.z);
+  float sin_theta_sq = max(kEpsilon, 1.0f - result.w.z * result.w.z);
+  float inv_sin_theta_2 = 1.0f / sin_theta_sq;
   float cos_phi_2 = result.w.x * result.w.x * inv_sin_theta_2;
   float sin_phi_2 = result.w.y * result.w.y * inv_sin_theta_2;
-  float alpha_value = sqrt(cos_phi_2 * alpha.x * alpha.x + sin_phi_2 * alpha.y * alpha.y);
-  float a = 1.0f / tan_theta / alpha_value;
-  result.Lambda = 0.5f * (-1.0f + ((a > 0.0f) ? 1.0f : -1.0f) * sqrt(1.0f + 1.0f / (a * a)));
+  float alpha_value = sqrt(max(kEpsilon, cos_phi_2 * alpha.x * alpha.x + sin_phi_2 * alpha.y * alpha.y));
+  float a = 1.0f / (tan_theta * alpha_value);
+  if (abs(a) <= kEpsilon) {
+    result.Lambda = kBSDFExternalLambdaMax;
+    return result;
+  }
+
+  result.Lambda = min(kBSDFExternalLambdaMax, 0.5f * (-1.0f + ((a > 0.0f) ? 1.0f : -1.0f) * sqrt(1.0f + 1.0f / (a * a))));
   return result;
 }
 
@@ -180,6 +193,9 @@ ETX_SHARED_INLINE float bsdf_external_log_gamma_approx(float x) {
 }
 
 ETX_SHARED_INLINE float bsdf_external_beta(float m, float n) {
+  if ((isfinite(m) == false) || (isfinite(n) == false) || (m <= 0.0f) || (n <= 0.0f) || (m > kBSDFExternalLambdaMax) || (n > kBSDFExternalLambdaMax)) {
+    return 0.0f;
+  }
 #if (ETX_CPP)
   return exp(lgamma(m) + lgamma(n) - lgamma(m + n));
 #else
@@ -188,6 +204,10 @@ ETX_SHARED_INLINE float bsdf_external_beta(float m, float n) {
 }
 
 ETX_SHARED_INLINE float3 bsdf_external_refract(ETX_IN(float3, wi), ETX_IN(float3, wm), float eta) {
+  if (abs(eta) <= kEpsilon) {
+    return float3(0.0f, 0.0f, 0.0f);
+  }
+
   float cos_theta_i = dot(wi, wm);
   float cos_theta_t2 = 1.0f - (1.0f - cos_theta_i * cos_theta_i) / (eta * eta);
   float cos_theta_t = -sqrt(max(0.0f, cos_theta_t2));
@@ -226,6 +246,11 @@ ETX_SHARED_INLINE BSDFExternalDielectricSample bsdf_external_sample_phase_functi
 
   BSDFExternalDielectricSample result = ETX_ZERO(BSDFExternalDielectricSample);
   result.reflection = rnd_reflection < spectral_response_monochromatic(f);
-  result.w_o = result.reflection ? (-wi + 2.0f * wm * i_dot_m) : normalize(bsdf_external_refract(wi, wm, eta));
+  if (result.reflection) {
+    result.w_o = -wi + 2.0f * wm * i_dot_m;
+  } else {
+    const float3 refracted_w_o = bsdf_external_refract(wi, wm, eta);
+    result.w_o = (dot(refracted_w_o, refracted_w_o) > kEpsilon) ? normalize(refracted_w_o) : float3(0.0f, 0.0f, 0.0f);
+  }
   return result;
 }

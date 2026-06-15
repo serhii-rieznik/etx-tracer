@@ -81,9 +81,6 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
     return v_image;
   }
 
-  const Texture2D reference_image = bindless_textures[options.reference_image_index];
-  float4 r_image = reference_image.Load(load_coord);
-  float r_lum = dot(r_image.xyz, lum);
   float c_lum = dot(c_image.xyz, lum);
   const float c_treshold = 1.0f / 8192.0f;
 
@@ -94,16 +91,24 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
       break;
     }
     case OutputView::ReferenceImage: {
+      const Texture2D reference_image = bindless_textures[options.reference_image_index];
+      float4 r_image = reference_image.Load(load_coord);
       result = tonemap(r_image);
       break;
     }
     case OutputView::RelativeDifference: {
+      const Texture2D reference_image = bindless_textures[options.reference_image_index];
+      float4 r_image = reference_image.Load(load_coord);
+      float r_lum = dot(r_image.xyz, lum);
       result.x = options.view.exposure * max(0.0f, r_lum - c_lum);
       result.y = options.view.exposure * max(0.0f, c_lum - r_lum);
       result = tonemap(result);
       break;
     }
     case OutputView::AbsoluteDifference: {
+      const Texture2D reference_image = bindless_textures[options.reference_image_index];
+      float4 r_image = reference_image.Load(load_coord);
+      float r_lum = dot(r_image.xyz, lum);
       result.x = float(max(0.0f, r_lum - c_lum) > c_treshold);
       result.y = float(max(0.0f, c_lum - r_lum) > c_treshold);
       break;

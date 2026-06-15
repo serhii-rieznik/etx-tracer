@@ -12,9 +12,13 @@ struct ETX_ALIGNED GPURTConstants {
   uint32_t blue_noise_buffer_index;
   uint32_t wavefront_buffer_index;
   uint32_t path_iteration;
+  uint32_t connect_light_vertex_length;
   uint32_t render_window_origin_x;
   uint32_t render_window_origin_y;
   uint32_t render_window_width;
   uint32_t render_window_height;
+  uint32_t dispatch_item_offset;
+  uint32_t dispatch_item_count;
+  uint32_t pad2;
   GPUScene scene;
 };

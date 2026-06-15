@@ -121,14 +121,14 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, out Wavefro
   const uint vertex_stride = wavefront_light_fixed_max_bounces(input_value.resources) + 1u;
   const uint queue_descriptor = wavefront_queue_current_descriptor(true);
   const uint queue_count = wavefront_queue_count(queue_descriptor);
-  const uint queue_index = dispatch_index / vertex_stride;
+  const uint queue_index = dispatch_index;
   if (queue_index >= queue_count) {
     return false;
   }
 
-  input_value.task_index = dispatch_index;
+  input_value.task_index = queue_index * vertex_stride + constants.connect_light_vertex_length;
   input_value.path_index = wavefront_queue_load(queue_descriptor, queue_index);
-  input_value.light_vertex_length = dispatch_index % vertex_stride;
+  input_value.light_vertex_length = constants.connect_light_vertex_length;
 
   if (input_value.light_vertex_length == 0u) {
     return false;
@@ -195,7 +195,7 @@ void wavefront_store_connect_light_camera_task(uint dispatch_index, WavefrontCon
 
   const float3 direction_to_camera = -direction_to_light;
   BSDFData camera_reverse_data =
-    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, input_value.camera_vertex.medium_index, PathSource::Camera, direction_to_camera);
+    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, kInvalidIndex, PathSource::Camera, direction_to_camera);
   Sampler camera_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 1u) ^ (constants.path_iteration + 31u)));
   float3 camera_prev_direction = normalize(input_value.camera_previous_vertex.position - input_value.camera_vertex.position);
   float z_prev_pdf_dir = wavefront_connect_light_stage_camera_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), camera_reverse_data, camera_prev_direction,
@@ -244,7 +244,7 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index) {
 
   Sampler light_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 17u)));
   BSDFData light_data =
-    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, input_value.light_vertex.medium_index, PathSource::Light, input_value.light_vertex.w_i);
+    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, kInvalidIndex, PathSource::Light, input_value.light_vertex.w_i);
   BSDFEval light_eval = wavefront_connect_light_stage_light_bsdf_eval(make_scene_bsdf_resource_gpu_context(), light_data, direction_to_camera, input_value.light_material, light_sampler);
   if (bsdf_eval_valid(light_eval) == false) {
     return;
@@ -262,7 +262,7 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index) {
     wavefront_path_vertex_is_surface(input_value.light_vertex), input_value.light_vertex.normal);
 
   BSDFData light_reverse_data =
-    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, input_value.light_vertex.medium_index, PathSource::Light, -direction_to_camera);
+    bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, kInvalidIndex, PathSource::Light, -direction_to_camera);
   Sampler light_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 3u) ^ (constants.path_iteration + 43u)));
   float3 light_prev_direction = normalize(input_value.light_previous_vertex.position - input_value.light_vertex.position);
   float y_prev_pdf_dir =

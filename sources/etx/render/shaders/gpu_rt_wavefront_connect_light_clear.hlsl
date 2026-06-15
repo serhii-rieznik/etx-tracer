@@ -7,8 +7,7 @@
     return;
   }
 
-  const uint vertex_stride = wavefront_light_fixed_max_bounces(resources) + 1u;
-  if ((vertex_stride == 0u) || ((dispatch_index / vertex_stride) >= resources.path_capacity)) {
+  if (dispatch_index >= resources.path_capacity) {
     return;
   }
 
