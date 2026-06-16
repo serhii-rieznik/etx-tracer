@@ -321,7 +321,7 @@ uint wavefront_queue_count(uint descriptor_index) {
   if (descriptor_index == kInvalidIndex) {
     return 0u;
   }
-  return WAVEFRONT_RO_BUFFER(descriptor_index).Load(0u);
+  return WAVEFRONT_RO_BUFFER(descriptor_index).Load(kGPUWavefrontQueueCountOffset);
 }
 
 void wavefront_queue_reset(uint descriptor_index) {
@@ -329,10 +329,10 @@ void wavefront_queue_reset(uint descriptor_index) {
     return;
   }
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
-  buffer.Store(0u, 0u);
-  buffer.Store(4u, 0u);
-  buffer.Store(8u, 0u);
-  buffer.Store(12u, 0u);
+  buffer.Store(kGPUWavefrontQueueCountOffset, 0u);
+  buffer.Store(kGPUWavefrontQueueMaxPathLengthOffset, 0u);
+  buffer.Store(kGPUWavefrontQueuePad1Offset, 0u);
+  buffer.Store(kGPUWavefrontQueuePad2Offset, 0u);
 }
 
 void wavefront_queue_store(uint descriptor_index, uint slot, uint value) {
@@ -346,7 +346,7 @@ uint wavefront_queue_load(uint descriptor_index, uint slot) {
 uint wavefront_queue_append(uint descriptor_index, uint value) {
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   uint slot = 0u;
-  buffer.InterlockedAdd(0u, 1u, slot);
+  buffer.InterlockedAdd(kGPUWavefrontQueueCountOffset, 1u, slot);
   buffer.Store(kGPUWavefrontQueueIndicesOffset + slot * 4u, value);
   return slot;
 }
@@ -543,7 +543,7 @@ SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary,
   surface_point_shared_interpolate_vertex(position_0, position_1, position_2, normal_0, normal_1, normal_2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2,
     texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
 
-  result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
+  result.geo_normal = tri.geo_n;
   return result;
 }
 
@@ -1130,8 +1130,7 @@ void wavefront_camera_direct_light_prepare_stage(uint dispatch_index) {
   }
 
   uint connection_length = state.path_length + 1u;
-  if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length()) ||
-      (connection_length > load_scene_options_max_path_length())) {
+  if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length())) {
     return;
   }
 

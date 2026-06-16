@@ -114,5 +114,5 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
 #include "gpu_rt_wavefront_connect_light_prepare_common.hlsl"
 
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
-  wavefront_resolve_connect_light_prepare_task(dtid.x);
+  wavefront_resolve_connect_light_prepare_task(dtid.x, dtid.y);
 }

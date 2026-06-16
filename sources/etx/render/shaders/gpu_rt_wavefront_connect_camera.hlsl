@@ -1,14 +1,34 @@
 #include "gpu_rt_wavefront_common.hlsl"
 
 [numthreads(64, 1, 1)] void wavefront_light_connect_camera_prepare_main(uint3 dtid : SV_DispatchThreadID) {
-  (void)dtid;
+  const uint dispatch_index = dtid.x;
+  GPUWavefrontResources resources = wavefront_load_resources();
+  if (resources.connect_camera_task_buffer == kInvalidIndex) {
+    return;
+  }
+
+  uint queue_descriptor = wavefront_queue_current_descriptor(false);
+  uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index >= queue_count) {
+    return;
+  }
+
+  GPUWavefrontConnectCameraTask empty_task = (GPUWavefrontConnectCameraTask)0;
+  empty_task.medium_index = kInvalidIndex;
+  wavefront_store_connect_camera_task(resources.connect_camera_task_buffer, dispatch_index, empty_task);
 }
 
-  [numthreads(64, 1, 1)] void wavefront_light_connect_camera_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
+[numthreads(64, 1, 1)] void wavefront_light_connect_camera_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
   const uint dispatch_index = dtid.x;
 
   GPUWavefrontResources resources = wavefront_load_resources();
   if ((resources.connect_camera_task_buffer == kInvalidIndex) || (resources.connect_camera_result_buffer == kInvalidIndex)) {
+    return;
+  }
+
+  uint queue_descriptor = wavefront_queue_current_descriptor(false);
+  uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index >= queue_count) {
     return;
   }
 

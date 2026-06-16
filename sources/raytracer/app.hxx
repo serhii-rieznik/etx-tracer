@@ -82,10 +82,13 @@ struct RTApplication {
   void on_camera_activated(uint32_t camera_index);
   void on_reload_shaders_selected();
   void on_cancel_renderer_preparation_selected();
+  void on_gpu_wavefront_steps_per_frame_changed(uint32_t value);
 
  private:
   void add_to_recent(const std::string&);
   bool ensure_gpu_renderer_initialized();
+  void process_pending_image_requests();
+  bool read_active_gpu_output(std::vector<float4>& output, uint2& image_size);
   void save_options();
   void update_camera_to_fit_scene(const float3& view_direction);
   void notify_scene_might_have_changed();
@@ -108,9 +111,15 @@ struct RTApplication {
   bool _gpu_renderer_initialized = false;
   bool _gpu_renderer_supported = false;
   bool _quit_preparation_cancel_requested = false;
+  bool _pending_current_image_reference_capture = false;
+  bool _pending_reference_file_load = false;
+  bool _pending_gpu_save_image = false;
+  SaveImageMode _pending_gpu_save_image_mode = SaveImageMode::RGB;
 
   Options _options;
   std::vector<std::string> _recent_files = {};
+  std::string _pending_reference_file = {};
+  std::string _pending_gpu_save_image_file = {};
   std::string _current_scene_file = {};
   TimeMeasure time_measure = {};
   TimeMeasure scene_commit_time = {};

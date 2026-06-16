@@ -14,6 +14,7 @@
 
   uint2 output_pixel = wavefront_output_pixel(dtid.xy);
   uint output_pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
+  uint path_index = wavefront_render_window_local_index(dtid.xy);
   uint2 camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
   uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
@@ -41,21 +42,21 @@
   state.pixel = camera_space_pixel;
   state.spect = spect;
   state.film_uv = uv;
-  state.last_vertex_index = wavefront_camera_vertex_slot(output_pixel_index, 0u);
+  state.last_vertex_index = wavefront_camera_vertex_slot(path_index, 0u);
   GPUWavefrontResources resources = wavefront_load_resources();
-  wavefront_store_path_state(resources.camera_state_buffer, output_pixel_index, state);
+  wavefront_store_path_state(resources.camera_state_buffer, path_index, state);
   if (resources.camera_subsurface_state_buffer != kInvalidIndex) {
     GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
     subsurface_state.material_index = kInvalidIndex;
     subsurface_state.medium_index = kInvalidIndex;
     subsurface_state.scatter_material_index = kInvalidIndex;
-    wavefront_store_subsurface_state(resources.camera_subsurface_state_buffer, output_pixel_index, subsurface_state);
+    wavefront_store_subsurface_state(resources.camera_subsurface_state_buffer, path_index, subsurface_state);
   }
-  wavefront_write_root_camera_vertex(output_pixel_index, camera, state.ray, spect, output_pixel_index);
+  wavefront_write_root_camera_vertex(path_index, camera, state.ray, spect, output_pixel_index);
   if (resources.path_meta_buffer != kInvalidIndex) {
     GPUWavefrontPathMeta meta = (GPUWavefrontPathMeta)0;
     if (scene_path_mode_is_bdpt_full()) {
-      meta = wavefront_load_path_meta(resources.path_meta_buffer, output_pixel_index);
+      meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
     }
     meta.camera_path_length = 1u;
     meta.camera_mis_history = scene_path_mode_uses_bdpt_fast() ? 1.0f : 0.0f;
@@ -64,10 +65,9 @@
     } else {
       meta.flags = GPUWavefrontPathMetaFlags::Camera_active;
     }
-    wavefront_store_path_meta(resources.path_meta_buffer, output_pixel_index, meta);
+    wavefront_store_path_meta(resources.path_meta_buffer, path_index, meta);
   }
-  uint queue_slot = wavefront_render_window_local_index(dtid.xy);
-  wavefront_queue_store(wavefront_queue_current_descriptor(true), queue_slot, output_pixel_index);
+  wavefront_queue_store(wavefront_queue_current_descriptor(true), path_index, path_index);
   if ((dtid.x == 0u) && (dtid.y == 0u)) {
     uint2 render_window_size = wavefront_render_window_size();
     WAVEFRONT_RW_BUFFER(wavefront_queue_current_descriptor(true)).Store(0u, render_window_size.x * render_window_size.y);

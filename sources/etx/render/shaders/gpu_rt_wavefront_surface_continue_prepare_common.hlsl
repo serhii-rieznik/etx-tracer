@@ -223,7 +223,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   }
 
   GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
-  bool current_connectible = sample_valid ? (bsdf_sample_is_delta(bsdf_sample) == false) : true;
+  bool current_connectible = bsdf_sample_is_delta(bsdf_sample) == false;
   bool previous_connectible = wavefront_path_vertex_connectible(previous_vertex);
   uint current_medium_index = (sample_valid && ((bsdf_sample.properties & BSDFSample::MediumChanged) != 0u)) ? bsdf_sample.medium_index : state.medium_index;
   float current_d_vcm = current_vertex.forward_pdf;
@@ -306,9 +306,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     SpectralResponse next_throughput = spectral_response_mul(state.throughput, bsdf_sample.weight);
     if (from_camera == false) {
       float shading_fix = bsdf_fix_shading_normal(hit.geo_normal, hit.vertex.nrm, state.ray.d, bsdf_sample.w_o);
-      if (isfinite(shading_fix) && (shading_fix > 0.0f)) {
-        next_throughput = spectral_response_mul(next_throughput, shading_fix);
-      }
+      next_throughput = spectral_response_mul(next_throughput, shading_fix);
     }
 
     state.throughput = next_throughput;

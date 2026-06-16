@@ -14,7 +14,8 @@
   }
 
   uint2 output_pixel = wavefront_output_pixel(dtid.xy);
-  uint path_index = output_pixel.x + output_pixel.y * camera.film_size.x;
+  uint output_pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
+  uint path_index = wavefront_render_window_local_index(dtid.xy);
   uint2 camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
   uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
@@ -72,7 +73,7 @@
   }
   state.medium_index = emitter_sample.medium_index;
   state.path_length = 1u;
-  state.pixel_index = path_index;
+  state.pixel_index = output_pixel_index;
   state.flags = GPUWavefrontPathFlags::Valid | GPUWavefrontPathFlags::From_light | GPUWavefrontPathFlags::Connectible;
   state.path_source = PathSource::Light;
   state.sampler_seed = seed;
@@ -80,7 +81,7 @@
   state.spect = spect;
   state.last_vertex_index = wavefront_light_vertex_slot(path_index, 0u);
   wavefront_store_path_state(resources.light_state_buffer, path_index, state);
-  wavefront_write_root_light_vertex(path_index, emitter_sample, spect);
+  wavefront_write_root_light_vertex(path_index, emitter_sample, spect, output_pixel_index);
   if (resources.path_meta_buffer != kInvalidIndex) {
     GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
     meta.light_path_length = 0u;

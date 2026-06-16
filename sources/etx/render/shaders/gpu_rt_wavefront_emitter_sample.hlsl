@@ -77,7 +77,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
     sample_value.barycentric = random_barycentric(emitter_sample_rnd);
     Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
     sample_value.origin = vertex.pos;
-    sample_value.normal = normalize(vertex.nrm);
+    sample_value.normal = vertex.nrm;
     sample_value.image_uv = vertex.tex;
     sample_value.pdf_area = (emitter_instance.triangle_area > 0.0f) ? (1.0f / emitter_instance.triangle_area) : 0.0f;
     float3 dp = sample_value.origin - from_point;
@@ -124,7 +124,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
   SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
   if (emitter_instance.emitter_class == EmitterClass::Directional) {
     float2 disk_sample = float2(0.0f, 0.0f);
-    if ((emitter_profile.emitter_angular_size_cosine > 0.0f) && (emitter_profile.emitter_angular_size_cosine < 1.0f)) {
+    if (emitter_profile.emitter_angular_size_cosine > kEpsilon) {
       float sin_half_angle = sqrt(max(0.0f, 1.0f - (emitter_profile.emitter_angular_size_cosine * emitter_profile.emitter_angular_size_cosine)));
       float equivalent_disk_size = 2.0f * (sin_half_angle / max(kEpsilon, emitter_profile.emitter_angular_size_cosine));
       OrthonormalBasis basis = orthonormal_basis(access.emitter_direction);
@@ -214,8 +214,8 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
 
     float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
     sample_value.origin = vertex.pos;
-    sample_value.normal = normalize(vertex.nrm);
-    sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, vertex.tan, vertex.btn, exponent);
+    sample_value.normal = vertex.nrm;
+    sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, exponent);
     sample_value.image_uv = vertex.tex;
     sample_value.pdf_area = (emitter_instance.triangle_area > 0.0f) ? (1.0f / emitter_instance.triangle_area) : 0.0f;
     float cos_t = max(0.0f, dot(sample_value.normal, sample_value.direction));

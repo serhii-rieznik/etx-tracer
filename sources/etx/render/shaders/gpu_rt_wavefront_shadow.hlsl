@@ -8,6 +8,12 @@
     return;
   }
 
+  uint queue_descriptor = wavefront_queue_current_descriptor(true);
+  uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index >= queue_count) {
+    return;
+  }
+
   GPUWavefrontDirectLightTask task = wavefront_load_direct_light_task(resources.direct_light_task_buffer, dispatch_index);
   GPUWavefrontDirectLightResult result_value = (GPUWavefrontDirectLightResult)0;
   result_value.transmittance = spectral_response_make(spectral_query_sample(), 0.0f);
@@ -33,17 +39,28 @@
 
 [numthreads(64, 1, 1)] void wavefront_camera_connect_light_shadow_main(uint3 dtid : SV_DispatchThreadID) {
   const uint dispatch_index = dtid.x;
+  const uint batch_index = dtid.y;
+  if ((constants.dispatch_item_count != 0u) && (batch_index >= constants.dispatch_item_count)) {
+    return;
+  }
 
   GPUWavefrontResources resources = wavefront_load_resources();
   if ((resources.connect_light_task_buffer == kInvalidIndex) || (resources.connect_light_result_buffer == kInvalidIndex)) {
     return;
   }
 
-  GPUWavefrontConnectLightTask task = wavefront_load_connect_light_task(resources.connect_light_task_buffer, dispatch_index);
+  uint queue_descriptor = wavefront_queue_current_descriptor(true);
+  uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index >= queue_count) {
+    return;
+  }
+
+  const uint task_index = batch_index * resources.path_capacity + dispatch_index;
+  GPUWavefrontConnectLightTask task = wavefront_load_connect_light_task(resources.connect_light_task_buffer, task_index);
   GPUWavefrontConnectLightResult result_value = (GPUWavefrontConnectLightResult)0;
   result_value.transmittance = spectral_response_make(spectral_query_sample(), 0.0f);
   if (task.flags != GPUWavefrontConnectLightTaskFlags::Ready) {
-    wavefront_store_connect_light_result(resources.connect_light_result_buffer, dispatch_index, result_value);
+    wavefront_store_connect_light_result(resources.connect_light_result_buffer, task_index, result_value);
     return;
   }
 
@@ -66,7 +83,7 @@
     state.sampler_seed = seed;
     wavefront_store_path_state(resources.camera_state_buffer, task.path_index, state);
   }
-  wavefront_store_connect_light_result(resources.connect_light_result_buffer, dispatch_index, result_value);
+  wavefront_store_connect_light_result(resources.connect_light_result_buffer, task_index, result_value);
 }
 
 [numthreads(64, 1, 1)] void wavefront_light_connect_camera_shadow_main(uint3 dtid : SV_DispatchThreadID) {
@@ -74,6 +91,12 @@
 
   GPUWavefrontResources resources = wavefront_load_resources();
   if ((resources.connect_camera_task_buffer == kInvalidIndex) || (resources.connect_camera_result_buffer == kInvalidIndex)) {
+    return;
+  }
+
+  uint queue_descriptor = wavefront_queue_current_descriptor(false);
+  uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index >= queue_count) {
     return;
   }
 

@@ -235,12 +235,14 @@ float wavefront_medium_direct_light_weight(
 
   GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, meta.camera_path_length));
   const bool subsurface_medium_vertex = (wavefront_path_vertex_is_subsurface(current_vertex)) && (wavefront_path_vertex_is_medium(current_vertex));
-  if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false) || subsurface_medium_vertex) {
+  const bool medium_direct_connection_disabled =
+    wavefront_path_vertex_is_medium(current_vertex) && (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false);
+  if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false) || subsurface_medium_vertex ||
+      medium_direct_connection_disabled) {
     return;
   }
   uint connection_length = meta.camera_path_length + 1u;
-  if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length()) ||
-      (connection_length > load_scene_options_max_path_length())) {
+  if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length())) {
     return;
   }
 

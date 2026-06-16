@@ -28,6 +28,72 @@ namespace {
 
 constexpr uint32_t kRecentFileLimit = 8u;
 
+bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const uint2 image_size, std::vector<float4>& output) {
+  output.clear();
+  if ((texture.valid() == false) || (image_size.x == 0u) || (image_size.y == 0u)) {
+    log::warning("No GPU output image is available for capture");
+    return false;
+  }
+
+  const uint64_t pixel_count = static_cast<uint64_t>(image_size.x) * static_cast<uint64_t>(image_size.y);
+  const uint64_t buffer_size = pixel_count * sizeof(float4);
+  RHIBufferDesc readback_desc = {};
+  readback_desc.size = buffer_size;
+  readback_desc.usage = RHIBufferUsage::TransferDst;
+  readback_desc.host_visible = true;
+
+  auto readback_result = ctx.device().create_buffer(readback_desc);
+  if ((readback_result.result != RHIResult::Success) || (readback_result.handle.valid() == false)) {
+    log::error("Failed to create GPU image capture buffer (%u)", static_cast<uint32_t>(readback_result.result));
+    return false;
+  }
+
+  const RHIResult idle_wait = ctx.wait_idle();
+  if (idle_wait != RHIResult::Success) {
+    log::error("Failed to wait before GPU image capture (%u)", static_cast<uint32_t>(idle_wait));
+    ctx.device().destroy_buffer(readback_result.handle);
+    return false;
+  }
+
+  RHICommandBuffer cmd = ctx.get_command_buffer();
+  if (cmd.valid() == false) {
+    log::error("Failed to get command buffer for GPU image capture");
+    ctx.device().destroy_buffer(readback_result.handle);
+    return false;
+  }
+
+  ctx.command_buffer_begin(cmd);
+  ctx.cmd_texture_barrier(cmd, texture, RHIResourceState::ShaderReadOnly, RHIResourceState::TransferSrc);
+  ctx.cmd_copy_texture_to_buffer(cmd, texture, readback_result.handle, image_size.x, image_size.y, 0u);
+  ctx.cmd_texture_barrier(cmd, texture, RHIResourceState::TransferSrc, RHIResourceState::ShaderReadOnly);
+  ctx.command_buffer_end(cmd);
+  ctx.submit_command_buffer({cmd});
+
+  const RHIResult capture_wait = ctx.wait_for_command_buffer(cmd);
+  if (capture_wait != RHIResult::Success) {
+    log::error("GPU image capture wait failed (%u)", static_cast<uint32_t>(capture_wait));
+    ctx.destroy_command_buffer(cmd);
+    ctx.device().destroy_buffer(readback_result.handle);
+    return false;
+  }
+  ctx.destroy_command_buffer(cmd);
+
+  output.resize(static_cast<size_t>(pixel_count));
+  const RHIResult read_result = ctx.device().read_buffer(readback_result.handle, output.data(), buffer_size, 0u);
+  const RHIResult destroy_result = ctx.device().destroy_buffer(readback_result.handle);
+  if (destroy_result != RHIResult::Success) {
+    log::warning("Failed to destroy GPU image capture buffer (%u)", static_cast<uint32_t>(destroy_result));
+  }
+
+  if (read_result != RHIResult::Success) {
+    log::error("Failed to read GPU image capture buffer (%u)", static_cast<uint32_t>(read_result));
+    output.clear();
+    return false;
+  }
+
+  return true;
+}
+
 std::string normalized_existing_scene_path(const std::string& value) {
   if (value.empty()) {
     return {};
@@ -90,6 +156,7 @@ void RTApplication::init() {
     _gpu_renderer_supported = render_context.get_context().capabilities().supports_ray_tracing;
     ui.set_gpu_renderer_available(_gpu_renderer_supported);
     ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
+    ui.set_current_renderer_stats(_active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{});
     if (_gpu_renderer_supported == false) {
       log::warning("GPU ray tracing is not supported by the active RHI backend; falling back to CPU or raster rendering");
     }
@@ -104,6 +171,10 @@ void RTApplication::init() {
     cpu_renderer.init(render_context.get_context(), scene);
     raster_renderer.init(render_context.get_context(), scene);
   }
+
+  const uint32_t gpu_wavefront_steps_per_frame = std::clamp(_options.get_integral<uint32_t>("gpu-wavefront-steps-per-frame", 16u), 1u, 1024u);
+  ui.set_gpu_wavefront_steps_per_frame(gpu_wavefront_steps_per_frame);
+  gpu_renderer.set_wavefront_steps_per_render(gpu_wavefront_steps_per_frame);
 
   RendererMode mode = RendererMode::CPURaytracing;
   auto renderer_name = _options.get_string("renderer", "cpu");
@@ -147,6 +218,7 @@ void RTApplication::init() {
     ui.callbacks.clear_recent_files = std::bind(&RTApplication::on_clear_recent_files, this);
     ui.callbacks.camera_activated = std::bind(&RTApplication::on_camera_activated, this, std::placeholders::_1);
     ui.callbacks.integrator_selected = std::bind(&RTApplication::on_integrator_selected, this, std::placeholders::_1);
+    ui.callbacks.gpu_wavefront_steps_per_frame_changed = std::bind(&RTApplication::on_gpu_wavefront_steps_per_frame_changed, this, std::placeholders::_1);
   }
 
   {
@@ -309,6 +381,7 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
 
   ui.set_current_renderer_mode(mode);
   ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
+  ui.set_current_renderer_stats(_active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{});
   if ((_active_renderer == &gpu_renderer) && _gpu_renderer_initialized) {
     gpu_renderer.reload_shaders(render_context.get_context(), scene);
   }
@@ -332,12 +405,15 @@ void RTApplication::frame() {
     .dt = render_frame_data.dt,
   };
   ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
+  ui.set_current_renderer_stats(_active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{});
+  process_pending_image_requests();
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_render_context_start_frame");
     render_context.start_frame(_active_renderer, scene, render_frame_data);
   }
   ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
+  ui.set_current_renderer_stats(_active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{});
   if (render_context.valid() && render_context.rhi_ui().initialized()) {
     ETX_PROFILER_NAMED_SCOPE("app_ui_build");
     ui.build(scene, ui_frame_data);
@@ -527,12 +603,80 @@ std::string RTApplication::save_scene_file(const std::string& file_name) {
 void RTApplication::on_referenece_image_selected(std::string file_name) {
   ETX_PROFILER_SCOPE();
 
-  log::warning("Loading reference image %s...", file_name.c_str());
-
   _options.set_string("ref", file_name, "Reference");
   save_options();
 
-  render_context.set_reference_image(file_name.c_str());
+  _pending_reference_file = file_name;
+  _pending_reference_file_load = true;
+}
+
+bool RTApplication::read_active_gpu_output(std::vector<float4>& output, uint2& image_size) {
+  output.clear();
+  image_size = {};
+
+  if (render_context.valid() == false) {
+    log::warning("Cannot capture GPU output: render context is not initialized");
+    return false;
+  }
+
+  if ((_active_renderer == nullptr) || (_active_renderer->mode() != RendererMode::GPURaytracing)) {
+    log::warning("Cannot capture GPU output: GPU renderer is not active");
+    return false;
+  }
+
+  RHITexture texture = _active_renderer->output_texture();
+  image_size = _active_renderer->output_size();
+  return read_texture_to_float4_buffer(render_context.get_context(), texture, image_size, output);
+}
+
+void RTApplication::process_pending_image_requests() {
+  if ((_pending_reference_file_load == false) && (_pending_current_image_reference_capture == false) && (_pending_gpu_save_image == false)) {
+    return;
+  }
+
+  if (_pending_reference_file_load) {
+    log::warning("Loading reference image %s...", _pending_reference_file.c_str());
+    render_context.set_reference_image(_pending_reference_file.c_str());
+    _pending_reference_file.clear();
+    _pending_reference_file_load = false;
+  }
+
+  std::vector<float4> output = {};
+  uint2 image_size = {};
+  bool capture_succeeded = false;
+  const bool gpu_renderer_active = (_active_renderer != nullptr) && (_active_renderer->mode() == RendererMode::GPURaytracing);
+  const bool needs_gpu_capture = gpu_renderer_active && (_pending_current_image_reference_capture || _pending_gpu_save_image);
+  if (needs_gpu_capture) {
+    capture_succeeded = read_active_gpu_output(output, image_size);
+  }
+
+  if (_pending_current_image_reference_capture) {
+    if (gpu_renderer_active) {
+      if (capture_succeeded) {
+        render_context.set_reference_image(output.data(), image_size);
+      }
+    } else {
+      const float4* data = cpu_renderer.film().layer(ViewLayer::Result, cpu_renderer.scene().options.radiance_clamp);
+      const uint2 size = cpu_renderer.film().base_dimensions();
+      render_context.set_reference_image(data, size);
+    }
+    _pending_current_image_reference_capture = false;
+  }
+
+  if (_pending_gpu_save_image) {
+    if ((needs_gpu_capture == false) && gpu_renderer_active) {
+      capture_succeeded = read_active_gpu_output(output, image_size);
+    }
+    if ((capture_succeeded) && (_pending_gpu_save_image_file.empty() == false)) {
+      ImageOutputParameters params = {
+        .mode = _pending_gpu_save_image_mode,
+        .exposure = ui.view_options().exposure,
+      };
+      save_image_to_file(_pending_gpu_save_image_file, output.data(), image_size, params);
+    }
+    _pending_gpu_save_image_file.clear();
+    _pending_gpu_save_image = false;
+  }
 }
 
 void RTApplication::on_use_image_as_reference() {
@@ -541,13 +685,18 @@ void RTApplication::on_use_image_as_reference() {
   _options.set_string("ref", {}, "Reference");
   save_options();
 
-  const float4* data = cpu_renderer.film().layer(ViewLayer::Result, cpu_renderer.scene().options.radiance_clamp);
-  uint2 size = cpu_renderer.film().base_dimensions();
-  render_context.set_reference_image(data, size);
+  _pending_current_image_reference_capture = true;
 }
 
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
   ETX_PROFILER_SCOPE();
+
+  if ((_active_renderer != nullptr) && (_active_renderer->mode() == RendererMode::GPURaytracing)) {
+    _pending_gpu_save_image_file = file_name;
+    _pending_gpu_save_image_mode = mode;
+    _pending_gpu_save_image = true;
+    return;
+  }
 
   uint2 image_size = {scene.camera().film_size.x, scene.camera().film_size.y};
   const float4* output = cpu_renderer.film().layer(ui.view_options().view_layer, cpu_renderer.scene().options.radiance_clamp);
@@ -662,6 +811,14 @@ void RTApplication::on_options_changed() {
   if (cpu_renderer_active) {
     cpu_renderer.restart();
   }
+}
+
+void RTApplication::on_gpu_wavefront_steps_per_frame_changed(uint32_t value) {
+  const uint32_t clamped_value = std::clamp(value, 1u, 1024u);
+  gpu_renderer.set_wavefront_steps_per_render(clamped_value);
+  ui.set_gpu_wavefront_steps_per_frame(clamped_value);
+  _options.set_integral("gpu-wavefront-steps-per-frame", clamped_value, "GPU Wavefront Steps Per Frame");
+  save_options();
 }
 
 void RTApplication::on_material_added() {

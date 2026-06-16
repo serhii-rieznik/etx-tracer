@@ -8,6 +8,12 @@
     return;
   }
 
+  uint queue_descriptor = wavefront_queue_current_descriptor(true);
+  uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index >= queue_count) {
+    return;
+  }
+
   GPUWavefrontDirectLightTask task = wavefront_load_direct_light_task(resources.direct_light_task_buffer, dispatch_index);
   GPUWavefrontDirectLightResult result_value = wavefront_load_direct_light_result(resources.direct_light_result_buffer, dispatch_index);
   if ((task.flags == 0u) || (result_value.visible == 0u)) {

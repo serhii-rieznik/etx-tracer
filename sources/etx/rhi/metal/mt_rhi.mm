@@ -3210,7 +3210,13 @@ RHIResult MTDevice::reload_compute_pipeline(RHIPipeline pipeline, const RHICompu
 }
 
 RHIMemoryStats MTDevice::get_memory_statistics() const {
-  return {.gpu_allocated_bytes = _impl->gpu_allocated_bytes};
+  RHIMemoryStats stats = {};
+  stats.gpu_allocated_bytes = _impl->gpu_allocated_bytes;
+  if (_impl->metal_device != nil) {
+    stats.gpu_device_local_allocated_bytes = _impl->gpu_allocated_bytes;
+    stats.gpu_device_local_budget_bytes = [_impl->metal_device recommendedMaxWorkingSetSize];
+  }
+  return stats;
 }
 
 RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAccelerationStructureDesc& desc) {

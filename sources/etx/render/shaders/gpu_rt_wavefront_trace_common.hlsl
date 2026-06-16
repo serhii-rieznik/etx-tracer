@@ -47,42 +47,123 @@ bool wavefront_subsurface_state_active(GPUWavefrontResources resources, bool fro
 
 bool wavefront_trace_transmittance_to_point(float3 origin, float3 target, SpectralQuery spect, uint medium_index, inout uint seed, out SpectralResponse transmittance) {
   transmittance = spectral_response_make(spect, 1.0f);
-  float3 current_origin = origin;
-  uint current_medium_index = medium_index;
 
-  while (true) {
-    float3 delta = target - current_origin;
-    float distance = length(delta);
-    if (distance <= kRayEpsilon) {
-      return true;
+  float3 delta = target - origin;
+  float distance = length(delta);
+  if (distance <= kRayEpsilon) {
+    return true;
+  }
+
+  RayDesc ray = (RayDesc)0;
+  ray.Origin = origin;
+  ray.Direction = delta / distance;
+  ray.TMin = kRayEpsilon;
+  const float t_max_epsilon = max(kRayEpsilon, distance * kRayEpsilon);
+  ray.TMax = max(ray.TMin, distance - t_max_epsilon);
+
+  bool has_geometry_buffers = (constants.scene.triangles != kInvalidIndex) && (constants.scene.vertex_positions != kInvalidIndex) &&
+                              (constants.scene.vertex_normals != kInvalidIndex) && (constants.scene.scene_globals != kInvalidIndex);
+  if (has_geometry_buffers == false) {
+    return true;
+  }
+
+  SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
+  uint vertex_count = scene_globals_data.vertex_count;
+  uint triangle_count = scene_globals_data.triangle_count;
+  bool has_material_buffer = constants.scene.materials != kInvalidIndex;
+  bool has_texcoords = constants.scene.vertex_texcoords != kInvalidIndex;
+
+  const uint kBoundaryCapacity = 62u;
+  float boundary_t[kBoundaryCapacity];
+  uint boundary_medium[kBoundaryCapacity];
+  uint boundary_count = 0u;
+
+  RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> ray_query;
+  ray_query.TraceRayInline(bindless_accel_structs[NonUniformResourceIndex(constants.as_index)], RAY_FLAG_FORCE_NON_OPAQUE, 0xFF, ray);
+
+  while (ray_query.Proceed()) {
+    if (ray_query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) {
+      continue;
     }
 
-    RayDesc ray = (RayDesc)0;
-    ray.Origin = current_origin;
-    ray.Direction = delta / distance;
-    ray.TMin = kRayEpsilon;
-    const float t_max_epsilon = max(kRayEpsilon, distance * kRayEpsilon);
-    ray.TMax = max(ray.TMin, distance - t_max_epsilon);
-
-    TraceSurfaceResult trace_result = (TraceSurfaceResult)0;
-    bool boundary_hit = false;
-    uint boundary_medium = kInvalidIndex;
-    bool found_hit = wavefront_trace_closest_surface_or_boundary(ray, seed, trace_result, boundary_hit, boundary_medium);
-    float segment_distance = found_hit ? trace_result.hit_t : ray.TMax;
-    SpectralResponse segment_transmittance = medium_segment_transmittance_spectral(current_medium_index, current_origin, ray.Direction, segment_distance, spect, seed);
-    transmittance = spectral_response_mul(transmittance, segment_transmittance);
-
-    if (found_hit == false) {
-      return true;
+    uint candidate_triangle_index = ray_query.CandidatePrimitiveIndex();
+    if (candidate_triangle_index >= triangle_count) {
+      continue;
     }
 
-    if (boundary_hit == false) {
+    TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], candidate_triangle_index);
+    bool valid_indices = (tri.i.x < vertex_count) && (tri.i.y < vertex_count) && (tri.i.z < vertex_count);
+    if (valid_indices == false) {
+      continue;
+    }
+
+    float2 candidate_bary = ray_query.CandidateTriangleBarycentrics();
+    float2 candidate_uv = float2(0.0f, 0.0f);
+    if (has_texcoords) {
+      candidate_uv = interpolate_uv(bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)], tri, candidate_bary);
+    }
+
+    MaterialAccess material_access = ETX_ZERO(MaterialAccess);
+    if (has_material_buffer) {
+      MaterialAccessGPUContext material_context = {constants.scene.materials};
+      material_access_try_load(material_context, tri.material_index, material_access);
+    }
+
+    bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
+    bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
+    HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::MediumTransmittance, material_access.material_class, alpha_rejected, entering_surface,
+      material_access.int_medium_index, material_access.ext_medium_index);
+    if (hit_policy.action == HitPolicyAction::Ignore) {
+      continue;
+    }
+
+    if (hit_policy.action == HitPolicyAction::Occlude) {
       return false;
     }
 
-    current_medium_index = boundary_medium;
-    current_origin = trace_result.surface_point.vertex.pos;
+    if (hit_policy.action == HitPolicyAction::TransitionMedium) {
+      if (boundary_count >= kBoundaryCapacity) {
+        return false;
+      }
+
+      boundary_t[boundary_count] = ray_query.CandidateTriangleRayT();
+      boundary_medium[boundary_count] = hit_policy.medium_index;
+      boundary_count += 1u;
+    }
   }
+
+  for (uint i = 0u; i < boundary_count; ++i) {
+    for (uint j = i + 1u; j < boundary_count; ++j) {
+      if (boundary_t[i] > boundary_t[j]) {
+        float swap_t = boundary_t[i];
+        boundary_t[i] = boundary_t[j];
+        boundary_t[j] = swap_t;
+
+        uint swap_medium = boundary_medium[i];
+        boundary_medium[i] = boundary_medium[j];
+        boundary_medium[j] = swap_medium;
+      }
+    }
+  }
+
+  float current_t = 0.0f;
+  uint current_medium_index = medium_index;
+  for (uint boundary_index = 0u; boundary_index < boundary_count; ++boundary_index) {
+    float segment_end_t = boundary_t[boundary_index];
+    float segment_distance = max(0.0f, segment_end_t - current_t);
+    float3 segment_origin = origin + ray.Direction * current_t;
+    SpectralResponse segment_transmittance = medium_segment_transmittance_spectral(current_medium_index, segment_origin, ray.Direction, segment_distance, spect, seed);
+    transmittance = spectral_response_mul(transmittance, segment_transmittance);
+    current_medium_index = boundary_medium[boundary_index];
+    current_t = segment_end_t;
+  }
+
+  float final_segment_distance = max(0.0f, ray.TMax - current_t);
+  float3 final_segment_origin = origin + ray.Direction * current_t;
+  SpectralResponse final_segment_transmittance =
+    medium_segment_transmittance_spectral(current_medium_index, final_segment_origin, ray.Direction, final_segment_distance, spect, seed);
+  transmittance = spectral_response_mul(transmittance, final_segment_transmittance);
+  return true;
 }
 
 bool wavefront_trace_transmittance_to_point_inline_medium(float3 origin, float3 target, SpectralQuery spect, uint medium_index, SpectralResponse inline_extinction,
@@ -258,7 +339,7 @@ SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary,
 
   surface_point_shared_interpolate_vertex(position_0, position_1, position_2, normal_0, normal_1, normal_2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2,
     texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
-  result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
+  result.geo_normal = tri.geo_n;
   return result;
 }
 

@@ -622,7 +622,7 @@ uint wavefront_queue_count(uint descriptor_index) {
   if (descriptor_index == kInvalidIndex) {
     return 0u;
   }
-  return WAVEFRONT_RO_BUFFER(descriptor_index).Load(0u);
+  return WAVEFRONT_RO_BUFFER(descriptor_index).Load(kGPUWavefrontQueueCountOffset);
 }
 
 void wavefront_queue_reset(uint descriptor_index) {
@@ -630,10 +630,10 @@ void wavefront_queue_reset(uint descriptor_index) {
     return;
   }
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
-  buffer.Store(0u, 0u);
-  buffer.Store(4u, 0u);
-  buffer.Store(8u, 0u);
-  buffer.Store(12u, 0u);
+  buffer.Store(kGPUWavefrontQueueCountOffset, 0u);
+  buffer.Store(kGPUWavefrontQueueMaxPathLengthOffset, 0u);
+  buffer.Store(kGPUWavefrontQueuePad1Offset, 0u);
+  buffer.Store(kGPUWavefrontQueuePad2Offset, 0u);
 }
 
 void wavefront_queue_store(uint descriptor_index, uint slot, uint value) {
@@ -647,9 +647,17 @@ uint wavefront_queue_load(uint descriptor_index, uint slot) {
 uint wavefront_queue_append(uint descriptor_index, uint value) {
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   uint slot = 0u;
-  buffer.InterlockedAdd(0u, 1u, slot);
+  buffer.InterlockedAdd(kGPUWavefrontQueueCountOffset, 1u, slot);
   buffer.Store(kGPUWavefrontQueueIndicesOffset + slot * 4u, value);
   return slot;
+}
+
+void wavefront_queue_update_max_path_length(uint descriptor_index, uint path_length) {
+  if (descriptor_index == kInvalidIndex) {
+    return;
+  }
+  uint original = 0u;
+  WAVEFRONT_RW_BUFFER(descriptor_index).InterlockedMax(kGPUWavefrontQueueMaxPathLengthOffset, path_length, original);
 }
 
 uint2 wavefront_render_window_origin() {
@@ -940,7 +948,7 @@ void wavefront_write_root_camera_vertex(uint path_index, Camera camera, Ray ray,
   wavefront_store_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, 0u), vertex);
 }
 
-void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample emitter_sample, SpectralQuery spect) {
+void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample emitter_sample, SpectralQuery spect, uint pixel_index) {
   GPUWavefrontResources resources = wavefront_load_resources();
   if (resources.light_vertex_buffer == kInvalidIndex) {
     return;
@@ -960,7 +968,7 @@ void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample e
   vertex.reverse_pdf = 0.0f;
   vertex.sampled_bsdf_pdf = emitter_sample.pdf_dir;
   vertex.path_length = 0u;
-  vertex.pixel_index = path_index;
+  vertex.pixel_index = pixel_index;
   vertex.flags = GPUWavefrontVertexFlags::Valid | GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Emitter | GPUWavefrontVertexFlags::From_light;
   if (emitter_sample.is_distant == 0u) {
     vertex.triangle_index = emitter_sample.triangle_index;
@@ -1079,6 +1087,7 @@ void wavefront_write_path_meta(bool from_camera, uint path_index, GPUWavefrontPa
   } else {
     meta.light_path_length = state.path_length;
     meta.flags |= GPUWavefrontPathMetaFlags::Light_active;
+    wavefront_queue_update_max_path_length(wavefront_queue_next_descriptor(false), state.path_length);
   }
   wavefront_store_path_meta(resources.path_meta_buffer, path_index, meta);
 }

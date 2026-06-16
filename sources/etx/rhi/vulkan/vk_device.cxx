@@ -2842,6 +2842,16 @@ RHIMemoryStats VKDevice::get_memory_statistics() const {
     for (uint32_t i = 0; i < mem_props2.memoryProperties.memoryHeapCount; ++i) {
       stats.gpu_driver_allocated_bytes += budget_props.heapUsage[i];
       stats.gpu_driver_budget_bytes += budget_props.heapBudget[i];
+      if ((mem_props2.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u) {
+        stats.gpu_device_local_allocated_bytes += budget_props.heapUsage[i];
+        stats.gpu_device_local_budget_bytes += budget_props.heapBudget[i];
+      }
+    }
+  } else {
+    for (uint32_t i = 0; i < _impl->memory_properties.memoryHeapCount; ++i) {
+      if ((_impl->memory_properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u) {
+        stats.gpu_device_local_budget_bytes += _impl->memory_properties.memoryHeaps[i].size;
+      }
     }
   }
 

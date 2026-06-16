@@ -363,9 +363,6 @@ struct CPUBidirectionalImpl : public Task {
       if (target_path_length < scene.options.min_path_length)
         continue;
 
-      if (target_path_length > scene.options.max_path_length)
-        break;
-
       const auto& y_i = path_data.emitter_path[light_s];
       if (y_i.connectible == false) {
         continue;
@@ -1270,7 +1267,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     uint32_t connection_len = path_data.camera_path_length() + 1u;
-    bool invalid_path_length = (connection_len > scene.options.max_path_length) || (connection_len < scene.options.min_path_length);
+    bool invalid_path_length = connection_len < scene.options.min_path_length;
     if (invalid_path_length || (enable_connect_to_light == false) || (mode == Mode::LightTracing))
       return {spect, 0.0f};
 
@@ -1325,8 +1322,7 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     const uint32_t target_path_length = path_data.emitter_path_length() + 1u;
-    if ((mode == Mode::PathTracing) || (enable_connect_to_camera == false) || (target_path_length > scene.options.max_path_length) ||
-        (target_path_length < scene.options.min_path_length))
+    if ((mode == Mode::PathTracing) || (enable_connect_to_camera == false) || (target_path_length < scene.options.min_path_length))
       return {spect, 0.0f};
 
     const auto& camera = rt.camera();
@@ -1356,7 +1352,6 @@ struct CPUBidirectionalImpl : public Task {
     if (bsdf.is_zero()) {
       return {spect, 0.0f};
     }
-
     float weight = mis_weight_light_to_camera(spect, path_data, y_curr, y_prev, sampled_vertex, smp);
 
     SpectralResponse splat = y_curr.throughput * bsdf * (camera_sample.weight * weight / spect.sampling_pdf());

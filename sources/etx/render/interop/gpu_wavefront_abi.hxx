@@ -4,6 +4,10 @@
 #include "gpu_wavefront_shared.hxx"
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontQueueHeaderSize = 16u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontQueueCountOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontQueueMaxPathLengthOffset = 4u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontQueuePad1Offset = 8u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontQueuePad2Offset = 12u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontQueueIndicesOffset = 16u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontPathStateStride = 144u;

@@ -33,6 +33,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 
 namespace etx {
@@ -96,6 +97,28 @@ inline auto hash_mapping(const T& m) -> uint64_t {
   }
   return h;
 };
+
+std::string duration_string(double seconds) {
+  if (seconds < 0.0) {
+    return "-";
+  }
+
+  const uint64_t total_seconds = static_cast<uint64_t>(seconds + 0.5);
+  const uint64_t hours = total_seconds / 3600ull;
+  const uint64_t minutes = (total_seconds / 60ull) % 60ull;
+  const uint64_t remaining_seconds = total_seconds % 60ull;
+
+  char buffer[64] = {};
+  if (hours > 0ull) {
+    snprintf(buffer, sizeof(buffer), "%lluh %02llum %02llus", static_cast<unsigned long long>(hours), static_cast<unsigned long long>(minutes),
+      static_cast<unsigned long long>(remaining_seconds));
+  } else if (minutes > 0ull) {
+    snprintf(buffer, sizeof(buffer), "%llum %02llus", static_cast<unsigned long long>(minutes), static_cast<unsigned long long>(remaining_seconds));
+  } else {
+    snprintf(buffer, sizeof(buffer), "%llus", static_cast<unsigned long long>(remaining_seconds));
+  }
+  return std::string(buffer);
+}
 
 const char* material_class_display_name(const Material::Class cls) {
   switch (cls) {
@@ -2598,8 +2621,21 @@ void UI::build_toolbar(const BuildContext& ctx) {
         progress = "-";
       }
 
-      const char* buffer = format_string("%s | %s | %s | %s | %.1f FPS", (_current_renderer_mode == RendererMode::GPURaytracing) ? "GPU Raytracing" : "Rasterization", state_str,
-        status.phase.empty() ? "-" : status.phase.c_str(), progress.c_str(), _current_fps);
+      const RendererRuntimeStats stats = _current_renderer_stats;
+      const bool gpu_stats_available = (_current_renderer_mode == RendererMode::GPURaytracing) && stats.valid;
+      const char* buffer = nullptr;
+      if (gpu_stats_available) {
+        const std::string sample_progress =
+          (stats.target_samples > 0u) ? (std::to_string(stats.completed_samples) + "/" + std::to_string(stats.target_samples)) : std::to_string(stats.completed_samples);
+        const std::string elapsed = duration_string(stats.elapsed_seconds);
+        const std::string remaining = duration_string(stats.estimated_remaining_seconds);
+        buffer = format_string("%s | %s | %s | sample %s | elapsed %s | remaining %s | %.1f FPS",
+          (_current_renderer_mode == RendererMode::GPURaytracing) ? "GPU Raytracing" : "Rasterization", state_str, status.phase.empty() ? "-" : status.phase.c_str(),
+          sample_progress.c_str(), elapsed.c_str(), remaining.c_str(), _current_fps);
+      } else {
+        buffer = format_string("%s | %s | %s | %s | %.1f FPS", (_current_renderer_mode == RendererMode::GPURaytracing) ? "GPU Raytracing" : "Rasterization", state_str,
+          status.phase.empty() ? "-" : status.phase.c_str(), progress.c_str(), _current_fps);
+      }
       ImGui::Text("%s", buffer);
       if (status.message.empty() == false) {
         ImGui::SameLine(0.0f, ctx.wpadding.x);
@@ -3894,6 +3930,16 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
     _current_renderer_mode = selected_mode;
     if (callbacks.renderer_selected) {
       callbacks.renderer_selected(_current_renderer_mode);
+    }
+  }
+
+  if (_current_renderer_mode == RendererMode::GPURaytracing) {
+    int32_t wavefront_steps = static_cast<int32_t>(_gpu_wavefront_steps_per_frame);
+    if (validated_int_control("GPU Wavefront Steps / Frame", wavefront_steps, 1, 1024)) {
+      _gpu_wavefront_steps_per_frame = static_cast<uint32_t>(wavefront_steps);
+      if (callbacks.gpu_wavefront_steps_per_frame_changed) {
+        callbacks.gpu_wavefront_steps_per_frame_changed(_gpu_wavefront_steps_per_frame);
+      }
     }
   }
 

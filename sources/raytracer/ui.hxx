@@ -9,6 +9,7 @@
 #include "renderer.hxx"
 #include "options.hxx"
 
+#include <algorithm>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -44,6 +45,18 @@ struct UI {
 
   void set_current_renderer_status(const RendererPreparationStatus& status) {
     _current_renderer_status = status;
+  }
+
+  void set_current_renderer_stats(const RendererRuntimeStats& stats) {
+    _current_renderer_stats = stats;
+  }
+
+  void set_gpu_wavefront_steps_per_frame(uint32_t value) {
+    _gpu_wavefront_steps_per_frame = std::clamp(value, 1u, 1024u);
+  }
+
+  uint32_t gpu_wavefront_steps_per_frame() const {
+    return _gpu_wavefront_steps_per_frame;
   }
 
   void set_gpu_renderer_available(bool value) {
@@ -104,6 +117,7 @@ struct UI {
     std::function<void(Integrator::Type)> integrator_selected;
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
+    std::function<void(uint32_t)> gpu_wavefront_steps_per_frame_changed;
   } callbacks;
 
  private:
@@ -182,6 +196,8 @@ struct UI {
   Integrator* _current_integrator = nullptr;
   RendererMode _current_renderer_mode = RendererMode::CPURaytracing;
   RendererPreparationStatus _current_renderer_status = {};
+  RendererRuntimeStats _current_renderer_stats = {};
+  uint32_t _gpu_wavefront_steps_per_frame = 16u;
   bool _gpu_renderer_available = true;
 
   ArrayView<Integrator*> _integrators = {};

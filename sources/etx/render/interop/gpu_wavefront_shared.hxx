@@ -70,7 +70,7 @@ struct GPUWavefrontDirectLightSampleFlags {
 
 struct ETX_ALIGNED GPUWavefrontQueueHeader {
   uint32_t count ETX_INIT(0u);
-  uint32_t pad0 ETX_INIT(0u);
+  uint32_t max_path_length ETX_INIT(0u);
   uint32_t pad1 ETX_INIT(0u);
   uint32_t pad2 ETX_INIT(0u);
 };

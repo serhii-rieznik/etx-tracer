@@ -443,7 +443,7 @@ uint wavefront_queue_count(uint descriptor_index) {
   if (descriptor_index == kInvalidIndex) {
     return 0u;
   }
-  return WAVEFRONT_RO_BUFFER(descriptor_index).Load(0u);
+  return WAVEFRONT_RO_BUFFER(descriptor_index).Load(kGPUWavefrontQueueCountOffset);
 }
 
 uint wavefront_queue_load(uint descriptor_index, uint slot) {

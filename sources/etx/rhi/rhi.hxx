@@ -31,6 +31,8 @@ struct RHIMemoryStats {
   uint64_t gpu_allocated_bytes = 0;
   uint64_t gpu_driver_allocated_bytes = 0;
   uint64_t gpu_driver_budget_bytes = 0;
+  uint64_t gpu_device_local_allocated_bytes = 0;
+  uint64_t gpu_device_local_budget_bytes = 0;
 };
 
 struct RHICapabilities {

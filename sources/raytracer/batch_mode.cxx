@@ -400,6 +400,7 @@ const char* batch_usage_string() {
          "  --strict-comparison\n"
          "  --gpu-compile-only\n"
          "  --gpu-compile-stage <entry-point>\n"
+         "  --gpu-wavefront-steps-per-frame <count>\n"
          "  --reference <reference-image>\n"
          "  --compare <render>\n"
          "  --denoise\n"
@@ -2169,12 +2170,17 @@ bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const ui
     return false;
   }
 
-  ctx.begin_frame();
-  auto cmd = ctx.get_command_buffer();
+  const RHIResult idle_wait = ctx.wait_idle();
+  if (idle_wait != RHIResult::Success) {
+    log::error("GPU readback wait before capture failed (%u)", static_cast<uint32_t>(idle_wait));
+    ctx.device().destroy_buffer(readback_result.handle);
+    return false;
+  }
+
+  RHICommandBuffer cmd = ctx.get_command_buffer();
   if (cmd.valid() == false) {
     log::error("Failed to get command buffer for GPU readback");
     ctx.device().destroy_buffer(readback_result.handle);
-    ctx.end_frame();
     return false;
   }
 
@@ -2184,11 +2190,10 @@ bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const ui
   ctx.cmd_texture_barrier(cmd, texture, RHIResourceState::TransferSrc, RHIResourceState::ShaderReadOnly);
   ctx.command_buffer_end(cmd);
   ctx.submit_command_buffer({cmd});
-  ctx.end_frame();
 
-  const RHIResult wait_result = ctx.wait_idle();
+  const RHIResult wait_result = ctx.wait_for_command_buffer(cmd);
   if (wait_result != RHIResult::Success) {
-    log::error("GPU readback wait_idle failed (%u)", static_cast<uint32_t>(wait_result));
+    log::error("GPU readback command wait failed (%u)", static_cast<uint32_t>(wait_result));
     ctx.destroy_command_buffer(cmd);
     ctx.device().destroy_buffer(readback_result.handle);
     return false;
@@ -2501,6 +2506,8 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     log::error("GPU renderer preparation failed before batch rendering");
     return false;
   }
+  session.gpu_renderer.set_wavefront_steps_per_render(options.gpu_wavefront_steps_per_frame);
+  session.gpu_renderer.set_batch_coarse_progress(true);
 
   const uint32_t target_sample_count = max(1u, session.scene.data().options.samples);
   const uint64_t frames_per_sample_budget = std::max<uint64_t>(4096u, static_cast<uint64_t>(session.scene.data().options.max_path_length) + 2u);
@@ -2510,6 +2517,7 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   double total_frame_time_ms = 0.0;
   double first_frame_time_ms = 0.0;
   uint32_t frame_index = 0u;
+  uint32_t last_logged_sample_count = session.gpu_renderer.completed_samples();
   while ((session.gpu_renderer.completed_samples() < target_sample_count) && (frame_index < max_gpu_frame_count)) {
     const auto frame_begin = std::chrono::steady_clock::now();
     const auto begin_frame_begin = std::chrono::steady_clock::now();
@@ -2538,7 +2546,11 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     }
 
     frame_index += 1u;
-    log::info("GPU rendering progress: frames=%u samples=%u / %u", frame_index, session.gpu_renderer.completed_samples(), target_sample_count);
+    const uint32_t completed_sample_count = session.gpu_renderer.completed_samples();
+    if ((completed_sample_count != last_logged_sample_count) || (completed_sample_count >= target_sample_count)) {
+      log::info("GPU rendering progress: frames=%u samples=%u / %u", frame_index, completed_sample_count, target_sample_count);
+      last_logged_sample_count = completed_sample_count;
+    }
   }
   if (session.gpu_renderer.completed_samples() < target_sample_count) {
     log::error("GPU batch render did not reach target samples (%u / %u) within %u frames", session.gpu_renderer.completed_samples(), target_sample_count, max_gpu_frame_count);
@@ -3109,6 +3121,27 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
         return BatchModeCommand::Error;
       }
       options.gpu_compile_stage = argv[++i];
+      continue;
+    }
+
+    if (argument == "--gpu-wavefront-steps-per-frame") {
+      batch_argument_seen = true;
+      if ((i + 1) >= argc) {
+        message = "Missing value for --gpu-wavefront-steps-per-frame\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      if (parse_u32_argument(argv[i + 1], options.gpu_wavefront_steps_per_frame) == false) {
+        message = "Invalid value for --gpu-wavefront-steps-per-frame\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      if ((options.gpu_wavefront_steps_per_frame == 0u) || (options.gpu_wavefront_steps_per_frame > 1024u)) {
+        message = "--gpu-wavefront-steps-per-frame must be in [1, 1024]\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      i += 1;
       continue;
     }
 

@@ -35,6 +35,14 @@ struct RendererPreparationStatus {
   uint32_t total_steps = 0u;
 };
 
+struct RendererRuntimeStats {
+  bool valid = false;
+  uint32_t completed_samples = 0u;
+  uint32_t target_samples = 0u;
+  double elapsed_seconds = 0.0;
+  double estimated_remaining_seconds = -1.0;
+};
+
 struct Renderer {
   struct FrameData {
     ViewParameters view_parameters = {};
@@ -114,6 +122,10 @@ struct Renderer {
   virtual const char* name() const = 0;
   virtual RendererMode mode() const = 0;
   virtual RendererPreparationStatus preparation_status() const {
+    return {};
+  }
+
+  virtual RendererRuntimeStats runtime_stats() const {
     return {};
   }
 

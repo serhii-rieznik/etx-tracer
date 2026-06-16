@@ -433,8 +433,12 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
     return;
   }
 
+  if (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false) {
+    return;
+  }
+
   uint target_path_length = path_meta.light_path_length + 1u;
-  if ((target_path_length < load_scene_options_min_path_length()) || (target_path_length > load_scene_options_max_path_length())) {
+  if (target_path_length < load_scene_options_min_path_length()) {
     return;
   }
 
@@ -578,11 +582,9 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
 
     const bool subsurface_medium_vertex = wavefront_path_vertex_is_subsurface(current_vertex);
     current_vertex.flags &= ~(GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible | GPUWavefrontVertexFlags::Delta);
-    if (subsurface_medium_vertex || wavefront_medium_explicit_connections_enabled(current_vertex.medium_index)) {
-      current_vertex.flags |= GPUWavefrontVertexFlags::Connectible;
-      if (wavefront_path_vertex_connectible(previous_vertex)) {
-        current_vertex.flags |= GPUWavefrontVertexFlags::Mis_connectible;
-      }
+    current_vertex.flags |= GPUWavefrontVertexFlags::Connectible;
+    if (wavefront_path_vertex_connectible(previous_vertex)) {
+      current_vertex.flags |= GPUWavefrontVertexFlags::Mis_connectible;
     }
 
     current_vertex.pdf_from_prev = wavefront_vertex_to_vertex_area_pdf(state.sampled_bsdf_pdf, previous_vertex, current_vertex);

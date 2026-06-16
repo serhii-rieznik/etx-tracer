@@ -7,6 +7,11 @@ namespace {
 static_assert(std::is_standard_layout_v<GPUWavefrontQueueHeader>, "GPUWavefrontQueueHeader must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontQueueHeader>, "GPUWavefrontQueueHeader must stay trivially copyable for GPU wavefront ABI");
 static_assert(sizeof(GPUWavefrontQueueHeader) == kGPUWavefrontQueueHeaderSize, "GPUWavefrontQueueHeader size changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontQueueHeader, count) == kGPUWavefrontQueueCountOffset, "GPUWavefrontQueueHeader::count offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontQueueHeader, max_path_length) == kGPUWavefrontQueueMaxPathLengthOffset,
+  "GPUWavefrontQueueHeader::max_path_length offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontQueueHeader, pad1) == kGPUWavefrontQueuePad1Offset, "GPUWavefrontQueueHeader::pad1 offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontQueueHeader, pad2) == kGPUWavefrontQueuePad2Offset, "GPUWavefrontQueueHeader::pad2 offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontPathState>, "GPUWavefrontPathState must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontPathState>, "GPUWavefrontPathState must stay trivially copyable for GPU wavefront ABI");

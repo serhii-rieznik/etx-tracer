@@ -141,8 +141,6 @@ bool wavefront_connect_camera_stage_matches_material(uint material_class) {
 # include "gpu_rt_wavefront_connect_camera_prepare_common.hlsl"
 
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
-  wavefront_clear_connect_camera_task(dtid.x);
-
   WavefrontConnectCameraPrepareInput input_value = (WavefrontConnectCameraPrepareInput)0;
   if (wavefront_load_connect_camera_prepare_input(dtid.x, input_value) == false) {
     return;
@@ -157,8 +155,6 @@ bool wavefront_connect_camera_stage_matches_material(uint material_class) {
   BSDFEval bsdf_eval = wavefront_connect_camera_stage_bsdf_eval(wavefront_connect_camera_make_scene_bsdf_resource_gpu_context(), bsdf_data, input_value.camera_sample.direction,
     input_value.material, bsdf_sampler);
   float shading_fix = bsdf_fix_shading_normal(input_value.hit.geo_normal, input_value.hit.vertex.nrm, input_value.current_vertex.w_i, input_value.camera_sample.direction);
-  if (isfinite(shading_fix) && (shading_fix > 0.0f)) {
-    bsdf_eval.bsdf = spectral_response_mul(bsdf_eval.bsdf, shading_fix);
-  }
+  bsdf_eval.bsdf = spectral_response_mul(bsdf_eval.bsdf, shading_fix);
   wavefront_store_connect_camera_prepare_task(dtid.x, input_value, bsdf_eval, bsdf_sampler);
 }

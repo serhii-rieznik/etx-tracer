@@ -154,8 +154,7 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
     return false;
   }
   uint target_path_length = input_value.path_meta.light_path_length + 1u;
-  if ((scene_strategy_enabled(kSceneStrategyConnectToCamera) == false) || (target_path_length < load_scene_options_min_path_length()) ||
-      (target_path_length > load_scene_options_max_path_length())) {
+  if ((scene_strategy_enabled(kSceneStrategyConnectToCamera) == false) || (target_path_length < load_scene_options_min_path_length())) {
     return false;
   }
 
@@ -236,7 +235,7 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   float near_extent = (input_value.camera.clip_near > 0.0f) ? input_value.camera.clip_near / direction_scale : 0.0f;
   float surface_len = length(input_value.camera_sample.position - input_value.hit.vertex.pos);
   float3 shadow_origin = wavefront_surface_shading_position(input_value.hit, input_value.camera_sample.direction);
-  float3 clip_pos = shadow_origin + input_value.camera_sample.direction * max(0.0f, surface_len - near_extent);
+  float3 clip_pos = input_value.hit.vertex.pos + input_value.camera_sample.direction * max(0.0f, surface_len - near_extent);
   float3 shadow_delta = clip_pos - shadow_origin;
   float shadow_distance = length(shadow_delta);
   if (shadow_distance <= kRayEpsilon) {
