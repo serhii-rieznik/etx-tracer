@@ -50,6 +50,20 @@ set_target_properties(procedural_geometry PROPERTIES
   FOLDER "tests"
 )
 
+if(APPLE)
+  foreach(test_target bsdf_validation procedural_geometry)
+    target_link_libraries(${test_target} PRIVATE
+      "-framework Foundation"
+      "-framework QuartzCore"
+      "-framework CoreGraphics"
+      "-framework Metal"
+      "-framework MetalKit"
+      "-framework AppKit"
+    )
+    target_link_options(${test_target} PRIVATE "-Wl,-rpath,@executable_path" "-Wl,-rpath,@loader_path")
+  endforeach()
+endif()
+
 if(DXC_FOUND AND DXC_LIBRARY)
   get_filename_component(DXC_LIBRARY_NAME "${DXC_LIBRARY}" NAME)
   get_filename_component(DXC_LIBRARY_DIR "${DXC_LIBRARY}" DIRECTORY)

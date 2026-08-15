@@ -94,6 +94,7 @@ static_assert(std::is_standard_layout_v<SpectralImage>, "SpectralImage must stay
 static_assert(std::is_standard_layout_v<Material>, "Material must stay standard layout for C++/HLSL interop");
 static_assert(alignof(Material) == 16, "Material alignment must match HLSL packing");
 static_assert(sizeof(Material) == kMaterialStride, "Material size changed; update shared ABI");
+static_assert((offsetof(Material, thinfilm) + offsetof(Thinfilm, weight)) == kMaterialThinfilmWeightOffset, "Material::thinfilm.weight offset changed");
 static_assert(offsetof(Material, scattering) == kMaterialScatteringSpectrumIndexOffset, "Material::scattering offset changed");
 static_assert((offsetof(Material, scattering) + offsetof(SpectralImage, image_index)) == kMaterialScatteringImageIndexOffset, "Material::scattering.image_index offset changed");
 static_assert(offsetof(Material, cls) == kMaterialClassOffset, "Material::cls offset changed");

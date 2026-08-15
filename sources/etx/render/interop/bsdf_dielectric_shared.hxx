@@ -54,7 +54,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceCon
   RefractiveIndexSample ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
   RefractiveIndexSample int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
   const ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, data.spectrum_sample, material.thinfilm, data.tex, sampler);
-  if ((thinfilm.thickness <= 0.0f) && bsdf_dielectric_equal_eta(ext_ior, int_ior)) {
+  if (((thinfilm.weight <= 0.0f) || (thinfilm.thickness <= 0.0f)) && bsdf_dielectric_equal_eta(ext_ior, int_ior)) {
     return bsdf_dielectric_equal_eta_sample(data, material);
   }
 

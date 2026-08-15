@@ -656,6 +656,7 @@ ETX_SHARED_INLINE ThinfilmEval bsdf_energy_compensated_empty_thinfilm() {
   result.ior.cls = SpectralDistribution::Invalid;
   result.rgb_wavelengths = kRGBWavelengths;
   result.thickness = 0.0f;
+  result.weight = 0.0f;
   return result;
 }
 
@@ -709,32 +710,11 @@ ETX_SHARED_INLINE SpectralResponse bsdf_energy_compensated_conductor_fms(ETX_IN(
 }
 
 ETX_SHARED_INLINE float3 bsdf_energy_compensated_sample_vndf_local(ETX_IN(float3, w_i), float alpha, ETX_IN(float2, rnd)) {
-  const float3 w_i_11 = normalize(float3(alpha * w_i.x, alpha * w_i.y, w_i.z));
-  const float2 slope_11 = bsdf_external_sample_p22_11(acos(bsdf_energy_compensated_saturate(w_i_11.z)), rnd, float2(alpha, alpha));
-
-  float2 slope = slope_11;
-  const float wi_xy_length_sq = (w_i_11.x * w_i_11.x) + (w_i_11.y * w_i_11.y);
-  if (wi_xy_length_sq > (kEpsilon * kEpsilon)) {
-    const float phi = atan2(w_i_11.y, w_i_11.x);
-    slope = float2(cos(phi) * slope_11.x - sin(phi) * slope_11.y, sin(phi) * slope_11.x + cos(phi) * slope_11.y);
-  }
-  slope.x *= alpha;
-  slope.y *= alpha;
-
-  if ((slope.x != slope.x) || (isinf(slope.x))) {
-    if (w_i.z > 0.0f) {
-      return float3(0.0f, 0.0f, 1.0f);
-    }
-    return normalize(float3(w_i.x, w_i.y, 0.0f));
-  }
-
-  return normalize(float3(-slope.x, -slope.y, 1.0f));
+  return bsdf_external_sample_vndf_local(w_i, alpha, rnd);
 }
 
 ETX_SHARED_INLINE float bsdf_energy_compensated_vndf_pdf(ETX_IN(float3, w_i), ETX_IN(float3, m), float alpha) {
-  const BSDFExternalRayInfo ray = bsdf_external_ray_info_make(w_i, float2(alpha, alpha));
-  const float denominator = (1.0f + ray.Lambda) * max(kEpsilon, w_i.z);
-  return max(0.0f, dot(w_i, m)) * bsdf_external_d_ggx(m, float2(alpha, alpha)) / denominator;
+  return bsdf_external_vndf_pdf(w_i, m, alpha);
 }
 
 ETX_SHARED_INLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_conductor_base_lobe(ETX_IN(SpectralQuery, spect), ETX_IN(float3, w_i), ETX_IN(float3, w_o), float alpha,

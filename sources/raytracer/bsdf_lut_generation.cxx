@@ -115,6 +115,7 @@ ThinfilmEval empty_thinfilm() {
   result.ior.cls = SpectralDistribution::Invalid;
   result.rgb_wavelengths = kRGBWavelengths;
   result.thickness = 0.0f;
+  result.weight = 0.0f;
   return result;
 }
 

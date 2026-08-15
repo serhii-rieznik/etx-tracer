@@ -1,5 +1,6 @@
 #pragma once
 
+#include <etx/render/interop/bsdf_fresnel_shared.hxx>
 #include <etx/render/shared/material.hxx>
 #include <etx/render/shared/sampler.hxx>
 
@@ -299,52 +300,11 @@ ETX_SHARED_INLINE auto transmittance(const complex& ext_ior, const complex& cos_
 }
 
 ETX_SHARED_INLINE float fresnel_generic(const float cos_theta_i, const complex& ext_ior, const complex& int_ior) {
-  auto sin_theta_o_squared = sqr(ext_ior / int_ior) * (1.0f - cos_theta_i * cos_theta_i);
-  auto cos_theta_o = sqrt(1.0f - sin_theta_o_squared);
-  ETX_VALIDATE(cos_theta_o);
-  auto rsrp = reflectance(ext_ior, cos_theta_i, int_ior, cos_theta_o);
-  return 0.5f * (complex_norm(rsrp.rs) + complex_norm(rsrp.rp));
+  return ::bsdf_fresnel_generic(cos_theta_i, ext_ior, int_ior);
 }
 
 ETX_SHARED_INLINE float fresnel_thinfilm(float wavelength, const float cos_theta_0, const complex& ext_ior, const complex& film_ior, const complex& int_ior, float thickness) {
-  constexpr complex i = {0.0f, 1.0f};
-
-  if (cos_theta_0 == 0.0f)
-    return 0.0f;
-
-  complex sin_theta_1_squared = sqr(ext_ior / film_ior) * (1.0f - cos_theta_0 * cos_theta_0);
-  if (sin_theta_1_squared.real() >= 1.0f)
-    return 1.0f;
-
-  complex cos_theta_1 = sqrt(1.0f - sin_theta_1_squared);
-
-  complex sin_theta_2_squared = sqr(film_ior / int_ior) * (1.0f - cos_theta_1 * cos_theta_1);
-  if (sin_theta_2_squared.real() >= 1.0f)
-    return 1.0f;
-
-  complex cos_theta_2 = sqrt(1.0f - sin_theta_2_squared);
-
-  auto ratio = (int_ior * cos_theta_2) / (ext_ior * cos_theta_0);
-  ETX_CHECK_FINITE(ratio);
-
-  auto delta_10 = ext_ior.real() < film_ior.real() ? kPi : 0.0f;
-  auto delta_21 = film_ior.real() < int_ior.real() ? kPi : 0.0f;
-  auto phase_shift = delta_10 + delta_21;
-
-  auto r01 = reflectance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
-  auto t01 = transmittance(ext_ior, cos_theta_0, film_ior, cos_theta_1);
-
-  auto r12 = reflectance(film_ior, cos_theta_1, int_ior, cos_theta_2);
-  auto t12 = transmittance(film_ior, cos_theta_1, int_ior, cos_theta_2);
-
-  auto phi = (kDoublePi * 2.0f * thickness * cos_theta_1 + phase_shift * film_ior) / wavelength;
-  auto exp_i_phi = complex_exp(i * phi);
-  auto tp = sqr(t01.tp * t12.tp / (1.0f - r01.rp * r12.rp * exp_i_phi));
-  ETX_CHECK_FINITE(tp);
-  auto ts = sqr(t01.ts * t12.ts / (1.0f - r01.rs * r12.rs * exp_i_phi));
-  ETX_CHECK_FINITE(ts);
-
-  return complex_abs(1.0f - ratio * 0.5f * (tp + ts));
+  return ::bsdf_fresnel_thinfilm(wavelength, cos_theta_0, ext_ior, film_ior, int_ior, thickness);
 }
 
 ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_theta, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
@@ -354,40 +314,9 @@ ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_thet
   ETX_ASSERT(spect.wavelength == int_ior.eta.wavelength);
   ETX_ASSERT(spect.wavelength == int_ior.k.wavelength);
 
-  cos_theta = min(1.0f, max(0.0f, fabsf(cos_theta)));
-
-  SpectralResponse result = {spect, 0.0f};
-
-  if (spect.spectral()) {
-    float value = 0.0f;
-    if ((thinfilm.thickness == 0.0f) || spectral_response_is_zero(thinfilm.ior.eta)) {
-      value = fresnel_generic(cos_theta, ext_ior.as_complex(), int_ior.as_complex());
-    } else {
-      value =
-        fresnel_thinfilm(spect.wavelength, cos_theta, ext_ior.as_complex(), refractive_index_sample_as_complex_spectral(thinfilm.ior), int_ior.as_complex(), thinfilm.thickness);
-    }
-    result.value = saturate(value);
-  } else {
-    float3 values = {};
-    if ((thinfilm.thickness == 0.0f) || spectral_response_is_zero(thinfilm.ior.eta)) {
-      values.x = fresnel_generic(cos_theta, ext_ior.as_complex_x(), int_ior.as_complex_x());
-      values.y = fresnel_generic(cos_theta, ext_ior.as_complex_y(), int_ior.as_complex_y());
-      values.z = fresnel_generic(cos_theta, ext_ior.as_complex_z(), int_ior.as_complex_z());
-      if (int_ior.cls == SpectralDistribution::Conductor) {
-        values = xyz_to_rgb(values) * SpectralDistribution::kRGBLuminanceScale;
-      }
-    } else {
-      values.x = fresnel_thinfilm(thinfilm.rgb_wavelengths.x, cos_theta, ext_ior.as_complex_x(), refractive_index_sample_as_complex_x(thinfilm.ior), int_ior.as_complex_x(),
-        thinfilm.thickness);
-      values.y = fresnel_thinfilm(thinfilm.rgb_wavelengths.y, cos_theta, ext_ior.as_complex_y(), refractive_index_sample_as_complex_y(thinfilm.ior), int_ior.as_complex_y(),
-        thinfilm.thickness);
-      values.z = fresnel_thinfilm(thinfilm.rgb_wavelengths.z, cos_theta, ext_ior.as_complex_z(), refractive_index_sample_as_complex_z(thinfilm.ior), int_ior.as_complex_z(),
-        thinfilm.thickness);
-    }
-    result.integrated = saturate(values);
-  }
-
-  return result;
+  const ::SpectralResponse shared_result = ::bsdf_fresnel_calculate(static_cast<const ::SpectralQuery&>(spect), cos_theta,
+    static_cast<const ::RefractiveIndexSample&>(ext_ior), static_cast<const ::RefractiveIndexSample&>(int_ior), thinfilm);
+  return spect.spectral() ? SpectralResponse{spect, shared_result.value} : SpectralResponse{spect, shared_result.integrated};
 }
 
 }  // namespace fresnel

@@ -97,6 +97,93 @@ bool close_value(const float a, const float b, const float tolerance) {
   return fabsf(a - b) <= tolerance;
 }
 
+::RefractiveIndexSample make_spectral_ior(const etx::SpectralQuery& query, const float eta, const float k = 0.0f,
+  const uint32_t cls = etx::SpectralDistribution::Dielectric) {
+  ::RefractiveIndexSample result = {};
+  result.cls = cls;
+  result.eta = spectral_response_make(query, eta);
+  result.k = spectral_response_make(query, k);
+  return result;
+}
+
+bool validate_thinfilm_optical_invariants() {
+  constexpr float wavelength = 550.0f;
+  const complex air = bsdf_complex_make(1.0f, 0.0f);
+  const complex film = bsdf_complex_make(1.5f, 0.0f);
+  const complex glass = bsdf_complex_make(2.25f, 0.0f);
+  bool valid = true;
+
+  const float direct = bsdf_fresnel_generic(1.0f, air, glass);
+  const float zero_thickness = bsdf_fresnel_thinfilm(wavelength, 1.0f, air, film, glass, 0.0f);
+  if (close_value(direct, zero_thickness, 2.0e-6f) == false) {
+    std::printf("thinfilm zero-thickness limit failed direct %.9f film %.9f\n", direct, zero_thickness);
+    valid = false;
+  }
+
+  const float quarter_wave_thickness = wavelength / (4.0f * 1.5f);
+  const float quarter_wave = bsdf_fresnel_thinfilm(wavelength, 1.0f, air, film, glass, quarter_wave_thickness);
+  if ((std::isfinite(quarter_wave) == false) || (quarter_wave > 2.0e-6f)) {
+    std::printf("thinfilm ideal quarter-wave antireflection failed %.9f\n", quarter_wave);
+    valid = false;
+  }
+
+  const float phase_period = wavelength / (2.0f * 1.5f);
+  const float phase_a = bsdf_fresnel_thinfilm(wavelength, 1.0f, air, film, glass, 137.0f);
+  const float phase_b = bsdf_fresnel_thinfilm(wavelength, 1.0f, air, film, glass, 137.0f + phase_period);
+  if (close_value(phase_a, phase_b, 2.0e-6f) == false) {
+    std::printf("thinfilm phase periodicity failed %.9f %.9f\n", phase_a, phase_b);
+    valid = false;
+  }
+
+  const float grazing = bsdf_fresnel_thinfilm(wavelength, 0.0f, air, film, glass, 400.0f);
+  if (close_value(grazing, 1.0f, 1.0e-7f) == false) {
+    std::printf("thinfilm grazing limit failed %.9f\n", grazing);
+    valid = false;
+  }
+
+  for (float tested_wavelength = 390.0f; tested_wavelength <= 830.0f; tested_wavelength += 20.0f) {
+    for (uint32_t angle_index = 0u; angle_index <= 20u; ++angle_index) {
+      const float cosine = static_cast<float>(angle_index) / 20.0f;
+      for (float thickness = 0.0f; thickness <= 2000.0f; thickness += 100.0f) {
+        const float reflectance = bsdf_fresnel_thinfilm(tested_wavelength, cosine, air, film, glass, thickness);
+        const float transmittance = 1.0f - reflectance;
+        if ((std::isfinite(reflectance) == false) || (reflectance < -2.0e-6f) || (reflectance > 1.0f + 2.0e-6f) ||
+            (close_value(reflectance + transmittance, 1.0f, 2.0e-6f) == false)) {
+          std::printf("thinfilm lossless energy bound failed wavelength %.1f cosine %.3f thickness %.1f R %.9f T %.9f\n", tested_wavelength, cosine,
+            thickness, reflectance, transmittance);
+          valid = false;
+        }
+      }
+    }
+  }
+
+  const etx::SpectralQuery query{wavelength, SpectralFlags::Spectral};
+  const ::RefractiveIndexSample ext_ior = make_spectral_ior(query, 1.0f);
+  const ::RefractiveIndexSample int_ior = make_spectral_ior(query, 2.25f);
+  ::ThinfilmEval evaluated_film = {};
+  evaluated_film.ior = make_spectral_ior(query, 1.5f);
+  evaluated_film.rgb_wavelengths = kRGBWavelengths;
+  evaluated_film.thickness = quarter_wave_thickness;
+
+  evaluated_film.weight = 0.0f;
+  const float uncoated = bsdf_fresnel_calculate(query, 1.0f, ext_ior, int_ior, evaluated_film).value;
+  evaluated_film.weight = 1.0f;
+  const float coated = bsdf_fresnel_calculate(query, 1.0f, ext_ior, int_ior, evaluated_film).value;
+  evaluated_film.weight = 0.25f;
+  const float partial = bsdf_fresnel_calculate(query, 1.0f, ext_ior, int_ior, evaluated_film).value;
+  const float expected_partial = uncoated + 0.25f * (coated - uncoated);
+  if ((close_value(uncoated, direct, 2.0e-6f) == false) || (close_value(coated, quarter_wave, 2.0e-6f) == false) ||
+      (close_value(partial, expected_partial, 2.0e-6f) == false)) {
+    std::printf("thinfilm coverage blend failed bare %.9f coated %.9f partial %.9f expected %.9f\n", uncoated, coated, partial, expected_partial);
+    valid = false;
+  }
+
+  if (valid) {
+    std::printf("thinfilm optical invariants valid\n");
+  }
+  return valid;
+}
+
 void set_test_float4_channel(float4& value, uint32_t channel, float scalar) {
   if (channel == 0u) {
     value.x = scalar;
@@ -672,6 +759,7 @@ void set_basic_thinfilm(etx::Material& material, const float min_thickness, cons
   material.thinfilm.ior.cls = etx::SpectralDistribution::Dielectric;
   material.thinfilm.ior.eta_index = SpectrumDielectricEta;
   material.thinfilm.ior.k_index = SpectrumBlack;
+  material.thinfilm.weight = 1.0f;
 }
 
 etx::Material make_standalone_thinfilm(const float min_thickness, const float max_thickness) {
@@ -1401,8 +1489,11 @@ bool validate_thinfilm_energy_compensation_cache_key(const etx::SpectralDistribu
   etx::Material material_500 = make_thinfilm_rough_conductor(0.5f);
   etx::Material material_650 = material_500;
   set_basic_thinfilm(material_650, 650.0f, 650.0f);
+  etx::Material material_half_weight = material_500;
+  material_half_weight.thinfilm.weight = 0.5f;
   scene_data.materials.emplace_back(material_500);
   scene_data.materials.emplace_back(material_650);
+  scene_data.materials.emplace_back(material_half_weight);
 
   if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
     std::printf("thinfilm EC cache-key validation failed to bind LUTs\n");
@@ -1411,12 +1502,14 @@ bool validate_thinfilm_energy_compensation_cache_key(const etx::SpectralDistribu
 
   const uint32_t interface_500 = scene_data.materials[0].energy_compensation_interface_index;
   const uint32_t interface_650 = scene_data.materials[1].energy_compensation_interface_index;
-  if ((interface_500 == kInvalidIndex) || (interface_650 == kInvalidIndex) || (interface_500 == interface_650)) {
-    std::printf("thinfilm EC cache-key validation failed interfaces %u %u\n", interface_500, interface_650);
+  const uint32_t interface_half_weight = scene_data.materials[2].energy_compensation_interface_index;
+  if ((interface_500 == kInvalidIndex) || (interface_650 == kInvalidIndex) || (interface_half_weight == kInvalidIndex) || (interface_500 == interface_650) ||
+      (interface_500 == interface_half_weight) || (interface_650 == interface_half_weight)) {
+    std::printf("thinfilm EC cache-key validation failed interfaces %u %u %u\n", interface_500, interface_650, interface_half_weight);
     return false;
   }
 
-  std::printf("thinfilm EC cache-key validation interfaces %u %u\n", interface_500, interface_650);
+  std::printf("thinfilm EC cache-key validation interfaces %u %u %u\n", interface_500, interface_650, interface_half_weight);
   return true;
 }
 
@@ -1459,6 +1552,15 @@ bool validate_variable_thinfilm_texture_lut(const etx::SpectralDistribution* spe
     etx::ArrayView<etx::Scene::EnergyCompensationInterface>{scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
 
   const BSDFResourceContext context = make_bsdf_resource_cpu_context(exact_scene);
+  etx::Material absorbing_film_material = variable_material;
+  absorbing_film_material.thinfilm.ior.k_index = SpectrumHalf;
+  Sampler absorbing_film_sampler(56999u, 0x34a1u);
+  const ThinfilmEval lossless_film =
+    bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, absorbing_film_material.thinfilm, float2{0.0f, 0.0f}, absorbing_film_sampler);
+  if (spectral_response_is_zero(lossless_film.ior.k) == false) {
+    std::printf("thinfilm runtime contract did not force extinction to zero\n");
+    return false;
+  }
   const etx::Material& bound_variable_material = scene_data.materials[0];
   const etx::Material& bound_constant_material = scene_data.materials[1];
   const uint32_t variable_interface_index = bound_variable_material.energy_compensation_interface_index;
@@ -2864,10 +2966,31 @@ int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   etx::env().setup("bin/bsdf_validation.exe");
   bool runtime_only = false;
+  bool thinfilm_optics_only = false;
+  bool thinfilm_validation_only = false;
+  bool thinfilm_furnace_only = false;
+  bool energy_compensation_parity_only = false;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--bsdf-runtime-only") == 0) {
       runtime_only = true;
+    } else if (std::strcmp(argv[i], "--thinfilm-optics-only") == 0) {
+      thinfilm_optics_only = true;
+    } else if (std::strcmp(argv[i], "--thinfilm-validation-only") == 0) {
+      thinfilm_validation_only = true;
+    } else if (std::strcmp(argv[i], "--thinfilm-furnace-only") == 0) {
+      thinfilm_furnace_only = true;
+    } else if (std::strcmp(argv[i], "--energy-compensation-parity-only") == 0) {
+      energy_compensation_parity_only = true;
     }
+  }
+
+  if (thinfilm_optics_only) {
+    return validate_thinfilm_optical_invariants() ? 0 : 1;
+  }
+
+  if (energy_compensation_parity_only) {
+    const bool valid = validate_energy_compensation_gpu_shader_compile() && validate_energy_compensation_gpu_lut_parity();
+    return valid ? 0 : 1;
   }
 
   etx::SpectralDistribution spectra[SpectrumCount] = {};
@@ -2914,7 +3037,44 @@ int main(int argc, char** argv) {
   const etx::BSDFData data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
   etx::BSDFData inside_data = data;
   inside_data.w_i = float3{0.0f, 0.0f, 1.0f};
+
+  if (thinfilm_validation_only || thinfilm_furnace_only) {
+    bool thinfilm_valid = validate_thinfilm_optical_invariants();
+    if (thinfilm_validation_only) {
+      thinfilm_valid = validate_energy_compensation_gpu_shader_compile() && thinfilm_valid;
+      thinfilm_valid = validate_energy_compensation_gpu_lut_parity() && thinfilm_valid;
+    }
+
+    const etx::Material standalone = make_standalone_thinfilm(0.0f, 500.0f);
+    thinfilm_valid = validate_standalone_thinfilm_contract("standalone thinfilm outside", data, standalone, 22000u) && thinfilm_valid;
+    thinfilm_valid = validate_standalone_thinfilm_contract("standalone thinfilm inside", inside_data, standalone, 22100u) && thinfilm_valid;
+    thinfilm_valid = validate_standalone_thinfilm_sheet_symmetry("standalone thinfilm boundary ior ignored", data, standalone, 22150u) && thinfilm_valid;
+    thinfilm_valid = validate_delta_thinfilm_coating_sample("delta dielectric thinfilm outside", data, make_thinfilm_delta_dielectric(), 22200u, true) && thinfilm_valid;
+    thinfilm_valid = validate_delta_thinfilm_coating_sample("delta conductor thinfilm outside", data, make_thinfilm_delta_conductor(), 22400u, false) && thinfilm_valid;
+    thinfilm_valid = validate_delta_plastic_thinfilm_contract("delta plastic thinfilm outside", data, make_thinfilm_delta_plastic(), 22500u) && thinfilm_valid;
+
+    const float plastic_roughness_values[] = {0.25f, 0.5f, 1.0f};
+    for (uint32_t i = 0u; i < 3u; ++i) {
+      thinfilm_valid = validate_thinfilm_plastic_interface(scene, spectra, SpectrumCount, plastic_roughness_values[i], 30500u + i * 1000u) && thinfilm_valid;
+    }
+    thinfilm_valid = validate_exact_energy_compensated_conductor_interface(
+                       scene, spectra, SpectrumCount, "mirror conductor thinfilm exact interface", make_thinfilm_rough_conductor(0.5f), 0.5f, 33600u) &&
+                     thinfilm_valid;
+    thinfilm_valid = validate_exact_energy_compensated_dielectric_interface(
+                       scene, spectra, SpectrumCount, "sapphire dielectric thinfilm exact interface", make_thinfilm_rough_dielectric(0.5f), 0.5f, 38600u) &&
+                     thinfilm_valid;
+    thinfilm_valid = validate_thinfilm_energy_compensation_cache_key(spectra, SpectrumCount) && thinfilm_valid;
+    thinfilm_valid = validate_variable_thinfilm_texture_lut(spectra, SpectrumCount) && thinfilm_valid;
+    thinfilm_valid = validate_openpbr_case(scene, spectra, SpectrumCount, "openpbr thinfilm rough", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumWhite, true), 49000u, true) &&
+                     thinfilm_valid;
+
+    etx::scene_global_clear(&scene);
+    etx::scene_global_deinit();
+    return thinfilm_valid ? 0 : 1;
+  }
+
   bool valid = true;
+  valid = validate_thinfilm_optical_invariants() && valid;
   valid = validate_image_3d_sampling() && valid;
   valid = validate_spectral_energy_compensation_lut_sampling() && valid;
   valid = validate_energy_compensation_gpu_shader_compile() && valid;

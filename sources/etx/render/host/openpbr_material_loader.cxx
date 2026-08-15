@@ -279,6 +279,7 @@ bool load_openpbr_material_file(const std::filesystem::path& path, SceneData& da
     const float thickness_nm = thin_film_thickness * 1000.0f;
     material.thinfilm.min_thickness = thickness_nm;
     material.thinfilm.max_thickness = thickness_nm;
+    material.thinfilm.weight = thin_film_weight;
     material.thinfilm.ior.cls = SpectralDistribution::Dielectric;
     material.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(thin_film_ior));
     material.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));

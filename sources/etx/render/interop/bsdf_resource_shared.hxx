@@ -85,7 +85,8 @@ ETX_SHARED_INLINE RefractiveIndexSample bsdf_resource_evaluate_refractive_index(
 }
 
 ETX_SHARED_INLINE bool bsdf_resource_thinfilm_enabled(ETX_IN(Thinfilm, film)) {
-  return max(film.min_thickness, film.max_thickness) > 0.0f;
+  const float maximum_thickness = max(max(film.min_thickness, 0.0f), max(film.max_thickness, 0.0f));
+  return (clamp(film.weight, 0.0f, 1.0f) > 0.0f) && (maximum_thickness > 0.0f) && (film.ior.cls == SpectralDistribution::Dielectric);
 }
 
 ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Thinfilm, film), ETX_IN(float2, uv),
@@ -96,6 +97,7 @@ ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResour
   result.ior.cls = SpectralDistribution::Invalid;
   result.rgb_wavelengths = kRGBWavelengths;
   result.thickness = 0.0f;
+  result.weight = 0.0f;
 
   if (bsdf_resource_thinfilm_enabled(film) == false) {
     return result;
@@ -106,8 +108,12 @@ ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResour
     sampled_thickness = bsdf_resource_image_sample_channel_or_default(context, film.thinkness_image, 0u, uv, 1.0f);
   }
 
-  result.thickness = film.min_thickness + (film.max_thickness - film.min_thickness) * sampled_thickness;
+  const float minimum_thickness = max(0.0f, film.min_thickness);
+  const float maximum_thickness = max(0.0f, film.max_thickness);
+  result.thickness = max(0.0f, minimum_thickness + (maximum_thickness - minimum_thickness) * clamp(sampled_thickness, 0.0f, 1.0f));
+  result.weight = clamp(film.weight, 0.0f, 1.0f);
   result.ior = bsdf_resource_evaluate_refractive_index(context, film.ior, spect);
+  result.ior.k = spectral_response_make(spect, 0.0f);
 
   return result;
 }

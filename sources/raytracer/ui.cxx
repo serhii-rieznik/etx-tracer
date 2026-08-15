@@ -508,6 +508,9 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
   apply_field(before.thinfilm.max_thickness, after.thinfilm.max_thickness, [](Material& material, const float value) {
     material.thinfilm.max_thickness = value;
   });
+  apply_field(before.thinfilm.weight, after.thinfilm.weight, [](Material& material, const float value) {
+    material.thinfilm.weight = value;
+  });
   apply_field(before.ext_ior.cls, after.ext_ior.cls, [](Material& material, const uint32_t value) {
     material.ext_ior.cls = value;
   });
@@ -691,10 +694,10 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
 }
 
 bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data) {
-  return ior_picker(scene, name, ior, data, false);
+  return ior_picker(scene, name, ior, data, false, false);
 }
 
-bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data, bool mixed) {
+bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data, bool mixed, bool dielectric_only) {
   bool changed = false;
   bool load_from_file = false;
 
@@ -749,7 +752,7 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
 
       std::vector<ColumnInfo> columns;
       const auto& conductors = data.ior_database.class_entries(SpectralDistribution::Conductor);
-      if (conductors.empty() == false) {
+      if ((dielectric_only == false) && (conductors.empty() == false)) {
         columns.push_back({SpectralDistribution::Conductor, "Conductors"});
       }
       const auto& dielectrics = data.ior_database.class_entries(SpectralDistribution::Dielectric);
@@ -817,7 +820,7 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
     SpectralDistribution t_eta = {};
     SpectralDistribution t_k = {};
     auto cls = SpectralDistribution::load_refractive_index(filename.c_str(), t_eta, t_k, title);
-    if (cls != SpectralDistribution::Invalid) {
+    if ((cls != SpectralDistribution::Invalid) && ((dielectric_only == false) || (cls == SpectralDistribution::Dielectric))) {
       ior.cls = cls;
       ETX_CRITICAL(ior.eta_index != kInvalidIndex);
       scene.data().spectrum_values[ior.eta_index] = t_eta;
@@ -1937,12 +1940,22 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
         return value.thinfilm.ior;
       });
       const bool thinfilm_ior_changed = mixed_control(thinfilm_ior_mixed, [&]() {
-        return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed);
+        return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed, true);
       });
       if (thinfilm_ior_changed) {
         _material_batch_changed_fields |= MaterialBatchChangedThinfilmIOR;
         changed = true;
       }
+
+      ImGui::Spacing();
+      ImGui::Text("Weight");
+      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+      changed |= mixed_control(material_values_mixed([](const Material& value) {
+        return value.thinfilm.weight;
+      }),
+        [&]() {
+          return ImGui::SliderFloat("##thinfilm_weight", &material.thinfilm.weight, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        });
 
       ImGui::Spacing();
       ImGui::Text("Thickness (nm)");

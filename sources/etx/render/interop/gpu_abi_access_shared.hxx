@@ -95,6 +95,7 @@ ETX_SHARED_INLINE Material gpu_abi_load_material_full(ByteAddressBuffer buffer, 
   result.thinfilm.thinkness_image = gpu_abi_load_u32(buffer, base_offset + kMaterialThinfilmThicknessImageOffset);
   result.thinfilm.min_thickness = gpu_abi_load_f32(buffer, base_offset + kMaterialThinfilmMinThicknessOffset);
   result.thinfilm.max_thickness = gpu_abi_load_f32(buffer, base_offset + kMaterialThinfilmMaxThicknessOffset);
+  result.thinfilm.weight = gpu_abi_load_f32(buffer, base_offset + kMaterialThinfilmWeightOffset);
 
   result.ext_ior.cls = gpu_abi_load_u32(buffer, base_offset + kMaterialExtIorClassOffset);
   result.ext_ior.eta_index = gpu_abi_load_u32(buffer, base_offset + kMaterialExtIorEtaIndexOffset);

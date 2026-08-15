@@ -62,6 +62,7 @@ ETX_STATIC_CONST uint32_t kMaterialThinfilmIorKIndexOffset = 168u;
 ETX_STATIC_CONST uint32_t kMaterialThinfilmThicknessImageOffset = 176u;
 ETX_STATIC_CONST uint32_t kMaterialThinfilmMinThicknessOffset = 180u;
 ETX_STATIC_CONST uint32_t kMaterialThinfilmMaxThicknessOffset = 184u;
+ETX_STATIC_CONST uint32_t kMaterialThinfilmWeightOffset = 188u;
 ETX_STATIC_CONST uint32_t kMaterialExtIorClassOffset = 192u;
 ETX_STATIC_CONST uint32_t kMaterialExtIorEtaIndexOffset = 196u;
 ETX_STATIC_CONST uint32_t kMaterialExtIorKIndexOffset = 200u;

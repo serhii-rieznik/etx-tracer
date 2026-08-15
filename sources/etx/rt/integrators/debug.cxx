@@ -410,6 +410,7 @@ struct CPUDebugIntegratorImpl : public Task {
       thinfilm_eval_s.ior = make_ior_sample(q_s, thinfilm.ior.cls, spd_film_eta, spd_film_k);
       thinfilm_eval_s.rgb_wavelengths = local_wl;
       thinfilm_eval_s.thickness = thickness;
+      thinfilm_eval_s.weight = thinfilm.weight;
       auto f_s = fresnel::calculate(q_s, cos_theta, make_ior_sample(q_s, spd_air.cls, spd_air_eta, spd_air_k), make_ior_sample(q_s, spd_base.cls, spd_base_eta, spd_base_k),
         thinfilm_eval_s);
       float3 xyz_s = (thinfilm_spectral ? SpectralDistribution::kRGBLuminanceScale : float3{1.0f, 1.0f, 1.0f}) * f_s.to_rgb() / q_s.sampling_pdf();

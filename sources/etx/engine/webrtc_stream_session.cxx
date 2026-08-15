@@ -2,6 +2,8 @@
 
 #include <etx/core/log.hxx>
 
+#if ETX_ENABLE_WEBRTC_STREAMING
+
 #include <json.hpp>
 #include <rtc/rtc.hpp>
 #include <sokol_app.h>
@@ -393,3 +395,38 @@ bool WebRtcStreamSession::consume_keyframe_request() {
 }
 
 }  // namespace etx
+
+#else
+
+namespace etx {
+
+bool WebRtcStreamSession::init(const WebRtcStreamSessionConfig&) {
+  log::error("WebRTC streaming support is not available in this build");
+  return false;
+}
+
+void WebRtcStreamSession::shutdown() {
+}
+
+bool WebRtcStreamSession::create_offer_response_json(std::string&) {
+  return false;
+}
+
+bool WebRtcStreamSession::accept_answer_from_json(const std::string&, std::string&) {
+  return false;
+}
+
+void WebRtcStreamSession::push_h264_access_unit(const uint8_t*, size_t, uint64_t, bool) {
+}
+
+void WebRtcStreamSession::drain_input_events(std::vector<BrowserInputEvent>& output) {
+  output.clear();
+}
+
+bool WebRtcStreamSession::consume_keyframe_request() {
+  return false;
+}
+
+}  // namespace etx
+
+#endif

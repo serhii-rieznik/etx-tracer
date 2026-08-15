@@ -7,6 +7,8 @@ struct BSDFPlasticCoatingReflectionProposal {
   float probability ETX_INIT(0.0f);
   float base_probability ETX_INIT(0.0f);
   float compensation_probability ETX_INIT(0.0f);
+  float base_attempt_probability ETX_INIT(0.0f);
+  float base_success_probability ETX_INIT(0.0f);
 };
 
 struct BSDFPlasticExternalAlbedos {
@@ -321,6 +323,9 @@ ETX_SHARED_NOINLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_re
   result.probability = bsdf_energy_compensated_saturate(total_mass);
   result.base_probability = bsdf_energy_compensated_saturate(base_mass / total_mass);
   result.compensation_probability = max(0.0f, 1.0f - result.base_probability);
+  result.base_attempt_probability = bsdf_energy_compensated_saturate(reflection_visible_probability);
+  result.base_success_probability =
+    1.0f - pow(max(0.0f, 1.0f - result.base_attempt_probability), float(kBSDFEnergyCompensatedMaxSampleAttempts));
   return result;
 }
 
@@ -435,7 +440,8 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, c
         first_attempt = false;
       }
       if (candidate_valid == false) {
-        return bsdf_sample_zero(data.spectrum_sample);
+        sampled_diffuse = true;
+        local_w_o = sample_cosine_distribution(bsdf_sampler_next_2d(sampler), 1.0f);
       }
     } else {
       local_w_o = sample_cosine_distribution(rnd, 1.0f);
@@ -494,14 +500,19 @@ ETX_SHARED_NOINLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context),
     bsdf_plastic_specular_sample_probability(context, data.spectrum_sample, material, substrate, local_w_i.z, alpha, thinfilm_lut_value);
   const BSDFPlasticCoatingReflectionProposal coating_proposal =
     bsdf_plastic_coating_reflection_proposal(context, data.spectrum_sample, material, local_w_i.z, alpha, thinfilm_lut_value, ext_ior, int_ior);
-  float specular_pdf = 0.0f;
-  if (coating_proposal.probability > kEpsilon) {
-    const float full_dielectric_pdf =
-      bsdf_energy_compensated_dielectric_pdf_local(context, data.spectrum_sample, material, local_w_i, local_w_o, alpha, ext_ior, int_ior, thinfilm);
-    specular_pdf = full_dielectric_pdf / coating_proposal.probability;
+  float base_conditional_pdf = 0.0f;
+  if ((coating_proposal.base_probability > kEpsilon) && (coating_proposal.base_attempt_probability > kEpsilon)) {
+    const float base_pdf =
+      bsdf_energy_compensated_dielectric_base_pdf_local(data.spectrum_sample, local_w_i, local_w_o, alpha, ext_ior, int_ior, thinfilm);
+    base_conditional_pdf = base_pdf / coating_proposal.base_attempt_probability;
   }
   const float diffuse_pdf = local_w_o.z * kInvPi;
-  return specular_probability * specular_pdf + (1.0f - specular_probability) * diffuse_pdf;
+  const float successful_base_mass = specular_probability * coating_proposal.base_probability * coating_proposal.base_success_probability;
+  const float compensation_mass = specular_probability * coating_proposal.compensation_probability;
+  const float failed_base_mass =
+    specular_probability * coating_proposal.base_probability * max(0.0f, 1.0f - coating_proposal.base_success_probability);
+  const float diffuse_mass = max(0.0f, 1.0f - specular_probability) + failed_base_mass;
+  return successful_base_mass * base_conditional_pdf + (compensation_mass + diffuse_mass) * diffuse_pdf;
 }
 
 ETX_SHARED_INLINE bool bsdf_plastic_is_delta(ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {

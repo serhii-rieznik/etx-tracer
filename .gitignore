@@ -8,11 +8,16 @@
 /bin/options.json
 /bin/ui.ini
 /bin/raytracer
+/bin/bsdf_validation
+/bin/procedural_geometry
 /bin/cache/
 /bin/tmp/
 /bin/_tmp/
 /bin/assets_testing/
 /bin/lib
+/bin/shaders/
+/bin/interop/
+/bin/access/
 /blender/etx_tracer_exporter/__pycache__/
 /thirdparty/oidn/
 papers/
@@ -21,3 +26,5 @@ thirdparty/dxc
 bin/bsdf/cache/
 bin/review/
 bin/validation/
+artifacts
+scripts/validation

@@ -1953,6 +1953,11 @@ struct SceneSerializationImpl {
           i += 2;
         }
 
+        if ((strcmp(params[i], "weight") == 0) && (i + 1 < e)) {
+          mtl.thinfilm.weight = clamp(static_cast<float>(atof(params[i + 1])), 0.0f, 1.0f);
+          i += 1;
+        }
+
         if ((strcmp(params[i], "ior") == 0) && (i + 1 < e)) {
           float value = 0.0f;
           if (sscanf(params[i + 1], "%f", &value) == 1) {
@@ -1976,6 +1981,13 @@ struct SceneSerializationImpl {
               cls = SpectralDistribution::Dielectric;
               eta_spd = SpectralDistribution::constant(1.5f);
               k_spd = SpectralDistribution::constant(0.0f);
+            }
+
+            if (cls != SpectralDistribution::Dielectric) {
+              log::warning("Thinfilm IOR `%s` is not a non-absorbing dielectric; disabling the thin film", params[i + 1]);
+              mtl.thinfilm.weight = 0.0f;
+              i += 1;
+              continue;
             }
 
             mtl.thinfilm.ior.cls = cls;

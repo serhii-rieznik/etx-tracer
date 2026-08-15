@@ -22,13 +22,14 @@ struct ETX_ALIGNED Thinfilm {
   uint32_t thinkness_image ETX_INIT(kInvalidIndex);
   float min_thickness ETX_INIT(0.0f);
   float max_thickness ETX_INIT(0.0f);
-  float pad ETX_INIT({});
+  float weight ETX_INIT(1.0f);
 };
 
 struct ETX_ALIGNED ThinfilmEval {
   RefractiveIndexSample ior ETX_INIT({});
   float3 rgb_wavelengths ETX_INIT(kRGBWavelengths);
   float thickness ETX_INIT(0.0f);
+  float weight ETX_INIT(0.0f);
 };
 
 struct SubsurfaceMaterial {

@@ -1280,6 +1280,10 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
   for (uint32_t i = 0, e = entry_points.size(); i < e; ++i) {
     const auto& ep = entry_points[i];
+    // `main` is reserved by Metal Shading Language. SPIRV-Cross deterministically
+    // cleans that SPIR-V entry point to `main0`; pipeline creation must request
+    // the translated symbol rather than the original HLSL name.
+    const std::string backend_entry_point = ((backend == RHIBackend::Metal) && (ep.entry_point == "main")) ? "main0" : ep.entry_point;
     ShaderVariantKey key{source_name, ep.entry_point, ep.stage, backend, ordered_defines, source_hash};
     const uint64_t key_hash = shader_variant_cache_hash(key);
     uint32_t local_size_x = 1;
@@ -1321,7 +1325,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       result.binaries[i].stage = ep.stage;
       result.binaries[i].backend = backend;
       result.binaries[i].format = binary_format;
-      result.binaries[i].entry_point = ep.entry_point;
+      result.binaries[i].entry_point = backend_entry_point;
       result.binaries[i].local_size_x = local_size_x;
       result.binaries[i].local_size_y = local_size_y;
       result.binaries[i].local_size_z = local_size_z;
@@ -1447,7 +1451,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     result.binaries[i].stage = ep.stage;
     result.binaries[i].backend = backend;
     result.binaries[i].format = binary_format;
-    result.binaries[i].entry_point = ep.entry_point;
+    result.binaries[i].entry_point = backend_entry_point;
     result.binaries[i].local_size_x = local_size_x;
     result.binaries[i].local_size_y = local_size_y;
     result.binaries[i].local_size_z = local_size_z;

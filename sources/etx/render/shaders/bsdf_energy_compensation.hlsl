@@ -33,7 +33,7 @@ struct EnergyCompensationParams {
   float4 wavelengths;
   float thinfilm_thickness;
   uint film_cls;
-  uint pad2;
+  float thinfilm_weight;
   uint pad3;
 };
 
@@ -96,7 +96,7 @@ EnergyCompensationParams load_params() {
   result.wavelengths = load_f32x4(buffer, 160u);
   result.thinfilm_thickness = load_f32(buffer, 176u);
   result.film_cls = load_u32(buffer, 180u);
-  result.pad2 = load_u32(buffer, 184u);
+  result.thinfilm_weight = load_f32(buffer, 184u);
   result.pad3 = load_u32(buffer, 188u);
   return result;
 }
@@ -161,28 +161,6 @@ float3 ec_incident_direction_from_mu(float mu) {
   return float3(sqrt(max(0.0f, 1.0f - mu * mu)), 0.0f, mu);
 }
 
-float3 ec_sample_vndf_local(float3 w_i, float alpha, float2 rnd) {
-  float3 w_i_11 = normalize(float3(alpha * w_i.x, alpha * w_i.y, w_i.z));
-  float2 slope_11 = bsdf_external_sample_p22_11(acos(ec_saturate(w_i_11.z)), rnd, float2(alpha, alpha));
-  float phi = atan2(w_i_11.y, w_i_11.x);
-  float2 slope = float2(cos(phi) * slope_11.x - sin(phi) * slope_11.y, sin(phi) * slope_11.x + cos(phi) * slope_11.y);
-  slope.x *= alpha;
-  slope.y *= alpha;
-  if ((slope.x != slope.x) || isinf(slope.x)) {
-    if (w_i.z > 0.0f) {
-      return float3(0.0f, 0.0f, 1.0f);
-    }
-    return normalize(float3(w_i.x, w_i.y, 0.0f));
-  }
-  return normalize(float3(-slope.x, -slope.y, 1.0f));
-}
-
-float ec_vndf_pdf(float3 w_i, float3 m, float alpha) {
-  BSDFExternalRayInfo ray = bsdf_external_ray_info_make(w_i, float2(alpha, alpha));
-  float denominator = (1.0f + ray.Lambda) * max(kEpsilon, w_i.z);
-  return max(0.0f, dot(w_i, m)) * bsdf_external_d_ggx(m, float2(alpha, alpha)) / denominator;
-}
-
 SpectralQuery ec_query(EnergyCompensationParams params, uint channel) {
   SpectralQuery result = (SpectralQuery)0;
   if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
@@ -240,8 +218,10 @@ RefractiveIndexSample ec_select_refractive_index(bool use_first, RefractiveIndex
 ThinfilmEval ec_thinfilm(EnergyCompensationParams params, SpectralQuery spect, uint channel) {
   ThinfilmEval result = (ThinfilmEval)0;
   result.ior = ec_refractive_index(params.film_eta, params.film_k, params.film_cls, spect, channel);
+  result.ior.k = spectral_response_make(spect, 0.0f);
   result.rgb_wavelengths = kRGBWavelengths;
   result.thickness = params.thinfilm_thickness;
+  result.weight = params.thinfilm_weight;
   return result;
 }
 
@@ -301,7 +281,7 @@ EnergyCompensationLobe ec_conductor_base_lobe(SpectralQuery spect, float3 w_i, f
   float d = bsdf_external_d_ggx(m, float2(alpha, alpha));
   float g2 = 1.0f / (1.0f + lambda_i + lambda_o);
   result.bsdf = spectral_response_mul(fresnel, d * g2 / (4.0f * w_i.z));
-  float vndf_pdf = ec_vndf_pdf(w_i, m, alpha);
+  float vndf_pdf = bsdf_external_vndf_pdf(w_i, m, alpha);
   result.pdf = vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
   return result;
 }
@@ -337,7 +317,7 @@ EnergyCompensationLobe ec_dielectric_base_lobe(SpectralQuery spect, float3 w_i_l
     float d = bsdf_external_d_ggx(m, float2(alpha, alpha));
     float g2 = 1.0f / (1.0f + lambda_i + lambda_o);
     result.bsdf = spectral_response_mul(fresnel, d * g2 / (4.0f * w_i.z));
-    float vndf_pdf = ec_vndf_pdf(w_i, m, alpha);
+    float vndf_pdf = bsdf_external_vndf_pdf(w_i, m, alpha);
     float fresnel_probability = spectral_response_monochromatic(fresnel);
     result.pdf = fresnel_probability * vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
     return result;
@@ -365,7 +345,7 @@ EnergyCompensationLobe ec_dielectric_base_lobe(SpectralQuery spect, float3 w_i_l
     return result;
   }
   result.bsdf = spectral_response_mul(one_minus_fresnel, scalar * eta * eta);
-  float vndf_pdf = ec_vndf_pdf(w_i, m, alpha);
+  float vndf_pdf = bsdf_external_vndf_pdf(w_i, m, alpha);
   float fresnel_probability = 1.0f - spectral_response_monochromatic(fresnel);
   float dwh_dwo = (eta * eta) * abs(o_dot_m) / (denominator * denominator);
   result.pdf = fresnel_probability * vndf_pdf * dwh_dwo;
@@ -387,14 +367,14 @@ EnergyCompensationDirectionalResult ec_integrate_conductor_directional(EnergyCom
   float g1_i = 1.0f / (1.0f + lambda_i);
 
   for (uint sample_index = 0u; sample_index < params.sample_count; ++sample_index) {
-    float3 m = ec_sample_vndf_local(w_i, alpha, ec_hammersley(sample_index, params.sample_count));
+    float3 m = bsdf_external_sample_vndf_local(w_i, alpha, ec_hammersley(sample_index, params.sample_count));
     float i_dot_m = dot(w_i, m);
     if ((m.z <= kEpsilon) || (i_dot_m <= kEpsilon)) {
       continue;
     }
     float3 w_o = -w_i + 2.0f * m * i_dot_m;
     if (w_o.z > 0.0f) {
-      float vndf_pdf = ec_vndf_pdf(w_i, m, alpha);
+      float vndf_pdf = bsdf_external_vndf_pdf(w_i, m, alpha);
       float raw_specular_pdf = vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
       EnergyCompensationLobe lobe = ec_conductor_base_lobe(spect, w_i, w_o, alpha, ext_ior, int_ior, thinfilm);
       if ((raw_specular_pdf > kEpsilon) && (lobe.pdf > kEpsilon)) {
@@ -439,7 +419,7 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
   float eta = spectral_response_monochromatic(spectral_response_div(target_ior.eta, source_ior.eta));
   uint incident_side = ec_dielectric_side(incident_outside);
   uint opposite_side = 1u - incident_side;
-  bool no_thinfilm = (thinfilm.thickness <= 0.0f) || spectral_response_is_zero(thinfilm.ior.eta);
+  bool no_thinfilm = (thinfilm.weight <= 0.0f) || (thinfilm.thickness <= 0.0f) || spectral_response_is_zero(thinfilm.ior.eta);
   if ((no_thinfilm) && (abs(eta - 1.0f) <= (16.0f * kEpsilon))) {
     result.branch_albedo[opposite_side] = float4(1.0f, 1.0f, 1.0f, 1.0f);
     result.branch_visible_probability[opposite_side] = 1.0f;
@@ -450,7 +430,7 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
   float3 w_i = ec_incident_direction_from_mu(mu_i);
   if (total_scatter == false) {
     for (uint sample_index = 0u; sample_index < params.sample_count; ++sample_index) {
-      float3 m = ec_sample_vndf_local(w_i, alpha, ec_hammersley(sample_index, params.sample_count));
+      float3 m = bsdf_external_sample_vndf_local(w_i, alpha, ec_hammersley(sample_index, params.sample_count));
       float i_dot_m = dot(w_i, m);
       if (i_dot_m <= kEpsilon) {
         continue;

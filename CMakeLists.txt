@@ -13,6 +13,17 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "CMake")
 
 option(ETX_ENABLE_DATA_TARGET "Add the utility data target to the generated solution." OFF)
 
+set(ETX_WEBRTC_STREAMING_DEFAULT OFF)
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/thirdparty/mbedtls/CMakeLists.txt" AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/thirdparty/libdatachannel/CMakeLists.txt")
+  set(ETX_WEBRTC_STREAMING_DEFAULT ON)
+endif()
+option(ETX_ENABLE_WEBRTC_STREAMING "Build browser WebRTC streaming support." ${ETX_WEBRTC_STREAMING_DEFAULT})
+if(ETX_ENABLE_WEBRTC_STREAMING AND
+   (NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/thirdparty/mbedtls/CMakeLists.txt" OR
+    NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/thirdparty/libdatachannel/CMakeLists.txt"))
+  message(FATAL_ERROR "ETX_ENABLE_WEBRTC_STREAMING requires thirdparty/mbedtls and thirdparty/libdatachannel")
+endif()
+
 set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3")
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake)
 set(CMAKE_CXX_STANDARD 23)

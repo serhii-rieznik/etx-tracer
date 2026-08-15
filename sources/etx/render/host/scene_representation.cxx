@@ -257,6 +257,9 @@ struct SceneRepresentationImpl {
     scheduler.execute(data.materials.size(), [this, &mt](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
         auto& mtl = data.materials[i];
+        mtl.thinfilm.weight = clamp(mtl.thinfilm.weight, 0.0f, 1.0f);
+        mtl.thinfilm.min_thickness = max(0.0f, mtl.thinfilm.min_thickness);
+        mtl.thinfilm.max_thickness = max(0.0f, mtl.thinfilm.max_thickness);
         if (mtl.reflectance.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
           mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
@@ -307,13 +310,25 @@ struct SceneRepresentationImpl {
           std::unique_lock lock(mt);
           mtl.ext_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
         }
-        if (mtl.thinfilm.ior.k_index == kInvalidIndex) {
-          std::unique_lock lock(mt);
-          mtl.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
+        const bool thinfilm_requested =
+          (mtl.thinfilm.weight > 0.0f) && (max(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness) > 0.0f);
+        if (thinfilm_requested && (mtl.thinfilm.ior.cls != SpectralDistribution::Dielectric)) {
+          log::warning("Material %u uses a non-dielectric thin-film IOR; disabling its unsupported thin film", i);
+          mtl.thinfilm.weight = 0.0f;
         }
-        if (mtl.thinfilm.ior.eta_index == kInvalidIndex) {
+        {
           std::unique_lock lock(mt);
-          mtl.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
+          if (mtl.thinfilm.ior.k_index >= data.spectrum_values.size()) {
+            mtl.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
+          }
+          if (mtl.thinfilm.ior.eta_index >= data.spectrum_values.size()) {
+            mtl.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
+          }
+          if (thinfilm_requested && (mtl.thinfilm.ior.cls == SpectralDistribution::Dielectric) &&
+              (data.spectrum_values[mtl.thinfilm.ior.k_index].is_zero() == false)) {
+            log::warning("Material %u uses absorption in its thin film; forcing extinction to zero for the supported lossless-film model", i);
+            mtl.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
+          }
         }
       }
     });
@@ -1969,6 +1984,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
         materials_stream << " image " << thinfilm_path;
       }
       materials_stream << " range " << material.thinfilm.min_thickness << " " << material.thinfilm.max_thickness;
+      materials_stream << " weight " << clamp(material.thinfilm.weight, 0.0f, 1.0f);
       int matched_thinfilm_index = -1;
       if (material.thinfilm.ior.cls != SpectralDistribution::Invalid) {
         matched_thinfilm_index =
