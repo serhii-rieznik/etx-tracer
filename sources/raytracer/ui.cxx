@@ -1393,7 +1393,9 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
 
   validate_selections(scene_rep);
 
-  build_main_menu_bar(data.recent_files);
+  if (_embedded_menu_enabled) {
+    build_main_menu_bar(data.recent_files);
+  }
   build_toolbar(ctx);
   build_scene_objects_window(scene_rep, ctx);
   build_properties_window(scene_rep, scene_rep.camera(), ctx, data);
@@ -1422,38 +1424,36 @@ bool UI::handle_event(const sapp_event* e) {
   if ((modifiers & SAPP_MODIFIER_CTRL) || (modifiers & SAPP_MODIFIER_SUPER)) {
     switch (e->key_code) {
       case SAPP_KEYCODE_Q: {
-        quit();
+        execute_menu_command(MenuCommand::Quit);
         break;
       }
       case SAPP_KEYCODE_O: {
-        select_scene_file();
+        execute_menu_command(MenuCommand::OpenScene);
         break;
       }
       case SAPP_KEYCODE_I: {
-        load_image();
+        execute_menu_command(MenuCommand::OpenReferenceImage);
         break;
       }
       case SAPP_KEYCODE_R: {
         if (has_shift) {
-          if (callbacks.use_image_as_reference) {
-            callbacks.use_image_as_reference();
-          }
+          execute_menu_command(MenuCommand::UseImageAsReference);
         } else {
-          reload_scene();
+          execute_menu_command(MenuCommand::ReloadScene);
         }
         break;
       }
       case SAPP_KEYCODE_G: {
-        reload_geometry();
+        execute_menu_command(MenuCommand::ReloadGeometry);
         break;
       }
       case SAPP_KEYCODE_S: {
         if (has_alt && (has_shift == false)) {
           // TODO : use
         } else if (has_shift && (has_alt == false)) {
-          save_image(SaveImageMode::TonemappedLDR);
+          execute_menu_command(MenuCommand::SaveImageLDR);
         } else if ((has_shift == false) && (has_alt == false)) {
-          save_image(SaveImageMode::RGB);
+          execute_menu_command(MenuCommand::SaveImageRGB);
         }
         break;
       }
@@ -1481,11 +1481,11 @@ bool UI::handle_event(const sapp_event* e) {
       break;
     }
     case SAPP_KEYCODE_KP_DIVIDE: {
-      decrease_exposure(_view_options);
+      execute_menu_command(MenuCommand::DecreaseExposure);
       break;
     }
     case SAPP_KEYCODE_KP_MULTIPLY: {
-      increase_exposure(_view_options);
+      execute_menu_command(MenuCommand::IncreaseExposure);
       break;
     }
     default:
@@ -1493,6 +1493,100 @@ bool UI::handle_event(const sapp_event* e) {
   }
 
   return false;
+}
+
+void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std::string& value) {
+  switch (command) {
+    case MenuCommand::Quit:
+      quit();
+      break;
+    case MenuCommand::SelectCPURenderer:
+      if (callbacks.renderer_selected) {
+        callbacks.renderer_selected(RendererMode::CPURaytracing);
+      }
+      break;
+    case MenuCommand::SelectRasterRenderer:
+      if (callbacks.renderer_selected) {
+        callbacks.renderer_selected(RendererMode::Rasterization);
+      }
+      break;
+    case MenuCommand::SelectGPURenderer:
+      if (_gpu_renderer_available && callbacks.renderer_selected) {
+        callbacks.renderer_selected(RendererMode::GPURaytracing);
+      }
+      break;
+    case MenuCommand::OpenScene:
+      select_scene_file();
+      break;
+    case MenuCommand::ReloadScene:
+      reload_scene();
+      break;
+    case MenuCommand::ReloadGeometry:
+      reload_geometry();
+      break;
+    case MenuCommand::OpenRecentScene:
+      if (!value.empty() && callbacks.scene_file_selected) {
+        callbacks.scene_file_selected(value);
+      }
+      break;
+    case MenuCommand::ClearRecentScenes:
+      if (callbacks.clear_recent_files) {
+        callbacks.clear_recent_files();
+      }
+      break;
+    case MenuCommand::SaveScene:
+      save_scene_file();
+      break;
+    case MenuCommand::SaveSceneAs:
+      save_scene_file_as();
+      break;
+    case MenuCommand::SelectIntegrator:
+      if ((argument < _integrators.count) && (_integrators[argument] != nullptr) && _integrators[argument]->enabled()) {
+        if (callbacks.integrator_selected) {
+          callbacks.integrator_selected(_integrators[argument]->type());
+        }
+        set_current_integrator(_integrators[argument]);
+      }
+      break;
+    case MenuCommand::OpenReferenceImage:
+      load_image();
+      break;
+    case MenuCommand::SaveImageRGB:
+      save_image(SaveImageMode::RGB);
+      break;
+    case MenuCommand::SaveImageLDR:
+      save_image(SaveImageMode::TonemappedLDR);
+      break;
+    case MenuCommand::UseImageAsReference:
+      if (callbacks.use_image_as_reference) {
+        callbacks.use_image_as_reference();
+      }
+      break;
+    case MenuCommand::ViewWholeScene:
+    case MenuCommand::ViewPositiveX:
+    case MenuCommand::ViewNegativeX:
+    case MenuCommand::ViewPositiveY:
+    case MenuCommand::ViewNegativeY:
+    case MenuCommand::ViewPositiveZ:
+    case MenuCommand::ViewNegativeZ:
+      if (callbacks.view_scene) {
+        const uint32_t direction = static_cast<uint32_t>(command) - static_cast<uint32_t>(MenuCommand::ViewWholeScene);
+        callbacks.view_scene(direction);
+      }
+      break;
+    case MenuCommand::IncreaseExposure:
+      increase_exposure(_view_options);
+      break;
+    case MenuCommand::DecreaseExposure:
+      decrease_exposure(_view_options);
+      break;
+    case MenuCommand::ToggleSceneObjects:
+      _ui_setup ^= UIObjects;
+      break;
+    case MenuCommand::ToggleProperties:
+      _ui_setup ^= UIProperties;
+      break;
+  }
 }
 
 ViewParameters UI::view_options() const {
@@ -2337,37 +2431,31 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
   if (ImGui::BeginMainMenuBar()) {
     if (ImGui::BeginMenu("etx-tracer")) {
       if (ImGui::MenuItem("CPU Raytracer", nullptr, _current_renderer_mode == RendererMode::CPURaytracing)) {
-        if (callbacks.renderer_selected) {
-          callbacks.renderer_selected(RendererMode::CPURaytracing);
-        }
+        execute_menu_command(MenuCommand::SelectCPURenderer);
       }
       if (ImGui::MenuItem("Rasterizer", nullptr, _current_renderer_mode == RendererMode::Rasterization)) {
-        if (callbacks.renderer_selected) {
-          callbacks.renderer_selected(RendererMode::Rasterization);
-        }
+        execute_menu_command(MenuCommand::SelectRasterRenderer);
       }
       const char* gpu_renderer_label = _gpu_renderer_available ? "GPU Raytracer" : "GPU Raytracer (Unavailable)";
       if (ImGui::MenuItem(gpu_renderer_label, nullptr, _current_renderer_mode == RendererMode::GPURaytracing, _gpu_renderer_available)) {
-        if (callbacks.renderer_selected) {
-          callbacks.renderer_selected(RendererMode::GPURaytracing);
-        }
+        execute_menu_command(MenuCommand::SelectGPURenderer);
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Exit", "Ctrl+Q", false, true)) {
-        quit();
+        execute_menu_command(MenuCommand::Quit);
       }
       ImGui::EndMenu();
     }
 
     if (ImGui::BeginMenu("Scene", true)) {
       if (ImGui::MenuItem("Open...", "Ctrl+O", false, true)) {
-        select_scene_file();
+        execute_menu_command(MenuCommand::OpenScene);
       }
       if (ImGui::MenuItem("Reload Scene", "Ctrl+R", false, true)) {
-        reload_scene();
+        execute_menu_command(MenuCommand::ReloadScene);
       }
       if (ImGui::MenuItem("Reload Geometry and Materials", "Ctrl+G", false, true)) {
-        reload_geometry();
+        execute_menu_command(MenuCommand::ReloadGeometry);
       }
 
       if (recent_files.empty() == false) {
@@ -2382,9 +2470,7 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
             }
             std::string label = display_name + "##recent_" + std::to_string(i - 1u);
             if (ImGui::MenuItem(label.c_str(), nullptr, nullptr)) {
-              if (callbacks.scene_file_selected) {
-                callbacks.scene_file_selected(entry);
-              }
+              execute_menu_command(MenuCommand::OpenRecentScene, 0u, entry);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
               ImGui::SetTooltip("%s", entry.c_str());
@@ -2396,17 +2482,17 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
           }
           ImGui::EndMenu();
         }
-        if (clear_recent_requested && callbacks.clear_recent_files) {
-          callbacks.clear_recent_files();
+        if (clear_recent_requested) {
+          execute_menu_command(MenuCommand::ClearRecentScenes);
         }
       }
 
       ImGui::Separator();
       if (ImGui::MenuItem("Save", nullptr, false, true)) {
-        save_scene_file();
+        execute_menu_command(MenuCommand::SaveScene);
       }
       if (ImGui::MenuItem("Save as...", nullptr, false, true)) {
-        save_scene_file_as();
+        execute_menu_command(MenuCommand::SaveSceneAs);
       }
       ImGui::EndMenu();
     }
@@ -2414,10 +2500,7 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
     if (ImGui::BeginMenu("Integrator", true)) {
       for (uint64_t i = 0; i < _integrators.count; ++i) {
         if (ImGui::MenuItem(_integrators[i]->name(), nullptr, _current_integrator == _integrators[i], _integrators[i]->enabled())) {
-          if (callbacks.integrator_selected) {
-            callbacks.integrator_selected(_integrators[i]->type());
-            set_current_integrator(_integrators[i]);
-          }
+          execute_menu_command(MenuCommand::SelectIntegrator, static_cast<uint32_t>(i));
         }
       }
 
@@ -2426,45 +2509,43 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
 
     if (ImGui::BeginMenu("Image", true)) {
       if (ImGui::MenuItem("Open Reference Image...", "Ctrl+I", false, true)) {
-        load_image();
+        execute_menu_command(MenuCommand::OpenReferenceImage);
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Save Current Image (RGB)...", "Ctrl+S", false, true)) {
-        save_image(SaveImageMode::RGB);
+        execute_menu_command(MenuCommand::SaveImageRGB);
       }
       if (ImGui::MenuItem("Save Current Image (LDR)...", "Shift+Ctrl+S", false, true)) {
-        save_image(SaveImageMode::TonemappedLDR);
+        execute_menu_command(MenuCommand::SaveImageLDR);
       }
       if (ImGui::MenuItem("Use as Reference", "Ctrl+Shift+R", false, true)) {
-        if (callbacks.use_image_as_reference) {
-          callbacks.use_image_as_reference();
-        }
+        execute_menu_command(MenuCommand::UseImageAsReference);
       }
       ImGui::EndMenu();
     }
 
     if (callbacks.view_scene && ImGui::BeginMenu("View", true)) {
       if (ImGui::MenuItem("View whole scene", nullptr, false, true)) {
-        callbacks.view_scene(0);
+        execute_menu_command(MenuCommand::ViewWholeScene);
       }
       if (ImGui::BeginMenu("View scene")) {
         if (ImGui::MenuItem("From +X", nullptr, false, true)) {
-          callbacks.view_scene(1);
+          execute_menu_command(MenuCommand::ViewPositiveX);
         }
         if (ImGui::MenuItem("From -X", nullptr, false, true)) {
-          callbacks.view_scene(2);
+          execute_menu_command(MenuCommand::ViewNegativeX);
         }
         if (ImGui::MenuItem("From +Y", nullptr, false, true)) {
-          callbacks.view_scene(3);
+          execute_menu_command(MenuCommand::ViewPositiveY);
         }
         if (ImGui::MenuItem("From -Y", nullptr, false, true)) {
-          callbacks.view_scene(4);
+          execute_menu_command(MenuCommand::ViewNegativeY);
         }
         if (ImGui::MenuItem("From +Z", nullptr, false, true)) {
-          callbacks.view_scene(5);
+          execute_menu_command(MenuCommand::ViewPositiveZ);
         }
         if (ImGui::MenuItem("From -Z", nullptr, false, true)) {
-          callbacks.view_scene(6);
+          execute_menu_command(MenuCommand::ViewNegativeZ);
         }
         ImGui::EndMenu();
       }
@@ -2472,26 +2553,26 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
       ImGui::Separator();
 
       if (ImGui::MenuItem("Increase Exposure", "*", false, true)) {
-        increase_exposure(_view_options);
+        execute_menu_command(MenuCommand::IncreaseExposure);
       }
       if (ImGui::MenuItem("Decrease Exposure", "/", false, true)) {
-        decrease_exposure(_view_options);
+        execute_menu_command(MenuCommand::DecreaseExposure);
       }
 
       ImGui::Separator();
 
-      auto ui_toggle = [this](const char* label, uint32_t flag) {
+      auto ui_toggle = [this](const char* label, uint32_t flag, MenuCommand command) {
         uint32_t k = 0;
         for (; (k < 8) && (flag != (1u << k)); ++k) {
         }
         const char* buffer = format_string("F%u", k + 1u);
         bool ui_integrator = (_ui_setup & flag) == flag;
         if (ImGui::MenuItem(label, buffer, ui_integrator, true)) {
-          _ui_setup = ui_integrator ? (_ui_setup & (~flag)) : (_ui_setup | flag);
+          execute_menu_command(command);
         }
       };
-      ui_toggle("Scene Objects", UIObjects);
-      ui_toggle("Properties", UIProperties);
+      ui_toggle("Scene Objects", UIObjects, MenuCommand::ToggleSceneObjects);
+      ui_toggle("Properties", UIProperties, MenuCommand::ToggleProperties);
       ImGui::EndMenu();
     }
 

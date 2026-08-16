@@ -20,6 +20,36 @@ namespace etx {
 
 struct IORDatabase;
 
+enum class MenuCommand : uint32_t {
+  Quit,
+  SelectCPURenderer,
+  SelectRasterRenderer,
+  SelectGPURenderer,
+  OpenScene,
+  ReloadScene,
+  ReloadGeometry,
+  OpenRecentScene,
+  ClearRecentScenes,
+  SaveScene,
+  SaveSceneAs,
+  SelectIntegrator,
+  OpenReferenceImage,
+  SaveImageRGB,
+  SaveImageLDR,
+  UseImageAsReference,
+  ViewWholeScene,
+  ViewPositiveX,
+  ViewNegativeX,
+  ViewPositiveY,
+  ViewNegativeY,
+  ViewPositiveZ,
+  ViewNegativeZ,
+  IncreaseExposure,
+  DecreaseExposure,
+  ToggleSceneObjects,
+  ToggleProperties,
+};
+
 struct UI {
   struct FrameData {
     const IORDatabase& ior_database;
@@ -67,6 +97,43 @@ struct UI {
   }
 
   bool handle_event(const sapp_event*);
+  void execute_menu_command(MenuCommand command, uint32_t argument = 0u, const std::string& value = {});
+
+  void set_embedded_menu_enabled(bool value) {
+    _embedded_menu_enabled = value;
+  }
+
+  bool gpu_renderer_available() const {
+    return _gpu_renderer_available;
+  }
+
+  RendererMode current_renderer_mode() const {
+    return _current_renderer_mode;
+  }
+
+  uint64_t integrator_count() const {
+    return _integrators.count;
+  }
+
+  Integrator* integrator(uint64_t index) const {
+    return index < _integrators.count ? _integrators[index] : nullptr;
+  }
+
+  Integrator* current_integrator() const {
+    return _current_integrator;
+  }
+
+  bool scene_objects_visible() const {
+    return (_ui_setup & UIObjects) != 0u;
+  }
+
+  bool properties_visible() const {
+    return (_ui_setup & UIProperties) != 0u;
+  }
+
+  bool scene_view_commands_available() const {
+    return static_cast<bool>(callbacks.view_scene);
+  }
 
   struct BuildContext {
     std::vector<int32_t> emitter_primary_instance;
@@ -284,6 +351,7 @@ struct UI {
   std::vector<SelectionState> _selection_history;
   int32_t _selection_history_cursor = -1;
   uint32_t _ui_setup = UIDefaults;
+  bool _embedded_menu_enabled = true;
   uint32_t _font_image = 0u;
   std::unordered_map<std::string, SpectrumEditorState> _spectrum_editors;
   std::unordered_map<std::string, bool> _material_anisotropy;

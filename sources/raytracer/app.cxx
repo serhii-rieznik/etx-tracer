@@ -11,6 +11,10 @@
 #include "app.hxx"
 #include "image_output.hxx"
 
+#if defined(ETX_PLATFORM_APPLE)
+# include "macos_menu.hxx"
+#endif
+
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -284,6 +288,11 @@ void RTApplication::init() {
   }
 
   save_options();
+
+#if defined(ETX_PLATFORM_APPLE)
+  setup_macos_menu(ui);
+  update_macos_menu(ui, _recent_files);
+#endif
 }
 
 void RTApplication::save_options() {
@@ -414,6 +423,9 @@ void RTApplication::frame() {
   }
   ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
   ui.set_current_renderer_stats(_active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{});
+#if defined(ETX_PLATFORM_APPLE)
+  update_macos_menu(ui, _recent_files);
+#endif
   if (render_context.valid() && render_context.rhi_ui().initialized()) {
     ETX_PROFILER_NAMED_SCOPE("app_ui_build");
     ui.build(scene, ui_frame_data);
@@ -426,6 +438,10 @@ void RTApplication::frame() {
 
 void RTApplication::cleanup() {
   ETX_PROFILER_SCOPE();
+
+#if defined(ETX_PLATFORM_APPLE)
+  shutdown_macos_menu();
+#endif
 
   bool device_already_idle = false;
 

@@ -27,6 +27,11 @@ add_executable(raytracer
   ${RAYTRACER_SHARED_SOURCES}
 )
 
+if(APPLE)
+  target_sources(raytracer PRIVATE macos_menu.hxx macos_menu.mm)
+  set_source_files_properties(macos_menu.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
+
 set(ETX_UNITY_STD_HEADER "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
 
 if(MSVC)
