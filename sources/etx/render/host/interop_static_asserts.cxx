@@ -95,6 +95,14 @@ static_assert(std::is_standard_layout_v<Material>, "Material must stay standard 
 static_assert(alignof(Material) == 16, "Material alignment must match HLSL packing");
 static_assert(sizeof(Material) == kMaterialStride, "Material size changed; update shared ABI");
 static_assert((offsetof(Material, thinfilm) + offsetof(Thinfilm, weight)) == kMaterialThinfilmWeightOffset, "Material::thinfilm.weight offset changed");
+static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, period_nm)) == kMaterialDiffractionGratingPeriodNmOffset,
+  "Material::diffraction_grating.period_nm offset changed");
+static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, optical_path_difference_nm)) == kMaterialDiffractionGratingOpticalPathDifferenceNmOffset,
+  "Material::diffraction_grating.optical_path_difference_nm offset changed");
+static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, duty_cycle)) == kMaterialDiffractionGratingDutyCycleOffset,
+  "Material::diffraction_grating.duty_cycle offset changed");
+static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, rotation)) == kMaterialDiffractionGratingRotationOffset,
+  "Material::diffraction_grating.rotation offset changed");
 static_assert(offsetof(Material, scattering) == kMaterialScatteringSpectrumIndexOffset, "Material::scattering offset changed");
 static_assert((offsetof(Material, scattering) + offsetof(SpectralImage, image_index)) == kMaterialScatteringImageIndexOffset, "Material::scattering.image_index offset changed");
 static_assert(offsetof(Material, cls) == kMaterialClassOffset, "Material::cls offset changed");

@@ -1076,6 +1076,7 @@ bool gpu_bsdf_sample_supported_class(uint material_class) {
     case MaterialClass::Boundary:
     case MaterialClass::Velvet:
     case MaterialClass::Void:
+    case MaterialClass::DiffractionGrating:
       return true;
 
     // TODO(OpenPBR GPU parity): OpenPBR is deliberately unsupported on the production GPU path for now.
@@ -1143,6 +1144,9 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
     return bsdf_sample_zero(data.spectrum_sample);
   }
   if (material.cls == MaterialClass::Void) {
+    return bsdf_sample(context, data, material, sampler);
+  }
+  if (material.cls == MaterialClass::DiffractionGrating) {
     return bsdf_sample(context, data, material, sampler);
   }
 

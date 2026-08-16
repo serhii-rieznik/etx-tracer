@@ -68,6 +68,8 @@ inline Material::Class material_string_to_class(const char* s) {
     return MaterialClass::OpenPBR;
   else if (strcmp(s, "void") == 0)
     return MaterialClass::Void;
+  else if ((strcmp(s, "diffraction_grating") == 0) || (strcmp(s, "diffraction") == 0) || (strcmp(s, "grating") == 0))
+    return MaterialClass::DiffractionGrating;
   else {
     log::error("Undefined BSDF: `%s`", s);
     return MaterialClass::Diffuse;
@@ -1998,6 +2000,57 @@ struct SceneSerializationImpl {
               mtl.thinfilm.ior.k_index = k_spd.empty() ? kInvalidIndex : data.add_spectrum(k_spd);
             }
           }
+        }
+      }
+    }
+
+    bool has_diffraction_grating = get_param(material, "diffraction_grating");
+    if (has_diffraction_grating == false) {
+      has_diffraction_grating = get_param(material, "grating");
+    }
+    if (has_diffraction_grating) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      auto params = split_params(buffer);
+      auto parse_finite_float = [&](const char* text, const char* parameter, float& value) {
+        float parsed = 0.0f;
+        char trailing = 0;
+        if ((sscanf(text, "%f%c", &parsed, &trailing) != 1) || (std::isfinite(parsed) == false)) {
+          log::warning("Invalid diffraction grating %s `%s` in material `%s`; keeping the default value", parameter, text, material.name.c_str());
+          return false;
+        }
+        value = parsed;
+        return true;
+      };
+      for (uint64_t i = 0, e = params.size(); i < e; ++i) {
+        if (((strcmp(params[i], "period") == 0) || (strcmp(params[i], "period_nm") == 0)) && (i + 1 < e)) {
+          parse_finite_float(params[i + 1], "period", mtl.diffraction_grating.period_nm);
+          i += 1;
+        } else if (((strcmp(params[i], "optical_path_difference") == 0) || (strcmp(params[i], "optical_path_difference_nm") == 0)) && (i + 1 < e)) {
+          parse_finite_float(params[i + 1], "optical path difference", mtl.diffraction_grating.optical_path_difference_nm);
+          i += 1;
+        } else if (((strcmp(params[i], "depth") == 0) || (strcmp(params[i], "depth_nm") == 0) || (strcmp(params[i], "groove_depth") == 0) ||
+                     (strcmp(params[i], "groove_depth_nm") == 0)) &&
+                   (i + 1 < e)) {
+          float legacy_groove_depth_nm = 0.0f;
+          if (parse_finite_float(params[i + 1], "legacy groove depth", legacy_groove_depth_nm)) {
+            // At normal incidence, a reflective height step h produces a
+            // round-trip optical path difference of 2h.
+            mtl.diffraction_grating.optical_path_difference_nm = 2.0f * legacy_groove_depth_nm;
+          }
+          i += 1;
+        } else if (((strcmp(params[i], "duty") == 0) || (strcmp(params[i], "duty_cycle") == 0)) && (i + 1 < e)) {
+          parse_finite_float(params[i + 1], "duty cycle", mtl.diffraction_grating.duty_cycle);
+          i += 1;
+        } else if (((strcmp(params[i], "rotation") == 0) || (strcmp(params[i], "rotation_degrees") == 0)) && (i + 1 < e)) {
+          float rotation_degrees = 0.0f;
+          if (parse_finite_float(params[i + 1], "rotation", rotation_degrees)) {
+            mtl.diffraction_grating.rotation = rotation_degrees * kPi / 180.0f;
+          }
+          i += 1;
+        } else if ((strcmp(params[i], "profile") == 0) && (i + 1 < e)) {
+          log::warning("Diffraction grating profile `%s` in material `%s` is obsolete; using the binary phase-mask model", params[i + 1], material.name.c_str());
+          i += 1;
         }
       }
     }

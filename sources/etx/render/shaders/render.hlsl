@@ -23,9 +23,11 @@ float4 tonemap(float4 value) {
   switch (options.view.view_option) {
     case ViewOptions::Tonemapped: {
       value = 1.0f - exp(-options.view.exposure * value);
+#if !defined(ETX_PRESENT_SRGB_TARGET)
       value.x = linear_to_gamma(value.x);
       value.y = linear_to_gamma(value.y);
       value.z = linear_to_gamma(value.z);
+#endif
       break;
     }
     case ViewOptions::HDR: {

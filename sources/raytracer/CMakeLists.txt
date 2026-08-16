@@ -40,8 +40,8 @@ target_link_libraries(raytracer
 )
 
 target_include_directories(raytracer
-    PRIVATE "${CMAKE_SOURCE_DIR}/bin"
-    PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render")
+    PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
+    PRIVATE "${CMAKE_SOURCE_DIR}/bin")
 
 set_target_properties(raytracer PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
@@ -68,6 +68,25 @@ if(MSVC)
 endif()
 
 set_property(TARGET raytracer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_folder}/bin")
+
+# Runtime shader compilation must not depend on the process working directory.
+# Keep the complete shader include tree next to the executable.
+add_custom_target(raytracer_runtime_shaders
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/sources/etx/render/shaders"
+    "${root_folder}/bin/shaders"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/sources/etx/render/interop"
+    "${root_folder}/bin/interop"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/sources/etx/render/access"
+    "${root_folder}/bin/access"
+  COMMENT "Copying runtime shaders to bin folder"
+)
+add_dependencies(raytracer raytracer_runtime_shaders)
+if(TARGET bsdf_validation)
+  add_dependencies(bsdf_validation raytracer_runtime_shaders)
+endif()
 
 # Copy DXC runtime library to bin folder (runtime shader compilation)
 if(DXC_FOUND AND DXC_LIBRARY)

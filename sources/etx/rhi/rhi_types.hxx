@@ -114,6 +114,10 @@ enum class RHITextureFormat : uint32_t {
   D32_FLOAT,
 };
 
+inline bool rhi_texture_format_is_srgb(RHITextureFormat format) {
+  return (format == RHITextureFormat::R8G8B8A8_SRGB) || (format == RHITextureFormat::B8G8R8A8_SRGB);
+}
+
 enum class RHITextureUsage : uint32_t {
   Sampled = 1u << 0u,
   Storage = 1u << 1u,

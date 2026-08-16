@@ -1,9 +1,13 @@
+#include <algorithm>
+
 #include <etx/core/environment.hxx>
 #include <etx/render/host/bsdf_energy_compensation_lut.hxx>
 #include <etx/render/host/gpu_asset_descriptor.hxx>
-#include <etx/render/host/scene_global.hxx>
 #include <etx/render/host/scene_data.hxx>
+#include <etx/render/host/scene_global.hxx>
+#include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/interop/gpu_scene_shared.hxx>
+#include <etx/render/shared/ior_database.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scene_bsdf.hxx>
 #include <etx/rhi/rhi.hxx>
@@ -11,7 +15,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -37,6 +40,7 @@ enum SpectrumSlot : uint32_t {
   SpectrumConductorK,
   SpectrumMirrorEta,
   SpectrumMirrorK,
+  SpectrumSpectralWhite,
   SpectrumCount,
 };
 
@@ -97,8 +101,7 @@ bool close_value(const float a, const float b, const float tolerance) {
   return fabsf(a - b) <= tolerance;
 }
 
-::RefractiveIndexSample make_spectral_ior(const etx::SpectralQuery& query, const float eta, const float k = 0.0f,
-  const uint32_t cls = etx::SpectralDistribution::Dielectric) {
+::RefractiveIndexSample make_spectral_ior(const etx::SpectralQuery& query, const float eta, const float k = 0.0f, const uint32_t cls = etx::SpectralDistribution::Dielectric) {
   ::RefractiveIndexSample result = {};
   result.cls = cls;
   result.eta = spectral_response_make(query, eta);
@@ -149,8 +152,8 @@ bool validate_thinfilm_optical_invariants() {
         const float transmittance = 1.0f - reflectance;
         if ((std::isfinite(reflectance) == false) || (reflectance < -2.0e-6f) || (reflectance > 1.0f + 2.0e-6f) ||
             (close_value(reflectance + transmittance, 1.0f, 2.0e-6f) == false)) {
-          std::printf("thinfilm lossless energy bound failed wavelength %.1f cosine %.3f thickness %.1f R %.9f T %.9f\n", tested_wavelength, cosine,
-            thickness, reflectance, transmittance);
+          std::printf("thinfilm lossless energy bound failed wavelength %.1f cosine %.3f thickness %.1f R %.9f T %.9f\n", tested_wavelength, cosine, thickness, reflectance,
+            transmittance);
           valid = false;
         }
       }
@@ -172,14 +175,309 @@ bool validate_thinfilm_optical_invariants() {
   evaluated_film.weight = 0.25f;
   const float partial = bsdf_fresnel_calculate(query, 1.0f, ext_ior, int_ior, evaluated_film).value;
   const float expected_partial = uncoated + 0.25f * (coated - uncoated);
-  if ((close_value(uncoated, direct, 2.0e-6f) == false) || (close_value(coated, quarter_wave, 2.0e-6f) == false) ||
-      (close_value(partial, expected_partial, 2.0e-6f) == false)) {
+  if ((close_value(uncoated, direct, 2.0e-6f) == false) || (close_value(coated, quarter_wave, 2.0e-6f) == false) || (close_value(partial, expected_partial, 2.0e-6f) == false)) {
     std::printf("thinfilm coverage blend failed bare %.9f coated %.9f partial %.9f expected %.9f\n", uncoated, coated, partial, expected_partial);
     valid = false;
   }
 
   if (valid) {
     std::printf("thinfilm optical invariants valid\n");
+  }
+  return valid;
+}
+
+bool validate_diffraction_grating_contract(const etx::Scene& scene) {
+  (void)scene;
+  bool valid = true;
+  auto require = [&](const bool condition, const char* label) {
+    if (condition == false) {
+      std::printf("diffraction grating failed: %s\n", label);
+      valid = false;
+    }
+  };
+
+  constexpr float wavelength_nm = 550.0f;
+  constexpr float period_nm = 1600.0f;
+  constexpr float optical_path_difference_nm = 0.5f * wavelength_nm;
+  constexpr float duty_cycle = 0.5f;
+  const float3 local_w_i = float3{0.0f, 0.0f, 1.0f};
+  const BSDFDiffractionOrderRange range = bsdf_diffraction_grating_order_range(local_w_i, wavelength_nm, period_nm);
+  require((range.minimum == -2) && (range.maximum == 2), "normal-incidence propagating order range");
+
+  const float phase_difference = kPi;
+  const float zero_order = bsdf_diffraction_grating_binary_phase_fourier_power(0, duty_cycle, phase_difference);
+  const float first_order = bsdf_diffraction_grating_binary_phase_fourier_power(1, duty_cycle, phase_difference);
+  const float second_order = bsdf_diffraction_grating_binary_phase_fourier_power(2, duty_cycle, phase_difference);
+  require(zero_order < 1.0e-7f, "half-wave binary phase profile cancels the analytic zero order");
+  require(close_value(first_order, 4.0f / (kPi * kPi), 5.0e-7f), "half-wave binary phase first-order coefficient");
+  require(second_order < 1.0e-12f, "half-duty binary phase profile suppresses even sidebands");
+
+  double parseval_sum = 0.0;
+  for (int order = -10000; order <= 10000; ++order) {
+    parseval_sum += static_cast<double>(bsdf_diffraction_grating_binary_phase_fourier_power(order, duty_cycle, phase_difference));
+  }
+  // The omitted 1 / m^2 tail beyond order 10000 is less than 4.1e-5.
+  require(std::abs(parseval_sum - 1.0) <= 4.1e-5, "lossless binary phase Fourier power satisfies Parseval within the analytic tail bound");
+
+  etx::Material material = {};
+  material.cls = MaterialClass::DiffractionGrating;
+  material.reflectance.spectrum_index = SpectrumSpectralWhite;
+  material.diffraction_grating.period_nm = period_nm;
+  material.diffraction_grating.optical_path_difference_nm = optical_path_difference_nm;
+  material.diffraction_grating.duty_cycle = duty_cycle;
+  material.diffraction_grating.rotation = 0.0f;
+
+  const float sideband_efficiency = bsdf_diffraction_grating_propagating_sideband_efficiency(range, local_w_i, wavelength_nm, period_nm, material);
+  const float runtime_zero_order = bsdf_diffraction_grating_zero_order_efficiency(range, local_w_i, wavelength_nm, period_nm, material);
+  const float propagating_efficiency = bsdf_diffraction_grating_propagating_efficiency(range, local_w_i, wavelength_nm, period_nm, material);
+  require(std::isfinite(sideband_efficiency) && (sideband_efficiency >= 0.0f) && (sideband_efficiency <= 1.0f), "propagating phase sidebands are finite and bounded");
+  require(close_value(runtime_zero_order, zero_order, 2.0e-6f), "runtime zero order equals the analytic binary-phase coefficient");
+  require(close_value(propagating_efficiency, runtime_zero_order + sideband_efficiency, 2.0e-6f), "propagating power is the sum of analytic order coefficients");
+  require((propagating_efficiency > 0.0f) && (propagating_efficiency < 1.0f), "evanescent Fourier orders are not reassigned to a radiative lobe");
+
+  material.diffraction_grating.optical_path_difference_nm = 0.0f;
+  const float flat_sidebands = bsdf_diffraction_grating_propagating_sideband_efficiency(range, local_w_i, wavelength_nm, period_nm, material);
+  const float flat_zero = bsdf_diffraction_grating_zero_order_efficiency(range, local_w_i, wavelength_nm, period_nm, material);
+  require(flat_sidebands <= 1.0e-12f, "zero optical path difference has no diffracted sidebands");
+  require(close_value(flat_zero, 1.0f, 1.0e-7f), "zero optical path difference is a lossless mirror");
+  material.diffraction_grating.optical_path_difference_nm = optical_path_difference_nm;
+
+  float3 blue_first = {};
+  float3 red_first = {};
+  float3 evanescent = {};
+  require(bsdf_diffraction_grating_order_direction(local_w_i, 450.0f, period_nm, 1, blue_first), "blue first order propagates");
+  require(bsdf_diffraction_grating_order_direction(local_w_i, 650.0f, period_nm, 1, red_first), "red first order propagates");
+  require(red_first.x > blue_first.x, "longer wavelengths diffract farther");
+  require(bsdf_diffraction_grating_order_direction(local_w_i, wavelength_nm, period_nm, 3, evanescent) == false, "evanescent order is rejected");
+
+  const float3 oblique_w_i = normalize(float3{0.35f, -0.2f, 1.0f});
+  const BSDFDiffractionOrderRange oblique_range = bsdf_diffraction_grating_order_range(oblique_w_i, wavelength_nm, period_nm);
+  require(oblique_range.maximum >= oblique_range.minimum, "oblique incidence has propagating orders");
+  const float oblique_efficiency = bsdf_diffraction_grating_propagating_efficiency(oblique_range, oblique_w_i, wavelength_nm, period_nm, material);
+  require(std::isfinite(oblique_efficiency) && (oblique_efficiency >= 0.0f) && (oblique_efficiency <= 1.0f), "oblique propagating phase-mask power is passive");
+  for (int order = oblique_range.minimum; order <= oblique_range.maximum; ++order) {
+    float3 oblique_w_o = {};
+    require(bsdf_diffraction_grating_order_direction(oblique_w_i, wavelength_nm, period_nm, order, oblique_w_o), "oblique order range contains only propagating directions");
+    require(close_value(oblique_w_o.x + oblique_w_i.x, float(order) * wavelength_nm / period_nm, 2.0e-6f), "oblique order satisfies the grating equation");
+    require(close_value(oblique_w_o.y, -oblique_w_i.y, 2.0e-6f), "oblique order preserves the groove-parallel wavevector");
+    require(close_value(dot(oblique_w_o, oblique_w_o), 1.0f, 2.0e-6f), "oblique order direction is normalized");
+    int reverse_order = 0;
+    require(bsdf_diffraction_grating_match_order(oblique_w_o, oblique_w_i, wavelength_nm, period_nm, reverse_order), "oblique order maps back under path reversal");
+    require(reverse_order == order, "oblique reciprocal path uses the same grating order");
+  }
+
+  const float validation_wavelengths[] = {kShortestWavelength, 550.0f, kLongestWavelength};
+  const float validation_periods[] = {kDiffractionGratingMinimumPeriodNm, 390.0f, 1600.0f, kDiffractionGratingMaximumPeriodNm};
+  const float validation_duties[] = {0.0f, 0.1f, 0.5f, 0.9f, 1.0f};
+  const float validation_optical_path_differences[] = {0.0f, 50.0f, 275.0f, 500.0f, kDiffractionGratingMaximumOpticalPathDifferenceNm};
+  const float3 validation_incident_directions[] = {
+    float3{0.0f, 0.0f, 1.0f},
+    normalize(float3{0.8f, 0.1f, 1.0f}),
+    normalize(float3{-0.95f, 0.2f, 0.25f}),
+  };
+  for (const float tested_wavelength : validation_wavelengths) {
+    for (const float tested_period : validation_periods) {
+      for (const float3 tested_w_i : validation_incident_directions) {
+        const BSDFDiffractionOrderRange tested_range = bsdf_diffraction_grating_order_range(tested_w_i, tested_wavelength, tested_period);
+        require((tested_range.maximum - tested_range.minimum) <= 64, "supported period range keeps exact order enumeration bounded");
+        for (const float tested_duty : validation_duties) {
+          for (const float tested_optical_path_difference : validation_optical_path_differences) {
+            material.diffraction_grating.period_nm = tested_period;
+            material.diffraction_grating.duty_cycle = tested_duty;
+            material.diffraction_grating.optical_path_difference_nm = tested_optical_path_difference;
+            const float tested_total = bsdf_diffraction_grating_propagating_efficiency(tested_range, tested_w_i, tested_wavelength, tested_period, material);
+            require(std::isfinite(tested_total) && (tested_total >= 0.0f) && (tested_total <= 1.0f + 3.0e-6f),
+              "phase-mask propagating energy remains finite and passive across the parameter domain");
+
+            float enumerated_total = 0.0f;
+            for (int order = tested_range.minimum; order <= tested_range.maximum; ++order) {
+              float3 tested_w_o = {};
+              if (bsdf_diffraction_grating_order_direction(tested_w_i, tested_wavelength, tested_period, order, tested_w_o)) {
+                const float efficiency = bsdf_diffraction_grating_order_efficiency(tested_range, tested_w_i, tested_w_o, tested_wavelength, tested_period, order, material);
+                require(std::isfinite(efficiency) && (efficiency >= 0.0f) && (efficiency <= 1.0f), "every phase-grating order efficiency is finite and bounded");
+                enumerated_total += efficiency;
+
+                const BSDFDiffractionOrderRange reverse_range = bsdf_diffraction_grating_order_range(tested_w_o, tested_wavelength, tested_period);
+                const float reverse_efficiency =
+                  bsdf_diffraction_grating_order_efficiency(reverse_range, tested_w_o, tested_w_i, tested_wavelength, tested_period, order, material);
+                require(close_value(reverse_efficiency, efficiency, 4.0e-6f), "phase-grating order efficiency is reciprocal");
+              }
+            }
+            require(close_value(enumerated_total, tested_total, 4.0e-6f), "reported propagating power equals the independently enumerated analytic orders");
+          }
+        }
+        for (int order = tested_range.minimum; order <= tested_range.maximum; ++order) {
+          float3 tested_w_o = {};
+          require(bsdf_diffraction_grating_order_direction(tested_w_i, tested_wavelength, tested_period, order, tested_w_o), "enumerated edge-case order is propagating");
+          int reverse_order = 0;
+          require(bsdf_diffraction_grating_match_order(tested_w_o, tested_w_i, tested_wavelength, tested_period, reverse_order), "enumerated edge-case order is reciprocal");
+          require(reverse_order == order, "edge-case reciprocal path preserves the order index");
+        }
+      }
+    }
+  }
+  const BSDFDiffractionOrderRange short_wavelength_range = bsdf_diffraction_grating_order_range(local_w_i, kShortestWavelength - 1.0f, period_nm);
+  const BSDFDiffractionOrderRange long_wavelength_range = bsdf_diffraction_grating_order_range(local_w_i, kLongestWavelength + 1.0f, period_nm);
+  require(short_wavelength_range.maximum < short_wavelength_range.minimum, "wavelengths below the renderer spectral domain are rejected");
+  require(long_wavelength_range.maximum < long_wavelength_range.minimum, "wavelengths above the renderer spectral domain are rejected");
+  const float invalid_float = std::numeric_limits<float>::quiet_NaN();
+  const BSDFDiffractionOrderRange invalid_direction_range = bsdf_diffraction_grating_order_range(float3{invalid_float, 0.0f, 1.0f}, wavelength_nm, period_nm);
+  require(invalid_direction_range.maximum < invalid_direction_range.minimum, "non-finite incident directions are rejected before integer order conversion");
+  float3 invalid_order_direction = {};
+  require(bsdf_diffraction_grating_order_direction(local_w_i, wavelength_nm, invalid_float, 0, invalid_order_direction) == false,
+    "non-finite periods are rejected by direction construction");
+  int invalid_matched_order = 0;
+  require(bsdf_diffraction_grating_match_order(local_w_i, float3{invalid_float, 0.0f, 1.0f}, wavelength_nm, period_nm, invalid_matched_order) == false,
+    "non-finite outgoing directions are rejected before integer order conversion");
+
+  material.diffraction_grating.period_nm = period_nm;
+  material.diffraction_grating.optical_path_difference_nm = optical_path_difference_nm;
+  material.diffraction_grating.duty_cycle = duty_cycle;
+  material.diffraction_grating.rotation = 0.0f;
+
+  const Vertex vertex = {
+    float3{0.0f, 0.0f, 0.0f},
+    float3{0.0f, 0.0f, 1.0f},
+    float3{1.0f, 0.0f, 0.0f},
+    float3{0.0f, 1.0f, 0.0f},
+    float2{0.5f, 0.5f},
+  };
+  etx::BSDFData data = {etx::SpectralQuery{wavelength_nm, SpectralFlags::Spectral}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
+
+  constexpr uint32_t sample_count = 65536u;
+  uint32_t order_counts[5] = {};
+  double mean_weight = 0.0;
+  for (uint32_t sample_index = 0u; sample_index < sample_count; ++sample_index) {
+    etx::Sampler sampler(0x51f15e5u, sample_index + 1u);
+    const etx::BSDFSample sample = etx::bsdf::sample(data, material, sampler);
+    require(validate_sample(sample), "sample is finite and non-negative");
+    require((sample.properties & BSDFSample::Delta) != 0u, "sample is marked delta");
+    require((sample.properties & BSDFSample::Reflection) != 0u, "sample is marked reflection");
+    require(close_value(sample.weight.monochromatic(), propagating_efficiency, 2.0e-6f), "white phase-mask sample carries the physically modeled propagating power");
+
+    int matched_order = 0;
+    require(bsdf_diffraction_grating_match_order(local_w_i, sample.w_o, wavelength_nm, period_nm, matched_order), "sample lies on an exact grating order");
+    require((matched_order >= -2) && (matched_order <= 2), "sampled order is propagating");
+    order_counts[matched_order + 2] += 1u;
+
+    etx::Sampler eval_sampler(17u, sample_index + 3u);
+    const etx::BSDFEval eval = etx::bsdf::evaluate(data, sample.w_o, material, eval_sampler);
+    etx::Sampler pdf_sampler(23u, sample_index + 5u);
+    const float pdf = etx::bsdf::pdf(data, sample.w_o, material, pdf_sampler);
+    etx::Sampler reverse_sampler(29u, sample_index + 7u);
+    const float reverse_pdf = etx::bsdf::reverse_pdf(data, sample.w_o, material, reverse_sampler);
+    float3 matched_w_o = {};
+    require(bsdf_diffraction_grating_order_direction(local_w_i, wavelength_nm, period_nm, matched_order, matched_w_o),
+      "sampled phase-grating order direction can be reconstructed");
+    const float expected_efficiency = bsdf_diffraction_grating_order_efficiency(range, local_w_i, matched_w_o, wavelength_nm, period_nm, matched_order, material);
+    require(close_value(eval.bsdf.monochromatic(), expected_efficiency, 2.0e-6f), "evaluate returns the selected phase-order power");
+    const float expected_pdf = expected_efficiency / propagating_efficiency;
+    require(close_value(sample.pdf, expected_pdf, 2.0e-6f), "sample PDF matches normalized propagating phase-order power");
+    require(close_value(pdf, sample.pdf, 2.0e-6f), "sample and queried PDFs agree");
+    const BSDFDiffractionOrderRange reverse_range = bsdf_diffraction_grating_order_range(matched_w_o, wavelength_nm, period_nm);
+    const float reverse_total = bsdf_diffraction_grating_propagating_efficiency(reverse_range, matched_w_o, wavelength_nm, period_nm, material);
+    const float reverse_efficiency = bsdf_diffraction_grating_order_efficiency(reverse_range, matched_w_o, local_w_i, wavelength_nm, period_nm, matched_order, material);
+    require(close_value(reverse_pdf, reverse_efficiency / reverse_total, 3.0e-6f), "reverse PDF uses the reverse path's propagating-order normalization");
+    etx::BSDFData reverse_data = data;
+    reverse_data.w_i = -sample.w_o;
+    etx::Sampler reverse_eval_sampler(31u, sample_index + 9u);
+    const etx::BSDFEval reverse_eval = etx::bsdf::evaluate(reverse_data, -data.w_i, material, reverse_eval_sampler);
+    require(close_value(reverse_eval.bsdf.monochromatic(), eval.bsdf.monochromatic(), 2.0e-6f), "reciprocal BSDF power agrees");
+    mean_weight += sample.weight.monochromatic();
+  }
+  mean_weight /= static_cast<double>(sample_count);
+  require(close_value(static_cast<float>(mean_weight), propagating_efficiency, 2.0e-6f), "white-furnace estimator returns the analytic propagating reflected power");
+
+  for (int order = -2; order <= 2; ++order) {
+    float3 order_w_o = {};
+    require(bsdf_diffraction_grating_order_direction(local_w_i, wavelength_nm, period_nm, order, order_w_o), "histogram phase-grating order direction is valid");
+    const float expected_probability = bsdf_diffraction_grating_order_efficiency(range, local_w_i, order_w_o, wavelength_nm, period_nm, order, material) / propagating_efficiency;
+    const float observed_probability = static_cast<float>(order_counts[order + 2]) / static_cast<float>(sample_count);
+    require(fabsf(observed_probability - expected_probability) <= 0.006f, "sampled order histogram matches analytic probabilities");
+  }
+
+  ::BSDFData interop_data = etx::bsdf::detail::make_interop_data(data);
+  float3 local_first = {};
+  require(bsdf_diffraction_grating_order_direction(local_w_i, wavelength_nm, period_nm, 1, local_first), "rotation reference order propagates");
+  const LocalFrame unrotated_frame = bsdf_diffraction_grating_frame(interop_data, material);
+  const float3 unrotated_world = local_frame_from_local(unrotated_frame, local_first);
+  material.diffraction_grating.rotation = 0.5f * kPi;
+  const LocalFrame rotated_frame = bsdf_diffraction_grating_frame(interop_data, material);
+  const float3 rotated_world = local_frame_from_local(rotated_frame, local_first);
+  require((fabsf(unrotated_world.x) > 0.3f) && (fabsf(unrotated_world.y) < 1.0e-5f), "zero rotation disperses along tangent");
+  require((fabsf(rotated_world.y) > 0.3f) && (fabsf(rotated_world.x) < 1.0e-5f), "ninety-degree rotation rotates dispersion axis");
+
+  etx::BSDFData rgb_data = data;
+  rgb_data.spectrum_sample = etx::SpectralQuery{};
+  etx::Sampler rgb_sampler(31u, 37u);
+  const etx::BSDFSample rgb_sample = etx::bsdf::sample(rgb_data, material, rgb_sampler);
+  require(rgb_sample.weight.maximum() == 0.0f, "RGB transport is explicitly disabled for the spectral-only implementation");
+
+  material.diffraction_grating.period_nm = kDiffractionGratingMaximumPeriodNm + 1.0f;
+  etx::Sampler invalid_period_sampler(47u, 53u);
+  const etx::BSDFSample invalid_period_sample = etx::bsdf::sample(data, material, invalid_period_sampler);
+  require(invalid_period_sample.weight.maximum() == 0.0f, "out-of-contract periods fail closed instead of being silently clamped at runtime");
+  material.diffraction_grating.period_nm = invalid_float;
+  etx::Sampler nonfinite_period_sampler(59u, 61u);
+  const etx::BSDFSample nonfinite_period_sample = etx::bsdf::sample(data, material, nonfinite_period_sampler);
+  require(nonfinite_period_sample.weight.maximum() == 0.0f, "non-finite material parameters fail closed");
+
+  material.diffraction_grating.period_nm = period_nm;
+  material.diffraction_grating.optical_path_difference_nm = kDiffractionGratingMaximumOpticalPathDifferenceNm + 1.0f;
+  etx::Sampler invalid_depth_sampler(67u, 71u);
+  const etx::BSDFSample invalid_depth_sample = etx::bsdf::sample(data, material, invalid_depth_sampler);
+  require(invalid_depth_sample.weight.maximum() == 0.0f, "out-of-contract optical path differences fail closed");
+  material.diffraction_grating.optical_path_difference_nm = invalid_float;
+  etx::Sampler nonfinite_depth_sampler(73u, 79u);
+  const etx::BSDFSample nonfinite_depth_sample = etx::bsdf::sample(data, material, nonfinite_depth_sampler);
+  require(nonfinite_depth_sample.weight.maximum() == 0.0f, "non-finite optical path differences fail closed");
+
+  if (valid) {
+    std::printf("diffraction grating contract valid: phase mask period %.1f nm optical path difference %.1f nm duty %.3f propagating power %.9f sampled %u paths\n", period_nm,
+      optical_path_difference_nm, duty_cycle, propagating_efficiency, sample_count);
+  }
+  return valid;
+}
+
+bool validate_diffraction_grating_serialization() {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(16u);
+  scene_data.mediums.init(16u);
+  scene_data.defaults.missing_material = scene_data.add_material("__missing");
+
+  etx::MaterialDefinition canonical = {};
+  canonical.name = "diffraction-canonical";
+  canonical.properties["material"] = "class diffraction_grating";
+  canonical.properties["diffraction_grating"] = "period_nm 1700 optical_path_difference_nm 321 duty_cycle 0.4 rotation_degrees 25";
+
+  etx::MaterialDefinition legacy = {};
+  legacy.name = "diffraction-legacy";
+  legacy.properties["material"] = "class diffraction_grating";
+  legacy.properties["diffraction_grating"] = "period_nm 1800 groove_depth_nm 123 duty_cycle 0.3 rotation_degrees -40";
+
+  etx::IORDatabase ior_database = {};
+  etx::SceneSerialization serialization;
+  serialization.parse_material_definitions("", {canonical, legacy}, scene_data, ior_database, scheduler);
+
+  const auto canonical_index = scene_data.material_mapping.find(canonical.name);
+  const auto legacy_index = scene_data.material_mapping.find(legacy.name);
+  if ((canonical_index == scene_data.material_mapping.end()) || (legacy_index == scene_data.material_mapping.end())) {
+    std::printf("diffraction grating serialization failed: material mapping missing\n");
+    return false;
+  }
+
+  const etx::Material& canonical_material = scene_data.materials[canonical_index->second];
+  const etx::Material& legacy_material = scene_data.materials[legacy_index->second];
+  const bool valid =
+    (canonical_material.cls == MaterialClass::DiffractionGrating) && close_value(canonical_material.diffraction_grating.period_nm, 1700.0f, 1.0e-6f) &&
+    close_value(canonical_material.diffraction_grating.optical_path_difference_nm, 321.0f, 1.0e-6f) &&
+    close_value(canonical_material.diffraction_grating.duty_cycle, 0.4f, 1.0e-6f) && close_value(canonical_material.diffraction_grating.rotation, 25.0f * kPi / 180.0f, 1.0e-6f) &&
+    (legacy_material.cls == MaterialClass::DiffractionGrating) && close_value(legacy_material.diffraction_grating.period_nm, 1800.0f, 1.0e-6f) &&
+    close_value(legacy_material.diffraction_grating.optical_path_difference_nm, 246.0f, 1.0e-6f) && close_value(legacy_material.diffraction_grating.duty_cycle, 0.3f, 1.0e-6f) &&
+    close_value(legacy_material.diffraction_grating.rotation, -40.0f * kPi / 180.0f, 1.0e-6f);
+  if (valid == false) {
+    std::printf("diffraction grating serialization failed: canonical or legacy fields changed\n");
   }
   return valid;
 }
@@ -318,35 +616,33 @@ bool validate_spectral_energy_compensation_lut_sampling() {
   bool valid = true;
   etx::SpectralQuery spect = etx::SpectralQuery::spectral_sample(0.5f);
   spect.wavelength = kShortestWavelength + (kLongestWavelength - kShortestWavelength) * (5.0f / 127.0f);
-  const float exact_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.0f,
-    interface_data.cache_mode, interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength,
-    interface_data.spectral_longest_wavelength);
+  const float exact_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.0f, interface_data.cache_mode,
+    interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength, interface_data.spectral_longest_wavelength);
   if (close_value(exact_value, 5.0f, 1.0e-5f) == false) {
     std::printf("Spectral energy-compensation LUT exact wavelength failed %.6f\n", exact_value);
     valid = false;
   }
 
   spect.wavelength = kShortestWavelength + (kLongestWavelength - kShortestWavelength) * (5.5f / 127.0f);
-  const float wavelength_interp_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.0f,
-    interface_data.cache_mode, interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength,
-    interface_data.spectral_longest_wavelength);
+  const float wavelength_interp_value =
+    bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.0f, interface_data.cache_mode,
+      interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength, interface_data.spectral_longest_wavelength);
   if (close_value(wavelength_interp_value, 5.5f, 1.0e-5f) == false) {
     std::printf("Spectral energy-compensation LUT wavelength interpolation failed %.6f\n", wavelength_interp_value);
     valid = false;
   }
 
-  const float thinfilm_interp_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.5f,
-    interface_data.cache_mode, interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength,
-    interface_data.spectral_longest_wavelength);
+  const float thinfilm_interp_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 0.5f, interface_data.cache_mode,
+    interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength, interface_data.spectral_longest_wavelength);
   if (close_value(thinfilm_interp_value, 3005.5f, 1.0e-5f) == false) {
     std::printf("Spectral energy-compensation LUT thinfilm interpolation failed %.6f\n", thinfilm_interp_value);
     valid = false;
   }
 
   spect.wavelength = kShortestWavelength + (kLongestWavelength - kShortestWavelength) * (100.0f / 127.0f);
-  const float exact_layer_value = bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 1.0f / 6.0f,
-    interface_data.cache_mode, interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength,
-    interface_data.spectral_longest_wavelength);
+  const float exact_layer_value =
+    bsdf_energy_compensated_sample_spectral_scalar_image(context, image_index, spect, float2{0.0f, 0.0f}, 1u, 1u, 1.0f / 6.0f, interface_data.cache_mode,
+      interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength, interface_data.spectral_longest_wavelength);
   if (close_value(exact_layer_value, 1100.0f, 1.0e-6f) == false) {
     std::printf("Spectral energy-compensation LUT exact packed layer failed %.6f\n", exact_layer_value);
     valid = false;
@@ -393,6 +689,56 @@ bool validate_energy_compensation_gpu_shader_compile() {
     std::printf("Energy-compensation GPU shader compile valid\n");
   }
   return valid;
+}
+
+bool validate_diffraction_grating_gpu_shader_compile() {
+  auto& compiler = etx::ShaderCompiler::instance();
+  if (compiler.is_initialized() == false) {
+    std::printf("Diffraction-grating GPU shader compiler is not initialized\n");
+    return false;
+  }
+
+  const std::unordered_map<std::string, std::string> validation_defines = {
+    {"ETX_BSDF_RUNTIME_VALIDATION_MODE", "3"},
+    {"ETX_BSDF_RUNTIME_VALIDATION_OPERATION", "0"},
+    {"ETX_DXC_OPT_LEVEL", "0"},
+    {"ETX_DXC_SPIRV_OPT_CONFIG", "--compact-ids"},
+  };
+  const auto compilation = compiler.compile("shaders/bsdf_runtime_validation.hlsl", {{"main", etx::RHIShaderStage::Compute}}, validation_defines, select_default_backend());
+  if ((compilation.result != etx::RHIResult::Success) || compilation.binaries.empty() || (compilation.binaries[0].spirv_size == 0u)) {
+    std::printf("Diffraction-grating GPU shader compilation failed: %s\n", compilation.error_message.c_str());
+    return false;
+  }
+
+  struct ProductionShaderVariant {
+    const char* source_file;
+    const char* entry_point;
+  };
+  const ProductionShaderVariant production_variants[] = {
+    {"shaders/gpu_rt_wavefront_direct_light_prepare_variant.hlsl", "wavefront_camera_direct_light_prepare_diffuse_main"},
+    {"shaders/gpu_rt_wavefront_connect_light_prepare_variant.hlsl", "wavefront_camera_connect_light_prepare_diffuse_main"},
+    {"shaders/gpu_rt_wavefront_connect_light_resolve_variant.hlsl", "wavefront_camera_connect_light_resolve_diffuse_main"},
+    {"shaders/gpu_rt_wavefront_surface_continue_prepare_camera_variant.hlsl", "wavefront_camera_continue_prepare_diffuse_main"},
+    {"shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl", "wavefront_light_continue_prepare_diffuse_main"},
+    {"shaders/gpu_rt_wavefront_connect_camera_prepare_variant.hlsl", "wavefront_light_connect_camera_prepare_diffuse_main"},
+  };
+  for (const ProductionShaderVariant& variant : production_variants) {
+    const std::unordered_map<std::string, std::string> production_defines = {
+      {"ETX_BSDF_KIND", "1"},
+      {"ETX_STAGE_ENTRY", variant.entry_point},
+      {"ETX_WAVEFRONT_PATH_TRACING_ONLY", "0"},
+      {"ETX_DXC_OPT_LEVEL", "0"},
+      {"ETX_DXC_SPIRV_OPT_CONFIG", "--compact-ids"},
+    };
+    const auto production_compilation = compiler.compile(variant.source_file, {{variant.entry_point, etx::RHIShaderStage::Compute}}, production_defines, select_default_backend());
+    if ((production_compilation.result != etx::RHIResult::Success) || production_compilation.binaries.empty() || (production_compilation.binaries[0].spirv_size == 0u)) {
+      std::printf("Diffraction-grating production GPU shader compilation failed for %s: %s\n", variant.entry_point, production_compilation.error_message.c_str());
+      return false;
+    }
+  }
+
+  std::printf("diffraction grating validation and production GPU shader variants compile valid\n");
+  return true;
 }
 
 bool validate_energy_compensation_gpu_lut_parity() {
@@ -545,9 +891,9 @@ bool validate_equal_ior_dielectric_direction(const char* label, const etx::BSDFD
   const uint32_t expected_medium = entering ? material_with_media.int_medium : material_with_media.ext_medium;
   const float3 direction_error = sample.w_o - data.w_i;
 
-  if ((sample.valid() == false) || (sample.is_delta() == false) || reflection || (transmission == false) || (medium_changed == false) ||
-      (sample.medium_index != expected_medium) || (fabsf(sample.pdf - 1.0f) > kEpsilon) || (fabsf(sample.eta - 1.0f) > kEpsilon) ||
-      (sample.weight.valid() == false) || (fabsf(sample.weight.monochromatic() - 1.0f) > kEpsilon) || (dot(direction_error, direction_error) > 1.0e-8f)) {
+  if ((sample.valid() == false) || (sample.is_delta() == false) || reflection || (transmission == false) || (medium_changed == false) || (sample.medium_index != expected_medium) ||
+      (fabsf(sample.pdf - 1.0f) > kEpsilon) || (fabsf(sample.eta - 1.0f) > kEpsilon) || (sample.weight.valid() == false) ||
+      (fabsf(sample.weight.monochromatic() - 1.0f) > kEpsilon) || (dot(direction_error, direction_error) > 1.0e-8f)) {
     std::printf("%s equal-IOR sample failed pdf %.6f eta %.6f medium %u expected %u weight %.6f\n", label, sample.pdf, sample.eta, sample.medium_index, expected_medium,
       sample.weight.monochromatic());
     return false;
@@ -853,9 +1199,9 @@ bool validate_energy_compensated_material(const char* label, const etx::BSDFData
     return false;
   }
 
-  std::printf("%s roughness %.3f pdf %.6f reverse %.6f avg %.6f %.6f %.6f p95 %.6f p99 %.6f max %.6f valid %u zero_pdf %u bsdf_energy %.6f\n", label, roughness,
-    pdf_integral, reverse_pdf_integral, stats.average.x, stats.average.y, stats.average.z, stats.p95_weight, stats.p99_weight, stats.max_weight, stats.valid_count,
-    stats.zero_pdf_count, bsdf_energy);
+  std::printf("%s roughness %.3f pdf %.6f reverse %.6f avg %.6f %.6f %.6f p95 %.6f p99 %.6f max %.6f valid %u zero_pdf %u bsdf_energy %.6f\n", label, roughness, pdf_integral,
+    reverse_pdf_integral, stats.average.x, stats.average.y, stats.average.z, stats.p95_weight, stats.p99_weight, stats.max_weight, stats.valid_count, stats.zero_pdf_count,
+    bsdf_energy);
   return true;
 }
 
@@ -874,15 +1220,15 @@ bool validate_energy_compensated_white_furnace_direction(const char* label, cons
 
   if ((stats.invalid_count > 0u) || (stats.valid_count == 0u) || (std::isfinite(average_rgb.x) == false) || (std::isfinite(average_rgb.y) == false) ||
       (std::isfinite(average_rgb.z) == false) || (max_rgb_error > 0.12f)) {
-    std::printf("%s furnace wi %.3f %.3f %.3f roughness %.3f rgb %.6f %.6f %.6f p95 %.6f p99 %.6f max %.6f valid %u zero_pdf %u invalid %u\n", label,
-      w_i_world.x, w_i_world.y, w_i_world.z, roughness, average_rgb.x, average_rgb.y, average_rgb.z, stats.p95_weight, stats.p99_weight, stats.max_weight, stats.valid_count,
-      stats.zero_pdf_count, stats.invalid_count);
+    std::printf("%s furnace wi %.3f %.3f %.3f roughness %.3f rgb %.6f %.6f %.6f p95 %.6f p99 %.6f max %.6f valid %u zero_pdf %u invalid %u\n", label, w_i_world.x, w_i_world.y,
+      w_i_world.z, roughness, average_rgb.x, average_rgb.y, average_rgb.z, stats.p95_weight, stats.p99_weight, stats.max_weight, stats.valid_count, stats.zero_pdf_count,
+      stats.invalid_count);
     return false;
   }
 
-  std::printf("%s furnace wi %.3f %.3f %.3f roughness %.3f rgb %.6f %.6f %.6f p95 %.6f p99 %.6f max %.6f valid %u zero_pdf %u invalid %u\n", label, w_i_world.x,
-    w_i_world.y, w_i_world.z, roughness, average_rgb.x, average_rgb.y, average_rgb.z, stats.p95_weight, stats.p99_weight, stats.max_weight, stats.valid_count,
-    stats.zero_pdf_count, stats.invalid_count);
+  std::printf("%s furnace wi %.3f %.3f %.3f roughness %.3f rgb %.6f %.6f %.6f p95 %.6f p99 %.6f max %.6f valid %u zero_pdf %u invalid %u\n", label, w_i_world.x, w_i_world.y,
+    w_i_world.z, roughness, average_rgb.x, average_rgb.y, average_rgb.z, stats.p95_weight, stats.p99_weight, stats.max_weight, stats.valid_count, stats.zero_pdf_count,
+    stats.invalid_count);
   return true;
 }
 
@@ -967,8 +1313,7 @@ bool validate_plastic_sample_contract(const char* label, const etx::BSDFData& da
     const float weight_error = fabsf(sample.weight.monochromatic() - expected_weight.monochromatic());
     const float weight_tolerance = max(1.0e-3f, 0.05f * max(sample.weight.monochromatic(), expected_weight.monochromatic()));
     if (weight_error > weight_tolerance) {
-      std::printf("%s roughness %.3f plastic weight mismatch sample %.6f expected %.6f\n", label, roughness, sample.weight.monochromatic(),
-        expected_weight.monochromatic());
+      std::printf("%s roughness %.3f plastic weight mismatch sample %.6f expected %.6f\n", label, roughness, sample.weight.monochromatic(), expected_weight.monochromatic());
       return false;
     }
   }
@@ -998,8 +1343,7 @@ bool validate_plastic_inner_matches_outer(const char* label, const etx::BSDFData
   const float bsdf_error = fabsf(outside_eval.bsdf.monochromatic() - inside_eval.bsdf.monochromatic());
   const float bsdf_tolerance = max(1.0e-4f, 5.0e-3f * max(outside_eval.bsdf.monochromatic(), inside_eval.bsdf.monochromatic()));
   if (bsdf_error > bsdf_tolerance) {
-    std::printf("%s roughness %.3f inner/outer bsdf mismatch outside %.6f inside %.6f\n", label, roughness, outside_eval.bsdf.monochromatic(),
-      inside_eval.bsdf.monochromatic());
+    std::printf("%s roughness %.3f inner/outer bsdf mismatch outside %.6f inside %.6f\n", label, roughness, outside_eval.bsdf.monochromatic(), inside_eval.bsdf.monochromatic());
     return false;
   }
 
@@ -1021,8 +1365,8 @@ bool validate_plastic_inner_matches_outer(const char* label, const etx::BSDFData
   return true;
 }
 
-bool validate_plastic_black_substrate_matches_dielectric_reflection(const char* label, const etx::BSDFData& data, const etx::Material& plastic,
-  const etx::Material& dielectric, const float roughness, const uint32_t seed) {
+bool validate_plastic_black_substrate_matches_dielectric_reflection(const char* label, const etx::BSDFData& data, const etx::Material& plastic, const etx::Material& dielectric,
+  const float roughness, const uint32_t seed) {
   const float3 outgoing_direction = normalize(float3{0.0f, 0.0f, 1.0f});
   etx::Sampler plastic_eval_sampler(seed, seed ^ 0x7a53d21u);
   const etx::BSDFEval plastic_eval = etx::bsdf::evaluate(data, outgoing_direction, plastic, plastic_eval_sampler);
@@ -1036,8 +1380,7 @@ bool validate_plastic_black_substrate_matches_dielectric_reflection(const char* 
   const float bsdf_error = fabsf(plastic_eval.bsdf.monochromatic() - dielectric_eval.bsdf.monochromatic());
   const float bsdf_tolerance = max(1.0e-4f, 5.0e-3f * max(plastic_eval.bsdf.monochromatic(), dielectric_eval.bsdf.monochromatic()));
   if (bsdf_error > bsdf_tolerance) {
-    std::printf("%s roughness %.3f coating bsdf %.6f dielectric %.6f\n", label, roughness, plastic_eval.bsdf.monochromatic(),
-      dielectric_eval.bsdf.monochromatic());
+    std::printf("%s roughness %.3f coating bsdf %.6f dielectric %.6f\n", label, roughness, plastic_eval.bsdf.monochromatic(), dielectric_eval.bsdf.monochromatic());
     return false;
   }
 
@@ -1046,8 +1389,7 @@ bool validate_plastic_black_substrate_matches_dielectric_reflection(const char* 
   const LocalFrame frame = bsdf_plastic_coating_frame(interop_data, plastic);
   const float3 local_w_i = local_frame_to_local(frame, -interop_data.w_i);
   const float alpha = bsdf_energy_compensated_scalar_roughness(context, plastic, interop_data.tex);
-  const BSDFPlasticCoatingReflectionProposal proposal =
-    bsdf_plastic_coating_reflection_proposal(context, interop_data.spectrum_sample, plastic, local_w_i, alpha, 0.0f);
+  const BSDFPlasticCoatingReflectionProposal proposal = bsdf_plastic_coating_reflection_proposal(context, interop_data.spectrum_sample, plastic, local_w_i, alpha, 0.0f);
   if (proposal.probability <= kEpsilon) {
     std::printf("%s roughness %.3f invalid coating proposal probability %.6f\n", label, roughness, proposal.probability);
     return false;
@@ -1289,8 +1631,7 @@ bool validate_delta_thinfilm_coating_sample(const char* label, const etx::BSDFDa
     } else if (transmission) {
       saw_transmission = true;
       if (((medium_changed == false) || (sample.medium_index != expected_transmission_medium)) || (sample.eta <= 0.0f)) {
-        std::printf("%s invalid delta thinfilm transmission metadata eta %.6f medium %u expected %u\n", label, sample.eta, sample.medium_index,
-          expected_transmission_medium);
+        std::printf("%s invalid delta thinfilm transmission metadata eta %.6f medium %u expected %u\n", label, sample.eta, sample.medium_index, expected_transmission_medium);
         return false;
       }
     } else {
@@ -1400,21 +1741,19 @@ bool validate_exact_plastic_interface(etx::Scene& original_scene, const etx::Spe
   const etx::BSDFData inside_data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, 1.0f}};
 
   bool diagnostic_valid = validate_energy_compensated_material("plastic coated diffuse", camera_data, material, roughness, seed);
-  diagnostic_valid =
-    validate_energy_compensated_material("plastic coated diffuse light", light_data, material, roughness, seed + 500u) && diagnostic_valid;
+  diagnostic_valid = validate_energy_compensated_material("plastic coated diffuse light", light_data, material, roughness, seed + 500u) && diagnostic_valid;
   diagnostic_valid =
     validate_energy_compensated_white_furnace_direction("plastic coated diffuse", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 1000u) && diagnostic_valid;
-  diagnostic_valid = validate_energy_compensated_white_furnace_direction("plastic coated diffuse", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness,
-                       seed + 1100u) &&
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction("plastic coated diffuse", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 1100u) &&
                      diagnostic_valid;
-  diagnostic_valid = validate_energy_compensated_white_furnace_direction("plastic coated diffuse grazing", normalize(float3{0.9848077f, 0.0f, -0.1736482f}), material,
-                       roughness, seed + 1150u) &&
-                     diagnostic_valid;
+  diagnostic_valid =
+    validate_energy_compensated_white_furnace_direction("plastic coated diffuse grazing", normalize(float3{0.9848077f, 0.0f, -0.1736482f}), material, roughness, seed + 1150u) &&
+    diagnostic_valid;
   diagnostic_valid = validate_plastic_sample_contract("plastic coated diffuse", camera_data, material, roughness, seed + 1250u) && diagnostic_valid;
   diagnostic_valid = validate_plastic_inner_matches_outer("plastic coated diffuse", camera_data, inside_data, material, roughness, seed + 1300u) && diagnostic_valid;
-  diagnostic_valid = validate_plastic_black_substrate_matches_dielectric_reflection("plastic coated diffuse", camera_data, black_substrate_material, dielectric_material,
-                       roughness, seed + 1350u) &&
-                     diagnostic_valid;
+  diagnostic_valid =
+    validate_plastic_black_substrate_matches_dielectric_reflection("plastic coated diffuse", camera_data, black_substrate_material, dielectric_material, roughness, seed + 1350u) &&
+    diagnostic_valid;
 
   const float bsdf_energy = integrate_bsdf_energy(camera_data, material, seed + 1200u);
   if ((std::isfinite(bsdf_energy) == false) || (bsdf_energy < 0.0f) || (bsdf_energy > 1.05f)) {
@@ -1466,13 +1805,12 @@ bool validate_thinfilm_plastic_interface(etx::Scene& original_scene, const etx::
 
   bool diagnostic_valid = validate_energy_compensated_material("plastic thinfilm coated diffuse", data, material, roughness, seed);
   diagnostic_valid =
-    validate_energy_compensated_white_furnace_direction("plastic thinfilm coated diffuse", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) &&
-    diagnostic_valid;
+    validate_energy_compensated_white_furnace_direction("plastic thinfilm coated diffuse", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
   diagnostic_valid =
     validate_energy_compensated_white_furnace_direction("plastic thinfilm coated diffuse", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) &&
     diagnostic_valid;
-  diagnostic_valid = validate_energy_compensated_white_furnace_direction("plastic thinfilm coated diffuse grazing", normalize(float3{0.9848077f, 0.0f, -0.1736482f}),
-                       material, roughness, seed + 300u) &&
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction("plastic thinfilm coated diffuse grazing", normalize(float3{0.9848077f, 0.0f, -0.1736482f}), material,
+                       roughness, seed + 300u) &&
                      diagnostic_valid;
   diagnostic_valid = validate_plastic_sample_contract("plastic thinfilm coated diffuse", data, material, roughness, seed + 400u) && diagnostic_valid;
 
@@ -1555,8 +1893,7 @@ bool validate_variable_thinfilm_texture_lut(const etx::SpectralDistribution* spe
   etx::Material absorbing_film_material = variable_material;
   absorbing_film_material.thinfilm.ior.k_index = SpectrumHalf;
   Sampler absorbing_film_sampler(56999u, 0x34a1u);
-  const ThinfilmEval lossless_film =
-    bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, absorbing_film_material.thinfilm, float2{0.0f, 0.0f}, absorbing_film_sampler);
+  const ThinfilmEval lossless_film = bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, absorbing_film_material.thinfilm, float2{0.0f, 0.0f}, absorbing_film_sampler);
   if (spectral_response_is_zero(lossless_film.ior.k) == false) {
     std::printf("thinfilm runtime contract did not force extinction to zero\n");
     return false;
@@ -1602,8 +1939,7 @@ bool validate_variable_thinfilm_texture_lut(const etx::SpectralDistribution* spe
   }
 
   Sampler constant_sampler(58000u, 0x5678u);
-  const ThinfilmEval constant_thinfilm =
-    bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, bound_constant_material.thinfilm, float2{0.0f, 0.0f}, constant_sampler);
+  const ThinfilmEval constant_thinfilm = bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, bound_constant_material.thinfilm, float2{0.0f, 0.0f}, constant_sampler);
   const float constant_lut_value = bsdf_energy_compensated_thinfilm_lut_value(bound_constant_material, constant_thinfilm);
   if ((close_value(constant_thinfilm.thickness, 550.0f, 1.0e-4f) == false) || (close_value(constant_lut_value, 0.0f, 1.0e-5f) == false)) {
     std::printf("constant thinfilm mapping failed thickness %.6f lut %.6f\n", constant_thinfilm.thickness, constant_lut_value);
@@ -1642,24 +1978,20 @@ bool validate_variable_thinfilm_texture_lut(const etx::SpectralDistribution* spe
 
   etx::Material synthetic_3d_material = bound_variable_material;
   synthetic_3d_material.energy_compensation_interface_index = synthetic_3d_interface_index;
-  const SpectralResponse synthetic_low =
-    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, 0.0f);
-  const SpectralResponse synthetic_high =
-    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, 1.0f);
+  const SpectralResponse synthetic_low = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, 0.0f);
+  const SpectralResponse synthetic_high = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, 1.0f);
   if ((close_value(synthetic_low.integrated.x, 0.1f, 1.0e-5f) == false) || (close_value(synthetic_low.integrated.y, 0.2f, 1.0e-5f) == false) ||
       (close_value(synthetic_low.integrated.z, 0.3f, 1.0e-5f) == false) || (close_value(synthetic_high.integrated.x, 0.7f, 1.0e-5f) == false) ||
       (close_value(synthetic_high.integrated.y, 0.6f, 1.0e-5f) == false) || (close_value(synthetic_high.integrated.z, 0.5f, 1.0e-5f) == false)) {
-    std::printf("synthetic variable thinfilm LUT sampling failed low %.6f %.6f %.6f high %.6f %.6f %.6f\n", synthetic_low.integrated.x,
-      synthetic_low.integrated.y, synthetic_low.integrated.z, synthetic_high.integrated.x, synthetic_high.integrated.y, synthetic_high.integrated.z);
+    std::printf("synthetic variable thinfilm LUT sampling failed low %.6f %.6f %.6f high %.6f %.6f %.6f\n", synthetic_low.integrated.x, synthetic_low.integrated.y,
+      synthetic_low.integrated.z, synthetic_high.integrated.x, synthetic_high.integrated.y, synthetic_high.integrated.z);
     return false;
   }
 
   etx::Material synthetic_1d_material = bound_constant_material;
   synthetic_1d_material.energy_compensation_interface_index = synthetic_1d_interface_index;
-  const SpectralResponse synthetic_constant_low =
-    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, 0.0f);
-  const SpectralResponse synthetic_constant_high =
-    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, 1.0f);
+  const SpectralResponse synthetic_constant_low = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, 0.0f);
+  const SpectralResponse synthetic_constant_high = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, 1.0f);
   const float synthetic_constant_delta = length(synthetic_constant_low.integrated - synthetic_constant_high.integrated);
   if ((synthetic_constant_delta > 1.0e-6f) || (close_value(synthetic_constant_low.integrated.x, 0.4f, 1.0e-5f) == false) ||
       (close_value(synthetic_constant_low.integrated.y, 0.5f, 1.0e-5f) == false) || (close_value(synthetic_constant_low.integrated.z, 0.6f, 1.0e-5f) == false)) {
@@ -1813,13 +2145,13 @@ bool validate_named_plastic_water_exact_interface(etx::Scene& original_scene, co
     const float sin_theta = sqrtf(max(0.0f, 1.0f - mu * mu));
     char outside_label[128] = {};
     snprintf(outside_label, sizeof(outside_label), "energy compensated named plastic-water exact outside mu %.3f", mu);
-    diagnostic_valid = validate_energy_compensated_white_furnace_direction(outside_label, normalize(float3{sin_theta, 0.0f, -mu}), material, roughness, 34000u + i) &&
-                       diagnostic_valid;
+    diagnostic_valid =
+      validate_energy_compensated_white_furnace_direction(outside_label, normalize(float3{sin_theta, 0.0f, -mu}), material, roughness, 34000u + i) && diagnostic_valid;
 
     char inside_label[128] = {};
     snprintf(inside_label, sizeof(inside_label), "energy compensated named plastic-water exact inside mu %.3f", mu);
-    diagnostic_valid = validate_energy_compensated_white_furnace_direction(inside_label, normalize(float3{sin_theta, 0.0f, mu}), material, roughness, 34100u + i) &&
-                       diagnostic_valid;
+    diagnostic_valid =
+      validate_energy_compensated_white_furnace_direction(inside_label, normalize(float3{sin_theta, 0.0f, mu}), material, roughness, 34100u + i) && diagnostic_valid;
   }
 
   const Vertex contract_vertex = {
@@ -1855,8 +2187,8 @@ bool validate_named_plastic_water_exact_interface(etx::Scene& original_scene, co
   return true;
 }
 
-bool validate_exact_energy_compensated_dielectric_interface(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count,
-  const char* label, const etx::Material& source_material, const float roughness, const uint32_t seed) {
+bool validate_exact_energy_compensated_dielectric_interface(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const char* label,
+  const etx::Material& source_material, const float roughness, const uint32_t seed) {
   etx::TaskScheduler scheduler = {};
   etx::SceneData scene_data(scheduler);
   scene_data.images.init(16u);
@@ -1884,10 +2216,8 @@ bool validate_exact_energy_compensated_dielectric_interface(etx::Scene& original
   bool diagnostic_valid = true;
   diagnostic_valid = validate_energy_compensated_white_furnace_direction(label, float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
   diagnostic_valid = validate_energy_compensated_white_furnace_direction(label, float3{0.0f, 0.0f, 1.0f}, material, roughness, seed + 200u) && diagnostic_valid;
-  diagnostic_valid =
-    validate_energy_compensated_white_furnace_direction(label, normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 300u) && diagnostic_valid;
-  diagnostic_valid =
-    validate_energy_compensated_white_furnace_direction(label, normalize(float3{0.8660254f, 0.0f, 0.5f}), material, roughness, seed + 400u) && diagnostic_valid;
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction(label, normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 300u) && diagnostic_valid;
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction(label, normalize(float3{0.8660254f, 0.0f, 0.5f}), material, roughness, seed + 400u) && diagnostic_valid;
 
   const Vertex contract_vertex = {
     float3{0.0f, 0.0f, 0.0f},
@@ -1916,8 +2246,8 @@ bool validate_exact_energy_compensated_dielectric_interface(etx::Scene& original
   return diagnostic_valid;
 }
 
-bool validate_exact_energy_compensated_conductor_interface(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count,
-  const char* label, const etx::Material& source_material, const float roughness, const uint32_t seed) {
+bool validate_exact_energy_compensated_conductor_interface(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count, const char* label,
+  const etx::Material& source_material, const float roughness, const uint32_t seed) {
   etx::TaskScheduler scheduler = {};
   etx::SceneData scene_data(scheduler);
   scene_data.images.init(16u);
@@ -1968,8 +2298,7 @@ bool validate_exact_energy_compensated_conductor_interface(etx::Scene& original_
 
   bool diagnostic_valid = validate_energy_compensated_material(label, data, material, roughness, seed);
   diagnostic_valid = validate_energy_compensated_white_furnace_direction(label, float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
-  diagnostic_valid =
-    validate_energy_compensated_white_furnace_direction(label, normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) && diagnostic_valid;
+  diagnostic_valid = validate_energy_compensated_white_furnace_direction(label, normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) && diagnostic_valid;
 
   const float bsdf_energy = integrate_bsdf_energy(data, material, seed + 300u);
   if ((std::isfinite(bsdf_energy) == false) || (bsdf_energy < 0.0f) || (bsdf_energy > 1.05f)) {
@@ -2040,8 +2369,7 @@ bool validate_openpbr_white_furnace(etx::Scene& original_scene, const etx::Spect
   bool diagnostic_valid = validate_energy_compensated_material("openpbr coated base", data, material, roughness, seed);
   diagnostic_valid = validate_energy_compensated_white_furnace_direction("openpbr coated base", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
   diagnostic_valid =
-    validate_energy_compensated_white_furnace_direction("openpbr coated base", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) &&
-    diagnostic_valid;
+    validate_energy_compensated_white_furnace_direction("openpbr coated base", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) && diagnostic_valid;
 
   etx::scene_global_clear(&openpbr_scene);
   etx::scene_global_publish(&original_scene, &original_scene);
@@ -2387,8 +2715,8 @@ bool validation_close_float(const char* label, const char* field, const float cp
 
 bool validation_close_float3(const char* label, const char* field, const float3& cpu, const float3& gpu, const float tolerance) {
   const float error = validation_max_abs_diff(cpu, gpu);
-  if ((std::isfinite(cpu.x) == false) || (std::isfinite(cpu.y) == false) || (std::isfinite(cpu.z) == false) || (std::isfinite(gpu.x) == false) ||
-      (std::isfinite(gpu.y) == false) || (std::isfinite(gpu.z) == false) || (error > tolerance)) {
+  if ((std::isfinite(cpu.x) == false) || (std::isfinite(cpu.y) == false) || (std::isfinite(cpu.z) == false) || (std::isfinite(gpu.x) == false) || (std::isfinite(gpu.y) == false) ||
+      (std::isfinite(gpu.z) == false) || (error > tolerance)) {
     std::printf("%s %s CPU %.9f %.9f %.9f GPU %.9f %.9f %.9f tolerance %.9f\n", label, field, cpu.x, cpu.y, cpu.z, gpu.x, gpu.y, gpu.z, tolerance);
     return false;
   }
@@ -2404,7 +2732,12 @@ bool validation_equal_u32(const char* label, const char* field, const uint32_t c
 }
 
 BSDFRuntimeValidationExpected validation_expected(const etx::BSDFData& data, const etx::Material& material, const BSDFRuntimeValidationCase& test_case) {
-  const float3 outgoing_direction = normalize(float3{0.35f, 0.0f, 0.9367497f});
+  float3 outgoing_direction = normalize(float3{0.35f, 0.0f, 0.9367497f});
+  if (material.cls == MaterialClass::DiffractionGrating) {
+    const bool direction_valid =
+      bsdf_diffraction_grating_order_direction(float3{0.0f, 0.0f, 1.0f}, data.spectrum_sample.wavelength, material.diffraction_grating.period_nm, 1, outgoing_direction);
+    ETX_ASSERT(direction_valid);
+  }
   BSDFRuntimeValidationExpected result = {};
 
   etx::Sampler sample_sampler(test_case.seed);
@@ -2453,8 +2786,8 @@ bool validation_check_runtime_case(const char* label, const etx::BSDFData& data,
   if (check_sample) {
     case_valid =
       validation_close_float3(label, "sample.weight", expected.sample.weight.to_rgb(), validation_read_f32x3(output, output_case_index, 0u), value_tolerance) && case_valid;
-    case_valid = validation_close_float(label, "sample.weight.value", expected.sample.weight.value, validation_read_f32(output, output_case_index, 12u), value_tolerance) &&
-                 case_valid;
+    case_valid =
+      validation_close_float(label, "sample.weight.value", expected.sample.weight.value, validation_read_f32(output, output_case_index, 12u), value_tolerance) && case_valid;
     case_valid = validation_close_float3(label, "sample.w_o", expected.sample.w_o, validation_read_f32x3(output, output_case_index, 16u), value_tolerance) && case_valid;
     case_valid = validation_close_float(label, "sample.pdf", expected.sample.pdf, validation_read_f32(output, output_case_index, 28u), pdf_tolerance) && case_valid;
     case_valid = validation_close_float(label, "sample.eta", expected.sample.eta, validation_read_f32(output, output_case_index, 32u), value_tolerance) && case_valid;
@@ -2493,7 +2826,8 @@ bool validation_check_runtime_case(const char* label, const etx::BSDFData& data,
   return case_valid;
 }
 
-bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count) {
+bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx::SpectralDistribution* spectra, const uint32_t spectrum_count,
+  const bool diffraction_only = false) {
   etx::TaskScheduler scheduler = {};
   etx::SceneData scene_data(scheduler);
   scene_data.images.init(128u);
@@ -2505,6 +2839,14 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
   scene_data.materials.emplace_back(make_plastic(0.5f));
   scene_data.materials.emplace_back(make_openpbr(0.5f, 1.0f, 0.0f, SpectrumWhite, false));
   scene_data.materials.emplace_back(make_openpbr(0.5f, 0.0f, 1.0f, SpectrumWhite, false));
+  etx::Material diffraction = {};
+  diffraction.cls = MaterialClass::DiffractionGrating;
+  diffraction.reflectance.spectrum_index = SpectrumHalf;
+  diffraction.diffraction_grating.period_nm = 1600.0f;
+  diffraction.diffraction_grating.optical_path_difference_nm = 275.0f;
+  diffraction.diffraction_grating.duty_cycle = 0.5f;
+  diffraction.diffraction_grating.rotation = 0.0f;
+  scene_data.materials.emplace_back(diffraction);
 
   if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
     std::printf("BSDF runtime numeric harness failed to bind LUTs\n");
@@ -2532,16 +2874,15 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
   };
   const etx::BSDFData data = {etx::SpectralQuery{}, kInvalidIndex, etx::PathSource::Camera, vertex, float3{0.0f, 0.0f, -1.0f}};
 
-  const char* labels[] = {"rough conductor", "rough dielectric", "rough plastic", "openpbr conductor", "openpbr dielectric"};
+  const char* labels[] = {"rough conductor", "rough dielectric", "rough plastic", "openpbr conductor", "openpbr dielectric", "diffraction grating"};
   const BSDFRuntimeValidationCase cases[] = {
     {0u, 41001u, 0.31f, 0.63f, 0.17f, 0u, 0u, 0u},
     {1u, 42001u, 0.41f, 0.23f, 0.72f, 0u, 0u, 0u},
     {2u, 43001u, 0.19f, 0.77f, 0.44f, 0u, 0u, 0u},
     {3u, 44001u, 0.55f, 0.37f, 0.28f, 0u, 0u, 0u},
     {4u, 45001u, 0.27f, 0.52f, 0.66f, 0u, 0u, 0u},
+    {5u, 46001u, 0.43f, 0.29f, 0.61f, 0u, 0u, 0u},
   };
-  constexpr uint32_t case_count = static_cast<uint32_t>(sizeof(cases) / sizeof(cases[0]));
-
   etx::RHIInitInfo init_info = {
     .backend = select_default_backend(),
     .enable_validation = ETX_DEBUG,
@@ -2597,8 +2938,7 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
               scene_data.energy_compensation_interfaces.size() * sizeof(etx::Scene::EnergyCompensationInterface), etx::RHIBufferUsage::TransferDst, true, interface_buffer,
               "bsdf validation interfaces") &&
             valid;
-    valid =
-      validation_create_storage_buffer(rhi, &globals, sizeof(globals), etx::RHIBufferUsage::TransferDst, true, globals_buffer, "bsdf validation globals") && valid;
+    valid = validation_create_storage_buffer(rhi, &globals, sizeof(globals), etx::RHIBufferUsage::TransferDst, true, globals_buffer, "bsdf validation globals") && valid;
     if (valid == false) {
       break;
     }
@@ -2625,12 +2965,11 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
       bool batch_valid = true;
 
       do {
-        batch_valid =
-          validation_create_storage_buffer(rhi, batch_cases.data(), batch_cases.size() * sizeof(BSDFRuntimeValidationCase), etx::RHIBufferUsage::TransferDst, true,
-            case_buffer, "bsdf validation cases") &&
-          batch_valid;
-        batch_valid = validation_create_storage_buffer(rhi, nullptr, batch_case_count * kBSDFRuntimeValidationOutputStride, etx::RHIBufferUsage::TransferSrc, false,
-                        output_buffer, "bsdf validation output") &&
+        batch_valid = validation_create_storage_buffer(rhi, batch_cases.data(), batch_cases.size() * sizeof(BSDFRuntimeValidationCase), etx::RHIBufferUsage::TransferDst, true,
+                        case_buffer, "bsdf validation cases") &&
+                      batch_valid;
+        batch_valid = validation_create_storage_buffer(rhi, nullptr, batch_case_count * kBSDFRuntimeValidationOutputStride, etx::RHIBufferUsage::TransferSrc, false, output_buffer,
+                        "bsdf validation output") &&
                       batch_valid;
         batch_valid = validation_create_readback_buffer(rhi, batch_case_count * kBSDFRuntimeValidationOutputStride, readback_buffer, "bsdf validation") && batch_valid;
         if (batch_valid == false) {
@@ -2711,7 +3050,11 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
           const uint32_t case_index = first_case + i;
           const auto& test_case = cases[case_index];
           const etx::Material& material = scene_data.materials[test_case.material_index];
-          batch_valid = validation_check_runtime_case(labels[case_index], data, material, test_case, output, i, validation_operation) && batch_valid;
+          etx::BSDFData expected_data = data;
+          if (validation_mode == 3u) {
+            expected_data.spectrum_sample = etx::SpectralQuery{550.0f, SpectralFlags::Spectral};
+          }
+          batch_valid = validation_check_runtime_case(labels[case_index], expected_data, material, test_case, output, i, validation_operation) && batch_valid;
         }
       } while (false);
 
@@ -2727,10 +3070,15 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
       return batch_valid;
     };
 
-    valid = validate_batch("energy", 0u, 2u, 0u, 0u) && valid;
+    if (diffraction_only == false) {
+      valid = validate_batch("energy", 0u, 2u, 0u, 0u) && valid;
+      for (uint32_t operation = 1u; operation <= 4u; ++operation) {
+        valid = validate_batch("plastic", 2u, 1u, 1u, operation) && valid;
+        valid = validate_batch("openpbr", 3u, 2u, 2u, operation) && valid;
+      }
+    }
     for (uint32_t operation = 1u; operation <= 4u; ++operation) {
-      valid = validate_batch("plastic", 2u, 1u, 1u, operation) && valid;
-      valid = validate_batch("openpbr", 3u, case_count - 3u, 2u, operation) && valid;
+      valid = validate_batch("diffraction", 5u, 1u, 3u, operation) && valid;
     }
   } while (false);
 
@@ -2898,8 +3246,7 @@ bool validate_openpbr_thinfilm_delegate(etx::Scene& original_scene, const etx::S
     diagnostic_valid = false;
   }
 
-  if ((delegate.thinfilm.min_thickness <= 0.0f) || (delegate.thinfilm.max_thickness <= 0.0f) ||
-      (delegate.thinfilm.ior.cls == etx::SpectralDistribution::Invalid)) {
+  if ((delegate.thinfilm.min_thickness <= 0.0f) || (delegate.thinfilm.max_thickness <= 0.0f) || (delegate.thinfilm.ior.cls == etx::SpectralDistribution::Invalid)) {
     std::printf("%s did not preserve thinfilm on delegate\n", label);
     diagnostic_valid = false;
   }
@@ -2970,6 +3317,7 @@ int main(int argc, char** argv) {
   bool thinfilm_validation_only = false;
   bool thinfilm_furnace_only = false;
   bool energy_compensation_parity_only = false;
+  bool diffraction_validation_only = false;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--bsdf-runtime-only") == 0) {
       runtime_only = true;
@@ -2981,6 +3329,8 @@ int main(int argc, char** argv) {
       thinfilm_furnace_only = true;
     } else if (std::strcmp(argv[i], "--energy-compensation-parity-only") == 0) {
       energy_compensation_parity_only = true;
+    } else if (std::strcmp(argv[i], "--diffraction-validation-only") == 0) {
+      diffraction_validation_only = true;
     }
   }
 
@@ -3002,14 +3352,15 @@ int main(int argc, char** argv) {
   spectra[SpectrumDielectricEta] = make_spectrum(float3{1.5f, 1.5f, 1.5f});
   spectra[SpectrumSapphireEta] = make_spectrum(float3{1.77f, 1.77f, 1.77f});
   std::string named_ior_title = {};
-  etx::SpectralDistribution::load_refractive_index(etx::env().file_in_data("spectrum/dielectric/plastic.spd"), spectra[SpectrumNamedPlasticEta],
-    spectra[SpectrumNamedPlasticK], named_ior_title);
+  etx::SpectralDistribution::load_refractive_index(etx::env().file_in_data("spectrum/dielectric/plastic.spd"), spectra[SpectrumNamedPlasticEta], spectra[SpectrumNamedPlasticK],
+    named_ior_title);
   etx::SpectralDistribution::load_refractive_index(etx::env().file_in_data("spectrum/dielectric/water.spd"), spectra[SpectrumNamedWaterEta], spectra[SpectrumNamedWaterK],
     named_ior_title);
   spectra[SpectrumConductorEta] = make_spectrum(float3{0.25f, 0.45f, 1.05f});
   spectra[SpectrumConductorK] = make_spectrum(float3{3.4f, 2.4f, 1.9f});
   spectra[SpectrumMirrorEta] = make_loaded_ior_constant(0.0f);
   spectra[SpectrumMirrorK] = make_loaded_ior_constant(1000000.0f);
+  spectra[SpectrumSpectralWhite] = etx::SpectralDistribution::constant(1.0f);
 
   etx::Scene scene = {};
   scene.spectrums = etx::ArrayView<etx::SpectralDistribution>{spectra, SpectrumCount};
@@ -3020,6 +3371,13 @@ int main(int argc, char** argv) {
 
   etx::scene_global_init();
   etx::scene_global_publish(&scene, &scene);
+  if (diffraction_validation_only) {
+    const bool diffraction_valid = validate_diffraction_grating_serialization() && validate_diffraction_grating_gpu_shader_compile() &&
+                                   validate_diffraction_grating_contract(scene) && validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount, true);
+    etx::scene_global_clear(&scene);
+    etx::scene_global_deinit();
+    return diffraction_valid ? 0 : 1;
+  }
   if (runtime_only) {
     const bool runtime_valid = validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount);
     etx::scene_global_clear(&scene);
@@ -3057,16 +3415,16 @@ int main(int argc, char** argv) {
     for (uint32_t i = 0u; i < 3u; ++i) {
       thinfilm_valid = validate_thinfilm_plastic_interface(scene, spectra, SpectrumCount, plastic_roughness_values[i], 30500u + i * 1000u) && thinfilm_valid;
     }
-    thinfilm_valid = validate_exact_energy_compensated_conductor_interface(
-                       scene, spectra, SpectrumCount, "mirror conductor thinfilm exact interface", make_thinfilm_rough_conductor(0.5f), 0.5f, 33600u) &&
+    thinfilm_valid = validate_exact_energy_compensated_conductor_interface(scene, spectra, SpectrumCount, "mirror conductor thinfilm exact interface",
+                       make_thinfilm_rough_conductor(0.5f), 0.5f, 33600u) &&
                      thinfilm_valid;
-    thinfilm_valid = validate_exact_energy_compensated_dielectric_interface(
-                       scene, spectra, SpectrumCount, "sapphire dielectric thinfilm exact interface", make_thinfilm_rough_dielectric(0.5f), 0.5f, 38600u) &&
+    thinfilm_valid = validate_exact_energy_compensated_dielectric_interface(scene, spectra, SpectrumCount, "sapphire dielectric thinfilm exact interface",
+                       make_thinfilm_rough_dielectric(0.5f), 0.5f, 38600u) &&
                      thinfilm_valid;
     thinfilm_valid = validate_thinfilm_energy_compensation_cache_key(spectra, SpectrumCount) && thinfilm_valid;
     thinfilm_valid = validate_variable_thinfilm_texture_lut(spectra, SpectrumCount) && thinfilm_valid;
-    thinfilm_valid = validate_openpbr_case(scene, spectra, SpectrumCount, "openpbr thinfilm rough", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumWhite, true), 49000u, true) &&
-                     thinfilm_valid;
+    thinfilm_valid =
+      validate_openpbr_case(scene, spectra, SpectrumCount, "openpbr thinfilm rough", make_openpbr(0.5f, 0.0f, 0.0f, SpectrumWhite, true), 49000u, true) && thinfilm_valid;
 
     etx::scene_global_clear(&scene);
     etx::scene_global_deinit();
@@ -3128,8 +3486,8 @@ int main(int argc, char** argv) {
   valid = (validate_delta_dielectric_transmission_sample("sapphire delta dielectric inside", inside_data, delta_sapphire_dielectric, 25530u) && valid);
 
   const float exact_conductor_roughness = 0.5f;
-  valid = validate_exact_energy_compensated_conductor_interface(scene, spectra, SpectrumCount, "mirror conductor exact interface",
-    make_mirror_conductor(exact_conductor_roughness), exact_conductor_roughness, 33400u) &&
+  valid = validate_exact_energy_compensated_conductor_interface(scene, spectra, SpectrumCount, "mirror conductor exact interface", make_mirror_conductor(exact_conductor_roughness),
+            exact_conductor_roughness, 33400u) &&
           valid;
   valid = validate_exact_energy_compensated_conductor_interface(scene, spectra, SpectrumCount, "mirror conductor thinfilm exact interface",
             make_thinfilm_rough_conductor(exact_conductor_roughness), exact_conductor_roughness, 33600u) &&

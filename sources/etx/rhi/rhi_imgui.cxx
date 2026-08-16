@@ -354,7 +354,12 @@ RHIResult RHIImGui::create_pipeline() {
   auto& device = _context->device();
   auto& compiler = ShaderCompiler::instance();
 
-  auto result = compiler.compile("shaders/imgui.hlsl", {{"vs_main", RHIShaderStage::Vertex}, {"ps_main", RHIShaderStage::Fragment}}, {}, _context->backend());
+  std::unordered_map<std::string, std::string> defines = {};
+  if (rhi_texture_format_is_srgb(_desc.color_format)) {
+    defines.emplace("ETX_IMGUI_SRGB_TARGET", "1");
+  }
+
+  auto result = compiler.compile("shaders/imgui.hlsl", {{"vs_main", RHIShaderStage::Vertex}, {"ps_main", RHIShaderStage::Fragment}}, defines, _context->backend());
 
   if (result.result != RHIResult::Success) {
     log::error("Failed to compile imgui shader: %s", result.error_message.c_str());

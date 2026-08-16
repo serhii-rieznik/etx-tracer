@@ -2,6 +2,7 @@
 
 #include "bsdf_conductor_shared.hxx"
 #include "bsdf_dielectric_shared.hxx"
+#include "bsdf_diffraction_grating_shared.hxx"
 #include "bsdf_energy_compensated_shared.hxx"
 #include "bsdf_openpbr_shared.hxx"
 #include "bsdf_plastic_shared.hxx"
@@ -20,7 +21,8 @@ ETX_SHARED_INLINE bool bsdf_gpu_supported_class(uint32_t material_class) {
     case MaterialClass::Boundary:
     case MaterialClass::Velvet:
     case MaterialClass::OpenPBR:
-    case MaterialClass::Void: {
+    case MaterialClass::Void:
+    case MaterialClass::DiffractionGrating: {
       return true;
     }
 
@@ -55,6 +57,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_sample(ETX_IN(BSDFResourceContext, context), E
       return bsdf_openpbr_sample(context, data, effective_material, sampler);
     case MaterialClass::Void:
       return bsdf_void_sample(context, data, effective_material, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_sample(context, data, effective_material, sampler);
     default:
       return bsdf_sample_zero(data.spectrum_sample);
   }
@@ -86,6 +90,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_evaluate(ETX_IN(BSDFResourceContext, context), E
       return bsdf_openpbr_evaluate(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Void:
       return bsdf_void_evaluate(context, data, outgoing_direction, effective_material, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_evaluate(context, data, outgoing_direction, effective_material, sampler);
     default:
       return bsdf_eval_zero(data.spectrum_sample);
   }
@@ -117,6 +123,8 @@ ETX_SHARED_INLINE float bsdf_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BS
       return bsdf_openpbr_pdf(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Void:
       return bsdf_void_pdf(context, data, outgoing_direction, effective_material, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_pdf(context, data, outgoing_direction, effective_material, sampler);
     default:
       return 0.0f;
   }
@@ -159,6 +167,8 @@ ETX_SHARED_INLINE bool bsdf_is_delta(ETX_IN(Material, material), ETX_IN(float2, 
       return bsdf_openpbr_is_delta(material, tex, sampler);
     case MaterialClass::Void:
       return bsdf_void_is_delta(material, tex, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_is_delta(material, tex, sampler);
     default:
       return false;
   }
@@ -189,6 +199,8 @@ ETX_SHARED_INLINE bool bsdf_is_delta_with_context(ETX_IN(BSDFResourceContext, co
       return bsdf_openpbr_is_delta(effective_material, tex, sampler);
     case MaterialClass::Void:
       return bsdf_void_is_delta(effective_material, tex, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_is_delta(effective_material, tex, sampler);
     default:
       return false;
   }
@@ -219,6 +231,8 @@ ETX_SHARED_INLINE SpectralResponse bsdf_albedo(ETX_IN(BSDFResourceContext, conte
       return bsdf_openpbr_albedo(context, data, effective_material, sampler);
     case MaterialClass::Void:
       return bsdf_void_albedo(context, data, effective_material, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_albedo(context, data, effective_material, sampler);
     default:
       return spectral_response_zero(data.spectrum_sample);
   }

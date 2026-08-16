@@ -122,8 +122,7 @@ static_assert(offsetof(GPUWavefrontLightPathVertex, geo_normal) == kGPUWavefront
   "GPUWavefrontLightPathVertex::geo_normal offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontLightPathVertex, medium_index) == kGPUWavefrontLightPathVertexMediumIndexOffset,
   "GPUWavefrontLightPathVertex::medium_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontLightPathVertex, w_i) == kGPUWavefrontLightPathVertexWiOffset,
-  "GPUWavefrontLightPathVertex::w_i offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontLightPathVertex, w_i) == kGPUWavefrontLightPathVertexWiOffset, "GPUWavefrontLightPathVertex::w_i offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontLightPathVertex, emitter_index) == kGPUWavefrontLightPathVertexEmitterIndexOffset,
   "GPUWavefrontLightPathVertex::emitter_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontLightPathVertex, texcoord) == kGPUWavefrontLightPathVertexTexcoordOffset,
@@ -408,6 +407,14 @@ static_assert(offsetof(Emitter, triangle_area) == kEmitterTriangleAreaOffset, "E
 static_assert(std::is_standard_layout_v<Material>, "Material must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<Material>, "Material must stay trivially copyable for GPU upload ABI");
 static_assert(sizeof(Material) == kMaterialStride, "Material size changed; update GPU shader decode stride");
+static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, period_nm)) == kMaterialDiffractionGratingPeriodNmOffset,
+  "Material::diffraction_grating.period_nm offset changed; update GPU shader decode");
+static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, optical_path_difference_nm)) == kMaterialDiffractionGratingOpticalPathDifferenceNmOffset,
+  "Material::diffraction_grating.optical_path_difference_nm offset changed; update GPU shader decode");
+static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, duty_cycle)) == kMaterialDiffractionGratingDutyCycleOffset,
+  "Material::diffraction_grating.duty_cycle offset changed; update GPU shader decode");
+static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, rotation)) == kMaterialDiffractionGratingRotationOffset,
+  "Material::diffraction_grating.rotation offset changed; update GPU shader decode");
 static_assert(offsetof(Material, scattering) == kMaterialScatteringSpectrumIndexOffset, "Material::scattering offset changed; update GPU shader decode");
 static_assert((offsetof(Material, scattering) + offsetof(SpectralImage, image_index)) == kMaterialScatteringImageIndexOffset,
   "Material::scattering.image_index offset changed; update GPU shader decode");

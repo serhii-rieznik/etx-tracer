@@ -70,7 +70,8 @@ ETX_SHARED_INLINE bool interop_supported(const Material& mtl) {
     case MaterialClass::Mirror:
     case MaterialClass::Boundary:
     case MaterialClass::Velvet:
-    case MaterialClass::Void: {
+    case MaterialClass::Void:
+    case MaterialClass::DiffractionGrating: {
       return true;
     }
 

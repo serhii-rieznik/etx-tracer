@@ -144,6 +144,8 @@ const char* material_class_display_name(const Material::Class cls) {
       return "OpenPBR";
     case MaterialClass::Void:
       return "Void";
+    case MaterialClass::DiffractionGrating:
+      return "Diffraction Grating";
     default:
       return "Undefined";
   }
@@ -510,6 +512,18 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
   });
   apply_field(before.thinfilm.weight, after.thinfilm.weight, [](Material& material, const float value) {
     material.thinfilm.weight = value;
+  });
+  apply_field(before.diffraction_grating.period_nm, after.diffraction_grating.period_nm, [](Material& material, const float value) {
+    material.diffraction_grating.period_nm = value;
+  });
+  apply_field(before.diffraction_grating.optical_path_difference_nm, after.diffraction_grating.optical_path_difference_nm, [](Material& material, const float value) {
+    material.diffraction_grating.optical_path_difference_nm = value;
+  });
+  apply_field(before.diffraction_grating.duty_cycle, after.diffraction_grating.duty_cycle, [](Material& material, const float value) {
+    material.diffraction_grating.duty_cycle = value;
+  });
+  apply_field(before.diffraction_grating.rotation, after.diffraction_grating.rotation, [](Material& material, const float value) {
+    material.diffraction_grating.rotation = value;
   });
   apply_field(before.ext_ior.cls, after.ext_ior.cls, [](Material& material, const uint32_t value) {
     material.ext_ior.cls = value;
@@ -1731,21 +1745,23 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
             return image_picker(scene_rep, "Reflectance Texture##reflectance_texture", material.reflectance.image_index, Image::RepeatU | Image::RepeatV);
           });
-        ImGui::Spacing();
-        ImGui::Text("Scattering Spectrum");
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.scattering.spectrum_index;
-        }),
-          [&]() {
-            return spectrum_picker(scene_rep, "Scattering", material.scattering.spectrum_index, false, false);
-          });
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.scattering.image_index;
-        }),
-          [&]() {
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-            return image_picker(scene_rep, "Scattering Texture##scattering_texture", material.scattering.image_index, Image::RepeatU | Image::RepeatV);
-          });
+        if (material.cls != MaterialClass::DiffractionGrating) {
+          ImGui::Spacing();
+          ImGui::Text("Scattering Spectrum");
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return value.scattering.spectrum_index;
+          }),
+            [&]() {
+              return spectrum_picker(scene_rep, "Scattering", material.scattering.spectrum_index, false, false);
+            });
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return value.scattering.image_index;
+          }),
+            [&]() {
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return image_picker(scene_rep, "Scattering Texture##scattering_texture", material.scattering.image_index, Image::RepeatU | Image::RepeatV);
+            });
+        }
         ImGui::Spacing();
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         const bool opacity_mixed = material_values_mixed([](const Material& value) {
@@ -1931,66 +1947,135 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       false);
   }
 
-  with_section(
-    2, "Thin Film",
-    [&]() {
-      ImGui::Text("IoR");
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      const bool thinfilm_ior_mixed = material_ior_values_mixed([](const Material& value) {
-        return value.thinfilm.ior;
-      });
-      const bool thinfilm_ior_changed = mixed_control(thinfilm_ior_mixed, [&]() {
-        return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed, true);
-      });
-      if (thinfilm_ior_changed) {
-        _material_batch_changed_fields |= MaterialBatchChangedThinfilmIOR;
-        changed = true;
-      }
+  if (material.cls == MaterialClass::DiffractionGrating) {
+    with_section(
+      1, "Diffraction Grating",
+      [&]() {
+        const float previous_period_nm = material.diffraction_grating.period_nm;
+        const bool period_changed = mixed_control(material_values_mixed([](const Material& value) {
+          return value.diffraction_grating.period_nm;
+        }),
+          [&]() {
+            ImGui::Text("Period (nm)");
+            full_width_item();
+            return ImGui::InputFloat("##diffraction_period", &material.diffraction_grating.period_nm, 0.0f, 0.0f, "%.3f");
+          });
+        if (period_changed) {
+          material.diffraction_grating.period_nm = std::isfinite(material.diffraction_grating.period_nm)
+                                                     ? clamp(material.diffraction_grating.period_nm, kDiffractionGratingMinimumPeriodNm, kDiffractionGratingMaximumPeriodNm)
+                                                     : previous_period_nm;
+          changed = true;
+        }
 
-      ImGui::Spacing();
-      ImGui::Text("Weight");
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.thinfilm.weight;
-      }),
-        [&]() {
-          return ImGui::SliderFloat("##thinfilm_weight", &material.thinfilm.weight, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        });
+        ImGui::Spacing();
+        const float previous_optical_path_difference_nm = material.diffraction_grating.optical_path_difference_nm;
+        const bool optical_path_difference_changed = mixed_control(material_values_mixed([](const Material& value) {
+          return value.diffraction_grating.optical_path_difference_nm;
+        }),
+          [&]() {
+            ImGui::Text("Optical Path Difference (nm)");
+            full_width_item();
+            return ImGui::InputFloat("##diffraction_optical_path_difference", &material.diffraction_grating.optical_path_difference_nm, 0.0f, 0.0f, "%.3f");
+          });
+        if (optical_path_difference_changed) {
+          material.diffraction_grating.optical_path_difference_nm =
+            std::isfinite(material.diffraction_grating.optical_path_difference_nm)
+              ? clamp(material.diffraction_grating.optical_path_difference_nm, kDiffractionGratingMinimumOpticalPathDifferenceNm, kDiffractionGratingMaximumOpticalPathDifferenceNm)
+              : previous_optical_path_difference_nm;
+          changed = true;
+        }
 
-      ImGui::Spacing();
-      ImGui::Text("Thickness (nm)");
-      const float avail = ImGui::GetContentRegionAvail().x;
-      const float spacing = ImGui::GetStyle().ItemSpacing.x;
-      const float dash_width = ImGui::CalcTextSize(" - ").x;
-      const float field_width = max((avail - dash_width - spacing * 2.0f) * 0.5f, 0.0f);
-      ImGui::SetNextItemWidth(field_width);
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.thinfilm.min_thickness;
-      }),
-        [&]() {
-          return ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
+        ImGui::Spacing();
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.diffraction_grating.duty_cycle;
+        }),
+          [&]() {
+            ImGui::Text("Duty Cycle");
+            full_width_item();
+            return ImGui::SliderFloat("##diffraction_duty", &material.diffraction_grating.duty_cycle, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+          });
+
+        ImGui::Spacing();
+        const float previous_rotation = material.diffraction_grating.rotation;
+        float rotation_degrees = previous_rotation * 180.0f / kPi;
+        const bool rotation_changed = mixed_control(material_values_mixed([](const Material& value) {
+          return value.diffraction_grating.rotation;
+        }),
+          [&]() {
+            ImGui::Text("Rotation (degrees)");
+            full_width_item();
+            return ImGui::InputFloat("##diffraction_rotation", &rotation_degrees, 0.0f, 0.0f, "%.3f");
+          });
+        if (rotation_changed) {
+          material.diffraction_grating.rotation = std::isfinite(rotation_degrees) ? fmodf(rotation_degrees * kPi / 180.0f, kDoublePi) : previous_rotation;
+          changed = true;
+        }
+      },
+      true);
+  }
+
+  if (material.cls != MaterialClass::DiffractionGrating) {
+    with_section(
+      2, "Thin Film",
+      [&]() {
+        ImGui::Text("IoR");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        const bool thinfilm_ior_mixed = material_ior_values_mixed([](const Material& value) {
+          return value.thinfilm.ior;
         });
-      ImGui::SameLine();
-      ImGui::Text(" - ");
-      ImGui::SameLine();
-      ImGui::SetNextItemWidth(field_width);
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.thinfilm.max_thickness;
-      }),
-        [&]() {
-          return ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
+        const bool thinfilm_ior_changed = mixed_control(thinfilm_ior_mixed, [&]() {
+          return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed, true);
         });
-      ImGui::Spacing();
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.thinfilm.thinkness_image;
-      }),
-        [&]() {
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          return image_picker(scene_rep, "Thickness Texture##thinfilm_thickness_texture", material.thinfilm.thinkness_image,
-            Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
-        });
-    },
-    material.cls == MaterialClass::Thinfilm);
+        if (thinfilm_ior_changed) {
+          _material_batch_changed_fields |= MaterialBatchChangedThinfilmIOR;
+          changed = true;
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Weight");
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.thinfilm.weight;
+        }),
+          [&]() {
+            return ImGui::SliderFloat("##thinfilm_weight", &material.thinfilm.weight, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+          });
+
+        ImGui::Spacing();
+        ImGui::Text("Thickness (nm)");
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float dash_width = ImGui::CalcTextSize(" - ").x;
+        const float field_width = max((avail - dash_width - spacing * 2.0f) * 0.5f, 0.0f);
+        ImGui::SetNextItemWidth(field_width);
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.thinfilm.min_thickness;
+        }),
+          [&]() {
+            return ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
+          });
+        ImGui::SameLine();
+        ImGui::Text(" - ");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(field_width);
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.thinfilm.max_thickness;
+        }),
+          [&]() {
+            return ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
+          });
+        ImGui::Spacing();
+        changed |= mixed_control(material_values_mixed([](const Material& value) {
+          return value.thinfilm.thinkness_image;
+        }),
+          [&]() {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            return image_picker(scene_rep, "Thickness Texture##thinfilm_thickness_texture", material.thinfilm.thinkness_image,
+              Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
+          });
+      },
+      material.cls == MaterialClass::Thinfilm);
+  }
 
   if ((uses_subsurface()) || (_medium_mapping.empty() == false)) {
     with_section(
@@ -2741,7 +2826,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
 
     ImGui::Separator();
 
-    ImGui::Text("Cameras (%zu)", _camera_mapping.size());
+    ImGui::Text("Cameras (%zu)", static_cast<size_t>(_camera_mapping.size()));
     if (_camera_mapping.empty()) {
       ImGui::TextDisabled("None");
     } else if (ImGui::BeginListBox("##cameras_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
@@ -2775,7 +2860,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
 
     ImGui::Separator();
 
-    ImGui::Text("Materials (%zu)", _material_mapping.size());
+    ImGui::Text("Materials (%zu)", static_cast<size_t>(_material_mapping.size()));
     if (_material_mapping.empty()) {
       ImGui::TextDisabled("None");
     } else if (ImGui::BeginListBox("##materials_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
@@ -2801,7 +2886,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
 
     ImGui::Separator();
 
-    ImGui::Text("Meshes (%zu)", _mesh_mapping.size());
+    ImGui::Text("Meshes (%zu)", static_cast<size_t>(_mesh_mapping.size()));
     if (_mesh_mapping.empty()) {
       ImGui::TextDisabled("None");
     } else if (ImGui::BeginListBox("##meshes_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
@@ -2820,7 +2905,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
     ImGui::Separator();
 
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("Mediums (%zu)", _medium_mapping.size());
+    ImGui::Text("Mediums (%zu)", static_cast<size_t>(_medium_mapping.size()));
     ImGui::Spacing();
     if (_medium_mapping.empty()) {
       ImGui::TextDisabled("None");
@@ -2839,7 +2924,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
 
     ImGui::Separator();
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("Emitters (%u)", scene_rep.data().emitter_profiles.size());
+    ImGui::Text("Emitters (%zu)", scene_rep.data().emitter_profiles.size());
     ImGui::Spacing();
     if (scene_rep.data().emitter_profiles.empty()) {
       ImGui::TextDisabled("None");
@@ -3059,7 +3144,7 @@ bool UI::build_material_class_selector(Material& material, bool mixed) {
     draw_material_column(column_index++, "Primary", {MaterialClass::Diffuse, MaterialClass::Plastic, MaterialClass::Conductor, MaterialClass::Dielectric});
     ImGui::NextColumn();
     draw_material_column(column_index++, "Specialized",
-      {MaterialClass::OpenPBR, MaterialClass::Translucent, MaterialClass::Thinfilm, MaterialClass::Velvet, MaterialClass::Mirror});
+      {MaterialClass::OpenPBR, MaterialClass::Translucent, MaterialClass::Thinfilm, MaterialClass::DiffractionGrating, MaterialClass::Velvet, MaterialClass::Mirror});
     ImGui::NextColumn();
     draw_material_column(column_index++, "Interfaces", {MaterialClass::Boundary, MaterialClass::Void});
 

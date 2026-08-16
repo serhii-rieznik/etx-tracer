@@ -23,10 +23,11 @@ echo "Using temporary directory: $TEMP_DIR"
 mkdir -p "$RELEASE_DIR"
 
 # Copy only necessary directories from bin/
-echo "Copying bin/ contents (only including assets, fonts, spectrum)..."
+echo "Copying bin/ contents (including assets and runtime shaders)..."
 cd "$PROJECT_ROOT/bin"
 for item in *; do
-    if [[ "$item" == "assets" || "$item" == "fonts" || "$item" == "spectrum" ]]; then
+    if [[ "$item" == "assets" || "$item" == "fonts" || "$item" == "spectrum" ||
+          "$item" == "shaders" || "$item" == "interop" || "$item" == "access" ]]; then
         echo "  Copying: $item"
         cp -r "$item" "$RELEASE_DIR/"
     fi

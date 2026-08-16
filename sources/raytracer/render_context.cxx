@@ -176,7 +176,11 @@ void RenderContext::init() {
   ShaderCompiler::MultiShaderCompilationResult result = {};
   {
     ETX_PROFILER_NAMED_SCOPE("render_context_compile_presentation_shader");
-    result = compiler.compile("shaders/render.hlsl", {{"vertex_main", RHIShaderStage::Vertex}, {"fragment_main", RHIShaderStage::Fragment}}, {}, backend);
+    std::unordered_map<std::string, std::string> defines = {};
+    if (rhi_texture_format_is_srgb(_private->runtime_output.output_format())) {
+      defines.emplace("ETX_PRESENT_SRGB_TARGET", "1");
+    }
+    result = compiler.compile("shaders/render.hlsl", {{"vertex_main", RHIShaderStage::Vertex}, {"fragment_main", RHIShaderStage::Fragment}}, defines, backend);
   }
 
   if (result.result != RHIResult::Success) {

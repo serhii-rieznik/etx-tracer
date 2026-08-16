@@ -59,6 +59,8 @@ BSDFEval wavefront_direct_light_stage_various_eval(BSDFResourceContext context, 
 # endif
     case MaterialClass::Void:
       return bsdf_void_evaluate(context, data, outgoing_direction, material, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_evaluate(context, data, outgoing_direction, material, sampler);
     default:
       return bsdf_diffuse_evaluate(context, data, outgoing_direction, material, sampler);
   }
@@ -83,6 +85,8 @@ float wavefront_direct_light_stage_various_pdf(BSDFResourceContext context, BSDF
 # endif
     case MaterialClass::Void:
       return bsdf_void_pdf(context, data, outgoing_direction, material, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_pdf(context, data, outgoing_direction, material, sampler);
     default:
       return bsdf_diffuse_pdf(context, data, outgoing_direction, material, sampler);
   }
@@ -125,7 +129,7 @@ float wavefront_direct_light_stage_bsdf_pdf(BSDFResourceContext context, BSDFDat
 bool wavefront_direct_light_stage_matches_material(uint material_class) {
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
   return (material_class == MaterialClass::Diffuse) || (material_class == MaterialClass::Translucent) || (material_class == MaterialClass::Mirror) ||
-         (material_class == MaterialClass::Boundary) || (material_class == MaterialClass::Void)
+         (material_class == MaterialClass::Boundary) || (material_class == MaterialClass::Void) || (material_class == MaterialClass::DiffractionGrating)
 # if ETX_ENABLE_THINFILM_STAGE
          || (material_class == MaterialClass::Thinfilm)
 # endif

@@ -140,6 +140,22 @@ constexpr std::array<std::string_view, 6> default_shader_search_paths = {
   "../../sources",
 };
 
+std::vector<std::filesystem::path> shader_search_paths() {
+  std::vector<std::filesystem::path> paths;
+
+  const char* data_folder = env().data_folder();
+  if ((data_folder != nullptr) && (data_folder[0] != '\0')) {
+    paths.emplace_back(data_folder);
+  }
+
+  paths.reserve(paths.size() + default_shader_search_paths.size());
+  for (const auto path : default_shader_search_paths) {
+    paths.emplace_back(path);
+  }
+
+  return paths;
+}
+
 void append_unique_existing_directory(std::vector<std::string>& directories, const std::filesystem::path& input_path) {
   if (input_path.empty()) {
     return;
@@ -185,8 +201,8 @@ std::vector<std::string> build_shader_include_directories(const std::string& sou
     }
   }
 
-  for (const auto path : default_shader_search_paths) {
-    append_unique_existing_directory(include_directories, std::filesystem::path(std::string(path)));
+  for (const auto& path : shader_search_paths()) {
+    append_unique_existing_directory(include_directories, path);
   }
 
   return include_directories;
@@ -300,12 +316,12 @@ std::string resolve_shader_file_path(const std::string& filename) {
     return ec.value() == 0 ? abs_path.string() : input_path.string();
   }
 
-  for (const auto path : default_shader_search_paths) {
+  for (const auto& path : shader_search_paths()) {
     if (path.empty()) {
       continue;
     }
 
-    std::filesystem::path candidate = std::filesystem::path(std::string(path)) / filename;
+    std::filesystem::path candidate = path / filename;
     ec = {};
     if (std::filesystem::exists(candidate, ec) && (ec.value() == 0)) {
       auto abs_path = std::filesystem::absolute(candidate, ec);
@@ -1988,8 +2004,8 @@ std::string CustomIncludeHandler::find_include_file(const std::string& filename)
     }
   }
 
-  for (const auto root : default_shader_search_paths) {
-    if (auto resolved = resolve_relative_to_root(std::filesystem::path(std::string(root)), include_path); resolved.empty() == false) {
+  for (const auto& root : shader_search_paths()) {
+    if (auto resolved = resolve_relative_to_root(root, include_path); resolved.empty() == false) {
       return resolved;
     }
   }

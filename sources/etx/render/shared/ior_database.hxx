@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include <etx/core/environment.hxx>
 #include <etx/render/shared/spectrum.hxx>
 namespace etx {

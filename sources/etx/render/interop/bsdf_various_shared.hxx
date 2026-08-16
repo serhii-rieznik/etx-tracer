@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bsdf_resource_shared.hxx"
+#include "bsdf_diffraction_grating_shared.hxx"
 
 ETX_SHARED_INLINE BSDFSample bsdf_void_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)context;

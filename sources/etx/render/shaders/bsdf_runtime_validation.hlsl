@@ -12,7 +12,10 @@
   #define ETX_BSDF_RUNTIME_VALIDATION_OPERATION 0
 #endif
 
-#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 2
+#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+  #include <interop/bsdf_energy_compensated_shared.hxx>
+  #include <interop/bsdf_diffraction_grating_shared.hxx>
+#elif ETX_BSDF_RUNTIME_VALIDATION_MODE == 2
   #include <interop/bsdf_openpbr_shared.hxx>
 #elif ETX_BSDF_RUNTIME_VALIDATION_MODE == 1
   #include <interop/bsdf_plastic_shared.hxx>
@@ -64,7 +67,12 @@ BSDFData validation_data() {
   result.btn = float3(0.0f, 1.0f, 0.0f);
   result.tex = float2(0.5f, 0.5f);
   result.w_i = float3(0.0f, 0.0f, -1.0f);
+#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+  result.spectrum_sample.wavelength = 550.0f;
+  result.spectrum_sample.flags = SpectralFlags::Spectral;
+#else
   result.spectrum_sample = spectral_query_sample();
+#endif
   result.path_source = PathSource::Camera;
   result.current_medium = kInvalidIndex;
   return result;
@@ -97,6 +105,11 @@ BSDFSample validation_sample(BSDFResourceContext context, BSDFData data, Materia
     return bsdf_openpbr_sample(context, data, material, sampler);
   }
 #endif
+#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+  if (material.cls == MaterialClass::DiffractionGrating) {
+    return bsdf_diffraction_grating_sample(context, data, material, sampler);
+  }
+#endif
   return bsdf_sample_zero(data.spectrum_sample);
 }
 #endif
@@ -119,6 +132,11 @@ BSDFEval validation_evaluate(BSDFResourceContext context, BSDFData data, float3 
     return bsdf_openpbr_evaluate(context, data, outgoing_direction, material, sampler);
   }
 #endif
+#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+  if (material.cls == MaterialClass::DiffractionGrating) {
+    return bsdf_diffraction_grating_evaluate(context, data, outgoing_direction, material, sampler);
+  }
+#endif
   return bsdf_eval_zero(data.spectrum_sample);
 }
 #endif
@@ -139,6 +157,11 @@ float validation_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing
 #if ETX_BSDF_RUNTIME_VALIDATION_MODE == 2
   if (material.cls == MaterialClass::OpenPBR) {
     return bsdf_openpbr_pdf(context, data, outgoing_direction, material, sampler);
+  }
+#endif
+#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+  if (material.cls == MaterialClass::DiffractionGrating) {
+    return bsdf_diffraction_grating_pdf(context, data, outgoing_direction, material, sampler);
   }
 #endif
   return 0.0f;
@@ -175,6 +198,11 @@ bool validation_is_delta(BSDFResourceContext context, Material material, float2 
     return bsdf_openpbr_is_delta(material, tex, sampler);
   }
 #endif
+#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+  if (material.cls == MaterialClass::DiffractionGrating) {
+    return bsdf_diffraction_grating_is_delta(material, tex, sampler);
+  }
+#endif
   return false;
 }
 
@@ -193,6 +221,11 @@ SpectralResponse validation_albedo(BSDFResourceContext context, BSDFData data, M
 #if ETX_BSDF_RUNTIME_VALIDATION_MODE == 2
   if (material.cls == MaterialClass::OpenPBR) {
     return bsdf_openpbr_albedo(context, data, material, sampler);
+  }
+#endif
+#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+  if (material.cls == MaterialClass::DiffractionGrating) {
+    return bsdf_diffraction_grating_albedo(context, data, material, sampler);
   }
 #endif
   return spectral_response_zero(data.spectrum_sample);
@@ -218,7 +251,12 @@ void main(uint3 id : SV_DispatchThreadID) {
 
   Material material = gpu_abi_load_material_full(material_buffer, material_index);
   BSDFData data = validation_data();
+#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+  const float diffraction_tangent = data.spectrum_sample.wavelength / material.diffraction_grating.period_nm;
+  const float3 outgoing_direction = float3(diffraction_tangent, 0.0f, sqrt(max(0.0f, 1.0f - diffraction_tangent * diffraction_tangent)));
+#else
   const float3 outgoing_direction = normalize(float3(0.35f, 0.0f, 0.9367497f));
+#endif
   BSDFResourceContext context = make_bsdf_resource_gpu_context(constants.images_descriptor_index, constants.spectrums_descriptor_index,
     constants.energy_compensation_interfaces_descriptor_index, constants.scene_globals_descriptor_index);
 

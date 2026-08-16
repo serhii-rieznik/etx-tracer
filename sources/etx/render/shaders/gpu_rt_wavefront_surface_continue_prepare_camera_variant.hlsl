@@ -58,6 +58,8 @@ BSDFSample wavefront_surface_continue_stage_various_sample(BSDFResourceContext c
 # endif
     case MaterialClass::Void:
       return bsdf_void_sample(context, data, material, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_sample(context, data, material, sampler);
     default:
       return bsdf_diffuse_sample(context, data, material, sampler);
   }
@@ -78,6 +80,8 @@ float wavefront_surface_continue_stage_various_pdf(BSDFResourceContext context, 
 # endif
     case MaterialClass::Void:
       return bsdf_void_pdf(context, data, outgoing_direction, material, sampler);
+    case MaterialClass::DiffractionGrating:
+      return bsdf_diffraction_grating_pdf(context, data, outgoing_direction, material, sampler);
     default:
       return bsdf_diffuse_pdf(context, data, outgoing_direction, material, sampler);
   }
@@ -110,7 +114,7 @@ float wavefront_surface_continue_stage_conductor_pdf(BSDFResourceContext context
 bool wavefront_surface_continue_stage_matches_material(uint material_class) {
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
   return (material_class == MaterialClass::Diffuse) || (material_class == MaterialClass::Translucent) || (material_class == MaterialClass::Mirror) ||
-         (material_class == MaterialClass::Boundary) || (material_class == MaterialClass::Void)
+         (material_class == MaterialClass::Boundary) || (material_class == MaterialClass::Void) || (material_class == MaterialClass::DiffractionGrating)
 # if ETX_ENABLE_VELVET_STAGE
          || (material_class == MaterialClass::Velvet)
 # endif

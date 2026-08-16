@@ -573,7 +573,8 @@ bool material_compile_mask_has(uint32_t mask, uint32_t material_class) {
 bool material_compile_mask_has_various_continue(uint32_t mask) {
   return (material_compile_mask_has(mask, MaterialClass::Diffuse)) || (material_compile_mask_has(mask, MaterialClass::Translucent)) ||
          (material_compile_mask_has(mask, MaterialClass::Mirror)) || (material_compile_mask_has(mask, MaterialClass::Boundary)) ||
-         (material_compile_mask_has(mask, MaterialClass::Velvet)) || (material_compile_mask_has(mask, MaterialClass::Void));
+         (material_compile_mask_has(mask, MaterialClass::Velvet)) || (material_compile_mask_has(mask, MaterialClass::Void)) ||
+         (material_compile_mask_has(mask, MaterialClass::DiffractionGrating));
 }
 
 bool material_compile_mask_has_various_connect(uint32_t mask) {

@@ -32,6 +32,18 @@ struct ETX_ALIGNED ThinfilmEval {
   float weight ETX_INIT(0.0f);
 };
 
+ETX_STATIC_CONST float kDiffractionGratingMinimumPeriodNm = 1.0f;
+ETX_STATIC_CONST float kDiffractionGratingMaximumPeriodNm = 10000.0f;
+ETX_STATIC_CONST float kDiffractionGratingMinimumOpticalPathDifferenceNm = 0.0f;
+ETX_STATIC_CONST float kDiffractionGratingMaximumOpticalPathDifferenceNm = 20000.0f;
+
+struct ETX_ALIGNED DiffractionGrating {
+  float period_nm ETX_INIT(1600.0f);
+  float optical_path_difference_nm ETX_INIT(280.0f);
+  float duty_cycle ETX_INIT(0.5f);
+  float rotation ETX_INIT(0.0f);
+};
+
 struct SubsurfaceMaterial {
   using Class = uint32_t;
   enum : uint32_t {
@@ -59,6 +71,7 @@ struct MaterialClass {
     Velvet,
     OpenPBR,
     Void,
+    DiffractionGrating,
 
     Count,
     Undefined = kInvalidIndex,
@@ -76,6 +89,7 @@ struct ETX_ALIGNED Material {
   SampledImage metalness;
   SampledImage transmission;
   Thinfilm thinfilm;
+  DiffractionGrating diffraction_grating;
   RefractiveIndex ext_ior;
   RefractiveIndex int_ior;
   uint32_t subsurface_cls ETX_INIT(SubsurfaceMaterial::Disabled);

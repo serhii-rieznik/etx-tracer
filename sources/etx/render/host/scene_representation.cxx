@@ -141,6 +141,7 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "velvet",
     "openpbr",
     "void",
+    "diffraction_grating",
     "undefined",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(MaterialClass::Count) + 1);
@@ -260,6 +261,42 @@ struct SceneRepresentationImpl {
         mtl.thinfilm.weight = clamp(mtl.thinfilm.weight, 0.0f, 1.0f);
         mtl.thinfilm.min_thickness = max(0.0f, mtl.thinfilm.min_thickness);
         mtl.thinfilm.max_thickness = max(0.0f, mtl.thinfilm.max_thickness);
+        if ((mtl.cls == MaterialClass::DiffractionGrating) &&
+            ((std::isfinite(mtl.diffraction_grating.period_nm) == false) || (mtl.diffraction_grating.period_nm < kDiffractionGratingMinimumPeriodNm) ||
+              (mtl.diffraction_grating.period_nm > kDiffractionGratingMaximumPeriodNm))) {
+          log::warning("Material %u diffraction period %.9g nm is outside the supported [%g, %g] nm range; clamping it", i, mtl.diffraction_grating.period_nm,
+            kDiffractionGratingMinimumPeriodNm, kDiffractionGratingMaximumPeriodNm);
+          mtl.diffraction_grating.period_nm = clamp(mtl.diffraction_grating.period_nm, kDiffractionGratingMinimumPeriodNm, kDiffractionGratingMaximumPeriodNm);
+          if (std::isfinite(mtl.diffraction_grating.period_nm) == false) {
+            mtl.diffraction_grating.period_nm = 1600.0f;
+          }
+        }
+        if ((mtl.cls == MaterialClass::DiffractionGrating) &&
+            ((std::isfinite(mtl.diffraction_grating.duty_cycle) == false) || (mtl.diffraction_grating.duty_cycle < 0.0f) || (mtl.diffraction_grating.duty_cycle > 1.0f))) {
+          log::warning("Material %u diffraction duty cycle %.9g is outside [0, 1]; clamping it", i, mtl.diffraction_grating.duty_cycle);
+          mtl.diffraction_grating.duty_cycle = clamp(mtl.diffraction_grating.duty_cycle, 0.0f, 1.0f);
+          if (std::isfinite(mtl.diffraction_grating.duty_cycle) == false) {
+            mtl.diffraction_grating.duty_cycle = 0.5f;
+          }
+        }
+        if ((mtl.cls == MaterialClass::DiffractionGrating) && ((std::isfinite(mtl.diffraction_grating.optical_path_difference_nm) == false) ||
+                                                                (mtl.diffraction_grating.optical_path_difference_nm < kDiffractionGratingMinimumOpticalPathDifferenceNm) ||
+                                                                (mtl.diffraction_grating.optical_path_difference_nm > kDiffractionGratingMaximumOpticalPathDifferenceNm))) {
+          log::warning("Material %u diffraction optical path difference %.9g nm is outside the supported [%g, %g] nm range; clamping it", i,
+            mtl.diffraction_grating.optical_path_difference_nm, kDiffractionGratingMinimumOpticalPathDifferenceNm, kDiffractionGratingMaximumOpticalPathDifferenceNm);
+          mtl.diffraction_grating.optical_path_difference_nm =
+            clamp(mtl.diffraction_grating.optical_path_difference_nm, kDiffractionGratingMinimumOpticalPathDifferenceNm, kDiffractionGratingMaximumOpticalPathDifferenceNm);
+          if (std::isfinite(mtl.diffraction_grating.optical_path_difference_nm) == false) {
+            mtl.diffraction_grating.optical_path_difference_nm = 280.0f;
+          }
+        }
+        if ((mtl.cls == MaterialClass::DiffractionGrating) && (std::isfinite(mtl.diffraction_grating.rotation) == false)) {
+          log::warning("Material %u diffraction rotation is not finite; resetting it to zero", i);
+          mtl.diffraction_grating.rotation = 0.0f;
+        }
+        if ((mtl.cls == MaterialClass::DiffractionGrating) && (data.options.properties[Scene::Properties::Spectral] == false)) {
+          log::warning("Material %u is a diffraction grating in an RGB scene; diffraction transport is spectral-only and will evaluate to zero", i);
+        }
         if (mtl.reflectance.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
           mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
@@ -310,8 +347,7 @@ struct SceneRepresentationImpl {
           std::unique_lock lock(mt);
           mtl.ext_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
         }
-        const bool thinfilm_requested =
-          (mtl.thinfilm.weight > 0.0f) && (max(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness) > 0.0f);
+        const bool thinfilm_requested = (mtl.thinfilm.weight > 0.0f) && (max(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness) > 0.0f);
         if (thinfilm_requested && (mtl.thinfilm.ior.cls != SpectralDistribution::Dielectric)) {
           log::warning("Material %u uses a non-dielectric thin-film IOR; disabling its unsupported thin film", i);
           mtl.thinfilm.weight = 0.0f;
@@ -324,8 +360,7 @@ struct SceneRepresentationImpl {
           if (mtl.thinfilm.ior.eta_index >= data.spectrum_values.size()) {
             mtl.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
           }
-          if (thinfilm_requested && (mtl.thinfilm.ior.cls == SpectralDistribution::Dielectric) &&
-              (data.spectrum_values[mtl.thinfilm.ior.k_index].is_zero() == false)) {
+          if (thinfilm_requested && (mtl.thinfilm.ior.cls == SpectralDistribution::Dielectric) && (data.spectrum_values[mtl.thinfilm.ior.k_index].is_zero() == false)) {
             log::warning("Material %u uses absorption in its thin film; forcing extinction to zero for the supported lossless-film model", i);
             mtl.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
           }
@@ -1321,7 +1356,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     entry.cam.clip_far = default_camera.clip_far;
   }
 
-  return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene, create_default_camera_entry);
+  return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene,
+    create_default_camera_entry);
 }
 
 void SceneRepresentationImpl::update_medium_bounds() {
@@ -1849,8 +1885,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "material class " << material_class_to_string(material.cls) << "\n";
 
     write_spectrum_line(materials_stream, "Kd", material.scattering.spectrum_index, true);
-    if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Translucent) ||
-        (material.transmission.value.x > kEpsilon)) {
+    if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Translucent) || (material.transmission.value.x > kEpsilon)) {
       write_spectrum_line(materials_stream, "Kt", material.scattering.spectrum_index, true);
     }
     write_spectrum_line(materials_stream, "Ks", material.reflectance.spectrum_index, true);
@@ -1997,6 +2032,14 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
         float thinfilm_eta = spectrum_scalar(material.thinfilm.ior.eta_index, 1.0f);
         materials_stream << " ior " << thinfilm_eta << "\n";
       }
+    }
+
+    if (material.cls == MaterialClass::DiffractionGrating) {
+      materials_stream << "diffraction_grating period_nm " << material.diffraction_grating.period_nm;
+      materials_stream << " optical_path_difference_nm " << material.diffraction_grating.optical_path_difference_nm;
+      materials_stream << " duty_cycle " << material.diffraction_grating.duty_cycle;
+      materials_stream << " rotation_degrees " << material.diffraction_grating.rotation * 180.0f / kPi;
+      materials_stream << "\n";
     }
 
     materials_stream << "\n";

@@ -2,9 +2,15 @@
 #include <etx/core/debug.hxx>
 #if (ETX_PLATFORM_WINDOWS)
 # include <windows.h>
+#elif (ETX_PLATFORM_APPLE)
+# include <mach-o/dyld.h>
 #else
 # include <unistd.h>
 #endif
+
+#include <filesystem>
+#include <string>
+#include <vector>
 
 namespace etx {
 
@@ -95,21 +101,56 @@ void Environment::clear_tmp_folder() {
 }
 
 void Environment::setup(const char* executable_path) {
+  std::string platform_executable_path;
+
 #if (ETX_PLATFORM_WINDOWS)
   char exe_path[MAX_PATH] = {};
   DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
   if (len > 0 && len < MAX_PATH) {
-    executable_path = exe_path;
+    platform_executable_path.assign(exe_path, len);
+  }
+#elif (ETX_PLATFORM_APPLE)
+  uint32_t path_size = PATH_MAX;
+  std::vector<char> exe_path(path_size);
+  if (_NSGetExecutablePath(exe_path.data(), &path_size) != 0) {
+    exe_path.resize(path_size);
+  }
+  if (_NSGetExecutablePath(exe_path.data(), &path_size) == 0) {
+    platform_executable_path.assign(exe_path.data());
   }
 #else
   char exe_path[PATH_MAX] = {};
   ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
   if (len > 0 && len < (ssize_t)sizeof(exe_path)) {
     exe_path[len] = '\0';
-    executable_path = exe_path;
+    platform_executable_path.assign(exe_path, static_cast<size_t>(len));
   }
 #endif
-  get_file_folder(executable_path, _env.data_folder, sizeof(_env.data_folder));
+
+  std::filesystem::path resolved_executable = platform_executable_path.empty()
+    ? std::filesystem::path(executable_path ? executable_path : "")
+    : std::filesystem::path(platform_executable_path);
+
+  std::error_code ec;
+  if (resolved_executable.is_relative()) {
+    resolved_executable = std::filesystem::absolute(resolved_executable, ec);
+  }
+  if (!ec) {
+    auto canonical_executable = std::filesystem::weakly_canonical(resolved_executable, ec);
+    if (!ec) {
+      resolved_executable = std::move(canonical_executable);
+    }
+  }
+
+  std::string data_folder = resolved_executable.parent_path().generic_string();
+  if (data_folder.empty()) {
+    data_folder = std::filesystem::current_path(ec).generic_string();
+  }
+  if (!data_folder.empty() && data_folder.back() != '/') {
+    data_folder.push_back('/');
+  }
+  snprintf(_env.data_folder, sizeof(_env.data_folder), "%s", data_folder.c_str());
+  normalize_path(_env.data_folder);
   snprintf(_env.current_directory, sizeof(_env.current_directory), "%s", _env.data_folder);
 
   snprintf(_env.tmp_folder, sizeof(_env.tmp_folder), "%stmp%c", _env.data_folder, kDelimiter);

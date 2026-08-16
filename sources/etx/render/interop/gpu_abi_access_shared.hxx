@@ -97,6 +97,11 @@ ETX_SHARED_INLINE Material gpu_abi_load_material_full(ByteAddressBuffer buffer, 
   result.thinfilm.max_thickness = gpu_abi_load_f32(buffer, base_offset + kMaterialThinfilmMaxThicknessOffset);
   result.thinfilm.weight = gpu_abi_load_f32(buffer, base_offset + kMaterialThinfilmWeightOffset);
 
+  result.diffraction_grating.period_nm = gpu_abi_load_f32(buffer, base_offset + kMaterialDiffractionGratingPeriodNmOffset);
+  result.diffraction_grating.optical_path_difference_nm = gpu_abi_load_f32(buffer, base_offset + kMaterialDiffractionGratingOpticalPathDifferenceNmOffset);
+  result.diffraction_grating.duty_cycle = gpu_abi_load_f32(buffer, base_offset + kMaterialDiffractionGratingDutyCycleOffset);
+  result.diffraction_grating.rotation = gpu_abi_load_f32(buffer, base_offset + kMaterialDiffractionGratingRotationOffset);
+
   result.ext_ior.cls = gpu_abi_load_u32(buffer, base_offset + kMaterialExtIorClassOffset);
   result.ext_ior.eta_index = gpu_abi_load_u32(buffer, base_offset + kMaterialExtIorEtaIndexOffset);
   result.ext_ior.k_index = gpu_abi_load_u32(buffer, base_offset + kMaterialExtIorKIndexOffset);

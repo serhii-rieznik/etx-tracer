@@ -9,6 +9,9 @@ namespace etx {
 namespace {
 
 static constexpr uint32_t kMaxSphereSubdivisions = 6u;
+static constexpr uint32_t kMinimumDiskSegments = 3u;
+static constexpr uint32_t kMaximumDiskSegments = 4096u;
+static constexpr uint32_t kMaximumDiskBevelSegments = 32u;
 
 struct IcosphereFace {
   uint32_t i[3] = {};
@@ -95,6 +98,10 @@ bool is_sphere_alias(const std::string& name) {
 
 bool is_plane_alias(const std::string& name) {
   return (name == "et::plane") || (name == "etx::plane");
+}
+
+bool is_disk_alias(const std::string& name) {
+  return (name == "et::disk") || (name == "etx::disk");
 }
 
 bool is_geometry_entry(const std::string& name) {
@@ -255,7 +262,8 @@ float sphere_radius(const ProceduralGeometryDefinition& definition) {
 bool append_sphere_mesh(SceneData& data, const ProceduralGeometryDefinition& definition) {
   const float radius = sphere_radius(definition);
   if (radius <= kEpsilon) {
-    log::warning("Procedural sphere `%s` has invalid dimensions %.6f %.6f %.6f - skipped", definition.id.c_str(), definition.dimensions.x, definition.dimensions.y, definition.dimensions.z);
+    log::warning("Procedural sphere `%s` has invalid dimensions %.6f %.6f %.6f - skipped", definition.id.c_str(), definition.dimensions.x, definition.dimensions.y,
+      definition.dimensions.z);
     return false;
   }
 
@@ -341,7 +349,8 @@ bool append_sphere_mesh(SceneData& data, const ProceduralGeometryDefinition& def
 
 bool append_plane_mesh(SceneData& data, const ProceduralGeometryDefinition& definition) {
   if ((definition.dimensions.x <= kEpsilon) || (definition.dimensions.z <= kEpsilon)) {
-    log::warning("Procedural plane `%s` has invalid dimensions %.6f %.6f %.6f - skipped", definition.id.c_str(), definition.dimensions.x, definition.dimensions.y, definition.dimensions.z);
+    log::warning("Procedural plane `%s` has invalid dimensions %.6f %.6f %.6f - skipped", definition.id.c_str(), definition.dimensions.x, definition.dimensions.y,
+      definition.dimensions.z);
     return false;
   }
 
@@ -386,8 +395,12 @@ bool append_plane_mesh(SceneData& data, const ProceduralGeometryDefinition& defi
   }
 
   const uint32_t indices[6] = {
-    0u, 2u, 1u,
-    0u, 3u, 2u,
+    0u,
+    2u,
+    1u,
+    0u,
+    3u,
+    2u,
   };
 
   data.triangles.reserve(data.triangles.size() + 2u);
@@ -421,10 +434,262 @@ bool append_plane_mesh(SceneData& data, const ProceduralGeometryDefinition& defi
   return true;
 }
 
+bool append_disk_mesh(SceneData& data, const ProceduralGeometryDefinition& definition) {
+  if ((std::isfinite(definition.center.x) == false) || (std::isfinite(definition.center.y) == false) || (std::isfinite(definition.center.z) == false)) {
+    log::warning("Procedural disk `%s` has a non-finite center - skipped", definition.id.c_str());
+    return false;
+  }
+  if ((std::isfinite(definition.radius) == false) || (definition.radius <= kEpsilon)) {
+    log::warning("Procedural disk `%s` has invalid radius %.6f - skipped", definition.id.c_str(), definition.radius);
+    return false;
+  }
+  if ((std::isfinite(definition.inner_radius) == false) || (definition.inner_radius < 0.0f) || (definition.inner_radius >= definition.radius)) {
+    log::warning("Procedural disk `%s` has invalid inner radius %.6f for outer radius %.6f - skipped", definition.id.c_str(), definition.inner_radius, definition.radius);
+    return false;
+  }
+  if ((std::isfinite(definition.thickness) == false) || (definition.thickness < 0.0f) || ((definition.thickness > 0.0f) && (definition.thickness <= kEpsilon))) {
+    log::warning("Procedural disk `%s` has invalid thickness %.6f - skipped", definition.id.c_str(), definition.thickness);
+    return false;
+  }
+  if ((std::isfinite(definition.bevel_radius) == false) || (definition.bevel_radius < 0.0f)) {
+    log::warning("Procedural disk `%s` has invalid bevel radius %.6f - skipped", definition.id.c_str(), definition.bevel_radius);
+    return false;
+  }
+  if ((definition.thickness == 0.0f) && (definition.bevel_radius > 0.0f)) {
+    log::warning("Procedural disk `%s` requires positive thickness for a bevel - skipped", definition.id.c_str());
+    return false;
+  }
+  if (definition.bevel_radius > 0.0f) {
+    const float maximum_radial_bevel = (definition.inner_radius > 0.0f) ? 0.5f * (definition.radius - definition.inner_radius) : definition.radius;
+    const float maximum_bevel = min(0.5f * definition.thickness, maximum_radial_bevel);
+    if ((definition.bevel_radius >= maximum_bevel) || (maximum_bevel <= kEpsilon)) {
+      log::warning("Procedural disk `%s` bevel radius %.6f reaches or exceeds the geometric limit %.6f - skipped", definition.id.c_str(), definition.bevel_radius, maximum_bevel);
+      return false;
+    }
+  }
+  const float normal_length = length(definition.normal);
+  if ((std::isfinite(definition.normal.x) == false) || (std::isfinite(definition.normal.y) == false) || (std::isfinite(definition.normal.z) == false) ||
+      (std::isfinite(normal_length) == false) || (normal_length <= kEpsilon)) {
+    log::warning("Procedural disk `%s` has invalid normal %.6f %.6f %.6f - skipped", definition.id.c_str(), definition.normal.x, definition.normal.y, definition.normal.z);
+    return false;
+  }
+
+  uint32_t segments = definition.segments;
+  if (segments < kMinimumDiskSegments) {
+    log::warning("Procedural disk `%s` segments %u is below minimum %u - clamped", definition.id.c_str(), segments, kMinimumDiskSegments);
+    segments = kMinimumDiskSegments;
+  } else if (segments > kMaximumDiskSegments) {
+    log::warning("Procedural disk `%s` segments %u exceeds maximum %u - clamped", definition.id.c_str(), segments, kMaximumDiskSegments);
+    segments = kMaximumDiskSegments;
+  }
+
+  uint32_t bevel_segments = definition.bevel_segments;
+  if (definition.bevel_radius > 0.0f) {
+    if (bevel_segments == 0u) {
+      log::warning("Procedural disk `%s` has a positive bevel radius but zero bevel segments - skipped", definition.id.c_str());
+      return false;
+    }
+    if (bevel_segments > kMaximumDiskBevelSegments) {
+      log::warning("Procedural disk `%s` bevel segments %u exceeds maximum %u - clamped", definition.id.c_str(), bevel_segments, kMaximumDiskBevelSegments);
+      bevel_segments = kMaximumDiskBevelSegments;
+    }
+  }
+
+  const uint32_t material_index = resolve_material_index(data, definition);
+  if (material_index == kInvalidIndex) {
+    log::warning("Procedural disk `%s` has no valid material - skipped", definition.id.c_str());
+    return false;
+  }
+
+  const float3 normal = definition.normal / normal_length;
+  const float3 tangent_axis = (abs(normal.y) < 0.999f) ? normalize(cross(float3{0.0f, 1.0f, 0.0f}, normal)) : float3{1.0f, 0.0f, 0.0f};
+  const float3 bitangent_axis = normalize(cross(normal, tangent_axis));
+  const bool has_center_hole = definition.inner_radius > 0.0f;
+  const uint32_t vertex_start = static_cast<uint32_t>(data.vertices.pos.size());
+  const uint32_t triangle_start = static_cast<uint32_t>(data.triangles.size());
+
+  auto append_triangle = [&](const uint32_t i0, const uint32_t i1, const uint32_t i2) {
+    Triangle triangle = {};
+    triangle.i[0] = i0;
+    triangle.i[1] = i1;
+    triangle.i[2] = i2;
+    triangle.material_index = material_index;
+    if (validate_triangle(triangle, data.vertices.pos)) {
+      data.triangles.emplace_back(triangle);
+    }
+  };
+
+  auto append_surface_vertex = [&](const float radius, const float axial_offset, const float radial_normal, const float axial_normal, const float cosine, const float sine,
+                                 const float2 texcoord) {
+    const float3 radial_direction = normalize(cosine * tangent_axis + sine * bitangent_axis);
+    const float3 surface_normal = normalize(radial_normal * radial_direction + axial_normal * normal);
+    const float3 surface_tangent = normalize(axial_normal * radial_direction - radial_normal * normal);
+    data.vertices.pos.emplace_back(definition.center + radius * radial_direction + axial_offset * normal);
+    data.vertices.nrm.emplace_back(surface_normal);
+    data.vertices.tan.emplace_back(surface_tangent);
+    data.vertices.btn.emplace_back(normalize(cross(surface_normal, surface_tangent)));
+    data.vertices.tex.emplace_back(texcoord);
+  };
+
+  auto append_strip = [&](const float radius0, const float offset0, const float radial_normal0, const float axial_normal0, const float radius1, const float offset1,
+                        const float radial_normal1, const float axial_normal1) {
+    const uint32_t strip_start = static_cast<uint32_t>(data.vertices.pos.size());
+    for (uint32_t segment = 0u; segment <= segments; ++segment) {
+      const float u = float(segment) / float(segments);
+      const float angle = kDoublePi * u;
+      const float cosine = cosf(angle);
+      const float sine = sinf(angle);
+      append_surface_vertex(radius0, offset0, radial_normal0, axial_normal0, cosine, sine, float2{u, 0.0f});
+      append_surface_vertex(radius1, offset1, radial_normal1, axial_normal1, cosine, sine, float2{u, 1.0f});
+    }
+    for (uint32_t segment = 0u; segment < segments; ++segment) {
+      const uint32_t current0 = strip_start + 2u * segment;
+      const uint32_t current1 = current0 + 1u;
+      const uint32_t next0 = current0 + 2u;
+      const uint32_t next1 = current0 + 3u;
+      append_triangle(current0, current1, next1);
+      append_triangle(current0, next1, next0);
+    }
+  };
+
+  auto append_cap = [&](const float axial_offset, const float axial_normal, const float inner_radius, const float outer_radius) {
+    if (inner_radius > 0.0f) {
+      const uint32_t cap_start = static_cast<uint32_t>(data.vertices.pos.size());
+      for (uint32_t segment = 0u; segment <= segments; ++segment) {
+        const float angle = kDoublePi * float(segment) / float(segments);
+        const float cosine = cosf(angle);
+        const float sine = sinf(angle);
+        const float radius0 = (axial_normal > 0.0f) ? inner_radius : outer_radius;
+        const float radius1 = (axial_normal > 0.0f) ? outer_radius : inner_radius;
+        const float normalized_radius0 = radius0 / definition.radius;
+        const float normalized_radius1 = radius1 / definition.radius;
+        append_surface_vertex(radius0, axial_offset, 0.0f, axial_normal, cosine, sine, float2{0.5f + 0.5f * normalized_radius0 * cosine, 0.5f + 0.5f * normalized_radius0 * sine});
+        append_surface_vertex(radius1, axial_offset, 0.0f, axial_normal, cosine, sine, float2{0.5f + 0.5f * normalized_radius1 * cosine, 0.5f + 0.5f * normalized_radius1 * sine});
+      }
+      for (uint32_t segment = 0u; segment < segments; ++segment) {
+        const uint32_t current0 = cap_start + 2u * segment;
+        const uint32_t current1 = current0 + 1u;
+        const uint32_t next0 = current0 + 2u;
+        const uint32_t next1 = current0 + 3u;
+        append_triangle(current0, current1, next1);
+        append_triangle(current0, next1, next0);
+      }
+      return;
+    }
+
+    const uint32_t center_index = static_cast<uint32_t>(data.vertices.pos.size());
+    data.vertices.pos.emplace_back(definition.center + axial_offset * normal);
+    data.vertices.nrm.emplace_back(axial_normal * normal);
+    data.vertices.tan.emplace_back(tangent_axis);
+    data.vertices.btn.emplace_back(normalize(cross(axial_normal * normal, tangent_axis)));
+    data.vertices.tex.emplace_back(float2{0.5f, 0.5f});
+
+    const uint32_t ring_start = static_cast<uint32_t>(data.vertices.pos.size());
+    for (uint32_t segment = 0u; segment <= segments; ++segment) {
+      const float angle = kDoublePi * float(segment) / float(segments);
+      const float cosine = cosf(angle);
+      const float sine = sinf(angle);
+      append_surface_vertex(outer_radius, axial_offset, 0.0f, axial_normal, cosine, sine, float2{0.5f + 0.5f * cosine, 0.5f + 0.5f * sine});
+    }
+    for (uint32_t segment = 0u; segment < segments; ++segment) {
+      if (axial_normal > 0.0f) {
+        append_triangle(center_index, ring_start + segment, ring_start + segment + 1u);
+      } else {
+        append_triangle(center_index, ring_start + segment + 1u, ring_start + segment);
+      }
+    }
+  };
+
+  if (definition.thickness == 0.0f) {
+    append_cap(0.0f, 1.0f, definition.inner_radius, definition.radius);
+  } else {
+    const float half_thickness = 0.5f * definition.thickness;
+    const float bevel = definition.bevel_radius;
+    const float top_inner_radius = has_center_hole ? definition.inner_radius + bevel : 0.0f;
+    const float top_outer_radius = definition.radius - bevel;
+    append_cap(half_thickness, 1.0f, top_inner_radius, top_outer_radius);
+
+    if (bevel > 0.0f) {
+      const float outer_center_radius = definition.radius - bevel;
+      const float top_bevel_center = half_thickness - bevel;
+      for (uint32_t i = 0u; i < bevel_segments; ++i) {
+        const float angle0 = 0.5f * kPi * (1.0f - float(i) / float(bevel_segments));
+        const float angle1 = 0.5f * kPi * (1.0f - float(i + 1u) / float(bevel_segments));
+        append_strip(outer_center_radius + bevel * cosf(angle0), top_bevel_center + bevel * sinf(angle0), cosf(angle0), sinf(angle0), outer_center_radius + bevel * cosf(angle1),
+          top_bevel_center + bevel * sinf(angle1), cosf(angle1), sinf(angle1));
+      }
+    }
+
+    append_strip(definition.radius, half_thickness - bevel, 1.0f, 0.0f, definition.radius, -half_thickness + bevel, 1.0f, 0.0f);
+
+    if (bevel > 0.0f) {
+      const float outer_center_radius = definition.radius - bevel;
+      const float bottom_bevel_center = -half_thickness + bevel;
+      for (uint32_t i = 0u; i < bevel_segments; ++i) {
+        const float angle0 = -0.5f * kPi * float(i) / float(bevel_segments);
+        const float angle1 = -0.5f * kPi * float(i + 1u) / float(bevel_segments);
+        append_strip(outer_center_radius + bevel * cosf(angle0), bottom_bevel_center + bevel * sinf(angle0), cosf(angle0), sinf(angle0), outer_center_radius + bevel * cosf(angle1),
+          bottom_bevel_center + bevel * sinf(angle1), cosf(angle1), sinf(angle1));
+      }
+    }
+
+    const float bottom_inner_radius = has_center_hole ? definition.inner_radius + bevel : 0.0f;
+    append_cap(-half_thickness, -1.0f, bottom_inner_radius, top_outer_radius);
+
+    if (has_center_hole) {
+      if (bevel > 0.0f) {
+        const float inner_center_radius = definition.inner_radius + bevel;
+        const float bottom_bevel_center = -half_thickness + bevel;
+        for (uint32_t i = 0u; i < bevel_segments; ++i) {
+          const float angle0 = -0.5f * kPi - 0.5f * kPi * float(i) / float(bevel_segments);
+          const float angle1 = -0.5f * kPi - 0.5f * kPi * float(i + 1u) / float(bevel_segments);
+          append_strip(inner_center_radius + bevel * cosf(angle0), bottom_bevel_center + bevel * sinf(angle0), cosf(angle0), sinf(angle0),
+            inner_center_radius + bevel * cosf(angle1), bottom_bevel_center + bevel * sinf(angle1), cosf(angle1), sinf(angle1));
+        }
+      }
+
+      append_strip(definition.inner_radius, -half_thickness + bevel, -1.0f, 0.0f, definition.inner_radius, half_thickness - bevel, -1.0f, 0.0f);
+
+      if (bevel > 0.0f) {
+        const float inner_center_radius = definition.inner_radius + bevel;
+        const float top_bevel_center = half_thickness - bevel;
+        for (uint32_t i = 0u; i < bevel_segments; ++i) {
+          const float angle0 = kPi - 0.5f * kPi * float(i) / float(bevel_segments);
+          const float angle1 = kPi - 0.5f * kPi * float(i + 1u) / float(bevel_segments);
+          append_strip(inner_center_radius + bevel * cosf(angle0), top_bevel_center + bevel * sinf(angle0), cosf(angle0), sinf(angle0), inner_center_radius + bevel * cosf(angle1),
+            top_bevel_center + bevel * sinf(angle1), cosf(angle1), sinf(angle1));
+        }
+      }
+    }
+  }
+
+  const uint32_t triangle_end = static_cast<uint32_t>(data.triangles.size());
+  const uint32_t triangle_count = triangle_end - triangle_start;
+  if (triangle_count == 0u) {
+    data.vertices.pos.resize(vertex_start);
+    data.vertices.nrm.resize(vertex_start);
+    data.vertices.tan.resize(vertex_start);
+    data.vertices.btn.resize(vertex_start);
+    data.vertices.tex.resize(vertex_start);
+    return false;
+  }
+
+  const float3 projected_radius = definition.radius * float3{
+                                                        sqrtf(max(0.0f, 1.0f - normal.x * normal.x)),
+                                                        sqrtf(max(0.0f, 1.0f - normal.y * normal.y)),
+                                                        sqrtf(max(0.0f, 1.0f - normal.z * normal.z)),
+                                                      };
+  const float3 projected_half_thickness = 0.5f * definition.thickness * float3{abs(normal.x), abs(normal.y), abs(normal.z)};
+  const std::string mesh_name = unique_mesh_name(data, definition.id, "disk");
+  data.add_mesh(mesh_name.c_str(), triangle_start, triangle_count, definition.center - projected_radius - projected_half_thickness,
+    definition.center + projected_radius + projected_half_thickness);
+  return true;
+}
+
 }  // namespace
 
 bool is_procedural_geometry_entry(const std::string& name) {
-  return is_geometry_entry(name) || is_sphere_alias(name) || is_plane_alias(name);
+  return is_geometry_entry(name) || is_sphere_alias(name) || is_plane_alias(name) || is_disk_alias(name);
 }
 
 bool parse_procedural_geometry_definition(const MaterialDefinition& material, ProceduralGeometryDefinition& out_definition) {
@@ -434,6 +699,8 @@ bool parse_procedural_geometry_definition(const MaterialDefinition& material, Pr
     out_definition.cls = ProceduralGeometryDefinition::Class::Sphere;
   } else if (is_plane_alias(material.name)) {
     out_definition.cls = ProceduralGeometryDefinition::Class::Plane;
+  } else if (is_disk_alias(material.name)) {
+    out_definition.cls = ProceduralGeometryDefinition::Class::Disk;
   } else if (is_geometry_entry(material.name)) {
     std::string class_name;
     if (read_property(material, "class", class_name) == false) {
@@ -445,6 +712,8 @@ bool parse_procedural_geometry_definition(const MaterialDefinition& material, Pr
       out_definition.cls = ProceduralGeometryDefinition::Class::Sphere;
     } else if (class_name == "plane") {
       out_definition.cls = ProceduralGeometryDefinition::Class::Plane;
+    } else if (class_name == "disk") {
+      out_definition.cls = ProceduralGeometryDefinition::Class::Disk;
     } else {
       log::warning("Unsupported procedural geometry class `%s` - skipped", class_name.c_str());
       return false;
@@ -457,6 +726,13 @@ bool parse_procedural_geometry_definition(const MaterialDefinition& material, Pr
     out_definition.dimensions = {2.0f, 2.0f, 2.0f};
   } else if (out_definition.cls == ProceduralGeometryDefinition::Class::Plane) {
     out_definition.dimensions = {1.0f, 0.0f, 1.0f};
+  } else if (out_definition.cls == ProceduralGeometryDefinition::Class::Disk) {
+    out_definition.radius = 0.5f;
+    out_definition.inner_radius = 0.0f;
+    out_definition.thickness = 0.0f;
+    out_definition.bevel_radius = 0.0f;
+    out_definition.segments = 128u;
+    out_definition.bevel_segments = 0u;
   }
 
   std::string value;
@@ -475,23 +751,48 @@ bool parse_procedural_geometry_definition(const MaterialDefinition& material, Pr
 
   read_float3_property(material, "center", out_definition.center);
 
-  const bool has_dimensions = read_float3_property(material, "dimensions", out_definition.dimensions);
-  if (has_dimensions == false) {
-    if (out_definition.cls == ProceduralGeometryDefinition::Class::Sphere) {
-      float radius = 0.0f;
-      if (read_float_property(material, "radius", radius)) {
-        const float diameter = radius * 2.0f;
-        out_definition.dimensions = {diameter, diameter, diameter};
-      }
-    } else if (out_definition.cls == ProceduralGeometryDefinition::Class::Plane) {
-      float2 size = {};
-      if (read_float2_property(material, "size", size)) {
-        out_definition.dimensions = {size.x, 0.0f, size.y};
+  if (out_definition.cls == ProceduralGeometryDefinition::Class::Disk) {
+    if (read_float_property(material, "radius", out_definition.radius) == false) {
+      float diameter = 0.0f;
+      if (read_float_property(material, "diameter", diameter)) {
+        out_definition.radius = 0.5f * diameter;
       }
     }
-  }
+    if (read_float_property(material, "inner-radius", out_definition.inner_radius) == false) {
+      if (read_float_property(material, "inner_radius", out_definition.inner_radius) == false) {
+        if (read_float_property(material, "hole-radius", out_definition.inner_radius) == false) {
+          read_float_property(material, "hole_radius", out_definition.inner_radius);
+        }
+      }
+    }
+    read_float3_property(material, "normal", out_definition.normal);
+    read_float_property(material, "thickness", out_definition.thickness);
+    if (read_float_property(material, "bevel-radius", out_definition.bevel_radius) == false) {
+      read_float_property(material, "bevel_radius", out_definition.bevel_radius);
+    }
+    read_uint32_property(material, "segments", out_definition.segments);
+    if (read_uint32_property(material, "bevel-segments", out_definition.bevel_segments) == false) {
+      read_uint32_property(material, "bevel_segments", out_definition.bevel_segments);
+    }
+  } else {
+    const bool has_dimensions = read_float3_property(material, "dimensions", out_definition.dimensions);
+    if (has_dimensions == false) {
+      if (out_definition.cls == ProceduralGeometryDefinition::Class::Sphere) {
+        float radius = 0.0f;
+        if (read_float_property(material, "radius", radius)) {
+          const float diameter = radius * 2.0f;
+          out_definition.dimensions = {diameter, diameter, diameter};
+        }
+      } else if (out_definition.cls == ProceduralGeometryDefinition::Class::Plane) {
+        float2 size = {};
+        if (read_float2_property(material, "size", size)) {
+          out_definition.dimensions = {size.x, 0.0f, size.y};
+        }
+      }
+    }
 
-  read_uint32_property(material, "subdivisions", out_definition.subdivisions);
+    read_uint32_property(material, "subdivisions", out_definition.subdivisions);
+  }
 
   return out_definition.cls != ProceduralGeometryDefinition::Class::Invalid;
 }
@@ -505,6 +806,10 @@ uint32_t generate_procedural_geometry(SceneData& data, const std::vector<Procedu
       }
     } else if (definition.cls == ProceduralGeometryDefinition::Class::Plane) {
       if (append_plane_mesh(data, definition)) {
+        ++generated_count;
+      }
+    } else if (definition.cls == ProceduralGeometryDefinition::Class::Disk) {
+      if (append_disk_mesh(data, definition)) {
         ++generated_count;
       }
     }
