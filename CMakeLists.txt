@@ -95,6 +95,7 @@ if (EXISTS "${bin_dir}")
     )
   endif()
   list(FILTER bin_files EXCLUDE REGEX "[/\\\\]assets_testing[/\\\\]")
+  list(FILTER bin_files EXCLUDE REGEX "[/\\\\][^/\\\\]+\\.app[/\\\\]")
 
   set(data_hlsl_files "")
   set(render_hlsl_files ${render_files})

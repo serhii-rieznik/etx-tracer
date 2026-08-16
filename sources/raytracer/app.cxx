@@ -175,11 +175,14 @@ void RTApplication::init() {
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_load_options");
-    std::string options_file = env().file_in_user_data("options.json");
-    if (env().bundled() && !std::filesystem::exists(options_file)) {
-      options_file = env().file_in_data("options.json");
+    const std::string options_file = env().file_in_config("options.json");
+    if (std::filesystem::exists(options_file)) {
+      _options.load_from_file(options_file);
+    } else if (env().bundled()) {
+      _options.load_from_file(env().file_in_data("DefaultOptions.json"));
     }
-    _options.load_from_file(options_file);
+    // Scene selection is session state: scenes are always supplied explicitly.
+    _options.remove("scene");
   }
 
   {
@@ -281,9 +284,6 @@ void RTApplication::init() {
   if (GetAsyncKeyState(VK_ESCAPE)) {
     _options.set_string("integrator", {}, "Integrator");
   }
-  if (GetAsyncKeyState(VK_ESCAPE) && GetAsyncKeyState(VK_SHIFT)) {
-    _options.set_string("scene", {}, "Scene");
-  }
 #endif
 
   Integrator* integrator = nullptr;
@@ -309,12 +309,7 @@ void RTApplication::init() {
   ui.set_current_integrator(integrator);
 
   {
-    ETX_PROFILER_NAMED_SCOPE("app_restore_last_scene_and_reference");
-    _current_scene_file = _options.get_string("scene", std::string{});
-    if (_current_scene_file.empty() == false) {
-      on_scene_file_selected(_current_scene_file);
-    }
-
+    ETX_PROFILER_NAMED_SCOPE("app_restore_reference");
     const auto& ref = _options.get_string("ref", std::string{});
     if (ref.empty() == false) {
       on_referenece_image_selected(ref);
@@ -338,10 +333,8 @@ void RTApplication::save_options() {
   for (const auto& recent : _recent_files) {
     _options.set_string("recent-" + std::to_string(i++), portable_scene_path(recent), "Recent File");
   }
-  if (_current_scene_file.empty() == false) {
-    _options.set_string("scene", portable_scene_path(_current_scene_file), "Scene");
-  }
-  _options.save_to_file(env().file_in_user_data("options.json"));
+  _options.remove("scene");
+  _options.save_to_file(env().file_in_config("options.json"));
 }
 
 bool RTApplication::ensure_gpu_renderer_initialized() {
@@ -599,8 +592,6 @@ void RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   _current_scene_file = scene_file;
 
   cpu_renderer.stop();
-  _options.set_string("scene", _current_scene_file, "Scene");
-  save_options();
 
   log::warning("Loading scene %s...", _current_scene_file.c_str());
   SceneRepresentation::IntegratorData integrator_data;
@@ -673,7 +664,6 @@ std::string RTApplication::save_scene_file(const std::string& file_name) {
   }
 
   _current_scene_file = env().resolve_to_absolute(saved_path);
-  _options.set_string("scene", _current_scene_file, "Scene");
   add_to_recent(_current_scene_file);
   save_options();
 

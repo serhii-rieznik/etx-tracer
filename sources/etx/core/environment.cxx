@@ -44,6 +44,7 @@ inline static void normalize_path(char buffer[]) {
 static struct {
   char data_folder[2048] = {};
   char user_data_folder[2048] = {};
+  char config_folder[2048] = {};
   char cache_folder[2048] = {};
   char library_folder[2048] = {};
   char tmp_folder[2048] = {};
@@ -86,6 +87,10 @@ const char* Environment::user_data_folder() {
   return _env.user_data_folder;
 }
 
+const char* Environment::config_folder() {
+  return _env.config_folder;
+}
+
 const char* Environment::cache_folder() {
   return _env.cache_folder;
 }
@@ -118,6 +123,17 @@ const char* Environment::file_in_user_data(const char* f, char buffer[], uint64_
 const char* Environment::file_in_user_data(const char* f) {
   static char buffer[2048] = {};
   return file_in_user_data(f, buffer, sizeof(buffer));
+}
+
+const char* Environment::file_in_config(const char* f, char buffer[], uint64_t buffer_size) {
+  snprintf(buffer, buffer_size, "%s%s", _env.config_folder, f);
+  normalize_path(buffer);
+  return buffer;
+}
+
+const char* Environment::file_in_config(const char* f) {
+  static char buffer[2048] = {};
+  return file_in_config(f, buffer, sizeof(buffer));
 }
 
 const char* Environment::file_in_cache(const char* f, char buffer[], uint64_t buffer_size) {
@@ -202,6 +218,7 @@ void Environment::setup(const char* executable_path) {
 
   std::filesystem::path data_folder = executable_folder;
   std::filesystem::path user_data_folder = executable_folder;
+  std::filesystem::path config_folder = executable_folder;
   std::filesystem::path cache_folder = executable_folder / "cache";
   std::filesystem::path library_folder = executable_folder;
   std::filesystem::path tmp_folder = executable_folder / "tmp";
@@ -213,30 +230,36 @@ void Environment::setup(const char* executable_path) {
   if (_env.bundled) {
     data_folder = contents_folder / "Resources";
     library_folder = contents_folder / "Frameworks";
-
-    const char* home_value = getenv("HOME");
-    if ((home_value == nullptr) || (home_value[0] == '\0')) {
-      if (const passwd* user = getpwuid(getuid()); user != nullptr) {
-        home_value = user->pw_dir;
-      }
-    }
-    const std::filesystem::path home_folder = ((home_value != nullptr) && (home_value[0] != '\0')) ? std::filesystem::path(home_value) : std::filesystem::temp_directory_path(ec);
-    user_data_folder = home_folder / "Library" / "Application Support" / "etx-tracer";
-    cache_folder = home_folder / "Library" / "Caches" / "etx-tracer";
-    tmp_folder = cache_folder / "tmp";
   }
+
+  const char* home_value = getenv("HOME");
+  if ((home_value == nullptr) || (home_value[0] == '\0')) {
+    if (const passwd* user = getpwuid(getuid()); user != nullptr) {
+      home_value = user->pw_dir;
+    }
+  }
+  const std::filesystem::path home_folder = ((home_value != nullptr) && (home_value[0] != '\0'))
+    ? std::filesystem::path(home_value)
+    : std::filesystem::temp_directory_path(ec);
+  const std::filesystem::path application_support_folder = home_folder / "Library" / "Application Support" / "ETX Tracer";
+  user_data_folder = application_support_folder;
+  config_folder = application_support_folder;
+  cache_folder = home_folder / "Library" / "Caches" / "ETX Tracer";
+  tmp_folder = cache_folder / "tmp";
 #else
   _env.bundled = false;
 #endif
 
   set_folder_path(_env.data_folder, sizeof(_env.data_folder), data_folder);
   set_folder_path(_env.user_data_folder, sizeof(_env.user_data_folder), user_data_folder);
+  set_folder_path(_env.config_folder, sizeof(_env.config_folder), config_folder);
   set_folder_path(_env.cache_folder, sizeof(_env.cache_folder), cache_folder);
   set_folder_path(_env.library_folder, sizeof(_env.library_folder), library_folder);
   set_folder_path(_env.tmp_folder, sizeof(_env.tmp_folder), tmp_folder);
   snprintf(_env.current_directory, sizeof(_env.current_directory), "%s", _env.data_folder);
 
   std::filesystem::create_directories(_env.user_data_folder, ec);
+  std::filesystem::create_directories(_env.config_folder, ec);
   std::filesystem::create_directories(_env.cache_folder, ec);
   clear_tmp_folder();
 }

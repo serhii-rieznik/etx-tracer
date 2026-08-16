@@ -109,6 +109,7 @@ if(APPLE)
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/shaders"
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/interop"
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/access"
+    COMMAND ${CMAKE_COMMAND} -E remove -f "$<TARGET_FILE_DIR:raytracer_app>/../Resources/options.json"
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks"
@@ -132,7 +133,7 @@ if(APPLE)
       "$<TARGET_FILE_DIR:raytracer_app>/../Resources/access"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/macos/DefaultOptions.json"
-      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/options.json"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/DefaultOptions.json"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${root_folder}/bin/lib"
       "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks"
