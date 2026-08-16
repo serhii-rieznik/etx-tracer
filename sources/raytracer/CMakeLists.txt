@@ -3,6 +3,8 @@ set(RAYTRACER_SHARED_SOURCES
   app.cxx
   ui.hxx
   ui.cxx
+  platform_ui.hxx
+  platform_ui.cxx
   render_context.hxx
   render_context.cxx
   options.hxx
@@ -28,8 +30,8 @@ add_executable(raytracer
 )
 
 if(APPLE)
-  target_sources(raytracer PRIVATE macos_menu.hxx macos_menu.mm)
-  set_source_files_properties(macos_menu.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  target_sources(raytracer PRIVATE platform_ui_macos.mm)
+  set_source_files_properties(platform_ui_macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 
 if(APPLE)
@@ -41,8 +43,7 @@ if(APPLE)
   add_executable(raytracer_app MACOSX_BUNDLE
     main.cxx
     ${RAYTRACER_SHARED_SOURCES}
-    macos_menu.hxx
-    macos_menu.mm
+    platform_ui_macos.mm
     "${ETX_TRACER_APP_ICON}"
   )
 
@@ -78,6 +79,28 @@ if(APPLE)
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "@executable_path/../Frameworks;@loader_path/../Frameworks"
   )
+
+  # Bundle resources are copied and the finished app is signed in POST_BUILD.
+  # Make resource edits relink the executable so those steps cannot be skipped.
+  file(GLOB_RECURSE ETX_TRACER_BUNDLE_RESOURCES CONFIGURE_DEPENDS
+    "${root_folder}/bin/assets/*"
+    "${root_folder}/bin/fonts/*"
+    "${root_folder}/bin/spectrum/*"
+    "${root_folder}/bin/lib/*"
+    "${CMAKE_SOURCE_DIR}/sources/etx/render/shaders/*"
+    "${CMAKE_SOURCE_DIR}/sources/etx/render/interop/*"
+    "${CMAKE_SOURCE_DIR}/sources/etx/render/access/*"
+  )
+  list(APPEND ETX_TRACER_BUNDLE_RESOURCES
+    "${ETX_TRACER_APP_ICON}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/macos/DefaultOptions.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/macos/SignBundle.cmake"
+  )
+  if(DXC_FOUND AND DXC_LIBRARY)
+    list(APPEND ETX_TRACER_BUNDLE_RESOURCES "${DXC_LIBRARY}")
+  endif()
+  set_property(TARGET raytracer_app APPEND PROPERTY LINK_DEPENDS ${ETX_TRACER_BUNDLE_RESOURCES})
 
   add_custom_command(TARGET raytracer_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/assets"

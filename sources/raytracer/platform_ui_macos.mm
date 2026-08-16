@@ -1,9 +1,10 @@
-#include "macos_menu.hxx"
+#include "platform_ui.hxx"
 
 #include "ui.hxx"
 
 #import <AppKit/AppKit.h>
 
+#include <cmath>
 #include <filesystem>
 
 using etx::MenuCommand;
@@ -18,22 +19,68 @@ static NSMenuItem* g_raster_renderer_item = nil;
 static NSMenuItem* g_gpu_renderer_item = nil;
 static NSMenuItem* g_scene_objects_item = nil;
 static NSMenuItem* g_properties_item = nil;
+static NSToolbarItem* g_frame_scene_toolbar_item = nil;
 static std::vector<std::string> g_recent_files = {};
 static bool g_recent_files_initialized = false;
-static uint64_t g_integrator_count = ~0ull;
+static std::vector<etx::Integrator*> g_integrators = {};
 static NSVisualEffectView* g_startup_overlay = nil;
 static NSProgressIndicator* g_startup_indicator = nil;
 static NSTextField* g_startup_label = nil;
+static NSToolbarItemGroup* g_render_toolbar_group = nil;
+static NSToolbarItemGroup* g_panels_toolbar_group = nil;
 
-@interface ETXMenuTarget : NSObject
+static NSToolbarItemIdentifier const kOpenToolbarItem = @"com.etxtracer.toolbar.open";
+static NSToolbarItemIdentifier const kSaveToolbarItem = @"com.etxtracer.toolbar.save";
+static NSToolbarItemIdentifier const kRenderToolbarGroup = @"com.etxtracer.toolbar.render";
+static NSToolbarItemIdentifier const kExportToolbarItem = @"com.etxtracer.toolbar.export";
+static NSToolbarItemIdentifier const kFrameSceneToolbarItem = @"com.etxtracer.toolbar.frame-scene";
+static NSToolbarItemIdentifier const kPanelsToolbarGroup = @"com.etxtracer.toolbar.panels";
+
+@interface ETXPlatformUIController : NSObject<NSToolbarDelegate>
 @property(nonatomic, assign) UI* ui;
 - (void)performCommand:(id)sender;
+- (void)performRenderCommand:(id)sender;
+- (void)performPanelCommand:(id)sender;
 @end
 
-static ETXMenuTarget* g_menu_target = nil;
+static ETXPlatformUIController* g_platform_ui_controller = nil;
+
+static NSInteger selected_group_index(id sender) {
+  if ([sender respondsToSelector:@selector(selectedIndex)]) {
+    return [sender selectedIndex];
+  }
+  if ([sender respondsToSelector:@selector(selectedSegment)]) {
+    return [sender selectedSegment];
+  }
+  return -1;
+}
 
 static NSString* ns_string(const char* value) {
   return value != nullptr ? [NSString stringWithUTF8String:value] : @"";
+}
+
+static NSImage* toolbar_symbol(NSString* name, NSString* accessibility_description) {
+  constexpr CGFloat reference_point_size = 15.0;
+  constexpr CGFloat target_image_area = 17.0 * 17.0;
+
+  NSImage* system_image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:accessibility_description];
+  NSImageSymbolConfiguration* reference_configuration = [NSImageSymbolConfiguration
+    configurationWithPointSize:reference_point_size weight:NSFontWeightRegular scale:NSImageSymbolScaleMedium];
+  NSImage* reference_image = [system_image imageWithSymbolConfiguration:reference_configuration] ?: system_image;
+  if (reference_image == nil) {
+    return nil;
+  }
+  const CGFloat reference_area = reference_image.size.width * reference_image.size.height;
+  if (reference_area <= 0.0) {
+    return reference_image;
+  }
+
+  const CGFloat point_size = reference_point_size * std::sqrt(target_image_area / reference_area);
+  NSImageSymbolConfiguration* configuration =
+    [NSImageSymbolConfiguration configurationWithPointSize:point_size weight:NSFontWeightRegular scale:NSImageSymbolScaleMedium];
+  NSImage* image = [system_image imageWithSymbolConfiguration:configuration] ?: reference_image;
+  image.alignmentRect = NSMakeRect(0.0, 0.0, image.size.width, image.size.height);
+  return image;
 }
 
 static NSString* application_name() {
@@ -44,9 +91,17 @@ static NSString* application_name() {
   return name.length > 0 ? name : NSProcessInfo.processInfo.processName;
 }
 
+static void install_application_icon() {
+  NSURL* icon_url = [NSBundle.mainBundle URLForResource:@"AppIcon" withExtension:@"icns"];
+  NSImage* icon = icon_url != nil ? [[NSImage alloc] initWithContentsOfURL:icon_url] : nil;
+  if (icon != nil) {
+    NSApp.applicationIconImage = icon;
+  }
+}
+
 static NSMenuItem* add_command_item(NSMenu* menu, NSString* title, MenuCommand command, NSString* key_equivalent = @"", NSEventModifierFlags modifiers = NSEventModifierFlagCommand) {
   NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title action:@selector(performCommand:) keyEquivalent:key_equivalent];
-  item.target = g_menu_target;
+  item.target = g_platform_ui_controller;
   item.tag = kCommandTagBase + static_cast<NSInteger>(command);
   item.keyEquivalentModifierMask = key_equivalent.length > 0 ? modifiers : 0;
   [menu addItem:item];
@@ -96,30 +151,183 @@ static void rebuild_integrator_menu(UI& ui) {
   }
 }
 
-@implementation ETXMenuTarget
+@implementation ETXPlatformUIController
 
 - (void)performCommand:(id)sender {
-  if ((self.ui == nullptr) || (![sender isKindOfClass:[NSMenuItem class]])) {
+  if ((self.ui == nullptr) || (![sender respondsToSelector:@selector(tag)])) {
     return;
   }
 
-  NSMenuItem* item = static_cast<NSMenuItem*>(sender);
-  const MenuCommand command = static_cast<MenuCommand>(item.tag - kCommandTagBase);
+  const MenuCommand command = static_cast<MenuCommand>([sender tag] - kCommandTagBase);
   uint32_t argument = 0u;
   std::string value = {};
-  if ([item.representedObject isKindOfClass:[NSNumber class]]) {
-    argument = [static_cast<NSNumber*>(item.representedObject) unsignedIntValue];
-  } else if ([item.representedObject isKindOfClass:[NSString class]]) {
-    value = [static_cast<NSString*>(item.representedObject) UTF8String];
+  if ([sender isKindOfClass:[NSMenuItem class]]) {
+    NSMenuItem* item = static_cast<NSMenuItem*>(sender);
+    if ([item.representedObject isKindOfClass:[NSNumber class]]) {
+      argument = [static_cast<NSNumber*>(item.representedObject) unsignedIntValue];
+    } else if ([item.representedObject isKindOfClass:[NSString class]]) {
+      value = [static_cast<NSString*>(item.representedObject) UTF8String];
+    }
   }
   self.ui->execute_menu_command(command, argument, value);
+}
+
+- (void)performRenderCommand:(id)sender {
+  if (self.ui == nullptr) {
+    return;
+  }
+
+  constexpr MenuCommand commands[] = {
+    MenuCommand::RunRenderer,
+    MenuCommand::FinishRenderer,
+    MenuCommand::StopRenderer,
+    MenuCommand::RestartRenderer,
+  };
+  const NSInteger index = selected_group_index(sender);
+  if ((index >= 0) && (index < static_cast<NSInteger>(sizeof(commands) / sizeof(commands[0])))) {
+    self.ui->execute_menu_command(commands[index]);
+  }
+}
+
+- (void)performPanelCommand:(id)sender {
+  if (self.ui == nullptr) {
+    return;
+  }
+
+  constexpr MenuCommand commands[] = {
+    MenuCommand::ToggleSceneObjects,
+    MenuCommand::ToggleProperties,
+  };
+  const NSInteger index = selected_group_index(sender);
+  if ((index >= 0) && (index < static_cast<NSInteger>(sizeof(commands) / sizeof(commands[0])))) {
+    self.ui->execute_menu_command(commands[index]);
+  }
+}
+
+- (NSArray<NSToolbarItemIdentifier>*)toolbarAllowedItemIdentifiers:(NSToolbar*)toolbar {
+  (void)toolbar;
+  return @[
+    kOpenToolbarItem, kSaveToolbarItem, kRenderToolbarGroup,
+    kExportToolbarItem, kFrameSceneToolbarItem, kPanelsToolbarGroup,
+    NSToolbarSpaceItemIdentifier, NSToolbarFlexibleSpaceItemIdentifier,
+  ];
+}
+
+- (NSArray<NSToolbarItemIdentifier>*)toolbarDefaultItemIdentifiers:(NSToolbar*)toolbar {
+  (void)toolbar;
+  return @[
+    kOpenToolbarItem, kSaveToolbarItem,
+    NSToolbarSpaceItemIdentifier,
+    kRenderToolbarGroup,
+    NSToolbarFlexibleSpaceItemIdentifier,
+    kFrameSceneToolbarItem, kExportToolbarItem,
+    NSToolbarSpaceItemIdentifier,
+    kPanelsToolbarGroup,
+  ];
+}
+
+- (NSToolbarItem*)toolbar:(NSToolbar*)toolbar itemForItemIdentifier:(NSToolbarItemIdentifier)identifier willBeInsertedIntoToolbar:(BOOL)flag {
+  (void)toolbar;
+  (void)flag;
+
+  if ([identifier isEqualToString:kRenderToolbarGroup]) {
+    NSArray<NSImage*>* images = @[
+      toolbar_symbol(@"play.circle", @"Start Rendering"),
+      toolbar_symbol(@"checkmark.circle", @"Finish Current Iteration"),
+      toolbar_symbol(@"stop.circle", @"Stop Rendering"),
+      toolbar_symbol(@"arrow.clockwise.circle", @"Restart Rendering"),
+    ];
+    g_render_toolbar_group = [NSToolbarItemGroup groupWithItemIdentifier:kRenderToolbarGroup
+      images:images
+      selectionMode:NSToolbarItemGroupSelectionModeMomentary
+      labels:@[@"Run", @"Finish", @"Stop", @"Restart"]
+      target:self
+      action:@selector(performRenderCommand:)];
+    g_render_toolbar_group.label = @"Render";
+    g_render_toolbar_group.paletteLabel = @"Render Controls";
+    g_render_toolbar_group.toolTip = @"Rendering Controls";
+    g_render_toolbar_group.controlRepresentation = NSToolbarItemGroupControlRepresentationExpanded;
+
+    NSArray<NSToolbarItem*>* items = g_render_toolbar_group.subitems;
+    items[0].toolTip = @"Start Rendering";
+    items[1].toolTip = @"Finish Current Iteration";
+    items[2].toolTip = @"Stop Rendering Immediately";
+    items[3].toolTip = @"Restart Rendering";
+    return g_render_toolbar_group;
+  }
+
+  if ([identifier isEqualToString:kPanelsToolbarGroup]) {
+    NSArray<NSImage*>* images = @[
+      toolbar_symbol(@"sidebar.left", @"Scene Objects"),
+      toolbar_symbol(@"sidebar.right", @"Properties"),
+    ];
+    g_panels_toolbar_group = [NSToolbarItemGroup groupWithItemIdentifier:kPanelsToolbarGroup
+      images:images
+      selectionMode:NSToolbarItemGroupSelectionModeSelectAny
+      labels:@[@"Objects", @"Properties"]
+      target:self
+      action:@selector(performPanelCommand:)];
+    g_panels_toolbar_group.label = @"Panels";
+    g_panels_toolbar_group.paletteLabel = @"Panels";
+    g_panels_toolbar_group.toolTip = @"Show or Hide Panels";
+    g_panels_toolbar_group.controlRepresentation = NSToolbarItemGroupControlRepresentationExpanded;
+    return g_panels_toolbar_group;
+  }
+
+  NSString* label = nil;
+  NSString* symbol = nil;
+  NSString* help = nil;
+  MenuCommand command = MenuCommand::OpenScene;
+  if ([identifier isEqualToString:kOpenToolbarItem]) {
+    label = @"Open";
+    symbol = @"folder";
+    help = @"Open Scene";
+    command = MenuCommand::OpenScene;
+  } else if ([identifier isEqualToString:kSaveToolbarItem]) {
+    label = @"Save";
+    symbol = @"tray.and.arrow.down";
+    help = @"Save Scene";
+    command = MenuCommand::SaveScene;
+  } else if ([identifier isEqualToString:kExportToolbarItem]) {
+    label = @"Export";
+    symbol = @"arrow.up.forward.square";
+    help = @"Export Current Image";
+    command = MenuCommand::SaveImageRGB;
+  } else if ([identifier isEqualToString:kFrameSceneToolbarItem]) {
+    label = @"Frame";
+    symbol = @"viewfinder";
+    help = @"Frame Whole Scene";
+    command = MenuCommand::ViewWholeScene;
+  } else {
+    return nil;
+  }
+
+  NSToolbarItem* item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
+  item.label = label;
+  item.paletteLabel = label;
+  item.toolTip = help;
+  item.image = toolbar_symbol(symbol, help);
+  item.target = self;
+  item.action = @selector(performCommand:);
+  item.tag = kCommandTagBase + static_cast<NSInteger>(command);
+  if ([identifier isEqualToString:kFrameSceneToolbarItem]) {
+    g_frame_scene_toolbar_item = item;
+  }
+  return item;
 }
 
 @end
 
 namespace etx {
 
-void show_macos_startup_overlay() {
+PlatformUI& platform_ui() {
+  static PlatformUI instance = {};
+  return instance;
+}
+
+void PlatformUI::show_startup() {
+  install_application_icon();
+
   NSWindow* window = NSApp.keyWindow ?: NSApp.mainWindow;
   NSView* content_view = window.contentView;
   if ((content_view == nil) || (g_startup_overlay != nil)) {
@@ -159,7 +367,7 @@ void show_macos_startup_overlay() {
   [g_startup_overlay displayIfNeeded];
 }
 
-void finish_macos_startup(bool succeeded) {
+void PlatformUI::finish_startup(bool succeeded) {
   if (g_startup_overlay == nil) {
     return;
   }
@@ -176,9 +384,9 @@ void finish_macos_startup(bool succeeded) {
   }
 }
 
-void setup_macos_menu(UI& ui) {
-  g_menu_target = [[ETXMenuTarget alloc] init];
-  g_menu_target.ui = &ui;
+void PlatformUI::setup(UI& ui) {
+  g_platform_ui_controller = [[ETXPlatformUIController alloc] init];
+  g_platform_ui_controller.ui = &ui;
 
   NSMenu* main_menu = [[NSMenu alloc] initWithTitle:@"Main Menu"];
   NSString* app_name = application_name();
@@ -265,14 +473,28 @@ void setup_macos_menu(UI& ui) {
   [NSApp setWindowsMenu:window_menu];
 
   NSApp.mainMenu = main_menu;
+
+  NSWindow* window = NSApp.keyWindow ?: NSApp.mainWindow;
+  if (window != nil) {
+    NSToolbar* toolbar = [[NSToolbar alloc] initWithIdentifier:@"com.etxtracer.toolbar.v2"];
+    toolbar.delegate = g_platform_ui_controller;
+    toolbar.displayMode = NSToolbarDisplayModeIconOnly;
+    toolbar.allowsUserCustomization = YES;
+    toolbar.autosavesConfiguration = YES;
+    toolbar.centeredItemIdentifiers = [NSSet setWithObject:kRenderToolbarGroup];
+    window.toolbarStyle = NSWindowToolbarStyleUnified;
+    window.titleVisibility = NSWindowTitleVisible;
+    window.toolbar = toolbar;
+  }
   ui.set_embedded_menu_enabled(false);
+  ui.set_embedded_toolbar_enabled(false);
 }
 
-void update_macos_menu(UI& ui, const std::vector<std::string>& recent_files) {
-  if (g_menu_target == nil) {
+void PlatformUI::update(UI& ui, const std::vector<std::string>& recent_files) {
+  if (g_platform_ui_controller == nil) {
     return;
   }
-  g_menu_target.ui = &ui;
+  g_platform_ui_controller.ui = &ui;
 
   g_cpu_renderer_item.state = ui.current_renderer_mode() == RendererMode::CPURaytracing ? NSControlStateValueOn : NSControlStateValueOff;
   g_raster_renderer_item.state = ui.current_renderer_mode() == RendererMode::Rasterization ? NSControlStateValueOn : NSControlStateValueOff;
@@ -280,37 +502,59 @@ void update_macos_menu(UI& ui, const std::vector<std::string>& recent_files) {
   g_gpu_renderer_item.enabled = ui.gpu_renderer_available();
   g_scene_objects_item.state = ui.scene_objects_visible() ? NSControlStateValueOn : NSControlStateValueOff;
   g_properties_item.state = ui.properties_visible() ? NSControlStateValueOn : NSControlStateValueOff;
+  g_frame_scene_toolbar_item.enabled = ui.scene_view_commands_available();
+
+  const bool can_run = ui.renderer_can_run();
+  const Integrator::State renderer_state = ui.renderer_state();
+  NSArray<NSToolbarItem*>* render_items = g_render_toolbar_group.subitems;
+  if (render_items.count == 4) {
+    render_items[0].enabled = can_run && (renderer_state == Integrator::State::Stopped);
+    render_items[1].enabled = can_run && (renderer_state == Integrator::State::Running);
+    render_items[2].enabled = can_run && (renderer_state != Integrator::State::Stopped);
+    render_items[3].enabled = can_run && (renderer_state == Integrator::State::Running);
+  }
+  if (g_panels_toolbar_group.subitems.count == 2) {
+    [g_panels_toolbar_group setSelected:ui.scene_objects_visible() atIndex:0];
+    [g_panels_toolbar_group setSelected:ui.properties_visible() atIndex:1];
+    g_panels_toolbar_group.subitems[0].toolTip = ui.scene_objects_visible() ? @"Hide Scene Objects" : @"Show Scene Objects";
+    g_panels_toolbar_group.subitems[1].toolTip = ui.properties_visible() ? @"Hide Properties" : @"Show Properties";
+  }
 
   if (!g_recent_files_initialized || (g_recent_files != recent_files)) {
     g_recent_files_initialized = true;
     g_recent_files = recent_files;
     rebuild_recent_menu(recent_files);
   }
-  if (g_integrator_count != ui.integrator_count()) {
-    g_integrator_count = ui.integrator_count();
+  std::vector<Integrator*> integrators(ui.integrator_count());
+  for (uint64_t i = 0; i < ui.integrator_count(); ++i) {
+    integrators[i] = ui.integrator(i);
+  }
+  if (g_integrators != integrators) {
+    g_integrators = std::move(integrators);
     rebuild_integrator_menu(ui);
   } else {
-    for (uint64_t i = 0; i < ui.integrator_count(); ++i) {
-      Integrator* integrator = ui.integrator(i);
-      NSMenuItem* item = [g_integrator_menu itemAtIndex:static_cast<NSInteger>(i)];
-      if ((integrator != nullptr) && (item != nil)) {
-        item.enabled = integrator->enabled();
-        item.state = integrator == ui.current_integrator() ? NSControlStateValueOn : NSControlStateValueOff;
+    for (NSMenuItem* item in g_integrator_menu.itemArray) {
+      if (![item.representedObject isKindOfClass:[NSNumber class]]) {
+        continue;
       }
+      const uint64_t index = [static_cast<NSNumber*>(item.representedObject) unsignedLongLongValue];
+      Integrator* integrator = ui.integrator(index);
+      item.enabled = (integrator != nullptr) && integrator->enabled();
+      item.state = integrator == ui.current_integrator() ? NSControlStateValueOn : NSControlStateValueOff;
     }
   }
 }
 
-void shutdown_macos_menu() {
+void PlatformUI::shutdown() {
   [g_startup_indicator stopAnimation:nil];
   [g_startup_overlay removeFromSuperview];
   g_startup_indicator = nil;
   g_startup_label = nil;
   g_startup_overlay = nil;
-  if (g_menu_target != nil) {
-    g_menu_target.ui = nullptr;
+  if (g_platform_ui_controller != nil) {
+    g_platform_ui_controller.ui = nullptr;
   }
-  g_menu_target = nil;
+  g_platform_ui_controller = nil;
   g_recent_menu = nil;
   g_integrator_menu = nil;
   g_cpu_renderer_item = nil;
@@ -318,9 +562,21 @@ void shutdown_macos_menu() {
   g_gpu_renderer_item = nil;
   g_scene_objects_item = nil;
   g_properties_item = nil;
+  g_frame_scene_toolbar_item = nil;
+  g_render_toolbar_group = nil;
+  g_panels_toolbar_group = nil;
   g_recent_files.clear();
   g_recent_files_initialized = false;
-  g_integrator_count = ~0ull;
+  g_integrators.clear();
+}
+
+PlatformColorScheme PlatformUI::color_scheme() const {
+  NSAppearanceName appearance = [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+  return [appearance isEqualToString:NSAppearanceNameDarkAqua] ? PlatformColorScheme::Dark : PlatformColorScheme::Light;
+}
+
+bool PlatformUI::defers_initialization() const {
+  return true;
 }
 
 }  // namespace etx

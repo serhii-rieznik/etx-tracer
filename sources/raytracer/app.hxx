@@ -1,7 +1,5 @@
 #pragma once
 
-#pragma once
-
 #if !defined(WIN32_LEAN_AND_MEAN)
 # define WIN32_LEAN_AND_MEAN 1
 #endif
@@ -28,6 +26,7 @@
 #include "cpu_renderer.hxx"
 #include "raster_renderer.hxx"
 #include "gpu_renderer.hxx"
+#include "platform_ui.hxx"
 
 #include <vector>
 #include <string>
@@ -94,6 +93,7 @@ struct RTApplication {
   void update_camera_to_fit_scene(const float3& view_direction);
   void notify_scene_might_have_changed();
   void sync_scene_integrator_data_from_current_integrator();
+  void sync_platform_color_scheme();
   bool rebuild_material_render_resources();
 
  private:
@@ -119,6 +119,8 @@ struct RTApplication {
   bool _initialization_started = false;
   bool _initialized = false;
   bool _scene_global_initialized = false;
+  bool _platform_color_scheme_initialized = false;
+  PlatformColorScheme _platform_color_scheme = PlatformColorScheme::Dark;
   SaveImageMode _pending_gpu_save_image_mode = SaveImageMode::RGB;
 
   Options _options;

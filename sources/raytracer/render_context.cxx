@@ -51,6 +51,7 @@ struct RenderContextImpl {
   RHIContext rhi_context = {};
   RuntimeOutput runtime_output = {};
   RHIImGui rhi_imgui = {};
+  RHIImGuiTheme ui_theme = RHIImGuiTheme::Dark;
   RHICommandBuffer rhi_cmd = {};
   RHIPipeline presentation_pipeline = {};
   Renderer* active_renderer = nullptr;
@@ -119,6 +120,11 @@ RHITextureFormat RenderContext::get_depth_format() {
 
 RuntimeMode RenderContext::runtime_mode() const {
   return _private->runtime_output.mode();
+}
+
+void RenderContext::set_ui_theme(RHIImGuiTheme theme) {
+  _private->ui_theme = theme;
+  _private->rhi_imgui.set_theme(theme);
 }
 
 void RenderContext::init() {
@@ -334,7 +340,10 @@ void RenderContext::end_frame() {
 
   {
     ETX_PROFILER_NAMED_SCOPE("render_context_begin_present_pass");
-    float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    constexpr float light_canvas = 0.68f;
+    constexpr float dark_canvas = 0.03f;
+    const float canvas = _private->ui_theme == RHIImGuiTheme::Light ? light_canvas : dark_canvas;
+    float clear_color[4] = {canvas, canvas, canvas, 1.0f};
     RHITexture output_texture = output_target.texture;
     _private->rhi_context.cmd_begin_render_pass(_private->rhi_cmd, 1, &output_texture, clear_color);
   }

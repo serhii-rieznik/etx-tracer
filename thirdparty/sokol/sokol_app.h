@@ -5916,6 +5916,15 @@ _SOKOL_PRIVATE void _sapp_macos_frame(void) {
 @end
 
 @implementation _sapp_macos_view
+// A unified native toolbar can resize the content view without a window-resize
+// notification. Keep Sokol's framebuffer and input dimensions in sync.
+- (void)setFrameSize:(NSSize)new_size {
+    [super setFrameSize:new_size];
+    if (_sapp.valid) {
+        _sapp_macos_update_dimensions();
+    }
+}
+
 #if defined(SOKOL_GLCORE)
 - (void)timerFired:(id)sender {
     _SOKOL_UNUSED(sender);

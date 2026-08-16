@@ -12,6 +12,7 @@
 namespace etx {
 
 struct RHIImGui;
+enum class RHIImGuiTheme;
 struct TaskScheduler;
 struct SceneRepresentation;
 struct Renderer;
@@ -40,6 +41,7 @@ struct RenderContext {
   RHITextureFormat get_swapchain_format();
   RHITextureFormat get_depth_format();
   RuntimeMode runtime_mode() const;
+  void set_ui_theme(RHIImGuiTheme theme);
 
   void set_reference_image(const char*);
   void set_reference_image(const float4 data[], const uint2 dimensions);

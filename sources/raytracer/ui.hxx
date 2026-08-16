@@ -37,6 +37,10 @@ enum class MenuCommand : uint32_t {
   SaveImageRGB,
   SaveImageLDR,
   UseImageAsReference,
+  RunRenderer,
+  FinishRenderer,
+  StopRenderer,
+  RestartRenderer,
   ViewWholeScene,
   ViewPositiveX,
   ViewNegativeX,
@@ -103,6 +107,10 @@ struct UI {
     _embedded_menu_enabled = value;
   }
 
+  void set_embedded_toolbar_enabled(bool value) {
+    _embedded_toolbar_enabled = value;
+  }
+
   bool gpu_renderer_available() const {
     return _gpu_renderer_available;
   }
@@ -133,6 +141,14 @@ struct UI {
 
   bool scene_view_commands_available() const {
     return static_cast<bool>(callbacks.view_scene);
+  }
+
+  bool renderer_can_run() const {
+    return (_current_renderer_mode == RendererMode::CPURaytracing) && (_current_integrator != nullptr) && _current_integrator->can_run();
+  }
+
+  Integrator::State renderer_state() const {
+    return renderer_can_run() ? _current_integrator->state() : Integrator::State::Stopped;
   }
 
   struct BuildContext {
@@ -243,6 +259,7 @@ struct UI {
 
   void build_main_menu_bar(const std::vector<std::string>& recent_files);
   void build_toolbar(const BuildContext& ctx);
+  void build_status_bar(const BuildContext& ctx);
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx, const FrameData& data);
 
@@ -266,6 +283,7 @@ struct UI {
   RendererRuntimeStats _current_renderer_stats = {};
   uint32_t _gpu_wavefront_steps_per_frame = 16u;
   bool _gpu_renderer_available = true;
+  bool _embedded_toolbar_enabled = true;
 
   ArrayView<Integrator*> _integrators = {};
   ViewParameters _view_options = {

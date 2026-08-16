@@ -11,10 +11,6 @@
 #include "app.hxx"
 #include "image_output.hxx"
 
-#if defined(ETX_PLATFORM_APPLE)
-# include "macos_menu.hxx"
-#endif
-
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
@@ -164,11 +160,10 @@ RTApplication::~RTApplication() {
 }
 
 void RTApplication::prepare_startup() {
-#if defined(ETX_PLATFORM_APPLE)
-  show_macos_startup_overlay();
-#else
-  init();
-#endif
+  platform_ui().show_startup();
+  if (!platform_ui().defers_initialization()) {
+    init();
+  }
 }
 
 void RTApplication::init() {
@@ -194,6 +189,7 @@ void RTApplication::init() {
       log::error("Failed to initialize rendering context");
       return;
     }
+    sync_platform_color_scheme();
     scene.set_scattering_rhi(render_context.get_context());
     _gpu_renderer_supported = render_context.get_context().capabilities().supports_ray_tracing;
     ui.set_gpu_renderer_available(_gpu_renderer_supported);
@@ -327,10 +323,8 @@ void RTApplication::init() {
 
   save_options();
 
-#if defined(ETX_PLATFORM_APPLE)
-  setup_macos_menu(ui);
-  update_macos_menu(ui, _recent_files);
-#endif
+  platform_ui().setup(ui);
+  platform_ui().update(ui, _recent_files);
   _initialized = true;
 }
 
@@ -435,23 +429,36 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   }
 }
 
+void RTApplication::sync_platform_color_scheme() {
+  if (!render_context.valid() || !render_context.rhi_ui().initialized()) {
+    return;
+  }
+
+  const PlatformColorScheme color_scheme = platform_ui().color_scheme();
+  if (!_platform_color_scheme_initialized || (_platform_color_scheme != color_scheme)) {
+    _platform_color_scheme_initialized = true;
+    _platform_color_scheme = color_scheme;
+    render_context.set_ui_theme(color_scheme == PlatformColorScheme::Dark ? RHIImGuiTheme::Dark : RHIImGuiTheme::Light);
+  }
+}
+
 void RTApplication::frame() {
   ETX_PROFILER_SCOPE();
 
-#if defined(ETX_PLATFORM_APPLE)
   if (!_initialization_started) {
     if (!_startup_frame_presented) {
       _startup_frame_presented = true;
       return;
     }
     init();
-    finish_macos_startup(_initialized);
+    platform_ui().finish_startup(_initialized);
   }
-#endif
 
   if (!_initialized) {
     return;
   }
+
+  sync_platform_color_scheme();
 
   auto thread = _active_renderer && (_active_renderer->mode() == RendererMode::CPURaytracing) ? &cpu_renderer.integrator_thread() : nullptr;
 
@@ -477,9 +484,7 @@ void RTApplication::frame() {
   }
   ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
   ui.set_current_renderer_stats(_active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{});
-#if defined(ETX_PLATFORM_APPLE)
-  update_macos_menu(ui, _recent_files);
-#endif
+  platform_ui().update(ui, _recent_files);
   if (render_context.valid() && render_context.rhi_ui().initialized()) {
     ETX_PROFILER_NAMED_SCOPE("app_ui_build");
     ui.build(scene, ui_frame_data);
@@ -493,9 +498,7 @@ void RTApplication::frame() {
 void RTApplication::cleanup() {
   ETX_PROFILER_SCOPE();
 
-#if defined(ETX_PLATFORM_APPLE)
-  shutdown_macos_menu();
-#endif
+  platform_ui().shutdown();
 
   bool device_already_idle = false;
 

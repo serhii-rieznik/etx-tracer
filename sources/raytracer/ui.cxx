@@ -1396,7 +1396,10 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   if (_embedded_menu_enabled) {
     build_main_menu_bar(data.recent_files);
   }
-  build_toolbar(ctx);
+  if (_embedded_toolbar_enabled) {
+    build_toolbar(ctx);
+  }
+  build_status_bar(ctx);
   build_scene_objects_window(scene_rep, ctx);
   build_properties_window(scene_rep, scene_rep.camera(), ctx, data);
 
@@ -1560,6 +1563,26 @@ void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std:
     case MenuCommand::UseImageAsReference:
       if (callbacks.use_image_as_reference) {
         callbacks.use_image_as_reference();
+      }
+      break;
+    case MenuCommand::RunRenderer:
+      if (renderer_can_run() && (renderer_state() == Integrator::State::Stopped) && callbacks.run_selected) {
+        callbacks.run_selected();
+      }
+      break;
+    case MenuCommand::FinishRenderer:
+      if (renderer_can_run() && (renderer_state() == Integrator::State::Running) && callbacks.stop_selected) {
+        callbacks.stop_selected(true);
+      }
+      break;
+    case MenuCommand::StopRenderer:
+      if (renderer_can_run() && (renderer_state() != Integrator::State::Stopped) && callbacks.stop_selected) {
+        callbacks.stop_selected(false);
+      }
+      break;
+    case MenuCommand::RestartRenderer:
+      if (renderer_can_run() && (renderer_state() == Integrator::State::Running) && callbacks.restart_selected) {
+        callbacks.restart_selected();
       }
       break;
     case MenuCommand::ViewWholeScene:
@@ -2708,16 +2731,8 @@ void UI::build_toolbar(const BuildContext& ctx) {
 
     ImGui::SameLine(0.0f, ctx.wpadding.x);
     ImGui::GetStyle().FramePadding.y = (ctx.button_size - ctx.text_size) / 2.0f;
-    ImGui::PushItemWidth(ctx.input_size);
-    {
-      ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      ImGui::DragFloat("Exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-    }
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::PopItemWidth();
 
     ImGui::PushItemWidth(2.25f * ctx.input_size);
     if (ImGui::BeginCombo("##view_layer", Film::layer_name(_view_options.view_layer))) {
@@ -2766,7 +2781,9 @@ void UI::build_toolbar(const BuildContext& ctx) {
     ImGui::GetStyle().FramePadding.y = ctx.fpadding.y;
     ImGui::End();
   }
+}
 
+void UI::build_status_bar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ctx.text_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     if (_current_renderer_mode == RendererMode::CPURaytracing) {
       constexpr const char* status_str[] = {
@@ -4118,6 +4135,65 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
       _gpu_wavefront_steps_per_frame = static_cast<uint32_t>(wavefront_steps);
       if (callbacks.gpu_wavefront_steps_per_frame_changed) {
         callbacks.gpu_wavefront_steps_per_frame_changed(_gpu_wavefront_steps_per_frame);
+      }
+    }
+  }
+
+  ImGui::Spacing();
+  if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
+    labeled_control("Exposure", [&]() {
+      return ImGui::DragFloat("##exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
+    });
+
+    if (_embedded_toolbar_enabled == false) {
+      ImGui::Text("View Layer:");
+      full_width_item();
+      if (ImGui::BeginCombo("##view_layer", Film::layer_name(_view_options.view_layer))) {
+        for (uint32_t i = 0; i < ViewLayer::Count; ++i) {
+          const bool selected = i == _view_options.view_layer;
+          if (ImGui::Selectable(Film::layer_name(i), selected)) {
+            _view_options.view_layer = i;
+          }
+        }
+        ImGui::EndCombo();
+      }
+
+      ImGui::Text("Output Image:");
+      full_width_item();
+      if (ImGui::BeginCombo("##view_image", output_view_to_string(uint32_t(_view_options.view_image)).c_str())) {
+        for (uint32_t i = 0; i < uint32_t(OutputView::Count); ++i) {
+          const bool selected = i == uint32_t(_view_options.view_image);
+          if (ImGui::Selectable(output_view_to_string(i).c_str(), selected)) {
+            _view_options.view_image = i;
+          }
+        }
+        ImGui::EndCombo();
+      }
+
+      ImGui::Text("Display Transform:");
+      full_width_item();
+      if (ImGui::BeginCombo("##view_option", view_option_to_string(uint32_t(_view_options.view_option)).c_str())) {
+        for (uint32_t i = 0; i < uint32_t(ViewOptions::Count); ++i) {
+          const bool selected = i == uint32_t(_view_options.view_option);
+          if (ImGui::Selectable(view_option_to_string(i).c_str(), selected)) {
+            _view_options.view_option = i;
+          }
+        }
+        ImGui::EndCombo();
+      }
+
+      if (_current_renderer_mode == RendererMode::CPURaytracing) {
+        const bool can_denoise = renderer_can_run() && (renderer_state() == Integrator::State::Stopped);
+        ImGui::Spacing();
+        if (can_denoise == false) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Denoise Current Image", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)) && callbacks.denoise_selected) {
+          callbacks.denoise_selected();
+        }
+        if (can_denoise == false) {
+          ImGui::EndDisabled();
+        }
       }
     }
   }
