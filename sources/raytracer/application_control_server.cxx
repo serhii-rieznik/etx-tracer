@@ -355,7 +355,6 @@ const char* client_page() {
       background: var(--panel);
     }
     header strong { flex: none; font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
-    #scene { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
     #status { flex: none; margin-left: auto; color: var(--muted); font-size: 13px; font-weight: 550; }
     #status[data-state="connected"] { color: var(--success); }
     #status[data-state="disconnected"] { color: var(--danger); }
@@ -385,9 +384,11 @@ const char* client_page() {
     button.primary:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
     button.danger:not(:disabled) { color: var(--danger); }
     button:disabled { color: var(--faint); opacity: .58; cursor: default; }
+    button[aria-busy="true"] { cursor: progress; }
     .row { display: flex; gap: 8px; }
     .row > * { min-width: 0; flex: 1; }
     .render-actions { display: grid; grid-template-columns: 1fr 1fr; }
+    #denoise { width: 100%; margin-top: 8px; }
     .hint { margin: 8px 0 12px; color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     #upload-warning { color: var(--warning); }
     .hidden { display: none !important; }
@@ -401,6 +402,7 @@ const char* client_page() {
     .meta { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 7px 12px; margin: 0; padding-bottom: 4px; font-variant-numeric: tabular-nums; }
     .meta dt { color: var(--muted); font-size: 12px; }
     .meta dd { min-width: 0; margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+    #scene-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #message { min-height: 36px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     #message[data-tone="success"] { color: var(--success); }
     #message[data-tone="error"] { color: var(--danger); }
@@ -415,7 +417,6 @@ const char* client_page() {
     @media (max-width: 820px) {
       body { overflow: auto; }
       header { position: sticky; top: 0; z-index: 1; padding: 0 16px; }
-      #scene { display: none; }
       main { height: auto; min-height: calc(100% - 52px); grid-template-columns: 1fr; }
       aside { overflow: visible; padding: 20px 16px; border-right: 0; border-bottom: 1px solid var(--border); }
       section { min-height: 440px; padding: 16px; overflow: visible; }
@@ -426,7 +427,7 @@ const char* client_page() {
   </style>
 </head>
 <body>
-  <header><strong>ETX Tracer</strong><span id="scene">No scene loaded</span><span id="status" data-state="connecting">Connecting…</span></header>
+  <header><strong>ETX Tracer</strong><span id="status" data-state="connecting">Connecting…</span></header>
   <main>
     <aside aria-label="Renderer controls">
       <fieldset>
@@ -448,29 +449,25 @@ const char* client_page() {
           <summary>Load from renderer host</summary>
           <label for="path">File path</label>
           <input id="path" type="text" autocomplete="off">
-          <button id="load" type="button">Load scene</button>
+          <button id="load" type="button" disabled>Load scene</button>
         </details>
       </fieldset>
       <fieldset>
         <legend>Rendering</legend>
         <label for="renderer">Renderer</label>
-        <select id="renderer"><option value="cpu">CPU</option><option value="raster">Raster</option><option value="gpu">GPU</option></select>
+        <select id="renderer" disabled><option value="cpu">CPU</option><option value="raster">Raster</option><option value="gpu">GPU</option></select>
         <label for="integrator">Integrator</label>
-        <select id="integrator"></select>
+        <select id="integrator" disabled></select>
         <div class="row render-actions">
-          <button id="run" class="primary" type="button">Run</button>
-          <button id="finish" type="button">Finish</button>
-          <button id="stop" class="danger" type="button">Stop</button>
-          <button id="restart" type="button">Restart</button>
+          <button id="run" class="primary" type="button" disabled>Run</button>
+          <button id="finish" type="button" disabled>Finish</button>
+          <button id="stop" class="danger" type="button" disabled>Stop</button>
+          <button id="restart" type="button" disabled>Restart</button>
         </div>
-      </fieldset>
-      <fieldset>
-        <legend>View</legend>
-        <label for="exposure">Exposure</label>
-        <input id="exposure" type="number" min="0.0009765625" max="1024" step="0.1">
-        <button id="apply-exposure" type="button">Apply exposure</button>
+        <button id="denoise" type="button" disabled>Denoise image</button>
       </fieldset>
       <dl class="meta">
+        <dt>Scene</dt><dd id="scene-name">—</dd>
         <dt>Renderer</dt><dd id="renderer-name">—</dd>
         <dt>State</dt><dd id="run-state">—</dd>
         <dt>Samples</dt><dd id="samples">—</dd>
@@ -479,9 +476,9 @@ const char* client_page() {
       <div id="message" role="status" aria-live="polite"></div>
     </aside>
     <section aria-label="Rendered image">
-      <div class="image-head"><strong>Rendered image</strong><button id="refresh-image" type="button">Refresh image</button></div>
+      <div class="image-head"><strong>Output</strong><button id="refresh-image" type="button">Refresh image</button></div>
       <div id="image-stage" class="image-stage">
-        <div class="image-empty">Rendered output will appear here after a scene is loaded.</div>
+        <div class="image-empty">Rendered output will appear here after you load and run a scene.</div>
         <img id="image" alt="Latest rendered output" decoding="async">
       </div>
     </section>
@@ -492,6 +489,7 @@ const char* client_page() {
     let imageRefreshPending = false;
     let lastImageKey = '';
     let currentImageKey = '';
+    let currentSceneFile = '';
     let lastImageRefresh = 0;
     let folderFiles = [];
     let uploadController = null;
@@ -499,13 +497,46 @@ const char* client_page() {
     let activeUploadId = '';
     let pendingUpload = null;
     let lastCommandResultId = 0;
+    let latestState = null;
+    let serverConnected = false;
+    let resultsRefreshPending = false;
+    let pollTimer = 0;
     const commandResults = new Map();
+    const pendingCommands = new Map();
+    const submittingCommands = new Set();
+    const commandDetails = {
+      load_scene: {label: 'Load scene', control: 'load', pending: 'Loading…'},
+      set_renderer: {label: 'Change renderer', control: 'renderer'},
+      set_integrator: {label: 'Change integrator', control: 'integrator'},
+      run: {label: 'Start rendering', control: 'run', pending: 'Starting…'},
+      finish: {label: 'Finish rendering', control: 'finish', pending: 'Finishing…'},
+      stop: {label: 'Stop rendering', control: 'stop', pending: 'Stopping…'},
+      restart: {label: 'Restart rendering', control: 'restart', pending: 'Restarting…'},
+      denoise: {label: 'Denoise image', control: 'denoise', pending: 'Denoising…'}
+    };
 
     async function responseJson(response) {
       let result = {};
       try { result = await response.json(); } catch (_) {}
       if (!response.ok) throw new Error(result.error || `Server returned ${response.status}`);
       return result;
+    }
+
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+      const controller = new AbortController();
+      const sourceSignal = options.signal;
+      const forwardAbort = () => controller.abort();
+      if (sourceSignal) {
+        if (sourceSignal.aborted) controller.abort();
+        else sourceSignal.addEventListener('abort', forwardAbort, {once: true});
+      }
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, {...options, signal: controller.signal});
+      } finally {
+        clearTimeout(timeout);
+        if (sourceSignal) sourceSignal.removeEventListener('abort', forwardAbort);
+      }
     }
 
     function setMessage(message, tone = 'info') {
@@ -518,12 +549,75 @@ const char* client_page() {
       byId('status').dataset.state = state;
     }
 
+    function commandPending(type) {
+      if (submittingCommands.has(type)) return true;
+      for (const pending of pendingCommands.values()) {
+        if (pending.type === type) return true;
+      }
+      return false;
+    }
+
+    function setCommandPresentation(type, pending) {
+      const details = commandDetails[type];
+      if (!details || !details.control) return;
+      const control = byId(details.control);
+      if (!control) return;
+      if (pending) {
+        control.disabled = true;
+        control.setAttribute('aria-busy', 'true');
+        if ((control.tagName === 'BUTTON') && details.pending) {
+          if (!control.dataset.defaultLabel) control.dataset.defaultLabel = control.textContent;
+          control.textContent = details.pending;
+        }
+      } else {
+        control.removeAttribute('aria-busy');
+        if ((control.tagName === 'BUTTON') && control.dataset.defaultLabel) {
+          control.textContent = control.dataset.defaultLabel;
+        }
+      }
+    }
+
+    function finishPendingCommand(result) {
+      const pending = pendingCommands.get(result.command_id);
+      if (!pending) return false;
+      pendingCommands.delete(result.command_id);
+      setCommandPresentation(pending.type, commandPending(pending.type));
+      if (latestState) applyState(latestState);
+      setMessage(result.message || `${pending.label} ${result.success ? 'completed' : 'failed'}`, result.success ? 'success' : 'error');
+      return true;
+    }
+
     async function command(type, extra = {}) {
+      if (!serverConnected) {
+        setMessage('Renderer is not connected', 'error');
+        return null;
+      }
+      if (commandPending(type)) return null;
+      const details = commandDetails[type] || {label: type.replaceAll('_', ' ')};
+      submittingCommands.add(type);
+      setCommandPresentation(type, true);
+      setMessage(`${details.label} requested…`);
       try {
-        const response = await fetch('/api/commands', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({type, ...extra})});
+        const response = await fetchWithTimeout('/api/commands', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({type, ...extra})
+        }, 10000);
         const result = await responseJson(response);
-        setMessage(result.accepted ? `Command ${result.command_id} accepted` : 'Command rejected', result.accepted ? 'info' : 'error');
-      } catch (error) { setMessage(error.message, 'error'); }
+        if (!result.accepted || !Number.isSafeInteger(result.command_id)) throw new Error('The renderer returned an invalid command response');
+        submittingCommands.delete(type);
+        pendingCommands.set(result.command_id, {type, label: details.label});
+        setMessage(`${details.label} accepted · waiting for renderer`);
+        const cachedResult = commandResults.get(result.command_id);
+        if (cachedResult) finishPendingCommand(cachedResult);
+        else updateResults();
+        return result.command_id;
+      } catch (error) {
+        submittingCommands.delete(type);
+        setCommandPresentation(type, false);
+        if (latestState) applyState(latestState);
+        const message = error.name === 'AbortError' ? `${details.label} timed out` : error.message;
+        setMessage(message, 'error');
+        return null;
+      }
     }
 
     function formatSize(bytes) {
@@ -581,7 +675,7 @@ const char* client_page() {
       byId('folder-summary').textContent = `${rootName || 'Selected folder'} · ${folderFiles.length} files · ${formatSize(totalSize)}`;
       if (sceneFiles.length) {
         byId('entry-fields').classList.toggle('hidden', sceneFiles.length === 1);
-        byId('upload').disabled = pendingUpload !== null;
+        byId('upload').disabled = !serverConnected || pendingUpload !== null;
       } else {
         byId('folder-summary').textContent += ' · No supported scene found';
       }
@@ -602,11 +696,11 @@ const char* client_page() {
       } else {
         deleteUpload(completed.id);
       }
-      byId('upload').disabled = !folderFiles.length || !byId('entry').value;
+      byId('upload').disabled = !serverConnected || !folderFiles.length || !byId('entry').value;
     }
 
     async function uploadFolder() {
-      if (uploadController || pendingUpload || !folderFiles.length || !byId('entry').value) return;
+      if (!serverConnected || uploadController || pendingUpload || !folderFiles.length || !byId('entry').value) return;
       uploadController = new AbortController();
       const signal = uploadController.signal;
       let uploadedSize = 0;
@@ -660,9 +754,11 @@ const char* client_page() {
         }
         setMessage('Loading scene…');
         const accepted = await responseJson(await fetch(`/api/uploads/${currentUploadId}/commit`, {method: 'POST', signal}));
+        if (!accepted.accepted || !Number.isSafeInteger(accepted.command_id)) throw new Error('The renderer returned an invalid load response');
         committed = true;
         pendingUpload = {id: currentUploadId, commandId: accepted.command_id, previousId: activeUploadId};
-        if (commandResults.has(accepted.command_id)) processUploadResult(commandResults.get(accepted.command_id));
+        pendingCommands.set(accepted.command_id, {type: 'upload_scene', label: 'Load uploaded scene'});
+        const cachedResult = commandResults.get(accepted.command_id);
         const warning = unavailableReferences.length ? ` · ${unavailableReferences.length} unavailable reference${unavailableReferences.length === 1 ? '' : 's'}` : '';
         if (unavailableReferences.length) {
           const visible = unavailableReferences.slice(0, 3).join('; ');
@@ -670,7 +766,11 @@ const char* client_page() {
           byId('upload-warning').textContent = `Not found in the selected folder: ${visible}${remainder}`;
           byId('upload-warning').classList.remove('hidden');
         }
-        setMessage(`Uploaded ${formatSize(uploadedSize)} · command ${accepted.command_id} accepted${warning}`, 'success');
+        setMessage(`Upload complete · waiting for renderer${warning}`);
+        if (cachedResult) {
+          processUploadResult(cachedResult);
+          finishPendingCommand(cachedResult);
+        }
       } catch (error) {
         if (currentUploadId && !committed) deleteUpload(currentUploadId);
         setMessage(error.name === 'AbortError' ? 'Upload cancelled' : error.message, error.name === 'AbortError' ? 'info' : 'error');
@@ -680,7 +780,7 @@ const char* client_page() {
         byId('upload').textContent = 'Upload and load';
         byId('upload').removeAttribute('aria-busy');
         byId('choose-folder').disabled = false;
-        byId('upload').disabled = pendingUpload !== null || !folderFiles.length || !byId('entry').value;
+        byId('upload').disabled = !serverConnected || pendingUpload !== null || !folderFiles.length || !byId('entry').value;
         byId('cancel-upload').classList.add('hidden');
         byId('upload-progress').classList.add('hidden');
       }
@@ -689,62 +789,106 @@ const char* client_page() {
     function cancelUpload() {
       if (uploadController) uploadController.abort();
     }
+    function sceneDisplayName(path) {
+      const normalized = String(path || '').replace(/\\/g, '/');
+      return normalized.slice(normalized.lastIndexOf('/') + 1) || '—';
+    }
+
+    function clearDisplayedImage() {
+      lastImageKey = '';
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+      imageUrl = null;
+      byId('image').removeAttribute('src');
+      byId('image-stage').classList.remove('has-image');
+    }
+
+    function applyState(state) {
+      byId('scene-name').textContent = sceneDisplayName(state.scene_file);
+      byId('renderer-name').textContent = state.renderer_name;
+      byId('run-state').textContent = state.run_state;
+      byId('samples').textContent = state.runtime.valid ? `${state.runtime.completed_samples} / ${state.runtime.target_samples}` : '—';
+      byId('elapsed').textContent = state.runtime.valid ? `${state.runtime.elapsed_seconds.toFixed(1)} s` : '—';
+      const renderer = byId('renderer');
+      if (!commandPending('set_renderer')) renderer.value = state.renderer;
+      renderer.disabled = !serverConnected || commandPending('set_renderer');
+      renderer.querySelector('[value="gpu"]').disabled = !state.gpu_renderer_available;
+      const integrator = byId('integrator');
+      const values = state.integrators.map(item => `${item.value}:${item.enabled ? 1 : 0}`).join(',');
+      if (integrator.dataset.values !== values) {
+        integrator.replaceChildren(...state.integrators.map(item => {
+          const option = document.createElement('option'); option.value = item.value; option.textContent = item.name; option.disabled = !item.enabled; return option;
+        }));
+        integrator.dataset.values = values;
+      }
+      if (!commandPending('set_integrator')) integrator.value = String(state.integrator_value);
+      integrator.disabled = !serverConnected || commandPending('set_integrator');
+      byId('load').disabled = !serverConnected || commandPending('load_scene');
+      byId('upload').disabled = !serverConnected || pendingUpload !== null || !folderFiles.length || !byId('entry').value;
+      byId('run').disabled = !serverConnected || !state.controls.can_run || commandPending('run');
+      byId('finish').disabled = !serverConnected || !state.controls.can_finish || commandPending('finish');
+      byId('stop').disabled = !serverConnected || !state.controls.can_stop || commandPending('stop');
+      byId('restart').disabled = !serverConnected || !state.controls.can_restart || commandPending('restart');
+      byId('denoise').disabled = !serverConnected || !state.can_denoise || commandPending('denoise');
+
+      if (state.scene_file !== currentSceneFile) {
+        currentSceneFile = state.scene_file;
+        clearDisplayedImage();
+      }
+      const imageKey = state.scene_loaded ? JSON.stringify([
+        state.scene_file, state.renderer, state.run_state, state.runtime.completed_samples,
+        state.view.exposure, state.view.view_layer, state.view.output_view, state.view.display_transform
+      ]) : '';
+      currentImageKey = imageKey;
+      if (!imageKey) {
+        clearDisplayedImage();
+        return;
+      }
+      const activelyRendering = (state.run_state === 'running') || (state.run_state === 'finishing');
+      const refreshInterval = activelyRendering ? 1000 : 5000;
+      const imageChanged = imageKey !== lastImageKey;
+      if ((imageChanged || ((Date.now() - lastImageRefresh) >= refreshInterval)) && !imageRefreshPending) {
+        refreshImage(false, imageKey);
+      }
+    }
+
+    function disableCommandControls() {
+      for (const id of ['load', 'upload', 'renderer', 'integrator', 'run', 'finish', 'stop', 'restart', 'denoise']) byId(id).disabled = true;
+    }
+
     async function updateState() {
       try {
-        const state = await (await fetch('/api/state', {cache: 'no-store'})).json();
+        const state = await responseJson(await fetchWithTimeout('/api/state', {cache: 'no-store'}));
         setConnectionStatus(state.initialized ? 'Connected' : 'Starting…', state.initialized ? 'connected' : 'connecting');
-        byId('scene').textContent = state.scene_file || 'No scene loaded';
-        byId('scene').title = state.scene_file || '';
-        byId('renderer-name').textContent = state.renderer_name;
-        byId('run-state').textContent = state.run_state;
-        byId('samples').textContent = state.runtime.valid ? `${state.runtime.completed_samples} / ${state.runtime.target_samples}` : '—';
-        byId('elapsed').textContent = state.runtime.valid ? `${state.runtime.elapsed_seconds.toFixed(1)} s` : '—';
-        byId('renderer').value = state.renderer;
-        byId('renderer').querySelector('[value="gpu"]').disabled = !state.gpu_renderer_available;
-        const integrator = byId('integrator');
-        const values = state.integrators.map(item => String(item.value)).join(',');
-        if (integrator.dataset.values !== values) {
-          integrator.replaceChildren(...state.integrators.map(item => {
-            const option = document.createElement('option'); option.value = item.value; option.textContent = item.name; option.disabled = !item.enabled; return option;
-          }));
-          integrator.dataset.values = values;
-        }
-        integrator.value = String(state.integrator_value);
-        if (document.activeElement !== byId('exposure')) byId('exposure').value = state.view.exposure;
-        byId('run').disabled = !state.controls.can_run;
-        byId('finish').disabled = !state.controls.can_finish;
-        byId('stop').disabled = !state.controls.can_stop;
-        byId('restart').disabled = !state.controls.can_restart;
-        const imageKey = state.scene_loaded ? JSON.stringify([
-          state.scene_file, state.renderer, state.run_state, state.runtime.completed_samples,
-          state.view.exposure, state.view.view_layer, state.view.output_view, state.view.display_transform
-        ]) : '';
-        currentImageKey = imageKey;
-        if (!imageKey) {
-          lastImageKey = '';
-          if (imageUrl) URL.revokeObjectURL(imageUrl);
-          imageUrl = null;
-          byId('image').removeAttribute('src');
-          byId('image-stage').classList.remove('has-image');
-        } else if ((imageKey !== lastImageKey) && !imageRefreshPending && ((Date.now() - lastImageRefresh) >= 1000)) {
-          refreshImage(false, imageKey);
-        }
-      } catch (_) { setConnectionStatus('Disconnected', 'disconnected'); }
+        serverConnected = true;
+        latestState = state;
+        applyState(state);
+        return true;
+      } catch (_) {
+        serverConnected = false;
+        setConnectionStatus('Disconnected · retrying', 'disconnected');
+        disableCommandControls();
+        return false;
+      }
     }
+
     async function updateResults() {
+      if (resultsRefreshPending) return;
+      resultsRefreshPending = true;
       try {
-        const results = await (await fetch(`/api/results?after=${lastCommandResultId}`, {cache: 'no-store'})).json();
+        const results = await responseJson(await fetchWithTimeout(`/api/results?after=${lastCommandResultId}`, {cache: 'no-store'}));
+        if (!Array.isArray(results)) throw new Error('The renderer returned invalid command results');
         for (const result of results) {
+          if (!Number.isSafeInteger(result.command_id) || (typeof result.success !== 'boolean')) continue;
           lastCommandResultId = Math.max(lastCommandResultId, result.command_id);
           commandResults.set(result.command_id, result);
           processUploadResult(result);
+          finishPendingCommand(result);
         }
         while (commandResults.size > 256) commandResults.delete(commandResults.keys().next().value);
-        if (results.length) {
-          const latest = results.at(-1);
-          setMessage(latest.message, latest.success ? 'success' : 'error');
-        }
-      } catch (_) {}
+      } catch (_) {
+      } finally {
+        resultsRefreshPending = false;
+      }
     }
     async function refreshImage(showFailure = true, imageKey = '') {
       if (imageRefreshPending) return;
@@ -753,21 +897,36 @@ const char* client_page() {
       byId('refresh-image').disabled = true;
       byId('image-stage').setAttribute('aria-busy', 'true');
       try {
-        const response = await fetch(`/api/image?revision=${Date.now()}`, {cache: 'no-store'});
+        const response = await fetchWithTimeout(`/api/image?revision=${Date.now()}`, {cache: 'no-store'}, 10000);
         if (!response.ok) {
           if (showFailure) setMessage('No rendered image is available yet', 'error');
           return;
         }
+        const contentType = response.headers.get('Content-Type') || '';
+        if (!contentType.toLowerCase().startsWith('image/png')) throw new Error('The renderer returned an invalid image');
         const blob = await response.blob();
+        if (!blob.size) throw new Error('The renderer returned an empty image');
         if (imageKey && (imageKey !== currentImageKey)) return;
         const nextUrl = URL.createObjectURL(blob);
+        const decoder = new Image();
+        decoder.src = nextUrl;
+        try {
+          await decoder.decode();
+        } catch (error) {
+          URL.revokeObjectURL(nextUrl);
+          throw error;
+        }
+        if (imageKey && (imageKey !== currentImageKey)) {
+          URL.revokeObjectURL(nextUrl);
+          return;
+        }
         byId('image').src = nextUrl;
         if (imageUrl) URL.revokeObjectURL(imageUrl);
         imageUrl = nextUrl;
         lastImageKey = imageKey;
         byId('image-stage').classList.add('has-image');
-      } catch (_) {
-        if (showFailure) setMessage('Failed to refresh rendered image', 'error');
+      } catch (error) {
+        if (showFailure) setMessage(error.name === 'AbortError' ? 'Image refresh timed out' : (error.message || 'Failed to refresh rendered image'), 'error');
       } finally {
         imageRefreshPending = false;
         byId('refresh-image').disabled = false;
@@ -783,11 +942,14 @@ const char* client_page() {
     byId('renderer').onchange = e => command('set_renderer', {renderer: e.target.value});
     byId('integrator').onchange = e => command('set_integrator', {value: Number(e.target.value)});
     for (const type of ['run', 'finish', 'stop', 'restart']) byId(type).onclick = () => command(type);
-    byId('apply-exposure').onclick = () => command('set_exposure', {value: Number(byId('exposure').value)});
-    byId('exposure').onkeydown = event => { if (event.key === 'Enter') byId('apply-exposure').click(); };
+    byId('denoise').onclick = () => command('denoise');
     byId('refresh-image').onclick = () => refreshImage(true, currentImageKey);
-    setInterval(() => { updateState(); updateResults(); }, 500);
-    updateState(); updateResults();
+    async function pollServer() {
+      clearTimeout(pollTimer);
+      if (await updateState()) await updateResults();
+      pollTimer = setTimeout(pollServer, 500);
+    }
+    pollServer();
   </script>
 </body>
 </html>)html";
@@ -1372,6 +1534,7 @@ Json state_json(const ApplicationStateSnapshot& state) {
     {"initialized", state.initialized},
     {"scene_loaded", state.scene_loaded},
     {"scene_file", state.scene_file},
+    {"can_denoise", state.can_denoise},
     {"gpu_renderer_available", state.gpu_renderer_available},
     {"quit_requested", state.quit_requested},
     {"renderer", renderer_mode_name(state.renderer_mode)},
@@ -1422,6 +1585,8 @@ bool parse_command(const Json& json, ApplicationCommand& command, std::string& e
         return false;
       }
       command.save_image_mode = format == "png" ? SaveImageMode::TonemappedLDR : SaveImageMode::RGB;
+    } else if (type == "denoise") {
+      command.type = ApplicationCommandType::Denoise;
     } else if (type == "set_renderer") {
       command.type = ApplicationCommandType::SetRenderer;
       const std::string renderer = json.value("renderer", std::string{});

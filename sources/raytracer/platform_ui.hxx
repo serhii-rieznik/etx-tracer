@@ -13,6 +13,7 @@ enum class PlatformColorScheme {
 };
 
 struct PlatformUI {
+  void prepare_application();
   void show_startup();
   void finish_startup(bool succeeded);
   void setup(UI& ui);

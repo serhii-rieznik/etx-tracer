@@ -45,6 +45,8 @@ if(APPLE)
   set(ETX_TRACER_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/macos/AppIcon.icns")
   set(ETX_MACOS_CODE_SIGN_IDENTITY "-" CACHE STRING
     "Code-signing identity for the ETX Tracer app bundle ('-' creates a local ad-hoc signature)")
+  set(ETX_MACOS_BUNDLE_VERSION "2" CACHE STRING
+    "Internal macOS bundle build number; increment when publishing a new app bundle")
   set_source_files_properties("${ETX_TRACER_APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 
   add_executable(raytracer_app MACOSX_BUNDLE
@@ -79,7 +81,7 @@ if(APPLE)
     MACOSX_BUNDLE_BUNDLE_NAME "ETX Tracer"
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.etxtracer.app"
     MACOSX_BUNDLE_ICON_FILE "AppIcon.icns"
-    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${ETX_MACOS_BUNDLE_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
     MACOSX_BUNDLE_COPYRIGHT "Copyright © 2026 ETX Tracer contributors"
     MACOSX_RPATH TRUE

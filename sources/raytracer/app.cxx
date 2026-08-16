@@ -222,8 +222,6 @@ void RTApplication::init(const ApplicationConfig& config) {
     } else if (env().bundled()) {
       _options.load_from_file(env().file_in_data("DefaultOptions.json"));
     }
-    // Scene selection is session state: scenes are always supplied explicitly.
-    _options.remove("scene");
   }
 
   {
@@ -329,7 +327,9 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.emitter_deleted = std::bind(&RTApplication::on_emitter_deleted, this, std::placeholders::_1);
     ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
-    ui.callbacks.denoise_selected = std::bind(&RTApplication::on_denoise_selected, this);
+    ui.callbacks.denoise_selected = [this]() {
+      submit_command({.type = ApplicationCommandType::Denoise});
+    };
     ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
     ui.callbacks.clear_recent_files = std::bind(&RTApplication::on_clear_recent_files, this);
     ui.callbacks.camera_activated = std::bind(&RTApplication::on_camera_activated, this, std::placeholders::_1);
@@ -381,7 +381,7 @@ void RTApplication::init(const ApplicationConfig& config) {
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_select_integrator");
-    const auto& selected_integrator = _options.get_string("integrator", std::string{});
+    const std::string selected_integrator = _options.get_string("integrator", {});
     for (uint64_t i = 0; (selected_integrator.empty() == false) && (i < (uint64_t)cpu_renderer.integrator_count()); ++i) {
       Integrator* it = cpu_renderer.integrator_list()[i];
       ETX_ASSERT(it != nullptr);
@@ -399,11 +399,25 @@ void RTApplication::init(const ApplicationConfig& config) {
   sync_scene_integrator_data_from_current_integrator();
   ui.set_current_integrator(integrator);
 
-  {
+  if ((config.runtime_mode == RuntimeMode::Desktop) && config.persist_options) {
+    ETX_PROFILER_NAMED_SCOPE("app_restore_last_scene");
+    std::string restored_scene = _options.get_string("scene", {});
+    if (restored_scene.empty() && !_recent_files.empty()) {
+      restored_scene = _recent_files.back();
+    }
+    if (!restored_scene.empty() && !load_scene_file(restored_scene, SceneRepresentation::LoadEverything, false)) {
+      _options.remove("scene");
+    }
+  }
+
+  if ((config.runtime_mode == RuntimeMode::Desktop) && config.persist_options) {
     ETX_PROFILER_NAMED_SCOPE("app_restore_reference");
-    const auto& ref = _options.get_string("ref", std::string{});
-    if (ref.empty() == false) {
+    const std::string ref = _options.get_string("ref", {});
+    std::error_code error = {};
+    if (!ref.empty() && std::filesystem::is_regular_file(ref, error)) {
       on_referenece_image_selected(ref);
+    } else if (!ref.empty()) {
+      _options.remove("ref");
     }
   }
 
@@ -431,7 +445,9 @@ void RTApplication::save_options() {
   for (const auto& recent : _recent_files) {
     _options.set_string("recent-" + std::to_string(i++), portable_scene_path(recent), "Recent File");
   }
-  _options.remove("scene");
+  if ((_application_config.runtime_mode == RuntimeMode::Desktop) && !_current_scene_file.empty()) {
+    _options.set_string("scene", portable_scene_path(_current_scene_file), "Scene");
+  }
   _options.save_to_file(env().file_in_config("options.json"));
 }
 
@@ -1294,6 +1310,19 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       message = "Image save requested";
       return true;
 
+    case ApplicationCommandType::Denoise:
+      if (_current_scene_file.empty() || !scene.valid()) {
+        message = "No scene is loaded";
+        return false;
+      }
+      if ((_active_renderer != &cpu_renderer) || !_active_renderer->control_state().can_run || (_active_renderer->runtime_stats().completed_samples == 0u)) {
+        message = "Denoising requires stopped CPU output with at least one rendered sample";
+        return false;
+      }
+      on_denoise_selected();
+      message = "Image denoised";
+      return true;
+
     case ApplicationCommandType::SetRenderer:
       if ((command.renderer == RendererMode::GPURaytracing) && (_gpu_renderer_supported == false)) {
         message = "GPU ray tracing is unavailable";
@@ -1468,6 +1497,8 @@ void RTApplication::publish_application_state() {
   state.preparation = _active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{};
   state.runtime = _active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{};
   state.controls = state.scene_loaded && _active_renderer ? _active_renderer->control_state() : RendererControlState{};
+  state.can_denoise = state.scene_loaded && (_active_renderer == &cpu_renderer) && state.controls.can_run && state.runtime.valid &&
+                      (state.runtime.completed_samples > 0u);
   state.view = _view_parameters;
   if (Integrator* integrator = cpu_renderer.current_integrator()) {
     state.integrator_type = integrator->type();

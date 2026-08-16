@@ -16,6 +16,7 @@ enum class ApplicationCommandType : uint32_t {
   SaveScene,
   LoadReferenceImage,
   SaveImage,
+  Denoise,
   SetRenderer,
   SetIntegrator,
   Run,
@@ -63,6 +64,7 @@ struct ApplicationStateSnapshot {
   bool initialized = false;
   bool scene_loaded = false;
   bool gpu_renderer_available = false;
+  bool can_denoise = false;
   bool quit_requested = false;
   std::string scene_file = {};
   std::string renderer_name = {};

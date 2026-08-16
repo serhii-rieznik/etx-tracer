@@ -11,6 +11,9 @@ PlatformUI& platform_ui() {
   return instance;
 }
 
+void PlatformUI::prepare_application() {
+}
+
 void PlatformUI::show_startup() {
 }
 

@@ -2674,17 +2674,18 @@ void UI::build_toolbar(const BuildContext& ctx) {
       ImGui::PopStyleColor(4);
 
       if (cpu_mode) {
+        const bool can_denoise = controls.can_run && _current_renderer_stats.valid && (_current_renderer_stats.completed_samples > 0u);
         ImGui::SameLine(0.0f, ctx.wpadding.x);
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
 
         ImGui::SameLine(0.0f, ctx.wpadding.x);
-        if (state_available[0] == false) {
+        if (can_denoise == false) {
           ImGui::BeginDisabled();
         }
         if (ImGui::Button("  Denoise (preview)  ", {0.0f, ctx.button_size}) && callbacks.denoise_selected) {
           callbacks.denoise_selected();
         }
-        if (state_available[0] == false) {
+        if (can_denoise == false) {
           ImGui::EndDisabled();
         }
       }
@@ -4192,7 +4193,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
       }
 
       if (_current_renderer_mode == RendererMode::CPURaytracing) {
-        const bool can_denoise = _current_renderer_controls.can_run;
+        const bool can_denoise = _current_renderer_controls.can_run && _current_renderer_stats.valid && (_current_renderer_stats.completed_samples > 0u);
         ImGui::Spacing();
         if (can_denoise == false) {
           ImGui::BeginDisabled();

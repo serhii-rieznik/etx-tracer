@@ -91,6 +91,7 @@ extern "C" int main(int argc, char* argv[]) {
   desc.fullscreen = false;
   desc.alpha = false;
 
+  platform_ui().prepare_application();
   sapp_run(desc);
   return 0;
 }

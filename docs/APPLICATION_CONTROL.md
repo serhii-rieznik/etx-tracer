@@ -36,7 +36,7 @@ raytracer --window-only --window-size 1600x900 --scene /path/to/scene.etx.json
 ```
 
 `--window-only` starts the same control server automatically. Runtime selections in these UI-independent modes do not overwrite the saved desktop preferences.
-Headless output has no independent presentation size. `GET /api/image` follows the active renderer's scene/film dimensions. The built-in browser client refreshes the PNG blob automatically when rendering or view state changes; its Refresh button remains available for an explicit update.
+Headless output has no independent presentation size. `GET /api/image` follows the active renderer's scene/film dimensions. The built-in browser client polls state and command results without overlapping requests. It refreshes the PNG blob when rendering or view state changes, once per second while rendering, and every five seconds while idle; its Refresh button remains available for an explicit update.
 
 ## HTTP API
 
@@ -51,6 +51,7 @@ Commands are JSON objects with a `type` field. Supported types are:
 
 - `load_scene`, `save_scene`, and `load_reference` with `path`
 - `save_image` with `path` and `format` (`png` or `exr`)
+- `denoise`
 - `set_renderer` with `renderer` (`cpu`, `raster`, or `gpu`)
 - `set_integrator` with the numeric integrator `value`
 - `run`, `finish`, `stop`, `restart`
@@ -79,6 +80,8 @@ The corresponding result is later returned by `/api/results` (or `/api/results?a
 ```json
 [{"command_id":12,"success":true,"message":"Renderer changed"}]
 ```
+
+The built-in page associates that result with the submitted command ID. It keeps the corresponding control pending after acceptance, then presents the renderer's success or failure message and reconciles the controls with the next state snapshot. State and result polling runs sequentially at approximately 500 ms intervals so a slow scene operation cannot accumulate overlapping browser requests.
 
 The server is deliberately a transport adapter. Renderer and scene mutations execute on the application thread when its command queue is drained, so HTTP handling does not mutate rendering state concurrently.
 

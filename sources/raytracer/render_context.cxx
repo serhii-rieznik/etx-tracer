@@ -442,7 +442,14 @@ void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, 
   if (!valid())
     return;
 
-  if ((_private->config.mode == RuntimeMode::Headless) && (renderer != nullptr)) {
+  if (_private->config.mode == RuntimeMode::Desktop) {
+    const uint32_t framebuffer_width = static_cast<uint32_t>(sapp_width());
+    const uint32_t framebuffer_height = static_cast<uint32_t>(sapp_height());
+    const RHIExtent2D output_extent = _private->runtime_output.extent();
+    if ((framebuffer_width != output_extent.width) || (framebuffer_height != output_extent.height)) {
+      _private->runtime_output.resize(_private->rhi_context, framebuffer_width, framebuffer_height);
+    }
+  } else if ((_private->config.mode == RuntimeMode::Headless) && (renderer != nullptr)) {
     const uint2 renderer_size = renderer->output_size();
     const RHIExtent2D output_extent = _private->runtime_output.extent();
     if ((renderer_size.x > 0u) && (renderer_size.y > 0u) &&

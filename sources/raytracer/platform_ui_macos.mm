@@ -247,12 +247,16 @@ static void rebuild_integrator_menu(UI& ui) {
     g_render_toolbar_group.paletteLabel = @"Render Controls";
     g_render_toolbar_group.toolTip = @"Rendering Controls";
     g_render_toolbar_group.controlRepresentation = NSToolbarItemGroupControlRepresentationExpanded;
+    g_render_toolbar_group.autovalidates = NO;
 
     NSArray<NSToolbarItem*>* items = g_render_toolbar_group.subitems;
     items[0].toolTip = @"Start Rendering";
     items[1].toolTip = @"Finish Current Iteration";
     items[2].toolTip = @"Stop Rendering Immediately";
     items[3].toolTip = @"Restart Rendering";
+    for (NSToolbarItem* item in items) {
+      item.autovalidates = NO;
+    }
     return g_render_toolbar_group;
   }
 
@@ -312,6 +316,7 @@ static void rebuild_integrator_menu(UI& ui) {
   item.tag = kCommandTagBase + static_cast<NSInteger>(command);
   if ([identifier isEqualToString:kFrameSceneToolbarItem]) {
     g_frame_scene_toolbar_item = item;
+    item.autovalidates = NO;
   }
   return item;
 }
@@ -323,6 +328,10 @@ namespace etx {
 PlatformUI& platform_ui() {
   static PlatformUI instance = {};
   return instance;
+}
+
+void PlatformUI::prepare_application() {
+  [NSWindow setAllowsAutomaticWindowTabbing:NO];
 }
 
 void PlatformUI::show_startup() {
@@ -465,17 +474,17 @@ void PlatformUI::setup(UI& ui) {
   g_scene_objects_item = add_command_item(view_menu, @"Scene Objects", MenuCommand::ToggleSceneObjects, @"1", NSEventModifierFlagCommand | NSEventModifierFlagOption);
   g_properties_item = add_command_item(view_menu, @"Properties", MenuCommand::ToggleProperties, @"2", NSEventModifierFlagCommand | NSEventModifierFlagOption);
 
-  NSMenu* window_menu = add_submenu(main_menu, @"Window");
-  [window_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"]];
-  [window_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""]];
-  [window_menu addItem:[NSMenuItem separatorItem]];
-  [window_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Bring All to Front" action:@selector(arrangeInFront:) keyEquivalent:@""]];
-  [NSApp setWindowsMenu:window_menu];
-
-  NSApp.mainMenu = main_menu;
-
   NSWindow* window = NSApp.keyWindow ?: NSApp.mainWindow;
   if (window != nil) {
+    window.collectionBehavior =
+      (window.collectionBehavior & ~NSWindowCollectionBehaviorFullScreenPrimary) | NSWindowCollectionBehaviorFullScreenNone;
+  }
+
+  [NSApp setWindowsMenu:nil];
+  NSApp.mainMenu = main_menu;
+
+  if (window != nil) {
+    window.tabbingMode = NSWindowTabbingModeDisallowed;
     NSToolbar* toolbar = [[NSToolbar alloc] initWithIdentifier:@"com.etxtracer.toolbar.v2"];
     toolbar.delegate = g_platform_ui_controller;
     toolbar.displayMode = NSToolbarDisplayModeIconOnly;
@@ -502,15 +511,25 @@ void PlatformUI::update(UI& ui, const std::vector<std::string>& recent_files) {
   g_gpu_renderer_item.enabled = ui.gpu_renderer_available();
   g_scene_objects_item.state = ui.scene_objects_visible() ? NSControlStateValueOn : NSControlStateValueOff;
   g_properties_item.state = ui.properties_visible() ? NSControlStateValueOn : NSControlStateValueOff;
-  g_frame_scene_toolbar_item.enabled = ui.scene_view_commands_available();
+  const BOOL frame_scene_enabled = ui.scene_view_commands_available() ? YES : NO;
+  if (g_frame_scene_toolbar_item.enabled != frame_scene_enabled) {
+    g_frame_scene_toolbar_item.enabled = frame_scene_enabled;
+  }
 
   const RendererControlState& controls = ui.renderer_controls();
   NSArray<NSToolbarItem*>* render_items = g_render_toolbar_group.subitems;
   if (render_items.count == 4) {
-    render_items[0].enabled = controls.can_run;
-    render_items[1].enabled = controls.can_finish;
-    render_items[2].enabled = controls.can_stop;
-    render_items[3].enabled = controls.can_restart;
+    const BOOL enabled[] = {
+      controls.can_run ? YES : NO,
+      controls.can_finish ? YES : NO,
+      controls.can_stop ? YES : NO,
+      controls.can_restart ? YES : NO,
+    };
+    for (NSUInteger index = 0; index < render_items.count; ++index) {
+      if (render_items[index].enabled != enabled[index]) {
+        render_items[index].enabled = enabled[index];
+      }
+    }
   }
   if (g_panels_toolbar_group.subitems.count == 2) {
     [g_panels_toolbar_group setSelected:ui.scene_objects_visible() atIndex:0];

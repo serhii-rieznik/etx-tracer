@@ -90,7 +90,7 @@ This is important on Windows because the HTTP server may receive work independen
 The shared command layer currently covers:
 
 - scene load/save and reference-image load;
-- image save;
+- image save and CPU-output denoising;
 - renderer and integrator selection;
 - run, finish-current-iteration, immediate stop, and restart;
 - scene, geometry, and shader reload;
@@ -102,7 +102,7 @@ Material editing, emitter editing, camera manipulation, and other detailed scene
 
 ### State and results
 
-`ApplicationStateSnapshot` exposes initialization, scene, renderer, integrator, preparation, run-state, timing/sample statistics, action availability, view settings, and quit state. Clients should use `controls.can_run`, `can_finish`, `can_stop`, and `can_restart`; they should not infer button availability from renderer names or sample counts.
+`ApplicationStateSnapshot` exposes initialization, scene, renderer, integrator, preparation, run-state, timing/sample statistics, action availability, view settings, and quit state. Clients should use `controls.can_run`, `can_finish`, `can_stop`, and `can_restart`, plus `can_denoise`; they should not infer button availability from renderer names or sample counts.
 
 Command acceptance and command completion are separate:
 
@@ -149,7 +149,8 @@ Relevant rules:
 - A control-server session does not start rendering after scene load; the client must send `run`.
 - Fixed-frame headless mode starts automatically after the supplied scene becomes ready.
 - UI-independent modes do not persist renderer selections into desktop preferences.
-- A scene is session state and is never loaded implicitly from `options.json`.
+- The persistent native desktop restores its last valid scene from `options.json`.
+- UI-independent modes do not restore or persist that scene; they require an explicit scene command or `--scene` option.
 
 Headless rendering has no presentation-window resolution. The render output follows the active scene/film dimensions. The initial `1 x 1` runtime target is only a bootstrap allocation and is resized from `Renderer::output_size()` when a scene is available.
 
@@ -202,9 +203,10 @@ The current page provides:
 - responsive desktop and narrow-window layouts;
 - renderer and integrator selection;
 - correctly state-driven Run, Finish, Stop, and Restart buttons;
-- exposure control;
+- CPU-output denoising;
+- pending, success, timeout, and failure feedback tied to each submitted command ID;
 - live renderer name, state, samples, elapsed time, and command feedback;
-- automatic and manual image refresh;
+- automatic image polling while rendering and idle, plus manual refresh;
 - local host-path loading for trusted/local operation;
 - selective remote scene upload.
 
@@ -316,7 +318,8 @@ Do not expose this server directly to the internet. Remote commands include read
 - Run the existing offline/batch workflows to confirm the explicit GPU `start()` preserved them.
 - Run `raytracer.exe` with no arguments.
 - Confirm the normal Windows window, ImGui menu, and ImGui toolbar remain present.
-- Confirm no scene loads by default.
+- On a clean configuration, confirm no scene loads until one is selected.
+- Reopen the desktop app and confirm the last valid scene is restored without starting a render.
 - Confirm options still come from the shared application configuration location.
 
 ### 2. Desktop action wiring
@@ -328,7 +331,7 @@ With a normal local scene:
 - exercise Run, Finish, Stop, and Restart in ImGui;
 - confirm disabled/enabled states match actual behavior;
 - confirm GPU buttons remain disabled while preparation is incomplete, then become usable;
-- verify exposure and view changes update the presentation;
+- verify denoising becomes available only for stopped CPU output and updates the presentation;
 - verify scene/geometry/shader reload actions still work.
 
 ### 3. Local headless server
