@@ -61,7 +61,11 @@ extern "C" int main(int argc, char* argv[]) {
   desc.width = 1600;
   desc.height = 900;
   desc.high_dpi = true;
+#if defined(ETX_PLATFORM_APPLE)
+  desc.window_title = "ETX Tracer";
+#else
   desc.window_title = "etx-tracer";
+#endif
   desc.win32.console_utf8 = true;
   desc.win32.console_create = true;
   desc.user_data = &rhi_app;

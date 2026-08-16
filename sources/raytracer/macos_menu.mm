@@ -33,6 +33,14 @@ static NSString* ns_string(const char* value) {
   return value != nullptr ? [NSString stringWithUTF8String:value] : @"";
 }
 
+static NSString* application_name() {
+  NSString* name = NSBundle.mainBundle.infoDictionary[@"CFBundleDisplayName"];
+  if (name.length == 0) {
+    name = NSBundle.mainBundle.infoDictionary[@"CFBundleName"];
+  }
+  return name.length > 0 ? name : NSProcessInfo.processInfo.processName;
+}
+
 static NSMenuItem* add_command_item(NSMenu* menu, NSString* title, MenuCommand command, NSString* key_equivalent = @"", NSEventModifierFlags modifiers = NSEventModifierFlagCommand) {
   NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title action:@selector(performCommand:) keyEquivalent:key_equivalent];
   item.target = g_menu_target;
@@ -113,19 +121,26 @@ void setup_macos_menu(UI& ui) {
   g_menu_target.ui = &ui;
 
   NSMenu* main_menu = [[NSMenu alloc] initWithTitle:@"Main Menu"];
+  NSString* app_name = application_name();
 
-  NSMenu* application_menu = add_submenu(main_menu, @"etx-tracer");
-  NSMenuItem* about_item = [[NSMenuItem alloc] initWithTitle:@"About etx-tracer" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+  NSMenu* application_menu = add_submenu(main_menu, app_name);
+  NSMenuItem* about_item = [[NSMenuItem alloc] initWithTitle:[@"About " stringByAppendingString:app_name] action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
   [application_menu addItem:about_item];
   [application_menu addItem:[NSMenuItem separatorItem]];
-  NSMenuItem* hide_item = [[NSMenuItem alloc] initWithTitle:@"Hide etx-tracer" action:@selector(hide:) keyEquivalent:@"h"];
+  NSMenu* services_menu = [[NSMenu alloc] initWithTitle:@"Services"];
+  NSMenuItem* services_item = [[NSMenuItem alloc] initWithTitle:@"Services" action:nil keyEquivalent:@""];
+  services_item.submenu = services_menu;
+  [application_menu addItem:services_item];
+  NSApp.servicesMenu = services_menu;
+  [application_menu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem* hide_item = [[NSMenuItem alloc] initWithTitle:[@"Hide " stringByAppendingString:app_name] action:@selector(hide:) keyEquivalent:@"h"];
   [application_menu addItem:hide_item];
   NSMenuItem* hide_others_item = [[NSMenuItem alloc] initWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
   hide_others_item.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
   [application_menu addItem:hide_others_item];
   [application_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""]];
   [application_menu addItem:[NSMenuItem separatorItem]];
-  add_command_item(application_menu, @"Quit etx-tracer", MenuCommand::Quit, @"q");
+  add_command_item(application_menu, [@"Quit " stringByAppendingString:app_name], MenuCommand::Quit, @"q");
 
   NSMenu* file_menu = add_submenu(main_menu, @"File");
   add_command_item(file_menu, @"Open Scene…", MenuCommand::OpenScene, @"o");
@@ -139,6 +154,15 @@ void setup_macos_menu(UI& ui) {
   [file_menu addItem:[NSMenuItem separatorItem]];
   add_command_item(file_menu, @"Save Scene", MenuCommand::SaveScene, @"s");
   add_command_item(file_menu, @"Save Scene As…", MenuCommand::SaveSceneAs, @"s", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+
+  NSMenu* edit_menu = add_submenu(main_menu, @"Edit");
+  [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"]];
+  [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"]];
+  [edit_menu addItem:[NSMenuItem separatorItem]];
+  [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"]];
+  [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"]];
+  [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"]];
+  [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"]];
 
   NSMenu* renderer_menu = add_submenu(main_menu, @"Renderer");
   g_cpu_renderer_item = add_command_item(renderer_menu, @"CPU Raytracer", MenuCommand::SelectCPURenderer);

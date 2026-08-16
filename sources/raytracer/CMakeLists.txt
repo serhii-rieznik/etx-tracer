@@ -32,6 +32,110 @@ if(APPLE)
   set_source_files_properties(macos_menu.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 
+if(APPLE)
+  set(ETX_TRACER_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/macos/AppIcon.icns")
+  set(ETX_MACOS_CODE_SIGN_IDENTITY "-" CACHE STRING
+    "Code-signing identity for the ETX Tracer app bundle ('-' creates a local ad-hoc signature)")
+  set_source_files_properties("${ETX_TRACER_APP_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
+  add_executable(raytracer_app MACOSX_BUNDLE
+    main.cxx
+    ${RAYTRACER_SHARED_SOURCES}
+    macos_menu.hxx
+    macos_menu.mm
+    "${ETX_TRACER_APP_ICON}"
+  )
+
+  target_compile_options(raytracer_app PRIVATE "-include" "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
+  target_link_libraries(raytracer_app PRIVATE
+    imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+    "-framework Foundation"
+    "-framework QuartzCore"
+    "-framework CoreGraphics"
+    "-framework Metal"
+    "-framework MetalKit"
+    "-framework AppKit"
+  )
+  target_include_directories(raytracer_app PRIVATE
+    "${CMAKE_SOURCE_DIR}/sources/etx/render"
+    "${CMAKE_SOURCE_DIR}/bin"
+  )
+  set_target_properties(raytracer_app PROPERTIES
+    OUTPUT_NAME "ETX Tracer"
+    RUNTIME_OUTPUT_DIRECTORY "${root_folder}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${root_folder}/bin"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
+    MACOSX_BUNDLE_BUNDLE_NAME "ETX Tracer"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.etxtracer.app"
+    MACOSX_BUNDLE_ICON_FILE "AppIcon.icns"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_COPYRIGHT "Copyright © 2026 ETX Tracer contributors"
+    MACOSX_RPATH TRUE
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "@executable_path/../Frameworks;@loader_path/../Frameworks"
+  )
+
+  add_custom_command(TARGET raytracer_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/assets"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/fonts"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/spectrum"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/shaders"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/interop"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/access"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${root_folder}/bin/assets"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/assets"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${root_folder}/bin/fonts"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${root_folder}/bin/spectrum"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/spectrum"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_SOURCE_DIR}/sources/etx/render/shaders"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_SOURCE_DIR}/sources/etx/render/interop"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/interop"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_SOURCE_DIR}/sources/etx/render/access"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/access"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/macos/DefaultOptions.json"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/options.json"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${root_folder}/bin/lib"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks"
+    COMMENT "Bundling ETX Tracer resources and runtime libraries"
+  )
+
+  if(DXC_FOUND AND DXC_LIBRARY)
+    add_custom_command(TARGET raytracer_app POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${DXC_LIBRARY}"
+        "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks/"
+      COMMENT "Bundling DXC runtime library"
+    )
+  endif()
+
+  if(ETX_MACOS_CODE_SIGN_IDENTITY)
+    add_custom_command(TARGET raytracer_app POST_BUILD
+      COMMAND ${CMAKE_COMMAND}
+        "-DAPP_BUNDLE=$<TARGET_BUNDLE_DIR:raytracer_app>"
+        "-DSIGNING_IDENTITY=${ETX_MACOS_CODE_SIGN_IDENTITY}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/macos/SignBundle.cmake"
+      COMMENT "Code-signing ETX Tracer app bundle"
+    )
+  endif()
+endif()
+
 set(ETX_UNITY_STD_HEADER "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
 
 if(MSVC)

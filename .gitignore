@@ -10,6 +10,7 @@
 /bin/raytracer
 /bin/bsdf_validation
 /bin/procedural_geometry
+/bin/*.app/
 /bin/cache/
 /bin/tmp/
 /bin/_tmp/
