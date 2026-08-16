@@ -21,6 +21,9 @@ static NSMenuItem* g_properties_item = nil;
 static std::vector<std::string> g_recent_files = {};
 static bool g_recent_files_initialized = false;
 static uint64_t g_integrator_count = ~0ull;
+static NSVisualEffectView* g_startup_overlay = nil;
+static NSProgressIndicator* g_startup_indicator = nil;
+static NSTextField* g_startup_label = nil;
 
 @interface ETXMenuTarget : NSObject
 @property(nonatomic, assign) UI* ui;
@@ -115,6 +118,63 @@ static void rebuild_integrator_menu(UI& ui) {
 @end
 
 namespace etx {
+
+void show_macos_startup_overlay() {
+  NSWindow* window = NSApp.keyWindow ?: NSApp.mainWindow;
+  NSView* content_view = window.contentView;
+  if ((content_view == nil) || (g_startup_overlay != nil)) {
+    return;
+  }
+
+  g_startup_overlay = [[NSVisualEffectView alloc] initWithFrame:content_view.bounds];
+  g_startup_overlay.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  g_startup_overlay.blendingMode = NSVisualEffectBlendingModeWithinWindow;
+  g_startup_overlay.material = NSVisualEffectMaterialUnderWindowBackground;
+  g_startup_overlay.state = NSVisualEffectStateActive;
+
+  g_startup_indicator = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+  g_startup_indicator.style = NSProgressIndicatorStyleSpinning;
+  g_startup_indicator.controlSize = NSControlSizeRegular;
+  g_startup_indicator.translatesAutoresizingMaskIntoConstraints = NO;
+  [g_startup_indicator startAnimation:nil];
+
+  g_startup_label = [NSTextField labelWithString:@"Preparing ETX Tracer…\nThe first launch and large scenes may take a moment."];
+  g_startup_label.alignment = NSTextAlignmentCenter;
+  g_startup_label.font = [NSFont systemFontOfSize:15.0 weight:NSFontWeightMedium];
+  g_startup_label.maximumNumberOfLines = 2;
+  g_startup_label.translatesAutoresizingMaskIntoConstraints = NO;
+
+  [g_startup_overlay addSubview:g_startup_indicator];
+  [g_startup_overlay addSubview:g_startup_label];
+  [NSLayoutConstraint activateConstraints:@[
+    [g_startup_indicator.centerXAnchor constraintEqualToAnchor:g_startup_overlay.centerXAnchor],
+    [g_startup_indicator.centerYAnchor constraintEqualToAnchor:g_startup_overlay.centerYAnchor constant:-24.0],
+    [g_startup_label.topAnchor constraintEqualToAnchor:g_startup_indicator.bottomAnchor constant:16.0],
+    [g_startup_label.centerXAnchor constraintEqualToAnchor:g_startup_overlay.centerXAnchor],
+    [g_startup_label.leadingAnchor constraintGreaterThanOrEqualToAnchor:g_startup_overlay.leadingAnchor constant:24.0],
+    [g_startup_label.trailingAnchor constraintLessThanOrEqualToAnchor:g_startup_overlay.trailingAnchor constant:-24.0],
+  ]];
+
+  [content_view addSubview:g_startup_overlay positioned:NSWindowAbove relativeTo:nil];
+  [g_startup_overlay displayIfNeeded];
+}
+
+void finish_macos_startup(bool succeeded) {
+  if (g_startup_overlay == nil) {
+    return;
+  }
+  if (succeeded) {
+    [g_startup_indicator stopAnimation:nil];
+    [g_startup_overlay removeFromSuperview];
+    g_startup_indicator = nil;
+    g_startup_label = nil;
+    g_startup_overlay = nil;
+  } else {
+    [g_startup_indicator stopAnimation:nil];
+    g_startup_indicator.hidden = YES;
+    g_startup_label.stringValue = @"ETX Tracer could not initialize the rendering system.";
+  }
+}
 
 void setup_macos_menu(UI& ui) {
   g_menu_target = [[ETXMenuTarget alloc] init];
@@ -242,6 +302,11 @@ void update_macos_menu(UI& ui, const std::vector<std::string>& recent_files) {
 }
 
 void shutdown_macos_menu() {
+  [g_startup_indicator stopAnimation:nil];
+  [g_startup_overlay removeFromSuperview];
+  g_startup_indicator = nil;
+  g_startup_label = nil;
+  g_startup_overlay = nil;
   if (g_menu_target != nil) {
     g_menu_target.ui = nullptr;
   }

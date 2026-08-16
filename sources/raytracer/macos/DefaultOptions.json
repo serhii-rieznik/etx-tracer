@@ -6,13 +6,6 @@
       "id": "renderer",
       "meta": 0,
       "value": "raster"
-    },
-    {
-      "class": 5,
-      "description": "Scene",
-      "id": "scene",
-      "meta": 0,
-      "value": "assets/cornellbox/cornellbox.etx.json"
     }
   ]
 }

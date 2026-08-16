@@ -46,7 +46,11 @@ extern "C" int main(int argc, char* argv[]) {
   RTApplication rhi_app = {};
   sapp_desc desc = {};
   desc.init_userdata_cb = [](void* data) {
+#if defined(ETX_PLATFORM_APPLE)
+    reinterpret_cast<RTApplication*>(data)->prepare_startup();
+#else
     reinterpret_cast<RTApplication*>(data)->init();
+#endif
   };
   desc.frame_userdata_cb = [](void* data) {
     reinterpret_cast<RTApplication*>(data)->frame();

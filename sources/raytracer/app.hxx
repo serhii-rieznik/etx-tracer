@@ -39,6 +39,7 @@ struct RTApplication {
   RTApplication();
   ~RTApplication();
 
+  void prepare_startup();
   void init();
   void frame();
   void cleanup();
@@ -114,6 +115,10 @@ struct RTApplication {
   bool _pending_current_image_reference_capture = false;
   bool _pending_reference_file_load = false;
   bool _pending_gpu_save_image = false;
+  bool _startup_frame_presented = false;
+  bool _initialization_started = false;
+  bool _initialized = false;
+  bool _scene_global_initialized = false;
   SaveImageMode _pending_gpu_save_image_mode = SaveImageMode::RGB;
 
   Options _options;

@@ -121,6 +121,29 @@ std::string normalized_existing_scene_path(const std::string& value) {
   return path.generic_string();
 }
 
+std::string portable_scene_path(const std::string& value) {
+  if (!env().bundled() || value.empty()) {
+    return value;
+  }
+
+  std::error_code ec = {};
+  const std::filesystem::path resource_root = std::filesystem::weakly_canonical(env().data_folder(), ec);
+  if (ec) {
+    return value;
+  }
+
+  const std::filesystem::path scene_path = std::filesystem::weakly_canonical(value, ec);
+  if (ec) {
+    return value;
+  }
+
+  const std::filesystem::path relative_path = scene_path.lexically_relative(resource_root);
+  if (relative_path.empty() || (*relative_path.begin() == "..")) {
+    return value;
+  }
+  return relative_path.generic_string();
+}
+
 }  // namespace
 
 RTApplication::RTApplication()
@@ -135,13 +158,25 @@ RTApplication::RTApplication()
 }
 
 RTApplication::~RTApplication() {
-  save_options();
+  if (_initialized) {
+    save_options();
+  }
+}
+
+void RTApplication::prepare_startup() {
+#if defined(ETX_PLATFORM_APPLE)
+  show_macos_startup_overlay();
+#else
+  init();
+#endif
 }
 
 void RTApplication::init() {
   ETX_PROFILER_SCOPE();
 
+  _initialization_started = true;
   scene_global_init();
+  _scene_global_initialized = true;
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_load_options");
@@ -296,6 +331,7 @@ void RTApplication::init() {
   setup_macos_menu(ui);
   update_macos_menu(ui, _recent_files);
 #endif
+  _initialized = true;
 }
 
 void RTApplication::save_options() {
@@ -306,10 +342,10 @@ void RTApplication::save_options() {
   }
   uint32_t i = 0;
   for (const auto& recent : _recent_files) {
-    _options.set_string("recent-" + std::to_string(i++), recent, "Recent File");
+    _options.set_string("recent-" + std::to_string(i++), portable_scene_path(recent), "Recent File");
   }
   if (_current_scene_file.empty() == false) {
-    _options.set_string("scene", _current_scene_file, "Scene");
+    _options.set_string("scene", portable_scene_path(_current_scene_file), "Scene");
   }
   _options.save_to_file(env().file_in_user_data("options.json"));
 }
@@ -402,6 +438,21 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
 void RTApplication::frame() {
   ETX_PROFILER_SCOPE();
 
+#if defined(ETX_PLATFORM_APPLE)
+  if (!_initialization_started) {
+    if (!_startup_frame_presented) {
+      _startup_frame_presented = true;
+      return;
+    }
+    init();
+    finish_macos_startup(_initialized);
+  }
+#endif
+
+  if (!_initialized) {
+    return;
+  }
+
   auto thread = _active_renderer && (_active_renderer->mode() == RendererMode::CPURaytracing) ? &cpu_renderer.integrator_thread() : nullptr;
 
   RenderContext::FrameData render_frame_data = {
@@ -465,13 +516,20 @@ void RTApplication::cleanup() {
 
   scheduler.shutdown();
   ShaderCompiler::instance().shutdown();
-  scene_global_deinit();
+  if (_scene_global_initialized) {
+    scene_global_deinit();
+    _scene_global_initialized = false;
+  }
 
   render_context.cleanup(device_already_idle);
 }
 
 void RTApplication::process_event(const sapp_event* e) {
   ETX_PROFILER_SCOPE();
+
+  if (!_initialized) {
+    return;
+  }
 
   if ((e != nullptr) && (e->type == SAPP_EVENTTYPE_QUIT_REQUESTED) && (_quit_preparation_cancel_requested == false)) {
     if (_gpu_renderer_initialized) {
