@@ -101,6 +101,41 @@ bool close_value(const float a, const float b, const float tolerance) {
   return fabsf(a - b) <= tolerance;
 }
 
+bool validate_diffraction_transport_partition() {
+  const ::SpectralQuery rgb = diffraction_transport_sample_query(false, true, 0.75f, 0.25f);
+  const ::SpectralQuery spectral = diffraction_transport_sample_query(false, true, 0.25f, 0.75f);
+  const ::SpectralQuery native_spectral = diffraction_transport_sample_query(true, true, 0.75f, 0.25f);
+  const ::SpectralQuery ordinary_rgb = diffraction_transport_sample_query(false, false, 0.25f, 0.75f);
+
+  bool valid = true;
+  valid = diffraction_transport_partition_enabled(false, true) && valid;
+  valid = (diffraction_transport_partition_enabled(true, true) == false) && valid;
+  valid = (diffraction_transport_partition_enabled(false, false) == false) && valid;
+  valid = (spectral_query_is_spectral(rgb) == false) && valid;
+  valid = spectral_query_is_spectral(spectral) && valid;
+  valid = spectral_query_is_spectral(native_spectral) && valid;
+  valid = (spectral_query_is_spectral(ordinary_rgb) == false) && valid;
+
+  valid = diffraction_transport_contribution_enabled(true, rgb, false) && valid;
+  valid = (diffraction_transport_contribution_enabled(true, rgb, true) == false) && valid;
+  valid = diffraction_transport_contribution_enabled(true, spectral, true) && valid;
+  valid = (diffraction_transport_contribution_enabled(true, spectral, false) == false) && valid;
+
+  const float rgb_branch_pdf = diffraction_transport_branch_pdf(true, rgb);
+  const float spectral_branch_pdf = diffraction_transport_branch_pdf(true, spectral);
+  valid = close_value(diffraction_transport_branch_pdf(false, rgb), 1.0f, 1.0e-6f) && valid;
+  valid = close_value(rgb_branch_pdf + spectral_branch_pdf, 1.0f, 1.0e-6f) && valid;
+  const float no_diffraction_radiance = 3.0f;
+  const float diffraction_radiance = 5.0f;
+  const float expected = no_diffraction_radiance + diffraction_radiance;
+  const float partition_expectation = rgb_branch_pdf * (no_diffraction_radiance / rgb_branch_pdf) +
+                                      spectral_branch_pdf * (diffraction_radiance / spectral_branch_pdf);
+  valid = close_value(partition_expectation, expected, 1.0e-6f) && valid;
+
+  std::printf("diffraction RGB/spectral transport partition %s\n", valid ? "valid" : "failed");
+  return valid;
+}
+
 ::RefractiveIndexSample make_spectral_ior(const etx::SpectralQuery& query, const float eta, const float k = 0.0f, const uint32_t cls = etx::SpectralDistribution::Dielectric) {
   ::RefractiveIndexSample result = {};
   result.cls = cls;
@@ -3372,7 +3407,7 @@ int main(int argc, char** argv) {
   etx::scene_global_init();
   etx::scene_global_publish(&scene, &scene);
   if (diffraction_validation_only) {
-    const bool diffraction_valid = validate_diffraction_grating_serialization() && validate_diffraction_grating_gpu_shader_compile() &&
+    const bool diffraction_valid = validate_diffraction_transport_partition() && validate_diffraction_grating_serialization() && validate_diffraction_grating_gpu_shader_compile() &&
                                    validate_diffraction_grating_contract(scene) && validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount, true);
     etx::scene_global_clear(&scene);
     etx::scene_global_deinit();
@@ -3432,6 +3467,7 @@ int main(int argc, char** argv) {
   }
 
   bool valid = true;
+  valid = validate_diffraction_transport_partition() && valid;
   valid = validate_thinfilm_optical_invariants() && valid;
   valid = validate_image_3d_sampling() && valid;
   valid = validate_spectral_energy_compensation_lut_sampling() && valid;

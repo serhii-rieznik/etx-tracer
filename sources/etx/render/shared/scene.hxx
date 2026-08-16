@@ -3,6 +3,7 @@
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/interop/gpu_abi_constants.hxx>
+#include <etx/render/interop/diffraction_transport_shared.hxx>
 #include <etx/render/interop/material_scattering_shared.hxx>
 #include <etx/render/interop/surface_point_shared.hxx>
 #include <etx/render/interop/scene_math_shared.hxx>
@@ -33,6 +34,7 @@ struct ETX_ALIGNED Scene {
       Spectral = SceneProperty::Spectral,
       MultipleImportanceSampling = SceneProperty::MultipleImportanceSampling,
       BlueNoise = SceneProperty::BlueNoise,
+      DiffractionGrating = SceneProperty::DiffractionGrating,
 
       Count = SceneProperty::Count,
     };
@@ -134,6 +136,12 @@ struct ETX_ALIGNED Scene {
   }
   bool blue_noise() const {
     return options.properties[Properties::BlueNoise];
+  }
+  bool has_diffraction_grating() const {
+    return options.properties[Properties::DiffractionGrating];
+  }
+  bool diffraction_transport_partition() const {
+    return diffraction_transport_partition_enabled(spectral(), has_diffraction_grating());
   }
   LightSampling light_sampling_method() const {
     return options.light_sampling;

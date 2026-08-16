@@ -95,6 +95,8 @@ struct ETX_ALIGNED VCMPathState {
     RayActionSet = 1u << 2u,
     LocalEmitter = 1u << 3u,
     Valid = 1u << 4u,
+    DiffractionPartition = 1u << 5u,
+    ContainsDiffraction = 1u << 6u,
   };
 
   SpectralResponse throughput = {};
@@ -127,6 +129,14 @@ struct ETX_ALIGNED VCMPathState {
     return (flags & LocalEmitter) == LocalEmitter;
   }
 
+  ETX_SHARED_INLINE bool diffraction_partition() const {
+    return (flags & DiffractionPartition) == DiffractionPartition;
+  }
+
+  ETX_SHARED_INLINE bool contains_diffraction() const {
+    return (flags & ContainsDiffraction) == ContainsDiffraction;
+  }
+
   ETX_SHARED_INLINE bool should_continue_ray() const {
     return (flags & ContinueRay) == ContinueRay;
   }
@@ -151,6 +161,31 @@ struct ETX_ALIGNED VCMPathState {
 
 constexpr uint64_t kVCMPathStateSize = sizeof(VCMPathState);
 
+ETX_SHARED_INLINE bool vcm_contribution_enabled(ETX_IN(VCMPathState, state), bool contains_diffraction) {
+  return diffraction_transport_contribution_enabled(state.diffraction_partition(), state.spect, contains_diffraction);
+}
+
+ETX_SHARED_INLINE float vcm_branch_pdf(ETX_IN(VCMPathState, state)) {
+  return diffraction_transport_branch_pdf(state.diffraction_partition(), state.spect);
+}
+
+// Vertex merging combines light and camera subpaths before converting the
+// complete path to RGB. All paths in one VCM iteration must therefore use the
+// same spectral query; independently sampled wavelengths cannot be multiplied
+// into a valid spectral path contribution.
+ETX_SHARED_INLINE SpectralQuery vcm_iteration_spectral_query(const Scene& scene, ETX_IN(VCMIteration, iteration)) {
+  Sampler sampler = {};
+  sampler.init(0u, iteration.iteration ^ scene.options.random_seed);
+  if (scene.spectral()) {
+    return SpectralQuery::spectral_sample(sampler.next());
+  }
+  if (scene.diffraction_transport_partition()) {
+    const auto query = diffraction_transport_sample_query(false, true, sampler.next(), sampler.next());
+    return SpectralQuery{query.wavelength, query.flags};
+  }
+  return SpectralQuery::sample();
+}
+
 struct ETX_ALIGNED VCMLightVertex {
   VCMLightVertex() = default;
 
@@ -167,6 +202,7 @@ struct ETX_ALIGNED VCMLightVertex {
     , material_index(i.material_index)
     , medium_index(s.medium_index)
     , is_medium(false)
+    , contains_diffraction(s.contains_diffraction())
     , path_length(s.total_path_depth)
     , path_index(index) {
   }
@@ -187,6 +223,7 @@ struct ETX_ALIGNED VCMLightVertex {
   uint32_t material_index = kInvalidIndex;
   uint32_t medium_index = kInvalidIndex;
   bool is_medium = false;
+  bool contains_diffraction = false;
 
   uint32_t path_length = 0;
   uint32_t path_index = 0;
@@ -277,6 +314,9 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   state.ray.max_t = kMaxFloat;
   state.ray.min_t = kRayEpsilon;
   state.eta *= bsdf_sample.eta;
+  if (mat.cls == MaterialClass::DiffractionGrating) {
+    state.set_flags(VCMPathState::ContainsDiffraction, true);
+  }
   state.total_path_depth += 1u;
 
   return true;
@@ -310,7 +350,15 @@ ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, cons
 ETX_SHARED_INLINE VCMPathState vcm_generate_emitter_state(uint32_t index, const Scene& scene, const VCMIteration& it) {
   VCMPathState state = {};
   state.sampler.init(index, it.iteration ^ scene.options.random_seed);
-  state.spect = scene.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
+  const bool partition = scene.diffraction_transport_partition();
+  if (scene.spectral()) {
+    state.sampler.next();
+  } else if (partition) {
+    state.sampler.next();
+    state.sampler.next();
+  }
+  state.spect = vcm_iteration_spectral_query(scene, it);
+  state.set_flags(VCMPathState::DiffractionPartition, partition);
   state.global_index = index;
 
   auto emitter_sample = sample_emission(state.spect, state.sampler);
@@ -355,8 +403,14 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
   state.pixel_coord = coord;  // Store pixel coordinate for blue noise
 
   state.sampler.init(state.global_index, it.iteration ^ scene.options.random_seed);
-  auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
-  state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
+  if (scene.diffraction_transport_partition()) {
+    state.sampler.next();
+    state.sampler.next();
+    state.spect = spect;
+  } else {
+    auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
+    state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
+  }
 
   state.uv = get_jittered_uv(state.sampler, coord, camera.film_size);
   state.ray = generate_ray(camera, state.uv, state.sampler.next_2d());
@@ -371,6 +425,7 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
   state.medium_index = camera.medium_index;
   state.eta = 1.0f;
   state.path_distance = 0.0f;
+  state.set_flags(VCMPathState::DiffractionPartition, scene.diffraction_transport_partition());
 
   state.total_path_depth = 1;
   return state;
@@ -466,6 +521,12 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
     return {};
   }
 
+  const bool contains_diffraction = state.contains_diffraction() ||
+                                    ((camera_at_medium == false) && (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating));
+  if (vcm_contribution_enabled(state, contains_diffraction) == false) {
+    return {};
+  }
+
   float3 sample_pos = camera_at_medium ? medium_pos : isect->pos;
   auto camera_sample = sample_film(state.sampler, camera, sample_pos);
   if (camera_sample.pdf_dir <= 0.0f) {
@@ -535,7 +596,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
 }
 
 ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
-  if (options.direct_hit() == false)
+  if ((options.direct_hit() == false) || (vcm_contribution_enabled(state, state.contains_diffraction()) == false))
     return;
 
   if (state.path_distance > 0.0f) {
@@ -610,6 +671,9 @@ ETX_SHARED_INLINE void vcm_handle_direct_hit(const Scene& scene, const VCMOption
   if ((state.total_path_depth > scene.options.max_path_length) || (state.total_path_depth < scene.options.min_path_length))
     return;
 
+  if (vcm_contribution_enabled(state, state.contains_diffraction()) == false)
+    return;
+
   Emitter emitter_instance = {};
   if (try_load_emitter_instance(intersection.emitter_index, emitter_instance) == false) {
     return;
@@ -620,6 +684,11 @@ ETX_SHARED_INLINE void vcm_handle_direct_hit(const Scene& scene, const VCMOption
 ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
   const Intersection* isect, const float3& medium_pos, const Raytracing& rt, VCMPathState& state) {
   if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.options.max_path_length) || (state.total_path_depth + 1 < scene.options.min_path_length))
+    return {state.spect, 0.0f};
+
+  const bool contains_diffraction = state.contains_diffraction() ||
+                                    ((camera_at_medium == false) && (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating));
+  if (vcm_contribution_enabled(state, contains_diffraction) == false)
     return {state.spect, 0.0f};
 
   float3 sample_pos = camera_at_medium ? medium_pos : isect->pos;
@@ -789,6 +858,17 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light_path(const Scene& scene,
   const auto& light_path = light_paths[state.global_index];
   SpectralResponse result = {state.spect, 0.0f};
   for (uint64_t i = 0; i < light_path.count; ++i) {
+    const auto& light_vertex = light_vertices[light_path.index + i];
+    const bool camera_vertex_diffraction = (camera_at_medium == false) &&
+                                           (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating);
+    const bool light_vertex_diffraction = (light_vertex.is_medium == false) &&
+                                          (scene.materials[light_vertex.material_index].cls == MaterialClass::DiffractionGrating);
+    const bool contains_diffraction = state.contains_diffraction() || light_vertex.contains_diffraction ||
+                                      camera_vertex_diffraction || light_vertex_diffraction;
+    if (vcm_contribution_enabled(state, contains_diffraction) == false) {
+      continue;
+    }
+
     const uint64_t target_path_length = state.total_path_depth + i + 2u;
     if (target_path_length < scene.options.min_path_length)
       continue;
@@ -797,11 +877,11 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light_path(const Scene& scene,
 
     float3 target_position = {};
     SpectralResponse value = {};
-    bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertices[light_path.index + i], options, camera_at_medium, isect, medium_pos, iteration.vm_weight,
+    bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertex, options, camera_at_medium, isect, medium_pos, iteration.vm_weight,
       state.medium_index, target_position, value);
     if (connected) {
       if (camera_at_medium) {
-        auto tr = vcm_transmittance(rt, scene, state, medium_pos, light_vertices[light_path.index + i].pos);
+        auto tr = vcm_transmittance(rt, scene, state, medium_pos, light_vertex.pos);
         if (tr.is_zero() == false) {
           result += tr * value;
           ETX_VALIDATE(result);
@@ -828,7 +908,8 @@ struct ETX_ALIGNED VCMSpatialGridData {
   ArrayView<float> d_vcm ETX_EMPTY_INIT;
   ArrayView<float> d_vm ETX_EMPTY_INIT;
   ArrayView<uint32_t> path_lengths ETX_EMPTY_INIT;
-  ArrayView<float3> throughput_rgb_div_pdf ETX_EMPTY_INIT;
+  ArrayView<uint32_t> contains_diffraction ETX_EMPTY_INIT;
+  ArrayView<SpectralResponse> throughputs ETX_EMPTY_INIT;
   BoundingBox bounding_box ETX_EMPTY_INIT;
   uint32_t hash_table_mask ETX_EMPTY_INIT;
   float cell_size ETX_EMPTY_INIT;
@@ -847,17 +928,28 @@ struct ETX_ALIGNED VCMSpatialGridData {
   ETX_SHARED_INLINE float3 gather_index(const Scene& scene, const Intersection& intersection, const VCMOptions& options, float vc_weight, uint32_t index,
     VCMPathState& state) const {
     const auto& mat = scene.materials[intersection.material_index];
+    const bool camera_vertex_diffraction = mat.cls == MaterialClass::DiffractionGrating;
 
     const auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
-    const auto t_camera = state.throughput / state.spect.sampling_pdf();
+    const auto t_camera = state.throughput;
     const float w_camera_base = state.d_vcm * vc_weight;
     const bool use_mis = options.enable_mis();
-    const bool is_spectral = state.spect.spectral();
     const bool use_epan = (options.kernel == VCMOptions::Epanechnikov);
     const uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
 
     float3 merged = {};
     for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
+      if (vcm_contribution_enabled(state, state.contains_diffraction() || camera_vertex_diffraction || (contains_diffraction[j] != 0u)) == false) {
+        continue;
+      }
+
+      const auto& light_throughput = throughputs[j];
+      const bool query_matches = (light_throughput.flags == state.spect.flags) &&
+                                 ((state.spect.spectral() == false) || (light_throughput.wavelength == state.spect.wavelength));
+      if (query_matches == false) {
+        continue;
+      }
+
       auto d = positions[j] - intersection.pos;
       float distance_squared = dot(d, d);
       if ((distance_squared > radius_squared) || (path_lengths[j] + state.total_path_depth + 1 > scene.options.max_path_length)) {
@@ -886,17 +978,9 @@ struct ETX_ALIGNED VCMSpatialGridData {
         kernel_weight = fmaxf(2.0f * one_minus, 0.0f);
       }
 
-      auto c_value = (camera_bsdf.func * t_camera).to_rgb();
-      ETX_VALIDATE(c_value);
-
-      auto l_value = throughput_rgb_div_pdf[j];
-      ETX_VALIDATE(l_value);
-
-      if (is_spectral) {
-        l_value *= SpectralDistribution::kRGBLuminanceScale;
-      }
-
-      merged += (c_value * l_value) * (kernel_weight * weight);
+      auto path_value = camera_bsdf.func * t_camera * light_throughput;
+      ETX_VALIDATE(path_value);
+      merged += (path_value / state.spect.sampling_pdf()).to_rgb() * (kernel_weight * weight);
       ETX_VALIDATE(merged);
     }
     return merged;
@@ -1139,6 +1223,7 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
       v.material_index = kInvalidIndex;
       v.medium_index = state.medium_index;
       v.is_medium = true;
+      v.contains_diffraction = state.contains_diffraction();
       v.path_length = state.total_path_depth;
       v.path_index = path_index;
       result.add_vertex = true;

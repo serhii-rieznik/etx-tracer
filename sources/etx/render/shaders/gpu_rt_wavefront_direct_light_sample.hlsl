@@ -241,6 +241,10 @@ float wavefront_medium_direct_light_weight(
       medium_direct_connection_disabled) {
     return;
   }
+  if (wavefront_path_vertex_is_medium(current_vertex) &&
+      (wavefront_diffraction_contribution_enabled(state.spect, wavefront_vertex_contains_diffraction(current_vertex)) == false)) {
+    return;
+  }
   uint connection_length = meta.camera_path_length + 1u;
   if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length())) {
     return;

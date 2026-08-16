@@ -25,6 +25,7 @@ struct SceneProperty {
     Spectral,
     MultipleImportanceSampling,
     BlueNoise,
+    DiffractionGrating,
 
     Count,
   };

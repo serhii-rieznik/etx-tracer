@@ -28,6 +28,7 @@
 #include <interop/medium_phase_shared.hxx>
 #include <interop/surface_point_shared.hxx>
 #include <interop/scene_math_shared.hxx>
+#include <interop/diffraction_transport_shared.hxx>
 
 static const uint kSceneStrategyDirectHit = 1u << 0u;
 static const uint kSceneStrategyConnectToLight = 1u << 1u;
@@ -205,6 +206,16 @@ uint load_scene_options_path_mode() {
 bool scene_uses_spectral_mode() {
   SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
   return scene_gpu_uses_spectral_mode(options);
+}
+
+bool scene_has_diffraction_grating() {
+  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
+  return scene_gpu_has_diffraction_grating(options);
+}
+
+bool scene_diffraction_contribution_enabled(SpectralQuery spect, bool contains_diffraction) {
+  bool partition = diffraction_transport_partition_enabled(scene_uses_spectral_mode(), scene_has_diffraction_grating());
+  return diffraction_transport_contribution_enabled(partition, spect, contains_diffraction);
 }
 
 bool scene_multiple_importance_sampling_enabled() {

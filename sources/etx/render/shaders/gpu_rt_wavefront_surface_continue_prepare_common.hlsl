@@ -94,6 +94,8 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     return;
   }
 
+  const bool sampled_diffraction = material.cls == MaterialClass::DiffractionGrating;
+
   if (wavefront_surface_continue_stage_matches_material(material.cls) == false) {
     return;
   }
@@ -316,6 +318,9 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     }
     state.eta_scale *= abs(bsdf_sample.eta);
     state.medium_index = current_medium_index;
+    if (sampled_diffraction) {
+      state.flags |= GPUWavefrontPathFlags::Contains_diffraction;
+    }
     state.ray.o = wavefront_surface_shading_position(hit, bsdf_sample.w_o);
     state.ray.d = normalize(bsdf_sample.w_o);
     state.ray.min_t = kRayEpsilon;

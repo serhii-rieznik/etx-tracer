@@ -218,6 +218,7 @@ struct SceneRepresentationImpl {
     data.options.properties[Scene::Properties::Spectral] = false;
     data.options.properties[Scene::Properties::MultipleImportanceSampling] = true;
     data.options.properties[Scene::Properties::BlueNoise] = true;
+    data.options.properties[Scene::Properties::DiffractionGrating] = false;
 
     data.defaults.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
     data.materials[data.defaults.subsurface_scatter_material].reflectance = {.spectrum_index = data.defaults.black_spectrum};
@@ -294,9 +295,6 @@ struct SceneRepresentationImpl {
           log::warning("Material %u diffraction rotation is not finite; resetting it to zero", i);
           mtl.diffraction_grating.rotation = 0.0f;
         }
-        if ((mtl.cls == MaterialClass::DiffractionGrating) && (data.options.properties[Scene::Properties::Spectral] == false)) {
-          log::warning("Material %u is a diffraction grating in an RGB scene; diffraction transport is spectral-only and will evaluate to zero", i);
-        }
         if (mtl.reflectance.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
           mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
@@ -366,6 +364,9 @@ struct SceneRepresentationImpl {
           }
         }
       }
+    });
+    data.options.properties[Scene::Properties::DiffractionGrating] = std::any_of(data.materials.begin(), data.materials.end(), [](const Material& material) {
+      return material.cls == MaterialClass::DiffractionGrating;
     });
   }
 

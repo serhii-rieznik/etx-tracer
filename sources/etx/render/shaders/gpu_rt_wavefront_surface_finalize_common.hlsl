@@ -68,8 +68,8 @@ void wavefront_surface_continue_finalize(bool from_camera, uint dispatch_index) 
     }
 
     state.path_length = next_path_length;
-    const uint depth_flag = wavefront_path_state_depth_flag(state);
-    state.flags = depth_flag | GPUWavefrontPathFlags::Valid | (from_camera ? GPUWavefrontPathFlags::From_camera : GPUWavefrontPathFlags::From_light);
+    const uint persistent_flags = wavefront_path_state_persistent_flags(state);
+    state.flags = persistent_flags | GPUWavefrontPathFlags::Valid | (from_camera ? GPUWavefrontPathFlags::From_camera : GPUWavefrontPathFlags::From_light);
     if (wavefront_path_vertex_connectible(current_vertex)) {
       state.flags |= GPUWavefrontPathFlags::Connectible;
     }
@@ -103,8 +103,8 @@ void wavefront_surface_continue_finalize(bool from_camera, uint dispatch_index) 
   }
 
   state.path_length = next_path_length;
-  const uint depth_flag = wavefront_path_state_depth_flag(state);
-  state.flags = depth_flag | GPUWavefrontPathFlags::Valid | (from_camera ? GPUWavefrontPathFlags::From_camera : GPUWavefrontPathFlags::From_light);
+  const uint persistent_flags = wavefront_path_state_persistent_flags(state);
+  state.flags = persistent_flags | GPUWavefrontPathFlags::Valid | (from_camera ? GPUWavefrontPathFlags::From_camera : GPUWavefrontPathFlags::From_light);
   if (wavefront_path_vertex_connectible(current_vertex)) {
     state.flags |= GPUWavefrontPathFlags::Connectible;
   }

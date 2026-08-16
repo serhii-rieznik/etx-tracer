@@ -11,6 +11,7 @@ struct ETX_ALIGNED PTRayPayload {
   SpectralResponse accumulated = {};
   SpectralResponse view_albedo = {};
   float3 view_normal = {};
+  bool view_albedo_contains_diffraction = false;
   uint32_t medium = kInvalidIndex;
   uint32_t path_length = 0u;
   uint32_t iteration = 0u;
@@ -21,8 +22,18 @@ struct ETX_ALIGNED PTRayPayload {
   uint2 pixel = {};
   bool mis_weight = true;
   bool use_blue_noise = false;
+  bool diffraction_partition = false;
+  bool contains_diffraction = false;
   bool depth_limit_reached_while_refractive = false;
 };
+
+ETX_SHARED_INLINE bool path_tracing_contribution_enabled(ETX_IN(PTRayPayload, payload), bool contains_diffraction) {
+  return diffraction_transport_contribution_enabled(payload.diffraction_partition, payload.spect, contains_diffraction);
+}
+
+ETX_SHARED_INLINE float path_tracing_branch_pdf(ETX_IN(PTRayPayload, payload)) {
+  return diffraction_transport_branch_pdf(payload.diffraction_partition, payload.spect);
+}
 
 enum PTRayState : uint8_t {
   IntersectionFound,
@@ -152,7 +163,15 @@ ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera
   PTRayPayload payload = {};
   payload.iteration = iteration;
   payload.smp.init(pixel_index, payload.iteration ^ scene.options.random_seed);
-  payload.spect = spectral ? SpectralQuery::spectral_sample(payload.smp.next()) : SpectralQuery::sample();
+  payload.diffraction_partition = scene.diffraction_transport_partition();
+  if (spectral) {
+    payload.spect = SpectralQuery::spectral_sample(payload.smp.next());
+  } else if (payload.diffraction_partition) {
+    const auto query = diffraction_transport_sample_query(false, true, payload.smp.next(), payload.smp.next());
+    payload.spect = SpectralQuery{query.wavelength, query.flags};
+  } else {
+    payload.spect = SpectralQuery::sample();
+  }
 
   float2 uv = film.sample(iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, px, payload.smp.next_2d());
   payload.ray = generate_ray(camera, uv, payload.smp.next_2d());
@@ -184,7 +203,8 @@ ETX_SHARED_INLINE void handle_sampled_medium(const Scene& scene, const MediumSam
   /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
    * direct light sampling from medium
    * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-  if (scene.strategy_enabled(Scene::Strategy::ConnectToLight) && (payload.path_length + 1 <= rt.scene().options.max_path_length) && medium.enable_explicit_connections) {
+  if (path_tracing_contribution_enabled(payload, payload.contains_diffraction) && scene.strategy_enabled(Scene::Strategy::ConnectToLight) &&
+      (payload.path_length + 1 <= rt.scene().options.max_path_length) && medium.enable_explicit_connections) {
     EmitterSampleQuery query = {
       .spect = payload.spect,
       .source_type = InteractionType::Medium,
@@ -240,7 +260,8 @@ ETX_SHARED_INLINE SpectralResponse evaluate_light(const Scene& scene, const Inte
 }
 
 ETX_SHARED_INLINE void handle_direct_emitter(const Scene& scene, const Triangle& tri, const Intersection& intersection, const Raytracing& rt, PTRayPayload& payload) {
-  if ((scene.strategy_enabled(Scene::Strategy::DirectHit) == false) || (intersection.emitter_index == kInvalidIndex))
+  if ((scene.strategy_enabled(Scene::Strategy::DirectHit) == false) || (intersection.emitter_index == kInvalidIndex) ||
+      (path_tracing_contribution_enabled(payload, payload.contains_diffraction) == false))
     return;
 
   Emitter emitter_instance = {};
@@ -290,6 +311,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   if (payload.path_length == 1) {
     payload.view_normal = intersection.nrm;
     payload.view_albedo = bsdf::albedo(bsdf_data, mat, payload.smp);
+    payload.view_albedo_contains_diffraction = mat.cls == MaterialClass::DiffractionGrating;
   }
 
   float2 rnd_bsdf = payload.smp.next_2d();
@@ -330,7 +352,9 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-  if (scene.strategy_enabled(Scene::Strategy::ConnectToLight) && (payload.path_length + 1 <= rt.scene().options.max_path_length)) {
+  const bool direct_light_contains_diffraction = payload.contains_diffraction || (mat.cls == MaterialClass::DiffractionGrating);
+  if (path_tracing_contribution_enabled(payload, direct_light_contains_diffraction) && scene.strategy_enabled(Scene::Strategy::ConnectToLight) &&
+      (payload.path_length + 1 <= rt.scene().options.max_path_length)) {
     SpectralResponse direct_light = {payload.spect, 0.0f};
     if (subsurface_sampled) {
       EmitterSampleQuery query = {
@@ -373,6 +397,9 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
     payload.eta *= bsdf_sample.eta;
     payload.ray.d = bsdf_sample.w_o;
     payload.ray.o = shading_pos(scene, scene.triangles[intersection.triangle_index], intersection.barycentric, payload.ray.d);
+    if (mat.cls == MaterialClass::DiffractionGrating) {
+      payload.contains_diffraction = true;
+    }
   }
 
   if (payload.throughput.is_zero())
@@ -387,6 +414,10 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
 }  // namespace etx
 
 ETX_SHARED_INLINE void handle_missed_ray(const Scene& scene, PTRayPayload& payload) {
+  if (path_tracing_contribution_enabled(payload, payload.contains_diffraction) == false) {
+    return;
+  }
+
   uint32_t environment_emitter_count = environment_emitter_shared_count();
   for (uint32_t ie = 0; ie < environment_emitter_count; ++ie) {
     uint32_t emitter_index = kInvalidIndex;

@@ -161,6 +161,11 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
   if (wavefront_connect_camera_try_load_material_full(input_value.current_vertex.material_index, input_value.material) == false) {
     return false;
   }
+  bool contains_diffraction = wavefront_vertex_contains_diffraction(input_value.current_vertex) ||
+                              (input_value.material.cls == MaterialClass::DiffractionGrating);
+  if (wavefront_diffraction_contribution_enabled(input_value.state.spect, contains_diffraction) == false) {
+    return false;
+  }
 
   input_value.camera = load_camera(bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)]);
   if (input_value.camera.cls == Camera::Class::Equirectangular) {

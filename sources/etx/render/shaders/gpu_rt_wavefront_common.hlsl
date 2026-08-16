@@ -2,6 +2,7 @@
 
 #include <interop/gpu_rt_shared.hxx>
 #include <interop/gpu_wavefront_abi.hxx>
+#include <interop/diffraction_transport_shared.hxx>
 
 [[vk::push_constant]] GPURTConstants constants;
 #include "gpu_rt_shared.hlsl"
@@ -715,7 +716,20 @@ void wavefront_film_add(uint pixel_index, float3 value) {
 
 float wavefront_spectral_weight(SpectralQuery spect) {
   float spectral_pdf = spectral_query_sampling_pdf(spect);
-  return (spectral_pdf > 0.0f) ? (1.0f / spectral_pdf) : 0.0f;
+  float branch_pdf = diffraction_transport_branch_pdf(diffraction_transport_partition_enabled(scene_uses_spectral_mode(), scene_has_diffraction_grating()), spect);
+  return (spectral_pdf > 0.0f) ? (1.0f / (spectral_pdf * branch_pdf)) : 0.0f;
+}
+
+bool wavefront_diffraction_contribution_enabled(SpectralQuery spect, bool contains_diffraction) {
+  return scene_diffraction_contribution_enabled(spect, contains_diffraction);
+}
+
+bool wavefront_path_contains_diffraction(GPUWavefrontPathState state) {
+  return (state.flags & GPUWavefrontPathFlags::Contains_diffraction) != 0u;
+}
+
+bool wavefront_vertex_contains_diffraction(GPUWavefrontPathVertex vertex) {
+  return (vertex.flags & GPUWavefrontVertexFlags::Contains_diffraction) != 0u;
 }
 
 bool wavefront_path_state_valid(GPUWavefrontPathState state) {
@@ -1033,6 +1047,9 @@ void wavefront_write_vertex(bool from_camera, uint path_index, GPUWavefrontPathS
   if ((state.flags & GPUWavefrontPathFlags::Delta) != 0u) {
     vertex.flags |= GPUWavefrontVertexFlags::Delta;
   }
+  if (wavefront_path_contains_diffraction(state)) {
+    vertex.flags |= GPUWavefrontVertexFlags::Contains_diffraction;
+  }
 
   uint descriptor_index = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
   wavefront_store_path_vertex(descriptor_index, vertex_slot, vertex);
@@ -1068,6 +1085,9 @@ void wavefront_write_medium_vertex(bool from_camera, uint path_index, GPUWavefro
   }
   if (wavefront_medium_explicit_connections_enabled(state.medium_index)) {
     vertex.flags |= GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible;
+  }
+  if (wavefront_path_contains_diffraction(state)) {
+    vertex.flags |= GPUWavefrontVertexFlags::Contains_diffraction;
   }
 
   uint descriptor_index = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;

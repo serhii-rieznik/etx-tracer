@@ -21,6 +21,8 @@
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
     spect = spectral_query_spectral_sample(rnd01(seed));
+  } else if (scene_has_diffraction_grating()) {
+    spect = diffraction_transport_sample_query(false, true, rnd01(seed), rnd01(seed));
   }
   float2 uv_sample = float2(rnd01(seed), rnd01(seed));
   float2 uv = camera_sample_film_uv(output_pixel, camera.film_size, uv_sample);

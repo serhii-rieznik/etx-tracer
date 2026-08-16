@@ -138,7 +138,8 @@ struct CPUVCMImpl {
           local_vertices.emplace_back(step_result.vertex_to_add);
         }
         if (step_result.splat) {
-          const float3& val = step_result.value_to_splat.to_rgb() / step_result.value_to_splat.sampling_pdf();
+          const float3 val = step_result.value_to_splat.to_rgb() /
+                             (step_result.value_to_splat.sampling_pdf() * vcm_branch_pdf(state));
           if (dot(val, val) > kEpsilon) {
             film.submit(val, step_result.splat_uv);
           }
@@ -184,8 +185,8 @@ struct CPUVCMImpl {
           }
         }
 
-        state.merged *= vcm_iteration.vm_normalization;
-        state.merged += (state.gathered / state.spect.sampling_pdf()).to_rgb();
+        state.merged *= vcm_iteration.vm_normalization / vcm_branch_pdf(state);
+        state.merged += (state.gathered / (state.spect.sampling_pdf() * vcm_branch_pdf(state))).to_rgb();
 
         film.submit(state.merged, {}, {}, pixel);
       }

@@ -227,6 +227,17 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
     return false;
   }
 
+  bool contains_diffraction = wavefront_vertex_contains_diffraction(input_value.camera_vertex) ||
+                              wavefront_vertex_contains_diffraction(input_value.light_vertex) ||
+                              (wavefront_path_vertex_is_surface(input_value.camera_vertex) &&
+                                (input_value.camera_material.cls == MaterialClass::DiffractionGrating)) ||
+                              (wavefront_path_vertex_is_surface(input_value.light_vertex) &&
+                                (input_value.light_material.cls == MaterialClass::DiffractionGrating));
+  SpectralQuery spect = spectral_response_as_query(input_value.camera_vertex.throughput);
+  if (wavefront_diffraction_contribution_enabled(spect, contains_diffraction) == false) {
+    return false;
+  }
+
   return true;
 }
 

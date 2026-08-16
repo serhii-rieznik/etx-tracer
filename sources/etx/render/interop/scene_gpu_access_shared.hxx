@@ -105,6 +105,10 @@ ETX_SHARED_INLINE bool scene_gpu_uses_spectral_mode(ETX_IN(SceneGPUSharedOptions
   return (options.properties_flags & (1u << SceneProperty::Spectral)) != 0u;
 }
 
+ETX_SHARED_INLINE bool scene_gpu_has_diffraction_grating(ETX_IN(SceneGPUSharedOptions, options)) {
+  return (options.properties_flags & (1u << SceneProperty::DiffractionGrating)) != 0u;
+}
+
 ETX_SHARED_INLINE SceneGPUSharedGlobals scene_gpu_load_globals(ByteAddressBuffer scene_globals) {
   SceneGPUSharedGlobals result;
   result.vertex_count = scene_gpu_load_u32(scene_globals, kSceneGlobalsVertexCountOffset);
