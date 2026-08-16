@@ -29,3 +29,6 @@ bin/review/
 bin/validation/
 artifacts
 scripts/validation
+dxc
+libdxcompiler.dylib
+playground_app

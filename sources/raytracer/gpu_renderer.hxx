@@ -110,8 +110,13 @@ struct GPURaytracingRenderer : public Renderer {
   }
   RendererPreparationStatus preparation_status() const override;
   RendererRuntimeStats runtime_stats() const override;
+  RendererControlState control_state() const override;
+  bool is_running() const override;
+  void start() override;
   void cancel_preparation() override;
   void stop() override;
+  void finish() override;
+  void restart() override;
 
   void on_camera_changed(SceneRepresentation& scene) override;
   void on_camera_become_steady(SceneRepresentation& scene) override;
@@ -193,6 +198,8 @@ struct GPURaytracingRenderer : public Renderer {
   void destroy_preview_pipeline(RHIDevice& device);
   bool render_preview(RHIContext& ctx, RHICommandBuffer frame_cmd, const GPURTConstants& constants, const RHIDispatchDesc& dispatch);
   void reset_render_timing();
+  void reset_render_progress();
+  void stop_render_timing();
   void set_preparation_failed(const std::string& message, const char* phase = "Failed");
   void set_preparation_ready(const char* message = nullptr);
   void set_preparation_state(RendererPreparationState state, const char* phase, const std::string& message = {}, uint32_t completed_steps = 0u, uint32_t total_steps = 0u);
@@ -370,11 +377,14 @@ struct GPURaytracingRenderer : public Renderer {
   bool _compile_filter_matched = false;
   bool _initialized = false;
   bool _runtime_failed = false;
+  bool _preparation_canceled = false;
   bool _pipeline_publish_logged = false;
   bool _preview_active = false;
   bool _preview_pipeline_failed = false;
   bool _cleanup_wait_succeeded = false;
   bool _render_timing_active = false;
+  bool _scene_valid = false;
+  RendererRunState _run_state = RendererRunState::Stopped;
   RendererPreparationState _preparation_state = RendererPreparationState::Ready;
 };
 

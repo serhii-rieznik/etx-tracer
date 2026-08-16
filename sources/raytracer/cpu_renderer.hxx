@@ -30,8 +30,11 @@ struct CPURaytracingRenderer : public Renderer {
   }
 
   bool is_running() const override;
+  RendererRuntimeStats runtime_stats() const override;
+  RendererControlState control_state() const override;
   void start() override;
   void stop() override;
+  void finish() override;
   void restart() override;
 
   void set_output_dimensions(RHIContext& ctx, const uint2& dim);

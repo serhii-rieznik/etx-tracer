@@ -85,6 +85,10 @@ struct UI {
     _current_renderer_stats = stats;
   }
 
+  void set_current_renderer_controls(const RendererControlState& controls) {
+    _current_renderer_controls = controls;
+  }
+
   void set_gpu_wavefront_steps_per_frame(uint32_t value) {
     _gpu_wavefront_steps_per_frame = std::clamp(value, 1u, 1024u);
   }
@@ -143,12 +147,8 @@ struct UI {
     return static_cast<bool>(callbacks.view_scene);
   }
 
-  bool renderer_can_run() const {
-    return (_current_renderer_mode == RendererMode::CPURaytracing) && (_current_integrator != nullptr) && _current_integrator->can_run();
-  }
-
-  Integrator::State renderer_state() const {
-    return renderer_can_run() ? _current_integrator->state() : Integrator::State::Stopped;
+  const RendererControlState& renderer_controls() const {
+    return _current_renderer_controls;
   }
 
   struct BuildContext {
@@ -163,15 +163,16 @@ struct UI {
     bool has_integrator = false;
   };
 
-  ViewParameters view_options() const;
-  ViewParameters& mutable_view_options();
+  void set_view_options(const ViewParameters& value) {
+    _view_options = value;
+  }
 
   struct {
+    std::function<void()> quit_selected;
     std::function<void(std::string)> reference_image_selected;
     std::function<void(std::string, SaveImageMode)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
     std::function<void(std::string)> save_scene_file_selected;
-    std::function<void()> save_scene_file_as_selected;
     std::function<void(RendererMode)> renderer_selected;
     std::function<void(bool)> stop_selected;
     std::function<void()> run_selected;
@@ -201,6 +202,10 @@ struct UI {
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
     std::function<void(uint32_t)> gpu_wavefront_steps_per_frame_changed;
+    std::function<void(float)> exposure_changed;
+    std::function<void(uint32_t)> view_layer_changed;
+    std::function<void(uint32_t)> output_view_changed;
+    std::function<void(uint32_t)> display_transform_changed;
   } callbacks;
 
  private:
@@ -281,6 +286,7 @@ struct UI {
   RendererMode _current_renderer_mode = RendererMode::CPURaytracing;
   RendererPreparationStatus _current_renderer_status = {};
   RendererRuntimeStats _current_renderer_stats = {};
+  RendererControlState _current_renderer_controls = {};
   uint32_t _gpu_wavefront_steps_per_frame = 16u;
   bool _gpu_renderer_available = true;
   bool _embedded_toolbar_enabled = true;

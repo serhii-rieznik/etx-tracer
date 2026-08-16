@@ -43,6 +43,21 @@ struct RendererRuntimeStats {
   double estimated_remaining_seconds = -1.0;
 };
 
+enum class RendererRunState : uint32_t {
+  Stopped,
+  Running,
+  Finishing,
+  Completed,
+};
+
+struct RendererControlState {
+  RendererRunState state = RendererRunState::Stopped;
+  bool can_run = false;
+  bool can_finish = false;
+  bool can_stop = false;
+  bool can_restart = false;
+};
+
 struct Renderer {
   struct FrameData {
     ViewParameters view_parameters = {};
@@ -129,6 +144,10 @@ struct Renderer {
     return {};
   }
 
+  virtual RendererControlState control_state() const {
+    return {};
+  }
+
   virtual bool is_running() const {
     return false;
   }
@@ -137,6 +156,9 @@ struct Renderer {
   }
 
   virtual void stop() {
+  }
+
+  virtual void finish() {
   }
 
   virtual void restart() {

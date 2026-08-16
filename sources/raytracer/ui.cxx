@@ -1481,6 +1481,7 @@ bool UI::handle_event(const sapp_event* e) {
     case SAPP_KEYCODE_5:
     case SAPP_KEYCODE_6: {
       _view_options.view_image = static_cast<uint32_t>(e->key_code - SAPP_KEYCODE_1);
+      if (callbacks.output_view_changed) callbacks.output_view_changed(_view_options.view_image);
       break;
     }
     case SAPP_KEYCODE_KP_DIVIDE: {
@@ -1566,22 +1567,22 @@ void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std:
       }
       break;
     case MenuCommand::RunRenderer:
-      if (renderer_can_run() && (renderer_state() == Integrator::State::Stopped) && callbacks.run_selected) {
+      if (_current_renderer_controls.can_run && callbacks.run_selected) {
         callbacks.run_selected();
       }
       break;
     case MenuCommand::FinishRenderer:
-      if (renderer_can_run() && (renderer_state() == Integrator::State::Running) && callbacks.stop_selected) {
+      if (_current_renderer_controls.can_finish && callbacks.stop_selected) {
         callbacks.stop_selected(true);
       }
       break;
     case MenuCommand::StopRenderer:
-      if (renderer_can_run() && (renderer_state() != Integrator::State::Stopped) && callbacks.stop_selected) {
+      if (_current_renderer_controls.can_stop && callbacks.stop_selected) {
         callbacks.stop_selected(false);
       }
       break;
     case MenuCommand::RestartRenderer:
-      if (renderer_can_run() && (renderer_state() == Integrator::State::Running) && callbacks.restart_selected) {
+      if (_current_renderer_controls.can_restart && callbacks.restart_selected) {
         callbacks.restart_selected();
       }
       break;
@@ -1599,9 +1600,11 @@ void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std:
       break;
     case MenuCommand::IncreaseExposure:
       increase_exposure(_view_options);
+      if (callbacks.exposure_changed) callbacks.exposure_changed(_view_options.exposure);
       break;
     case MenuCommand::DecreaseExposure:
       decrease_exposure(_view_options);
+      if (callbacks.exposure_changed) callbacks.exposure_changed(_view_options.exposure);
       break;
     case MenuCommand::ToggleSceneObjects:
       _ui_setup ^= UIObjects;
@@ -1612,14 +1615,6 @@ void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std:
   }
 }
 
-ViewParameters UI::view_options() const {
-  return _view_options;
-}
-
-ViewParameters& UI::mutable_view_options() {
-  return _view_options;
-}
-
 void UI::set_current_integrator(Integrator* i) {
   _current_integrator = i;
   if (i != nullptr) {
@@ -1628,7 +1623,11 @@ void UI::set_current_integrator(Integrator* i) {
 }
 
 void UI::quit() {
-  sapp_quit();
+  if (callbacks.quit_selected) {
+    callbacks.quit_selected();
+  } else {
+    sapp_quit();
+  }
 }
 
 void UI::select_scene_file() const {
@@ -1645,8 +1644,9 @@ void UI::save_scene_file() const {
 }
 
 void UI::save_scene_file_as() const {
-  if (callbacks.save_scene_file_as_selected) {
-    callbacks.save_scene_file_as_selected();
+  const std::string selected_file = save_file("json");
+  if (!selected_file.empty() && callbacks.save_scene_file_selected) {
+    callbacks.save_scene_file_selected(selected_file);
   }
 }
 
@@ -2606,22 +2606,22 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
 void UI::build_toolbar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##toolbar", ImGui::GetMainViewport(), ImGuiDir_Up, ctx.button_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     const bool cpu_mode = _current_renderer_mode == RendererMode::CPURaytracing;
-    if (cpu_mode) {
-      bool can_run = ctx.has_integrator && _current_integrator->can_run();
-      Integrator::State state = can_run ? _current_integrator->state() : Integrator::State::Stopped;
+    const bool gpu_mode = _current_renderer_mode == RendererMode::GPURaytracing;
+    if (cpu_mode || gpu_mode) {
+      const RendererControlState& controls = _current_renderer_controls;
 
-      bool state_available[4] = {
-        can_run && (state == Integrator::State::Stopped),
-        can_run && (state == Integrator::State::Running),
-        can_run && (state != Integrator::State::Stopped),
-        can_run && (state == Integrator::State::Running),
+      const bool state_available[4] = {
+        controls.can_run,
+        controls.can_finish,
+        controls.can_stop,
+        controls.can_restart,
       };
 
-      std::string labels[4] = {
-        (state == Integrator::State::Running) ? "> Running <" : "  Launch  ",
-        (state == Integrator::State::WaitingForCompletion) ? "> Finishing <" : "  Finish  ",
+      const char* labels[4] = {
+        (controls.state == RendererRunState::Running) ? "> Running <" : "  Launch  ",
+        (controls.state == RendererRunState::Finishing) ? "> Finishing <" : "  Finish  ",
         " Terminate ",
-        (state == Integrator::State::Running) ? " Restart " : "  Restart  ",
+        (controls.state == RendererRunState::Running) ? " Restart " : "  Restart  ",
       };
 
       ImGui::SameLine(0.0f, ctx.wpadding.x);
@@ -2629,7 +2629,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
       if (state_available[0] == false) {
         ImGui::BeginDisabled();
       }
-      if (ImGui::Button(labels[0].c_str(), {0.0f, ctx.button_size}) && (state_available[0] == true)) {
+      if (ImGui::Button(labels[0], {0.0f, ctx.button_size}) && state_available[0] && callbacks.run_selected) {
         callbacks.run_selected();
       }
       if (state_available[0] == false) {
@@ -2641,7 +2641,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
       if (state_available[1] == false) {
         ImGui::BeginDisabled();
       }
-      if (ImGui::Button(labels[1].c_str(), {0.0f, ctx.button_size}) && (state_available[1] == true)) {
+      if (ImGui::Button(labels[1], {0.0f, ctx.button_size}) && state_available[1] && callbacks.stop_selected) {
         callbacks.stop_selected(true);
       }
       if (state_available[1] == false) {
@@ -2653,7 +2653,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
       if (state_available[2] == false) {
         ImGui::BeginDisabled();
       }
-      if (ImGui::Button(labels[2].c_str(), {0.0f, ctx.button_size}) && (state_available[2] == true)) {
+      if (ImGui::Button(labels[2], {0.0f, ctx.button_size}) && state_available[2] && callbacks.stop_selected) {
         callbacks.stop_selected(false);
       }
       if (state_available[2] == false) {
@@ -2665,7 +2665,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
       if (state_available[3] == false) {
         ImGui::BeginDisabled();
       }
-      if (ImGui::Button(labels[3].c_str(), {0.0f, ctx.button_size}) && (state_available[3] == true)) {
+      if (ImGui::Button(labels[3], {0.0f, ctx.button_size}) && state_available[3] && callbacks.restart_selected) {
         callbacks.restart_selected();
       }
       if (state_available[3] == false) {
@@ -2673,21 +2673,24 @@ void UI::build_toolbar(const BuildContext& ctx) {
       }
       ImGui::PopStyleColor(4);
 
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+      if (cpu_mode) {
+        ImGui::SameLine(0.0f, ctx.wpadding.x);
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
 
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      if (state_available[0] == false) {
-        ImGui::BeginDisabled();
+        ImGui::SameLine(0.0f, ctx.wpadding.x);
+        if (state_available[0] == false) {
+          ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("  Denoise (preview)  ", {0.0f, ctx.button_size}) && callbacks.denoise_selected) {
+          callbacks.denoise_selected();
+        }
+        if (state_available[0] == false) {
+          ImGui::EndDisabled();
+        }
       }
-      if (ImGui::Button("  Denoise (preview)  ", {0.0f, ctx.button_size})) {
-        callbacks.denoise_selected();
-      }
-      if (state_available[0] == false) {
-        ImGui::EndDisabled();
-      }
-    } else {
-      const bool gpu_mode = _current_renderer_mode == RendererMode::GPURaytracing;
+    }
+
+    if (gpu_mode) {
       const RendererPreparationStatus status = _current_renderer_status;
       const char* label = "  Ready  ";
       ImVec4 status_color = kToolbarLaunchColor;
@@ -2706,26 +2709,24 @@ void UI::build_toolbar(const BuildContext& ctx) {
       ImGui::EndDisabled();
       ImGui::PopStyleColor();
 
-      if (gpu_mode) {
-        ImGui::SameLine(0.0f, ctx.wpadding.x);
-        if (ImGui::Button((status.state == RendererPreparationState::Failed) ? "  Retry  " : "  Reload Shaders  ", {0.0f, ctx.button_size})) {
-          if (callbacks.reload_shaders_selected) {
-            callbacks.reload_shaders_selected();
-          }
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      if (ImGui::Button((status.state == RendererPreparationState::Failed) ? "  Retry  " : "  Reload Shaders  ", {0.0f, ctx.button_size})) {
+        if (callbacks.reload_shaders_selected) {
+          callbacks.reload_shaders_selected();
         }
+      }
 
-        ImGui::SameLine(0.0f, ctx.wpadding.x);
-        if (status.state != RendererPreparationState::Preparing) {
-          ImGui::BeginDisabled();
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      if (status.state != RendererPreparationState::Preparing) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button("  Cancel  ", {0.0f, ctx.button_size})) {
+        if (callbacks.cancel_renderer_preparation_selected) {
+          callbacks.cancel_renderer_preparation_selected();
         }
-        if (ImGui::Button("  Cancel  ", {0.0f, ctx.button_size})) {
-          if (callbacks.cancel_renderer_preparation_selected) {
-            callbacks.cancel_renderer_preparation_selected();
-          }
-        }
-        if (status.state != RendererPreparationState::Preparing) {
-          ImGui::EndDisabled();
-        }
+      }
+      if (status.state != RendererPreparationState::Preparing) {
+        ImGui::EndDisabled();
       }
     }
 
@@ -2741,6 +2742,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
         if (ImGui::Selectable(Film::layer_name(i), &selected)) {
           if (selected) {
             _view_options.view_layer = i;
+            if (callbacks.view_layer_changed) callbacks.view_layer_changed(i);
           }
         }
       }
@@ -2757,6 +2759,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
         bool selected = i == uint32_t(_view_options.view_image);
         if (ImGui::Selectable(output_view_to_string(i).c_str(), &selected)) {
           _view_options.view_image = i;
+          if (callbacks.output_view_changed) callbacks.output_view_changed(i);
         }
       }
       ImGui::EndCombo();
@@ -2772,6 +2775,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
         bool selected = i == uint32_t(_view_options.view_option);
         if (ImGui::Selectable(view_option_to_string(i).c_str(), &selected)) {
           _view_options.view_option = i;
+          if (callbacks.display_transform_changed) callbacks.display_transform_changed(i);
         }
       }
       ImGui::EndCombo();
@@ -4141,9 +4145,11 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
 
   ImGui::Spacing();
   if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
-    labeled_control("Exposure", [&]() {
+    if (labeled_control("Exposure", [&]() {
       return ImGui::DragFloat("##exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
-    });
+    }) && callbacks.exposure_changed) {
+      callbacks.exposure_changed(_view_options.exposure);
+    }
 
     if (_embedded_toolbar_enabled == false) {
       ImGui::Text("View Layer:");
@@ -4153,6 +4159,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
           const bool selected = i == _view_options.view_layer;
           if (ImGui::Selectable(Film::layer_name(i), selected)) {
             _view_options.view_layer = i;
+            if (callbacks.view_layer_changed) callbacks.view_layer_changed(i);
           }
         }
         ImGui::EndCombo();
@@ -4165,6 +4172,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
           const bool selected = i == uint32_t(_view_options.view_image);
           if (ImGui::Selectable(output_view_to_string(i).c_str(), selected)) {
             _view_options.view_image = i;
+            if (callbacks.output_view_changed) callbacks.output_view_changed(i);
           }
         }
         ImGui::EndCombo();
@@ -4177,13 +4185,14 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
           const bool selected = i == uint32_t(_view_options.view_option);
           if (ImGui::Selectable(view_option_to_string(i).c_str(), selected)) {
             _view_options.view_option = i;
+            if (callbacks.display_transform_changed) callbacks.display_transform_changed(i);
           }
         }
         ImGui::EndCombo();
       }
 
       if (_current_renderer_mode == RendererMode::CPURaytracing) {
-        const bool can_denoise = renderer_can_run() && (renderer_state() == Integrator::State::Stopped);
+        const bool can_denoise = _current_renderer_controls.can_run;
         ImGui::Spacing();
         if (can_denoise == false) {
           ImGui::BeginDisabled();

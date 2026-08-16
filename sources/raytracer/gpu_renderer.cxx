@@ -1434,6 +1434,8 @@ void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
   _integrator_features = integrator_selection.features;
   _material_compile_mask = build_material_compile_mask(scene.data());
   _initialized = true;
+  _scene_valid = scene.valid();
+  _run_state = RendererRunState::Stopped;
 
   if (integrator_selection.supported == false) {
     set_runtime_failure(gpu_integrator_selection_error_message(integrator_selection));
@@ -1520,10 +1522,66 @@ RendererRuntimeStats GPURaytracingRenderer::runtime_stats() const {
   return result;
 }
 
+RendererControlState GPURaytracingRenderer::control_state() const {
+  RendererControlState result = {};
+  result.state = _run_state;
+
+  const bool preparation_ready = _preparation_state == RendererPreparationState::Ready;
+  const bool render_ready = _initialized && _scene_valid && (_runtime_failed == false) && preparation_ready && pipelines_valid();
+  const bool render_active = (_run_state == RendererRunState::Running) || (_run_state == RendererRunState::Finishing);
+  result.can_run = render_ready && ((_run_state == RendererRunState::Stopped) || (_run_state == RendererRunState::Completed));
+  result.can_finish = render_ready && (_run_state == RendererRunState::Running);
+  result.can_stop = render_active || (_preparation_state == RendererPreparationState::Preparing);
+  result.can_restart = render_ready && (_run_state != RendererRunState::Stopped);
+  return result;
+}
+
+bool GPURaytracingRenderer::is_running() const {
+  return (_run_state == RendererRunState::Running) || (_run_state == RendererRunState::Finishing);
+}
+
+void GPURaytracingRenderer::start() {
+  if ((_initialized == false) || (_scene_valid == false) || _runtime_failed) {
+    return;
+  }
+
+  reset_render_progress();
+  _preview_active = false;
+  _run_state = RendererRunState::Running;
+  request_scene_update();
+}
+
 void GPURaytracingRenderer::reset_render_timing() {
   _render_started_at = {};
   _last_render_elapsed_seconds = 0.0;
   _render_timing_active = false;
+}
+
+void GPURaytracingRenderer::reset_render_progress() {
+  _frame_index = 0u;
+  _sample_index = 0u;
+  reset_render_timing();
+  _wavefront_render_step = WavefrontRenderStep::InitSample;
+  _wavefront_path_iteration = 0u;
+  _wavefront_hard_iteration_cap = 0u;
+  _wavefront_camera_queue_count = 0u;
+  _wavefront_light_queue_count = 0u;
+  _wavefront_light_max_path_length = 0u;
+  _wavefront_tile_index = 0u;
+  _wavefront_tile_max_pixels = 0u;
+  _wavefront_tile_count = 1u;
+  _wavefront_tile_path_capacity = 0u;
+  _wavefront_tile_base_origin = {};
+  _wavefront_tile_base_size = {};
+  _wavefront_tile_plan_valid = false;
+  _wavefront_camera_phase_initialized = false;
+}
+
+void GPURaytracingRenderer::stop_render_timing() {
+  if (_render_timing_active) {
+    _last_render_elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - _render_started_at).count();
+    _render_timing_active = false;
+  }
 }
 
 void GPURaytracingRenderer::set_preparation_state(RendererPreparationState state, const char* phase, const std::string& message, uint32_t completed_steps, uint32_t total_steps) {
@@ -1865,23 +1923,8 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
   }
 
   reset_runtime_failure();
-  _frame_index = 0u;
-  _sample_index = 0u;
-  reset_render_timing();
-  _wavefront_render_step = WavefrontRenderStep::InitSample;
-  _wavefront_path_iteration = 0u;
-  _wavefront_hard_iteration_cap = 0u;
-  _wavefront_camera_queue_count = 0u;
-  _wavefront_light_queue_count = 0u;
-  _wavefront_light_max_path_length = 0u;
-  _wavefront_tile_index = 0u;
-  _wavefront_tile_max_pixels = 0u;
-  _wavefront_tile_count = 1u;
-  _wavefront_tile_path_capacity = 0u;
-  _wavefront_tile_base_origin = {};
-  _wavefront_tile_base_size = {};
-  _wavefront_tile_plan_valid = false;
-  _wavefront_camera_phase_initialized = false;
+  _preparation_canceled = false;
+  reset_render_progress();
   _integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
   _integrator_features = integrator_selection.features;
   _material_compile_mask = build_material_compile_mask(scene.data());
@@ -2093,12 +2136,30 @@ void GPURaytracingRenderer::cancel_preparation() {
   _publish_preparation.reset();
   _published_pipeline_count = 0u;
   _publish_pipeline_index = 0u;
+  _preparation_canceled = true;
   log::info("GPU RT preparation canceled: generation=%u", _preparation_generation - 1u);
   set_preparation_failed("Preparation canceled", "Canceled");
 }
 
 void GPURaytracingRenderer::stop() {
   cancel_preparation();
+  stop_render_timing();
+  _wavefront_render_step = WavefrontRenderStep::InitSample;
+  _wavefront_path_iteration = 0u;
+  _wavefront_camera_queue_count = 0u;
+  _wavefront_light_queue_count = 0u;
+  _wavefront_camera_phase_initialized = false;
+  _run_state = RendererRunState::Stopped;
+}
+
+void GPURaytracingRenderer::finish() {
+  if (_run_state == RendererRunState::Running) {
+    _run_state = RendererRunState::Finishing;
+  }
+}
+
+void GPURaytracingRenderer::restart() {
+  start();
 }
 
 void GPURaytracingRenderer::destroy_scene_buffers(RHIContext& ctx) {
@@ -2594,6 +2655,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (_initialized == false)
     return;
 
+  _scene_valid = scene.valid();
+  if (_scene_valid == false)
+    return;
+
   poll_preparation_tasks(ctx);
   if (_publish_preparation) {
     advance_pipeline_publish(ctx, 1u);
@@ -2607,13 +2672,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool integrator_mode_changed = (_integrator_mode != new_integrator_mode);
   const bool integrator_features_changed = (_integrator_features != new_integrator_features);
   const bool material_compile_mask_changed = (_material_compile_mask != new_material_compile_mask);
+  const bool pipeline_configuration_changed = integrator_mode_changed || integrator_features_changed || material_compile_mask_changed;
   const bool missing_pipelines = (_preparation_state == RendererPreparationState::Ready) && (pipelines_valid() == false);
-  const bool should_request_prepare =
-    integrator_selection.supported &&
-    (integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || missing_pipelines || (_preparation_state == RendererPreparationState::Failed));
+  const bool failed_preparation_can_retry = (_preparation_state == RendererPreparationState::Failed) && (_preparation_canceled == false);
+  const bool should_request_prepare = integrator_selection.supported && (pipeline_configuration_changed || missing_pipelines || failed_preparation_can_retry);
   if (should_request_prepare) {
     const auto pipeline_refresh_begin = std::chrono::steady_clock::now();
-    request_pipeline_preparation(scene, (integrator_mode_changed || integrator_features_changed || material_compile_mask_changed) ? "scene pipeline change" : "missing pipelines");
+    request_pipeline_preparation(scene, pipeline_configuration_changed ? "scene pipeline change" : "missing pipelines");
     const auto pipeline_refresh_end = std::chrono::steady_clock::now();
     pipeline_refresh_ms = elapsed_ms(pipeline_refresh_begin, pipeline_refresh_end);
   }
@@ -2654,23 +2719,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool camera_changed = (new_camera_hash != _current_camera_hash);
   const bool restart_accumulation = scene_check_requested || integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || camera_changed;
   if (restart_accumulation || scene_changed) {
-    _frame_index = 0u;
-    _sample_index = 0u;
-    reset_render_timing();
-    _wavefront_render_step = WavefrontRenderStep::InitSample;
-    _wavefront_path_iteration = 0u;
-    _wavefront_hard_iteration_cap = 0u;
-    _wavefront_camera_queue_count = 0u;
-    _wavefront_light_queue_count = 0u;
-    _wavefront_light_max_path_length = 0u;
-    _wavefront_tile_index = 0u;
-    _wavefront_tile_max_pixels = 0u;
-    _wavefront_tile_count = 1u;
-    _wavefront_tile_path_capacity = 0u;
-    _wavefront_tile_base_origin = {};
-    _wavefront_tile_base_size = {};
-    _wavefront_tile_plan_valid = false;
-    _wavefront_camera_phase_initialized = false;
+    reset_render_progress();
+    if (_run_state == RendererRunState::Completed) {
+      _run_state = RendererRunState::Running;
+    }
   }
 
   const bool wavefront_sample_in_progress = _wavefront_render_step != WavefrontRenderStep::InitSample;
@@ -2916,7 +2968,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     return;
   }
 
+  if ((_run_state == RendererRunState::Stopped) || (_run_state == RendererRunState::Completed)) {
+    return;
+  }
+
   if (_sample_index >= std::max(1u, scene.data().options.samples)) {
+    stop_render_timing();
+    _run_state = RendererRunState::Completed;
     return;
   }
 
@@ -3482,9 +3540,12 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   _frame_index += 1u;
   if (completed_sample) {
     _sample_index += 1u;
-    if (_sample_index >= _last_target_samples) {
-      _last_render_elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - _render_started_at).count();
-      _render_timing_active = false;
+    if (_run_state == RendererRunState::Finishing) {
+      stop_render_timing();
+      _run_state = RendererRunState::Stopped;
+    } else if (_sample_index >= _last_target_samples) {
+      stop_render_timing();
+      _run_state = RendererRunState::Completed;
     }
   }
 }
@@ -3521,6 +3582,8 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _output_texture_state = RHIResourceState::Undefined;
 
   _initialized = false;
+  _scene_valid = false;
+  _run_state = RendererRunState::Stopped;
   _current_scene_hashes = {};
   _current_camera_hash = 0;
   _frame_index = 0u;
@@ -3552,6 +3615,7 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _publish_pipeline_index = 0u;
   _pipeline_publish_logged = false;
   _preview_active = false;
+  _preparation_canceled = false;
   reset_runtime_failure();
   set_preparation_ready();
   request_scene_update();
@@ -3561,50 +3625,25 @@ void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
   (void)scene;
   _preview_active = true;
-  _frame_index = 0u;
-  _sample_index = 0u;
-  reset_render_timing();
-  _wavefront_render_step = WavefrontRenderStep::InitSample;
-  _wavefront_path_iteration = 0u;
-  _wavefront_hard_iteration_cap = 0u;
-  _wavefront_camera_queue_count = 0u;
-  _wavefront_light_queue_count = 0u;
-  _wavefront_light_max_path_length = 0u;
-  _wavefront_tile_index = 0u;
-  _wavefront_tile_max_pixels = 0u;
-  _wavefront_tile_count = 1u;
-  _wavefront_tile_path_capacity = 0u;
-  _wavefront_tile_base_origin = {};
-  _wavefront_tile_base_size = {};
-  _wavefront_tile_plan_valid = false;
-  _wavefront_camera_phase_initialized = false;
+  reset_render_progress();
+  if ((_run_state == RendererRunState::Completed) || (_run_state == RendererRunState::Finishing)) {
+    _run_state = RendererRunState::Running;
+  }
 }
 
 void GPURaytracingRenderer::on_camera_become_steady(SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
   (void)scene;
   _preview_active = false;
-  _frame_index = 0u;
-  _sample_index = 0u;
-  reset_render_timing();
-  _wavefront_render_step = WavefrontRenderStep::InitSample;
-  _wavefront_path_iteration = 0u;
-  _wavefront_hard_iteration_cap = 0u;
-  _wavefront_camera_queue_count = 0u;
-  _wavefront_light_queue_count = 0u;
-  _wavefront_light_max_path_length = 0u;
-  _wavefront_tile_index = 0u;
-  _wavefront_tile_max_pixels = 0u;
-  _wavefront_tile_count = 1u;
-  _wavefront_tile_path_capacity = 0u;
-  _wavefront_tile_base_origin = {};
-  _wavefront_tile_base_size = {};
-  _wavefront_tile_plan_valid = false;
-  _wavefront_camera_phase_initialized = false;
+  reset_render_progress();
+  if ((_run_state == RendererRunState::Completed) || (_run_state == RendererRunState::Finishing)) {
+    _run_state = RendererRunState::Running;
+  }
 }
 
 void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
+  _scene_valid = scene.valid();
   Renderer::on_scene_changed(scene);
 }
 

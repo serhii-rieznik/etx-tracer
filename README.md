@@ -93,6 +93,10 @@ All updates will be located here: [BUILDING.md](docs/BUILDING.md)
 
 Offline CPU/GPU comparison workflow, command-line options, outputs, and report format are documented in [docs/OFFLINE_COMPARISON.md](docs/OFFLINE_COMPARISON.md).
 
+## UI-independent control
+
+Headless, window-only, and browser-controlled launch modes are documented in [docs/APPLICATION_CONTROL.md](docs/APPLICATION_CONTROL.md).
+
 ## Sponsors
 
 This project is GitHub-sponsored by:

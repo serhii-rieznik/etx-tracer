@@ -17,6 +17,9 @@
 
 #include <vector>
 #include <algorithm>
+#include <cstring>
+#include <limits>
+#include <stb_image_write.hxx>
 namespace etx {
 namespace {
 
@@ -39,6 +42,84 @@ const char* backend_name(RHIBackend backend) {
   }
 }
 
+bool read_output_texture(RHIContext& rhi, RHITexture texture, const RHIExtent2D& extent, RHITextureFormat format, std::vector<uint8_t>& output) {
+  output.clear();
+  if ((texture.valid() == false) || (extent.width == 0u) || (extent.height == 0u)) {
+    return false;
+  }
+  if ((format != RHITextureFormat::B8G8R8A8_UNORM) && (format != RHITextureFormat::R8G8B8A8_UNORM)) {
+    log::error("Output capture does not support texture format %u", static_cast<uint32_t>(format));
+    return false;
+  }
+
+  const uint64_t pixel_count = static_cast<uint64_t>(extent.width) * static_cast<uint64_t>(extent.height);
+  if (pixel_count > (std::numeric_limits<uint64_t>::max() / 4u)) {
+    return false;
+  }
+  const uint64_t buffer_size = pixel_count * 4u;
+  if (buffer_size > std::numeric_limits<size_t>::max()) {
+    return false;
+  }
+  const RHIBufferDesc readback_desc = {
+    .size = buffer_size,
+    .usage = RHIBufferUsage::TransferDst,
+    .host_visible = true,
+  };
+  const RHICreateBindlessResult buffer_result = rhi.device().create_buffer(readback_desc);
+  if ((buffer_result.result != RHIResult::Success) || (buffer_result.handle.valid() == false)) {
+    return false;
+  }
+
+  rhi.begin_frame();
+  const RHICommandBuffer cmd = rhi.get_command_buffer();
+  if (cmd.valid() == false) {
+    rhi.end_frame();
+    rhi.device().destroy_buffer(buffer_result.handle);
+    return false;
+  }
+
+  rhi.command_buffer_begin(cmd);
+  rhi.cmd_texture_barrier(cmd, texture, RHIResourceState::ColorAttachment, RHIResourceState::TransferSrc);
+  rhi.cmd_copy_texture_to_buffer(cmd, texture, buffer_result.handle, extent.width, extent.height);
+  rhi.cmd_texture_barrier(cmd, texture, RHIResourceState::TransferSrc, RHIResourceState::ColorAttachment);
+  rhi.command_buffer_end(cmd);
+  rhi.submit_command_buffer({cmd});
+  rhi.end_frame();
+
+  const RHIResult wait_result = rhi.wait_idle();
+  if (wait_result != RHIResult::Success) {
+    rhi.destroy_command_buffer(cmd);
+    rhi.device().destroy_buffer(buffer_result.handle);
+    return false;
+  }
+  rhi.destroy_command_buffer(cmd);
+
+  output.resize(static_cast<size_t>(buffer_size));
+  const RHIResult read_result = rhi.device().read_buffer(buffer_result.handle, output.data(), buffer_size);
+  rhi.device().destroy_buffer(buffer_result.handle);
+  if (read_result != RHIResult::Success) {
+    output.clear();
+    return false;
+  }
+
+  if (format == RHITextureFormat::B8G8R8A8_UNORM) {
+    for (size_t pixel = 0u; pixel < output.size(); pixel += 4u) {
+      std::swap(output[pixel + 0u], output[pixel + 2u]);
+    }
+  }
+  return true;
+}
+
+void append_png_data(void* context, void* data, int size) {
+  if ((context == nullptr) || (data == nullptr) || (size <= 0)) {
+    return;
+  }
+  auto& output = *reinterpret_cast<std::vector<uint8_t>*>(context);
+  const size_t offset = output.size();
+  output.resize(offset + static_cast<size_t>(size));
+  std::memcpy(output.data() + offset, data, static_cast<size_t>(size));
+}
+
 }  // namespace
 
 struct RenderContextImpl {
@@ -52,6 +133,9 @@ struct RenderContextImpl {
   RuntimeOutput runtime_output = {};
   RHIImGui rhi_imgui = {};
   RHIImGuiTheme ui_theme = RHIImGuiTheme::Dark;
+  RenderContextConfig config = {};
+  bool initialized = false;
+  bool imgui_enabled = false;
   RHICommandBuffer rhi_cmd = {};
   RHIPipeline presentation_pipeline = {};
   Renderer* active_renderer = nullptr;
@@ -96,7 +180,7 @@ RenderContext::~RenderContext() {
 }
 
 bool RenderContext::valid() const {
-  return _private->rhi_context.valid();
+  return _private->initialized && _private->rhi_context.valid();
 }
 
 RHIContext& RenderContext::get_context() {
@@ -124,25 +208,64 @@ RuntimeMode RenderContext::runtime_mode() const {
 
 void RenderContext::set_ui_theme(RHIImGuiTheme theme) {
   _private->ui_theme = theme;
-  _private->rhi_imgui.set_theme(theme);
+  if (_private->imgui_enabled) {
+    _private->rhi_imgui.set_theme(theme);
+  }
 }
 
-void RenderContext::init() {
+bool RenderContext::imgui_enabled() const {
+  return _private->imgui_enabled;
+}
+
+bool RenderContext::capture_output_png(std::vector<uint8_t>& png_data, uint32_t& width, uint32_t& height) {
+  png_data.clear();
+  width = 0u;
+  height = 0u;
+  if (!valid() || (_private->runtime_output.mode() == RuntimeMode::Desktop)) {
+    return false;
+  }
+
+  const RHIExtent2D extent = _private->runtime_output.extent();
+  if ((extent.width > static_cast<uint32_t>(std::numeric_limits<int>::max())) ||
+      (extent.height > static_cast<uint32_t>(std::numeric_limits<int>::max())) ||
+      (extent.width > static_cast<uint32_t>(std::numeric_limits<int>::max() / 4))) {
+    return false;
+  }
+  std::vector<uint8_t> pixels = {};
+  if (read_output_texture(_private->rhi_context, _private->runtime_output.offscreen_texture(), extent, _private->runtime_output.output_format(), pixels) == false) {
+    return false;
+  }
+  if (stbi_write_png_to_func(append_png_data, &png_data, static_cast<int>(extent.width), static_cast<int>(extent.height), 4, pixels.data(),
+        static_cast<int>(extent.width * 4u)) == 0) {
+    png_data.clear();
+    return false;
+  }
+  width = extent.width;
+  height = extent.height;
+  return true;
+}
+
+void RenderContext::init(const RenderContextConfig& config) {
   ETX_PROFILER_SCOPE();
 
+  _private->initialized = false;
+  _private->config = config;
   RHIBackend backend = select_default_backend();
 
   RHIInitInfo info = {
     .backend = backend,
     .enable_validation = ETX_DEBUG,
+    .headless = config.mode != RuntimeMode::Desktop,
   };
-  const void* native_window = nullptr;
+  const void* native_window = config.native_window;
+  if ((config.mode == RuntimeMode::Desktop) && (native_window == nullptr)) {
 #if ETX_PLATFORM_WINDOWS
-  native_window = sapp_win32_get_hwnd();
+    native_window = sapp_win32_get_hwnd();
 #elif defined(__APPLE__)
-  native_window = sapp_macos_get_window();
+    native_window = sapp_macos_get_window();
 #endif
-  if (native_window == nullptr)
+  }
+  if ((config.mode == RuntimeMode::Desktop) && (native_window == nullptr))
     return;
 
   {
@@ -154,9 +277,9 @@ void RenderContext::init() {
   }
 
   RuntimeOutputConfig runtime_output_config = {
-    .mode = RuntimeMode::Desktop,
-    .width = static_cast<uint32_t>(sapp_width()),
-    .height = static_cast<uint32_t>(sapp_height()),
+    .mode = config.mode,
+    .width = config.mode == RuntimeMode::Desktop ? static_cast<uint32_t>(sapp_width()) : config.width,
+    .height = config.mode == RuntimeMode::Desktop ? static_cast<uint32_t>(sapp_height()) : config.height,
     .native_window = native_window,
   };
   if (_private->runtime_output.init(_private->rhi_context, runtime_output_config) == false) {
@@ -168,13 +291,20 @@ void RenderContext::init() {
     static_cast<uint32_t>(capabilities.supports_swapchain), static_cast<uint32_t>(capabilities.supports_bindless), static_cast<uint32_t>(capabilities.supports_timestamps),
     static_cast<uint32_t>(capabilities.supports_ray_tracing));
 
-  const RHIImGuiDesc imgui_desc = {
-    .color_format = _private->runtime_output.output_format(),
-    .ini_filename = env().file_in_user_data("ui.ini"),
-  };
-  {
-    ETX_PROFILER_NAMED_SCOPE("render_context_setup_imgui");
-    _private->rhi_imgui.setup(_private->rhi_context, imgui_desc);
+  _private->imgui_enabled = config.enable_imgui && _private->runtime_output.imgui_supported();
+  if (_private->imgui_enabled) {
+    const RHIImGuiDesc imgui_desc = {
+      .color_format = _private->runtime_output.output_format(),
+      .ini_filename = env().file_in_user_data("ui.ini"),
+    };
+    {
+      ETX_PROFILER_NAMED_SCOPE("render_context_setup_imgui");
+      const RHIResult setup_result = _private->rhi_imgui.setup(_private->rhi_context, imgui_desc);
+      if (setup_result != RHIResult::Success) {
+        log::error("Failed to initialize ImGui rendering (%u)", static_cast<uint32_t>(setup_result));
+        return;
+      }
+    }
   }
 
   auto& compiler = ShaderCompiler::instance();
@@ -193,6 +323,10 @@ void RenderContext::init() {
     log::error("Failed to compile render shader: %s", result.error_message.c_str());
     return;
   }
+  if (result.binaries.size() != 2u) {
+    log::error("Expected 2 presentation shader binaries, got %zu", result.binaries.size());
+    return;
+  }
 
   RHIGraphicsPipelineDesc pipeline_desc = {
     .color_attachment_count = 1,
@@ -201,8 +335,15 @@ void RenderContext::init() {
 
   {
     ETX_PROFILER_NAMED_SCOPE("render_context_create_presentation_pipeline");
-    _private->presentation_pipeline = _private->rhi_context.device().create_graphics_pipeline(pipeline_desc, result.binaries[0], result.binaries[1]).handle;
+    const RHICreatePipelineResult pipeline_result =
+      _private->rhi_context.device().create_graphics_pipeline(pipeline_desc, result.binaries[0], result.binaries[1]);
+    if ((pipeline_result.result != RHIResult::Success) || !pipeline_result.handle.valid()) {
+      log::error("Failed to create presentation pipeline (%u)", static_cast<uint32_t>(pipeline_result.result));
+      return;
+    }
+    _private->presentation_pipeline = pipeline_result.handle;
   }
+  _private->initialized = true;
 }
 
 void RenderContext::cleanup() {
@@ -215,14 +356,17 @@ void RenderContext::cleanup(bool device_already_idle) {
   if (_private->rhi_context.valid() == false)
     return;
 
+  _private->initialized = false;
+
   if (device_already_idle == false) {
     ETX_PROFILER_NAMED_SCOPE("render_context_wait_idle");
     _private->rhi_context.wait_idle();
   }
 
-  {
+  if (_private->imgui_enabled) {
     ETX_PROFILER_NAMED_SCOPE("render_context_shutdown_imgui");
     _private->rhi_imgui.shutdown();
+    _private->imgui_enabled = false;
   }
 
   auto& device = _private->rhi_context.device();
@@ -245,6 +389,8 @@ void RenderContext::cleanup(bool device_already_idle) {
     ETX_PROFILER_NAMED_SCOPE("render_context_destroy_rhi_context");
     _private->rhi_context = {};
     _private->rhi_cmd = {};
+    _private->presentation_pipeline = {};
+    _private->active_renderer = nullptr;
   }
 }
 
@@ -252,7 +398,7 @@ void RenderContext::set_reference_image(const char* file_name) {
   ETX_PROFILER_SCOPE();
 
   _private->image_pool.remove(_private->reference_image_handle);
-  if (_private->rhi_context.valid() == false)
+  if (!valid())
     return;
 
   {
@@ -273,7 +419,7 @@ void RenderContext::set_reference_image(const float4 data[], const uint2 dimensi
   ETX_PROFILER_SCOPE();
 
   _private->image_pool.remove(_private->reference_image_handle);
-  if (_private->rhi_context.valid() == false)
+  if (!valid())
     return;
 
   {
@@ -293,16 +439,26 @@ void RenderContext::set_reference_image(const float4 data[], const uint2 dimensi
 void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, const FrameData& frame_data) {
   ETX_PROFILER_SCOPE();
 
-  if (_private->rhi_context.valid() == false)
+  if (!valid())
     return;
 
-  etx::RHIImGuiFrameDesc imgui_frame_desc = {
-    .width = uint32_t(sapp_width()),
-    .height = uint32_t(sapp_height()),
-    .delta_time = frame_data.dt,
-    .dpi_scale = sapp_dpi_scale(),
-  };
-  {
+  if ((_private->config.mode == RuntimeMode::Headless) && (renderer != nullptr)) {
+    const uint2 renderer_size = renderer->output_size();
+    const RHIExtent2D output_extent = _private->runtime_output.extent();
+    if ((renderer_size.x > 0u) && (renderer_size.y > 0u) &&
+        ((renderer_size.x != output_extent.width) || (renderer_size.y != output_extent.height))) {
+      _private->runtime_output.resize(_private->rhi_context, renderer_size.x, renderer_size.y);
+    }
+  }
+
+  if (_private->imgui_enabled) {
+    const RHIExtent2D extent = _private->runtime_output.extent();
+    etx::RHIImGuiFrameDesc imgui_frame_desc = {
+      .width = extent.width,
+      .height = extent.height,
+      .delta_time = frame_data.dt,
+      .dpi_scale = _private->config.mode == RuntimeMode::Desktop ? sapp_dpi_scale() : _private->config.dpi_scale,
+    };
     ETX_PROFILER_NAMED_SCOPE("render_context_imgui_new_frame");
     _private->rhi_imgui.new_frame(imgui_frame_desc);
   }
@@ -318,7 +474,9 @@ void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, 
     render_frame_data.cmd = _private->rhi_context.get_command_buffer();
     _private->rhi_cmd = render_frame_data.cmd;
     _private->rhi_context.command_buffer_begin(_private->rhi_cmd);
-    renderer->render(_private->rhi_context, scene, render_frame_data);
+    if (renderer != nullptr) {
+      renderer->render(_private->rhi_context, scene, render_frame_data);
+    }
   }
   _private->active_renderer = renderer;
   _private->frame_data = frame_data;
@@ -327,7 +485,7 @@ void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, 
 void RenderContext::end_frame() {
   ETX_PROFILER_SCOPE();
 
-  if (_private->rhi_context.valid() == false)
+  if (!valid())
     return;
 
   const RuntimeOutputTarget output_target = _private->runtime_output.acquire_target(_private->rhi_context);
@@ -371,7 +529,7 @@ void RenderContext::end_frame() {
     _private->rhi_context.cmd_draw(_private->rhi_cmd, {.vertex_count = 3});
   }
 
-  {
+  if (_private->imgui_enabled) {
     ETX_PROFILER_NAMED_SCOPE("render_context_imgui_render");
     _private->rhi_imgui.render(_private->rhi_cmd);
   }

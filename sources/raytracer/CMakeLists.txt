@@ -1,4 +1,11 @@
 set(RAYTRACER_SHARED_SOURCES
+  application_control.hxx
+  application_control_server.hxx
+  application_control_server.cxx
+  scene_dependencies.hxx
+  scene_dependencies.cxx
+  application_runner.hxx
+  application_runner.cxx
   app.hxx
   app.cxx
   ui.hxx

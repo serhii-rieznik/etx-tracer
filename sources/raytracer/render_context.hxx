@@ -8,6 +8,7 @@
 #include <etx/rhi/rhi.hxx>
 #include "options.hxx"
 #include <functional>
+#include <vector>
 
 namespace etx {
 
@@ -16,6 +17,15 @@ enum class RHIImGuiTheme;
 struct TaskScheduler;
 struct SceneRepresentation;
 struct Renderer;
+
+struct RenderContextConfig {
+  RuntimeMode mode = RuntimeMode::Desktop;
+  uint32_t width = 1600u;
+  uint32_t height = 900u;
+  const void* native_window = nullptr;
+  bool enable_imgui = true;
+  float dpi_scale = 1.0f;
+};
 
 struct RenderContext {
   struct FrameData {
@@ -28,7 +38,7 @@ struct RenderContext {
   ~RenderContext();
 
   bool valid() const;
-  void init();
+  void init(const RenderContextConfig& config = {});
   void cleanup();
   void cleanup(bool device_already_idle);
 
@@ -41,6 +51,8 @@ struct RenderContext {
   RHITextureFormat get_swapchain_format();
   RHITextureFormat get_depth_format();
   RuntimeMode runtime_mode() const;
+  bool imgui_enabled() const;
+  bool capture_output_png(std::vector<uint8_t>& png_data, uint32_t& width, uint32_t& height);
   void set_ui_theme(RHIImGuiTheme theme);
 
   void set_reference_image(const char*);

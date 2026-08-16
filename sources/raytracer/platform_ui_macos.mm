@@ -504,14 +504,13 @@ void PlatformUI::update(UI& ui, const std::vector<std::string>& recent_files) {
   g_properties_item.state = ui.properties_visible() ? NSControlStateValueOn : NSControlStateValueOff;
   g_frame_scene_toolbar_item.enabled = ui.scene_view_commands_available();
 
-  const bool can_run = ui.renderer_can_run();
-  const Integrator::State renderer_state = ui.renderer_state();
+  const RendererControlState& controls = ui.renderer_controls();
   NSArray<NSToolbarItem*>* render_items = g_render_toolbar_group.subitems;
   if (render_items.count == 4) {
-    render_items[0].enabled = can_run && (renderer_state == Integrator::State::Stopped);
-    render_items[1].enabled = can_run && (renderer_state == Integrator::State::Running);
-    render_items[2].enabled = can_run && (renderer_state != Integrator::State::Stopped);
-    render_items[3].enabled = can_run && (renderer_state == Integrator::State::Running);
+    render_items[0].enabled = controls.can_run;
+    render_items[1].enabled = controls.can_finish;
+    render_items[2].enabled = controls.can_stop;
+    render_items[3].enabled = controls.can_restart;
   }
   if (g_panels_toolbar_group.subitems.count == 2) {
     [g_panels_toolbar_group setSelected:ui.scene_objects_visible() atIndex:0];

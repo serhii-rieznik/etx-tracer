@@ -2,6 +2,8 @@
 
 #include <etx/rhi/shader/shader_compiler.hxx>
 
+#include <algorithm>
+
 namespace etx {
 
 CPURaytracingRenderer::CPURaytracingRenderer(Raytracing& rt, SceneRepresentation& scene)
@@ -39,6 +41,54 @@ bool CPURaytracingRenderer::is_running() const {
   return _integrator_thread.running();
 }
 
+RendererRuntimeStats CPURaytracingRenderer::runtime_stats() const {
+  const Integrator* integrator = current_integrator();
+  if ((integrator == nullptr) || !integrator->can_run()) {
+    return {};
+  }
+
+  const Integrator::Status& status = _integrator_thread.status();
+  RendererRuntimeStats result = {
+    .valid = true,
+    .completed_samples = status.completed_iterations,
+    .target_samples = std::max(1u, _raytracing.scene().options.samples),
+    .elapsed_seconds = status.total_time,
+  };
+  if ((status.completed_iterations > 0u) && (result.completed_samples < result.target_samples)) {
+    const double seconds_per_sample = status.total_time / static_cast<double>(status.completed_iterations);
+    result.estimated_remaining_seconds = seconds_per_sample * static_cast<double>(result.target_samples - result.completed_samples);
+  } else if (result.completed_samples >= result.target_samples) {
+    result.estimated_remaining_seconds = 0.0;
+  }
+  return result;
+}
+
+RendererControlState CPURaytracingRenderer::control_state() const {
+  const Integrator* integrator = current_integrator();
+  if ((integrator == nullptr) || (integrator->can_run() == false)) {
+    return {};
+  }
+
+  RendererControlState result = {};
+  switch (integrator->state()) {
+    case Integrator::State::Running:
+      result.state = RendererRunState::Running;
+      break;
+    case Integrator::State::WaitingForCompletion:
+      result.state = RendererRunState::Finishing;
+      break;
+    default:
+      result.state = RendererRunState::Stopped;
+      break;
+  }
+
+  result.can_run = result.state == RendererRunState::Stopped;
+  result.can_finish = result.state == RendererRunState::Running;
+  result.can_stop = result.state != RendererRunState::Stopped;
+  result.can_restart = result.state == RendererRunState::Running;
+  return result;
+}
+
 void CPURaytracingRenderer::start() {
   _raytracing.film().clear(Film::ClearEverything);
   _integrator_thread.run();
@@ -46,6 +96,10 @@ void CPURaytracingRenderer::start() {
 
 void CPURaytracingRenderer::stop() {
   _integrator_thread.stop(Integrator::Stop::Immediate);
+}
+
+void CPURaytracingRenderer::finish() {
+  _integrator_thread.stop(Integrator::Stop::WaitForCompletion);
 }
 
 void CPURaytracingRenderer::restart() {

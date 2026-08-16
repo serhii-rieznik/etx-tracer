@@ -2508,6 +2508,7 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   }
   session.gpu_renderer.set_wavefront_steps_per_render(options.gpu_wavefront_steps_per_frame);
   session.gpu_renderer.set_batch_coarse_progress(true);
+  session.gpu_renderer.start();
 
   const uint32_t target_sample_count = max(1u, session.scene.data().options.samples);
   const uint64_t frames_per_sample_budget = std::max<uint64_t>(4096u, static_cast<uint64_t>(session.scene.data().options.max_path_length) + 2u);
