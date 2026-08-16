@@ -1,7 +1,14 @@
-﻿add_library(tinyexr STATIC
-  tinyexr.hxx
-  tinyexr.cxx
+file(GLOB TINYEXR_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/src/*.c")
+
+add_library(tinyexr STATIC
+  ${TINYEXR_SOURCES}
+  deps/zstd/tinyexr_zstd.c
+  include/exr.h
 )
 
-target_include_directories(tinyexr PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_compile_features(tinyexr PRIVATE c_std_11)
+target_include_directories(tinyexr
+  PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include"
+  PRIVATE "${CMAKE_CURRENT_LIST_DIR}/src" "${CMAKE_CURRENT_LIST_DIR}/deps/zstd"
+)
 set_target_properties(tinyexr PROPERTIES FOLDER "thirdparty")

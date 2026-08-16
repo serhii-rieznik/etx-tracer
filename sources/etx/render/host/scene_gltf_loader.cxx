@@ -2,13 +2,13 @@
 
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
+#include <etx/render/host/exr.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/host/scene_gltf_loader.hxx>
 #include <etx/render/host/gltf_accessor.hxx>
 #include <etx/render/host/scene_representation.hxx>
 
-#include <tinyexr.hxx>
 namespace etx {
 namespace {
 
@@ -741,10 +741,9 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
                     char exr_name[64] = {};
                     snprintf(exr_name, sizeof(exr_name), "specular_env_%zu.exr", light_idx);
                     env().file_in_tmp(exr_name, exr_filename, sizeof(exr_filename));
-                    const char* error = nullptr;
-                    if (SaveEXR(reinterpret_cast<const float*>(equirect_image.pixels.f32.a), equirect_dimensions.x, equirect_dimensions.y, 4, false, exr_filename, &error) !=
-                        TINYEXR_SUCCESS) {
-                      log::warning("Failed to save specular environment map to %s: %s", exr_filename, error ? error : "unknown error");
+                    std::string error;
+                    if (!save_exr_image(exr_filename, equirect_image.pixels.f32.a, equirect_dimensions, &error)) {
+                      log::warning("Failed to save specular environment map to %s: %s", exr_filename, error.c_str());
                     } else {
                       log::info("Saved specular environment map to %s", exr_filename);
                     }

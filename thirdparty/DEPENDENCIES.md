@@ -8,6 +8,8 @@ pinned to an exact commit so builds remain reproducible.
 
 | Dependency | Version / revision | Integration notes |
 | --- | --- | --- |
+| Dear ImGui | 1.92.9, tag commit `01380c579715e62fb9a8d6ec0502c4ea83bfde6e` | Core sources are vendored under `imgui/`. The custom RHI backend implements `ImGuiBackendFlags_RendererHasTextures`, including dynamic font-atlas texture creation, updates, and deferred destruction. Source archive SHA-256 `af97ed649182c39314320514a672b82008ab462b9293fe23d37b30bfa5d05519`. |
+| TinyEXR | 3.2.0, tag commit `6f470c9ab24bf3992bc512ce07e8ecb00d9bf105` | The pure-C11 v3 library, its in-tree DEFLATE implementation, and vendored Zstandard codec are built under `tinyexr/`. Project code accesses it through the RGBA32F adapter in `sources/etx/render/host/exr.cxx`. Source archive SHA-256 `df2bd61124a35d8138f8b0bc22418a1d4fe33622c818e0e022f5522afc0821b0`. |
 | stb_image | 2.30, upstream commit `2c980bb59875b0d32144a71867fbdebb2f77cd20` | Vendored as `stb_image/stb_image.hxx`; file SHA-256 `594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3`. |
 | Sokol App | upstream commit `e01e395cd5b916fc381913161244cb5abd3fbc37` | Vendored as `sokol/sokol_app.h`; file SHA-256 `4ace5d4221943950b71dad37bf69ce0449897aee12dab5af1daeeca8fc719487`. Sokol does not publish numbered releases. This is the newest revision immediately before its Metal backend began requiring the macOS 14-only `CADisplayLink` API, preserving this project's macOS 13.3 deployment target. |
 | Native File Dialog Extended | 1.3.0, tag commit `fc168e8605bfa51aaec22ab0c4e46b9de665a437` | The project maintains a small platform-only CMake target and a wrapper in `sources/etx/core/platform.cxx`. Source archive SHA-256 `2fea19102cf4d5283a80fb87a784792166988e85bb92baa962d34f72b22dcc1a`. |
@@ -19,16 +21,13 @@ packages OIDN's newer oneTBB 12.18 copy for both libraries.
 
 ## Confirmed current, unchanged
 
-- Dear ImGui 1.91.9
 - nlohmann/json 3.12.0
 - xxHash 0.8.3
 - stb_image_write 1.16
 
 ## Deferred updates
 
-- Dear ImGui 1.92 requires a coordinated renderer-backend migration for dynamic
-  texture and font-atlas lifecycle handling.
-- DXC/SPIR-V tooling, TinyGLTF, TinyEXR, TinyObjLoader, NanoVDB, enkiTS, and
+- DXC/SPIR-V tooling, TinyGLTF, TinyObjLoader, NanoVDB, enkiTS, and
   MicroProfile have broader API, shader, build-system, or runtime implications
   and should be updated as focused changes rather than as part of the low-risk
   dependency batch.

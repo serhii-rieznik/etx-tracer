@@ -4,7 +4,7 @@
 
 #include <imgui.h>
 struct ImDrawData;
-struct ImFontAtlas;
+struct ImTextureData;
 
 struct sapp_event;
 
@@ -85,7 +85,9 @@ struct RHIImGui {
   RHIResult update_buffers(const ImDrawData* draw_data);
   void render_draw_data(RHICommandBuffer command_buffer, const ImDrawData* draw_data);
 
-  RHIResult create_font_texture();
+  RHIResult create_font();
+  RHIResult update_texture(ImTextureData* texture);
+  void destroy_texture(ImTextureData* texture);
   RHIResult create_pipeline();
 };
 

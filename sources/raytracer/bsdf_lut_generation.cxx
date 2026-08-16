@@ -3,13 +3,12 @@
 #include <etx/core/environment.hxx>
 #include <etx/core/log.hxx>
 #include <etx/render/host/bsdf_energy_compensation_lut.hxx>
+#include <etx/render/host/exr.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/interop/interop.hxx>
 #include <etx/render/interop/bsdf_external_shared.hxx>
 #include <etx/render/shared/spectrum.hxx>
-
-#include <tinyexr.hxx>
 
 #include <algorithm>
 #include <chrono>
@@ -293,13 +292,9 @@ bool save_exr_rgba(const std::filesystem::path& path, const std::vector<float4>&
   }
 
   const std::string file_name = path.generic_string();
-  const char* error = nullptr;
-  if (SaveEXR(reinterpret_cast<const float*>(pixels.data()), static_cast<int>(width), static_cast<int>(height), 4, false, file_name.c_str(), &error) !=
-      TINYEXR_SUCCESS) {
-    log::error("Failed to save EXR LUT %s: %s", file_name.c_str(), (error != nullptr) ? error : "unknown error");
-    if (error != nullptr) {
-      FreeEXRErrorMessage(error);
-    }
+  std::string error;
+  if (!save_exr_image(file_name.c_str(), pixels.data(), {width, height}, &error)) {
+    log::error("Failed to save EXR LUT %s: %s", file_name.c_str(), error.c_str());
     return false;
   }
 

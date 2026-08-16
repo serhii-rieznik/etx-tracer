@@ -46,11 +46,10 @@ RHIResult RHIImGui::setup(RHIContext& context, const RHIImGuiDesc& desc) {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = _desc.ini_filename.c_str();
     io.BackendRendererName = "etx-rhi-imgui";
-    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures;
   }
 
   _cur_dpi_scale = (sapp_dpi_scale() > 0.0f) ? sapp_dpi_scale() : 1.0f;
-  _desc.no_default_font = true;
 
   auto result = create_resources();
   if (result != RHIResult::Success) {
@@ -188,12 +187,7 @@ void RHIImGui::new_frame(const RHIImGuiFrameDesc& desc) {
     return;
   }
 
-  bool dpi_changed = (desc.dpi_scale > 0.0f) && (desc.dpi_scale != _cur_dpi_scale);
   _cur_dpi_scale = (desc.dpi_scale > 0.0f) ? desc.dpi_scale : 1.0f;
-
-  if (dpi_changed) {
-    create_font_texture();
-  }
 
   ImGuiIO& io = ImGui::GetIO();
   io.DisplaySize = ImVec2(static_cast<float>(desc.width) / _cur_dpi_scale, static_cast<float>(desc.height) / _cur_dpi_scale);
@@ -210,7 +204,19 @@ void RHIImGui::render(RHICommandBuffer command_buffer) {
 
   ImGui::Render();
   ImDrawData* draw_data = ImGui::GetDrawData();
-  if (draw_data == nullptr || draw_data->TotalVtxCount == 0) {
+  if (draw_data == nullptr) {
+    return;
+  }
+
+  if (draw_data->Textures != nullptr) {
+    for (ImTextureData* texture : *draw_data->Textures) {
+      if ((texture->Status != ImTextureStatus_OK) && (update_texture(texture) != RHIResult::Success)) {
+        log::error("Failed to update Dear ImGui texture %d", texture->UniqueID);
+      }
+    }
+  }
+
+  if (draw_data->TotalVtxCount == 0) {
     return;
   }
 
@@ -250,7 +256,7 @@ RHIResult RHIImGui::create_resources() {
     _indices[i].capacity = ib_desc.size;
   }
 
-  auto font_result = create_font_texture();
+  auto font_result = create_font();
   if (font_result != RHIResult::Success) {
     return font_result;
   }
@@ -276,23 +282,16 @@ void RHIImGui::destroy_resources() {
     _indices[i].buffer = {};
   }
 
-  device.destroy_texture(_font_texture);
+  for (ImTextureData* texture : ImGui::GetPlatformIO().Textures) {
+    destroy_texture(texture);
+  }
   _font_texture = {};
-  ImGui::GetIO().Fonts->TexID = (ImTextureID)0;
 
   device.destroy_pipeline(_pipeline);
   _pipeline = {};
 }
 
-RHIResult RHIImGui::create_font_texture() {
-  if (_context != nullptr) {
-    auto& device = _context->device();
-    if (_font_texture.valid()) {
-      device.destroy_texture(_font_texture);
-      _font_texture = {};
-    }
-  }
-
+RHIResult RHIImGui::create_font() {
   ImGuiIO& io = ImGui::GetIO();
   io.Fonts->Clear();
 
@@ -304,50 +303,84 @@ RHIResult RHIImGui::create_font_texture() {
   env().file_in_data("fonts/roboto.ttf", font_file, sizeof(font_file));
   float font_size = 14.0f;
 
-  auto font = io.Fonts->AddFontFromFileTTF(font_file, font_size * _cur_dpi_scale, &font_config, nullptr);
+  auto font = io.Fonts->AddFontFromFileTTF(font_file, font_size, &font_config, nullptr);
   if (font == nullptr) {
     font = io.Fonts->AddFontDefault(&font_config);
   }
 
-  if (font != nullptr) {
-    font->Scale = 1.0f / _cur_dpi_scale;
-  }
-
-  // Get font texture data
-  unsigned char* pixels = nullptr;
-  int width = 0, height = 0;
-  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-
-  if (pixels == nullptr || width == 0 || height == 0) {
+  if (font == nullptr) {
     return RHIResult::InvalidArgument;
   }
 
-  // Create texture
-  RHITextureDesc tex_desc = {
-    .width = static_cast<uint32_t>(width),
-    .height = static_cast<uint32_t>(height),
-    .format = RHITextureFormat::R8G8B8A8_UNORM,
-    .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst,
-    .host_visible = false,
-  };
-
-  auto tex_result = _context->device().create_texture(tex_desc);
-  if (tex_result.result != RHIResult::Success) {
-    return tex_result.result;
-  }
-  _font_texture = tex_result.handle;
-
-  // Upload texture data
-  auto update_result = _context->device().update_texture(_font_texture, pixels, 0, 0);
-  if (update_result != RHIResult::Success) {
-    _context->device().destroy_texture(_font_texture);
-    _font_texture = {};
-    return update_result;
-  }
-
   io.FontDefault = font;
-  io.Fonts->TexID = (ImTextureID)(uintptr_t)_font_texture.value;
   return RHIResult::Success;
+}
+
+RHIResult RHIImGui::update_texture(ImTextureData* texture) {
+  if ((texture == nullptr) || (_context == nullptr)) {
+    return RHIResult::InvalidArgument;
+  }
+
+  auto& device = _context->device();
+  if (texture->Status == ImTextureStatus_WantCreate) {
+    if ((texture->Format != ImTextureFormat_RGBA32) || (texture->Pixels == nullptr) || (texture->Width <= 0) || (texture->Height <= 0)) {
+      return RHIResult::InvalidArgument;
+    }
+
+    const RHITextureDesc texture_desc = {
+      .width = static_cast<uint32_t>(texture->Width),
+      .height = static_cast<uint32_t>(texture->Height),
+      .format = RHITextureFormat::R8G8B8A8_UNORM,
+      .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst,
+      .host_visible = false,
+    };
+    auto texture_result = device.create_texture(texture_desc);
+    if (texture_result.result != RHIResult::Success) {
+      return texture_result.result;
+    }
+
+    const RHIResult upload_result = device.update_texture(texture_result.handle, texture->Pixels, 0, 0);
+    if (upload_result != RHIResult::Success) {
+      device.destroy_texture(texture_result.handle);
+      return upload_result;
+    }
+
+    texture->SetTexID(static_cast<ImTextureID>(texture_result.handle.value));
+    texture->SetStatus(ImTextureStatus_OK);
+    _font_texture = texture_result.handle;
+  } else if (texture->Status == ImTextureStatus_WantUpdates) {
+    const RHIBindlessHandle handle = {static_cast<uint64_t>(texture->GetTexID())};
+    if (!handle.valid() || (texture->Pixels == nullptr)) {
+      return RHIResult::InvalidArgument;
+    }
+
+    const RHIResult upload_result = device.update_texture(handle, texture->Pixels, 0, 0);
+    if (upload_result != RHIResult::Success) {
+      return upload_result;
+    }
+    texture->SetStatus(ImTextureStatus_OK);
+  } else if ((texture->Status == ImTextureStatus_WantDestroy) && (texture->UnusedFrames >= static_cast<int>(kRHIMaxFrames))) {
+    destroy_texture(texture);
+  }
+
+  return RHIResult::Success;
+}
+
+void RHIImGui::destroy_texture(ImTextureData* texture) {
+  if ((texture == nullptr) || (_context == nullptr)) {
+    return;
+  }
+
+  const RHIBindlessHandle handle = {static_cast<uint64_t>(texture->GetTexID())};
+  if (handle.valid()) {
+    _context->device().destroy_texture(handle);
+    if (handle.value == _font_texture.value) {
+      _font_texture = {};
+    }
+    texture->SetTexID(ImTextureID_Invalid);
+  }
+  texture->BackendUserData = nullptr;
+  texture->SetStatus(ImTextureStatus_Destroyed);
 }
 
 RHIResult RHIImGui::create_pipeline() {

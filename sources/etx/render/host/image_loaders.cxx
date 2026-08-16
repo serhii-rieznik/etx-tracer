@@ -1,7 +1,7 @@
 #include <etx/render/host/image_loaders.hxx>
+#include <etx/render/host/exr.hxx>
 #include <etx/render/shared/math.hxx>
 
-#include <tinyexr.hxx>
 #include <stb_image.hxx>
 
 #define BCDEC_IMPLEMENTATION
@@ -512,28 +512,25 @@ Image::Format load_data(const char* source, std::vector<uint8_t>& data, uint2& d
   }
 
   if (strcmp(ext, ".exr") == 0) {
-    int w = 0;
-    int h = 0;
-    const char* error = nullptr;
-    float* rgba_data = nullptr;
-    if (LoadEXR(&rgba_data, &w, &h, source, &error) != TINYEXR_SUCCESS) {
-      printf("Failed to load EXR from file: %s\n", error);
+    std::vector<float4> rgba_data;
+    std::string error;
+    if (!load_exr_image(source, rgba_data, dimensions, &error)) {
+      printf("Failed to load EXR from file: %s\n", error.c_str());
       return Image::Format::Undefined;
     }
 
-    for (int i = 0; i < 4 * w * h; ++i) {
-      if (std::isinf(rgba_data[i])) {
-        rgba_data[i] = 65504.0f;  // max value in half-float
+    float* components = reinterpret_cast<float*>(rgba_data.data());
+    for (size_t i = 0; i < 4u * rgba_data.size(); ++i) {
+      if (std::isinf(components[i])) {
+        components[i] = 65504.0f;  // max value in half-float
       }
-      if (std::isnan(rgba_data[i]) || (rgba_data[i] < 0.0f)) {
-        rgba_data[i] = 0.0f;
+      if (std::isnan(components[i]) || (components[i] < 0.0f)) {
+        components[i] = 0.0f;
       }
     }
 
-    dimensions = {uint32_t(w), uint32_t(h)};
-    data.resize(sizeof(float4) * w * h);
-    memcpy(data.data(), rgba_data, sizeof(float4) * w * h);
-    free(rgba_data);
+    data.resize(sizeof(float4) * rgba_data.size());
+    memcpy(data.data(), rgba_data.data(), data.size());
 
     return Image::Format::RGBA32F;
   }

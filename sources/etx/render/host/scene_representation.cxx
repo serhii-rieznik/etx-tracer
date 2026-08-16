@@ -23,8 +23,6 @@
 #include <etx/render/host/scene_gltf_loader.hxx>
 #include <etx/render/host/scene_tungsten_loader.hxx>
 
-#include <tinyexr.hxx>
-
 #include <mikktspace.h>
 namespace etx {
 

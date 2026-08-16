@@ -2,9 +2,9 @@
 
 #include <etx/core/environment.hxx>
 #include <etx/core/log.hxx>
+#include <etx/render/host/exr.hxx>
 
 #include <algorithm>
-#include <tinyexr.hxx>
 #include <stb_image.hxx>
 #include <stb_image_write.hxx>
 
@@ -168,9 +168,9 @@ bool save_image_to_file(const std::string& file_name, const float4* output, cons
       target_file_name += ".exr";
     }
 
-    const char* error = nullptr;
-    if (SaveEXR(reinterpret_cast<const float*>(output), image_size.x, image_size.y, 4, false, target_file_name.c_str(), &error) != TINYEXR_SUCCESS) {
-      log::error("Failed to save EXR image to %s: %s", target_file_name.c_str(), (error != nullptr) ? error : "unknown error");
+    std::string error;
+    if (!save_exr_image(target_file_name.c_str(), output, image_size, &error)) {
+      log::error("Failed to save EXR image to %s: %s", target_file_name.c_str(), error.c_str());
       return false;
     }
   }
@@ -190,22 +190,11 @@ bool load_hdr_image_from_file(const std::string& file_name, std::vector<float4>&
   }
 
   if ((strcmp(extension, ".exr") == 0) || (strcmp(extension, ".EXR") == 0)) {
-    int width = 0;
-    int height = 0;
-    float* rgba_data = nullptr;
-    const char* error = nullptr;
-    if (LoadEXR(&rgba_data, &width, &height, file_name.c_str(), &error) != TINYEXR_SUCCESS) {
-      log::error("Failed to load EXR image from %s: %s", file_name.c_str(), (error != nullptr) ? error : "unknown error");
-      if (error != nullptr) {
-        FreeEXRErrorMessage(error);
-      }
+    std::string error;
+    if (!load_exr_image(file_name.c_str(), output, image_size, &error)) {
+      log::error("Failed to load EXR image from %s: %s", file_name.c_str(), error.c_str());
       return false;
     }
-
-    image_size = {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
-    output.resize(static_cast<size_t>(image_size.x) * static_cast<size_t>(image_size.y));
-    memcpy(output.data(), rgba_data, output.size() * sizeof(float4));
-    free(rgba_data);
     return true;
   }
 

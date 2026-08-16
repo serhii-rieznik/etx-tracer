@@ -17,11 +17,11 @@ else()
 endif()
 
 target_link_libraries(bsdf_validation
-  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi tinyexr stb_image bluenoise
+  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
 
 target_link_libraries(procedural_geometry
-  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi tinyexr stb_image bluenoise
+  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
 
 target_include_directories(bsdf_validation
