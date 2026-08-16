@@ -503,7 +503,7 @@ RHIResult RHIImGui::update_buffers(const ImDrawData* draw_data) {
 
   size_t vb_offset = 0;
   size_t ib_offset = 0;
-  for (int i = 0; i < draw_data->CmdListsCount; ++i) {
+  for (int i = 0; i < draw_data->CmdLists.Size; ++i) {
     const ImDrawList* cmd_list = draw_data->CmdLists[i];
 
     size_t v_size = cmd_list->VtxBuffer.Size * sizeof(ImDrawVert);
@@ -550,7 +550,7 @@ void RHIImGui::render_draw_data(RHICommandBuffer command_buffer, const ImDrawDat
 
   uint32_t vertex_offset = 0;
   uint32_t index_offset = 0;
-  for (int cmd_list_idx = 0; cmd_list_idx < draw_data->CmdListsCount; ++cmd_list_idx) {
+  for (int cmd_list_idx = 0; cmd_list_idx < draw_data->CmdLists.Size; ++cmd_list_idx) {
     const ImDrawList* cmd_list = draw_data->CmdLists[cmd_list_idx];
     for (int cmd_idx = 0; cmd_idx < cmd_list->CmdBuffer.Size; ++cmd_idx) {
       const ImDrawCmd* pcmd = &cmd_list->CmdBuffer[cmd_idx];
