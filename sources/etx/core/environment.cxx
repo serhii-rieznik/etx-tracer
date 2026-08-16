@@ -4,6 +4,8 @@
 # include <windows.h>
 #elif (ETX_PLATFORM_APPLE)
 # include <mach-o/dyld.h>
+# include <pwd.h>
+# include <unistd.h>
 #else
 # include <unistd.h>
 #endif
@@ -41,10 +43,23 @@ inline static void normalize_path(char buffer[]) {
 
 static struct {
   char data_folder[2048] = {};
+  char user_data_folder[2048] = {};
+  char cache_folder[2048] = {};
+  char library_folder[2048] = {};
   char tmp_folder[2048] = {};
   char current_directory[2048] = {};
+  bool bundled = false;
   Environment e;
 } _env;
+
+static void set_folder_path(char* destination, size_t destination_size, const std::filesystem::path& path) {
+  std::string value = path.generic_string();
+  if (!value.empty() && (value.back() != '/')) {
+    value.push_back('/');
+  }
+  snprintf(destination, destination_size, "%s", value.c_str());
+  normalize_path(destination);
+}
 
 static void ensure_tmp_directory() {
   if (_env.tmp_folder[0] == 0)
@@ -67,6 +82,22 @@ const char* Environment::data_folder() {
   return _env.data_folder;
 }
 
+const char* Environment::user_data_folder() {
+  return _env.user_data_folder;
+}
+
+const char* Environment::cache_folder() {
+  return _env.cache_folder;
+}
+
+const char* Environment::library_folder() {
+  return _env.library_folder;
+}
+
+bool Environment::bundled() const {
+  return _env.bundled;
+}
+
 const char* Environment::file_in_data(const char* f, char buffer[], uint64_t buffer_size) {
   snprintf(buffer, buffer_size, "%s%s", _env.data_folder, f);
   normalize_path(buffer);
@@ -76,6 +107,28 @@ const char* Environment::file_in_data(const char* f, char buffer[], uint64_t buf
 const char* Environment::file_in_data(const char* f) {
   static char buffer[2048] = {};
   return file_in_data(f, buffer, sizeof(buffer));
+}
+
+const char* Environment::file_in_user_data(const char* f, char buffer[], uint64_t buffer_size) {
+  snprintf(buffer, buffer_size, "%s%s", _env.user_data_folder, f);
+  normalize_path(buffer);
+  return buffer;
+}
+
+const char* Environment::file_in_user_data(const char* f) {
+  static char buffer[2048] = {};
+  return file_in_user_data(f, buffer, sizeof(buffer));
+}
+
+const char* Environment::file_in_cache(const char* f, char buffer[], uint64_t buffer_size) {
+  snprintf(buffer, buffer_size, "%s%s", _env.cache_folder, f);
+  normalize_path(buffer);
+  return buffer;
+}
+
+const char* Environment::file_in_cache(const char* f) {
+  static char buffer[2048] = {};
+  return file_in_cache(f, buffer, sizeof(buffer));
 }
 
 const char* Environment::tmp_folder() {
@@ -142,19 +195,49 @@ void Environment::setup(const char* executable_path) {
     }
   }
 
-  std::string data_folder = resolved_executable.parent_path().generic_string();
-  if (data_folder.empty()) {
-    data_folder = std::filesystem::current_path(ec).generic_string();
+  std::filesystem::path executable_folder = resolved_executable.parent_path();
+  if (executable_folder.empty()) {
+    executable_folder = std::filesystem::current_path(ec);
   }
-  if (!data_folder.empty() && data_folder.back() != '/') {
-    data_folder.push_back('/');
+
+  std::filesystem::path data_folder = executable_folder;
+  std::filesystem::path user_data_folder = executable_folder;
+  std::filesystem::path cache_folder = executable_folder / "cache";
+  std::filesystem::path library_folder = executable_folder;
+  std::filesystem::path tmp_folder = executable_folder / "tmp";
+
+#if (ETX_PLATFORM_APPLE)
+  const std::filesystem::path contents_folder = executable_folder.parent_path();
+  const std::filesystem::path bundle_folder = contents_folder.parent_path();
+  _env.bundled = (executable_folder.filename() == "MacOS") && (contents_folder.filename() == "Contents") && (bundle_folder.extension() == ".app");
+  if (_env.bundled) {
+    data_folder = contents_folder / "Resources";
+    library_folder = contents_folder / "Frameworks";
+
+    const char* home_value = getenv("HOME");
+    if ((home_value == nullptr) || (home_value[0] == '\0')) {
+      if (const passwd* user = getpwuid(getuid()); user != nullptr) {
+        home_value = user->pw_dir;
+      }
+    }
+    const std::filesystem::path home_folder = ((home_value != nullptr) && (home_value[0] != '\0')) ? std::filesystem::path(home_value) : std::filesystem::temp_directory_path(ec);
+    user_data_folder = home_folder / "Library" / "Application Support" / "etx-tracer";
+    cache_folder = home_folder / "Library" / "Caches" / "etx-tracer";
+    tmp_folder = cache_folder / "tmp";
   }
-  snprintf(_env.data_folder, sizeof(_env.data_folder), "%s", data_folder.c_str());
-  normalize_path(_env.data_folder);
+#else
+  _env.bundled = false;
+#endif
+
+  set_folder_path(_env.data_folder, sizeof(_env.data_folder), data_folder);
+  set_folder_path(_env.user_data_folder, sizeof(_env.user_data_folder), user_data_folder);
+  set_folder_path(_env.cache_folder, sizeof(_env.cache_folder), cache_folder);
+  set_folder_path(_env.library_folder, sizeof(_env.library_folder), library_folder);
+  set_folder_path(_env.tmp_folder, sizeof(_env.tmp_folder), tmp_folder);
   snprintf(_env.current_directory, sizeof(_env.current_directory), "%s", _env.data_folder);
 
-  snprintf(_env.tmp_folder, sizeof(_env.tmp_folder), "%stmp%c", _env.data_folder, kDelimiter);
-  normalize_path(_env.tmp_folder);
+  std::filesystem::create_directories(_env.user_data_folder, ec);
+  std::filesystem::create_directories(_env.cache_folder, ec);
   clear_tmp_folder();
 }
 

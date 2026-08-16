@@ -5,13 +5,21 @@ namespace etx {
 
 struct Environment {
   const char* data_folder();
+  const char* user_data_folder();
+  const char* cache_folder();
+  const char* library_folder();
+  bool bundled() const;
 
   // thread save, uses extenal data storage
   const char* file_in_data(const char* f, char buffer[], uint64_t buffer_size);
+  const char* file_in_user_data(const char* f, char buffer[], uint64_t buffer_size);
+  const char* file_in_cache(const char* f, char buffer[], uint64_t buffer_size);
   const char* file_in_tmp(const char* f, char buffer[], uint64_t buffer_size);
 
   // not thread save, uses static data storage, use at your own risk
   const char* file_in_data(const char*);
+  const char* file_in_user_data(const char*);
+  const char* file_in_cache(const char*);
   const char* file_in_tmp(const char*);
 
   const char* tmp_folder();

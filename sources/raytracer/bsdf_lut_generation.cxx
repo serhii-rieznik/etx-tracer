@@ -457,7 +457,7 @@ bool generate_bsdf_energy_compensation_luts(const BSDFLutGenerationOptions& opti
   }
 
   const std::filesystem::path output_directory =
-    options.output_directory.empty() ? std::filesystem::path(env().file_in_data("bsdf/energy_compensation")) : std::filesystem::path(options.output_directory);
+    options.output_directory.empty() ? std::filesystem::path(env().file_in_user_data("bsdf/energy_compensation")) : std::filesystem::path(options.output_directory);
 
   TaskScheduler scheduler = {};
   const auto time_begin = std::chrono::steady_clock::now();

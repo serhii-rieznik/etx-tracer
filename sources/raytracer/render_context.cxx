@@ -164,7 +164,7 @@ void RenderContext::init() {
 
   const RHIImGuiDesc imgui_desc = {
     .color_format = _private->runtime_output.output_format(),
-    .ini_filename = env().file_in_data("ui.ini"),
+    .ini_filename = env().file_in_user_data("ui.ini"),
   };
   {
     ETX_PROFILER_NAMED_SCOPE("render_context_setup_imgui");

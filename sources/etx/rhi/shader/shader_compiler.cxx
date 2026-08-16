@@ -506,8 +506,7 @@ uint64_t preprocessed_shader_cache_hash(const PreprocessedShaderKey& key) {
 }
 
 std::filesystem::path shader_cache_root_directory() {
-  std::filesystem::path root(env().data_folder());
-  root /= "cache";
+  std::filesystem::path root(env().cache_folder());
   root /= "shaders";
   root /= ("v" + std::to_string(kShaderCacheVersion));
   return root;
@@ -1660,6 +1659,10 @@ RHIResult load_dxc_dll_global() {
   if (data_folder && data_folder[0] != '\0') {
     append_with_separator(search_paths, std::string(data_folder), path_separator);
     append_with_separator(search_paths, std::string(data_folder) + "bin", path_separator);
+  }
+  const char* library_folder = env().library_folder();
+  if (library_folder && library_folder[0] != '\0') {
+    append_with_separator(search_paths, std::string(library_folder), path_separator);
   }
 
   search_paths.insert(search_paths.end(), system_paths.begin(), system_paths.end());

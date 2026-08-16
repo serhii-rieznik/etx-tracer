@@ -145,7 +145,10 @@ void RTApplication::init() {
 
   {
     ETX_PROFILER_NAMED_SCOPE("app_load_options");
-    std::string options_file = env().file_in_data("options.json");
+    std::string options_file = env().file_in_user_data("options.json");
+    if (env().bundled() && !std::filesystem::exists(options_file)) {
+      options_file = env().file_in_data("options.json");
+    }
     _options.load_from_file(options_file);
   }
 
@@ -308,7 +311,7 @@ void RTApplication::save_options() {
   if (_current_scene_file.empty() == false) {
     _options.set_string("scene", _current_scene_file, "Scene");
   }
-  _options.save_to_file(env().file_in_data("options.json"));
+  _options.save_to_file(env().file_in_user_data("options.json"));
 }
 
 bool RTApplication::ensure_gpu_renderer_initialized() {

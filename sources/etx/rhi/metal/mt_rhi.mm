@@ -329,8 +329,7 @@ std::string metal_device_archive_suffix(id<MTLDevice> device) {
 }
 
 std::filesystem::path metal_pipeline_archive_root_directory() {
-  std::filesystem::path root(env().data_folder());
-  root /= "cache";
+  std::filesystem::path root(env().cache_folder());
   root /= "metal";
   root /= "pipeline_archives";
   root /= ("v" + std::to_string(kMetalPipelineArchiveVersion));
@@ -1022,8 +1021,7 @@ static std::string format_hash_hex(uint64_t value) {
 }
 
 static std::filesystem::path metal_library_cache_root_directory() {
-  std::filesystem::path root(env().data_folder());
-  root /= "cache";
+  std::filesystem::path root(env().cache_folder());
   root /= "metal";
   root /= "libraries";
   root /= "v1";

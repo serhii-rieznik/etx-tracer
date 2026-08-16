@@ -23,8 +23,7 @@ constexpr const char* kVK_KHR_portability_subset_extension_name = "VK_KHR_portab
 constexpr uint64_t kVulkanPipelineCacheMaxBytes = 64ull * 1024ull * 1024ull;
 
 std::filesystem::path vulkan_pipeline_cache_directory() {
-  std::filesystem::path root(env().data_folder());
-  root /= "cache";
+  std::filesystem::path root(env().cache_folder());
   root /= "vulkan";
   return root;
 }

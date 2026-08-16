@@ -600,7 +600,7 @@ uint64_t hash_material_interface(const SceneData& data, const Material& material
 }
 
 std::filesystem::path cache_directory() {
-  return std::filesystem::path(env().file_in_data("cache/bsdf/energy_compensation"));
+  return std::filesystem::path(env().file_in_cache("bsdf/energy_compensation"));
 }
 
 std::filesystem::path parity_cache_directory() {
