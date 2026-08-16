@@ -51,16 +51,74 @@ void atomic_add_float(float* ptr, float value) {
 #endif
 }
 
-std::string open_file(const char* filters) {
-  nfdchar_t* selected_path = nullptr;
-  nfdresult_t result = NFD_OpenDialog(filters, nullptr, &selected_path);
-  return (result == NFD_OKAY) ? selected_path : std::string{};
+namespace {
+
+nfdwindowhandle_t native_dialog_parent(void* parent_window) {
+  nfdwindowhandle_t result = {};
+  if (parent_window == nullptr) {
+    return result;
+  }
+
+#if defined(_WIN32)
+  result.type = NFD_WINDOW_HANDLE_TYPE_WINDOWS;
+#elif defined(__APPLE__)
+  result.type = NFD_WINDOW_HANDLE_TYPE_COCOA;
+#endif
+  result.handle = parent_window;
+  return result;
 }
 
-std::string save_file(const char* filters) {
-  nfdchar_t* selected_path = nullptr;
-  nfdresult_t result = NFD_SaveDialog(filters, nullptr, &selected_path);
-  return (result == NFD_OKAY) ? selected_path : std::string{};
+std::string copy_selected_path(nfdu8char_t* selected_path, nfdresult_t result) {
+  if ((result != NFD_OKAY) || (selected_path == nullptr)) {
+    return {};
+  }
+
+  std::string path = selected_path;
+  NFD_FreePathU8(selected_path);
+  return path;
+}
+
+}  // namespace
+
+std::string open_file(const char* filters, void* parent_window) {
+  if (NFD_Init() != NFD_OKAY) {
+    return {};
+  }
+
+  const nfdu8filteritem_t filter = {"Supported files", filters};
+  const nfdopendialogu8args_t args = {
+    .filterList = (filters != nullptr) && (filters[0] != '\0') ? &filter : nullptr,
+    .filterCount = (filters != nullptr) && (filters[0] != '\0') ? 1u : 0u,
+    .defaultPath = nullptr,
+    .parentWindow = native_dialog_parent(parent_window),
+  };
+
+  nfdu8char_t* selected_path = nullptr;
+  const nfdresult_t result = NFD_OpenDialogU8_With(&selected_path, &args);
+  std::string path = copy_selected_path(selected_path, result);
+  NFD_Quit();
+  return path;
+}
+
+std::string save_file(const char* filters, void* parent_window) {
+  if (NFD_Init() != NFD_OKAY) {
+    return {};
+  }
+
+  const nfdu8filteritem_t filter = {"Supported files", filters};
+  const nfdsavedialogu8args_t args = {
+    .filterList = (filters != nullptr) && (filters[0] != '\0') ? &filter : nullptr,
+    .filterCount = (filters != nullptr) && (filters[0] != '\0') ? 1u : 0u,
+    .defaultPath = nullptr,
+    .defaultName = nullptr,
+    .parentWindow = native_dialog_parent(parent_window),
+  };
+
+  nfdu8char_t* selected_path = nullptr;
+  const nfdresult_t result = NFD_SaveDialogU8_With(&selected_path, &args);
+  std::string path = copy_selected_path(selected_path, result);
+  NFD_Quit();
+  return path;
 }
 
 }  // namespace etx

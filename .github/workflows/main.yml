@@ -13,11 +13,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            embree_url: https://github.com/RenderKit/embree/releases/download/v4.4.0/embree-4.4.0.x64.windows.zip
-            embree_dir: embree-4.4.0.x64.windows
+            embree_url: https://github.com/RenderKit/embree/releases/download/v4.4.1/embree-4.4.1.x64.windows.zip
+            embree_dir: embree-4.4.1.x64.windows
           - os: macos-latest
-            embree_url: https://github.com/RenderKit/embree/releases/download/v4.4.0/embree-4.4.0.arm64.macosx.zip
-            embree_dir: embree-4.4.0.arm64.macosx
+            embree_url: https://github.com/RenderKit/embree/releases/download/v4.4.1/embree-4.4.1.arm64.macosx.zip
+            embree_dir: embree-4.4.1.arm64.macosx
 
     runs-on: ${{ matrix.os }}
 
@@ -31,17 +31,18 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          # Download and extract Embree for macOS (v4.4.0 from RenderKit)
+          # Download and extract Embree for macOS (v4.4.1 from RenderKit)
           echo "Downloading Embree for ARM64..."
-          wget -O embree.tar.gz ${{ matrix.embree_url }}
+          wget -O embree.zip ${{ matrix.embree_url }}
           echo "Extracting Embree..."
-          mkdir -p embree_temp && tar -xzf embree.tar.gz -C embree_temp
+          mkdir -p embree_temp && unzip -q embree.zip -d embree_temp
           echo "Moving Embree files..."
+          mkdir -p thirdparty/embree
           # Try different extraction structures
           if [ -d "embree_temp/${{ matrix.embree_dir }}" ]; then
-            cp -r embree_temp/${{ matrix.embree_dir }}/* thirdparty/embree/ 2>/dev/null || mkdir -p thirdparty/embree && cp -r embree_temp/${{ matrix.embree_dir }}/* thirdparty/embree/
+            cp -r embree_temp/${{ matrix.embree_dir }}/* thirdparty/embree/
           else
-            cp -r embree_temp/* thirdparty/embree/ 2>/dev/null || mkdir -p thirdparty/embree && cp -r embree_temp/* thirdparty/embree/
+            cp -r embree_temp/* thirdparty/embree/
           fi
           # Set EMBREE_LOCATION for CMake
           echo "EMBREE_LOCATION=$PWD/thirdparty/embree" >> $GITHUB_ENV
@@ -49,10 +50,10 @@ jobs:
       - name: Install OIDN (macOS)
         if: runner.os == 'macOS'
         run: |
-          # Download and extract OIDN for macOS (v2.3.3 from RenderKit)
+          # Download and extract OIDN for macOS (v2.5.0 from RenderKit)
           # GitHub macOS runners are ARM64-based, so we need ARM64 version
           echo "Downloading OIDN for ARM64..."
-          wget -O oidn.tar.gz https://github.com/RenderKit/oidn/releases/download/v2.3.3/oidn-2.3.3.arm64.macos.tar.gz
+          wget -O oidn.tar.gz https://github.com/RenderKit/oidn/releases/download/v2.5.0/oidn-2.5.0.arm64.macos.tar.gz
           echo "Extracting OIDN..."
           mkdir -p oidn_temp && tar -xzf oidn.tar.gz -C oidn_temp
           echo "OIDN extraction contents:"
@@ -61,8 +62,8 @@ jobs:
           # Try different extraction structures
           if [ -d "oidn_temp/lib" ]; then
             cp -r oidn_temp/* thirdparty/oidn/
-          elif [ -d "oidn_temp/oidn-2.3.3.arm64.macos" ]; then
-            cp -r oidn_temp/oidn-2.3.3.arm64.macos/* thirdparty/oidn/
+          elif [ -d "oidn_temp/oidn-2.5.0.arm64.macos" ]; then
+            cp -r oidn_temp/oidn-2.5.0.arm64.macos/* thirdparty/oidn/
           else
             echo "Unknown OIDN extraction structure, copying everything"
             cp -r oidn_temp/* thirdparty/oidn/ 2>/dev/null || true
@@ -72,22 +73,25 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          # Download and extract Embree to fixed location (force overwrite)
+          # Download and extract Embree to a fixed, non-versioned location
           Write-Host "Downloading embree from: ${{ matrix.embree_url }}"
           Invoke-WebRequest -Uri "${{ matrix.embree_url }}" -OutFile "embree.zip"
-          # Ensure clean extraction - remove any existing directory
+          Expand-Archive -Path "embree.zip" -DestinationPath "embree_temp" -Force
+
           if (Test-Path "thirdparty/embree") {
-            Write-Host "Removing existing thirdparty/embree directory..."
             Remove-Item -Path "thirdparty/embree" -Recurse -Force
           }
-          # Create fresh directory and extract with force overwrite
-          Write-Host "Creating fresh thirdparty/embree directory..."
           New-Item -ItemType Directory -Path "thirdparty/embree" -Force | Out-Null
-          Write-Host "Extracting embree.zip to thirdparty/embree (force overwrite)..."
-          Expand-Archive -Path "embree.zip" -DestinationPath "thirdparty/embree" -Force
+
+          $embreePackage = "embree_temp/${{ matrix.embree_dir }}"
+          if (-not (Test-Path $embreePackage)) {
+            throw "Expected Embree package directory not found: $embreePackage"
+          }
+          Move-Item -Path "$embreePackage/*" -Destination "thirdparty/embree" -Force
+          Remove-Item -Path "embree_temp" -Recurse -Force
 
           # Download and extract OIDN (preserve CMakeLists.txt)
-          Invoke-WebRequest -Uri "https://github.com/RenderKit/oidn/releases/download/v2.3.3/oidn-2.3.3.x64.windows.zip" -OutFile "oidn.zip"
+          Invoke-WebRequest -Uri "https://github.com/RenderKit/oidn/releases/download/v2.5.0/oidn-2.5.0.x64.windows.zip" -OutFile "oidn.zip"
           Expand-Archive -Path "oidn.zip" -DestinationPath "oidn_temp" -Force
           # Clean existing OIDN subdirectories but preserve CMakeLists.txt
           if (Test-Path "thirdparty/oidn/include") {
@@ -100,8 +104,8 @@ jobs:
             Remove-Item -Path "thirdparty/oidn/bin" -Recurse -Force
           }
           # Move contents from the extracted directory to thirdparty/oidn
-          if (Test-Path "oidn_temp/oidn-2.3.3.x64.windows") {
-            Move-Item -Path "oidn_temp/oidn-2.3.3.x64.windows/*" -Destination "thirdparty/oidn" -Force
+          if (Test-Path "oidn_temp/oidn-2.5.0.x64.windows") {
+            Move-Item -Path "oidn_temp/oidn-2.5.0.x64.windows/*" -Destination "thirdparty/oidn" -Force
           } else {
             Move-Item -Path "oidn_temp/*" -Destination "thirdparty/oidn" -Force
           }

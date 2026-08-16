@@ -126,13 +126,31 @@ create_library(rt)
 target_include_directories(etx-rt PUBLIC ${EMBREE_INCLUDE_DIR})
 target_link_libraries(etx-rt PRIVATE ${EMBREE_LIBRARY} etx-core etx-render bluenoise)
 
-if (WIN32)
-  message("Copying ${EMBREE_LIBRARY} ... to ${root_folder}/bin/")
+if(WIN32)
+  message(STATUS "Copying Embree runtime libraries to ${root_folder}/bin/")
   # Derive bin directory from the found library path
   get_filename_component(EMBREE_LIB_DIR "${EMBREE_LIBRARY}" DIRECTORY)
   get_filename_component(EMBREE_ROOT_DIR "${EMBREE_LIB_DIR}" DIRECTORY)
   set(EMBREE_BIN_DIR "${EMBREE_ROOT_DIR}/bin")
 
   configure_file("${EMBREE_BIN_DIR}/embree4.dll" "${root_folder}/bin/" COPYONLY)
-  configure_file("${EMBREE_BIN_DIR}/tbb12.dll" "${root_folder}/bin/" COPYONLY)
+  # OIDN 2.5 ships a newer compatible oneTBB runtime than Embree 4.4.1.
+  # Use one shared copy because both libraries load tbb12.dll by name.
+  set(ETX_TBB_RUNTIME "${root_folder}/thirdparty/oidn/bin/tbb12.dll")
+  if(NOT EXISTS "${ETX_TBB_RUNTIME}")
+    set(ETX_TBB_RUNTIME "${EMBREE_BIN_DIR}/tbb12.dll")
+  endif()
+  configure_file("${ETX_TBB_RUNTIME}" "${root_folder}/bin/tbb12.dll" COPYONLY)
+elseif(APPLE)
+  # The executable uses @rpath for Embree. Keep the versioned library beside
+  # OIDN so builds and future app bundles do not depend on the SDK location.
+  get_filename_component(EMBREE_LIBRARY_REAL "${EMBREE_LIBRARY}" REALPATH)
+  get_filename_component(EMBREE_LIBRARY_NAME "${EMBREE_LIBRARY_REAL}" NAME)
+  file(MAKE_DIRECTORY "${root_folder}/bin/lib")
+  message(STATUS "Copying ${EMBREE_LIBRARY_NAME} to ${root_folder}/bin/lib/")
+  configure_file(
+    "${EMBREE_LIBRARY_REAL}"
+    "${root_folder}/bin/lib/${EMBREE_LIBRARY_NAME}"
+    COPYONLY
+  )
 endif()

@@ -221,16 +221,12 @@ struct CameraController {
       }
 
       case SAPP_EVENTTYPE_KEY_DOWN: {
-        if ((e->key_code >= 0) && (e->key_code < 512)) {
-          _keys[e->key_code] = true;
-        }
+        set_key_state(static_cast<uint32_t>(e->key_code), true);
         break;
       }
 
       case SAPP_EVENTTYPE_KEY_UP: {
-        if ((e->key_code >= 0) && (e->key_code < 512)) {
-          _keys[e->key_code] = false;
-        }
+        set_key_state(static_cast<uint32_t>(e->key_code), false);
         break;
       }
 

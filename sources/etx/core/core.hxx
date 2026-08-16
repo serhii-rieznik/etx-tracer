@@ -28,8 +28,8 @@ struct TimeMeasure {
 
 void init_platform();
 
-std::string open_file(const char* filters);
-std::string save_file(const char* filters);
+std::string open_file(const char* filters, void* parent_window = nullptr);
+std::string save_file(const char* filters, void* parent_window = nullptr);
 
 uint32_t atomic_inc(int32_t* ptr);
 uint64_t atomic_inc(int64_t* ptr);
