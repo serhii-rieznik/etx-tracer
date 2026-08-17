@@ -1,0 +1,8 @@
+#pragma once
+
+namespace etx {
+
+inline constexpr unsigned char kApplicationControlHtml[] = {
+@APPLICATION_CONTROL_HTML_BYTES@};
+
+}  // namespace etx

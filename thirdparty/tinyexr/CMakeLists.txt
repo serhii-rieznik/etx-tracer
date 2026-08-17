@@ -7,6 +7,9 @@ add_library(tinyexr STATIC
 )
 
 target_compile_features(tinyexr PRIVATE c_std_11)
+if(MSVC)
+  target_compile_options(tinyexr PRIVATE /experimental:c11atomics)
+endif()
 target_include_directories(tinyexr
   PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include"
   PRIVATE "${CMAKE_CURRENT_LIST_DIR}/src" "${CMAKE_CURRENT_LIST_DIR}/deps/zstd"

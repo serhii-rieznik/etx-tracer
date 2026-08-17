@@ -705,7 +705,13 @@ static void jph_frwd_read_ff_avx2(JphFrwdAvx2 *msp) {
     next_unstuff = flags >> 16u;
     flags = (flags | msp->unstuff) & 0xffffu;
     while (flags) {
+#if defined(_MSC_VER)
+        unsigned long index;
+        _BitScanReverse(&index, flags);
+        uint32_t loc = (uint32_t)index;
+#else
         uint32_t loc = 31u - (uint32_t)__builtin_clz(flags);
+#endif
         __m128i t, m, c;
         --bits;
         flags ^= 1u << loc;
